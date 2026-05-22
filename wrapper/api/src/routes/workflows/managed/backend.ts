@@ -212,8 +212,18 @@ export class ManagedWorkflowBackend {
     pageSize: number,
     statusFilter: WorkflowRecordingFilterStatus,
     inputFilter: WorkflowRecordingInputFilter | null = null,
+    inputCursor = 0,
+    signal?: AbortSignal,
   ): Promise<WorkflowRecordingRunsPageResponse> {
-    return this.#recordings.listWorkflowRecordingRunsPage(workflowId, page, pageSize, statusFilter, inputFilter);
+    return this.#recordings.listWorkflowRecordingRunsPage(
+      workflowId,
+      page,
+      pageSize,
+      statusFilter,
+      inputFilter,
+      inputCursor,
+      signal,
+    );
   }
 
   async readWorkflowRecordingArtifact(recordingId: string, artifact: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> {

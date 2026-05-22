@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   deleteWorkflowRecording as deleteWorkflowRecordingRequest,
   fetchWorkflowRecordingRuns,
@@ -8,9 +8,29 @@ import type {
   WorkflowRecordingFilterStatus,
   WorkflowRecordingInputFilter,
   WorkflowRecordingInputFilterOperator,
+  WorkflowRecordingRunSummary,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
 } from './types';
+
+type InputSearchStatus = 'idle' | 'searching' | 'complete' | 'stopped';
+
+function appendUniqueRuns(
+  currentRuns: WorkflowRecordingRunSummary[],
+  nextRuns: WorkflowRecordingRunSummary[],
+): WorkflowRecordingRunSummary[] {
+  const seenIds = new Set(currentRuns.map((run) => run.id));
+  const uniqueNextRuns = nextRuns.filter((run) => {
+    if (seenIds.has(run.id)) {
+      return false;
+    }
+
+    seenIds.add(run.id);
+    return true;
+  });
+
+  return uniqueNextRuns.length > 0 ? [...currentRuns, ...uniqueNextRuns] : currentRuns;
+}
 
 export function useRunRecordingsController(isOpen: boolean) {
   const [workflowsResponse, setWorkflowsResponse] = useState<WorkflowRecordingWorkflowListResponse | null>(null);
@@ -27,10 +47,13 @@ export function useRunRecordingsController(isOpen: boolean) {
   const [inputFilterOperator, setInputFilterOperator] = useState<WorkflowRecordingInputFilterOperator>('==');
   const [inputFilterValue, setInputFilterValue] = useState('');
   const [appliedInputFilter, setAppliedInputFilter] = useState<WorkflowRecordingInputFilter | null>(null);
+  const [inputFilterRuns, setInputFilterRuns] = useState<WorkflowRecordingRunSummary[]>([]);
+  const [inputSearchStatus, setInputSearchStatus] = useState<InputSearchStatus>('idle');
   const [inputFilterError, setInputFilterError] = useState<string | null>(null);
   const [deletingRecordingId, setDeletingRecordingId] = useState<string | null>(null);
+  const inputSearchAbortControllerRef = useRef<AbortController | null>(null);
 
-  const loadWorkflowRecordingWorkflows = useCallback(() => fetchWorkflowRecordingWorkflows(), []);
+  const loadWorkflowRecordingWorkflows = useCallback((signal?: AbortSignal) => fetchWorkflowRecordingWorkflows({ signal }), []);
   const loadWorkflowRecordingRunsPage = useCallback((
     workflowId: string,
     options: {
@@ -38,8 +61,14 @@ export function useRunRecordingsController(isOpen: boolean) {
       pageSize: number;
       status: WorkflowRecordingFilterStatus;
       inputFilter?: WorkflowRecordingInputFilter | null;
+      inputCursor?: number;
+      signal?: AbortSignal;
     },
   ) => fetchWorkflowRecordingRuns(workflowId, options), []);
+  const abortInputSearch = useCallback(() => {
+    inputSearchAbortControllerRef.current?.abort();
+    inputSearchAbortControllerRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!isOpen) {
@@ -47,6 +76,7 @@ export function useRunRecordingsController(isOpen: boolean) {
     }
 
     let cancelled = false;
+    const abortController = new AbortController();
     setSelectedWorkflowId('');
     setRunsPage(null);
     setError(null);
@@ -58,20 +88,22 @@ export function useRunRecordingsController(isOpen: boolean) {
     setInputFilterOperator('==');
     setInputFilterValue('');
     setAppliedInputFilter(null);
+    setInputFilterRuns([]);
+    setInputSearchStatus('idle');
     setInputFilterError(null);
     setRunsLoading(false);
     setWorkflowsResponse(null);
     setWorkflowsLoading(true);
     setDeletingRecordingId(null);
 
-    void loadWorkflowRecordingWorkflows()
+    void loadWorkflowRecordingWorkflows(abortController.signal)
       .then((response) => {
         if (!cancelled) {
           setWorkflowsResponse(response);
         }
       })
       .catch((err) => {
-        if (!cancelled) {
+        if (!cancelled && !abortController.signal.aborted) {
           setError(err instanceof Error ? err.message : String(err));
         }
       })
@@ -83,6 +115,7 @@ export function useRunRecordingsController(isOpen: boolean) {
 
     return () => {
       cancelled = true;
+      abortController.abort();
     };
   }, [isOpen, loadWorkflowRecordingWorkflows]);
 
@@ -112,42 +145,111 @@ export function useRunRecordingsController(isOpen: boolean) {
     }
 
     let cancelled = false;
+    const abortController = new AbortController();
+    inputSearchAbortControllerRef.current = appliedInputFilter ? abortController : null;
     setRunsLoading(true);
     setRunsPage(null);
     setError(null);
 
-    void loadWorkflowRecordingRunsPage(selectedWorkflowId, {
-      page,
-      pageSize: runsPerPage,
-      status: statusFilter,
-      inputFilter: appliedInputFilter,
-    })
-      .then((response) => {
-        if (!cancelled) {
+    if (appliedInputFilter) {
+      setInputFilterRuns([]);
+      setInputSearchStatus('searching');
+
+      void (async () => {
+        let nextCursor = 0;
+        while (!cancelled && !abortController.signal.aborted) {
+          const response = await loadWorkflowRecordingRunsPage(selectedWorkflowId, {
+            page: 1,
+            pageSize: runsPerPage,
+            status: statusFilter,
+            inputFilter: appliedInputFilter,
+            inputCursor: nextCursor,
+            signal: abortController.signal,
+          });
+
+          if (cancelled || abortController.signal.aborted) {
+            return;
+          }
+
           setRunsPage(response);
+          setInputFilterRuns((currentRuns) => appendUniqueRuns(currentRuns, response.runs));
+
+          const responseNextCursor = response.nextInputCursor;
+          if (!response.hasMore || responseNextCursor == null || responseNextCursor <= nextCursor) {
+            setInputSearchStatus('complete');
+            return;
+          }
+
+          nextCursor = responseNextCursor;
         }
-      })
+      })()
       .catch((err) => {
-        if (!cancelled) {
+        if (!cancelled && !abortController.signal.aborted) {
           setError(err instanceof Error ? err.message : String(err));
+          setInputSearchStatus('stopped');
         }
       })
       .finally(() => {
-        if (!cancelled) {
+        const isCurrentSearch = inputSearchAbortControllerRef.current === abortController;
+        if (!cancelled && isCurrentSearch) {
           setRunsLoading(false);
         }
+        if (isCurrentSearch) {
+          inputSearchAbortControllerRef.current = null;
+        }
       });
+    } else {
+      setInputFilterRuns([]);
+      setInputSearchStatus('idle');
+
+      void loadWorkflowRecordingRunsPage(selectedWorkflowId, {
+        page,
+        pageSize: runsPerPage,
+        status: statusFilter,
+        inputFilter: null,
+        signal: abortController.signal,
+      })
+        .then((response) => {
+          if (!cancelled) {
+            setRunsPage(response);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled && !abortController.signal.aborted) {
+            setError(err instanceof Error ? err.message : String(err));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setRunsLoading(false);
+          }
+        });
+    }
 
     return () => {
       cancelled = true;
+      abortController.abort();
+      if (inputSearchAbortControllerRef.current === abortController) {
+        inputSearchAbortControllerRef.current = null;
+      }
     };
-  }, [appliedInputFilter, isOpen, loadWorkflowRecordingRunsPage, page, runsPerPage, selectedWorkflowId, statusFilter]);
+  }, [
+    appliedInputFilter,
+    isOpen,
+    loadWorkflowRecordingRunsPage,
+    page,
+    runsPerPage,
+    selectedWorkflowId,
+    statusFilter,
+  ]);
 
   const overallRunsCount = selectedWorkflow?.totalRuns ?? 0;
   const badRunsCount = (selectedWorkflow?.failedRuns ?? 0) + (selectedWorkflow?.suspiciousRuns ?? 0);
-  const filteredRunsCount = runsPage?.totalRuns ?? (appliedInputFilter ? 0 : statusFilter === 'failed' ? badRunsCount : overallRunsCount);
-  const totalPages = Math.max(1, Math.ceil(filteredRunsCount / runsPerPage));
-  const visibleRuns = runsPage?.runs ?? [];
+  const visibleRuns = appliedInputFilter ? inputFilterRuns : runsPage?.runs ?? [];
+  const filteredRunsCount = appliedInputFilter
+    ? inputFilterRuns.length
+    : runsPage?.totalRuns ?? (statusFilter === 'failed' ? badRunsCount : overallRunsCount);
+  const totalPages = appliedInputFilter ? 1 : Math.max(1, Math.ceil(filteredRunsCount / runsPerPage));
 
   useEffect(() => {
     if (page > totalPages) {
@@ -170,26 +272,42 @@ export function useRunRecordingsController(isOpen: boolean) {
         ? ''
         : inputFilterValue,
     });
+    setInputFilterRuns([]);
+    setInputSearchStatus('searching');
     setPage(1);
   }, [inputFilterOperator, inputFilterPath, inputFilterValue]);
 
   const handleClearInputFilter = useCallback(() => {
+    abortInputSearch();
     setInputFilterError(null);
     setAppliedInputFilter(null);
     setInputFilterPath('$');
     setInputFilterOperator('==');
     setInputFilterValue('');
+    setInputFilterRuns([]);
+    setInputSearchStatus('idle');
     setPage(1);
-  }, []);
+  }, [abortInputSearch]);
 
   const handleSetInputFilterVisible = useCallback((visible: boolean) => {
     setInputFilterVisible(visible);
     setInputFilterError(null);
     if (!visible) {
+      abortInputSearch();
       setAppliedInputFilter(null);
+      setInputFilterRuns([]);
+      setInputSearchStatus('idle');
       setPage(1);
     }
-  }, []);
+  }, [abortInputSearch]);
+
+  const handleStopInputSearch = useCallback(() => {
+    abortInputSearch();
+    if (appliedInputFilter) {
+      setInputSearchStatus('stopped');
+      setRunsLoading(false);
+    }
+  }, [abortInputSearch, appliedInputFilter]);
 
   const handleDeleteRecording = useCallback(async (recordingId: string) => {
     if (!window.confirm('Are you sure you want to delete this recording? This action cannot be undone.')) {
@@ -201,8 +319,10 @@ export function useRunRecordingsController(isOpen: boolean) {
     const currentPageSize = runsPerPage;
     const currentStatusFilter = statusFilter;
     const currentInputFilter = appliedInputFilter;
+    const currentInputSearchStatus = inputSearchStatus;
 
     try {
+      abortInputSearch();
       setDeletingRecordingId(recordingId);
       setRunsLoading(true);
       setError(null);
@@ -215,6 +335,14 @@ export function useRunRecordingsController(isOpen: boolean) {
       const refreshedWorkflow = nextWorkflowsResponse.workflows.find((workflow) => workflow.workflowId === currentWorkflowId) ?? null;
       if (!refreshedWorkflow) {
         setRunsPage(null);
+        setInputFilterRuns([]);
+        return;
+      }
+
+      if (currentInputFilter) {
+        setInputFilterRuns((currentRuns) => currentRuns.filter((run) => run.id !== recordingId));
+        setInputSearchStatus(currentInputSearchStatus === 'searching' ? 'stopped' : currentInputSearchStatus);
+        setRunsPage(null);
         return;
       }
 
@@ -223,7 +351,7 @@ export function useRunRecordingsController(isOpen: boolean) {
         page: currentPage,
         pageSize: currentPageSize,
         status: currentStatusFilter,
-        inputFilter: currentInputFilter,
+        inputFilter: null,
       });
       if (nextRunsPage.totalRuns > 0 && nextRunsPage.runs.length === 0 && currentPage > 1) {
         const nextPage = Math.max(1, Math.ceil(nextRunsPage.totalRuns / currentPageSize));
@@ -232,7 +360,7 @@ export function useRunRecordingsController(isOpen: boolean) {
           page: nextPage,
           pageSize: currentPageSize,
           status: currentStatusFilter,
-          inputFilter: currentInputFilter,
+          inputFilter: null,
         });
       }
 
@@ -251,6 +379,8 @@ export function useRunRecordingsController(isOpen: boolean) {
     selectedWorkflowId,
     statusFilter,
     appliedInputFilter,
+    inputSearchStatus,
+    abortInputSearch,
   ]);
 
   return {
@@ -260,7 +390,6 @@ export function useRunRecordingsController(isOpen: boolean) {
     error,
     selectedWorkflowId,
     selectedWorkflow,
-    runsPage,
     runsPerPage,
     page,
     statusFilter,
@@ -275,6 +404,7 @@ export function useRunRecordingsController(isOpen: boolean) {
     badRunsCount,
     filteredRunsCount,
     totalPages,
+    inputSearchStatus,
     visibleRuns,
     setSelectedWorkflowId,
     setRunsPerPage,
@@ -286,6 +416,7 @@ export function useRunRecordingsController(isOpen: boolean) {
     setInputFilterVisible: handleSetInputFilterVisible,
     handleApplyInputFilter,
     handleClearInputFilter,
+    handleStopInputSearch,
     handleDeleteRecording,
   };
 }

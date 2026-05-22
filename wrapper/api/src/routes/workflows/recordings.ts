@@ -62,7 +62,7 @@ import {
 } from './recordings-maintenance.js';
 import { type StoredWorkflowRecordingMetadataV2 } from './recordings-metadata.js';
 import { getWorkflowProject } from './workflow-query.js';
-import { filterRowsBySerializedRecordingInput } from './recording-input-filter.js';
+import { filterRowsBySerializedRecordingInputPage } from './recording-input-filter.js';
 
 type PersistWorkflowExecutionRecordingOptions = {
   workflowsRoot: string;
@@ -343,31 +343,52 @@ export async function listWorkflowRecordingRunsPage(
   pageSize: number,
   statusFilter: WorkflowRecordingFilterStatus,
   inputFilter: WorkflowRecordingInputFilter | null = null,
+  inputCursor = 0,
+  signal?: AbortSignal,
 ): Promise<WorkflowRecordingRunsPageResponse> {
   const recordingsRoot = await ensureWorkflowRecordingStorage(root);
   await repairWorkflowRecordingIndexIfDrifted(recordingsRoot);
 
   const normalizedPage = Math.max(1, Math.floor(page));
   const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
-  const allMatchingRows = inputFilter
-    ? await listWorkflowRecordingRowsMatchingInputFilter(workflowId, statusFilter, inputFilter)
-    : null;
-  const totalRuns = allMatchingRows
-    ? allMatchingRows.length
-    : await countWorkflowRecordingRuns(workflowId, statusFilter);
-  const rows = allMatchingRows
-    ? allMatchingRows.slice((normalizedPage - 1) * normalizedPageSize, normalizedPage * normalizedPageSize)
-    : await listWorkflowRecordingRunRowsByWorkflowId(workflowId, {
+  if (inputFilter) {
+    const filteredPage = await listWorkflowRecordingRowsMatchingInputFilter(
+      workflowId,
+      statusFilter,
+      inputFilter,
+      inputCursor,
+      normalizedPageSize,
+      signal,
+    );
+
+    return {
+      workflowId,
       page: normalizedPage,
       pageSize: normalizedPageSize,
+      totalRuns: filteredPage.totalRuns,
+      totalRunsExact: filteredPage.totalRunsExact,
+      hasMore: filteredPage.hasMore,
+      nextInputCursor: filteredPage.nextInputCursor,
       statusFilter,
-    });
+      inputFilter,
+      runs: filteredPage.rows.map(toWorkflowRecordingRunSummary),
+    };
+  }
+
+  const totalRuns = await countWorkflowRecordingRuns(workflowId, statusFilter);
+  const rows = await listWorkflowRecordingRunRowsByWorkflowId(workflowId, {
+    page: normalizedPage,
+    pageSize: normalizedPageSize,
+    statusFilter,
+  });
 
   return {
     workflowId,
     page: normalizedPage,
     pageSize: normalizedPageSize,
     totalRuns,
+    totalRunsExact: true,
+    hasMore: normalizedPage * normalizedPageSize < totalRuns,
     statusFilter,
     inputFilter,
     runs: rows.map(toWorkflowRecordingRunSummary),
@@ -378,16 +399,23 @@ async function listWorkflowRecordingRowsMatchingInputFilter(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
   inputFilter: WorkflowRecordingInputFilter,
-): Promise<WorkflowRecordingRunRow[]> {
+  inputCursor: number,
+  pageSize: number,
+  signal?: AbortSignal,
+) {
   const rows = (await listWorkflowRecordingRunRowsForWorkflow(workflowId))
     .filter((row) => statusFilter === 'all' || row.status === 'failed' || row.status === 'suspicious');
-  return filterRowsBySerializedRecordingInput(rows, inputFilter, async (row) => {
+  return filterRowsBySerializedRecordingInputPage(rows, inputFilter, async (row) => {
     const recordingPath = getRecordingArtifactPath(row.bundlePath, 'recording', row.encoding);
     if (!await pathExists(recordingPath)) {
       return null;
     }
 
     return readArtifactText(recordingPath, row.encoding);
+  }, {
+    cursor: inputCursor,
+    pageSize,
+    signal,
   });
 }
 

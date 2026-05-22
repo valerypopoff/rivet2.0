@@ -94,9 +94,10 @@ export async function fetchWorkflowTree(): Promise<WorkflowTreeResponse> {
   return workflowJsonResponse<WorkflowTreeResponse>(response);
 }
 
-export async function fetchWorkflowRecordingWorkflows(): Promise<WorkflowRecordingWorkflowListResponse> {
+export async function fetchWorkflowRecordingWorkflows(options: { signal?: AbortSignal } = {}): Promise<WorkflowRecordingWorkflowListResponse> {
   const response = await fetch(`${API}/workflows/recordings/workflows`, {
     cache: 'no-store',
+    signal: options.signal,
   });
   return workflowJsonResponse<WorkflowRecordingWorkflowListResponse>(response);
 }
@@ -108,6 +109,8 @@ export async function fetchWorkflowRecordingRuns(
     pageSize: number;
     status: WorkflowRecordingFilterStatus;
     inputFilter?: WorkflowRecordingInputFilter | null;
+    inputCursor?: number;
+    signal?: AbortSignal;
   },
 ): Promise<WorkflowRecordingRunsPageResponse> {
   const query = new URLSearchParams({
@@ -119,9 +122,13 @@ export async function fetchWorkflowRecordingRuns(
     query.set('inputPath', options.inputFilter.path);
     query.set('inputOperator', options.inputFilter.operator);
     query.set('inputValue', options.inputFilter.value);
+    if (options.inputCursor != null) {
+      query.set('inputCursor', String(options.inputCursor));
+    }
   }
   const response = await fetch(`${API}/workflows/recordings/workflows/${encodeURIComponent(workflowId)}/runs?${query}`, {
     cache: 'no-store',
+    signal: options.signal,
   });
   return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);
 }

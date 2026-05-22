@@ -135,6 +135,7 @@ type RecordingRunsTableProps = {
   badRunsCount: number;
   filteredRunsCount: number;
   totalPages: number;
+  inputSearchStatus: 'idle' | 'searching' | 'complete' | 'stopped';
   page: number;
   runsPerPage: number;
   statusFilter: WorkflowRecordingFilterStatus;
@@ -154,6 +155,7 @@ type RecordingRunsTableProps = {
   onSetInputFilterValue: (value: string) => void;
   onApplyInputFilter: () => void;
   onClearInputFilter: () => void;
+  onStopInputSearch: () => void;
   onSetRunsPerPage: (pageSize: number) => void;
   onSetPage: (page: number | ((current: number) => number)) => void;
   onDeleteRecording: (recordingId: string) => void;
@@ -168,6 +170,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   badRunsCount,
   filteredRunsCount,
   totalPages,
+  inputSearchStatus,
   page,
   runsPerPage,
   statusFilter,
@@ -187,6 +190,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   onSetInputFilterValue,
   onApplyInputFilter,
   onClearInputFilter,
+  onStopInputSearch,
   onSetRunsPerPage,
   onSetPage,
   onDeleteRecording,
@@ -197,6 +201,12 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   const valueInputDisabled = inputFilterOperator === 'exists' || inputFilterOperator === 'not_exists';
   const selectedInputFilterOperator = inputFilterOperatorOptions.find((option) => option.value === inputFilterOperator) ??
     inputFilterOperatorOptions[0]!;
+  const inputSearchFoundLabel = visibleRuns.length === 1 ? '1 match found' : `${visibleRuns.length} matches found`;
+  const inputSearchMessage = inputSearchStatus === 'searching'
+    ? visibleRuns.length > 0 ? `Searching older recordings... ${inputSearchFoundLabel}` : 'Searching newest recordings...'
+    : inputSearchStatus === 'complete'
+      ? `Search complete, ${inputSearchFoundLabel}`
+      : inputSearchStatus === 'stopped' ? `Search stopped, ${inputSearchFoundLabel}` : '';
 
   return (
     <section className="run-recordings-details">
@@ -350,16 +360,38 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             {inputFilterError ? (
               <div className="run-recordings-input-filter-error">{inputFilterError}</div>
             ) : null}
+
+            {appliedInputFilter && inputSearchMessage ? (
+              <div className="run-recordings-input-search-status" aria-live="polite">
+                <span className="run-recordings-input-search-message">
+                  {inputSearchStatus === 'searching' ? (
+                    <span className="run-recordings-input-search-spinner" aria-hidden="true" />
+                  ) : null}
+                  {inputSearchMessage}
+                </span>
+                {inputSearchStatus === 'searching' ? (
+                  <button
+                    type="button"
+                    className="run-recordings-page-button"
+                    onClick={onStopInputSearch}
+                  >
+                    Stop search
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </form>
         ) : null}
 
         <div className="run-recordings-runs-body">
-          {runsLoading ? (
-            <div className="run-recordings-empty-group">Loading runs...</div>
+          {runsLoading && visibleRuns.length === 0 ? (
+            <div className="run-recordings-empty-group">
+              {appliedInputFilter ? 'Searching for matching runs...' : 'Loading runs...'}
+            </div>
           ) : filteredRunsCount === 0 ? (
             <div className="run-recordings-empty-group">
               {appliedInputFilter
-                ? 'No runs match this input filter.'
+                ? inputSearchStatus === 'searching' ? 'Searching for matching runs...' : 'No runs match this input filter.'
                 : statusFilter === 'failed' ? 'No bad runs for this workflow.' : 'No recorded runs yet.'}
             </div>
           ) : (
@@ -377,7 +409,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
           )}
         </div>
 
-        {filteredRunsCount > 0 && totalPages > 1 ? (
+        {!appliedInputFilter && filteredRunsCount > 0 && totalPages > 1 ? (
           <div className="run-recordings-pagination-footer">
             <button
               type="button"

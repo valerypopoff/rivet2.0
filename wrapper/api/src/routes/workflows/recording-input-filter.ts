@@ -9,6 +9,22 @@ type PathToken = string | number;
 const INPUT_FILTER_OPERATORS = new Set<WorkflowRecordingInputFilterOperator>(
   WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS,
 );
+const INPUT_FILTER_CONCURRENT_ARTIFACT_READS = 8;
+
+type FilterRowsBySerializedRecordingInputPageOptions = {
+  cursor: number;
+  pageSize: number;
+  settleCandidateCount?: number;
+  signal?: AbortSignal;
+};
+
+type FilterRowsBySerializedRecordingInputPageResult<T> = {
+  rows: T[];
+  totalRuns: number;
+  totalRunsExact: boolean;
+  hasMore: boolean;
+  nextInputCursor?: number;
+};
 
 export function normalizeWorkflowRecordingInputFilter(options: {
   path?: string | null;
@@ -57,7 +73,7 @@ export async function filterRowsBySerializedRecordingInput<T>(
   const matches = Array.from({ length: rows.length }, () => false);
   let nextIndex = 0;
 
-  const workerCount = Math.min(8, rows.length);
+  const workerCount = Math.min(INPUT_FILTER_CONCURRENT_ARTIFACT_READS, rows.length);
   await Promise.all(Array.from({ length: workerCount }, async () => {
     while (nextIndex < rows.length) {
       const rowIndex = nextIndex;
@@ -74,6 +90,91 @@ export async function filterRowsBySerializedRecordingInput<T>(
   }));
 
   return rows.filter((_, index) => matches[index]);
+}
+
+export async function filterRowsBySerializedRecordingInputPage<T>(
+  rows: T[],
+  filter: WorkflowRecordingInputFilter,
+  readSerializedRecording: (row: T) => Promise<string | null>,
+  options: FilterRowsBySerializedRecordingInputPageOptions,
+): Promise<FilterRowsBySerializedRecordingInputPageResult<T>> {
+  const cursor = Math.min(rows.length, Math.max(0, Math.floor(options.cursor)));
+  const pageSize = Math.min(100, Math.max(1, Math.floor(options.pageSize)));
+  const settleCandidateCount = Math.max(1, Math.floor(options.settleCandidateCount ?? pageSize));
+  const pageRows: T[] = [];
+  let matchedRows = 0;
+  let scannedRows = 0;
+  let nextIndex = cursor;
+  let pageFilled = false;
+
+  while (nextIndex < rows.length) {
+    throwIfAborted(options.signal);
+
+    const batchStartIndex = nextIndex;
+    const batchRows = rows.slice(batchStartIndex, batchStartIndex + INPUT_FILTER_CONCURRENT_ARTIFACT_READS);
+    nextIndex += batchRows.length;
+
+    const batchMatches = await Promise.all(batchRows.map(async (row) => {
+      try {
+        throwIfAborted(options.signal);
+        const serializedRecording = await readSerializedRecording(row);
+        throwIfAborted(options.signal);
+        return serializedRecording != null &&
+          matchesWorkflowRecordingSerializedInputFilter(serializedRecording, filter);
+      } catch {
+        return false;
+      }
+    }));
+    throwIfAborted(options.signal);
+
+    for (let index = 0; index < batchRows.length; index += 1) {
+      scannedRows += 1;
+
+      if (!batchMatches[index]) {
+        continue;
+      }
+
+      matchedRows += 1;
+      if (pageRows.length < pageSize) {
+        pageRows.push(batchRows[index]!);
+      }
+
+      if (pageRows.length >= pageSize) {
+        pageFilled = true;
+        break;
+      }
+    }
+
+    if (pageFilled) {
+      break;
+    }
+
+    if (scannedRows >= settleCandidateCount) {
+      break;
+    }
+  }
+
+  const nextInputCursor = cursor + scannedRows;
+  const totalRunsExact = nextInputCursor >= rows.length && cursor === 0;
+  const hasMore = nextInputCursor < rows.length;
+
+  return {
+    rows: pageRows,
+    totalRuns: totalRunsExact ? matchedRows : pageRows.length,
+    totalRunsExact,
+    hasMore,
+    nextInputCursor: hasMore ? nextInputCursor : undefined,
+  };
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+
+  const error = new Error('Recording input filter search aborted');
+  error.name = 'AbortError';
+  throw error;
 }
 
 function extractWorkflowInputFromSerializedRecording(recordingSerialized: string): { exists: boolean; value: unknown } {

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   filterRowsBySerializedRecordingInput,
+  filterRowsBySerializedRecordingInputPage,
   matchesWorkflowRecordingSerializedInputFilter,
   normalizeWorkflowRecordingInputFilter,
 } from '../routes/workflows/recording-input-filter.js';
@@ -153,4 +154,100 @@ test('recording input row filtering preserves order and bounds artifact reads', 
   );
 
   assert.deepEqual(filteredRows.map((row) => row.id), ['first', 'third']);
+});
+
+test('recording input page filtering returns recent matches before scanning full history', async () => {
+  const rows = Array.from({ length: 30 }, (_, index) => ({
+    id: `row-${index}`,
+    serialized: createSerializedRecording(index === 0 ? { request_id: 'recent' } : { request_id: `older-${index}` }),
+  }));
+  let readCount = 0;
+
+  const filteredPage = await filterRowsBySerializedRecordingInputPage(
+    rows,
+    { path: '$.request_id', operator: '==', value: 'recent' },
+    async (row) => {
+      readCount += 1;
+      return row.serialized;
+    },
+    { cursor: 0, pageSize: 5, settleCandidateCount: 5 },
+  );
+
+  assert.deepEqual(filteredPage.rows.map((row) => row.id), ['row-0']);
+  assert.equal(filteredPage.totalRunsExact, false);
+  assert.equal(filteredPage.hasMore, true);
+  assert.equal(filteredPage.nextInputCursor, readCount);
+  assert.ok(readCount < rows.length);
+});
+
+test('recording input page filtering advances the cursor through chunks with no matches', async () => {
+  const rows = Array.from({ length: 30 }, (_, index) => ({
+    id: `row-${index}`,
+    serialized: createSerializedRecording({ request_id: `older-${index}` }),
+  }));
+  let readCount = 0;
+
+  const filteredPage = await filterRowsBySerializedRecordingInputPage(
+    rows,
+    { path: '$.request_id', operator: '==', value: 'missing' },
+    async (row) => {
+      readCount += 1;
+      return row.serialized;
+    },
+    { cursor: 0, pageSize: 5, settleCandidateCount: 5 },
+  );
+
+  assert.deepEqual(filteredPage.rows, []);
+  assert.equal(filteredPage.totalRunsExact, false);
+  assert.equal(filteredPage.hasMore, true);
+  assert.equal(filteredPage.nextInputCursor, readCount);
+  assert.ok(readCount < rows.length);
+});
+
+test('recording input page filtering resumes without skipping extra matches from a read batch', async () => {
+  const rows = Array.from({ length: 10 }, (_, index) => ({
+    id: `row-${index}`,
+    serialized: createSerializedRecording({ request_id: `match-${index}` }),
+  }));
+
+  const firstPage = await filterRowsBySerializedRecordingInputPage(
+    rows,
+    { path: '$.request_id', operator: 'exists', value: '' },
+    async (row) => row.serialized,
+    { cursor: 0, pageSize: 2 },
+  );
+  const secondPage = await filterRowsBySerializedRecordingInputPage(
+    rows,
+    { path: '$.request_id', operator: 'exists', value: '' },
+    async (row) => row.serialized,
+    { cursor: firstPage.nextInputCursor ?? 0, pageSize: 2 },
+  );
+
+  assert.deepEqual(firstPage.rows.map((row) => row.id), ['row-0', 'row-1']);
+  assert.equal(firstPage.nextInputCursor, 2);
+  assert.deepEqual(secondPage.rows.map((row) => row.id), ['row-2', 'row-3']);
+});
+
+test('recording input page filtering aborts the scan between artifact reads', async () => {
+  const rows = Array.from({ length: 30 }, (_, index) => ({
+    id: `row-${index}`,
+    serialized: createSerializedRecording({ request_id: `match-${index}` }),
+  }));
+  const abortController = new AbortController();
+  let readCount = 0;
+
+  await assert.rejects(
+    filterRowsBySerializedRecordingInputPage(
+      rows,
+      { path: '$.request_id', operator: 'exists', value: '' },
+      async (row) => {
+        readCount += 1;
+        abortController.abort();
+        return row.serialized;
+      },
+      { cursor: 0, pageSize: 5, signal: abortController.signal },
+    ),
+    { name: 'AbortError' },
+  );
+  assert.equal(readCount, 1);
 });

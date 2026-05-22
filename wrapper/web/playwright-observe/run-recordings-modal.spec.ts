@@ -221,11 +221,52 @@ function applyInputFilter(run: RecordingRun, url: URL): boolean {
   }
 }
 
-async function installRunRecordingRoutes(page: Page) {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function installRunRecordingRoutes(
+  page: Page,
+  options: { latestFlowRunCount?: number; cursorDelayMs?: number } = {},
+) {
   const { workflows, runsByWorkflow } = createRunRecordingsFixture();
   const recordingFetches: string[] = [];
   const replayProjectFetches: string[] = [];
   const runFetches: string[] = [];
+  const latestRuns = runsByWorkflow.get('workflow-b');
+  if (latestRuns && options.latestFlowRunCount && options.latestFlowRunCount > latestRuns.length) {
+    for (let index = latestRuns.length; index < options.latestFlowRunCount; index += 1) {
+      latestRuns.push({
+        id: `recording-b-${index + 1}`,
+        workflowId: 'workflow-b',
+        createdAt: new Date(Date.UTC(2026, 3, 8, 11, 30 - index, 0)).toISOString(),
+        runKind: index % 3 === 0 ? 'latest' : 'published',
+        status: 'succeeded',
+        durationMs: 900 + (index * 10),
+        endpointNameAtExecution: 'latest-flow',
+        hasReplayDataset: false,
+        recordingCompressedBytes: 10,
+        recordingUncompressedBytes: 20,
+        projectCompressedBytes: 10,
+        projectUncompressedBytes: 20,
+        datasetCompressedBytes: 0,
+        datasetUncompressedBytes: 0,
+        input: {
+          foo: 'baz',
+          score: index,
+        },
+      });
+    }
+
+    const latestWorkflow = workflows.find((workflow) => workflow.workflowId === 'workflow-b');
+    if (latestWorkflow) {
+      latestWorkflow.totalRuns = latestRuns.length;
+      latestWorkflow.failedRuns = latestRuns.filter((run) => run.status === 'failed').length;
+      latestWorkflow.suspiciousRuns = latestRuns.filter((run) => run.status === 'suspicious').length;
+    }
+  }
 
   await page.addInitScript(() => {
     window.confirm = () => true;
@@ -251,12 +292,23 @@ async function installRunRecordingRoutes(page: Page) {
       const status = (url.searchParams.get('status') ?? 'all') as WorkflowRecordingFilterStatus;
       const pageNumber = Number(url.searchParams.get('page') ?? '1');
       const pageSize = Number(url.searchParams.get('pageSize') ?? '20');
+      const inputCursor = Number(url.searchParams.get('inputCursor') ?? '0');
+      const hasInputFilter = url.searchParams.has('inputPath');
       const sourceRuns = runsByWorkflow.get(workflowId) ?? [];
       const filteredRuns = status === 'failed'
         ? sourceRuns.filter((run) => run.status === 'failed' || run.status === 'suspicious')
         : sourceRuns;
-      const inputFilteredRuns = filteredRuns.filter((run) => applyInputFilter(run, url));
-      const pageRuns = inputFilteredRuns.slice((pageNumber - 1) * pageSize, pageNumber * pageSize);
+      const offset = hasInputFilter ? inputCursor : (pageNumber - 1) * pageSize;
+      const candidateRuns = filteredRuns.slice(offset, offset + pageSize);
+      const pageRuns = hasInputFilter
+        ? candidateRuns.filter((run) => applyInputFilter(run, url))
+        : candidateRuns;
+      const nextInputCursor = offset + candidateRuns.length;
+      const hasMore = hasInputFilter && nextInputCursor < filteredRuns.length;
+
+      if (hasInputFilter && inputCursor > 0) {
+        await delay(options.cursorDelayMs ?? 150);
+      }
 
       await route.fulfill({
         status: 200,
@@ -265,7 +317,10 @@ async function installRunRecordingRoutes(page: Page) {
           workflowId,
           page: pageNumber,
           pageSize,
-          totalRuns: inputFilteredRuns.length,
+          totalRuns: hasInputFilter ? pageRuns.length : filteredRuns.length,
+          totalRunsExact: !hasInputFilter || !hasMore,
+          hasMore,
+          nextInputCursor: hasMore ? nextInputCursor : undefined,
           statusFilter: status,
           runs: pageRuns,
         }),
@@ -359,10 +414,10 @@ async function openLatestFlowRecordings(page: Page) {
   return modal;
 }
 
-async function choosePageSizeTen(modal: Locator) {
+async function choosePageSizeTen(modal: Locator, expectedTotalPages = 2) {
   await modal.getByRole('button', { name: /^All/ }).click();
   await modal.getByRole('button', { name: '10', exact: true }).click();
-  await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 2');
+  await expect(modal.locator('.run-recordings-page-status')).toHaveText(`Page 1 of ${expectedTotalPages}`);
 }
 
 test.describe('Run recordings modal', () => {
@@ -385,6 +440,7 @@ test.describe('Run recordings modal', () => {
     await modal.getByLabel('Value').fill('bar');
     await modal.getByRole('button', { name: 'Apply' }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
     const filteredRunsRequest = new URL(runFetches.at(-1)!);
     expect(filteredRunsRequest.searchParams.get('inputPath')).toBe('$.foo');
     expect(filteredRunsRequest.searchParams.get('inputOperator')).toBe('==');
@@ -399,6 +455,10 @@ test.describe('Run recordings modal', () => {
     await modal.getByLabel('Value').fill('bar');
     await modal.getByRole('button', { name: 'Apply' }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(10);
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Searching older recordings');
+    await expect(modal.getByRole('button', { name: 'Stop search' })).toBeVisible();
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(12);
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
     const missingNotEqualsRequest = new URL(runFetches.at(-1)!);
     expect(missingNotEqualsRequest.searchParams.get('inputPath')).toBe('$.missing');
     expect(missingNotEqualsRequest.searchParams.get('inputOperator')).toBe('!=');
@@ -408,7 +468,8 @@ test.describe('Run recordings modal', () => {
     await page.locator('.run-recordings-select__option').filter({ hasText: /^==$/ }).click();
     await modal.getByLabel('Value').fill('undefined');
     await modal.getByRole('button', { name: 'Apply' }).click();
-    await expect(modal.locator('.run-recordings-run')).toHaveCount(10);
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(12);
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
     const missingEqualsUndefinedRequest = new URL(runFetches.at(-1)!);
     expect(missingEqualsUndefinedRequest.searchParams.get('inputPath')).toBe('$.missing');
     expect(missingEqualsUndefinedRequest.searchParams.get('inputOperator')).toBe('==');
@@ -433,5 +494,31 @@ test.describe('Run recordings modal', () => {
     expect(replayProjectFetches[0]).toBe('recording-b-2');
     await expect(page.locator('.dashboard-empty-state')).toBeHidden();
     await expect(page.locator('.Toastify__toast', { hasText: 'Failed to open project' })).toHaveCount(0);
+  });
+
+  test('stops an active input search when the modal closes', async ({ page }) => {
+    const { runFetches } = await installRunRecordingRoutes(page, {
+      latestFlowRunCount: 30,
+      cursorDelayMs: 300,
+    });
+    const modal = await openLatestFlowRecordings(page);
+    await choosePageSizeTen(modal, 3);
+
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    await modal.getByLabel('Input JSON path').fill('$.missing');
+    await modal.locator('.run-recordings-input-filter-operator .run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option').filter({ hasText: /^!=$/ }).click();
+    await modal.getByLabel('Value').fill('bar');
+    await modal.getByRole('button', { name: 'Apply' }).click();
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(10);
+    await expect(modal.getByRole('button', { name: 'Stop search' })).toBeVisible();
+    await expect.poll(() => runFetches.length).toBeGreaterThanOrEqual(2);
+
+    const requestCountAtClose = runFetches.length;
+    await modal.getByLabel('Close run recordings').click();
+    await expect(modal).toBeHidden();
+    await delay(700);
+
+    expect(runFetches.length).toBe(requestCountAtClose);
   });
 });
