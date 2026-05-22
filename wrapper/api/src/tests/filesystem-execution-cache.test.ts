@@ -3,7 +3,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
+import {
+  createRootPublishedProjectFactory,
+  createWorkflowTestRoots,
+  resetWorkflowTestRoots,
+} from './helpers/workflow-fixtures.js';
 
 const envKeys = [
   'RIVET_WORKSPACE_ROOT',
@@ -40,18 +44,12 @@ const {
 } = await import('../routes/workflows/filesystem-execution-cache.js');
 const rivetNode = await import('@valerypopoff/rivet2-node');
 
+const createRootPublishedProject = createRootPublishedProjectFactory(workflowMutations);
+
 async function resetFilesystemRoots(): Promise<void> {
   resetFilesystemExecutionCacheForTests();
   await resetWorkflowTestRoots({ workflowsRoot, appDataRoot, runtimeLibrariesRoot });
   await workflowFs.ensureWorkflowsRoot();
-}
-
-async function createPublishedProject(name: string, endpointName: string) {
-  const created = await workflowMutations.createWorkflowProjectItem('', name);
-  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
-    endpointName,
-  });
-  return created;
 }
 
 function createDatasetsContents(value: string): string {
@@ -111,7 +109,7 @@ test.after(async () => {
 });
 
 test('filesystem execution cache warms published and latest endpoint pointers at startup', async () => {
-  const created = await createPublishedProject('WarmIndex', 'warm-index-endpoint');
+  const created = await createRootPublishedProject('WarmIndex', 'warm-index-endpoint');
   const cache = new FilesystemExecutionCache();
 
   await cache.initialize(workflowsRoot);
@@ -128,7 +126,7 @@ test('filesystem execution cache warms published and latest endpoint pointers at
 });
 
 test('filesystem execution cache invalidates published snapshot materializations by source project path', async () => {
-  const created = await createPublishedProject('Published Source Invalidation', 'published-source-invalidation');
+  const created = await createRootPublishedProject('Published Source Invalidation', 'published-source-invalidation');
   const cache = new FilesystemExecutionCache();
 
   await cache.initialize(workflowsRoot);
@@ -151,7 +149,7 @@ test('filesystem execution cache invalidates published snapshot materializations
 });
 
 test('filesystem execution cache rebuilds after settings and directory changes', async () => {
-  const created = await createPublishedProject('RebuildIndex', 'before-index-rebuild');
+  const created = await createRootPublishedProject('RebuildIndex', 'before-index-rebuild');
   const cache = new FilesystemExecutionCache();
 
   await cache.initialize(workflowsRoot);
@@ -184,7 +182,7 @@ test('filesystem execution cache rebuilds after settings and directory changes',
 });
 
 test('filesystem execution cache resolves latest endpoints from the draft endpoint after settings change', async () => {
-  const created = await createPublishedProject('Draft Latest Cache Project', 'draft-latest-cache-published');
+  const created = await createRootPublishedProject('Draft Latest Cache Project', 'draft-latest-cache-published');
   const cache = new FilesystemExecutionCache();
 
   await cache.initialize(workflowsRoot);
@@ -214,7 +212,7 @@ test('filesystem execution cache resolves latest endpoints from the draft endpoi
 });
 
 test('filesystem execution cache drops both public endpoint families after full unpublish while keeping the saved draft endpoint', async () => {
-  const created = await createPublishedProject('Draft Latest Cache Unpublish', 'draft-latest-cache-unpublish');
+  const created = await createRootPublishedProject('Draft Latest Cache Unpublish', 'draft-latest-cache-unpublish');
   const cache = new FilesystemExecutionCache();
 
   await cache.initialize(workflowsRoot);
@@ -290,7 +288,7 @@ test('filesystem execution cache preserves stale published candidate skipping an
 });
 
 test('filesystem execution cache reuses cached materialization and reloads project and dataset contents when files change', async () => {
-  const created = await createPublishedProject('Materialized Project', 'materialized-project-endpoint');
+  const created = await createRootPublishedProject('Materialized Project', 'materialized-project-endpoint');
   const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
   await fs.writeFile(sidecars.dataset, createDatasetsContents('before'), 'utf8');
 
@@ -331,7 +329,7 @@ test('filesystem execution cache reuses cached materialization and reloads proje
 });
 
 test('filesystem execution cache does not let an invalidated in-flight materialization repopulate stale cache state', async (t) => {
-  const created = await createPublishedProject('Invalidate In Flight', 'invalidate-in-flight-endpoint');
+  const created = await createRootPublishedProject('Invalidate In Flight', 'invalidate-in-flight-endpoint');
   const cache = new FilesystemExecutionCache();
 
   await cache.initialize(workflowsRoot);
@@ -373,7 +371,7 @@ test('filesystem execution cache does not let an invalidated in-flight materiali
 });
 
 test('filesystem execution cache preserves dirty invalidations that arrive during an index rebuild', async (t) => {
-  await createPublishedProject('First Indexed Project', 'first-indexed-endpoint');
+  await createRootPublishedProject('First Indexed Project', 'first-indexed-endpoint');
   const cache = new FilesystemExecutionCache();
 
   await cache.initialize(workflowsRoot);
@@ -418,7 +416,7 @@ test('filesystem execution cache preserves dirty invalidations that arrive durin
 });
 
 test('filesystem execution cache resets cleanly when the workflows root changes', async () => {
-  await createPublishedProject('First Root Project', 'first-root-endpoint');
+  await createRootPublishedProject('First Root Project', 'first-root-endpoint');
   const cache = new FilesystemExecutionCache();
 
   await cache.initialize(workflowsRoot);

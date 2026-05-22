@@ -26,7 +26,7 @@ import type {
   WorkflowRecordingListRow,
   WorkflowRow,
 } from './types.js';
-import { filterRowsBySerializedRecordingInput } from '../recording-input-filter.js';
+import { filterRowsBySerializedRecordingInputPage } from '../recording-input-filter.js';
 
 type ManagedWorkflowRecordingServiceDependencies = {
   context: ManagedWorkflowContext;
@@ -36,11 +36,19 @@ async function filterManagedRecordingRowsByInput(
   rows: RecordingRow[],
   inputFilter: WorkflowRecordingInputFilter,
   blobStore: ManagedWorkflowBlobStore,
-): Promise<RecordingRow[]> {
-  return filterRowsBySerializedRecordingInput(
+  inputCursor: number,
+  pageSize: number,
+  signal?: AbortSignal,
+) {
+  return filterRowsBySerializedRecordingInputPage(
     rows,
     inputFilter,
     (row) => blobStore.getText(row.recording_blob_key),
+    {
+      cursor: inputCursor,
+      pageSize,
+      signal,
+    },
   );
 }
 
@@ -177,6 +185,8 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       pageSize: number,
       statusFilter: WorkflowRecordingFilterStatus,
       inputFilter: WorkflowRecordingInputFilter | null = null,
+      inputCursor = 0,
+      signal?: AbortSignal,
     ): Promise<WorkflowRecordingRunsPageResponse> {
       await deps.initialize();
       const normalizedPage = Math.max(1, Math.floor(page));
@@ -211,12 +221,10 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           `,
         inputFilter ? [workflowId] : [workflowId, normalizedPageSize, offset],
       );
-      const filteredRows = inputFilter
-        ? await filterManagedRecordingRowsByInput(rows, inputFilter, deps.blobStore)
-        : rows;
-      const pageRows = inputFilter
-        ? filteredRows.slice(offset, offset + normalizedPageSize)
-        : filteredRows;
+      const filteredPage = inputFilter
+        ? await filterManagedRecordingRowsByInput(rows, inputFilter, deps.blobStore, inputCursor, normalizedPageSize, signal)
+        : null;
+      const pageRows = filteredPage?.rows ?? rows;
 
       const runs: WorkflowRecordingRunSummary[] = pageRows.map((row) => ({
         id: row.recording_id,
@@ -240,7 +248,10 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         workflowId,
         page: normalizedPage,
         pageSize: normalizedPageSize,
-        totalRuns: inputFilter ? filteredRows.length : countRow?.total_runs ?? 0,
+        totalRuns: filteredPage?.totalRuns ?? countRow?.total_runs ?? 0,
+        totalRunsExact: filteredPage?.totalRunsExact ?? true,
+        hasMore: filteredPage?.hasMore ?? normalizedPage * normalizedPageSize < (countRow?.total_runs ?? 0),
+        nextInputCursor: filteredPage?.nextInputCursor,
         statusFilter,
         inputFilter,
         runs,

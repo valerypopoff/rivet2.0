@@ -63,6 +63,9 @@ export type WorkflowRecordingRunsPageResponse = {
   page: number;
   pageSize: number;
   totalRuns: number;
+  totalRunsExact?: boolean;
+  hasMore?: boolean;
+  nextInputCursor?: number;
   statusFilter: WorkflowRecordingFilterStatus;
   inputFilter?: WorkflowRecordingInputFilter | null;
   runs: WorkflowRecordingRunSummary[];

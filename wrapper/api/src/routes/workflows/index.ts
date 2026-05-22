@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 
 import { validateBody } from '../../middleware/validate.js';
@@ -39,6 +39,25 @@ import { createWorkflowDownloadContentDisposition } from './workflow-download.js
 
 export const workflowsRouter = Router();
 const timing = createResponseTimingMiddleware();
+
+function createRequestAbortSignal(req: Request, res: Response): { signal: AbortSignal; cleanup: () => void } {
+  const abortController = new AbortController();
+  const abort = () => abortController.abort();
+  req.on('aborted', abort);
+  res.on('close', abort);
+
+  return {
+    signal: abortController.signal,
+    cleanup: () => {
+      req.off('aborted', abort);
+      res.off('close', abort);
+    },
+  };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
 
 workflowsRouter.use((req, res, next) => {
   if (req.method === 'GET') {
@@ -126,6 +145,7 @@ const recordingsRunsQuerySchema = z.object({
   inputPath: z.string().optional(),
   inputOperator: z.enum(WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS).optional(),
   inputValue: z.string().optional(),
+  inputCursor: z.coerce.number().int().min(0).optional().default(0),
 });
 
 workflowsRouter.get('/tree', timing, asyncHandler(async (_req, res) => {
@@ -142,6 +162,7 @@ workflowsRouter.get('/recordings/workflows', asyncHandler(async (_req, res) => {
 
 workflowsRouter.get('/recordings/workflows/:workflowId/runs', asyncHandler(async (req, res) => {
   const parsedQuery = recordingsRunsQuerySchema.parse(req.query);
+  const requestAbort = createRequestAbortSignal(req, res);
   let inputFilter: ReturnType<typeof normalizeWorkflowRecordingInputFilter> = null;
   try {
     inputFilter = normalizeWorkflowRecordingInputFilter({
@@ -150,16 +171,30 @@ workflowsRouter.get('/recordings/workflows/:workflowId/runs', asyncHandler(async
       value: parsedQuery.inputValue,
     });
   } catch (error) {
+    requestAbort.cleanup();
     throw badRequest(error instanceof Error ? error.message : 'Invalid recording input filter');
   }
 
-  res.json(await listWorkflowRecordingRunsPageWithBackend(
-    String(req.params.workflowId ?? ''),
-    parsedQuery.page,
-    parsedQuery.pageSize,
-    parsedQuery.status,
-    inputFilter,
-  ));
+  try {
+    const runsPage = await listWorkflowRecordingRunsPageWithBackend(
+      String(req.params.workflowId ?? ''),
+      parsedQuery.page,
+      parsedQuery.pageSize,
+      parsedQuery.status,
+      inputFilter,
+      parsedQuery.inputCursor,
+      requestAbort.signal,
+    );
+    if (!requestAbort.signal.aborted && !res.destroyed) {
+      res.json(runsPage);
+    }
+  } catch (error) {
+    if (!requestAbort.signal.aborted || !isAbortError(error)) {
+      throw error;
+    }
+  } finally {
+    requestAbort.cleanup();
+  }
 }));
 
 workflowsRouter.get('/recordings/:recordingId/recording', asyncHandler(async (req, res) => {

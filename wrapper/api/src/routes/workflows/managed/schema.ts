@@ -85,8 +85,8 @@ DECLARE
     WHEN position('/' in target_relative_path) = 0 THEN ''
     ELSE regexp_replace(target_relative_path, '/[^/]+$', '')
   END;
-  source_prefix_pattern TEXT := replace(replace(replace(source_relative_path, '\', '\\'), '%', '\%'), '_', '\_') || '/%';
-  temporary_prefix_pattern TEXT := replace(replace(replace(temporary_prefix, '\', '\\'), '%', '\%'), '_', '\_') || '/%';
+  source_prefix_pattern TEXT := replace(replace(replace(source_relative_path, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '/%';
+  temporary_prefix_pattern TEXT := replace(replace(replace(temporary_prefix, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '/%';
   moved_paths TEXT[] := ARRAY[]::TEXT[];
 BEGIN
   PERFORM 1
@@ -100,7 +100,7 @@ BEGIN
 
   PERFORM 1
   FROM workflow_folders AS folder
-  WHERE folder.relative_path = source_relative_path OR folder.relative_path LIKE source_prefix_pattern ESCAPE '\'
+  WHERE folder.relative_path = source_relative_path OR folder.relative_path LIKE source_prefix_pattern ESCAPE '\\'
   FOR UPDATE;
 
   IF target_parent_relative_path <> '' THEN
@@ -125,7 +125,7 @@ BEGIN
   WITH locked_workflows AS (
     SELECT workflow.relative_path
     FROM workflows AS workflow
-    WHERE workflow.relative_path = source_relative_path OR workflow.relative_path LIKE source_prefix_pattern ESCAPE '\'
+    WHERE workflow.relative_path = source_relative_path OR workflow.relative_path LIKE source_prefix_pattern ESCAPE '\\'
     ORDER BY workflow.relative_path ASC
     FOR UPDATE
   )
@@ -140,11 +140,11 @@ BEGIN
       END,
       parent_relative_path = CASE
         WHEN folder.parent_relative_path = source_relative_path THEN temporary_prefix
-        WHEN folder.parent_relative_path LIKE source_prefix_pattern ESCAPE '\' THEN temporary_prefix || substring(folder.parent_relative_path from char_length(source_relative_path) + 1)
+        WHEN folder.parent_relative_path LIKE source_prefix_pattern ESCAPE '\\' THEN temporary_prefix || substring(folder.parent_relative_path from char_length(source_relative_path) + 1)
         ELSE folder.parent_relative_path
       END,
       updated_at = NOW()
-  WHERE folder.relative_path = source_relative_path OR folder.relative_path LIKE source_prefix_pattern ESCAPE '\';
+  WHERE folder.relative_path = source_relative_path OR folder.relative_path LIKE source_prefix_pattern ESCAPE '\\';
 
   UPDATE workflows AS workflow
   SET relative_path = CASE
@@ -153,11 +153,11 @@ BEGIN
       END,
       folder_relative_path = CASE
         WHEN workflow.folder_relative_path = source_relative_path THEN temporary_prefix
-        WHEN workflow.folder_relative_path LIKE source_prefix_pattern ESCAPE '\' THEN temporary_prefix || substring(workflow.folder_relative_path from char_length(source_relative_path) + 1)
+        WHEN workflow.folder_relative_path LIKE source_prefix_pattern ESCAPE '\\' THEN temporary_prefix || substring(workflow.folder_relative_path from char_length(source_relative_path) + 1)
         ELSE workflow.folder_relative_path
       END,
       updated_at = NOW()
-  WHERE workflow.relative_path = source_relative_path OR workflow.relative_path LIKE source_prefix_pattern ESCAPE '\';
+  WHERE workflow.relative_path = source_relative_path OR workflow.relative_path LIKE source_prefix_pattern ESCAPE '\\';
 
   UPDATE workflow_folders AS folder
   SET relative_path = CASE
@@ -170,11 +170,11 @@ BEGIN
       END,
       parent_relative_path = CASE
         WHEN folder.parent_relative_path = temporary_prefix THEN target_relative_path
-        WHEN folder.parent_relative_path LIKE temporary_prefix_pattern ESCAPE '\' THEN target_relative_path || substring(folder.parent_relative_path from char_length(temporary_prefix) + 1)
+        WHEN folder.parent_relative_path LIKE temporary_prefix_pattern ESCAPE '\\' THEN target_relative_path || substring(folder.parent_relative_path from char_length(temporary_prefix) + 1)
         ELSE folder.parent_relative_path
       END,
       updated_at = NOW()
-  WHERE folder.relative_path = temporary_prefix OR folder.relative_path LIKE temporary_prefix_pattern ESCAPE '\';
+  WHERE folder.relative_path = temporary_prefix OR folder.relative_path LIKE temporary_prefix_pattern ESCAPE '\\';
 
   UPDATE workflows AS workflow
   SET relative_path = CASE
@@ -183,11 +183,11 @@ BEGIN
       END,
       folder_relative_path = CASE
         WHEN workflow.folder_relative_path = temporary_prefix THEN target_relative_path
-        WHEN workflow.folder_relative_path LIKE temporary_prefix_pattern ESCAPE '\' THEN target_relative_path || substring(workflow.folder_relative_path from char_length(temporary_prefix) + 1)
+        WHEN workflow.folder_relative_path LIKE temporary_prefix_pattern ESCAPE '\\' THEN target_relative_path || substring(workflow.folder_relative_path from char_length(temporary_prefix) + 1)
         ELSE workflow.folder_relative_path
       END,
       updated_at = NOW()
-  WHERE workflow.relative_path = temporary_prefix OR workflow.relative_path LIKE temporary_prefix_pattern ESCAPE '\';
+  WHERE workflow.relative_path = temporary_prefix OR workflow.relative_path LIKE temporary_prefix_pattern ESCAPE '\\';
 
   RETURN QUERY
     SELECT workflow_folders.relative_path, workflow_folders.name, workflow_folders.parent_relative_path, workflow_folders.updated_at, moved_paths

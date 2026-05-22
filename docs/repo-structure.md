@@ -89,11 +89,13 @@ Root Markdown is reserved for:
 
 - `README.md`
 - `AGENTS.md`
-- the current tracked working-doc baseline:
+- the current approved working-doc baseline:
   - `backlog.md`
   - `repo-rearrangement.md`
+  - `tests-refactor.md`
 
 Reference docs, architecture docs, operator docs, and contributor docs belong under `docs/`.
+The repo-structure verifier checks both tracked and untracked root Markdown files so new working docs fail early unless they are added to this approved set.
 
 ## Tooling expectations
 
@@ -102,6 +104,7 @@ Reference docs, architecture docs, operator docs, and contributor docs belong un
 - upstream `rivet/` still uses Yarn internally where required by wrapper build/dev flows
 - `npm run setup:k8s-tools` installs the pinned cached Helm binary under `.data/tools/helm/`
 - `npm run verify:repo-structure` enforces the repo-structure guardrails
+- `npm run verify:test-style` enforces the test command manifest and style guardrails without running the full API or browser suites
 
 Helm resolution order for repo tooling is:
 
@@ -118,11 +121,13 @@ The repo-structure cleanup is meant to stay stable:
 - keep runtime/bootstrap code in `wrapper/bootstrap/`
 - keep root Markdown limited to the approved working-doc set
 - do not reintroduce tracked vendored helper binaries
+- keep test-suite command manifests explicit and protected by `npm run verify:test-style`
 
 Run:
 
 ```bash
 npm run verify:repo-structure
+npm run verify:test-style
 ```
 
 after repo-structure changes to keep those boundaries honest.

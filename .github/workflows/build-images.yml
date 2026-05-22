@@ -52,6 +52,9 @@ jobs:
       - name: Verify Repo Structure
         run: npm run verify:repo-structure
 
+      - name: Verify Test Style
+        run: npm run verify:test-style
+
       - name: Bootstrap Upstream Rivet
         run: |
           if [ ! -d rivet ] || [ -z "$(ls -A rivet 2>/dev/null)" ]; then

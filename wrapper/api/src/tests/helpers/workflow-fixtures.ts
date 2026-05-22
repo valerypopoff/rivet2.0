@@ -44,3 +44,24 @@ export async function resetWorkflowTestRoots(roots: {
     await fs.mkdir(dirPath, { recursive: true });
   }
 }
+
+type CreatedWorkflowProjectItem = {
+  relativePath: string;
+};
+
+type WorkflowProjectMutations<TCreated extends CreatedWorkflowProjectItem> = {
+  createWorkflowProjectItem(parentRelativePath: string, name: string): Promise<TCreated>;
+  publishWorkflowProjectItem(relativePath: string, options: { endpointName: string }): Promise<unknown>;
+};
+
+export function createRootPublishedProjectFactory<TCreated extends CreatedWorkflowProjectItem>(
+  workflowMutations: WorkflowProjectMutations<TCreated>,
+) {
+  return async function createRootPublishedProject(name: string, endpointName: string): Promise<TCreated> {
+    const created = await workflowMutations.createWorkflowProjectItem('', name);
+    await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+      endpointName,
+    });
+    return created;
+  };
+}

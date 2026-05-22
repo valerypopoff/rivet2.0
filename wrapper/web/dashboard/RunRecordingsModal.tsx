@@ -1,5 +1,5 @@
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
-import { useMemo, type FC } from 'react';
+import { useCallback, useMemo, type FC } from 'react';
 
 import { getWorkflowProjectStatusLabel } from './projectSettingsForm';
 import { RecordingRunsTable } from './RecordingRunsTable';
@@ -69,6 +69,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     badRunsCount,
     filteredRunsCount,
     totalPages,
+    inputSearchStatus,
     visibleRuns,
     setSelectedWorkflowId,
     setRunsPerPage,
@@ -80,6 +81,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     setInputFilterValue,
     handleApplyInputFilter,
     handleClearInputFilter,
+    handleStopInputSearch,
     handleDeleteRecording,
   } = useRunRecordingsController(isOpen);
 
@@ -104,6 +106,10 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   const selectedWorkflowStatusLabel = selectedWorkflow
     ? getWorkflowProjectStatusLabel(selectedWorkflow.project.settings.status)
     : '';
+  const handleClose = useCallback(() => {
+    handleStopInputSearch();
+    onClose();
+  }, [handleStopInputSearch, onClose]);
 
   if (!isOpen) {
     return null;
@@ -115,7 +121,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
         testId="run-recordings-modal"
         width="large"
         label="Run recordings"
-        onClose={onClose}
+        onClose={handleClose}
       >
         <ModalBody>
           <div className="project-settings-modal-shell run-recordings-shell">
@@ -129,7 +135,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
               <button
                 type="button"
                 className="project-settings-close-button"
-                onClick={onClose}
+                onClick={handleClose}
                 aria-label="Close run recordings"
               >
                 &times;
@@ -169,6 +175,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                       badRunsCount={badRunsCount}
                       filteredRunsCount={filteredRunsCount}
                       totalPages={totalPages}
+                      inputSearchStatus={inputSearchStatus}
                       page={page}
                       runsPerPage={runsPerPage}
                       statusFilter={statusFilter}
@@ -188,6 +195,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                       onSetInputFilterValue={setInputFilterValue}
                       onApplyInputFilter={handleApplyInputFilter}
                       onClearInputFilter={handleClearInputFilter}
+                      onStopInputSearch={handleStopInputSearch}
                       onSetRunsPerPage={setRunsPerPage}
                       onSetPage={setPage}
                       onDeleteRecording={handleDeleteRecording}

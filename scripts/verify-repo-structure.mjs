@@ -11,14 +11,15 @@ const requiredRootMarkdown = new Set([
   'README.md',
 ]);
 
-const currentWorkingDocs = new Set([
+const requiredWorkingDocs = new Set([
   'backlog.md',
   'repo-rearrangement.md',
+  'tests-refactor.md',
 ]);
 
 const allowedRootMarkdown = new Set([
   ...requiredRootMarkdown,
-  ...currentWorkingDocs,
+  ...requiredWorkingDocs,
 ]);
 
 const requiredPaths = [
@@ -123,6 +124,7 @@ function assertDirectoryEntries(relativeDirPath, expectedEntries) {
 
 function main() {
   const trackedFiles = readGitFileList([]);
+  const untrackedFiles = readGitFileList(['--others', '--exclude-standard']);
   const deletedTrackedFiles = new Set(readGitFileList(['--deleted']));
 
   const trackedToolArtifacts = trackedFiles.filter(
@@ -134,16 +136,16 @@ function main() {
     `Tracked legacy tool artifacts must be removed from Git: ${trackedToolArtifacts.join(', ')}`,
   );
 
-  const trackedRootMarkdown = trackedFiles.filter(
+  const rootMarkdownFiles = [...new Set([...trackedFiles, ...untrackedFiles])].filter(
     (filePath) => !deletedTrackedFiles.has(filePath) && !filePath.includes('/') && filePath.endsWith('.md'),
   );
-  const missingRequiredRootMarkdown = [...allowedRootMarkdown].filter((filePath) => !trackedRootMarkdown.includes(filePath));
+  const missingRequiredRootMarkdown = [...allowedRootMarkdown].filter((filePath) => !rootMarkdownFiles.includes(filePath));
   assert.equal(
     missingRequiredRootMarkdown.length,
     0,
-    `Expected tracked root Markdown files are missing: ${missingRequiredRootMarkdown.join(', ')}`,
+    `Expected root Markdown files are missing: ${missingRequiredRootMarkdown.join(', ')}`,
   );
-  const unexpectedRootMarkdown = trackedRootMarkdown.filter((filePath) => !allowedRootMarkdown.has(filePath));
+  const unexpectedRootMarkdown = rootMarkdownFiles.filter((filePath) => !allowedRootMarkdown.has(filePath));
   assert.equal(
     unexpectedRootMarkdown.length,
     0,
@@ -194,6 +196,7 @@ function main() {
     'setup:k8s-tools',
     'setup:rivet',
     'verify:repo-structure',
+    'verify:test-style',
     'verify:kubernetes',
     'dev:docker:config',
     'prod',
@@ -226,6 +229,21 @@ function main() {
       `.dockerignore should contain the repo/build guardrail pattern: ${requiredPattern}`,
     );
   }
+
+  const gitattributes = fs.readFileSync(path.join(rootDir, '.gitattributes'), 'utf8');
+  assert.match(gitattributes, /^\*\.sh text eol=lf$/m, 'Shell scripts should stay LF-normalized for Linux containers.');
+
+  const proxyBootstrapBytes = fs.readFileSync(path.join(rootDir, 'image/proxy/normalize-workflow-paths.sh'));
+  assert.equal(
+    proxyBootstrapBytes.includes(Buffer.from('\r\n')),
+    false,
+    'image/proxy/normalize-workflow-paths.sh should not contain CRLF line endings.',
+  );
+  assert.match(
+    proxyBootstrapBytes.toString('utf8'),
+    /^#!\/bin\/sh\n/,
+    'image/proxy/normalize-workflow-paths.sh should keep its POSIX shell shebang.',
+  );
 
   console.log(`[${launcherName}] Repo structure checks passed.`);
 }

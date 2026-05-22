@@ -49,13 +49,15 @@ See also: [Repo structure](./repo-structure.md)
 | `npm run prod:prebuilt` | Same prebuilt-image deployment path as `npm run prod` | Explicit published-artifact verification |
 | `npm run prod:restart` | Force-recreates the production-style Docker stack from already-local images without pulling or building | Pick up `.env` changes without changing the running image version |
 | `npm run prod:custom` | Builds and force-recreates the production-style Docker stack from this repo plus the current `rivet/` folder | Test custom wrapper/Rivet source changes |
+| `npm run test` | Runs the root repo-local automated test gate after the standard dependency bootstrap: API build, API tests, pure web tests, test-style guardrails, repo-structure guardrails, and Kubernetes chart/launcher contracts | One-command pre-commit or branch verification |
 | `npm run verify:filesystem` | Runs the repo-local compatibility baseline for single-host filesystem mode | Check that filesystem mode still has build/test and launcher-contract coverage |
 | `npm run verify:filesystem:docker` | Verifies the filesystem Docker launcher shape with a disposable env/fixture root | Check that Docker launcher config still supports filesystem mode without managed services |
 | `npm run verify:local-docker` | Verifies managed-storage local-Docker launcher shape with a disposable env/fixture root | Check that `managed + local-docker` still enables the expected Postgres/MinIO rehearsal path |
 | `npm run verify:local-docker:split` | Runs split-topology repo-local checks plus local-Docker launcher validation | Check that split-era control/execution contracts still fit the local-Docker managed rehearsal model |
 | `npm run verify:repo-structure` | Verifies the intended authored repo layout and blocks legacy path drift | Catch misplaced runtime/deployment/tooling files before they spread |
+| `npm run verify:test-style` | Verifies test command manifests and test-suite style guardrails | Catch accidental focused tests, missing command entries, broad suite reintroduction, and upstream-source assertions |
 | `npm run verify:web-pure` | Runs the pure web helper tests with `tsx --test` | Catch regressions in extracted non-React dashboard/protocol helpers quickly |
-| `npm run verify:kubernetes` | Runs the Kubernetes static-contract tests, renders the local rehearsal values path, and lint-renders the production overlay | Catch local/prod chart drift before handing the repo to operators |
+| `npm run verify:kubernetes` | Runs Kubernetes launcher/chart contract tests, renders the local rehearsal values path, and lint-renders the production overlay | Catch local/prod chart drift before handing the repo to operators |
 | `npm --prefix wrapper/api run workflow-execution:measure -- --base-url http://localhost:8080 --endpoint hello-world --kind published --runs 5 --warmups 1` | Calls one published/latest workflow endpoint repeatedly and prints timing headers | Measure filesystem or managed execution behavior safely |
 | `npm run runtime-libraries:managed:audit` | Audits managed runtime-library release/job/object state and writes a JSON snapshot | Inspect live managed runtime-library state safely |
 | `npm run runtime-libraries:managed:prune` | Builds a dry-run prune plan for managed runtime-library state | Review cleanup impact before applying it |
@@ -209,12 +211,13 @@ Current behavior:
 - `npm run ui:observe` launches Chromium in headed mode with `slowMo`, trace capture, video capture, and HTML reporting enabled
 - the runner loads the same `.env` / `.env.dev` file as the Docker scripts, so UI-gated hosts automatically reuse `RIVET_KEY`
 - unless `PLAYWRIGHT_BASE_URL` is already set, the runner targets `http://127.0.0.1:${RIVET_PORT}` from your env file, defaulting to `8080`
-- the current observable spec creates a temporary two-node workflow project, then visibly exercises the hosted editor focus, copy, cut, paste, and cleanup path
+- the main hosted-editor observable spec uses mocked workflow/project API responses to open a two-node project, then visibly exercises the hosted editor focus, copy, cut, and paste path without mutating workflow storage
 - trace, video, screenshots, and the HTML report are written under `artifacts/playwright/`
 
 Managed-state safety:
 
 - most browser-visible specs should stay non-mutating and prefer mocked API responses when the behavior under test is modal/controller/UI wiring rather than storage persistence
+- hosted-editor shortcut/focus coverage should also prefer mocked workflow/project routes when the behavior only needs an open project shape, not durable workflow storage
 - mutating workflow specs are blocked against `RIVET_STORAGE_MODE=managed` unless `PLAYWRIGHT_ALLOW_MANAGED_MUTATIONS=1` is set explicitly
 - specs that assert managed virtual workflow paths should call the managed-mode guard and skip under filesystem stacks; filesystem runs should not be expected to produce `/managed/workflows/...` save paths
 - shared Playwright workflow helpers use Playwright's request context for setup and cleanup, not `page.evaluate(fetch(...))`, so they go through the same proxy-auth path as the real browser shell
@@ -340,7 +343,7 @@ For slow `GET /api/workflows/recordings/workflows` diagnosis in Docker, compare:
 - indexed run rows in `/data/rivet-app/recordings.sqlite`:
   `node -e "const {DatabaseSync}=require('node:sqlite'); const db=new DatabaseSync('/data/rivet-app/recordings.sqlite'); console.log(db.prepare('select count(*) n from recording_runs').get())"`
 
-The `Run recordings` modal can also filter a workflow's runs by recorded request input. Use the `Input JSON path` control with a path such as `$.foo`, an operator such as `==`, and a value such as `bar`. The API evaluates `$` against the root workflow request body stored in the recording's `inputs.input.value` event. Missing paths match `not_exists`, do not match `exists`, and resolve to actual `undefined` for the other operators; the filter value literal `undefined` also parses as `undefined`. Ordering comparisons with `undefined` do not match. This filter reads existing recording artifacts after workflow/status narrowing, so it is best for targeted inspection rather than high-cardinality analytics.
+The `Run recordings` modal can also filter a workflow's runs by recorded request input. Use the `Input JSON path` control with a path such as `$.foo`, an operator such as `==`, and a value such as `bar`. The API evaluates `$` against the root workflow request body stored in the recording's `inputs.input.value` event. Missing paths match `not_exists`, do not match `exists`, and resolve to actual `undefined` for the other operators; the filter value literal `undefined` also parses as `undefined`. Ordering comparisons with `undefined` do not match. This filter reads existing recording artifacts after workflow/status narrowing, newest first. For input-filtered requests a response can be non-exhaustive, including a scan window with no matches: `totalRunsExact: false`, `hasMore: true`, and `nextInputCursor` mean the dashboard can show the newest matches immediately, continue with the next cursor automatically, and append newly found runs to the visible list. The dashboard shows searching/completed/stopped status, exposes `Stop search`, and aborts an in-flight recordings request through the same stop path when the filter is cleared/hidden or the modal closes/dismisses.
 
 ## Source of truth
 
@@ -443,8 +446,20 @@ For wrapper/API changes:
 
 Current repo-local baseline:
 
-- CI also runs the same `wrapper/api` build and test steps directly before image packaging.
-- CI also lint-renders the Helm chart with real image repository overrides and verifies the key negative cases:
+- `npm run test` is the one-command root test gate for non-browser automation. Its `pretest` hook runs the same dependency bootstrap as the dev launchers, then the test command runs the API build, default API tests, pure web helper tests, test-style guardrails, repo-structure guardrails, and Kubernetes launcher/chart contracts. It intentionally does not run Playwright because those specs require a live browser/app target and, for some managed flows, deliberate mutation opt-in.
+- The image-build workflow runs the cheap repo guardrails (`npm run verify:repo-structure` and `npm run verify:test-style`) before image packaging. The API image build still compiles the API inside Docker; full API test runs remain developer/compatibility verification commands, not the image-publish workflow.
+- If the full API suite fails with `ERR_MODULE_NOT_FOUND` for upstream Rivet packages such as `ai`, `openai`, or `@ai-sdk/anthropic`, refresh the embedded Rivet dependency baseline with `npm run setup` before treating the failure as a wrapper test regression.
+- The test-suite cleanup plan lives in the root `tests-refactor.md` working document; it has completed through the final prune, and the public verification commands should stay stable for future cleanup.
+- API workflow tests should reuse the shared helpers under `wrapper/api/src/tests/helpers/` before adding local harness code. Workflow HTTP harnesses, JSON response handling, recording waiters, filesystem execution cache invalidation probes, temp workflow roots, root-level published-project fixtures, and the filesystem workflow suite bootstrap/cleanup live there.
+- The old mixed `workflow-services.test.ts` suite has been split by behavior domain. Put new filesystem tree/import/export coverage in `workflow-filesystem-tree.test.ts`, publication-state and endpoint-reservation coverage in `workflow-publication-filesystem.test.ts`, published-version-history coverage in `workflow-published-history-filesystem.test.ts`, endpoint execution/cache coverage in `workflow-execution-filesystem.test.ts`, and recording route coverage in `workflow-recordings-http.test.ts`.
+- The old mixed `managed-backend-sql.test.ts` suite has been split. Put managed schema, folder-move SQL, and execution lookup query contracts in `managed-workflow-schema.test.ts`; put managed publication history, restore, star persistence, and save-target behavior in `managed-publication-history.test.ts`. Schema tests should import the exported SQL string, not read `schema.ts` as source text, so escaping regressions are tested against what the app actually sends to Postgres.
+- The old broad `phase4-static-contract.test.ts` suite has been split. Put proxy, Docker image, CI image, and production launcher contracts in `proxy-image-contract.test.ts`; hosted editor wrapper/upstream seam guardrails in `hosted-editor-seams.test.ts`; and Helm/chart topology assertions in `kubernetes-contract.test.ts`.
+- `npm --prefix wrapper/api test` intentionally does not run Helm. Use `npm run verify:kubernetes` for Kubernetes launcher tests, Helm-rendered chart contracts, and production overlay lint/template checks.
+- `npm run verify:test-style` owns the test-suite style guardrails: root `npm run test` must keep composing the non-browser repo-local gate after the standard `pretest` dependency bootstrap, default API tests must list every non-Kubernetes API test exactly once, `verify:web-pure` must list every pure web test exactly once, `kubernetes-*.test.ts` API files must stay behind `verify:kubernetes`, runnable test/spec files must stay in their expected top-level suite folders, retired or merged-away suites must not come back, `.only` tests are blocked, and wrapper tests/helpers must not assert upstream `rivet/packages/app/src` implementation paths beyond the approved host entry/style seam.
+- Tests that intentionally exercise negative paths should capture and assert expected `console.error` or `console.warn` output. A passing `npm run test` should not print scary stack traces for failures that the test deliberately caused.
+- Final-prune cleanup should not reintroduce a broad suite just to keep a helper alive. If a helper has no call sites after a split, delete the helper and let `npm --prefix wrapper/api run build` plus `npm run verify:test-style` prove the manifest and type boundaries.
+- `scripts/update-check.sh` must list every active `createModuleOverrideAliases(...)` target. `npm run verify:web-pure` checks that the scanner and Vite aliases stay aligned, so update both when adding or removing hosted upstream overrides.
+- `npm run verify:kubernetes` lint-renders the Helm chart with real image repository overrides and verifies the key negative cases:
   - placeholder image repositories are rejected
   - published-route-prefix overrides are rejected
   - the managed-only chart shape is enforced
@@ -660,8 +675,11 @@ For the current execution-plane split specifically:
 Use the three validation layers intentionally:
 
 - repo-local:
-  - proves API correctness, cache/invalidation behavior, config parsing, proxy/chart static contracts, and most workflow/runtime-library backend logic
-  - this is where `npm --prefix wrapper/api run build`, `npm --prefix wrapper/api test`, and Helm lint/template checks belong
+  - proves API correctness, cache/invalidation behavior, config parsing, proxy/image static contracts, hosted-editor seam contracts, and most workflow/runtime-library backend logic
+  - this is where `npm --prefix wrapper/api run build`, `npm --prefix wrapper/api test`, `npm run verify:web-pure`, `npm run verify:test-style`, and `npm run verify:repo-structure` belong
+- Kubernetes render:
+  - proves Helm chart syntax, local launcher values rendering, chart validation, and rendered control-plane versus execution-plane env/routing contracts
+  - this is where `npm run verify:kubernetes` and Helm lint/template checks belong
 - managed Docker rehearsal:
   - proves managed-state behavior against disposable Postgres plus object storage
   - use this for workflow-storage migration rehearsal, `workflow-storage:verify`, managed endpoint measurement, hosted browser flows, and runtime-library install/remove/readiness checks
@@ -680,6 +698,7 @@ Current follow-up expectations:
 
 Use the current compatibility commands intentionally:
 
+- the repo-local test portions scrub ambient runtime-root, managed-storage, execution-route, runtime-library, and recording env such as `RIVET_WORKFLOWS_ROOT`, `RIVET_ARTIFACTS_HOST_PATH`, `RIVET_DATABASE_CONNECTION_STRING`, `RIVET_STORAGE_URL`, `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, and `RIVET_ENV_FILE` before spawning API tests, so local `.env` or shell state cannot redirect those tests into a real workflow folder, database, object store, route prefix, runtime-library role, or recording policy
 - `npm run verify:filesystem`
   - runs the repo-local baseline for filesystem compatibility:
     - `wrapper/api` build

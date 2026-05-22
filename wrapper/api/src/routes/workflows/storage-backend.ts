@@ -328,10 +328,29 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   pageSize: number,
   statusFilter: WorkflowRecordingFilterStatus,
   inputFilter: WorkflowRecordingInputFilter | null = null,
+  inputCursor = 0,
+  signal?: AbortSignal,
 ): Promise<WorkflowRecordingRunsPageResponse> {
   return delegateWithWorkflowsRoot(
-    async (backend) => backend.listWorkflowRecordingRunsPage(workflowId, page, pageSize, statusFilter, inputFilter),
-    async (root) => listWorkflowRecordingRunsPage(root, workflowId, page, pageSize, statusFilter, inputFilter),
+    async (backend) => backend.listWorkflowRecordingRunsPage(
+      workflowId,
+      page,
+      pageSize,
+      statusFilter,
+      inputFilter,
+      inputCursor,
+      signal,
+    ),
+    async (root) => listWorkflowRecordingRunsPage(
+      root,
+      workflowId,
+      page,
+      pageSize,
+      statusFilter,
+      inputFilter,
+      inputCursor,
+      signal,
+    ),
   );
 }
 

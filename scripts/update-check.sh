@@ -33,11 +33,18 @@ fi
 # 2. Check that all aliased upstream files still exist
 echo "[2/7] Checking aliased upstream file paths..."
 ALIASED_FILES=(
-  "utils/tauri.ts"
   "state/savedGraphs.ts"
   "state/settings.ts"
+  "hooks/useCheckForUpdate.tsx"
+  "hooks/useContextMenu.ts"
+  "hooks/useCopyNodesHotkeys.ts"
   "hooks/useLoadPackagePlugin.ts"
+  "hooks/useLoadProject.ts"
+  "hooks/useSyncCurrentStateIntoOpenedProjects.ts"
+  "hooks/useWindowsHotkeysFix.tsx"
   "model/native/TauriNativeApi.ts"
+  "utils/deserializeProject.ts"
+  "utils/tauri.ts"
 )
 
 ALIASED_MISSING_COUNT=0

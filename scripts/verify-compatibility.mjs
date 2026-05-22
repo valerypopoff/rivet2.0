@@ -9,7 +9,86 @@ import {
 } from './lib/docker-launcher-env.mjs';
 
 const rootDir = process.cwd();
+const apiPackageDir = path.join(rootDir, 'wrapper', 'api');
 const sampleProjectPath = path.join(rootDir, 'rivet', 'packages', 'node', 'test', 'test-graphs.rivet-project');
+const repoLocalEnvKeysToScrub = [
+  'RIVET_ENV_FILE',
+  'RIVET_API_PROFILE',
+  'RIVET_STORAGE_MODE',
+  'RIVET_KEY',
+  'RIVET_REQUIRE_WORKFLOW_KEY',
+  'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER',
+  'RIVET_UI_TOKEN_FREE_HOSTS',
+  'RIVET_PUBLISHED_WORKFLOWS_BASE_PATH',
+  'RIVET_LATEST_WORKFLOWS_BASE_PATH',
+  'RIVET_WORKSPACE_ROOT',
+  'RIVET_APP_DATA_ROOT',
+  'RIVET_WORKFLOWS_ROOT',
+  'RIVET_WORKFLOW_RECORDINGS_ROOT',
+  'RIVET_RUNTIME_LIBRARIES_ROOT',
+  'RIVET_EXTRA_ROOTS',
+  'RIVET_ENV_ALLOWLIST',
+  'RIVET_SHELL_ALLOWLIST',
+  'RIVET_COMMAND_TIMEOUT',
+  'RIVET_MAX_OUTPUT',
+  'RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS',
+  'RIVET_ARTIFACTS_HOST_PATH',
+  'RIVET_WORKFLOWS_HOST_PATH',
+  'RIVET_WORKFLOW_RECORDINGS_HOST_PATH',
+  'RIVET_RUNTIME_LIBS_HOST_PATH',
+  'RIVET_RUNTIME_PROCESS_ROLE',
+  'RIVET_RUNTIME_LIBRARIES_REPLICA_TIER',
+  'RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED',
+  'RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS',
+  'RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS',
+  'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_MS',
+  'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_MS',
+  'RIVET_DATABASE_MODE',
+  'RIVET_DATABASE_CONNECTION_STRING',
+  'RIVET_DATABASE_SSL_MODE',
+  'RIVET_STORAGE_URL',
+  'RIVET_STORAGE_BUCKET',
+  'RIVET_STORAGE_REGION',
+  'RIVET_STORAGE_ENDPOINT',
+  'RIVET_STORAGE_ACCESS_KEY_ID',
+  'RIVET_STORAGE_ACCESS_KEY',
+  'RIVET_STORAGE_SECRET_ACCESS_KEY',
+  'RIVET_STORAGE_PREFIX',
+  'RIVET_STORAGE_FORCE_PATH_STYLE',
+  'RIVET_STORAGE_BACKEND',
+  'RIVET_WORKFLOWS_STORAGE_BACKEND',
+  'RIVET_DATABASE_URL',
+  'RIVET_WORKFLOWS_DATABASE_MODE',
+  'RIVET_WORKFLOWS_DATABASE_URL',
+  'RIVET_WORKFLOWS_DATABASE_CONNECTION_STRING',
+  'RIVET_WORKFLOWS_DATABASE_SSL_MODE',
+  'RIVET_WORKFLOWS_STORAGE_URL',
+  'RIVET_WORKFLOWS_STORAGE_BUCKET',
+  'RIVET_WORKFLOWS_STORAGE_REGION',
+  'RIVET_WORKFLOWS_STORAGE_ENDPOINT',
+  'RIVET_WORKFLOWS_STORAGE_ACCESS_KEY_ID',
+  'RIVET_WORKFLOWS_STORAGE_SECRET_ACCESS_KEY',
+  'RIVET_WORKFLOWS_STORAGE_ACCESS_KEY',
+  'RIVET_WORKFLOWS_STORAGE_PREFIX',
+  'RIVET_WORKFLOWS_STORAGE_FORCE_PATH_STYLE',
+  'RIVET_OBJECT_STORAGE_BUCKET',
+  'RIVET_OBJECT_STORAGE_REGION',
+  'RIVET_OBJECT_STORAGE_ENDPOINT',
+  'RIVET_OBJECT_STORAGE_ACCESS_KEY_ID',
+  'RIVET_OBJECT_STORAGE_SECRET_ACCESS_KEY',
+  'RIVET_OBJECT_STORAGE_PREFIX',
+  'RIVET_OBJECT_STORAGE_FORCE_PATH_STYLE',
+  'RIVET_RECORDINGS_ENABLED',
+  'RIVET_RECORDINGS_COMPRESS',
+  'RIVET_RECORDINGS_DATASET_MODE',
+  'RIVET_RECORDINGS_GZIP_LEVEL',
+  'RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS',
+  'RIVET_RECORDINGS_INCLUDE_TRACE',
+  'RIVET_RECORDINGS_RETENTION_DAYS',
+  'RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT',
+  'RIVET_RECORDINGS_MAX_TOTAL_BYTES',
+  'RIVET_RECORDINGS_MAX_PENDING_WRITES',
+];
 
 function readSampleProjectContents() {
   if (!fs.existsSync(sampleProjectPath)) {
@@ -24,10 +103,11 @@ function readSampleProjectContents() {
 
 function run(command, env = process.env, options = {}) {
   const stdio = options.stdio ?? 'inherit';
+  const cwd = options.cwd ?? rootDir;
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
-      cwd: rootDir,
+      cwd,
       env,
       shell: true,
       stdio,
@@ -73,6 +153,18 @@ function runCapture(command, env = process.env) {
       }
     });
   });
+}
+
+function createRepoLocalTestEnv() {
+  const env = {
+    ...process.env,
+  };
+
+  for (const key of repoLocalEnvKeysToScrub) {
+    delete env[key];
+  }
+
+  return env;
 }
 
 function writeFile(filePath, contents) {
@@ -233,29 +325,37 @@ async function runDockerConfigWithEnv(envPath, launcherScript) {
 }
 
 async function runRepoLocalBaseline() {
-  await run('npm --prefix wrapper/api run build');
-  await run('npm --prefix wrapper/api test');
+  const env = createRepoLocalTestEnv();
+  await run('npm --prefix wrapper/api run build', env);
+  await run('npm --prefix wrapper/api test', env);
 }
 
 async function runSplitRepoLocalChecks() {
+  const env = createRepoLocalTestEnv();
   await run(
-    'npx tsx --test ' +
-    'wrapper/api/src/tests/api-profile.test.ts ' +
-    'wrapper/api/src/tests/phase4-static-contract.test.ts ' +
-    'wrapper/api/src/tests/runtime-library-cleanup.test.ts ' +
-    'wrapper/api/src/tests/workflow-storage-config.test.ts ' +
-    'wrapper/api/src/tests/docker-launcher-env.test.ts',
+    'node ../../scripts/run-preserve-symlinks.mjs tsx --test ' +
+    'src/tests/api-profile.test.ts ' +
+    'src/tests/hosted-editor-seams.test.ts ' +
+    'src/tests/proxy-image-contract.test.ts ' +
+    'src/tests/runtime-library-cleanup.test.ts ' +
+    'src/tests/workflow-storage-config.test.ts ' +
+    'src/tests/docker-launcher-env.test.ts',
+    env,
+    { cwd: apiPackageDir },
   );
 }
 
 async function runManagedLocalDockerRepoLocalChecks() {
+  const env = createRepoLocalTestEnv();
   await run(
-    'npx tsx --test ' +
-    'wrapper/api/src/tests/workflow-storage-config.test.ts ' +
-    'wrapper/api/src/tests/runtime-libraries.test.ts ' +
-    'wrapper/api/src/tests/runtime-library-cleanup.test.ts ' +
-    'wrapper/api/src/tests/migrate-workflow-storage.test.ts ' +
-    'wrapper/api/src/tests/docker-launcher-env.test.ts',
+    'node ../../scripts/run-preserve-symlinks.mjs tsx --test ' +
+    'src/tests/workflow-storage-config.test.ts ' +
+    'src/tests/runtime-libraries.test.ts ' +
+    'src/tests/runtime-library-cleanup.test.ts ' +
+    'src/tests/migrate-workflow-storage.test.ts ' +
+    'src/tests/docker-launcher-env.test.ts',
+    env,
+    { cwd: apiPackageDir },
   );
 }
 

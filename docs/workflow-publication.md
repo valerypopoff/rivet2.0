@@ -556,7 +556,7 @@ That backend data serves:
 The main recordings routes are:
 
 - `GET /api/workflows/recordings/workflows`
-- `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed&inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar`
+- `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed&inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar&inputCursor=0`
 - `GET /api/workflows/recordings/:recordingId/recording`
 - `GET /api/workflows/recordings/:recordingId/replay-project`
 - `GET /api/workflows/recordings/:recordingId/replay-dataset`
@@ -575,13 +575,13 @@ Current browser behavior:
 - pages runs from the API instead of materializing the whole history at once
 - sorts runs by newest first with a recording-ID tie-breaker, so same-millisecond runs keep a stable order across pages and filters
 - supports `All` and `Bad only`, where `Bad only` includes both `failed` and `suspicious`
-- supports an optional input filter. The filter uses a JSON path where `$` is the workflow request input object recorded under Rivet's `inputs.input.value`; for example, request input `{ "foo": "bar" }` matches `$.foo == bar`.
+- supports an optional input filter. The filter uses a JSON path where `$` is the workflow request input object recorded under Rivet's `inputs.input.value`; for example, request input `{ "foo": "bar" }` matches `$.foo == bar`. Filtered searches scan newest-first, append matches to the visible list as each cursor response returns, and keep searching automatically until the history is exhausted or the user clicks `Stop search`. Clearing or hiding the filter, closing the modal, or dismissing the modal uses the same stop path and aborts the in-flight request.
 - lets the user delete individual stored runs
 - opens a run by `recordingId`, not by raw filesystem path
 - `useRunRecordingsController.ts` owns workflow loading, run paging/filtering, and delete flow
 - `RecordingWorkflowSelect.tsx` and `RecordingRunsTable.tsx` render the focused UI slices instead of leaving all of that state and rendering in `RunRecordingsModal.tsx`
 
-Input filtering does not change how recordings are created. When `inputPath` is present, the API reads the existing serialized recording artifact for each candidate run after the workflow/status filter, restores Rivet string-table references from the serialized recording payload, extracts the recorded root request input from the `start` or `graphStart` event, applies the JSON-path/operator/value predicate, and then paginates the matching rows. This keeps old recordings readable and avoids adding wrapper-specific fields to the recording write path. Supported operators are `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `exists`, and `not_exists`. A missing JSON path matches `not_exists`, does not match `exists`, and resolves to actual `undefined` for the other operators; the filter value literal `undefined` also parses as `undefined`. Ordering comparisons with `undefined` do not match.
+Input filtering does not change how recordings are created. When `inputPath` is present, the API reads existing serialized recording artifacts after the workflow/status filter, newest first, restores Rivet string-table references from each serialized recording payload, extracts the recorded root request input from the `start` or `graphStart` event, and applies the JSON-path/operator/value predicate. The response may return before the full history has been exhausted, even when the current scan window has no matches; in that case `totalRunsExact` is `false`, `hasMore` is `true`, and `nextInputCursor` can be passed back as `inputCursor` to continue searching older recordings. The dashboard uses that cursor automatically, appending each newly found run to the same filtered list and showing a searching/completed/stopped status. This keeps old recordings readable, avoids adding wrapper-specific fields to the recording write path, and makes recent-request lookups responsive even when historical artifacts live in object storage. The browser request is abortable, and the API stops the artifact scan after the current small read batch when the client closes the modal, stops the search, or navigates away. Supported operators are `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `exists`, and `not_exists`. A missing JSON path matches `not_exists`, does not match `exists`, and resolves to actual `undefined` for the other operators; the filter value literal `undefined` also parses as `undefined`. Ordering comparisons with `undefined` do not match.
 
 Deleting a run removes both:
 

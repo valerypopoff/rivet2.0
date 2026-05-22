@@ -407,6 +407,40 @@
   font-size: 12px;
 }
 
+.run-recordings-input-search-status {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 32px;
+  color: var(--grey-light);
+  font-size: 13px;
+}
+
+.run-recordings-input-search-message {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.run-recordings-input-search-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-top-color: rgba(126, 226, 148, 0.85);
+  border-radius: 50%;
+  animation: run-recordings-spin 0.8s linear infinite;
+}
+
+@keyframes run-recordings-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .run-recordings-pagination {
   display: flex;
   align-items: center;

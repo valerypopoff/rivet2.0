@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import test from 'node:test';
 import { loadProjectAndAttachedDataFromString, serializeProject } from '@valerypopoff/rivet2-node';
 
-import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
 import { normalizeHostedProjectTitle } from '../routes/workflows/hosted-project-contents.js';
 import { createManagedWorkflowRevisionService } from '../routes/workflows/managed/revisions.js';
 import * as managedMappers from '../routes/workflows/managed/mappers.js';
@@ -26,6 +25,7 @@ process.env.RIVET_APP_DATA_ROOT = appDataRoot;
 
 const workflowMutations = await import('../routes/workflows/workflow-mutations.js');
 const workflowStorageBackend = await import('../routes/workflows/storage-backend.js');
+const workflowFs = await import('../routes/workflows/fs-helpers.js');
 
 function rewriteProjectMetadata(contents: string, metadata: { title: string; description: string }): string {
   const [project, attachedData] = loadProjectAndAttachedDataFromString(contents);
@@ -74,7 +74,12 @@ test.after(async () => {
   await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
-test('hosted project title normalization rejects invalid project contents as a bad request', () => {
+test('hosted project title normalization rejects invalid project contents as a bad request', (t) => {
+  const loggedWarnings: unknown[][] = [];
+  t.mock.method(console, 'warn', (...args: unknown[]) => {
+    loggedWarnings.push(args);
+  });
+
   assert.throws(
     () => normalizeHostedProjectTitle('not a rivet project', 'Tree Name', 'Could not save project'),
     (error: unknown) => {
@@ -83,6 +88,8 @@ test('hosted project title normalization rejects invalid project contents as a b
       return true;
     },
   );
+  assert.equal(loggedWarnings.length, 1);
+  assert.match(String(loggedWarnings[0]?.[0]), /Failed to deserialize project/);
 });
 
 test('filesystem saveHostedProject rewrites the YAML title to the file tree name', async () => {
@@ -108,7 +115,7 @@ test('filesystem saveHostedProject rewrites the YAML title to the file tree name
 test('managed saveHostedProject stores revisions with the YAML title matching the tree name', async () => {
   const workflow = createWorkflowRow();
   const currentRevision = createRevisionRow(workflow.workflow_id, workflow.current_draft_revision_id);
-  const currentContents = createBlankProjectFile(workflow.name);
+  const currentContents = workflowFs.createBlankProjectFile(workflow.name);
   const editedContents = rewriteProjectMetadata(currentContents, {
     title: 'Editor Settings Name',
     description: 'managed description from editor save',

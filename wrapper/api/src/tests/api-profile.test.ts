@@ -315,8 +315,12 @@ test('runtime-libraries route exposes permission errors for an unwritable runtim
     const server = await startServer('control');
     const runtimeLibrariesRoot = process.env.RIVET_RUNTIME_LIBRARIES_ROOT!;
     const normalizedRoot = runtimeLibrariesRoot.replace(/\\/g, '/');
+    const loggedErrors: unknown[][] = [];
 
     try {
+      t.mock.method(console, 'error', (...args: unknown[]) => {
+        loggedErrors.push(args);
+      });
       t.mock.method(fs, 'mkdirSync', (targetPath: fs.PathLike) => {
         const normalizedTargetPath = String(targetPath).replace(/\\/g, '/');
         if (normalizedTargetPath.startsWith(normalizedRoot)) {
@@ -336,6 +340,9 @@ test('runtime-libraries route exposes permission errors for an unwritable runtim
       assert.deepEqual(await response.json(), {
         error: `Runtime-library storage is not writable. Check server permissions for ${normalizedRoot}.`,
       });
+      assert.equal(loggedErrors.length, 1);
+      assert.equal(loggedErrors[0]?.[0], 'Unhandled API error:');
+      assert.match((loggedErrors[0]?.[1] as Error).message, /Runtime-library storage is not writable/);
     } finally {
       await disposeRuntimeLibrariesBackend();
       await server.close();
