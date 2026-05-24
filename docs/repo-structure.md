@@ -89,13 +89,11 @@ Root Markdown is reserved for:
 
 - `README.md`
 - `AGENTS.md`
-- the current approved working-doc baseline:
+- approved working docs, currently:
   - `backlog.md`
-  - `repo-rearrangement.md`
-  - `tests-refactor.md`
 
 Reference docs, architecture docs, operator docs, and contributor docs belong under `docs/`.
-The repo-structure verifier checks both tracked and untracked root Markdown files so new working docs fail early unless they are added to this approved set.
+The repo-structure verifier requires `README.md` and `AGENTS.md`, and checks both tracked and untracked root Markdown files so new working docs fail early unless they are added to the approved optional working-doc set. Working docs are allowed to disappear after their cleanup project is complete.
 
 ## Tooling expectations
 

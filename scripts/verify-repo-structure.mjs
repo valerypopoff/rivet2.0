@@ -11,15 +11,13 @@ const requiredRootMarkdown = new Set([
   'README.md',
 ]);
 
-const requiredWorkingDocs = new Set([
+const allowedWorkingDocs = new Set([
   'backlog.md',
-  'repo-rearrangement.md',
-  'tests-refactor.md',
 ]);
 
 const allowedRootMarkdown = new Set([
   ...requiredRootMarkdown,
-  ...requiredWorkingDocs,
+  ...allowedWorkingDocs,
 ]);
 
 const requiredPaths = [
@@ -139,7 +137,7 @@ function main() {
   const rootMarkdownFiles = [...new Set([...trackedFiles, ...untrackedFiles])].filter(
     (filePath) => !deletedTrackedFiles.has(filePath) && !filePath.includes('/') && filePath.endsWith('.md'),
   );
-  const missingRequiredRootMarkdown = [...allowedRootMarkdown].filter((filePath) => !rootMarkdownFiles.includes(filePath));
+  const missingRequiredRootMarkdown = [...requiredRootMarkdown].filter((filePath) => !rootMarkdownFiles.includes(filePath));
   assert.equal(
     missingRequiredRootMarkdown.length,
     0,
