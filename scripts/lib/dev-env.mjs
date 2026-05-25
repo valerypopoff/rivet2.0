@@ -32,6 +32,16 @@ export function loadDevEnv(rootDir) {
     ? path.resolve(rootDir, explicitRivetSourceBuildContextPath)
     : path.join(rootDir, '.data', 'docker-contexts', 'rivet-source');
 
+  const explicitRivetDependencyBuildContextPath = Object.prototype.hasOwnProperty.call(
+    fileEnv,
+    'RIVET_DEPENDENCY_BUILD_CONTEXT_PATH',
+  )
+    ? String(fileEnv.RIVET_DEPENDENCY_BUILD_CONTEXT_PATH ?? '').trim()
+    : String(process.env.RIVET_DEPENDENCY_BUILD_CONTEXT_PATH ?? '').trim();
+  mergedEnv.RIVET_DEPENDENCY_BUILD_CONTEXT_PATH = explicitRivetDependencyBuildContextPath
+    ? path.resolve(rootDir, explicitRivetDependencyBuildContextPath)
+    : path.join(rootDir, '.data', 'docker-contexts', 'rivet-dependency-metadata');
+
   if (!Object.prototype.hasOwnProperty.call(fileEnv, 'RIVET_WORKSPACE_ROOT')) {
     mergedEnv.RIVET_WORKSPACE_ROOT = rootDir;
   }

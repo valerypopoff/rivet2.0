@@ -26,10 +26,12 @@ WORKDIR /app
 COPY wrapper/bootstrap/proxy-bootstrap/ /opt/proxy-bootstrap/
 RUN --mount=type=cache,target=/root/.npm npm --prefix /opt/proxy-bootstrap ci
 
-COPY --from=rivet_source . /app/rivet/
-
+COPY --from=rivet_dependency_metadata . /app/rivet/
 WORKDIR /app/rivet
 RUN --mount=type=cache,target=/root/.cache/yarn YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable || YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install
+
+COPY --from=rivet_source . /app/rivet/
+WORKDIR /app/rivet
 RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-core run build
 RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-node run build
 

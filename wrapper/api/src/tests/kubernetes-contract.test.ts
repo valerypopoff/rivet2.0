@@ -122,6 +122,7 @@ test('local Kubernetes launcher builds Rivet-dependent images from the filtered 
   assert.match(kubernetesLauncher, /needsRivetSource: true/);
   assert.match(kubernetesLauncher, /--build-context/);
   assert.match(kubernetesLauncher, /rivet_source=\$\{rivetSourceBuildContextPath\}/);
+  assert.match(kubernetesLauncher, /rivet_dependency_metadata=\$\{rivetDependencyBuildContextPath\}/);
 });
 
 test('executor app-data path remains intentionally separate from API app-data mounts', () => {

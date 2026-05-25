@@ -98,7 +98,7 @@ The static coverage is now split by contract boundary, with Kubernetes render ch
 - `proxy-image-contract.test.ts` owns proxy route ownership, proxy timeout behavior, UI-gate prompt staging, API/executor image contracts, GHCR login/tag/publish behavior, and production launcher image behavior.
 - `hosted-editor-seams.test.ts` owns wrapper-facing hosted editor seams: `RivetAppHost` mounting, provider injection, workspace command bridge usage, hosted file-menu policy, hosted executor URL wiring, shortcut shims, and stale override removal.
 - `kubernetes-contract.test.ts` owns Helm/chart topology assertions and runs through `npm run verify:kubernetes`, not the default API test command.
-- The Kubernetes contract also keeps the local image-build path honest: Rivet-dependent local K8s images must receive the filtered `rivet_source` Docker build context.
+- The Kubernetes contract also keeps the local image-build path honest: Rivet-dependent local K8s images must receive the filtered `rivet_source` and `rivet_dependency_metadata` Docker build contexts.
 - `verify:repo-structure` owns structural guardrails such as shell-script LF normalization.
 - `verify:web-pure` owns exported web helper contracts such as hosted shortcut matching, Vite override alias selection, and alignment between active module overrides and `scripts/update-check.sh`.
 

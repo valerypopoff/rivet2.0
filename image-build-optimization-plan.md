@@ -19,11 +19,11 @@ four images:
 - `api`: `image/api/Dockerfile`
 - `executor`: `image/executor/Dockerfile`
 
-Current platform matrix:
+Implemented platform matrix:
 
 - `proxy`: `linux/amd64`, `linux/arm64`
 - `web`: `linux/amd64`, `linux/arm64`
-- `api`: `linux/amd64`, `linux/arm64`
+- `api`: `linux/amd64`
 - `executor`: `linux/amd64`
 
 Rivet source is bootstrapped by `npm run setup:rivet`, which uses
@@ -35,34 +35,44 @@ RIVET_REPO_URL=https://github.com/valerypopoff/rivet2.0.git
 RIVET_REPO_REF=main
 ```
 
-The Docker builds receive the checked-out source as the named build context
-`rivet_source=./rivet`.
+The Docker builds for Rivet-consuming images receive two named contexts:
 
-Local Docker launchers use a filtered Rivet source snapshot under
-`.data/docker-contexts/rivet-source`, prepared by
-`scripts/lib/rivet-source-context.mjs`. The GitHub image workflow currently
-does not use that helper; it passes the freshly bootstrapped `./rivet`
-directory directly as `rivet_source`.
+```text
+rivet_source=.data/docker-contexts/rivet-source
+rivet_dependency_metadata=.data/docker-contexts/rivet-dependency-metadata
+```
+
+`proxy` does not receive a Rivet build context.
+Both filtered contexts carry `.upstream-version` when the bootstrapped Rivet
+source has it, so build-stage diagnostics can still identify the upstream
+snapshot.
+
+Local Docker launchers use the same filtered Rivet source and dependency
+metadata snapshots, prepared by `scripts/lib/rivet-source-context.mjs`.
+The GitHub image workflow now prepares those contexts before each
+Rivet-consuming image build.
 
 ## Diagnosis
 
 The expensive work is repeated across image jobs:
 
-- `setup:rivet` runs in every matrix job, including `proxy`, even though
-  `proxy` does not use Rivet.
+- Before this implementation, `setup:rivet` ran in every matrix job, including
+  `proxy`, even though `proxy` does not use Rivet.
 - `api`, `web`, and `executor` each run their own Rivet `yarn install`.
 - `@valerypopoff/rivet2-core` is built in all three Rivet-consuming images.
 - `@valerypopoff/rivet2-node` is built in both `api` and `executor`.
 - Buildx cache is scoped by service, so shared Rivet layers are not shared
   across `api`, `web`, and `executor`.
-- The `api` image currently builds for `linux/arm64`; recent logs showed the
-  QEMU arm64 Rivet install/link step is both slow and fragile.
-- Dockerfiles copy full Rivet source before `yarn install`, so ordinary source
-  changes can invalidate the expensive dependency install layer.
-- The publish workflow passes `build-contexts: rivet_source=./rivet` to every
-  service build. If `proxy` skips Rivet bootstrap while this input still points
-  at a missing `./rivet` directory, the Buildx step can fail before the
-  proxy Dockerfile has a chance to ignore that context.
+- Before this implementation, the `api` image built for `linux/arm64`; recent
+  logs showed the QEMU arm64 Rivet install/link step was both slow and fragile.
+- Before this implementation, Dockerfiles copied full Rivet source before
+  `yarn install`, so ordinary source changes could invalidate the expensive
+  dependency install layer.
+- Before this implementation, the publish workflow passed
+  `build-contexts: rivet_source=./rivet` to every service build. If `proxy`
+  skipped Rivet bootstrap while that input still pointed at a missing `./rivet`
+  directory, the Buildx step could fail before the proxy Dockerfile had a
+  chance to ignore that context.
 
 ## Desired Ownership Split
 
@@ -80,13 +90,25 @@ Upstream Rivet improvements:
 - Exact-commit built artifacts for `core`, `node`, and optionally `trivet`.
 - A documented build-time benchmark recipe for install/build phases.
 
-## Phase 0: Baseline And Contract Audit
+## Phase 0: DONE - Baseline And Contract Audit
 
-Status: Pending
+Status: Done.
+
+Implementation notes:
+
+- The image matrix, contract tests, Kubernetes docs, and Docker launcher paths
+  were audited together.
+- The selected published platform contract is `proxy` and `web` multi-arch,
+  with `api` and `executor` on `linux/amd64`.
+- The pre-change failure evidence is the QEMU arm64 API `yarn install`/link
+  crash from the GitHub image workflow logs. Keep collecting plain-progress
+  timing logs from subsequent workflow runs to measure the cache impact.
 
 Capture the current state before changing build structure.
 
 1. Save one plain-progress GitHub Actions log for the current slow image build.
+   - Done from the failing workflow evidence already captured in the issue
+     thread; keep a fresh post-change log after this lands.
 2. Record current timings for:
    - Rivet bootstrap.
    - Rivet Yarn install.
@@ -101,11 +123,9 @@ Capture the current state before changing build structure.
    - `.github/workflows/build-images.yml`
    - `wrapper/api/src/tests/proxy-image-contract.test.ts`
    - `docs/kubernetes.md`
-4. Record whether the intended contract is:
-   - `proxy`, `web`, `api`: `linux/amd64`, `linux/arm64`; `executor`:
-     `linux/amd64`
-   - or `proxy`, `web`: `linux/amd64`, `linux/arm64`; `api`, `executor`:
-     `linux/amd64`
+4. Record the intended contract:
+   - `proxy`, `web`: `linux/amd64`, `linux/arm64`
+   - `api`, `executor`: `linux/amd64`
 
 Acceptance checks:
 
@@ -114,9 +134,19 @@ Acceptance checks:
 - The contract test and Kubernetes docs are identified as required changes for
   any platform-matrix edit.
 
-## Phase 1: Low-Risk CI Fixes
+## Phase 1: DONE - Low-Risk CI Fixes
 
-Status: Pending
+Status: Done.
+
+Implementation notes:
+
+- `.github/workflows/build-images.yml` has an explicit `needsRivet` matrix
+  field.
+- `proxy` skips `setup:rivet`, skips Rivet context preparation, and uses a
+  Buildx step with no Rivet build contexts.
+- `api` is `linux/amd64` only, matching `executor` and avoiding the fragile
+  QEMU arm64 API build path.
+- QEMU setup is conditional on matrix platforms that include `linux/arm64`.
 
 1. Skip Rivet bootstrap for `proxy`.
    - `proxy` does not consume the `rivet_source` build context.
@@ -154,9 +184,24 @@ Acceptance checks:
 - `npm run verify:repo-structure`
 - `npm run verify:test-style`
 
-## Phase 2: Docker Dependency Layering
+## Phase 2: DONE - Docker Dependency Layering
 
-Status: Pending
+Status: Done.
+
+Implementation notes:
+
+- `scripts/lib/rivet-source-context.mjs` now prepares both
+  `.data/docker-contexts/rivet-source` and
+  `.data/docker-contexts/rivet-dependency-metadata`.
+- Rivet-consuming Dockerfiles install Yarn dependencies from
+  `rivet_dependency_metadata` before copying full `rivet_source`.
+- API and web wrapper dependency layers now copy package manifests before
+  source.
+- Docker Compose and local Kubernetes image builds pass both named contexts.
+- The dependency-metadata context copies root dependency files plus
+  `package.json` files from declared Yarn workspaces only, so unrelated local
+  scratch manifests in an upstream checkout do not invalidate the install
+  layer.
 
 Split dependency-install layers from source-copy layers.
 
@@ -178,7 +223,7 @@ Implementation note:
 - Avoid hand-maintaining a fragile list of all workspace manifests directly in
   three Dockerfiles. Prefer extending `scripts/lib/rivet-source-context.mjs` or
   adding a sibling helper that prepares a small Rivet dependency-metadata
-  context. That helper can copy all workspace `package.json` files while still
+  context. That helper can copy declared workspace `package.json` files while still
   excluding source, build output, dependency folders, VCS data, and Yarn cache
   artifacts.
 - Keep GitHub Actions and local Docker launchers aligned. If CI starts using a
@@ -204,9 +249,19 @@ Acceptance checks:
   install layers.
 - Image builds still work from GitHub Actions and local Docker contexts.
 
-## Phase 3: Release Reproducibility
+## Phase 3: DONE - Release Reproducibility
 
-Status: Pending
+Status: Done.
+
+Implementation notes:
+
+- `scripts/bootstrap-rivet.mjs` supports exact commit SHAs by initializing a
+  temporary checkout and fetching the resolved commit directly.
+- The image workflow resolves `RIVET_REPO_REF` to an exact upstream commit
+  before the matrix build.
+- Rivet-consuming image builds run `setup:rivet` with the resolved commit SHA.
+- Image metadata includes the upstream Rivet source, requested ref, and exact
+  resolved revision.
 
 Pin Rivet image builds by exact commit SHA for release/published image builds.
 
@@ -231,9 +286,14 @@ Acceptance checks:
 - Re-running the same wrapper commit with the same Rivet SHA uses cache more
   predictably.
 
-## Phase 4: Shared Rivet Build Artifacts
+## Phase 4: DEFERRED - Shared Rivet Build Artifacts
 
-Status: Pending
+Status: Deferred by this plan.
+
+Do not implement this phase until the simpler CI/platform/layering changes
+have produced at least one cold build and one warm no-source-change build log.
+The phase remains the next structural optimization candidate if repeated
+`core`/`node`/`trivet` builds still dominate after cache behavior improves.
 
 Add a shared Rivet artifact or base-image flow after the simpler cache fixes
 land.
@@ -268,7 +328,7 @@ Acceptance checks:
   identity.
 - Image jobs fail clearly if artifact and source revisions do not match.
 
-## Phase 5: Upstream Contract Adoption
+## Phase 5: WAITING ON UPSTREAM - Upstream Contract Adoption
 
 Status: Waiting On Upstream
 

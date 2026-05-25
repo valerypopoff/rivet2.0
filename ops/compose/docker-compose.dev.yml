@@ -92,6 +92,7 @@ services:
       dockerfile: ops/docker/Dockerfile.api
       additional_contexts:
         rivet_source: ${RIVET_SOURCE_BUILD_CONTEXT_PATH:-../../rivet}
+        rivet_dependency_metadata: ${RIVET_DEPENDENCY_BUILD_CONTEXT_PATH:-../../rivet}
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -205,6 +206,7 @@ services:
       dockerfile: ops/docker/Dockerfile.executor
       additional_contexts:
         rivet_source: ${RIVET_SOURCE_BUILD_CONTEXT_PATH:-../../rivet}
+        rivet_dependency_metadata: ${RIVET_DEPENDENCY_BUILD_CONTEXT_PATH:-../../rivet}
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}

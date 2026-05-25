@@ -426,10 +426,16 @@ async function buildImages(dockerBin, config, env) {
     { dockerfile: 'image/proxy/Dockerfile', image: config.images.proxy },
   ];
   const rivetSourceBuildContextPath = prepareRivetDockerContext(rootDir, env);
+  const rivetDependencyBuildContextPath = env.RIVET_DEPENDENCY_BUILD_CONTEXT_PATH;
 
   for (const spec of buildSpecs) {
     const buildContextArgs = spec.needsRivetSource
-      ? ['--build-context', `rivet_source=${rivetSourceBuildContextPath}`]
+      ? [
+          '--build-context',
+          `rivet_source=${rivetSourceBuildContextPath}`,
+          '--build-context',
+          `rivet_dependency_metadata=${rivetDependencyBuildContextPath}`,
+        ]
       : [];
     await spawnProgram(
       dockerBin,
