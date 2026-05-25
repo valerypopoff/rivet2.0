@@ -454,6 +454,17 @@ The public routes stayed the same, but the internal ownership boundaries are now
   - `execution-cache.ts`, `execution-invalidation.ts`, `execution-service.ts`, and `execution-types.ts` stay local to managed execution rather than becoming a generic platform layer
 - managed virtual hosted-file semantics stay explicit through `managed-virtual-io.ts` instead of being folded into the filesystem branch
 
+## Endpoint processor API
+
+Endpoint execution intentionally uses Rivet Node's `createProcessor(...)` rather than `runGraph(...)`. `runGraph(...)` can accept most of the same runtime inputs the wrapper passes today, including request `inputs`, request-header `context`, `ManagedCodeRunner`, dataset providers, project-reference loading, project path, and the latest remote debugger. The reason the wrapper keeps `createProcessor(...)` is that it exposes the underlying `GraphProcessor` before the run starts.
+
+That exposed processor is part of the current recording/replay contract:
+
+- `ExecutionRecorder.record(processor.processor)` must attach before `processor.run()` so endpoint runs produce replay-compatible `recording.rivet-recording.gz` payloads.
+- the endpoint can still choose explicit processor runtime behavior if upstream changes `runGraph(...)` defaults, because `createProcessor(...)` accepts `runtimeProfile` while `runGraph(...)` chooses its own default run plan.
+
+Do not replace this path with `runGraph(...)` unless upstream exposes an equivalent pre-run processor/recording hook or the wrapper recording format is deliberately redesigned.
+
 ## Workflow execution auth
 
 Public execution auth is separate from the browser UI gate:
@@ -476,6 +487,8 @@ Recording capture is intentionally best-effort observability:
 
 - the endpoint response is sent first
 - recording persistence is queued in the background after execution finishes
+- queued recording work is deferred past the current request turn, so recorder serialization, replay-project serialization, compression, and object/file writes should not inflate endpoint `durationMs` or `x-duration-ms`
+- recording duration is the processor execution window, matching `x-workflow-execute-ms`, not the full HTTP request duration
 - both successful and failed runs are eligible for recording
 - successful runs whose final `output` is `control-flow-excluded` are marked as `suspicious`
 - if the queue is full, new recordings are dropped so endpoint execution is not slowed or blocked

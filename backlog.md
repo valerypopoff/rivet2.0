@@ -1,5 +1,6 @@
 
-- Ctrl+D is not coming through
+
+- In the publish history, allow users to leave comments on each version, not just star them
 
 
 - Убедиться, что RIVET_RECORDINGS_MAX_PENDING_WRITES работает правильно — на каждую реплику

@@ -653,12 +653,15 @@ For endpoint measurement with the dedicated script:
 2. optionally set `RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true` so the route emits stage timings
 3. run `npm --prefix wrapper/api run workflow-execution:measure -- --base-url http://localhost:8080 --endpoint hello-world --kind published --runs 5 --warmups 1`
 4. expect one output line per request with HTTP status, client duration, `x-duration-ms`, `x-workflow-resolve-ms`, `x-workflow-materialize-ms`, `x-workflow-execute-ms`, and `x-workflow-cache`
-5. if debug headers are disabled, expect those per-stage fields to print as `n/a` rather than failing
-6. in `managed` mode, use the transition from `x-workflow-cache=miss` to `x-workflow-cache=hit` to verify cold-first-hit then warm-hit behavior
-7. in `filesystem` mode, the startup-warmed path should normally report `x-workflow-cache=hit`; after a project-affecting mutation or other tracked filesystem-tree change, expect one rebuild `miss` and then a return to `hit`
-8. in `filesystem` mode, `x-workflow-resolve-ms` covers endpoint-index freshness validation plus endpoint lookup, while `x-workflow-materialize-ms` covers materialization-cache validation plus any needed project/dataset reload, one-time project reparsing, and per-request dataset-provider reconstruction
-9. in `filesystem` mode, `x-workflow-cache=bypass` means the cache deliberately fell back to uncached filesystem resolution because cached routing/materialization state was uncertain; that slower degraded path is the guardrail against stale cache execution
-10. in local Docker on Windows, filesystem mode still reads `/workflows` through a host bind mount, so fixed filesystem overhead can remain materially higher than a direct local-process run even when the endpoint index and materialization path are warm
+5. compare Postman or browser total time against `x-duration-ms`; the difference is network, proxy, TLS, client, and response-transfer overhead
+6. compare `x-duration-ms` against `x-workflow-execute-ms` and the Run recordings duration; recordings and `x-workflow-execute-ms` show the measured processor execution window, while `x-duration-ms` includes request handling, endpoint resolution/materialization, processor setup, and response shaping
+7. recording persistence is intentionally deferred after the response turn, so recorder serialization, replay-project serialization, compression, and object/file writes should not explain a large `x-duration-ms` gap
+8. if debug headers are disabled, expect those per-stage fields to print as `n/a` rather than failing
+9. in `managed` mode, use the transition from `x-workflow-cache=miss` to `x-workflow-cache=hit` to verify cold-first-hit then warm-hit behavior
+10. in `filesystem` mode, the startup-warmed path should normally report `x-workflow-cache=hit`; after a project-affecting mutation or other tracked filesystem-tree change, expect one rebuild `miss` and then a return to `hit`
+11. in `filesystem` mode, `x-workflow-resolve-ms` covers endpoint-index freshness validation plus endpoint lookup, while `x-workflow-materialize-ms` covers materialization-cache validation plus any needed project/dataset reload, one-time project reparsing, and per-request dataset-provider reconstruction
+12. in `filesystem` mode, `x-workflow-cache=bypass` means the cache deliberately fell back to uncached filesystem resolution because cached routing/materialization state was uncertain; that slower degraded path is the guardrail against stale cache execution
+13. in local Docker on Windows, filesystem mode still reads `/workflows` through a host bind mount, so fixed filesystem overhead can remain materially higher than a direct local-process run even when the endpoint index and materialization path are warm
 
 For the current execution-plane split specifically:
 

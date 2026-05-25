@@ -304,7 +304,7 @@ async function executeWorkflowEndpoint(
     recordingErrorMessage = getWorkflowErrorMessage(error);
     executionError = error;
   } finally {
-    executionDurationMs = performance.now() - requestStartedAt;
+    executionDurationMs = performance.now() - executionStartedAt;
   }
 
   if (recorder) {
@@ -333,11 +333,11 @@ async function executeWorkflowEndpoint(
   }
 
   if (executionError) {
-    setWorkflowExecutionDebugHeaders(res, executionProject, performance.now() - executionStartedAt);
+    setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
     throw executionError;
   }
 
-  setWorkflowExecutionDebugHeaders(res, executionProject, performance.now() - executionStartedAt);
+  setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
   sendJsonWithDuration(res, 200, responsePayload, requestStartedAt);
 }
 

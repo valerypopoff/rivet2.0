@@ -16,6 +16,7 @@ export function createWorkflowRecordingStore(options: {
   let cleanupRequested = false;
   let persistenceQueue: WorkflowRecordingPersistenceTask[] = [];
   let persistenceQueuePromise: Promise<void> | null = null;
+  let persistenceQueueStartImmediate: ReturnType<typeof setImmediate> | null = null;
   let lastDroppedPersistenceLogAt = 0;
   let resettingWorkflowRecordingStorageForTests = false;
 
@@ -62,7 +63,12 @@ export function createWorkflowRecordingStore(options: {
     );
   };
 
-  const scheduleWorkflowRecordingPersistenceQueue = (): void => {
+  const getPendingPersistenceWriteCount = (): number => {
+    return Math.max(0, persistenceQueue.length - (persistenceQueueStartImmediate ? 1 : 0));
+  };
+
+  const runWorkflowRecordingPersistenceQueue = (): void => {
+    persistenceQueueStartImmediate = null;
     if (persistenceQueuePromise) {
       return;
     }
@@ -89,6 +95,14 @@ export function createWorkflowRecordingStore(options: {
     });
   };
 
+  const scheduleWorkflowRecordingPersistenceQueue = (): void => {
+    if (persistenceQueuePromise || persistenceQueueStartImmediate) {
+      return;
+    }
+
+    persistenceQueueStartImmediate = setImmediate(runWorkflowRecordingPersistenceQueue);
+  };
+
   return {
     scheduleCleanup: scheduleWorkflowRecordingCleanup,
 
@@ -98,7 +112,7 @@ export function createWorkflowRecordingStore(options: {
       }
 
       const { maxPendingWrites } = getWorkflowRecordingConfig();
-      if (maxPendingWrites > 0 && persistenceQueue.length >= maxPendingWrites) {
+      if (maxPendingWrites > 0 && getPendingPersistenceWriteCount() >= maxPendingWrites) {
         logDroppedWorkflowRecordingPersistence(maxPendingWrites);
         return false;
       }
@@ -134,14 +148,19 @@ export function createWorkflowRecordingStore(options: {
 
       const pendingPersistence = persistenceQueuePromise;
       const pendingCleanup = cleanupPromise;
+      const pendingPersistenceStartImmediate = persistenceQueueStartImmediate;
 
       storageReadyPromise = null;
       storageReadyRoot = '';
       cleanupPromise = null;
       cleanupRequested = false;
       persistenceQueuePromise = null;
+      persistenceQueueStartImmediate = null;
       persistenceQueue = [];
       lastDroppedPersistenceLogAt = 0;
+      if (pendingPersistenceStartImmediate) {
+        clearImmediate(pendingPersistenceStartImmediate);
+      }
 
       try {
         await pendingPersistence?.catch(() => {});
