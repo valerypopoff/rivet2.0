@@ -13,6 +13,7 @@ const requiredRootMarkdown = new Set([
 
 const allowedWorkingDocs = new Set([
   'backlog.md',
+  'image-build-optimization-plan.md',
 ]);
 
 const allowedRootMarkdown = new Set([

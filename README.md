@@ -57,7 +57,9 @@ The repo root stays intentionally small. Root Markdown is reserved for:
 
 - `README.md`
 - `AGENTS.md`
-- the current tracked working-doc baseline: `backlog.md`
+- the current tracked working-doc baseline:
+  - `backlog.md`
+  - `image-build-optimization-plan.md`
 
 Reference documentation lives under `docs/`, not at the repo root.
 
