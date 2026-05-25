@@ -163,7 +163,7 @@ Do not use `vault.roleIdSecretName`; that value is retired and the chart rejects
 
 Have these ready before the first `helm upgrade --install`:
 
-- a `linux/amd64` node pool, unless the executor image is rebuilt for another platform
+- a `linux/amd64` node pool, unless the API and executor images are rebuilt for another platform
 - an ingress controller that supports websocket upgrades and long-lived websocket connections
 - DNS for the public Rivet hostname and a TLS secret or certificate-manager integration
 - a default `StorageClass`, or explicit `storage.appData.storageClassName` / `storage.appData.existingClaimName`
@@ -209,16 +209,16 @@ images:
     tag: latest
 ```
 
-The `latest` tag is produced from pushes to `main-rivet2`; commit SHA and tag-derived image tags are also produced by the same workflow.
+The `latest` tag is produced from pushes to `main-rivet2`; commit SHA and tag-derived image tags are also produced by the same workflow. The image workflow resolves the configured upstream Rivet ref to an exact commit before the Rivet-consuming image builds and labels the resulting images with that Rivet source, ref, and revision.
 For production, prefer pinning all four image tags to the same published commit SHA or release tag instead of leaving them on `latest`.
 If the GHCR packages are private, configure `imagePullSecrets`; public packages should pull anonymously.
 
 Current published image platforms:
 
-- `proxy`, `web`, and `api`: `linux/amd64` and `linux/arm64`
-- `executor`: `linux/amd64`
+- `proxy` and `web`: `linux/amd64` and `linux/arm64`
+- `api` and `executor`: `linux/amd64`
 
-Run the production chart on `linux/amd64` nodes unless the executor image is rebuilt for another platform.
+Run the production chart on `linux/amd64` nodes unless the API and executor images are rebuilt for another platform.
 
 ### Environment values skeleton
 

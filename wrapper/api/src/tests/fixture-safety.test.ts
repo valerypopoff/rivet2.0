@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -18,9 +19,13 @@ function getGraphFixturePath(): string {
   );
 }
 
-test('graph speed fixture does not contain live secrets or production endpoints', async () => {
-  const fixturePath = getGraphFixturePath();
-  const fixture = await fs.readFile(fixturePath, 'utf8');
+const graphFixturePath = getGraphFixturePath();
+const graphFixtureSkipReason = existsSync(graphFixturePath)
+  ? false
+  : 'optional graph speed benchmark fixture is not present';
+
+test('graph speed fixture does not contain live secrets or production endpoints', { skip: graphFixtureSkipReason }, async () => {
+  const fixture = await fs.readFile(graphFixturePath, 'utf8');
 
   const forbiddenPatterns: Array<[RegExp, string]> = [
     [/sk-svcacct-[0-9A-Za-z_-]+/, 'OpenAI service-account key'],
@@ -40,8 +45,8 @@ test('graph speed fixture does not contain live secrets or production endpoints'
   }
 });
 
-test('graph speed fixture has a main graph default endpoint payload', async () => {
-  const fixture = await fs.readFile(getGraphFixturePath(), 'utf8');
+test('graph speed fixture has a main graph default endpoint payload', { skip: graphFixtureSkipReason }, async () => {
+  const fixture = await fs.readFile(graphFixturePath, 'utf8');
   const project = loadProjectFromString(fixture);
   const mainGraphId = project.metadata.mainGraphId;
 

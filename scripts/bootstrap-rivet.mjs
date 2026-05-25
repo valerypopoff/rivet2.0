@@ -56,6 +56,10 @@ function removeTargetDir() {
   fs.rmSync(targetDir, { recursive: true, force: true });
 }
 
+function isCommitSha(value) {
+  return /^[0-9a-f]{40}$/i.test(String(value).trim());
+}
+
 function ensureTargetDirReady(force) {
   if (!fs.existsSync(targetDir)) {
     return;
@@ -78,12 +82,28 @@ function ensureTargetDirReady(force) {
 }
 
 async function resolveRefCommit() {
-  const { stdout } = await run('git', ['ls-remote', upstreamRepo, upstreamRef]);
-  const [line] = stdout
+  if (isCommitSha(upstreamRef)) {
+    return upstreamRef.toLowerCase();
+  }
+
+  const { stdout } = await run('git', [
+    'ls-remote',
+    upstreamRepo,
+    upstreamRef,
+    `refs/heads/${upstreamRef}`,
+    `refs/tags/${upstreamRef}`,
+    `refs/tags/${upstreamRef}^{}`,
+  ]);
+  const entries = stdout
     .split(/\r?\n/)
     .map((entry) => entry.trim())
-    .filter(Boolean);
-  const [commit] = line?.split(/\s+/) ?? [];
+    .filter(Boolean)
+    .map((line) => {
+      const [commit, refName] = line.split(/\s+/);
+      return { commit, refName };
+    });
+  const selectedEntry = entries.find((entry) => entry.refName?.endsWith('^{}')) ?? entries[0];
+  const commit = selectedEntry?.commit;
 
   if (!commit) {
     throw new Error(`Could not resolve Rivet ref "${upstreamRef}" from ${upstreamRepo}.`);
@@ -92,20 +112,17 @@ async function resolveRefCommit() {
   return commit;
 }
 
-function getCloneRefName() {
-  return upstreamRef
-    .replace(/^refs\/heads\//, '')
-    .replace(/^refs\/tags\//, '');
-}
-
 async function cloneRef(commit) {
   const tempParent = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-bootstrap-'));
   const tempCloneDir = path.join(tempParent, 'rivet');
-  const cloneRef = getCloneRefName();
 
   try {
-    console.log(`[setup:rivet] Downloading ${cloneRef} (${commit.slice(0, 7)}) from ${upstreamRepo}...`);
-    await run('git', ['clone', '--depth', '1', '--branch', cloneRef, upstreamRepo, tempCloneDir], { stdio: 'inherit' });
+    console.log(`[setup:rivet] Downloading ${upstreamRef} (${commit.slice(0, 7)}) from ${upstreamRepo}...`);
+    fs.mkdirSync(tempCloneDir, { recursive: true });
+    await run('git', ['init', tempCloneDir], { stdio: 'inherit' });
+    await run('git', ['remote', 'add', 'origin', upstreamRepo], { cwd: tempCloneDir, stdio: 'inherit' });
+    await run('git', ['fetch', '--depth', '1', 'origin', commit], { cwd: tempCloneDir, stdio: 'inherit' });
+    await run('git', ['checkout', '--detach', 'FETCH_HEAD'], { cwd: tempCloneDir, stdio: 'inherit' });
 
     fs.rmSync(path.join(tempCloneDir, '.git'), { recursive: true, force: true });
     fs.writeFileSync(

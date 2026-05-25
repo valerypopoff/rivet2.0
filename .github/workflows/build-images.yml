@@ -17,8 +17,40 @@ env:
   RIVET_REPO_REF: main
 
 jobs:
-  build-and-push:
+  resolve-rivet:
     runs-on: ubuntu-latest
+    outputs:
+      rivet_commit: ${{ steps.resolve.outputs.rivet_commit }}
+      rivet_ref: ${{ steps.resolve.outputs.rivet_ref }}
+    steps:
+      - name: Resolve Upstream Rivet Ref
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ref="${RIVET_REPO_REF}"
+          if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            commit="$ref"
+          else
+            refs="$(git ls-remote "$RIVET_REPO_URL" "$ref" "refs/heads/$ref" "refs/tags/$ref" "refs/tags/$ref^{}")"
+            commit="$(awk 'NF >= 2 && $2 ~ /\^\{\}$/ { print $1; found=1; exit } NF >= 2 && first == "" { first=$1 } END { if (!found && first != "") print first }' <<< "$refs")"
+          fi
+
+          if [ -z "${commit:-}" ]; then
+            echo "::error::Could not resolve Rivet ref '$ref' from $RIVET_REPO_URL"
+            exit 1
+          fi
+
+          echo "rivet_commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "rivet_ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Resolved Rivet ref $ref -> $commit"
+
+  build-and-push:
+    needs: resolve-rivet
+    runs-on: ubuntu-latest
+    env:
+      RIVET_REPO_REF: ${{ needs.resolve-rivet.outputs.rivet_commit }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,18 +59,22 @@ jobs:
             dockerfile: image/proxy/Dockerfile
             image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/proxy
             platforms: linux/amd64,linux/arm64
+            needsRivet: false
           - service: web
             dockerfile: image/web/Dockerfile
             image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/web
             platforms: linux/amd64,linux/arm64
+            needsRivet: true
           - service: api
             dockerfile: image/api/Dockerfile
             image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/api
-            platforms: linux/amd64,linux/arm64
+            platforms: linux/amd64
+            needsRivet: true
           - service: executor
             dockerfile: image/executor/Dockerfile
             image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/executor
             platforms: linux/amd64
+            needsRivet: true
 
     steps:
       - name: Check Out Repository
@@ -56,12 +92,18 @@ jobs:
         run: npm run verify:test-style
 
       - name: Bootstrap Upstream Rivet
+        if: ${{ matrix.needsRivet }}
         run: |
           if [ ! -d rivet ] || [ -z "$(ls -A rivet 2>/dev/null)" ]; then
             npm run setup:rivet
           fi
 
+      - name: Prepare Rivet Docker Contexts
+        if: ${{ matrix.needsRivet }}
+        run: npm run dev:docker:prepare-rivet-context
+
       - name: Set Up QEMU
+        if: ${{ contains(matrix.platforms, 'linux/arm64') }}
         uses: docker/setup-qemu-action@v3
 
       - name: Set Up Buildx
@@ -87,14 +129,32 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.rivet.source=${{ env.RIVET_REPO_URL }}
+            org.opencontainers.image.rivet.ref=${{ needs.resolve-rivet.outputs.rivet_ref }}
+            org.opencontainers.image.rivet.revision=${{ needs.resolve-rivet.outputs.rivet_commit }}
 
       - name: Build and Push ${{ matrix.service }}
+        if: ${{ matrix.needsRivet }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           build-contexts: |
-            rivet_source=./rivet
+            rivet_source=.data/docker-contexts/rivet-source
+            rivet_dependency_metadata=.data/docker-contexts/rivet-dependency-metadata
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Build and Push ${{ matrix.service }}
+        if: ${{ ! matrix.needsRivet }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}

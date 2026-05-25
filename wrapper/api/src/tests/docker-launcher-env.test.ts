@@ -104,6 +104,14 @@ test('loadDevEnv honors explicit RIVET_ENV_FILE overrides and still derives file
     assert.equal(loaded.envPath, envPath);
     assert.equal(loaded.hasEnvFile, true);
     assert.equal(loaded.fileEnv.RIVET_STORAGE_MODE, 'filesystem');
+    assert.equal(
+      loaded.mergedEnv.RIVET_SOURCE_BUILD_CONTEXT_PATH,
+      path.join(tempRoot, '.data', 'docker-contexts', 'rivet-source'),
+    );
+    assert.equal(
+      loaded.mergedEnv.RIVET_DEPENDENCY_BUILD_CONTEXT_PATH,
+      path.join(tempRoot, '.data', 'docker-contexts', 'rivet-dependency-metadata'),
+    );
     assert.equal(loaded.mergedEnv.RIVET_WORKFLOWS_HOST_PATH, path.join(tempRoot, 'artifacts', 'workflows'));
     assert.equal(loaded.mergedEnv.RIVET_WORKFLOW_RECORDINGS_HOST_PATH, path.join(tempRoot, 'artifacts', 'workflow-recordings'));
     assert.equal(loaded.mergedEnv.RIVET_RUNTIME_LIBS_HOST_PATH, path.join(tempRoot, 'artifacts', 'runtime-libraries'));

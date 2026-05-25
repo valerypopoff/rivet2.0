@@ -29,11 +29,20 @@ WORKDIR /app
 COPY wrapper/bootstrap/proxy-bootstrap/ /opt/proxy-bootstrap/
 RUN --mount=type=cache,target=/root/.npm npm --prefix /opt/proxy-bootstrap ci
 
-COPY --from=rivet_source . rivet/
+COPY --from=rivet_dependency_metadata . rivet/
 WORKDIR /app/rivet
 RUN --mount=type=cache,target=/root/.cache/yarn YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable || YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install
+
+COPY --from=rivet_source . /app/rivet/
+WORKDIR /app/rivet
 RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-core run build
 RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-node run build
+
+WORKDIR /app
+COPY wrapper/api/package.json wrapper/api/package-lock.json wrapper/api/
+
+WORKDIR /app/wrapper/api
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 WORKDIR /app
 COPY scripts/link-rivet-node-package.mjs scripts/link-rivet-node-package.mjs
@@ -41,7 +50,6 @@ COPY wrapper/api/ wrapper/api/
 COPY wrapper/shared/ wrapper/shared/
 
 WORKDIR /app/wrapper/api
-RUN --mount=type=cache,target=/root/.npm npm ci
 RUN node /app/scripts/link-rivet-node-package.mjs
 RUN npm run build
 

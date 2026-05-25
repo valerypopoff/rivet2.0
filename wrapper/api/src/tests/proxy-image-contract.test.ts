@@ -135,7 +135,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
   const preserveSymlinksRunner = readRepoFile('scripts/run-preserve-symlinks.mjs');
 
   for (const dockerfile of [apiDockerfile, composeApiDockerfile]) {
-    assert.match(dockerfile, /COPY --from=rivet_source \. rivet\//);
+    assert.match(dockerfile, /COPY --from=rivet_dependency_metadata \. rivet\//);
+    assert.match(dockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
     assert.match(dockerfile, /yarn workspace @valerypopoff\/rivet2-core run build/);
     assert.match(dockerfile, /yarn workspace @valerypopoff\/rivet2-node run build/);
     assert.match(dockerfile, /RUN node \/app\/scripts\/link-rivet-node-package\.mjs/);
@@ -161,7 +162,10 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(composeApiDockerfile, /node --preserve-symlinks dist\/api\/src\/server\.js/);
 
   for (const compose of [prodCompose, devCompose]) {
-    assert.match(compose, /additional_contexts:\s*\n\s*rivet_source: \$\{RIVET_SOURCE_BUILD_CONTEXT_PATH:-\.\.\/\.\.\/rivet\}/);
+    assert.match(
+      compose,
+      /additional_contexts:\s*\n\s*rivet_source: \$\{RIVET_SOURCE_BUILD_CONTEXT_PATH:-\.\.\/\.\.\/rivet\}\s*\n\s*rivet_dependency_metadata: \$\{RIVET_DEPENDENCY_BUILD_CONTEXT_PATH:-\.\.\/\.\.\/rivet\}/,
+    );
   }
   assert.match(devCompose, /api:[\s\S]*- rivet_node_modules:\/workspace\/rivet\/node_modules/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/app\/\.rivet-source RIVET_API_PACKAGE_ROOT=\/app node \/workspace\/scripts\/link-rivet-node-package\.mjs/);
@@ -169,6 +173,15 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(devDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
   assert.match(prodDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
   assert.ok(rivetContextHelper.includes("const defaultContextRelPath = path.join(contextRootRelPath, 'rivet-source');"));
+  assert.match(rivetContextHelper, /'\.upstream-version'/);
+  assert.ok(
+    rivetContextHelper.includes(
+      "const defaultDependencyContextRelPath = path.join(contextRootRelPath, 'rivet-dependency-metadata');",
+    ),
+  );
+  assert.match(rivetContextHelper, /function assertDistinctPaths\(firstPath, secondPath, firstLabel, secondLabel\)/);
+  assert.match(rivetContextHelper, /function copyWorkspacePackageJsonFiles\(sourceRoot, destinationRoot\)/);
+  assert.doesNotMatch(rivetContextHelper, /visit\(''\)/);
   assert.match(rivetContextHelper, /Excluded dependency folders, build output, VCS data, and Yarn cache artifacts/);
 });
 
@@ -200,7 +213,12 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   assert.match(imageBuildWorkflow, /uses: docker\/login-action@v3/);
   assert.match(imageBuildWorkflow, /uses: docker\/metadata-action@v5/);
   assert.match(imageBuildWorkflow, /uses: docker\/build-push-action@v6/);
-  assert.match(imageBuildWorkflow, /build-contexts:\s*\|\s*\n\s*rivet_source=\.\/rivet/);
+  assert.match(imageBuildWorkflow, /needsRivet: false/);
+  assert.match(imageBuildWorkflow, /if: \$\{\{ matrix\.needsRivet \}\}/);
+  assert.match(imageBuildWorkflow, /if: \$\{\{ ! matrix\.needsRivet \}\}/);
+  assert.match(imageBuildWorkflow, /build-contexts:\s*\|\s*\n\s*rivet_source=\.data\/docker-contexts\/rivet-source/);
+  assert.match(imageBuildWorkflow, /rivet_dependency_metadata=\.data\/docker-contexts\/rivet-dependency-metadata/);
+  assert.match(imageBuildWorkflow, /org\.opencontainers\.image\.rivet\.revision=\$\{\{ needs\.resolve-rivet\.outputs\.rivet_commit \}\}/);
   assert.match(imageBuildWorkflow, /push: true/);
   assert.ok(imageBuildWorkflow.includes("type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main-rivet2' }}"));
   assert.ok(imageBuildWorkflow.includes('type=ref,event=branch'));
@@ -208,7 +226,7 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   for (const [service, dockerfile, platforms] of [
     ['proxy', 'image/proxy/Dockerfile', 'linux/amd64,linux/arm64'],
     ['web', 'image/web/Dockerfile', 'linux/amd64,linux/arm64'],
-    ['api', 'image/api/Dockerfile', 'linux/amd64,linux/arm64'],
+    ['api', 'image/api/Dockerfile', 'linux/amd64'],
     ['executor', 'image/executor/Dockerfile', 'linux/amd64'],
   ] as const) {
     assert.match(
@@ -221,8 +239,11 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
     assert.ok(envExample.includes(`ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/${service}:latest`));
   }
 
-  assert.match(webDockerfile, /COPY --from=rivet_source \. rivet\//);
-  assert.match(apiDockerfile, /COPY --from=rivet_source \. rivet\//);
+  assert.match(webDockerfile, /COPY --from=rivet_dependency_metadata \. rivet\//);
+  assert.match(webDockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
+  assert.match(apiDockerfile, /COPY --from=rivet_dependency_metadata \. rivet\//);
+  assert.match(apiDockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
+  assert.match(executorDockerfile, /COPY --from=rivet_dependency_metadata \. \/app\/rivet\//);
   assert.match(executorDockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
   assert.doesNotMatch(webPackageJson, /"rivet-studio-server":\s*"file:\.\.\/\.\."/);
   assert.doesNotMatch(webPackageLock, /"node_modules\/rivet-studio-server"/);
@@ -233,6 +254,9 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   assert.doesNotMatch(ensureDevDeps, legacyRepoPattern);
   assert.match(bootstrapRivet, /RIVET_REPO_URL \|\| 'https:\/\/github\.com\/valerypopoff\/rivet2\.0\.git'/);
   assert.match(bootstrapRivet, /RIVET_REPO_REF \|\| process\.env\.RIVET_BRANCH \|\| 'main'/);
+  assert.match(bootstrapRivet, /function isCommitSha\(value\)/);
+  assert.match(bootstrapRivet, /refName\?\.endsWith\('\^\{\}'\)/);
+  assert.match(bootstrapRivet, /'fetch', '--depth', '1', 'origin', commit/);
 
   assert.match(prodCompose, /proxy:[\s\S]*dockerfile: image\/proxy\/Dockerfile/);
   assert.match(prodCompose, /proxy:[\s\S]*"\$\{RIVET_PORT:-8080\}:8080"/);

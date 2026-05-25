@@ -57,7 +57,9 @@ The repo root stays intentionally small. Root Markdown is reserved for:
 
 - `README.md`
 - `AGENTS.md`
-- the current tracked working-doc baseline: `backlog.md`
+- the current tracked working-doc baseline:
+  - `backlog.md`
+  - `image-build-optimization-plan.md`
 
 Reference documentation lives under `docs/`, not at the repo root.
 
@@ -129,9 +131,9 @@ If you need a custom local build, first make sure the upstream Rivet source is a
 npm run setup:rivet
 ```
 
-The script downloads the configured Rivet 2 source ref. By default that is `https://github.com/valerypopoff/rivet2.0.git` at `main`; override it with `RIVET_REPO_URL` and `RIVET_REPO_REF` when rehearsing another fork, branch, or tag.
+The script downloads the configured Rivet 2 source ref. By default that is `https://github.com/valerypopoff/rivet2.0.git` at `main`; override it with `RIVET_REPO_URL` and `RIVET_REPO_REF` when rehearsing another fork, branch, tag, or exact commit SHA.
 
-If `./rivet` is a symlink or Windows junction to another checkout, the repo launchers resolve that link to its real host path for dev bind mounts. Local Docker image builds use a filtered snapshot at `.data/docker-contexts/rivet-source` for the named `rivet_source` build context, so a large upstream working tree does not send `node_modules`, VCS data, or Yarn caches into BuildKit. Direct `docker build` commands need the same build context explicitly; run `npm run dev:docker:prepare-rivet-context`, then use a command such as `docker build --build-context rivet_source=.data/docker-contexts/rivet-source -f image/api/Dockerfile .`.
+If `./rivet` is a symlink or Windows junction to another checkout, the repo launchers resolve that link to its real host path for dev bind mounts. Local Docker image builds use a filtered source snapshot at `.data/docker-contexts/rivet-source` and a dependency-metadata snapshot at `.data/docker-contexts/rivet-dependency-metadata`, so large upstream working trees do not send `node_modules`, VCS data, or Yarn caches into BuildKit and source-only changes do not invalidate the Rivet install layer. Direct `docker build` commands need both build contexts explicitly; run `npm run dev:docker:prepare-rivet-context`, then use a command such as `docker build --build-context rivet_source=.data/docker-contexts/rivet-source --build-context rivet_dependency_metadata=.data/docker-contexts/rivet-dependency-metadata -f image/api/Dockerfile .`.
 
 To replace an existing non-empty `rivet/` directory:
 

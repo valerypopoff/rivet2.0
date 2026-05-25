@@ -25,27 +25,29 @@ RUN corepack enable && corepack prepare yarn@4.6.0 --activate
 
 WORKDIR /app
 
-# Copy upstream Rivet source from the explicit named build context.
-COPY --from=rivet_source . rivet/
+COPY --from=rivet_dependency_metadata . rivet/
 
-# Install upstream dependencies
 WORKDIR /app/rivet
 RUN --mount=type=cache,target=/root/.cache/yarn YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable || YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install
 
-# Build upstream core + trivet (needed for wrapper frontend)
+COPY --from=rivet_source . /app/rivet/
+WORKDIR /app/rivet
 RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-core run build
 RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/trivet run build
 
-# Copy wrapper source
 WORKDIR /app
-COPY wrapper/ wrapper/
 COPY package.json package.json
+COPY wrapper/web/package.json wrapper/web/package-lock.json wrapper/web/
 
-# Install wrapper web dependencies
 WORKDIR /app/wrapper/web
 RUN --mount=type=cache,target=/root/.npm npm install --legacy-peer-deps
 
-# Build wrapper frontend
+WORKDIR /app
+COPY wrapper/web/ wrapper/web/
+COPY wrapper/shared/ wrapper/shared/
+
+WORKDIR /app/wrapper/web
+
 ARG VITE_RIVET_DEBUG_LOGS=false
 ARG RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows
 ARG RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest

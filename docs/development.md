@@ -20,7 +20,7 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 - `npm run setup:rivet`
   - downloads the configured Rivet 2 source ref into `./rivet`
   - defaults to `https://github.com/valerypopoff/rivet2.0.git` at `main`
-  - override the source with `RIVET_REPO_URL` and `RIVET_REPO_REF` when rehearsing a different fork, branch, or tag
+  - override the source with `RIVET_REPO_URL` and `RIVET_REPO_REF` when rehearsing a different fork, branch, tag, or exact commit SHA
   - use this when you want a clean upstream snapshot for local Docker builds
   - `npm run setup:rivet -- --force` replaces an existing non-empty `rivet/` directory
 
@@ -32,7 +32,7 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 | `npm run dev:recreate` | Rebuilds and recreates the Docker dev stack | Pick up Dockerfile/env/runtime changes |
 | `npm run dev:docker:recreate` | Rebuilds and recreates the Docker dev stack without going through the alias | Useful when you want the exact script name that repo instructions refer to |
 | `npm run dev:docker:config` | Renders the merged Docker dev Compose config without starting containers | Verify launcher/env/Compose wiring |
-| `npm run dev:docker:prepare-rivet-context` | Refreshes the filtered upstream Rivet Docker build context | Manual build-context checks without starting Docker |
+| `npm run dev:docker:prepare-rivet-context` | Refreshes the filtered upstream Rivet source and dependency-metadata Docker build contexts | Manual build-context checks without starting Docker |
 | `npm run dev:down` | Stops the Docker dev stack | Cleanup |
 | `npm run dev:docker:ps` | Shows Docker dev container status | Diagnostics |
 | `npm run dev:docker:logs` | Streams Docker dev logs | Diagnostics |
@@ -87,6 +87,7 @@ Current behavior:
   - `RIVET_RUNTIME_LIBS_HOST_PATH=<artifactsRoot>/runtime-libraries`
 - `RIVET_SOURCE_HOST_PATH` points dev bind mounts at the embedded upstream Rivet source. If it is unset, the launchers resolve `<repo>/rivet` through `fs.realpathSync.native()`, so a Windows junction such as `rivet -> D:\Programming\Rivet2.0` becomes the real host path before Docker sees it.
 - `RIVET_SOURCE_BUILD_CONTEXT_PATH` points Docker image builds at a filtered Rivet source snapshot. If it is unset, build-capable launchers recreate `.data/docker-contexts/rivet-source` from `RIVET_SOURCE_HOST_PATH`, copying package source plus Yarn release metadata while excluding dependency folders, build output, VCS data, and Yarn cache artifacts.
+- `RIVET_DEPENDENCY_BUILD_CONTEXT_PATH` points Docker image builds at the smaller Rivet dependency-metadata snapshot used before `yarn install`. If it is unset, build-capable launchers recreate `.data/docker-contexts/rivet-dependency-metadata` from `RIVET_SOURCE_HOST_PATH`, copying root dependency files, `.upstream-version` when present, Yarn release/patch/plugin metadata, and declared workspace `package.json` files only.
 - if `RIVET_WORKFLOWS_HOST_PATH`, `RIVET_WORKFLOW_RECORDINGS_HOST_PATH`, or `RIVET_RUNTIME_LIBS_HOST_PATH` is present, the launcher resolves it to an absolute host path before invoking Docker Compose
 - explicit `RIVET_WORKFLOWS_HOST_PATH`, `RIVET_WORKFLOW_RECORDINGS_HOST_PATH`, and `RIVET_RUNTIME_LIBS_HOST_PATH` values override the derived paths from `RIVET_ARTIFACTS_HOST_PATH`
 
@@ -274,7 +275,7 @@ Current behavior:
 - the browser entrypoint is still `http://localhost:8080` through nginx by default; override it with `RIVET_PORT` if needed
 - `npm run prod` and `npm run prod:prebuilt` pull prebuilt images under `ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/{proxy,web,api,executor}:${RIVET_IMAGE_TAG:-latest}`, then force-recreate the stack with `--no-build`; set `RIVET_PROXY_IMAGE`, `RIVET_WEB_IMAGE`, `RIVET_API_IMAGE`, or `RIVET_EXECUTOR_IMAGE` to pin any service to a different image. Keep the image examples in `.env.example` on that same namespace so VM overrides do not accidentally pull the legacy wrapper images.
 - `npm run prod:restart` skips the pull/build step and force-recreates the stack from the images already present locally. Use it after changing `.env` when you want containers to pick up new env values without updating to newer GHCR images.
-- `npm run prod:custom` rebuilds the stack from the current wrapper repo and the current `rivet/` source folder, using the filtered `rivet_source` Docker build context
+- `npm run prod:custom` rebuilds the stack from the current wrapper repo and the current `rivet/` source folder, using the filtered `rivet_source` and `rivet_dependency_metadata` Docker build contexts
 - the API is also exposed directly on `http://localhost:3100` for diagnostics
 - proxy startup scripts are Linux shell scripts; dev Compose mounts them from the repo, while production images bake them into the proxy image. The repo pins `*.sh` files to LF line endings so Windows checkouts do not inject CRLF characters into `/bin/sh`
 - proxy startup copies the UI gate prompt from its mounted or baked source into `/tmp/nginx/html` before nginx starts; nginx serves the staged copy instead of repeatedly reading a host-mounted HTML file on each gated request
@@ -283,13 +284,13 @@ Current behavior:
 - the `web` service runs the Vite dev server inside the container with live bind mounts
 - Docker dev rebuilds the `api` and `executor` services from Dockerfiles while running `web` through Vite; `npm run prod:custom` rebuilds `proxy`, `web`, `api`, and `executor`
 - the launchers compute host bind mounts before calling Compose. With `RIVET_ARTIFACTS_HOST_PATH=../` from the repo root, both dev and production-style Docker mount `<repo>/../workflows` at `/workflows`, `<repo>/../workflow-recordings` at `/workflow-recordings`, and `<repo>/../runtime-libraries` at `/data/runtime-libraries`. If you bypass the launcher and run Compose directly, set those three `RIVET_*_HOST_PATH` values explicitly or Compose may fall back to repo-local defaults.
-- the production web image copies `wrapper/`, the root `package.json` as build metadata for the About modal version, and the `rivet_source` build context. Keep `wrapper/web/package.json` free of `file:../..` root dependencies so GitHub Actions can build the web image from the same minimal context.
+- the production web image installs wrapper web dependencies from `wrapper/web/package.json` and `wrapper/web/package-lock.json` before copying web/shared source, then uses the root `package.json` as build metadata for the About modal version. Keep `wrapper/web/package.json` free of `file:../..` root dependencies so GitHub Actions can build the web image from the same minimal context.
 - the API image builds `rivet/packages/core` and `rivet/packages/node`, then links `wrapper/api` to those built package directories before compiling the API; this keeps hosted endpoint execution on the same Rivet source tree as the editor and executor
 - the Docker dev API waits for the web service to populate the shared `rivet_node_modules` volume, then copies only `rivet/packages/core` and `rivet/packages/node` into `/app/.rivet-source`, attaches `/workspace/rivet/node_modules` beside that copy, and points the generated `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and `@rivet2/*` package overlays at the internal copy. That keeps Node package resolution inside the container even when `rivet/` is a Windows junction target, avoids duplicating the upstream dependency install, and avoids writing API helper links into the external Rivet checkout.
 - local and image API entrypoints run with symlink preservation (`preserveSymlinks` for TypeScript and `--preserve-symlinks` for Node/tsx), while `scripts/link-rivet-node-package.mjs` creates generated package overlays that expose the built Rivet package `dist` folders and route third-party dependency lookup back to `rivet/node_modules`
 - the Docker dev API mounts the repo scripts directory at `/scripts`, matching the `../../scripts/...` path seen from `/app`, so the same `wrapper/api` package scripts run locally and inside Compose
-- Docker image builds receive upstream Rivet through the named `rivet_source` build context instead of `COPY rivet/` from the main repo context; local launchers feed that context from `.data/docker-contexts/rivet-source` so linked Rivet checkouts do not send `node_modules`, `.git`, or Yarn cache artifacts to BuildKit
-- `npm run dev:docker:prepare-rivet-context` refreshes that filtered context without starting Docker, which is useful before manual `docker build --build-context rivet_source=.data/docker-contexts/rivet-source ...` checks
+- Docker image builds receive upstream Rivet through the named `rivet_source` and `rivet_dependency_metadata` build contexts instead of `COPY rivet/` from the main repo context; local launchers feed those contexts from `.data/docker-contexts/rivet-source` and `.data/docker-contexts/rivet-dependency-metadata` so linked Rivet checkouts do not send `node_modules`, `.git`, or Yarn cache artifacts to BuildKit
+- `npm run dev:docker:prepare-rivet-context` refreshes those filtered contexts without starting Docker, which is useful before manual `docker build --build-context rivet_source=.data/docker-contexts/rivet-source --build-context rivet_dependency_metadata=.data/docker-contexts/rivet-dependency-metadata ...` checks
 - the Docker Compose stacks set `HOME=/home/rivet` and keep npm/Yarn caches there so pulled non-root images and locally built images use the same runtime cache contract
 - the launcher waits for healthy services; `RIVET_DOCKER_WAIT_TIMEOUT` controls the overall wait window, while the Docker dev API healthcheck has a longer startup grace period because cold starts may need to refresh npm dependencies, copy Rivet package sources, and relink local package overlays before `/healthz` is available
 - on Windows/Docker Desktop, if Compose fails before containers start with `error while creating mount source path '/run/desktop/mnt/host/<drive>/...'` and `file exists`, first verify the host folder exists, then run `wsl --shutdown` from PowerShell to reset Docker Desktop's WSL file-sharing bridge before retrying `npm run dev:docker`
@@ -669,7 +670,7 @@ For endpoint measurement with the dedicated script:
 13. in local Docker on Windows, filesystem mode still reads `/workflows` through a host bind mount, so fixed filesystem overhead can remain materially higher than a direct local-process run even when the endpoint index and materialization path are warm
 14. when CodeRunner telemetry is enabled, use `x-code-runner-prepare-ms` to find managed runtime-library sync cost, `x-code-runner-compile-ms` to find repeated function compilation cost, `x-code-runner-execute-ms` for actual user-code time, and cache hit/miss headers to confirm repeated Code/Expression nodes are reusing compiled functions
 
-For the committed graph fixture, use the local benchmark runner when you need a
+For the optional local graph fixture, use the local benchmark runner when you need a
 repeatable before/after sanity check without importing into a real workspace:
 
 ```bash
@@ -694,6 +695,10 @@ Expression and Code New nodes, with no managed `require(...)` and no external
 service call. If the report shows only one CodeRunner call, check whether the
 command accidentally passed `--body '{}'` or another body that bypasses the
 fixture's default test payload.
+
+The fixture is intentionally optional in a clean checkout. The API test suite
+skips the fixture safety checks when `.fixtures/graph-fixture.rivet-project` is
+absent and runs them automatically when the benchmark fixture is present.
 
 For the current execution-plane split specifically:
 
