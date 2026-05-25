@@ -21,6 +21,55 @@ const devEnv = await import(new URL('../../../../scripts/lib/dev-env.mjs', impor
     mergedEnv: NodeJS.ProcessEnv;
   };
 };
+const rivetSourceContext = await import(new URL('../../../../scripts/lib/rivet-source-context.mjs', import.meta.url).href) as {
+  prepareRivetDockerContext: (rootDir: string, env: NodeJS.ProcessEnv) => string;
+};
+
+function writeFile(pathname: string, contents: string) {
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  fs.writeFileSync(pathname, contents);
+}
+
+function writeMinimalRivetSource(
+  sourceRoot: string,
+  options: {
+    includeBuildWrapperTarget?: boolean;
+    scripts?: Record<string, string>;
+  } = {},
+) {
+  const includeBuildWrapperTarget = options.includeBuildWrapperTarget ?? true;
+  const scripts = options.scripts ?? {
+    'build:runtime': 'node scripts/build-wrapper-target.mjs runtime',
+    'build:hosted-web-deps': 'node scripts/build-wrapper-target.mjs hosted-web-deps',
+  };
+
+  writeFile(
+    path.join(sourceRoot, 'package.json'),
+    JSON.stringify({ private: true, workspaces: ['packages/*'], scripts }, null, 2),
+  );
+  writeFile(path.join(sourceRoot, 'yarn.lock'), '');
+  writeFile(path.join(sourceRoot, '.yarnrc.yml'), 'yarnPath: .yarn/releases/yarn-4.6.0.cjs\n');
+  writeFile(path.join(sourceRoot, '.yarn', 'releases', 'yarn-4.6.0.cjs'), '');
+
+  for (const packageName of ['app', 'app-executor', 'core', 'node', 'trivet']) {
+    writeFile(path.join(sourceRoot, 'packages', packageName, 'package.json'), JSON.stringify({ name: packageName }));
+  }
+
+  if (includeBuildWrapperTarget) {
+    writeFile(path.join(sourceRoot, 'scripts', 'build-wrapper-target.mjs'), 'console.log("build target");\n');
+  }
+}
+
+function withMutedConsoleLog<T>(callback: () => T): T {
+  const originalConsoleLog = console.log;
+  console.log = () => {};
+
+  try {
+    return callback();
+  } finally {
+    console.log = originalConsoleLog;
+  }
+}
 
 function setProcessEnvForTest(name: string, value: string) {
   const previous = process.env[name];
@@ -140,6 +189,71 @@ test('loadDevEnv preserves an explicit workflow recordings host path override', 
     assert.equal(loaded.mergedEnv.RIVET_RUNTIME_LIBS_HOST_PATH, path.join(tempRoot, 'artifacts', 'runtime-libraries'));
   } finally {
     restoreEnvFile();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('prepareRivetDockerContext copies source-only wrapper build scripts outside dependency metadata', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-source-context-'));
+  const sourceRoot = path.join(tempRoot, 'upstream-rivet');
+  writeMinimalRivetSource(sourceRoot);
+
+  try {
+    const env: NodeJS.ProcessEnv = { RIVET_SOURCE_HOST_PATH: sourceRoot };
+    const contextPath = withMutedConsoleLog(() => rivetSourceContext.prepareRivetDockerContext(tempRoot, env));
+    const dependencyContextPath = env.RIVET_DEPENDENCY_BUILD_CONTEXT_PATH;
+
+    assert.equal(contextPath, path.join(tempRoot, '.data', 'docker-contexts', 'rivet-source'));
+    assert.equal(dependencyContextPath, path.join(tempRoot, '.data', 'docker-contexts', 'rivet-dependency-metadata'));
+    assert.equal(fs.existsSync(path.join(contextPath, 'scripts', 'build-wrapper-target.mjs')), true);
+    assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts', 'build-wrapper-target.mjs')), false);
+    assert.equal(fs.existsSync(path.join(dependencyContextPath, 'packages', 'trivet', 'package.json')), true);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('prepareRivetDockerContext rejects upstream checkouts without wrapper build scripts', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-source-context-stale-'));
+  const sourceRoot = path.join(tempRoot, 'upstream-rivet');
+  writeMinimalRivetSource(sourceRoot, {
+    includeBuildWrapperTarget: false,
+    scripts: {
+      'build:runtime': 'node scripts/build-wrapper-target.mjs runtime',
+    },
+  });
+
+  try {
+    assert.throws(
+      () =>
+        withMutedConsoleLog(() =>
+          rivetSourceContext.prepareRivetDockerContext(tempRoot, { RIVET_SOURCE_HOST_PATH: sourceRoot }),
+        ),
+      /Expected upstream Rivet source file or directory at .*scripts.*build-wrapper-target\.mjs/,
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('prepareRivetDockerContext rejects upstream package.json without required wrapper build scripts', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-source-context-script-'));
+  const sourceRoot = path.join(tempRoot, 'upstream-rivet');
+  writeMinimalRivetSource(sourceRoot, {
+    scripts: {
+      'build:runtime': 'node scripts/build-wrapper-target.mjs runtime',
+    },
+  });
+
+  try {
+    assert.throws(
+      () =>
+        withMutedConsoleLog(() =>
+          rivetSourceContext.prepareRivetDockerContext(tempRoot, { RIVET_SOURCE_HOST_PATH: sourceRoot }),
+        ),
+      /Expected upstream Rivet package\.json script "build:hosted-web-deps"/,
+    );
+  } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });

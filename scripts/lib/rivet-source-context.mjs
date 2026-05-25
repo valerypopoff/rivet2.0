@@ -20,6 +20,10 @@ const rootFiles = [
   'yarn.lock',
 ];
 
+const sourceOnlyFiles = [path.join('scripts', 'build-wrapper-target.mjs')];
+
+const requiredRootScripts = ['build:runtime', 'build:hosted-web-deps'];
+
 const yarnSubdirectories = ['releases', 'patches', 'plugins'];
 
 const excludedDirectoryNames = new Set([
@@ -162,14 +166,25 @@ function validateRivetSource(sourceRoot) {
     'yarn.lock',
     '.yarnrc.yml',
     path.join('.yarn', 'releases'),
+    path.join('scripts', 'build-wrapper-target.mjs'),
+    path.join('packages', 'app', 'package.json'),
+    path.join('packages', 'app-executor', 'package.json'),
     path.join('packages', 'core', 'package.json'),
     path.join('packages', 'node', 'package.json'),
+    path.join('packages', 'trivet', 'package.json'),
   ];
 
   for (const relativePath of requiredPaths) {
     const candidate = path.join(sourceRoot, relativePath);
     if (!fs.existsSync(candidate)) {
       throw new Error(`[rivet-context] Expected upstream Rivet source file or directory at ${candidate}`);
+    }
+  }
+
+  const rootPackageJson = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'package.json'), 'utf8'));
+  for (const scriptName of requiredRootScripts) {
+    if (typeof rootPackageJson.scripts?.[scriptName] !== 'string') {
+      throw new Error(`[rivet-context] Expected upstream Rivet package.json script "${scriptName}"`);
     }
   }
 }
@@ -191,6 +206,10 @@ export function prepareRivetDockerContext(rootDir, env) {
   fs.mkdirSync(contextPath, { recursive: true });
 
   for (const relativePath of rootFiles) {
+    copyIfExists(sourceRoot, contextPath, relativePath);
+  }
+
+  for (const relativePath of sourceOnlyFiles) {
     copyIfExists(sourceRoot, contextPath, relativePath);
   }
 

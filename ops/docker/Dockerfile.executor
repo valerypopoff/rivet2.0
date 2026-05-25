@@ -32,8 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/yarn YARN_NODE_LINKER=node-modules YA
 
 COPY --from=rivet_source . /app/rivet/
 WORKDIR /app/rivet
-RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-core run build
-RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-node run build
+RUN YARN_NODE_LINKER=node-modules yarn build:runtime
 
 COPY wrapper/executor/build/bundle-executor.cjs /app/wrapper/executor/build/bundle-executor.cjs
 RUN NODE_PATH=/app/rivet/node_modules node /app/wrapper/executor/build/bundle-executor.cjs
