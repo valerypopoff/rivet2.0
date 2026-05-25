@@ -328,22 +328,50 @@ Acceptance checks:
   identity.
 - Image jobs fail clearly if artifact and source revisions do not match.
 
-## Phase 5: WAITING ON UPSTREAM - Upstream Contract Adoption
+## Phase 5: DONE - Upstream Contract Adoption
 
-Status: Waiting On Upstream
+Status: Done.
 
-Adopt upstream minimal build scripts/artifacts when available.
+Implementation notes:
 
-Useful upstream additions:
+- Upstream Rivet now provides wrapper-facing scripts through
+  `scripts/build-wrapper-target.mjs`.
+- The filtered `rivet_source` context now includes that script and validates
+  that the selected upstream ref provides it before Docker starts building.
+- API images call `yarn build:runtime` for `core + node`.
+- Web images call `yarn build:hosted-web-deps` for `core + trivet`.
+- Executor images call `yarn build:runtime` for `core + node`, then keep the
+  wrapper Docker-specific app-executor bundle-only step. Do not switch the
+  Docker executor image to `yarn build:executor-runtime` unless the image needs
+  native app-executor sidecar binaries; that upstream target also creates
+  platform-specific native artifacts and must run on the target platform.
+- Exact-checkout artifact helper adoption remains covered by Phase 4 because it
+  is a larger CI topology change that should follow timing evidence.
+
+Available upstream additions:
 
 - `build:runtime`: build only `core + node`.
 - `build:hosted-web-deps`: build only `core + trivet`.
+- `build:executor-runtime`: build `core + node + app-executor`; available for
+  future native sidecar/image artifact flows, not used by the current Docker
+  executor image.
 - `build:npm-public`: build `core + node + trivet + cli`.
-- Extended `scripts/create-built-package-artifacts.mjs` support for `trivet`.
+- Extended `scripts/create-built-package-artifacts.mjs` support for runtime,
+  hosted-web-deps, executor-runtime, wrapper, and custom include targets. The
+  wrapper has not adopted this helper yet; that remains part of the deferred
+  shared-artifact/base-image work in Phase 4.
 - Documentation of wrapper-facing build contracts:
   - API endpoint runtime needs built `core + node`.
   - Hosted web/editor needs app source plus `core + trivet`.
   - Executor needs app-executor plus `core + node`.
+
+Acceptance checks:
+
+- Wrapper Dockerfiles no longer hardcode Rivet workspace build order for
+  `core`, `node`, or `trivet`.
+- Contract tests assert the upstream minimal build scripts stay wired.
+- The executor Dockerfile preserves the bundle-only app-executor path until a
+  native sidecar artifact flow is intentionally adopted.
 
 ## Timing Evidence To Capture
 
@@ -379,8 +407,10 @@ happened to be warm.
 2. Decide and document whether `api` should be amd64-only.
 3. Split Docker dependency layers.
 4. Teach `setup:rivet` to support exact SHA checkout and pin release builds.
-5. Add shared Rivet artifacts or a reusable base image.
-6. Adopt upstream minimal build scripts/artifacts when available.
+5. Adopt upstream minimal build scripts where they fit the current image
+   contract.
+6. Use post-change timing logs to decide whether shared Rivet artifacts or a
+   reusable base image are worth the larger CI topology change.
 
 ## Do Not Do Yet
 

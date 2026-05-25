@@ -137,8 +137,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
   for (const dockerfile of [apiDockerfile, composeApiDockerfile]) {
     assert.match(dockerfile, /COPY --from=rivet_dependency_metadata \. rivet\//);
     assert.match(dockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
-    assert.match(dockerfile, /yarn workspace @valerypopoff\/rivet2-core run build/);
-    assert.match(dockerfile, /yarn workspace @valerypopoff\/rivet2-node run build/);
+    assert.match(dockerfile, /YARN_NODE_LINKER=node-modules yarn build:runtime/);
+    assert.doesNotMatch(dockerfile, /yarn workspace @valerypopoff\/rivet2-(core|node) run build/);
     assert.match(dockerfile, /RUN node \/app\/scripts\/link-rivet-node-package\.mjs/);
   }
 
@@ -181,6 +181,11 @@ test('API images and launchers use the filtered Rivet source context and symlink
   );
   assert.match(rivetContextHelper, /function assertDistinctPaths\(firstPath, secondPath, firstLabel, secondLabel\)/);
   assert.match(rivetContextHelper, /function copyWorkspacePackageJsonFiles\(sourceRoot, destinationRoot\)/);
+  assert.match(rivetContextHelper, /const requiredRootScripts = \[['"]build:runtime['"], ['"]build:hosted-web-deps['"]\]/);
+  assert.match(rivetContextHelper, /scripts['"], ['"]build-wrapper-target\.mjs/);
+  assert.match(rivetContextHelper, /packages['"], ['"]app['"], ['"]package\.json/);
+  assert.match(rivetContextHelper, /packages['"], ['"]app-executor['"], ['"]package\.json/);
+  assert.match(rivetContextHelper, /packages['"], ['"]trivet['"], ['"]package\.json/);
   assert.doesNotMatch(rivetContextHelper, /visit\(''\)/);
   assert.match(rivetContextHelper, /Excluded dependency folders, build output, VCS data, and Yarn cache artifacts/);
 });
@@ -241,10 +246,18 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
 
   assert.match(webDockerfile, /COPY --from=rivet_dependency_metadata \. rivet\//);
   assert.match(webDockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
+  assert.match(webDockerfile, /YARN_NODE_LINKER=node-modules yarn build:hosted-web-deps/);
   assert.match(apiDockerfile, /COPY --from=rivet_dependency_metadata \. rivet\//);
   assert.match(apiDockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
+  assert.match(apiDockerfile, /YARN_NODE_LINKER=node-modules yarn build:runtime/);
   assert.match(executorDockerfile, /COPY --from=rivet_dependency_metadata \. \/app\/rivet\//);
   assert.match(executorDockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
+  assert.match(executorDockerfile, /YARN_NODE_LINKER=node-modules yarn build:runtime/);
+  assert.match(executorDockerfile, /bundle-executor\.cjs/);
+  assert.doesNotMatch(
+    `${apiDockerfile}\n${webDockerfile}\n${executorDockerfile}`,
+    /yarn workspace @valerypopoff\/(rivet2-core|rivet2-node|trivet) run build/,
+  );
   assert.doesNotMatch(webPackageJson, /"rivet-studio-server":\s*"file:\.\.\/\.\."/);
   assert.doesNotMatch(webPackageLock, /"node_modules\/rivet-studio-server"/);
   assert.doesNotMatch(imageBuildWorkflow, legacyImageNamespacePattern);
