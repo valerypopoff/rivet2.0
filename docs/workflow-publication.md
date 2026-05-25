@@ -487,6 +487,8 @@ Recording capture is intentionally best-effort observability:
 
 - the endpoint response is sent first
 - recording persistence is queued in the background after execution finishes
+- queued recording work is deferred past the current request turn, so recorder serialization, replay-project serialization, compression, and object/file writes should not inflate endpoint `durationMs` or `x-duration-ms`
+- recording duration is the processor execution window, matching `x-workflow-execute-ms`, not the full HTTP request duration
 - both successful and failed runs are eligible for recording
 - successful runs whose final `output` is `control-flow-excluded` are marked as `suspicious`
 - if the queue is full, new recordings are dropped so endpoint execution is not slowed or blocked

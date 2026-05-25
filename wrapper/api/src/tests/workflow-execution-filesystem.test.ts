@@ -480,29 +480,44 @@ test('published workflow responds with any outputs and records the run asynchron
     endpointName: 'any-response-endpoint',
   });
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl }) => {
-    const response = await fetch(`${publishedBaseUrl}/any-response-endpoint`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ foo: 'bar' }),
-      signal: AbortSignal.timeout(5000),
+  await withEnvOverride('RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS', 'true', async () => {
+    await withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl }) => {
+      const response = await fetch(`${publishedBaseUrl}/any-response-endpoint`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ foo: 'bar' }),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      assert.equal(response.ok, true);
+
+      const workflowExecuteMsHeader = response.headers.get('x-workflow-execute-ms');
+      assert.match(workflowExecuteMsHeader ?? '', /^\d+$/);
+      const workflowExecuteMs = Number(workflowExecuteMsHeader);
+
+      const body = await response.json() as { foo: string; durationMs: number };
+      assert.equal(body.foo, 'bar');
+      assert.equal(typeof body.durationMs, 'number');
+
+      const workflowsResponse = await waitForRecordingWorkflows(
+        apiBaseUrl,
+        (workflows) => workflows[0]?.totalRuns === 1,
+      ) as {
+        workflows: Array<{ totalRuns: number; workflowId: string }>;
+      };
+
+      assert.equal(workflowsResponse.workflows.length, 1);
+      const workflow = workflowsResponse.workflows[0]!;
+      assert.equal(workflow.totalRuns, 1);
+
+      const runsResponse = await readJson<{
+        runs: Array<{ durationMs: number }>;
+      }>(await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflow.workflowId)}/runs?page=1&pageSize=20&status=all`,
+      ));
+
+      assert.equal(runsResponse.runs[0]?.durationMs, workflowExecuteMs);
     });
-
-    assert.equal(response.ok, true);
-
-    const body = await response.json() as { foo: string; durationMs: number };
-    assert.equal(body.foo, 'bar');
-    assert.equal(typeof body.durationMs, 'number');
-
-    const workflowsResponse = await waitForRecordingWorkflows(
-      apiBaseUrl,
-      (workflows) => workflows[0]?.totalRuns === 1,
-    ) as {
-      workflows: Array<{ totalRuns: number }>;
-    };
-
-    assert.equal(workflowsResponse.workflows.length, 1);
-    assert.equal(workflowsResponse.workflows[0]?.totalRuns, 1);
   });
 });
 
