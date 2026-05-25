@@ -70,6 +70,64 @@ async function writeHeadersContextEchoProject(projectPath: string, projectName: 
   await fs.writeFile(projectPath, serializedProject, 'utf8');
 }
 
+async function writeDefaultInputEchoProject(projectPath: string, projectName: string): Promise<void> {
+  const project = rivetNode.loadProjectFromString(workflowFs.createBlankProjectFile(projectName));
+  const graph = project.graphs[project.metadata.mainGraphId!];
+
+  graph.nodes = [
+    {
+      type: 'object',
+      title: 'Default Payload',
+      id: 'default-payload',
+      visualData: { x: 0, y: 0, width: 300 },
+      data: {
+        jsonTemplate: '{ "source": "graph-input-default" }',
+      },
+    } as never,
+    {
+      type: 'graphInput',
+      title: 'Graph Input',
+      id: 'graph-input',
+      visualData: { x: 360, y: 0, width: 300 },
+      data: {
+        id: 'input',
+        dataType: 'any',
+        useDefaultValueInput: true,
+      },
+    } as never,
+    {
+      type: 'graphOutput',
+      title: 'Graph Output',
+      id: 'graph-output',
+      visualData: { x: 720, y: 0, width: 300 },
+      data: {
+        id: 'output',
+        dataType: 'any',
+      },
+    } as never,
+  ];
+  graph.connections = [
+    {
+      outputNodeId: 'default-payload',
+      outputId: 'output',
+      inputNodeId: 'graph-input',
+      inputId: 'default',
+    } as never,
+    {
+      outputNodeId: 'graph-input',
+      outputId: 'data',
+      inputNodeId: 'graph-output',
+      inputId: 'value',
+    } as never,
+  ];
+
+  const serializedProject = rivetNode.serializeProject(project);
+  if (typeof serializedProject !== 'string') {
+    throw new TypeError('Expected serialized project to be a string');
+  }
+  await fs.writeFile(projectPath, serializedProject, 'utf8');
+}
+
 test('workflow request headers context is normalized to a safe string object', () => {
   const rawHeaders: Record<string, unknown> = Object.create(null);
   rawHeaders[' Content-Type '] = 'application/json';
@@ -115,6 +173,18 @@ test('filesystem execution emits per-stage debug headers only when explicitly en
     assert.equal(debugDisabledResponse.headers.get('x-workflow-materialize-ms'), null);
     assert.equal(debugDisabledResponse.headers.get('x-workflow-execute-ms'), null);
     assert.equal(debugDisabledResponse.headers.get('x-workflow-cache'), null);
+    assert.equal(debugDisabledResponse.headers.get('x-code-runner-calls'), null);
+
+    await withEnvOverride('RIVET_CODE_RUNNER_TELEMETRY', 'true', async () => {
+      const telemetryOnlyResponse = await fetch(`${publishedBaseUrl}/measured-endpoint`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'telemetry-only' }),
+      });
+
+      assert.equal(telemetryOnlyResponse.ok, true);
+      assert.equal(telemetryOnlyResponse.headers.get('x-code-runner-calls'), null);
+    });
 
     await withEnvOverride('RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS', 'true', async () => {
       const publishedResponse = await fetch(`${publishedBaseUrl}/measured-endpoint`, {
@@ -127,6 +197,7 @@ test('filesystem execution emits per-stage debug headers only when explicitly en
       assert.match(publishedResponse.headers.get('x-workflow-materialize-ms') ?? '', /^\d+$/);
       assert.match(publishedResponse.headers.get('x-workflow-execute-ms') ?? '', /^\d+$/);
       assert.equal(publishedResponse.headers.get('x-workflow-cache'), 'hit');
+      assert.equal(publishedResponse.headers.get('x-code-runner-calls'), null);
 
       const latestResponse = await fetch(`${latestBaseUrl}/measured-endpoint`, {
         method: 'POST',
@@ -138,6 +209,23 @@ test('filesystem execution emits per-stage debug headers only when explicitly en
       assert.match(latestResponse.headers.get('x-workflow-materialize-ms') ?? '', /^\d+$/);
       assert.match(latestResponse.headers.get('x-workflow-execute-ms') ?? '', /^\d+$/);
       assert.equal(latestResponse.headers.get('x-workflow-cache'), 'hit');
+
+      await withEnvOverride('RIVET_CODE_RUNNER_TELEMETRY', 'true', async () => {
+        const codeRunnerDebugResponse = await fetch(`${publishedBaseUrl}/measured-endpoint`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'code-runner-debug' }),
+        });
+
+        assert.equal(codeRunnerDebugResponse.ok, true);
+        assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-calls') ?? '', /^\d+$/);
+        assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-compile-ms') ?? '', /^\d+$/);
+        assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-execute-ms') ?? '', /^\d+$/);
+        assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-prepare-ms') ?? '', /^\d+$/);
+        assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-cache-hits') ?? '', /^\d+$/);
+        assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-cache-misses') ?? '', /^\d+$/);
+        assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-cache') ?? '', /^enabled;size=\d+$/);
+      });
     });
   });
 });
@@ -517,6 +605,52 @@ test('published workflow responds with any outputs and records the run asynchron
       ));
 
       assert.equal(runsResponse.runs[0]?.durationMs, workflowExecuteMs);
+    });
+  });
+});
+
+test('published workflow lets graph input defaults apply when the request has no body', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'DefaultInputResponse');
+  await writeDefaultInputEchoProject(created.absolutePath, 'DefaultInputResponse');
+
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+    endpointName: 'default-input-response-endpoint',
+  });
+
+  await withWorkflowExecutionServer(async ({ publishedBaseUrl }) => {
+    const noBodyResponse = await fetch(`${publishedBaseUrl}/default-input-response-endpoint`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(5000),
+    });
+
+    assert.equal(noBodyResponse.ok, true);
+    assert.deepEqual(await noBodyResponse.json(), {
+      source: 'graph-input-default',
+      durationMs: Number(noBodyResponse.headers.get('x-duration-ms')),
+    });
+
+    const typedNoBodyResponse = await fetch(`${publishedBaseUrl}/default-input-response-endpoint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    assert.equal(typedNoBodyResponse.ok, true);
+    assert.deepEqual(await typedNoBodyResponse.json(), {
+      source: 'graph-input-default',
+      durationMs: Number(typedNoBodyResponse.headers.get('x-duration-ms')),
+    });
+
+    const explicitEmptyObjectResponse = await fetch(`${publishedBaseUrl}/default-input-response-endpoint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    assert.equal(explicitEmptyObjectResponse.ok, true);
+    assert.deepEqual(await explicitEmptyObjectResponse.json(), {
+      durationMs: Number(explicitEmptyObjectResponse.headers.get('x-duration-ms')),
     });
   });
 });

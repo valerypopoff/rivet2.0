@@ -315,7 +315,8 @@ The refactor work kept that route and cache contract intact while making the own
 
 Managed runtime-library sync is part of that execution path too:
 
-- `ManagedCodeRunner` calls `prepareRuntimeLibrariesForExecution()` before `Code` node resolution
+- `ManagedCodeRunner` calls `prepareRuntimeLibrariesForExecution()` lazily when Rivet enables `require(...)` for a code invocation
+- plain JS Code/Expression invocations that do not receive `require(...)` skip runtime-library sync and use the compiled-function cache
 - API replicas therefore reconcile the active managed runtime-library release through the same backend contract that the runtime-library admin surface exposes
 - that keeps published/latest route behavior aligned with runtime-library activation without making endpoint execution depend on a shared mounted `node_modules` tree
 

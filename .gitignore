@@ -5,6 +5,8 @@
 .claude/
 .tools/
 
+.fixtures
+
 # Dependency + build artifacts
 node_modules/
 # Includes moved runtime/bootstrap package state such as wrapper/bootstrap/proxy-bootstrap/node_modules/
@@ -13,6 +15,7 @@ wrapper/api/dist/
 wrapper/api/.rivet-source/
 wrapper/web/dist/
 artifacts/playwright/
+artifacts/benchmarks/
 artifacts/runtime-library-cleanup/
 artifacts/*.png
 tmp-*.png

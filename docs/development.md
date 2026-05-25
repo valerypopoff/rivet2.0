@@ -2,6 +2,7 @@
 
 See also: [Mistakes and Misconceptions](./mistakes-and-misconceptions.md)
 See also: [Repo structure](./repo-structure.md)
+See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-speed-plan.md)
 
 ## Setup commands
 
@@ -58,7 +59,8 @@ See also: [Repo structure](./repo-structure.md)
 | `npm run verify:test-style` | Verifies test command manifests and test-suite style guardrails | Catch accidental focused tests, missing command entries, broad suite reintroduction, and upstream-source assertions |
 | `npm run verify:web-pure` | Runs the pure web helper tests with `tsx --test` | Catch regressions in extracted non-React dashboard/protocol helpers quickly |
 | `npm run verify:kubernetes` | Runs Kubernetes launcher/chart contract tests, renders the local rehearsal values path, and lint-renders the production overlay | Catch local/prod chart drift before handing the repo to operators |
-| `npm --prefix wrapper/api run workflow-execution:measure -- --base-url http://localhost:8080 --endpoint hello-world --kind published --runs 5 --warmups 1` | Calls one published/latest workflow endpoint repeatedly and prints timing headers | Measure filesystem or managed execution behavior safely |
+| `npm --prefix wrapper/api run workflow-execution:measure -- --base-url http://localhost:8080 --endpoint hello-world --kind published --runs 5 --warmups 1` | Calls one published/latest workflow endpoint repeatedly and prints workflow and optional CodeRunner timing headers | Measure filesystem or managed execution behavior safely |
+| `npm --prefix wrapper/api run workflow-execution:benchmark-fixture -- --runs 50 --warmups 10` | Publishes `.fixtures/graph-fixture.rivet-project` into an isolated temp filesystem workflow root and compares legacy-compatible CodeRunner flags with the optimized path, sending no request body so the fixture's Main Graph input default applies | Repeat the local graph-fixture before/after benchmark without touching real workflows |
 | `npm run runtime-libraries:managed:audit` | Audits managed runtime-library release/job/object state and writes a JSON snapshot | Inspect live managed runtime-library state safely |
 | `npm run runtime-libraries:managed:prune` | Builds a dry-run prune plan for managed runtime-library state | Review cleanup impact before applying it |
 | `npm run ui:observe:install` | Installs Playwright Chromium for observable frontend runs | First-time browser setup |
@@ -297,6 +299,9 @@ Current behavior:
 - if `RIVET_DATABASE_MODE=managed`, runtime-library replica-status rows also live in the shared Postgres database, so stale rows from older containers can survive a Docker recreate until retention cleanup runs or you clear them explicitly
 - when the Runtime Libraries modal shows stale rows that are only historical dev noise, use the `Clear stale replicas` action or call `POST /api/runtime-libraries/replicas/cleanup`
 - set `RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true` when you want additive execution timing headers for local diagnosis of endpoint resolve/materialize/execute stages
+- set `RIVET_CODE_RUNNER_TELEMETRY=true` alongside workflow debug headers when you also want ManagedCodeRunner call counts, prepare/compile/execute timing, and cache hit/miss headers
+- use `RIVET_MANAGED_CODE_RUNNER_DISABLE_CACHE=true` to disable only the API-side compiled Code/Expression function cache
+- use `RIVET_MANAGED_CODE_RUNNER_FORCE_PREPARE_EVERY_CODE=true` to restore the previous per-code runtime-library preparation behavior without disabling telemetry or the compiled-function cache
 - local Docker still does not prove multi-backend latest-debugger support; the supported Kubernetes contract is a singleton control-plane backend plus independently scalable execution replicas
 
 ## Recording-storage notes
@@ -650,9 +655,9 @@ For managed endpoint latency and cache behavior:
 For endpoint measurement with the dedicated script:
 
 1. run the app in either `RIVET_STORAGE_MODE=filesystem` or `RIVET_STORAGE_MODE=managed`
-2. optionally set `RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true` so the route emits stage timings
+2. optionally set `RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true` so the route emits stage timings; also set `RIVET_CODE_RUNNER_TELEMETRY=true` when diagnosing Code/Expression overhead
 3. run `npm --prefix wrapper/api run workflow-execution:measure -- --base-url http://localhost:8080 --endpoint hello-world --kind published --runs 5 --warmups 1`
-4. expect one output line per request with HTTP status, client duration, `x-duration-ms`, `x-workflow-resolve-ms`, `x-workflow-materialize-ms`, `x-workflow-execute-ms`, and `x-workflow-cache`
+4. expect one output line per request with HTTP status, client duration, `x-duration-ms`, `x-workflow-resolve-ms`, `x-workflow-materialize-ms`, `x-workflow-execute-ms`, `x-workflow-cache`, and any enabled `x-code-runner-*` headers
 5. compare Postman or browser total time against `x-duration-ms`; the difference is network, proxy, TLS, client, and response-transfer overhead
 6. compare `x-duration-ms` against `x-workflow-execute-ms` and the Run recordings duration; recordings and `x-workflow-execute-ms` show the measured processor execution window, while `x-duration-ms` includes request handling, endpoint resolution/materialization, processor setup, and response shaping
 7. recording persistence is intentionally deferred after the response turn, so recorder serialization, replay-project serialization, compression, and object/file writes should not explain a large `x-duration-ms` gap
@@ -662,6 +667,33 @@ For endpoint measurement with the dedicated script:
 11. in `filesystem` mode, `x-workflow-resolve-ms` covers endpoint-index freshness validation plus endpoint lookup, while `x-workflow-materialize-ms` covers materialization-cache validation plus any needed project/dataset reload, one-time project reparsing, and per-request dataset-provider reconstruction
 12. in `filesystem` mode, `x-workflow-cache=bypass` means the cache deliberately fell back to uncached filesystem resolution because cached routing/materialization state was uncertain; that slower degraded path is the guardrail against stale cache execution
 13. in local Docker on Windows, filesystem mode still reads `/workflows` through a host bind mount, so fixed filesystem overhead can remain materially higher than a direct local-process run even when the endpoint index and materialization path are warm
+14. when CodeRunner telemetry is enabled, use `x-code-runner-prepare-ms` to find managed runtime-library sync cost, `x-code-runner-compile-ms` to find repeated function compilation cost, `x-code-runner-execute-ms` for actual user-code time, and cache hit/miss headers to confirm repeated Code/Expression nodes are reusing compiled functions
+
+For the committed graph fixture, use the local benchmark runner when you need a
+repeatable before/after sanity check without importing into a real workspace:
+
+```bash
+npm --prefix wrapper/api run workflow-execution:benchmark-fixture -- --runs 50 --warmups 10
+```
+
+The runner creates a temporary filesystem workflow root, writes
+`.fixtures/graph-fixture.rivet-project`, publishes it as
+`graph-fixture-speed`, runs the real published endpoint path, and writes JSON
+reports under `artifacts/benchmarks/`. By default it sends no request body,
+which lets the fixture's Main Graph `Graph Input` default payload run. Passing
+`--body '{}'` intentionally measures the explicit-empty-object request path and
+will bypass most of the fixture's Code/Expression-heavy branch. It compares:
+
+- `legacy-compatible`: `RIVET_MANAGED_CODE_RUNNER_DISABLE_CACHE=true` and
+  `RIVET_MANAGED_CODE_RUNNER_FORCE_PREPARE_EVERY_CODE=true`
+- `optimized`: the default optimized ManagedCodeRunner path
+
+The default no-body fixture run is a representative CodeRunner-heavy endpoint
+check for this app. It should execute dozens of CodeRunner calls, including many
+Expression and Code New nodes, with no managed `require(...)` and no external
+service call. If the report shows only one CodeRunner call, check whether the
+command accidentally passed `--body '{}'` or another body that bypasses the
+fixture's default test payload.
 
 For the current execution-plane split specifically:
 

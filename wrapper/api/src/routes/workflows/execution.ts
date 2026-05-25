@@ -9,7 +9,13 @@ import { getLatestWorkflowRemoteDebugger, isLatestWorkflowRemoteDebuggerEnabled 
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
-import { ManagedCodeRunner } from '../../runtime-libraries/managed-code-runner.js';
+import {
+  createManagedCodeRunnerTelemetry,
+  getManagedCodeRunnerTelemetrySnapshot,
+  isManagedCodeRunnerTelemetryEnabled,
+  ManagedCodeRunner,
+  type ManagedCodeRunnerTelemetry,
+} from '../../runtime-libraries/managed-code-runner.js';
 import { getRootPath } from '../../runtime-libraries/manifest.js';
 import { isTrustedTokenFreeHostRequest } from '../../auth.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
@@ -44,8 +50,32 @@ function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function getWorkflowRequestInput(req: Request): unknown {
-  return req.body === undefined ? {} : req.body;
+function hasWorkflowRequestBody(req: Request): boolean {
+  const transferEncoding = req.get('transfer-encoding');
+  if (transferEncoding) {
+    return true;
+  }
+
+  const contentLength = req.get('content-length');
+  if (contentLength != null) {
+    const parsedLength = Number.parseInt(contentLength, 10);
+    return !Number.isFinite(parsedLength) || parsedLength > 0;
+  }
+
+  return false;
+}
+
+function getWorkflowRequestInputs(req: Request): Record<string, { type: 'any'; value: unknown }> {
+  if (!hasWorkflowRequestBody(req)) {
+    return {};
+  }
+
+  return {
+    input: {
+      type: 'any',
+      value: req.body,
+    },
+  };
 }
 
 function normalizeWorkflowContextHeaderName(name: string): string | null {
@@ -201,6 +231,10 @@ function shouldEmitWorkflowExecutionDebugHeaders(): boolean {
   return isEnvFlagEnabled(process.env.RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS, false);
 }
 
+function shouldCollectCodeRunnerTelemetry(): boolean {
+  return shouldEmitWorkflowExecutionDebugHeaders() && isManagedCodeRunnerTelemetryEnabled();
+}
+
 function getWorkflowExecutionContext(
   req: Request
 ): WorkflowExecutionContext {
@@ -227,6 +261,28 @@ function setWorkflowExecutionDebugHeaders(
   res.set('x-workflow-materialize-ms', String(executionProject.debug.materializeMs));
   res.set('x-workflow-execute-ms', String(Math.max(0, Math.round(executionMs))));
   res.set('x-workflow-cache', executionProject.debug.cacheStatus);
+}
+
+function setCodeRunnerTelemetryHeaders(
+  res: Response,
+  telemetry: ManagedCodeRunnerTelemetry | null,
+): void {
+  if (!telemetry || !shouldEmitWorkflowExecutionDebugHeaders() || !isManagedCodeRunnerTelemetryEnabled()) {
+    return;
+  }
+
+  const snapshot = getManagedCodeRunnerTelemetrySnapshot(telemetry);
+  res.set('x-code-runner-calls', String(snapshot.calls));
+  res.set('x-code-runner-require-calls', String(snapshot.requireCalls));
+  res.set('x-code-runner-prepare-calls', String(snapshot.prepareCalls));
+  res.set('x-code-runner-compile-calls', String(snapshot.compileCalls));
+  res.set('x-code-runner-compile-ms', String(snapshot.compileMs));
+  res.set('x-code-runner-execute-ms', String(snapshot.executeMs));
+  res.set('x-code-runner-prepare-ms', String(snapshot.prepareMs));
+  res.set('x-code-runner-cache-hits', String(snapshot.cacheHits));
+  res.set('x-code-runner-cache-misses', String(snapshot.cacheMisses));
+  res.set('x-code-runner-cache', snapshot.cacheEnabled ? `enabled;size=${snapshot.cacheSize}` : 'disabled');
+  res.set('x-code-runner-force-prepare', snapshot.forcePrepareEveryCode ? 'true' : 'false');
 }
 
 function requirePublishedWorkflowApiKey(req: Request): void {
@@ -268,19 +324,20 @@ async function executeWorkflowEndpoint(
   const remoteDebugger = options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
     ? getLatestWorkflowRemoteDebugger()
     : undefined;
+  const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
+    ? createManagedCodeRunnerTelemetry()
+    : null;
   const processor = createProcessor(project, {
-    codeRunner: new ManagedCodeRunner(getRootPath()) as any,
+    codeRunner: new ManagedCodeRunner(
+      getRootPath(),
+      codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {},
+    ) as any,
     projectPath: projectVirtualPath,
     datasetProvider,
     projectReferenceLoader,
     remoteDebugger,
     context: getWorkflowExecutionContext(req),
-    inputs: {
-      input: {
-        type: 'any',
-        value: getWorkflowRequestInput(req),
-      },
-    },
+    inputs: getWorkflowRequestInputs(req),
   });
   const recorder = isWorkflowRecordingEnabled()
     ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
@@ -334,10 +391,12 @@ async function executeWorkflowEndpoint(
 
   if (executionError) {
     setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
+    setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
     throw executionError;
   }
 
   setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
+  setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
   sendJsonWithDuration(res, 200, responsePayload, requestStartedAt);
 }
 
