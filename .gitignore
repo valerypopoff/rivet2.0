@@ -5,6 +5,8 @@
 .claude/
 .tools/
 
+.fixtures
+
 # Dependency + build artifacts
 node_modules/
 # Includes moved runtime/bootstrap package state such as wrapper/bootstrap/proxy-bootstrap/node_modules/
