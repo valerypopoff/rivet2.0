@@ -1,6 +1,6 @@
 # Wrapper ManagedCodeRunner Speed Plan
 
-Status: HANDOFF PLAN FOR WRAPPER IMPLEMENTATION
+Status: IMPLEMENTED FOR WRAPPER CODE PHASES
 
 ## Purpose
 
@@ -26,7 +26,7 @@ F:\Programming\Self-hosted-rivet\wrapper\api\src\runtime-libraries\backend.ts
 F:\Programming\Self-hosted-rivet\wrapper\api\src\runtime-libraries\managed\backend.ts
 ```
 
-## Handoff Deliverables
+## Implementation Deliverables
 
 The wrapper implementation should produce these concrete outputs:
 
@@ -41,8 +41,8 @@ The wrapper implementation should produce these concrete outputs:
    Node version, same API mode, and same endpoint route.
 7. Wrapper developer docs describing the new telemetry and runtime-library
    snapshot behavior.
-8. A fixture sanity check proving the benchmark does not depend on live
-   external HTTP, LLM, or secret-bearing services.
+8. A fixture sanity check proving the benchmark fixture does not contain live
+   external HTTP, LLM, or secret-bearing service configuration.
 
 Do not treat direct Rivet package benchmarks as acceptance for this plan. They
 are useful diagnostics, but the production path being optimized is the wrapper
@@ -64,12 +64,7 @@ const processor = createProcessor(project, {
   projectReferenceLoader,
   remoteDebugger,
   context: getWorkflowExecutionContext(req),
-  inputs: {
-    input: {
-      type: 'any',
-      value: getWorkflowRequestInput(req),
-    },
-  },
+  inputs: getWorkflowRequestInputs(req),
 });
 ```
 
@@ -78,7 +73,7 @@ That is necessary for Code nodes that use wrapper-managed runtime libraries via
 used. Rivet-side optimizations in the default CodeRunner therefore do not help
 this production wrapper path.
 
-The current `ManagedCodeRunner` also does conservative per-node work:
+Before this implementation, `ManagedCodeRunner` did conservative per-node work:
 
 ```ts
 async runCode(...) {
@@ -91,7 +86,7 @@ async runCode(...) {
 }
 ```
 
-This means every Expression, Code New, and Code node currently pays for:
+That meant every Expression, Code New, and Code node paid for:
 
 - runtime-library preparation, even when `includeRequire=false`;
 - argument-list construction;
@@ -176,12 +171,13 @@ Use the fixture:
 ```
 
 The user will pass this file to the wrapper developer. It is a large
-representative workflow with external HTTP calls mocked out. It requires no
-request inputs; run it with an empty JSON body:
-
-```json
-{}
-```
+representative workflow with external HTTP calls mocked out. The Main Graph
+contains an `Object - test` node wired into the `Graph Input` default value.
+Benchmark the heavy path by sending no HTTP request body, so the wrapper passes
+no `input` value to Rivet and that Graph Input default applies. Do not use an
+explicit `{}` body for the primary speed benchmark: `{}` is a real input value
+and intentionally overrides the default with an empty object, which drives a
+shallow control-flow-excluded path.
 
 Recommended wrapper setup:
 
@@ -221,8 +217,7 @@ npm --prefix wrapper/api run workflow-execution:measure -- \
   --endpoint graph-fixture-speed \
   --kind published \
   --runs 50 \
-  --warmups 10 \
-  --body '{}'
+  --warmups 10
 ```
 
 If the endpoint requires a workflow bearer token, add:
@@ -248,8 +243,9 @@ x-workflow-execute-ms
 x-workflow-cache
 ```
 
-The implementation in this plan should add CodeRunner telemetry as headers
-and/or structured logs behind `RIVET_CODE_RUNNER_TELEMETRY=true`.
+The implementation emits CodeRunner telemetry as debug response headers when
+both `RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true` and
+`RIVET_CODE_RUNNER_TELEMETRY=true` are enabled on the API process.
 
 For this fixture, use `x-workflow-execute-ms` as the primary runtime metric. It
 measures `processor.run()` and excludes HTTP response JSON serialization. Also
@@ -262,7 +258,7 @@ without proving which CodeRunner stage changed.
 
 ## Implementation Phases
 
-### P0: Add Baseline Wrapper Telemetry
+### P0: DONE - Add Baseline Wrapper Telemetry
 
 Before changing behavior, add request-scoped timing around `ManagedCodeRunner`.
 
@@ -332,7 +328,7 @@ includeRequire calls per request:
 If telemetry shows this fixture spends little time in `ManagedCodeRunner`, stop
 and reassess. Do not add caching complexity unless the timing data points here.
 
-### P1: Skip Runtime-Library Prepare For Plain JS
+### P1: DONE - Skip Runtime-Library Prepare For Plain JS
 
 Change `ManagedCodeRunner.runCode(...)` so it only prepares runtime libraries
 when `options.includeRequire === true`.
@@ -367,7 +363,7 @@ Keep the rest of the invocation semantics unchanged. The only behavior change
 should be skipping managed package preparation when the node cannot use managed
 packages anyway.
 
-### P2: Make Require Preparation Lazy Once Per Request
+### P2: DONE - Make Require Preparation Lazy Once Per Request
 
 Keep `ManagedCodeRunner` request-scoped and store a private prepare promise:
 
@@ -407,7 +403,7 @@ RIVET_MANAGED_CODE_RUNNER_FORCE_PREPARE_EVERY_CODE=true
 This is separate from disabling the compiled-function cache. It allows
 production rollback of lazy preparation without throwing away cache telemetry.
 
-### P3: Add A Bounded Compiled-Function Cache
+### P3: DONE - Add A Bounded Compiled-Function Cache
 
 Add a process-level or module-level LRU cache for successful `AsyncFunction`
 compilations.
@@ -470,10 +466,31 @@ wall-clock time. Avoid mutating cache entries across `await` boundaries; cache
 lookup, insert, and eviction should be synchronous bookkeeping around function
 compilation.
 
-### P4: Defer Cache Managed Require By Runtime-Library Snapshot
+### P4: DONE - Cache Managed Require By Runtime-Library Snapshot
 
-For `includeRequire=true`, `createManagedRequire()` currently does filesystem
-work and constructs a new require function:
+For `includeRequire=true`, `ManagedCodeRunner` now prepares runtime libraries,
+captures the current manifest snapshot, and reuses a request-scoped managed
+`require` resolver for the workflow request.
+
+The process-level managed require cache is keyed by:
+
+- runtime-library root;
+- active `node_modules` path;
+- manifest snapshot:
+  - `activeReleaseId` when available;
+  - otherwise `updatedAt`;
+  - otherwise the active `node_modules` timestamp;
+  - otherwise an `unversioned` fallback.
+
+When a later workflow request observes a different snapshot for the same local
+runtime-library path, the wrapper:
+
+- drops the stale managed resolver from the process-level cache;
+- clears CommonJS modules loaded from that `node_modules` tree;
+- creates a fresh resolver for the newly active snapshot.
+
+This fixes the old shape where every `includeRequire=true` code invocation did
+filesystem work and constructed a new resolver:
 
 ```ts
 const nodeModulesPath = currentNodeModulesPath();
@@ -484,24 +501,13 @@ if (nodeModulesPath && fs.existsSync(nodeModulesPath)) {
 return createRequire(import.meta.url);
 ```
 
-After P1-P3 are stable, make this release-aware:
+The current runtime-library layout still exposes packages through
+`current/node_modules`, so the invalidation point is "the next workflow request
+that observes a new manifest snapshot." That is the wrapper contract we need
+for endpoint execution: package changes affect later requests, while an
+already-created runner keeps its request-scoped resolver.
 
-- expose active runtime-library release id or active path from the runtime
-  library backend;
-- bind each workflow run to that snapshot;
-- cache the require function for that snapshot;
-- invalidate the cache when active release changes.
-
-Be careful with Node's CommonJS `require.cache`. If package versions can change
-behind a stable `current/node_modules/...` path, Node may keep old modules in
-memory. Prefer release-specific physical paths or explicitly clear relevant
-cache entries on release activation.
-
-Do not implement this phase in the first pass unless P0 proves require creation
-is a meaningful remaining bottleneck. It is more invasive than the plain-JS
-fast path because it touches active package release semantics.
-
-### P5: Benchmark Through The Wrapper Endpoint
+### P5: DONE - Benchmark Through The Wrapper Endpoint
 
 The source of truth is wrapper endpoint timing, not direct Rivet package
 benchmarks.
@@ -575,6 +581,61 @@ Recording equivalence check:
 - Confirm the recording duration continues to describe the processor execution
   window, not post-response persistence or telemetry logging.
 
+The wrapper-side benchmark tooling, telemetry headers, fixture sanitization,
+and fixture-safety regression test are in place. A local before/after benchmark
+has been run against the wrapper endpoint path with the sanitized
+`.fixtures/graph-fixture.rivet-project` fixture.
+
+Local benchmark command:
+
+```bash
+npm --prefix wrapper/api run workflow-execution:benchmark-fixture -- --runs 50 --warmups 10
+```
+
+Benchmark shape:
+
+- the runner creates an isolated temporary filesystem workflow root;
+- writes the sanitized graph fixture as `GraphFixture.rivet-project`;
+- publishes it as `graph-fixture-speed`;
+- sends no request body by default so the fixture's Main Graph input default is
+  used;
+- runs the real published endpoint route through `createProcessor(...)`;
+- compares `legacy-compatible` rollback flags with the optimized default path;
+- writes generated JSON reports under `artifacts/benchmarks/`.
+
+Literal pre-change baseline was checked from clean wrapper commit
+`971fffd676a1c9247b0a1cdf68df7a244c0427fc` with the same sanitized fixture,
+Node `v22.22.3`, and the benchmark harness/no-body endpoint correction applied
+only for measurement. The old ManagedCodeRunner implementation was left intact.
+That old code does not emit CodeRunner telemetry headers, but it does emit
+workflow timing headers.
+
+Representative local result, 50 measured requests after 10 warmups:
+
+| Run | Mean total client | P95 total client | Mean `x-duration-ms` | P95 `x-duration-ms` | Mean `x-workflow-execute-ms` | P95 `x-workflow-execute-ms` | CodeRunner telemetry |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Clean HEAD baseline with explicit `{}` | 7 ms | 24 ms | 5 ms | 23 ms | 2 ms | 2 ms | unavailable in old code |
+| Current optimized with explicit `{}` | 7 ms | 23 ms | 4 ms | 22 ms | 1 ms | 2 ms | 1 call, 0 `require`, cache hit, output equivalent |
+| Clean HEAD baseline with no body/default input | 58 ms | 269 ms | 56 ms | 265 ms | 27 ms | 29 ms | unavailable in old code; recording confirms 42 code-like node starts |
+| Current legacy-compatible flags with no body/default input | 59 ms | 268 ms | 48 ms | 265 ms | 28 ms | 29 ms | 42 calls, 0 `require`, cache disabled, output equivalent |
+| Current optimized with no body/default input | 57 ms | 268 ms | 51 ms | 266 ms | 26 ms | 28 ms | 42 calls, 0 `require`, 42 cache hits, output equivalent |
+
+The explicit `{}` numbers are only a shallow smoke path. The no-body/default
+input run is the representative fixture path for this workflow: the recording
+shows 449-450 node starts, including 33 Expression nodes and 9 Code New nodes.
+Use that shape when validating the wrapper CodeRunner optimization.
+
+On this fixture, the endpoint-level speedup is intentionally modest: it has no
+managed `require(...)` calls, so the optimization mainly removes repeated
+prepare/compile overhead while total run time remains dominated by broader graph
+execution and recording/response work. The telemetry is still valuable because
+it proves the cache path is active and that plain JS nodes no longer pay runtime
+library preparation cost.
+
+A production-profile benchmark is still an operational release check because it
+requires the deployed app, representative container limits, real storage mode,
+and the fixture or representative workflow published in that environment.
+
 ## Required Tests
 
 Add or update wrapper API tests for `ManagedCodeRunner`:
@@ -594,8 +655,10 @@ Add or update wrapper API tests for `ManagedCodeRunner`:
 - cache disable and force-prepare rollback flags work independently;
 - managed require still resolves packages from active runtime libraries;
 - package activation invalidates release-sensitive require state, or package
-  changes are clearly observed on the next request through release-specific
-  paths.
+  changes are clearly observed on the next request through manifest snapshot
+  invalidation.
+- benchmark fixtures do not contain live service tokens, proxy auth values,
+  production hostnames, or live external provider endpoints.
 
 Also run the existing workflow endpoint tests and recording tests.
 
@@ -604,12 +667,12 @@ Recommended commands from the `F:\Programming\Self-hosted-rivet` checkout:
 ```bash
 npm --prefix wrapper/api run build
 npm --prefix wrapper/api test
-npm --prefix wrapper/api run workflow-execution:measure -- --base-url http://localhost:8080 --endpoint graph-fixture-speed --kind published --runs 50 --warmups 10 --body '{}'
+npm --prefix wrapper/api run workflow-execution:measure -- --base-url http://localhost:8080 --endpoint graph-fixture-speed --kind published --runs 50 --warmups 10
 npm run test
 npm run verify:repo-structure
 ```
 
-## Documentation Updates
+## Documentation Updates - DONE
 
 Update wrapper developer docs to explain:
 

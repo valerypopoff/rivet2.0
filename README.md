@@ -26,6 +26,7 @@ Rivet Studio Server is a self-hosted personal Rivet platform with a UI that you 
 - [Editor bridge](./docs/editor-bridge.md)
 - [Workflow publication](./docs/workflow-publication.md)
 - [Runtime libraries](./docs/runtime-libraries.md)
+- [Wrapper ManagedCodeRunner speed plan](./docs/wrapper-managed-code-runner-speed-plan.md)
 - [Refactor history](./docs/refactor-history.md)
 
 ## Repository Map
@@ -56,7 +57,7 @@ The repo root stays intentionally small. Root Markdown is reserved for:
 
 - `README.md`
 - `AGENTS.md`
-- the current tracked working-doc baseline: `backlog.md` and `repo-rearrangement.md`
+- the current tracked working-doc baseline: `backlog.md`
 
 Reference documentation lives under `docs/`, not at the repo root.
 

@@ -140,10 +140,49 @@ of truth is:
 Runtime-library sync is part of execution wiring, not only the admin UI:
 
 - `prepareRuntimeLibrariesForExecution()` goes through the root runtime-library backend singleton
-- API-side `Code` node execution reaches that path through `ManagedCodeRunner`
-- `ManagedRuntimeLibrariesBackend.prepareForExecution()` forces the managed backend to initialize and reconcile the local `current/` cache before code execution continues
+- API-side `Code` node execution reaches that path through `ManagedCodeRunner` only when Rivet enables `require(...)` for that code invocation
+- plain JS Code/Expression executions that do not receive `require(...)` skip runtime-library preparation, because they cannot resolve wrapper-managed packages
+- `ManagedRuntimeLibrariesBackend.prepareForExecution()` forces the managed backend to initialize and reconcile the local `current/` cache before managed-package code execution continues
 - in managed mode, `managed/context.ts` prefers the process-local `globalThis.__RIVET_PREPARE_RUNTIME_LIBRARIES__` hook when one exists, then falls back to `localCache.sync(force)`
 - that keeps API processes and executor processes on the same "prepare then resolve `current/node_modules`" contract even though they are different runtimes
+
+`ManagedCodeRunner` is still request-scoped, but it now keeps runtime-library
+preparation lazy and stable inside one workflow request:
+
+- if no code node requests `require(...)`, the request performs no
+  runtime-library sync
+- the first `includeRequire=true` code invocation prepares the active
+  runtime-library snapshot
+- later `includeRequire=true` invocations in the same workflow request reuse
+  that same preparation promise
+- package installs/removals are therefore observed on a later workflow request,
+  not in the middle of a running workflow
+
+The runner also keeps a bounded process-level cache of successful
+`AsyncFunction` compilations. The cache key contains the generated code and the
+exact argument-name shape. Request values such as `inputs`, `graphInputs`,
+`context`, `require`, and `Rivet` are never cached; they are passed fresh on
+every invocation.
+
+For `require(...)`-enabled code, the runner creates the managed `require`
+resolver lazily after runtime-library preparation and reuses it for the
+workflow request. Resolver caching is keyed by the runtime-library root, the
+active `node_modules` path, and the manifest snapshot (`activeReleaseId` when
+available, otherwise `updatedAt`, otherwise the active `node_modules`
+timestamp). When a later request observes a different snapshot for the same
+local runtime-library path, the wrapper drops the stale managed resolver and
+clears CommonJS modules loaded from that `node_modules` tree so the next
+request resolves the newly active packages.
+
+Operational flags:
+
+- `RIVET_CODE_RUNNER_TELEMETRY=true` enables ManagedCodeRunner aggregate timing
+  telemetry for endpoint runs when workflow debug headers are also enabled
+- `RIVET_MANAGED_CODE_RUNNER_DISABLE_CACHE=true` disables only the compiled
+  function cache
+- `RIVET_MANAGED_CODE_RUNNER_FORCE_PREPARE_EVERY_CODE=true` restores the old
+  per-code runtime-library preparation behavior without disabling telemetry or
+  the compiled-function cache
 
 ## API surface
 
@@ -345,7 +384,7 @@ The adjacent `Run recordings` action is separate. It browses stored workflow exe
 - `wrapper/api/src/runtime-libraries/managed/process-registry.ts` - running-process tracking and termination
 - `wrapper/api/src/runtime-libraries/managed/replica-status.ts` - stale-replica cleanup helpers
 - `wrapper/api/src/runtime-libraries/managed/cleanup.ts` - audit/prune tooling for historical managed state
-- `wrapper/api/src/runtime-libraries/managed-code-runner.ts` - API-side `Code` node resolution path that prepares runtime libraries before execution
+- `wrapper/api/src/runtime-libraries/managed-code-runner.ts` - API-side `Code` node resolution path with lazy managed-package preparation, compiled-function caching, and endpoint telemetry
 - `wrapper/web/dashboard/RuntimeLibrariesModal.tsx` - modal shell
 - `wrapper/web/dashboard/useRuntimeLibrariesModalState.ts` - public dashboard controller for runtime-library admin flows
 - `wrapper/web/dashboard/runtimeLibrariesJobStream.ts` - browser-side SSE/log/status helper layer

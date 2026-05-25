@@ -348,8 +348,14 @@ That route is mounted on the execution surface, is not exposed through nginx, an
 
 Current request/response behavior for all execution routes:
 
-- the incoming JSON request body becomes the workflow `input`
-- an empty body is treated as `{}`
+- when the HTTP request has a real body, indicated by a positive
+  `Content-Length` or transfer encoding, the parsed JSON body becomes the
+  workflow `input`
+- when the HTTP request has no body, including a zero-length JSON request, the
+  wrapper does not pass `input` to Rivet; Graph Input node defaults can apply
+  normally
+- an explicit JSON body of `{}` is still a real input value and overrides Graph
+  Input defaults with an empty object
 - published, internal published, and latest execution routes expose the incoming request headers as `context.headers`
   - header names follow Node/Express lowercase normalization
   - `context.headers` is always a plain JSON object with string values
@@ -369,6 +375,20 @@ Current request/response behavior for all execution routes:
   - `x-workflow-cache`
     - in `filesystem` mode: `hit`, `miss`, or degraded `bypass`
     - in `managed` mode: `hit` or `miss`
+- when both `RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true` and
+  `RIVET_CODE_RUNNER_TELEMETRY=true`, execution responses also emit additive
+  ManagedCodeRunner headers:
+  - `x-code-runner-calls`
+  - `x-code-runner-require-calls`
+  - `x-code-runner-prepare-calls`
+  - `x-code-runner-compile-calls`
+  - `x-code-runner-prepare-ms`
+  - `x-code-runner-compile-ms`
+  - `x-code-runner-execute-ms`
+  - `x-code-runner-cache-hits`
+  - `x-code-runner-cache-misses`
+  - `x-code-runner-cache`
+  - `x-code-runner-force-prepare`
 - successful object responses get `durationMs` injected unless already present
 - failures return JSON with `error.name`/`error.message` plus `durationMs`
 
@@ -492,6 +512,17 @@ Recording capture is intentionally best-effort observability:
 - both successful and failed runs are eligible for recording
 - successful runs whose final `output` is `control-flow-excluded` are marked as `suspicious`
 - if the queue is full, new recordings are dropped so endpoint execution is not slowed or blocked
+
+Endpoint execution uses the wrapper `ManagedCodeRunner` for API-side
+Code/Expression nodes. That runner now avoids runtime-library sync for plain JS
+invocations that do not receive `require(...)`, prepares managed runtime
+libraries lazily at most once per workflow request when `require(...)` is
+enabled, reuses a request-scoped managed `require` resolver, invalidates stale
+managed package modules when a later request observes a new active
+runtime-library snapshot, and caches successful compiled functions without
+caching request values. This keeps recording behavior unchanged: recordings
+still attach before `processor.run()`, while CodeRunner telemetry is additive
+diagnostics only.
 
 Each bundle stores:
 

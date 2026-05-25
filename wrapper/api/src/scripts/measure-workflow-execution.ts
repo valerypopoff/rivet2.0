@@ -8,7 +8,7 @@ type ParsedArgs = {
   kind: WorkflowExecutionKind;
   runs: number;
   warmups: number;
-  body: string;
+  body: string | null;
   bearer: string | null;
 };
 
@@ -16,11 +16,12 @@ function printUsage(): void {
   console.error(
     'Usage: npm --prefix wrapper/api run workflow-execution:measure -- ' +
     '--base-url http://localhost:8080 --endpoint hello-world --kind published|latest ' +
-    '[--runs 5] [--warmups 1] [--body \'{}\'] [--bearer token]',
+    '[--runs 5] [--warmups 1] [--body \'<json>\'] [--bearer token]',
   );
   console.error(
     'Works in both filesystem and managed storage modes. ' +
-    'Set RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true on the API process when you want per-stage timing headers.',
+    'Set RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true on the API process when you want per-stage timing headers. ' +
+    'Also set RIVET_CODE_RUNNER_TELEMETRY=true alongside it when you want ManagedCodeRunner timing headers.',
   );
 }
 
@@ -70,8 +71,11 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new Error('Missing required options: --base-url, --endpoint, --kind');
   }
 
-  const body = options.get('body')?.trim() || '{}';
-  JSON.parse(body);
+  const bodyOption = options.get('body');
+  const body = bodyOption == null ? null : bodyOption.trim() || '{}';
+  if (body != null) {
+    JSON.parse(body);
+  }
 
   return {
     baseUrl,
@@ -106,9 +110,10 @@ async function main(): Promise<void> {
   }
 
   const executionUrl = buildExecutionUrl(args.baseUrl, args.kind, args.endpoint);
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
+  const headers: Record<string, string> = {};
+  if (args.body != null) {
+    headers['Content-Type'] = 'application/json';
+  }
   if (args.bearer) {
     headers.Authorization = `Bearer ${args.bearer}`;
   }
@@ -116,11 +121,15 @@ async function main(): Promise<void> {
   const totalRequests = args.warmups + args.runs;
   for (let index = 0; index < totalRequests; index += 1) {
     const startedAt = performance.now();
-    const response = await fetch(executionUrl, {
+    const requestInit: RequestInit = {
       method: 'POST',
       headers,
-      body: args.body,
-    });
+    };
+    if (args.body != null) {
+      requestInit.body = args.body;
+    }
+
+    const response = await fetch(executionUrl, requestInit);
     await response.text();
     const totalClientMs = Math.max(0, Math.round(performance.now() - startedAt));
 
@@ -137,6 +146,14 @@ async function main(): Promise<void> {
         `x-workflow-materialize-ms=${formatHeaderValue(response.headers.get('x-workflow-materialize-ms'))}`,
         `x-workflow-execute-ms=${formatHeaderValue(response.headers.get('x-workflow-execute-ms'))}`,
         `x-workflow-cache=${formatHeaderValue(response.headers.get('x-workflow-cache'))}`,
+        `x-code-runner-calls=${formatHeaderValue(response.headers.get('x-code-runner-calls'))}`,
+        `x-code-runner-require-calls=${formatHeaderValue(response.headers.get('x-code-runner-require-calls'))}`,
+        `x-code-runner-prepare-ms=${formatHeaderValue(response.headers.get('x-code-runner-prepare-ms'))}`,
+        `x-code-runner-compile-ms=${formatHeaderValue(response.headers.get('x-code-runner-compile-ms'))}`,
+        `x-code-runner-execute-ms=${formatHeaderValue(response.headers.get('x-code-runner-execute-ms'))}`,
+        `x-code-runner-cache-hits=${formatHeaderValue(response.headers.get('x-code-runner-cache-hits'))}`,
+        `x-code-runner-cache-misses=${formatHeaderValue(response.headers.get('x-code-runner-cache-misses'))}`,
+        `x-code-runner-cache=${formatHeaderValue(response.headers.get('x-code-runner-cache'))}`,
       ].join(' '),
     );
   }
