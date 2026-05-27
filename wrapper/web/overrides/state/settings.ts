@@ -104,9 +104,56 @@ export const skippedMaxVersionState = atomWithStorage<string | undefined>('skipp
 
 export const updateModalOpenState = atom<boolean>(false);
 
-export const updateStatusState = atom<string | undefined>(undefined);
-
 export const zoomSensitivityState = atomWithStorage<number>('zoomSensitivity', 0.25, storage);
+
+export const canvasBackgroundPatterns = [
+  {
+    label: 'Grid',
+    value: 'grid',
+  },
+  {
+    label: 'Dots',
+    value: 'dots',
+  },
+  {
+    label: 'Crosses',
+    value: 'crosses',
+  },
+] as const;
+
+export type CanvasBackgroundPattern = (typeof canvasBackgroundPatterns)[number]['value'];
+
+export function resolveCanvasBackgroundPattern(value: unknown): CanvasBackgroundPattern {
+  return canvasBackgroundPatterns.some((pattern) => pattern.value === value) ? (value as CanvasBackgroundPattern) : 'grid';
+}
+
+export const DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY = 0.02;
+export const MIN_CANVAS_BACKGROUND_PATTERN_OPACITY = 0;
+export const MAX_CANVAS_BACKGROUND_PATTERN_OPACITY = 0.12;
+export const CANVAS_BACKGROUND_PATTERN_OPACITY_STEP = 0.005;
+
+export function clampCanvasBackgroundPatternOpacity(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY;
+  }
+
+  return Math.min(
+    MAX_CANVAS_BACKGROUND_PATTERN_OPACITY,
+    Math.max(MIN_CANVAS_BACKGROUND_PATTERN_OPACITY, value),
+  );
+}
+
+export const canvasBackgroundPatternState = atomWithStorage<CanvasBackgroundPattern>(
+  'canvasBackgroundPattern',
+  'grid',
+  storage,
+);
+
+export const canvasBackgroundPatternOpacityState = atomWithStorage<number>(
+  'canvasBackgroundPatternOpacity',
+  DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY,
+  storage,
+);
 
 export const debuggerDefaultUrlState = atomWithStorage(
   'debuggerDefaultUrl',
