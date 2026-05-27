@@ -430,6 +430,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
 - wrapper module overrides should stay scoped to upstream app importers
   - `wrapper/web/vite.config.ts` resolves override files only when the importer is under `rivet/packages/app/src`
   - keep the `savedGraphs` override narrow: it re-exports upstream state, changes only `clearProjectContextState` for normal tab close/reopen, and exposes an explicit delete helper for actual workflow deletion
+  - keep the `state/settings` override aligned with upstream exports; it exists for hosted executor/debugger defaults and the wrapper update-check modal atom, so upstream UI settings exports such as canvas background preferences must be mirrored rather than silently dropped
   - do not put wrapper-owned transport overrides back into `wrapper/web/vite-aliases.ts`
   - do not alias `useSaveProject` or `useMenuCommands`; upstream `useWorkspaceTransitions`, `RivetAppHost.onProjectSaved`, and `RivetAppHost.ui.fileMenu.visibleItems` own the save/menu seam, while the wrapper sends `save-project` when focus is outside the iframe and reconciles hosted title metadata after successful saves
   - do not reintroduce wrapper copies of `TauriProjectReferenceLoader`, `io/datasets`, `io/TauriIOProvider`, or `utils/globals/ioProvider`; hosted relative-project reads belong in the path policy provider, and hosted project/dataset persistence belongs in `RivetAppHost.providers` plus `HostedIOProvider`

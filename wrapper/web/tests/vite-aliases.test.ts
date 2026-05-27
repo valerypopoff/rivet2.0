@@ -7,10 +7,22 @@ import { createModuleOverrideAliases } from '../vite-aliases';
 
 const overrideDir = resolve('/repo/wrapper/web/overrides');
 const updateCheckScript = readFileSync(new URL('../../../scripts/update-check.sh', import.meta.url), 'utf8');
+const settingsOverride = readFileSync(new URL('../overrides/state/settings.ts', import.meta.url), 'utf8');
 
 function replacementFor(source: string): string | null {
   const alias = createModuleOverrideAliases(overrideDir).find((candidate) => candidate.find.test(source));
   return alias?.replacement.replace(/\\/g, '/') ?? null;
+}
+
+function collectSettingsOverrideExports(sourceFile: string): Set<string> {
+  const exports = new Set<string>();
+  const namedExportPattern = /export\s+(?:const|function|type)\s+([A-Za-z_$][\w$]*)/g;
+
+  for (const match of sourceFile.matchAll(namedExportPattern)) {
+    exports.add(match[1]);
+  }
+
+  return exports;
 }
 
 test('module override aliases keep only wrapper-owned Rivet app seams', () => {
@@ -50,5 +62,23 @@ test('upstream compatibility scanner watches every active module override target
       new RegExp(`"${aliasedOverrideTarget.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
       `scripts/update-check.sh should watch upstream ${aliasedOverrideTarget}`,
     );
+  }
+});
+
+test('settings override preserves the hosted canvas background settings surface', () => {
+  const overrideExports = collectSettingsOverrideExports(settingsOverride);
+
+  for (const exportName of [
+    'canvasBackgroundPatternOpacityState',
+    'canvasBackgroundPatternState',
+    'canvasBackgroundPatterns',
+    'CANVAS_BACKGROUND_PATTERN_OPACITY_STEP',
+    'clampCanvasBackgroundPatternOpacity',
+    'DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY',
+    'MAX_CANVAS_BACKGROUND_PATTERN_OPACITY',
+    'MIN_CANVAS_BACKGROUND_PATTERN_OPACITY',
+    'resolveCanvasBackgroundPattern',
+  ]) {
+    assert.equal(overrideExports.has(exportName), true, `wrapper settings override must export ${exportName}`);
   }
 });
