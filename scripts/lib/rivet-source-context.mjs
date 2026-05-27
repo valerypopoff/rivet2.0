@@ -20,7 +20,7 @@ const rootFiles = [
   'yarn.lock',
 ];
 
-const sourceOnlyFiles = [path.join('scripts', 'build-wrapper-target.mjs')];
+const sourceOnlyDirectories = ['scripts'];
 
 const requiredRootScripts = ['build:runtime', 'build:hosted-web-deps'];
 
@@ -209,7 +209,7 @@ export function prepareRivetDockerContext(rootDir, env) {
     copyIfExists(sourceRoot, contextPath, relativePath);
   }
 
-  for (const relativePath of sourceOnlyFiles) {
+  for (const relativePath of sourceOnlyDirectories) {
     copyIfExists(sourceRoot, contextPath, relativePath);
   }
 

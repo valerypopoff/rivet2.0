@@ -182,6 +182,7 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(rivetContextHelper, /function assertDistinctPaths\(firstPath, secondPath, firstLabel, secondLabel\)/);
   assert.match(rivetContextHelper, /function copyWorkspacePackageJsonFiles\(sourceRoot, destinationRoot\)/);
   assert.match(rivetContextHelper, /const requiredRootScripts = \[['"]build:runtime['"], ['"]build:hosted-web-deps['"]\]/);
+  assert.match(rivetContextHelper, /const sourceOnlyDirectories = \[['"]scripts['"]\]/);
   assert.match(rivetContextHelper, /scripts['"], ['"]build-wrapper-target\.mjs/);
   assert.match(rivetContextHelper, /packages['"], ['"]app['"], ['"]package\.json/);
   assert.match(rivetContextHelper, /packages['"], ['"]app-executor['"], ['"]package\.json/);
