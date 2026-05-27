@@ -57,6 +57,7 @@ function writeMinimalRivetSource(
 
   if (includeBuildWrapperTarget) {
     writeFile(path.join(sourceRoot, 'scripts', 'build-wrapper-target.mjs'), 'console.log("build target");\n');
+    writeFile(path.join(sourceRoot, 'scripts', 'ci-timing.mjs'), 'export function startTimer() { return 0; }\n');
   }
 }
 
@@ -206,7 +207,10 @@ test('prepareRivetDockerContext copies source-only wrapper build scripts outside
     assert.equal(contextPath, path.join(tempRoot, '.data', 'docker-contexts', 'rivet-source'));
     assert.equal(dependencyContextPath, path.join(tempRoot, '.data', 'docker-contexts', 'rivet-dependency-metadata'));
     assert.equal(fs.existsSync(path.join(contextPath, 'scripts', 'build-wrapper-target.mjs')), true);
+    assert.equal(fs.existsSync(path.join(contextPath, 'scripts', 'ci-timing.mjs')), true);
+    assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts')), false);
     assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts', 'build-wrapper-target.mjs')), false);
+    assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts', 'ci-timing.mjs')), false);
     assert.equal(fs.existsSync(path.join(dependencyContextPath, 'packages', 'trivet', 'package.json')), true);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
