@@ -400,6 +400,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
 - hosted provider wiring should stay explicit
   - import the app shell and CSS through `rivet/packages/app/src/host.tsx` and `rivet/packages/app/src/host.css`
   - pass `HostedIOProvider`, an injected `HostedDatasetProvider`, the hosted environment provider, and the hosted path-policy provider through `RivetAppHost.providers`
+  - keep hosted environment lookup cached and deduplicated in `wrapper/web/overrides/utils/tauri.ts`; warm node settings panel opens should not issue repeated `/api/config/env/*` requests, including for empty or disallowed env values
   - keep `HostedIOProvider` and Rivet's active dataset provider on the same import/export-capable dataset-provider instance so project file IO, dataset UI, and runtime hooks observe the same imported datasets
   - keep `HostedDatasetProvider` pruning old per-project IndexedDB dataset rows before importing a project payload, otherwise datasets removed from a project can reappear from stale browser app storage
 - hosted project context values are editor-owned app state, not `.rivet-project` file contents
@@ -616,6 +617,15 @@ For hosted editor production-image regressions:
 1. remember that `npm run prod` and `npm run prod:prebuilt` use pulled images, `npm run prod:restart` keeps already-local images, and `npm run prod:custom` uses your current workspace and `rivet/` folder
 2. if dev works but prod does not, diff the behavior against clean upstream `rivet` and move any hosted-only patch into tracked wrapper code before trusting the local result
 3. for clipboard regressions specifically, check the tracked hosted overrides for `useCopyNodesHotkeys`, `useContextMenu`, and the canvas focus handoff in `EditorMessageBridge.tsx`
+
+For slow hosted node settings panels:
+
+1. open DevTools Network and filter for `/api/config/env/`
+2. open the same node settings panel twice
+3. a cold page may make one concurrent burst of env requests, but the warm open should not repeat them
+4. repeated warm env requests usually mean `wrapper/web/overrides/utils/tauri.ts` stopped caching empty env responses or stopped deduplicating pending requests
+5. panel latency that is the same in small and large projects usually points to fixed hosted provider work, not `.rivet-project` YAML parsing or opened-project snapshot caching
+6. after changing server env values, restart or recreate the app and reload the browser page because hosted env values are cached for the browser page session
 
 For published-project save status behavior:
 

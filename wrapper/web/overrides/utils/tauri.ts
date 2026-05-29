@@ -14,7 +14,8 @@ export function isHostedMode(): boolean {
   return RIVET_HOSTED_MODE;
 }
 
-const cachedEnvVars: Record<string, string> = {};
+const cachedEnvVars = new Map<string, string>();
+const pendingEnvVars = new Map<string, Promise<string | undefined>>();
 
 export function getDefaultEnvironmentProvider(): EnvironmentProvider {
   return {
@@ -46,24 +47,38 @@ export function getDefaultPathPolicyProvider(): PathPolicyProvider {
 }
 
 export async function getEnvVar(name: string): Promise<string | undefined> {
-  if (cachedEnvVars[name]) {
-    return cachedEnvVars[name];
+  if (cachedEnvVars.has(name)) {
+    return cachedEnvVars.get(name) || undefined;
   }
 
   if (isHostedMode()) {
-    try {
+    const pendingValue = pendingEnvVars.get(name);
+    if (pendingValue) {
+      return pendingValue;
+    }
+
+    const loadValue = (async () => {
       const response = await fetch(`${RIVET_API_BASE_URL}/config/env/${encodeURIComponent(name)}`);
       if (!response.ok) {
         return undefined;
       }
 
-      const { value } = await response.json() as { value?: string };
-      if (value) {
-        cachedEnvVars[name] = value;
+      const data = await response.json() as { value?: unknown };
+      if (typeof data.value !== 'string') {
+        return undefined;
       }
+
+      const value = data.value;
+      cachedEnvVars.set(name, value);
       return value || undefined;
-    } catch {
-      return undefined;
+    })().catch(() => undefined);
+
+    pendingEnvVars.set(name, loadValue);
+
+    try {
+      return await loadValue;
+    } finally {
+      pendingEnvVars.delete(name);
     }
   }
 
@@ -84,14 +99,9 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     : optionsOrExtraEnvVarNames;
   const environmentProvider = options.environmentProvider ?? getDefaultEnvironmentProvider();
   const getProviderEnvVar = (name: string) => environmentProvider.getEnvVar(name);
-  const fullSettings: Settings = {
-    ...settings,
-    openAiKey: (settings.openAiKey || (await getProviderEnvVar('OPENAI_API_KEY'))) ?? '',
-    openAiOrganization: (settings.openAiOrganization || (await getProviderEnvVar('OPENAI_ORG_ID'))) ?? '',
-    openAiEndpoint: (settings.openAiEndpoint || (await getProviderEnvVar('OPENAI_ENDPOINT'))) ?? '',
-    pluginSettings: settings.pluginSettings,
-    pluginEnv: {},
-  };
+  const resolveSetting = (value: string | undefined, envVarName: string) =>
+    value ? Promise.resolve(value) : getProviderEnvVar(envVarName);
+  const pluginEnvVarNames = new Set<string>();
 
   for (const plugin of plugins) {
     const stringConfigs = entries(plugin.configSpec ?? {}).filter(([, c]) => c.type === 'string') as [
@@ -107,17 +117,35 @@ export async function fillMissingSettingsFromEnvironmentVariables(
               ? configName
               : undefined;
         if (envVarName) {
-          const envVarValue = await getProviderEnvVar(envVarName);
-          if (envVarValue) {
-            fullSettings.pluginEnv![envVarName] = envVarValue;
-          }
+          pluginEnvVarNames.add(envVarName);
         }
       }
     }
   }
 
-  for (const envVarName of new Set((options.extraEnvVarNames ?? []).map((name) => name.trim()).filter(Boolean))) {
-    const envVarValue = await getProviderEnvVar(envVarName);
+  for (const envVarName of (options.extraEnvVarNames ?? []).map((name) => name.trim()).filter(Boolean)) {
+    pluginEnvVarNames.add(envVarName);
+  }
+
+  const [openAiKey, openAiOrganization, openAiEndpoint, pluginEnvEntries] = await Promise.all([
+    resolveSetting(settings.openAiKey, 'OPENAI_API_KEY'),
+    resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
+    resolveSetting(settings.openAiEndpoint, 'OPENAI_ENDPOINT'),
+    Promise.all(
+      [...pluginEnvVarNames].map(async (envVarName) => [envVarName, await getProviderEnvVar(envVarName)] as const),
+    ),
+  ]);
+
+  const fullSettings: Settings = {
+    ...settings,
+    openAiKey: openAiKey ?? '',
+    openAiOrganization: openAiOrganization ?? '',
+    openAiEndpoint: openAiEndpoint ?? '',
+    pluginSettings: settings.pluginSettings,
+    pluginEnv: {},
+  };
+
+  for (const [envVarName, envVarValue] of pluginEnvEntries) {
     if (envVarValue) {
       fullSettings.pluginEnv![envVarName] = envVarValue;
     }
