@@ -31,9 +31,14 @@ CREATE TABLE IF NOT EXISTS workflow_revisions (
   workflow_id TEXT NOT NULL,
   project_blob_key TEXT NOT NULL,
   dataset_blob_key TEXT NULL,
+  stats_graph_count INTEGER NULL,
+  stats_total_node_count INTEGER NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE
 );
+
+ALTER TABLE workflow_revisions ADD COLUMN IF NOT EXISTS stats_graph_count INTEGER NULL;
+ALTER TABLE workflow_revisions ADD COLUMN IF NOT EXISTS stats_total_node_count INTEGER NULL;
 
 CREATE INDEX IF NOT EXISTS workflow_revisions_workflow_id_idx ON workflow_revisions(workflow_id);
 

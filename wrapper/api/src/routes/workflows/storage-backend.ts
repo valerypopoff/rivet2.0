@@ -64,6 +64,7 @@ import { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
 import type { AttachedData, Project, CombinedDataset } from '@valerypopoff/rivet2-node';
 import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
 import { normalizeHostedProjectTitle } from './hosted-project-contents.js';
+import { writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
 
 function mapHostedProjectFilesystemError(
   error: unknown,
@@ -268,6 +269,7 @@ export async function saveHostedProject(options: {
 
         await fs.mkdir(path.dirname(options.projectPath), { recursive: true });
         await fs.writeFile(options.projectPath, normalized.contents, 'utf8');
+        await writeWorkflowProjectStatsCacheFromContents(options.projectPath, normalized.contents);
 
         const datasetPath = getWorkflowDatasetPath(options.projectPath);
         if (options.datasetsContents != null) {

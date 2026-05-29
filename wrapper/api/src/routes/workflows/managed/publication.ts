@@ -114,6 +114,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           pv.is_starred,
           r.project_blob_key,
           r.dataset_blob_key,
+          r.stats_graph_count,
+          r.stats_total_node_count,
           r.created_at
         FROM workflow_published_versions pv
         JOIN workflow_revisions r ON r.revision_id = pv.revision_id

@@ -28,12 +28,14 @@ test('workflow project rename and move preserve wrapper sidecars', async () => {
 
   await fs.writeFile(sidecars.dataset, '{"rows":[]}', 'utf8');
   await fs.writeFile(sidecars.settings, '{"endpointName":""}', 'utf8');
+  await fs.writeFile(sidecars.stats, '{"schemaVersion":2,"fileSize":0,"fileMtimeMs":0,"fileCtimeMs":0,"stats":{"graphCount":1,"totalNodeCount":0}}', 'utf8');
 
   const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'Renamed');
   const renamedSidecars = workflowFs.getProjectSidecarPaths(renamed.project.absolutePath);
 
   assert.equal(await workflowFs.pathExists(renamedSidecars.dataset), true);
   assert.equal(await workflowFs.pathExists(renamedSidecars.settings), true);
+  assert.equal(await workflowFs.pathExists(renamedSidecars.stats), true);
   assert.deepEqual(renamed.movedProjectPaths, [
     {
       fromAbsolutePath: created.absolutePath,
@@ -46,6 +48,7 @@ test('workflow project rename and move preserve wrapper sidecars', async () => {
 
   assert.equal(await workflowFs.pathExists(movedSidecars.dataset), true);
   assert.equal(await workflowFs.pathExists(movedSidecars.settings), true);
+  assert.equal(await workflowFs.pathExists(movedSidecars.stats), true);
 });
 
 test('workflow project rename rejects hidden names and does not expose hidden workflow paths', async () => {
@@ -106,6 +109,42 @@ test('workflow project move refuses conflicting sidecar targets without moving t
   assert.equal(await workflowFs.pathExists(conflictingTargetPath), false);
 });
 
+test('workflow project move replaces stale generated stats sidecar without treating it as a conflict', async () => {
+  await workflowMutations.createWorkflowFolderItem('Destination', '');
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Source');
+  const sourceSidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
+  const targetPath = path.join(workflowsRoot, 'Destination', 'Source.rivet-project');
+  const targetSidecars = workflowFs.getProjectSidecarPaths(targetPath);
+
+  await fs.writeFile(sourceSidecars.stats, 'source-stats', 'utf8');
+  await fs.writeFile(targetSidecars.stats, 'stale-target-stats', 'utf8');
+
+  const moved = await workflowQuery.moveWorkflowProject(workflowsRoot, created.relativePath, 'Destination');
+  const movedSidecars = workflowFs.getProjectSidecarPaths(moved.project.absolutePath);
+
+  assert.equal(await workflowFs.pathExists(created.absolutePath), false);
+  assert.equal(await workflowFs.pathExists(sourceSidecars.stats), false);
+  assert.notEqual(await fs.readFile(movedSidecars.stats, 'utf8'), 'stale-target-stats');
+});
+
+test('workflow project move drops stale generated stats sidecar when the source has no stats cache', async () => {
+  await workflowMutations.createWorkflowFolderItem('Destination', '');
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Source');
+  const sourceSidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
+  const targetPath = path.join(workflowsRoot, 'Destination', 'Source.rivet-project');
+  const targetSidecars = workflowFs.getProjectSidecarPaths(targetPath);
+
+  await fs.rm(sourceSidecars.stats, { force: true });
+  await fs.writeFile(targetSidecars.stats, 'stale-target-stats', 'utf8');
+
+  const moved = await workflowQuery.moveWorkflowProject(workflowsRoot, created.relativePath, 'Destination');
+  const movedSidecars = workflowFs.getProjectSidecarPaths(moved.project.absolutePath);
+
+  assert.equal(await workflowFs.pathExists(created.absolutePath), false);
+  assert.equal(await workflowFs.pathExists(sourceSidecars.stats), false);
+  assert.notEqual(await fs.readFile(movedSidecars.stats, 'utf8'), 'stale-target-stats');
+});
+
 test('workflow folder rename handles case-only renames', async () => {
   const createdFolder = await workflowMutations.createWorkflowFolderItem('Folder', '');
 
@@ -158,6 +197,80 @@ test('workflow project stats count serialized graph nodes', async () => {
 
   assert.equal(project.stats?.graphCount, 1);
   assert.equal(project.stats?.totalNodeCount, 1);
+});
+
+test('workflow project stats cache is rebuilt when the project file changes', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'StatsCache');
+  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
+  const projectContents = await fs.readFile(created.absolutePath, 'utf8');
+  const fileStats = await fs.stat(created.absolutePath);
+
+  await fs.writeFile(
+    sidecars.stats,
+    `${JSON.stringify({
+      schemaVersion: 2,
+      fileSize: fileStats.size,
+      fileMtimeMs: fileStats.mtimeMs,
+      fileCtimeMs: fileStats.ctimeMs,
+      stats: {
+        graphCount: 99,
+        totalNodeCount: 99,
+      },
+    })}\n`,
+    'utf8',
+  );
+
+  const cachedProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
+  assert.equal(cachedProject.stats?.graphCount, 99);
+  assert.equal(cachedProject.stats?.totalNodeCount, 99);
+
+  await fs.writeFile(
+    created.absolutePath,
+    projectContents.replace(
+      '      nodes: {}',
+      [
+        '      nodes:',
+        '        \'[node-1]:text "Node 1"\':',
+        '          visualData: 0/0/null/null//',
+        '          data:',
+        '            text: hello',
+      ].join('\n'),
+    ),
+    'utf8',
+  );
+
+  const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
+  assert.equal(rebuiltProject.stats?.graphCount, 1);
+  assert.equal(rebuiltProject.stats?.totalNodeCount, 1);
+});
+
+test('workflow project stats cache is rebuilt when file ctime changes', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'StatsCacheCtime');
+  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
+  const fileStats = await fs.stat(created.absolutePath);
+
+  await fs.writeFile(
+    sidecars.stats,
+    `${JSON.stringify({
+      schemaVersion: 2,
+      fileSize: fileStats.size,
+      fileMtimeMs: fileStats.mtimeMs,
+      fileCtimeMs: fileStats.ctimeMs,
+      stats: {
+        graphCount: 99,
+        totalNodeCount: 99,
+      },
+    })}\n`,
+    'utf8',
+  );
+
+  const contents = await fs.readFile(created.absolutePath, 'utf8');
+  await fs.writeFile(created.absolutePath, contents, 'utf8');
+  await fs.utimes(created.absolutePath, fileStats.atime, fileStats.mtime);
+
+  const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
+  assert.equal(rebuiltProject.stats?.graphCount, 1);
+  assert.equal(rebuiltProject.stats?.totalNodeCount, 0);
 });
 
 test('workflow tree route disables caching', async () => {
@@ -829,6 +942,7 @@ test('delete workflow project removes project and sidecars', async () => {
   const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
   await fs.writeFile(sidecars.dataset, '{}', 'utf8');
   await fs.writeFile(sidecars.settings, '{}', 'utf8');
+  await fs.writeFile(sidecars.stats, '{}', 'utf8');
 
   const deletedProjectId = await workflowMutations.deleteWorkflowProjectItem(created.relativePath);
 
@@ -836,6 +950,7 @@ test('delete workflow project removes project and sidecars', async () => {
   assert.equal(await workflowFs.pathExists(created.absolutePath), false);
   assert.equal(await workflowFs.pathExists(sidecars.dataset), false);
   assert.equal(await workflowFs.pathExists(sidecars.settings), false);
+  assert.equal(await workflowFs.pathExists(sidecars.stats), false);
 });
 
 test('delete workflow project removes published snapshots', async () => {

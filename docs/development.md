@@ -465,7 +465,7 @@ Current repo-local baseline:
 - The old mixed `workflow-services.test.ts` suite has been split by behavior domain. Put new filesystem tree/import/export coverage in `workflow-filesystem-tree.test.ts`, publication-state and endpoint-reservation coverage in `workflow-publication-filesystem.test.ts`, published-version-history coverage in `workflow-published-history-filesystem.test.ts`, endpoint execution/cache coverage in `workflow-execution-filesystem.test.ts`, and recording route coverage in `workflow-recordings-http.test.ts`.
 - The old mixed `managed-backend-sql.test.ts` suite has been split. Put managed schema, folder-move SQL, and execution lookup query contracts in `managed-workflow-schema.test.ts`; put managed publication history, restore, star persistence, and save-target behavior in `managed-publication-history.test.ts`. Schema tests should import the exported SQL string, not read `schema.ts` as source text, so escaping regressions are tested against what the app actually sends to Postgres.
 - The old broad `phase4-static-contract.test.ts` suite has been split. Put proxy, Docker image, CI image, and production launcher contracts in `proxy-image-contract.test.ts`; hosted editor wrapper/upstream seam guardrails in `hosted-editor-seams.test.ts`; and Helm/chart topology assertions in `kubernetes-contract.test.ts`.
-- `npm --prefix wrapper/api test` intentionally does not run Helm. Use `npm run verify:kubernetes` for Kubernetes launcher tests, Helm-rendered chart contracts, and production overlay lint/template checks.
+- `npm --prefix wrapper/api test` intentionally does not run Helm. Use `npm run verify:kubernetes` for Kubernetes launcher tests, Helm-rendered chart contracts, and production overlay lint/template checks. The API suite runs with `--test-concurrency=1` because many API tests intentionally set process-wide `RIVET_*` roots before importing route modules; keep that serialization unless the affected tests are refactored to avoid global env mutation.
 - `npm run verify:test-style` owns the test-suite style guardrails: root `npm run test` must keep composing the non-browser repo-local gate after the standard `pretest` dependency bootstrap, default API tests must list every non-Kubernetes API test exactly once, `verify:web-pure` must list every pure web test exactly once, `kubernetes-*.test.ts` API files must stay behind `verify:kubernetes`, runnable test/spec files must stay in their expected top-level suite folders, retired or merged-away suites must not come back, `.only` tests are blocked, and wrapper tests/helpers must not assert upstream `rivet/packages/app/src` implementation paths beyond the approved host entry/style seam.
 - Tests that intentionally exercise negative paths should capture and assert expected `console.error` or `console.warn` output. A passing `npm run test` should not print scary stack traces for failures that the test deliberately caused.
 - Final-prune cleanup should not reintroduce a broad suite just to keep a helper alive. If a helper has no call sites after a split, delete the helper and let `npm --prefix wrapper/api run build` plus `npm run verify:test-style` prove the manifest and type boundaries.
@@ -635,6 +635,13 @@ For published-project save status behavior:
 4. save it with no actual changes and confirm the sidebar stays `Published` without a brief `Unpublished changes` flicker
 5. if you are in `managed` mode, also confirm the saved revision id does not change on that no-op save
 6. then make a real saved change, save again, and confirm the sidebar updates to `Unpublished changes`
+
+For workflow-tree stats performance:
+
+1. `GET /api/workflows/tree` should not parse every managed project blob just to show graph/node counts; managed stats come from `workflow_revisions.stats_*`, with a one-time lazy blob read only for legacy revisions that have null stats
+2. in filesystem mode, `*.wrapper-stats.json` is generated and can be deleted safely; the next tree read or hosted save rebuilds it
+3. project rename, move, and delete flows must move/remove the stats sidecar with the project, but generated stats sidecars should not block user operations the way publication settings or dataset sidecars do
+4. after save, keep status validation separate from stats caching: a no-op save on a published project must stay `Published`, while a real saved change must become `Unpublished changes`
 
 For routing/auth/deployment changes:
 

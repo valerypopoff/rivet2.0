@@ -14,6 +14,7 @@ In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In s
 
 - **Project file** (`*.rivet-project`): the live, editable workflow file
 - **Settings sidecar** (`*.rivet-project.wrapper-settings.json`): stores the endpoint draft plus publication state
+- **Stats sidecar** (`*.rivet-project.wrapper-stats.json`): generated wrapper cache for graph/node counts in `filesystem` mode; it is rebuilt when the project file changes and is not part of publication state
 - **Published snapshot** (`.published/<snapshotId>.rivet-project`): frozen copy of the currently published project version
 - **Published version history**: every successful publish creates a durable downloadable history entry for that project
   - in `filesystem` mode: `.published/<versionId>.rivet-project` plus `.published/<versionId>.json` metadata and an optional `.rivet-data` sidecar
@@ -74,6 +75,8 @@ Each project has a derived status:
 Status is derived from the stored settings plus a fresh state hash; it is not stored as the source of truth.
 
 The dashboard does not maintain its own separate optimistic publication-status model after save. It refreshes `/api/workflows/tree` and uses the API's derived status.
+
+Tree project stats are intentionally separate from publication state. Filesystem mode stores stats in a generated `*.wrapper-stats.json` sidecar keyed by the project file size, modification time, and metadata-change time; managed mode stores stats on immutable `workflow_revisions` rows when a revision is created. Existing managed revisions that predate the stats columns are lazily backfilled the first time the tree needs their counts. These caches let `/api/workflows/tree` avoid re-parsing project contents only for graph/node counts. They must not be used to decide whether a saved project is `Published` or `Unpublished changes`.
 
 In Project Settings:
 

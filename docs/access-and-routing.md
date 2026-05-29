@@ -114,6 +114,7 @@ Current tree-response note:
 - `GET /api/workflows/tree` is the dashboard's main workflow-library metadata source
 - each `WorkflowProjectItem` in that response carries the API-derived publication status used by the sidebar and Project Settings flows
 - that same project item also carries per-project `stats` (`graphCount`, `totalNodeCount`), which drive the active project summary shown in the dashboard
+- stats are cached as wrapper-owned metadata (`*.wrapper-stats.json` in filesystem mode, revision columns in managed mode), but publication status stays API-derived from settings/hash/revision state so save refreshes still show the correct `Published` or `Unpublished changes` state
 
 `GET /healthz` lives on the API service itself and is used by the Docker healthchecks.
 

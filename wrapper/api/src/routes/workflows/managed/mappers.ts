@@ -124,6 +124,8 @@ export function splitCurrentDraftRevisionRow(row: CurrentDraftRevisionRow): { wo
       workflow_id: row.revision_workflow_id,
       project_blob_key: row.project_blob_key,
       dataset_blob_key: row.dataset_blob_key,
+      stats_graph_count: row.stats_graph_count,
+      stats_total_node_count: row.stats_total_node_count,
       created_at: row.revision_created_at,
     },
   };

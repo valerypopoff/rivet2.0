@@ -23,6 +23,8 @@ function createExecutionLookupRow() {
     revision_workflow_id: 'workflow-a',
     project_blob_key: 'project-blob',
     dataset_blob_key: null,
+    stats_graph_count: 1,
+    stats_total_node_count: 2,
     revision_created_at: new Date().toISOString(),
   };
 }
@@ -74,6 +76,9 @@ test('managed schema keeps published version history physically tied to workflow
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('published_version_id TEXT NULL'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ALTER TABLE workflows ADD COLUMN IF NOT EXISTS published_version_id TEXT NULL;'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS workflow_published_versions'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('stats_graph_count INTEGER NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ALTER TABLE workflow_revisions ADD COLUMN IF NOT EXISTS stats_graph_count INTEGER NULL;'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ALTER TABLE workflow_revisions ADD COLUMN IF NOT EXISTS stats_total_node_count INTEGER NULL;'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('is_starred BOOLEAN NOT NULL DEFAULT FALSE'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ALTER TABLE workflow_published_versions ADD COLUMN IF NOT EXISTS is_starred BOOLEAN NOT NULL DEFAULT FALSE;'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'));
