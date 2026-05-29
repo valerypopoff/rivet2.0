@@ -22,6 +22,7 @@ tmp-*.png
 
 # Local runtime data
 .data/
+workflows/
 rivet/
 
 # OS/editor files

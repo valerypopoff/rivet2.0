@@ -11,6 +11,7 @@ import { badRequest, conflict } from '../../utils/httpError.js';
 
 export const PROJECT_EXTENSION = '.rivet-project';
 export const PROJECT_SETTINGS_SUFFIX = '.wrapper-settings.json';
+export const PROJECT_STATS_SUFFIX = '.wrapper-stats.json';
 export const PUBLISHED_SNAPSHOTS_DIR = '.published';
 export const WORKFLOW_RECORDINGS_DIR = '.recordings';
 export const WORKFLOW_DATASET_SUFFIX = '.rivet-data';
@@ -138,6 +139,10 @@ export function getWorkflowProjectSettingsPath(projectPath: string): string {
   return `${projectPath}${PROJECT_SETTINGS_SUFFIX}`;
 }
 
+export function getWorkflowProjectStatsPath(projectPath: string): string {
+  return `${projectPath}${PROJECT_STATS_SUFFIX}`;
+}
+
 export function getPublishedSnapshotsRoot(root: string): string {
   return validatePath(path.join(root, PUBLISHED_SNAPSHOTS_DIR));
 }
@@ -204,10 +209,11 @@ export function getWorkflowDatasetPath(projectPath: string): string {
   return projectPath.replace(PROJECT_EXTENSION, WORKFLOW_DATASET_SUFFIX);
 }
 
-export function getProjectSidecarPaths(projectPath: string): { dataset: string; settings: string } {
+export function getProjectSidecarPaths(projectPath: string): { dataset: string; settings: string; stats: string } {
   return {
     dataset: getWorkflowDatasetPath(projectPath),
     settings: getWorkflowProjectSettingsPath(projectPath),
+    stats: getWorkflowProjectStatsPath(projectPath),
   };
 }
 
@@ -216,6 +222,7 @@ export async function moveProjectWithSidecars(sourceProjectPath: string, targetP
   const targetSidecars = getProjectSidecarPaths(targetProjectPath);
   const sourceDatasetExists = await pathExists(sourceSidecars.dataset);
   const sourceSettingsExists = await pathExists(sourceSidecars.settings);
+  const sourceStatsExists = await pathExists(sourceSidecars.stats);
   const projectRename = (fromPath: string, toPath: string) => renamePathHandlingCaseChange(fromPath, toPath);
 
   if (sourceProjectPath !== targetProjectPath && await pathExists(targetProjectPath)) {
@@ -245,6 +252,16 @@ export async function moveProjectWithSidecars(sourceProjectPath: string, targetP
       await projectRename(sourceSidecars.settings, targetSidecars.settings);
       settingsMoved = true;
     }
+
+    if (sourceSidecars.stats !== targetSidecars.stats) {
+      if (!pathsDifferOnlyByCase(sourceSidecars.stats, targetSidecars.stats) && await pathExists(targetSidecars.stats)) {
+        await fs.rm(targetSidecars.stats, { force: true }).catch(() => {});
+      }
+
+      if (sourceStatsExists) {
+        await projectRename(sourceSidecars.stats, targetSidecars.stats).catch(() => {});
+      }
+    }
   } catch (error) {
     if (settingsMoved) {
       await renamePathHandlingCaseChange(targetSidecars.settings, sourceSidecars.settings).catch(() => {});
@@ -272,6 +289,10 @@ export async function deleteProjectWithSidecars(projectPath: string): Promise<vo
 
   if (await pathExists(sidecars.settings)) {
     await fs.rm(sidecars.settings, { force: false });
+  }
+
+  if (await pathExists(sidecars.stats)) {
+    await fs.rm(sidecars.stats, { force: false });
   }
 }
 

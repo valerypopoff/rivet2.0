@@ -12,12 +12,12 @@ import {
   requireProjectPath,
   resolveWorkflowRelativePath,
 } from './fs-helpers.js';
-import { getWorkflowProjectStatsFromFile } from './project-stats.js';
+import { getWorkflowProjectStatsFromFileCached } from './project-stats.js';
 import { getWorkflowProjectSettings } from './publication.js';
 import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowProjectPathMove, WorkflowProjectStats } from './types.js';
 
 async function getWorkflowProjectStats(filePath: string): Promise<WorkflowProjectStats> {
-  return getWorkflowProjectStatsFromFile(filePath);
+  return getWorkflowProjectStatsFromFileCached(filePath);
 }
 
 export async function listWorkflowFolders(root: string): Promise<WorkflowFolderItem[]> {

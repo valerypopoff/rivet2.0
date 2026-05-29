@@ -6,13 +6,13 @@ import {
   type AttachedData,
   type Project,
 } from '@valerypopoff/rivet2-node';
-import { type Pool, type PoolClient, type QueryResultRow } from 'pg';
 
 import type {
   WorkflowFolderItem,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
   WorkflowProjectPathMove,
+  WorkflowProjectStats,
 } from '../../../../../shared/workflow-types.js';
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../shared/workflow-types.js';
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
@@ -137,6 +137,34 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     }
   };
 
+  const getRevisionStats = async (revision: RevisionRow): Promise<WorkflowProjectStats> => {
+    if (revision.stats_graph_count != null && revision.stats_total_node_count != null) {
+      return {
+        graphCount: revision.stats_graph_count,
+        totalNodeCount: revision.stats_total_node_count,
+      };
+    }
+
+    try {
+      const stats = deps.getWorkflowProjectStatsFromContents(await deps.readRevisionProjectContents(revision));
+      await deps.queryRows(
+        deps.pool,
+        `
+          UPDATE workflow_revisions
+          SET stats_graph_count = $2,
+              stats_total_node_count = $3
+          WHERE revision_id = $1
+            AND (stats_graph_count IS NULL OR stats_total_node_count IS NULL)
+        `,
+        [revision.revision_id, stats.graphCount, stats.totalNodeCount],
+      ).catch(() => {});
+
+      return stats;
+    } catch {
+      return emptyProjectStats;
+    }
+  };
+
   const moveWorkflowProjectRelativePath = async (
     sourceRelativePath: string,
     targetRelativePath: string,
@@ -236,24 +264,11 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
           };
         }
 
-        let contents: string;
-        try {
-          contents = await deps.readRevisionProjectContents(revision);
-        } catch {
-          return {
-            row,
-            project: {
-              ...project,
-              stats: emptyProjectStats,
-            },
-          };
-        }
-
         return {
           row,
           project: {
             ...project,
-            stats: deps.getWorkflowProjectStatsFromContents(contents),
+            stats: await getRevisionStats(revision),
           },
         };
       }));
@@ -608,7 +623,11 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
 
         const revisions = await deps.queryRows<RevisionRow>(
           client,
-          'SELECT revision_id, workflow_id, project_blob_key, dataset_blob_key, created_at FROM workflow_revisions WHERE workflow_id = $1',
+          `
+            SELECT revision_id, workflow_id, project_blob_key, dataset_blob_key, stats_graph_count, stats_total_node_count, created_at
+            FROM workflow_revisions
+            WHERE workflow_id = $1
+          `,
           [workflow.workflow_id],
         );
         const recordings = await deps.queryRows<RecordingRow>(

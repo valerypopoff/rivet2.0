@@ -51,6 +51,8 @@ function createRevision(overrides: Partial<RevisionRow> = {}): RevisionRow {
     workflow_id: 'workflow-a',
     project_blob_key: 'project-blob',
     dataset_blob_key: null,
+    stats_graph_count: 1,
+    stats_total_node_count: 0,
     created_at: now,
     ...overrides,
   };

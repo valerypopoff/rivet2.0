@@ -9,6 +9,7 @@ import {
 import { withManagedDbRetry, type ManagedWorkflowDbClient } from './db.js';
 import { RECORDING_COLUMNS } from './mappers.js';
 import { normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
+import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
 import type {
   ManagedRevisionContents,
   RecordingBlobArtifacts,
@@ -97,6 +98,7 @@ export function createManagedWorkflowRevisionFactory(options: {
       const datasetBlobKey = datasetsContents != null
         ? createRevisionBlobKey(workflowId, revisionId, 'dataset')
         : null;
+      const stats = getWorkflowProjectStatsFromContents(contents);
 
       await options.blobStore.putText(projectBlobKey, contents, 'application/x-yaml; charset=utf-8');
       try {
@@ -113,6 +115,8 @@ export function createManagedWorkflowRevisionFactory(options: {
         workflow_id: workflowId,
         project_blob_key: projectBlobKey,
         dataset_blob_key: datasetBlobKey,
+        stats_graph_count: stats.graphCount,
+        stats_total_node_count: stats.totalNodeCount,
         created_at: new Date(),
       };
     },
@@ -120,10 +124,20 @@ export function createManagedWorkflowRevisionFactory(options: {
     async insertRevision(client: PoolClient, revision: RevisionRow): Promise<void> {
       await client.query(
         `
-          INSERT INTO workflow_revisions (revision_id, workflow_id, project_blob_key, dataset_blob_key, created_at)
-          VALUES ($1, $2, $3, $4, NOW())
+          INSERT INTO workflow_revisions (
+            revision_id, workflow_id, project_blob_key, dataset_blob_key,
+            stats_graph_count, stats_total_node_count, created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, NOW())
         `,
-        [revision.revision_id, revision.workflow_id, revision.project_blob_key, revision.dataset_blob_key],
+        [
+          revision.revision_id,
+          revision.workflow_id,
+          revision.project_blob_key,
+          revision.dataset_blob_key,
+          revision.stats_graph_count,
+          revision.stats_total_node_count,
+        ],
       );
     },
 

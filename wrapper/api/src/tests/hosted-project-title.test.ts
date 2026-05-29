@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import test from 'node:test';
 import { loadProjectAndAttachedDataFromString, serializeProject } from '@valerypopoff/rivet2-node';
 
@@ -23,7 +24,6 @@ process.env.RIVET_WORKFLOWS_ROOT = workflowsRoot;
 process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = recordingsRoot;
 process.env.RIVET_APP_DATA_ROOT = appDataRoot;
 
-const workflowMutations = await import('../routes/workflows/workflow-mutations.js');
 const workflowStorageBackend = await import('../routes/workflows/storage-backend.js');
 const workflowFs = await import('../routes/workflows/fs-helpers.js');
 
@@ -62,6 +62,8 @@ function createRevisionRow(workflowId: string, revisionId: string): RevisionRow 
     workflow_id: workflowId,
     project_blob_key: `blob/${revisionId}`,
     dataset_blob_key: null,
+    stats_graph_count: 1,
+    stats_total_node_count: 0,
     created_at: '2026-05-05T00:00:00.000Z',
   };
 }
@@ -93,23 +95,40 @@ test('hosted project title normalization rejects invalid project contents as a b
 });
 
 test('filesystem saveHostedProject rewrites the YAML title to the file tree name', async () => {
-  const created = await workflowMutations.createWorkflowProjectItem('', 'Original Tree Name');
-  const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'Renamed Tree Name');
-  const loaded = await workflowStorageBackend.loadHostedProject(renamed.project.absolutePath);
+  const suffix = randomUUID();
+  const renamedName = `Renamed Tree Name ${suffix}`;
+  const projectPath = path.join(workflowsRoot, `${renamedName}.rivet-project`);
+  const cleanupPaths = new Set<string>();
 
-  await workflowStorageBackend.saveHostedProject({
-    projectPath: renamed.project.absolutePath,
-    contents: rewriteProjectMetadata(loaded.contents, {
-      title: 'Editor Settings Name',
-      description: 'description from editor save',
-    }),
-    datasetsContents: loaded.datasetsContents,
-  });
+  function trackProjectPath(projectPath: string) {
+    cleanupPaths.add(projectPath);
+    const sidecars = workflowFs.getProjectSidecarPaths(projectPath);
+    cleanupPaths.add(sidecars.dataset);
+    cleanupPaths.add(sidecars.settings);
+    cleanupPaths.add(sidecars.stats);
+  }
 
-  const saved = await fs.readFile(renamed.project.absolutePath, 'utf8');
-  const [savedProject] = loadProjectAndAttachedDataFromString(saved);
-  assert.equal(savedProject.metadata.title, 'Renamed Tree Name');
-  assert.equal(savedProject.metadata.description, 'description from editor save');
+  try {
+    trackProjectPath(projectPath);
+    await fs.writeFile(projectPath, workflowFs.createBlankProjectFile(renamedName), 'utf8');
+    const loaded = await workflowStorageBackend.loadHostedProject(projectPath);
+
+    await workflowStorageBackend.saveHostedProject({
+      projectPath,
+      contents: rewriteProjectMetadata(loaded.contents, {
+        title: 'Editor Settings Name',
+        description: 'description from editor save',
+      }),
+      datasetsContents: loaded.datasetsContents,
+    });
+
+    const saved = await fs.readFile(projectPath, 'utf8');
+    const [savedProject] = loadProjectAndAttachedDataFromString(saved);
+    assert.equal(savedProject.metadata.title, renamedName);
+    assert.equal(savedProject.metadata.description, 'description from editor save');
+  } finally {
+    await Promise.all([...cleanupPaths].map((projectPath) => fs.rm(projectPath, { force: true }).catch(() => {})));
+  }
 });
 
 test('managed saveHostedProject stores revisions with the YAML title matching the tree name', async () => {

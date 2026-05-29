@@ -245,6 +245,11 @@ function main() {
   assertCommandHasExplicitTestFiles(apiScripts.test, 'wrapper/api test');
   assertCommandHasExplicitTestFiles(rootScripts['verify:web-pure'], 'verify:web-pure');
   assertCommandHasExplicitTestFiles(rootScripts['verify:kubernetes'], 'verify:kubernetes');
+  assert.match(
+    apiScripts.test,
+    /--test-concurrency=1\b/,
+    'wrapper/api test should keep API files serialized because many API tests intentionally mutate process-wide RIVET_* env before importing route modules.',
+  );
   assertRootTestCommand(rootScripts.test);
   assertRootPretestCommand(rootScripts.pretest);
 
