@@ -80,6 +80,7 @@ function RecordingRow({
     (recording.status === 'suspicious'
       ? 'Completed without throwing, but the final output was control-flow-excluded.'
       : null);
+  const endpointNameAtExecution = recording.endpointNameAtExecution?.trim() || 'Unknown';
 
   return (
     <div className={`run-recordings-run ${recording.status}`}>
@@ -111,6 +112,10 @@ function RecordingRow({
             </span>
             <span className="run-recordings-run-duration">{formatDuration(recording.durationMs)}</span>
           </div>
+        </div>
+        <div className="run-recordings-run-endpoint">
+          Endpoint at execution:{' '}
+          <span className="run-recordings-run-endpoint-value">{endpointNameAtExecution}</span>
         </div>
       </button>
       <div className="run-recordings-run-actions">

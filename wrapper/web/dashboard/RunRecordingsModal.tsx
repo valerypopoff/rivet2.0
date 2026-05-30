@@ -1,5 +1,5 @@
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
-import { useCallback, useMemo, type FC } from 'react';
+import { useCallback, useEffect, useMemo, type FC } from 'react';
 
 import { getWorkflowProjectStatusLabel } from './projectSettingsForm';
 import { RecordingRunsTable } from './RecordingRunsTable';
@@ -13,8 +13,11 @@ import { useRunRecordingsController } from './useRunRecordingsController';
 
 interface RunRecordingsModalProps {
   isOpen: boolean;
+  resetToken: number;
+  onDismiss: () => void;
   onClose: () => void;
   onOpenRecording: (recordingId: string) => void;
+  onFoundCountChange: (count: number) => void;
 }
 
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
@@ -45,8 +48,11 @@ function getWorkflowEndpoint(workflow: WorkflowRecordingWorkflowSummary): string
 
 export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   isOpen,
+  resetToken,
+  onDismiss,
   onClose,
   onOpenRecording,
+  onFoundCountChange,
 }) => {
   const {
     workflows,
@@ -83,7 +89,11 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     handleClearInputFilter,
     handleStopInputSearch,
     handleDeleteRecording,
-  } = useRunRecordingsController(isOpen);
+  } = useRunRecordingsController(isOpen, resetToken);
+
+  useEffect(() => {
+    onFoundCountChange(filteredRunsCount);
+  }, [filteredRunsCount, onFoundCountChange]);
 
   const workflowOptions = useMemo<RecordingWorkflowOption[]>(
     () =>
@@ -106,7 +116,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   const selectedWorkflowStatusLabel = selectedWorkflow
     ? getWorkflowProjectStatusLabel(selectedWorkflow.project.settings.status)
     : '';
-  const handleClose = useCallback(() => {
+  const handleExplicitClose = useCallback(() => {
     handleStopInputSearch();
     onClose();
   }, [handleStopInputSearch, onClose]);
@@ -121,7 +131,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
         testId="run-recordings-modal"
         width="large"
         label="Run recordings"
-        onClose={handleClose}
+        onClose={onDismiss}
       >
         <ModalBody>
           <div className="project-settings-modal-shell run-recordings-shell">
@@ -135,7 +145,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
               <button
                 type="button"
                 className="project-settings-close-button"
-                onClick={handleClose}
+                onClick={handleExplicitClose}
                 aria-label="Close run recordings"
               >
                 &times;
