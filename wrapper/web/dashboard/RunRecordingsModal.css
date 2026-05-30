@@ -194,10 +194,10 @@
   flex: 0 0 auto;
   max-width: 120px;
   padding: 1px 7px;
-  border: 1px solid rgba(126, 226, 148, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
-  background: rgba(126, 226, 148, 0.08);
-  color: #b7f6c3;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--grey-light);
   font-size: 11px;
   font-weight: 700;
   line-height: 16px;

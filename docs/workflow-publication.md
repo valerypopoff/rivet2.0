@@ -619,7 +619,7 @@ Current browser behavior:
 
 - lists currently published workflows and workflows that still have recording history from earlier publication
 - sorts workflows by most recent run
-- shows each workflow's saved recording count in the workflow dropdown
+- shows each workflow's neutral saved-recording count badge in the workflow dropdown
 - pages runs from the API instead of materializing the whole history at once
 - sorts runs by newest first with a recording-ID tie-breaker, so same-millisecond runs keep a stable order across pages and filters
 - shows each run's historical endpoint name from `endpointNameAtExecution`, so recordings remain understandable after endpoint renames or republishing under a new endpoint
