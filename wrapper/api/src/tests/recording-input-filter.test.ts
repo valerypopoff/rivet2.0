@@ -75,6 +75,14 @@ test('recording input filters use the workflow request input as the JSON path ro
     false,
   );
   assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(serializedRecording, { path: '$.missing', operator: 'contains', value: '' }),
+    false,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(serializedRecording, { path: '$.missing', operator: 'contains', value: '"undefined"' }),
+    true,
+  );
+  assert.equal(
     matchesWorkflowRecordingSerializedInputFilter(serializedRecording, { path: '$.missing', operator: '>', value: '0' }),
     false,
   );
@@ -86,6 +94,50 @@ test('recording input filters use the workflow request input as the JSON path ro
     matchesWorkflowRecordingSerializedInputFilter(
       serializedRecording,
       { path: '$', operator: '==', value: '{"score":12,"foo":"bar"}' },
+    ),
+    true,
+  );
+});
+
+test('recording input contains stringifies the left operand when filtering with a string', () => {
+  const serializedRecording = createSerializedRecording({
+    foo: 'foobar',
+    items: ['alpha', 'beta'],
+    score: 12,
+  });
+
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$', operator: 'contains', value: '"foobar"' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$', operator: 'contains', value: 'foobar' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$', operator: 'contains', value: '"items"' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$.items', operator: 'contains', value: 'alpha' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$.score', operator: 'contains', value: '"12"' },
     ),
     true,
   );

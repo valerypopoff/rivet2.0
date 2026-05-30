@@ -3,9 +3,11 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type {
   WorkflowRecordingFilterStatus,
+  WorkflowRecordingInputFilterOperator,
   WorkflowRecordingRunSummary,
   WorkflowRecordingWorkflowSummary,
 } from '../../shared/workflow-recording-types';
+import { matchesWorkflowRecordingInputFilter } from '../../api/src/routes/workflows/recording-input-filter.js';
 
 type RecordingRun = WorkflowRecordingRunSummary & {
   input?: Record<string, unknown>;
@@ -192,33 +194,11 @@ function applyInputFilter(run: RecordingRun, url: URL): boolean {
     return true;
   }
 
-  const key = inputPath.startsWith('$.') ? inputPath.slice(2) : inputPath === '$' ? null : '';
-  const exists = key == null
-    ? run.input !== undefined
-    : Boolean(key && run.input && Object.prototype.hasOwnProperty.call(run.input, key));
-  const actual = key == null ? run.input : exists ? run.input?.[key] : undefined;
-  switch (inputOperator) {
-    case 'exists':
-      return exists;
-    case 'not_exists':
-      return !exists;
-    case '==':
-      return String(actual) === inputValue;
-    case '!=':
-      return String(actual) !== inputValue;
-    case '>':
-      return Number(actual) > Number(inputValue);
-    case '>=':
-      return Number(actual) >= Number(inputValue);
-    case '<':
-      return Number(actual) < Number(inputValue);
-    case '<=':
-      return Number(actual) <= Number(inputValue);
-    case 'contains':
-      return typeof actual === 'string' && actual.includes(inputValue);
-    default:
-      return true;
-  }
+  return matchesWorkflowRecordingInputFilter(run.input, {
+    path: inputPath,
+    operator: inputOperator as WorkflowRecordingInputFilterOperator,
+    value: inputValue,
+  });
 }
 
 function delay(ms: number): Promise<void> {

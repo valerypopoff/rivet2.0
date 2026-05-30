@@ -481,6 +481,14 @@ function toComparableNumber(value: unknown): number | null {
 }
 
 function valueContains(value: unknown, expected: unknown): boolean {
+  if (typeof expected === 'string') {
+    if (value === undefined) {
+      return expected === 'undefined';
+    }
+
+    return stringifyForContains(value).includes(expected);
+  }
+
   if (typeof value === 'string') {
     return value.includes(String(expected));
   }
@@ -489,9 +497,22 @@ function valueContains(value: unknown, expected: unknown): boolean {
     return value.some((item) => valuesEqual(item, expected));
   }
 
-  if (value != null && typeof value === 'object' && typeof expected === 'string') {
-    return Object.prototype.hasOwnProperty.call(value, expected);
+  return false;
+}
+
+function stringifyForContains(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
   }
 
-  return false;
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === 'string') {
+      return serialized;
+    }
+  } catch {
+    // Fall through to String(value) for unusual non-JSON values.
+  }
+
+  return String(value);
 }
