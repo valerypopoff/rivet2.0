@@ -440,11 +440,13 @@ test.describe('Run recordings modal', () => {
     await page.locator('.run-recordings-select__option').filter({ hasText: /^!=$/ }).click();
     await modal.getByLabel('Value').fill('bar');
     await modal.getByRole('button', { name: 'Apply' }).click();
-    await expect(modal.locator('.run-recordings-run')).toHaveCount(10);
-    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Searching older recordings');
-    await expect(modal.getByRole('button', { name: 'Stop search' })).toBeVisible();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(12);
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
+    await expect.poll(() => runFetches.filter((requestUrl) => {
+      const request = new URL(requestUrl);
+      return request.searchParams.get('inputPath') === '$.missing'
+        && request.searchParams.get('inputOperator') === '!=';
+    }).length).toBeGreaterThan(1);
     const missingNotEqualsRequest = new URL(runFetches.at(-1)!);
     expect(missingNotEqualsRequest.searchParams.get('inputPath')).toBe('$.missing');
     expect(missingNotEqualsRequest.searchParams.get('inputOperator')).toBe('!=');
@@ -463,7 +465,7 @@ test.describe('Run recordings modal', () => {
   });
 
   test('deletes a run and opens replay through serialized recorder APIs', async ({ page }) => {
-    const { recordingFetches, replayProjectFetches } = await installRunRecordingRoutes(page);
+    const { recordingFetches, replayProjectFetches, runFetches } = await installRunRecordingRoutes(page);
     const modal = await openLatestFlowRecordings(page);
     await choosePageSizeTen(modal);
 
@@ -480,12 +482,25 @@ test.describe('Run recordings modal', () => {
     expect(replayProjectFetches[0]).toBe('recording-b-2');
     await expect(page.locator('.dashboard-empty-state')).toBeHidden();
     await expect(page.locator('.Toastify__toast', { hasText: 'Failed to open project' })).toHaveCount(0);
+    await expect(modal).toBeHidden();
+    await expect(page.getByText('Found: 11')).toBeVisible();
+
+    const runFetchCountAfterReplayOpen = runFetches.length;
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    await expect(modal).toBeVisible();
+    await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 2');
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(10);
+    expect(runFetches.length).toBe(runFetchCountAfterReplayOpen);
+
+    await modal.getByLabel('Close run recordings').click();
+    await expect(modal).toBeHidden();
+    await expect(page.getByText(/^Found:/)).toHaveCount(0);
   });
 
   test('stops an active input search when the modal closes', async ({ page }) => {
     const { runFetches } = await installRunRecordingRoutes(page, {
       latestFlowRunCount: 30,
-      cursorDelayMs: 300,
+      cursorDelayMs: 2000,
     });
     const modal = await openLatestFlowRecordings(page);
     await choosePageSizeTen(modal, 3);
@@ -503,6 +518,7 @@ test.describe('Run recordings modal', () => {
     const requestCountAtClose = runFetches.length;
     await modal.getByLabel('Close run recordings').click();
     await expect(modal).toBeHidden();
+    await expect(page.getByText(/^Found:/)).toHaveCount(0);
     await delay(700);
 
     expect(runFetches.length).toBe(requestCountAtClose);

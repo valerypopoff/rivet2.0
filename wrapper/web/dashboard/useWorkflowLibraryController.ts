@@ -193,6 +193,9 @@ export function useWorkflowLibraryController(options: {
   const [publishedHistoryProject, setPublishedHistoryProject] = useState<WorkflowProjectItem | null>(null);
   const [runtimeLibsOpen, setRuntimeLibsOpen] = useState(false);
   const [runRecordingsOpen, setRunRecordingsOpen] = useState(false);
+  const [runRecordingsRetained, setRunRecordingsRetained] = useState(false);
+  const [runRecordingsFoundCount, setRunRecordingsFoundCount] = useState(0);
+  const [runRecordingsResetToken, setRunRecordingsResetToken] = useState(0);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
@@ -221,6 +224,26 @@ export function useWorkflowLibraryController(options: {
   const duplicatingProjectPath = duplicateState.projectPath;
   const duplicatingVersion = duplicateState.version;
   const settingsModalOpen = settingsModalProject != null;
+
+  const openRunRecordingsModal = useCallback(() => {
+    setRunRecordingsOpen(true);
+  }, []);
+
+  const hideRunRecordingsModal = useCallback(() => {
+    setRunRecordingsOpen(false);
+    setRunRecordingsRetained(true);
+  }, []);
+
+  const closeRunRecordingsModal = useCallback(() => {
+    setRunRecordingsOpen(false);
+    setRunRecordingsRetained(false);
+    setRunRecordingsFoundCount(0);
+    setRunRecordingsResetToken((currentToken) => currentToken + 1);
+  }, []);
+
+  const handleRunRecordingsFoundCountChange = useCallback((count: number) => {
+    setRunRecordingsFoundCount(count);
+  }, []);
 
   const refresh = useCallback(async (
     showLoading = true,
@@ -1235,6 +1258,9 @@ export function useWorkflowLibraryController(options: {
     publishedHistoryProject,
     runtimeLibsOpen,
     runRecordingsOpen,
+    runRecordingsRetained,
+    runRecordingsFoundCount,
+    runRecordingsResetToken,
     aboutOpen,
     folderContextMenuState,
     projectContextMenuState,
@@ -1280,10 +1306,14 @@ export function useWorkflowLibraryController(options: {
     handleProjectModalSelectPublished,
     handleProjectModalSelectUnpublishedChanges,
     setRuntimeLibsOpen,
-    setRunRecordingsOpen,
+    openRunRecordingsModal,
+    hideRunRecordingsModal,
+    closeRunRecordingsModal,
+    handleRunRecordingsFoundCountChange,
     setAboutOpen,
     onOpenRecording: (recordingId: string) => {
       setRunRecordingsOpen(false);
+      setRunRecordingsRetained(true);
       onOpenRecording(recordingId);
     },
     onOpenPublishedVersionPreview: (relativePath: string, versionId: string) => {

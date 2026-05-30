@@ -32,7 +32,7 @@ function appendUniqueRuns(
   return uniqueNextRuns.length > 0 ? [...currentRuns, ...uniqueNextRuns] : currentRuns;
 }
 
-export function useRunRecordingsController(isOpen: boolean) {
+export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   const [workflowsResponse, setWorkflowsResponse] = useState<WorkflowRecordingWorkflowListResponse | null>(null);
   const [workflowsLoading, setWorkflowsLoading] = useState(true);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -70,13 +70,8 @@ export function useRunRecordingsController(isOpen: boolean) {
     inputSearchAbortControllerRef.current = null;
   }, []);
 
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    let cancelled = false;
-    const abortController = new AbortController();
+  const resetSessionState = useCallback(() => {
+    abortInputSearch();
     setSelectedWorkflowId('');
     setRunsPage(null);
     setError(null);
@@ -95,6 +90,21 @@ export function useRunRecordingsController(isOpen: boolean) {
     setWorkflowsResponse(null);
     setWorkflowsLoading(true);
     setDeletingRecordingId(null);
+  }, [abortInputSearch]);
+
+  useEffect(() => {
+    resetSessionState();
+  }, [resetSessionState, resetToken]);
+
+  useEffect(() => {
+    if (!isOpen || workflowsResponse) {
+      return;
+    }
+
+    let cancelled = false;
+    const abortController = new AbortController();
+    setError(null);
+    setWorkflowsLoading(true);
 
     void loadWorkflowRecordingWorkflows(abortController.signal)
       .then((response) => {
@@ -117,7 +127,7 @@ export function useRunRecordingsController(isOpen: boolean) {
       cancelled = true;
       abortController.abort();
     };
-  }, [isOpen, loadWorkflowRecordingWorkflows]);
+  }, [isOpen, loadWorkflowRecordingWorkflows, workflowsResponse]);
 
   const workflows = useMemo(() => workflowsResponse?.workflows ?? [], [workflowsResponse]);
 
@@ -140,7 +150,7 @@ export function useRunRecordingsController(isOpen: boolean) {
   );
 
   useEffect(() => {
-    if (!isOpen || !selectedWorkflowId) {
+    if (!selectedWorkflowId) {
       return;
     }
 
@@ -235,7 +245,6 @@ export function useRunRecordingsController(isOpen: boolean) {
     };
   }, [
     appliedInputFilter,
-    isOpen,
     loadWorkflowRecordingRunsPage,
     page,
     runsPerPage,

@@ -113,7 +113,9 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     setProjectRowRef,
     setAboutOpen,
     setRuntimeLibsOpen,
-    setRunRecordingsOpen,
+    openRunRecordingsModal,
+    runRecordingsRetained,
+    runRecordingsFoundCount,
   } = controller;
 
   let bodyContent: JSX.Element | null = null;
@@ -218,14 +220,19 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           >
             Runtime libraries
           </Button>
-          <Button
-            appearance="subtle"
-            className="panel-bottom-button project-settings-secondary-button button-size-m"
-            onClick={() => setRunRecordingsOpen(true)}
-            title="Browse workflow run recordings and load them into the editor"
-          >
-            Run recordings
-          </Button>
+          <div className={`panel-bottom-action-with-summary${runRecordingsRetained ? ' has-summary' : ''}`}>
+            <Button
+              appearance="subtle"
+              className="panel-bottom-button project-settings-secondary-button button-size-m"
+              onClick={openRunRecordingsModal}
+              title="Browse workflow run recordings and load them into the editor"
+            >
+              Run recordings
+            </Button>
+            {runRecordingsRetained ? (
+              <div className="panel-bottom-action-summary">Found: {runRecordingsFoundCount}</div>
+            ) : null}
+          </div>
           <Button
             appearance="subtle"
             className="panel-bottom-button project-settings-secondary-button button-size-m"

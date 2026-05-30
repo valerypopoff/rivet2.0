@@ -26,7 +26,10 @@ export const WorkflowLibraryModals: FC<{
     runtimeLibsOpen,
     setRuntimeLibsOpen,
     runRecordingsOpen,
-    setRunRecordingsOpen,
+    runRecordingsResetToken,
+    hideRunRecordingsModal,
+    closeRunRecordingsModal,
+    handleRunRecordingsFoundCountChange,
     aboutOpen,
     setAboutOpen,
     onOpenRecording,
@@ -65,8 +68,11 @@ export const WorkflowLibraryModals: FC<{
       />
       <RunRecordingsModal
         isOpen={runRecordingsOpen}
-        onClose={() => setRunRecordingsOpen(false)}
+        resetToken={runRecordingsResetToken}
+        onDismiss={hideRunRecordingsModal}
+        onClose={closeRunRecordingsModal}
         onOpenRecording={onOpenRecording}
+        onFoundCountChange={handleRunRecordingsFoundCountChange}
       />
       <AboutModal
         isOpen={aboutOpen}
