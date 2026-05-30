@@ -7,6 +7,7 @@ export type RecordingWorkflowOption = {
   description: string;
   endpoint: string;
   statusLabel: string;
+  recordingCount: number;
 };
 
 type RecordingWorkflowSelectProps = {
@@ -14,6 +15,10 @@ type RecordingWorkflowSelectProps = {
   selectedWorkflowId: string;
   onSelectWorkflow: (workflowId: string) => void;
 };
+
+function formatRecordingCount(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? 'recording' : 'recordings'}`;
+}
 
 export const RecordingWorkflowSelect: FC<RecordingWorkflowSelectProps> = ({
   workflowOptions,
@@ -33,7 +38,14 @@ export const RecordingWorkflowSelect: FC<RecordingWorkflowSelectProps> = ({
       classNamePrefix="run-recordings-select"
       formatOptionLabel={(option: RecordingWorkflowOption, { context }: { context: 'menu' | 'value' }) => (
         <div className="run-recordings-select-option">
-          <div className="run-recordings-select-option-title">{option.label}</div>
+          <div className="run-recordings-select-option-title-row">
+            <div className="run-recordings-select-option-title">{option.label}</div>
+            {context === 'menu' ? (
+              <div className="run-recordings-select-option-count">
+                {formatRecordingCount(option.recordingCount)}
+              </div>
+            ) : null}
+          </div>
           {context === 'menu' ? (
             <div className="run-recordings-select-option-meta">
               {option.statusLabel}

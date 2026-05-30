@@ -378,7 +378,7 @@ async function installRunRecordingRoutes(
   return { recordingFetches, replayProjectFetches, runFetches };
 }
 
-async function openLatestFlowRecordings(page: Page) {
+async function openLatestFlowRecordings(page: Page, expectedLatestFlowRecordingCount = 12) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
@@ -388,7 +388,12 @@ async function openLatestFlowRecordings(page: Page) {
   await expect(modal).toBeVisible();
 
   await modal.locator('.run-recordings-select__control').click();
-  await page.locator('.run-recordings-select__option', { hasText: 'Latest Flow' }).click();
+  await expect(page.locator('.run-recordings-select__option', { hasText: 'Published Flow' })
+    .locator('.run-recordings-select-option-count')).toHaveText('2 recordings');
+  const latestFlowOption = page.locator('.run-recordings-select__option', { hasText: 'Latest Flow' });
+  await expect(latestFlowOption.locator('.run-recordings-select-option-count'))
+    .toHaveText(`${expectedLatestFlowRecordingCount} recordings`);
+  await latestFlowOption.click();
   await expect(modal.locator('.run-recordings-workflow-name')).toHaveText('Latest Flow');
 
   return modal;
@@ -502,7 +507,7 @@ test.describe('Run recordings modal', () => {
       latestFlowRunCount: 30,
       cursorDelayMs: 2000,
     });
-    const modal = await openLatestFlowRecordings(page);
+    const modal = await openLatestFlowRecordings(page, 30);
     await choosePageSizeTen(modal, 3);
 
     await modal.getByRole('button', { name: 'Filter by input' }).click();

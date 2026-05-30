@@ -106,6 +106,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
           value: workflow.workflowId,
           description: workflow.latestRunAt ? `Last run ${formatTimestamp(workflow.latestRunAt)}` : 'No recorded runs yet',
           endpoint,
+          recordingCount: workflow.totalRuns,
           statusLabel,
         };
       }),
