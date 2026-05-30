@@ -404,6 +404,8 @@ test.describe('Run recordings modal', () => {
   test('filters and paginates runs with the operator menu outside modal clipping', async ({ page }) => {
     const { runFetches } = await installRunRecordingRoutes(page);
     const modal = await openLatestFlowRecordings(page);
+    await expect(modal.locator('.run-recordings-run').first().locator('.run-recordings-run-endpoint'))
+      .toHaveText('Endpoint at execution: latest-flow');
 
     await modal.getByRole('button', { name: /Bad only/ }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(3);
@@ -420,6 +422,10 @@ test.describe('Run recordings modal', () => {
     await modal.getByLabel('Value').fill('bar');
     await modal.getByRole('button', { name: 'Apply' }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+    await expect(modal.locator('.run-recordings-run-endpoint')).toHaveText([
+      'Endpoint at execution: latest-flow',
+      'Endpoint at execution: latest-flow',
+    ]);
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
     const filteredRunsRequest = new URL(runFetches.at(-1)!);
     expect(filteredRunsRequest.searchParams.get('inputPath')).toBe('$.foo');

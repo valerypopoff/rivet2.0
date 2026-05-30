@@ -648,6 +648,19 @@
   font-weight: 600;
 }
 
+.run-recordings-run-endpoint {
+  color: var(--grey-light);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.run-recordings-run-endpoint-value {
+  color: var(--grey-lightest);
+  font-weight: 600;
+}
+
 .run-recordings-run-detail {
   font-size: 12px;
   line-height: 1.4;

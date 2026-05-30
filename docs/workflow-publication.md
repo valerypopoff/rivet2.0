@@ -621,6 +621,7 @@ Current browser behavior:
 - sorts workflows by most recent run
 - pages runs from the API instead of materializing the whole history at once
 - sorts runs by newest first with a recording-ID tie-breaker, so same-millisecond runs keep a stable order across pages and filters
+- shows each run's historical endpoint name from `endpointNameAtExecution`, so recordings remain understandable after endpoint renames or republishing under a new endpoint
 - supports `All` and `Bad only`, where `Bad only` includes both `failed` and `suspicious`
 - supports an optional input filter. The filter uses a JSON path where `$` is the workflow request input object recorded under Rivet's `inputs.input.value`; for example, request input `{ "foo": "bar" }` matches `$.foo == bar`. Filtered searches scan newest-first, append matches to the visible list as each cursor response returns, and keep searching automatically until the history is exhausted or the user clicks `Stop search`. Clearing or hiding the filter, closing the modal, or dismissing the modal uses the same stop path and aborts the in-flight request.
 - lets the user delete individual stored runs
