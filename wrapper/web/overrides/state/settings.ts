@@ -123,8 +123,93 @@ export const canvasBackgroundPatterns = [
 
 export type CanvasBackgroundPattern = (typeof canvasBackgroundPatterns)[number]['value'];
 
+export const canvasBackgroundColorOptions = [
+  {
+    label: 'Grey',
+    value: 'grey',
+  },
+  {
+    label: 'Black',
+    value: 'black',
+  },
+  {
+    label: 'Custom',
+    value: 'custom',
+  },
+] as const;
+
+export type CanvasBackgroundColorMode = (typeof canvasBackgroundColorOptions)[number]['value'];
+
+export type CanvasBackgroundCustomColor = {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+};
+
+export const DEFAULT_CANVAS_BACKGROUND_CUSTOM_COLOR = 'rgba(40,44,52,1)';
+const CANVAS_BACKGROUND_COLOR_NUMBER_PATTERN = '-?(?:\\d+(?:\\.\\d+)?|\\.\\d+)';
+
 export function resolveCanvasBackgroundPattern(value: unknown): CanvasBackgroundPattern {
   return canvasBackgroundPatterns.some((pattern) => pattern.value === value) ? (value as CanvasBackgroundPattern) : 'grid';
+}
+
+export function resolveCanvasBackgroundColorMode(value: unknown): CanvasBackgroundColorMode {
+  return canvasBackgroundColorOptions.some((option) => option.value === value)
+    ? (value as CanvasBackgroundColorMode)
+    : 'grey';
+}
+
+export function parseCanvasBackgroundCustomColor(value: unknown): CanvasBackgroundCustomColor {
+  if (typeof value !== 'string') {
+    return { r: 40, g: 44, b: 52, a: 1 };
+  }
+
+  const match = new RegExp(
+    `^rgba\\(\\s*(?<r>${CANVAS_BACKGROUND_COLOR_NUMBER_PATTERN})\\s*,\\s*(?<g>${CANVAS_BACKGROUND_COLOR_NUMBER_PATTERN})\\s*,\\s*(?<b>${CANVAS_BACKGROUND_COLOR_NUMBER_PATTERN})\\s*,\\s*(?<a>${CANVAS_BACKGROUND_COLOR_NUMBER_PATTERN})\\s*\\)$`,
+    'i',
+  ).exec(value);
+
+  if (!match?.groups) {
+    return { r: 40, g: 44, b: 52, a: 1 };
+  }
+
+  const groups = match.groups as { r: string; g: string; b: string; a: string };
+
+  return {
+    r: clampCanvasBackgroundColorChannel(Number.parseFloat(groups.r)),
+    g: clampCanvasBackgroundColorChannel(Number.parseFloat(groups.g)),
+    b: clampCanvasBackgroundColorChannel(Number.parseFloat(groups.b)),
+    a: clampCanvasBackgroundAlpha(Number.parseFloat(groups.a)),
+  };
+}
+
+export function formatCanvasBackgroundCustomColor(color: CanvasBackgroundCustomColor): string {
+  return `rgba(${clampCanvasBackgroundColorChannel(color.r)},${clampCanvasBackgroundColorChannel(
+    color.g,
+  )},${clampCanvasBackgroundColorChannel(color.b)},${clampCanvasBackgroundAlpha(color.a)})`;
+}
+
+export function normalizeCanvasBackgroundCustomColor(value: unknown): string {
+  return formatCanvasBackgroundCustomColor(parseCanvasBackgroundCustomColor(value));
+}
+
+export function getCanvasBackgroundColor({
+  mode,
+  customColor,
+}: {
+  mode: CanvasBackgroundColorMode;
+  customColor: unknown;
+}): string {
+  if (mode === 'black') {
+    return '#000000';
+  }
+
+  if (mode === 'custom') {
+    return normalizeCanvasBackgroundCustomColor(customColor);
+  }
+
+  return 'var(--grey-darker)';
 }
 
 export const DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY = 0.02;
@@ -155,8 +240,36 @@ export const canvasBackgroundPatternOpacityState = atomWithStorage<number>(
   storage,
 );
 
+export const canvasBackgroundColorModeState = atomWithStorage<CanvasBackgroundColorMode>(
+  'canvasBackgroundColorMode',
+  'grey',
+  storage,
+);
+
+export const canvasBackgroundCustomColorState = atomWithStorage<string>(
+  'canvasBackgroundCustomColor',
+  DEFAULT_CANVAS_BACKGROUND_CUSTOM_COLOR,
+  storage,
+);
+
 export const debuggerDefaultUrlState = atomWithStorage(
   'debuggerDefaultUrl',
   isHostedMode() ? RIVET_REMOTE_DEBUGGER_DEFAULT_WS : 'ws://localhost:21888',
   storage,
 );
+
+function clampCanvasBackgroundColorChannel(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 40;
+  }
+
+  return Math.min(255, Math.max(0, Math.round(value)));
+}
+
+function clampCanvasBackgroundAlpha(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+
+  return Math.min(1, Math.max(0, Number(value.toFixed(3))));
+}

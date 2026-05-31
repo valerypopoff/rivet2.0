@@ -65,18 +65,29 @@ test('upstream compatibility scanner watches every active module override target
   }
 });
 
-test('settings override preserves the hosted canvas background settings surface', () => {
+test('settings override preserves the hosted settings surface used by upstream app UI', () => {
   const overrideExports = collectSettingsOverrideExports(settingsOverride);
 
   for (const exportName of [
     'canvasBackgroundPatternOpacityState',
     'canvasBackgroundPatternState',
     'canvasBackgroundPatterns',
+    'canvasBackgroundColorModeState',
+    'canvasBackgroundColorOptions',
+    'canvasBackgroundCustomColorState',
+    'CanvasBackgroundColorMode',
+    'CanvasBackgroundCustomColor',
     'CANVAS_BACKGROUND_PATTERN_OPACITY_STEP',
     'clampCanvasBackgroundPatternOpacity',
     'DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY',
+    'DEFAULT_CANVAS_BACKGROUND_CUSTOM_COLOR',
+    'formatCanvasBackgroundCustomColor',
+    'getCanvasBackgroundColor',
     'MAX_CANVAS_BACKGROUND_PATTERN_OPACITY',
     'MIN_CANVAS_BACKGROUND_PATTERN_OPACITY',
+    'normalizeCanvasBackgroundCustomColor',
+    'parseCanvasBackgroundCustomColor',
+    'resolveCanvasBackgroundColorMode',
     'resolveCanvasBackgroundPattern',
   ]) {
     assert.equal(overrideExports.has(exportName), true, `wrapper settings override must export ${exportName}`);
