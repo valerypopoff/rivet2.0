@@ -4,6 +4,7 @@ import { relative, resolve } from 'node:path';
 import test from 'node:test';
 
 import { createModuleOverrideAliases } from '../vite-aliases';
+import { replaceHostedProjectTabLabelExpression } from '../project-tab-label-transform';
 
 const overrideDir = resolve('/repo/wrapper/web/overrides');
 const updateCheckScript = readFileSync(new URL('../../../scripts/update-check.sh', import.meta.url), 'utf8');
@@ -92,4 +93,36 @@ test('settings override preserves the hosted settings surface used by upstream a
   ]) {
     assert.equal(overrideExports.has(exportName), true, `wrapper settings override must export ${exportName}`);
   }
+});
+
+test('hosted project tab label transform handles legacy upstream labels', () => {
+  const source = [
+    '  const fileName = unsaved ? \'Unsaved\' : project.fsPath!.split(\'/\').pop();',
+    "  const projectDisplayName = `${project?.title}${fileName ? ` [${fileName}]` : ''}`;",
+  ].join('\n');
+
+  assert.equal(
+    replaceHostedProjectTabLabelExpression(source),
+    "  const projectDisplayName = project?.title?.trim() || 'Untitled Project';",
+  );
+});
+
+test('hosted project tab label transform handles active-only upstream labels', () => {
+  const source = [
+    "  const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();",
+    '  const active = projectTabsSelected && currentProject.metadata.id === projectId;',
+    "  const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
+  ].join('\n');
+
+  assert.equal(
+    replaceHostedProjectTabLabelExpression(source),
+    [
+      '  const active = projectTabsSelected && currentProject.metadata.id === projectId;',
+      "  const projectDisplayName = project?.title?.trim() || 'Untitled Project';",
+    ].join('\n'),
+  );
+});
+
+test('hosted project tab label transform fails closed on unknown upstream labels', () => {
+  assert.equal(replaceHostedProjectTabLabelExpression('const projectDisplayName = project?.title;'), null);
 });
