@@ -10,6 +10,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { createBrowserSubpathAliases, createModuleOverrideAliases, createTauriShimAliases } from './vite-aliases';
+import { replaceHostedProjectTabLabelExpression } from './project-tab-label-transform';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -195,23 +196,6 @@ const resolveRivetModuleOverride = (): PluginOption => ({
     return (await this.resolve(override.replacement, importer, { skipSelf: true })) ?? override.replacement;
   },
 });
-
-const upstreamProjectTabLabelLines = {
-  legacyFileName: "const fileName = unsaved ? 'Unsaved' : project.fsPath!.split('/').pop();",
-  legacyDisplayName: "const projectDisplayName = `${project?.title}${fileName ? ` [${fileName}]` : ''}`;",
-};
-const hostedProjectTabDisplayNameLine = "const projectDisplayName = project?.title?.trim() || 'Untitled Project';";
-const upstreamProjectTabLabelPattern = new RegExp(
-  `^([ \\t]*)${escapeRegExp(upstreamProjectTabLabelLines.legacyFileName)}[ \\t]*\\r?\\n\\1${escapeRegExp(
-    upstreamProjectTabLabelLines.legacyDisplayName,
-  )}[ \\t]*$`,
-  'm',
-);
-
-const replaceHostedProjectTabLabelExpression = (code: string) => {
-  const updatedCode = code.replace(upstreamProjectTabLabelPattern, `$1${hostedProjectTabDisplayNameLine}`);
-  return updatedCode === code ? null : updatedCode;
-};
 
 const normalizeHostedProjectTabLabels = (): PluginOption => {
   const projectSelectorPath = normalizePath(resolve(upstreamApp, 'src/components/ProjectSelector.tsx'));
