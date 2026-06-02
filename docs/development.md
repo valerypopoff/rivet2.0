@@ -602,15 +602,16 @@ For hosted editor keyboard-node behavior:
 2. validate through `http://localhost:8080` by default, or your configured `RIVET_PORT`
 3. open a workflow in the editor iframe and confirm the workflow-library row that opened it does not keep the visible browser focus outline
 4. confirm the editor iframe receives keyboard focus after open without showing a visible white perimeter
-5. click a node normally and confirm `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` use the internal node clipboard
+5. click a node normally and confirm `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, and `Ctrl+D` use the internal node clipboard/duplicate behavior
 6. deliberately return focus to the workflow library, then confirm `Shift+click` multi-selection inside the editor reclaims iframe focus and still copies multiple nodes
 7. deliberately return focus to the workflow library, then click blank canvas background and confirm `Ctrl+C` / `Ctrl+X` / `Ctrl+V` work again without an extra recovery click on a node
 8. open and close an editor context menu or search UI, then confirm `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` still work after returning to the canvas
-9. deliberately return focus to the workflow library, then confirm `Ctrl+F` opens Rivet graph search instead of the browser find UI
-10. focus the editor iframe/canvas, then confirm `Ctrl+F` still opens Rivet graph search and a physical `KeyF` find shortcut is also prevented from reaching browser find even when `event.key` is not `f`; with a Rivet search field already mounted, confirm the same shortcut focuses that field instead of closing overlays
-11. confirm `Ctrl+S` works while focus is inside the workflow iframe, including on Windows browsers
-12. confirm `Ctrl+Shift+I` remains browser-owned for DevTools and does not open Rivet's graph import picker
-13. confirm the browser can still type normally inside real text inputs and that copy/paste/save/search shortcuts do not hijack active editor form fields
+9. deliberately return focus to the workflow library with a node still selected, then confirm `Ctrl+D` duplicates that node instead of opening the browser bookmark UI
+10. deliberately return focus to the workflow library, then confirm `Ctrl+F` opens Rivet graph search instead of the browser find UI
+11. focus the editor iframe/canvas, then confirm `Ctrl+F` still opens Rivet graph search and a physical `KeyF` find shortcut is also prevented from reaching browser find even when `event.key` is not `f`; with a Rivet search field already mounted, confirm the same shortcut focuses that field instead of closing overlays
+12. confirm `Ctrl+S` works while focus is inside the workflow iframe, including on Windows browsers
+13. confirm `Ctrl+Shift+I` remains browser-owned for DevTools and does not open Rivet's graph import picker
+14. confirm the browser can still type normally inside real text inputs and that copy/paste/duplicate/save/search shortcuts do not hijack active editor form fields
 
 For hosted editor production-image regressions:
 

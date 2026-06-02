@@ -20,6 +20,8 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 | `open-published-version-preview` | `relativePath`, `versionId`, `replaceCurrent` | User previews a stored published workflow version from Project Settings |
 | `refresh-open-project-from-disk` | `path` | A server-side mutation changed a project that may already be open in the editor |
 | `save-project` | (none) | User saves from the dashboard surface or presses the save shortcut outside the iframe |
+| `trigger-editor-duplicate-shortcut` | `modifier` | Dashboard-focused `Ctrl+D` / `Cmd+D` should duplicate the selected Rivet node instead of opening browser bookmark UI |
+| `trigger-editor-find-shortcut` | `modifier` | Dashboard-focused `Ctrl+F` / `Cmd+F` should open Rivet search instead of browser find |
 | `delete-workflow-project` | `path`, `projectId` | User deletes a workflow project from the dashboard |
 | `workflow-paths-moved` | `moves[]` | A project or folder rename/move changed one or more workflow project references |
 
@@ -86,15 +88,16 @@ Rivet owns editor-local find/search UIs, but `Ctrl+F` / `Cmd+F` can fire while f
 
 ## Copy/Paste behavior
 
-Node copy/paste shortcuts do not cross the editor bridge.
+Node copy/paste shortcuts do not cross the editor bridge. Dashboard-focused duplicate is the narrow exception because browsers reserve `Ctrl+D` / `Cmd+D` for bookmark UI before the iframe can see it.
 
-- `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, and `Ctrl+D` stay inside the iframe, but hosted builds replace the upstream hotkey hook with a tracked wrapper override so copy/cut/paste reads the latest Jotai state immediately instead of waiting for a React re-render.
-- The dashboard does not relay those shortcuts to the iframe. That approach was intentionally avoided because iframe-focused keyboard events are not reliable at the parent-page level.
+- `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` stay inside the iframe, but hosted builds replace the upstream hotkey hook with a tracked wrapper override so copy/cut/paste reads the latest Jotai state immediately instead of waiting for a React re-render.
+- `Ctrl+D` / `Cmd+D` is editor-local when the iframe has focus. When an active project is open but focus is still on dashboard chrome, the dashboard prevents the browser bookmark default, focuses the iframe, and sends `trigger-editor-duplicate-shortcut`; the iframe then replays a normal `KeyD` shortcut so the existing Rivet node-duplicate handler owns selection, edit-state checks, and mutation.
+- The dashboard does not relay copy/cut/paste shortcuts to the iframe. That approach was intentionally avoided because iframe-focused clipboard events are not reliable at the parent-page level.
 - In hosted mode, shortcut reliability depends on editor focus, not dashboard focus. The hosted wrapper therefore explicitly focuses the iframe after `project-opened` and reclaims iframe focus on capture-phase pointer interactions inside `.node-canvas`.
 - On those canvas interactions, the hosted editor bridge also focuses the canvas element itself unless the click is on a real form control, and blurs stale editor-local text inputs before keyboard node actions run.
 - The hosted wrapper also replaces the upstream context-menu hook so closing a context menu clears any focused search input instead of leaving a hidden text field intercepting shortcuts.
 - The hosted wrapper keeps the iframe and canvas focusable for keyboard reliability but suppresses their visible browser focus outline, so the editor does not show a white perimeter when focused.
-- Save is still special: it crosses the bridge when initiated outside the iframe, but copy/cut/paste/duplicate stay editor-local and iframe-focused save is handled directly inside the editor context.
+- Save is still special: it crosses the bridge when initiated outside the iframe, duplicate crosses only for dashboard-focused browser-shortcut recovery, and iframe-focused save/duplicate behavior is handled directly inside the editor context.
 
 ## Adjacent hosted execution transport
 

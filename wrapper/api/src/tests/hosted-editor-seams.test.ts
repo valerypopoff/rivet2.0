@@ -107,9 +107,12 @@ test('hosted executor, save, find, and clipboard shims stay scoped to wrapper-ow
   assert.match(windowsHotkeysFix, /menuId === 'save_project' && isHostedMode\(\)/);
   assert.doesNotMatch(windowsHotkeysFix, /CmdOrCtrl\+Shift\+I|import_graph/);
   assert.match(editorEvents, /postMessageToEditor\(editorWindow,\s*\{\s*type: 'trigger-editor-find-shortcut'/);
+  assert.match(editorEvents, /activeWorkflowProjectPath && isEditorDuplicateShortcutEvent\(event\)/);
+  assert.match(editorEvents, /postMessageToEditor\(editorWindow,\s*\{\s*type: 'trigger-editor-duplicate-shortcut'/);
   assert.match(editorEvents, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
   assert.match(editorEvents, /isEditableElement\(eventTarget\)/);
   assert.match(editorMessageBridge, /function replayEditorFindShortcut/);
+  assert.match(editorMessageBridge, /function replayEditorDuplicateShortcut/);
   assert.match(editorMessageBridge, /MOUNTED_EDITOR_SEARCH_INPUT_SELECTORS/);
   assert.match(editorMessageBridge, /setSearching\(openOrFocusGraphSearchState\)/);
   assert.match(viteAliases, /useCopyNodesHotkeys/);

@@ -107,8 +107,24 @@ function createEditorFindKeyboardEvent(modifier: EditorShortcutModifier): Keyboa
   });
 }
 
+function createEditorDuplicateKeyboardEvent(modifier: EditorShortcutModifier): KeyboardEvent {
+  return new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    code: 'KeyD',
+    ctrlKey: modifier === 'ctrl',
+    key: 'd',
+    metaKey: modifier === 'meta',
+  });
+}
+
 function replayEditorFindShortcut(modifier: EditorShortcutModifier): void {
   window.dispatchEvent(createEditorFindKeyboardEvent(modifier));
+}
+
+function replayEditorDuplicateShortcut(modifier: EditorShortcutModifier): void {
+  const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+  (target ?? window).dispatchEvent(createEditorDuplicateKeyboardEvent(modifier));
 }
 
 function focusMountedEditorSearchInput(): boolean {
@@ -495,6 +511,11 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
 
         case 'trigger-editor-find-shortcut': {
           replayEditorFindShortcut(event.data.modifier);
+          break;
+        }
+
+        case 'trigger-editor-duplicate-shortcut': {
+          replayEditorDuplicateShortcut(event.data.modifier);
           break;
         }
 

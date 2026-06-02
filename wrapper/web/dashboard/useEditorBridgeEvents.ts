@@ -6,6 +6,7 @@ import {
   postMessageToEditor,
 } from '../../shared/editor-bridge';
 import {
+  isEditorDuplicateShortcutEvent,
   isEditorFindShortcutEvent,
   isEditableElement,
   isSaveShortcutEvent,
@@ -67,6 +68,32 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         focusEditorFrame();
         postMessageToEditor(editorWindow, {
           type: 'trigger-editor-find-shortcut',
+          modifier: event.metaKey ? 'meta' : 'ctrl',
+        });
+        return;
+      }
+
+      if (activeWorkflowProjectPath && isEditorDuplicateShortcutEvent(event)) {
+        const eventTarget = event.target instanceof Element ? event.target : null;
+        if (
+          document.activeElement === iframeRef.current ||
+          isEditableElement(document.activeElement) ||
+          isEditableElement(eventTarget)
+        ) {
+          return;
+        }
+
+        const editorWindow = iframeRef.current?.contentWindow;
+        if (!editorWindow) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        focusEditorFrame();
+        postMessageToEditor(editorWindow, {
+          type: 'trigger-editor-duplicate-shortcut',
           modifier: event.metaKey ? 'meta' : 'ctrl',
         });
         return;

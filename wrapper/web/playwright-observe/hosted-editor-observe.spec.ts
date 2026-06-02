@@ -160,6 +160,26 @@ test.describe('Observable hosted editor flow', () => {
     const visibleNodeCenters = await getVisibleNodeCenters(nodes, minVisibleX, maxVisibleX, maxVisibleY);
     expect(visibleNodeCenters.length).toBeGreaterThanOrEqual(2);
 
+    await test.step('Relay dashboard-focused duplicate shortcut to the editor', async () => {
+      await page.mouse.click(visibleNodeCenters[0]!.x, visibleNodeCenters[0]!.y);
+      await openedProjectRow.evaluate((element) => {
+        if (element instanceof HTMLElement) {
+          element.focus();
+        }
+      });
+      await waitForFocusTag(page, 'BUTTON', 'sidebar refocus before duplicate');
+
+      const nodeCountBeforeDuplicate = await nodes.count();
+      await page.keyboard.press(`${shortcutModifier}+D`);
+      const nodeCountAfterDuplicate = await waitForNodeCountIncrease(
+        nodes,
+        nodeCountBeforeDuplicate,
+        'dashboard-focused duplicate',
+      );
+      expect(nodeCountAfterDuplicate).toBeGreaterThan(nodeCountBeforeDuplicate);
+      await saveStepScreenshot(page, testInfo, '03-after-dashboard-duplicate.png');
+    });
+
     await test.step('Return focus to the sidebar and recover it with Shift+click node selection', async () => {
       await page.mouse.click(visibleNodeCenters[0]!.x, visibleNodeCenters[0]!.y);
       await openedProjectRow.click();

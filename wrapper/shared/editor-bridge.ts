@@ -9,6 +9,7 @@ export type DashboardToEditorCommand =
   | { type: 'refresh-open-project-from-disk'; path: string }
   | { type: 'save-project' }
   | { type: 'trigger-editor-find-shortcut'; modifier: EditorShortcutModifier }
+  | { type: 'trigger-editor-duplicate-shortcut'; modifier: EditorShortcutModifier }
   | { type: 'delete-workflow-project'; path: string; projectId?: string | null }
   | { type: 'workflow-paths-moved'; moves: WorkflowProjectPathMove[] };
 
@@ -65,6 +66,8 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
     case 'save-project':
       return true;
     case 'trigger-editor-find-shortcut':
+      return isEditorShortcutModifier(value.modifier);
+    case 'trigger-editor-duplicate-shortcut':
       return isEditorShortcutModifier(value.modifier);
     case 'delete-workflow-project':
       return typeof value.path === 'string' && (value.projectId == null || typeof value.projectId === 'string');
