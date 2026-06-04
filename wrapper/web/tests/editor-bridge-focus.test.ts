@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  isEditorDuplicateShortcutEvent,
   isEditorFindShortcutEvent,
   isSaveShortcutEvent,
 } from '../dashboard/editorBridgeFocus';
@@ -32,4 +33,13 @@ test('find shortcut detection accepts physical KeyF and rejects unrelated browse
   assert.equal(isEditorFindShortcutEvent(keyboardEventLike({ code: 'KeyP', ctrlKey: true, key: 'p' })), false);
   assert.equal(isEditorFindShortcutEvent(keyboardEventLike({ altKey: true, code: 'KeyF', ctrlKey: true, key: 'f' })), false);
   assert.equal(isEditorFindShortcutEvent(keyboardEventLike({ code: 'KeyF', ctrlKey: true, key: 'f', shiftKey: true })), false);
+});
+
+test('duplicate shortcut detection accepts physical KeyD and rejects browser-adjacent shortcuts', () => {
+  assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ code: 'KeyD', ctrlKey: true, key: 'd' })), true);
+  assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ code: 'KeyD', ctrlKey: true, key: 'x' })), true);
+  assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ code: 'KeyD', key: 'd', metaKey: true })), true);
+  assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ code: 'KeyF', ctrlKey: true, key: 'f' })), false);
+  assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ altKey: true, code: 'KeyD', ctrlKey: true, key: 'd' })), false);
+  assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ code: 'KeyD', ctrlKey: true, key: 'd', shiftKey: true })), false);
 });

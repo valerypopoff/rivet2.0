@@ -24,6 +24,20 @@ test('editor bridge accepts valid dashboard commands', () => {
   );
   assert.equal(
     isDashboardToEditorCommand({
+      type: 'trigger-editor-duplicate-shortcut',
+      modifier: 'ctrl',
+    }),
+    true,
+  );
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'trigger-editor-duplicate-shortcut',
+      modifier: 'meta',
+    }),
+    true,
+  );
+  assert.equal(
+    isDashboardToEditorCommand({
       type: 'open-project',
       path: '/tmp/example.rivet-project',
       replaceCurrent: false,
@@ -90,6 +104,14 @@ test('editor bridge rejects malformed messages', () => {
   assert.equal(
     isDashboardToEditorCommand({
       type: 'trigger-editor-find-shortcut',
+      modifier: 'alt',
+    }),
+    false,
+  );
+  assert.equal(isDashboardToEditorCommand({ type: 'trigger-editor-duplicate-shortcut' }), false);
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'trigger-editor-duplicate-shortcut',
       modifier: 'alt',
     }),
     false,
