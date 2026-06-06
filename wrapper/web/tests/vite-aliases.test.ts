@@ -66,33 +66,12 @@ test('upstream compatibility scanner watches every active module override target
   }
 });
 
-test('settings override preserves the hosted settings surface used by upstream app UI', () => {
+test('settings override delegates upstream settings and keeps hosted-only exports narrow', () => {
   const overrideExports = collectSettingsOverrideExports(settingsOverride);
 
-  for (const exportName of [
-    'canvasBackgroundPatternOpacityState',
-    'canvasBackgroundPatternState',
-    'canvasBackgroundPatterns',
-    'canvasBackgroundColorModeState',
-    'canvasBackgroundColorOptions',
-    'canvasBackgroundCustomColorState',
-    'CanvasBackgroundColorMode',
-    'CanvasBackgroundCustomColor',
-    'CANVAS_BACKGROUND_PATTERN_OPACITY_STEP',
-    'clampCanvasBackgroundPatternOpacity',
-    'DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY',
-    'DEFAULT_CANVAS_BACKGROUND_CUSTOM_COLOR',
-    'formatCanvasBackgroundCustomColor',
-    'getCanvasBackgroundColor',
-    'MAX_CANVAS_BACKGROUND_PATTERN_OPACITY',
-    'MIN_CANVAS_BACKGROUND_PATTERN_OPACITY',
-    'normalizeCanvasBackgroundCustomColor',
-    'parseCanvasBackgroundCustomColor',
-    'resolveCanvasBackgroundColorMode',
-    'resolveCanvasBackgroundPattern',
-  ]) {
-    assert.equal(overrideExports.has(exportName), true, `wrapper settings override must export ${exportName}`);
-  }
+  assert.match(settingsOverride, /export\s+\*\s+from\s+['"][^'"]*\/state\/settings\.js['"]/);
+  assert.deepEqual([...overrideExports].sort(), ['debuggerDefaultUrlState', 'updateModalOpenState']);
+  assert.match(settingsOverride, /RIVET_REMOTE_DEBUGGER_DEFAULT_WS/);
 });
 
 test('hosted project tab label transform handles legacy upstream labels', () => {
