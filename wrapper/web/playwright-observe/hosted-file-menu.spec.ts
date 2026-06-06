@@ -12,6 +12,18 @@ async function seedFileMenuProject(page: Page, suffix: string) {
   });
 }
 
+async function openHostedFileMenu(page: Page) {
+  const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+  const menuButton = editorFrame.getByRole('button', { name: 'Menu', exact: true });
+  await expect(menuButton).toBeVisible({ timeout: 120_000 });
+  await menuButton.click();
+
+  const fileMenu = editorFrame.getByRole('menu');
+  await expect(fileMenu).toBeVisible();
+
+  return { editorFrame, fileMenu, menuButton };
+}
+
 test.describe('Hosted editor File menu', () => {
   test('shows only graph import/export, settings, and help actions', async ({ page }) => {
     await seedFileMenuProject(page, 'visible-items');
@@ -19,14 +31,7 @@ test.describe('Hosted editor File menu', () => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
 
-    const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
-    const fileButton = editorFrame.getByRole('button', { name: 'File', exact: true });
-    await expect(fileButton).toBeVisible({ timeout: 120_000 });
-
-    await fileButton.click();
-
-    const fileMenu = editorFrame.getByRole('menu');
-    await expect(fileMenu).toBeVisible();
+    const { fileMenu } = await openHostedFileMenu(page);
     await expect(fileMenu.getByRole('menuitem')).toHaveText([
       'Import graph',
       'Export graph',
@@ -56,10 +61,8 @@ test.describe('Hosted editor File menu', () => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
 
-    const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
-    const fileButton = editorFrame.getByRole('button', { name: 'File', exact: true });
-    await expect(fileButton).toBeVisible({ timeout: 120_000 });
-    await fileButton.focus();
+    const { editorFrame, menuButton } = await openHostedFileMenu(page);
+    await menuButton.focus();
     await expect
       .poll(() =>
         editorFrame.locator('body').evaluate(() => {
