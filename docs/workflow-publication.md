@@ -301,7 +301,8 @@ Stars and comments are persisted with the published version record:
 
 - in `filesystem` mode, `isStarred` and `comment` are stored in `.published/<versionId>.json`
 - in `managed` mode, `is_starred` and `comment` are stored on `workflow_published_versions`
-- the dashboard updates stars optimistically and saves comments on blur/Enter, then replaces the row with the API response, so the API remains the durable source of truth
+- rows without a comment show a secondary `Comment` button; rows with a comment show the saved label as text that switches into an editor when clicked
+- the dashboard updates stars optimistically and saves comments on blur/Enter, cancels draft edits on Escape, then replaces the row with the API response, so the API remains the durable source of truth
 
 In filesystem mode, the metadata filename is the authoritative version ID. If `.published/<versionId>.json` contains a mismatched internal `id`, the API ignores that metadata and falls back to the matching snapshot when it can, so a stale or hand-edited JSON file cannot point history actions at a different snapshot.
 

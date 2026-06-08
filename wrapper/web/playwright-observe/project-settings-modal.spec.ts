@@ -419,6 +419,15 @@ test.describe('Project settings modal', () => {
     await expect(historyModal.getByRole('button', { name: 'Preview' })).toHaveCount(10);
     await expect(historyModal.getByRole('button', { name: 'Restore' })).toHaveCount(10);
     await expect(historyModal.getByRole('button', { name: 'Star published version' })).toHaveCount(10);
+    const addFirstCommentButton = historyModal.getByRole('button', {
+      name: 'Add comment for published version published-version-1',
+      exact: true,
+    });
+    await expect(addFirstCommentButton).toBeVisible();
+    await expect(historyModal.getByRole('textbox', {
+      name: 'Comment for published version published-version-1',
+      exact: true,
+    })).toHaveCount(0);
     await historyModal.getByRole('button', { name: 'Star published version' }).first().click();
     await expect(historyModal.getByRole('button', { name: 'Unstar published version' })).toHaveCount(1);
     expect(routeTrackers.publishedVersionStarRequests).toEqual([{
@@ -426,10 +435,12 @@ test.describe('Project settings modal', () => {
       versionId: 'published-version-1',
       isStarred: true,
     }]);
+    await addFirstCommentButton.click();
     const firstCommentInput = historyModal.getByRole('textbox', {
       name: 'Comment for published version published-version-1',
       exact: true,
     });
+    await expect(firstCommentInput).toBeFocused();
     await firstCommentInput.fill('Launch baseline');
     await firstCommentInput.press('Enter');
     await expect.poll(() => routeTrackers.publishedVersionCommentRequests.length).toBe(1);
@@ -438,15 +449,27 @@ test.describe('Project settings modal', () => {
       versionId: 'published-version-1',
       comment: 'Launch baseline',
     }]);
+    await expect(firstCommentInput).toHaveCount(0);
+    const savedComment = historyModal.getByRole('button', {
+      name: 'Edit comment for published version published-version-1',
+      exact: true,
+    });
+    await expect(savedComment).toHaveText('Launch baseline');
+    await savedComment.click();
     await expect(firstCommentInput).toHaveValue('Launch baseline');
+    await firstCommentInput.fill('Do not save');
+    await firstCommentInput.press('Escape');
+    await expect(firstCommentInput).toHaveCount(0);
+    await expect(savedComment).toHaveText('Launch baseline');
+    await expect.poll(() => routeTrackers.publishedVersionCommentRequests.length).toBe(1);
     await historyModal.getByRole('button', { name: 'Close published version history' }).click();
     await expect(historyModal).toHaveCount(0);
     await modal.getByRole('button', { name: 'Published version history' }).click();
     await expect(historyModal.getByRole('button', { name: 'Unstar published version' })).toHaveCount(1);
-    await expect(historyModal.getByRole('textbox', {
-      name: 'Comment for published version published-version-1',
+    await expect(historyModal.getByRole('button', {
+      name: 'Edit comment for published version published-version-1',
       exact: true,
-    })).toHaveValue('Launch baseline');
+    })).toHaveText('Launch baseline');
     await expect(historyModal.getByText('Page 1 of 2')).toBeVisible();
     await expect(historyModal.getByRole('button', { name: 'Previous' })).toBeDisabled();
     await historyModal.getByRole('button', { name: 'Next' }).click();

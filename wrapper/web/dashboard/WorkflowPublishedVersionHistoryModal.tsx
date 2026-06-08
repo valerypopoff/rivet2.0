@@ -1,6 +1,6 @@
 import Button, { LoadingButton } from '@atlaskit/button';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
-import { type FC, type KeyboardEvent, useEffect, useMemo, useState } from 'react';
+import { type FC, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../shared/workflow-types';
 
@@ -53,9 +53,11 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   const [downloadingVersionId, setDownloadingVersionId] = useState<string | null>(null);
   const [starringVersionId, setStarringVersionId] = useState<string | null>(null);
   const [commentingVersionId, setCommentingVersionId] = useState<string | null>(null);
+  const [editingCommentVersionId, setEditingCommentVersionId] = useState<string | null>(null);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const skipCommentSaveVersionIdRef = useRef<string | null>(null);
   const canClose = !downloadingVersionId && !starringVersionId && !commentingVersionId && !restoringVersionId;
   const projectTitle = useMemo(() => project?.name ?? 'Published version history', [project?.name]);
   const totalPages = Math.max(1, Math.ceil(versions.length / PUBLISHED_VERSION_HISTORY_PAGE_SIZE));
@@ -74,6 +76,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
       setDownloadingVersionId(null);
       setStarringVersionId(null);
       setCommentingVersionId(null);
+      setEditingCommentVersionId(null);
       setCommentDrafts({});
       setRestoringVersionId(null);
       setPage(1);
@@ -83,6 +86,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setEditingCommentVersionId(null);
     void fetchWorkflowPublishedVersions(project.relativePath)
       .then((response) => {
         if (!cancelled) {
@@ -124,6 +128,21 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
 
   const getCommentDraft = (version: WorkflowPublishedVersionSummary) => commentDrafts[version.id] ?? version.comment;
 
+  const canEditComment = !downloadingVersionId && !starringVersionId && !commentingVersionId && !restoringVersionId;
+
+  const handleStartCommentEdit = (version: WorkflowPublishedVersionSummary) => {
+    if (!canEditComment) {
+      return;
+    }
+
+    skipCommentSaveVersionIdRef.current = null;
+    setCommentDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [version.id]: version.comment,
+    }));
+    setEditingCommentVersionId(version.id);
+  };
+
   const handleCommentDraftChange = (versionId: string, comment: string) => {
     setCommentDrafts((currentDrafts) => ({
       ...currentDrafts,
@@ -132,12 +151,19 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   };
 
   const handleSaveComment = async (version: WorkflowPublishedVersionSummary) => {
+    if (skipCommentSaveVersionIdRef.current === version.id) {
+      skipCommentSaveVersionIdRef.current = null;
+      setEditingCommentVersionId((currentId) => currentId === version.id ? null : currentId);
+      return;
+    }
+
     if (!project || downloadingVersionId || starringVersionId || commentingVersionId || restoringVersionId) {
       return;
     }
 
     const draft = getCommentDraft(version);
     if (draft === version.comment) {
+      setEditingCommentVersionId((currentId) => currentId === version.id ? null : currentId);
       return;
     }
 
@@ -145,11 +171,13 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
     try {
       const response = await setWorkflowPublishedVersionComment(project.relativePath, version.id, draft);
       replaceVersion(response.version);
+      setEditingCommentVersionId((currentId) => currentId === version.id ? null : currentId);
     } catch (err: any) {
       setCommentDrafts((currentDrafts) => ({
         ...currentDrafts,
         [version.id]: version.comment,
       }));
+      setEditingCommentVersionId((currentId) => currentId === version.id ? null : currentId);
       toast.error(err.message || 'Failed to update published version comment');
     } finally {
       setCommentingVersionId((currentId) => currentId === version.id ? null : currentId);
@@ -168,10 +196,12 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
 
     if (event.key === 'Escape') {
       event.preventDefault();
+      skipCommentSaveVersionIdRef.current = version.id;
       setCommentDrafts((currentDrafts) => ({
         ...currentDrafts,
         [version.id]: version.comment,
       }));
+      setEditingCommentVersionId((currentId) => currentId === version.id ? null : currentId);
       event.currentTarget.blur();
     }
   };
@@ -253,6 +283,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
         ...currentDrafts,
         [response.version.id]: response.version.comment,
       }));
+      setEditingCommentVersionId(null);
       setPage(1);
       await Promise.resolve(onRestored(response)).catch((refreshError: any) => {
         toast.error(refreshError.message || 'Restored published version, but failed to refresh the project tree');
@@ -321,18 +352,42 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
                             <div className="published-version-history-endpoint" title={version.endpointName}>
                               {version.endpointName}
                             </div>
-                            <input
-                              type="text"
-                              className="published-version-history-comment-input"
-                              value={getCommentDraft(version)}
-                              placeholder="Add comment"
-                              maxLength={WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH}
-                              disabled={downloadingVersionId != null || starringVersionId != null || commentingVersionId != null || restoringVersionId != null}
-                              aria-label={`Comment for published version ${version.id}`}
-                              onChange={(event) => handleCommentDraftChange(version.id, event.currentTarget.value)}
-                              onBlur={() => void handleSaveComment(version)}
-                              onKeyDown={(event) => handleCommentKeyDown(event, version)}
-                            />
+                            {editingCommentVersionId === version.id ? (
+                              <input
+                                type="text"
+                                className="published-version-history-comment-input"
+                                value={getCommentDraft(version)}
+                                placeholder="Add comment"
+                                maxLength={WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH}
+                                disabled={downloadingVersionId != null || starringVersionId != null || commentingVersionId != null || restoringVersionId != null}
+                                aria-label={`Comment for published version ${version.id}`}
+                                autoFocus
+                                onChange={(event) => handleCommentDraftChange(version.id, event.currentTarget.value)}
+                                onBlur={() => void handleSaveComment(version)}
+                                onKeyDown={(event) => handleCommentKeyDown(event, version)}
+                              />
+                            ) : version.comment ? (
+                              <button
+                                type="button"
+                                className="published-version-history-comment-text"
+                                onClick={() => handleStartCommentEdit(version)}
+                                disabled={!canEditComment}
+                                aria-label={`Edit comment for published version ${version.id}`}
+                                title="Edit comment"
+                              >
+                                {version.comment}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="published-version-history-comment-link"
+                                onClick={() => handleStartCommentEdit(version)}
+                                disabled={!canEditComment}
+                                aria-label={`Add comment for published version ${version.id}`}
+                              >
+                                Comment
+                              </button>
+                            )}
                           </div>
                           <div className="published-version-history-actions">
                             <button
