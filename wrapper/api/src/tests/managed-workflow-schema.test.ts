@@ -81,6 +81,8 @@ test('managed schema keeps published version history physically tied to workflow
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ALTER TABLE workflow_revisions ADD COLUMN IF NOT EXISTS stats_total_node_count INTEGER NULL;'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('is_starred BOOLEAN NOT NULL DEFAULT FALSE'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ALTER TABLE workflow_published_versions ADD COLUMN IF NOT EXISTS is_starred BOOLEAN NOT NULL DEFAULT FALSE;'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes("comment TEXT NOT NULL DEFAULT ''"));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes("ALTER TABLE workflow_published_versions ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT '';"));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('workflow_published_versions_workflow_id_published_at_idx'));

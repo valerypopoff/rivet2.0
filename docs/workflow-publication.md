@@ -20,6 +20,7 @@ In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In s
   - in `filesystem` mode: `.published/<versionId>.rivet-project` plus `.published/<versionId>.json` metadata and an optional `.rivet-data` sidecar
   - in `managed` mode: a `workflow_published_versions` row pointing at a durable `workflow_revisions` project blob in object storage
   - version stars are stored on the version metadata/row, so starred history survives browser reloads and server restarts
+  - version comments are stored on the same version metadata/row, so operator labels survive browser reloads and server restarts
 - **Dataset sidecar** (`*.rivet-data`): optional data associated with a project, published alongside it
 - **Execution recording artifacts**
   - in `filesystem` mode: replayable bundles under `<RIVET_WORKFLOW_RECORDINGS_ROOT>/<workflowId>/<recordingId>/`
@@ -250,6 +251,7 @@ Projects can now also be downloaded from the workflow tree's project-row context
 - `POST /api/workflows/projects/download`
 - `GET /api/workflows/projects/published-versions?relativePath=<project>`
 - `PATCH /api/workflows/projects/published-versions/star`
+- `PATCH /api/workflows/projects/published-versions/comment`
 - `POST /api/workflows/projects/published-versions/download`
 - `POST /api/workflows/projects/published-versions/preview`
 - `POST /api/workflows/projects/published-versions/restore`
@@ -293,13 +295,13 @@ Filename format is:
 
 ## Published version history
 
-Project Settings exposes a `Published version history` link. The modal lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, paginates the list after 10 versions with the same paging controls used by Run recordings, grows vertically before introducing list scrolling, and lets the user download, preview, or restore any stored project snapshot.
+Project Settings exposes a `Published version history` link. The modal lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, add a short comment label for each version, paginates the list after 10 versions with the same paging controls used by Run recordings, grows vertically before introducing list scrolling, and lets the user download, preview, or restore any stored project snapshot.
 
-Stars are persisted with the published version record:
+Stars and comments are persisted with the published version record:
 
-- in `filesystem` mode, `isStarred` is stored in `.published/<versionId>.json`
-- in `managed` mode, `is_starred` is stored on `workflow_published_versions`
-- the dashboard updates the star optimistically but replaces the row with the API response, so the API remains the durable source of truth
+- in `filesystem` mode, `isStarred` and `comment` are stored in `.published/<versionId>.json`
+- in `managed` mode, `is_starred` and `comment` are stored on `workflow_published_versions`
+- the dashboard updates stars optimistically and saves comments on blur/Enter, then replaces the row with the API response, so the API remains the durable source of truth
 
 In filesystem mode, the metadata filename is the authoritative version ID. If `.published/<versionId>.json` contains a mismatched internal `id`, the API ignores that metadata and falls back to the matching snapshot when it can, so a stale or hand-edited JSON file cannot point history actions at a different snapshot.
 

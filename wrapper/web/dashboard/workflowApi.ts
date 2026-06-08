@@ -11,6 +11,7 @@ import type {
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
   WorkflowPublishedVersionRestoreResponse,
+  WorkflowPublishedVersionCommentResponse,
   WorkflowPublishedVersionStarResponse,
   WorkflowPublishedVersionPreviewResponse,
   WorkflowPublishedVersionsResponse,
@@ -303,6 +304,20 @@ export async function setWorkflowPublishedVersionStar(
   });
 
   return workflowJsonResponse<WorkflowPublishedVersionStarResponse>(response);
+}
+
+export async function setWorkflowPublishedVersionComment(
+  relativePath: string,
+  versionId: string,
+  comment: string,
+): Promise<WorkflowPublishedVersionCommentResponse> {
+  const response = await fetch(`${API}/workflows/projects/published-versions/comment`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relativePath, versionId, comment }),
+  });
+
+  return workflowJsonResponse<WorkflowPublishedVersionCommentResponse>(response);
 }
 
 export async function restoreWorkflowPublishedVersion(

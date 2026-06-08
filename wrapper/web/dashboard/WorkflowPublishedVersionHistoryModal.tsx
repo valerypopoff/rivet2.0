@@ -1,7 +1,8 @@
 import Button, { LoadingButton } from '@atlaskit/button';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type FC, type KeyboardEvent, useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-toastify';
+import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../shared/workflow-types';
 
 import type {
   WorkflowProjectItem,
@@ -12,6 +13,7 @@ import {
   downloadWorkflowPublishedVersion,
   fetchWorkflowPublishedVersions,
   restoreWorkflowPublishedVersion,
+  setWorkflowPublishedVersionComment,
   setWorkflowPublishedVersionStar,
 } from './workflowApi';
 
@@ -34,6 +36,10 @@ function formatPublishedVersionDate(value: string): string {
   return date.toLocaleString();
 }
 
+function createCommentDrafts(versions: WorkflowPublishedVersionSummary[]): Record<string, string> {
+  return Object.fromEntries(versions.map((version) => [version.id, version.comment]));
+}
+
 export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHistoryModalProps> = ({
   project,
   isOpen,
@@ -46,9 +52,11 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   const [error, setError] = useState<string | null>(null);
   const [downloadingVersionId, setDownloadingVersionId] = useState<string | null>(null);
   const [starringVersionId, setStarringVersionId] = useState<string | null>(null);
+  const [commentingVersionId, setCommentingVersionId] = useState<string | null>(null);
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const canClose = !downloadingVersionId && !starringVersionId && !restoringVersionId;
+  const canClose = !downloadingVersionId && !starringVersionId && !commentingVersionId && !restoringVersionId;
   const projectTitle = useMemo(() => project?.name ?? 'Published version history', [project?.name]);
   const totalPages = Math.max(1, Math.ceil(versions.length / PUBLISHED_VERSION_HISTORY_PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -65,6 +73,8 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
       setLoading(false);
       setDownloadingVersionId(null);
       setStarringVersionId(null);
+      setCommentingVersionId(null);
+      setCommentDrafts({});
       setRestoringVersionId(null);
       setPage(1);
       return;
@@ -77,6 +87,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
       .then((response) => {
         if (!cancelled) {
           setVersions(response.versions);
+          setCommentDrafts(createCommentDrafts(response.versions));
           setPage(1);
         }
       })
@@ -102,8 +113,71 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
     }
   }, [page, totalPages]);
 
+  const replaceVersion = (nextVersion: WorkflowPublishedVersionSummary) => {
+    setVersions((currentVersions) => currentVersions.map((currentVersion) =>
+      currentVersion.id === nextVersion.id ? nextVersion : currentVersion));
+    setCommentDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [nextVersion.id]: nextVersion.comment,
+    }));
+  };
+
+  const getCommentDraft = (version: WorkflowPublishedVersionSummary) => commentDrafts[version.id] ?? version.comment;
+
+  const handleCommentDraftChange = (versionId: string, comment: string) => {
+    setCommentDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [versionId]: comment,
+    }));
+  };
+
+  const handleSaveComment = async (version: WorkflowPublishedVersionSummary) => {
+    if (!project || downloadingVersionId || starringVersionId || commentingVersionId || restoringVersionId) {
+      return;
+    }
+
+    const draft = getCommentDraft(version);
+    if (draft === version.comment) {
+      return;
+    }
+
+    setCommentingVersionId(version.id);
+    try {
+      const response = await setWorkflowPublishedVersionComment(project.relativePath, version.id, draft);
+      replaceVersion(response.version);
+    } catch (err: any) {
+      setCommentDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [version.id]: version.comment,
+      }));
+      toast.error(err.message || 'Failed to update published version comment');
+    } finally {
+      setCommentingVersionId((currentId) => currentId === version.id ? null : currentId);
+    }
+  };
+
+  const handleCommentKeyDown = (
+    event: KeyboardEvent<HTMLInputElement>,
+    version: WorkflowPublishedVersionSummary,
+  ) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.currentTarget.blur();
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setCommentDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [version.id]: version.comment,
+      }));
+      event.currentTarget.blur();
+    }
+  };
+
   const handleDownloadVersion = async (version: WorkflowPublishedVersionSummary) => {
-    if (!project || downloadingVersionId || starringVersionId || restoringVersionId) {
+    if (!project || downloadingVersionId || starringVersionId || commentingVersionId || restoringVersionId) {
       return;
     }
 
@@ -118,7 +192,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   };
 
   const handleToggleStar = async (version: WorkflowPublishedVersionSummary) => {
-    if (!project || downloadingVersionId || starringVersionId || restoringVersionId) {
+    if (!project || downloadingVersionId || starringVersionId || commentingVersionId || restoringVersionId) {
       return;
     }
 
@@ -131,8 +205,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
 
     try {
       const response = await setWorkflowPublishedVersionStar(project.relativePath, version.id, nextIsStarred);
-      setVersions((currentVersions) => currentVersions.map((currentVersion) =>
-        currentVersion.id === response.version.id ? response.version : currentVersion));
+      replaceVersion(response.version);
     } catch (err: any) {
       setVersions((currentVersions) => currentVersions.map((currentVersion) =>
         currentVersion.id === version.id
@@ -145,7 +218,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   };
 
   const handlePreviewVersion = (version: WorkflowPublishedVersionSummary) => {
-    if (!project || downloadingVersionId || starringVersionId || restoringVersionId) {
+    if (!project || downloadingVersionId || starringVersionId || commentingVersionId || restoringVersionId) {
       return;
     }
 
@@ -153,7 +226,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   };
 
   const handleRestoreVersion = async (version: WorkflowPublishedVersionSummary) => {
-    if (!project || downloadingVersionId || starringVersionId || restoringVersionId) {
+    if (!project || downloadingVersionId || starringVersionId || commentingVersionId || restoringVersionId) {
       return;
     }
 
@@ -176,6 +249,10 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
             isCurrent: false,
           })),
       ]);
+      setCommentDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [response.version.id]: response.version.comment,
+      }));
       setPage(1);
       await Promise.resolve(onRestored(response)).catch((refreshError: any) => {
         toast.error(refreshError.message || 'Restored published version, but failed to refresh the project tree');
@@ -244,6 +321,18 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
                             <div className="published-version-history-endpoint" title={version.endpointName}>
                               {version.endpointName}
                             </div>
+                            <input
+                              type="text"
+                              className="published-version-history-comment-input"
+                              value={getCommentDraft(version)}
+                              placeholder="Add comment"
+                              maxLength={WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH}
+                              disabled={downloadingVersionId != null || starringVersionId != null || commentingVersionId != null || restoringVersionId != null}
+                              aria-label={`Comment for published version ${version.id}`}
+                              onChange={(event) => handleCommentDraftChange(version.id, event.currentTarget.value)}
+                              onBlur={() => void handleSaveComment(version)}
+                              onKeyDown={(event) => handleCommentKeyDown(event, version)}
+                            />
                           </div>
                           <div className="published-version-history-actions">
                             <button
@@ -253,7 +342,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
                                 version.isStarred ? 'starred' : '',
                               ].filter(Boolean).join(' ')}
                               onClick={() => void handleToggleStar(version)}
-                              disabled={downloadingVersionId != null || starringVersionId != null || restoringVersionId != null}
+                              disabled={downloadingVersionId != null || starringVersionId != null || commentingVersionId != null || restoringVersionId != null}
                               aria-label={`${version.isStarred ? 'Unstar' : 'Star'} published version`}
                               aria-pressed={version.isStarred}
                               title={version.isStarred ? 'Unstar version' : 'Star version'}
@@ -272,7 +361,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
                               appearance="subtle"
                               className="project-settings-secondary-button button-size-m published-version-history-preview-button"
                               onClick={() => handlePreviewVersion(version)}
-                              isDisabled={downloadingVersionId != null || starringVersionId != null || restoringVersionId != null}
+                              isDisabled={downloadingVersionId != null || starringVersionId != null || commentingVersionId != null || restoringVersionId != null}
                             >
                               Preview
                             </Button>
@@ -281,7 +370,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
                               className="project-settings-secondary-button button-size-m published-version-history-restore-button"
                               onClick={() => void handleRestoreVersion(version)}
                               isLoading={restoringVersionId === version.id}
-                              isDisabled={downloadingVersionId != null || starringVersionId != null || (restoringVersionId != null && restoringVersionId !== version.id)}
+                              isDisabled={downloadingVersionId != null || starringVersionId != null || commentingVersionId != null || (restoringVersionId != null && restoringVersionId !== version.id)}
                             >
                               Restore
                             </LoadingButton>
@@ -290,7 +379,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
                               className="project-settings-secondary-button button-size-m published-version-history-download-button"
                               onClick={() => void handleDownloadVersion(version)}
                               isLoading={downloadingVersionId === version.id}
-                              isDisabled={starringVersionId != null || restoringVersionId != null || (downloadingVersionId != null && downloadingVersionId !== version.id)}
+                              isDisabled={starringVersionId != null || commentingVersionId != null || restoringVersionId != null || (downloadingVersionId != null && downloadingVersionId !== version.id)}
                             >
                               Download
                             </LoadingButton>

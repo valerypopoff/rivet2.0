@@ -8,7 +8,7 @@ import {
 } from './blob-store.js';
 import { withManagedDbRetry, type ManagedWorkflowDbClient } from './db.js';
 import { RECORDING_COLUMNS } from './mappers.js';
-import { normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
+import { resolveManagedHostedProjectSaveTarget } from './save-target.js';
 import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
 import type {
   ManagedRevisionContents,
@@ -19,31 +19,7 @@ import type {
   TransactionHooks,
 } from './types.js';
 
-function haveMatchingManagedRevisionContents(left: ManagedRevisionContents, right: ManagedRevisionContents): boolean {
-  return left.contents === right.contents && left.datasetsContents === right.datasetsContents;
-}
-
-export function resolveManagedHostedProjectSaveTarget(options: {
-  nextContents: ManagedRevisionContents;
-  currentDraftContents: ManagedRevisionContents;
-  publishedContents: ManagedRevisionContents | null;
-  draftEndpointName: string;
-  publishedEndpointName: string;
-}): 'current-draft' | 'published-revision' | 'create-revision' {
-  const matchesPublishedRevision = options.publishedContents != null &&
-    normalizeWorkflowEndpointLookupName(options.draftEndpointName) === normalizeWorkflowEndpointLookupName(options.publishedEndpointName) &&
-    haveMatchingManagedRevisionContents(options.nextContents, options.publishedContents);
-
-  if (matchesPublishedRevision) {
-    return 'published-revision';
-  }
-
-  if (haveMatchingManagedRevisionContents(options.nextContents, options.currentDraftContents)) {
-    return 'current-draft';
-  }
-
-  return 'create-revision';
-}
+export { resolveManagedHostedProjectSaveTarget };
 
 export function createManagedWorkflowRevisionFactory(options: {
   blobStore: ManagedWorkflowBlobStore;

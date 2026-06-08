@@ -45,6 +45,7 @@ export type PublishedVersionRow = {
   endpoint_name: string;
   published_at: TimestampValue;
   is_starred: boolean;
+  comment: string;
 };
 
 export type CurrentDraftRevisionRow = {

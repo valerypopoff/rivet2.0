@@ -1386,6 +1386,38 @@
   white-space: nowrap;
 }
 
+.published-version-history-comment-input {
+  appearance: none;
+  width: min(100%, 360px);
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.14);
+  color: var(--grey-lightest);
+  font: inherit;
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.3;
+  padding: 4px 8px;
+  transition: border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
+}
+
+.published-version-history-comment-input::placeholder {
+  color: var(--grey-light);
+}
+
+.published-version-history-comment-input:hover:not(:disabled),
+.published-version-history-comment-input:focus {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.2);
+  outline: none;
+}
+
+.published-version-history-comment-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .published-version-history-actions {
   flex: 0 0 auto;
   display: flex;

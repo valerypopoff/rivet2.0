@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool, PoolClient } from 'pg';
 
-import { resolveManagedHostedProjectSaveTarget } from '../routes/workflows/managed/backend.js';
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
 import type { ManagedWorkflowDbClient } from '../routes/workflows/managed/db.js';
 import * as managedMappers from '../routes/workflows/managed/mappers.js';
 import { createManagedWorkflowPublicationService } from '../routes/workflows/managed/publication.js';
+import { resolveManagedHostedProjectSaveTarget } from '../routes/workflows/managed/save-target.js';
 import type {
   PublishedVersionRow,
   RevisionRow,
@@ -66,6 +66,7 @@ function createPublishedVersion(overrides: Partial<PublishedVersionRow> = {}): P
     endpoint_name: 'published-endpoint',
     published_at: now,
     is_starred: false,
+    comment: '',
     ...overrides,
   };
 }
@@ -127,17 +128,28 @@ function createPublicationHarness(options: {
 
     if (normalized.startsWith('UPDATE workflow_published_versions')) {
       const version = publishedVersions.get(String(params[1]));
-      return version ? { ...version, is_starred: params[2] === true } as T : null;
+      if (!version) {
+        return null;
+      }
+
+      return {
+        ...version,
+        ...(normalized.includes('SET is_starred') ? { is_starred: params[2] === true } : {}),
+        ...(normalized.includes('SET comment') ? { comment: String(params[2]) } : {}),
+      } as T;
     }
 
     if (normalized.startsWith('INSERT INTO workflow_published_versions')) {
+      const explicitIsStarredInsert = normalized.includes('(version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred)');
+      const explicitCommentInsert = normalized.includes('(version_id, workflow_id, revision_id, endpoint_name, published_at, comment)');
       latestInsertedPublishedVersionId = String(params[0]);
       return createPublishedVersion({
         version_id: String(params[0]),
         workflow_id: String(params[1]),
         revision_id: String(params[2]),
         endpoint_name: String(params[3]),
-        is_starred: params[5] === true,
+        is_starred: explicitIsStarredInsert && params[5] === true,
+        comment: explicitCommentInsert ? String(params[5] ?? '') : '',
       }) as T;
     }
 
@@ -419,6 +431,38 @@ test('managed published version stars update durable history rows', async () => 
   assert.deepEqual(updateCall.params, ['workflow-a', 'version-a', true]);
 });
 
+test('managed published version comments update durable history rows', async () => {
+  const { service, queryOneCalls } = createPublicationHarness({
+    workflow: createWorkflow({
+      published_revision_id: 'published-revision',
+      published_version_id: 'version-a',
+    }),
+    publishedVersions: [
+      createPublishedVersion({
+        version_id: 'version-a',
+        revision_id: 'published-revision',
+        comment: '',
+      }),
+    ],
+  });
+
+  const version = await service.setWorkflowPublishedVersionComment(
+    'Main.rivet-project',
+    'version-a',
+    '  release candidate  ',
+  );
+
+  assert.equal(version.id, 'version-a');
+  assert.equal(version.isCurrent, true);
+  assert.equal(version.comment, 'release candidate');
+
+  const updateCall = queryOneCalls.find((query) =>
+    normalizeSql(query.sql).startsWith('UPDATE workflow_published_versions') &&
+    normalizeSql(query.sql).includes('SET comment'));
+  assert.ok(updateCall);
+  assert.deepEqual(updateCall.params, ['workflow-a', 'version-a', 'release candidate']);
+});
+
 test('managed legacy current version stars are persisted by creating a history row', async () => {
   const legacyPublishedAt = '2026-05-20T09:15:00.000Z';
   const { service, queryOneCalls } = createPublicationHarness({
@@ -449,6 +493,44 @@ test('managed legacy current version stars are persisted by creating a history r
     'legacy-endpoint',
     legacyPublishedAt,
     true,
+  ]);
+});
+
+test('managed legacy current version comments are persisted by creating a history row', async () => {
+  const legacyPublishedAt = '2026-05-20T09:45:00.000Z';
+  const { service, queryOneCalls } = createPublicationHarness({
+    workflow: createWorkflow({
+      published_revision_id: 'legacy-published-revision',
+      published_version_id: null,
+      published_endpoint_name: 'legacy-endpoint',
+      last_published_at: legacyPublishedAt,
+    }),
+    revisions: [
+      createRevision({ revision_id: 'legacy-published-revision' }),
+    ],
+  });
+
+  const version = await service.setWorkflowPublishedVersionComment(
+    'Main.rivet-project',
+    'legacy-published-revision',
+    'legacy winner',
+  );
+
+  assert.equal(version.id, 'legacy-published-revision');
+  assert.equal(version.isCurrent, true);
+  assert.equal(version.comment, 'legacy winner');
+
+  const insertCall = queryOneCalls.find((query) =>
+    normalizeSql(query.sql).startsWith('INSERT INTO workflow_published_versions') &&
+    normalizeSql(query.sql).includes('comment'));
+  assert.ok(insertCall);
+  assert.deepEqual(insertCall.params, [
+    'legacy-published-revision',
+    'workflow-a',
+    'legacy-published-revision',
+    'legacy-endpoint',
+    legacyPublishedAt,
+    'legacy winner',
   ]);
 });
 

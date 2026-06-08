@@ -78,7 +78,7 @@ The important operational detail is that these tiers scale independently. A new 
 - `Download` streams a saved `.rivet-project` file to the browser. It ignores unsaved editor changes and, for `unpublished_changes`, lets the user choose between the saved live file and the published snapshot. The download flow also leaves selection, open tabs, and folder expansion unchanged.
 - `Delete project` in the project context menu never deletes immediately. For unpublished projects it opens the existing Project Settings modal, where the user must click `Delete project` again. For published or `unpublished_changes` projects it shows a toast telling the user to unpublish first.
 - `Upload project` opens a browser file picker, uploads a chosen `.rivet-project` into the target folder, refreshes the tree, and leaves selection, open tabs, and folder expansion unchanged.
-- Project Settings shows `Last published at ...` next to the `Published` or `Unpublished changes` status badge. That timestamp comes from stored publication metadata, with a fallback for older already-published projects that predate the explicit field. It also links to a published-version-history modal that lists every successful publish for the project and stars, downloads, previews, or restores the selected stored snapshot.
+- Project Settings shows `Last published at ...` next to the `Published` or `Unpublished changes` status badge. That timestamp comes from stored publication metadata, with a fallback for older already-published projects that predate the explicit field. It also links to a published-version-history modal that lists every successful publish for the project and lets users star, add comment labels, download, preview, or restore the selected stored snapshot.
 - `Run recordings` is likewise controller-driven: `useRunRecordingsController.ts` owns workflow loading, status/input filtering, run paging, retained modal state, and delete flow, while `RecordingWorkflowSelect.tsx` and `RecordingRunsTable.tsx` render the focused UI slices. Opening a recording hides the modal without flushing that controller state; the explicit modal close button is the reset boundary.
 - `Runtime libraries` keeps `useRuntimeLibrariesModalState.ts` as the public controller. SSE framing, log merging, and job status patching live in `runtimeLibrariesJobStream.ts`, while the modal panels stay largely presentational.
 - in `filesystem` mode, that modal treats install/remove logs and terminal status as session-local UI state: once the modal is closed after a finished job, reopening it falls back to the installed libraries list unless another job is still actively running. `managed` mode keeps its persisted job-state behavior.
@@ -149,7 +149,7 @@ Storage mode decides which of those paths are authoritative:
 
 - `RIVET_STORAGE_MODE=filesystem`
   - workflows are authoritative under `RIVET_WORKFLOWS_ROOT`
-  - published version history and its durable star state live under the workflow root's hidden `.published/` directory
+  - published version history and its durable star/comment state live under the workflow root's hidden `.published/` directory
   - runtime libraries are authoritative under `RIVET_RUNTIME_LIBRARIES_ROOT`
   - published/latest workflow execution now keeps a local startup-warmed endpoint index plus a lazy materialization cache on the API process
   - the cache facade delegates uncached resolution/materialization to a dedicated filesystem execution source, so degraded requests can bypass the cache without inventing separate publication rules
@@ -159,7 +159,7 @@ Storage mode decides which of those paths are authoritative:
   - full unpublish closes both public route families even though the saved draft `endpointName` remains stored for later republish convenience
 - `RIVET_STORAGE_MODE=managed`
   - workflow metadata lives in Postgres and workflow blobs live in object storage
-  - published version history and its durable star state live in Postgres `workflow_published_versions` and points at durable workflow revision blobs in object storage
+  - published version history and its durable star/comment state live in Postgres `workflow_published_versions` and points at durable workflow revision blobs in object storage
   - workflow recording metadata lives in Postgres `workflow_recordings`
   - workflow recording artifacts live in object storage
   - API replicas may keep local warm execution caches for endpoint pointers and immutable revision payloads; those caches are derived accelerators, not a new source of truth
