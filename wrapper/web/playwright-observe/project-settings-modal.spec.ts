@@ -33,7 +33,7 @@ function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
 
 function createProjectSettingsFixture(name: string): WorkflowProjectItem {
   return {
-    id: 'project-settings-fixture',
+    id: `project-settings-fixture-${name}`,
     name,
     fileName: `${name}.rivet-project`,
     relativePath: `${name}.rivet-project`,
@@ -77,9 +77,11 @@ function createPublishedVersionPreviewProject(project: WorkflowProjectItem, vers
 
 async function installProjectSettingsRoutes(
   page: Page,
-  project: WorkflowProjectItem,
+  projectOrProjects: WorkflowProjectItem | WorkflowProjectItem[],
   trackers: ProjectSettingsRouteTrackers,
 ): Promise<void> {
+  const projects = Array.isArray(projectOrProjects) ? projectOrProjects : [projectOrProjects];
+  const project = projects[0]!;
   const publishedVersions: WorkflowPublishedVersionSummary[] = Array.from({ length: 12 }, (_, index) => ({
     id: `published-version-${index + 1}`,
     projectId: project.id,
@@ -108,7 +110,7 @@ async function installProjectSettingsRoutes(
     const tree: WorkflowTreeResponse = {
       root: '/managed/workflows',
       folders: [],
-      projects: [project],
+      projects,
     };
 
     await route.fulfill({
@@ -125,17 +127,19 @@ async function installProjectSettingsRoutes(
     }
 
     const requestBody = route.request().postDataJSON() as {
+      relativePath?: string;
       settings?: { endpointName?: string };
     };
-    project.settings = {
+    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    targetProject.settings = {
       status: 'published',
-      endpointName: requestBody.settings?.endpointName ?? project.settings.endpointName,
+      endpointName: requestBody.settings?.endpointName ?? targetProject.settings.endpointName,
       lastPublishedAt: '2026-04-08T10:30:00.000Z',
     };
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ project }),
+      body: JSON.stringify({ project: targetProject }),
     });
   });
 
@@ -145,15 +149,19 @@ async function installProjectSettingsRoutes(
       return;
     }
 
-    project.settings = {
+    const requestBody = route.request().postDataJSON() as {
+      relativePath?: string;
+    };
+    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    targetProject.settings = {
       status: 'unpublished',
-      endpointName: '',
-      lastPublishedAt: null,
+      endpointName: targetProject.settings.endpointName,
+      lastPublishedAt: targetProject.settings.lastPublishedAt,
     };
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ project }),
+      body: JSON.stringify({ project: targetProject }),
     });
   });
 
@@ -390,6 +398,35 @@ test.describe('Project settings modal', () => {
     await modal.getByRole('button', { name: 'Unpublish' }).click();
     await expect(modal.locator('.project-status-badge.unpublished')).toBeVisible({ timeout: 30_000 });
     await expect(modal.getByRole('button', { name: 'Delete project' })).toBeVisible();
+  });
+
+  test('publish validation ignores endpoints saved on fully unpublished projects', async ({ page }) => {
+    const endpointName = 'codex-reusable-unpublished-endpoint';
+    const previousProject = createProjectSettingsFixture('codex-previous-endpoint-owner');
+    previousProject.settings = {
+      status: 'published',
+      endpointName,
+      lastPublishedAt: '2026-04-08T10:30:00.000Z',
+    };
+    const nextProject = createProjectSettingsFixture('codex-next-endpoint-owner');
+    await installProjectSettingsRoutes(page, [previousProject, nextProject], createProjectSettingsRouteTrackers());
+
+    const { modal: previousModal } = await openProjectSettingsModal(page, previousProject);
+    page.once('dialog', (dialog) => dialog.accept());
+    await previousModal.getByRole('button', { name: 'Unpublish' }).click();
+    await expect(previousModal.locator('.project-status-badge.unpublished')).toBeVisible({ timeout: 30_000 });
+    expect(previousProject.settings.endpointName).toBe(endpointName);
+    await previousModal.getByRole('button', { name: 'Close project settings' }).click();
+
+    const { modal: nextModal } = await openProjectSettingsModal(page, nextProject);
+    await nextModal.getByRole('button', { name: 'Publish...' }).click();
+    const endpointInput = nextModal.locator('#workflow-project-endpoint-name');
+    await endpointInput.fill(endpointName);
+    await expect(nextModal.locator('.project-settings-error')).toHaveCount(0);
+    await expect(nextModal.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
+    await nextModal.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(nextModal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
+    await expect(nextModal.locator('.project-settings-endpoint-code')).toContainText(endpointName);
   });
 
   test('published version history paginates, stars, previews, and restores versions', async ({ page }) => {

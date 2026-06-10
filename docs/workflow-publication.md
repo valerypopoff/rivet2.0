@@ -86,6 +86,7 @@ In Project Settings:
 - older already-published projects that predate the explicit `lastPublishedAt` field fall back to the settings-sidecar file timestamp
 - the `Published version history` secondary action sits to the right of the idle publish/unpublish controls and opens the version-history modal for the current project
 - when an unpublished project is in the endpoint-entry publish UI, the history action is hidden and a `Cancel` button hides the publish UI without saving
+- endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
 
 ## Publish flow
 
