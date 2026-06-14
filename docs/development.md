@@ -406,8 +406,8 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - keep `HostedDatasetProvider` pruning old per-project IndexedDB dataset rows before importing a project payload, otherwise datasets removed from a project can reappear from stale browser app storage
 - hosted project context values are editor-owned app state, not `.rivet-project` file contents
   - Rivet stores them under `projectContext__"<projectId>"`, so hosted open/reopen persistence depends on stable `project.metadata.id` values
-  - keep `wrapper/web/overrides/state/savedGraphs.ts` overriding only `clearProjectContextState` so `RivetWorkspaceHost.closeProject()` and `replaceCurrent()` can close tabs without deleting those stored values
-  - actual dashboard workflow deletion should forward the project id returned by `DELETE /api/workflows/projects`, then call `deleteHostedProjectContextState` and `clearHostedDatasetsForProject` from the iframe delete handler so stale editor-owned browser state does not remain even when the tab was already closed
+  - keep `wrapper/web/overrides/state/savedGraphs.ts` exporting the hosted `clearProjectContextState` compatibility helper by delegating normal tab cleanup to upstream `releaseProjectContextState`, so `RivetWorkspaceHost.closeProject()` and `replaceCurrent()` can close tabs without deleting those stored values
+  - actual dashboard workflow deletion should forward the project id returned by `DELETE /api/workflows/projects`, then call `deleteHostedProjectContextState` and `clearHostedDatasetsForProject` from the iframe delete handler so stale editor-owned browser state does not remain even when the tab was already closed; the delete helper removes `projectContext__"<projectId>"` through the shared `project` storage group
 - editor executor transport should prefer Rivet's upstream host/session seam
   - mount the editor through `RivetAppHost`
   - pass the hosted executor websocket through `executor.internalExecutorUrl`
@@ -431,7 +431,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - when fixing tab close/switch behavior, update the wrapper overrides rather than storing full project objects back into `projectsState.openedProjects`
 - wrapper module overrides should stay scoped to upstream app importers
   - `wrapper/web/vite.config.ts` resolves override files only when the importer is under `rivet/packages/app/src`
-  - keep the `savedGraphs` override narrow: it re-exports upstream state, changes only `clearProjectContextState` for normal tab close/reopen, and exposes an explicit delete helper for actual workflow deletion
+  - keep the `savedGraphs` override narrow: it re-exports upstream state, maps the hosted `clearProjectContextState` compatibility helper to upstream `releaseProjectContextState` for normal tab close/reopen, and exposes an explicit storage-removing delete helper for actual workflow deletion
   - keep the `state/settings` override narrow: delegate upstream settings exports and override only hosted executor/debugger defaults plus the wrapper update-check modal atom, so upstream UI settings such as canvas background preferences and custom theme color helpers are not copied into the wrapper
   - do not put wrapper-owned transport overrides back into `wrapper/web/vite-aliases.ts`
   - do not alias `useSaveProject` or `useMenuCommands`; upstream `useWorkspaceTransitions`, `RivetAppHost.onProjectSaved`, and `RivetAppHost.ui.fileMenu.visibleItems` own the save/menu seam, while the wrapper sends `save-project` when focus is outside the iframe and reconciles hosted title metadata after successful saves

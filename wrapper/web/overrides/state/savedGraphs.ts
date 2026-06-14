@@ -1,16 +1,17 @@
 import type { ProjectId } from '@valerypopoff/rivet2-core';
-import {
-  clearProjectContextState as deleteStoredProjectContextState,
-  projectContextState,
-} from '../../../../rivet/packages/app/src/state/savedGraphs';
+import { releaseProjectContextState } from '../../../../rivet/packages/app/src/state/savedGraphs';
+import { createHybridStorage } from '../../../../rivet/packages/app/src/state/storage';
 
 export * from '../../../../rivet/packages/app/src/state/savedGraphs';
 
+const { storage: projectStorage } = createHybridStorage('project');
+
 export function clearProjectContextState(projectId: ProjectId): void {
   // Hosted tab close is not project deletion; editor-owned context must survive reopen.
-  projectContextState.remove(projectId);
+  releaseProjectContextState(projectId);
 }
 
 export function deleteHostedProjectContextState(projectId: ProjectId): void {
-  deleteStoredProjectContextState(projectId);
+  clearProjectContextState(projectId);
+  projectStorage.removeItem(`projectContext__"${projectId}"`);
 }
