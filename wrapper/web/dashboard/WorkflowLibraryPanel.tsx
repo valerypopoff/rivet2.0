@@ -18,6 +18,7 @@ interface WorkflowLibraryPanelProps {
     versionId: string,
     options?: { replaceCurrent?: boolean },
   ) => void;
+  onCompareOpenProjectWith: (path: string, referencePath?: string) => void;
   onSaveProject: () => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => void;
@@ -48,6 +49,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onRefreshOpenProjectFromDisk,
   onOpenRecording,
   onOpenPublishedVersionPreview,
+  onCompareOpenProjectWith,
   onSaveProject,
   onDeleteProject,
   onWorkflowPathsMoved,
@@ -64,6 +66,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onRefreshOpenProjectFromDisk,
     onOpenRecording,
     onOpenPublishedVersionPreview,
+    onCompareOpenProjectWith,
     onDeleteProject,
     onWorkflowPathsMoved,
     onActiveWorkflowProjectPathChange,

@@ -140,7 +140,7 @@ The workflow API tests are now split by behavior domain so a future change has a
 
 Publishing a workflow used to behave like a single mutable pointer: publishing overwrote the current stored snapshot, and unpublishing removed that snapshot. That made it impossible to inspect or recover earlier published states after repeated publishes.
 
-The dashboard now treats each successful publish as a durable version-history entry. Project Settings exposes that history so an operator can download, preview, star, or restore notable published versions without reconnecting preview snapshots to the editable source project.
+The dashboard now treats each successful publish as a durable version-history entry. Project Settings exposes that history so an operator can download, preview, star, label with comments, or restore notable published versions without reconnecting preview snapshots to the editable source project.
 
 ### Ownership
 
@@ -152,7 +152,7 @@ The dashboard now treats each successful publish as a durable version-history en
 ### Important Details
 
 - Every publish creates a new version id. The current published endpoint points at the newest version, while older versions stay in history.
-- Starred state is durable server state, not browser state.
+- Starred state and short operator comments are durable server state, not browser state.
 - Restore creates a new current history entry from the selected version instead of moving the current pointer back to an existing row.
 - Restoring also replaces the saved live project/dataset with the selected snapshot so the project status remains coherent after restore.
 - After restore, the dashboard sends `refresh-open-project-from-disk` for the restored path. If that project is active, the editor replaces the current tab from storage with `reloadFromDisk`; if it is open in a hidden tab, the editor clears that hidden tab's cached snapshot/session so switching back reloads from storage without stealing focus.

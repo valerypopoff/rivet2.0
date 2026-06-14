@@ -50,6 +50,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     return allProjects.find(
       (project) =>
         project.absolutePath !== activeProject.absolutePath &&
+        project.settings.status !== 'unpublished' &&
         project.settings.endpointName.trim().toLowerCase() === endpointLookupName,
     ) ?? null;
   }, [activeProject.absolutePath, allProjects, endpointLookupName]);

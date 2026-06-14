@@ -6,6 +6,7 @@ import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest } from '../../utils/httpError.js';
 import { createResponseTimingMiddleware } from '../../utils/responseTiming.js';
 import { WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS } from '../../../../shared/workflow-recording-types.js';
+import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../shared/workflow-types.js';
 import {
   PROJECT_EXTENSION,
 } from './fs-helpers.js';
@@ -31,6 +32,7 @@ import {
   readWorkflowRecordingArtifactWithBackend,
   renameWorkflowFolderItemWithBackend,
   renameWorkflowProjectItemWithBackend,
+  setWorkflowPublishedVersionCommentWithBackend,
   setWorkflowPublishedVersionStarWithBackend,
   unpublishWorkflowProjectItemWithBackend,
   uploadWorkflowProjectItemWithBackend,
@@ -136,6 +138,12 @@ const publishedVersionStarSchema = z.object({
   relativePath: z.unknown(),
   versionId: z.unknown(),
   isStarred: z.boolean(),
+});
+
+const publishedVersionCommentSchema = z.object({
+  relativePath: z.unknown(),
+  versionId: z.unknown(),
+  comment: z.string().max(WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH),
 });
 
 const recordingsRunsQuerySchema = z.object({
@@ -300,6 +308,11 @@ workflowsRouter.post('/projects/published-versions/preview', validateBody(publis
 workflowsRouter.patch('/projects/published-versions/star', validateBody(publishedVersionStarSchema), asyncHandler(async (req, res) => {
   const { relativePath, versionId, isStarred } = req.body as z.infer<typeof publishedVersionStarSchema>;
   res.json({ version: await setWorkflowPublishedVersionStarWithBackend(relativePath, versionId, isStarred) });
+}));
+
+workflowsRouter.patch('/projects/published-versions/comment', validateBody(publishedVersionCommentSchema), asyncHandler(async (req, res) => {
+  const { relativePath, versionId, comment } = req.body as z.infer<typeof publishedVersionCommentSchema>;
+  res.json({ version: await setWorkflowPublishedVersionCommentWithBackend(relativePath, versionId, comment) });
 }));
 
 workflowsRouter.post('/projects/published-versions/restore', validateBody(publishedVersionDownloadSchema), asyncHandler(async (req, res) => {

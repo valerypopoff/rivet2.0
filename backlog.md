@@ -1,6 +1,7 @@
-- Feature to move from local mode to managed (transfer all files (including libs) and metadata)
 
-- In the publish history, allow users to leave comments on each version, not just star them
+- Different remote debugger sessions for different users
+
+- Feature to move from local mode to managed (transfer all files (including libs) and metadata)
 
 
 - Убедиться, что RIVET_RECORDINGS_MAX_PENDING_WRITES работает правильно — на каждую реплику

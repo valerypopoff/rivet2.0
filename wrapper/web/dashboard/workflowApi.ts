@@ -11,6 +11,7 @@ import type {
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
   WorkflowPublishedVersionRestoreResponse,
+  WorkflowPublishedVersionCommentResponse,
   WorkflowPublishedVersionStarResponse,
   WorkflowPublishedVersionPreviewResponse,
   WorkflowPublishedVersionsResponse,
@@ -23,6 +24,11 @@ const API = RIVET_API_BASE_URL;
 const workflowJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
   nonJsonErrorMessage:
     'Workflow API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/workflows is routed to the API service.',
+});
+
+const hostedProjectJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
+  nonJsonErrorMessage:
+    'Project API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/projects is routed to the API service.',
 });
 
 async function parseBlobResponse(response: Response): Promise<{ blob: Blob; fileName: string | null }> {
@@ -141,6 +147,24 @@ export async function fetchWorkflowRecordingArtifactText(
     cache: 'no-store',
   });
   return parseTextResponse(response);
+}
+
+export async function fetchHostedProjectFile(path: string): Promise<{ contents: string }> {
+  const response = await fetch(`${API}/projects/load`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+
+  const data = await hostedProjectJsonResponse<{
+    contents: string;
+    datasetsContents?: string | null;
+    revisionId?: string | null;
+  }>(response);
+
+  return {
+    contents: data.contents,
+  };
 }
 
 export async function deleteWorkflowRecording(recordingId: string): Promise<void> {
@@ -303,6 +327,20 @@ export async function setWorkflowPublishedVersionStar(
   });
 
   return workflowJsonResponse<WorkflowPublishedVersionStarResponse>(response);
+}
+
+export async function setWorkflowPublishedVersionComment(
+  relativePath: string,
+  versionId: string,
+  comment: string,
+): Promise<WorkflowPublishedVersionCommentResponse> {
+  const response = await fetch(`${API}/workflows/projects/published-versions/comment`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relativePath, versionId, comment }),
+  });
+
+  return workflowJsonResponse<WorkflowPublishedVersionCommentResponse>(response);
 }
 
 export async function restoreWorkflowPublishedVersion(

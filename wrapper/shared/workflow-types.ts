@@ -1,6 +1,8 @@
 export type WorkflowProjectStatus = 'unpublished' | 'published' | 'unpublished_changes';
 export type WorkflowProjectDownloadVersion = 'live' | 'published';
 
+export const WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH = 240;
+
 export const MANAGED_WORKFLOW_VIRTUAL_ROOT = '/managed/workflows';
 export const WORKFLOW_PROJECT_EXTENSION = '.rivet-project';
 export const WORKFLOW_DATASET_EXTENSION = '.rivet-data';
@@ -152,6 +154,7 @@ export type WorkflowPublishedVersionSummary = {
   publishedAt: string;
   isCurrent: boolean;
   isStarred: boolean;
+  comment: string;
 };
 
 export type WorkflowPublishedVersionsResponse = {
@@ -159,6 +162,10 @@ export type WorkflowPublishedVersionsResponse = {
 };
 
 export type WorkflowPublishedVersionStarResponse = {
+  version: WorkflowPublishedVersionSummary;
+};
+
+export type WorkflowPublishedVersionCommentResponse = {
   version: WorkflowPublishedVersionSummary;
 };
 

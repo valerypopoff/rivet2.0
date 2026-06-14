@@ -9,6 +9,7 @@ import type {
 
 type ProjectSettingsRouteTrackers = {
   projectLoadRequests: Array<{ path: string }>;
+  publishedVersionCommentRequests: Array<{ relativePath: string; versionId: string; comment: string }>;
   publishedVersionPreviewRequests: Array<{ relativePath: string; versionId: string }>;
   publishedVersionStarRequests: Array<{ relativePath: string; versionId: string; isStarred: boolean }>;
   publishedVersionRestoreRequests: Array<{ relativePath: string; versionId: string }>;
@@ -23,6 +24,7 @@ function isRouteRequest(routeRequest: { method: () => string; url: () => string 
 function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
   return {
     projectLoadRequests: [],
+    publishedVersionCommentRequests: [],
     publishedVersionPreviewRequests: [],
     publishedVersionStarRequests: [],
     publishedVersionRestoreRequests: [],
@@ -31,7 +33,7 @@ function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
 
 function createProjectSettingsFixture(name: string): WorkflowProjectItem {
   return {
-    id: 'project-settings-fixture',
+    id: `project-settings-fixture-${name}`,
     name,
     fileName: `${name}.rivet-project`,
     relativePath: `${name}.rivet-project`,
@@ -75,9 +77,11 @@ function createPublishedVersionPreviewProject(project: WorkflowProjectItem, vers
 
 async function installProjectSettingsRoutes(
   page: Page,
-  project: WorkflowProjectItem,
+  projectOrProjects: WorkflowProjectItem | WorkflowProjectItem[],
   trackers: ProjectSettingsRouteTrackers,
 ): Promise<void> {
+  const projects = Array.isArray(projectOrProjects) ? projectOrProjects : [projectOrProjects];
+  const project = projects[0]!;
   const publishedVersions: WorkflowPublishedVersionSummary[] = Array.from({ length: 12 }, (_, index) => ({
     id: `published-version-${index + 1}`,
     projectId: project.id,
@@ -86,6 +90,7 @@ async function installProjectSettingsRoutes(
     publishedAt: new Date(Date.UTC(2026, 3, 8, 10, 30 - index, 0)).toISOString(),
     isCurrent: false,
     isStarred: false,
+    comment: '',
   }));
   const getPublishedVersions = () => {
     const endpointName = project.settings.endpointName || 'codex-project-settings-endpoint';
@@ -105,7 +110,7 @@ async function installProjectSettingsRoutes(
     const tree: WorkflowTreeResponse = {
       root: '/managed/workflows',
       folders: [],
-      projects: [project],
+      projects,
     };
 
     await route.fulfill({
@@ -122,17 +127,19 @@ async function installProjectSettingsRoutes(
     }
 
     const requestBody = route.request().postDataJSON() as {
+      relativePath?: string;
       settings?: { endpointName?: string };
     };
-    project.settings = {
+    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    targetProject.settings = {
       status: 'published',
-      endpointName: requestBody.settings?.endpointName ?? project.settings.endpointName,
+      endpointName: requestBody.settings?.endpointName ?? targetProject.settings.endpointName,
       lastPublishedAt: '2026-04-08T10:30:00.000Z',
     };
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ project }),
+      body: JSON.stringify({ project: targetProject }),
     });
   });
 
@@ -142,15 +149,19 @@ async function installProjectSettingsRoutes(
       return;
     }
 
-    project.settings = {
+    const requestBody = route.request().postDataJSON() as {
+      relativePath?: string;
+    };
+    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    targetProject.settings = {
       status: 'unpublished',
-      endpointName: '',
-      lastPublishedAt: null,
+      endpointName: targetProject.settings.endpointName,
+      lastPublishedAt: targetProject.settings.lastPublishedAt,
     };
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ project }),
+      body: JSON.stringify({ project: targetProject }),
     });
   });
 
@@ -224,6 +235,38 @@ async function installProjectSettingsRoutes(
     });
   });
 
+  await page.route('**/api/workflows/projects/published-versions/comment', async (route) => {
+    if (!isRouteRequest(route.request(), 'PATCH', '/api/workflows/projects/published-versions/comment')) {
+      await route.fallback();
+      return;
+    }
+
+    const requestBody = route.request().postDataJSON() as {
+      relativePath: string;
+      versionId: string;
+      comment: string;
+    };
+    trackers.publishedVersionCommentRequests.push(requestBody);
+    const version = publishedVersions.find((candidate) => candidate.id === requestBody.versionId);
+    if (!version) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Published version not found' }),
+      });
+      return;
+    }
+
+    version.comment = requestBody.comment.trim();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        version: getPublishedVersions().find((candidate) => candidate.id === requestBody.versionId),
+      }),
+    });
+  });
+
   await page.route('**/api/workflows/projects/published-versions/preview', async (route) => {
     if (!isRouteRequest(route.request(), 'POST', '/api/workflows/projects/published-versions/preview')) {
       await route.fallback();
@@ -277,6 +320,7 @@ async function installProjectSettingsRoutes(
       publishedAt: new Date(Date.UTC(2026, 3, 8, 11, 0, 0)).toISOString(),
       isCurrent: true,
       isStarred: false,
+      comment: '',
     };
     publishedVersions.unshift(restoredVersion);
     project.settings = {
@@ -356,6 +400,35 @@ test.describe('Project settings modal', () => {
     await expect(modal.getByRole('button', { name: 'Delete project' })).toBeVisible();
   });
 
+  test('publish validation ignores endpoints saved on fully unpublished projects', async ({ page }) => {
+    const endpointName = 'codex-reusable-unpublished-endpoint';
+    const previousProject = createProjectSettingsFixture('codex-previous-endpoint-owner');
+    previousProject.settings = {
+      status: 'published',
+      endpointName,
+      lastPublishedAt: '2026-04-08T10:30:00.000Z',
+    };
+    const nextProject = createProjectSettingsFixture('codex-next-endpoint-owner');
+    await installProjectSettingsRoutes(page, [previousProject, nextProject], createProjectSettingsRouteTrackers());
+
+    const { modal: previousModal } = await openProjectSettingsModal(page, previousProject);
+    page.once('dialog', (dialog) => dialog.accept());
+    await previousModal.getByRole('button', { name: 'Unpublish' }).click();
+    await expect(previousModal.locator('.project-status-badge.unpublished')).toBeVisible({ timeout: 30_000 });
+    expect(previousProject.settings.endpointName).toBe(endpointName);
+    await previousModal.getByRole('button', { name: 'Close project settings' }).click();
+
+    const { modal: nextModal } = await openProjectSettingsModal(page, nextProject);
+    await nextModal.getByRole('button', { name: 'Publish...' }).click();
+    const endpointInput = nextModal.locator('#workflow-project-endpoint-name');
+    await endpointInput.fill(endpointName);
+    await expect(nextModal.locator('.project-settings-error')).toHaveCount(0);
+    await expect(nextModal.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
+    await nextModal.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(nextModal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
+    await expect(nextModal.locator('.project-settings-endpoint-code')).toContainText(endpointName);
+  });
+
   test('published version history paginates, stars, previews, and restores versions', async ({ page }) => {
     test.slow();
 
@@ -383,6 +456,15 @@ test.describe('Project settings modal', () => {
     await expect(historyModal.getByRole('button', { name: 'Preview' })).toHaveCount(10);
     await expect(historyModal.getByRole('button', { name: 'Restore' })).toHaveCount(10);
     await expect(historyModal.getByRole('button', { name: 'Star published version' })).toHaveCount(10);
+    const addFirstCommentButton = historyModal.getByRole('button', {
+      name: 'Add comment for published version published-version-1',
+      exact: true,
+    });
+    await expect(addFirstCommentButton).toBeVisible();
+    await expect(historyModal.getByRole('textbox', {
+      name: 'Comment for published version published-version-1',
+      exact: true,
+    })).toHaveCount(0);
     await historyModal.getByRole('button', { name: 'Star published version' }).first().click();
     await expect(historyModal.getByRole('button', { name: 'Unstar published version' })).toHaveCount(1);
     expect(routeTrackers.publishedVersionStarRequests).toEqual([{
@@ -390,10 +472,41 @@ test.describe('Project settings modal', () => {
       versionId: 'published-version-1',
       isStarred: true,
     }]);
+    await addFirstCommentButton.click();
+    const firstCommentInput = historyModal.getByRole('textbox', {
+      name: 'Comment for published version published-version-1',
+      exact: true,
+    });
+    await expect(firstCommentInput).toBeFocused();
+    await firstCommentInput.fill('Launch baseline');
+    await firstCommentInput.press('Enter');
+    await expect.poll(() => routeTrackers.publishedVersionCommentRequests.length).toBe(1);
+    expect(routeTrackers.publishedVersionCommentRequests).toEqual([{
+      relativePath: project.relativePath,
+      versionId: 'published-version-1',
+      comment: 'Launch baseline',
+    }]);
+    await expect(firstCommentInput).toHaveCount(0);
+    const savedComment = historyModal.getByRole('button', {
+      name: 'Edit comment for published version published-version-1',
+      exact: true,
+    });
+    await expect(savedComment).toHaveText('Launch baseline');
+    await savedComment.click();
+    await expect(firstCommentInput).toHaveValue('Launch baseline');
+    await firstCommentInput.fill('Do not save');
+    await firstCommentInput.press('Escape');
+    await expect(firstCommentInput).toHaveCount(0);
+    await expect(savedComment).toHaveText('Launch baseline');
+    await expect.poll(() => routeTrackers.publishedVersionCommentRequests.length).toBe(1);
     await historyModal.getByRole('button', { name: 'Close published version history' }).click();
     await expect(historyModal).toHaveCount(0);
     await modal.getByRole('button', { name: 'Published version history' }).click();
     await expect(historyModal.getByRole('button', { name: 'Unstar published version' })).toHaveCount(1);
+    await expect(historyModal.getByRole('button', {
+      name: 'Edit comment for published version published-version-1',
+      exact: true,
+    })).toHaveText('Launch baseline');
     await expect(historyModal.getByText('Page 1 of 2')).toBeVisible();
     await expect(historyModal.getByRole('button', { name: 'Previous' })).toBeDisabled();
     await historyModal.getByRole('button', { name: 'Next' }).click();

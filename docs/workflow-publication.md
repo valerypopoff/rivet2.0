@@ -20,6 +20,7 @@ In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In s
   - in `filesystem` mode: `.published/<versionId>.rivet-project` plus `.published/<versionId>.json` metadata and an optional `.rivet-data` sidecar
   - in `managed` mode: a `workflow_published_versions` row pointing at a durable `workflow_revisions` project blob in object storage
   - version stars are stored on the version metadata/row, so starred history survives browser reloads and server restarts
+  - version comments are stored on the same version metadata/row, so operator labels survive browser reloads and server restarts
 - **Dataset sidecar** (`*.rivet-data`): optional data associated with a project, published alongside it
 - **Execution recording artifacts**
   - in `filesystem` mode: replayable bundles under `<RIVET_WORKFLOW_RECORDINGS_ROOT>/<workflowId>/<recordingId>/`
@@ -85,6 +86,7 @@ In Project Settings:
 - older already-published projects that predate the explicit `lastPublishedAt` field fall back to the settings-sidecar file timestamp
 - the `Published version history` secondary action sits to the right of the idle publish/unpublish controls and opens the version-history modal for the current project
 - when an unpublished project is in the endpoint-entry publish UI, the history action is hidden and a `Cancel` button hides the publish UI without saving
+- endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
 
 ## Publish flow
 
@@ -131,9 +133,10 @@ Current backend-specific behavior:
 
 Unpublishing does not delete published version history. It closes the public/latest route lineage, but previous published versions remain downloadable from Project Settings. If a pre-history legacy project still has only a current published pointer, unpublish first backfills that current snapshot/revision into history before clearing the pointer.
 
-In the current dashboard UI, the project-row context menu exposes `Rename project`, `Download`, `Duplicate`, and `Delete project`.
+In the current dashboard UI, the project-row context menu exposes `Rename project`, `Compare opened project with this one` when a different normal workflow project is open, `Download`, `Duplicate`, and `Delete project`.
 
 - `Rename project` edits the project name inline in the tree; `Enter` closes the edit field and shows a preloader on the project name while the API saves, while `Esc` or focus leaving the edit field cancels without calling the API
+- `Compare opened project with this one` loads the right-clicked project's saved `.rivet-project` as Rivet's compare reference for the currently open editor project; compare mode is transient editor state and is not written into project YAML, settings sidecars, or published history
 
 The folder-row context menu exposes `Rename folder`, `Create project`, `Upload project`, and `Delete folder`.
 
@@ -250,6 +253,7 @@ Projects can now also be downloaded from the workflow tree's project-row context
 - `POST /api/workflows/projects/download`
 - `GET /api/workflows/projects/published-versions?relativePath=<project>`
 - `PATCH /api/workflows/projects/published-versions/star`
+- `PATCH /api/workflows/projects/published-versions/comment`
 - `POST /api/workflows/projects/published-versions/download`
 - `POST /api/workflows/projects/published-versions/preview`
 - `POST /api/workflows/projects/published-versions/restore`
@@ -293,13 +297,14 @@ Filename format is:
 
 ## Published version history
 
-Project Settings exposes a `Published version history` link. The modal lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, paginates the list after 10 versions with the same paging controls used by Run recordings, grows vertically before introducing list scrolling, and lets the user download, preview, or restore any stored project snapshot.
+Project Settings exposes a `Published version history` link. The modal lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, add a short comment label for each version, paginates the list after 10 versions with the same paging controls used by Run recordings, grows vertically before introducing list scrolling, and lets the user download, preview, or restore any stored project snapshot.
 
-Stars are persisted with the published version record:
+Stars and comments are persisted with the published version record:
 
-- in `filesystem` mode, `isStarred` is stored in `.published/<versionId>.json`
-- in `managed` mode, `is_starred` is stored on `workflow_published_versions`
-- the dashboard updates the star optimistically but replaces the row with the API response, so the API remains the durable source of truth
+- in `filesystem` mode, `isStarred` and `comment` are stored in `.published/<versionId>.json`
+- in `managed` mode, `is_starred` and `comment` are stored on `workflow_published_versions`
+- rows without a comment show a secondary `Comment` button; rows with a comment show the saved label as text that switches into an editor when clicked
+- the dashboard updates stars optimistically and saves comments on blur/Enter, cancels draft edits on Escape, then replaces the row with the API response, so the API remains the durable source of truth
 
 In filesystem mode, the metadata filename is the authoritative version ID. If `.published/<versionId>.json` contains a mismatched internal `id`, the API ignores that metadata and falls back to the matching snapshot when it can, so a stale or hand-edited JSON file cannot point history actions at a different snapshot.
 

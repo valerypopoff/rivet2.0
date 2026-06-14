@@ -49,11 +49,13 @@ CREATE TABLE IF NOT EXISTS workflow_published_versions (
   endpoint_name TEXT NOT NULL,
   published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   is_starred BOOLEAN NOT NULL DEFAULT FALSE,
+  comment TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE,
   FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE
 );
 
 ALTER TABLE workflow_published_versions ADD COLUMN IF NOT EXISTS is_starred BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE workflow_published_versions ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS workflow_published_versions_workflow_id_published_at_idx
   ON workflow_published_versions(workflow_id, published_at DESC);

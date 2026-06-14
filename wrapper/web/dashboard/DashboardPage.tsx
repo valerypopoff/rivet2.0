@@ -69,6 +69,14 @@ export const DashboardPage: FC = () => {
     [postEditorCommand],
   );
 
+  const handleCompareOpenProjectWith = useCallback((path: string, referencePath?: string) => {
+    postEditorCommand({
+      type: 'compare-open-project-with',
+      path,
+      referencePath,
+    });
+  }, [postEditorCommand]);
+
   const handleSaveProject = useCallback(() => {
     postEditorCommand({ type: 'save-project' });
   }, [postEditorCommand]);
@@ -140,6 +148,7 @@ export const DashboardPage: FC = () => {
           onRefreshOpenProjectFromDisk={handleRefreshOpenProjectFromDisk}
           onOpenRecording={handleOpenRecording}
           onOpenPublishedVersionPreview={handleOpenPublishedVersionPreview}
+          onCompareOpenProjectWith={handleCompareOpenProjectWith}
           onSaveProject={handleSaveProject}
           onDeleteProject={handleDeleteProject}
           onWorkflowPathsMoved={handleWorkflowPathsMoved}

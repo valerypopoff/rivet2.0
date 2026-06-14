@@ -49,6 +49,7 @@ import {
   readWorkflowPublishedVersionDownload,
   readWorkflowPublishedVersionPreview,
   restoreWorkflowPublishedVersion,
+  setWorkflowPublishedVersionComment,
   setWorkflowPublishedVersionStar,
 } from './published-versions.js';
 import {
@@ -499,6 +500,17 @@ export async function setWorkflowPublishedVersionStarWithBackend(
   return delegate(
     async (backend) => backend.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
     async () => setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
+  );
+}
+
+export async function setWorkflowPublishedVersionCommentWithBackend(
+  relativePath: unknown,
+  versionId: unknown,
+  comment: unknown,
+): Promise<WorkflowPublishedVersionSummary> {
+  return delegate(
+    async (backend) => backend.setWorkflowPublishedVersionComment(relativePath, versionId, comment),
+    async () => setWorkflowPublishedVersionComment(relativePath, versionId, comment),
   );
 }
 

@@ -10,6 +10,7 @@ import type {
   WorkflowPublishedVersionSummary,
   WorkflowPublishedVersionsResponse,
 } from '../../../../shared/workflow-types.js';
+import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../shared/workflow-types.js';
 import { createHttpError } from '../../utils/httpError.js';
 import {
   ensureWorkflowsRoot,
@@ -42,6 +43,7 @@ type StoredPublishedVersionMetadata = {
   publishedAt: string;
   stateHash: string;
   isStarred: boolean;
+  comment: string;
 };
 
 type FilesystemPublishedVersionRecord = StoredPublishedVersionMetadata & {
@@ -76,6 +78,7 @@ function normalizeStoredPublishedVersionMetadata(value: unknown): StoredPublishe
   const publishedAt = typeof raw.publishedAt === 'string' ? raw.publishedAt.trim() : '';
   const stateHash = typeof raw.stateHash === 'string' ? raw.stateHash.trim() : '';
   const isStarred = raw.isStarred === true;
+  const comment = normalizePublishedVersionCommentForStorage(raw.comment);
 
   if (!id || !projectId || !projectName || !relativePath || !endpointName || !publishedAt || !stateHash) {
     return null;
@@ -91,7 +94,28 @@ function normalizeStoredPublishedVersionMetadata(value: unknown): StoredPublishe
     publishedAt,
     stateHash,
     isStarred,
+    comment,
   };
+}
+
+function normalizePublishedVersionCommentForStorage(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.trim().slice(0, WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH);
+}
+
+function normalizePublishedVersionCommentInput(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw createHttpError(400, 'Missing comment');
+  }
+
+  if (value.length > WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH) {
+    throw createHttpError(400, `Published version comment must be ${WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH} characters or fewer`);
+  }
+
+  return value.trim();
 }
 
 function comparePublishedVersionsNewestFirst(
@@ -210,6 +234,7 @@ async function createLegacyCurrentPublishedVersionRecord(options: {
       publishedAt: options.settings.lastPublishedAt ?? snapshotStats.mtime.toISOString(),
       stateHash: options.settings.publishedStateHash ?? 'legacy',
       isStarred: false,
+      comment: '',
       isCurrent: true,
     };
   } catch (error) {
@@ -258,6 +283,7 @@ export async function ensureCurrentPublishedWorkflowVersionMetadata(options: {
     publishedAt: options.settings.lastPublishedAt ?? snapshotStats.mtime.toISOString(),
     stateHash: options.settings.publishedStateHash ?? 'legacy',
     isStarred: false,
+    comment: '',
   });
 }
 
@@ -362,6 +388,7 @@ export async function writePublishedWorkflowVersionMetadata(options: {
     publishedAt: options.publishedAt,
     stateHash: options.stateHash,
     isStarred: false,
+    comment: '',
   };
 
   await writePublishedVersionMetadata(options.root, metadata);
@@ -396,6 +423,7 @@ function mapPublishedVersionRecordToSummary(record: FilesystemPublishedVersionRe
     publishedAt: record.publishedAt,
     isCurrent: record.isCurrent,
     isStarred: record.isStarred,
+    comment: record.comment,
   };
 }
 
@@ -410,6 +438,7 @@ function mapPublishedVersionRecordToMetadata(record: FilesystemPublishedVersionR
     publishedAt: record.publishedAt,
     stateHash: record.stateHash,
     isStarred: record.isStarred,
+    comment: record.comment,
   };
 }
 
@@ -468,6 +497,40 @@ export async function setWorkflowPublishedVersionStar(
   const nextRecord: FilesystemPublishedVersionRecord = {
     ...record,
     isStarred,
+  };
+  await writePublishedVersionMetadata(root, mapPublishedVersionRecordToMetadata(nextRecord));
+
+  return mapPublishedVersionRecordToSummary(nextRecord);
+}
+
+export async function setWorkflowPublishedVersionComment(
+  relativePath: unknown,
+  versionId: unknown,
+  comment: unknown,
+): Promise<WorkflowPublishedVersionSummary> {
+  if (typeof versionId !== 'string' || !versionId.trim()) {
+    throw createHttpError(400, 'Missing versionId');
+  }
+
+  const normalizedComment = normalizePublishedVersionCommentInput(comment);
+
+  const root = await ensureWorkflowsRoot();
+  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
+    allowProjectFile: true,
+  }));
+
+  if (!await pathExists(projectPath)) {
+    throw createHttpError(404, 'Project not found');
+  }
+
+  const record = await resolveFilesystemPublishedVersion(root, projectPath, versionId.trim());
+  if (!record) {
+    throw createHttpError(404, 'Published version not found');
+  }
+
+  const nextRecord: FilesystemPublishedVersionRecord = {
+    ...record,
+    comment: normalizedComment,
   };
   await writePublishedVersionMetadata(root, mapPublishedVersionRecordToMetadata(nextRecord));
 

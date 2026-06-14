@@ -8,6 +8,7 @@ import type {
   WorkflowPublishedVersionSummary,
   WorkflowPublishedVersionsResponse,
 } from '../../../../../shared/workflow-types.js';
+import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../../shared/workflow-types.js';
 import { badRequest, createHttpError } from '../../../utils/httpError.js';
 import { normalizeStoredEndpointName } from '../endpoint-names.js';
 import { normalizeManagedWorkflowRelativePath } from '../virtual-paths.js';
@@ -49,6 +50,26 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     versionId === workflow.published_version_id ||
     (!workflow.published_version_id && versionId === workflow.published_revision_id);
 
+  const normalizePublishedVersionCommentForStorage = (value: unknown): string => {
+    if (typeof value !== 'string') {
+      return '';
+    }
+
+    return value.trim().slice(0, WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH);
+  };
+
+  const normalizePublishedVersionCommentInput = (value: unknown): string => {
+    if (typeof value !== 'string') {
+      throw badRequest('Missing comment');
+    }
+
+    if (value.length > WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH) {
+      throw badRequest(`Published version comment must be ${WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH} characters or fewer`);
+    }
+
+    return value.trim();
+  };
+
   const mapPublishedVersionRowToSummary = (
     workflow: WorkflowRow,
     row: PublishedVersionRow,
@@ -60,6 +81,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     publishedAt: toIsoString(row.published_at) ?? new Date().toISOString(),
     isCurrent: isCurrentPublishedVersion(workflow, row.version_id),
     isStarred: row.is_starred === true,
+    comment: normalizePublishedVersionCommentForStorage(row.comment),
   });
 
   const backfillLegacyPublishedVersion = async (
@@ -112,6 +134,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           pv.endpoint_name,
           pv.published_at,
           pv.is_starred,
+          pv.comment,
           r.project_blob_key,
           r.dataset_blob_key,
           r.stats_graph_count,
@@ -166,7 +189,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       const rows = await deps.queryRows<PublishedVersionRow>(
         deps.pool,
         `
-          SELECT version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred
+          SELECT version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred, comment
           FROM workflow_published_versions
           WHERE workflow_id = $1
           ORDER BY published_at DESC, version_id DESC
@@ -189,6 +212,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           publishedAt: toIsoString(workflow.last_published_at) ?? new Date().toISOString(),
           isCurrent: true,
           isStarred: false,
+          comment: '',
         });
       }
 
@@ -244,7 +268,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           UPDATE workflow_published_versions
           SET is_starred = $3
           WHERE workflow_id = $1 AND version_id = $2
-          RETURNING version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred
+          RETURNING version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred, comment
         `,
         [workflow.workflow_id, normalizedVersionId, isStarred],
       );
@@ -271,7 +295,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
             ON CONFLICT (version_id) DO UPDATE
               SET is_starred = EXCLUDED.is_starred
               WHERE workflow_published_versions.workflow_id = EXCLUDED.workflow_id
-            RETURNING version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred
+            RETURNING version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred, comment
           `,
           [
             workflow.published_revision_id,
@@ -280,6 +304,78 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
             workflow.published_endpoint_name || workflow.endpoint_name,
             toIsoString(workflow.last_published_at) ?? toIsoString(revision.created_at) ?? new Date().toISOString(),
             isStarred,
+          ],
+        );
+
+        if (insertedRow) {
+          return mapPublishedVersionRowToSummary(workflow, insertedRow);
+        }
+      }
+
+      throw createHttpError(404, 'Published version not found');
+    },
+
+    async setWorkflowPublishedVersionComment(
+      relativePath: unknown,
+      versionId: unknown,
+      comment: unknown,
+    ): Promise<WorkflowPublishedVersionSummary> {
+      const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
+      const normalizedVersionId = typeof versionId === 'string' ? versionId.trim() : '';
+      if (!normalizedVersionId) {
+        throw badRequest('Missing versionId');
+      }
+
+      const normalizedComment = normalizePublishedVersionCommentInput(comment);
+
+      await deps.initialize();
+      const workflow = await deps.getWorkflowByRelativePath(deps.pool, normalizedRelativePath);
+      if (!workflow) {
+        throw createHttpError(404, 'Project not found');
+      }
+
+      const updatedRow = await deps.queryOne<PublishedVersionRow>(
+        deps.pool,
+        `
+          UPDATE workflow_published_versions
+          SET comment = $3
+          WHERE workflow_id = $1 AND version_id = $2
+          RETURNING version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred, comment
+        `,
+        [workflow.workflow_id, normalizedVersionId, normalizedComment],
+      );
+
+      if (updatedRow) {
+        return mapPublishedVersionRowToSummary(workflow, updatedRow);
+      }
+
+      if (
+        !workflow.published_version_id &&
+        workflow.published_revision_id &&
+        normalizedVersionId === workflow.published_revision_id
+      ) {
+        const revision = await deps.getRevision(deps.pool, workflow.published_revision_id);
+        if (!revision) {
+          throw createHttpError(404, 'Published version not found');
+        }
+
+        const insertedRow = await deps.queryOne<PublishedVersionRow>(
+          deps.pool,
+          `
+            INSERT INTO workflow_published_versions (version_id, workflow_id, revision_id, endpoint_name, published_at, comment)
+            VALUES ($1, $2, $3, $4, $5::timestamptz, $6)
+            ON CONFLICT (version_id) DO UPDATE
+              SET comment = EXCLUDED.comment
+              WHERE workflow_published_versions.workflow_id = EXCLUDED.workflow_id
+            RETURNING version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred, comment
+          `,
+          [
+            workflow.published_revision_id,
+            workflow.workflow_id,
+            revision.revision_id,
+            workflow.published_endpoint_name || workflow.endpoint_name,
+            toIsoString(workflow.last_published_at) ?? toIsoString(revision.created_at) ?? new Date().toISOString(),
+            normalizedComment,
           ],
         );
 
@@ -310,7 +406,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         const versionRow = await deps.queryOne<PublishedVersionRow>(
           client,
           `
-            SELECT version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred
+            SELECT version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred, comment
             FROM workflow_published_versions
             WHERE workflow_id = $1 AND version_id = $2
           `,
@@ -355,7 +451,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           `
             INSERT INTO workflow_published_versions (version_id, workflow_id, revision_id, endpoint_name, published_at)
             VALUES ($1, $2, $3, $4, NOW())
-            RETURNING version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred
+            RETURNING version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred, comment
           `,
           [restoredVersionId, workflow.workflow_id, revisionId, endpointName],
         );

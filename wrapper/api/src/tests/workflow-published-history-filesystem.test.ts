@@ -41,6 +41,7 @@ test('each filesystem publish creates a downloadable published version history e
   assert.equal(history.versions[1]?.isCurrent, false);
   assert.equal(history.versions[0]?.endpointName, 'published-history-endpoint');
   assert.equal(history.versions[0]?.isStarred, false);
+  assert.equal(history.versions[0]?.comment, '');
 
   const starredVersion = await workflowStorageBackend.setWorkflowPublishedVersionStarWithBackend(
     created.relativePath,
@@ -49,10 +50,21 @@ test('each filesystem publish creates a downloadable published version history e
   );
   assert.equal(starredVersion.isStarred, true);
 
+  const commentedVersion = await workflowStorageBackend.setWorkflowPublishedVersionCommentWithBackend(
+    created.relativePath,
+    history.versions[1]!.id,
+    '  baseline before model switch  ',
+  );
+  assert.equal(commentedVersion.comment, 'baseline before model switch');
+
   const historyAfterStar = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
   assert.equal(
     historyAfterStar.versions.find((version) => version.id === history.versions[1]!.id)?.isStarred,
     true,
+  );
+  assert.equal(
+    historyAfterStar.versions.find((version) => version.id === history.versions[1]!.id)?.comment,
+    'baseline before model switch',
   );
 
   const currentDownload = await workflowStorageBackend.readWorkflowPublishedVersionDownloadWithBackend(
@@ -112,6 +124,10 @@ test('each filesystem publish creates a downloadable published version history e
     historyAfterUnpublish.versions.find((version) => version.id === history.versions[1]!.id)?.isStarred,
     true,
   );
+  assert.equal(
+    historyAfterUnpublish.versions.find((version) => version.id === history.versions[1]!.id)?.comment,
+    'baseline before model switch',
+  );
 });
 
 test('filesystem published version history exposes legacy current snapshots without metadata', async () => {
@@ -134,6 +150,7 @@ test('filesystem published version history exposes legacy current snapshots with
   assert.equal(history.versions[0]?.id, storedSettings.publishedSnapshotId);
   assert.equal(history.versions[0]?.isCurrent, true);
   assert.equal(history.versions[0]?.isStarred, false);
+  assert.equal(history.versions[0]?.comment, '');
 
   await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
   const historyAfterLegacyUnpublish = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(
@@ -151,6 +168,13 @@ test('filesystem published version history exposes legacy current snapshots with
     true,
   );
   assert.equal(starredLegacyVersion.isStarred, true);
+
+  const commentedLegacyVersion = await workflowStorageBackend.setWorkflowPublishedVersionCommentWithBackend(
+    created.relativePath,
+    historyAfterLegacyUnpublish.versions[0]!.id,
+    'legacy keeper',
+  );
+  assert.equal(commentedLegacyVersion.comment, 'legacy keeper');
 
   const download = await workflowStorageBackend.readWorkflowPublishedVersionDownloadWithBackend(
     created.relativePath,
@@ -176,6 +200,7 @@ test('filesystem published version history exposes legacy current snapshots with
   assert.equal(historyAfterSecondPublish.versions[0]?.isCurrent, true);
   assert.equal(historyAfterSecondPublish.versions[1]?.id, storedSettings.publishedSnapshotId);
   assert.equal(historyAfterSecondPublish.versions[1]?.isStarred, true);
+  assert.equal(historyAfterSecondPublish.versions[1]?.comment, 'legacy keeper');
 });
 
 test('filesystem published version history rejects mismatched metadata ids', async (t) => {
@@ -201,6 +226,7 @@ test('filesystem published version history rejects mismatched metadata ids', asy
   assert.equal(history.versions.length, 1);
   assert.equal(history.versions[0]?.id, storedSettings.publishedSnapshotId);
   assert.equal(history.versions[0]?.isCurrent, true);
+  assert.equal(history.versions[0]?.comment, '');
 
   const starredVersion = await workflowStorageBackend.setWorkflowPublishedVersionStarWithBackend(
     created.relativePath,
@@ -213,6 +239,7 @@ test('filesystem published version history rejects mismatched metadata ids', asy
   const repairedMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
   assert.equal(repairedMetadata.id, storedSettings.publishedSnapshotId);
   assert.equal(repairedMetadata.isStarred, true);
+  assert.equal(repairedMetadata.comment, '');
 
   const originalContents = await fs.readFile(created.absolutePath, 'utf8');
   const otherProject = await workflowMutations.createWorkflowProjectItem('', 'PublishedHistoryOtherProject');

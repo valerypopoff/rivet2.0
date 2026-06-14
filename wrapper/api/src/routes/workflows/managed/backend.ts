@@ -165,6 +165,14 @@ export class ManagedWorkflowBackend {
     return this.#publication.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred);
   }
 
+  async setWorkflowPublishedVersionComment(
+    relativePath: unknown,
+    versionId: unknown,
+    comment: unknown,
+  ): Promise<WorkflowPublishedVersionSummary> {
+    return this.#publication.setWorkflowPublishedVersionComment(relativePath, versionId, comment);
+  }
+
   async restoreWorkflowPublishedVersion(
     relativePath: unknown,
     versionId: unknown,
