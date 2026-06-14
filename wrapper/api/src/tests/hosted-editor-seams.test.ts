@@ -80,9 +80,16 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.doesNotMatch(loadProjectOverride, /setProject\(projectInfo\.project\)/);
   assert.match(syncOpenedProjectsOverride, /normalizeOpenedProjects/);
   assert.match(syncOpenedProjectsOverride, /openedProjectSnapshotsState/);
-  assert.match(savedGraphsOverride, /deleteHostedProjectContextState\(projectId: ProjectId\)/);
-  assert.match(savedGraphsOverride, /clearProjectContextState as deleteStoredProjectContextState/);
-  assert.doesNotMatch(savedGraphsOverride, /storage\.removeItem/);
+  assert.match(savedGraphsOverride, /createHybridStorage\('project'\)/);
+  assert.match(
+    savedGraphsOverride,
+    /export function clearProjectContextState\(projectId: ProjectId\): void \{\s*\/\/[^\n]*\n\s*releaseProjectContextState\(projectId\);\s*\}/,
+  );
+  assert.match(
+    savedGraphsOverride,
+    /export function deleteHostedProjectContextState\(projectId: ProjectId\): void \{\s*clearProjectContextState\(projectId\);\s*projectStorage\.removeItem\(`projectContext__"\$\{projectId\}"`\);\s*\}/,
+  );
+  assert.doesNotMatch(savedGraphsOverride, /clearProjectContextState as/);
 
   assert.match(hostedIOProvider, /this\.#datasetProvider\.exportDatasetsForProject/);
   assert.match(hostedIOProvider, /this\.#datasetProvider\.importDatasetsForProject/);
