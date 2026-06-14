@@ -159,6 +159,7 @@ export function useWorkflowLibraryController(options: {
     versionId: string,
     nextOptions?: { replaceCurrent?: boolean },
   ) => void;
+  onCompareOpenProjectWith: (path: string, referencePath?: string) => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
@@ -170,6 +171,7 @@ export function useWorkflowLibraryController(options: {
     onRefreshOpenProjectFromDisk,
     onOpenRecording,
     onOpenPublishedVersionPreview,
+    onCompareOpenProjectWith,
     onDeleteProject,
     onWorkflowPathsMoved,
     onActiveWorkflowProjectPathChange,
@@ -1066,6 +1068,37 @@ export function useWorkflowLibraryController(options: {
     uploadingFolderPath,
   ]);
 
+  const canCompareWithProject = useCallback((project: WorkflowProjectItem): boolean => {
+    return Boolean(
+      openedWorkflowProject &&
+      normalizeWorkflowPath(openedWorkflowProject.absolutePath) !== normalizeWorkflowPath(project.absolutePath),
+    );
+  }, [openedWorkflowProject]);
+
+  const handleCompareProjectFromContextMenu = useCallback(() => {
+    const targetProject = projectContextMenuState?.project;
+    if (
+      !targetProject ||
+      !canCompareWithProject(targetProject) ||
+      downloadingProjectPath ||
+      duplicatingProjectPath ||
+      uploadingFolderPath
+    ) {
+      return;
+    }
+
+    closeProjectContextMenu();
+    onCompareOpenProjectWith(targetProject.absolutePath, targetProject.relativePath || targetProject.fileName);
+  }, [
+    canCompareWithProject,
+    closeProjectContextMenu,
+    downloadingProjectPath,
+    duplicatingProjectPath,
+    onCompareOpenProjectWith,
+    projectContextMenuState,
+    uploadingFolderPath,
+  ]);
+
   const openProjectSettingsModal = useCallback((project: WorkflowProjectItem) => {
     setSettingsModalProject(project);
   }, []);
@@ -1302,6 +1335,8 @@ export function useWorkflowLibraryController(options: {
     handleCancelProjectRename,
     handleDownloadProject,
     handleDuplicateProject,
+    handleCompareProjectFromContextMenu,
+    canCompareWithProject,
     handleDeleteProjectFromContextMenu,
     handleProjectModalSelectPublished,
     handleProjectModalSelectUnpublishedChanges,

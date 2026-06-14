@@ -133,9 +133,10 @@ Current backend-specific behavior:
 
 Unpublishing does not delete published version history. It closes the public/latest route lineage, but previous published versions remain downloadable from Project Settings. If a pre-history legacy project still has only a current published pointer, unpublish first backfills that current snapshot/revision into history before clearing the pointer.
 
-In the current dashboard UI, the project-row context menu exposes `Rename project`, `Download`, `Duplicate`, and `Delete project`.
+In the current dashboard UI, the project-row context menu exposes `Rename project`, `Compare opened project with this one` when a different normal workflow project is open, `Download`, `Duplicate`, and `Delete project`.
 
 - `Rename project` edits the project name inline in the tree; `Enter` closes the edit field and shows a preloader on the project name while the API saves, while `Esc` or focus leaving the edit field cancels without calling the API
+- `Compare opened project with this one` loads the right-clicked project's saved `.rivet-project` as Rivet's compare reference for the currently open editor project; compare mode is transient editor state and is not written into project YAML, settings sidecars, or published history
 
 The folder-row context menu exposes `Rename folder`, `Create project`, `Upload project`, and `Delete folder`.
 

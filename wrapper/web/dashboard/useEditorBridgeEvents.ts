@@ -155,6 +155,9 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           onProjectOpenFailed(event.data.error);
           toast.error(`Failed to open project: ${event.data.error}`);
           break;
+        case 'project-compare-failed':
+          toast.error(`Failed to compare project: ${event.data.error}`);
+          break;
       }
     };
     window.addEventListener('message', handler);

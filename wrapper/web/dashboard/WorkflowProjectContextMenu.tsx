@@ -22,6 +22,8 @@ type WorkflowProjectContextMenuProps = {
   onRename: () => void;
   onDownload: () => void;
   onDuplicate: () => void;
+  canCompare: boolean;
+  onCompare: () => void;
   canDelete: boolean;
   onDelete: () => void;
 };
@@ -52,6 +54,8 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   onRename,
   onDownload,
   onDuplicate,
+  canCompare,
+  onCompare,
   canDelete,
   onDelete,
 }) => {
@@ -103,6 +107,16 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
       >
         <span>Rename project</span>
       </button>
+      {canCompare ? (
+        <button
+          type="button"
+          className="workflow-project-context-menu-item"
+          role="menuitem"
+          onClick={onCompare}
+        >
+          <span>Compare opened project with this one</span>
+        </button>
+      ) : null}
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button
         type="button"

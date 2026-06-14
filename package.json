@@ -1,7 +1,7 @@
 {
   "name": "rivet-studio-server",
   "private": true,
-  "version": "1.5.12",
+  "version": "1.5.13",
   "description": "Root launcher for the Rivet Studio Server Docker stacks",
   "scripts": {
     "pretest": "node scripts/ensure-dev-deps.mjs",
@@ -20,7 +20,7 @@
     "verify:local-docker:split": "node scripts/verify-compatibility.mjs local-docker:split",
     "verify:repo-structure": "node scripts/verify-repo-structure.mjs",
     "verify:test-style": "node scripts/verify-test-style.mjs",
-    "verify:web-pure": "npm --prefix wrapper/api exec -- tsx --test wrapper/web/tests/api-request.test.ts wrapper/web/tests/editor-bridge-focus.test.ts wrapper/web/tests/hosted-env-shim.test.ts wrapper/web/tests/hosted-fonts.test.ts wrapper/web/tests/opened-project-metadata.test.ts wrapper/web/tests/vite-aliases.test.ts",
+    "verify:web-pure": "npm --prefix wrapper/api exec -- tsx --test wrapper/web/tests/api-request.test.ts wrapper/web/tests/editor-bridge-contract.test.ts wrapper/web/tests/editor-bridge-focus.test.ts wrapper/web/tests/hosted-env-shim.test.ts wrapper/web/tests/hosted-fonts.test.ts wrapper/web/tests/opened-project-metadata.test.ts wrapper/web/tests/vite-aliases.test.ts",
     "verify:kubernetes": "npm --prefix wrapper/api exec -- tsx --test wrapper/api/src/tests/kubernetes-launcher-config.test.ts wrapper/api/src/tests/kubernetes-contract.test.ts && node scripts/verify-kubernetes.mjs",
     "ui:observe": "node scripts/playwright-observe.mjs test",
     "ui:observe:debug": "node scripts/playwright-observe.mjs debug",

@@ -18,6 +18,7 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 | `open-project` | `path`, `replaceCurrent`, optional `reloadFromDisk` | User opens or creates a workflow project |
 | `open-recording` | `recordingId`, `replaceCurrent` | User opens a stored workflow run from the recordings browser |
 | `open-published-version-preview` | `relativePath`, `versionId`, `replaceCurrent` | User previews a stored published workflow version from Project Settings |
+| `compare-open-project-with` | `path`, optional `referencePath` | User starts Rivet compare mode from another project row in the workflow tree |
 | `refresh-open-project-from-disk` | `path` | A server-side mutation changed a project that may already be open in the editor |
 | `save-project` | (none) | User saves from the dashboard surface or presses the save shortcut outside the iframe |
 | `trigger-editor-duplicate-shortcut` | `modifier` | Dashboard-focused `Ctrl+D` / `Cmd+D` should duplicate the selected Rivet node instead of opening browser bookmark UI |
@@ -34,6 +35,7 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 | `project-open-failed` | `path`, `error` | Open failed for a project path or recording ID |
 | `active-project-path-changed` | `path` | User switched the active tab inside the editor |
 | `open-project-count-changed` | `count` | Number of open editor tabs changed |
+| `project-compare-failed` | `path`, `error` | A project-tree compare reference could not be loaded or deserialized |
 | `project-saved` | `path` | Current project saved successfully |
 
 ## Message flow
@@ -41,7 +43,7 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 1. The dashboard renders the iframe. The editor emits `editor-ready` once mounted.
 2. Commands sent before `editor-ready` are buffered by `useEditorCommandQueue` and flushed once the editor is ready.
 3. Both sides validate message shape and origin before acting.
-4. Project, recording, and published-version preview open commands are serialized inside the editor iframe so overlapping async loads cannot leave the active virtual project state from different runs.
+4. Project, recording, published-version preview, refresh, and project-compare commands are serialized inside the editor iframe so overlapping async work cannot leave the active virtual project state from different runs.
 5. `open-project` uses the project reference supplied by the workflow tree, loads the snapshot through `HostedIOProvider`, then opens or replaces it through Rivet's `RivetWorkspaceHost`. The optional `reloadFromDisk` flag is reserved for server-side mutations such as published-version restore; it forces an already-open project path to bypass the cached in-memory snapshot and reload the saved project from storage before replacing the current tab. The wrapper keeps only the hosted path lookup, duplicate-id guard, stale-empty-tab cleanup, and replace-current confirmation around that upstream workspace handle. The opened-project sync also preserves an empty tab strip across reloads: it must not recreate a pathless `projectState` as a tab, and it normalizes stale persisted tab metadata by dropping missing entries, orphan metadata, duplicate project ids, legacy full-project payloads, and pathless entries with no active project or snapshot. When damaged duplicate entries share an id, it keeps the file-backed one.
 6. In `filesystem` mode that reference is a real server filesystem path. In `managed` mode it is a virtual managed path under `/managed/workflows/...`, even though the shared bridge type still uses the legacy field name `path`.
 7. Hosted editor project tabs show only the project title. The wrapper strips upstream's bracketed file-name suffix from `ProjectSelector` at build time because the workflow tree already owns the file/path context and this repo does not commit changes inside the vendored `rivet/` tree. That transform is scoped to the upstream file and tolerant of LF/CRLF line endings from linked Rivet checkouts. It recognizes the older all-tabs suffix expression and the newer active-tab-only suffix expression, but it still fails loudly if the upstream tab-label expression changes again and needs a fresh review.
@@ -56,12 +58,13 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 16. `workflow-paths-moved` rewrites wrapper revision/session caches and then calls `RivetWorkspaceHost.moveProjectPaths()` so open tabs, loaded-project state, and later saves keep pointing at the new location. In `managed` mode those `fromAbsolutePath` and `toAbsolutePath` fields contain managed virtual project paths rather than host filesystem paths.
 17. Folder rename uses that same `workflow-paths-moved` path-rewrite flow for every affected project path under the folder.
 18. Project duplication does not use the editor bridge. The dashboard calls `POST /api/workflows/projects/duplicate` directly, refreshes the workflow tree, and intentionally leaves selection and open tabs unchanged.
-19. Project uploading also does not use the editor bridge. The dashboard opens a browser file picker, posts the selected file to `POST /api/workflows/projects/upload`, refreshes the workflow tree, and leaves selection and open tabs unchanged.
-20. Project downloading also does not use the editor bridge. The dashboard calls `POST /api/workflows/projects/download` directly and only downloads saved server-side project files.
-21. Empty-folder deletion is API-only and does not need special bridge cleanup because no workflow project paths move; the dashboard just refreshes the tree after the delete succeeds.
-22. On `project-saved`, the hosted editor first reconciles the active project metadata and tab label back to the saved file-tree name without reloading the project, then the dashboard refreshes the workflow tree from the API and trusts the server-derived publication status. It does not locally force a `published -> unpublished_changes` status flip first, and the server now keeps published projects in `published` when the save was a true no-op.
-23. On `project-opened`, both sides of the hosted bridge explicitly move focus to the editor iframe so keyboard shortcuts target the editor instead of the workflow-library row that triggered the open.
-24. If the iframe reloads, `onLoad` resets `editorReady` to `false`, re-enabling the command buffer until `editor-ready` is sent again.
+19. Project-tree compare uses `compare-open-project-with`. The dashboard sends the right-click target's hosted project path only when a normal workflow project is already open and the target is a different workflow project. The iframe bridge loads only the reference `.rivet-project` payload through `/api/projects/load`, deserializes it, and sets Rivet's transient `projectCompareReferenceState` for the current editor project. It does not import reference datasets, persist compare state, or write wrapper project metadata.
+20. Project uploading also does not use the editor bridge. The dashboard opens a browser file picker, posts the selected file to `POST /api/workflows/projects/upload`, refreshes the workflow tree, and leaves selection and open tabs unchanged.
+21. Project downloading also does not use the editor bridge. The dashboard calls `POST /api/workflows/projects/download` directly and only downloads saved server-side project files.
+22. Empty-folder deletion is API-only and does not need special bridge cleanup because no workflow project paths move; the dashboard just refreshes the tree after the delete succeeds.
+23. On `project-saved`, the hosted editor first reconciles the active project metadata and tab label back to the saved file-tree name without reloading the project, then the dashboard refreshes the workflow tree from the API and trusts the server-derived publication status. It does not locally force a `published -> unpublished_changes` status flip first, and the server now keeps published projects in `published` when the save was a true no-op.
+24. On `project-opened`, both sides of the hosted bridge explicitly move focus to the editor iframe so keyboard shortcuts target the editor instead of the workflow-library row that triggered the open.
+25. If the iframe reloads, `onLoad` resets `editorReady` to `false`, re-enabling the command buffer until `editor-ready` is sent again.
 
 ## Save behavior
 

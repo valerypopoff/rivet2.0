@@ -397,6 +397,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - `useEditorCommandQueue.ts` owns pre-ready command buffering
   - `useEditorBridgeEvents.ts` owns dashboard-side message listeners and cross-iframe save shortcut capture
   - `EditorMessageBridge.tsx` owns editor-side message handling after the workspace host handle is ready, and should pass that `RivetWorkspaceHost` through to project open, replace-current, close, and path-move commands instead of rewriting Rivet tab atoms directly
+  - project-tree compare should stay a bridge command: the dashboard may send `compare-open-project-with` for another workflow project, and `EditorMessageBridge.tsx` should load only the reference `.rivet-project` contents before setting Rivet's transient compare reference state. Do not persist compare state or import the reference project's datasets into the active hosted dataset provider. The current upstream seam is the app-internal `projectCompareReferenceState`, so keep that import isolated to the hosted bridge and replace it with a public host compare API if upstream adds one.
 - hosted provider wiring should stay explicit
   - import the app shell and CSS through `rivet/packages/app/src/host.tsx` and `rivet/packages/app/src/host.css`
   - pass `HostedIOProvider`, an injected `HostedDatasetProvider`, the hosted environment provider, and the hosted path-policy provider through `RivetAppHost.providers`

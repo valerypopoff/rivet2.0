@@ -1,14 +1,16 @@
 import { type FC, useCallback, useEffect, useRef } from 'react';
 import { useOpenWorkflowProject } from './useOpenWorkflowProject';
-import { ExecutionRecorder, getError, type ProjectId } from '@valerypopoff/rivet2-core';
+import { ExecutionRecorder, getError, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
   loadedProjectState,
   openedProjectSnapshotsState,
   type OpenedProjectsInfo,
   type OpenedProjectInfo,
+  projectState,
   projectsState,
 } from '../../../rivet/packages/app/src/state/savedGraphs';
+import { projectCompareReferenceState } from '../../../rivet/packages/app/src/state/projectComparison';
 import { deleteHostedProjectContextState } from '../overrides/state/savedGraphs';
 import { loadedRecordingState } from '../../../rivet/packages/app/src/state/execution';
 import { selectedExecutorState } from '../../../rivet/packages/app/src/state/settings';
@@ -33,10 +35,11 @@ import {
 import {
   getWorkflowPublishedVersionPreviewVirtualProjectPath,
 } from '../../shared/workflow-types';
-import { fetchWorkflowRecordingArtifactText } from './workflowApi';
+import { fetchHostedProjectFile, fetchWorkflowRecordingArtifactText } from './workflowApi';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import { clearOpenedProjectSession, remapOpenedProjectSessionPaths } from '../io/openedProjectSessionCache';
 import { clearHostedProjectRevisionPath, remapHostedProjectRevisionPaths } from '../io/HostedIOProvider';
+import { deserializeProjectAsync } from '../overrides/utils/deserializeProject';
 import { useSaveProject } from '../../../rivet/packages/app/src/hooks/useSaveProject';
 import {
   focusHostedEditorCanvas,
@@ -157,6 +160,11 @@ async function fetchLoadedWorkflowRecording(recordingId: string): Promise<Loaded
   };
 }
 
+async function fetchProjectCompareReference(path: string): Promise<Project> {
+  const loadedProjectFile = await fetchHostedProjectFile(path);
+  return deserializeProjectAsync(loadedProjectFile.contents, path);
+}
+
 type EditorMessageBridgeProps = {
   workspaceHost: RivetWorkspaceHost;
 };
@@ -166,21 +174,25 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   const { saveProject } = useSaveProject();
   const projects = useAtomValue(projectsState);
   const loadedProject = useAtomValue(loadedProjectState);
+  const currentProject = useAtomValue(projectState);
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const setLoadedRecording = useSetAtom(loadedRecordingState);
   const setSelectedExecutor = useSetAtom(selectedExecutorState);
+  const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
   const openOverlay = useAtomValue(overlayOpenState);
   const setSearching = useSetAtom(searchingGraphState);
   const projectsRef = useRef<OpenedProjectsInfo>(projects);
   const loadedProjectRef = useRef(loadedProject);
+  const currentProjectRef = useRef(currentProject);
   const workspaceRef = useRef(workspaceHost);
   const openProjectRef = useRef(openProject);
   const saveProjectRef = useRef(saveProject);
-  const openCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const serializedCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
   const recordingByProjectPathRef = useRef(new Map<string, LoadedWorkflowRecording>());
   projectsRef.current = projects;
   loadedProjectRef.current = loadedProject;
+  currentProjectRef.current = currentProject;
   workspaceRef.current = workspaceHost;
   openProjectRef.current = openProject;
   saveProjectRef.current = saveProject;
@@ -188,6 +200,27 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   const saveCurrentProject = async () => {
     await saveProjectRef.current();
   };
+
+  const startProjectCompare = useCallback(async (
+    command: Extract<DashboardToEditorCommand, { type: 'compare-open-project-with' }>,
+  ) => {
+    const activeProject = currentProjectRef.current;
+    const activeProjectPath = loadedProjectRef.current.path?.trim() ?? '';
+    if (!activeProject.metadata.id || !activeProjectPath) {
+      throw new Error('Open a project before starting compare mode.');
+    }
+
+    if (normalizeWorkflowPath(activeProjectPath) === normalizeWorkflowPath(command.path)) {
+      throw new Error('Choose a different project to compare against.');
+    }
+
+    const referenceProject = await fetchProjectCompareReference(command.path);
+    setProjectCompareReference({
+      projectId: activeProject.metadata.id,
+      referencePath: command.referencePath ?? command.path,
+      referenceProject,
+    });
+  }, [setProjectCompareReference]);
 
   const activateWorkflowRecording = useCallback((loadedRecording: LoadedWorkflowRecording) => {
     // Current Rivet routes run-button clicks through selectedExecutorState.
@@ -329,12 +362,13 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   }, []);
 
   useEffect(() => {
-    type OpenCommand = Extract<DashboardToEditorCommand, {
+    type SerializedEditorCommand = Extract<DashboardToEditorCommand, {
       type:
         | 'open-project'
         | 'open-recording'
         | 'open-published-version-preview'
-        | 'refresh-open-project-from-disk';
+        | 'refresh-open-project-from-disk'
+        | 'compare-open-project-with';
     }>;
 
     const findOpenedProjectByPath = (path: string): OpenedProjectInfo | null => {
@@ -346,7 +380,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
       return openedProjectId ? openedProjects[openedProjectId] ?? null : null;
     };
 
-    const runOpenCommand = async (command: OpenCommand): Promise<void> => {
+    const runSerializedCommand = async (command: SerializedEditorCommand): Promise<void> => {
       switch (command.type) {
         case 'open-project':
           try {
@@ -482,15 +516,31 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
 
           break;
         }
+
+        case 'compare-open-project-with': {
+          try {
+            await startProjectCompare(command);
+          } catch (error) {
+            const message = getError(error).message;
+            console.error('Failed to start project compare mode:', error);
+            postMessageToDashboard({
+              type: 'project-compare-failed',
+              path: command.path,
+              error: message,
+            });
+          }
+
+          break;
+        }
       }
     };
 
-    const enqueueOpenCommand = (command: OpenCommand): void => {
-      const queued = openCommandQueueRef.current
+    const enqueueSerializedCommand = (command: SerializedEditorCommand): void => {
+      const queued = serializedCommandQueueRef.current
         .catch(() => undefined)
-        .then(() => runOpenCommand(command));
-      openCommandQueueRef.current = queued.catch((error) => {
-        console.error('Failed to process hosted editor open command:', error);
+        .then(() => runSerializedCommand(command));
+      serializedCommandQueueRef.current = queued.catch((error) => {
+        console.error('Failed to process hosted editor command:', error);
       });
     };
 
@@ -574,7 +624,8 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
         case 'open-recording':
         case 'open-published-version-preview':
         case 'refresh-open-project-from-disk':
-          enqueueOpenCommand(event.data);
+        case 'compare-open-project-with':
+          enqueueSerializedCommand(event.data);
           break;
       }
     };
@@ -586,6 +637,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
     setOpenedProjectSnapshots,
     activateWorkflowRecording,
     setLoadedRecording,
+    startProjectCompare,
   ]);
 
   return null;

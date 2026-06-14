@@ -6,6 +6,7 @@ export type DashboardToEditorCommand =
   | { type: 'open-project'; path: string; replaceCurrent: boolean; reloadFromDisk?: boolean }
   | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean }
   | { type: 'open-published-version-preview'; relativePath: string; versionId: string; replaceCurrent: boolean }
+  | { type: 'compare-open-project-with'; path: string; referencePath?: string }
   | { type: 'refresh-open-project-from-disk'; path: string }
   | { type: 'save-project' }
   | { type: 'trigger-editor-find-shortcut'; modifier: EditorShortcutModifier }
@@ -19,6 +20,7 @@ export type EditorToDashboardEvent =
   | { type: 'project-open-failed'; path: string; error: string }
   | { type: 'active-project-path-changed'; path: string }
   | { type: 'open-project-count-changed'; count: number }
+  | { type: 'project-compare-failed'; path: string; error: string }
   | { type: 'project-saved'; path: string };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -61,6 +63,8 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         typeof value.versionId === 'string' &&
         typeof value.replaceCurrent === 'boolean'
       );
+    case 'compare-open-project-with':
+      return typeof value.path === 'string' && (value.referencePath == null || typeof value.referencePath === 'string');
     case 'refresh-open-project-from-disk':
       return typeof value.path === 'string';
     case 'save-project':
@@ -90,6 +94,7 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
     case 'active-project-path-changed':
     case 'project-saved':
       return typeof value.path === 'string';
+    case 'project-compare-failed':
     case 'project-open-failed':
       return typeof value.path === 'string' && typeof value.error === 'string';
     case 'open-project-count-changed':
