@@ -22,6 +22,7 @@ export function useNewProject() {
       project,
       graphToLoad: initialGraph,
       testSuites: [],
+      markClean: true,
     });
 
     if (loaded) {

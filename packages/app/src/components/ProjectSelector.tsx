@@ -18,7 +18,13 @@ import CloseIcon from 'majesticons/line/multiply-line.svg?react';
 import LeftIcon from 'majesticons/line/chevron-left-line.svg?react';
 import RightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import RivetLogo from '../rivet-2-logo-no-background.svg';
-import { openedProjectsSortedIdsState, openedProjectsState, projectState } from '../state/savedGraphs';
+import {
+  openedProjectsSortedIdsState,
+  openedProjectsState,
+  projectDataUnsavedChangesState,
+  projectState,
+  projectUnsavedChangesState,
+} from '../state/savedGraphs';
 import clsx from 'clsx';
 import { useLoadProject } from '../hooks/useLoadProject';
 import { useSyncCurrentStateIntoOpenedProjects } from '../hooks/useSyncCurrentStateIntoOpenedProjects';
@@ -428,10 +434,24 @@ export const styles = css`
       white-space: nowrap;
       text-overflow: ellipsis;
 
+      &::before {
+        background: currentColor;
+        border-radius: 50%;
+        content: '';
+        display: none;
+        flex: 0 0 auto;
+        height: 6px;
+        width: 6px;
+      }
+
       > span {
         min-width: 50px;
         flex-shrink: 1;
       }
+    }
+
+    &.has-unsaved-changes .project-name::before {
+      display: block;
     }
 
     &:hover {
@@ -1033,11 +1053,15 @@ export const ProjectTab: FC<{
   onSelectProject?: () => void;
 }> = ({ projectId, dragListeners, onCloseProject, onSelectProject, projectTabsSelected }) => {
   const openedProjects = useAtomValue(openedProjectsState);
+  const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
+  const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
   const currentProject = useAtomValue(projectState);
 
   const project = openedProjects[projectId];
 
   const unsaved = !project?.fsPath;
+  const hasUnsavedChanges =
+    projectUnsavedChanges[projectId] === true || projectDataUnsavedChanges[projectId] === true;
   const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\/]/).pop();
   const active = projectTabsSelected && currentProject.metadata.id === projectId;
   const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;
@@ -1054,7 +1078,10 @@ export const ProjectTab: FC<{
   };
 
   return (
-    <div className={clsx('project', { active, unsaved })} onMouseDown={handleMouseDown}>
+    <div
+      className={clsx('project', { active, unsaved, 'has-unsaved-changes': hasUnsavedChanges })}
+      onMouseDown={handleMouseDown}
+    >
       <div className="project-name" {...dragListeners}>
         <span>{projectDisplayName}</span>
       </div>

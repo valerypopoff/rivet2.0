@@ -24,12 +24,14 @@ export function useLoadProject() {
 
       let project = storedSnapshot?.project;
       let data = storedSnapshot?.data;
+      let markClean = false;
       let testSuites: TrivetState['testSuites'] = [];
 
       if (!project && projectInfo.fsPath && isPathBasedIOProvider(ioProvider)) {
         const loadedProject = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath);
         project = loadedProject.project;
         data = loadedProject.project.data;
+        markClean = true;
         testSuites = loadedProject.testData.testSuites;
       } else if (projectInfo.fsPath && isPathBasedIOProvider(ioProvider)) {
         const { testData } = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath);
@@ -46,6 +48,7 @@ export function useLoadProject() {
         fsPath: projectInfo.fsPath,
         openedGraph: projectInfo.openedGraph,
         testSuites,
+        markClean,
       });
     } catch (err) {
       callbacks.onOpenError?.({

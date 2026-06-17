@@ -160,6 +160,12 @@ export const openedProjectSnapshotsState = atomWithStorage<Record<ProjectId, Ope
   storage,
 );
 
+export const savedProjectContentDigestsState = atom<Record<ProjectId, string | undefined>>({});
+
+export const projectUnsavedChangesState = atom<Record<ProjectId, boolean | undefined>>({});
+
+export const projectDataUnsavedChangesState = atom<Record<ProjectId, boolean | undefined>>({});
+
 export const openedProjectsState = atom(
   (get) => get(projectsState).openedProjects,
   (get, set, newValue: Record<ProjectId, OpenedProjectInfo> | undefined) => {

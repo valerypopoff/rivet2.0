@@ -14,8 +14,11 @@ import {
   loadedProjectState,
   openedProjectSnapshotsState,
   projectDataState,
+  projectDataUnsavedChangesState,
+  projectUnsavedChangesState,
   projectsState,
   projectState,
+  savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
 import { trivetState } from '../state/trivet.js';
@@ -42,6 +45,7 @@ import { canSaveProjectDataNoPrompt } from '../utils/projectSaveCapabilities.js'
 import { pluginsState, projectNodeRegistryState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js';
+import { markProjectClean, markProjectDirtyFlag } from '../utils/projectUnsavedChanges.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -60,6 +64,9 @@ export function useWorkspaceTransitions() {
   const setPosition = useSetAtom(canvasPositionState);
   const setLastSavedPositions = useSetAtom(lastCanvasPositionByGraphState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
+  const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
+  const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
+  const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
   const setProjects = useSetAtom(projectsState);
   const centerViewOnGraph = useCenterViewOnGraph();
   const saveCurrentGraph = useSaveCurrentGraph();
@@ -121,6 +128,7 @@ export function useWorkspaceTransitions() {
       testSuites?: typeof testSuites;
       graphToLoad?: typeof currentGraph;
       graphView?: GraphViewContext;
+      markClean?: boolean;
     }): Promise<boolean> {
       try {
         const currentProjectId = project.metadata.id;
@@ -162,6 +170,20 @@ export function useWorkspaceTransitions() {
           project: projectInfo.project,
           viewport: restoreTarget.viewport,
         });
+
+        if (projectInfo.markClean) {
+          setSavedProjectContentDigests((previousDigests) =>
+            markProjectClean(previousDigests, {
+              project: projectInfo.project,
+            }),
+          );
+          setProjectUnsavedChanges((previousFlags) =>
+            markProjectDirtyFlag(previousFlags, targetProjectId, false),
+          );
+          setProjectDataUnsavedChanges((previousFlags) =>
+            markProjectDirtyFlag(previousFlags, targetProjectId, false),
+          );
+        }
 
         setProject(transition.project);
         setNavigationStack(transition.navigationStack);
@@ -353,6 +375,17 @@ export function useWorkspaceTransitions() {
         }
 
         if (savedPath) {
+          setSavedProjectContentDigests((previousDigests) =>
+            markProjectClean(previousDigests, {
+              project: projectToPersist,
+            }),
+          );
+          setProjectUnsavedChanges((previousFlags) =>
+            markProjectDirtyFlag(previousFlags, projectToPersist.metadata.id, false),
+          );
+          setProjectDataUnsavedChanges((previousFlags) =>
+            markProjectDirtyFlag(previousFlags, projectToPersist.metadata.id, false),
+          );
           hostCallbacks.onProjectSaved?.({
             project: projectToPersist,
             path: savedPath,
