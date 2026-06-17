@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findMatchRanges, projectMatches, type SearchBlock } from './fullscreenOutputSearch.js';
+import {
+  findMatchRanges,
+  getHighlightTextNodeRangeGroups,
+  projectMatches,
+  type HighlightTextSegment,
+  type SearchBlock,
+} from './fullscreenOutputSearch.js';
 
 test('findMatchRanges is case-insensitive and returns non-overlapping ranges', () => {
   assert.deepEqual(findMatchRanges('Hello hello HELLO', 'heLLo'), [
@@ -73,3 +79,36 @@ test('projectMatches returns zero matches when blocks have no match ranges', () 
 
   assert.deepEqual(projectMatches(blocks), []);
 });
+
+test('highlight range mapping counts virtual line breaks from rich rendered text', () => {
+  const firstLine = createFakeTextNode('  "first": "alpha",');
+  const secondLine = createFakeTextNode('  "target": "needle"');
+  const segments: HighlightTextSegment[] = [
+    { kind: 'text', textNode: firstLine, text: firstLine.textContent ?? '' },
+    { kind: 'virtual', text: '\n' },
+    { kind: 'text', textNode: secondLine, text: secondLine.textContent ?? '' },
+  ];
+  const rawText = segments.map((segment) => segment.text).join('');
+  const needleStartOffset = rawText.indexOf('needle');
+  const secondLineNeedleStartOffset = secondLine.textContent!.indexOf('needle');
+
+  const groups = getHighlightTextNodeRangeGroups({
+    textSegments: segments,
+    matchRanges: [{ startOffset: needleStartOffset, endOffset: needleStartOffset + 'needle'.length }],
+    matchIndices: [0],
+  });
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.textNode, secondLine);
+  assert.deepEqual(groups[0]?.ranges, [
+    {
+      startOffset: secondLineNeedleStartOffset,
+      endOffset: secondLineNeedleStartOffset + 'needle'.length,
+      matchIndex: 0,
+    },
+  ]);
+});
+
+function createFakeTextNode(textContent: string): Text {
+  return { textContent } as Text;
+}

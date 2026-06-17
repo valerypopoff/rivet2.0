@@ -9,9 +9,9 @@ import {
 } from 'react';
 import { useFullscreenOutputSearchContext } from '../nodeOutput/FullscreenOutputSearchContext.js';
 import {
-  applyHighlights,
+  applyHighlightsToTextSegments,
   clearHighlights,
-  collectTextNodes,
+  collectHighlightTextSegments,
   findMatchRanges,
   PROVIDER_ATTRIBUTE,
   type SearchMatchRange,
@@ -151,8 +151,8 @@ export function useLargeStoredValueFullscreenSearch(args: {
       return;
     }
 
-    const activeHighlightElement = applyHighlights({
-      textNodes: collectTextNodes(contentElement),
+    const activeHighlightElement = applyHighlightsToTextSegments({
+      textSegments: collectHighlightTextSegments(contentElement, { includeLineBreakElements: true }),
       matchRanges: [
         {
           startOffset: Math.max(0, localMatchStartOffset),
