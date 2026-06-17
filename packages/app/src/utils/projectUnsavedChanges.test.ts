@@ -4,6 +4,7 @@ import type { DataId, GraphId, NodeGraph, Project, ProjectId } from '@valerypopo
 import {
   buildCurrentProjectContentSnapshot,
   getProjectContentDigest,
+  hasProjectUnsavedChanges,
   markProjectClean,
   markProjectDirtyFlag,
   removeProjectUnsavedState,
@@ -113,5 +114,14 @@ describe('project unsaved changes helpers', () => {
     assert.deepEqual(removeProjectUnsavedState(flags, projectId), {
       [otherProjectId]: true,
     });
+  });
+
+  test('unsaved changes are true when either content or static data is dirty', () => {
+    const projectId = 'project-1' as ProjectId;
+
+    assert.equal(hasProjectUnsavedChanges({ [projectId]: true }, {}, projectId), true);
+    assert.equal(hasProjectUnsavedChanges({}, { [projectId]: true }, projectId), true);
+    assert.equal(hasProjectUnsavedChanges({ [projectId]: false }, { [projectId]: false }, projectId), false);
+    assert.equal(hasProjectUnsavedChanges({}, {}, projectId), false);
   });
 });

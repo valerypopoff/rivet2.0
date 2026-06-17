@@ -15,6 +15,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   const workspaceTransitionsSource = readFileSync(join(srcDir, '..', 'hooks', 'useWorkspaceTransitions.ts'), 'utf8');
   const setStaticDataSource = readFileSync(join(srcDir, '..', 'hooks', 'useSetStaticData.ts'), 'utf8');
   const savedGraphsSource = readFileSync(join(srcDir, '..', 'state', 'savedGraphs.ts'), 'utf8');
+  const projectUnsavedChangesSource = readFileSync(join(srcDir, '..', 'utils', 'projectUnsavedChanges.ts'), 'utf8');
   const colorsCss = readFileSync(join(srcDir, '..', 'colors.css'), 'utf8');
 
   assert.match(
@@ -234,8 +235,23 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   );
   assert.match(
     projectSelectorTsx,
-    /const hasUnsavedChanges =[\s\S]*projectUnsavedChanges\[projectId\] === true \|\| projectDataUnsavedChanges\[projectId\] === true;/,
+    /const hasUnsavedChanges = hasProjectUnsavedChanges\(projectUnsavedChanges, projectDataUnsavedChanges, projectId\);/,
   );
+  assert.match(
+    projectUnsavedChangesSource,
+    /export function hasProjectUnsavedChanges\([\s\S]*projectUnsavedChanges\[projectId\] === true \|\| projectDataUnsavedChanges\[projectId\] === true;/,
+  );
+  assert.match(projectSelectorTsx, /const \[projectPendingClose, setProjectPendingClose\] = useState<ProjectId \| null>\(null\);/);
+  assert.match(
+    projectSelectorTsx,
+    /const requestCloseProject = \(projectId: ProjectId\) => \{[\s\S]*hasProjectUnsavedChanges\(projectUnsavedChanges, projectDataUnsavedChanges, projectId\)[\s\S]*setProjectPendingClose\(projectId\);[\s\S]*void closeProject\(projectId\);[\s\S]*\};/,
+  );
+  assert.match(projectSelectorTsx, /<UnsavedProjectCloseConfirmModal[\s\S]*open={projectPendingCloseInfo != null}/);
+  assert.match(projectSelectorTsx, /const UnsavedProjectCloseConfirmModal: FC/);
+  assert.match(projectSelectorTsx, /<AppModalHeader title="Unsaved changes" onClose={onClose} \/>/);
+  assert.match(projectSelectorTsx, /There are unsaved changes in <strong>{projectTitle \?\? 'this project'}<\/strong>/);
+  assert.match(projectSelectorTsx, /Close this project tab anyway\? Unsaved changes will be lost\./);
+  assert.match(projectSelectorTsx, />\s*Close without saving\s*<\/Button>/);
   assert.match(projectSelectorTsx, /&\.has-unsaved-changes \.project-name::before \{[\s\S]*display: block;/);
   assert.match(
     savedGraphsSource,

@@ -63,6 +63,14 @@ export function markProjectDirtyFlag(
   };
 }
 
+export function hasProjectUnsavedChanges(
+  projectUnsavedChanges: Record<ProjectId, boolean | undefined>,
+  projectDataUnsavedChanges: Record<ProjectId, boolean | undefined>,
+  projectId: ProjectId,
+): boolean {
+  return projectUnsavedChanges[projectId] === true || projectDataUnsavedChanges[projectId] === true;
+}
+
 export function removeProjectUnsavedState<T>(
   current: Record<ProjectId, T | undefined>,
   projectId: ProjectId,
