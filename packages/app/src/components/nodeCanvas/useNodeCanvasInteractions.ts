@@ -6,9 +6,9 @@ import type { CanvasPosition } from '../../state/graphBuilder.js';
 
 const SHIFT_WHEEL_ZOOM_MULTIPLIER = 6;
 const MAX_WHEEL_ZOOM_SPEED = 0.95;
-const CANVAS_PAN_SURFACE_CLASSES = ['node-canvas', 'canvas-contents', 'nodes'];
+const CANVAS_PAN_SURFACE_CLASSES = ['node-canvas', 'canvas-contents', 'nodes', 'wire-hit-area'];
 
-export function isCanvasPanSurface(target: HTMLElement): boolean {
+export function isCanvasPanSurface(target: Element): boolean {
   if (target.closest('.node.isComment .node-body')) {
     return true;
   }
@@ -25,7 +25,7 @@ export function shouldStartCanvasPan({
   target,
 }: {
   isNodeDragGestureActive: boolean;
-  target: HTMLElement;
+  target: Element;
 }): boolean {
   return !isNodeDragGestureActive && isCanvasPanSurface(target);
 }
@@ -135,7 +135,7 @@ export const useNodeCanvasInteractions = ({
       e.button !== 0 ||
       !shouldStartCanvasPan({
         isNodeDragGestureActive: isNodeDragGestureActive(),
-        target: e.target as HTMLElement,
+        target: e.target as Element,
       })
     ) {
       return;

@@ -52,6 +52,16 @@ const wiresStyles = css`
     transition: stroke 0.2s ease-out;
   }
 
+  .wire-hit-area {
+    cursor: inherit;
+    fill: none;
+    pointer-events: stroke;
+    stroke: transparent;
+    stroke-linecap: round;
+    stroke-width: 16px;
+    vector-effect: non-scaling-stroke;
+  }
+
   .wire.compare-added {
     stroke: var(--success);
     stroke-width: 3px;
@@ -112,6 +122,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   viewportClientRect,
 }) => {
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [hoveredConnectionKey, setHoveredConnectionKey] = useState<string | undefined>();
   const [closestPort, setClosestPort] = useAtom(draggingWireClosestPortState);
   const store = useStore();
 
@@ -214,6 +225,34 @@ export const WireLayer: FC<WireLayerProps> = ({
     viewportClientRect,
   });
 
+  useEffect(() => {
+    if (!hoveredConnectionKey) {
+      return;
+    }
+
+    const hoveredConnectionIsRenderable = renderableWires.some(
+      (connection) => getProjectConnectionComparisonKey(connection) === hoveredConnectionKey,
+    );
+
+    if (!hoveredConnectionIsRenderable) {
+      setHoveredConnectionKey(undefined);
+    }
+  }, [hoveredConnectionKey, renderableWires]);
+
+  useEffect(() => {
+    if (draggingNode || draggingWire) {
+      setHoveredConnectionKey(undefined);
+    }
+  }, [draggingNode, draggingWire]);
+
+  const handleConnectionHoverStart = useStableCallback((connectionKey: string) => {
+    setHoveredConnectionKey(connectionKey);
+  });
+
+  const handleConnectionHoverEnd = useStableCallback((connectionKey: string) => {
+    setHoveredConnectionKey((current) => (current === connectionKey ? undefined : current));
+  });
+
   return (
     <svg css={wiresStyles}>
       <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
@@ -248,9 +287,13 @@ export const WireLayer: FC<WireLayerProps> = ({
         )}
         <StaticWireContents
           graphSelectionOptions={graphSelectionOptions}
+          allowConnectionHover={!draggingNode && !draggingWire}
           highlightedNodes={highlightedNodes}
           highlightedPort={highlightedPort}
+          hoveredConnectionKey={hoveredConnectionKey}
           lastRunDataByNode={lastRunDataByNode}
+          onConnectionHoverEnd={handleConnectionHoverEnd}
+          onConnectionHoverStart={handleConnectionHoverStart}
           compareRemovedConnections={compareRemovedConnections}
           connectionCompareKindsByKey={connectionCompareKindsByKey}
           nodesById={renderNodesById}
@@ -266,18 +309,23 @@ export const WireLayer: FC<WireLayerProps> = ({
 
 const StaticWireContents = memo(
   ({
+    allowConnectionHover,
     compareRemovedConnections,
     connectionCompareKindsByKey,
     graphSelectionOptions,
     highlightedNodes,
     highlightedPort,
+    hoveredConnectionKey,
     lastRunDataByNode,
     nodesById,
+    onConnectionHoverEnd,
+    onConnectionHoverStart,
     portPositions,
     renderableWires,
     runningNodeIdSet,
     selectedProcessPageNodes,
   }: {
+    allowConnectionHover: boolean;
     compareRemovedConnections: NodeConnection[];
     connectionCompareKindsByKey: Record<string, ProjectComparisonChangeKind | undefined>;
     graphSelectionOptions: Parameters<typeof getSelectedProcessData>[2];
@@ -289,8 +337,11 @@ const StaticWireContents = memo(
           portId: PortId;
         }
       | undefined;
+    hoveredConnectionKey: string | undefined;
     lastRunDataByNode: RunDataByNodeId;
     nodesById: Record<NodeId, ChartNode>;
+    onConnectionHoverEnd: (connectionKey: string) => void;
+    onConnectionHoverStart: (connectionKey: string) => void;
     portPositions: PortPositions;
     renderableWires: NodeConnection[];
     runningNodeIdSet: ReadonlySet<NodeId>;
@@ -317,7 +368,8 @@ const StaticWireContents = memo(
           </ErrorBoundary>
         ))}
         {renderableWires.map((connection) => {
-          const compareChangeKind = connectionCompareKindsByKey[getProjectConnectionComparisonKey(connection)];
+          const connectionKey = getProjectConnectionComparisonKey(connection);
+          const compareChangeKind = connectionCompareKindsByKey[connectionKey];
           const isHighlightedNode =
             highlightedNodeIdSet?.has(connection.inputNodeId) || highlightedNodeIdSet?.has(connection.outputNodeId);
 
@@ -331,9 +383,10 @@ const StaticWireContents = memo(
 
           const isNotRan = getIsNotRan(connection, selectedProcessPageNodes, lastRunDataByNode, graphSelectionOptions);
 
-          const highlighted = isHighlightedNode || isCurrentlyRunning || isHighlightedPort;
+          const isHoveredConnection = hoveredConnectionKey === connectionKey;
+          const highlighted = isHighlightedNode || isCurrentlyRunning || isHighlightedPort || isHoveredConnection;
           return (
-            <ErrorBoundary fallback={<></>} key={`wire-${connection.inputId}-${connection.inputNodeId}`}>
+            <ErrorBoundary fallback={<></>} key={`wire-${connectionKey}`}>
               <ConditionallyRenderWire
                 connection={connection}
                 selected={false}
@@ -342,6 +395,9 @@ const StaticWireContents = memo(
                 portPositions={portPositions}
                 isNotRan={isNotRan}
                 compareChangeKind={compareChangeKind}
+                interactive={allowConnectionHover}
+                onHoverStart={() => onConnectionHoverStart(connectionKey)}
+                onHoverEnd={() => onConnectionHoverEnd(connectionKey)}
               />
             </ErrorBoundary>
           );

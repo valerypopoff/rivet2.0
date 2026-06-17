@@ -14,6 +14,9 @@ type WireProps = {
   compareChangeKind?: ProjectComparisonChangeKind;
   nodesById: Record<NodeId, ChartNode>;
   portPositions: PortPositions;
+  interactive?: boolean;
+  onHoverStart?: () => void;
+  onHoverEnd?: () => void;
 };
 
 export type PartialConnection = {
@@ -31,6 +34,9 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
   compareChangeKind,
   nodesById,
   portPositions,
+  interactive = false,
+  onHoverStart,
+  onHoverEnd,
 }) => {
   const inputNode = nodesById[connection.inputNodeId]!;
   const outputNode = nodesById[connection.outputNodeId]!;
@@ -56,7 +62,16 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
         isNotRan={isNotRan}
         compareChangeKind={compareChangeKind}
       />
-      ;
+      {interactive && (
+        <WireInteractionTarget
+          sx={start.x}
+          sy={start.y}
+          ex={end.x}
+          ey={end.y}
+          onHoverStart={onHoverStart}
+          onHoverEnd={onHoverEnd}
+        />
+      )}
     </ErrorBoundary>
   );
 };
@@ -78,7 +93,7 @@ export const PartialWire: FC<{ connection: PartialConnection; portPositions: Por
 
   return (
     <ErrorBoundary fallback={<></>}>
-      <Wire sx={start.x} sy={start.y} ex={end.x} ey={end.y} selected={false} highlighted={false} isNotRan={false} />;
+      <Wire sx={start.x} sy={start.y} ex={end.x} ey={end.y} selected={false} highlighted={false} isNotRan={false} />
     </ErrorBoundary>
   );
 };
@@ -93,23 +108,8 @@ export const Wire: FC<{
   isNotRan: boolean;
   compareChangeKind?: ProjectComparisonChangeKind;
 }> = memo(({ sx, sy, ex, ey, selected, highlighted, isNotRan, compareChangeKind }) => {
-  const deltaX = Math.abs(ex - sx);
-  const handleDistance = sx <= ex ? deltaX * 0.5 : Math.abs(ey - sy) * 0.6;
-
   const isBackwards = sx > ex;
-
-  const curveX1 = sx + handleDistance;
-  const curveY1 = sy;
-  const curveX2 = ex - handleDistance;
-  const curveY2 = ey;
-
-  const middleY = (sy + ey) / 2;
-
-  const wirePath =
-    sx <= ex
-      ? `M${sx},${sy} C${curveX1},${curveY1} ${curveX2},${curveY2} ${ex},${ey}`
-      : `M${sx},${sy} C${curveX1},${curveY1} ${curveX1},${middleY} ${sx},${middleY} ` +
-        `L${ex},${middleY} C${curveX2},${middleY} ${curveX2},${curveY2} ${ex},${ey}`;
+  const wirePath = getWirePath({ sx, sy, ex, ey });
 
   return (
     <path
@@ -126,6 +126,43 @@ export const Wire: FC<{
 });
 
 Wire.displayName = 'Wire';
+
+const WireInteractionTarget: FC<{
+  sx: number;
+  sy: number;
+  ex: number;
+  ey: number;
+  onHoverStart?: () => void;
+  onHoverEnd?: () => void;
+}> = memo(({ sx, sy, ex, ey, onHoverStart, onHoverEnd }) => {
+  return (
+    <path
+      className="wire-hit-area"
+      d={getWirePath({ sx, sy, ex, ey })}
+      onMouseEnter={onHoverStart ? () => onHoverStart() : undefined}
+      onMouseLeave={onHoverEnd ? () => onHoverEnd() : undefined}
+    />
+  );
+});
+
+WireInteractionTarget.displayName = 'WireInteractionTarget';
+
+function getWirePath({ sx, sy, ex, ey }: { sx: number; sy: number; ex: number; ey: number }): string {
+  const deltaX = Math.abs(ex - sx);
+  const handleDistance = sx <= ex ? deltaX * 0.5 : Math.abs(ey - sy) * 0.6;
+
+  const curveX1 = sx + handleDistance;
+  const curveY1 = sy;
+  const curveX2 = ex - handleDistance;
+  const curveY2 = ey;
+
+  const middleY = (sy + ey) / 2;
+
+  return sx <= ex
+    ? `M${sx},${sy} C${curveX1},${curveY1} ${curveX2},${curveY2} ${ex},${ey}`
+    : `M${sx},${sy} C${curveX1},${curveY1} ${curveX1},${middleY} ${sx},${middleY} ` +
+        `L${ex},${middleY} C${curveX2},${middleY} ${curveX2},${curveY2} ${ex},${ey}`;
+}
 
 export function getNodePortPosition(
   node: ChartNode,
