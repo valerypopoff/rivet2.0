@@ -62,7 +62,7 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 20. Project uploading also does not use the editor bridge. The dashboard opens a browser file picker, posts the selected file to `POST /api/workflows/projects/upload`, refreshes the workflow tree, and leaves selection and open tabs unchanged.
 21. Project downloading also does not use the editor bridge. The dashboard calls `POST /api/workflows/projects/download` directly and only downloads saved server-side project files.
 22. Empty-folder deletion is API-only and does not need special bridge cleanup because no workflow project paths move; the dashboard just refreshes the tree after the delete succeeds.
-23. On `project-saved`, the hosted editor first reconciles the active project metadata and tab label back to the saved file-tree name without reloading the project, then the dashboard refreshes the workflow tree from the API and trusts the server-derived publication status. It does not locally force a `published -> unpublished_changes` status flip first, and the server now keeps published projects in `published` when the save was a true no-op.
+23. On `project-saved`, the hosted editor reconciles only opened-tab metadata back to the saved file-tree name without reloading the project, then the dashboard refreshes the workflow tree from the API and trusts the server-derived publication status. The wrapper does not mutate active project content after upstream marks the save clean, because Rivet owns the in-memory dirty digest used by the tab unsaved-changes dot. If a future wrapper-owned save flow must make active editor snapshot changes after backend save success, it must use `RivetWorkspaceHost.markCurrentProjectClean()` or `markProjectClean()` instead of importing dirty-state atoms. It does not locally force a `published -> unpublished_changes` status flip first, and the server now keeps published projects in `published` when the save was a true no-op.
 24. On `project-opened`, both sides of the hosted bridge explicitly move focus to the editor iframe so keyboard shortcuts target the editor instead of the workflow-library row that triggered the open.
 25. If the iframe reloads, `onLoad` resets `editorReady` to `false`, re-enabling the command buffer until `editor-ready` is sent again.
 
@@ -70,11 +70,12 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 
 Save can be initiated from either context:
 
-- inside the iframe, the editor bridge listens for `Ctrl+S` / `Cmd+S` and calls the editor's normal save flow across platforms, including hosted Windows browser sessions
+- inside the iframe, the editor bridge listens for `Ctrl+S` / `Cmd+S` and calls the editor's normal save flow across platforms, including hosted Windows browser sessions; when it owns the shortcut it stops same-target listeners too, so upstream Windows/Tauri menu hotkeys cannot perform a second save for the same keypress
 - outside the iframe, the dashboard captures the save shortcut and sends `save-project`
 - save completion is reported through `RivetAppHost.onProjectSaved`, which the wrapper forwards to the dashboard as `project-saved`; the wrapper does not override upstream save/menu hooks just to observe saves
 - the API validates the saved project payload before persistence and treats the workflow tree/file name as the hosted project title source of truth; if the editor changed `data.metadata.title`, the saved `.rivet-project` is rewritten back to the current tree name
-- after a successful save, the hosted wrapper patches only project-title metadata in the active project, opened-project tab registry, and any cached opened-project snapshot so the visible tab updates to the file-tree name immediately without reopening the project or changing the active graph
+- after a successful save, the hosted wrapper patches only opened-tab title metadata so the visible tab updates to the file-tree name immediately without reopening the project, changing the active graph, mutating active project content, or reseeding Rivet's dirty baseline itself
+- wrapper-owned save code that bypasses Rivet's save command must call `RivetWorkspaceHost.markCurrentProjectClean()` or `markProjectClean()` only after the backend save succeeds, optionally with the exact snapshot that should become clean; do not read or mutate `savedProjectContentDigestsState`, `projectUnsavedChangesState`, or `projectDataUnsavedChangesState` directly
 - the hosted wrapper also overrides the upstream Windows hotkey fallback so `Ctrl+S` does not trigger a second save via the legacy keyup path
 
 That lets the hosted shell behave like a single app even though the editor lives in an iframe.
@@ -128,7 +129,7 @@ Those execution websocket responsibilities are separate from the dashboard/edito
 - `wrapper/web/dashboard/editorBridgeFocus.ts` - iframe/canvas focus helpers and save-shortcut detection
 - `wrapper/web/dashboard/EditorMessageBridge.tsx` - editor-side message handling
 - `wrapper/web/dashboard/HostedEditorApp.tsx` - `RivetAppHost` UI policy, callback forwarding for active project, open project count, saved project events, and workspace-host readiness
-- `wrapper/web/dashboard/useReconcileHostedProjectTitleAfterSave.ts` - save-completion title reconciliation for active project metadata, tab labels, and opened-project snapshots
+- `wrapper/web/dashboard/useReconcileHostedProjectTitleAfterSave.ts` - save-completion title reconciliation for opened-tab metadata only; do not mutate active project content or opened snapshots after upstream marks the project clean
 - `wrapper/web/dashboard/hostedRivetProviders.ts` - explicit provider overrides passed into `RivetAppHost`
 - `wrapper/web/overrides/state/savedGraphs.ts` - hosted preservation of editor-owned `projectContext__"<projectId>"` storage across tab close/reopen
 - `wrapper/web/dashboard/useOpenWorkflowProject.ts` - hosted path loading, duplicate-id checks, and open/replace-current calls through the captured `RivetWorkspaceHost`

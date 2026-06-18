@@ -47,6 +47,7 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   const editorBridgeTypes = readRepoFile('wrapper/shared/editor-bridge.ts');
   const editorMessageBridge = readRepoFile('wrapper/web/dashboard/EditorMessageBridge.tsx');
   const openWorkflowProject = readRepoFile('wrapper/web/dashboard/useOpenWorkflowProject.ts');
+  const titleAfterSaveReconciler = readRepoFile('wrapper/web/dashboard/useReconcileHostedProjectTitleAfterSave.ts');
   const savedGraphsOverride = readRepoFile('wrapper/web/overrides/state/savedGraphs.ts');
   const loadProjectOverride = readRepoFile('wrapper/web/overrides/hooks/useLoadProject.ts');
   const syncOpenedProjectsOverride = readRepoFile('wrapper/web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts');
@@ -73,6 +74,10 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(openWorkflowProject, /canLoadProjectByPath\(ioProvider\)/);
   assert.match(openWorkflowProject, /retainOnlyOpenedProject/);
   assert.doesNotMatch(openWorkflowProject, /await loadProject|useRivetWorkspaceHost|useLoadProject/);
+
+  assert.match(titleAfterSaveReconciler, /projectsState/);
+  assert.doesNotMatch(titleAfterSaveReconciler, /projectState|openedProjectSnapshotsState|savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
+  assert.doesNotMatch(editorMessageBridge, /savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
 
   assert.match(loadProjectOverride, /openedProjectSnapshotsState/);
   assert.match(loadProjectOverride, /useWorkspaceTransitions/);
@@ -111,6 +116,8 @@ test('hosted executor, save, find, and clipboard shims stay scoped to wrapper-ow
   assert.doesNotMatch(viteAliases, /useExecutorSession|useRemoteDebugger|useGraphExecutor|useRemoteExecutor|useSaveProject|useMenuCommands/);
   assert.match(editorMessageBridge, /const \{ saveProject \} = useSaveProject\(\)/);
   assert.doesNotMatch(editorMessageBridge, /rivet-project-saved/);
+  assert.match(editorMessageBridge, /event\.defaultPrevented \|\| !isSaveShortcutEvent\(event\)/);
+  assert.match(editorMessageBridge, /event\.stopImmediatePropagation\?\.\(\)/);
   assert.match(windowsHotkeysFix, /menuId === 'save_project' && isHostedMode\(\)/);
   assert.doesNotMatch(windowsHotkeysFix, /CmdOrCtrl\+Shift\+I|import_graph/);
   assert.match(editorEvents, /postMessageToEditor\(editorWindow,\s*\{\s*type: 'trigger-editor-find-shortcut'/);
