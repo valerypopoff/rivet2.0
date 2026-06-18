@@ -6,16 +6,18 @@ import { fileURLToPath } from 'node:url';
 
 const srcDir = dirname(fileURLToPath(import.meta.url));
 
-test('shared popup menu surfaces use the opaque theme-tinted material', () => {
+test('shared popup menu surfaces use the translucent blurred theme-tinted material', () => {
   const popupMenuSource = readFileSync(join(srcDir, 'PopupMenu.tsx'), 'utf8');
 
   assert.match(
     popupMenuSource,
-    /export const popupMenuSurfaceStyles = css`[\s\S]*background-color: var\(--grey-dark-colorish\);/,
+    /export const popupMenuSurfaceStyles = css`[\s\S]*background-color: var\(--grey-dark-colorish-seethrough\);/,
   );
+  assert.match(popupMenuSource, /backdrop-filter: blur\(2px\);/);
+  assert.match(popupMenuSource, /-webkit-backdrop-filter: blur\(2px\);/);
   assert.match(popupMenuSource, /border: 1px solid var\(--settings-collapsible-border\);/);
   assert.doesNotMatch(popupMenuSource, /border: 2px solid var\(--grey-dark\);/);
-  assert.doesNotMatch(popupMenuSource, /background-color: var\(--grey-dark-colorish-seethrough\);/);
+  assert.doesNotMatch(popupMenuSource, /background-color: var\(--grey-dark-colorish\);/);
   assert.doesNotMatch(popupMenuSource, /background-color: var\(--foreground-on-primary\);/);
 });
 

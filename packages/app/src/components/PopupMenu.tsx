@@ -11,7 +11,9 @@ import {
 import clsx from 'clsx';
 
 export const popupMenuSurfaceStyles = css`
-  background-color: var(--grey-dark-colorish);
+  background-color: var(--grey-dark-colorish-seethrough);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   border-radius: 18px;
   corner-shape: squircle;
   @supports not (corner-shape: squircle) {
