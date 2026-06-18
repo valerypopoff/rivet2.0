@@ -89,8 +89,14 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   );
   assert.match(
     structuredNodeOutputSource,
-    /useFolding=\{renderMode === 'expanded-preview' && allowLargeStoredValueActions === true\}/,
+    /const useFoldableParsedSource = renderMode === 'expanded-preview' && allowLargeStoredValueActions === true;/,
   );
+  assert.match(
+    structuredNodeOutputSource,
+    /const placeParsedSourceBeforeChildren = useFoldableParsedSource && errorMessage === undefined;/,
+  );
+  assert.match(structuredNodeOutputSource, /\{placeParsedSourceBeforeChildren && parsedSourceSection\}/);
+  assert.match(structuredNodeOutputSource, /\{!placeParsedSourceBeforeChildren && parsedSourceSection\}/);
   assert.match(
     structuredNodeOutputSource,
     /<FoldingCodeBlock text=\{source\} language=\{language\} wrapLines=\{wrapLines\} \/>/,

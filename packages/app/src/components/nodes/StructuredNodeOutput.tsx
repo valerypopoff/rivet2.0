@@ -59,21 +59,29 @@ export const StructuredNodeOutput: FC<{
   parsedSource,
   parsedSourceLabel,
   parsedSourceLanguage,
-}) => (
-  <div css={structuredNodeOutputCss}>
-    {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
-    {children}
-    {parsedSource !== undefined && parsedSourceLanguage && (
+}) => {
+  const useFoldableParsedSource = renderMode === 'expanded-preview' && allowLargeStoredValueActions === true;
+  const placeParsedSourceBeforeChildren = useFoldableParsedSource && errorMessage === undefined;
+  const parsedSourceSection =
+    parsedSource !== undefined && parsedSourceLanguage ? (
       <ParsedSourceOutputSection
         label={parsedSourceLabel ?? 'Parsed expression'}
         source={parsedSource}
         language={parsedSourceLanguage}
-        useFolding={renderMode === 'expanded-preview' && allowLargeStoredValueActions === true}
+        useFolding={useFoldableParsedSource}
         wrapLines={wrapLines ?? true}
       />
-    )}
-  </div>
-);
+    ) : null;
+
+  return (
+    <div css={structuredNodeOutputCss}>
+      {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
+      {placeParsedSourceBeforeChildren && parsedSourceSection}
+      {children}
+      {!placeParsedSourceBeforeChildren && parsedSourceSection}
+    </div>
+  );
+};
 
 export const StructuredNodeOutputSection: FC<{
   children: ReactNode;
