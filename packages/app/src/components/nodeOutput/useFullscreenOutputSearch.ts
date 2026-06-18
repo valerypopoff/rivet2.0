@@ -145,6 +145,7 @@ export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSe
 
       if (query.length === 0) {
         matchesRef.current = [];
+        providersRef.current.forEach(clearProviderMatches);
       } else {
         const blocks = buildSearchBlocks(bodyElement, providersRef.current, query);
         matchesRef.current = projectMatches(blocks);
@@ -176,7 +177,7 @@ export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSe
 
     const matches = matchesRef.current;
     if (matches.length === 0) {
-      providersRef.current.forEach((provider) => provider.clearActiveMatch());
+      providersRef.current.forEach(clearProviderMatches);
       if (currentMatchIndex !== 0) {
         setCurrentMatchIndex(0);
       }
@@ -229,7 +230,7 @@ export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSe
         clearHighlights(bodyElement);
       }
 
-      providers.forEach((provider) => provider.clearActiveMatch());
+      providers.forEach(clearProviderMatches);
     };
   }, [fullscreenOutputBodyRef]);
 
@@ -245,4 +246,13 @@ export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSe
     setQuery,
     totalMatchCount,
   };
+}
+
+function clearProviderMatches(provider: SearchProvider): void {
+  if (provider.clearMatches) {
+    provider.clearMatches();
+    return;
+  }
+
+  provider.clearActiveMatch();
 }

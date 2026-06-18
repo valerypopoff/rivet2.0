@@ -3,6 +3,10 @@ import { toast } from 'react-toastify';
 
 const recentErrorTimestamps = new Map<string, number>();
 const ERROR_DEDUPE_WINDOW_MS = 5_000;
+const IGNORED_BROWSER_ERROR_MESSAGES = new Set([
+  'ResizeObserver loop completed with undelivered notifications.',
+  'ResizeObserver loop limit exceeded',
+]);
 
 export type HandleErrorOptions = {
   metadata?: Record<string, unknown>;
@@ -12,6 +16,28 @@ export type HandleErrorOptions = {
 type HandleErrorOptionsResolver<TArgs extends unknown[]> =
   | HandleErrorOptions
   | ((...args: TArgs) => HandleErrorOptions);
+
+function getBrowserErrorMessage(error: unknown): string | undefined {
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'object' && error != null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' ? message : undefined;
+  }
+
+  return undefined;
+}
+
+export function isIgnoredBrowserError(error: unknown): boolean {
+  const message = getBrowserErrorMessage(error)?.trim();
+  return message != null && IGNORED_BROWSER_ERROR_MESSAGES.has(message);
+}
 
 export function handleError(error: unknown, context: string, options: HandleErrorOptions = {}): void {
   const normalizedError = getError(error);
@@ -61,10 +87,20 @@ export function installGlobalErrorHandlers(): void {
   windowWithFlag.__rivetGlobalErrorHandlersInstalled = true;
 
   window.addEventListener('unhandledrejection', (event) => {
+    if (isIgnoredBrowserError(event.reason)) {
+      event.preventDefault();
+      return;
+    }
+
     handleError(event.reason, 'Unhandled promise rejection');
   });
 
   window.addEventListener('error', (event) => {
+    if (isIgnoredBrowserError(event.error) || isIgnoredBrowserError(event.message)) {
+      event.preventDefault();
+      return;
+    }
+
     handleError(event.error ?? event.message, 'Unhandled error');
   });
 }

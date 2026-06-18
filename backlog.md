@@ -1,5 +1,5 @@
 
-- In the full output modal allow code and JSON folding
+- Context menus must be half transparent and blurring just like the left panel now
 
 - In the full output modal show word and character counters
 

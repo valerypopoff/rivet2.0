@@ -1,7 +1,7 @@
 import { describe, test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { toast, type Id as ToastId } from 'react-toastify';
-import { handleError, wrapAsync } from './errorHandling.js';
+import { handleError, isIgnoredBrowserError, wrapAsync } from './errorHandling.js';
 
 type ToastWithMutableError = typeof toast & {
   error: typeof toast.error;
@@ -106,6 +106,16 @@ describe('errorHandling', { concurrency: false }, () => {
 
     assert.equal(toasted.length, 0);
     assert.equal(relevantLogged.length, 1);
+  });
+
+  test('recognizes benign ResizeObserver browser loop warnings', () => {
+    assert.equal(isIgnoredBrowserError('ResizeObserver loop completed with undelivered notifications.'), true);
+    assert.equal(isIgnoredBrowserError(new Error('ResizeObserver loop limit exceeded')), true);
+    assert.equal(
+      isIgnoredBrowserError({ message: 'ResizeObserver loop completed with undelivered notifications.' }),
+      true,
+    );
+    assert.equal(isIgnoredBrowserError(new Error('real layout failure')), false);
   });
 
   test('wrapAsync resolves structured error options from handler arguments', async () => {

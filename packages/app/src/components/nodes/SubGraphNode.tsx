@@ -312,7 +312,8 @@ export const SubGraphNodeOutputSimple: FC<{
   isCompact: boolean;
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ outputs, renderMarkdown, isCompact, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ outputs, renderMarkdown, isCompact, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const dataRefs = useDataRefs();
   const costMetric = getSubGraphCostMetric(tryRestoreStoredDataValue(outputs['cost' as PortId], dataRefs));
   const durationMetric = getSubGraphDurationMetric(
@@ -348,6 +349,7 @@ export const SubGraphNodeOutputSimple: FC<{
             isCompact={isCompact}
             mode={renderMode}
             allowLargeStoredValueActions={allowLargeStoredValueActions}
+            wrapLines={wrapLines}
           />
         </div>
       )}
@@ -398,7 +400,8 @@ export const FullscreenSubGraphNodeOutputSimple: FC<{
   renderMarkdown: boolean;
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ outputs, renderMarkdown, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ outputs, renderMarkdown, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   return (
     <SubGraphNodeOutputSimple
       outputs={outputs}
@@ -406,6 +409,7 @@ export const FullscreenSubGraphNodeOutputSimple: FC<{
       isCompact={false}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   );
 };

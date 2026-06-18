@@ -10,6 +10,7 @@ export type SearchProvider = {
   getMatchRanges(query: string): SearchMatchRange[];
   activateMatch(localMatchIndex: number): void;
   clearActiveMatch(): void;
+  clearMatches?(): void;
 };
 
 export type SearchMatchRange = {

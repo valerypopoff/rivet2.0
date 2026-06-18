@@ -448,6 +448,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
     renderMarkdown,
     renderMode: 'expanded-preview',
     allowLargeStoredValueActions: true,
+    wrapLines,
   });
   const hasBody = body != null;
 

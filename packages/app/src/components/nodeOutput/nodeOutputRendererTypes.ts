@@ -6,6 +6,7 @@ import type { OutputRenderMode } from '../renderDataValue/outputRenderTypes.js';
 export type NodeOutputRenderPolicyProps = {
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
+  wrapLines?: boolean;
 };
 
 export type NodeOutputRendererProps<TNode extends ChartNode = ChartNode> = NodeOutputRenderPolicyProps & {

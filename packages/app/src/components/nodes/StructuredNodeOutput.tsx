@@ -1,6 +1,8 @@
 import { css } from '@emotion/react';
 import { type FC, type ReactNode } from 'react';
 import ColorizedPreformattedText from '../ColorizedPreformattedText.js';
+import { FoldingCodeBlock } from '../renderDataValue/FoldingCodeBlock.js';
+import { type OutputRenderMode } from '../renderDataValue/outputRenderTypes.js';
 import { outputSectionGroupGap, outputSectionLabelStyles } from '../renderDataValue/renderDataValueStyles.js';
 
 const structuredNodeOutputCss = css`
@@ -42,10 +44,22 @@ const structuredNodeOutputCss = css`
 export const StructuredNodeOutput: FC<{
   children?: ReactNode;
   errorMessage?: string;
+  renderMode?: OutputRenderMode;
+  allowLargeStoredValueActions?: boolean;
+  wrapLines?: boolean;
   parsedSource?: string;
   parsedSourceLabel?: string;
   parsedSourceLanguage?: string;
-}> = ({ children, errorMessage, parsedSource, parsedSourceLabel, parsedSourceLanguage }) => (
+}> = ({
+  children,
+  errorMessage,
+  renderMode,
+  allowLargeStoredValueActions,
+  wrapLines,
+  parsedSource,
+  parsedSourceLabel,
+  parsedSourceLanguage,
+}) => (
   <div css={structuredNodeOutputCss}>
     {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
     {children}
@@ -54,6 +68,8 @@ export const StructuredNodeOutput: FC<{
         label={parsedSourceLabel ?? 'Parsed expression'}
         source={parsedSource}
         language={parsedSourceLanguage}
+        useFolding={renderMode === 'expanded-preview' && allowLargeStoredValueActions === true}
+        wrapLines={wrapLines ?? true}
       />
     )}
   </div>
@@ -78,8 +94,14 @@ const ParsedSourceOutputSection: FC<{
   label: string;
   language: string;
   source: string;
-}> = ({ label, language, source }) => (
+  useFolding: boolean;
+  wrapLines: boolean;
+}> = ({ label, language, source, useFolding, wrapLines }) => (
   <StructuredNodeOutputSection label={label} className="structured-node-output-source">
-    <ColorizedPreformattedText text={source} language={language} />
+    {useFolding ? (
+      <FoldingCodeBlock text={source} language={language} wrapLines={wrapLines} />
+    ) : (
+      <ColorizedPreformattedText text={source} language={language} />
+    )}
   </StructuredNodeOutputSection>
 );

@@ -20,7 +20,8 @@ const ExpressionNodeOutputBody: FC<{
   data: NodeRunDataWithRefs;
   renderMode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ node, data, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
   const hasError = data.status?.type === 'error';
   const dataRefs = useDataRefs();
@@ -52,6 +53,7 @@ const ExpressionNodeOutputBody: FC<{
         isCompact={isCompactPreview}
         mode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     );
   };
@@ -84,6 +86,9 @@ const ExpressionNodeOutputBody: FC<{
   return (
     <StructuredNodeOutput
       errorMessage={errorMessage}
+      renderMode={renderMode}
+      allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
       parsedSource={shouldShowParsedExpression ? parsedExpression ?? '' : undefined}
       parsedSourceLanguage="javascript"
     >
@@ -96,20 +101,22 @@ const ExpressionNodeOutputBody: FC<{
 };
 
 export const expressionNodeDescriptor: NodeComponentDescriptor<'expression'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions }) => (
+  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <ExpressionNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions }) => (
+  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <ExpressionNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
 };

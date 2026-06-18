@@ -16,6 +16,7 @@ import { useMemo, type FC } from 'react';
 import { match } from 'ts-pattern';
 import type { DataValueRendererProps } from './createDataValueRendererMap.js';
 import ColorizedPreformattedText from '../ColorizedPreformattedText.js';
+import { FoldingCodeBlock } from './FoldingCodeBlock.js';
 import { RenderChatMessagePart } from './RenderChatMessagePart.js';
 import { COMPACT_PREVIEW_MAX_CHARS, COMPACT_PREVIEW_MAX_LINES } from '../../utils/outputStorageLimits.js';
 import { getRenderedStringText } from './stringPreview.js';
@@ -39,6 +40,7 @@ export type ScalarRendererProps<T extends DataType = DataType> = {
   isCompact?: boolean;
   mode?: DataValueRendererProps['mode'];
   allowLargeStoredValueActions?: boolean;
+  wrapLines?: boolean;
 };
 
 export function createScalarRenderers(options: { renderValue: (props: DataValueRendererProps) => JSX.Element }) {
@@ -62,7 +64,7 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
 
       return <pre className="pre-wrap">{truncated}</pre>;
     },
-    'chat-message': ({ value, renderMarkdown, isCompact, allowLargeStoredValueActions }) => {
+    'chat-message': ({ value, renderMarkdown, isCompact, allowLargeStoredValueActions, wrapLines }) => {
       const { value: realValue } = value as ChatMessageDataValue;
       let parts = getRenderableChatMessageParts(isRecord(realValue) ? realValue.message : undefined);
 
@@ -118,7 +120,9 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
                   <h4>Function Calls:</h4>
                   <div className="pre-wrap">
                     {functionCall.functionCalls.map((fc, index) => (
-                      <div key={index}>{renderValue({ value: inferType(fc), allowLargeStoredValueActions })}</div>
+                      <div key={index}>
+                        {renderValue({ value: inferType(fc), allowLargeStoredValueActions, wrapLines })}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -127,7 +131,11 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
                   <div className="function-call">
                     <h4>Function Call:</h4>
                     <div className="pre-wrap">
-                      {renderValue({ value: inferType(functionCall.functionCall), allowLargeStoredValueActions })}
+                      {renderValue({
+                        value: inferType(functionCall.functionCall),
+                        allowLargeStoredValueActions,
+                        wrapLines,
+                      })}
                     </div>
                   </div>
                 )
@@ -156,7 +164,16 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
     time: ({ value }) => <>{value.value}</>,
     datetime: ({ value }) => <>{value.value}</>,
     'control-flow-excluded': () => <>Not ran</>,
-    any: ({ value, depth, renderMarkdown, isCompact, mode, truncateLength, allowLargeStoredValueActions }) => {
+    any: ({
+      value,
+      depth,
+      renderMarkdown,
+      isCompact,
+      mode,
+      truncateLength,
+      allowLargeStoredValueActions,
+      wrapLines,
+    }) => {
       const inferred = inferType(value.value);
       if (inferred.type === 'any') {
         return <>{stringifyUninferredAnyValue(inferred.value)}</>;
@@ -169,9 +186,10 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
         mode,
         truncateLength,
         allowLargeStoredValueActions,
+        wrapLines,
       });
     },
-    object: ({ value, isCompact }) => {
+    object: ({ value, isCompact, mode, allowLargeStoredValueActions, wrapLines }) => {
       let stringified = stringifyForDisplay(value.value);
 
       if (isCompact) {
@@ -180,6 +198,14 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
           maxLines: COMPACT_PREVIEW_MAX_LINES,
         }).text;
         return <pre className="pre-wrap">{stringified}</pre>;
+      }
+
+      if (shouldUseFullscreenFoldingOutput({ mode, allowLargeStoredValueActions })) {
+        return (
+          <div className="rendered-object-type">
+            <FoldingCodeBlock text={stringified} language="json" wrapLines={wrapLines ?? true} />
+          </div>
+        );
       }
 
       return (
@@ -281,6 +307,16 @@ function getRenderableChatMessageParts(value: unknown): ChatMessageMessagePart[]
   const parts = Array.isArray(value) ? value : [value];
   const renderableParts = parts.filter(isRenderableChatMessagePart);
   return renderableParts.length > 0 ? renderableParts : [''];
+}
+
+function shouldUseFullscreenFoldingOutput({
+  mode,
+  allowLargeStoredValueActions,
+}: {
+  mode?: DataValueRendererProps['mode'];
+  allowLargeStoredValueActions?: boolean;
+}): boolean {
+  return mode === 'expanded-preview' && allowLargeStoredValueActions === true;
 }
 
 function isRenderableChatMessagePart(part: unknown): part is ChatMessageMessagePart {
