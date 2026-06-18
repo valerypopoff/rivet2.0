@@ -115,6 +115,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
           openedGraph: snapshot.openedGraph,
           graphToLoad: snapshot.graphToLoad,
           testSuites: snapshot.testSuites,
+          executorMode: projects.openedProjects[projectId]?.executorMode,
           markClean: true,
         });
 

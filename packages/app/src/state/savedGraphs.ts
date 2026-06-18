@@ -15,6 +15,8 @@ import {
 import { blankProject } from '../utils/blankProject.js';
 import { entries, values } from '../utils/typeSafety';
 import { createHybridStorage } from './storage.js';
+import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
+
 /** Project context values stored in the IDE and not in the project file. Available in Context nodes. */
 export type ProjectContext = Record<
   string,
@@ -133,6 +135,7 @@ export type OpenedProjectInfo = {
   title: string;
   fsPath?: string | null;
   openedGraph?: GraphId;
+  executorMode?: ProjectExecutorMode;
 };
 
 export type OpenedProjectSnapshot = {

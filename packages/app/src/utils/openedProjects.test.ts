@@ -98,6 +98,10 @@ describe('openedProjects helpers', () => {
             title: project.metadata.title,
             fsPath: '/tmp/project-1.rivet-project',
             openedGraph: 'graph-2' as GraphId,
+            executorMode: {
+              type: 'remote-debugger',
+              url: 'ws://debugger.example',
+            },
           },
         },
         openedProjectsSortedIds: [project.metadata.id],
@@ -109,6 +113,46 @@ describe('openedProjects helpers', () => {
     assert.equal(result.openedProjects[project.metadata.id]?.title, 'Updated');
     assert.equal(result.openedProjects[project.metadata.id]?.fsPath, '/tmp/project-1.rivet-project');
     assert.equal(result.openedProjects[project.metadata.id]?.openedGraph, 'graph-2');
+    assert.deepEqual(result.openedProjects[project.metadata.id]?.executorMode, {
+      type: 'remote-debugger',
+      url: 'ws://debugger.example',
+    });
+  });
+
+  test('allows callers to update executor mode without changing other tab metadata', () => {
+    const project = makeProject('project-1', 'Existing');
+
+    const result = addOpenedProject(
+      {
+        openedProjects: {
+          [project.metadata.id]: {
+            projectId: project.metadata.id,
+            title: project.metadata.title,
+            fsPath: '/tmp/project-1.rivet-project',
+            openedGraph: 'graph-2' as GraphId,
+            executorMode: {
+              type: 'local',
+              executor: 'browser',
+            },
+          },
+        },
+        openedProjectsSortedIds: [project.metadata.id],
+      },
+      project,
+      {
+        executorMode: {
+          type: 'local',
+          executor: 'nodejs',
+        },
+      },
+    );
+
+    assert.equal(result.openedProjects[project.metadata.id]?.fsPath, '/tmp/project-1.rivet-project');
+    assert.equal(result.openedProjects[project.metadata.id]?.openedGraph, 'graph-2');
+    assert.deepEqual(result.openedProjects[project.metadata.id]?.executorMode, {
+      type: 'local',
+      executor: 'nodejs',
+    });
   });
 
   test('allows callers to explicitly clear an already-open project path', () => {

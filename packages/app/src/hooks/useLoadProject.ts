@@ -47,6 +47,7 @@ export function useLoadProject() {
         data,
         fsPath: projectInfo.fsPath,
         openedGraph: projectInfo.openedGraph,
+        executorMode: projectInfo.executorMode,
         testSuites,
         markClean,
       });

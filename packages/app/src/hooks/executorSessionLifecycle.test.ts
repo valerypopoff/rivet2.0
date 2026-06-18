@@ -48,6 +48,26 @@ test('manual disconnect only notifies listeners once', async () => {
   assert.equal(runtime.getRuntimeState().socket, null);
 });
 
+test('disconnect can report replaced reason for project-mode handoffs', async () => {
+  let disconnectReason: string | undefined;
+
+  const unsubscribe = runtime.subscribeLifecycle('disconnect', (event) => {
+    disconnectReason = event.reason;
+  });
+
+  await runtime.connect('ws://debugger.example/latest');
+  const socket = FakeWebSocket.instances[0]!;
+  socket.open();
+
+  runtime.disconnect({ reason: 'replaced' });
+  socket.emitClose();
+  unsubscribe();
+
+  assert.equal(disconnectReason, 'replaced');
+  assert.equal(runtime.getRuntimeState().status, 'idle');
+  assert.equal(runtime.getRuntimeState().target, null);
+});
+
 test('manual external debugger disconnect can immediately restore internal executor without losing cleanup event', async () => {
   let disconnectCount = 0;
   let disconnectReason: string | undefined;

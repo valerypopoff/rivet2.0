@@ -13,7 +13,7 @@ import { ConditionallyRenderWire, PartialWire } from './Wire.js';
 import { useCanvasPositioning } from '../hooks/useCanvasPositioning.js';
 import { ErrorBoundary } from 'react-error-boundary';
 import { draggingWireClosestPortState } from '../state/graphBuilder.js';
-import { nodesByIdState } from '../state/graph';
+import { isReadOnlyGraphState, nodesByIdState } from '../state/graph.js';
 import { type PortPositions } from './NodeCanvas';
 import {
   lastRunDataByNodeState,
@@ -29,7 +29,6 @@ import { resolveClosestWireDropTargetFromPoint } from '../utils/wireDropTarget.j
 import { useRenderableWires } from './nodeCanvas/useRenderableWires.js';
 import type { LineClipRect } from '../utils/lineClipping.js';
 import { useSetConnectionBendPointCommand } from '../commands/setConnectionBendPointCommand.js';
-import { isReadOnlyGraphState } from '../state/graph.js';
 
 const wiresStyles = css`
   position: absolute;

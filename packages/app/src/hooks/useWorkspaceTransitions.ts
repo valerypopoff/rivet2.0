@@ -46,6 +46,8 @@ import { pluginsState, projectNodeRegistryState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js';
 import { markProjectClean, markProjectDirtyFlag } from '../utils/projectUnsavedChanges.js';
+import { useApplyProjectExecutorMode } from './useProjectExecutorMode.js';
+import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -70,6 +72,7 @@ export function useWorkspaceTransitions() {
   const setProjects = useSetAtom(projectsState);
   const centerViewOnGraph = useCenterViewOnGraph();
   const saveCurrentGraph = useSaveCurrentGraph();
+  const applyProjectExecutorMode = useApplyProjectExecutorMode();
   const {
     persistCurrentProjectExecutionSnapshot,
     restoreProjectExecutionSnapshot,
@@ -129,6 +132,7 @@ export function useWorkspaceTransitions() {
       graphToLoad?: typeof currentGraph;
       graphView?: GraphViewContext;
       markClean?: boolean;
+      executorMode?: ProjectExecutorMode;
     }): Promise<boolean> {
       try {
         const currentProjectId = project.metadata.id;
@@ -215,6 +219,7 @@ export function useWorkspaceTransitions() {
             ? currentProjectExecutionSnapshot ?? targetProjectExecutionSnapshot
             : targetProjectExecutionSnapshot,
         );
+        applyProjectExecutorMode(projectInfo.executorMode);
         await applyStaticData(projectInfo.data);
         setLoadedProject(transition.loadedProject);
         setTrivetState(createDefaultTrivetState(projectInfo.testSuites ?? []));

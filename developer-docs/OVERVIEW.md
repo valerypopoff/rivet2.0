@@ -130,6 +130,7 @@ Used by the desktop app when the live `selectedExecutorState` is `nodejs`.
 - execution runs via the debugger/server protocol
 - supports Node-specific APIs and plugin installation scenarios
 - connection ownership is centralized in the app's shared `executorSession` runtime and `useExecutorSessionCoordinator` policy hook rather than in `useRemoteExecutor` itself
+- the selected executor mode is remembered per open project tab in editor-owned metadata, not in `.rivet-project` YAML; Browser and Node modes restore through `selectedExecutorState`, while a Remote Debugger tab stores the external debugger URL and reconnects that target when the project tab is reactivated
 - sidecar process lifecycle is now isolated in a small runtime helper (`executorSidecarRuntime.ts`) instead of being reassembled inside the React hook that mounts it
 - hosted wrappers can bind the app-executor server to a non-loopback host with `--host` or `RIVET_EXECUTOR_HOST`, override the port with `--port` / `-p` or `RIVET_EXECUTOR_PORT` using a valid TCP port from `1` to `65535`, and redirect Code-family `require()` resolution with `RIVET_CODE_RUNNER_REQUIRE_ROOT` / `RIVET_CODE_RUNNER_REQUIRE_ANCHOR`
 - hosted wrappers that mount through `RivetAppHost` can pass `executor.internalExecutorUrl` so browser-hosted Node executor mode connects to an externally managed app-executor websocket instead of trying to start a Tauri sidecar
