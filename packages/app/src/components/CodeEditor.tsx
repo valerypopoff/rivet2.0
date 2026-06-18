@@ -119,8 +119,8 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       model,
       scrollBeyondLastLine,
       scrollbar: {
-        alwaysConsumeMouseWheel: false,
         ...scrollbar,
+        alwaysConsumeMouseWheel: false,
       },
     });
 
@@ -272,8 +272,8 @@ export const CodeEditor: FC<CodeEditorProps> = ({
 
     editor.updateOptions({
       scrollbar: {
-        alwaysConsumeMouseWheel: false,
         ...scrollbar,
+        alwaysConsumeMouseWheel: false,
       },
     });
     editor.layout();

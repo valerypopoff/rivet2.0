@@ -274,10 +274,9 @@ test('node settings code editors use the active app display theme', () => {
 test('node code editor lets panel scrolling continue at editor scroll edges', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
 
-  assert.match(
-    codeEditorSource,
-    /scrollbar: \{\s+alwaysConsumeMouseWheel: false,\s+\},/,
-  );
+  const scrollbarBlocks = [...codeEditorSource.matchAll(/scrollbar: \{\s+\.\.\.scrollbar,\s+alwaysConsumeMouseWheel: false,\s+\},/g)];
+
+  assert.equal(scrollbarBlocks.length, 2);
 });
 
 test('node code editor popup widgets are allowed outside the rounded editor shell', () => {
