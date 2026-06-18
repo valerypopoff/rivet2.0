@@ -281,12 +281,13 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
 
   useEffect(() => {
     const handler = async (event: KeyboardEvent) => {
-      if (!isSaveShortcutEvent(event)) {
+      if (event.defaultPrevented || !isSaveShortcutEvent(event)) {
         return;
       }
 
       event.preventDefault();
       event.stopPropagation();
+      event.stopImmediatePropagation?.();
       await saveCurrentProject();
     };
 

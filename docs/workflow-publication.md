@@ -120,7 +120,7 @@ That means:
 Current backend-specific behavior:
 
 - in `filesystem` mode, status is derived from the fresh publication state hash after the save completes
-- in both storage modes, the workflow tree/file name is the hosted project title source of truth; saving rewrites `data.metadata.title` back to the current tree name if the editor changed it, and the hosted editor reconciles the visible open tab title immediately after save without reopening the project
+- in both storage modes, the workflow tree/file name is the hosted project title source of truth; saving rewrites `data.metadata.title` back to the current tree name if the editor changed it, and the hosted editor reconciles the visible open tab label immediately after save without reopening the project or mutating the active project content after upstream marks the save clean. If a future wrapper-owned save flow needs to mark a canonical saved snapshot clean, it should call `RivetWorkspaceHost.markCurrentProjectClean()` or `markProjectClean()` after backend save success instead of touching Rivet's dirty-state atoms.
 - in `managed` mode, a no-op save does not create a new draft revision
 - in `managed` mode, if the saved contents match the published revision exactly, the save path reuses that published revision instead of creating a distinct draft revision that would incorrectly appear as `unpublished_changes`
 

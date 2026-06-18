@@ -1,4 +1,7 @@
 
+
+- ??? Make the project opened on just a click in the prject tree, not on double click. After this, the edit button is not gonna be beeded, only the Save one. But We will have to make the openings to be ephemeral (open the clicked one and then close it as the user clicks another one) unles the user cicks twice. Just like in VS Code. But there should be exceptions for when I clicked and changed the project
+
 - Different remote debugger sessions for different users
 
 - Feature to move from local mode to managed (transfer all files (including libs) and metadata)
