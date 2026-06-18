@@ -79,11 +79,19 @@ export function useRenderableWires({
       const [outputCacheKey, inputCacheKey] = getConnectionCacheKeys(connection);
       const start = getNodePortPosition(outputNode, connection.outputId, outputCacheKey, portPositions);
       const end = getNodePortPosition(inputNode, connection.inputId, inputCacheKey, portPositions);
+      const wireSegments = connection.bendPoint
+        ? [
+            { start, end: connection.bendPoint },
+            { start: connection.bendPoint, end },
+          ]
+        : [{ start, end }];
 
-      return lineCrossesViewport(
-        canvasToClientPosition(start.x, start.y),
-        canvasToClientPosition(end.x, end.y),
-        viewportClientRect,
+      return wireSegments.some((segment) =>
+        lineCrossesViewport(
+          canvasToClientPosition(segment.start.x, segment.start.y),
+          canvasToClientPosition(segment.end.x, segment.end.y),
+          viewportClientRect,
+        ),
       );
     });
 

@@ -179,6 +179,13 @@ Graphs include:
 - node list
 - connection list
 
+`NodeConnection.bendPoint` is optional, visual-only canvas routing metadata.
+It is ignored by runtime scheduling and dataflow: the four endpoint fields
+(`outputNodeId`, `outputId`, `inputNodeId`, `inputId`) remain the complete
+semantic connection identity. Runtime helpers, connection maps, comparison keys,
+and graph execution must not treat the bend point as a second connection or as
+an execution dependency.
+
 ## Data Type System
 
 The type system lives in [`DataValue.ts`](../packages/core/src/model/DataValue.ts).
@@ -1053,7 +1060,7 @@ Serialization lives in [`packages/core/src/utils/serialization/`](../packages/co
 
 [`serializationHelpers.ts`](../packages/core/src/utils/serialization/serializationHelpers.ts) consolidates logic shared between V3 and V4 serializers:
 
-- `serializeConnection` / `deserializeConnection` - convert `NodeConnection` to/from the compact string format
+- `serializeConnection` / `deserializeConnection` - convert `NodeConnection` to/from the compact string format. Optional visual `bendPoint` metadata is stored inside the existing quoted target-title portion of that string with a private suffix marker. Older Rivet versions ignore that title portion when reading connection endpoints, so they still load the connection normally; if they resave, the visual bend can be dropped without changing graph behavior. The marker must be sanitized out of ordinary target titles before writing so a user-authored node title is not mistaken for bend metadata on read.
 - `parseVisualData` / `packVisualDataV3` / `packVisualDataV4` - encode/decode node visual data (position, size, colors). In the app UI, `visualData.color.bg` is the node header color and `visualData.color.border` is the optional resting frame color; Rivet 2 uses `transparent` as the header-only border sentinel so selected/hover/search/diff borders can still be painted dynamically without a permanent custom frame. Older border-only values with the neutral header color are normalized by the app renderer to the new header-only visual mode instead of keeping an unsupported third skin.
 - `wrapInYamlEnvelope` / `unwrapYamlEnvelope` - standard YAML version-envelope wrapping with validation
 

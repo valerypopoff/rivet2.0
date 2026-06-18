@@ -1,4 +1,4 @@
-import { type FC, memo } from 'react';
+import { type FC, type MouseEvent, memo } from 'react';
 import { type ChartNode, type NodeConnection, type NodeId, type PortId, type ProjectComparisonChangeKind } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import clsx from 'clsx';
@@ -15,8 +15,12 @@ type WireProps = {
   nodesById: Record<NodeId, ChartNode>;
   portPositions: PortPositions;
   interactive?: boolean;
-  onHoverStart?: () => void;
+  bendPoint?: NodeConnection['bendPoint'];
+  onHoverStart?: (event: MouseEvent<SVGPathElement>) => void;
+  onHoverMove?: (event: MouseEvent<SVGPathElement>) => void;
   onHoverEnd?: () => void;
+  onMouseDown?: (event: MouseEvent<SVGPathElement>) => void;
+  onClick?: (event: MouseEvent<SVGPathElement>) => void;
 };
 
 export type PartialConnection = {
@@ -35,8 +39,12 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
   nodesById,
   portPositions,
   interactive = false,
+  bendPoint: bendPointOverride,
   onHoverStart,
+  onHoverMove,
   onHoverEnd,
+  onMouseDown,
+  onClick,
 }) => {
   const inputNode = nodesById[connection.inputNodeId]!;
   const outputNode = nodesById[connection.outputNodeId]!;
@@ -49,28 +57,46 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
 
   const start = getNodePortPosition(outputNode, connection.outputId, outputCacheKey, portPositions);
   const end = getNodePortPosition(inputNode, connection.inputId, inputCacheKey, portPositions);
+  const bendPoint = bendPointOverride ?? connection.bendPoint;
+  const wireSegments = bendPoint
+    ? [
+        { start, end: bendPoint },
+        { start: bendPoint, end },
+      ]
+    : [{ start, end }];
 
   return (
     <ErrorBoundary fallback={<></>}>
-      <Wire
-        sx={start.x}
-        sy={start.y}
-        ex={end.x}
-        ey={end.y}
-        selected={selected}
-        highlighted={highlighted}
-        isNotRan={isNotRan}
-        compareChangeKind={compareChangeKind}
-      />
-      {interactive && (
-        <WireInteractionTarget
-          sx={start.x}
-          sy={start.y}
-          ex={end.x}
-          ey={end.y}
-          onHoverStart={onHoverStart}
-          onHoverEnd={onHoverEnd}
+      {wireSegments.map((segment, index) => (
+        <Wire
+          key={`wire-segment-${index}`}
+          sx={segment.start.x}
+          sy={segment.start.y}
+          ex={segment.end.x}
+          ey={segment.end.y}
+          selected={selected}
+          highlighted={highlighted}
+          isNotRan={isNotRan}
+          compareChangeKind={compareChangeKind}
         />
+      ))}
+      {interactive && (
+        <>
+          {wireSegments.map((segment, index) => (
+            <WireInteractionTarget
+              key={`wire-hit-segment-${index}`}
+              sx={segment.start.x}
+              sy={segment.start.y}
+              ex={segment.end.x}
+              ey={segment.end.y}
+              onHoverStart={onHoverStart}
+              onHoverMove={onHoverMove}
+              onHoverEnd={onHoverEnd}
+              onMouseDown={onMouseDown}
+              onClick={onClick}
+            />
+          ))}
+        </>
       )}
     </ErrorBoundary>
   );
@@ -132,15 +158,21 @@ const WireInteractionTarget: FC<{
   sy: number;
   ex: number;
   ey: number;
-  onHoverStart?: () => void;
+  onHoverStart?: (event: MouseEvent<SVGPathElement>) => void;
+  onHoverMove?: (event: MouseEvent<SVGPathElement>) => void;
   onHoverEnd?: () => void;
-}> = memo(({ sx, sy, ex, ey, onHoverStart, onHoverEnd }) => {
+  onMouseDown?: (event: MouseEvent<SVGPathElement>) => void;
+  onClick?: (event: MouseEvent<SVGPathElement>) => void;
+}> = memo(({ sx, sy, ex, ey, onHoverStart, onHoverMove, onHoverEnd, onMouseDown, onClick }) => {
   return (
     <path
       className="wire-hit-area"
       d={getWirePath({ sx, sy, ex, ey })}
-      onMouseEnter={onHoverStart ? () => onHoverStart() : undefined}
+      onMouseEnter={onHoverStart}
+      onMouseMove={onHoverMove}
       onMouseLeave={onHoverEnd ? () => onHoverEnd() : undefined}
+      onMouseDown={onMouseDown}
+      onClick={onClick}
     />
   );
 });

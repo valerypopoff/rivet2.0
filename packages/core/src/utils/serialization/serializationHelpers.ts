@@ -15,9 +15,23 @@ import * as yaml from 'yaml';
  */
 export type SerializedNodeConnection = `${string}->"${string}" ${string}/${string}`;
 
+const CONNECTION_BEND_MARKER = ' __rivet_bend:';
+const CONNECTION_BEND_MARKER_TITLE_FALLBACK = ' __rivet bend:';
+const FINITE_NUMBER_PATTERN = String.raw`[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?`;
+const CONNECTION_BEND_PATTERN = new RegExp(
+  `${CONNECTION_BEND_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(${FINITE_NUMBER_PATTERN}),(${FINITE_NUMBER_PATTERN})$`,
+);
+
 export function serializeConnection(connection: NodeConnection, allNodes: ChartNode[]): SerializedNodeConnection {
-  const targetTitle = allNodes.find((node) => node.id === connection.inputNodeId)?.title ?? '';
-  return `${connection.outputId}->"${targetTitle}" ${connection.inputNodeId}/${connection.inputId}`;
+  const targetTitle = serializeConnectionTargetTitle(
+    allNodes.find((node) => node.id === connection.inputNodeId)?.title ?? '',
+  );
+  const bendPoint =
+    connection.bendPoint && Number.isFinite(connection.bendPoint.x) && Number.isFinite(connection.bendPoint.y)
+      ? `${CONNECTION_BEND_MARKER}${connection.bendPoint.x},${connection.bendPoint.y}`
+      : '';
+
+  return `${connection.outputId}->"${targetTitle}${bendPoint}" ${connection.inputNodeId}/${connection.inputId}`;
 }
 
 export function deserializeConnection(
@@ -28,13 +42,31 @@ export function deserializeConnection(
   if (!match) {
     throw new Error(`Invalid connection: ${connection}`);
   }
-  const [, outputId, , inputNodeId, inputId] = match;
+  const [, outputId, targetTitle, inputNodeId, inputId] = match;
+  const bendPoint = deserializeConnectionBendPoint(targetTitle);
+
   return {
     outputId: outputId as PortId,
     outputNodeId: sourceNodeId,
     inputId: inputId as PortId,
     inputNodeId: inputNodeId as NodeId,
+    ...(bendPoint ? { bendPoint } : {}),
   };
+}
+
+function serializeConnectionTargetTitle(targetTitle: string): string {
+  return targetTitle.replaceAll(CONNECTION_BEND_MARKER, CONNECTION_BEND_MARKER_TITLE_FALLBACK);
+}
+
+function deserializeConnectionBendPoint(targetTitle: string | undefined): NodeConnection['bendPoint'] | undefined {
+  const match = targetTitle?.match(CONNECTION_BEND_PATTERN);
+  if (!match) {
+    return undefined;
+  }
+
+  const x = Number.parseFloat(match[1]!);
+  const y = Number.parseFloat(match[2]!);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
 }
 
 // ---- Visual data encoding (shared parsing) ----

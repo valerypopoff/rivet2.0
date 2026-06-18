@@ -5,6 +5,7 @@ import {
   areConnectionsEqual,
   createRewireConnectionChange,
   removeMatchingConnection,
+  setConnectionBendPoint,
   undoRewireConnectionChange,
 } from './connectionActions.js';
 
@@ -108,4 +109,35 @@ test('createRewireConnectionChange rewires to an occupied input and undo restore
   assert.equal(undone.length, 2);
   assert.ok(undone.some((connection) => areConnectionsEqual(connection, original)));
   assert.ok(undone.some((connection) => areConnectionsEqual(connection, occupiedTarget)));
+});
+
+test('setConnectionBendPoint updates the endpoint-matching connection without changing endpoints', () => {
+  const original = makeConnection({});
+  const sameEndpointsDifferentObject = makeConnection({});
+  const untouched = makeConnection({ inputNodeId: 'other-input' as any });
+
+  const change = setConnectionBendPoint({
+    connections: [original, untouched],
+    connectionToUpdate: sameEndpointsDifferentObject,
+    bendPoint: { x: 20, y: 30 },
+  });
+
+  assert.ok(change);
+  assert.deepEqual(change.previousConnection, original);
+  assert.deepEqual(change.nextConnection, { ...original, bendPoint: { x: 20, y: 30 } });
+  assert.deepEqual(change.connections, [{ ...original, bendPoint: { x: 20, y: 30 } }, untouched]);
+});
+
+test('setConnectionBendPoint removes the bend point field when cleared', () => {
+  const original = makeConnection({ bendPoint: { x: 20, y: 30 } });
+
+  const change = setConnectionBendPoint({
+    connections: [original],
+    connectionToUpdate: original,
+    bendPoint: undefined,
+  });
+
+  assert.ok(change);
+  assert.equal('bendPoint' in change.nextConnection, false);
+  assert.deepEqual(change.connections, [makeConnection({})]);
 });
