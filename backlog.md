@@ -1,6 +1,6 @@
 
 
-- In the full output modal show word and character counters
+- In the full output modal show word and character counters with each output piece
 
 
 - Node from rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?

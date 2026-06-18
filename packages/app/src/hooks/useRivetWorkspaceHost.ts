@@ -5,6 +5,7 @@ import type { TrivetState } from '../state/trivet.js';
 import { isPathBasedIOProvider } from '../io/IOProvider.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
+import { graphState } from '../state/graph.js';
 import {
   loadedProjectState,
   openedProjectSnapshotsState,
@@ -29,7 +30,13 @@ import { useLoadProject } from './useLoadProject.js';
 import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js';
 import { useStableCallback } from './useStableCallback.js';
 import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
-import { removeProjectUnsavedState } from '../utils/projectUnsavedChanges.js';
+import {
+  buildCurrentProjectContentSnapshot,
+  markProjectClean as markProjectContentClean,
+  markProjectDirtyFlag,
+  removeProjectUnsavedState,
+  type ProjectContentForDigest,
+} from '../utils/projectUnsavedChanges.js';
 
 export type RivetProjectSnapshotInput = {
   project: Project | Omit<Project, 'data'>;
@@ -42,12 +49,21 @@ export type RivetProjectSnapshotInput = {
 
 export type MoveProjectPathsInput = ProjectPathMovesInput;
 
+export type RivetProjectCleanBaselineSnapshotInput = {
+  project: Project | Omit<Project, 'data'>;
+  // Accepted for parity with save/open snapshots. Static data is not included
+  // in the content digest, but mark-clean calls clear its dirty flag.
+  data?: Project['data'];
+};
+
 export type RivetWorkspaceHost = {
   openProjectSnapshot(snapshot: RivetProjectSnapshotInput): Promise<boolean>;
   openProjectPath(path: string): Promise<boolean>;
   closeProject(projectId?: ProjectId): Promise<boolean>;
   moveProjectPaths(moves: MoveProjectPathsInput): void;
   replaceCurrent(snapshot: RivetProjectSnapshotInput): Promise<boolean>;
+  markCurrentProjectClean(snapshot?: RivetProjectCleanBaselineSnapshotInput): Promise<boolean>;
+  markProjectClean(projectId: ProjectId, snapshot?: RivetProjectCleanBaselineSnapshotInput): Promise<boolean>;
 };
 
 function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId): void {
@@ -87,7 +103,9 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const loadProject = useLoadProject();
   const [projects, setProjects] = useAtom(projectsState);
   const currentProject = useAtomValue(projectState);
+  const currentGraph = useAtomValue(graphState);
   const loadedProject = useAtomValue(loadedProjectState);
+  const openedProjectSnapshots = useAtomValue(openedProjectSnapshotsState);
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
@@ -298,6 +316,69 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
     return await openProjectSnapshot(snapshot, { replaceCurrent: true });
   });
 
+  const getProjectCleanBaseline = useStableCallback(
+    (
+      projectId: ProjectId,
+      snapshot?: RivetProjectCleanBaselineSnapshotInput,
+    ): ProjectContentForDigest | undefined => {
+      if (snapshot?.project) {
+        const normalized = normalizeProjectSnapshot({
+          project: snapshot.project,
+          data: snapshot.data,
+        });
+        const snapshotProjectId = normalized.project.metadata.id as ProjectId | undefined;
+
+        return snapshotProjectId === projectId
+          ? {
+              project: normalized.project,
+            }
+          : undefined;
+      }
+
+      if (currentProject.metadata.id === projectId) {
+        return buildCurrentProjectContentSnapshot({
+          project: currentProject,
+          graph: currentGraph,
+        });
+      }
+
+      const inactiveSnapshot = openedProjectSnapshots[projectId];
+      return inactiveSnapshot
+        ? {
+            project: inactiveSnapshot.project,
+          }
+        : undefined;
+    },
+  );
+
+  const markOpenProjectClean = useStableCallback(
+    async (projectId: ProjectId, snapshot?: RivetProjectCleanBaselineSnapshotInput) => {
+      if (!projects.openedProjects[projectId] && currentProject.metadata.id !== projectId) {
+        return false;
+      }
+
+      const cleanBaseline = getProjectCleanBaseline(projectId, snapshot);
+      if (!cleanBaseline) {
+        return false;
+      }
+
+      setSavedProjectContentDigests((previousDigests) => markProjectContentClean(previousDigests, cleanBaseline));
+      setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, false));
+      setProjectDataUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, false));
+
+      return true;
+    },
+  );
+
+  const markCurrentProjectClean = useStableCallback(async (snapshot?: RivetProjectCleanBaselineSnapshotInput) => {
+    const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
+    if (!currentProjectId) {
+      return false;
+    }
+
+    return await markOpenProjectClean(currentProjectId, snapshot);
+  });
+
   return useMemo(
     () => ({
       openProjectSnapshot,
@@ -305,7 +386,17 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       closeProject,
       moveProjectPaths,
       replaceCurrent,
+      markCurrentProjectClean,
+      markProjectClean: markOpenProjectClean,
     }),
-    [closeProject, moveProjectPaths, openProjectPath, openProjectSnapshot, replaceCurrent],
+    [
+      closeProject,
+      markCurrentProjectClean,
+      markOpenProjectClean,
+      moveProjectPaths,
+      openProjectPath,
+      openProjectSnapshot,
+      replaceCurrent,
+    ],
   );
 }
