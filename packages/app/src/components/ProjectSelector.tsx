@@ -12,13 +12,21 @@ import {
   type ReactNode,
 } from 'react';
 import { DndContext, type DragEndEvent } from '@dnd-kit/core';
+import Button from '@atlaskit/button';
+import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
 import { type ProjectId } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue } from 'jotai';
 import CloseIcon from 'majesticons/line/multiply-line.svg?react';
 import LeftIcon from 'majesticons/line/chevron-left-line.svg?react';
 import RightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import RivetLogo from '../rivet-2-logo-no-background.svg';
-import { openedProjectsSortedIdsState, openedProjectsState, projectState } from '../state/savedGraphs';
+import {
+  openedProjectsSortedIdsState,
+  openedProjectsState,
+  projectDataUnsavedChangesState,
+  projectState,
+  projectUnsavedChangesState,
+} from '../state/savedGraphs';
 import clsx from 'clsx';
 import { useLoadProject } from '../hooks/useLoadProject';
 import { useSyncCurrentStateIntoOpenedProjects } from '../hooks/useSyncCurrentStateIntoOpenedProjects';
@@ -43,6 +51,8 @@ import {
 } from '../hooks/canvasNavigationShortcuts.js';
 import { Tooltip } from './Tooltip.js';
 import { useGraphHistoryNavigation } from '../hooks/useGraphHistoryNavigation.js';
+import { hasProjectUnsavedChanges } from '../utils/projectUnsavedChanges.js';
+import { AppModalHeader } from './AppModalHeader.js';
 
 export const styles = css`
   position: absolute;
@@ -428,10 +438,24 @@ export const styles = css`
       white-space: nowrap;
       text-overflow: ellipsis;
 
+      &::before {
+        background: currentColor;
+        border-radius: 50%;
+        content: '';
+        display: none;
+        flex: 0 0 auto;
+        height: 6px;
+        width: 6px;
+      }
+
       > span {
         min-width: 50px;
         flex-shrink: 1;
       }
+    }
+
+    &.has-unsaved-changes .project-name::before {
+      display: block;
     }
 
     &:hover {
@@ -557,17 +581,32 @@ export const styles = css`
   }
 `;
 
+const unsavedProjectCloseModalBody = css`
+  color: var(--foreground);
+  display: flex;
+  flex-direction: column;
+  font-size: var(--ui-font-size-compact);
+  gap: 8px;
+
+  p {
+    margin: 0;
+  }
+`;
+
 export const ProjectSelector: FC<{
   mode?: 'project' | 'workspace';
 }> = ({ mode = 'project' }) => {
   const projectMode = mode === 'project';
   const openedProjects = useAtomValue(openedProjectsState);
   const [openedProjectsSortedIds, setOpenedProjectsSortedIds] = useAtom(openedProjectsSortedIdsState);
+  const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
+  const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
   const [openOverlay, setOpenOverlay] = useAtom(overlayOpenState);
   const sidebarOpen = useAtomValue(sidebarOpenState);
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const currentProject = useAtomValue(projectState);
   const { closeProject } = useRivetWorkspaceHost();
+  const [projectPendingClose, setProjectPendingClose] = useState<ProjectId | null>(null);
 
   const sortedOpenedProjects = useMemo(() => {
     return openedProjectsSortedIds
@@ -613,6 +652,29 @@ export const ProjectSelector: FC<{
     }
   };
 
+  const requestCloseProject = (projectId: ProjectId) => {
+    if (hasProjectUnsavedChanges(projectUnsavedChanges, projectDataUnsavedChanges, projectId)) {
+      setProjectPendingClose(projectId);
+      return;
+    }
+
+    void closeProject(projectId);
+  };
+
+  const cancelCloseProject = () => setProjectPendingClose(null);
+
+  const confirmCloseProject = () => {
+    const projectId = projectPendingClose;
+    if (!projectId) {
+      return;
+    }
+
+    setProjectPendingClose(null);
+    void closeProject(projectId);
+  };
+
+  const projectPendingCloseInfo = projectPendingClose ? openedProjects[projectPendingClose] : undefined;
+
   return (
     <div
       className={clsx({ 'graph-tree-open': reserveSidebarColumn })}
@@ -637,7 +699,7 @@ export const ProjectSelector: FC<{
                   <SortableProject
                     key={project.id}
                     projectId={project.project.projectId}
-                    onCloseProject={() => void closeProject(project.project.projectId)}
+                    onCloseProject={() => requestCloseProject(project.project.projectId)}
                     onSelectProject={() => handleSelectProject(project.project.projectId)}
                     projectTabsSelected={projectTabsSelected}
                   />
@@ -650,6 +712,12 @@ export const ProjectSelector: FC<{
       </div>
       <OverlayTabs showWelcomeScreen={!projectMode} />
       {showWindowsWindowControls && <WindowsWindowControls />}
+      <UnsavedProjectCloseConfirmModal
+        projectTitle={projectPendingCloseInfo?.title}
+        onClose={cancelCloseProject}
+        onConfirm={confirmCloseProject}
+        open={projectPendingCloseInfo != null}
+      />
     </div>
   );
 };
@@ -928,6 +996,37 @@ const GraphHistoryButton: FC<{
   );
 };
 
+const UnsavedProjectCloseConfirmModal: FC<{
+  open: boolean;
+  projectTitle?: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}> = ({ open, projectTitle, onClose, onConfirm }) => (
+  <ModalTransition>
+    {open && (
+      <Modal autoFocus={false} onClose={onClose} width="small">
+        <AppModalHeader title="Unsaved changes" onClose={onClose} />
+        <ModalBody>
+          <div css={unsavedProjectCloseModalBody}>
+            <p>
+              There are unsaved changes in <strong>{projectTitle ?? 'this project'}</strong>.
+            </p>
+            <p>Close this project tab anyway? Unsaved changes will be lost.</p>
+          </div>
+        </ModalBody>
+        <ModalFooter>
+          <Button appearance="subtle" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button appearance="danger" onClick={onConfirm}>
+            Close without saving
+          </Button>
+        </ModalFooter>
+      </Modal>
+    )}
+  </ModalTransition>
+);
+
 const ProjectFileMenu: FC = () => {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const fileMenuRef = useRef<HTMLDivElement>(null);
@@ -1033,11 +1132,14 @@ export const ProjectTab: FC<{
   onSelectProject?: () => void;
 }> = ({ projectId, dragListeners, onCloseProject, onSelectProject, projectTabsSelected }) => {
   const openedProjects = useAtomValue(openedProjectsState);
+  const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
+  const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
   const currentProject = useAtomValue(projectState);
 
   const project = openedProjects[projectId];
 
   const unsaved = !project?.fsPath;
+  const hasUnsavedChanges = hasProjectUnsavedChanges(projectUnsavedChanges, projectDataUnsavedChanges, projectId);
   const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\/]/).pop();
   const active = projectTabsSelected && currentProject.metadata.id === projectId;
   const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;
@@ -1054,7 +1156,10 @@ export const ProjectTab: FC<{
   };
 
   return (
-    <div className={clsx('project', { active, unsaved })} onMouseDown={handleMouseDown}>
+    <div
+      className={clsx('project', { active, unsaved, 'has-unsaved-changes': hasUnsavedChanges })}
+      onMouseDown={handleMouseDown}
+    >
       <div className="project-name" {...dragListeners}>
         <span>{projectDisplayName}</span>
       </div>

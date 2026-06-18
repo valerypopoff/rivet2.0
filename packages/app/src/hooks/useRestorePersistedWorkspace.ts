@@ -7,6 +7,7 @@ import { projectEditorHydratedState, projectEditorStateByProjectIdState } from '
 import { resolvePersistedCanvasPositionsForLegacyCache, resolveProjectEditorRestoreTarget } from '../utils/projectEditorState.js';
 import { useCenterViewOnGraph } from './useCenterViewOnGraph.js';
 import { handleError } from '../utils/errorHandling.js';
+import { useApplyProjectExecutorMode } from './useProjectExecutorMode.js';
 
 export function useRestorePersistedWorkspace() {
   const didRestoreRef = useRef(false);
@@ -24,6 +25,7 @@ export function useRestorePersistedWorkspace() {
   const setLastCanvasPositionsByGraph = useSetAtom(lastCanvasPositionByGraphState);
   const setProjectEditorHydrated = useSetAtom(projectEditorHydratedState);
   const centerViewOnGraph = useCenterViewOnGraph();
+  const applyProjectExecutorMode = useApplyProjectExecutorMode();
 
   useEffect(() => {
     if (didRestoreRef.current) {
@@ -76,6 +78,8 @@ export function useRestorePersistedWorkspace() {
       if (!currentGraphIsValid || (targetGraphId != null && currentGraphId !== targetGraphId)) {
         setGraph(restoreTarget.graph);
       }
+
+      applyProjectExecutorMode(openedProjects[currentProjectId]?.executorMode);
     } catch (error) {
       handleError(error, 'Failed to restore persisted workspace view', {
         metadata: {
@@ -90,6 +94,7 @@ export function useRestorePersistedWorkspace() {
     }
   }, [
     centerViewOnGraph,
+    applyProjectExecutorMode,
     currentGraph,
     currentProject,
     lastCanvasPositionsByGraph,

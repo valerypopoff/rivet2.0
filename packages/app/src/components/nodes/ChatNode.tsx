@@ -36,7 +36,8 @@ export const ChatNodeOutput: FC<{
   renderMarkdown?: boolean;
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ outputs, fullscreen, renderMarkdown, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ outputs, fullscreen, renderMarkdown, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const dataRefs = useDataRefs();
   const responseValue = tryRestoreStoredDataValue(outputs['response' as PortId], dataRefs);
   const requestTokensValue = tryRestoreStoredDataValue(outputs['requestTokens' as PortId], dataRefs);
@@ -82,6 +83,7 @@ export const ChatNodeOutput: FC<{
               renderMarkdown={renderMarkdown}
               renderMode={renderMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              wrapLines={wrapLines}
             />
           );
         })}
@@ -107,6 +109,7 @@ export const ChatNodeOutput: FC<{
         renderMarkdown={renderMarkdown}
         renderMode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     );
   }
@@ -153,6 +156,7 @@ export const ChatNodeOutputSingle: FC<{
   renderMarkdown?: boolean;
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
+  wrapLines?: boolean;
 }> = ({
   outputValue,
   functionCallValue,
@@ -164,6 +168,7 @@ export const ChatNodeOutputSingle: FC<{
   renderMarkdown,
   renderMode,
   allowLargeStoredValueActions,
+  wrapLines,
 }) => {
   const effectiveRenderMode = renderMode ?? (fullscreen ? 'expanded-preview' : 'compact');
 
@@ -204,6 +209,7 @@ export const ChatNodeOutputSingle: FC<{
               renderMarkdown={renderMarkdown}
               mode={effectiveRenderMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              wrapLines={wrapLines}
             />
           </div>
         </div>
@@ -216,6 +222,7 @@ export const ChatNodeOutputSingle: FC<{
               value={functionCallValue}
               mode={effectiveRenderMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              wrapLines={wrapLines}
             />
           </div>
         </div>
@@ -237,7 +244,8 @@ const ChatNodeFullscreenOutput: FC<{
   renderMarkdown: boolean;
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ outputs, renderMarkdown, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ outputs, renderMarkdown, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   return (
     <ChatNodeOutput
       outputs={outputs}
@@ -245,6 +253,7 @@ const ChatNodeFullscreenOutput: FC<{
       renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   );
 };

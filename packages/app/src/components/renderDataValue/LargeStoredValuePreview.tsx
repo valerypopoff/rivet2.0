@@ -1,6 +1,6 @@
 import { css } from '@emotion/react';
 import prettyBytes from 'pretty-bytes';
-import { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FC } from 'react';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import type { StoredDataValue } from '../../state/dataFlow.js';
 import { FULL_RENDER_SAFE_THRESHOLD_CHARS } from '../../utils/outputStorageLimits.js';
@@ -8,6 +8,7 @@ import { tryRestoreStoredDataValue } from '../../utils/executionDataStorage.js';
 import { copyToClipboard } from '../../utils/copyToClipboard.js';
 import { handleError } from '../../utils/errorHandling.js';
 import ColorizedPreformattedText from '../ColorizedPreformattedText.js';
+import { FoldingCodeBlock } from './FoldingCodeBlock.js';
 import { shouldShowLargeStoredValueActions, type OutputRenderMode } from './outputRenderTypes.js';
 import { buildLargeStoredValueChunks, type LargeStoredValueChunk } from './largeStoredValueChunks.js';
 import { deriveLargeStoredValuePreviewFullText } from './largeStoredValuePreviewText.js';
@@ -101,13 +102,16 @@ export const LargeStoredValuePreview: FC<{
   value: Extract<StoredDataValue, { storage: 'ref' }>;
   mode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ value, mode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ value, mode, allowLargeStoredValueActions, wrapLines = true }) => {
   const dataRefs = useDataRefs();
   const [showFull, setShowFull] = useState(mode === 'full');
   const [chunkPage, setChunkPage] = useState(0);
   const preview = value.preview;
   const rootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const rawProviderInstanceId = useId();
+  const providerId = `large-stored-value-${value.refId}-${rawProviderInstanceId}`;
 
   useEffect(() => {
     setShowFull(mode === 'full');
@@ -160,8 +164,9 @@ export const LargeStoredValuePreview: FC<{
   const chunkCount = shouldPageFullText ? Math.max(1, chunks.length) : 1;
   const showActions = shouldShowLargeStoredValueActions({ mode, allowLargeStoredValueActions });
   const missingRef = mode !== 'compact' && restoredValue == null;
-  const { providerRootProps, clearSearchAutoExpansion } = useLargeStoredValueFullscreenSearch({
-    providerId: value.refId,
+  const usesFoldingJsonPreview = preview.kind === 'json' && showFull && !shouldPageFullText;
+  const { providerRootProps, clearSearchAutoExpansion, activeMatchRange } = useLargeStoredValueFullscreenSearch({
+    providerId,
     rootRef,
     contentRef,
     fullText,
@@ -173,6 +178,7 @@ export const LargeStoredValuePreview: FC<{
     setShowFull,
     chunkPage,
     setChunkPage,
+    highlightMode: usesFoldingJsonPreview ? 'external' : 'dom',
   });
 
   const handleCopyFullValue = () => {
@@ -241,7 +247,13 @@ export const LargeStoredValuePreview: FC<{
       ) : preview.kind === 'json' && showFull ? (
         <div ref={contentRef} className="preview-content">
           <div className="json-preview-content">
-            <ColorizedPreformattedText text={activeChunkText ?? ''} language="json" wrapWords />
+            <FoldingCodeBlock
+              text={activeChunkText ?? ''}
+              language="json"
+              wrapLines={wrapLines}
+              searchProvider={false}
+              activeMatchRange={activeMatchRange}
+            />
           </div>
         </div>
       ) : (

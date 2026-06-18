@@ -523,6 +523,59 @@ describe('serialization helpers', () => {
     assert.equal(deserialized.inputId, 'in');
   });
 
+  it('serializeConnection stores optional bend points without changing older endpoint parsing', () => {
+    const nodes = [
+      { id: 'n1', type: 'text', title: 'Source', visualData: { x: 0, y: 0 }, data: {}, variants: [] },
+      { id: 'n2', type: 'text', title: 'Target Node', visualData: { x: 0, y: 0 }, data: {}, variants: [] },
+    ] as any[];
+
+    const connection = {
+      outputNodeId: 'n1',
+      outputId: 'out',
+      inputNodeId: 'n2',
+      inputId: 'in',
+      bendPoint: { x: 123.5, y: -42 },
+    } as any;
+
+    const serialized = serializeConnection(connection, nodes);
+    assert.equal(serialized, 'out->"Target Node __rivet_bend:123.5,-42" n2/in');
+
+    const olderParserMatch = serialized.match(/(.+)->"(.*)"\s+(.+)\/(.+)/);
+    assert.equal(olderParserMatch?.[1], 'out');
+    assert.equal(olderParserMatch?.[3], 'n2');
+    assert.equal(olderParserMatch?.[4], 'in');
+
+    const deserialized = deserializeConnection(serialized, 'n1' as any);
+    assert.deepEqual(deserialized, {
+      outputId: 'out',
+      outputNodeId: 'n1',
+      inputId: 'in',
+      inputNodeId: 'n2',
+      bendPoint: { x: 123.5, y: -42 },
+    });
+  });
+
+  it('serializeConnection does not parse target-title marker text as a bend point', () => {
+    const nodes = [
+      { id: 'n1', type: 'text', title: 'Source', visualData: { x: 0, y: 0 }, data: {}, variants: [] },
+      {
+        id: 'n2',
+        type: 'text',
+        title: 'Target Node __rivet_bend:123,456',
+        visualData: { x: 0, y: 0 },
+        data: {},
+        variants: [],
+      },
+    ] as any[];
+
+    const connection = { outputNodeId: 'n1', outputId: 'out', inputNodeId: 'n2', inputId: 'in' } as any;
+    const serialized = serializeConnection(connection, nodes);
+    assert.equal(serialized, 'out->"Target Node __rivet bend:123,456" n2/in');
+
+    const deserialized = deserializeConnection(serialized, 'n1' as any);
+    assert.equal(deserialized.bendPoint, undefined);
+  });
+
   it('parseVisualData handles V3 format (4 parts)', () => {
     const result = parseVisualData('10/20/300/5');
     assert.equal(result.x, 10);

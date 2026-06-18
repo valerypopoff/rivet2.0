@@ -61,6 +61,7 @@ export function useNewProjectFromTemplate() {
       data,
       graphToLoad,
       testSuites: [],
+      markClean: true,
     });
 
     if (loaded) {

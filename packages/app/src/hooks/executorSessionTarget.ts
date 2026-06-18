@@ -1,5 +1,6 @@
-export const DEFAULT_REMOTE_DEBUGGER_URL = 'ws://localhost:21888';
-export const INTERNAL_EXECUTOR_URL = 'ws://127.0.0.1:21889/internal';
+import { DEFAULT_REMOTE_DEBUGGER_URL, INTERNAL_EXECUTOR_URL } from '../domain/execution/executorUrls.js';
+
+export { DEFAULT_REMOTE_DEBUGGER_URL, INTERNAL_EXECUTOR_URL } from '../domain/execution/executorUrls.js';
 
 export type ExecutorSessionTarget =
   | { type: 'internal-desktop'; url: string }

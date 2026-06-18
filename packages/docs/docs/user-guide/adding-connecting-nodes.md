@@ -36,6 +36,8 @@ The input port of a node can only connect to one output port on another node.
 
 For nodes that are far apart, you can start a connection from an output port and release it on empty canvas. Rivet keeps the connection line attached to your mouse while you pan or zoom the canvas, so you can move across the graph and finish by dropping it on an input port. Press **Esc**, right click the canvas, or click outside the canvas to cancel the pending connection. Dragging an already connected input port to empty canvas still disconnects that existing connection.
 
+To manually bend a connection, hover the wire and click the ghost circle that appears. The circle becomes a bend handle; drag it anywhere on the canvas to route the wire through that point. Double-click the bend handle to remove it and return the connection to its automatic route. Bend handles are saved in the project file as visual layout only: they do not change which ports are connected or how the graph runs.
+
 The data type of every port is available in the documentation for each node in the [Node Reference](../node-reference).
 
 ## Disconnecting Nodes

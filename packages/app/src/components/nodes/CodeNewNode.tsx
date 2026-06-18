@@ -20,7 +20,8 @@ const CodeNewNodeOutputBody: FC<{
   data: NodeRunDataWithRefs;
   renderMode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ node, data, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const hasError = data.status?.type === 'error';
   const parsedError = hasError ? getCodeNodeErrorViewModel(data) : undefined;
   const dataRefs = useDataRefs();
@@ -53,6 +54,7 @@ const CodeNewNodeOutputBody: FC<{
         isCompact={isCompactPreview}
         mode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     );
   };
@@ -85,6 +87,9 @@ const CodeNewNodeOutputBody: FC<{
   return (
     <StructuredNodeOutput
       errorMessage={parsedError?.message}
+      renderMode={renderMode}
+      allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
       parsedSource={shouldShowParsedCode ? parsedCode ?? '' : undefined}
       parsedSourceLabel="Parsed code"
       parsedSourceLanguage="javascript"
@@ -106,20 +111,22 @@ const CodeNewNodeOutputBody: FC<{
 };
 
 export const codeNewNodeDescriptor: NodeComponentDescriptor<'codeNew'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions }) => (
+  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <CodeNewNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions }) => (
+  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <CodeNewNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
 };

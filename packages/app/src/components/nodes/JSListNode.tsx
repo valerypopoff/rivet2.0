@@ -25,7 +25,8 @@ const JSListNodeOutputBody: FC<{
   data: NodeRunDataWithRefs;
   renderMode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ node, data, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const { outputId, resultLabel } = JS_LIST_OUTPUT_CONFIG[node.type];
   const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
   const hasError = data.status?.type === 'error';
@@ -48,6 +49,9 @@ const JSListNodeOutputBody: FC<{
   return (
     <StructuredNodeOutput
       errorMessage={errorMessage}
+      renderMode={renderMode}
+      allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
       parsedSource={shouldShowParsedExpression ? parsedExpression ?? '' : undefined}
       parsedSourceLanguage="javascript"
     >
@@ -61,6 +65,7 @@ const JSListNodeOutputBody: FC<{
                   value={outputs[outputId]}
                   mode={renderMode}
                   allowLargeStoredValueActions={allowLargeStoredValueActions}
+                  wrapLines={wrapLines}
                 />
               </StructuredNodeOutputSection>
             ))}
@@ -73,6 +78,7 @@ const JSListNodeOutputBody: FC<{
             value={data.outputData?.[outputId]}
             mode={renderMode}
             allowLargeStoredValueActions={allowLargeStoredValueActions}
+            wrapLines={wrapLines}
           />
         </StructuredNodeOutputSection>
       )}
@@ -81,39 +87,43 @@ const JSListNodeOutputBody: FC<{
 };
 
 export const jsFilterNodeDescriptor: NodeComponentDescriptor<'jsFilter'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions }) => (
+  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <JSListNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions }) => (
+  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <JSListNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
 };
 
 export const jsMapNodeDescriptor: NodeComponentDescriptor<'jsMap'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions }) => (
+  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <JSListNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions }) => (
+  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <JSListNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
 };

@@ -21,7 +21,8 @@ export const UserInputNodeOutput: FC<{
   isCompact: boolean;
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ outputs, isCompact, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ outputs, isCompact, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const questionsAndAnswers = outputs['questionsAndAnswers' as PortId];
 
   if (!questionsAndAnswers || getScalarTypeOf(questionsAndAnswers.type) === 'control-flow-excluded') {
@@ -35,6 +36,7 @@ export const UserInputNodeOutput: FC<{
         isCompact={isCompact}
         mode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     </div>
   );

@@ -66,6 +66,9 @@ type DebuggerMessageHandler = <K extends keyof ProcessEventMessageMap>(
 ) => MaybePromise<void>;
 
 export type ExecutorSessionDisconnectReason = 'manual-disconnect' | 'unexpected-disconnect' | 'replaced';
+export type ExecutorSessionDisconnectOptions = {
+  reason?: ExecutorSessionDisconnectReason;
+};
 
 export type ExecutorSessionConnectedEvent = {
   isInternalExecutor: boolean;
@@ -100,7 +103,7 @@ export type ExecutorSessionRuntime = {
   connectInternalHostedExecutor(url: string): Promise<void>;
   createPendingGraphExecution(requestId?: RemoteRunRequestId): PendingGraphExecution;
   createRemoteExecutionRequest(): RemoteRunRequestId;
-  disconnect(): void;
+  disconnect(options?: ExecutorSessionDisconnectOptions): void;
   getRuntimeState(): Pick<
     ExecutorSessionState,
     'capabilities' | 'isInternalExecutor' | 'remoteUploadAllowed' | 'socket' | 'status' | 'target' | 'url'
@@ -438,8 +441,9 @@ export function createExecutorSessionRuntime(options: {
     });
   }
 
-  function disconnect() {
+  function disconnect(options: ExecutorSessionDisconnectOptions = {}) {
     const hadActiveSession = currentSocket != null || currentStatus !== 'idle';
+    const disconnectReason = options.reason ?? 'manual-disconnect';
     const socketToClose = currentSocket;
     const disconnectedTarget = currentTarget;
     const disconnectedUrl = currentTarget?.url ?? currentSocket?.url ?? '';
@@ -469,7 +473,7 @@ export function createExecutorSessionRuntime(options: {
     if (hadActiveSession) {
       notifyDisconnect({
         isInternalExecutor: isInternalExecutorTarget(disconnectedTarget),
-        reason: 'manual-disconnect',
+        reason: disconnectReason,
         status: currentStatus,
         target: disconnectedTarget,
         type: 'disconnected',

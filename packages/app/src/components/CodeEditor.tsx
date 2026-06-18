@@ -33,8 +33,12 @@ export type CodeEditorProps = {
   onKeyDown?: (e: monaco.IKeyboardEvent) => void;
   onBlur?: () => void;
   editorRef?: MutableRefObject<monaco.editor.IStandaloneCodeEditor | undefined>;
+  onEditorMount?: (editor: monaco.editor.IStandaloneCodeEditor) => void;
   scrollBeyondLastLine?: boolean;
   enableFolding?: boolean;
+  wordWrap?: 'on' | 'off';
+  scrollbar?: monaco.editor.IEditorScrollbarOptions;
+  onContentHeightChange?: (height: number) => void;
   errorLineHighlight?: {
     line: number;
     source: string;
@@ -57,8 +61,12 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   onKeyDown,
   onBlur,
   editorRef,
+  onEditorMount,
   scrollBeyondLastLine,
   enableFolding,
+  wordWrap = 'on',
+  scrollbar,
+  onContentHeightChange,
   errorLineHighlight,
   fontSize = DEFAULT_MULTILINE_EDITOR_FONT_SIZE,
   onFontSizeKeyDown,
@@ -72,6 +80,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const pendingResizeLayoutRef = useRef(false);
 
   const onChangeLatest = useLatest(onChange);
+  const onContentHeightChangeLatest = useLatest(onContentHeightChange);
   const isNodeEditorResizingRef = useRef(isNodeEditorResizing);
 
   isNodeEditorResizingRef.current = isNodeEditorResizing;
@@ -105,16 +114,18 @@ export const CodeEditor: FC<CodeEditorProps> = ({
         enabled: false,
       },
       fontSize,
-      wordWrap: 'on',
+      wordWrap,
       readOnly: isReadonly,
       model,
       scrollBeyondLastLine,
       scrollbar: {
+        ...scrollbar,
         alwaysConsumeMouseWheel: false,
       },
     });
 
     editor.layout();
+    onContentHeightChangeLatest.current?.(editor.getContentHeight());
     const interpolationSupport =
       interpolationSyntax != null ? installEditorInterpolationSupport(editor, interpolationSyntax) : undefined;
     const commentHighlightingSupport = shouldHighlightJsStyleComments(language)
@@ -134,6 +145,11 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     };
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(container);
+    const contentSizeChangeDisposable = editor.onDidContentSizeChange((event) => {
+      if (event.contentHeightChanged) {
+        onContentHeightChangeLatest.current?.(editor.getContentHeight());
+      }
+    });
 
     editor.onDidChangeModelContent(() => {
       onChangeLatest.current?.(editor.getValue());
@@ -147,6 +163,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     if (editorRef) {
       editorRef.current = editor;
     }
+    onEditorMount?.(editor);
 
     const currentOnChange = onChangeLatest.current;
 
@@ -161,6 +178,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
         editorRef.current = undefined;
       }
       resizeObserver?.disconnect();
+      contentSizeChangeDisposable.dispose();
       interpolationSupport?.dispose();
       commentHighlightingSupport?.dispose();
       editor.dispose();
@@ -228,7 +246,39 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       fontSize,
     });
     editor.layout();
-  }, [fontSize]);
+    onContentHeightChange?.(editor.getContentHeight());
+  }, [fontSize, onContentHeightChange]);
+
+  useEffect(() => {
+    const editor = editorInstance.current;
+
+    if (!editor) {
+      return;
+    }
+
+    editor.updateOptions({
+      wordWrap,
+    });
+    editor.layout();
+    onContentHeightChange?.(editor.getContentHeight());
+  }, [onContentHeightChange, wordWrap]);
+
+  useEffect(() => {
+    const editor = editorInstance.current;
+
+    if (!editor) {
+      return;
+    }
+
+    editor.updateOptions({
+      scrollbar: {
+        ...scrollbar,
+        alwaysConsumeMouseWheel: false,
+      },
+    });
+    editor.layout();
+    onContentHeightChange?.(editor.getContentHeight());
+  }, [onContentHeightChange, scrollbar]);
 
   useEffect(() => {
     const editor = editorInstance.current;

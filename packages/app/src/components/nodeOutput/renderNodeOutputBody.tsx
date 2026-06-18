@@ -36,6 +36,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
     renderMarkdown,
     renderMode,
     allowLargeStoredValueActions,
+    wrapLines,
   } = options;
 
   const bodyViewModel = createNodeOutputBodyViewModel({
@@ -51,6 +52,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
         data={data}
         renderMode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     );
   }
@@ -63,6 +65,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
         isCompact={isCompact}
         renderMode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     );
   }
@@ -78,6 +81,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
               renderMarkdown={renderMarkdown ?? false}
               renderMode={renderMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              wrapLines={wrapLines}
             />
           ) : OutputSimple ? (
             <OutputSimple
@@ -86,6 +90,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
               isCompact={isCompact}
               renderMode={renderMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              wrapLines={wrapLines}
             />
           ) : (
             <RenderDataOutputs
@@ -96,6 +101,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
               isCompact={isCompact}
               mode={renderMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              wrapLines={wrapLines}
             />
           ),
         )}
@@ -114,6 +120,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
         renderMarkdown={renderMarkdown ?? false}
         renderMode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     );
   }
@@ -125,6 +132,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
         isCompact={isCompact}
         renderMode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     );
   }
@@ -137,6 +145,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
       isCompact={isCompact}
       mode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   );
 }

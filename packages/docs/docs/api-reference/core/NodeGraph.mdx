@@ -55,6 +55,10 @@ Type: `NodeConnection[]`
 
 The directed connections between node ports.
 
+Connections may include optional visual bend-point metadata used by the editor
+to route a wire through a manual handle. This does not change the connected
+ports or graph execution semantics.
+
 ## Creating an Empty Graph
 
 The core package exports `emptyNodeGraph()`:

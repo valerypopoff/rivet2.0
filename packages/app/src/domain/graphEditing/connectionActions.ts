@@ -68,6 +68,42 @@ export function removeConnection(connections: NodeConnection[], connectionToBrea
   return removeMatchingConnection(connections, connectionToBreak);
 }
 
+export function setConnectionBendPoint(options: {
+  connections: NodeConnection[];
+  connectionToUpdate: NodeConnection;
+  bendPoint: NodeConnection['bendPoint'] | undefined;
+}): { connections: NodeConnection[]; previousConnection: NodeConnection; nextConnection: NodeConnection } | undefined {
+  let updated = false;
+  let previousConnection: NodeConnection | undefined;
+  let nextConnection: NodeConnection | undefined;
+
+  const nextConnections = options.connections.map((connection) => {
+    if (updated || !areConnectionsEqual(connection, options.connectionToUpdate)) {
+      return connection;
+    }
+
+    updated = true;
+    previousConnection = connection;
+    const connectionWithoutBendPoint: NodeConnection = { ...connection };
+    delete connectionWithoutBendPoint.bendPoint;
+    nextConnection = options.bendPoint
+      ? { ...connectionWithoutBendPoint, bendPoint: options.bendPoint }
+      : connectionWithoutBendPoint;
+
+    return nextConnection;
+  });
+
+  if (!previousConnection || !nextConnection) {
+    return undefined;
+  }
+
+  return {
+    connections: nextConnections,
+    previousConnection,
+    nextConnection,
+  };
+}
+
 export function createRewireConnectionChange(
   connections: NodeConnection[],
   originalConnection: NodeConnection,

@@ -271,6 +271,22 @@ test('compareProjects compares connections exactly and marks port rewires as cha
   assert.equal(main.summary.addedConnections, 1);
 });
 
+test('compareProjects ignores connection bend-point-only changes', () => {
+  const beforeConnection = connection('a', 'b');
+  const afterConnection = { ...beforeConnection, bendPoint: { x: 120, y: 240 } };
+  const result = compareProjects(
+    project([graph('main', [node('a'), node('b')], [beforeConnection])]),
+    project([graph('main', [node('a'), node('b')], [afterConnection])]),
+  );
+
+  const main = result.graphs['main' as GraphId]!;
+  const comparison = main.connections[getProjectConnectionComparisonKey(beforeConnection)]!;
+
+  assert.equal(main.kind, 'unchanged');
+  assert.equal(comparison.kind, 'unchanged');
+  assert.equal(main.summary.changedConnections, 0);
+});
+
 test('getProjectNodeFieldComparisons reports changed node config fields', () => {
   const result = compareProjects(
     project([graph('main', [node('changed', { value: 'before' })])]),

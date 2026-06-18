@@ -12,6 +12,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   const overlayTabsTsx = readFileSync(join(srcDir, 'OverlayTabs.tsx'), 'utf8');
   const noProjectTsx = readFileSync(join(srcDir, 'NoProject.tsx'), 'utf8');
   const rivetAppSource = readFileSync(join(srcDir, 'RivetApp.tsx'), 'utf8');
+  const workspaceTransitionsSource = readFileSync(join(srcDir, '..', 'hooks', 'useWorkspaceTransitions.ts'), 'utf8');
+  const setStaticDataSource = readFileSync(join(srcDir, '..', 'hooks', 'useSetStaticData.ts'), 'utf8');
+  const savedGraphsSource = readFileSync(join(srcDir, '..', 'state', 'savedGraphs.ts'), 'utf8');
+  const projectUnsavedChangesSource = readFileSync(join(srcDir, '..', 'utils', 'projectUnsavedChanges.ts'), 'utf8');
   const colorsCss = readFileSync(join(srcDir, '..', 'colors.css'), 'utf8');
 
   assert.match(
@@ -225,7 +229,72 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
       "const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
     ),
   );
-  assert.match(projectSelectorTsx, /className={clsx\('project', \{ active, unsaved \}\)}/);
+  assert.match(
+    projectSelectorTsx,
+    /className={clsx\('project', \{ active, unsaved, 'has-unsaved-changes': hasUnsavedChanges \}\)}/,
+  );
+  assert.match(
+    projectSelectorTsx,
+    /const hasUnsavedChanges = hasProjectUnsavedChanges\(projectUnsavedChanges, projectDataUnsavedChanges, projectId\);/,
+  );
+  assert.match(
+    projectUnsavedChangesSource,
+    /export function hasProjectUnsavedChanges\([\s\S]*projectUnsavedChanges\[projectId\] === true \|\| projectDataUnsavedChanges\[projectId\] === true;/,
+  );
+  assert.match(projectSelectorTsx, /const \[projectPendingClose, setProjectPendingClose\] = useState<ProjectId \| null>\(null\);/);
+  assert.match(
+    projectSelectorTsx,
+    /const requestCloseProject = \(projectId: ProjectId\) => \{[\s\S]*hasProjectUnsavedChanges\(projectUnsavedChanges, projectDataUnsavedChanges, projectId\)[\s\S]*setProjectPendingClose\(projectId\);[\s\S]*void closeProject\(projectId\);[\s\S]*\};/,
+  );
+  assert.match(projectSelectorTsx, /<UnsavedProjectCloseConfirmModal[\s\S]*open={projectPendingCloseInfo != null}/);
+  assert.match(projectSelectorTsx, /const UnsavedProjectCloseConfirmModal: FC/);
+  assert.match(projectSelectorTsx, /<AppModalHeader title="Unsaved changes" onClose={onClose} \/>/);
+  assert.match(projectSelectorTsx, /There are unsaved changes in <strong>{projectTitle \?\? 'this project'}<\/strong>/);
+  assert.match(projectSelectorTsx, /Close this project tab anyway\? Unsaved changes will be lost\./);
+  assert.match(projectSelectorTsx, />\s*Close without saving\s*<\/Button>/);
+  assert.match(projectSelectorTsx, /&\.has-unsaved-changes \.project-name::before \{[\s\S]*display: block;/);
+  assert.match(
+    savedGraphsSource,
+    /export const savedProjectContentDigestsState = atom<Record<ProjectId, string \| undefined>>\(\{\}\);/,
+  );
+  assert.match(
+    savedGraphsSource,
+    /export const projectUnsavedChangesState = atom<Record<ProjectId, boolean \| undefined>>\(\{\}\);/,
+  );
+  assert.match(
+    savedGraphsSource,
+    /export const projectDataUnsavedChangesState = atom<Record<ProjectId, boolean \| undefined>>\(\{\}\);/,
+  );
+  assert.doesNotMatch(savedGraphsSource, /projectUnsavedChangesState = atomWithStorage/);
+  assert.match(
+    workspaceTransitionsSource,
+    /if \(projectInfo\.markClean\) \{[\s\S]*markProjectClean\([\s\S]*project: projectInfo\.project,[\s\S]*markProjectDirtyFlag\(previousFlags, targetProjectId, false\)[\s\S]*\}\s+setProject\(transition\.project\);/,
+  );
+  assert.match(workspaceTransitionsSource, /markClean\?: boolean;/);
+  const syncOpenedProjectsSource = readFileSync(
+    join(srcDir, '..', 'hooks', 'useSyncCurrentStateIntoOpenedProjects.ts'),
+    'utf8',
+  );
+  assert.match(
+    syncOpenedProjectsSource,
+    /if \(!savedDigest\) \{[\s\S]*markProjectClean\(previousDigests, snapshot\)[\s\S]*markProjectDirtyFlag\(previousFlags, currentProject\.metadata\.id, false\)[\s\S]*return;/,
+  );
+  assert.doesNotMatch(
+    syncOpenedProjectsSource,
+    /markProjectDirtyFlag\(previousFlags, currentProject\.metadata\.id, !loadedProject\.path\)/,
+  );
+  assert.match(
+    syncOpenedProjectsSource,
+    /const currentDigest = getProjectContentDigest\(snapshot\);[\s\S]*const isDirty = currentDigest !== savedDigest;[\s\S]*markProjectDirtyFlag\(previousFlags, currentProject\.metadata\.id, isDirty\)/,
+  );
+  assert.match(
+    setStaticDataSource,
+    /markProjectDirtyFlag\(previousFlags, currentProject\.metadata\.id, true\)/,
+  );
+  assert.doesNotMatch(
+    syncOpenedProjectsSource,
+    /if \(previousFlags\[currentProject\.metadata\.id\]\) \{\s+return previousFlags;\s+\}/,
+  );
   assert.match(projectSelectorTsx, /&:not\(\.active\) > \.actions \{[\s\S]*display: none;/);
   assert.match(projectSelectorTsx, /{active && \(\s*<div className="actions">/);
   assert.match(overlayTabsTsx, /background: var\(--project-selector-strip-bg, var\(--grey-dark-colorish\)\);/);

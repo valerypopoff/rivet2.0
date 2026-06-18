@@ -1,6 +1,10 @@
+
+
+- In the full output modal show word and character counters
+
+
 - Node from rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?
 
-- Apply a style where there's a straight line and another line in parallel close to it, just like in the Rivet logo
 
 
 - Rework ChatViewer workspace into an actual chat interface that is connected to a specific graph with cpecific inputs and outputs so the user can test their graph in a chat-like interface.
@@ -10,7 +14,6 @@
 
 
 
-- In the full output modal show word and character counters
 
 
 - Need to show the curent graph name somewhere. When there's many and they are in the folders and you click through subgraphs, the user gets lost. It's already shown in the run button. maybe make it more noticeable?
@@ -28,6 +31,7 @@
 
 - Now, the executor mode is global for all open projects (remote debugger, browser, node). Make it per tab
 
+- Apply a style where there's a straight line and another line in parallel close to it, just like in the Rivet logo
 
 - Get back to MCP and see if it works and how it works. I don't see an MCP node. I think we need it
 - Reassess all the "Generate using AI" in different nodes. The model picker is clipped by the section border
@@ -41,7 +45,6 @@
 
 - In the node output when there's yellow headers, without hover the headers are not visible. I want them to be visible
 
-- Make node terminals not round, but half squircles on the inside part of the node
 
 - A setting for LLM chat node to race several LLM calls and return the fastest. Need to think through how it works along with retries
 
@@ -49,7 +52,6 @@
   rivet2.0/packages/app/src/assets/tutorials
   /documentation-tutorial.rivet-project
 
-- Add mid points to connections so I can do neat wiring
 - Code node (and Expression node) should have a "Catch failures" switcher so I can safely fallback with coalesce
 
 

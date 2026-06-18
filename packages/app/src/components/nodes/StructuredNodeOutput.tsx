@@ -1,6 +1,8 @@
 import { css } from '@emotion/react';
 import { type FC, type ReactNode } from 'react';
 import ColorizedPreformattedText from '../ColorizedPreformattedText.js';
+import { FoldingCodeBlock } from '../renderDataValue/FoldingCodeBlock.js';
+import { type OutputRenderMode } from '../renderDataValue/outputRenderTypes.js';
 import { outputSectionGroupGap, outputSectionLabelStyles } from '../renderDataValue/renderDataValueStyles.js';
 
 const structuredNodeOutputCss = css`
@@ -42,22 +44,44 @@ const structuredNodeOutputCss = css`
 export const StructuredNodeOutput: FC<{
   children?: ReactNode;
   errorMessage?: string;
+  renderMode?: OutputRenderMode;
+  allowLargeStoredValueActions?: boolean;
+  wrapLines?: boolean;
   parsedSource?: string;
   parsedSourceLabel?: string;
   parsedSourceLanguage?: string;
-}> = ({ children, errorMessage, parsedSource, parsedSourceLabel, parsedSourceLanguage }) => (
-  <div css={structuredNodeOutputCss}>
-    {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
-    {children}
-    {parsedSource !== undefined && parsedSourceLanguage && (
+}> = ({
+  children,
+  errorMessage,
+  renderMode,
+  allowLargeStoredValueActions,
+  wrapLines,
+  parsedSource,
+  parsedSourceLabel,
+  parsedSourceLanguage,
+}) => {
+  const useFoldableParsedSource = renderMode === 'expanded-preview' && allowLargeStoredValueActions === true;
+  const placeParsedSourceBeforeChildren = useFoldableParsedSource && errorMessage === undefined;
+  const parsedSourceSection =
+    parsedSource !== undefined && parsedSourceLanguage ? (
       <ParsedSourceOutputSection
         label={parsedSourceLabel ?? 'Parsed expression'}
         source={parsedSource}
         language={parsedSourceLanguage}
+        useFolding={useFoldableParsedSource}
+        wrapLines={wrapLines ?? true}
       />
-    )}
-  </div>
-);
+    ) : null;
+
+  return (
+    <div css={structuredNodeOutputCss}>
+      {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
+      {placeParsedSourceBeforeChildren && parsedSourceSection}
+      {children}
+      {!placeParsedSourceBeforeChildren && parsedSourceSection}
+    </div>
+  );
+};
 
 export const StructuredNodeOutputSection: FC<{
   children: ReactNode;
@@ -78,8 +102,14 @@ const ParsedSourceOutputSection: FC<{
   label: string;
   language: string;
   source: string;
-}> = ({ label, language, source }) => (
+  useFolding: boolean;
+  wrapLines: boolean;
+}> = ({ label, language, source, useFolding, wrapLines }) => (
   <StructuredNodeOutputSection label={label} className="structured-node-output-source">
-    <ColorizedPreformattedText text={source} language={language} />
+    {useFolding ? (
+      <FoldingCodeBlock text={source} language={language} wrapLines={wrapLines} />
+    ) : (
+      <ColorizedPreformattedText text={source} language={language} />
+    )}
   </StructuredNodeOutputSection>
 );

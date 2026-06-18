@@ -28,6 +28,7 @@ export function RenderDataValue({
   isCompact,
   mode,
   allowLargeStoredValueActions,
+  wrapLines,
 }: {
   value: DataValueWithRefs | DataValue | undefined;
   depth?: number;
@@ -36,6 +37,7 @@ export function RenderDataValue({
   isCompact?: boolean;
   mode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
+  wrapLines?: boolean;
 }) {
   const dataRefs = useDataRefs();
   const effectiveMode = mode ?? (isCompact ? 'compact' : 'full');
@@ -55,6 +57,7 @@ export function RenderDataValue({
         value={value}
         mode={effectiveMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
+        wrapLines={wrapLines}
       />
     );
   }
@@ -75,6 +78,7 @@ export function RenderDataValue({
       isCompact={isCompact}
       mode={effectiveMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   );
 }
@@ -86,7 +90,8 @@ export const RenderDataOutputs: FC<{
   isCompact: boolean;
   mode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ definitions, outputs, renderMarkdown, isCompact, mode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ definitions, outputs, renderMarkdown, isCompact, mode, allowLargeStoredValueActions, wrapLines }) => {
   const visibleOutputPorts = keys(outputs).filter((portId) => isVisibleOutputPort(portId) && outputs[portId] != null);
   const outputPorts = isCompact ? visibleOutputPorts.slice(0, 1) : visibleOutputPorts;
   const effectiveMode = mode ?? (isCompact ? 'compact' : 'full');
@@ -104,6 +109,7 @@ export const RenderDataOutputs: FC<{
           isCompact={isCompact}
           mode={effectiveMode}
           allowLargeStoredValueActions={allowLargeStoredValueActions}
+          wrapLines={wrapLines}
         />
       </div>
     );
@@ -128,6 +134,7 @@ export const RenderDataOutputs: FC<{
               isCompact={isCompact}
               mode={effectiveMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              wrapLines={wrapLines}
             />
           </div>
         );
@@ -146,6 +153,7 @@ function getRendererMap(): ReturnType<typeof createDataValueRendererMap> {
       isCompact?: boolean;
       mode?: OutputRenderMode;
       allowLargeStoredValueActions?: boolean;
+      wrapLines?: boolean;
     }) => <RenderDataValue {...nestedProps} />;
 
     const scalarRenderers = createScalarRenderers({

@@ -41,6 +41,7 @@ export function useLoadProjectWithFileBrowser() {
             data,
             fsPath: path,
             testSuites: testData.testSuites,
+            markClean: true,
           });
 
           if (loaded) {

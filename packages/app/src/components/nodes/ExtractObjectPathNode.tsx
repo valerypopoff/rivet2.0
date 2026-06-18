@@ -24,7 +24,8 @@ const ExtractObjectPathNodeOutputBody: FC<{
   data: NodeRunDataWithRefs;
   renderMode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
-}> = ({ node, data, renderMode, allowLargeStoredValueActions }) => {
+  wrapLines?: boolean;
+}> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
   const hasError = data.status?.type === 'error';
   const dataRefs = useDataRefs();
@@ -57,6 +58,7 @@ const ExtractObjectPathNodeOutputBody: FC<{
             value={outputValue}
             mode={renderMode}
             allowLargeStoredValueActions={allowLargeStoredValueActions}
+            wrapLines={wrapLines}
           />
         </StructuredNodeOutputSection>,
       ];
@@ -65,6 +67,9 @@ const ExtractObjectPathNodeOutputBody: FC<{
   return (
     <StructuredNodeOutput
       errorMessage={errorMessage}
+      renderMode={renderMode}
+      allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
       parsedSource={shouldShowParsedExpression ? parsedExpression ?? '' : undefined}
       parsedSourceLanguage="jsonpath"
     >
@@ -80,20 +85,22 @@ const ExtractObjectPathNodeOutputBody: FC<{
 };
 
 export const extractObjectPathNodeDescriptor: NodeComponentDescriptor<'extractObjectPath'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions }) => (
+  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <ExtractObjectPathNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions }) => (
+  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <ExtractObjectPathNodeOutputBody
       node={node}
       data={data}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      wrapLines={wrapLines}
     />
   ),
 };

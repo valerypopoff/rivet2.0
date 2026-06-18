@@ -9,9 +9,12 @@ import {
   loadedProjectState,
   openedProjectSnapshotsState,
   openedProjectsSortedIdsState,
+  projectDataUnsavedChangesState,
+  projectUnsavedChangesState,
   projectsState,
   projectState,
   releaseProjectContextState,
+  savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
 import { handleError } from '../utils/errorHandling.js';
 import {
@@ -26,6 +29,7 @@ import { useLoadProject } from './useLoadProject.js';
 import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js';
 import { useStableCallback } from './useStableCallback.js';
 import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
+import { removeProjectUnsavedState } from '../utils/projectUnsavedChanges.js';
 
 export type RivetProjectSnapshotInput = {
   project: Project | Omit<Project, 'data'>;
@@ -87,6 +91,9 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
+  const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
+  const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
+  const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
   const { persistCurrentProjectEditorSnapshot } = useCurrentProjectEditorSnapshot();
   const {
     captureCurrentProjectExecutionSnapshot,
@@ -108,6 +115,8 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
           openedGraph: snapshot.openedGraph,
           graphToLoad: snapshot.graphToLoad,
           testSuites: snapshot.testSuites,
+          executorMode: projects.openedProjects[projectId]?.executorMode,
+          markClean: true,
         });
 
         if (!loaded) {
@@ -155,6 +164,9 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
             delete nextSnapshots[currentProjectId];
             return nextSnapshots;
           });
+          setSavedProjectContentDigests((digests) => removeProjectUnsavedState(digests, currentProjectId));
+          setProjectUnsavedChanges((flags) => removeProjectUnsavedState(flags, currentProjectId));
+          setProjectDataUnsavedChanges((flags) => removeProjectUnsavedState(flags, currentProjectId));
           removeProjectExecutionSnapshot(currentProjectId);
           releaseProjectContextState(currentProjectId);
           clearCodeEditorModelCacheForClosedProject(currentProjectId);
@@ -257,6 +269,9 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       delete nextSnapshots[projectId];
       return nextSnapshots;
     });
+    setSavedProjectContentDigests((digests) => removeProjectUnsavedState(digests, projectId));
+    setProjectUnsavedChanges((flags) => removeProjectUnsavedState(flags, projectId));
+    setProjectDataUnsavedChanges((flags) => removeProjectUnsavedState(flags, projectId));
     releaseProjectContextState(projectId);
     clearCodeEditorModelCacheForClosedProject(projectId);
 

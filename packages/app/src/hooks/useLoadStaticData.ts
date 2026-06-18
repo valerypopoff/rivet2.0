@@ -1,5 +1,5 @@
 import { useAtom, useSetAtom } from 'jotai';
-import { loadedProjectState, projectDataState } from '../state/savedGraphs';
+import { projectDataState } from '../state/savedGraphs';
 import { useEffect } from 'react';
 import { useStaticDataDatabase } from './useStaticDataDatabase';
 import { type DataId } from '@valerypopoff/rivet2-core';

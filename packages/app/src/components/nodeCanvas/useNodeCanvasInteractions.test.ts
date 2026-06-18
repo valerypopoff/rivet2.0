@@ -70,20 +70,21 @@ test('getWheelZoomFactor clamps extreme shift-wheel zoom speed so zoom-out stays
   );
 });
 
-function elementWithClasses(...classNames: string[]): HTMLElement {
+function elementWithClasses(...classNames: string[]): Element {
   const classNameSet = new Set(classNames);
   return {
     classList: {
       contains: (className: string) => classNameSet.has(className),
     },
     closest: () => null,
-  } as unknown as HTMLElement;
+  } as unknown as Element;
 }
 
 test('isCanvasPanSurface accepts the root and transparent canvas layers', () => {
   assert.equal(isCanvasPanSurface(elementWithClasses('node-canvas')), true);
   assert.equal(isCanvasPanSurface(elementWithClasses('canvas-contents')), true);
   assert.equal(isCanvasPanSurface(elementWithClasses('nodes')), true);
+  assert.equal(isCanvasPanSurface(elementWithClasses('wire-hit-area')), true);
   assert.equal(isCanvasPanSurface(elementWithClasses('node-body')), false);
 });
 
@@ -92,14 +93,14 @@ test('isCanvasPanSurface accepts comment bodies but not comment headers', () => 
     isCanvasPanSurface({
       classList: { contains: () => false },
       closest: (selector: string) => (selector === '.node.isComment .node-body' ? {} : null),
-    } as unknown as HTMLElement),
+    } as unknown as Element),
     true,
   );
   assert.equal(
     isCanvasPanSurface({
       classList: { contains: () => false },
       closest: () => null,
-    } as unknown as HTMLElement),
+    } as unknown as Element),
     false,
   );
 });
@@ -109,7 +110,7 @@ test('isCanvasPanSurface rejects normal node descendants even when events bubble
     isCanvasPanSurface({
       classList: { contains: () => false },
       closest: (selector: string) => (selector === '.node' ? {} : null),
-    } as unknown as HTMLElement),
+    } as unknown as Element),
     false,
   );
 });
@@ -128,9 +129,22 @@ test('shouldStartCanvasPan refuses canvas panning during an active node drag ges
       target: {
         classList: { contains: () => false },
         closest: (selector: string) => (selector === '.node.isComment .node-body' ? {} : null),
-      } as unknown as HTMLElement,
+      } as unknown as Element,
     }),
     false,
+  );
+});
+
+test('canvas panning accepts SVG wire hit paths as pan surfaces', () => {
+  assert.equal(
+    shouldStartCanvasPan({
+      isNodeDragGestureActive: false,
+      target: {
+        classList: { contains: (className: string) => className === 'wire-hit-area' },
+        closest: () => null,
+      } as unknown as SVGPathElement,
+    }),
+    true,
   );
 });
 

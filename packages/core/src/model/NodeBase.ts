@@ -155,6 +155,12 @@ export type NodeConnection = {
 
   /** The unique identifier of the input. */
   inputId: PortId;
+
+  /** Optional visual-only bend point for manually routing the connection on the canvas. */
+  bendPoint?: {
+    x: number;
+    y: number;
+  };
 };
 
 export const IF_PORT: NodeInputDefinition = {

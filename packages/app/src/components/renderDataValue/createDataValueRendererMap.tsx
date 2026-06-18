@@ -22,6 +22,7 @@ export type DataValueRendererProps = {
   isCompact?: boolean;
   mode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
+  wrapLines?: boolean;
 };
 
 export function createDataValueRendererMap(options: {
@@ -40,6 +41,7 @@ export function createDataValueRendererMap(options: {
         isCompact,
         mode,
         allowLargeStoredValueActions,
+        wrapLines,
       }) => {
         if (!value) {
           return <Fragment>undefined</Fragment>;
@@ -76,6 +78,7 @@ export function createDataValueRendererMap(options: {
                     isCompact,
                     mode,
                     allowLargeStoredValueActions,
+                    wrapLines,
                   })}
                 </div>
               ))}
@@ -108,6 +111,7 @@ export function createDataValueRendererMap(options: {
               isCompact={isCompact}
               mode={mode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              wrapLines={wrapLines}
             />
           </div>
         );

@@ -10,6 +10,7 @@ export type SearchProvider = {
   getMatchRanges(query: string): SearchMatchRange[];
   activateMatch(localMatchIndex: number): void;
   clearActiveMatch(): void;
+  clearMatches?(): void;
 };
 
 export type SearchMatchRange = {
@@ -47,6 +48,22 @@ type TextNodeRange = {
   endOffset: number;
   matchIndex: number;
 };
+
+type HighlightTextNodeRangeGroup = {
+  textNode: Text;
+  ranges: TextNodeRange[];
+};
+
+export type HighlightTextSegment =
+  | {
+      kind: 'text';
+      textNode: Text;
+      text: string;
+    }
+  | {
+      kind: 'virtual';
+      text: string;
+    };
 
 export function findMatchRanges(text: string, query: string): SearchMatchRange[] {
   const normalizedQuery = query.toLocaleLowerCase();
@@ -232,6 +249,49 @@ export function collectTextNodes(rootElement: HTMLElement): Text[] {
   return textNodes;
 }
 
+export function collectHighlightTextSegments(
+  rootElement: HTMLElement,
+  options: { includeLineBreakElements?: boolean } = {},
+): HighlightTextSegment[] {
+  const textSegments: HighlightTextSegment[] = [];
+  const { includeLineBreakElements = false } = options;
+
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const textNode = node as Text;
+      textSegments.push({
+        kind: 'text',
+        textNode,
+        text: textNode.textContent ?? '',
+      });
+      return;
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return;
+    }
+
+    const element = node as HTMLElement;
+    if (includeLineBreakElements && element.tagName === 'BR') {
+      // Rich renderers such as Monaco colorization can represent raw "\n" as
+      // <br>, so provider-owned raw-text offsets need this virtual segment.
+      textSegments.push({
+        kind: 'virtual',
+        text: '\n',
+      });
+      return;
+    }
+
+    for (const childNode of Array.from(element.childNodes)) {
+      visit(childNode);
+    }
+  };
+
+  visit(rootElement);
+
+  return textSegments;
+}
+
 export function applyHighlights(args: {
   textNodes: readonly Text[];
   matchRanges: readonly SearchMatchRange[];
@@ -247,53 +307,47 @@ export function applyHighlights(args: {
     includeMatchIndexAttribute = true,
   } = args;
 
+  return applyHighlightsToTextSegments({
+    textSegments: textNodes.map((textNode) => ({
+      kind: 'text' as const,
+      textNode,
+      text: textNode.textContent ?? '',
+    })),
+    matchRanges,
+    matchIndices,
+    activeMatchIndex,
+    includeMatchIndexAttribute,
+  });
+}
+
+export function applyHighlightsToTextSegments(args: {
+  textSegments: readonly HighlightTextSegment[];
+  matchRanges: readonly SearchMatchRange[];
+  matchIndices: readonly number[];
+  activeMatchIndex?: number;
+  includeMatchIndexAttribute?: boolean;
+}): HTMLElement | null {
+  const {
+    textSegments,
+    matchRanges,
+    matchIndices,
+    activeMatchIndex,
+    includeMatchIndexAttribute = true,
+  } = args;
+
   if (matchRanges.length === 0) {
     return null;
   }
 
-  const textNodePositions = textNodes.map((textNode) => ({
-    textNode,
-    startOffset: 0,
-    endOffset: 0,
-    text: textNode.textContent ?? '',
-  }));
-
-  let runningOffset = 0;
-  textNodePositions.forEach((position) => {
-    position.startOffset = runningOffset;
-    runningOffset += position.text.length;
-    position.endOffset = runningOffset;
-  });
-
-  const rangesByTextNode = new Map<Text, TextNodeRange[]>();
-
-  matchRanges.forEach((matchRange, localMatchIndex) => {
-    const matchIndex = matchIndices[localMatchIndex];
-    if (matchIndex == null || matchRange.endOffset <= matchRange.startOffset) {
-      return;
-    }
-
-    for (const position of textNodePositions) {
-      const overlapStart = Math.max(matchRange.startOffset, position.startOffset);
-      const overlapEnd = Math.min(matchRange.endOffset, position.endOffset);
-
-      if (overlapStart >= overlapEnd) {
-        continue;
-      }
-
-      const ranges = rangesByTextNode.get(position.textNode) ?? [];
-      ranges.push({
-        startOffset: overlapStart - position.startOffset,
-        endOffset: overlapEnd - position.startOffset,
-        matchIndex,
-      });
-      rangesByTextNode.set(position.textNode, ranges);
-    }
+  const textNodeRangeGroups = getHighlightTextNodeRangeGroups({
+    textSegments,
+    matchRanges,
+    matchIndices,
   });
 
   let firstHighlightElement: HTMLElement | null = null;
 
-  for (const [textNode, ranges] of rangesByTextNode) {
+  for (const { textNode, ranges } of textNodeRangeGroups) {
     const sortedRanges = ranges.sort((left, right) => left.startOffset - right.startOffset);
     const originalText = textNode.textContent ?? '';
     const fragment = document.createDocumentFragment();
@@ -334,6 +388,62 @@ export function applyHighlights(args: {
   }
 
   return firstHighlightElement;
+}
+
+export function getHighlightTextNodeRangeGroups(args: {
+  textSegments: readonly HighlightTextSegment[];
+  matchRanges: readonly SearchMatchRange[];
+  matchIndices: readonly number[];
+}): HighlightTextNodeRangeGroup[] {
+  const { textSegments, matchRanges, matchIndices } = args;
+  const textSegmentPositions = textSegments.map((segment) => ({
+    segment,
+    startOffset: 0,
+    endOffset: 0,
+    text: segment.text,
+  }));
+
+  let runningOffset = 0;
+  textSegmentPositions.forEach((position) => {
+    position.startOffset = runningOffset;
+    runningOffset += position.text.length;
+    position.endOffset = runningOffset;
+  });
+
+  const rangesByTextNode = new Map<Text, TextNodeRange[]>();
+
+  matchRanges.forEach((matchRange, localMatchIndex) => {
+    const matchIndex = matchIndices[localMatchIndex];
+    if (matchIndex == null || matchRange.endOffset <= matchRange.startOffset) {
+      return;
+    }
+
+    for (const position of textSegmentPositions) {
+      if (position.segment.kind === 'virtual') {
+        continue;
+      }
+
+      const overlapStart = Math.max(matchRange.startOffset, position.startOffset);
+      const overlapEnd = Math.min(matchRange.endOffset, position.endOffset);
+
+      if (overlapStart >= overlapEnd) {
+        continue;
+      }
+
+      const ranges = rangesByTextNode.get(position.segment.textNode) ?? [];
+      ranges.push({
+        startOffset: overlapStart - position.startOffset,
+        endOffset: overlapEnd - position.startOffset,
+        matchIndex,
+      });
+      rangesByTextNode.set(position.segment.textNode, ranges);
+    }
+  });
+
+  return Array.from(rangesByTextNode, ([textNode, ranges]) => ({
+    textNode,
+    ranges,
+  }));
 }
 
 function isBoundaryTag(tagName: string): boolean {

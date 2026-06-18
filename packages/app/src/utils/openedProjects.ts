@@ -1,5 +1,7 @@
 import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
 import type { OpenedProjectsInfo } from '../state/savedGraphs.js';
+import type { ProjectExecutorMode } from './projectExecutorMode.js';
+import { sanitizeProjectExecutorMode } from './projectExecutorMode.js';
 
 export type ProjectPathMove = {
   from: string;
@@ -11,13 +13,15 @@ export type ProjectPathMovesInput = Record<string, string> | ProjectPathMove[];
 export function addOpenedProject(
   current: OpenedProjectsInfo,
   project: Project,
-  options: { fsPath?: string | null; openedGraph?: GraphId } = {},
+  options: { executorMode?: ProjectExecutorMode; fsPath?: string | null; openedGraph?: GraphId } = {},
 ): OpenedProjectsInfo {
   const projectId = project.metadata.id as ProjectId;
   const existingProject = current.openedProjects[projectId];
   const nextFsPath = 'fsPath' in options ? options.fsPath ?? null : existingProject?.fsPath ?? null;
   const nextOpenedGraph =
     'openedGraph' in options ? options.openedGraph : existingProject?.openedGraph ?? project.metadata.mainGraphId;
+  const nextExecutorMode =
+    'executorMode' in options ? sanitizeProjectExecutorMode(options.executorMode) : existingProject?.executorMode;
 
   return {
     openedProjects: {
@@ -28,6 +32,7 @@ export function addOpenedProject(
         title: project.metadata.title,
         fsPath: nextFsPath,
         openedGraph: nextOpenedGraph,
+        executorMode: nextExecutorMode,
       },
     },
     openedProjectsSortedIds: current.openedProjectsSortedIds.includes(projectId)

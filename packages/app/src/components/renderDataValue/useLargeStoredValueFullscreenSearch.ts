@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type Dispatch,
@@ -9,9 +10,9 @@ import {
 } from 'react';
 import { useFullscreenOutputSearchContext } from '../nodeOutput/FullscreenOutputSearchContext.js';
 import {
-  applyHighlights,
+  applyHighlightsToTextSegments,
   clearHighlights,
-  collectTextNodes,
+  collectHighlightTextSegments,
   findMatchRanges,
   PROVIDER_ATTRIBUTE,
   type SearchMatchRange,
@@ -25,6 +26,7 @@ type ActiveSearchMatch = {
 export type LargeStoredValueFullscreenSearchResult = {
   providerRootProps?: Record<string, string>;
   clearSearchAutoExpansion: () => void;
+  activeMatchRange: SearchMatchRange | null;
 };
 
 export function useLargeStoredValueFullscreenSearch(args: {
@@ -40,6 +42,7 @@ export function useLargeStoredValueFullscreenSearch(args: {
   setShowFull: Dispatch<SetStateAction<boolean>>;
   chunkPage: number;
   setChunkPage: Dispatch<SetStateAction<number>>;
+  highlightMode?: 'dom' | 'external';
 }): LargeStoredValueFullscreenSearchResult {
   const {
     providerId,
@@ -54,6 +57,7 @@ export function useLargeStoredValueFullscreenSearch(args: {
     setShowFull,
     chunkPage,
     setChunkPage,
+    highlightMode = 'dom',
   } = args;
 
   const fullscreenOutputSearch = useFullscreenOutputSearchContext();
@@ -80,6 +84,17 @@ export function useLargeStoredValueFullscreenSearch(args: {
     if (!fullscreenOutputSearch || !rootRef.current) {
       return;
     }
+
+    const restoreAutoExpandedSearchState = () => {
+      const restoreState = autoExpandedSearchStateRef.current;
+      if (!restoreState) {
+        return;
+      }
+
+      autoExpandedSearchStateRef.current = null;
+      setShowFull(restoreState.showFull);
+      setChunkPage(restoreState.chunkPage);
+    };
 
     return fullscreenOutputSearch.registerProvider({
       id: providerId,
@@ -116,29 +131,20 @@ export function useLargeStoredValueFullscreenSearch(args: {
         });
       },
       clearActiveMatch: () => {
+        setActiveSearchMatch(null);
+        restoreAutoExpandedSearchState();
+      },
+      clearMatches: () => {
         currentSearchMatchRangesRef.current = [];
         setActiveSearchMatch(null);
-
-        const restoreState = autoExpandedSearchStateRef.current;
-        if (restoreState) {
-          autoExpandedSearchStateRef.current = null;
-          setShowFull(restoreState.showFull);
-          setChunkPage(restoreState.chunkPage);
-        }
+        restoreAutoExpandedSearchState();
       },
     });
   }, [chunks, fullText, fullscreenOutputSearch, providerId, rootRef, setChunkPage, setShowFull, shouldPageFullText]);
 
-  useEffect(() => {
-    const contentElement = contentRef.current;
-    if (!contentElement) {
-      return;
-    }
-
-    clearHighlights(contentElement);
-
+  const activeVisibleMatchRange = useMemo((): SearchMatchRange | null => {
     if (!showFull || !activeChunk || !activeChunkText || !activeSearchMatch) {
-      return;
+      return null;
     }
 
     const localMatchStartOffset = activeSearchMatch.matchRange.startOffset - activeChunk.startOffset;
@@ -148,17 +154,34 @@ export function useLargeStoredValueFullscreenSearch(args: {
       localMatchStartOffset >= activeChunkText.length ||
       localMatchEndOffset <= localMatchStartOffset
     ) {
+      return null;
+    }
+
+    return {
+      startOffset: Math.max(0, localMatchStartOffset),
+      endOffset: Math.min(activeChunkText.length, localMatchEndOffset),
+    };
+  }, [activeChunk, activeChunkText, activeSearchMatch, showFull]);
+
+  useEffect(() => {
+    const contentElement = contentRef.current;
+    if (!contentElement) {
       return;
     }
 
-    const activeHighlightElement = applyHighlights({
-      textNodes: collectTextNodes(contentElement),
-      matchRanges: [
-        {
-          startOffset: Math.max(0, localMatchStartOffset),
-          endOffset: Math.min(activeChunkText.length, localMatchEndOffset),
-        },
-      ],
+    clearHighlights(contentElement);
+
+    if (highlightMode === 'external') {
+      return;
+    }
+
+    if (!activeChunkText || !activeVisibleMatchRange) {
+      return;
+    }
+
+    const activeHighlightElement = applyHighlightsToTextSegments({
+      textSegments: collectHighlightTextSegments(contentElement, { includeLineBreakElements: true }),
+      matchRanges: [activeVisibleMatchRange],
       matchIndices: [0],
       activeMatchIndex: 0,
       includeMatchIndexAttribute: false,
@@ -172,7 +195,7 @@ export function useLargeStoredValueFullscreenSearch(args: {
     return () => {
       clearHighlights(contentElement);
     };
-  }, [activeChunk, activeChunkText, activeSearchMatch, contentRef, showFull]);
+  }, [activeChunkText, activeVisibleMatchRange, contentRef, highlightMode]);
 
   return {
     providerRootProps: fullscreenOutputSearch
@@ -183,5 +206,6 @@ export function useLargeStoredValueFullscreenSearch(args: {
     clearSearchAutoExpansion: () => {
       autoExpandedSearchStateRef.current = null;
     },
+    activeMatchRange: activeVisibleMatchRange,
   };
 }
