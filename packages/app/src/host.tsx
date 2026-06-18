@@ -151,6 +151,7 @@ export {
 export { useRivetWorkspaceHost } from './hooks/useRivetWorkspaceHost.js';
 export type {
   MoveProjectPathsInput,
+  RivetProjectCleanBaselineSnapshotInput,
   RivetProjectSnapshotInput,
   RivetWorkspaceHost,
 } from './hooks/useRivetWorkspaceHost.js';

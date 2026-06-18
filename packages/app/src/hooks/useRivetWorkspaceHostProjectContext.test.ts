@@ -17,3 +17,32 @@ test('workspace host releases cached context atoms without deleting persisted co
   assert.match(workspaceHostSource, /releaseProjectContextState\(projectId\);/);
   assert.doesNotMatch(workspaceHostSource, /clearProjectContextState/);
 });
+
+test('workspace host exposes a narrow clean-baseline API for hosted wrappers', () => {
+  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
+  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
+
+  const cleanBaselineType = workspaceHostSource.match(
+    /export type RivetProjectCleanBaselineSnapshotInput = \{(?<body>[\s\S]*?)\};/,
+  )?.groups?.body;
+
+  assert.ok(cleanBaselineType);
+  assert.match(cleanBaselineType, /project: Project \| Omit<Project, 'data'>;/);
+  assert.match(cleanBaselineType, /data\?: Project\['data'\];/);
+  assert.doesNotMatch(cleanBaselineType, /path\?:/);
+  assert.doesNotMatch(cleanBaselineType, /openedGraph\?:/);
+  assert.doesNotMatch(cleanBaselineType, /testSuites\?:/);
+  assert.match(
+    workspaceHostSource,
+    /markCurrentProjectClean\(snapshot\?: RivetProjectCleanBaselineSnapshotInput\): Promise<boolean>;/,
+  );
+  assert.match(
+    workspaceHostSource,
+    /markProjectClean\(projectId: ProjectId, snapshot\?: RivetProjectCleanBaselineSnapshotInput\): Promise<boolean>;/,
+  );
+  assert.match(workspaceHostSource, /buildCurrentProjectContentSnapshot\(/);
+  assert.match(workspaceHostSource, /markProjectContentClean\(previousDigests, cleanBaseline\)/);
+  assert.match(workspaceHostSource, /markProjectDirtyFlag\(previousFlags, projectId, false\)/);
+  assert.match(workspaceHostSource, /if \(!projects\.openedProjects\[projectId\] && currentProject\.metadata\.id !== projectId\) \{/);
+  assert.match(hostSource, /RivetProjectCleanBaselineSnapshotInput/);
+});
