@@ -1,20 +1,19 @@
 import Button, { LoadingButton } from '@atlaskit/button';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import { type FC } from 'react';
-import type { WorkflowProjectDownloadVersion } from './types';
-import type { WorkflowProjectItem } from './types';
+import type { WorkflowProjectDownloadVersion, WorkflowProjectItem } from './types';
 
-type WorkflowProjectDownloadModalProps = {
+type WorkflowProjectVersionModalProps = {
   isOpen: boolean;
   project: WorkflowProjectItem | null;
-  actionLabel: 'Download' | 'Duplicate';
+  actionLabel: 'Download' | 'Duplicate' | 'Compare';
   activeVersion: WorkflowProjectDownloadVersion | null;
   onClose: () => void;
   onSelectPublished: () => void;
   onSelectUnpublishedChanges: () => void;
 };
 
-export const WorkflowProjectDownloadModal: FC<WorkflowProjectDownloadModalProps> = ({
+export const WorkflowProjectVersionModal: FC<WorkflowProjectVersionModalProps> = ({
   isOpen,
   project,
   actionLabel,
@@ -28,11 +27,14 @@ export const WorkflowProjectDownloadModal: FC<WorkflowProjectDownloadModalProps>
   }
 
   const canClose = activeVersion == null;
+  const actionDescription = actionLabel === 'Compare'
+    ? 'The reference side comes from saved server state; unsaved editor changes in that reference project are not included.'
+    : 'Unsaved editor changes are not included.';
 
   return (
     <ModalTransition>
       <ModalDialog
-        testId="workflow-project-download-modal"
+        testId="workflow-project-version-modal"
         width="medium"
         label={`${actionLabel} ${project.name}`}
         onClose={onClose}
@@ -58,15 +60,15 @@ export const WorkflowProjectDownloadModal: FC<WorkflowProjectDownloadModalProps>
               </button>
             </div>
 
-            <div className="project-settings-modal-content workflow-project-download-modal-content">
-              <div className="project-settings-help workflow-project-download-help">
-                {project.name}: choose which saved version to {actionLabel.toLowerCase()}. Unsaved editor changes are not included.
+            <div className="project-settings-modal-content workflow-project-version-modal-content">
+              <div className="project-settings-help workflow-project-version-help">
+                {project.name}: choose which saved version to {actionLabel.toLowerCase()}. {actionDescription}
               </div>
 
-              <div className="workflow-project-download-actions">
+              <div className="workflow-project-version-actions">
                 <LoadingButton
                   appearance="primary"
-                  className="project-settings-primary-button button-size-l workflow-project-download-published-button"
+                  className="project-settings-primary-button button-size-l workflow-project-version-published-button"
                   onClick={onSelectPublished}
                   isDisabled={activeVersion != null}
                   isLoading={activeVersion === 'published'}
@@ -75,7 +77,7 @@ export const WorkflowProjectDownloadModal: FC<WorkflowProjectDownloadModalProps>
                 </LoadingButton>
                 <LoadingButton
                   appearance="subtle"
-                  className="project-settings-secondary-button button-size-l workflow-project-download-secondary-button workflow-project-download-live-button"
+                  className="project-settings-secondary-button button-size-l workflow-project-version-secondary-button workflow-project-version-live-button"
                   onClick={onSelectUnpublishedChanges}
                   isDisabled={activeVersion != null}
                   isLoading={activeVersion === 'live'}
@@ -84,7 +86,7 @@ export const WorkflowProjectDownloadModal: FC<WorkflowProjectDownloadModalProps>
                 </LoadingButton>
               </div>
 
-              <div className="workflow-project-download-footer">
+              <div className="workflow-project-version-footer">
                 <Button
                   appearance="subtle"
                   className="project-settings-secondary-button button-size-l"

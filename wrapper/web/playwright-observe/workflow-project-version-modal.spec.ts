@@ -45,7 +45,7 @@ async function installVersionChooserRoutes(page: Page, project: MockWorkflowProj
 }
 
 test.describe('Workflow project version chooser', () => {
-  test('unpublished_changes uses one chooser component for download and duplicate', async ({ page }) => {
+  test('unpublished_changes uses the saved-version chooser for download and duplicate', async ({ page }) => {
     test.slow();
 
     const unique = 'codex-version-modal-fixture';
@@ -57,7 +57,7 @@ test.describe('Workflow project version chooser', () => {
     await waitForDashboardReady(page);
 
     const projectRow = page.locator('.project-row', { hasText: unique });
-    const chooserModal = page.getByTestId('workflow-project-download-modal');
+    const chooserModal = page.getByTestId('workflow-project-version-modal');
 
     await projectRow.click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Download' }).click();

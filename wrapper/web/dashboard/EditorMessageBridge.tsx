@@ -10,7 +10,6 @@ import {
   projectState,
   projectsState,
 } from '../../../rivet/packages/app/src/state/savedGraphs';
-import { projectCompareReferenceState } from '../../../rivet/packages/app/src/state/projectComparison';
 import { deleteHostedProjectContextState } from '../overrides/state/savedGraphs';
 import { loadedRecordingState } from '../../../rivet/packages/app/src/state/execution';
 import { selectedExecutorState } from '../../../rivet/packages/app/src/state/settings';
@@ -33,9 +32,14 @@ import {
   getWorkflowRecordingVirtualProjectPath,
 } from '../../shared/workflow-recording-types';
 import {
+  getWorkflowPublishedVersionPreviewFromVirtualProjectPath,
   getWorkflowPublishedVersionPreviewVirtualProjectPath,
 } from '../../shared/workflow-types';
-import { fetchHostedProjectFile, fetchWorkflowRecordingArtifactText } from './workflowApi';
+import {
+  fetchHostedProjectFile,
+  fetchWorkflowPublishedVersionPreview,
+  fetchWorkflowRecordingArtifactText,
+} from './workflowApi';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import { clearOpenedProjectSession, remapOpenedProjectSessionPaths } from '../io/openedProjectSessionCache';
 import { clearHostedProjectRevisionPath, remapHostedProjectRevisionPaths } from '../io/HostedIOProvider';
@@ -161,6 +165,15 @@ async function fetchLoadedWorkflowRecording(recordingId: string): Promise<Loaded
 }
 
 async function fetchProjectCompareReference(path: string): Promise<Project> {
+  const previewReference = getWorkflowPublishedVersionPreviewFromVirtualProjectPath(path);
+  if (previewReference) {
+    const preview = await fetchWorkflowPublishedVersionPreview(
+      previewReference.relativePath,
+      previewReference.versionId,
+    );
+    return deserializeProjectAsync(preview.contents, path);
+  }
+
   const loadedProjectFile = await fetchHostedProjectFile(path);
   return deserializeProjectAsync(loadedProjectFile.contents, path);
 }
@@ -179,7 +192,6 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const setLoadedRecording = useSetAtom(loadedRecordingState);
   const setSelectedExecutor = useSetAtom(selectedExecutorState);
-  const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
   const openOverlay = useAtomValue(overlayOpenState);
   const setSearching = useSetAtom(searchingGraphState);
   const projectsRef = useRef<OpenedProjectsInfo>(projects);
@@ -215,12 +227,17 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
     }
 
     const referenceProject = await fetchProjectCompareReference(command.path);
-    setProjectCompareReference({
-      projectId: activeProject.metadata.id,
-      referencePath: command.referencePath ?? command.path,
+    const compareOptions = command.labels ? { labels: command.labels } : undefined;
+    const started = await workspaceRef.current.startProjectCompare(
       referenceProject,
-    });
-  }, [setProjectCompareReference]);
+      command.referencePath ?? command.path,
+      compareOptions,
+    );
+
+    if (!started) {
+      throw new Error('Failed to start compare mode for the open project.');
+    }
+  }, []);
 
   const activateWorkflowRecording = useCallback((loadedRecording: LoadedWorkflowRecording) => {
     // Current Rivet routes run-button clicks through selectedExecutorState.

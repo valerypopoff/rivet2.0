@@ -105,7 +105,7 @@
 
 [data-testid='runtime-libraries-modal--blanket'],
 [data-testid='run-recordings-modal--blanket'],
-[data-testid='workflow-project-download-modal--blanket'],
+[data-testid='workflow-project-version-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
 [data-testid='about-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
@@ -115,7 +115,7 @@
 [data-testid='workflow-project-settings-modal'],
 [data-testid='runtime-libraries-modal'],
 [data-testid='run-recordings-modal'],
-[data-testid='workflow-project-download-modal'],
+[data-testid='workflow-project-version-modal'],
 [data-testid='workflow-published-version-history-modal'],
 [data-testid='about-modal'] {
   background: #1f1f22 !important;
@@ -127,7 +127,7 @@
 [data-testid='workflow-project-settings-modal--header'],
 [data-testid='runtime-libraries-modal--header'],
 [data-testid='run-recordings-modal--header'],
-[data-testid='workflow-project-download-modal--header'],
+[data-testid='workflow-project-version-modal--header'],
 [data-testid='workflow-published-version-history-modal--header'],
 [data-testid='about-modal--header'] {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -136,7 +136,7 @@
 [data-testid='workflow-project-settings-modal--body'],
 [data-testid='runtime-libraries-modal--body'],
 [data-testid='run-recordings-modal--body'],
-[data-testid='workflow-project-download-modal--body'],
+[data-testid='workflow-project-version-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
 [data-testid='about-modal--body'] {
   padding: 0 !important;
@@ -1011,57 +1011,57 @@
   }
 }
 
-.workflow-project-download-modal-content {
+.workflow-project-version-modal-content {
   gap: 20px;
 }
 
-.workflow-project-download-help {
+.workflow-project-version-help {
   padding-right: 0;
 }
 
-.workflow-project-download-actions {
+.workflow-project-version-actions {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.workflow-project-download-secondary-button {
+.workflow-project-version-secondary-button {
   border: none;
   cursor: pointer;
 }
 
-.workflow-project-download-published-button {
+.workflow-project-version-published-button {
   border: 1px solid var(--workflow-status-published-color) !important;
   background: var(--workflow-status-published-bg) !important;
   color: var(--workflow-status-published-color) !important;
 }
 
-.workflow-project-download-published-button > span {
+.workflow-project-version-published-button > span {
   color: var(--workflow-status-published-color) !important;
 }
 
-.workflow-project-download-published-button:hover:not(:disabled),
-.workflow-project-download-published-button:focus-visible:not(:disabled) {
+.workflow-project-version-published-button:hover:not(:disabled),
+.workflow-project-version-published-button:focus-visible:not(:disabled) {
   background: var(--workflow-status-published-bg-hover) !important;
 }
 
-.workflow-project-download-live-button {
+.workflow-project-version-live-button {
   border: 1px solid var(--workflow-status-unpublished-changes-color) !important;
   background: var(--workflow-status-unpublished-changes-bg) !important;
   color: var(--workflow-status-unpublished-changes-color) !important;
 }
 
-.workflow-project-download-live-button > span {
+.workflow-project-version-live-button > span {
   color: var(--workflow-status-unpublished-changes-color) !important;
 }
 
-.workflow-project-download-live-button:hover:not(:disabled),
-.workflow-project-download-live-button:focus-visible:not(:disabled) {
+.workflow-project-version-live-button:hover:not(:disabled),
+.workflow-project-version-live-button:focus-visible:not(:disabled) {
   background: var(--workflow-status-unpublished-changes-bg-hover) !important;
 }
 
-.workflow-project-download-footer {
+.workflow-project-version-footer {
   display: flex;
   justify-content: flex-end;
 }

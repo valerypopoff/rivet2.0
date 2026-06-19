@@ -22,6 +22,8 @@ export const WorkflowLibraryContextMenus: FC<{
     handleDuplicateProject,
     handleCompareProjectFromContextMenu,
     canCompareWithProject,
+    handleCompareOpenedProjectToPublishedVersionFromContextMenu,
+    canCompareOpenedProjectToPublishedVersion,
     handleDeleteProjectFromContextMenu,
     isFolderEmpty,
   } = controller;
@@ -56,6 +58,8 @@ export const WorkflowLibraryContextMenus: FC<{
           onDuplicate={() => void handleDuplicateProject()}
           canCompare={canCompareWithProject(projectContextMenuState.project)}
           onCompare={() => void handleCompareProjectFromContextMenu()}
+          canCompareToPublishedVersion={canCompareOpenedProjectToPublishedVersion(projectContextMenuState.project)}
+          onCompareToPublishedVersion={() => void handleCompareOpenedProjectToPublishedVersionFromContextMenu()}
           canDelete={projectContextMenuState.project.settings.status === 'unpublished'}
           onDelete={() => void handleDeleteProjectFromContextMenu()}
         />

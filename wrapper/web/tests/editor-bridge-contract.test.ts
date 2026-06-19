@@ -18,12 +18,28 @@ test('project compare bridge command validates required path fields', () => {
   }), true);
   assert.equal(isDashboardToEditorCommand({
     type: 'compare-open-project-with',
+    path: '/workflows/reference.rivet-project',
+    referencePath: 'reference.rivet-project',
+    labels: {
+      referenceLabel: 'Reference project',
+      currentLabel: 'Open project',
+    },
+  }), true);
+  assert.equal(isDashboardToEditorCommand({
+    type: 'compare-open-project-with',
     referencePath: 'reference.rivet-project',
   }), false);
   assert.equal(isDashboardToEditorCommand({
     type: 'compare-open-project-with',
     path: '/workflows/reference.rivet-project',
     referencePath: 1,
+  }), false);
+  assert.equal(isDashboardToEditorCommand({
+    type: 'compare-open-project-with',
+    path: '/workflows/reference.rivet-project',
+    labels: {
+      referenceLabel: 1,
+    },
   }), false);
 });
 

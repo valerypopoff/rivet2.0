@@ -135,6 +135,36 @@ test.describe('Workflow library layout', () => {
     await expect(title).toHaveText('Rivet Projects');
   });
 
+  test('resizes with a wider drag target and folds while dragging below half the minimum width', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+
+    const sidebar = page.locator('.dashboard-sidebar');
+    const resizer = page.locator('.dashboard-sidebar-resizer');
+    const title = page.locator('.workflow-library-panel .header-title');
+    await expect(resizer).toBeVisible();
+
+    const resizerBox = await resizer.boundingBox();
+    expect(resizerBox).not.toBeNull();
+    expect(Math.round(resizerBox!.width)).toBeGreaterThanOrEqual(14);
+
+    const dragY = resizerBox!.y + 48;
+    await page.mouse.move(resizerBox!.x + resizerBox!.width / 2, dragY);
+    await page.mouse.down();
+
+    await page.mouse.move(90, dragY, { steps: 4 });
+    await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width ?? 0)).toBe(30);
+    await expect(title).toBeHidden();
+
+    await page.mouse.move(280, dragY, { steps: 6 });
+    await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width ?? 0)).toBe(280);
+    await page.mouse.up();
+
+    await expect(title).toBeVisible();
+    await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width ?? 0)).toBe(280);
+  });
+
   test('shows the opened project status as a collapsed rail dot', async ({ page }) => {
     const projects = (['unpublished', 'published', 'unpublished_changes'] as const).map(createStatusProject);
     await installStatusDotTreeRoute(page, projects);

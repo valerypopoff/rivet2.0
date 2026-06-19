@@ -6,6 +6,7 @@ import {
   deleteWorkflowFolder,
   downloadWorkflowProject,
   duplicateWorkflowProjectVersion,
+  fetchCurrentWorkflowPublishedVersion,
   fetchWorkflowTree,
   moveWorkflowItem,
   renameWorkflowFolder,
@@ -34,6 +35,8 @@ import {
   remapExpandedFolderIds,
   rewriteWorkflowPathPrefix,
 } from './workflowTreeOps';
+import { getWorkflowPublishedVersionPreviewVirtualProjectPath } from '../../shared/workflow-types';
+import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
 
 const PROJECT_SAVE_REFRESH_DELAY_MS = 150;
 
@@ -44,7 +47,7 @@ export const instantWarningToastTransition = cssTransition({
 });
 
 export type WorkflowProjectModalState = {
-  mode: 'download' | 'duplicate';
+  mode: 'download' | 'duplicate' | 'compare';
   project: WorkflowProjectItem;
 };
 
@@ -159,7 +162,7 @@ export function useWorkflowLibraryController(options: {
     versionId: string,
     nextOptions?: { replaceCurrent?: boolean },
   ) => void;
-  onCompareOpenProjectWith: (path: string, referencePath?: string) => void;
+  onCompareOpenProjectWith: (path: string, referencePath?: string, labels?: ProjectCompareSideLabels) => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
@@ -215,16 +218,23 @@ export function useWorkflowLibraryController(options: {
     projectPath: null,
     version: null,
   });
+  const [compareState, setCompareState] = useState<WorkflowActionState>({
+    projectPath: null,
+    version: null,
+  });
   const refreshRequestIdRef = useRef(0);
   const projectSaveRefreshTimeoutRef = useRef<number | null>(null);
   const lastAutoExpandedActivePathRef = useRef<string | null>(null);
   const suppressedActiveAncestorExpansionIdsRef = useRef<Set<string>>(new Set());
+  const openedWorkflowProjectRef = useRef<WorkflowProjectItem | null>(null);
 
   const { draggedItem, dropTargetFolderPath, dragOverRoot } = dragState;
   const downloadingProjectPath = downloadState.projectPath;
   const downloadingVersion = downloadState.version;
   const duplicatingProjectPath = duplicateState.projectPath;
   const duplicatingVersion = duplicateState.version;
+  const comparingProjectPath = compareState.projectPath;
+  const comparingVersion = compareState.version;
   const settingsModalOpen = settingsModalProject != null;
 
   const openRunRecordingsModal = useCallback(() => {
@@ -356,6 +366,7 @@ export function useWorkflowLibraryController(options: {
     [allProjects, openedProjectPath],
   );
   const openedWorkflowProjectPath = openedWorkflowProject?.absolutePath ?? '';
+  openedWorkflowProjectRef.current = openedWorkflowProject;
 
   const activeProject = useMemo(
     () => allProjects.find((project) => project.absolutePath === activePath) ?? null,
@@ -802,7 +813,7 @@ export function useWorkflowLibraryController(options: {
     folder: WorkflowFolderItem,
     event: MouseEvent<HTMLDivElement>,
   ) => {
-    if (duplicatingProjectPath || downloadingProjectPath || uploadingFolderPath) {
+    if (comparingProjectPath || duplicatingProjectPath || downloadingProjectPath || uploadingFolderPath) {
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -819,13 +830,13 @@ export function useWorkflowLibraryController(options: {
       x: event.clientX,
       y: event.clientY,
     });
-  }, [downloadingProjectPath, duplicatingProjectPath, uploadingFolderPath]);
+  }, [comparingProjectPath, downloadingProjectPath, duplicatingProjectPath, uploadingFolderPath]);
 
   const handleProjectContextMenu = useCallback((
     project: WorkflowProjectItem,
     event: MouseEvent<HTMLElement>,
   ) => {
-    if (duplicatingProjectPath || downloadingProjectPath || uploadingFolderPath) {
+    if (comparingProjectPath || duplicatingProjectPath || downloadingProjectPath || uploadingFolderPath) {
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -842,7 +853,7 @@ export function useWorkflowLibraryController(options: {
       x: event.clientX,
       y: event.clientY,
     });
-  }, [downloadingProjectPath, duplicatingProjectPath, uploadingFolderPath]);
+  }, [comparingProjectPath, downloadingProjectPath, duplicatingProjectPath, uploadingFolderPath]);
 
   const handleUploadProjectFromFolder = useCallback(async () => {
     const targetFolder = folderContextMenuState?.folder;
@@ -948,12 +959,12 @@ export function useWorkflowLibraryController(options: {
   ]);
 
   const closeProjectModal = useCallback(() => {
-    if (downloadingVersion || duplicatingVersion) {
+    if (downloadingVersion || duplicatingVersion || comparingVersion) {
       return;
     }
 
     setProjectModalState(null);
-  }, [downloadingVersion, duplicatingVersion]);
+  }, [comparingVersion, downloadingVersion, duplicatingVersion]);
 
   const startDuplicateProject = useCallback(async (
     project: WorkflowProjectItem,
@@ -1068,10 +1079,82 @@ export function useWorkflowLibraryController(options: {
     uploadingFolderPath,
   ]);
 
+  const startCompareProject = useCallback(async (
+    project: WorkflowProjectItem,
+    version: WorkflowProjectDownloadVersion,
+    startOptions?: { closeModal?: boolean },
+  ) => {
+    const openedProjectAtStart = openedWorkflowProjectRef.current;
+    if (
+      !openedProjectAtStart ||
+      normalizeWorkflowPath(openedProjectAtStart.absolutePath) === normalizeWorkflowPath(project.absolutePath)
+    ) {
+      return;
+    }
+
+    setCompareState({
+      projectPath: project.relativePath,
+      version,
+    });
+
+    try {
+      const includeVersionInLabel = project.settings.status === 'unpublished_changes';
+      const currentLabel = openedProjectAtStart.name;
+      let comparePath = project.absolutePath;
+      let referencePath = project.relativePath || project.fileName;
+      let referenceLabel = includeVersionInLabel ? `${project.name} (Unpublished changes)` : project.name;
+
+      if (version === 'published') {
+        const currentVersion = await fetchCurrentWorkflowPublishedVersion(project.relativePath);
+        comparePath = getWorkflowPublishedVersionPreviewVirtualProjectPath(
+          project.relativePath,
+          currentVersion.id,
+        );
+        referencePath = `Published version of ${project.fileName}`;
+        referenceLabel = includeVersionInLabel ? `${project.name} (Published)` : project.name;
+      }
+
+      const latestOpenedProject = openedWorkflowProjectRef.current;
+      const sameProjectStillOpen = latestOpenedProject &&
+        normalizeWorkflowPath(latestOpenedProject.absolutePath) === normalizeWorkflowPath(openedProjectAtStart.absolutePath);
+      if (!sameProjectStillOpen) {
+        return;
+      }
+
+      onCompareOpenProjectWith(
+        comparePath,
+        referencePath,
+        {
+          referenceLabel,
+          currentLabel,
+        },
+      );
+
+      if (startOptions?.closeModal) {
+        setProjectModalState(null);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to load compare reference');
+    } finally {
+      setCompareState((current) =>
+        current.projectPath === project.relativePath && current.version === version
+          ? { projectPath: null, version: null }
+          : current);
+    }
+  }, [onCompareOpenProjectWith]);
+
   const canCompareWithProject = useCallback((project: WorkflowProjectItem): boolean => {
     return Boolean(
       openedWorkflowProject &&
       normalizeWorkflowPath(openedWorkflowProject.absolutePath) !== normalizeWorkflowPath(project.absolutePath),
+    );
+  }, [openedWorkflowProject]);
+
+  const canCompareOpenedProjectToPublishedVersion = useCallback((project: WorkflowProjectItem): boolean => {
+    return Boolean(
+      openedWorkflowProject &&
+      project.settings.status === 'unpublished_changes' &&
+      normalizeWorkflowPath(openedWorkflowProject.absolutePath) === normalizeWorkflowPath(project.absolutePath),
     );
   }, [openedWorkflowProject]);
 
@@ -1080,6 +1163,7 @@ export function useWorkflowLibraryController(options: {
     if (
       !targetProject ||
       !canCompareWithProject(targetProject) ||
+      comparingProjectPath ||
       downloadingProjectPath ||
       duplicatingProjectPath ||
       uploadingFolderPath
@@ -1088,10 +1172,81 @@ export function useWorkflowLibraryController(options: {
     }
 
     closeProjectContextMenu();
-    onCompareOpenProjectWith(targetProject.absolutePath, targetProject.relativePath || targetProject.fileName);
+
+    if (targetProject.settings.status === 'unpublished_changes') {
+      setProjectModalState({
+        mode: 'compare',
+        project: targetProject,
+      });
+      return;
+    }
+
+    void startCompareProject(targetProject, 'live');
   }, [
     canCompareWithProject,
     closeProjectContextMenu,
+    comparingProjectPath,
+    downloadingProjectPath,
+    duplicatingProjectPath,
+    projectContextMenuState,
+    startCompareProject,
+    uploadingFolderPath,
+  ]);
+
+  const handleCompareOpenedProjectToPublishedVersionFromContextMenu = useCallback(async () => {
+    const targetProject = projectContextMenuState?.project;
+    if (
+      !targetProject ||
+      !canCompareOpenedProjectToPublishedVersion(targetProject) ||
+      comparingProjectPath ||
+      downloadingProjectPath ||
+      duplicatingProjectPath ||
+      uploadingFolderPath
+    ) {
+      return;
+    }
+
+    closeProjectContextMenu();
+    setCompareState({
+      projectPath: targetProject.relativePath,
+      version: 'published',
+    });
+
+    try {
+      const currentVersion = await fetchCurrentWorkflowPublishedVersion(targetProject.relativePath);
+      const previewPath = getWorkflowPublishedVersionPreviewVirtualProjectPath(
+        targetProject.relativePath,
+        currentVersion.id,
+      );
+      const latestOpenedProject = openedWorkflowProjectRef.current;
+      if (
+        !latestOpenedProject ||
+        latestOpenedProject.settings.status !== 'unpublished_changes' ||
+        normalizeWorkflowPath(latestOpenedProject.absolutePath) !== normalizeWorkflowPath(targetProject.absolutePath)
+      ) {
+        return;
+      }
+
+      onCompareOpenProjectWith(
+        previewPath,
+        `Published version of ${targetProject.fileName}`,
+        {
+          referenceLabel: 'Published',
+          currentLabel: 'Unpublished',
+        },
+      );
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to load the current published version');
+    } finally {
+      setCompareState((current) =>
+        current.projectPath === targetProject.relativePath && current.version === 'published'
+          ? { projectPath: null, version: null }
+          : current);
+    }
+  }, [
+    canCompareOpenedProjectToPublishedVersion,
+    closeProjectContextMenu,
+    comparingProjectPath,
     downloadingProjectPath,
     duplicatingProjectPath,
     onCompareOpenProjectWith,
@@ -1177,7 +1332,9 @@ export function useWorkflowLibraryController(options: {
     ? null
     : projectModalMode === 'download'
       ? downloadingProjectPath === projectModalProject.relativePath ? downloadingVersion : null
-      : duplicatingProjectPath === projectModalProject.relativePath ? duplicatingVersion : null;
+      : projectModalMode === 'duplicate'
+        ? duplicatingProjectPath === projectModalProject.relativePath ? duplicatingVersion : null
+        : comparingProjectPath === projectModalProject.relativePath ? comparingVersion : null;
 
   const handleProjectModalSelectPublished = useCallback(() => {
     if (!projectModalProject) {
@@ -1189,8 +1346,13 @@ export function useWorkflowLibraryController(options: {
       return;
     }
 
-    void startDuplicateProject(projectModalProject, 'published', { closeModal: true });
-  }, [projectModalMode, projectModalProject, startDownloadProject, startDuplicateProject]);
+    if (projectModalMode === 'duplicate') {
+      void startDuplicateProject(projectModalProject, 'published', { closeModal: true });
+      return;
+    }
+
+    void startCompareProject(projectModalProject, 'published', { closeModal: true });
+  }, [projectModalMode, projectModalProject, startCompareProject, startDownloadProject, startDuplicateProject]);
 
   const handleProjectModalSelectUnpublishedChanges = useCallback(() => {
     if (!projectModalProject) {
@@ -1202,8 +1364,13 @@ export function useWorkflowLibraryController(options: {
       return;
     }
 
-    void startDuplicateProject(projectModalProject, 'live', { closeModal: true });
-  }, [projectModalMode, projectModalProject, startDownloadProject, startDuplicateProject]);
+    if (projectModalMode === 'duplicate') {
+      void startDuplicateProject(projectModalProject, 'live', { closeModal: true });
+      return;
+    }
+
+    void startCompareProject(projectModalProject, 'live', { closeModal: true });
+  }, [projectModalMode, projectModalProject, startCompareProject, startDownloadProject, startDuplicateProject]);
 
   const setProjectRowRef = useCallback((projectPath: string, node: HTMLElement | null) => {
     projectRowRefs.current[projectPath] = node;
@@ -1337,6 +1504,8 @@ export function useWorkflowLibraryController(options: {
     handleDuplicateProject,
     handleCompareProjectFromContextMenu,
     canCompareWithProject,
+    handleCompareOpenedProjectToPublishedVersionFromContextMenu,
+    canCompareOpenedProjectToPublishedVersion,
     handleDeleteProjectFromContextMenu,
     handleProjectModalSelectPublished,
     handleProjectModalSelectUnpublishedChanges,

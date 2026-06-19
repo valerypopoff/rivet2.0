@@ -133,10 +133,11 @@ Current backend-specific behavior:
 
 Unpublishing does not delete published version history. It closes the public/latest route lineage, but previous published versions remain downloadable from Project Settings. If a pre-history legacy project still has only a current published pointer, unpublish first backfills that current snapshot/revision into history before clearing the pointer.
 
-In the current dashboard UI, the project-row context menu exposes `Rename project`, `Compare opened project with this one` when a different normal workflow project is open, `Download`, `Duplicate`, and `Delete project`.
+In the current dashboard UI, the project-row context menu exposes `Rename project`, compare actions, `Download`, `Duplicate`, and `Delete project`.
 
 - `Rename project` edits the project name inline in the tree; `Enter` closes the edit field and shows a preloader on the project name while the API saves, while `Esc` or focus leaving the edit field cancels without calling the API
-- `Compare opened project with this one` loads the right-clicked project's saved `.rivet-project` as Rivet's compare reference for the currently open editor project; compare mode is transient editor state and is not written into project YAML, settings sidecars, or published history
+- `Compare opened project with this one` loads the right-clicked project's saved `.rivet-project` as Rivet's compare reference for the currently open editor project; compare mode is transient editor state and is not written into project YAML, settings sidecars, or published history. If the right-clicked project is in `Unpublished changes`, the dashboard asks whether to compare against its published snapshot or saved live file with unpublished changes. The wrapper labels the compare sides with the right-clicked project name, adding a version suffix when that choice was needed, and the open project name.
+- `Compare to the published version` appears only on the active/open project row when that project is in `Unpublished changes`; it resolves the current published history entry, loads that stored snapshot as the compare reference, labels the compare sides `Published` and `Unpublished`, and leaves the editor on the live unpublished project instead of opening a preview tab
 
 The folder-row context menu exposes `Rename folder`, `Create project`, `Upload project`, and `Delete folder`.
 

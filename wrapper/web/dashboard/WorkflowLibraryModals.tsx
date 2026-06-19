@@ -4,10 +4,22 @@ import { ProjectSettingsModal } from './ProjectSettingsModal';
 import { RuntimeLibrariesModal } from './RuntimeLibrariesModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
 import { WorkflowPublishedVersionHistoryModal } from './WorkflowPublishedVersionHistoryModal';
-import { WorkflowProjectDownloadModal } from './WorkflowProjectDownloadModal';
+import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
 type WorkflowLibraryController = ReturnType<typeof useWorkflowLibraryController>;
+
+function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectModalMode']) {
+  if (mode === 'download') {
+    return 'Download';
+  }
+
+  if (mode === 'duplicate') {
+    return 'Duplicate';
+  }
+
+  return 'Compare';
+}
 
 export const WorkflowLibraryModals: FC<{
   controller: WorkflowLibraryController;
@@ -78,10 +90,10 @@ export const WorkflowLibraryModals: FC<{
         isOpen={aboutOpen}
         onClose={() => setAboutOpen(false)}
       />
-      <WorkflowProjectDownloadModal
+      <WorkflowProjectVersionModal
         isOpen={projectModalProject != null}
         project={projectModalProject}
-        actionLabel={projectModalMode === 'download' ? 'Download' : 'Duplicate'}
+        actionLabel={getProjectVersionActionLabel(projectModalMode)}
         activeVersion={projectModalActiveVersion}
         onClose={closeProjectModal}
         onSelectPublished={handleProjectModalSelectPublished}

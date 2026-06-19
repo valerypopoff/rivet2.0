@@ -7,6 +7,7 @@ import { useEditorCommandQueue } from './useEditorCommandQueue';
 import { focusIframeElement } from './editorBridgeFocus';
 import { useDashboardSidebar } from './useDashboardSidebar';
 import { useEditorBridgeEvents } from './useEditorBridgeEvents';
+import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
 import './DashboardPage.css';
 
 const WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH = 30;
@@ -22,6 +23,8 @@ export const DashboardPage: FC = () => {
   const [projectSaveSequence, setProjectSaveSequence] = useState(0);
   const postEditorCommand = useEditorCommandQueue(iframeRef, editorReady);
   const {
+    handleResizeMouseDown,
+    handleResizePointerDown,
     handleToggleSidebar,
     handleSidebarTransitionEnd,
     sidebarCollapsed,
@@ -69,11 +72,16 @@ export const DashboardPage: FC = () => {
     [postEditorCommand],
   );
 
-  const handleCompareOpenProjectWith = useCallback((path: string, referencePath?: string) => {
+  const handleCompareOpenProjectWith = useCallback((
+    path: string,
+    referencePath?: string,
+    labels?: ProjectCompareSideLabels,
+  ) => {
     postEditorCommand({
       type: 'compare-open-project-with',
       path,
       referencePath,
+      labels,
     });
   }, [postEditorCommand]);
 
@@ -132,7 +140,10 @@ export const DashboardPage: FC = () => {
   const visibleSidebarWidth = sidebarCollapsed ? WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH : sidebarWidth;
 
   return (
-    <div className="dashboard-page" style={{ ['--workflow-dashboard-sidebar-width' as string]: `${visibleSidebarWidth}px` }}>
+    <div
+      className={`dashboard-page${sidebarResizing ? ' dashboard-page-resizing' : ''}`}
+      style={{ ['--workflow-dashboard-sidebar-width' as string]: `${visibleSidebarWidth}px` }}
+    >
       {showEditorLoading ? (
         <div className="dashboard-app-loading">
           <div className="dashboard-editor-loading-spinner" aria-hidden="true" />
@@ -140,7 +151,7 @@ export const DashboardPage: FC = () => {
         </div>
       ) : null}
       <aside
-        className={`dashboard-sidebar${sidebarCollapsed ? ' dashboard-sidebar-collapsed' : ''}`}
+        className={`dashboard-sidebar${sidebarCollapsed ? ' dashboard-sidebar-collapsed' : ''}${sidebarResizing ? ' dashboard-sidebar-resizing' : ''}`}
         onTransitionEnd={handleSidebarTransitionEnd}
       >
         <WorkflowLibraryPanel
@@ -160,10 +171,17 @@ export const DashboardPage: FC = () => {
           contentVisible={sidebarContentVisible}
           onToggleCollapse={handleToggleSidebar}
         />
-        {!sidebarCollapsed ? (
-          <div className="dashboard-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize folders pane" />
-        ) : null}
       </aside>
+      {!sidebarCollapsed || sidebarResizing ? (
+        <div
+          className="dashboard-sidebar-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize folders pane"
+          onMouseDown={handleResizeMouseDown}
+          onPointerDown={handleResizePointerDown}
+        />
+      ) : null}
       <main className="dashboard-main">
         {openProjectCount === 0 ? (
           <div className="dashboard-empty-state">
@@ -177,7 +195,6 @@ export const DashboardPage: FC = () => {
           className={`dashboard-editor-frame ${openProjectCount === 0 ? 'dashboard-editor-frame-hidden' : ''}${sidebarResizing ? ' dashboard-editor-frame-resizing' : ''}`}
         />
       </main>
-      {sidebarResizing ? <div className="dashboard-resize-overlay" aria-hidden="true" /> : null}
       <ToastContainer
         position="bottom-center"
         hideProgressBar

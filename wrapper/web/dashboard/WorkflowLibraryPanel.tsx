@@ -7,6 +7,7 @@ import { WorkflowLibraryModals } from './WorkflowLibraryModals';
 import type { WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
 import { getParentRelativePath } from './workflowLibraryHelpers';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
+import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
 import './WorkflowLibraryPanel.css';
 
 interface WorkflowLibraryPanelProps {
@@ -18,7 +19,7 @@ interface WorkflowLibraryPanelProps {
     versionId: string,
     options?: { replaceCurrent?: boolean },
   ) => void;
-  onCompareOpenProjectWith: (path: string, referencePath?: string) => void;
+  onCompareOpenProjectWith: (path: string, referencePath?: string, labels?: ProjectCompareSideLabels) => void;
   onSaveProject: () => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => void;

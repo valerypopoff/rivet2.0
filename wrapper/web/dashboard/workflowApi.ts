@@ -14,6 +14,7 @@ import type {
   WorkflowPublishedVersionCommentResponse,
   WorkflowPublishedVersionStarResponse,
   WorkflowPublishedVersionPreviewResponse,
+  WorkflowPublishedVersionSummary,
   WorkflowPublishedVersionsResponse,
   WorkflowTreeResponse,
 } from './types';
@@ -313,6 +314,19 @@ export async function fetchWorkflowPublishedVersionPreview(
   });
 
   return workflowJsonResponse<WorkflowPublishedVersionPreviewResponse>(response);
+}
+
+export async function fetchCurrentWorkflowPublishedVersion(
+  relativePath: string,
+): Promise<WorkflowPublishedVersionSummary> {
+  const { versions } = await fetchWorkflowPublishedVersions(relativePath);
+  const currentVersion = versions.find((version) => version.isCurrent);
+
+  if (!currentVersion) {
+    throw new Error('No current published version was found for this project.');
+  }
+
+  return currentVersion;
 }
 
 export async function setWorkflowPublishedVersionStar(
