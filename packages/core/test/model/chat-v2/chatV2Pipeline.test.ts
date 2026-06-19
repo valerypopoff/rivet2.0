@@ -1,9 +1,11 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
+import { NoObjectGeneratedError } from 'ai';
 import type { LanguageModelUsage } from 'ai';
 import type { Outputs } from '../../../src/model/GraphProcessor.js';
 import type { PortId } from '../../../src/model/NodeBase.js';
 import type {
+  ChatV2GenerateExecutor,
   ChatV2Model,
   ChatV2ProviderMetadata,
   ChatV2StreamExecutor,
@@ -907,6 +909,307 @@ void describe('runChatV2Pipeline', () => {
         id: 'call_1',
       },
     ]);
+  });
+
+  void it('uses a non-streaming provider call when partial output streaming is disabled', async () => {
+    let streamCalls = 0;
+    let generateCalls = 0;
+    let capturedGenerateArgs: Record<string, unknown> | undefined;
+    const model = createMockModel();
+    const executeStream: ChatV2StreamExecutor = async () => {
+      streamCalls += 1;
+      throw new Error('stream executor should not be used');
+    };
+    const executeGenerate: ChatV2GenerateExecutor = async (args) => {
+      generateCalls += 1;
+      capturedGenerateArgs = args as Record<string, unknown>;
+
+      return {
+        text: 'Generated answer',
+        toolCalls: [
+          {
+            toolCallId: 'call_1',
+            toolName: 'lookup_weather',
+            input: { city: 'Paris' },
+          },
+        ],
+        totalUsage: {
+          inputTokens: 8,
+          outputTokens: 4,
+          totalTokens: 12,
+        },
+        reasoning: [{ text: 'reasoned' }],
+        finishReason: 'tool-calls',
+        providerMetadata: {
+          custom: {
+            responseId: 'resp_generate_1',
+          },
+        },
+      };
+    };
+
+    const result = await runChatV2Pipeline({
+      provider: 'custom',
+      model,
+      modelId: 'custom-model',
+      prompt: { type: 'string', value: 'Tell me the weather.' },
+      outputUsage: true,
+      outputReasoning: true,
+      outputRequestStatus: true,
+      emitPartialOutputs: false,
+      context: {
+        signal: new AbortController().signal,
+      },
+      executeStream,
+      executeGenerate,
+    });
+
+    assert.equal(streamCalls, 0);
+    assert.equal(generateCalls, 1);
+    assert.equal(capturedGenerateArgs?.model, model);
+    assert.equal('stream' in capturedGenerateArgs!, false);
+    assert.equal(result.response, 'Generated answer');
+    assert.equal(result.requestStatus, 200);
+    assert.equal(result.reasoning, 'reasoned');
+    assert.equal(result.finishReason, 'tool-calls');
+    assert.equal(result.functionCalls.length, 1);
+    assert.deepEqual(result.commonOutputs['function-calls' as PortId]?.value, [
+      {
+        name: 'lookup_weather',
+        arguments: { city: 'Paris' },
+        id: 'call_1',
+      },
+    ]);
+    assert.equal(result.commonOutputs['responseTokens' as PortId]?.value, 4);
+    assert.deepEqual(result.commonOutputs['reasoning' as PortId], {
+      type: 'string',
+      value: 'reasoned',
+    });
+    assert.deepEqual(result.commonOutputs['requestStatus' as PortId], {
+      type: 'number',
+      value: 200,
+    });
+    assert.deepEqual(result.commonOutputs['requestError' as PortId], {
+      type: 'control-flow-excluded',
+      value: undefined,
+    });
+    assert.deepEqual(result.providerMetadata, {
+      custom: {
+        responseId: 'resp_generate_1',
+      },
+    });
+  });
+
+  void it('keeps non-streaming tool-call-only responses when structured output is not complete', async () => {
+    let generateCalls = 0;
+    const generateResult: ChatV2GenerateHandle = {
+      text: '',
+      toolCalls: [
+        {
+          toolCallId: 'call_1',
+          toolName: 'lookup_movie',
+          input: { query: 'favorite movie' },
+        },
+      ],
+      totalUsage: {
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+      },
+      finishReason: 'tool-calls',
+    };
+    Object.defineProperty(generateResult, 'output', {
+      get() {
+        throw new Error('No output generated.');
+      },
+    });
+    const executeGenerate: ChatV2GenerateExecutor = async () => {
+      generateCalls += 1;
+      return generateResult;
+    };
+
+    const result = await runChatV2Pipeline({
+      provider: 'custom',
+      model: createMockModel(),
+      modelId: 'custom-tool-model',
+      prompt: { type: 'string', value: 'Use the tool.' },
+      responseOutput: { name: 'json' },
+      responseFormat: 'json',
+      outputUsage: true,
+      includeFunctionCalls: true,
+      emitPartialOutputs: false,
+      context: {
+        signal: new AbortController().signal,
+      },
+      executeGenerate,
+    });
+
+    assert.equal(generateCalls, 1);
+    assert.equal(result.response, '');
+    assert.equal(result.finishReason, 'tool-calls');
+    assert.deepEqual(result.commonOutputs['response' as PortId], {
+      type: 'string',
+      value: '',
+    });
+    assert.deepEqual(result.commonOutputs['function-calls' as PortId]?.value, [
+      {
+        name: 'lookup_movie',
+        arguments: { query: 'favorite movie' },
+        id: 'call_1',
+      },
+    ]);
+    assert.equal(result.commonOutputs['responseTokens' as PortId]?.value, 2);
+  });
+
+  void it('keeps parsed structured output from completed non-streaming responses', async () => {
+    const structuredOutput = { answer: 'Paris', confidence: 0.9 };
+    const responseText = JSON.stringify(structuredOutput);
+    const executeGenerate: ChatV2GenerateExecutor = async () => ({
+      text: responseText,
+      output: structuredOutput,
+      finishReason: 'stop',
+    });
+
+    const result = await runChatV2Pipeline({
+      provider: 'custom',
+      model: createMockModel(),
+      modelId: 'custom-json-model',
+      prompt: { type: 'string', value: 'Answer as JSON.' },
+      responseOutput: { name: 'json' },
+      responseFormat: 'json',
+      emitPartialOutputs: false,
+      context: {
+        signal: new AbortController().signal,
+      },
+      executeGenerate,
+    });
+
+    assert.equal(result.response, responseText);
+    assert.equal(result.finishReason, 'stop');
+    assert.deepEqual(result.commonOutputs['response' as PortId], {
+      type: 'object',
+      value: structuredOutput,
+    });
+  });
+
+  void it('falls back to raw text when non-streaming structured output parsing fails', async () => {
+    const responseText = 'not json';
+    const usage: LanguageModelUsage = {
+      inputTokens: 4,
+      inputTokenDetails: {
+        noCacheTokens: 4,
+        cacheReadTokens: undefined,
+        cacheWriteTokens: undefined,
+      },
+      outputTokens: 2,
+      outputTokenDetails: {
+        textTokens: 2,
+        reasoningTokens: undefined,
+      },
+      totalTokens: 6,
+    };
+    const executeGenerate: ChatV2GenerateExecutor = async (args) => {
+      await (args as { onStepFinish?: (event: unknown) => unknown }).onStepFinish?.({
+        toolCalls: [
+          {
+            toolCallId: 'call_1',
+            toolName: 'lookup_movie',
+            input: { query: 'favorite movie' },
+          },
+        ],
+      });
+
+      throw new NoObjectGeneratedError({
+        message: 'No object generated: response did not match schema.',
+        text: responseText,
+        response: {
+          id: 'response-1',
+          timestamp: new Date(0),
+          modelId: 'gpt-5',
+        },
+        usage,
+        finishReason: 'stop',
+      });
+    };
+
+    const result = await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5',
+      prompt: { type: 'string', value: 'Answer as JSON.' },
+      responseOutput: { name: 'json' },
+      responseFormat: 'json',
+      includeFunctionCalls: true,
+      emitPartialOutputs: false,
+      context: {
+        signal: new AbortController().signal,
+      },
+      executeGenerate,
+    });
+
+    assert.equal(result.response, responseText);
+    assert.equal(result.finishReason, 'stop');
+    assert.deepEqual(result.commonOutputs['response' as PortId], {
+      type: 'string',
+      value: responseText,
+    });
+    assert.deepEqual(result.commonOutputs['function-calls' as PortId]?.value, [
+      {
+        name: 'lookup_movie',
+        arguments: { query: 'favorite movie' },
+        id: 'call_1',
+      },
+    ]);
+    assert.equal(result.commonOutputs['responseTokens' as PortId]?.value, 2);
+    assert.equal((result.allMessages.at(-1) as any)?.message, responseText);
+  });
+
+  void it('does not recover no-text non-streaming structured output errors as empty responses', async () => {
+    const usage: LanguageModelUsage = {
+      inputTokens: 4,
+      inputTokenDetails: {
+        noCacheTokens: 4,
+        cacheReadTokens: undefined,
+        cacheWriteTokens: undefined,
+      },
+      outputTokens: undefined,
+      outputTokenDetails: {
+        textTokens: undefined,
+        reasoningTokens: undefined,
+      },
+      totalTokens: 4,
+    };
+    const expectedError = new NoObjectGeneratedError({
+      message: 'No object generated: the model did not return a response.',
+      response: {
+        id: 'response-1',
+        timestamp: new Date(0),
+        modelId: 'gpt-5',
+      },
+      usage,
+      finishReason: 'stop',
+    });
+    const executeGenerate: ChatV2GenerateExecutor = async () => {
+      throw expectedError;
+    };
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'openai',
+          model: createMockModel(),
+          modelId: 'gpt-5',
+          prompt: { type: 'string', value: 'Answer as JSON.' },
+          responseOutput: { name: 'json' },
+          responseFormat: 'json',
+          emitPartialOutputs: false,
+          context: {
+            signal: new AbortController().signal,
+          },
+          executeGenerate,
+        }),
+      (error) => error === expectedError,
+    );
   });
 
   void it('excludes the function-calls output when tools are enabled but the model returns no tool calls', async () => {

@@ -19,6 +19,10 @@ test('Project settings owns the compare-to-project entry point', () => {
   assert.match(projectInfoModalSource, /projectCompareReferenceState/);
   assert.match(projectComparisonStateSource, /graphState/);
   assert.match(projectComparisonStateSource, /\[graphId\]: graph/);
+  assert.match(projectComparisonStateSource, /export type ProjectCompareSideLabels/);
+  assert.match(projectComparisonStateSource, /referenceLabel: 'Previous'/);
+  assert.match(projectComparisonStateSource, /currentLabel: 'Current'/);
+  assert.match(projectComparisonStateSource, /resolveProjectCompareSideLabels/);
 });
 
 test('canvas compare mode highlights nodes and wires without changing graph data', () => {
@@ -31,7 +35,8 @@ test('canvas compare mode highlights nodes and wires without changing graph data
   const projectComparisonCanvasSource = source('components/nodeCanvas/projectComparisonCanvas.ts');
   const graphBuilderSource = source('components/GraphBuilder.tsx');
 
-  assert.match(graphBuilderSource, /Compare mode against/);
+  assert.match(graphBuilderSource, /resolveProjectCompareSideLabels/);
+  assert.match(graphBuilderSource, /Compare mode: {activeComparisonLabels\.currentLabel} against/);
   assert.match(graphBuilderSource, /Current opened graph difference/);
   assert.match(graphBuilderSource, /getOverallProjectComparisonCounts/);
   assert.match(graphBuilderSource, /getGraphProjectComparisonCounts/);
@@ -56,8 +61,11 @@ test('canvas compare mode highlights nodes and wires without changing graph data
   assert.match(normalVisualNodeContentSource, /viewingProjectComparisonNodeState/);
   assert.match(normalVisualNodeContentSource, /View project comparison changes/);
   assert.match(projectComparisonNodeChangesModalSource, /getProjectNodeFieldComparisons/);
-  assert.match(projectComparisonNodeChangesModalSource, />Previous</);
-  assert.match(projectComparisonNodeChangesModalSource, />Current</);
+  assert.match(projectComparisonNodeChangesModalSource, /resolveProjectCompareSideLabels/);
+  assert.match(projectComparisonNodeChangesModalSource, /labels\.referenceLabel/);
+  assert.match(projectComparisonNodeChangesModalSource, /labels\.currentLabel/);
+  assert.doesNotMatch(projectComparisonNodeChangesModalSource, />Previous</);
+  assert.doesNotMatch(projectComparisonNodeChangesModalSource, />Current</);
   assert.match(projectComparisonNodeChangesModalSource, /project-compare-value-diff/);
   assert.match(projectComparisonNodeChangesModalSource, /diffStringsRaw/);
   assert.match(projectComparisonNodeChangesModalSource, /project-compare-diff-marker/);
@@ -81,8 +89,15 @@ test('graph tree shows compare diagnostics for graphs and folders', () => {
 
 test('host package re-exports the project comparison helper for wrappers', () => {
   const hostSource = source('host.tsx');
+  const workspaceHostSource = source('hooks/useRivetWorkspaceHost.ts');
 
   assert.match(hostSource, /compareProjects/);
   assert.match(hostSource, /getProjectNodeFieldComparisons/);
   assert.match(hostSource, /ProjectComparisonChangeKind/);
+  assert.match(hostSource, /ProjectCompareSideLabels/);
+  assert.match(hostSource, /RivetProjectCompareOptions/);
+  assert.match(workspaceHostSource, /startProjectCompare\(/);
+  assert.match(workspaceHostSource, /stopProjectCompare\(/);
+  assert.match(workspaceHostSource, /labels: options\?\.labels/);
+  assert.match(workspaceHostSource, /projectCompareReferenceState/);
 });

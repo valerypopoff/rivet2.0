@@ -17,6 +17,11 @@ import {
   releaseProjectContextState,
   savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
+import {
+  projectCompareReferenceState,
+  viewingProjectComparisonNodeState,
+  type ProjectCompareSideLabels,
+} from '../state/projectComparison.js';
 import { handleError } from '../utils/errorHandling.js';
 import {
   addOpenedProject,
@@ -56,6 +61,10 @@ export type RivetProjectCleanBaselineSnapshotInput = {
   data?: Project['data'];
 };
 
+export type RivetProjectCompareOptions = {
+  labels?: ProjectCompareSideLabels;
+};
+
 export type RivetWorkspaceHost = {
   openProjectSnapshot(snapshot: RivetProjectSnapshotInput): Promise<boolean>;
   openProjectPath(path: string): Promise<boolean>;
@@ -64,6 +73,12 @@ export type RivetWorkspaceHost = {
   replaceCurrent(snapshot: RivetProjectSnapshotInput): Promise<boolean>;
   markCurrentProjectClean(snapshot?: RivetProjectCleanBaselineSnapshotInput): Promise<boolean>;
   markProjectClean(projectId: ProjectId, snapshot?: RivetProjectCleanBaselineSnapshotInput): Promise<boolean>;
+  startProjectCompare(
+    referenceProject: Project,
+    referencePath?: string | null,
+    options?: RivetProjectCompareOptions,
+  ): Promise<boolean>;
+  stopProjectCompare(projectId?: ProjectId): Promise<boolean>;
 };
 
 function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId): void {
@@ -112,12 +127,12 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
   const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
+  const projectCompareReference = useAtomValue(projectCompareReferenceState);
+  const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
+  const setViewingProjectComparisonNode = useSetAtom(viewingProjectComparisonNodeState);
   const { persistCurrentProjectEditorSnapshot } = useCurrentProjectEditorSnapshot();
-  const {
-    captureCurrentProjectExecutionSnapshot,
-    removeProjectExecutionSnapshot,
-    restoreProjectExecutionSnapshot,
-  } = useProjectExecutionSnapshots();
+  const { captureCurrentProjectExecutionSnapshot, removeProjectExecutionSnapshot, restoreProjectExecutionSnapshot } =
+    useProjectExecutionSnapshots();
 
   const openProjectSnapshot = useStableCallback(
     async (snapshot: RivetProjectSnapshotInput, options: { replaceCurrent?: boolean } = {}) => {
@@ -177,6 +192,10 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
         });
 
         if (options.replaceCurrent && currentProjectId && currentProjectId !== projectId) {
+          setProjectCompareReference((reference) =>
+            reference?.projectId === currentProjectId ? undefined : reference,
+          );
+          setViewingProjectComparisonNode(undefined);
           setOpenedProjectSnapshots((snapshots) => {
             const nextSnapshots = { ...snapshots };
             delete nextSnapshots[currentProjectId];
@@ -282,6 +301,8 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       currentSnapshot: closingCurrentProjectExecutionSnapshot,
     });
     setProjects((previousProjects) => removeOpenedProject(previousProjects, projectId));
+    setProjectCompareReference((reference) => (reference?.projectId === projectId ? undefined : reference));
+    setViewingProjectComparisonNode(undefined);
     setOpenedProjectSnapshots((snapshots) => {
       const nextSnapshots = { ...snapshots };
       delete nextSnapshots[projectId];
@@ -317,10 +338,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   });
 
   const getProjectCleanBaseline = useStableCallback(
-    (
-      projectId: ProjectId,
-      snapshot?: RivetProjectCleanBaselineSnapshotInput,
-    ): ProjectContentForDigest | undefined => {
+    (projectId: ProjectId, snapshot?: RivetProjectCleanBaselineSnapshotInput): ProjectContentForDigest | undefined => {
       if (snapshot?.project) {
         const normalized = normalizeProjectSnapshot({
           project: snapshot.project,
@@ -379,6 +397,36 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
     return await markOpenProjectClean(currentProjectId, snapshot);
   });
 
+  const startProjectCompare = useStableCallback(
+    async (referenceProject: Project, referencePath?: string | null, options?: RivetProjectCompareOptions) => {
+      const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
+      if (!currentProjectId) {
+        return false;
+      }
+
+      setViewingProjectComparisonNode(undefined);
+      setProjectCompareReference({
+        projectId: currentProjectId,
+        referencePath: referencePath ?? undefined,
+        referenceProject,
+        labels: options?.labels,
+      });
+
+      return true;
+    },
+  );
+
+  const stopProjectCompare = useStableCallback(async (projectId?: ProjectId) => {
+    if (!projectCompareReference || (projectId && projectCompareReference.projectId !== projectId)) {
+      return false;
+    }
+
+    setViewingProjectComparisonNode(undefined);
+    setProjectCompareReference(undefined);
+
+    return true;
+  });
+
   return useMemo(
     () => ({
       openProjectSnapshot,
@@ -388,6 +436,8 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       replaceCurrent,
       markCurrentProjectClean,
       markProjectClean: markOpenProjectClean,
+      startProjectCompare,
+      stopProjectCompare,
     }),
     [
       closeProject,
@@ -397,6 +447,8 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       openProjectPath,
       openProjectSnapshot,
       replaceCurrent,
+      startProjectCompare,
+      stopProjectCompare,
     ],
   );
 }

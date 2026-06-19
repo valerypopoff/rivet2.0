@@ -1,12 +1,16 @@
-import { streamText } from 'ai';
+import { generateText, NoObjectGeneratedError, streamText } from 'ai';
 import { consumeAiSdkStream } from '../chat/aiSdkStreaming.js';
 import type {
+  ChatV2GenerateHandle,
   ChatV2StreamExecutor,
   ChatV2StreamHandle,
   StreamChatV2Options,
   StreamChatV2Result,
 } from './chatV2Types.js';
 import { isChatV2StructuredResponseFormat } from './chatV2ResponseFormat.js';
+
+type GenerateTextArgs = Parameters<typeof generateText>[0];
+type GenerateStepToolCall = NonNullable<ChatV2GenerateHandle['toolCalls']>[number];
 
 function keepPromiseHandled<T>(value: PromiseLike<T>): Promise<T> {
   const promise = Promise.resolve(value);
@@ -57,6 +61,10 @@ function defaultStreamExecutor(args: Parameters<typeof streamText>[0]): ChatV2St
   };
 }
 
+async function defaultGenerateExecutor(args: Parameters<typeof generateText>[0]): Promise<ChatV2GenerateHandle> {
+  return (await generateText(args)) as ChatV2GenerateHandle;
+}
+
 async function resolveOptionalValue<T>(value: T | PromiseLike<T> | undefined): Promise<T | undefined> {
   return value == null ? undefined : await value;
 }
@@ -71,6 +79,70 @@ async function resolveOptionalStructuredOutput(value: unknown | PromiseLike<unkn
   } catch {
     return undefined;
   }
+}
+
+async function resolveGenerateStructuredOutput(
+  result: ChatV2GenerateHandle,
+  responseOutput: StreamChatV2Options['responseOutput'],
+  finishReason: string | undefined,
+): Promise<unknown> {
+  if (responseOutput == null || (finishReason != null && finishReason !== 'stop')) {
+    return undefined;
+  }
+
+  try {
+    return await resolveOptionalStructuredOutput(result.output);
+  } catch {
+    return undefined;
+  }
+}
+
+function recoverGenerateStructuredOutputError(
+  error: unknown,
+  options: StreamChatV2Options,
+  toolCalls: ChatV2GenerateHandle['toolCalls'],
+): StreamChatV2Result | undefined {
+  if (options.responseOutput == null || !isChatV2StructuredResponseFormat(options.responseFormat)) {
+    return undefined;
+  }
+
+  if (!NoObjectGeneratedError.isInstance(error)) {
+    return undefined;
+  }
+
+  if (typeof error.text !== 'string') {
+    return undefined;
+  }
+
+  const rawText = error.text;
+  const responseText = collapseRepeatedStructuredJsonText(rawText);
+
+  return {
+    responseText,
+    structuredOutput: undefined,
+    functionCalls: toStreamedFunctionCalls(toolCalls),
+    usage: error.usage,
+    reasoning: '',
+    finishReason: error.finishReason == null ? undefined : String(error.finishReason),
+    providerMetadata: undefined,
+    requestStatus: undefined,
+  };
+}
+
+function attachGenerateStepToolCallCollector(args: GenerateTextArgs): ChatV2GenerateHandle['toolCalls'] {
+  const toolCalls: GenerateStepToolCall[] = [];
+  const previousOnStepFinish = args.onStepFinish;
+
+  args.onStepFinish = async (event) => {
+    const stepToolCalls = (event as { toolCalls?: readonly GenerateStepToolCall[] }).toolCalls;
+    if (stepToolCalls != null) {
+      toolCalls.push(...stepToolCalls);
+    }
+
+    await previousOnStepFinish?.(event);
+  };
+
+  return toolCalls;
 }
 
 function collapseRepeatedStructuredJsonText(responseText: string): string {
@@ -98,10 +170,7 @@ function collapseRepeatedStructuredJsonText(responseText: string): string {
   }
 }
 
-async function executeStream(
-  options: StreamChatV2Options,
-  executor: ChatV2StreamExecutor,
-): Promise<StreamChatV2Result> {
+function buildTextArgs(options: StreamChatV2Options): Parameters<typeof streamText>[0] {
   const args: Parameters<typeof streamText>[0] = {
     model: options.model,
     messages: options.messages,
@@ -121,6 +190,33 @@ async function executeStream(
   if (options.toolChoice !== undefined) args.toolChoice = options.toolChoice;
   if (options.abortSignal !== undefined) args.abortSignal = options.abortSignal;
 
+  return args;
+}
+
+function toStreamedFunctionCalls(toolCalls: ChatV2GenerateHandle['toolCalls']) {
+  return (toolCalls ?? []).map((toolCall) => ({
+    type: 'function' as const,
+    id: toolCall.toolCallId,
+    name: toolCall.toolName,
+    arguments: JSON.stringify(toolCall.input),
+    lastParsedArguments: toolCall.input,
+  }));
+}
+
+async function resolveGenerateReasoning(result: ChatV2GenerateHandle): Promise<string> {
+  const reasoningText = await resolveOptionalValue(result.reasoningText);
+  if (reasoningText != null && reasoningText.trim().length > 0) {
+    return reasoningText;
+  }
+
+  return (await resolveOptionalValue(result.reasoning))?.map((part) => part.text).join('') ?? '';
+}
+
+async function executeStream(
+  options: StreamChatV2Options,
+  executor: ChatV2StreamExecutor,
+): Promise<StreamChatV2Result> {
+  const args = buildTextArgs(options);
   const handle = await executor(args);
   markOptionalPromiseHandled(handle.finishReason);
   markOptionalPromiseHandled(handle.output);
@@ -159,4 +255,37 @@ async function executeStream(
 
 export async function streamChatV2(options: StreamChatV2Options): Promise<StreamChatV2Result> {
   return executeStream(options, options.executeStream ?? defaultStreamExecutor);
+}
+
+export async function generateChatV2(options: StreamChatV2Options): Promise<StreamChatV2Result> {
+  const args = buildTextArgs(options) as Parameters<typeof generateText>[0];
+  const stepToolCalls = attachGenerateStepToolCallCollector(args);
+  let result: ChatV2GenerateHandle;
+  try {
+    result = await (options.executeGenerate ?? defaultGenerateExecutor)(args);
+  } catch (error) {
+    const recovered = recoverGenerateStructuredOutputError(error, options, stepToolCalls);
+    if (recovered != null) {
+      return recovered;
+    }
+
+    throw error;
+  }
+
+  const isStructuredOutput = isChatV2StructuredResponseFormat(options.responseFormat);
+  const responseText = isStructuredOutput ? collapseRepeatedStructuredJsonText(result.text) : result.text;
+  const finishReason = await resolveOptionalValue(result.finishReason);
+
+  return {
+    responseText,
+    structuredOutput: await resolveGenerateStructuredOutput(result, options.responseOutput, finishReason),
+    functionCalls: toStreamedFunctionCalls(
+      result.toolCalls != null && result.toolCalls.length > 0 ? result.toolCalls : stepToolCalls,
+    ),
+    usage: (await resolveOptionalValue(result.totalUsage)) ?? (await resolveOptionalValue(result.usage)),
+    reasoning: await resolveGenerateReasoning(result),
+    finishReason,
+    providerMetadata: await resolveOptionalValue(result.providerMetadata),
+    requestStatus: await resolveOptionalValue(result.requestStatus),
+  };
 }

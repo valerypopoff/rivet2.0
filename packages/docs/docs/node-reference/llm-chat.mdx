@@ -35,17 +35,17 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ## Inputs
 
-| Title | Data Type | Description |
-| --- | --- | --- |
-| System Prompt | `string` | Optional system prompt prepended to the main prompt. |
-| Prompt | `chat-message`, `chat-message[]`, `string`, or `string[]` | Main prompt sent to the model. Strings are converted to user messages. |
-| Tools | `gpt-function` or `gpt-function[]` | Available when Tool use is enabled. Defines functions/tools the model may call. |
-| API Key | `string` | Available when API key source is set to Input port. |
-| Provider base URL | `string` | Available for Custom provider when Provider base URL uses an input. Accepts an OpenAI-compatible base URL or full `/chat/completions` URL. |
-| Base URL | `string` | Available for built-in providers when Base URL uses an input. |
-| Headers | `object` | Available when Headers uses an input. Adds provider request headers. |
-| Extra Provider Options | `string` or `object` | Available when Extra provider options uses an input. Power-user Vercel provider options. |
-| Response Schema | `object` or `gpt-function` | Available when Response format is JSON schema. |
+| Title                  | Data Type                                                 | Description                                                                                                                                |
+| ---------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| System Prompt          | `string`                                                  | Optional system prompt prepended to the main prompt.                                                                                       |
+| Prompt                 | `chat-message`, `chat-message[]`, `string`, or `string[]` | Main prompt sent to the model. Strings are converted to user messages.                                                                     |
+| Tools                  | `gpt-function` or `gpt-function[]`                        | Available when Tool use is enabled. Defines functions/tools the model may call.                                                            |
+| API Key                | `string`                                                  | Available when API key source is set to Input port.                                                                                        |
+| Provider base URL      | `string`                                                  | Available for Custom provider when Provider base URL uses an input. Accepts an OpenAI-compatible base URL or full `/chat/completions` URL. |
+| Base URL               | `string`                                                  | Available for built-in providers when Base URL uses an input.                                                                              |
+| Headers                | `object`                                                  | Available when Headers uses an input. Adds provider request headers.                                                                       |
+| Extra Provider Options | `string` or `object`                                      | Available when Extra provider options uses an input. Power-user Vercel provider options.                                                   |
+| Response Schema        | `object` or `gpt-function`                                | Available when Response format is JSON schema.                                                                                             |
 
 </TabItem>
 
@@ -53,17 +53,17 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ## Outputs
 
-| Title | Data Type | Description |
-| --- | --- | --- |
-| Response | `string`, `number`, `boolean`, `object`, `any`, or arrays of those values | Final model response. Default/Text formats output text. JSON and JSON schema formats output the parsed structured value when parsing succeeds, or the raw string when parsing fails. It may stream visually in the editor, but downstream nodes receive the final value. |
-| Messages Sent | `chat-message[]` | Messages sent to the provider. |
-| All Messages | `chat-message[]` | Conversation messages including the response. |
-| Response Tokens | `number` | Response token count when available. |
-| Tool Calls | `object[]` | Available when tool use or provider built-in tools are enabled. |
-| Usage | `object` | Available when Output usage details is enabled. Includes provider usage metadata when available. |
-| Reasoning | `string` or `string[]` | Available when Output reasoning is enabled and the provider exposes reasoning/thinking output. |
-| Response Status | `number` or `number[]` | Available when Output request status is enabled. When Retry on non-200 is enabled, this is a per-attempt array. |
-| Response Error | `string` or `string[]` | Available when Output request status is enabled. When Retry on non-200 is enabled, this is a per-attempt array. |
+| Title           | Data Type                                                                 | Description                                                                                                                                                                                                                                                              |
+| --------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Response        | `string`, `number`, `boolean`, `object`, `any`, or arrays of those values | Final model response. Default/Text formats output text. JSON and JSON schema formats output the parsed structured value when parsing succeeds, or the raw string when parsing fails. It may stream visually in the editor, but downstream nodes receive the final value. |
+| Messages Sent   | `chat-message[]`                                                          | Messages sent to the provider.                                                                                                                                                                                                                                           |
+| All Messages    | `chat-message[]`                                                          | Conversation messages including the response.                                                                                                                                                                                                                            |
+| Response Tokens | `number`                                                                  | Response token count when available.                                                                                                                                                                                                                                     |
+| Tool Calls      | `object[]`                                                                | Available when tool use or provider built-in tools are enabled.                                                                                                                                                                                                          |
+| Usage           | `object`                                                                  | Available when Output usage details is enabled. Includes provider usage metadata when available.                                                                                                                                                                         |
+| Reasoning       | `string` or `string[]`                                                    | Available when Output reasoning is enabled and the provider exposes reasoning/thinking output.                                                                                                                                                                           |
+| Response Status | `number` or `number[]`                                                    | Available when Output request status is enabled. When Retry on non-200 is enabled, this is a per-attempt array.                                                                                                                                                          |
+| Response Error  | `string` or `string[]`                                                    | Available when Output request status is enabled. When Retry on non-200 is enabled, this is a per-attempt array.                                                                                                                                                          |
 
 </TabItem>
 
@@ -73,12 +73,12 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ### Model
 
-| Setting | Description |
-| --- | --- |
-| Provider | OpenAI, Anthropic, Google, or Custom provider. |
-| Provider base URL | Custom provider only. This is separate from Provider Advanced > Base URL. |
-| Model | Provider model. For Custom provider, enter the model ID expected by that provider. |
-| API key source | Use the configured provider key or expose an API Key input port. |
+| Setting              | Description                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------- |
+| Provider             | OpenAI, Anthropic, Google, or Custom provider.                                           |
+| Provider base URL    | Custom provider only. This is separate from Provider Advanced > Base URL.                |
+| Model                | Provider model. For Custom provider, enter the model ID expected by that provider.       |
+| API key source       | Use the configured provider key or expose an API Key input port.                         |
 | API key env var name | Custom provider only when using a configured key. Defaults to `CUSTOM_PROVIDER_API_KEY`. |
 
 ### Parameters
@@ -109,12 +109,13 @@ Provider Advanced contains optional Base URL, Headers, and Extra provider option
 
 ### Technical Details
 
-| Setting | Description |
-| --- | --- |
-| Retry on non-200 | Retries provider requests when the Vercel AI SDK reports a non-200 HTTP status. |
-| Repeat times | Number of repeats after the initial request. |
-| Cooldown, ms | Delay between retry attempts. |
-| Output request status | Adds Response Status and Response Error outputs. Retry mode changes both outputs to per-attempt arrays. |
+| Setting               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stream response       | When enabled, the provider request uses streaming so Rivet can show live response updates while the node runs. When disabled, Rivet uses a non-streaming provider request and only displays the final response. Connected downstream nodes receive only the final response in both modes. Tool-call rounds can return tool calls before a final structured response exists; in that case Rivet keeps the tool calls, and auto-continue can produce the final structured response on a later model round. |
+| Retry on non-200      | Retries provider requests when the Vercel AI SDK reports a non-200 HTTP status.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Repeat times          | Number of repeats after the initial request.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Cooldown, ms          | Delay between retry attempts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Output request status | Adds Response Status and Response Error outputs. Retry mode changes both outputs to per-attempt arrays.                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 </TabItem>
 

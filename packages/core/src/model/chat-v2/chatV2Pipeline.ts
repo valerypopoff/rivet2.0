@@ -1,7 +1,7 @@
 import type { ChatMessage } from '../DataValue.js';
 import type { PortId } from '../NodeBase.js';
 import { coercePromptToChatMessages, prependSystemPrompt } from '../chat/chatMessages.js';
-import { streamChatV2 } from './aiSdkBridge.js';
+import { generateChatV2, streamChatV2 } from './aiSdkBridge.js';
 import { chatMessagesToModelMessages } from './messageConverter.js';
 import type {
   ChatV2PipelineResult,
@@ -27,26 +27,28 @@ import {
   normalizeChatV2Usage,
 } from './chatV2Outputs.js';
 
-type StreamChatV2WithRetryResult = {
+type ChatV2WithRetryResult = {
   result: StreamChatV2Result;
   requestStatuses: number[];
   requestErrors: unknown[];
   responseError?: unknown;
 };
 
-class StreamChatV2RetryFailure extends Error {
+type ChatV2TransportMode = 'stream' | 'generate';
+
+class ChatV2RetryFailure extends Error {
   constructor(
     public readonly error: unknown,
     public readonly requestStatuses: number[],
     public readonly requestErrors: unknown[],
   ) {
     super('Chat v2 retry attempts failed');
-    this.name = 'StreamChatV2RetryFailure';
+    this.name = 'ChatV2RetryFailure';
   }
 }
 
-function isStreamChatV2RetryFailure(error: unknown): error is StreamChatV2RetryFailure {
-  return error instanceof StreamChatV2RetryFailure;
+function isChatV2RetryFailure(error: unknown): error is ChatV2RetryFailure {
+  return error instanceof ChatV2RetryFailure;
 }
 
 function getProviderFailureMessage(error: unknown): string {
@@ -85,13 +87,14 @@ function normalizeProviderFailureMessages(
   return errors.map((error) => normalizeProviderFailureMessage(error, options));
 }
 
-async function streamChatV2WithRetry(
-  streamOptions: StreamChatV2Options,
+async function runChatV2WithRetry(
+  chatOptions: StreamChatV2Options,
   retryOptions: Pick<
     RunChatV2PipelineOptions,
     'context' | 'retryOnNon200' | 'retryOnNon200RepeatTimes' | 'retryOnNon200CooldownMs'
   >,
-): Promise<StreamChatV2WithRetryResult> {
+  transportMode: ChatV2TransportMode,
+): Promise<ChatV2WithRetryResult> {
   const repeatTimes = retryOptions.retryOnNon200
     ? normalizeLLMChatV2RetryCount(retryOptions.retryOnNon200RepeatTimes)
     : 0;
@@ -101,7 +104,7 @@ async function streamChatV2WithRetry(
 
   for (let attempt = 0; ; attempt++) {
     try {
-      const result = await streamChatV2(streamOptions);
+      const result = transportMode === 'generate' ? await generateChatV2(chatOptions) : await streamChatV2(chatOptions);
       const statusCode = result.requestStatus ?? 200;
 
       if (retryOptions.retryOnNon200) {
@@ -131,7 +134,7 @@ async function streamChatV2WithRetry(
       requestErrors.push(error);
 
       if (attempt >= repeatTimes) {
-        throw new StreamChatV2RetryFailure(error, requestStatuses, requestErrors);
+        throw new ChatV2RetryFailure(error, requestStatuses, requestErrors);
       }
 
       await waitForLLMChatV2RetryCooldown(cooldownMs, retryOptions.context.signal);
@@ -214,8 +217,10 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
       : options.additionalTools == null
         ? functionTools
         : { ...functionTools, ...options.additionalTools };
+  const shouldStreamResponse = options.emitPartialOutputs !== false;
+  const transportMode: ChatV2TransportMode = shouldStreamResponse ? 'stream' : 'generate';
 
-  const streamed = await streamChatV2WithRetry(
+  const chatResponse = await runChatV2WithRetry(
     {
       model: options.model,
       messages: modelMessages,
@@ -234,36 +239,37 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
       toolChoice: options.toolChoice,
       abortSignal: options.context.signal,
       executeStream: options.executeStream,
-      onPartialOutput:
-        options.emitPartialOutputs === false
-          ? undefined
-          : ({ text, functionCalls }) => {
-              options.context.onPartialOutputs?.(
-                createChatV2CommonOutputs({
-                  requestMessages,
-                  response: text,
-                  structuredOutput: undefined,
-                  functionCalls,
-                  usage: undefined,
-                  reasoning: '',
-                  requestStatus: undefined,
-                  responseError: undefined,
-                  requestStatuses: [],
-                  requestErrors: [],
-                  outputUsage: false,
-                  outputReasoning: false,
-                  outputRequestStatus: false,
-                  includeFunctionCalls: options.includeFunctionCalls,
-                  functionCallMode: options.functionCallMode,
-                  retryOnNon200: false,
-                  responseFormat: undefined,
-                }),
-              );
-            },
+      executeGenerate: options.executeGenerate,
+      onPartialOutput: !shouldStreamResponse
+        ? undefined
+        : ({ text, functionCalls }) => {
+            options.context.onPartialOutputs?.(
+              createChatV2CommonOutputs({
+                requestMessages,
+                response: text,
+                structuredOutput: undefined,
+                functionCalls,
+                usage: undefined,
+                reasoning: '',
+                requestStatus: undefined,
+                responseError: undefined,
+                requestStatuses: [],
+                requestErrors: [],
+                outputUsage: false,
+                outputReasoning: false,
+                outputRequestStatus: false,
+                includeFunctionCalls: options.includeFunctionCalls,
+                functionCallMode: options.functionCallMode,
+                retryOnNon200: false,
+                responseFormat: undefined,
+              }),
+            );
+          },
     },
     options,
+    transportMode,
   ).catch((caughtError: unknown) => {
-    const retryFailure = isStreamChatV2RetryFailure(caughtError) ? caughtError : undefined;
+    const retryFailure = isChatV2RetryFailure(caughtError) ? caughtError : undefined;
     const rawError = retryFailure?.error ?? caughtError;
     const normalizedError = normalizeChatV2ProviderError(rawError, {
       provider: options.provider,
@@ -285,24 +291,25 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
     throw normalizedError;
   });
 
-  if ('commonOutputs' in streamed) {
-    return streamed;
+  if ('commonOutputs' in chatResponse) {
+    return chatResponse;
   }
 
-  const usage = normalizeChatV2Usage(streamed.result.usage, options);
-  const requestStatuses = streamed.requestStatuses;
-  const requestErrors = normalizeProviderFailureMessages(streamed.requestErrors, options);
-  const responseError = streamed.responseError
-    ? normalizeProviderFailureMessage(streamed.responseError, options)
+  const usage = normalizeChatV2Usage(chatResponse.result.usage, options);
+  const requestStatuses = chatResponse.requestStatuses;
+  const requestStatus = chatResponse.result.requestStatus ?? 200;
+  const requestErrors = normalizeProviderFailureMessages(chatResponse.requestErrors, options);
+  const responseError = chatResponse.responseError
+    ? normalizeProviderFailureMessage(chatResponse.responseError, options)
     : undefined;
   const commonOutputs = createChatV2CommonOutputs({
     requestMessages,
-    response: streamed.result.responseText,
-    structuredOutput: streamed.result.structuredOutput,
-    functionCalls: streamed.result.functionCalls,
+    response: chatResponse.result.responseText,
+    structuredOutput: chatResponse.result.structuredOutput,
+    functionCalls: chatResponse.result.functionCalls,
     usage,
-    reasoning: streamed.result.reasoning,
-    requestStatus: streamed.result.requestStatus,
+    reasoning: chatResponse.result.reasoning,
+    requestStatus,
     responseError,
     requestStatuses,
     requestErrors,
@@ -324,13 +331,13 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
     commonOutputs,
     requestMessages,
     allMessages: allMessagesOutput.value,
-    response: streamed.result.responseText,
-    functionCalls: streamed.result.functionCalls,
-    reasoning: streamed.result.reasoning,
+    response: chatResponse.result.responseText,
+    functionCalls: chatResponse.result.functionCalls,
+    reasoning: chatResponse.result.reasoning,
     usage,
-    rawUsage: streamed.result.usage,
-    finishReason: streamed.result.finishReason,
-    providerMetadata: streamed.result.providerMetadata,
-    requestStatus: streamed.result.requestStatus ?? 200,
+    rawUsage: chatResponse.result.usage,
+    finishReason: chatResponse.result.finishReason,
+    providerMetadata: chatResponse.result.providerMetadata,
+    requestStatus,
   };
 }

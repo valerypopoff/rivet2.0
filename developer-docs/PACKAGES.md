@@ -182,13 +182,13 @@ sample, and 5 warmup runs per sample. Against the stable baseline artifact
 `fixture-speedup-baseline2-f7d72213-20260525-182552.json`, the after artifact
 `fixture-speedup-after-invocation-plan-f7d72213-20260525-183526.json` measured:
 
-| Fixture row | Baseline mean | After mean | Mean delta | Baseline p95 | After p95 | P95 delta |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `loadProjectFromFile(...)` | 20.034 ms | 19.686 ms | -1.74% | 20.619 ms | 20.287 ms | -1.61% |
-| `runGraphInFile(...)` | 49.333 ms | 49.015 ms | -0.64% | 52.186 ms | 53.051 ms | +1.66% |
-| loaded `runGraph(...)` | 28.066 ms | 27.468 ms | -2.13% | 29.334 ms | 28.392 ms | -3.21% |
-| fresh `createProcessor(...)` | 27.636 ms | 26.921 ms | -2.59% | 29.365 ms | 28.451 ms | -3.11% |
-| reused `createProcessor(...)` | 27.776 ms | 26.971 ms | -2.90% | 29.397 ms | 27.884 ms | -5.15% |
+| Fixture row                   | Baseline mean | After mean | Mean delta | Baseline p95 | After p95 | P95 delta |
+| ----------------------------- | ------------: | ---------: | ---------: | -----------: | --------: | --------: |
+| `loadProjectFromFile(...)`    |     20.034 ms |  19.686 ms |     -1.74% |    20.619 ms | 20.287 ms |    -1.61% |
+| `runGraphInFile(...)`         |     49.333 ms |  49.015 ms |     -0.64% |    52.186 ms | 53.051 ms |    +1.66% |
+| loaded `runGraph(...)`        |     28.066 ms |  27.468 ms |     -2.13% |    29.334 ms | 28.392 ms |    -3.21% |
+| fresh `createProcessor(...)`  |     27.636 ms |  26.921 ms |     -2.59% |    29.365 ms | 28.451 ms |    -3.11% |
+| reused `createProcessor(...)` |     27.776 ms |  26.971 ms |     -2.90% |    29.397 ms | 27.884 ms |    -5.15% |
 
 Treat this as a modest cleanup win, not a significant runtime breakthrough. The
 result is below the 10% threshold used for fixture-speed claims. Further large
@@ -203,17 +203,17 @@ measured runs per sample, and 5 warmup runs per sample. The benchmark varied
 only `--max-old-space-size` and loaded the fixture once before measuring fresh
 processors:
 
-| Node heap cap | Mean | Median | p95 | Takeaway |
-| ---: | ---: | ---: | ---: | --- |
-| 64 MB | 59.812 ms | 59.809 ms | 63.841 ms | Too low; GC pressure roughly doubles runtime. |
-| 80 MB | 33.007 ms | 32.820 ms | 37.510 ms | Usable but still measurably slower. |
-| 96 MB | 31.358 ms | 31.230 ms | 35.149 ms | Near the normal plateau. |
-| 128 MB | 30.751 ms | 30.253 ms | 35.815 ms | Safe practical floor for this fixture. |
-| 256 MB | 30.875 ms | 30.769 ms | 34.042 ms | No material speedup over 128 MB. |
-| 512 MB | 30.734 ms | 30.567 ms | 33.775 ms | No material speedup over 128 MB. |
-| 1024 MB | 30.806 ms | 30.498 ms | 34.601 ms | No material speedup over 128 MB. |
-| 2048 MB | 29.883 ms | 29.672 ms | 33.298 ms | Slight best run, within normal noise. |
-| 4096 MB | 30.756 ms | 30.631 ms | 33.277 ms | Baseline large heap. |
+| Node heap cap |      Mean |    Median |       p95 | Takeaway                                      |
+| ------------: | --------: | --------: | --------: | --------------------------------------------- |
+|         64 MB | 59.812 ms | 59.809 ms | 63.841 ms | Too low; GC pressure roughly doubles runtime. |
+|         80 MB | 33.007 ms | 32.820 ms | 37.510 ms | Usable but still measurably slower.           |
+|         96 MB | 31.358 ms | 31.230 ms | 35.149 ms | Near the normal plateau.                      |
+|        128 MB | 30.751 ms | 30.253 ms | 35.815 ms | Safe practical floor for this fixture.        |
+|        256 MB | 30.875 ms | 30.769 ms | 34.042 ms | No material speedup over 128 MB.              |
+|        512 MB | 30.734 ms | 30.567 ms | 33.775 ms | No material speedup over 128 MB.              |
+|       1024 MB | 30.806 ms | 30.498 ms | 34.601 ms | No material speedup over 128 MB.              |
+|       2048 MB | 29.883 ms | 29.672 ms | 33.298 ms | Slight best run, within normal noise.         |
+|       4096 MB | 30.756 ms | 30.631 ms | 33.277 ms | Baseline large heap.                          |
 
 Treat Node heap size as a floor, not a latency tuning knob: this workload gets
 hurt by very tight heaps, but it does not get meaningfully faster once the
@@ -228,14 +228,14 @@ the measuring machine exposed only 3 CPUs to containers, so `--cpus=4` was not
 available and the `unlimited` row means "up to Docker's configured 3 CPU
 ceiling":
 
-| Docker CPU quota | Mean | Median | p95 | Takeaway |
-| ---: | ---: | ---: | ---: | --- |
-| 0.25 CPU | 226.911 ms | 210.018 ms | 358.600 ms | Too throttled; latency is about 5.7x the unlimited row. |
-| 0.5 CPU | 97.938 ms | 91.349 ms | 159.430 ms | Still heavily throttled; about 2.45x the unlimited row. |
-| 1 CPU | 48.234 ms | 46.360 ms | 79.378 ms | Usable but still about 21% slower than unlimited. |
-| 2 CPUs | 44.555 ms | 43.570 ms | 52.182 ms | Near the local Docker ceiling, about 12% slower. |
-| 3 CPUs | 39.616 ms | 38.714 ms | 47.663 ms | Equivalent to the Docker ceiling within noise. |
-| Unlimited | 39.922 ms | 38.680 ms | 49.116 ms | Baseline for this Docker setup. |
+| Docker CPU quota |       Mean |     Median |        p95 | Takeaway                                                |
+| ---------------: | ---------: | ---------: | ---------: | ------------------------------------------------------- |
+|         0.25 CPU | 226.911 ms | 210.018 ms | 358.600 ms | Too throttled; latency is about 5.7x the unlimited row. |
+|          0.5 CPU |  97.938 ms |  91.349 ms | 159.430 ms | Still heavily throttled; about 2.45x the unlimited row. |
+|            1 CPU |  48.234 ms |  46.360 ms |  79.378 ms | Usable but still about 21% slower than unlimited.       |
+|           2 CPUs |  44.555 ms |  43.570 ms |  52.182 ms | Near the local Docker ceiling, about 12% slower.        |
+|           3 CPUs |  39.616 ms |  38.714 ms |  47.663 ms | Equivalent to the Docker ceiling within noise.          |
+|        Unlimited |  39.922 ms |  38.680 ms |  49.116 ms | Baseline for this Docker setup.                         |
 
 Treat CPU quota as a real latency knob for backend/container sizing. Unlike the
 heap benchmark, the sub-1-CPU rows degrade sharply. Docker absolute timings are
@@ -272,10 +272,10 @@ because a faster scheduler is active.
 
 There are two intentional runtime-observability paths:
 
-| Path | Default policy | Why |
-| --- | --- | --- |
-| Ordinary headless endpoint-style execution (`createProcessor(...)` with no `runtimeProfile`, and eligible `runGraph(...)`) | Uses run-scoped execution-plan caching, the cached default CodeRunner when no custom runner is supplied, and the internal `fast-acyclic` scheduler for eligible graphs. | The public contract is final outputs, errors, callbacks, and normal processor events; this path has compatibility tests and fixture benchmarks. |
-| Remote Debugger, trace-sensitive runs, CLI `serve --stream` / `--stream-node`, and explicit `runtimeProfile: 'compatible'` | Forces the compatible scheduler/policy. | The execution order itself is user-visible: node start/finish/excluded ordering, trace text/SSE payload order, live running state, nested graph lifecycle ordering, and debugger timing can all be observed. |
+| Path                                                                                                                       | Default policy                                                                                                                                                          | Why                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Ordinary headless endpoint-style execution (`createProcessor(...)` with no `runtimeProfile`, and eligible `runGraph(...)`) | Uses run-scoped execution-plan caching, the cached default CodeRunner when no custom runner is supplied, and the internal `fast-acyclic` scheduler for eligible graphs. | The public contract is final outputs, errors, callbacks, and normal processor events; this path has compatibility tests and fixture benchmarks.                                                              |
+| Remote Debugger, trace-sensitive runs, CLI `serve --stream` / `--stream-node`, and explicit `runtimeProfile: 'compatible'` | Forces the compatible scheduler/policy.                                                                                                                                 | The execution order itself is user-visible: node start/finish/excluded ordering, trace text/SSE payload order, live running state, nested graph lifecycle ordering, and debugger timing can all be observed. |
 
 Do not "simplify" this into one always-fast policy unless Remote Debugger,
 trace, and CLI streaming runs first get their own golden lifecycle tests,
@@ -298,11 +298,11 @@ repeated benchmark runs. The saved artifacts were:
 The full `createProcessor(...)` benchmark used 3 sessions, 15 samples per
 session, 20 measured runs per sample, and 5 warmup runs per sample:
 
-| Fixture row | Mean | Median | p95 | Note |
-| --- | ---: | ---: | ---: | --- |
-| Fresh compatible rollback `createProcessor(...)` | 33.728 ms | 33.817 ms | 35.962 ms | Explicit `runtimeProfile: 'compatible'`. |
-| Fresh default `createProcessor(...)` | 29.543 ms | 29.671 ms | 32.403 ms | Omitted profile; about 12.4% faster mean than compatible rollback. |
-| Reused default `createProcessor(...)` | 29.321 ms | 29.383 ms | 32.433 ms | Reuse is faster for this run, but backend endpoints usually construct per request. |
+| Fixture row                                      |      Mean |    Median |       p95 | Note                                                                               |
+| ------------------------------------------------ | --------: | --------: | --------: | ---------------------------------------------------------------------------------- |
+| Fresh compatible rollback `createProcessor(...)` | 33.728 ms | 33.817 ms | 35.962 ms | Explicit `runtimeProfile: 'compatible'`.                                           |
+| Fresh default `createProcessor(...)`             | 29.543 ms | 29.671 ms | 32.403 ms | Omitted profile; about 12.4% faster mean than compatible rollback.                 |
+| Reused default `createProcessor(...)`            | 29.321 ms | 29.383 ms | 32.433 ms | Reuse is faster for this run, but backend endpoints usually construct per request. |
 
 The default and compatible paths stayed equivalent in the compatibility
 characterization suite, including callbacks and recorder events for covered
@@ -343,12 +343,12 @@ The transport benchmark lives at
 and runs with `yarn workspace @valerypopoff/rivet2-node run bench:debugger-transport`.
 It asserts the new serializer's parsed websocket payload matches the old sanitize-then-stringify shape before timing either path. On the local Windows/Node 22.22.3 run that introduced the structural-sharing path:
 
-| Case | Old ms/event | New ms/event | Speedup | Bytes/event |
-| --- | ---: | ---: | ---: | ---: |
-| nodeFinish nested object output | 0.1291 | 0.1308 | 0.99x | 31827 |
-| graphFinish subgraph outputs | 0.0604 | 0.0599 | 1.01x | 15161 |
-| nodeStart fan-in inputs | 0.1220 | 0.1139 | 1.07x | 27734 |
-| non-json-safe expression output | 0.0051 | 0.0058 | 0.88x | 856 |
+| Case                            | Old ms/event | New ms/event | Speedup | Bytes/event |
+| ------------------------------- | -----------: | -----------: | ------: | ----------: |
+| nodeFinish nested object output |       0.1291 |       0.1308 |   0.99x |       31827 |
+| graphFinish subgraph outputs    |       0.0604 |       0.0599 |   1.01x |       15161 |
+| nodeStart fan-in inputs         |       0.1220 |       0.1139 |   1.07x |       27734 |
+| non-json-safe expression output |       0.0051 |       0.0058 |   0.88x |         856 |
 
 Large debugger outputs can still make Subgraph node `duration` exceed the sum of child node `durationMs`: the debugger must inspect and serialize values that it displays. The optimization trims clone allocation for common JSON-safe branches, but the measured serialization win is modest and it does not make Remote Debugger transport free.
 
@@ -378,7 +378,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.2.2`
+- Version: `2.6.4`
 - Private: yes
 
 ### Runtime shape
@@ -400,7 +400,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 - downstream package source imports core through `@valerypopoff/rivet2-core`, not by reaching into `packages/core/src/...`; the shared root ESLint config enforces that boundary with `no-restricted-imports`
 - app-only convenience helpers, such as type-safe object iteration, live in the app package; shared behavior that must match core runtime semantics is exported intentionally by core first
-- hosted/wrapper applications that mount Rivet's editor from a vendored `rivet/` folder should import directly from local source paths such as `../rivet/packages/app/src/host` and `../rivet/packages/app/src/host.css`, then render `RivetAppHost` instead of rendering `RivetApp` directly; that host shell owns QueryClient, provider context, executor-session context, async storage bootstrap, optional post-app bridge children, lifecycle callbacks, host UI policy such as browser top-bar Menu visibility, a stable imperative workspace-host handle through `onWorkspaceHostReady` / `RivetWorkspaceHostBridge` / `useRivetWorkspaceHost`, optional hosted executor websocket configuration through `executor.internalExecutorUrl`, project-comparison helper re-exports for wrapper-owned compare UIs including node field diffs, and the shared host style entrypoint, including the Atlaskit reset that keeps canvas Markdown spacing consistent with standalone Rivet. The workspace-host handle also exposes `markCurrentProjectClean(...)` / `markProjectClean(...)` for wrapper-owned save flows that need to re-seed Rivet's unsaved-changes baseline without reaching into app-internal dirty-state atoms or reloading the project. The style entrypoint also locks the document and Rivet app shell to the iframe viewport so modal scroll restoration cannot shift or clip the editor after fullscreen output modals close. Hosted shells must make both `Roboto` and `Roboto Mono` available, because Rivet's shared typography tokens default ordinary UI text to Roboto and explicit code/monospace surfaces to Roboto Mono.
+- hosted/wrapper applications that mount Rivet's editor from a vendored `rivet/` folder should import directly from local source paths such as `../rivet/packages/app/src/host` and `../rivet/packages/app/src/host.css`, then render `RivetAppHost` instead of rendering `RivetApp` directly; that host shell owns QueryClient, provider context, executor-session context, async storage bootstrap, optional post-app bridge children, lifecycle callbacks, host UI policy such as browser top-bar Menu visibility, a stable imperative workspace-host handle through `onWorkspaceHostReady` / `RivetWorkspaceHostBridge` / `useRivetWorkspaceHost`, optional hosted executor websocket configuration through `executor.internalExecutorUrl`, project-comparison helper re-exports for wrapper-owned compare UIs including node field diffs, and the shared host style entrypoint, including the Atlaskit reset that keeps canvas Markdown spacing consistent with standalone Rivet. The workspace-host handle also exposes `markCurrentProjectClean(...)` / `markProjectClean(...)` for wrapper-owned save flows that need to re-seed Rivet's unsaved-changes baseline without reaching into app-internal dirty-state atoms or reloading the project, plus `startProjectCompare(...)` / `stopProjectCompare(...)` for wrapper-owned compare flows that need optional reference/current side labels such as `Published` / `Unpublished`. Compare labels are transient UI state for the active compare session and are not project YAML or wrapper metadata. The style entrypoint also locks the document and Rivet app shell to the iframe viewport so modal scroll restoration cannot shift or clip the editor after fullscreen output modals close. Hosted shells must make both `Roboto` and `Roboto Mono` available, because Rivet's shared typography tokens default ordinary UI text to Roboto and explicit code/monospace surfaces to Roboto Mono.
 - `RivetAppHost` provider overrides are the supported hosted integration layer for IO, datasets, env vars, storage, and path policy behavior; wrappers should inject those providers instead of aliasing private globals or Tauri modules
 - `RivetAppHost` UI config is the supported wrapper layer for hiding top-level browser Menu items. Pass `ui={{ fileMenu: { visibleItems: [...] } }}` with stable `FileMenuItemId` values to filter the canonical dropdown order and labels, including the browser-only `Rivet settings` label for the stable `settings` command id and the `Help` item for the stable `get_help` command id. The public config key and item-id type retain the `fileMenu` name for compatibility even though the visible top-bar trigger is labeled `Menu`. This does not disable commands globally, and it does not rewrite the desktop/Tauri native application menu; `useMenuCommands` remains the command-behavior owner.
 - execution transport/session ownership is centralized under `src/hooks/executorSession.ts`, `src/providers/ExecutorSessionContext.tsx`, and `src/hooks/useExecutorSessionCoordinator.ts`; `src/hooks/useExecutorSession.ts` is now only a compatibility/read-only state hook that exposes `useExecutorSessionState()` plus coordinator exports
