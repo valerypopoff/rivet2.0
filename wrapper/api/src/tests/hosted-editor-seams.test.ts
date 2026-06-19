@@ -85,6 +85,11 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.doesNotMatch(loadProjectOverride, /setProject\(projectInfo\.project\)/);
   assert.match(syncOpenedProjectsOverride, /normalizeOpenedProjects/);
   assert.match(syncOpenedProjectsOverride, /openedProjectSnapshotsState/);
+  assert.match(syncOpenedProjectsOverride, /savedProjectContentDigestsState/);
+  assert.match(syncOpenedProjectsOverride, /projectUnsavedChangesState/);
+  assert.match(syncOpenedProjectsOverride, /buildCurrentProjectContentSnapshot/);
+  assert.match(syncOpenedProjectsOverride, /markProjectClean/);
+  assert.match(syncOpenedProjectsOverride, /markProjectDirtyFlag/);
   assert.match(savedGraphsOverride, /createHybridStorage\('project'\)/);
   assert.match(
     savedGraphsOverride,
