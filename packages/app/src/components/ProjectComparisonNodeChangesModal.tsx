@@ -14,6 +14,8 @@ import {
 } from '../state/projectComparison.js';
 import { AppModalHeader } from './AppModalHeader.js';
 
+const PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH = 'max(30vw, min(968px, calc(100vw - 48px)))';
+
 const styles = css`
   display: flex;
   flex-direction: column;
@@ -156,7 +158,7 @@ export const ProjectComparisonNodeChangesModal: FC = () => {
   const labels = resolveProjectCompareSideLabels(activeComparison.labels);
 
   return (
-    <Modal width="xlarge" autoFocus={false} onClose={close}>
+    <Modal width={PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH} autoFocus={false} onClose={close}>
       <AppModalHeader title="Node config changes" onClose={close} />
       <ModalBody>
         <div css={styles}>

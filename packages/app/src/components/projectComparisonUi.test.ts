@@ -71,6 +71,8 @@ test('canvas compare mode highlights nodes and wires without changing graph data
   assert.match(projectComparisonNodeChangesModalSource, /project-compare-diff-marker/);
   assert.match(projectComparisonNodeChangesModalSource, /project-compare-value-diff-before/);
   assert.match(projectComparisonNodeChangesModalSource, /project-compare-value-diff-after/);
+  assert.match(projectComparisonNodeChangesModalSource, /PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH/);
+  assert.match(projectComparisonNodeChangesModalSource, /max\(30vw, min\(968px, calc\(100vw - 48px\)\)\)/);
 });
 
 test('graph tree shows compare diagnostics for graphs and folders', () => {
