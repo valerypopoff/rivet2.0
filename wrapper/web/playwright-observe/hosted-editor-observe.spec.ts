@@ -177,6 +177,8 @@ test.describe('Observable hosted editor flow', () => {
         'dashboard-focused duplicate',
       );
       expect(nodeCountAfterDuplicate).toBeGreaterThan(nodeCountBeforeDuplicate);
+      await expect(frameLocator.locator('.project.has-unsaved-changes .project-name', { hasText: projectName }))
+        .toBeVisible({ timeout: 30_000 });
       await saveStepScreenshot(page, testInfo, '03-after-dashboard-duplicate.png');
     });
 

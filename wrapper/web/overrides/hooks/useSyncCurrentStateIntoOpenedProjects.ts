@@ -11,11 +11,19 @@ import {
   openedProjectsState,
   openedProjectsSortedIdsState,
   projectDataState,
+  projectUnsavedChangesState,
   projectState,
   projectsState,
+  savedProjectContentDigestsState,
 } from '../../../../rivet/packages/app/src/state/savedGraphs';
 import { trivetState } from '../../../../rivet/packages/app/src/state/trivet';
 import { addOpenedProject } from '../../../../rivet/packages/app/src/utils/openedProjects.js';
+import {
+  buildCurrentProjectContentSnapshot,
+  getProjectContentDigest,
+  markProjectClean,
+  markProjectDirtyFlag,
+} from '../../../../rivet/packages/app/src/utils/projectUnsavedChanges.js';
 import { resolveHostedProjectTitle, withHostedProjectTitle } from '../../dashboard/openedProjectMetadata';
 import { primeOpenedProjectSession, syncOpenedProjectSessionIds } from '../../io/openedProjectSessionCache';
 
@@ -151,12 +159,15 @@ export function useSyncCurrentStateIntoOpenedProjects() {
   const setProjects = useSetAtom(projectsState);
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
+  const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
+  const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
 
   const currentProject = useAtomValue(projectState);
   const currentProjectData = useAtomValue(projectDataState);
   const loadedProject = useAtomValue(loadedProjectState);
   const currentGraph = useAtomValue(graphState);
   const currentTrivetState = useAtomValue(trivetState);
+  const savedProjectContentDigests = useAtomValue(savedProjectContentDigestsState);
   const openedProjects = useAtomValue(openedProjectsState);
   const openedProjectSnapshots = useAtomValue(openedProjectSnapshotsState);
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
@@ -319,5 +330,35 @@ export function useSyncCurrentStateIntoOpenedProjects() {
     loadedProject.path,
     openedProjectIds,
     openedProjects,
+  ]);
+
+  useEffect(() => {
+    const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
+    if (!currentProjectId || !currentGraph) {
+      return;
+    }
+
+    const snapshot = buildCurrentProjectContentSnapshot({
+      project: currentProject,
+      graph: currentGraph,
+    });
+    const savedDigest = savedProjectContentDigests[currentProjectId];
+
+    if (!savedDigest) {
+      setSavedProjectContentDigests((previousDigests) => markProjectClean(previousDigests, snapshot));
+      setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, currentProjectId, false));
+      return;
+    }
+
+    const currentDigest = getProjectContentDigest(snapshot);
+    setProjectUnsavedChanges((previousFlags) =>
+      markProjectDirtyFlag(previousFlags, currentProjectId, currentDigest !== savedDigest),
+    );
+  }, [
+    currentGraph,
+    currentProject,
+    savedProjectContentDigests,
+    setProjectUnsavedChanges,
+    setSavedProjectContentDigests,
   ]);
 }
