@@ -151,8 +151,9 @@ Current rename-project route behavior:
 
 - `PATCH /api/workflows/projects` accepts `{ "relativePath": string, "newName": string }`
 - it returns `{ "project": WorkflowProjectItem, "movedProjectPaths": WorkflowProjectPathMove[] }`
+- it also rewrites the saved project contents so `project.metadata.title` matches `newName`; managed storage does this by creating a new current draft revision while leaving published revisions/history unchanged
 - the dashboard calls this route from the project-row context menu; Project Settings does not expose a second rename control
-- the project-row context-menu flow and selected-row `F2` shortcut edit inline in the workflow library, hide the edit field immediately on `Enter`, show a row preloader while the route is pending, and retarget selected/open project paths through `movedProjectPaths`
+- the project-row context-menu flow and selected-row `F2` shortcut edit inline in the workflow library, hide the edit field immediately on `Enter`, show a row preloader while the route is pending, retarget selected/open project paths through `movedProjectPaths`, and ask the hosted editor to apply the externally persisted title/path through `RivetWorkspaceHost.updateProjectMetadata(...)` when the renamed project is already open
 - if the target sibling project name already exists, the route returns `409` and the inline preloader clears without leaving the edit field open
 
 Current upload-route behavior:

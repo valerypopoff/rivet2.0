@@ -418,8 +418,8 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
 - hosted opened-project hooks should preserve Rivet 2.0's split tab state
   - keep `projectsState.openedProjects` as lightweight tab metadata: project id, title, path, and opened graph
   - keep full in-memory project content in `openedProjectSnapshotsState`
-  - prefer `RivetWorkspaceHost.openProjectSnapshot`, `replaceCurrent`, `closeProject`, and `moveProjectPaths` for the actual workspace transition
-  - wrapper atom reads are acceptable for hosted path lookup, duplicate-project-id checks, and stale-empty-tab cleanup, but do not reimplement tab close fallback or path rewrite transitions in wrapper code when the workspace host exposes them
+  - prefer `RivetWorkspaceHost.openProjectSnapshot`, `replaceCurrent`, `closeProject`, `moveProjectPaths`, and `updateProjectMetadata` for the actual workspace transition or externally persisted title/path reconciliation
+  - wrapper atom reads are acceptable for hosted path lookup, duplicate-project-id checks, and stale-empty-tab cleanup, but do not reimplement tab close fallback, path rewrite transitions, or live project metadata patching in wrapper code when the workspace host exposes them
   - normalize persisted opened-project metadata by dropping missing entries, orphan metadata, duplicate project ids, and legacy full-project payloads before the tab strip reads it; when damaged duplicate entries share an id, prefer the entry that still has a file path
   - resolve tab titles through the wrapper helper so old projects or legacy persisted tab entries fall back to the project filename instead of rendering missing, `undefined`, or `null` labels
   - when the visible tab strip is empty, the next workflow open must reset opened-project metadata and snapshots instead of merging hidden stale entries from older sessions
@@ -435,10 +435,10 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - keep the `savedGraphs` override narrow: it re-exports upstream state, maps the hosted `clearProjectContextState` compatibility helper to upstream `releaseProjectContextState` for normal tab close/reopen, and exposes an explicit storage-removing delete helper for actual workflow deletion
   - keep the `state/settings` override narrow: delegate upstream settings exports and override only hosted executor/debugger defaults plus the wrapper update-check modal atom, so upstream UI settings such as canvas background preferences and custom theme color helpers are not copied into the wrapper
   - do not put wrapper-owned transport overrides back into `wrapper/web/vite-aliases.ts`
-  - do not alias `useSaveProject` or `useMenuCommands`; upstream `useWorkspaceTransitions`, `RivetAppHost.onProjectSaved`, and `RivetAppHost.ui.fileMenu.visibleItems` own the save/menu seam, while the wrapper sends `save-project` when focus is outside the iframe and reconciles only opened-tab title metadata after successful saves
+  - do not alias `useSaveProject` or `useMenuCommands`; upstream `useWorkspaceTransitions`, `RivetAppHost.onProjectSaved`, and `RivetAppHost.ui.fileMenu.visibleItems` own the save/menu seam, while the wrapper sends `save-project` when focus is outside the iframe and reconciles saved title/path metadata through `RivetWorkspaceHost.updateProjectMetadata()` after successful saves
   - keep iframe-local `Ctrl+S` / `Cmd+S` idempotent: the hosted bridge should ignore already-prevented save shortcuts and call `stopImmediatePropagation()` when it handles one, because upstream in-app menu hotkey listeners can otherwise observe the same Windows keydown and trigger a second save
   - do not mutate `projectState`, `graphState`, `projectDataState`, or `openedProjectSnapshotsState` from save-completion callbacks. Upstream Rivet marks the saved snapshot clean inside its save transition, and post-save wrapper mutations to active project content can make the editor-owned unsaved-changes dot compare against the wrong digest.
-  - if a future wrapper-owned save path bypasses Rivet's save command, call `RivetWorkspaceHost.markCurrentProjectClean()` or `markProjectClean()` only after the backend save succeeds, optionally with the saved snapshot that should become the new baseline; never import or mutate `savedProjectContentDigestsState`, `projectUnsavedChangesState`, or `projectDataUnsavedChangesState` from wrapper code
+  - if a future wrapper-owned save path bypasses Rivet's save command, call `RivetWorkspaceHost.updateProjectMetadata(..., { persistedExternally: true })` for externally persisted title/description updates, or `markCurrentProjectClean()` / `markProjectClean()` for clean-baseline-only reconciliation after the backend save succeeds; never import or mutate `savedProjectContentDigestsState`, `projectUnsavedChangesState`, or `projectDataUnsavedChangesState` from wrapper code
   - do not reintroduce wrapper copies of `TauriProjectReferenceLoader`, `io/datasets`, `io/TauriIOProvider`, or `utils/globals/ioProvider`; hosted relative-project reads belong in the path policy provider, and hosted project/dataset persistence belongs in `RivetAppHost.providers` plus `HostedIOProvider`
   - keep `scripts/update-check.sh` aligned with that boundary: it should check the upstream provider seams, not treat provider-backed upstream modules as wrapper aliases
   - keep bare-package shims such as `@tauri-apps/api/*` separate from relative Rivet module overrides
@@ -597,9 +597,11 @@ For workflow-library project rename entry behavior:
 6. press `Esc`, then repeat and click elsewhere, and confirm both paths cancel without renaming
 7. enter a new project name and press `Enter`
 8. confirm the edit field closes immediately and the old project name shows a preloader while the rename is saving
-9. confirm the renamed row keeps the previous selection/open editor tab by following the returned `movedProjectPaths`
-10. try renaming to an existing sibling project name and confirm the preloader clears and the UI shows the API conflict without leaving a stale edit field open
-11. open Project Settings separately and confirm there is no modal-level rename button or title edit field
+9. confirm the saved `.rivet-project` now has `project.metadata.title` equal to the new tree name
+10. if the project is already open, confirm the Rivet tab label, graph-list project header, Project Settings title, and other editor title surfaces change to the new tree name without closing or reloading the project
+11. confirm the renamed row keeps the previous selection/open editor tab by following the returned `movedProjectPaths`
+12. try renaming to an existing sibling project name and confirm the preloader clears and the UI shows the API conflict without leaving a stale edit field open
+13. open Project Settings separately and confirm there is no modal-level rename button or title edit field
 
 For hosted editor keyboard-node behavior:
 

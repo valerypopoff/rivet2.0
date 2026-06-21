@@ -7,6 +7,7 @@ import { loadProjectAndAttachedDataFromString, serializeProject } from '@valeryp
 
 import { normalizeHostedProjectTitle } from '../routes/workflows/hosted-project-contents.js';
 import { createManagedWorkflowRevisionService } from '../routes/workflows/managed/revisions.js';
+import { createManagedWorkflowCatalogService } from '../routes/workflows/managed/catalog.js';
 import * as managedMappers from '../routes/workflows/managed/mappers.js';
 import type { RevisionRow, TransactionHooks, WorkflowRow } from '../routes/workflows/managed/types.js';
 import { getManagedWorkflowProjectVirtualPath } from '../routes/workflows/virtual-paths.js';
@@ -193,4 +194,114 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
   const [savedProject] = loadProjectAndAttachedDataFromString(savedRevisionContents);
   assert.equal(savedProject.metadata.title, workflow.name);
   assert.equal(savedProject.metadata.description, 'managed description from editor save');
+});
+
+test('managed project rename stores a new draft revision with the YAML title matching the tree name', async () => {
+  let workflow = createWorkflowRow({
+    name: 'Managed Old Name',
+    file_name: 'Managed Old Name.rivet-project',
+    relative_path: 'Managed Old Name.rivet-project',
+  });
+  const currentRevision = createRevisionRow(workflow.workflow_id, workflow.current_draft_revision_id);
+  const revisions = new Map<string, RevisionRow>([
+    [currentRevision.revision_id, currentRevision],
+  ]);
+  const currentContents = rewriteProjectMetadata(workflowFs.createBlankProjectFile(workflow.name), {
+    title: 'Editor YAML Name',
+    description: 'managed rename keeps project data',
+  });
+  let createdRevisionCount = 0;
+  let savedRevisionContents = '';
+  let savedRevisionDataset: string | null = null;
+  let invalidatedWorkflowId: string | null = null;
+
+  const catalogService = createManagedWorkflowCatalogService({
+    context: {
+      pool: {} as never,
+      initialize: async () => {},
+      withTransaction: async (run: (client: unknown, hooks: TransactionHooks) => Promise<unknown>) => run(
+        {
+          query: async (_sql: string, params: unknown[]) => {
+            const [
+              workflowId,
+              name,
+              fileName,
+              relativePath,
+              folderRelativePath,
+              currentDraftRevisionId,
+            ] = params as [string, string, string, string, string, string];
+            workflow = {
+              ...workflow,
+              workflow_id: workflowId,
+              name,
+              file_name: fileName,
+              relative_path: relativePath,
+              folder_relative_path: folderRelativePath,
+              current_draft_revision_id: currentDraftRevisionId,
+            };
+            return { rows: [] };
+          },
+        },
+        {
+          onCommit: () => {},
+          onRollback: () => {},
+        },
+      ),
+      queries: {
+        getWorkflowByRelativePath: async (_client: unknown, relativePath: string) =>
+          relativePath === workflow.relative_path ? workflow : null,
+        getRevision: async (_client: unknown, revisionId: string | null | undefined) =>
+          revisionId ? revisions.get(revisionId) ?? null : null,
+        assertFolderExists: async () => {},
+      },
+      revisions: {
+        readRevisionContents: async (revision: RevisionRow) => {
+          assert.equal(revision.revision_id, currentRevision.revision_id);
+          return {
+            contents: currentContents,
+            datasetsContents: '{"rows":[]}',
+          };
+        },
+        createRevision: async (workflowId: string, contents: string, datasetsContents: string | null): Promise<RevisionRow> => {
+          createdRevisionCount += 1;
+          savedRevisionContents = contents;
+          savedRevisionDataset = datasetsContents;
+          const revision = createRevisionRow(workflowId, 'revision-renamed');
+          revisions.set(revision.revision_id, revision);
+          return revision;
+        },
+        insertRevision: async () => {},
+        scheduleRevisionBlobCleanup: () => {},
+      },
+      mappers: managedMappers,
+      executionInvalidationController: {
+        queueWorkflowInvalidation: async (_client: unknown, _hooks: TransactionHooks, workflowId: string) => {
+          invalidatedWorkflowId = workflowId;
+        },
+        queueGlobalInvalidation: async () => {},
+      },
+      db: {
+        isUniqueViolation: () => false,
+      },
+    } as never,
+    saveHostedProject: async () => {
+      throw new Error('rename should update the managed draft revision directly');
+    },
+  });
+
+  const renamed = await catalogService.renameWorkflowProjectItem(workflow.relative_path, 'Managed Renamed Name');
+
+  const [savedProject] = loadProjectAndAttachedDataFromString(savedRevisionContents);
+  assert.equal(renamed.project.name, 'Managed Renamed Name');
+  assert.equal(renamed.project.relativePath, 'Managed Renamed Name.rivet-project');
+  assert.equal(savedProject.metadata.title, 'Managed Renamed Name');
+  assert.equal(savedProject.metadata.description, 'managed rename keeps project data');
+  assert.equal(createdRevisionCount, 1);
+  assert.equal(savedRevisionDataset, '{"rows":[]}');
+  assert.equal(invalidatedWorkflowId, workflow.workflow_id);
+
+  const moved = await catalogService.moveWorkflowProject(renamed.project.relativePath, 'Folder');
+
+  assert.equal(moved.project.relativePath, 'Folder/Managed Renamed Name.rivet-project');
+  assert.equal(createdRevisionCount, 1);
 });

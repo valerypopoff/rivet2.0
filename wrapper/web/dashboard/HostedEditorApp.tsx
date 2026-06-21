@@ -28,7 +28,7 @@ const HOSTED_RIVET_UI = {
 
 export const HostedEditorApp: FC = () => {
   const [workspaceHost, setWorkspaceHost] = useState<RivetWorkspaceHost | null>(null);
-  const reconcileHostedProjectTitleAfterSave = useReconcileHostedProjectTitleAfterSave();
+  const reconcileHostedProjectTitleAfterSave = useReconcileHostedProjectTitleAfterSave(workspaceHost);
 
   const handleProjectSaved = useCallback((event: RivetAppHostProjectSavedEvent) => {
     reconcileHostedProjectTitleAfterSave(event);

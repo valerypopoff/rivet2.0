@@ -1,8 +1,7 @@
 
 
-- ??? Make the project opened on just a click in the prject tree, not on double click. After this, the edit button is not gonna be beeded, only the Save one. But We will have to make the openings to be ephemeral (open the clicked one and then close it as the user clicks another one) unles the user cicks twice. Just like in VS Code. But there should be exceptions for when I clicked and changed the project
+- ??? When clicking a project once in the project tree, open it in the editor in the "Preview mode" like files in VS code. The tab does not persist unless the project is changed or clicked twice. After this, the edit button is not gonna be beeded, only the Save one. !!! Think it through thoroughly though. Such behavior may be confusing and may lead to some important state loss. Like, when the user opened a project in preview mode and ran it in the remode debugger mode. Probably, running must move the project from preview to edit mode.
 
-- Different remote debugger sessions for different users
 
 - Feature to move from local mode to managed (transfer all files (including libs) and metadata)
 

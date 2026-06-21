@@ -1,49 +1,32 @@
 import { useCallback } from 'react';
-import { useSetAtom } from 'jotai';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
-import type { RivetAppHostProjectSavedEvent } from '../../../rivet/packages/app/src/host';
-import { projectsState } from '../../../rivet/packages/app/src/state/savedGraphs';
+import type { RivetAppHostProjectSavedEvent, RivetWorkspaceHost } from '../../../rivet/packages/app/src/host';
 import { flushHybridStorageGroup } from '../../../rivet/packages/app/src/state/storage';
 import { resolveHostedProjectTitleFromPath } from './openedProjectMetadata';
 
-export function useReconcileHostedProjectTitleAfterSave() {
-  const setProjects = useSetAtom(projectsState);
-
+export function useReconcileHostedProjectTitleAfterSave(workspaceHost: RivetWorkspaceHost | null) {
   return useCallback((event: RivetAppHostProjectSavedEvent) => {
     const projectId = event.project.metadata.id as ProjectId | undefined;
     const title = resolveHostedProjectTitleFromPath(event.path);
-    if (!projectId || !title) {
+    if (!workspaceHost || !projectId || !title) {
       return;
     }
 
-    setProjects((previousProjects) => {
-      const openedProject = previousProjects.openedProjects[projectId];
-      if (!openedProject) {
-        return previousProjects;
-      }
-
-      const nextOpenedProject = {
-        ...openedProject,
-        title,
-        fsPath: event.path ?? openedProject.fsPath,
-      };
-
-      if (
-        openedProject.title === nextOpenedProject.title &&
-        openedProject.fsPath === nextOpenedProject.fsPath
-      ) {
-        return previousProjects;
-      }
-
-      return {
-        ...previousProjects,
-        openedProjects: {
-          ...previousProjects.openedProjects,
-          [projectId]: nextOpenedProject,
+    void (async () => {
+      const updated = await workspaceHost.updateProjectMetadata(
+        projectId,
+        { title },
+        {
+          path: event.path,
+          persistedExternally: true,
         },
-      };
-    });
+      );
 
-    void flushHybridStorageGroup('project');
-  }, [setProjects]);
+      if (updated) {
+        await flushHybridStorageGroup('project');
+      }
+    })().catch((error) => {
+      console.error('Failed to reconcile hosted project title after save:', error);
+    });
+  }, [workspaceHost]);
 }

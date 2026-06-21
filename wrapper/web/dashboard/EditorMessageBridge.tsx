@@ -18,6 +18,7 @@ import {
   searchingGraphState,
 } from '../../../rivet/packages/app/src/state/graphBuilder';
 import { overlayOpenState } from '../../../rivet/packages/app/src/state/ui';
+import { flushHybridStorageGroup } from '../../../rivet/packages/app/src/state/storage';
 import type { RivetWorkspaceHost } from '../../../rivet/packages/app/src/host';
 import type { WorkflowProjectPathMove } from './types';
 import {
@@ -35,6 +36,7 @@ import {
   getWorkflowPublishedVersionPreviewFromVirtualProjectPath,
   getWorkflowPublishedVersionPreviewVirtualProjectPath,
 } from '../../shared/workflow-types';
+import { resolveHostedProjectMetadataUpdatesForPathMoves } from './openedProjectMetadata';
 import {
   fetchHostedProjectFile,
   fetchWorkflowPublishedVersionPreview,
@@ -626,6 +628,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
             break;
           }
 
+          const metadataUpdates = resolveHostedProjectMetadataUpdatesForPathMoves(projectsRef.current, moves);
           remapOpenedProjectSessionPaths(moves);
           remapHostedProjectRevisionPaths(moves);
           workspaceRef.current.moveProjectPaths(
@@ -634,6 +637,28 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
               to: move.toAbsolutePath,
             })),
           );
+
+          let metadataUpdated = false;
+          for (const update of metadataUpdates) {
+            try {
+              const updated = await workspaceRef.current.updateProjectMetadata(
+                update.projectId,
+                { title: update.title },
+                {
+                  path: update.path,
+                  persistedExternally: true,
+                  changeSource: 'external-wrapper-rename',
+                },
+              );
+              metadataUpdated ||= updated;
+            } catch (error) {
+              console.error('Failed to update renamed hosted project metadata:', error);
+            }
+          }
+
+          if (metadataUpdated) {
+            await flushHybridStorageGroup('project');
+          }
 
           break;
         }

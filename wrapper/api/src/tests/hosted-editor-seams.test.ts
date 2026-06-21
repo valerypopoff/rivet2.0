@@ -59,6 +59,10 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorBridgeTypes, /workflow-paths-moved/);
   assert.match(editorMessageBridge, /workspaceRef\.current\.closeProject\(deletedProjectId\)/);
   assert.match(editorMessageBridge, /workspaceRef\.current\.moveProjectPaths/);
+  assert.match(editorMessageBridge, /resolveHostedProjectMetadataUpdatesForPathMoves\(projectsRef\.current, moves\)/);
+  assert.match(editorMessageBridge, /workspaceRef\.current\.updateProjectMetadata/);
+  assert.match(editorMessageBridge, /persistedExternally: true/);
+  assert.match(editorMessageBridge, /changeSource: 'external-wrapper-rename'/);
   assert.match(editorMessageBridge, /deleteHostedProjectContextState\(projectId\)/);
   assert.match(editorMessageBridge, /await clearHostedDatasetsForProject\(projectId\)/);
   assert.match(editorMessageBridge, /refresh-open-project-from-disk/);
@@ -75,8 +79,9 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(openWorkflowProject, /retainOnlyOpenedProject/);
   assert.doesNotMatch(openWorkflowProject, /await loadProject|useRivetWorkspaceHost|useLoadProject/);
 
-  assert.match(titleAfterSaveReconciler, /projectsState/);
-  assert.doesNotMatch(titleAfterSaveReconciler, /projectState|openedProjectSnapshotsState|savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
+  assert.match(titleAfterSaveReconciler, /workspaceHost\.updateProjectMetadata/);
+  assert.match(titleAfterSaveReconciler, /persistedExternally: true/);
+  assert.doesNotMatch(titleAfterSaveReconciler, /projectsState|projectState|openedProjectSnapshotsState|savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
   assert.doesNotMatch(editorMessageBridge, /savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
 
   assert.match(loadProjectOverride, /openedProjectSnapshotsState/);
