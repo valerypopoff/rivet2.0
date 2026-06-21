@@ -4,6 +4,7 @@ import type { DataId, GraphId, NodeGraph, Project, ProjectId } from '@valerypopo
 import {
   buildCurrentProjectContentSnapshot,
   getProjectContentDigest,
+  hasProjectContentChangedFromCleanDigest,
   hasProjectUnsavedChanges,
   markProjectClean,
   markProjectDirtyFlag,
@@ -100,6 +101,17 @@ describe('project unsaved changes helpers', () => {
     const result = markProjectClean({}, { project });
 
     assert.equal(result[project.metadata.id], getProjectContentDigest({ project }));
+  });
+
+  test('hasProjectContentChangedFromCleanDigest compares content to the saved baseline', () => {
+    const project = makeProject([makeGraph('graph-1', 'Graph')]);
+    const changedProject = makeProject([makeGraph('graph-1', 'Graph', [{ id: 'node-1' } as any])]);
+    const cleanDigests = markProjectClean({}, { project });
+
+    assert.equal(hasProjectContentChangedFromCleanDigest(cleanDigests, { project }), false);
+    assert.equal(hasProjectContentChangedFromCleanDigest(cleanDigests, { project: changedProject }), true);
+    assert.equal(hasProjectContentChangedFromCleanDigest({}, { project: changedProject }), false);
+    assert.equal(hasProjectContentChangedFromCleanDigest(cleanDigests, undefined), false);
   });
 
   test('dirty flags and cleanup preserve unchanged records', () => {

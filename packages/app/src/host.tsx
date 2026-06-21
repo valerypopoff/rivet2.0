@@ -153,6 +153,8 @@ export type {
   MoveProjectPathsInput,
   RivetProjectCompareOptions,
   RivetProjectCleanBaselineSnapshotInput,
+  RivetProjectMetadataPatch,
+  RivetProjectMetadataUpdateOptions,
   RivetProjectSnapshotInput,
   RivetWorkspaceHost,
 } from './hooks/useRivetWorkspaceHost.js';

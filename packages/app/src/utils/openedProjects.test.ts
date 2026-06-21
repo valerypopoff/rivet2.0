@@ -6,6 +6,7 @@ import {
   moveOpenedProjectPaths,
   removeOpenedProject,
   resolveSyncedOpenedProjectFsPathOptions,
+  updateOpenedProjectMetadata,
 } from './openedProjects.js';
 
 function makeProject(id: string, title: string): Project {
@@ -321,5 +322,105 @@ describe('openedProjects helpers', () => {
     assert.deepEqual(result.openedProjectsSortedIds, [firstProject.metadata.id, secondProject.metadata.id]);
     assert.equal(result.openedProjects[firstProject.metadata.id]?.fsPath, '/old/first.rivet-project');
     assert.equal(result.openedProjects[secondProject.metadata.id]?.fsPath, '/new/second.rivet-project');
+  });
+
+  test('updates opened project title and optional path without changing order', () => {
+    const firstProject = makeProject('project-1', 'First');
+    const secondProject = makeProject('project-2', 'Second');
+
+    const result = updateOpenedProjectMetadata(
+      {
+        openedProjects: {
+          [firstProject.metadata.id]: {
+            projectId: firstProject.metadata.id,
+            title: firstProject.metadata.title,
+            fsPath: '/old/first.rivet-project',
+          },
+          [secondProject.metadata.id]: {
+            projectId: secondProject.metadata.id,
+            title: secondProject.metadata.title,
+            fsPath: '/old/second.rivet-project',
+          },
+        },
+        openedProjectsSortedIds: [firstProject.metadata.id, secondProject.metadata.id],
+      },
+      secondProject.metadata.id,
+      { title: 'Renamed' },
+      { fsPath: '/new/second.rivet-project' },
+    );
+
+    assert.deepEqual(result.openedProjectsSortedIds, [firstProject.metadata.id, secondProject.metadata.id]);
+    assert.equal(result.openedProjects[firstProject.metadata.id]?.title, 'First');
+    assert.equal(result.openedProjects[secondProject.metadata.id]?.title, 'Renamed');
+    assert.equal(result.openedProjects[secondProject.metadata.id]?.fsPath, '/new/second.rivet-project');
+  });
+
+  test('clears an opened project path during metadata update when requested', () => {
+    const project = makeProject('project-1', 'Project');
+
+    const result = updateOpenedProjectMetadata(
+      {
+        openedProjects: {
+          [project.metadata.id]: {
+            projectId: project.metadata.id,
+            title: project.metadata.title,
+            fsPath: '/old/project.rivet-project',
+          },
+        },
+        openedProjectsSortedIds: [project.metadata.id],
+      },
+      project.metadata.id,
+      {},
+      { fsPath: null },
+    );
+
+    assert.equal(result.openedProjects[project.metadata.id]?.title, 'Project');
+    assert.equal(result.openedProjects[project.metadata.id]?.fsPath, null);
+  });
+
+  test('preserves an opened project path when metadata update receives an undefined path', () => {
+    const project = makeProject('project-1', 'Project');
+
+    const result = updateOpenedProjectMetadata(
+      {
+        openedProjects: {
+          [project.metadata.id]: {
+            projectId: project.metadata.id,
+            title: project.metadata.title,
+            fsPath: '/old/project.rivet-project',
+          },
+        },
+        openedProjectsSortedIds: [project.metadata.id],
+      },
+      project.metadata.id,
+      { title: 'Renamed' },
+      { fsPath: undefined },
+    );
+
+    assert.equal(result.openedProjects[project.metadata.id]?.title, 'Renamed');
+    assert.equal(result.openedProjects[project.metadata.id]?.fsPath, '/old/project.rivet-project');
+  });
+
+  test('treats empty runtime metadata updates as path-only or no-op tab updates', () => {
+    const project = makeProject('project-1', 'Project');
+    const current = {
+      openedProjects: {
+        [project.metadata.id]: {
+          projectId: project.metadata.id,
+          title: project.metadata.title,
+          fsPath: '/old/project.rivet-project',
+        },
+      },
+      openedProjectsSortedIds: [project.metadata.id],
+    };
+
+    assert.equal(updateOpenedProjectMetadata(current, project.metadata.id, undefined), current);
+
+    const pathOnlyResult = updateOpenedProjectMetadata(current, project.metadata.id, undefined, {
+      fsPath: '/new/project.rivet-project',
+    });
+
+    assert.equal(pathOnlyResult.openedProjects[project.metadata.id]?.title, 'Project');
+    assert.equal(pathOnlyResult.openedProjects[project.metadata.id]?.fsPath, '/new/project.rivet-project');
   });
 });

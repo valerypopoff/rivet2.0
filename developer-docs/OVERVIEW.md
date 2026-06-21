@@ -166,10 +166,14 @@ Wrapper shells can receive a stable imperative workspace handle through
 `RivetWorkspaceHostBridge`, or call `useRivetWorkspaceHost()` from their own
 bridge component inside the host tree. That handle opens snapshots, opens
 path-backed projects, closes projects, moves remembered project paths, and
-replaces the active project without wrapper-specific Jotai access. It also
-exposes `markCurrentProjectClean(...)` and `markProjectClean(...)` so
-wrapper-owned save flows can mark an already-open project clean after a
-successful external save without importing app-internal dirty-state atoms.
+updates the metadata for already-open projects without wrapper-specific Jotai
+access. Use `updateProjectMetadata(...)` for wrapper-owned external renames or
+description changes; it updates the tab title/path plus active or inactive
+project metadata and can treat the change as externally persisted without
+clearing pre-existing unsaved graph edits. The handle also exposes
+`markCurrentProjectClean(...)` and `markProjectClean(...)` so wrapper-owned save
+flows can mark an already-open project clean after a successful external save
+without importing app-internal dirty-state atoms.
 Project save/open lifecycle notifications should go through `RivetAppHost`
 callbacks rather than wrapper-specific subscriptions.
 

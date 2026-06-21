@@ -69,3 +69,32 @@ test('workspace host exposes project compare controls for hosted wrappers', () =
   assert.match(hostSource, /RivetProjectCompareOptions/);
   assert.match(hostSource, /ProjectCompareSideLabels/);
 });
+
+test('workspace host exposes a narrow project metadata update API for hosted wrappers', () => {
+  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
+  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
+  const metadataUpdateSource = readFileSync(join(hooksDir, '..', 'utils', 'projectMetadataUpdates.ts'), 'utf8');
+
+  assert.match(workspaceHostSource, /export type RivetProjectMetadataUpdateOptions = \{/);
+  assert.match(workspaceHostSource, /path\?: string \| null;/);
+  assert.match(workspaceHostSource, /persistedExternally\?: boolean;/);
+  assert.match(workspaceHostSource, /changeSource\?: 'external-wrapper-rename';/);
+  assert.match(workspaceHostSource, /export type RivetProjectMetadataPatch = ProjectMetadataPatch;/);
+  assert.match(
+    metadataUpdateSource,
+    /export type ProjectMetadataPatch = Pick<Partial<Project\['metadata'\]>, 'title' \| 'description'>;/,
+  );
+  assert.match(
+    workspaceHostSource,
+    /updateProjectMetadata\(\s*projectId: ProjectId,\s*metadataPatch: RivetProjectMetadataPatch,\s*options\?: RivetProjectMetadataUpdateOptions,\s*\): Promise<boolean>;/,
+  );
+  assert.match(workspaceHostSource, /updateOpenedProjectMetadata\(/);
+  assert.match(workspaceHostSource, /setCurrentProject\(patchedProject\);/);
+  assert.match(workspaceHostSource, /setOpenedProjectSnapshots\(/);
+  assert.match(workspaceHostSource, /if \(options\.persistedExternally\) \{/);
+  assert.match(workspaceHostSource, /if \(!wasProjectDirty && patchedProject\) \{/);
+  assert.match(workspaceHostSource, /hasProjectContentChangedFromCleanDigest\(savedProjectContentDigests, contentBeforePatch\)/);
+  assert.match(workspaceHostSource, /markProjectDirtyFlag\(previousFlags, projectId, true\)/);
+  assert.match(hostSource, /RivetProjectMetadataPatch/);
+  assert.match(hostSource, /RivetProjectMetadataUpdateOptions/);
+});
