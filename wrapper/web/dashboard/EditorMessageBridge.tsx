@@ -1,4 +1,4 @@
-import { type FC, useCallback, useEffect, useRef } from 'react';
+import { type FC, useCallback, useEffect, useRef, useState } from 'react';
 import { useOpenWorkflowProject } from './useOpenWorkflowProject';
 import { ExecutionRecorder, getError, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
 import { useAtomValue, useSetAtom } from 'jotai';
@@ -7,11 +7,17 @@ import {
   openedProjectSnapshotsState,
   type OpenedProjectsInfo,
   type OpenedProjectInfo,
+  projectDataUnsavedChangesState,
   projectState,
+  projectUnsavedChangesState,
   projectsState,
 } from '../../../rivet/packages/app/src/state/savedGraphs';
 import { deleteHostedProjectContextState } from '../overrides/state/savedGraphs';
-import { loadedRecordingState } from '../../../rivet/packages/app/src/state/execution';
+import {
+  executorSessionRevisionState,
+  loadedRecordingState,
+} from '../../../rivet/packages/app/src/state/execution';
+import { graphRunningState } from '../../../rivet/packages/app/src/state/dataFlow';
 import { selectedExecutorState } from '../../../rivet/packages/app/src/state/settings';
 import {
   openOrFocusGraphSearchState,
@@ -19,7 +25,7 @@ import {
 } from '../../../rivet/packages/app/src/state/graphBuilder';
 import { overlayOpenState } from '../../../rivet/packages/app/src/state/ui';
 import { flushHybridStorageGroup } from '../../../rivet/packages/app/src/state/storage';
-import type { RivetWorkspaceHost } from '../../../rivet/packages/app/src/host';
+import { useExecutorSessionRuntime, type RivetWorkspaceHost } from '../../../rivet/packages/app/src/host';
 import type { WorkflowProjectPathMove } from './types';
 import {
   type DashboardToEditorCommand,
@@ -157,6 +163,11 @@ type LoadedWorkflowRecording = {
   recorder: ExecutionRecorder;
 };
 
+type PreviewWorkflowProject = {
+  path: string;
+  projectId: ProjectId;
+};
+
 async function fetchLoadedWorkflowRecording(recordingId: string): Promise<LoadedWorkflowRecording> {
   const serializedRecording = await fetchWorkflowRecordingArtifactText(recordingId, 'recording');
 
@@ -187,18 +198,28 @@ type EditorMessageBridgeProps = {
 export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHost }) => {
   const openProject = useOpenWorkflowProject(workspaceHost);
   const { saveProject } = useSaveProject();
+  const executorSessionRuntime = useExecutorSessionRuntime();
   const projects = useAtomValue(projectsState);
   const loadedProject = useAtomValue(loadedProjectState);
   const currentProject = useAtomValue(projectState);
+  const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
+  const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
+  const graphRunning = useAtomValue(graphRunningState);
+  useAtomValue(executorSessionRevisionState);
+  const executorTargetType = executorSessionRuntime.getRuntimeState().target?.type;
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const setLoadedRecording = useSetAtom(loadedRecordingState);
   const setSelectedExecutor = useSetAtom(selectedExecutorState);
   const openOverlay = useAtomValue(overlayOpenState);
   const setSearching = useSetAtom(searchingGraphState);
+  const [previewProject, setPreviewProject] = useState<PreviewWorkflowProject | null>(null);
   const projectsRef = useRef<OpenedProjectsInfo>(projects);
   const loadedProjectRef = useRef(loadedProject);
   const currentProjectRef = useRef(currentProject);
+  const projectUnsavedChangesRef = useRef(projectUnsavedChanges);
+  const projectDataUnsavedChangesRef = useRef(projectDataUnsavedChanges);
+  const previewProjectRef = useRef<PreviewWorkflowProject | null>(previewProject);
   const workspaceRef = useRef(workspaceHost);
   const openProjectRef = useRef(openProject);
   const saveProjectRef = useRef(saveProject);
@@ -207,12 +228,98 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   projectsRef.current = projects;
   loadedProjectRef.current = loadedProject;
   currentProjectRef.current = currentProject;
+  projectUnsavedChangesRef.current = projectUnsavedChanges;
+  projectDataUnsavedChangesRef.current = projectDataUnsavedChanges;
+  previewProjectRef.current = previewProject;
   workspaceRef.current = workspaceHost;
   openProjectRef.current = openProject;
   saveProjectRef.current = saveProject;
 
+  const rememberPreviewProject = useCallback((project: PreviewWorkflowProject) => {
+    previewProjectRef.current = project;
+    setPreviewProject(project);
+  }, []);
+
+  const clearPreviewProject = useCallback((expectedProject?: PreviewWorkflowProject | null) => {
+    if (
+      expectedProject &&
+      previewProjectRef.current &&
+      previewProjectRef.current.projectId !== expectedProject.projectId
+    ) {
+      return;
+    }
+
+    previewProjectRef.current = null;
+    setPreviewProject((currentProjectPreview) => {
+      if (
+        expectedProject &&
+        currentProjectPreview &&
+        currentProjectPreview.projectId !== expectedProject.projectId
+      ) {
+        return currentProjectPreview;
+      }
+
+      return null;
+    });
+  }, []);
+
+  const promotePreviewProject = useCallback((expectedProject?: PreviewWorkflowProject | null) => {
+    const currentPreview = previewProjectRef.current;
+    if (
+      expectedProject &&
+      currentPreview &&
+      currentPreview.projectId !== expectedProject.projectId
+    ) {
+      return;
+    }
+
+    const promotedProject = expectedProject ?? currentPreview;
+    clearPreviewProject(expectedProject ?? undefined);
+
+    if (!promotedProject) {
+      return;
+    }
+
+    void workspaceRef.current
+      .setProjectTabUiState(promotedProject.projectId, { preview: false })
+      .then((updated) => {
+        if (!updated) {
+          console.warn('Promoted preview project was no longer open:', promotedProject.path);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to promote preview project tab:', error);
+      });
+  }, [clearPreviewProject]);
+
+  const previewProjectIsSafelyReplaceable = useCallback((project: PreviewWorkflowProject): boolean => {
+    return (
+      projectUnsavedChangesRef.current[project.projectId] === false &&
+      projectDataUnsavedChangesRef.current[project.projectId] === false
+    );
+  }, []);
+
+  const promotePreviewProjectByPath = useCallback((path: string | null | undefined) => {
+    const preview = previewProjectRef.current;
+    if (!preview || !path || normalizeWorkflowPath(preview.path) !== normalizeWorkflowPath(path)) {
+      return;
+    }
+
+    promotePreviewProject(preview);
+  }, [promotePreviewProject]);
+
+  const clearPreviewProjectByPath = useCallback((path: string | null | undefined) => {
+    const preview = previewProjectRef.current;
+    if (!preview || !path || normalizeWorkflowPath(preview.path) !== normalizeWorkflowPath(path)) {
+      return;
+    }
+
+    clearPreviewProject(preview);
+  }, [clearPreviewProject]);
+
   const saveCurrentProject = async () => {
     await saveProjectRef.current();
+    promotePreviewProjectByPath(loadedProjectRef.current.path);
   };
 
   const startProjectCompare = useCallback(async (
@@ -297,6 +404,60 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   useEffect(() => {
     postMessageToDashboard({ type: 'editor-ready' });
   }, []);
+
+  useEffect(() => {
+    if (!previewProject) {
+      return;
+    }
+
+    if (
+      projectUnsavedChanges[previewProject.projectId] === true ||
+      projectDataUnsavedChanges[previewProject.projectId] === true
+    ) {
+      promotePreviewProject(previewProject);
+    }
+  }, [previewProject, projectUnsavedChanges, projectDataUnsavedChanges, promotePreviewProject]);
+
+  useEffect(() => {
+    if (!graphRunning || !previewProject) {
+      return;
+    }
+
+    if (currentProject.metadata.id === previewProject.projectId) {
+      promotePreviewProject(previewProject);
+    }
+  }, [currentProject.metadata.id, graphRunning, previewProject, promotePreviewProject]);
+
+  useEffect(() => {
+    if (executorTargetType !== 'external-debugger' || !previewProject) {
+      return;
+    }
+
+    if (currentProject.metadata.id === previewProject.projectId) {
+      promotePreviewProject(previewProject);
+    }
+  }, [currentProject.metadata.id, executorTargetType, previewProject, promotePreviewProject]);
+
+  useEffect(() => {
+    const projectId = currentProject.metadata.id as ProjectId | undefined;
+    const path = loadedProject.path ?? '';
+    const hasUnsavedChanges = Boolean(
+      projectId &&
+      path &&
+      (projectUnsavedChanges[projectId] === true || projectDataUnsavedChanges[projectId] === true),
+    );
+
+    postMessageToDashboard({
+      type: 'active-project-unsaved-changes-changed',
+      path,
+      hasUnsavedChanges,
+    });
+  }, [
+    currentProject.metadata.id,
+    loadedProject.path,
+    projectUnsavedChanges,
+    projectDataUnsavedChanges,
+  ]);
 
   useEffect(() => {
     const handler = async (event: KeyboardEvent) => {
@@ -400,20 +561,83 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
       return openedProjectId ? openedProjects[openedProjectId] ?? null : null;
     };
 
+    const closeReplaceablePreviewProject = async (nextPath: string): Promise<void> => {
+      const preview = previewProjectRef.current;
+      if (!preview || normalizeWorkflowPath(preview.path) === normalizeWorkflowPath(nextPath)) {
+        return;
+      }
+
+      if (!previewProjectIsSafelyReplaceable(preview)) {
+        promotePreviewProject(preview);
+        return;
+      }
+
+      try {
+        const closed = await workspaceRef.current.closeProject(preview.projectId);
+        if (closed) {
+          clearPreviewProject(preview);
+          return;
+        }
+
+        promotePreviewProject(preview);
+      } catch (error) {
+        console.error('Failed to close previous preview project:', error);
+        promotePreviewProject(preview);
+      }
+    };
+
     const runSerializedCommand = async (command: SerializedEditorCommand): Promise<void> => {
       switch (command.type) {
         case 'open-project':
           try {
-            const replacedPath = command.replaceCurrent ? loadedProjectRef.current.path : '';
-            const opened = await openProjectRef.current(command.path, {
-              replaceCurrent: Boolean(command.replaceCurrent),
+            const existingOpenedProject = command.preview ? findOpenedProjectByPath(command.path) : null;
+            const existingPreview = previewProjectRef.current;
+            const targetIsExistingPreview =
+              existingPreview !== null &&
+              normalizeWorkflowPath(existingPreview.path) === normalizeWorkflowPath(command.path);
+            const shouldUsePreviewSlot =
+              command.preview === true && (existingOpenedProject === null || targetIsExistingPreview);
+            const shouldReplaceActivePreview =
+              shouldUsePreviewSlot &&
+              existingPreview !== null &&
+              !targetIsExistingPreview &&
+              currentProjectRef.current.metadata.id === existingPreview.projectId &&
+              previewProjectIsSafelyReplaceable(existingPreview);
+
+            if (shouldUsePreviewSlot && !shouldReplaceActivePreview) {
+              await closeReplaceablePreviewProject(command.path);
+            }
+
+            const replaceCurrent = Boolean(command.replaceCurrent || shouldReplaceActivePreview);
+            const replacedPath = replaceCurrent ? loadedProjectRef.current.path : '';
+            const openResult = await openProjectRef.current(command.path, {
+              replaceCurrent,
               reloadFromDisk: Boolean(command.reloadFromDisk),
+              skipReplaceConfirmation: shouldReplaceActivePreview,
+              previewTab: shouldUsePreviewSlot,
             });
-            if (!opened) {
+            if (!openResult.opened) {
               break;
             }
 
+            if (shouldUsePreviewSlot) {
+              const openedProject = openResult.projectId
+                ? { projectId: openResult.projectId }
+                : findOpenedProjectByPath(command.path);
+              if (openedProject?.projectId) {
+                rememberPreviewProject({
+                  path: command.path,
+                  projectId: openedProject.projectId,
+                });
+              } else {
+                console.warn('Opened preview project without a project id; leaving it persistent.', command.path);
+              }
+            } else {
+              promotePreviewProjectByPath(command.path);
+            }
+
             if (replacedPath && replacedPath !== command.path) {
+              clearPreviewProjectByPath(replacedPath);
               recordingByProjectPathRef.current.delete(replacedPath);
             }
             setLoadedRecording(null);
@@ -449,14 +673,16 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
           }
 
           try {
-            const opened = await openProjectRef.current(command.path, {
+            const openResult = await openProjectRef.current(command.path, {
               replaceCurrent: true,
               reloadFromDisk: true,
+              previewTab: false,
             });
-            if (!opened) {
+            if (!openResult.opened) {
               throw new Error('Rivet could not reload the restored project.');
             }
 
+            promotePreviewProjectByPath(command.path);
             setLoadedRecording(null);
             postMessageToDashboard({ type: 'project-opened', path: command.path });
           } catch (error) {
@@ -476,11 +702,11 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
             const replacedPath = command.replaceCurrent ? loadedProjectRef.current.path : '';
 
             recordingByProjectPathRef.current.set(virtualProjectPath, loadedRecording);
-            const opened = await openProjectRef.current(virtualProjectPath, {
+            const openResult = await openProjectRef.current(virtualProjectPath, {
               replaceCurrent: Boolean(command.replaceCurrent),
               preferredGraphId,
             });
-            if (!opened) {
+            if (!openResult.opened) {
               recordingByProjectPathRef.current.delete(virtualProjectPath);
               if (loadedProjectRef.current.path === virtualProjectPath) {
                 setLoadedRecording(null);
@@ -489,6 +715,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
             }
 
             if (replacedPath && replacedPath !== virtualProjectPath) {
+              clearPreviewProjectByPath(replacedPath);
               recordingByProjectPathRef.current.delete(replacedPath);
             }
             activateWorkflowRecording(loadedRecording);
@@ -515,14 +742,15 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
           );
           try {
             const replacedPath = command.replaceCurrent ? loadedProjectRef.current.path : '';
-            const opened = await openProjectRef.current(virtualProjectPath, {
+            const openResult = await openProjectRef.current(virtualProjectPath, {
               replaceCurrent: Boolean(command.replaceCurrent),
             });
-            if (!opened) {
+            if (!openResult.opened) {
               break;
             }
 
             if (replacedPath && replacedPath !== virtualProjectPath) {
+              clearPreviewProjectByPath(replacedPath);
               recordingByProjectPathRef.current.delete(replacedPath);
             }
             setLoadedRecording(null);
@@ -602,6 +830,9 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
           if (deletedProjectId) {
             deletedProjectIds.add(deletedProjectId);
           }
+          if (deletedProjectId && previewProjectRef.current?.projectId === deletedProjectId) {
+            clearPreviewProject(previewProjectRef.current);
+          }
           clearHostedProjectRevisionPath(deletedPath);
 
           let closed = false;
@@ -631,6 +862,16 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
           const metadataUpdates = resolveHostedProjectMetadataUpdatesForPathMoves(projectsRef.current, moves);
           remapOpenedProjectSessionPaths(moves);
           remapHostedProjectRevisionPaths(moves);
+          const preview = previewProjectRef.current;
+          if (preview) {
+            const movedPreviewPath = moves.find((move) => move.fromAbsolutePath === preview.path)?.toAbsolutePath;
+            if (movedPreviewPath) {
+              rememberPreviewProject({
+                ...preview,
+                path: movedPreviewPath,
+              });
+            }
+          }
           workspaceRef.current.moveProjectPaths(
             moves.map((move) => ({
               from: move.fromAbsolutePath,
@@ -679,6 +920,12 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
     setLoadedProject,
     setOpenedProjectSnapshots,
     activateWorkflowRecording,
+    clearPreviewProjectByPath,
+    clearPreviewProject,
+    previewProjectIsSafelyReplaceable,
+    promotePreviewProject,
+    promotePreviewProjectByPath,
+    rememberPreviewProject,
     setLoadedRecording,
     startProjectCompare,
   ]);

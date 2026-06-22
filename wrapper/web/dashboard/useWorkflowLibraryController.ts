@@ -356,7 +356,7 @@ export function useWorkflowLibraryController(options: {
     }
   }, []);
 
-  const activePath = selectedProjectPath || openedProjectPath;
+  const activePath = selectedProjectPath;
   const flattenedFolders = useMemo(() => flattenFolders(folders), [folders]);
   const folderIds = useMemo(() => flattenedFolders.map((folder) => folder.id), [flattenedFolders]);
   const allProjects = useMemo(() => [...rootProjects, ...flattenProjects(folders)], [folders, rootProjects]);
@@ -663,6 +663,19 @@ export function useWorkflowLibraryController(options: {
     event.preventDefault();
     await handleMoveDraggedItem('');
   }, [handleMoveDraggedItem]);
+
+  const handlePanelBodyClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) {
+      return;
+    }
+
+    if (target.closest('.project-row') || target.closest('.active-project-section')) {
+      return;
+    }
+
+    setSelectedProjectPath('');
+  }, []);
 
   const handleRootDragLeave = useCallback(() => {
     setDragState((prev) => ({ ...prev, dragOverRoot: false }));
@@ -1432,6 +1445,16 @@ export function useWorkflowLibraryController(options: {
     ],
   );
 
+  const handleProjectPreviewOpen = useCallback((path: string) => {
+    setSelectedProjectPath(path);
+    onOpenProject(path, { preview: true });
+  }, [onOpenProject]);
+
+  const handleProjectPersistentOpen = useCallback((path: string) => {
+    setSelectedProjectPath(path);
+    onOpenProject(path);
+  }, [onOpenProject]);
+
   return {
     folders,
     rootProjects,
@@ -1491,6 +1514,7 @@ export function useWorkflowLibraryController(options: {
     handleRootDragOver,
     handleRootDragLeave,
     handleRootDrop,
+    handlePanelBodyClick,
     handleUploadProjectFromFolder,
     handleCreateProjectFromContextMenu,
     handleRenameFolderFromContextMenu,
@@ -1525,8 +1549,8 @@ export function useWorkflowLibraryController(options: {
       setSettingsModalProject(null);
       onOpenPublishedVersionPreview(relativePath, versionId);
     },
-    onProjectSelect: setSelectedProjectPath,
-    onProjectOpen: onOpenProject,
+    onProjectPreviewOpen: handleProjectPreviewOpen,
+    onProjectPersistentOpen: handleProjectPersistentOpen,
     onWorkflowPathsMoved: applyWorkflowProjectPathMoves,
     onDeleteProject,
     setProjectRowRef,

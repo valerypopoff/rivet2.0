@@ -12,18 +12,18 @@ const STATUS_LABELS: Record<WorkflowProjectStatus, string> = {
 type ActiveProjectSectionProps = {
   activeProject: WorkflowProjectItem | null;
   isCurrentlyOpen: boolean;
+  hasUnsavedChanges: boolean;
   editorReady: boolean;
   onSave: () => void;
-  onOpen: (path: string) => void;
   onOpenSettings: () => void;
 };
 
 export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
   activeProject,
   isCurrentlyOpen,
+  hasUnsavedChanges,
   editorReady,
   onSave,
-  onOpen,
   onOpenSettings,
 }) => {
   if (!activeProject) {
@@ -41,6 +41,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
   const graphCount = activeProject.stats?.graphCount ?? 0;
   const totalNodeCount = activeProject.stats?.totalNodeCount ?? 0;
   const projectStatsLabel = `${graphCount} ${graphCount === 1 ? 'graph' : 'graphs'}, ${totalNodeCount} ${totalNodeCount === 1 ? 'node' : 'nodes'} total`;
+  const showSaveButton = isCurrentlyOpen && hasUnsavedChanges;
 
   return (
     <div className={`active-project-section ${activeProject.settings.status}`}>
@@ -54,28 +55,6 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
           </div>
           <div className="active-project-stats">{projectStatsLabel}</div>
           <div className="active-project-actions-row">
-            <LoadingButton
-              appearance="primary"
-              className="active-project-save-button button-size-m"
-              isDisabled={!editorReady}
-              onClick={isCurrentlyOpen ? onSave : () => onOpen(activeProject.absolutePath)}
-              title={
-                !editorReady
-                  ? 'Loading editor...'
-                  : isCurrentlyOpen
-                    ? 'Save current project'
-                    : 'Open selected project in editor'
-              }
-              aria-label={
-                !editorReady
-                  ? 'Loading editor'
-                  : isCurrentlyOpen
-                    ? 'Save current project'
-                    : 'Open selected project in editor'
-              }
-            >
-              {isCurrentlyOpen ? 'Save' : 'Edit'}
-            </LoadingButton>
             <Button
               appearance="subtle"
               className="active-project-more-button project-settings-secondary-button button-size-m"
@@ -83,6 +62,18 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
             >
               Settings
             </Button>
+            {showSaveButton ? (
+              <LoadingButton
+                appearance="primary"
+                className="active-project-save-button button-size-m"
+                isDisabled={!editorReady}
+                onClick={onSave}
+                title={editorReady ? 'Save current project' : 'Loading editor...'}
+                aria-label={editorReady ? 'Save current project' : 'Loading editor'}
+              >
+                Save
+              </LoadingButton>
+            ) : null}
           </div>
         </div>
       </div>

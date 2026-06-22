@@ -25,6 +25,7 @@ interface WorkflowLibraryPanelProps {
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   openedProjectPath: string;
+  activeProjectHasUnsavedChanges: boolean;
   editorReady: boolean;
   projectSaveSequence: number;
   collapsed: boolean;
@@ -56,6 +57,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onWorkflowPathsMoved,
   onActiveWorkflowProjectPathChange,
   openedProjectPath,
+  activeProjectHasUnsavedChanges,
   editorReady,
   projectSaveSequence,
   collapsed,
@@ -112,8 +114,9 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     handleRootDragOver,
     handleRootDragLeave,
     handleRootDrop,
-    onProjectSelect,
-    onProjectOpen,
+    handlePanelBodyClick,
+    onProjectPreviewOpen,
+    onProjectPersistentOpen,
     setProjectRowRef,
     setAboutOpen,
     setRuntimeLibsOpen,
@@ -144,8 +147,8 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         expandedFolders={expandedFolders}
         editorReady={editorReady}
         setProjectRowRef={setProjectRowRef}
-        onProjectSelect={onProjectSelect}
-        onProjectOpen={onProjectOpen}
+        onProjectPreviewOpen={onProjectPreviewOpen}
+        onProjectPersistentOpen={onProjectPersistentOpen}
         onProjectContextMenu={handleProjectContextMenu}
         onFolderContextMenu={handleFolderContextMenu}
         onDragStart={handleDragStart}
@@ -193,9 +196,9 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           <ActiveProjectSection
             activeProject={activeProject}
             isCurrentlyOpen={isActiveProjectOpen}
+            hasUnsavedChanges={activeProjectHasUnsavedChanges}
             editorReady={editorReady}
             onSave={onSaveProject}
-            onOpen={onOpenProject}
             onOpenSettings={handleOpenSettings}
           />
         </div>
@@ -205,6 +208,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           onDragOver={handleRootDragOver}
           onDragLeave={handleRootDragLeave}
           onDrop={(event) => void handleRootDrop(event)}
+          onClick={handlePanelBodyClick}
         >
           {!editorReady ? <div className="body-status body-status-top">Loading editor...</div> : null}
           {bodyContent}

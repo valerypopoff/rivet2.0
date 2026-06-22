@@ -391,6 +391,17 @@
   min-width: 72px;
 }
 
+.workflow-library-panel .active-project-more-button.project-settings-secondary-button {
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.workflow-library-panel .active-project-more-button.project-settings-secondary-button:hover:not(:disabled),
+.workflow-library-panel .active-project-more-button.project-settings-secondary-button:focus-visible:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
 .workflow-library-panel .active-project-save-button,
 .workflow-library-panel .active-project-more-button,
 .workflow-library-panel .project-settings-delete-button,

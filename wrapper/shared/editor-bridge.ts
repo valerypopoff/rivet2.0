@@ -8,7 +8,7 @@ export type ProjectCompareSideLabels = {
 };
 
 export type DashboardToEditorCommand =
-  | { type: 'open-project'; path: string; replaceCurrent: boolean; reloadFromDisk?: boolean }
+  | { type: 'open-project'; path: string; replaceCurrent: boolean; preview?: boolean; reloadFromDisk?: boolean }
   | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean }
   | { type: 'open-published-version-preview'; relativePath: string; versionId: string; replaceCurrent: boolean }
   | {
@@ -29,6 +29,7 @@ export type EditorToDashboardEvent =
   | { type: 'project-opened'; path: string }
   | { type: 'project-open-failed'; path: string; error: string }
   | { type: 'active-project-path-changed'; path: string }
+  | { type: 'active-project-unsaved-changes-changed'; path: string; hasUnsavedChanges: boolean }
   | { type: 'open-project-count-changed'; count: number }
   | { type: 'project-compare-failed'; path: string; error: string }
   | { type: 'project-saved'; path: string };
@@ -68,6 +69,7 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
       return (
         typeof value.path === 'string' &&
         typeof value.replaceCurrent === 'boolean' &&
+        (value.preview == null || typeof value.preview === 'boolean') &&
         (value.reloadFromDisk == null || typeof value.reloadFromDisk === 'boolean')
       );
     case 'open-recording':
@@ -113,6 +115,8 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
     case 'active-project-path-changed':
     case 'project-saved':
       return typeof value.path === 'string';
+    case 'active-project-unsaved-changes-changed':
+      return typeof value.path === 'string' && typeof value.hasUnsavedChanges === 'boolean';
     case 'project-compare-failed':
     case 'project-open-failed':
       return typeof value.path === 'string' && typeof value.error === 'string';

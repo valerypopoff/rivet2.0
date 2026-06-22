@@ -18,6 +18,7 @@ export const DashboardPage: FC = () => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [openedProjectPath, setOpenedProjectPath] = useState('');
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
+  const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
   const [editorReady, setEditorReady] = useState(false);
   const [openProjectCount, setOpenProjectCount] = useState(0);
   const [projectSaveSequence, setProjectSaveSequence] = useState(0);
@@ -41,6 +42,7 @@ export const DashboardPage: FC = () => {
       type: 'open-project',
       path,
       replaceCurrent: Boolean(options?.replaceCurrent),
+      preview: options?.preview === true ? true : undefined,
       reloadFromDisk: options?.reloadFromDisk === true ? true : undefined,
     });
   }, [postEditorCommand]);
@@ -95,6 +97,15 @@ export const DashboardPage: FC = () => {
 
   const handleDeleteProject = useCallback((path: string, projectId?: string | null) => {
     setOpenedProjectPath((prev) => (prev === path ? '' : prev));
+    setProjectUnsavedChangesByPath((prev) => {
+      if (!(path in prev)) {
+        return prev;
+      }
+
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
     postEditorCommand({ type: 'delete-workflow-project', path, projectId });
   }, [postEditorCommand]);
 
@@ -105,6 +116,22 @@ export const DashboardPage: FC = () => {
       }
 
       setOpenedProjectPath((prev) => moves.find((move) => move.fromAbsolutePath === prev)?.toAbsolutePath ?? prev);
+      setProjectUnsavedChangesByPath((prev) => {
+        let changed = false;
+        const next = { ...prev };
+
+        for (const move of moves) {
+          if (!(move.fromAbsolutePath in next)) {
+            continue;
+          }
+
+          next[move.toAbsolutePath] = next[move.fromAbsolutePath] ?? false;
+          delete next[move.fromAbsolutePath];
+          changed = true;
+        }
+
+        return changed ? next : prev;
+      });
       postEditorCommand({ type: 'workflow-paths-moved', moves });
     },
     [postEditorCommand],
@@ -119,6 +146,22 @@ export const DashboardPage: FC = () => {
       setOpenedProjectPath(path);
       setActiveWorkflowProjectPath(path);
     },
+    onActiveProjectUnsavedChangesChange: (path, hasUnsavedChanges) => {
+      setProjectUnsavedChangesByPath((prev) => {
+        if (path === '') {
+          return prev;
+        }
+
+        if (prev[path] === hasUnsavedChanges) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          [path]: hasUnsavedChanges,
+        };
+      });
+    },
     onEditorReady: () => {
       setEditorReady(true);
     },
@@ -131,13 +174,23 @@ export const DashboardPage: FC = () => {
       setOpenedProjectPath(path);
       setActiveWorkflowProjectPath(path);
     },
-    onProjectSaved: () => {
+    onProjectSaved: (path) => {
       setProjectSaveSequence((prev) => prev + 1);
+      setProjectUnsavedChangesByPath((prev) => (
+        prev[path] === false
+          ? prev
+          : {
+              ...prev,
+              [path]: false,
+            }
+      ));
     },
   });
 
   const showEditorLoading = !editorReady;
   const visibleSidebarWidth = sidebarCollapsed ? WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH : sidebarWidth;
+  const activeProjectHasUnsavedChanges =
+    activeWorkflowProjectPath !== '' && projectUnsavedChangesByPath[activeWorkflowProjectPath] === true;
 
   return (
     <div
@@ -165,6 +218,7 @@ export const DashboardPage: FC = () => {
           onWorkflowPathsMoved={handleWorkflowPathsMoved}
           onActiveWorkflowProjectPathChange={setActiveWorkflowProjectPath}
           openedProjectPath={openedProjectPath}
+          activeProjectHasUnsavedChanges={activeProjectHasUnsavedChanges}
           editorReady={editorReady}
           projectSaveSequence={projectSaveSequence}
           collapsed={sidebarCollapsed}

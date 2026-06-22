@@ -41,6 +41,7 @@ test('editor bridge accepts valid dashboard commands', () => {
       type: 'open-project',
       path: '/tmp/example.rivet-project',
       replaceCurrent: false,
+      preview: true,
       reloadFromDisk: true,
     }),
     true,
@@ -80,6 +81,15 @@ test('editor bridge accepts valid dashboard commands', () => {
 
 test('editor bridge rejects malformed messages', () => {
   assert.equal(isDashboardToEditorCommand({ type: 'open-project', path: '/tmp/example.rivet-project' }), false);
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'open-project',
+      path: '/tmp/example.rivet-project',
+      replaceCurrent: false,
+      preview: 'yes',
+    }),
+    false,
+  );
   assert.equal(
     isDashboardToEditorCommand({
       type: 'open-project',
@@ -126,6 +136,14 @@ test('editor bridge accepts valid editor events', () => {
     isEditorToDashboardEvent({
       type: 'project-saved',
       path: '/tmp/example.rivet-project',
+    }),
+    true,
+  );
+  assert.equal(
+    isEditorToDashboardEvent({
+      type: 'active-project-unsaved-changes-changed',
+      path: '/tmp/example.rivet-project',
+      hasUnsavedChanges: true,
     }),
     true,
   );

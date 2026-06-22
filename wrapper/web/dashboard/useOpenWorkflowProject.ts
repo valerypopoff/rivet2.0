@@ -28,6 +28,13 @@ type OpenWorkflowProjectOptions = {
   replaceCurrent?: boolean;
   reloadFromDisk?: boolean;
   preferredGraphId?: GraphId;
+  skipReplaceConfirmation?: boolean;
+  previewTab?: boolean;
+};
+
+type OpenWorkflowProjectResult = {
+  opened: boolean;
+  projectId?: ProjectId;
 };
 
 type ProjectSnapshot = Pick<RivetProjectSnapshotInput, 'project' | 'data'>;
@@ -111,16 +118,28 @@ function retainOnlySnapshot(
   return snapshot ? ({ [projectId]: snapshot } as Record<ProjectId, OpenedProjectSnapshot>) : {};
 }
 
+function getProjectTabUiOptions(previewTab: boolean | undefined) {
+  return previewTab === undefined
+    ? undefined
+    : {
+        tabUi: {
+          preview: previewTab,
+        },
+      };
+}
+
 export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
   const store = useStore();
   const ioProvider = useIOProvider();
   const setProjects = useSetAtom(projectsState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
 
-  return async (filePath: string, options?: OpenWorkflowProjectOptions): Promise<boolean> => {
+  return async (filePath: string, options?: OpenWorkflowProjectOptions): Promise<OpenWorkflowProjectResult> => {
     const replaceCurrent = options?.replaceCurrent ?? false;
     const reloadFromDisk = options?.reloadFromDisk ?? false;
     const preferredGraphId = options?.preferredGraphId;
+    const skipReplaceConfirmation = options?.skipReplaceConfirmation ?? false;
+    const tabUiOptions = getProjectTabUiOptions(options?.previewTab);
     const normalizedFilePath = normalizeWorkflowPath(filePath);
     const latestLoadedProject = store.get(loadedProjectState);
     const latestCurrentProject = store.get(projectState);
@@ -136,13 +155,13 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       normalizeWorkflowPath(latestLoadedProject.path) !== normalizedFilePath;
     const isLeavingUnsavedScratchProject = replaceCurrent && !latestLoadedProject.path && activeOpenedProjectIds.length > 0;
 
-    if (isSwitchingProjects || isLeavingUnsavedScratchProject) {
+    if (!skipReplaceConfirmation && (isSwitchingProjects || isLeavingUnsavedScratchProject)) {
       const shouldContinue = window.confirm(
         'Switch projects? Unsaved edits in the current editor may be lost if you have not saved them yet.',
       );
 
       if (!shouldContinue) {
-        return false;
+        return { opened: false };
       }
     }
 
@@ -188,18 +207,24 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
 
       const openedGraph = resolveOpenedGraph(snapshot.project, preferredGraphId) ?? alreadyOpenByPath.openedGraph;
       const opened = replaceCurrent
-        ? await workspace.replaceCurrent({
-            ...snapshot,
-            path: filePath,
-            openedGraph,
-            testSuites,
-          })
-        : await workspace.openProjectSnapshot({
-            ...snapshot,
-            path: filePath,
-            openedGraph,
-            testSuites,
-          });
+        ? await workspace.replaceCurrent(
+            {
+              ...snapshot,
+              path: filePath,
+              openedGraph,
+              testSuites,
+            },
+            tabUiOptions,
+          )
+        : await workspace.openProjectSnapshot(
+            {
+              ...snapshot,
+              path: filePath,
+              openedGraph,
+              testSuites,
+            },
+            tabUiOptions,
+          );
 
       if (!opened) {
         throw new Error(`Failed to activate "${alreadyOpenByPath.title}".`);
@@ -212,7 +237,10 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
         });
       }
 
-      return true;
+      return {
+        opened: true,
+        projectId: alreadyOpenByPath.projectId,
+      };
     }
 
     if (!canLoadProjectByPath(ioProvider)) {
@@ -227,7 +255,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       toast.error(
         `"${conflictingProject.title} [${conflictingProject.fsPath?.split('/').pop() ?? 'no path'}]" shares the same ID (${project.metadata.id}) and is already open. Please close that project first.`,
       );
-      return false;
+      return { opened: false };
     }
 
     const snapshot = splitProjectSnapshot(project);
@@ -241,8 +269,8 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     } satisfies RivetProjectSnapshotInput;
 
     const opened = replaceCurrent
-      ? await workspace.replaceCurrent(projectInput)
-      : await workspace.openProjectSnapshot(projectInput);
+      ? await workspace.replaceCurrent(projectInput, tabUiOptions)
+      : await workspace.openProjectSnapshot(projectInput, tabUiOptions);
 
     if (!opened) {
       throw new Error(`Failed to activate "${resolveHostedProjectTitle(project, filePath)}".`);
@@ -260,6 +288,9 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       setOpenedProjectSnapshots((previousSnapshots) => retainOnlySnapshot(previousSnapshots, projectId));
     }
 
-    return true;
+    return {
+      opened: true,
+      projectId,
+    };
   };
 }
