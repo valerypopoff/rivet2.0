@@ -27,6 +27,7 @@ import {
   projectState,
   projectUnsavedChangesState,
 } from '../state/savedGraphs';
+import { projectTabUiState } from '../state/projectTabUi.js';
 import clsx from 'clsx';
 import { useLoadProject } from '../hooks/useLoadProject';
 import { useSyncCurrentStateIntoOpenedProjects } from '../hooks/useSyncCurrentStateIntoOpenedProjects';
@@ -496,7 +497,8 @@ export const styles = css`
       background-color: rgba(255, 255, 255, 0.12);
     }
 
-    &.unsaved {
+    &.unsaved,
+    &.preview {
       font-style: italic;
     }
 
@@ -1132,6 +1134,7 @@ export const ProjectTab: FC<{
   onSelectProject?: () => void;
 }> = ({ projectId, dragListeners, onCloseProject, onSelectProject, projectTabsSelected }) => {
   const openedProjects = useAtomValue(openedProjectsState);
+  const projectTabUi = useAtomValue(projectTabUiState);
   const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
   const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
   const currentProject = useAtomValue(projectState);
@@ -1142,6 +1145,7 @@ export const ProjectTab: FC<{
   const hasUnsavedChanges = hasProjectUnsavedChanges(projectUnsavedChanges, projectDataUnsavedChanges, projectId);
   const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\/]/).pop();
   const active = projectTabsSelected && currentProject.metadata.id === projectId;
+  const preview = projectTabUi[projectId]?.preview === true;
   const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;
 
   const handleMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
@@ -1157,7 +1161,7 @@ export const ProjectTab: FC<{
 
   return (
     <div
-      className={clsx('project', { active, unsaved, 'has-unsaved-changes': hasUnsavedChanges })}
+      className={clsx('project', { active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges })}
       onMouseDown={handleMouseDown}
     >
       <div className="project-name" {...dragListeners}>

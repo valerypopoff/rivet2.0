@@ -98,3 +98,44 @@ test('workspace host exposes a narrow project metadata update API for hosted wra
   assert.match(hostSource, /RivetProjectMetadataPatch/);
   assert.match(hostSource, /RivetProjectMetadataUpdateOptions/);
 });
+
+test('workspace host exposes transient project tab UI state for hosted wrappers', () => {
+  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
+  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
+  const projectTabUiSource = readFileSync(join(hooksDir, '..', 'state', 'projectTabUi.ts'), 'utf8');
+
+  assert.match(projectTabUiSource, /export type ProjectTabUiState = \{/);
+  assert.match(projectTabUiSource, /preview\?: boolean;/);
+  assert.match(projectTabUiSource, /export const projectTabUiState = atom<Record<ProjectId, ProjectTabUiState \| undefined>>\(\{\}\);/);
+  assert.doesNotMatch(projectTabUiSource, /atomWithStorage/);
+  assert.match(workspaceHostSource, /export type RivetProjectTabUiState = ProjectTabUiState;/);
+  assert.match(workspaceHostSource, /export type RivetProjectOpenOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/);
+  assert.match(workspaceHostSource, /export type RivetProjectReplaceOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/);
+  assert.match(
+    workspaceHostSource,
+    /openProjectSnapshot\(snapshot: RivetProjectSnapshotInput, options\?: RivetProjectOpenOptions\): Promise<boolean>;/,
+  );
+  assert.match(
+    workspaceHostSource,
+    /replaceCurrent\(snapshot: RivetProjectSnapshotInput, options\?: RivetProjectReplaceOptions\): Promise<boolean>;/,
+  );
+  assert.match(
+    workspaceHostSource,
+    /setProjectTabUiState\(projectId: ProjectId, state\?: RivetProjectTabUiState\): Promise<boolean>;/,
+  );
+  assert.match(workspaceHostSource, /if \(!projects\.openedProjects\[projectId\]\) \{/);
+  assert.match(workspaceHostSource, /const shouldPreseedTabUiState = options\.tabUi !== undefined;/);
+  assert.match(
+    workspaceHostSource,
+    /if \(shouldPreseedTabUiState\) \{[\s\S]*updateProjectTabUiState\(states, projectId, options\.tabUi\)/,
+  );
+  assert.match(
+    workspaceHostSource,
+    /if \(shouldPreseedTabUiState\) \{[\s\S]*updateProjectTabUiState\(states, projectId, previousTabUiState\)/,
+  );
+  assert.match(workspaceHostSource, /removeProjectTabUiState\(states, projectId\)/);
+  assert.match(workspaceHostSource, /removeProjectTabUiState\(states, currentProjectId\)/);
+  assert.match(hostSource, /RivetProjectOpenOptions/);
+  assert.match(hostSource, /RivetProjectReplaceOptions/);
+  assert.match(hostSource, /RivetProjectTabUiState/);
+});

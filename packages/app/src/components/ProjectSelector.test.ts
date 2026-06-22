@@ -15,6 +15,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   const workspaceTransitionsSource = readFileSync(join(srcDir, '..', 'hooks', 'useWorkspaceTransitions.ts'), 'utf8');
   const setStaticDataSource = readFileSync(join(srcDir, '..', 'hooks', 'useSetStaticData.ts'), 'utf8');
   const savedGraphsSource = readFileSync(join(srcDir, '..', 'state', 'savedGraphs.ts'), 'utf8');
+  const projectTabUiSource = readFileSync(join(srcDir, '..', 'state', 'projectTabUi.ts'), 'utf8');
   const projectUnsavedChangesSource = readFileSync(join(srcDir, '..', 'utils', 'projectUnsavedChanges.ts'), 'utf8');
   const colorsCss = readFileSync(join(srcDir, '..', 'colors.css'), 'utf8');
 
@@ -224,6 +225,9 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.doesNotMatch(projectSelectorTsx, /&\.active \{[\s\S]*background-color: var\(--primary\);/);
   assert.ok(projectSelectorTsx.includes("const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();"));
   assert.match(projectSelectorTsx, /const active = projectTabsSelected && currentProject\.metadata\.id === projectId;/);
+  assert.match(projectSelectorTsx, /const projectTabUi = useAtomValue\(projectTabUiState\);/);
+  assert.match(projectSelectorTsx, /const preview = projectTabUi\[projectId\]\?\.preview === true;/);
+  assert.match(projectSelectorTsx, /&\.unsaved,[\s\S]*&\.preview \{[\s\S]*font-style: italic;/);
   assert.ok(
     projectSelectorTsx.includes(
       "const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
@@ -231,8 +235,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   );
   assert.match(
     projectSelectorTsx,
-    /className={clsx\('project', \{ active, unsaved, 'has-unsaved-changes': hasUnsavedChanges \}\)}/,
+    /className={clsx\('project', \{ active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges \}\)}/,
   );
+  assert.match(projectTabUiSource, /export const projectTabUiState = atom<Record<ProjectId, ProjectTabUiState \| undefined>>\(\{\}\);/);
+  assert.doesNotMatch(projectTabUiSource, /atomWithStorage/);
   assert.match(
     projectSelectorTsx,
     /const hasUnsavedChanges = hasProjectUnsavedChanges\(projectUnsavedChanges, projectDataUnsavedChanges, projectId\);/,

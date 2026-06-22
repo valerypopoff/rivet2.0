@@ -170,7 +170,10 @@ updates the metadata for already-open projects without wrapper-specific Jotai
 access. Use `updateProjectMetadata(...)` for wrapper-owned external renames or
 description changes; it updates the tab title/path plus active or inactive
 project metadata and can treat the change as externally persisted without
-clearing pre-existing unsaved graph edits. The handle also exposes
+clearing pre-existing unsaved graph edits. Use `setProjectTabUiState(...)`, or
+the `tabUi` option on `openProjectSnapshot(...)` / `replaceCurrent(...)`, for
+transient wrapper-owned tab presentation state such as preview tabs; this state
+is in-memory only and is cleared when the project tab closes. The handle also exposes
 `markCurrentProjectClean(...)` and `markProjectClean(...)` so wrapper-owned save
 flows can mark an already-open project clean after a successful external save
 without importing app-internal dirty-state atoms.
