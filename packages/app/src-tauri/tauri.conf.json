@@ -1,13 +1,13 @@
 {
   "build": {
-    "beforeBuildCommand": "yarn prepare:tauri && yarn build",
-    "beforeDevCommand": "yarn prepare:tauri && yarn start",
+    "beforeBuildCommand": "node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri && node ../../.yarn/releases/yarn-4.6.0.cjs build",
+    "beforeDevCommand": "node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri && node ../../.yarn/releases/yarn-4.6.0.cjs start",
     "devPath": "http://localhost:5173",
     "distDir": "../dist"
   },
   "package": {
     "productName": "Rivet 2",
-    "version": "2.6.4"
+    "version": "2.6.5"
   },
   "tauri": {
     "allowlist": {
