@@ -19,11 +19,12 @@ type UseEditorBridgeEventsOptions = {
   handleSaveProject: () => void;
   iframeRef: RefObject<HTMLIFrameElement | null>;
   onActiveWorkflowProjectPathChange: (path: string) => void;
+  onActiveProjectUnsavedChangesChange: (path: string, hasUnsavedChanges: boolean) => void;
   onEditorReady: () => void;
   onOpenProjectCountChange: (count: number) => void;
   onProjectOpenFailed: (error: string) => void;
   onProjectOpened: (path: string) => void;
-  onProjectSaved: () => void;
+  onProjectSaved: (path: string) => void;
 };
 
 export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
@@ -34,6 +35,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     handleSaveProject,
     iframeRef,
     onActiveWorkflowProjectPathChange,
+    onActiveProjectUnsavedChangesChange,
     onEditorReady,
     onOpenProjectCountChange,
     onProjectOpenFailed,
@@ -145,11 +147,14 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         case 'active-project-path-changed':
           onActiveWorkflowProjectPathChange(event.data.path);
           break;
+        case 'active-project-unsaved-changes-changed':
+          onActiveProjectUnsavedChangesChange(event.data.path, event.data.hasUnsavedChanges);
+          break;
         case 'open-project-count-changed':
           onOpenProjectCountChange(event.data.count);
           break;
         case 'project-saved':
-          onProjectSaved();
+          onProjectSaved(event.data.path);
           break;
         case 'project-open-failed':
           onProjectOpenFailed(event.data.error);
@@ -165,6 +170,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
   }, [
     focusEditorFrame,
     iframeRef,
+    onActiveProjectUnsavedChangesChange,
     onActiveWorkflowProjectPathChange,
     onEditorReady,
     onOpenProjectCountChange,

@@ -1,4 +1,5 @@
 .dashboard-page {
+  position: relative;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -20,6 +21,10 @@
     width 180ms ease;
 }
 
+.dashboard-page .dashboard-sidebar.dashboard-sidebar-resizing {
+  transition: none;
+}
+
 .dashboard-page .dashboard-sidebar.dashboard-sidebar-collapsed {
   border-right: 0;
   box-shadow: inset -1px 0 0 var(--grey);
@@ -28,15 +33,34 @@
 .dashboard-page .dashboard-sidebar-resizer {
   position: absolute;
   top: 0;
-  right: -3px;
-  width: 6px;
+  left: calc(var(--workflow-dashboard-sidebar-width) - 2px);
+  width: 16px;
   height: 100%;
   cursor: col-resize;
-  z-index: 2;
+  touch-action: none;
+  user-select: none;
+  z-index: 6500;
 }
 
-.dashboard-page .dashboard-sidebar-resizer:hover {
-  background: rgba(255, 255, 255, 0.08);
+.dashboard-page .dashboard-sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1px;
+  width: 2px;
+  background: transparent;
+}
+
+.dashboard-page .dashboard-sidebar-resizer:hover::after,
+.dashboard-page.dashboard-page-resizing .dashboard-sidebar-resizer::after {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.dashboard-page.dashboard-page-resizing,
+.dashboard-page.dashboard-page-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
 }
 
 .dashboard-page .dashboard-editor-frame {
@@ -134,13 +158,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-.dashboard-page .dashboard-resize-overlay {
-  position: fixed;
-  inset: 0;
-  cursor: col-resize;
-  z-index: 6000;
 }
 
 .Toastify__toast-container {

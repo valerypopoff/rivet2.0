@@ -20,8 +20,8 @@ type WorkflowFolderTreeProps = {
   expandedFolders: Record<string, boolean>;
   editorReady: boolean;
   setProjectRowRef: (path: string, node: HTMLElement | null) => void;
-  onProjectSelect: (path: string) => void;
-  onProjectOpen: (path: string) => void;
+  onProjectPreviewOpen: (path: string) => void;
+  onProjectPersistentOpen: (path: string) => void;
   onProjectContextMenu: (project: WorkflowProjectItem, event: React.MouseEvent<HTMLElement>) => void;
   onFolderContextMenu: (folder: WorkflowFolderItem, event: React.MouseEvent<HTMLDivElement>) => void;
   onDragStart: (item: DraggedWorkflowItem) => (event: React.DragEvent<HTMLElement>) => void;
@@ -52,8 +52,8 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
   expandedFolders,
   editorReady,
   setProjectRowRef,
-  onProjectSelect,
-  onProjectOpen,
+  onProjectPreviewOpen,
+  onProjectPersistentOpen,
   onProjectContextMenu,
   onFolderContextMenu,
   onDragStart,
@@ -90,8 +90,8 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
       setProjectRowRef={setProjectRowRef}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      onSelect={onProjectSelect}
-      onOpen={onProjectOpen}
+      onPreviewOpen={onProjectPreviewOpen}
+      onPersistentOpen={onProjectPersistentOpen}
       onContextMenu={onProjectContextMenu}
       onKeyDown={onProjectKeyDown}
       onRenameSubmit={onProjectRenameSubmit}

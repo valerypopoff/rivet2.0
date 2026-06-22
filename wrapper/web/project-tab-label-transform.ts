@@ -20,6 +20,19 @@ const upstreamProjectTabLabelVariants = [
       hostedProjectTabDisplayNameLine,
     ],
   },
+  {
+    lines: [
+      "const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();",
+      'const active = projectTabsSelected && currentProject.metadata.id === projectId;',
+      'const preview = projectTabUi[projectId]?.preview === true;',
+      "const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
+    ],
+    replacementLines: [
+      'const active = projectTabsSelected && currentProject.metadata.id === projectId;',
+      'const preview = projectTabUi[projectId]?.preview === true;',
+      hostedProjectTabDisplayNameLine,
+    ],
+  },
 ] as const;
 
 const upstreamProjectTabLabelReplacements = upstreamProjectTabLabelVariants.map(({ lines, replacementLines }) => ({

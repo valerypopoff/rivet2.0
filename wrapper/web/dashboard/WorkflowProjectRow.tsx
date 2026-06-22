@@ -13,8 +13,8 @@ type WorkflowProjectRowProps = {
   setProjectRowRef: (path: string, node: HTMLElement | null) => void;
   onDragStart: (item: DraggedWorkflowItem) => (event: React.DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
-  onSelect: (path: string) => void;
-  onOpen: (path: string) => void;
+  onPreviewOpen: (path: string) => void;
+  onPersistentOpen: (path: string) => void;
   onContextMenu: (project: WorkflowProjectItem, event: React.MouseEvent<HTMLElement>) => void;
   onKeyDown: (project: WorkflowProjectItem) => (event: React.KeyboardEvent<HTMLElement>) => void;
   onRenameSubmit: (project: WorkflowProjectItem, name: string) => void | Promise<void>;
@@ -32,8 +32,8 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
   setProjectRowRef,
   onDragStart,
   onDragEnd,
-  onSelect,
-  onOpen,
+  onPreviewOpen,
+  onPersistentOpen,
   onContextMenu,
   onKeyDown,
   onRenameSubmit,
@@ -89,8 +89,8 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
         parentRelativePath: getParentRelativePath(project.relativePath),
       })}
       onDragEnd={onDragEnd}
-      onClick={() => onSelect(project.absolutePath)}
-      onDoubleClick={() => onOpen(project.absolutePath)}
+      onClick={() => onPreviewOpen(project.absolutePath)}
+      onDoubleClick={() => onPersistentOpen(project.absolutePath)}
       onContextMenu={(event) => onContextMenu(project, event)}
       onKeyDown={onKeyDown(project)}
       title={editorReady ? project.fileName : 'Loading editor...'}

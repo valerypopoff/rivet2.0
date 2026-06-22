@@ -59,6 +59,10 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorBridgeTypes, /workflow-paths-moved/);
   assert.match(editorMessageBridge, /workspaceRef\.current\.closeProject\(deletedProjectId\)/);
   assert.match(editorMessageBridge, /workspaceRef\.current\.moveProjectPaths/);
+  assert.match(editorMessageBridge, /resolveHostedProjectMetadataUpdatesForPathMoves\(projectsRef\.current, moves\)/);
+  assert.match(editorMessageBridge, /workspaceRef\.current\.updateProjectMetadata/);
+  assert.match(editorMessageBridge, /persistedExternally: true/);
+  assert.match(editorMessageBridge, /changeSource: 'external-wrapper-rename'/);
   assert.match(editorMessageBridge, /deleteHostedProjectContextState\(projectId\)/);
   assert.match(editorMessageBridge, /await clearHostedDatasetsForProject\(projectId\)/);
   assert.match(editorMessageBridge, /refresh-open-project-from-disk/);
@@ -75,9 +79,15 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(openWorkflowProject, /retainOnlyOpenedProject/);
   assert.doesNotMatch(openWorkflowProject, /await loadProject|useRivetWorkspaceHost|useLoadProject/);
 
-  assert.match(titleAfterSaveReconciler, /projectsState/);
-  assert.doesNotMatch(titleAfterSaveReconciler, /projectState|openedProjectSnapshotsState|savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
-  assert.doesNotMatch(editorMessageBridge, /savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
+  assert.match(titleAfterSaveReconciler, /workspaceHost\.updateProjectMetadata/);
+  assert.match(titleAfterSaveReconciler, /persistedExternally: true/);
+  assert.doesNotMatch(titleAfterSaveReconciler, /projectsState|projectState|openedProjectSnapshotsState|savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
+  assert.match(editorMessageBridge, /projectUnsavedChangesState/);
+  assert.match(editorMessageBridge, /projectDataUnsavedChangesState/);
+  assert.match(editorMessageBridge, /graphRunningState/);
+  assert.doesNotMatch(editorMessageBridge, /savedProjectContentDigestsState/);
+  assert.doesNotMatch(editorMessageBridge, /useSetAtom\(\s*(projectUnsavedChangesState|projectDataUnsavedChangesState)/);
+  assert.doesNotMatch(editorMessageBridge, /markProjectDirtyFlag|markProjectClean/);
 
   assert.match(loadProjectOverride, /openedProjectSnapshotsState/);
   assert.match(loadProjectOverride, /useWorkspaceTransitions/);
@@ -119,6 +129,9 @@ test('hosted executor, save, find, and clipboard shims stay scoped to wrapper-ow
 
   assert.match(hostedEditorApp, /executor=\{\{ internalExecutorUrl: RIVET_EXECUTOR_WS_URL \}\}/);
   assert.doesNotMatch(viteAliases, /useExecutorSession|useRemoteDebugger|useGraphExecutor|useRemoteExecutor|useSaveProject|useMenuCommands/);
+  assert.match(editorMessageBridge, /useExecutorSessionRuntime\(\)/);
+  assert.match(editorMessageBridge, /executorSessionRevisionState/);
+  assert.match(editorMessageBridge, /executorTargetType !== 'external-debugger'/);
   assert.match(editorMessageBridge, /const \{ saveProject \} = useSaveProject\(\)/);
   assert.doesNotMatch(editorMessageBridge, /rivet-project-saved/);
   assert.match(editorMessageBridge, /event\.defaultPrevented \|\| !isSaveShortcutEvent\(event\)/);

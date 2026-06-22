@@ -32,10 +32,13 @@ test('workflow project rename and move preserve wrapper sidecars', async () => {
 
   const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'Renamed');
   const renamedSidecars = workflowFs.getProjectSidecarPaths(renamed.project.absolutePath);
+  const renamedContents = await fs.readFile(renamed.project.absolutePath, 'utf8');
+  const [renamedProjectYaml] = rivetNode.loadProjectAndAttachedDataFromString(renamedContents);
 
   assert.equal(await workflowFs.pathExists(renamedSidecars.dataset), true);
   assert.equal(await workflowFs.pathExists(renamedSidecars.settings), true);
   assert.equal(await workflowFs.pathExists(renamedSidecars.stats), true);
+  assert.equal(renamedProjectYaml.metadata.title, 'Renamed');
   assert.deepEqual(renamed.movedProjectPaths, [
     {
       fromAbsolutePath: created.absolutePath,

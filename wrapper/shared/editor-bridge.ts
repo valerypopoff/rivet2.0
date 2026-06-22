@@ -2,11 +2,21 @@ import type { WorkflowProjectPathMove } from './workflow-types';
 
 export type EditorShortcutModifier = 'ctrl' | 'meta';
 
+export type ProjectCompareSideLabels = {
+  referenceLabel?: string;
+  currentLabel?: string;
+};
+
 export type DashboardToEditorCommand =
-  | { type: 'open-project'; path: string; replaceCurrent: boolean; reloadFromDisk?: boolean }
+  | { type: 'open-project'; path: string; replaceCurrent: boolean; preview?: boolean; reloadFromDisk?: boolean }
   | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean }
   | { type: 'open-published-version-preview'; relativePath: string; versionId: string; replaceCurrent: boolean }
-  | { type: 'compare-open-project-with'; path: string; referencePath?: string }
+  | {
+      type: 'compare-open-project-with';
+      path: string;
+      referencePath?: string;
+      labels?: ProjectCompareSideLabels;
+    }
   | { type: 'refresh-open-project-from-disk'; path: string }
   | { type: 'save-project' }
   | { type: 'trigger-editor-find-shortcut'; modifier: EditorShortcutModifier }
@@ -19,6 +29,7 @@ export type EditorToDashboardEvent =
   | { type: 'project-opened'; path: string }
   | { type: 'project-open-failed'; path: string; error: string }
   | { type: 'active-project-path-changed'; path: string }
+  | { type: 'active-project-unsaved-changes-changed'; path: string; hasUnsavedChanges: boolean }
   | { type: 'open-project-count-changed'; count: number }
   | { type: 'project-compare-failed'; path: string; error: string }
   | { type: 'project-saved'; path: string };
@@ -43,6 +54,11 @@ const isWorkflowMove = (value: unknown): value is WorkflowProjectPathMove =>
 const isEditorShortcutModifier = (value: unknown): value is EditorShortcutModifier =>
   value === 'ctrl' || value === 'meta';
 
+const isProjectCompareSideLabels = (value: unknown): value is ProjectCompareSideLabels =>
+  isRecord(value) &&
+  (value.referenceLabel == null || typeof value.referenceLabel === 'string') &&
+  (value.currentLabel == null || typeof value.currentLabel === 'string');
+
 export function isDashboardToEditorCommand(value: unknown): value is DashboardToEditorCommand {
   if (!isRecord(value) || typeof value.type !== 'string') {
     return false;
@@ -53,6 +69,7 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
       return (
         typeof value.path === 'string' &&
         typeof value.replaceCurrent === 'boolean' &&
+        (value.preview == null || typeof value.preview === 'boolean') &&
         (value.reloadFromDisk == null || typeof value.reloadFromDisk === 'boolean')
       );
     case 'open-recording':
@@ -64,7 +81,11 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         typeof value.replaceCurrent === 'boolean'
       );
     case 'compare-open-project-with':
-      return typeof value.path === 'string' && (value.referencePath == null || typeof value.referencePath === 'string');
+      return (
+        typeof value.path === 'string' &&
+        (value.referencePath == null || typeof value.referencePath === 'string') &&
+        (value.labels == null || isProjectCompareSideLabels(value.labels))
+      );
     case 'refresh-open-project-from-disk':
       return typeof value.path === 'string';
     case 'save-project':
@@ -94,6 +115,8 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
     case 'active-project-path-changed':
     case 'project-saved':
       return typeof value.path === 'string';
+    case 'active-project-unsaved-changes-changed':
+      return typeof value.path === 'string' && typeof value.hasUnsavedChanges === 'boolean';
     case 'project-compare-failed':
     case 'project-open-failed':
       return typeof value.path === 'string' && typeof value.error === 'string';

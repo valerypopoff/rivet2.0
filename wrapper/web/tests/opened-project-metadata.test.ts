@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Project } from '@valerypopoff/rivet2-core';
 import {
+  resolveHostedProjectMetadataUpdatesForPathMoves,
   resolveHostedProjectTitleFromPath,
   resolveHostedProjectTitle,
   withHostedProjectTitle,
@@ -18,8 +19,8 @@ function makeProject(title: string | undefined): Project {
   };
 }
 
-test('resolveHostedProjectTitle prefers a non-empty project metadata title', () => {
-  assert.equal(resolveHostedProjectTitle(makeProject('Billing Flow'), '/workflows/fallback.rivet-project'), 'Billing Flow');
+test('resolveHostedProjectTitle prefers a normal hosted project path title', () => {
+  assert.equal(resolveHostedProjectTitle(makeProject('Billing Flow'), '/workflows/Renamed Flow.rivet-project'), 'Renamed Flow');
 });
 
 test('resolveHostedProjectTitle falls back to the project filename when metadata title is missing', () => {
@@ -27,6 +28,14 @@ test('resolveHostedProjectTitle falls back to the project filename when metadata
   assert.equal(resolveHostedProjectTitle(makeProject('   '), 'D:\\Programming\\workflows\\Windows Demo.rivet-project'), 'Windows Demo');
   assert.equal(resolveHostedProjectTitle(makeProject('undefined'), '/workflows/bad-title.rivet-project'), 'bad-title');
   assert.equal(resolveHostedProjectTitle(makeProject('null'), '/workflows/null-title.rivet-project'), 'null-title');
+});
+
+test('resolveHostedProjectTitle preserves metadata titles for virtual project paths', () => {
+  assert.equal(resolveHostedProjectTitle(makeProject('Recorded Run'), 'recording://run-1/replay.rivet-project'), 'Recorded Run');
+  assert.equal(
+    resolveHostedProjectTitle(makeProject('Published Snapshot'), 'published-version-preview://Project/version/replay.rivet-project'),
+    'Published Snapshot',
+  );
 });
 
 test('resolveHostedProjectTitleFromPath resolves the file-tree project title without consulting metadata', () => {
@@ -38,10 +47,113 @@ test('resolveHostedProjectTitleFromPath resolves the file-tree project title wit
   assert.equal(resolveHostedProjectTitleFromPath(null), null);
 });
 
-test('withHostedProjectTitle normalizes missing project metadata titles without changing titled projects', () => {
+test('withHostedProjectTitle normalizes project metadata titles from normal hosted paths', () => {
   const titledProject = makeProject('Already Named');
   const fallbackProject = makeProject(undefined);
 
-  assert.equal(withHostedProjectTitle(titledProject, '/workflows/ignored.rivet-project'), titledProject);
+  assert.equal(withHostedProjectTitle(titledProject, '/workflows/renamed.rivet-project').metadata.title, 'renamed');
   assert.equal(withHostedProjectTitle(fallbackProject, '/workflows/fallback.rivet-project').metadata.title, 'fallback');
+});
+
+test('withHostedProjectTitle preserves metadata titles for virtual project paths', () => {
+  const titledProject = makeProject('Recorded Run');
+
+  assert.equal(withHostedProjectTitle(titledProject, 'recording://run-1/replay.rivet-project'), titledProject);
+});
+
+test('resolveHostedProjectMetadataUpdatesForPathMoves finds open project renames', () => {
+  const current = {
+    openedProjects: {
+      'project-1': {
+        title: 'Old Name',
+        fsPath: '/managed/workflows/Old Name.rivet-project',
+      },
+      'project-2': {
+        title: 'Other',
+        fsPath: '/managed/workflows/Other.rivet-project',
+      },
+    },
+    openedProjectsSortedIds: ['project-1', 'project-2'],
+  };
+
+  const result = resolveHostedProjectMetadataUpdatesForPathMoves(current, [
+    {
+      fromAbsolutePath: '/managed/workflows/Old Name.rivet-project',
+      toAbsolutePath: '/managed/workflows/New Name.rivet-project',
+    },
+  ]);
+
+  assert.deepEqual(result, [
+    {
+      projectId: 'project-1',
+      path: '/managed/workflows/New Name.rivet-project',
+      title: 'New Name',
+    },
+  ]);
+});
+
+test('resolveHostedProjectMetadataUpdatesForPathMoves also handles already-retargeted paths', () => {
+  const current = {
+    openedProjects: {
+      'project-1': {
+        title: 'Old Name',
+        fsPath: '/managed/workflows/New Name.rivet-project',
+      },
+    },
+  };
+
+  const result = resolveHostedProjectMetadataUpdatesForPathMoves(current, [
+    {
+      fromAbsolutePath: '/managed/workflows/Old Name.rivet-project',
+      toAbsolutePath: '/managed/workflows/New Name.rivet-project',
+    },
+  ]);
+
+  assert.deepEqual(result, [
+    {
+      projectId: 'project-1',
+      path: '/managed/workflows/New Name.rivet-project',
+      title: 'New Name',
+    },
+  ]);
+});
+
+test('resolveHostedProjectMetadataUpdatesForPathMoves ignores folder moves with the same project file name', () => {
+  const current = {
+    openedProjects: {
+      'project-1': {
+        title: 'Current Name',
+        fsPath: '/managed/workflows/Folder/Current Name.rivet-project',
+      },
+    },
+  };
+
+  const result = resolveHostedProjectMetadataUpdatesForPathMoves(current, [
+    {
+      fromAbsolutePath: '/managed/workflows/Folder/Current Name.rivet-project',
+      toAbsolutePath: '/managed/workflows/Renamed Folder/Current Name.rivet-project',
+    },
+  ]);
+
+  assert.deepEqual(result, []);
+});
+
+test('resolveHostedProjectMetadataUpdatesForPathMoves ignores virtual project paths', () => {
+  const current = {
+    openedProjects: {
+      'project-1': {
+        title: 'Recorded Run',
+        fsPath: 'recording://run-1/replay.rivet-project',
+      },
+    },
+  };
+
+  const result = resolveHostedProjectMetadataUpdatesForPathMoves(current, [
+    {
+      fromAbsolutePath: 'recording://run-1/replay.rivet-project',
+      toAbsolutePath: 'recording://run-2/replay.rivet-project',
+    },
+  ]);
+
+  assert.deepEqual(result, []);
 });

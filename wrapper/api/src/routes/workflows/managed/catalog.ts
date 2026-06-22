@@ -29,6 +29,7 @@ import {
   parseManagedWorkflowProjectVirtualPath,
   resolveManagedWorkflowRelativeReference,
 } from '../virtual-paths.js';
+import { normalizeHostedProjectTitle } from '../hosted-project-contents.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type {
   FolderMoveRow,
@@ -64,6 +65,9 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     getRevision: options.context.queries.getRevision,
     readRevisionProjectContents: options.context.revisions.readRevisionProjectContents,
     readRevisionContents: options.context.revisions.readRevisionContents,
+    createRevision: options.context.revisions.createRevision,
+    insertRevision: options.context.revisions.insertRevision,
+    scheduleRevisionBlobCleanup: options.context.revisions.scheduleRevisionBlobCleanup,
     assertFolderExists: options.context.queries.assertFolderExists,
     saveHostedProject: options.saveHostedProject,
     mapWorkflowRowToProjectItem: options.context.mappers.mapWorkflowRowToProjectItem,
@@ -195,6 +199,34 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       await deps.assertFolderExists(client, folderRelativePath);
 
       const projectName = path.posix.basename(targetRelativePath, WORKFLOW_PROJECT_EXTENSION);
+      const sourceProjectName = path.posix.basename(sourceRelativePath, WORKFLOW_PROJECT_EXTENSION);
+      let currentDraftRevisionId = workflow.current_draft_revision_id;
+
+      if (sourceProjectName !== projectName) {
+        const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);
+        if (!currentDraftRevision) {
+          throw createHttpError(500, 'Current workflow revision could not be loaded');
+        }
+
+        const currentDraftContents = await deps.readRevisionContents(currentDraftRevision);
+        const normalizedDraftContents = normalizeHostedProjectTitle(
+          currentDraftContents.contents,
+          projectName,
+          'Could not rename project: invalid project file',
+        );
+
+        if (normalizedDraftContents.contents !== currentDraftContents.contents) {
+          const renamedRevision = await deps.createRevision(
+            workflow.workflow_id,
+            normalizedDraftContents.contents,
+            currentDraftContents.datasetsContents,
+          );
+          deps.scheduleRevisionBlobCleanup(hooks, renamedRevision);
+          await deps.insertRevision(client, renamedRevision);
+          currentDraftRevisionId = renamedRevision.revision_id;
+        }
+      }
+
       await client.query(
         `
           UPDATE workflows
@@ -202,10 +234,18 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
               file_name = $3,
               relative_path = $4,
               folder_relative_path = $5,
+              current_draft_revision_id = $6,
               updated_at = NOW()
           WHERE workflow_id = $1
         `,
-        [workflow.workflow_id, projectName, `${projectName}${WORKFLOW_PROJECT_EXTENSION}`, targetRelativePath, folderRelativePath],
+        [
+          workflow.workflow_id,
+          projectName,
+          `${projectName}${WORKFLOW_PROJECT_EXTENSION}`,
+          targetRelativePath,
+          folderRelativePath,
+          currentDraftRevisionId,
+        ],
       );
 
       const movedWorkflow = await deps.getWorkflowByRelativePath(client, targetRelativePath, { forUpdate: true });

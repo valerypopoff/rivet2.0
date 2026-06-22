@@ -24,6 +24,8 @@ type WorkflowProjectContextMenuProps = {
   onDuplicate: () => void;
   canCompare: boolean;
   onCompare: () => void;
+  canCompareToPublishedVersion: boolean;
+  onCompareToPublishedVersion: () => void;
   canDelete: boolean;
   onDelete: () => void;
 };
@@ -56,6 +58,8 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   onDuplicate,
   canCompare,
   onCompare,
+  canCompareToPublishedVersion,
+  onCompareToPublishedVersion,
   canDelete,
   onDelete,
 }) => {
@@ -115,6 +119,16 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
           onClick={onCompare}
         >
           <span>Compare opened project with this one</span>
+        </button>
+      ) : null}
+      {canCompareToPublishedVersion ? (
+        <button
+          type="button"
+          className="workflow-project-context-menu-item"
+          role="menuitem"
+          onClick={onCompareToPublishedVersion}
+        >
+          <span>Compare to the published version</span>
         </button>
       ) : null}
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
