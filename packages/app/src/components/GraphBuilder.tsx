@@ -35,6 +35,7 @@ import { warmCodeEditor } from './LazyComponents.js';
 import {
   activeProjectComparisonState,
   projectCompareReferenceState,
+  resolveProjectCompareSideLabels,
   selectedGraphProjectComparisonState,
 } from '../state/projectComparison.js';
 import {
@@ -192,6 +193,7 @@ export const GraphBuilder: FC = () => {
     () => selectedNodeIds.map((nodeId) => nodesById[nodeId]).filter(isNotNull),
     [selectedNodeIds, nodesById],
   );
+  const activeComparisonLabels = resolveProjectCompareSideLabels(activeComparison?.labels);
 
   const overlay = useAtomValue(overlayOpenState);
   const isReadOnly = useAtomValue(isReadOnlyGraphState);
@@ -222,7 +224,7 @@ export const GraphBuilder: FC = () => {
           <div className="project-compare-notice">
             <div className="project-compare-notice-text">
               <div>
-                Compare mode against{' '}
+                Compare mode: {activeComparisonLabels.currentLabel} against {activeComparisonLabels.referenceLabel}{' '}
                 <strong>
                   {getProjectComparisonReferenceFileName(
                     activeComparison.referencePath,
@@ -232,11 +234,15 @@ export const GraphBuilder: FC = () => {
               </div>
               <div>
                 - Overall difference:{' '}
-                <strong>{formatProjectComparisonCounts(getOverallProjectComparisonCounts(activeComparison.comparison))}</strong>
+                <strong>
+                  {formatProjectComparisonCounts(getOverallProjectComparisonCounts(activeComparison.comparison))}
+                </strong>
               </div>
               <div>
                 - Current opened graph difference:{' '}
-                <strong>{formatProjectComparisonCurrentGraphCounts(getGraphProjectComparisonCounts(selectedGraphComparison))}</strong>
+                <strong>
+                  {formatProjectComparisonCurrentGraphCounts(getGraphProjectComparisonCounts(selectedGraphComparison))}
+                </strong>
               </div>
             </div>
             <Button spacing="compact" onClick={() => setProjectCompareReference(undefined)}>

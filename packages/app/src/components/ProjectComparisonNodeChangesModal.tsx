@@ -3,14 +3,18 @@ import Button from '@atlaskit/button';
 import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
 import { css } from '@emotion/react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import {
-  getProjectNodeFieldComparisons,
-  type ProjectNodeFieldComparison,
-} from '@valerypopoff/rivet2-core';
+import { getProjectNodeFieldComparisons, type ProjectNodeFieldComparison } from '@valerypopoff/rivet2-core';
 import { DIFF_DELETE, DIFF_EQUAL, DIFF_INSERT, diffStringsRaw } from 'jest-diff';
 import * as yaml from 'yaml';
-import { activeProjectComparisonState, viewingProjectComparisonNodeState } from '../state/projectComparison.js';
+import {
+  activeProjectComparisonState,
+  resolveProjectCompareSideLabels,
+  viewingProjectComparisonNodeState,
+  type ResolvedProjectCompareSideLabels,
+} from '../state/projectComparison.js';
 import { AppModalHeader } from './AppModalHeader.js';
+
+const PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH = 'max(30vw, min(968px, calc(100vw - 48px)))';
 
 const styles = css`
   display: flex;
@@ -61,7 +65,6 @@ const styles = css`
     color: var(--foreground-muted);
     font-size: var(--ui-font-size-xs);
     font-weight: 700;
-    text-transform: uppercase;
   }
 
   .project-compare-diff-scroll-area {
@@ -130,9 +133,7 @@ const styles = css`
 export const ProjectComparisonNodeChangesModalRenderer: FC = () => {
   const viewingNode = useAtomValue(viewingProjectComparisonNodeState);
 
-  return (
-    <ModalTransition>{viewingNode == null ? null : <ProjectComparisonNodeChangesModal />}</ModalTransition>
-  );
+  return <ModalTransition>{viewingNode == null ? null : <ProjectComparisonNodeChangesModal />}</ModalTransition>;
 };
 
 export const ProjectComparisonNodeChangesModal: FC = () => {
@@ -154,21 +155,23 @@ export const ProjectComparisonNodeChangesModal: FC = () => {
   const fieldComparisons = getProjectNodeFieldComparisons(nodeComparison);
   const beforeTitle = nodeComparison.before?.title ?? nodeComparison.before?.type ?? viewingNode.nodeId;
   const afterTitle = nodeComparison.after?.title ?? nodeComparison.after?.type ?? viewingNode.nodeId;
+  const labels = resolveProjectCompareSideLabels(activeComparison.labels);
 
   return (
-    <Modal width="xlarge" autoFocus={false} onClose={close}>
+    <Modal width={PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH} autoFocus={false} onClose={close}>
       <AppModalHeader title="Node config changes" onClose={close} />
       <ModalBody>
         <div css={styles}>
           <div className="project-compare-node-meta">
-            Comparing node <strong>{String(beforeTitle)}</strong> to <strong>{String(afterTitle)}</strong>.
+            Comparing {labels.referenceLabel} node <strong>{String(beforeTitle)}</strong> to {labels.currentLabel} node{' '}
+            <strong>{String(afterTitle)}</strong>.
           </div>
           {fieldComparisons.length === 0 ? (
             <div className="project-compare-node-meta">No node config attribute changes were found.</div>
           ) : (
             <div className="project-compare-field-list">
               {fieldComparisons.map((fieldComparison) => (
-                <NodeFieldComparisonRow key={fieldComparison.field} fieldComparison={fieldComparison} />
+                <NodeFieldComparisonRow key={fieldComparison.field} fieldComparison={fieldComparison} labels={labels} />
               ))}
             </div>
           )}
@@ -183,16 +186,19 @@ export const ProjectComparisonNodeChangesModal: FC = () => {
   );
 };
 
-const NodeFieldComparisonRow: FC<{ fieldComparison: ProjectNodeFieldComparison }> = ({ fieldComparison }) => (
+const NodeFieldComparisonRow: FC<{
+  fieldComparison: ProjectNodeFieldComparison;
+  labels: ResolvedProjectCompareSideLabels;
+}> = ({ fieldComparison, labels }) => (
   <section className="project-compare-field">
     <div className="project-compare-field-header">{getNodeFieldLabel(fieldComparison)}</div>
     <div className="project-compare-field-values">
       <div className="project-compare-field-value">
-        <div className="project-compare-field-value-label">Previous</div>
+        <div className="project-compare-field-value-label">{labels.referenceLabel}</div>
         <NodeFieldDiffValue side="before" before={fieldComparison.before} after={fieldComparison.after} />
       </div>
       <div className="project-compare-field-value">
-        <div className="project-compare-field-value-label">Current</div>
+        <div className="project-compare-field-value-label">{labels.currentLabel}</div>
         <NodeFieldDiffValue side="after" before={fieldComparison.before} after={fieldComparison.after} />
       </div>
     </div>
@@ -216,10 +222,7 @@ const NodeFieldDiffValue: FC<{
         ) : (
           model.parts.map((part, index) =>
             part.changed ? (
-              <mark
-                key={index}
-                className={`project-compare-value-diff project-compare-value-diff-${side}`}
-              >
+              <mark key={index} className={`project-compare-value-diff project-compare-value-diff-${side}`}>
                 {part.text}
               </mark>
             ) : (
@@ -410,7 +413,9 @@ function getLineIndexAtOffset(lineStarts: readonly number[], offset: number): nu
 }
 
 function mergeTextDiffLineRanges(ranges: TextDiffLineRange[]): TextDiffLineRange[] {
-  const sortedRanges = [...ranges].sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
+  const sortedRanges = [...ranges].sort(
+    (left, right) => left.startLine - right.startLine || left.endLine - right.endLine,
+  );
   const mergedRanges: TextDiffLineRange[] = [];
 
   for (const range of sortedRanges) {

@@ -17,7 +17,7 @@ paths and should not be used as the primary target for new provider refactors.
   owns the runtime capability matrix: provider configuration, credentials,
   headers, tools, response format, generation parameters, and retry options.
 - [`chatV2Pipeline.ts`](../packages/core/src/model/chat-v2/chatV2Pipeline.ts)
-  owns the Vercel AI SDK request/stream/retry/result pipeline.
+  owns the Vercel AI SDK request/stream-or-generate/retry/result pipeline.
 - [`aiSdkBridge.ts`](../packages/core/src/model/chat-v2/aiSdkBridge.ts) is the
   only place that should directly adapt to Vercel AI SDK call signatures.
 - [`chatV2Outputs.ts`](../packages/core/src/model/chat-v2/chatV2Outputs.ts)
@@ -71,7 +71,7 @@ focused owner-level test before extracting that behavior.
 | Credential lookup, custom-provider base URL/header handling, generation parameters, and omission of unset SDK fields       | `llmChatV2NodeRuntime.ts`, `chatV2RuntimeOptions.ts`                              | `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                               | integration; add focused runtime-options tests before moving |
 | Custom-provider JSON-schema `response_format` override and provider option conflict handling                               | `chatV2ResponseFormat.ts`, `chatV2RuntimeOptions.ts`                              | `packages/core/test/model/chat-v2/chatV2ResponseFormat.test.ts`, `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                              | focused                                                      |
 | Tool use versus structured output mutual exclusion                                                                         | `chatV2FeatureCompatibility.ts`, `llmChatV2NodeRuntime.ts`, app editor validation | `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                               | integration                                                  |
-| SDK request/stream consumption and parsed-output fallback                                                                  | `aiSdkBridge.ts`, `chatV2Pipeline.ts`, `chatV2Outputs.ts`                         | `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`, `packages/core/test/model/chat-v2/chatV2Outputs.test.ts`                                                                  | focused                                                      |
+| SDK request streaming/non-streaming transport, stream consumption, and parsed-output fallback                              | `aiSdkBridge.ts`, `chatV2Pipeline.ts`, `chatV2Outputs.ts`                         | `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`, `packages/core/test/model/chat-v2/chatV2Outputs.test.ts`                                                                  | focused                                                      |
 | Structured-output dedupe, schema validation, and response typing                                                           | `chatV2ResponseFormat.ts`, `chatV2Pipeline.ts`, `chatV2Outputs.ts`                | `packages/core/test/model/chat-v2/chatV2ResponseFormat.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`, `packages/core/test/model/chat-v2/chatV2Outputs.test.ts` | focused                                                      |
 | Message normalization and provider-neutral message conversion                                                              | `messageConverter.ts`, `chatV2Pipeline.ts`                                        | `packages/core/test/model/chat-v2/messageConverter.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                               | focused                                                      |
 | Tool conversion, `Tool Calls` output label / `function-calls` output id, output shape, and auto-continuation               | `toolConverter.ts`, `toolContinuation.ts`, `chatV2Pipeline.ts`                    | `packages/core/test/model/chat-v2/toolContinuation.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                               | focused                                                      |
@@ -86,3 +86,19 @@ For LLM Chat V2 refactors, update this contract and add or extend focused
 `packages/core/test/model/chat-v2/*` coverage before moving provider or SDK
 normalization code. Legacy chat files may be touched only to preserve
 compatibility with existing legacy graphs.
+
+Non-streaming structured-output handling has one important tool-use edge case:
+the Vercel AI SDK only completes `output` parsing on final `stop` rounds. A
+round that finishes with `tool-calls` can still be a successful Rivet result
+because its useful payload is the tool call list, not a completed schema object.
+`aiSdkBridge.ts` must therefore treat missing SDK `output` on non-`stop` rounds
+as absent parsed output and keep the tool calls instead of surfacing
+`AI_NoOutputGeneratedError`. Completed `stop` rounds must still preserve parsed
+SDK output so JSON and JSON-schema responses keep their typed `Response` value.
+If the SDK throws `AI_NoObjectGeneratedError` while parsing a completed
+non-streaming structured response, the bridge must recover the raw text and let
+the normal Rivet fallback parse/string-output path handle it, matching the
+streaming path instead of failing the node solely because the SDK parser rejected
+the final text. The non-streaming bridge also collects SDK step tool calls before
+the final output parser runs so recovered parse failures keep any tool-call
+metadata that was already emitted by earlier steps.

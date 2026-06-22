@@ -151,8 +151,14 @@ export {
 export { useRivetWorkspaceHost } from './hooks/useRivetWorkspaceHost.js';
 export type {
   MoveProjectPathsInput,
+  RivetProjectCompareOptions,
   RivetProjectCleanBaselineSnapshotInput,
+  RivetProjectOpenOptions,
+  RivetProjectMetadataPatch,
+  RivetProjectMetadataUpdateOptions,
+  RivetProjectReplaceOptions,
   RivetProjectSnapshotInput,
+  RivetProjectTabUiState,
   RivetWorkspaceHost,
 } from './hooks/useRivetWorkspaceHost.js';
 export {
@@ -179,5 +185,6 @@ export {
   type ProjectNodeFieldComparison,
   type ProjectNodeComparison,
 } from '@valerypopoff/rivet2-core';
+export type { ProjectCompareSideLabels } from './state/projectComparison.js';
 export { configureHybridStorageBackend, IndexedDBStorage, type AsyncStorageBackend } from './state/storage.js';
 export type { IOProvider, PathBasedIOProvider } from './io/IOProvider.js';

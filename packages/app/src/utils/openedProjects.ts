@@ -1,5 +1,6 @@
 import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
 import type { OpenedProjectsInfo } from '../state/savedGraphs.js';
+import type { ProjectMetadataPatch } from './projectMetadataUpdates.js';
 import type { ProjectExecutorMode } from './projectExecutorMode.js';
 import { sanitizeProjectExecutorMode } from './projectExecutorMode.js';
 
@@ -134,4 +135,35 @@ export function moveOpenedProjectPaths(current: OpenedProjectsInfo, moves: Proje
         openedProjects,
       }
     : current;
+}
+
+export function updateOpenedProjectMetadata(
+  current: OpenedProjectsInfo,
+  projectId: ProjectId,
+  metadataPatch: ProjectMetadataPatch | null | undefined,
+  options: { fsPath?: string | null } = {},
+): OpenedProjectsInfo {
+  const existingProject = current.openedProjects[projectId];
+  if (!existingProject) {
+    return current;
+  }
+
+  const nextTitle = typeof metadataPatch?.title === 'string' ? metadataPatch.title : existingProject.title;
+  const nextFsPath = options.fsPath !== undefined ? options.fsPath ?? null : existingProject.fsPath;
+
+  if (existingProject.title === nextTitle && existingProject.fsPath === nextFsPath) {
+    return current;
+  }
+
+  return {
+    ...current,
+    openedProjects: {
+      ...current.openedProjects,
+      [projectId]: {
+        ...existingProject,
+        title: nextTitle,
+        fsPath: nextFsPath,
+      },
+    },
+  };
 }

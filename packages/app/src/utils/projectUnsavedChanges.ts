@@ -19,6 +19,19 @@ export function getProjectContentDigest(content: ProjectContentForDigest): strin
   );
 }
 
+export function hasProjectContentChangedFromCleanDigest(
+  currentDigests: Record<ProjectId, string | undefined>,
+  content: ProjectContentForDigest | undefined,
+): boolean {
+  const projectId = content?.project.metadata.id;
+  if (!projectId || !content) {
+    return false;
+  }
+
+  const savedDigest = currentDigests[projectId];
+  return savedDigest != null && getProjectContentDigest(content) !== savedDigest;
+}
+
 export function buildCurrentProjectContentSnapshot(params: {
   project: Omit<Project, 'data'>;
   graph: NodeGraph;

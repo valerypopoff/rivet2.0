@@ -63,7 +63,7 @@ Runs:
 
 1. `yarn workspace @valerypopoff/rivet-app run dev`
 
-That app dev script performs a Windows-only cleanup of stale copied `app-executor.exe` sidecars, then launches `tauri dev`. The Tauri dev command itself runs `yarn prepare:tauri && yarn start` through `beforeDevCommand`, so the Node sidecar is rebuilt before the desktop app starts. The app-executor bundle resolves `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` directly to their local source entrypoints, so `yarn dev` picks up current execution-engine changes without requiring a separate core/node package build first.
+That app dev script performs a Windows-only cleanup of stale copied `app-executor.exe` sidecars, then launches `tauri dev`. The Tauri dev command itself runs the pinned root Yarn 4 binary through `beforeDevCommand` to execute `prepare:tauri` and `start`, so the Node sidecar is rebuilt before the desktop app starts without depending on a global/corepack Yarn version. The app-executor bundle resolves `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` directly to their local source entrypoints, so `yarn dev` picks up current execution-engine changes without requiring a separate core/node package build first.
 
 ### `yarn build`
 
@@ -290,7 +290,7 @@ Current dev/build detail:
 
 - `packages/app/scripts/dev.mjs` does a Windows-only cleanup pass for stale `src-tauri/target/*/app-executor.exe` processes before launching `tauri dev`, because Tauri's sidecar-copy step fails if a previous dev session left that copied sidecar binary locked
 - `packages/app/scripts/prepare-tauri.mjs` syncs desktop version metadata from `packages/app/package.json` before rebuilding the app executor sidecar
-- `packages/app/src-tauri/tauri.conf.json` now runs `yarn prepare:tauri` before both `beforeDevCommand` and `beforeBuildCommand`, so desktop Node executor runs cannot drift onto an older bundled sidecar when app/core code has changed
+- `packages/app/src-tauri/tauri.conf.json` runs `node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri` before both dev and build commands, then uses that same pinned Yarn file for `start`/`build`. Keep those Tauri commands on the explicit root Yarn path instead of bare `yarn`: Tauri runs them from `packages/app`, and the explicit path avoids workspace package-manager drift and missing `.pnp.cjs` loader failures while still rebuilding the sidecar when app/core code has changed.
 - `packages/app/src-tauri/vendor/` now carries the small vendored Tauri v1 plugin crates (`tauri-plugin-persisted-scope` and `tauri-plugin-window-state`) so Cargo no longer has to parse the upstream `plugins-workspace` template manifest during metadata/check/dev runs
 - Vite bundle visualization is opt-in for normal app builds. Set `RIVET_BUNDLE_ANALYZE=true`
   before running `yarn workspace @valerypopoff/rivet-app run build` when a Rollup visualizer
@@ -507,9 +507,10 @@ Per matrix entry, the workflow:
 
 `yarn build:hosted-web-deps` builds only the core and Trivet package outputs
 that the app package typecheck consumes. The Tauri `beforeBuildCommand` still
-runs `yarn prepare:tauri && yarn build` from `packages/app`, so the final app
-frontend and app-executor sidecar are built once by the Tauri packaging path
-instead of being built once by the root `yarn build` and again by Tauri.
+runs `prepare:tauri` and the app `build` from `packages/app` through the pinned
+root Yarn file, so the final app frontend and app-executor sidecar are built
+once by the Tauri packaging path instead of being built once by the root
+`yarn build` and again by Tauri.
 
 ### Tauri release details
 
@@ -795,8 +796,8 @@ Tauri config lives in [`packages/app/src-tauri/tauri.conf.json`](../packages/app
 
 ### Verified current details
 
-- `beforeDevCommand`: `yarn prepare:tauri && yarn start`
-- `beforeBuildCommand`: `yarn prepare:tauri && yarn build`
+- `beforeDevCommand`: `node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri && node ../../.yarn/releases/yarn-4.6.0.cjs start`
+- `beforeBuildCommand`: `node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri && node ../../.yarn/releases/yarn-4.6.0.cjs build`
 - `devPath`: `http://localhost:5173`
 - `distDir`: `../dist`
 - product name/window title: `Rivet 2`, so installed desktop builds are distinguishable from the older Rivet app

@@ -1,10 +1,11 @@
-import type { streamText, LanguageModelUsage, ModelMessage, TextStreamPart, ToolSet } from 'ai';
+import type { generateText, streamText, LanguageModelUsage, ModelMessage, TextStreamPart, ToolSet } from 'ai';
 import type { ChatMessage, GptFunction } from '../DataValue.js';
 import type { Outputs } from '../GraphProcessor.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { AssistantMessageFunctionCallMode, StreamedFunctionCall } from '../chat/streamChatResponse.js';
 
 type StreamTextArgs = Parameters<typeof streamText>[0];
+type GenerateTextArgs = Parameters<typeof generateText>[0];
 type MaybePromiseLike<T> = T | PromiseLike<T>;
 
 export type ChatV2Provider = 'openai' | 'anthropic' | 'google' | 'custom';
@@ -41,6 +42,25 @@ export type ChatV2StreamHandle = {
 
 export type ChatV2StreamExecutor = (args: StreamTextArgs) => ChatV2StreamHandle | Promise<ChatV2StreamHandle>;
 
+export type ChatV2GenerateHandle = {
+  text: string;
+  output?: unknown;
+  toolCalls?: Array<{
+    toolCallId: string;
+    toolName: string;
+    input: unknown;
+  }>;
+  finishReason?: MaybePromiseLike<string | undefined> | undefined;
+  reasoningText?: MaybePromiseLike<string | undefined> | undefined;
+  reasoning?: MaybePromiseLike<Array<{ text: string }> | undefined> | undefined;
+  providerMetadata?: MaybePromiseLike<ChatV2ProviderMetadata | undefined> | undefined;
+  requestStatus?: MaybePromiseLike<number | undefined> | undefined;
+  totalUsage?: MaybePromiseLike<LanguageModelUsage | undefined> | undefined;
+  usage?: MaybePromiseLike<LanguageModelUsage | undefined> | undefined;
+};
+
+export type ChatV2GenerateExecutor = (args: GenerateTextArgs) => ChatV2GenerateHandle | Promise<ChatV2GenerateHandle>;
+
 export type StreamChatV2Options = {
   model: ChatV2Model;
   messages: ChatV2MessageList;
@@ -59,6 +79,7 @@ export type StreamChatV2Options = {
   toolChoice?: ChatV2ToolChoice | undefined;
   abortSignal?: AbortSignal | undefined;
   executeStream?: ChatV2StreamExecutor | undefined;
+  executeGenerate?: ChatV2GenerateExecutor | undefined;
   onPartialOutput?: ((partial: { text: string; functionCalls: StreamedFunctionCall[] }) => void) | undefined;
 };
 
@@ -105,6 +126,7 @@ export type RunChatV2PipelineOptions = {
   retryOnNon200CooldownMs?: number | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'>;
   executeStream?: ChatV2StreamExecutor | undefined;
+  executeGenerate?: ChatV2GenerateExecutor | undefined;
 };
 
 export type ChatV2PipelineResult = {

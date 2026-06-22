@@ -15,11 +15,43 @@ export type ProjectCompareReference = {
   projectId: ProjectId;
   referenceProject: Project;
   referencePath?: string;
+  labels?: ProjectCompareSideLabels;
 };
 
 export type ActiveProjectComparison = ProjectCompareReference & {
   comparison: ProjectComparison;
 };
+
+export type ProjectCompareSideLabels = {
+  referenceLabel?: string;
+  currentLabel?: string;
+};
+
+export type ResolvedProjectCompareSideLabels = {
+  referenceLabel: string;
+  currentLabel: string;
+};
+
+const DEFAULT_PROJECT_COMPARE_SIDE_LABELS: ResolvedProjectCompareSideLabels = {
+  referenceLabel: 'Previous',
+  currentLabel: 'Current',
+};
+
+function normalizeProjectCompareSideLabel(label: string | undefined): string | undefined {
+  const trimmedLabel = label?.trim();
+  return trimmedLabel && trimmedLabel.length > 0 ? trimmedLabel : undefined;
+}
+
+export function resolveProjectCompareSideLabels(
+  labels: ProjectCompareSideLabels | undefined,
+): ResolvedProjectCompareSideLabels {
+  return {
+    referenceLabel:
+      normalizeProjectCompareSideLabel(labels?.referenceLabel) ?? DEFAULT_PROJECT_COMPARE_SIDE_LABELS.referenceLabel,
+    currentLabel:
+      normalizeProjectCompareSideLabel(labels?.currentLabel) ?? DEFAULT_PROJECT_COMPARE_SIDE_LABELS.currentLabel,
+  };
+}
 
 export const projectCompareReferenceState = atom<ProjectCompareReference | undefined>(undefined);
 
