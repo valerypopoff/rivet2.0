@@ -194,6 +194,7 @@ function main() {
     'setup',
     'setup:k8s-tools',
     'setup:rivet',
+    'clean',
     'verify:repo-structure',
     'verify:test-style',
     'verify:kubernetes',
@@ -210,6 +211,19 @@ function main() {
     0,
     `Root package.json is missing required repo/tooling scripts: ${missingScripts.join(', ')}`,
   );
+
+  const cleanDockerScript = fs.readFileSync(path.join(rootDir, 'scripts', 'clean-docker.mjs'), 'utf8');
+  for (const forbiddenCleanPattern of [
+    { pattern: /docker\s+volume\s+prune/, label: 'docker volume prune' },
+    { pattern: /--volumes\b/, label: '--volumes' },
+    { pattern: /docker\s+system\s+prune/, label: 'docker system prune' },
+  ]) {
+    assert.equal(
+      forbiddenCleanPattern.pattern.test(cleanDockerScript),
+      false,
+      `npm run clean must stay Docker-volume-safe and must not use ${forbiddenCleanPattern.label}.`,
+    );
+  }
 
   const gitignore = fs.readFileSync(path.join(rootDir, '.gitignore'), 'utf8');
   for (const requiredPattern of ['.tools/', 'wrapper/**/node_modules/']) {
