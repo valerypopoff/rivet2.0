@@ -626,7 +626,7 @@ For hosted editor production-image regressions:
 
 1. remember that `npm run prod` and `npm run prod:prebuilt` use pulled images, `npm run prod:restart` keeps already-local images, and `npm run prod:custom` uses your current workspace and `rivet/` folder
 2. if dev works but prod does not, diff the behavior against clean upstream `rivet` and move any hosted-only patch into tracked wrapper code before trusting the local result
-3. for clipboard regressions specifically, check the tracked hosted overrides for `useCopyNodesHotkeys`, `useContextMenu`, and the canvas focus handoff in `EditorMessageBridge.tsx`
+3. for clipboard or graph-tree context-menu regressions specifically, check the tracked hosted overrides for `useCopyNodesHotkeys`, `useContextMenu`, and the canvas focus handoff in `EditorMessageBridge.tsx`; the context-menu override must keep upstream's virtual pointer anchor plus `setFloatingMenu` return and should not depend on removed graph-list positioning classes such as `graph-item-context-menu-pos` or `graph-list-context-menu-pos`
 
 For slow hosted node settings panels:
 

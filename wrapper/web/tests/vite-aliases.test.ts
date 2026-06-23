@@ -9,6 +9,7 @@ import { replaceHostedProjectTabLabelExpression } from '../project-tab-label-tra
 const overrideDir = resolve('/repo/wrapper/web/overrides');
 const updateCheckScript = readFileSync(new URL('../../../scripts/update-check.sh', import.meta.url), 'utf8');
 const settingsOverride = readFileSync(new URL('../overrides/state/settings.ts', import.meta.url), 'utf8');
+const contextMenuOverride = readFileSync(new URL('../overrides/hooks/useContextMenu.ts', import.meta.url), 'utf8');
 
 function replacementFor(source: string): string | null {
   const alias = createModuleOverrideAliases(overrideDir).find((candidate) => candidate.find.test(source));
@@ -72,6 +73,20 @@ test('settings override delegates upstream settings and keeps hosted-only export
   assert.match(settingsOverride, /export\s+\*\s+from\s+['"][^'"]*\/state\/settings\.js['"]/);
   assert.deepEqual([...overrideExports].sort(), ['debuggerDefaultUrlState', 'updateModalOpenState']);
   assert.match(settingsOverride, /RIVET_REMOTE_DEBUGGER_DEFAULT_WS/);
+});
+
+test('context menu override keeps upstream virtual anchor contract and hosted focus cleanup', () => {
+  const floatingHookIndex = contextMenuOverride.indexOf('const { refs, floatingStyles, update } = useFloating');
+  const virtualReferenceIndex = contextMenuOverride.indexOf('refs.setReference(createContextMenuVirtualElement');
+
+  assert.ok(floatingHookIndex >= 0, 'context menu override should create floating refs before using them');
+  assert.ok(virtualReferenceIndex > floatingHookIndex, 'context menu override should not read refs before useFloating runs');
+  assert.match(contextMenuOverride, /createContextMenuVirtualElement/);
+  assert.match(contextMenuOverride, /refs\.setReference\(createContextMenuVirtualElement\(event\.clientX, event\.clientY\)\)/);
+  assert.match(contextMenuOverride, /const setFloatingMenu = useMergeRefs\(\[refs\.setFloating, contextMenuRef\]\);/);
+  assert.match(contextMenuOverride, /setFloatingMenu,/);
+  assert.match(contextMenuOverride, /blurContextMenuFocus\(\);/);
+  assert.doesNotMatch(contextMenuOverride, /refs\.setReference\s*=/);
 });
 
 test('hosted project tab label transform handles legacy upstream labels', () => {
