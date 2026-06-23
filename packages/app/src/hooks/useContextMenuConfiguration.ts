@@ -15,6 +15,7 @@ import { useContextMenuCommands } from './useContextMenuCommands.js';
 import { clipboardState } from '../state/clipboard';
 import { useAtomValue } from 'jotai';
 import { SubgraphLinkIcon } from '../components/visualNode/SubgraphLinkIcon.js';
+import type { VariadicPortReorderKind } from '../domain/graphEditing/variadicPortReorder.js';
 
 export type ContextMenuConfig = {
   contexts: ContextMenuContextConfig;
@@ -63,6 +64,8 @@ type NodeContextMenuData = {
   canRunFromEditor: boolean;
   canRunFromHere: boolean;
   canRearrangeSubgraphPorts: boolean;
+  canRearrangeVariadicPorts: boolean;
+  variadicPortRearrangeKind?: VariadicPortReorderKind;
   canFreeze: boolean;
   canUnfreeze: boolean;
   freezeNodeTargets: NodeFreezeTarget[];
@@ -104,6 +107,7 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
     typeof data.canRunFromEditor !== 'boolean' ||
     typeof data.canRunFromHere !== 'boolean' ||
     typeof data.canRearrangeSubgraphPorts !== 'boolean' ||
+    typeof data.canRearrangeVariadicPorts !== 'boolean' ||
     typeof data.canFreeze !== 'boolean' ||
     typeof data.canUnfreeze !== 'boolean' ||
     typeof data.freezeMenuTargetCount !== 'number' ||
@@ -118,6 +122,11 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
     canRunFromEditor: data.canRunFromEditor,
     canRunFromHere: data.canRunFromHere,
     canRearrangeSubgraphPorts: data.canRearrangeSubgraphPorts,
+    canRearrangeVariadicPorts: data.canRearrangeVariadicPorts,
+    variadicPortRearrangeKind:
+      data.variadicPortRearrangeKind === 'input-only' || data.variadicPortRearrangeKind === 'input-output-pair'
+        ? data.variadicPortRearrangeKind
+        : undefined,
     canFreeze: data.canFreeze,
     canUnfreeze: data.canUnfreeze,
     freezeNodeTargets,
@@ -179,6 +188,16 @@ const isSubgraphNodeContext = (context: unknown) => getNodeContextMenuData(conte
 
 const canRearrangeSubgraphPorts = (context: unknown) =>
   getNodeContextMenuData(context)?.canRearrangeSubgraphPorts === true;
+
+const canRearrangeVariadicInputPorts = (context: unknown) => {
+  const data = getNodeContextMenuData(context);
+  return data?.canRearrangeVariadicPorts === true && data.variadicPortRearrangeKind === 'input-only';
+};
+
+const canRearrangeVariadicMirrorPorts = (context: unknown) => {
+  const data = getNodeContextMenuData(context);
+  return data?.canRearrangeVariadicPorts === true && data.variadicPortRearrangeKind === 'input-output-pair';
+};
 
 export function useContextMenuConfiguration() {
   const addMenuConfig = useContextMenuAddNodeConfiguration();
@@ -265,6 +284,18 @@ export function useContextMenuConfiguration() {
                 label: 'Rearrange inputs/outputs',
                 icon: RearrangePortsIcon,
                 conditional: canRearrangeSubgraphPorts,
+              },
+              {
+                id: 'node-rearrange-variadic-inputs',
+                label: 'Rearrange inputs',
+                icon: RearrangePortsIcon,
+                conditional: canRearrangeVariadicInputPorts,
+              },
+              {
+                id: 'node-rearrange-variadic-inputs-outputs',
+                label: 'Rearrange inputs/outputs',
+                icon: RearrangePortsIcon,
+                conditional: canRearrangeVariadicMirrorPorts,
               },
               {
                 id: 'nodes-factor-into-subgraph',

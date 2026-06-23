@@ -7,6 +7,7 @@ import {
 } from '../../hooks/remoteExecutorHelpers.js';
 import type { GraphRunRecord, GraphRunSelection, RunDataByNodeId } from '../../state/dataFlow.js';
 import { canFreezeNodeOutputs, canNodeTypeBeFrozen } from '../../utils/frozenNodeOutputs.js';
+import { canRearrangeVariadicNodePorts } from '../../domain/graphEditing/variadicPortReorder.js';
 
 type ProjectNodeRegistry = Parameters<typeof getEditorRunFromPlan>[3];
 const NODE_CONTEXT_MENU_TYPE_PREFIX = 'node-';
@@ -106,6 +107,11 @@ export function getNodeCanvasContextMenuContext({
           .filter((scopedTarget) => Boolean(frozenOutputsByNode?.[scopedTarget.nodeId]?.length))
           .map((scopedTarget) => scopedTarget.nodeId)
       : [];
+  const selectedGraphConnections = selectedGraphId ? project.graphs[selectedGraphId]?.connections ?? [] : [];
+  const variadicPortRearrangeKind = canRearrangeVariadicNodePorts({
+    connections: selectedGraphConnections,
+    node: nodesById[target.nodeId],
+  });
 
   return {
     type: 'node',
@@ -123,6 +129,8 @@ export function getNodeCanvasContextMenuContext({
         selectedGraphId,
       }),
       canRearrangeSubgraphPorts: canRearrangeNodeSubgraphPorts(nodesById[target.nodeId], project),
+      canRearrangeVariadicPorts: variadicPortRearrangeKind != null,
+      variadicPortRearrangeKind,
       canFreeze: freezeNodeTargets.length > 0,
       canUnfreeze: unfreezeNodeIds.length > 0,
       freezeNodeTargets,

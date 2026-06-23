@@ -101,7 +101,7 @@ import {
   getCanvasSelectedInteractionNodeIds,
 } from './nodeCanvas/nodeCanvasInteractionModel.js';
 import { getNodeCanvasContextMenuContext } from './nodeCanvas/nodeCanvasContextMenuModel.js';
-import { subGraphPortRearrangeTargetState, uiFontSizeState } from '../state/ui.js';
+import { subGraphPortRearrangeTargetState, uiFontSizeState, variadicPortRearrangeTargetState } from '../state/ui.js';
 import { getMinimumNodeWidthForPortLabels } from '../utils/nodePortLabelWidth.js';
 import { getUiFontScale } from '../utils/uiFontSize.js';
 import { blurFocusedGraphFilterInput } from './graphList/graphFilterFocus.js';
@@ -118,6 +118,29 @@ type ActiveResizeGroup = {
   sourceNodeId: NodeId;
   snapshots: ResizeNodeSnapshot[];
 };
+
+type NodeScopedUiTarget = {
+  graphId: string;
+  nodeId: NodeId;
+  projectId: string;
+};
+
+function shouldClearNodeScopedUiTarget(options: {
+  currentGraphId: string | undefined;
+  currentProjectId: string;
+  nodes: readonly ChartNode[];
+  target: NodeScopedUiTarget | undefined;
+}): boolean {
+  if (!options.target) {
+    return false;
+  }
+
+  return (
+    options.target.projectId !== options.currentProjectId ||
+    options.target.graphId !== options.currentGraphId ||
+    !options.nodes.some((node) => node.id === options.target!.nodeId)
+  );
+}
 
 function parseFiniteStyleNumber(value: string | undefined, fallback: number): number {
   if (value == null) {
@@ -174,6 +197,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const [selectedNodeIds, setSelectedNodeIds] = useAtom(selectedNodesState);
   const [hoveringNode, setHoveringNode] = useAtom(hoveringNodeState);
   const [subGraphPortRearrangeTarget, setSubGraphPortRearrangeTarget] = useAtom(subGraphPortRearrangeTargetState);
+  const [variadicPortRearrangeTarget, setVariadicPortRearrangeTarget] = useAtom(variadicPortRearrangeTargetState);
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0, canvasStartX: 0, canvasStartY: 0 });
   const [contextMenuDisabled, setContextMenuDisabled] = useState(true);
@@ -272,18 +296,28 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   }, [_connections.length, connections, onConnectionsChanged]);
 
   useEffect(() => {
-    if (!subGraphPortRearrangeTarget) {
-      return;
-    }
+    const targetOptions = {
+      currentGraphId: selectedGraphMetadata?.id,
+      currentProjectId: project.metadata.id,
+      nodes,
+    };
 
-    if (
-      subGraphPortRearrangeTarget.projectId !== project.metadata.id ||
-      subGraphPortRearrangeTarget.graphId !== selectedGraphMetadata?.id ||
-      !nodes.some((node) => node.id === subGraphPortRearrangeTarget.nodeId)
-    ) {
+    if (shouldClearNodeScopedUiTarget({ ...targetOptions, target: subGraphPortRearrangeTarget })) {
       setSubGraphPortRearrangeTarget(undefined);
     }
-  }, [nodes, project.metadata.id, selectedGraphMetadata?.id, setSubGraphPortRearrangeTarget, subGraphPortRearrangeTarget]);
+
+    if (shouldClearNodeScopedUiTarget({ ...targetOptions, target: variadicPortRearrangeTarget })) {
+      setVariadicPortRearrangeTarget(undefined);
+    }
+  }, [
+    nodes,
+    project.metadata.id,
+    selectedGraphMetadata?.id,
+    setSubGraphPortRearrangeTarget,
+    setVariadicPortRearrangeTarget,
+    subGraphPortRearrangeTarget,
+    variadicPortRearrangeTarget,
+  ]);
 
   const projectWithCanvasGraph = useMemo(() => {
     if (!selectedGraphMetadata?.id) {

@@ -41,6 +41,14 @@ export type SubGraphPortRearrangeTarget = {
 
 export const subGraphPortRearrangeTargetState = atom<SubGraphPortRearrangeTarget | undefined>(undefined);
 
+export type VariadicPortRearrangeTarget = {
+  graphId: GraphId;
+  nodeId: NodeId;
+  projectId: ProjectId;
+};
+
+export const variadicPortRearrangeTargetState = atom<VariadicPortRearrangeTarget | undefined>(undefined);
+
 export const expandedFoldersState = atomWithStorage<Record<string, boolean>>('expandedFoldersState', {}, storage);
 
 export const showUnreachableGraphTagsState = atomWithStorage<boolean>('showUnreachableGraphTagsState', true, storage);

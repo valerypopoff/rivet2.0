@@ -19,7 +19,7 @@ import { useDeleteNodesCommand } from '../commands/deleteNodeCommand';
 import { copyToClipboard } from '../utils/copyToClipboard';
 import { useGoToSubgraphNode } from './useGoToSubgraphNode.js';
 import { useFrozenNodeOutputActions } from './useFrozenNodeOutputActions.js';
-import { subGraphPortRearrangeTargetState } from '../state/ui.js';
+import { subGraphPortRearrangeTargetState, variadicPortRearrangeTargetState } from '../state/ui.js';
 
 type NodeFreezeTarget = {
   nodeId: NodeId;
@@ -42,6 +42,7 @@ export function useGraphBuilderContextMenuHandler() {
   const goToSubgraphNode = useGoToSubgraphNode();
   const { freezeNode, unfreezeNode } = useFrozenNodeOutputActions();
   const setSubGraphPortRearrangeTarget = useSetAtom(subGraphPortRearrangeTargetState);
+  const setVariadicPortRearrangeTarget = useSetAtom(variadicPortRearrangeTargetState);
 
   const addNode = useAddNodeCommand();
 
@@ -69,7 +70,15 @@ export function useGraphBuilderContextMenuHandler() {
         .with('node-rearrange-subgraph-ports', () => {
           const { nodeId } = context.data as { nodeId: NodeId };
           if (graphId) {
+            setVariadicPortRearrangeTarget(undefined);
             setSubGraphPortRearrangeTarget({ graphId, nodeId, projectId: project.metadata.id });
+          }
+        })
+        .with(P.union('node-rearrange-variadic-inputs', 'node-rearrange-variadic-inputs-outputs'), () => {
+          const { nodeId } = context.data as { nodeId: NodeId };
+          if (graphId) {
+            setSubGraphPortRearrangeTarget(undefined);
+            setVariadicPortRearrangeTarget({ graphId, nodeId, projectId: project.metadata.id });
           }
         })
         .with('node-duplicate', () => {
