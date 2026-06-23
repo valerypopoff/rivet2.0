@@ -30,6 +30,7 @@ type OpenWorkflowProjectOptions = {
   preferredGraphId?: GraphId;
   skipReplaceConfirmation?: boolean;
   previewTab?: boolean;
+  openingTabId?: string;
 };
 
 type OpenWorkflowProjectResult = {
@@ -139,6 +140,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     const reloadFromDisk = options?.reloadFromDisk ?? false;
     const preferredGraphId = options?.preferredGraphId;
     const skipReplaceConfirmation = options?.skipReplaceConfirmation ?? false;
+    const openingTabId = options?.openingTabId;
     const tabUiOptions = getProjectTabUiOptions(options?.previewTab);
     const normalizedFilePath = normalizeWorkflowPath(filePath);
     const latestLoadedProject = store.get(loadedProjectState);
@@ -154,6 +156,17 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       Boolean(latestLoadedProject.path) &&
       normalizeWorkflowPath(latestLoadedProject.path) !== normalizedFilePath;
     const isLeavingUnsavedScratchProject = replaceCurrent && !latestLoadedProject.path && activeOpenedProjectIds.length > 0;
+    const cancelOpeningTab = async () => {
+      if (!openingTabId) {
+        return;
+      }
+
+      try {
+        await workspace.cancelOpeningProjectTab(openingTabId);
+      } catch (error) {
+        console.warn('Failed to cancel project opening tab:', error);
+      }
+    };
 
     if (!skipReplaceConfirmation && (isSwitchingProjects || isLeavingUnsavedScratchProject)) {
       const shouldContinue = window.confirm(
@@ -161,6 +174,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       );
 
       if (!shouldContinue) {
+        await cancelOpeningTab();
         return { opened: false };
       }
     }
@@ -206,6 +220,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       }
 
       const openedGraph = resolveOpenedGraph(snapshot.project, preferredGraphId) ?? alreadyOpenByPath.openedGraph;
+      await cancelOpeningTab();
       const opened = replaceCurrent
         ? await workspace.replaceCurrent(
             {
@@ -244,14 +259,24 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     }
 
     if (!canLoadProjectByPath(ioProvider)) {
+      await cancelOpeningTab();
       throw new Error('The active IO provider does not support opening projects by path.');
     }
 
-    const { project: loadedProject, testData } = await ioProvider.loadProjectDataNoPrompt(filePath);
+    let loadedProjectData: Awaited<ReturnType<typeof ioProvider.loadProjectDataNoPrompt>>;
+    try {
+      loadedProjectData = await ioProvider.loadProjectDataNoPrompt(filePath);
+    } catch (error) {
+      await cancelOpeningTab();
+      throw error;
+    }
+
+    const { project: loadedProject, testData } = loadedProjectData;
     const project = withHostedProjectTitle(loadedProject, filePath);
     const conflictingProject = activeOpenedProjects.find((projectInfo) => projectInfo.projectId === project.metadata.id);
 
     if (conflictingProject) {
+      await cancelOpeningTab();
       toast.error(
         `"${conflictingProject.title} [${conflictingProject.fsPath?.split('/').pop() ?? 'no path'}]" shares the same ID (${project.metadata.id}) and is already open. Please close that project first.`,
       );
@@ -268,11 +293,24 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       testSuites: testData.testSuites,
     } satisfies RivetProjectSnapshotInput;
 
-    const opened = replaceCurrent
-      ? await workspace.replaceCurrent(projectInput, tabUiOptions)
-      : await workspace.openProjectSnapshot(projectInput, tabUiOptions);
+    let opened = false;
+    try {
+      opened = openingTabId
+        ? await workspace.finishOpeningProjectTab(openingTabId, projectInput, tabUiOptions)
+        : replaceCurrent
+          ? await workspace.replaceCurrent(projectInput, tabUiOptions)
+          : await workspace.openProjectSnapshot(projectInput, tabUiOptions);
+    } catch (error) {
+      await cancelOpeningTab();
+      throw error;
+    }
 
     if (!opened) {
+      if (openingTabId) {
+        await cancelOpeningTab();
+        return { opened: false };
+      }
+
       throw new Error(`Failed to activate "${resolveHostedProjectTitle(project, filePath)}".`);
     }
 

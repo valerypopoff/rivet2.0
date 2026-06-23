@@ -20,8 +20,8 @@ type WorkflowFolderTreeProps = {
   expandedFolders: Record<string, boolean>;
   editorReady: boolean;
   setProjectRowRef: (path: string, node: HTMLElement | null) => void;
-  onProjectPreviewOpen: (path: string) => void;
-  onProjectPersistentOpen: (path: string) => void;
+  onProjectPreviewOpen: (project: WorkflowProjectItem) => void;
+  onProjectPersistentOpen: (project: WorkflowProjectItem) => void;
   onProjectContextMenu: (project: WorkflowProjectItem, event: React.MouseEvent<HTMLElement>) => void;
   onFolderContextMenu: (folder: WorkflowFolderItem, event: React.MouseEvent<HTMLDivElement>) => void;
   onDragStart: (item: DraggedWorkflowItem) => (event: React.DragEvent<HTMLElement>) => void;

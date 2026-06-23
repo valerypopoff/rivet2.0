@@ -794,7 +794,7 @@ export function useWorkflowLibraryController(options: {
       const project = await createWorkflowProject(folder.relativePath, name);
       setExpandedFolders((prev) => ({ ...prev, [folder.id]: true }));
       await refresh(false);
-      onOpenProject(project.absolutePath);
+      onOpenProject(project.absolutePath, { title: project.name });
     } catch (err: any) {
       toast.error(err.message || 'Failed to create project');
     }
@@ -1445,14 +1445,14 @@ export function useWorkflowLibraryController(options: {
     ],
   );
 
-  const handleProjectPreviewOpen = useCallback((path: string) => {
-    setSelectedProjectPath(path);
-    onOpenProject(path, { preview: true });
+  const handleProjectPreviewOpen = useCallback((project: WorkflowProjectItem) => {
+    setSelectedProjectPath(project.absolutePath);
+    onOpenProject(project.absolutePath, { preview: true, title: project.name });
   }, [onOpenProject]);
 
-  const handleProjectPersistentOpen = useCallback((path: string) => {
-    setSelectedProjectPath(path);
-    onOpenProject(path);
+  const handleProjectPersistentOpen = useCallback((project: WorkflowProjectItem) => {
+    setSelectedProjectPath(project.absolutePath);
+    onOpenProject(project.absolutePath, { title: project.name });
   }, [onOpenProject]);
 
   return {
