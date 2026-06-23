@@ -1,15 +1,31 @@
 import { css } from '@emotion/react';
-import { type FC, type ReactNode } from 'react';
+import { createContext, type FC, type ReactNode, useContext } from 'react';
+import type { DataValue } from '@valerypopoff/rivet2-core';
 import ColorizedPreformattedText from '../ColorizedPreformattedText.js';
 import { FoldingCodeBlock } from '../renderDataValue/FoldingCodeBlock.js';
 import { type OutputRenderMode } from '../renderDataValue/outputRenderTypes.js';
-import { outputSectionGroupGap, outputSectionLabelStyles } from '../renderDataValue/renderDataValueStyles.js';
+import {
+  outputSectionFullscreenGroupGap,
+  outputSectionGroupGap,
+} from '../renderDataValue/renderDataValueStyles.js';
+import { OutputSectionHeader } from '../renderDataValue/OutputSectionHeader.js';
+import {
+  getOutputSectionStatsForValue,
+  getOutputSectionStatsFromText,
+  shouldShowOutputSectionStats,
+} from '../renderDataValue/outputSectionStats.js';
+import { useDataRefs } from '../../providers/ProvidersContext.js';
+import type { DataValueWithRefs } from '../../state/dataFlow.js';
 
 const structuredNodeOutputCss = css`
   display: block;
 
+  &.large-output-sections {
+    --output-section-group-gap: ${outputSectionFullscreenGroupGap};
+  }
+
   .structured-node-output-section + .structured-node-output-section {
-    margin-top: ${outputSectionGroupGap};
+    margin-top: var(--output-section-group-gap, ${outputSectionGroupGap});
   }
 
   .structured-node-output-section {
@@ -18,6 +34,13 @@ const structuredNodeOutputCss = css`
 
   .structured-node-output-section > * + * {
     margin-top: 6px;
+  }
+
+  .output-section-header {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(10px * var(--ui-font-scale));
   }
 
   .structured-node-output-source pre {
@@ -41,6 +64,8 @@ const structuredNodeOutputCss = css`
   }
 `;
 
+const StructuredNodeOutputStatsContext = createContext(false);
+
 export const StructuredNodeOutput: FC<{
   children?: ReactNode;
   errorMessage?: string;
@@ -61,6 +86,7 @@ export const StructuredNodeOutput: FC<{
   parsedSourceLanguage,
 }) => {
   const useFoldableParsedSource = renderMode === 'expanded-preview' && allowLargeStoredValueActions === true;
+  const showSectionStats = shouldShowOutputSectionStats({ mode: renderMode, allowLargeStoredValueActions });
   const placeParsedSourceBeforeChildren = useFoldableParsedSource && errorMessage === undefined;
   const parsedSourceSection =
     parsedSource !== undefined && parsedSourceLanguage ? (
@@ -74,12 +100,14 @@ export const StructuredNodeOutput: FC<{
     ) : null;
 
   return (
-    <div css={structuredNodeOutputCss}>
-      {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
-      {placeParsedSourceBeforeChildren && parsedSourceSection}
-      {children}
-      {!placeParsedSourceBeforeChildren && parsedSourceSection}
-    </div>
+    <StructuredNodeOutputStatsContext.Provider value={showSectionStats}>
+      <div css={structuredNodeOutputCss} className={showSectionStats ? 'large-output-sections' : undefined}>
+        {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
+        {placeParsedSourceBeforeChildren && parsedSourceSection}
+        {children}
+        {!placeParsedSourceBeforeChildren && parsedSourceSection}
+      </div>
+    </StructuredNodeOutputStatsContext.Provider>
   );
 };
 
@@ -87,16 +115,24 @@ export const StructuredNodeOutputSection: FC<{
   children: ReactNode;
   className?: string;
   label: string;
-}> = ({ children, className, label }) => (
-  <div className={className ? `structured-node-output-section ${className}` : 'structured-node-output-section'}>
-    <div>
-      <em css={outputSectionLabelStyles} className="port-id-label">
-        {label}
-      </em>
+  statsText?: string;
+  statsValue?: DataValueWithRefs | DataValue;
+}> = ({ children, className, label, statsText, statsValue }) => {
+  const dataRefs = useDataRefs();
+  const showSectionStats = useContext(StructuredNodeOutputStatsContext);
+  const stats = showSectionStats
+    ? statsText !== undefined
+      ? getOutputSectionStatsFromText(statsText)
+      : getOutputSectionStatsForValue(statsValue, dataRefs)
+    : undefined;
+
+  return (
+    <div className={className ? `structured-node-output-section ${className}` : 'structured-node-output-section'}>
+      <OutputSectionHeader isLarge={showSectionStats} label={label} stats={stats} />
+      {children}
     </div>
-    {children}
-  </div>
-);
+  );
+};
 
 const ParsedSourceOutputSection: FC<{
   label: string;
@@ -105,7 +141,7 @@ const ParsedSourceOutputSection: FC<{
   useFolding: boolean;
   wrapLines: boolean;
 }> = ({ label, language, source, useFolding, wrapLines }) => (
-  <StructuredNodeOutputSection label={label} className="structured-node-output-source">
+  <StructuredNodeOutputSection label={label} className="structured-node-output-source" statsText={source}>
     {useFolding ? (
       <FoldingCodeBlock text={source} language={language} wrapLines={wrapLines} />
     ) : (

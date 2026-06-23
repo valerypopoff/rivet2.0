@@ -1,6 +1,6 @@
 
 
-- In the full output modal show word and character counters with each output piece
+- The switcher hints in the node settings modal, do not make them so small. let's make them the same size as switcher hints in the project settings modal for example
 
 
 - Node from rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?
