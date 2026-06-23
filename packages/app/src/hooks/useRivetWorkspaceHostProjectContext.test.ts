@@ -156,6 +156,10 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
   const openingTabsUtilsSource = readFileSync(join(hooksDir, '..', 'utils', 'openingProjectTabs.ts'), 'utf8');
   const projectSelectorSource = readFileSync(join(hooksDir, '..', 'components', 'ProjectSelector.tsx'), 'utf8');
   const rivetAppSource = readFileSync(join(hooksDir, '..', 'components', 'RivetApp.tsx'), 'utf8');
+  const nodeRunningIndicatorSource = readFileSync(
+    join(hooksDir, '..', 'components', 'visualNode', 'NodeRunningIndicator.tsx'),
+    'utf8',
+  );
   const menuCommandsSource = readFileSync(join(hooksDir, 'useMenuCommands.ts'), 'utf8');
 
   assert.match(openingTabsSource, /export type OpeningProjectTabInfo = \{/);
@@ -188,9 +192,25 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
   );
   assert.match(projectSelectorSource, /<OpeningProjectTab/);
   assert.match(projectSelectorSource, /void cancelOpeningProjectTab\(tabItem\.openingTabId\);/);
+  assert.doesNotMatch(projectSelectorSource, /LoadingSpinner/);
+  assert.doesNotMatch(projectSelectorSource, /opening-project-spinner/);
   assert.match(rivetAppSource, /workspaceVisibleTabCountState/);
   assert.match(rivetAppSource, /selectedOpeningProjectTabIdState/);
   assert.match(rivetAppSource, /<OpeningProjectPlaceholder \/>/);
+  assert.match(rivetAppSource, /canvasBackgroundColorModeState/);
+  assert.match(rivetAppSource, /canvasBackgroundCustomColorState/);
+  assert.match(rivetAppSource, /getCanvasBackgroundColor\(\{/);
+  assert.match(rivetAppSource, /resolveCanvasBackgroundColorMode\(canvasBackgroundColorMode\)/);
+  assert.match(rivetAppSource, /background-color: var\(--canvas-background-color, var\(--grey-darker\)\);/);
+  assert.match(rivetAppSource, /'--canvas-background-color': canvasBackgroundColor/);
+  assert.doesNotMatch(rivetAppSource, /background: var\(--canvas-bg\)/);
+  assert.match(rivetAppSource, /NodeRunningIndicator/);
+  assert.match(rivetAppSource, /opening-project-placeholder-spinner[\s\S]*color: currentColor;/);
+  assert.match(rivetAppSource, /opening-project-placeholder-title[\s\S]*color: currentColor;/);
+  assert.doesNotMatch(rivetAppSource, /<div css=\{openingProjectPlaceholderStyles\} role="status"/);
+  assert.match(rivetAppSource, /label="Opening project"/);
+  assert.match(nodeRunningIndicatorSource, /box-sizing: border-box;/);
+  assert.match(nodeRunningIndicatorSource, /display: inline-block;/);
   assert.match(menuCommandsSource, /selectedOpeningProjectTabId == null \? openedProjectIds\.length : 0/);
 
   assert.match(hostSource, /RivetOpeningProjectTabHandle/);

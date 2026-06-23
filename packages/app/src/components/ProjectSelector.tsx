@@ -61,7 +61,6 @@ import { useGraphHistoryNavigation } from '../hooks/useGraphHistoryNavigation.js
 import { hasProjectUnsavedChanges } from '../utils/projectUnsavedChanges.js';
 import { AppModalHeader } from './AppModalHeader.js';
 import { buildProjectTabListItems } from '../utils/openingProjectTabs.js';
-import { LoadingSpinner } from './LoadingSpinner.js';
 
 export const styles = css`
   position: absolute;
@@ -508,21 +507,6 @@ export const styles = css`
     &.unsaved,
     &.preview {
       font-style: italic;
-    }
-
-    &.opening .project-name {
-      gap: 6px;
-    }
-
-    .opening-project-spinner {
-      align-items: center;
-      display: flex;
-      flex: 0 0 auto;
-
-      svg {
-        height: 12px;
-        width: 12px;
-      }
     }
 
     > .actions {
@@ -1271,9 +1255,6 @@ const OpeningProjectTab: FC<{
       <div className={clsx('project', 'opening', { active, preview })} onMouseDown={handleMouseDown}>
         <div className="project-name">
           <span>{projectDisplayName}</span>
-          <span className="opening-project-spinner" aria-hidden="true">
-            <LoadingSpinner />
-          </span>
         </div>
         {active && (
           <div className="actions">

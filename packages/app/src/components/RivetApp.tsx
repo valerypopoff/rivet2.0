@@ -16,10 +16,14 @@ import { DebuggerPanelRenderer } from './DebuggerConnectPanel';
 import { ChatViewerRenderer } from './ChatViewer';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
+  canvasBackgroundColorModeState,
+  canvasBackgroundCustomColorState,
   customThemePrimaryColorState,
   customThemeSecondaryColorState,
+  getCanvasBackgroundColor,
   getCustomThemeCssVariables,
   getThemeContrastCssVariables,
+  resolveCanvasBackgroundColorMode,
   selectedExecutorState,
   themeState,
   themes,
@@ -47,7 +51,7 @@ import { getUiFontSizeCssVariables } from '../utils/uiFontSize.js';
 import { useProjectPlugins } from '../hooks/useProjectPlugins.js';
 import { MissingAppPluginsModalRenderer } from './MissingAppPluginsModal.js';
 import { warmCodeEditor } from './LazyComponents.js';
-import { LoadingSpinner } from './LoadingSpinner.js';
+import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 
 const styles = css`
   position: fixed;
@@ -61,8 +65,8 @@ const styles = css`
 
 const openingProjectPlaceholderStyles = css`
   align-items: center;
-  background: var(--canvas-bg);
-  color: var(--foreground);
+  background-color: var(--canvas-background-color, var(--grey-darker));
+  color: var(--grey-lightest);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -70,13 +74,19 @@ const openingProjectPlaceholderStyles = css`
   justify-content: center;
   position: absolute;
 
-  .opening-project-placeholder-spinner svg {
-    height: 24px;
-    width: 24px;
+  .opening-project-placeholder-spinner {
+    color: currentColor;
+    filter: drop-shadow(0 0 10px color-mix(in srgb, currentColor 28%, transparent));
+
+    .node-running-indicator {
+      border-width: 3px;
+      height: 42px;
+      width: 42px;
+    }
   }
 
   .opening-project-placeholder-title {
-    color: var(--grey-lightest);
+    color: currentColor;
     font-size: var(--ui-font-size-base);
     font-weight: 600;
   }
@@ -288,11 +298,24 @@ export const RivetApp: FC = () => {
   );
 };
 
-const OpeningProjectPlaceholder: FC = () => (
-  <div css={openingProjectPlaceholderStyles} role="status" aria-live="polite">
-    <div className="opening-project-placeholder-spinner">
-      <LoadingSpinner />
+const OpeningProjectPlaceholder: FC = () => {
+  const canvasBackgroundColorMode = useAtomValue(canvasBackgroundColorModeState);
+  const canvasBackgroundCustomColor = useAtomValue(canvasBackgroundCustomColorState);
+  const canvasBackgroundColor = getCanvasBackgroundColor({
+    mode: resolveCanvasBackgroundColorMode(canvasBackgroundColorMode),
+    customColor: canvasBackgroundCustomColor,
+  });
+
+  return (
+    <div
+      css={openingProjectPlaceholderStyles}
+      style={{ '--canvas-background-color': canvasBackgroundColor } as CSSProperties}
+      aria-live="polite"
+    >
+      <div className="opening-project-placeholder-spinner">
+        <NodeRunningIndicator isRunning delayMs={0} label="Opening project" />
+      </div>
+      <div className="opening-project-placeholder-title">Opening project...</div>
     </div>
-    <div className="opening-project-placeholder-title">Opening project...</div>
-  </div>
-);
+  );
+};
