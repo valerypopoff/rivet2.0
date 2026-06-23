@@ -476,16 +476,8 @@ const styles = css`
   }
 
   .graph-list-notice {
-    margin: 8px 12px 0;
-    padding: 6px 8px;
-    border: 1px solid var(--warning);
-    border-radius: 12px;
-    corner-shape: squircle;
-    @supports not (corner-shape: squircle) {
-      border-radius: 6px;
-    }
-    background: var(--warning-lighter);
-    color: var(--warning-dark);
+    margin: -2px 10px 10px;
+    color: color-mix(in srgb, var(--grey-light) 82%, transparent);
     font-size: var(--ui-font-size-xs);
     line-height: 1.4;
   }
@@ -969,7 +961,6 @@ export const GraphList: FC = memo(() => {
           </div>
         </div>
       </div>
-      {graphListReachability.notice && <div className="graph-list-notice">{graphListReachability.notice}</div>}
       <div
         className="graph-list-container"
         onContextMenu={handleSidebarContextMenu}
@@ -980,6 +971,7 @@ export const GraphList: FC = memo(() => {
         tabIndex={-1}
       >
         <div className="graph-list-heading">Graphs</div>
+        {graphListReachability.notice && <div className="graph-list-notice">{graphListReachability.notice}</div>}
         <div
           className={clsx('graph-list', { 'dragging-over': dragOverFolderName === '' && draggingItemFolder !== '' })}
           data-contextmenutype="graph-list"

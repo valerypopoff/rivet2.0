@@ -1,5 +1,4 @@
 
-- The "Set a valid Main Graph in Project settings to see unreachable graphs." message is god knows where. Show it under the "Graphs" header in the left sidebar. Also remove the border at this message and make the message colors theme-aware
 
 - When I create a new project and create a new graph in it (not saving changes), then open another project in the next tab, then go back to the newly created project and remove the newly created graph, then go to the other opened graph and get back, the removed graph is there again
 
