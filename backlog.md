@@ -1,8 +1,8 @@
 
+- A special node mode that works like a filter: in this mode the node can accept multiple connections from different nodes into one port. Without such mode, I have to copy-paste the same node multiple times. Probably, for each connection set there should be a separate execution path. Like, "add path". Or! Allow connecting an auxiliary node as a filter for selected inputs/outputs of a node.
+
 
 - Let noedes with variadic inputs rearrange them. And outputs too. If inputs and outputs sare connected, rearrange them together.
-
-- The switcher hints in the node settings modal, do not make them so small. let's make them the same size as switcher hints in the project settings modal for example
 
 
 - Node from rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?

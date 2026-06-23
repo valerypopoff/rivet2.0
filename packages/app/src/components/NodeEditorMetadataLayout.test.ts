@@ -50,6 +50,9 @@ test('node settings panel uses regular UI typography outside embedded code edito
   const defaultNodeEditorSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditor.tsx'), 'utf8');
   const panelContainerStyles = nodeEditorSource.match(/^  \.panel-container \{(?<styles>[\s\S]*?)\n  \}/m)?.groups
     ?.styles;
+  const panelToggleHelperStyles = nodeEditorSource.match(
+    /\.panel-container \.labeled-toggle-helper-label,\s+\.panel-container \.labeled-toggle-helper,\s+\.panel-container \.labeled-toggle-helper \* \{(?<styles>[\s\S]*?)\n  \}/,
+  )?.groups?.styles;
   const sectionFooterStyles = nodeEditorSource.match(/\.section-footer \{(?<styles>[\s\S]*?)\n  \}/)?.groups?.styles;
   const titleReadContentStyles = nodeEditorSource.match(
     /\.node-title-field \.node-title-read-button \.title-read-content \{(?<styles>[\s\S]*?)\n  \}/,
@@ -64,6 +67,7 @@ test('node settings panel uses regular UI typography outside embedded code edito
     ?.groups?.styles;
 
   assert.ok(panelContainerStyles);
+  assert.ok(panelToggleHelperStyles);
   assert.ok(sectionFooterStyles);
   assert.ok(titleReadContentStyles);
   assert.ok(metadataInputStyles);
@@ -76,6 +80,8 @@ test('node settings panel uses regular UI typography outside embedded code edito
   assert.match(panelContainerStyles, /--label-font-family: var\(--font-family\);/);
   assert.match(panelContainerStyles, /border-left: 1px solid var\(--grey-darkish\);/);
   assert.match(panelContainerStyles, /box-shadow: none;/);
+  assert.match(panelToggleHelperStyles, /font-size: var\(--ui-font-size-sm\) !important;/);
+  assert.match(panelToggleHelperStyles, /line-height: 1\.35;/);
   assert.match(titleReadContentStyles, /color: var\(--foreground\);/);
   assert.match(defaultFieldLabelStyles, /color: var\(--label-color\);/);
   assert.doesNotMatch(sectionFooterStyles, /font-family: var\(--font-family-monospace\);/);
