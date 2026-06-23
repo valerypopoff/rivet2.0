@@ -1143,7 +1143,7 @@ const DeleteGraphConfirmModal: FC<{
   onClose: () => void;
   onConfirm: () => void;
 }> = ({ graph, onClose, onConfirm }) => {
-  const graphName = graph?.metadata?.name ?? 'Untitled Graph';
+  const graphName = graph?.metadata?.name ?? 'Untitled graph';
 
   return (
     <ModalTransition>

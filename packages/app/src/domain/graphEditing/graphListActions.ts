@@ -12,25 +12,25 @@ export function buildUntitledGraph(savedGraphs: NodeGraph[], folderPath?: string
   let index = 1;
 
   if (folderPath) {
-    if (savedGraphs.some((candidate) => candidate.metadata?.name === `${folderPath}/Untitled Graph`)) {
+    if (savedGraphs.some((candidate) => candidate.metadata?.name === `${folderPath}/Untitled graph`)) {
       index += 1;
     }
 
-    while (savedGraphs.some((candidate) => candidate.metadata?.name === `${folderPath}/Untitled Graph ${index}`)) {
+    while (savedGraphs.some((candidate) => candidate.metadata?.name === `${folderPath}/Untitled graph ${index}`)) {
       index += 1;
     }
 
-    graph.metadata!.name = index === 1 ? `${folderPath}/Untitled Graph` : `${folderPath}/Untitled Graph ${index}`;
+    graph.metadata!.name = index === 1 ? `${folderPath}/Untitled graph` : `${folderPath}/Untitled graph ${index}`;
   } else {
-    if (savedGraphs.some((candidate) => candidate.metadata?.name === 'Untitled Graph')) {
+    if (savedGraphs.some((candidate) => candidate.metadata?.name === 'Untitled graph')) {
       index += 1;
     }
 
-    while (savedGraphs.some((candidate) => candidate.metadata?.name === `Untitled Graph ${index}`)) {
+    while (savedGraphs.some((candidate) => candidate.metadata?.name === `Untitled graph ${index}`)) {
       index += 1;
     }
 
-    graph.metadata!.name = index === 1 ? 'Untitled Graph' : `Untitled Graph ${index}`;
+    graph.metadata!.name = index === 1 ? 'Untitled graph' : `Untitled graph ${index}`;
   }
 
   return graph;

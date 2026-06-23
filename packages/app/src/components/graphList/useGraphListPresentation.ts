@@ -98,7 +98,7 @@ export function mergeGraphListCurrentGraphIntoProject(
 }
 
 export function getGraphListItemPath(item: NodeGraphFolderItem): string {
-  return item.type === 'folder' ? item.fullPath : item.graph.metadata?.name ?? 'Untitled Graph';
+  return item.type === 'folder' ? item.fullPath : item.graph.metadata?.name ?? 'Untitled graph';
 }
 
 export type FolderItemPresentation = {

@@ -1,7 +1,5 @@
 
 
-- When I create a new project and create a new graph in it (not saving changes), then open another project in the next tab, then go back to the newly created project and remove the newly created graph, then go to the other opened graph and get back, the removed graph is there again
-
 
 - When the new project is created, the automatically created graph should be called "Main graph"
 

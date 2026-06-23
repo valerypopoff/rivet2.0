@@ -52,7 +52,7 @@ To create a subgraph, select multiple nodes by holding shift and clicking on the
 
 ![creating a subgraph](assets/create-subgraph.gif)
 
-Make sure you go into the graph info section for the subgraph and give it a name and description, or else it will be Untitled Graph.
+Make sure you go into the graph info section for the subgraph and give it a name and description, or else it will be Untitled graph.
 
 Make sure you save your new graph! (CMD+S or CTRL+S)
 

@@ -6,7 +6,7 @@ A Rivet project contains a set of graphs. These graphs can call each other by us
 
 ## Creating a Project
 
-To create a new project, choose **New Project** in the top-bar **Menu** dropdown. This will create a new blank project. The new project is unsaved by default.
+To create a new project, choose **New Project** in the top-bar **Menu** dropdown. This will create a new blank project with one empty graph named **Main graph**. The new project is unsaved by default.
 
 ## Project Settings
 

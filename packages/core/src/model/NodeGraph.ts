@@ -24,7 +24,7 @@ export function emptyNodeGraph(): NodeGraph {
     connections: [],
     metadata: {
       id: nanoid() as GraphId,
-      name: 'Untitled Graph',
+      name: 'Untitled graph',
       description: '',
     },
   };

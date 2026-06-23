@@ -30,7 +30,7 @@ function makeGraph(id: string, name: string, options: { nodeCount?: number; conn
 
 describe('currentGraphSave', () => {
   test('skips an empty placeholder graph that is not part of the project', () => {
-    const placeholderGraph = makeGraph('placeholder', 'Untitled Graph');
+    const placeholderGraph = makeGraph('placeholder', 'Untitled graph');
 
     assert.equal(shouldPersistCurrentGraph(placeholderGraph, []), false);
     assert.equal(prepareCurrentGraphForSave(placeholderGraph, []), undefined);

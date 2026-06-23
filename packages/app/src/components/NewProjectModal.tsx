@@ -147,7 +147,7 @@ const BlankProjectTemplate: FC<{
     <div className="template blank-project">
       <h1>Blank Project</h1>
       <p>
-        Creates a new blank Rivet project with one empty graph named &quot;Untitled Graph&quot;. Great when you have an
+        Creates a new blank Rivet project with one empty graph named &quot;Main graph&quot;. Great when you have an
         idea and want to start from scratch.
       </p>
       <form onSubmit={createProject}>

@@ -109,7 +109,7 @@ describe('workspaceTransitions', () => {
     });
 
     assert.equal(Object.keys(emptyProject.graphs).length, 0);
-    assert.equal(resolved.metadata?.name, 'Untitled Graph');
+    assert.equal(resolved.metadata?.name, 'Untitled graph');
     assert.equal(resolved.nodes.length, 0);
     assert.equal(resolved.connections.length, 0);
   });

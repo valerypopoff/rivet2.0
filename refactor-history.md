@@ -283,7 +283,7 @@ not preserve a complete file list.
 
 51. **Seeded blank projects with a real default graph**
     - Why: Blank projects showed an in-memory graph not yet present in `project.graphs`.
-    - How: Created an `Untitled Graph` in project state, set `mainGraphId`, and normalized project-load graph selection.
+    - How: Created a `Main graph` in project state, set `mainGraphId`, and normalized project-load graph selection.
     - Affected files/areas: blank project creation, project loader, opened project metadata, workspace transitions.
 
 52. **Made large execution outputs preview-first and ref-backed**

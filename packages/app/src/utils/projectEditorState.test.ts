@@ -372,7 +372,7 @@ describe('projectEditorState', () => {
     const emptyRestoreTarget = resolveProjectEditorRestoreTarget({
       project: makeProject([]),
     });
-    assert.equal(emptyRestoreTarget.graph.metadata?.name, 'Untitled Graph');
+    assert.equal(emptyRestoreTarget.graph.metadata?.name, 'Untitled graph');
     assert.deepEqual(emptyRestoreTarget.viewport, { type: 'reset' });
   });
 });
