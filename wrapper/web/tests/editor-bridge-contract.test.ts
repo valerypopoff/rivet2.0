@@ -6,13 +6,20 @@ import {
   isEditorToDashboardEvent,
 } from '../../shared/editor-bridge';
 
-test('open project bridge command accepts an optional preview mode flag', () => {
+test('open project bridge command accepts optional title and preview flags', () => {
   assert.equal(isDashboardToEditorCommand({
     type: 'open-project',
     path: '/workflows/example.rivet-project',
     replaceCurrent: false,
+    title: 'Example',
     preview: true,
   }), true);
+  assert.equal(isDashboardToEditorCommand({
+    type: 'open-project',
+    path: '/workflows/example.rivet-project',
+    replaceCurrent: false,
+    title: 12,
+  }), false);
   assert.equal(isDashboardToEditorCommand({
     type: 'open-project',
     path: '/workflows/example.rivet-project',

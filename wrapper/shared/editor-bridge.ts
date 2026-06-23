@@ -8,7 +8,14 @@ export type ProjectCompareSideLabels = {
 };
 
 export type DashboardToEditorCommand =
-  | { type: 'open-project'; path: string; replaceCurrent: boolean; preview?: boolean; reloadFromDisk?: boolean }
+  | {
+      type: 'open-project';
+      path: string;
+      replaceCurrent: boolean;
+      title?: string;
+      preview?: boolean;
+      reloadFromDisk?: boolean;
+    }
   | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean }
   | { type: 'open-published-version-preview'; relativePath: string; versionId: string; replaceCurrent: boolean }
   | {
@@ -69,6 +76,7 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
       return (
         typeof value.path === 'string' &&
         typeof value.replaceCurrent === 'boolean' &&
+        (value.title == null || typeof value.title === 'string') &&
         (value.preview == null || typeof value.preview === 'boolean') &&
         (value.reloadFromDisk == null || typeof value.reloadFromDisk === 'boolean')
       );

@@ -135,6 +135,36 @@ test('hosted project tab label transform preserves preview tab state', () => {
   );
 });
 
+test('hosted project tab label transform preserves opening-tab-aware active state', () => {
+  const source = [
+    "  const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();",
+    '  const active = projectTabsSelected && selectedOpeningProjectTabId == null && currentProject.metadata.id === projectId;',
+    '  const preview = projectTabUi[projectId]?.preview === true;',
+    "  const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
+  ].join('\n');
+
+  assert.equal(
+    replaceHostedProjectTabLabelExpression(source),
+    [
+      '  const active = projectTabsSelected && selectedOpeningProjectTabId == null && currentProject.metadata.id === projectId;',
+      '  const preview = projectTabUi[projectId]?.preview === true;',
+      "  const projectDisplayName = project?.title?.trim() || 'Untitled Project';",
+    ].join('\n'),
+  );
+});
+
+test('hosted project tab label transform handles opening project tabs', () => {
+  const source = [
+    '  const fileName = openingTab.path?.split(/[\\\\/]/).pop();',
+    "  const projectDisplayName = active ? `${openingTab.title}${fileName ? ` [${fileName}]` : ''}` : openingTab.title;",
+  ].join('\n');
+
+  assert.equal(
+    replaceHostedProjectTabLabelExpression(source),
+    "  const projectDisplayName = openingTab.title.trim() || 'Untitled Project';",
+  );
+});
+
 test('hosted project tab label transform fails closed on unknown upstream labels', () => {
   assert.equal(replaceHostedProjectTabLabelExpression('const projectDisplayName = project?.title;'), null);
 });

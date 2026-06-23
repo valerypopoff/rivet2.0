@@ -69,4 +69,5 @@ export type WorkflowProjectOpenOptions = {
   preview?: boolean;
   replaceCurrent?: boolean;
   reloadFromDisk?: boolean;
+  title?: string;
 };

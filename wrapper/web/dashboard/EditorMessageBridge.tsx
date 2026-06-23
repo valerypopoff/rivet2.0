@@ -168,6 +168,23 @@ type PreviewWorkflowProject = {
   projectId: ProjectId;
 };
 
+function resolveOpeningProjectTitle(command: Extract<DashboardToEditorCommand, { type: 'open-project' }>): string {
+  const commandTitle = command.title?.trim();
+  if (commandTitle) {
+    return commandTitle;
+  }
+
+  const fileName = command.path.split(/[\\/]/).pop()?.trim();
+  const titleFromFileName = fileName?.replace(/\.rivet-project$/i, '').trim();
+  return titleFromFileName || 'Project';
+}
+
+function waitForOpeningProjectTabFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
 async function fetchLoadedWorkflowRecording(recordingId: string): Promise<LoadedWorkflowRecording> {
   const serializedRecording = await fetchWorkflowRecordingArtifactText(recordingId, 'recording');
 
@@ -588,9 +605,10 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
 
     const runSerializedCommand = async (command: SerializedEditorCommand): Promise<void> => {
       switch (command.type) {
-        case 'open-project':
+        case 'open-project': {
+          let openingTabId: string | undefined;
           try {
-            const existingOpenedProject = command.preview ? findOpenedProjectByPath(command.path) : null;
+            const existingOpenedProject = findOpenedProjectByPath(command.path);
             const existingPreview = previewProjectRef.current;
             const targetIsExistingPreview =
               existingPreview !== null &&
@@ -610,13 +628,48 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
 
             const replaceCurrent = Boolean(command.replaceCurrent || shouldReplaceActivePreview);
             const replacedPath = replaceCurrent ? loadedProjectRef.current.path : '';
+            const canStartOpeningTabBeforeLoad =
+              !existingOpenedProject &&
+              command.reloadFromDisk !== true &&
+              (!replaceCurrent || shouldReplaceActivePreview);
+            if (canStartOpeningTabBeforeLoad) {
+              const openingTab = await workspaceRef.current.startOpeningProjectTab(
+                {
+                  path: command.path,
+                  title: resolveOpeningProjectTitle(command),
+                },
+                {
+                  replaceCurrent,
+                  tabUi: shouldUsePreviewSlot
+                    ? {
+                        preview: true,
+                      }
+                    : undefined,
+                },
+              );
+
+              if (openingTab) {
+                openingTabId = openingTab.openingTabId;
+                await waitForOpeningProjectTabFrame();
+              }
+            }
+
             const openResult = await openProjectRef.current(command.path, {
               replaceCurrent,
+              openingTabId,
               reloadFromDisk: Boolean(command.reloadFromDisk),
               skipReplaceConfirmation: shouldReplaceActivePreview,
               previewTab: shouldUsePreviewSlot,
             });
             if (!openResult.opened) {
+              if (openingTabId) {
+                try {
+                  await workspaceRef.current.cancelOpeningProjectTab(openingTabId);
+                } catch (cancelError) {
+                  console.warn('Failed to cancel project opening tab after skipped open:', cancelError);
+                }
+              }
+
               break;
             }
 
@@ -644,12 +697,21 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
             focusHostedEditorFrame();
             postMessageToDashboard({ type: 'project-opened', path: command.path });
           } catch (error) {
+            if (openingTabId) {
+              try {
+                await workspaceRef.current.cancelOpeningProjectTab(openingTabId);
+              } catch (cancelError) {
+                console.warn('Failed to cancel project opening tab after open failure:', cancelError);
+              }
+            }
+
             const message = getError(error).message;
             console.error('Failed to open workflow project:', error);
             postMessageToDashboard({ type: 'project-open-failed', path: command.path, error: message });
           }
 
           break;
+        }
 
         case 'refresh-open-project-from-disk': {
           const openedProject = findOpenedProjectByPath(command.path);

@@ -1,8 +1,4 @@
 
-
-- ??? When clicking a project once in the project tree, open it in the editor in the "Preview mode" like files in VS code. The tab does not persist unless the project is changed or clicked twice. After this, the edit button is not gonna be beeded, only the Save one. !!! Think it through thoroughly though. Such behavior may be confusing and may lead to some important state loss. Like, when the user opened a project in preview mode and ran it in the remode debugger mode. Probably, running must move the project from preview to edit mode.
-
-
 - Feature to move from local mode to managed (transfer all files (including libs) and metadata)
 
 

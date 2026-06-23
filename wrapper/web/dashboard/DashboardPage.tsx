@@ -42,6 +42,7 @@ export const DashboardPage: FC = () => {
       type: 'open-project',
       path,
       replaceCurrent: Boolean(options?.replaceCurrent),
+      title: options?.title,
       preview: options?.preview === true ? true : undefined,
       reloadFromDisk: options?.reloadFromDisk === true ? true : undefined,
     });

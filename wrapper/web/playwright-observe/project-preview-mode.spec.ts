@@ -67,6 +67,12 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
     [secondProject.absolutePath, createPreviewProjectFile(secondProject.name)],
     [thirdProject.absolutePath, createPreviewProjectFile(thirdProject.name)],
   ]);
+  let releaseFirstProjectLoad: (() => void) | null = null;
+  let firstProjectLoadStartedResolve: (() => void) | null = null;
+  const firstProjectLoadStarted = new Promise<void>((resolve) => {
+    firstProjectLoadStartedResolve = resolve;
+  });
+  let firstProjectLoadShouldWait = true;
 
   await page.route('**/api/workflows/tree', async (route) => {
     const tree: WorkflowTreeResponse = {
@@ -85,6 +91,14 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await page.route('**/api/projects/load', async (route) => {
     const body = route.request().postDataJSON() as { path?: string };
     const contents = body.path ? contentsByPath.get(body.path) : undefined;
+
+    if (body.path === firstProject.absolutePath && firstProjectLoadShouldWait) {
+      firstProjectLoadShouldWait = false;
+      firstProjectLoadStartedResolve?.();
+      await new Promise<void>((resolve) => {
+        releaseFirstProjectLoad = resolve;
+      });
+    }
 
     await route.fulfill({
       status: contents ? 200 : 404,
@@ -106,6 +120,7 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   const frame = page.frameLocator('iframe.dashboard-editor-frame');
   const editorTabs = frame.locator('.projects-container .project');
   const firstEditorTab = editorTabs.filter({ hasText: firstProject.name });
+  const firstOpeningEditorTab = frame.locator('.projects-container .project.opening', { hasText: firstProject.name });
   const secondEditorTab = editorTabs.filter({ hasText: secondProject.name });
   const thirdEditorTab = editorTabs.filter({ hasText: thirdProject.name });
   const firstActiveEditorTab = frame.locator('.projects-container .project.active', { hasText: firstProject.name });
@@ -114,6 +129,12 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   const thirdRow = page.locator('.project-row', { hasText: thirdProject.name });
 
   await firstRow.click();
+  await firstProjectLoadStarted;
+  await expect(firstOpeningEditorTab).toBeVisible();
+  await expect(firstOpeningEditorTab).toHaveClass(/\bpreview\b/);
+  await expect(firstOpeningEditorTab.locator('.opening-project-spinner')).toBeVisible();
+  await expect(frame.locator('.opening-project-placeholder-title')).toContainText('Opening project...');
+  releaseFirstProjectLoad?.();
   await expect(frame.locator('.node-canvas')).toBeVisible({ timeout: 30_000 });
   await expect(firstEditorTab).toBeVisible();
   await expectProjectTabPreview(firstEditorTab, true);
