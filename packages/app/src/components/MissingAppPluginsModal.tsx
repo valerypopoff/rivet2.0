@@ -5,14 +5,17 @@ import type { PluginLoadSpec } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue } from 'jotai';
 import { useMemo, useState } from 'react';
 import { AppModalHeader } from './AppModalHeader';
-import { appPluginSpecsState } from '../state/plugins';
+import { graphState } from '../state/graph';
+import { appPluginSpecsState, pluginsState } from '../state/plugins';
 import { projectState } from '../state/savedGraphs';
 import {
   dedupePluginSpecs,
+  deriveProjectPluginSpecsFromGraphs,
   getMissingAppPluginSpecs,
   getPluginSpecDetails,
   getPluginSpecLabel,
 } from '../utils/pluginUsage';
+import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry';
 
 const modalStyles = css`
   .missing-plugin-list {
@@ -42,13 +45,27 @@ const modalStyles = css`
 `;
 
 export function MissingAppPluginsModalRenderer() {
+  const graph = useAtomValue(graphState);
   const project = useAtomValue(projectState);
+  const pluginStates = useAtomValue(pluginsState);
+  const projectNodeRegistry = useProjectNodeRegistry();
   const [appPluginSpecs, setAppPluginSpecs] = useAtom(appPluginSpecsState);
   const [dismissedMissingPluginKey, setDismissedMissingPluginKey] = useState<string | null>(null);
 
+  const projectPluginSpecs = useMemo(
+    () =>
+      deriveProjectPluginSpecsFromGraphs({
+        appPluginStates: pluginStates,
+        currentGraph: graph,
+        project,
+        registry: projectNodeRegistry,
+      }),
+    [graph, pluginStates, project, projectNodeRegistry],
+  );
+
   const missingPluginSpecs = useMemo(
-    () => getMissingAppPluginSpecs(project.plugins, appPluginSpecs),
-    [appPluginSpecs, project.plugins],
+    () => getMissingAppPluginSpecs(projectPluginSpecs, appPluginSpecs),
+    [appPluginSpecs, projectPluginSpecs],
   );
 
   const missingPluginKey = useMemo(

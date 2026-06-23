@@ -156,9 +156,37 @@ describe('pluginUsage', () => {
     );
   });
 
-  test('preserves unresolved project plugin specs until the app can prove they are unused', () => {
+  test('removes stale project plugin specs when all node types are known without them', () => {
     const project = makeProject([makeGraph('main', [makeNode('text')])], [pluginSpec]);
     const registry = makeRegistry({ text: undefined });
+
+    assert.deepEqual(
+      deriveProjectPluginSpecsFromGraphs({
+        appPluginStates: [],
+        project,
+        registry,
+      }),
+      [],
+    );
+  });
+
+  test('removes stale built-in project plugin specs when all node types are known without them', () => {
+    const project = makeProject([makeGraph('main', [makeNode('text')])], [builtInPluginSpec]);
+    const registry = makeRegistry({ text: undefined });
+
+    assert.deepEqual(
+      deriveProjectPluginSpecsFromGraphs({
+        appPluginStates: [],
+        project,
+        registry,
+      }),
+      [],
+    );
+  });
+
+  test('preserves unresolved project plugin specs when unknown node types prevent proving usage', () => {
+    const project = makeProject([makeGraph('main', [makeNode('unknownPluginNode')])], [pluginSpec]);
+    const registry = makeRegistry({});
 
     assert.deepEqual(
       deriveProjectPluginSpecsFromGraphs({
@@ -170,9 +198,9 @@ describe('pluginUsage', () => {
     );
   });
 
-  test('preserves failed app plugin specs that are already declared by the project', () => {
-    const project = makeProject([makeGraph('main', [makeNode('text')])], [pluginSpec]);
-    const registry = makeRegistry({ text: undefined });
+  test('preserves failed app plugin specs when unknown node types prevent proving usage', () => {
+    const project = makeProject([makeGraph('main', [makeNode('unknownPluginNode')])], [pluginSpec]);
+    const registry = makeRegistry({});
 
     assert.deepEqual(
       deriveProjectPluginSpecsFromGraphs({

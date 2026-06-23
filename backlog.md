@@ -1,7 +1,11 @@
 
+- Does the LLM chat node retry on non-200 even when it's not set in the node settings?
+
+- Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
+
+
 - A special node mode that works like a filter: in this mode the node can accept multiple connections from different nodes into one port. Without such mode, I have to copy-paste the same node multiple times. Probably, for each connection set there should be a separate execution path. Like, "add path". Or! Allow connecting an auxiliary node as a filter for selected inputs/outputs of a node.
 
-- In all tooltips that mention Ctrl/Cmd, let's automatically replace them with the appropriate OS-specific modifier key (Cmd on Mac, Ctrl on Windows/Linux). Nt sure how we're gonna determine the OS in the browser.
 
 - Node from rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?
 
@@ -20,7 +24,6 @@
 
 
 
-- Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
 
 - When I need to gather a lot of inputs into one node, it looks messy and it's easy to look over some connections. like in the "setGlobals" graph. We need to do something about this UX. maybe introduce a "Group" node that will contain many same type nodes and combine their outputs into one so I can later pipe it into just one node and be sur ethat all the nodes are connected?
 
@@ -29,7 +32,6 @@
 
 - Reassess templates for the Ctrl+N window
 
-- Now, the executor mode is global for all open projects (remote debugger, browser, node). Make it per tab
 
 - Apply a style where there's a straight line and another line in parallel close to it, just like in the Rivet logo
 

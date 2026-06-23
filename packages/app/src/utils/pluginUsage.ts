@@ -98,7 +98,6 @@ export function deriveProjectPluginSpecsFromGraphs({
   registry,
 }: ProjectPluginUsageInput): PluginLoadSpec[] {
   const currentProjectSpecs = dedupePluginSpecs(project.plugins);
-  const pluginStateBySpecId = new Map(appPluginStates.map((state) => [getPluginSpecId(state.spec), state]));
   const specByRuntimePluginId = new Map<string, PluginLoadSpec>();
 
   for (const state of appPluginStates) {
@@ -130,7 +129,7 @@ export function deriveProjectPluginSpecsFromGraphs({
 
     if (usedSpec) {
       pushSpec(nextSpecs, seen, usedSpec);
-    } else if (shouldPreserveExistingProjectSpec(existingSpec, pluginStateBySpecId, hasUnresolvedNodeTypes)) {
+    } else if (hasUnresolvedNodeTypes) {
       pushSpec(nextSpecs, seen, existingSpec);
     }
   }
@@ -191,16 +190,6 @@ function getPluginSpecForNode(
   } catch {
     return { unresolved: true };
   }
-}
-
-function shouldPreserveExistingProjectSpec(
-  spec: PluginLoadSpec,
-  pluginStateBySpecId: Map<string, PluginUsageState>,
-  hasUnresolvedNodeTypes: boolean,
-): boolean {
-  const state = pluginStateBySpecId.get(getPluginSpecId(spec));
-
-  return hasUnresolvedNodeTypes || !state || !state.loaded || !!state.error || !state.plugin;
 }
 
 function pushSpec(specs: PluginLoadSpec[], seen: Set<string>, spec: PluginLoadSpec): void {
