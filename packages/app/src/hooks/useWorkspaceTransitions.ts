@@ -30,6 +30,7 @@ import {
   createGraphSwitchTransition,
   createProjectLoadTransition,
   mergeCurrentGraphIntoProject,
+  shouldPersistProjectBeforeLoad,
 } from '../utils/workspaceTransitions.js';
 import { handleError } from '../utils/errorHandling.js';
 import { useStaticDataDatabase } from './useStaticDataDatabase.js';
@@ -137,9 +138,15 @@ export function useWorkspaceTransitions() {
       try {
         const currentProjectId = project.metadata.id;
         const targetProjectId = projectInfo.project.metadata.id;
-        const shouldPersistCurrentProjectEditorState =
-          Boolean(currentProjectId) &&
-          (loadedProject.loaded || Object.keys(project.graphs).length > 0 || graphNavigationStack.stack.length > 0);
+        const currentProjectHasOpenTab = Boolean(
+          currentProjectId && store.get(projectsState).openedProjects[currentProjectId],
+        );
+        const shouldPersistCurrentProjectEditorState = shouldPersistProjectBeforeLoad({
+          currentProjectHasOpenTab,
+          loadedProject,
+          navigationStack: graphNavigationStack,
+          project,
+        });
 
         const currentProjectEditorSnapshot = shouldPersistCurrentProjectEditorState
           ? persistCurrentProjectEditorSnapshot()

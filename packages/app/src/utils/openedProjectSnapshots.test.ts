@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
+import { emptyNodeGraph, type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
 import { buildOpenedProjectSnapshot } from './openedProjectSnapshots.js';
 
 function makeGraph(id: string, name: string, nodes: NodeGraph['nodes'] = []): NodeGraph {
@@ -69,5 +69,16 @@ describe('openedProjectSnapshots', () => {
     });
 
     assert.deepEqual(snapshot.data, data);
+  });
+
+  test('buildOpenedProjectSnapshot does not persist a temporary empty graph after all project graphs were deleted', () => {
+    const project = makeProject([]);
+
+    const snapshot = buildOpenedProjectSnapshot({
+      project,
+      graph: emptyNodeGraph(),
+    });
+
+    assert.deepEqual(snapshot.project.graphs, {});
   });
 });

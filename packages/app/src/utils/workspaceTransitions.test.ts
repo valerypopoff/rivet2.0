@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
+import { emptyNodeGraph, type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
 import { createRootGraphViewContext, createSubgraphGraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import {
   chooseProjectGraph,
@@ -9,6 +9,7 @@ import {
   createProjectLoadTransition,
   mergeCurrentGraphIntoProject,
   resolveProjectGraphForLoad,
+  shouldPersistProjectBeforeLoad,
 } from './workspaceTransitions.js';
 
 function makeGraph(id: string, name: string, nodes: NodeGraph['nodes'] = []): NodeGraph {
@@ -229,5 +230,73 @@ describe('workspaceTransitions', () => {
 
     assert.equal(merged.graphs['g-1' as GraphId], updatedGraph);
     assert.equal(merged.graphs['g-2' as GraphId], siblingGraph);
+  });
+
+  test('mergeCurrentGraphIntoProject preserves unusual sibling graph map entries', () => {
+    const legacyGraph = {
+      metadata: {
+        name: 'Legacy',
+        description: '',
+      },
+      nodes: [],
+      connections: [],
+    } as NodeGraph;
+    const updatedGraph = makeGraph('g-1', 'Updated', [{ id: 'node-1' } as any]);
+    const project = {
+      ...makeProject([makeGraph('g-1', 'Original')]),
+      graphs: {
+        ['legacy-key' as GraphId]: legacyGraph,
+        ['g-1' as GraphId]: makeGraph('g-1', 'Original'),
+      },
+    };
+
+    const merged = mergeCurrentGraphIntoProject(project, updatedGraph);
+
+    assert.equal(merged.graphs['g-1' as GraphId], updatedGraph);
+    assert.equal(merged.graphs['legacy-key' as GraphId], legacyGraph);
+    assert.equal(merged.graphs['undefined' as GraphId], undefined);
+  });
+
+  test('mergeCurrentGraphIntoProject ignores temporary empty graphs that are not part of the project', () => {
+    const project = makeProject([]);
+    const temporaryEmptyGraph = emptyNodeGraph();
+
+    const merged = mergeCurrentGraphIntoProject(project, temporaryEmptyGraph);
+
+    assert.equal(merged, project);
+    assert.deepEqual(Object.keys(merged.graphs), []);
+  });
+
+  test('mergeCurrentGraphIntoProject preserves an existing empty project graph', () => {
+    const existingEmptyGraph = makeGraph('g-1', 'Empty');
+    const project = makeProject([existingEmptyGraph]);
+
+    const merged = mergeCurrentGraphIntoProject(project, existingEmptyGraph);
+
+    assert.equal(merged.graphs['g-1' as GraphId], existingEmptyGraph);
+  });
+
+  test('shouldPersistProjectBeforeLoad keeps empty opened tabs snapshot-eligible', () => {
+    const emptyProject = makeProject([]);
+    const emptyNavigationStack = { stack: [], index: undefined };
+
+    assert.equal(
+      shouldPersistProjectBeforeLoad({
+        currentProjectHasOpenTab: true,
+        loadedProject: { loaded: false },
+        navigationStack: emptyNavigationStack,
+        project: emptyProject,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldPersistProjectBeforeLoad({
+        currentProjectHasOpenTab: false,
+        loadedProject: { loaded: false },
+        navigationStack: emptyNavigationStack,
+        project: emptyProject,
+      }),
+      false,
+    );
   });
 });

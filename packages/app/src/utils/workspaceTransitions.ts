@@ -15,6 +15,7 @@ import {
 import type { TrivetState } from '../state/trivet.js';
 import type { CanvasPosition } from '../state/graphBuilder.js';
 import type { OpenedProjectInfo } from '../state/savedGraphs.js';
+import { prepareCurrentGraphForSave } from './currentGraphSave.js';
 
 export type WorkspaceTransitionType =
   | 'load-project'
@@ -174,9 +175,33 @@ export function mergeCurrentGraphIntoProject(project: Omit<Project, 'data'>, sav
     return project;
   }
 
+  const prepared = prepareCurrentGraphForSave(savedGraph, Object.values(project.graphs));
+  if (!prepared) {
+    return project;
+  }
+
   return produce(project, (draft) => {
-    draft.graphs[savedGraph.metadata!.id!] = savedGraph;
+    draft.graphs[prepared.currentGraph.metadata!.id!] = prepared.currentGraph;
   });
+}
+
+export function shouldPersistProjectBeforeLoad(options: {
+  currentProjectHasOpenTab: boolean;
+  loadedProject: { loaded: boolean };
+  navigationStack: GraphNavigationStack;
+  project: Omit<Project, 'data'>;
+}): boolean {
+  const projectId = options.project.metadata.id;
+  if (!projectId) {
+    return false;
+  }
+
+  return (
+    options.currentProjectHasOpenTab ||
+    options.loadedProject.loaded ||
+    Object.keys(options.project.graphs).length > 0 ||
+    options.navigationStack.stack.length > 0
+  );
 }
 
 export function mergeStaticData(
