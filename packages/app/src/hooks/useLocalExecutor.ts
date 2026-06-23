@@ -47,6 +47,7 @@ import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
 import { cloneFrozenNodeOutputsForExecutor } from '../utils/frozenNodeOutputs.js';
+import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
 
 /**
  * Yield to the macrotask queue so the browser can repaint.
@@ -120,14 +121,16 @@ export function useLocalExecutor() {
     // a Promise here pauses the processor until the macrotask yield completes,
     // giving the browser a chance to repaint with updated React state.
     processor.on('nodeStart', async (data: ProcessEvents['nodeStart']) => {
-      currentExecution.onNodeStart(data);
+      dispatchGraphExecutionEvent('nodeStart', () => currentExecution.onNodeStart(data));
       await yieldToMacrotask();
     });
     processor.on('nodeFinish', async (data: ProcessEvents['nodeFinish']) => {
-      currentExecution.onNodeFinish(data);
+      dispatchGraphExecutionEvent('nodeFinish', () => currentExecution.onNodeFinish(data));
       await yieldToMacrotask();
     });
-    processor.on('nodeError', currentExecution.onNodeError);
+    processor.on('nodeError', (data) => {
+      dispatchGraphExecutionEvent('nodeError', () => currentExecution.onNodeError(data));
+    });
 
     setUserInputSubmitHandler((nodeId: NodeId, answers: StringArrayDataValue) => {
       processor.userInput(nodeId, answers);
@@ -138,29 +141,53 @@ export function useLocalExecutor() {
       );
     });
 
-    processor.on('userInput', currentExecution.onUserInput);
+    processor.on('userInput', (data) => {
+      dispatchGraphExecutionEvent('userInput', () => currentExecution.onUserInput(data));
+    });
     // start and graphStart are already awaited by GraphProcessor, so yielding
     // here also creates a macrotask boundary before node processing begins.
     processor.on('start', async (data: ProcessEvents['start']) => {
-      currentExecution.onStart(data);
+      dispatchGraphExecutionEvent('start', () => currentExecution.onStart(data));
       await yieldToMacrotask();
     });
-    processor.on('done', currentExecution.onDone);
-    processor.on('abort', currentExecution.onAbort);
-    processor.on('graphAbort', currentExecution.onGraphAbort);
-    processor.on('graphError', currentExecution.onGraphError);
-    processor.on('partialOutput', currentExecution.onPartialOutput);
+    processor.on('done', (data) => {
+      dispatchGraphExecutionEvent('done', () => currentExecution.onDone(data));
+    });
+    processor.on('abort', (data) => {
+      dispatchGraphExecutionEvent('abort', () => currentExecution.onAbort(data));
+    });
+    processor.on('graphAbort', (data) => {
+      dispatchGraphExecutionEvent('graphAbort', () => currentExecution.onGraphAbort(data));
+    });
+    processor.on('graphError', (data) => {
+      dispatchGraphExecutionEvent('graphError', () => currentExecution.onGraphError(data));
+    });
+    processor.on('partialOutput', (data) => {
+      dispatchGraphExecutionEvent('partialOutput', () => currentExecution.onPartialOutput(data));
+    });
     processor.on('graphStart', async (data: ProcessEvents['graphStart']) => {
-      currentExecution.onGraphStart(data);
+      dispatchGraphExecutionEvent('graphStart', () => currentExecution.onGraphStart(data));
       await yieldToMacrotask();
     });
-    processor.on('graphFinish', currentExecution.onGraphFinish);
-    processor.on('nodeOutputsCleared', currentExecution.onNodeOutputsCleared);
+    processor.on('graphFinish', (data) => {
+      dispatchGraphExecutionEvent('graphFinish', () => currentExecution.onGraphFinish(data));
+    });
+    processor.on('nodeOutputsCleared', (data) => {
+      dispatchGraphExecutionEvent('nodeOutputsCleared', () => currentExecution.onNodeOutputsCleared(data));
+    });
     processor.on('trace', (trace) => logRuntimeDebug('Local graph trace', { trace }));
-    processor.on('pause', currentExecution.onPause);
-    processor.on('resume', currentExecution.onResume);
-    processor.on('error', currentExecution.onError);
-    processor.on('nodeExcluded', currentExecution.onNodeExcluded);
+    processor.on('pause', () => {
+      dispatchGraphExecutionEvent('pause', () => currentExecution.onPause());
+    });
+    processor.on('resume', () => {
+      dispatchGraphExecutionEvent('resume', () => currentExecution.onResume());
+    });
+    processor.on('error', (data) => {
+      dispatchGraphExecutionEvent('error', () => currentExecution.onError(data));
+    });
+    processor.on('nodeExcluded', (data) => {
+      dispatchGraphExecutionEvent('nodeExcluded', () => currentExecution.onNodeExcluded(data));
+    });
 
     processor.onUserEvent('toast', (data: DataValue | undefined) => {
       const stringData = coerceTypeOptional(data, 'string');
@@ -189,6 +216,8 @@ export function useLocalExecutor() {
         setRecordingPlaybackStarting(true);
       }
 
+      let processor: GraphProcessor | undefined;
+
       try {
         if (recordingToReplay) {
           await yieldToMacrotask();
@@ -216,7 +245,7 @@ export function useLocalExecutor() {
         );
 
         const recorder = new ExecutionRecorder();
-        const processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
+        processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
           captureNodeTimings: showNodeRunDurations,
         });
         processor.executor = 'browser';
@@ -298,6 +327,14 @@ export function useLocalExecutor() {
 
         logRuntimeError('Local graph run failed.', e);
       } finally {
+        if (processor) {
+          dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
+        }
+
+        if (processor && currentProcessor.current === processor) {
+          currentProcessor.current = null;
+        }
+
         if (recordingToReplay) {
           recordingPlaybackStartingRef.current = false;
           setRecordingPlaybackStarting(false);

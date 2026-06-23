@@ -67,8 +67,12 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
   assert.match(graphListSource, /data-contextmenutype="graph-list"/);
   assert.match(graphListSource, /onKeyDown={handleGraphListKeyDown}/);
   assert.match(graphListSource, /onMouseDown={handleGraphListMouseDown}/);
+  assert.match(graphListSource, /onMouseDownCapture={handleGraphListMouseDownCapture}/);
   assert.match(graphListSource, /tabIndex={-1}/);
   assert.match(graphListSource, /if \(e\.button !== 0\) {\s+return;\s+}/);
+  assert.match(graphListSource, /if \(e\.button !== 0\) {\s+e\.preventDefault\(\);/);
+  assert.doesNotMatch(graphListSource, /ref={refs\.setReference}/);
+  assert.match(graphListSource, /ref={setFloatingMenu}/);
   assert.match(graphListSource, /e\.key !== 'F2'/);
   assert.match(graphListSource, /isInteractiveGraphListTarget\(e\.target\)/);
   assert.match(graphListSource, /setSearchText\(''\);/);

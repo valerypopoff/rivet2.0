@@ -279,6 +279,13 @@ test('node code editor lets panel scrolling continue at editor scroll edges', ()
   assert.equal(scrollbarBlocks.length, 2);
 });
 
+test('readonly display code editors keep Monaco model text synchronized', () => {
+  const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
+
+  assert.match(codeEditorSource, /!isReadonly \|\| onChangeLatest\.current \|\| modelCacheKey/);
+  assert.match(codeEditorSource, /model\.setValue\(text\);[\s\S]*editor\.layout\(\);/);
+});
+
 test('node code editor popup widgets are allowed outside the rounded editor shell', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
   const defaultNodeEditorSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditor.tsx'), 'utf8');

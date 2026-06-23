@@ -237,6 +237,23 @@ export const CodeEditor: FC<CodeEditorProps> = ({
 
   useEffect(() => {
     const editor = editorInstance.current;
+    const model = editor?.getModel();
+
+    if (!editor || !model || !isReadonly || onChangeLatest.current || modelCacheKey) {
+      return;
+    }
+
+    if (model.getValue() === text) {
+      return;
+    }
+
+    model.setValue(text);
+    editor.layout();
+    onContentHeightChangeLatest.current?.(editor.getContentHeight());
+  }, [isReadonly, modelCacheKey, onChangeLatest, onContentHeightChangeLatest, text]);
+
+  useEffect(() => {
+    const editor = editorInstance.current;
 
     if (!editor) {
       return;
