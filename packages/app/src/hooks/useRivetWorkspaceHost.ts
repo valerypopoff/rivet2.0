@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import type { GraphId, NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
+import { nanoid } from 'nanoid/non-secure';
 import type { TrivetState } from '../state/trivet.js';
 import { isPathBasedIOProvider } from '../io/IOProvider.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
@@ -28,6 +29,12 @@ import {
   updateProjectTabUiState,
   type ProjectTabUiState,
 } from '../state/projectTabUi.js';
+import {
+  openingProjectTabsSortedIdsState,
+  openingProjectTabsState,
+  selectedOpeningProjectTabIdState,
+  type OpeningProjectTabId,
+} from '../state/openingProjectTabs.js';
 import { handleError } from '../utils/errorHandling.js';
 import {
   addOpenedProject,
@@ -55,6 +62,7 @@ import {
   hasProjectMetadataPatchChanges,
   type ProjectMetadataPatch,
 } from '../utils/projectMetadataUpdates.js';
+import { removeOpeningProjectTabId } from '../utils/openingProjectTabs.js';
 
 export type RivetProjectSnapshotInput = {
   project: Project | Omit<Project, 'data'>;
@@ -88,6 +96,20 @@ export type RivetProjectReplaceOptions = {
   tabUi?: RivetProjectTabUiState;
 };
 
+export type RivetOpeningProjectTabInput = {
+  title: string;
+  path?: string | null;
+};
+
+export type RivetOpeningProjectTabOptions = {
+  tabUi?: RivetProjectTabUiState;
+  replaceCurrent?: boolean;
+};
+
+export type RivetOpeningProjectTabHandle = {
+  openingTabId: string;
+};
+
 export type RivetProjectMetadataUpdateOptions = {
   path?: string | null;
   persistedExternally?: boolean;
@@ -102,6 +124,16 @@ export type RivetWorkspaceHost = {
   closeProject(projectId?: ProjectId): Promise<boolean>;
   moveProjectPaths(moves: MoveProjectPathsInput): void;
   setProjectTabUiState(projectId: ProjectId, state?: RivetProjectTabUiState): Promise<boolean>;
+  startOpeningProjectTab(
+    input: RivetOpeningProjectTabInput,
+    options?: RivetOpeningProjectTabOptions,
+  ): Promise<RivetOpeningProjectTabHandle | false>;
+  finishOpeningProjectTab(
+    openingTabId: string,
+    snapshot: RivetProjectSnapshotInput,
+    options?: RivetProjectOpenOptions,
+  ): Promise<boolean>;
+  cancelOpeningProjectTab(openingTabId: string): Promise<boolean>;
   updateProjectMetadata(
     projectId: ProjectId,
     metadataPatch: RivetProjectMetadataPatch,
@@ -155,6 +187,9 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const loadProject = useLoadProject();
   const [projects, setProjects] = useAtom(projectsState);
   const [projectTabUiStates, setProjectTabUiStates] = useAtom(projectTabUiState);
+  const [openingProjectTabs, setOpeningProjectTabs] = useAtom(openingProjectTabsState);
+  const setOpeningProjectTabIds = useSetAtom(openingProjectTabsSortedIdsState);
+  const setSelectedOpeningProjectTabId = useSetAtom(selectedOpeningProjectTabIdState);
   const currentProject = useAtomValue(projectState);
   const currentGraph = useAtomValue(graphState);
   const loadedProject = useAtomValue(loadedProjectState);
@@ -178,11 +213,16 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const openProjectSnapshot = useStableCallback(
     async (
       snapshot: RivetProjectSnapshotInput,
-      options: RivetProjectOpenOptions & { replaceCurrent?: boolean } = {},
+      options: RivetProjectOpenOptions & {
+        replaceCurrent?: boolean;
+        replaceProjectId?: ProjectId;
+        selectedOpeningProjectTabIdToClear?: OpeningProjectTabId | 'all';
+      } = {},
     ) => {
       const normalized = normalizeProjectSnapshot(snapshot);
       const projectId = normalized.project.metadata.id as ProjectId;
       const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
+      const replaceTargetProjectId = options.replaceProjectId ?? currentProjectId;
       const shouldPreseedTabUiState = options.tabUi !== undefined;
       const previousTabUiState = projectTabUiStates[projectId];
 
@@ -215,12 +255,12 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
 
         setProjects((previousProjects) => {
           const replacedProjectIndex =
-            currentProjectId && currentProjectId !== projectId
-              ? previousProjects.openedProjectsSortedIds.indexOf(currentProjectId)
+            replaceTargetProjectId && replaceTargetProjectId !== projectId
+              ? previousProjects.openedProjectsSortedIds.indexOf(replaceTargetProjectId)
               : -1;
           const withoutReplacedProject =
-            options.replaceCurrent && currentProjectId && currentProjectId !== projectId
-              ? removeOpenedProject(previousProjects, currentProjectId)
+            options.replaceCurrent && replaceTargetProjectId && replaceTargetProjectId !== projectId
+              ? removeOpenedProject(previousProjects, replaceTargetProjectId)
               : previousProjects;
 
           const withOpenedProject = addOpenedProject(
@@ -248,23 +288,32 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
           };
         });
 
-        if (options.replaceCurrent && currentProjectId && currentProjectId !== projectId) {
+        const openingTabSelectionToClear = options.selectedOpeningProjectTabIdToClear ?? 'all';
+        if (openingTabSelectionToClear === 'all') {
+          setSelectedOpeningProjectTabId(undefined);
+        } else {
+          setSelectedOpeningProjectTabId((selectedId) =>
+            selectedId === openingTabSelectionToClear ? undefined : selectedId,
+          );
+        }
+
+        if (options.replaceCurrent && replaceTargetProjectId && replaceTargetProjectId !== projectId) {
           setProjectCompareReference((reference) =>
-            reference?.projectId === currentProjectId ? undefined : reference,
+            reference?.projectId === replaceTargetProjectId ? undefined : reference,
           );
           setViewingProjectComparisonNode(undefined);
           setOpenedProjectSnapshots((snapshots) => {
             const nextSnapshots = { ...snapshots };
-            delete nextSnapshots[currentProjectId];
+            delete nextSnapshots[replaceTargetProjectId];
             return nextSnapshots;
           });
-          setSavedProjectContentDigests((digests) => removeProjectUnsavedState(digests, currentProjectId));
-          setProjectUnsavedChanges((flags) => removeProjectUnsavedState(flags, currentProjectId));
-          setProjectDataUnsavedChanges((flags) => removeProjectUnsavedState(flags, currentProjectId));
-          setProjectTabUiStates((states) => removeProjectTabUiState(states, currentProjectId));
-          removeProjectExecutionSnapshot(currentProjectId);
-          releaseProjectContextState(currentProjectId);
-          clearCodeEditorModelCacheForClosedProject(currentProjectId);
+          setSavedProjectContentDigests((digests) => removeProjectUnsavedState(digests, replaceTargetProjectId));
+          setProjectUnsavedChanges((flags) => removeProjectUnsavedState(flags, replaceTargetProjectId));
+          setProjectDataUnsavedChanges((flags) => removeProjectUnsavedState(flags, replaceTargetProjectId));
+          setProjectTabUiStates((states) => removeProjectTabUiState(states, replaceTargetProjectId));
+          removeProjectExecutionSnapshot(replaceTargetProjectId);
+          releaseProjectContextState(replaceTargetProjectId);
+          clearCodeEditorModelCacheForClosedProject(replaceTargetProjectId);
         }
 
         return true;
@@ -402,6 +451,90 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
     return true;
   });
 
+  const startOpeningProjectTab = useStableCallback(
+    async (
+      input: RivetOpeningProjectTabInput,
+      options: RivetOpeningProjectTabOptions = {},
+    ): Promise<RivetOpeningProjectTabHandle | false> => {
+      if (!input.title.trim()) {
+        return false;
+      }
+
+      const openingTabId = `opening-project-${nanoid()}` as OpeningProjectTabId;
+      const replaceTargetProjectId =
+        options.replaceCurrent && projects.openedProjects[currentProject.metadata.id as ProjectId]
+          ? (currentProject.metadata.id as ProjectId)
+          : undefined;
+      const replacedOpeningTabIds = replaceTargetProjectId
+        ? Object.values(openingProjectTabs).flatMap((tab) =>
+            tab?.replaceTargetProjectId === replaceTargetProjectId ? [tab.openingTabId] : [],
+          )
+        : [];
+
+      setOpeningProjectTabs((tabs) => {
+        const nextTabs = { ...tabs };
+        for (const replacedOpeningTabId of replacedOpeningTabIds) {
+          delete nextTabs[replacedOpeningTabId];
+        }
+
+        nextTabs[openingTabId] = {
+          openingTabId,
+          path: input.path ?? null,
+          replaceTargetProjectId,
+          tabUi: options.tabUi,
+          title: input.title,
+        };
+
+        return nextTabs;
+      });
+      setOpeningProjectTabIds((ids) => [...ids.filter((id) => !replacedOpeningTabIds.includes(id)), openingTabId]);
+      setSelectedOpeningProjectTabId(openingTabId);
+
+      return { openingTabId };
+    },
+  );
+
+  const removeOpeningProjectTab = useStableCallback(async (openingTabId: string) => {
+    const typedOpeningTabId = openingTabId as OpeningProjectTabId;
+    if (!openingProjectTabs[typedOpeningTabId]) {
+      return false;
+    }
+
+    setOpeningProjectTabs((tabs) => {
+      const nextTabs = { ...tabs };
+      delete nextTabs[typedOpeningTabId];
+      return nextTabs;
+    });
+    setOpeningProjectTabIds((ids) => removeOpeningProjectTabId(ids, typedOpeningTabId));
+    setSelectedOpeningProjectTabId((selectedId) => (selectedId === typedOpeningTabId ? undefined : selectedId));
+
+    return true;
+  });
+
+  const finishOpeningProjectTab = useStableCallback(
+    async (openingTabId: string, snapshot: RivetProjectSnapshotInput, options: RivetProjectOpenOptions = {}) => {
+      const typedOpeningTabId = openingTabId as OpeningProjectTabId;
+      const openingTab = openingProjectTabs[typedOpeningTabId];
+      if (!openingTab) {
+        return false;
+      }
+
+      const opened = await openProjectSnapshot(snapshot, {
+        replaceCurrent: openingTab.replaceTargetProjectId != null,
+        replaceProjectId: openingTab.replaceTargetProjectId,
+        selectedOpeningProjectTabIdToClear: typedOpeningTabId,
+        tabUi: options.tabUi ?? openingTab.tabUi,
+      });
+
+      if (!opened) {
+        return false;
+      }
+
+      await removeOpeningProjectTab(openingTabId);
+      return true;
+    },
+  );
+
   const replaceCurrent = useStableCallback(
     async (snapshot: RivetProjectSnapshotInput, options?: RivetProjectReplaceOptions) => {
       return await openProjectSnapshot(snapshot, { replaceCurrent: true, tabUi: options?.tabUi });
@@ -501,9 +634,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
                 project: patchedProject,
               };
 
-          setSavedProjectContentDigests((previousDigests) =>
-            markProjectContentClean(previousDigests, cleanBaseline),
-          );
+          setSavedProjectContentDigests((previousDigests) => markProjectContentClean(previousDigests, cleanBaseline));
           setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, false));
         }
       } else {
@@ -611,6 +742,9 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       closeProject,
       moveProjectPaths,
       setProjectTabUiState,
+      startOpeningProjectTab,
+      finishOpeningProjectTab,
+      cancelOpeningProjectTab: removeOpeningProjectTab,
       updateProjectMetadata,
       replaceCurrent,
       markCurrentProjectClean,
@@ -625,8 +759,11 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       moveProjectPaths,
       openProjectPath,
       openProjectSnapshot,
+      finishOpeningProjectTab,
       replaceCurrent,
+      removeOpeningProjectTab,
       setProjectTabUiState,
+      startOpeningProjectTab,
       startProjectCompare,
       stopProjectCompare,
       updateProjectMetadata,

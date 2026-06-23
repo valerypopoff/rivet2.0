@@ -1,5 +1,7 @@
 
 
+- In the Code node, I noticed thet in the node output area the order of outputs is correct: Returned value and then Parsed code. But in the full node output modal, the order is "Parsed code" and then "Returned value". Thta's wring. Fix it and check all the other similar nodes.
+
 - The switcher hints in the node settings modal, do not make them so small. let's make them the same size as switcher hints in the project settings modal for example
 
 

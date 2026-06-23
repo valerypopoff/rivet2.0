@@ -34,7 +34,7 @@ test('fullscreen node output modal is rendered outside the canvas tree', () => {
   assert.match(rendererBody, /return \(\) => \{\s*setFullscreenOutputNodeId\(null\);\s*\};/);
   assert.match(
     rivetAppSource,
-    /<GraphBuilder \/>\s*<AppErrorBoundary context="Fullscreen Output Modal"[\s\S]*<FullscreenNodeOutputModalRenderer \/>/,
+    /{!openingProjectSelected && <GraphBuilder \/>}\s*<AppErrorBoundary context="Fullscreen Output Modal"[\s\S]*<FullscreenNodeOutputModalRenderer \/>/,
   );
   assert.match(fullScreenModalSource, /shouldReturnFocus={false}/);
 });

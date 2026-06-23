@@ -13,7 +13,7 @@ test('workspace host releases cached context atoms without deleting persisted co
   assert.match(savedGraphsSource, /export function releaseProjectContextState\(projectId: ProjectId\): void \{/);
   assert.match(savedGraphsSource, /projectContextState\.remove\(projectId\);/);
   assert.doesNotMatch(savedGraphsSource, /storage\.removeItem\(`projectContext__"\$\{projectId\}"`\)/);
-  assert.match(workspaceHostSource, /releaseProjectContextState\(currentProjectId\);/);
+  assert.match(workspaceHostSource, /releaseProjectContextState\(replaceTargetProjectId\);/);
   assert.match(workspaceHostSource, /releaseProjectContextState\(projectId\);/);
   assert.doesNotMatch(workspaceHostSource, /clearProjectContextState/);
 });
@@ -64,7 +64,7 @@ test('workspace host exposes project compare controls for hosted wrappers', () =
   assert.match(workspaceHostSource, /setViewingProjectComparisonNode\(undefined\);/);
   assert.match(workspaceHostSource, /setProjectCompareReference\(\{/);
   assert.match(workspaceHostSource, /reference\?\.projectId === projectId \? undefined : reference/);
-  assert.match(workspaceHostSource, /reference\?\.projectId === currentProjectId \? undefined : reference/);
+  assert.match(workspaceHostSource, /reference\?\.projectId === replaceTargetProjectId \? undefined : reference/);
   assert.match(workspaceHostSource, /labels: options\?\.labels/);
   assert.match(hostSource, /RivetProjectCompareOptions/);
   assert.match(hostSource, /ProjectCompareSideLabels/);
@@ -93,7 +93,10 @@ test('workspace host exposes a narrow project metadata update API for hosted wra
   assert.match(workspaceHostSource, /setOpenedProjectSnapshots\(/);
   assert.match(workspaceHostSource, /if \(options\.persistedExternally\) \{/);
   assert.match(workspaceHostSource, /if \(!wasProjectDirty && patchedProject\) \{/);
-  assert.match(workspaceHostSource, /hasProjectContentChangedFromCleanDigest\(savedProjectContentDigests, contentBeforePatch\)/);
+  assert.match(
+    workspaceHostSource,
+    /hasProjectContentChangedFromCleanDigest\(savedProjectContentDigests, contentBeforePatch\)/,
+  );
   assert.match(workspaceHostSource, /markProjectDirtyFlag\(previousFlags, projectId, true\)/);
   assert.match(hostSource, /RivetProjectMetadataPatch/);
   assert.match(hostSource, /RivetProjectMetadataUpdateOptions/);
@@ -106,11 +109,17 @@ test('workspace host exposes transient project tab UI state for hosted wrappers'
 
   assert.match(projectTabUiSource, /export type ProjectTabUiState = \{/);
   assert.match(projectTabUiSource, /preview\?: boolean;/);
-  assert.match(projectTabUiSource, /export const projectTabUiState = atom<Record<ProjectId, ProjectTabUiState \| undefined>>\(\{\}\);/);
+  assert.match(
+    projectTabUiSource,
+    /export const projectTabUiState = atom<Record<ProjectId, ProjectTabUiState \| undefined>>\(\{\}\);/,
+  );
   assert.doesNotMatch(projectTabUiSource, /atomWithStorage/);
   assert.match(workspaceHostSource, /export type RivetProjectTabUiState = ProjectTabUiState;/);
   assert.match(workspaceHostSource, /export type RivetProjectOpenOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/);
-  assert.match(workspaceHostSource, /export type RivetProjectReplaceOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/);
+  assert.match(
+    workspaceHostSource,
+    /export type RivetProjectReplaceOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/,
+  );
   assert.match(
     workspaceHostSource,
     /openProjectSnapshot\(snapshot: RivetProjectSnapshotInput, options\?: RivetProjectOpenOptions\): Promise<boolean>;/,
@@ -134,8 +143,57 @@ test('workspace host exposes transient project tab UI state for hosted wrappers'
     /if \(shouldPreseedTabUiState\) \{[\s\S]*updateProjectTabUiState\(states, projectId, previousTabUiState\)/,
   );
   assert.match(workspaceHostSource, /removeProjectTabUiState\(states, projectId\)/);
-  assert.match(workspaceHostSource, /removeProjectTabUiState\(states, currentProjectId\)/);
+  assert.match(workspaceHostSource, /removeProjectTabUiState\(states, replaceTargetProjectId\)/);
   assert.match(hostSource, /RivetProjectOpenOptions/);
   assert.match(hostSource, /RivetProjectReplaceOptions/);
   assert.match(hostSource, /RivetProjectTabUiState/);
+});
+
+test('workspace host exposes transient opening project tabs for hosted wrappers', () => {
+  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
+  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
+  const openingTabsSource = readFileSync(join(hooksDir, '..', 'state', 'openingProjectTabs.ts'), 'utf8');
+  const openingTabsUtilsSource = readFileSync(join(hooksDir, '..', 'utils', 'openingProjectTabs.ts'), 'utf8');
+  const projectSelectorSource = readFileSync(join(hooksDir, '..', 'components', 'ProjectSelector.tsx'), 'utf8');
+  const rivetAppSource = readFileSync(join(hooksDir, '..', 'components', 'RivetApp.tsx'), 'utf8');
+  const menuCommandsSource = readFileSync(join(hooksDir, 'useMenuCommands.ts'), 'utf8');
+
+  assert.match(openingTabsSource, /export type OpeningProjectTabInfo = \{/);
+  assert.match(openingTabsSource, /replaceTargetProjectId\?: ProjectId;/);
+  assert.match(openingTabsSource, /export const openingProjectTabsState = atom</);
+  assert.match(openingTabsSource, /export const selectedOpeningProjectTabIdState = atom/);
+  assert.match(openingTabsSource, /getWorkspaceVisibleTabCount\(\{/);
+  assert.doesNotMatch(openingTabsSource, /atomWithStorage/);
+  assert.match(openingTabsUtilsSource, /export function buildProjectTabListItems/);
+  assert.match(openingTabsUtilsSource, /export function getWorkspaceVisibleTabCount/);
+
+  assert.match(workspaceHostSource, /export type RivetOpeningProjectTabInput = \{/);
+  assert.match(workspaceHostSource, /title: string;/);
+  assert.match(workspaceHostSource, /path\?: string \| null;/);
+  assert.match(workspaceHostSource, /export type RivetOpeningProjectTabOptions = \{/);
+  assert.match(workspaceHostSource, /replaceCurrent\?: boolean;/);
+  assert.match(workspaceHostSource, /startOpeningProjectTab\(/);
+  assert.match(workspaceHostSource, /finishOpeningProjectTab\(/);
+  assert.match(workspaceHostSource, /cancelOpeningProjectTab\(openingTabId: string\): Promise<boolean>;/);
+  assert.match(workspaceHostSource, /replaceProjectId\?: ProjectId/);
+  assert.match(workspaceHostSource, /projects\.openedProjects\[currentProject\.metadata\.id as ProjectId\]/);
+  assert.match(workspaceHostSource, /setSelectedOpeningProjectTabId\(openingTabId\);/);
+  assert.match(workspaceHostSource, /await removeOpeningProjectTab\(openingTabId\);/);
+
+  assert.match(projectSelectorSource, /buildProjectTabListItems\(/);
+  assert.match(projectSelectorSource, /const sortableProjectIds = useMemo\(/);
+  assert.match(
+    projectSelectorSource,
+    /useSyncCurrentStateIntoOpenedProjects\(\{ enabled: projectMode && selectedOpeningProjectTabId == null \}\);/,
+  );
+  assert.match(projectSelectorSource, /<OpeningProjectTab/);
+  assert.match(projectSelectorSource, /void cancelOpeningProjectTab\(tabItem\.openingTabId\);/);
+  assert.match(rivetAppSource, /workspaceVisibleTabCountState/);
+  assert.match(rivetAppSource, /selectedOpeningProjectTabIdState/);
+  assert.match(rivetAppSource, /<OpeningProjectPlaceholder \/>/);
+  assert.match(menuCommandsSource, /selectedOpeningProjectTabId == null \? openedProjectIds\.length : 0/);
+
+  assert.match(hostSource, /RivetOpeningProjectTabHandle/);
+  assert.match(hostSource, /RivetOpeningProjectTabInput/);
+  assert.match(hostSource, /RivetOpeningProjectTabOptions/);
 });

@@ -35,7 +35,7 @@ import { ProjectSelector } from './ProjectSelector';
 import { NewProjectModalRenderer } from './NewProjectModal';
 import { useWindowTitle } from '../hooks/useWindowTitle';
 import { HelpModal } from './HelpModal';
-import { openedProjectsSortedIdsState } from '../state/savedGraphs';
+import { selectedOpeningProjectTabIdState, workspaceVisibleTabCountState } from '../state/openingProjectTabs.js';
 import { NoProject } from './NoProject';
 import { AppErrorBoundary } from './AppErrorBoundary';
 import { wrapAsync } from '../utils/errorHandling';
@@ -47,6 +47,7 @@ import { getUiFontSizeCssVariables } from '../utils/uiFontSize.js';
 import { useProjectPlugins } from '../hooks/useProjectPlugins.js';
 import { MissingAppPluginsModalRenderer } from './MissingAppPluginsModal.js';
 import { warmCodeEditor } from './LazyComponents.js';
+import { LoadingSpinner } from './LoadingSpinner.js';
 
 const styles = css`
   position: fixed;
@@ -56,6 +57,29 @@ const styles = css`
   overflow: hidden;
   font-family: var(--font-family);
   font-size: var(--ui-font-size-base);
+`;
+
+const openingProjectPlaceholderStyles = css`
+  align-items: center;
+  background: var(--canvas-bg);
+  color: var(--foreground);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  inset: var(--project-selector-height) 0 0 0;
+  justify-content: center;
+  position: absolute;
+
+  .opening-project-placeholder-spinner svg {
+    height: 24px;
+    width: 24px;
+  }
+
+  .opening-project-placeholder-title {
+    color: var(--grey-lightest);
+    font-size: var(--ui-font-size-base);
+    font-weight: 600;
+  }
 `;
 
 setGlobalTheme({
@@ -79,7 +103,8 @@ export const RivetApp: FC = () => {
   const customThemeSecondaryColor = useAtomValue(customThemeSecondaryColorState);
   const uiFontSize = useAtomValue(uiFontSizeState);
   const openOverlay = useAtomValue(overlayOpenState);
-  const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
+  const workspaceVisibleTabCount = useAtomValue(workspaceVisibleTabCountState);
+  const selectedOpeningProjectTabId = useAtomValue(selectedOpeningProjectTabIdState);
   const uiFontSizeCssVariables = useMemo(() => getUiFontSizeCssVariables(uiFontSize), [uiFontSize]);
   const customThemeCssVariables = useMemo<Record<string, string>>(
     () =>
@@ -108,8 +133,9 @@ export const RivetApp: FC = () => {
     [rootThemeCssVariables, uiFontSizeCssVariables],
   );
 
-  const noProjectOpen = openedProjectIds.length === 0;
+  const noProjectOpen = workspaceVisibleTabCount === 0;
   const isCanvasMode = openOverlay === undefined;
+  const openingProjectSelected = isCanvasMode && selectedOpeningProjectTabId != null;
 
   useLoadStaticData();
   useRestorePersistedWorkspace();
@@ -219,7 +245,8 @@ export const RivetApp: FC = () => {
       ) : (
         <>
           <ProjectSelector />
-          {isCanvasMode && (
+          {openingProjectSelected ? <OpeningProjectPlaceholder /> : null}
+          {isCanvasMode && !openingProjectSelected && (
             <ActionBar
               onRunGraph={runGraph}
               onRunTests={runTests}
@@ -228,10 +255,10 @@ export const RivetApp: FC = () => {
               onResumeGraph={tryResumeGraph}
             />
           )}
-          <StatusBar />
-          {isCanvasMode && <DebuggerPanelRenderer />}
-          <LeftSidebar />
-          <GraphBuilder />
+          {!openingProjectSelected && <StatusBar />}
+          {isCanvasMode && !openingProjectSelected && <DebuggerPanelRenderer />}
+          {!openingProjectSelected && <LeftSidebar />}
+          {!openingProjectSelected && <GraphBuilder />}
           <AppErrorBoundary context="Fullscreen Output Modal" fallback={<div>Failed to render Fullscreen Output</div>}>
             <FullscreenNodeOutputModalRenderer />
           </AppErrorBoundary>
@@ -260,3 +287,12 @@ export const RivetApp: FC = () => {
     </div>
   );
 };
+
+const OpeningProjectPlaceholder: FC = () => (
+  <div css={openingProjectPlaceholderStyles} role="status" aria-live="polite">
+    <div className="opening-project-placeholder-spinner">
+      <LoadingSpinner />
+    </div>
+    <div className="opening-project-placeholder-title">Opening project...</div>
+  </div>
+);

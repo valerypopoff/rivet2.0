@@ -68,8 +68,14 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.match(colorsCss, /:root\.theme-bright,[\s\S]*--rivet-logo-opacity: 1;/);
   assert.match(colorsCss, /--custom-theme-primary: rgba\(255, 153, 0, 1\);/);
   assert.match(colorsCss, /--custom-theme-secondary: var\(--custom-theme-primary\);/);
-  assert.match(colorsCss, /:root\.theme-custom,[\s\S]*\.app\.theme-custom \{[\s\S]*--primary: var\(--custom-theme-primary\);/);
-  assert.match(colorsCss, /:root\.theme-custom,[\s\S]*\.app\.theme-custom \{[\s\S]*--secondary: var\(--custom-theme-secondary\);/);
+  assert.match(
+    colorsCss,
+    /:root\.theme-custom,[\s\S]*\.app\.theme-custom \{[\s\S]*--primary: var\(--custom-theme-primary\);/,
+  );
+  assert.match(
+    colorsCss,
+    /:root\.theme-custom,[\s\S]*\.app\.theme-custom \{[\s\S]*--secondary: var\(--custom-theme-secondary\);/,
+  );
   assert.match(
     colorsCss,
     /:root\.theme-custom,[\s\S]*\.app\.theme-custom \{[\s\S]*--primary-dark: color-mix\(in srgb, var\(--custom-theme-primary\) 80%, black 20%\);/,
@@ -127,8 +133,8 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   );
   assert.doesNotMatch(projectSelectorTsx, /no-left-controls/);
   assert.doesNotMatch(projectSelectorTsx, /\.project[\s\S]*?border-bottom:/);
-  const sidebarToggleStyles = projectSelectorTsx.match(/\.sidebar-toggle-menu \{(?<styles>[\s\S]*?)\n  \}/)
-    ?.groups?.styles;
+  const sidebarToggleStyles = projectSelectorTsx.match(/\.sidebar-toggle-menu \{(?<styles>[\s\S]*?)\n  \}/)?.groups
+    ?.styles;
   const graphHistoryStyles = projectSelectorTsx.match(
     /\.graph-history-menu \{(?<styles>[\s\S]*?)\n  \.sidebar-toggle-tooltip/,
   )?.groups?.styles;
@@ -153,7 +159,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.match(projectSelectorTsx, /\.window-drag-region \{[\s\S]*flex: 1 0 40px;/);
   assert.match(projectSelectorTsx, /\.windows-window-control \{[\s\S]*width: 46px;/);
   assert.match(projectSelectorTsx, /\.windows-window-control \{[\s\S]*border-radius: 0;/);
-  assert.match(projectSelectorTsx, /\.windows-window-control \{[\s\S]*&\.close-window:hover \{[\s\S]*background: #c42b1c;/);
+  assert.match(
+    projectSelectorTsx,
+    /\.windows-window-control \{[\s\S]*&\.close-window:hover \{[\s\S]*background: #c42b1c;/,
+  );
   assert.match(projectSelectorTsx, /const \[isWindowMaximized, setIsWindowMaximized\] = useState\(false\);/);
   assert.match(projectSelectorTsx, /appWindow\?\.listen\?\.\('tauri:\/\/resize'/);
   assert.match(projectSelectorTsx, /isWindowMaximized \? <RestoreWindowIcon \/> : <MaximizeWindowIcon \/>/);
@@ -173,7 +182,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
     projectSelectorTsx,
     /\.file-menu:not\(:hover\):not\(\.open\):has\([\s\S]*\+ \.projects-container \.draggableProject:first-child \.project:not\(\.active\):not\(:hover\)[\s\S]*\)::after \{[\s\S]*right: -2px;/,
   );
-  assert.match(projectSelectorTsx, /\.file-menu:hover,[\s\S]*\.file-menu\.open \{[\s\S]*--project-tab-current-bg: var\(--project-tab-hover-bg\);/);
+  assert.match(
+    projectSelectorTsx,
+    /\.file-menu:hover,[\s\S]*\.file-menu\.open \{[\s\S]*--project-tab-current-bg: var\(--project-tab-hover-bg\);/,
+  );
   assert.match(projectSelectorTsx, /\.file-menu-button \{[\s\S]*padding: 0 10px;/);
   assert.match(
     projectSelectorTsx,
@@ -200,7 +212,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.match(projectSelectorTsx, /\.draggableProject:has\(\.project\.active\)::after,/);
   assert.match(projectSelectorTsx, /\.draggableProject:has\(\.project:hover\)::after,/);
   assert.match(projectSelectorTsx, /\.draggableProject:has\(\+ \.draggableProject \.project:hover\)::after,/);
-  assert.match(projectSelectorTsx, /\.draggableProject:has\(\+ \.draggableProject \.project\.active\)::after \{[\s\S]*display: none;/);
+  assert.match(
+    projectSelectorTsx,
+    /\.draggableProject:has\(\+ \.draggableProject \.project\.active\)::after \{[\s\S]*display: none;/,
+  );
   assert.match(projectSelectorTsx, /\.project \{[\s\S]*--project-tab-bg: var\(--project-selector-strip-bg\);/);
   assert.match(projectSelectorTsx, /\.project \{[\s\S]*--project-tab-hover-bg: var\(--project-tab-active-bg\);/);
   assert.match(projectSelectorTsx, /\.project \{[\s\S]*--project-tab-current-bg: var\(--project-tab-bg\);/);
@@ -223,8 +238,13 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.match(projectSelectorTsx, /&\.active \{[\s\S]*margin-bottom: 0;/);
   assert.match(projectSelectorTsx, /&\.active::before,[\s\S]*&\.active::after \{[\s\S]*display: block;/);
   assert.doesNotMatch(projectSelectorTsx, /&\.active \{[\s\S]*background-color: var\(--primary\);/);
-  assert.ok(projectSelectorTsx.includes("const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();"));
-  assert.match(projectSelectorTsx, /const active = projectTabsSelected && currentProject\.metadata\.id === projectId;/);
+  assert.ok(
+    projectSelectorTsx.includes("const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();"),
+  );
+  assert.match(
+    projectSelectorTsx,
+    /const active = projectTabsSelected && selectedOpeningProjectTabId == null && currentProject\.metadata\.id === projectId;/,
+  );
   assert.match(projectSelectorTsx, /const projectTabUi = useAtomValue\(projectTabUiState\);/);
   assert.match(projectSelectorTsx, /const preview = projectTabUi\[projectId\]\?\.preview === true;/);
   assert.match(projectSelectorTsx, /&\.unsaved,[\s\S]*&\.preview \{[\s\S]*font-style: italic;/);
@@ -237,7 +257,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
     projectSelectorTsx,
     /className={clsx\('project', \{ active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges \}\)}/,
   );
-  assert.match(projectTabUiSource, /export const projectTabUiState = atom<Record<ProjectId, ProjectTabUiState \| undefined>>\(\{\}\);/);
+  assert.match(
+    projectTabUiSource,
+    /export const projectTabUiState = atom<Record<ProjectId, ProjectTabUiState \| undefined>>\(\{\}\);/,
+  );
   assert.doesNotMatch(projectTabUiSource, /atomWithStorage/);
   assert.match(
     projectSelectorTsx,
@@ -247,7 +270,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
     projectUnsavedChangesSource,
     /export function hasProjectUnsavedChanges\([\s\S]*projectUnsavedChanges\[projectId\] === true \|\| projectDataUnsavedChanges\[projectId\] === true;/,
   );
-  assert.match(projectSelectorTsx, /const \[projectPendingClose, setProjectPendingClose\] = useState<ProjectId \| null>\(null\);/);
+  assert.match(
+    projectSelectorTsx,
+    /const \[projectPendingClose, setProjectPendingClose\] = useState<ProjectId \| null>\(null\);/,
+  );
   assert.match(
     projectSelectorTsx,
     /const requestCloseProject = \(projectId: ProjectId\) => \{[\s\S]*hasProjectUnsavedChanges\(projectUnsavedChanges, projectDataUnsavedChanges, projectId\)[\s\S]*setProjectPendingClose\(projectId\);[\s\S]*void closeProject\(projectId\);[\s\S]*\};/,
@@ -293,10 +319,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
     syncOpenedProjectsSource,
     /const currentDigest = getProjectContentDigest\(snapshot\);[\s\S]*const isDirty = currentDigest !== savedDigest;[\s\S]*markProjectDirtyFlag\(previousFlags, currentProject\.metadata\.id, isDirty\)/,
   );
-  assert.match(
-    setStaticDataSource,
-    /markProjectDirtyFlag\(previousFlags, currentProject\.metadata\.id, true\)/,
-  );
+  assert.match(setStaticDataSource, /markProjectDirtyFlag\(previousFlags, currentProject\.metadata\.id, true\)/);
   assert.doesNotMatch(
     syncOpenedProjectsSource,
     /if \(previousFlags\[currentProject\.metadata\.id\]\) \{\s+return previousFlags;\s+\}/,
@@ -310,8 +333,14 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.doesNotMatch(projectSelectorTsx, /\.project::after \{[\s\S]*width: 1px;/);
   assert.doesNotMatch(overlayTabsTsx, /\.menu-item[\s\S]*?border-bottom:/);
   assert.doesNotMatch(overlayTabsTsx, /z-index: 200;/);
-  assert.match(overlayTabsTsx, /border-left: 1px solid var\(--project-selector-divider-color, var\(--grey-darkest\)\);/);
-  assert.match(overlayTabsTsx, /\.menu-item \{[\s\S]*border-right: 1px solid var\(--project-selector-divider-color, var\(--grey-darkest\)\);/);
+  assert.match(
+    overlayTabsTsx,
+    /border-left: 1px solid var\(--project-selector-divider-color, var\(--grey-darkest\)\);/,
+  );
+  assert.match(
+    overlayTabsTsx,
+    /\.menu-item \{[\s\S]*border-right: 1px solid var\(--project-selector-divider-color, var\(--grey-darkest\)\);/,
+  );
   assert.match(leftSidebarTsx, /id="graph-tree-sidebar"/);
   assert.match(leftSidebarTsx, /border-right: 1px solid var\(--grey-darkish\);/);
   assert.match(leftSidebarTsx, /shouldCollapseLeftSidebarDrag\(rawWidth\)/);
@@ -361,7 +390,10 @@ test('windows and macos desktop use the in-strip Menu dropdown instead of a full
   assert.match(platformCoreSource, /startDragging\?\(\): Promise<void>;/);
   assert.match(platformCoreSource, /toggleMaximize\?\(\): Promise<void>;/);
   assert.match(platformCoreSource, /isMaximized\?\(\): Promise<boolean>;/);
-  assert.match(platformCoreSource, /listen\?<T = unknown>\(event: string, handler: \(event: \{ payload: T \}\) => void\): Promise<NativeWindowListener>;/);
+  assert.match(
+    platformCoreSource,
+    /listen\?<T = unknown>\(event: string, handler: \(event: \{ payload: T \}\) => void\): Promise<NativeWindowListener>;/,
+  );
   assert.match(
     inAppMenuHotkeysSource,
     /import \{ isMacOSPlatform, isWindowsPlatform \} from '\.\.\/utils\/platform\/os\.js';/,
@@ -390,15 +422,24 @@ test('windows and macos desktop use the in-strip Menu dropdown instead of a full
   assert.match(tauriMainSource, /fn configure_windows_frameless_window\(app: &mut tauri::App\) -> tauri::Result<\(\)>/);
   assert.match(tauriMainSource, /const WINDOWS_MIN_WINDOW_WIDTH: f64 = 800\.0;/);
   assert.match(tauriMainSource, /const WINDOWS_MIN_WINDOW_HEIGHT: f64 = 600\.0;/);
-  assert.match(tauriMainSource, /window\.set_min_size\(Some\(LogicalSize \{\s+width: WINDOWS_MIN_WINDOW_WIDTH,\s+height: WINDOWS_MIN_WINDOW_HEIGHT,\s+\}\)\)\?;/);
+  assert.match(
+    tauriMainSource,
+    /window\.set_min_size\(Some\(LogicalSize \{\s+width: WINDOWS_MIN_WINDOW_WIDTH,\s+height: WINDOWS_MIN_WINDOW_HEIGHT,\s+\}\)\)\?;/,
+  );
   assert.match(tauriMainSource, /window\.set_decorations\(false\)\?;/);
   assert.equal(tauriConfig.tauri.windows[0].minWidth, 800);
   assert.equal(tauriConfig.tauri.windows[0].minHeight, 600);
   assert.match(windowStatePluginSource, /const MAIN_WINDOW_LABEL: &str = "main";/);
   assert.match(windowStatePluginSource, /const MIN_RESTORED_MAIN_WINDOW_WIDTH: f64 = 800\.0;/);
   assert.match(windowStatePluginSource, /const MIN_RESTORED_MAIN_WINDOW_HEIGHT: f64 = 600\.0;/);
-  assert.match(windowStatePluginSource, /fn clamp_restored_window_size\(label: &str, width: f64, height: f64\) -> \(f64, f64\)/);
-  assert.match(windowStatePluginSource, /let restored_size = clamp_restored_window_size\(self\.label\(\), state\.width, state\.height\);/);
+  assert.match(
+    windowStatePluginSource,
+    /fn clamp_restored_window_size\(label: &str, width: f64, height: f64\) -> \(f64, f64\)/,
+  );
+  assert.match(
+    windowStatePluginSource,
+    /let restored_size = clamp_restored_window_size\(self\.label\(\), state\.width, state\.height\);/,
+  );
   assert.match(windowStatePluginSource, /width: restored_size\.0,[\s\S]*height: restored_size\.1,/);
   assert.match(
     tauriMainSource,

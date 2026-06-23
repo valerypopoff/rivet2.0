@@ -28,6 +28,12 @@ import {
   projectUnsavedChangesState,
 } from '../state/savedGraphs';
 import { projectTabUiState } from '../state/projectTabUi.js';
+import {
+  openingProjectTabsSortedIdsState,
+  openingProjectTabsState,
+  selectedOpeningProjectTabIdState,
+  type OpeningProjectTabId,
+} from '../state/openingProjectTabs.js';
 import clsx from 'clsx';
 import { useLoadProject } from '../hooks/useLoadProject';
 import { useSyncCurrentStateIntoOpenedProjects } from '../hooks/useSyncCurrentStateIntoOpenedProjects';
@@ -54,6 +60,8 @@ import { Tooltip } from './Tooltip.js';
 import { useGraphHistoryNavigation } from '../hooks/useGraphHistoryNavigation.js';
 import { hasProjectUnsavedChanges } from '../utils/projectUnsavedChanges.js';
 import { AppModalHeader } from './AppModalHeader.js';
+import { buildProjectTabListItems } from '../utils/openingProjectTabs.js';
+import { LoadingSpinner } from './LoadingSpinner.js';
 
 export const styles = css`
   position: absolute;
@@ -502,6 +510,21 @@ export const styles = css`
       font-style: italic;
     }
 
+    &.opening .project-name {
+      gap: 6px;
+    }
+
+    .opening-project-spinner {
+      align-items: center;
+      display: flex;
+      flex: 0 0 auto;
+
+      svg {
+        height: 12px;
+        width: 12px;
+      }
+    }
+
     > .actions {
       display: flex;
       align-items: center;
@@ -601,13 +624,16 @@ export const ProjectSelector: FC<{
   const projectMode = mode === 'project';
   const openedProjects = useAtomValue(openedProjectsState);
   const [openedProjectsSortedIds, setOpenedProjectsSortedIds] = useAtom(openedProjectsSortedIdsState);
+  const openingProjectTabs = useAtomValue(openingProjectTabsState);
+  const openingProjectTabIds = useAtomValue(openingProjectTabsSortedIdsState);
+  const [selectedOpeningProjectTabId, setSelectedOpeningProjectTabId] = useAtom(selectedOpeningProjectTabIdState);
   const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
   const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
   const [openOverlay, setOpenOverlay] = useAtom(overlayOpenState);
   const sidebarOpen = useAtomValue(sidebarOpenState);
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const currentProject = useAtomValue(projectState);
-  const { closeProject } = useRivetWorkspaceHost();
+  const { closeProject, cancelOpeningProjectTab } = useRivetWorkspaceHost();
   const [projectPendingClose, setProjectPendingClose] = useState<ProjectId | null>(null);
 
   const sortedOpenedProjects = useMemo(() => {
@@ -618,7 +644,21 @@ export const ProjectSelector: FC<{
       }))
       .filter((item) => item.project != null);
   }, [openedProjectsSortedIds, openedProjects]);
-  const visibleProjects = projectMode ? sortedOpenedProjects : [];
+  const visibleTabItems = useMemo(() => {
+    if (!projectMode) {
+      return [];
+    }
+
+    return buildProjectTabListItems({
+      openedProjectIds: sortedOpenedProjects.map((project) => project.id),
+      openingTabIds: openingProjectTabIds,
+      openingTabs: openingProjectTabs,
+    });
+  }, [openingProjectTabIds, openingProjectTabs, projectMode, sortedOpenedProjects]);
+  const sortableProjectIds = useMemo(
+    () => visibleTabItems.flatMap((tabItem) => (tabItem.type === 'project' ? [tabItem.projectId] : [])),
+    [visibleTabItems],
+  );
 
   const loadProject = useLoadProject();
   const projectTabsSelected = projectMode && openOverlay === undefined;
@@ -626,7 +666,7 @@ export const ProjectSelector: FC<{
   const showFileMenu = !isInTauri() || isWindowsPlatform() || isMacOSPlatform();
   const showWindowsWindowControls = isInTauri() && isWindowsPlatform();
 
-  useSyncCurrentStateIntoOpenedProjects({ enabled: projectMode });
+  useSyncCurrentStateIntoOpenedProjects({ enabled: projectMode && selectedOpeningProjectTabId == null });
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     if (over && active.id !== over.id) {
@@ -639,6 +679,8 @@ export const ProjectSelector: FC<{
   };
 
   const handleSelectProject = (projectId: ProjectId) => {
+    setSelectedOpeningProjectTabId(undefined);
+
     if (projectId === currentProject.metadata.id) {
       setOpenOverlay(undefined);
       return;
@@ -652,6 +694,11 @@ export const ProjectSelector: FC<{
         }
       });
     }
+  };
+
+  const handleSelectOpeningProjectTab = (openingTabId: OpeningProjectTabId) => {
+    setSelectedOpeningProjectTabId(openingTabId);
+    setOpenOverlay(undefined);
   };
 
   const requestCloseProject = (projectId: ProjectId) => {
@@ -689,20 +736,35 @@ export const ProjectSelector: FC<{
       {showFileMenu && <ProjectFileMenu />}
       <div
         className={clsx('projects-container', {
-          empty: visibleProjects.length === 0,
+          empty: visibleTabItems.length === 0,
           'with-window-drag-region': showWindowsWindowControls,
         })}
       >
         <div className="projects">
           <DndContext onDragEnd={handleDragEnd}>
-            <SortableContext items={visibleProjects} strategy={horizontalListSortingStrategy}>
-              {visibleProjects.map((project) => {
+            <SortableContext items={sortableProjectIds} strategy={horizontalListSortingStrategy}>
+              {visibleTabItems.map((tabItem) => {
+                if (tabItem.type === 'opening') {
+                  return (
+                    <OpeningProjectTab
+                      key={tabItem.openingTabId}
+                      openingTabId={tabItem.openingTabId}
+                      onCloseProject={() => {
+                        void cancelOpeningProjectTab(tabItem.openingTabId);
+                      }}
+                      onSelectProject={() => handleSelectOpeningProjectTab(tabItem.openingTabId)}
+                      projectTabsSelected={projectTabsSelected}
+                      selectedOpeningProjectTabId={selectedOpeningProjectTabId}
+                    />
+                  );
+                }
+
                 return (
                   <SortableProject
-                    key={project.id}
-                    projectId={project.project.projectId}
-                    onCloseProject={() => requestCloseProject(project.project.projectId)}
-                    onSelectProject={() => handleSelectProject(project.project.projectId)}
+                    key={tabItem.projectId}
+                    projectId={tabItem.projectId}
+                    onCloseProject={() => requestCloseProject(tabItem.projectId)}
+                    onSelectProject={() => handleSelectProject(tabItem.projectId)}
                     projectTabsSelected={projectTabsSelected}
                   />
                 );
@@ -780,12 +842,7 @@ const WindowsWindowDragRegion: FC = () => {
   };
 
   return (
-    <div
-      className="window-drag-region"
-      aria-hidden="true"
-      onDoubleClick={toggleMaximize}
-      onMouseDown={startDragging}
-    />
+    <div className="window-drag-region" aria-hidden="true" onDoubleClick={toggleMaximize} onMouseDown={startDragging} />
   );
 };
 
@@ -1138,13 +1195,14 @@ export const ProjectTab: FC<{
   const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
   const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
   const currentProject = useAtomValue(projectState);
+  const selectedOpeningProjectTabId = useAtomValue(selectedOpeningProjectTabIdState);
 
   const project = openedProjects[projectId];
 
   const unsaved = !project?.fsPath;
   const hasUnsavedChanges = hasProjectUnsavedChanges(projectUnsavedChanges, projectDataUnsavedChanges, projectId);
   const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\/]/).pop();
-  const active = projectTabsSelected && currentProject.metadata.id === projectId;
+  const active = projectTabsSelected && selectedOpeningProjectTabId == null && currentProject.metadata.id === projectId;
   const preview = projectTabUi[projectId]?.preview === true;
   const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;
 
@@ -1174,6 +1232,57 @@ export const ProjectTab: FC<{
           </button>
         </div>
       )}
+    </div>
+  );
+};
+
+const OpeningProjectTab: FC<{
+  openingTabId: OpeningProjectTabId;
+  selectedOpeningProjectTabId?: OpeningProjectTabId;
+  projectTabsSelected: boolean;
+  onCloseProject?: () => void;
+  onSelectProject?: () => void;
+}> = ({ openingTabId, onCloseProject, onSelectProject, projectTabsSelected, selectedOpeningProjectTabId }) => {
+  const openingProjectTabs = useAtomValue(openingProjectTabsState);
+  const openingTab = openingProjectTabs[openingTabId];
+
+  if (!openingTab) {
+    return null;
+  }
+
+  const active = projectTabsSelected && selectedOpeningProjectTabId === openingTabId;
+  const preview = openingTab.tabUi?.preview === true;
+  const fileName = openingTab.path?.split(/[\\/]/).pop();
+  const projectDisplayName = active ? `${openingTab.title}${fileName ? ` [${fileName}]` : ''}` : openingTab.title;
+
+  const handleMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.button === 0) {
+      onSelectProject?.();
+    }
+  };
+
+  const closeProject = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    onCloseProject?.();
+  };
+
+  return (
+    <div className="draggableProject openingProject">
+      <div className={clsx('project', 'opening', { active, preview })} onMouseDown={handleMouseDown}>
+        <div className="project-name">
+          <span>{projectDisplayName}</span>
+          <span className="opening-project-spinner" aria-hidden="true">
+            <LoadingSpinner />
+          </span>
+        </div>
+        {active && (
+          <div className="actions">
+            <button className="close-project" onMouseDown={(e) => e.stopPropagation()} onClick={closeProject}>
+              <CloseIcon />
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
