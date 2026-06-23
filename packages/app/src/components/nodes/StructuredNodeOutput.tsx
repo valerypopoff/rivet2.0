@@ -87,7 +87,6 @@ export const StructuredNodeOutput: FC<{
 }) => {
   const useFoldableParsedSource = renderMode === 'expanded-preview' && allowLargeStoredValueActions === true;
   const showSectionStats = shouldShowOutputSectionStats({ mode: renderMode, allowLargeStoredValueActions });
-  const placeParsedSourceBeforeChildren = useFoldableParsedSource && errorMessage === undefined;
   const parsedSourceSection =
     parsedSource !== undefined && parsedSourceLanguage ? (
       <ParsedSourceOutputSection
@@ -103,9 +102,8 @@ export const StructuredNodeOutput: FC<{
     <StructuredNodeOutputStatsContext.Provider value={showSectionStats}>
       <div css={structuredNodeOutputCss} className={showSectionStats ? 'large-output-sections' : undefined}>
         {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
-        {placeParsedSourceBeforeChildren && parsedSourceSection}
         {children}
-        {!placeParsedSourceBeforeChildren && parsedSourceSection}
+        {parsedSourceSection}
       </div>
     </StructuredNodeOutputStatsContext.Provider>
   );
