@@ -1,6 +1,11 @@
 import clsx from 'clsx';
 import { type CSSProperties, type HTMLAttributes, type MouseEvent, forwardRef, memo, useMemo } from 'react';
-import { type ChartNode, type CommentNode, type NodeConnection, type ProjectComparisonChangeKind } from '@valerypopoff/rivet2-core';
+import {
+  type ChartNode,
+  type CommentNode,
+  type NodeConnection,
+  type ProjectComparisonChangeKind,
+} from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins';
 import { useHistoricalNodeChangeInfo } from '../hooks/useHistoricalNodeChangeInfo';
@@ -25,6 +30,7 @@ import { getMissingStaticSetGlobalWarning } from '../domain/graphEditing/globalV
 import { enabledStaticGlobalVariableIdsState } from '../state/selectors/globalVariables.js';
 import { getDuplicateGraphOutputIdWarning } from '../domain/graphEditing/graphOutputs.js';
 import { duplicateGraphOutputIdsState } from '../state/selectors/graphOutputs.js';
+import { getRecursiveSubGraphWarning } from '../domain/graphEditing/subGraphs.js';
 
 export type VisualNodeProps = {
   node: ChartNode;
@@ -247,6 +253,15 @@ const GraphOutputVisualNode = memo(
   }),
 );
 
+const SubGraphVisualNode = memo(
+  forwardRef<HTMLDivElement, VisualNodeProps>((props, ref) => {
+    const containingGraphId = useAtomValue(graphMetadataState)?.id;
+    const headerWarning = getRecursiveSubGraphWarning(props.node, containingGraphId);
+
+    return <VisualNodeImpl {...props} ref={ref} headerWarning={headerWarning} />;
+  }),
+);
+
 export const VisualNode = memo(
   forwardRef<HTMLDivElement, VisualNodeProps>((props, ref) => {
     if (props.node.type === 'getGlobal') {
@@ -255,6 +270,10 @@ export const VisualNode = memo(
 
     if (props.node.type === 'graphOutput') {
       return <GraphOutputVisualNode {...props} ref={ref} />;
+    }
+
+    if (props.node.type === 'subGraph') {
+      return <SubGraphVisualNode {...props} ref={ref} />;
     }
 
     return <VisualNodeImpl {...props} ref={ref} />;

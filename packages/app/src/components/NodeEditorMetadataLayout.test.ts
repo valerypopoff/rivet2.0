@@ -218,18 +218,28 @@ test('node header warning state stays scoped to warning-specific canvas nodes', 
   const graphOutputVisualNodeSource = sliceSourceBetween(
     visualNodeSource,
     'const GraphOutputVisualNode = memo(',
+    'const SubGraphVisualNode = memo(',
+  );
+  const subGraphVisualNodeSource = sliceSourceBetween(
+    visualNodeSource,
+    'const SubGraphVisualNode = memo(',
     'export const VisualNode = memo(',
   );
 
   assert.match(visualNodeSource, /const VisualNodeImpl = memo\(/);
   assert.match(visualNodeSource, /const GetGlobalVisualNode = memo\(/);
   assert.match(visualNodeSource, /const GraphOutputVisualNode = memo\(/);
+  assert.match(visualNodeSource, /const SubGraphVisualNode = memo\(/);
   assert.match(visualNodeSource, /props\.node\.type === 'getGlobal'/);
   assert.match(visualNodeSource, /props\.node\.type === 'graphOutput'/);
+  assert.match(visualNodeSource, /props\.node\.type === 'subGraph'/);
   assert.match(getGlobalVisualNodeSource, /enabledStaticGlobalVariableIdsState/);
   assert.match(graphOutputVisualNodeSource, /duplicateGraphOutputIdsState/);
+  assert.match(subGraphVisualNodeSource, /graphMetadataState/);
+  assert.match(subGraphVisualNodeSource, /getRecursiveSubGraphWarning/);
   assert.doesNotMatch(visualNodeImplSource, /enabledStaticGlobalVariableIdsState/);
   assert.doesNotMatch(visualNodeImplSource, /duplicateGraphOutputIdsState/);
+  assert.doesNotMatch(visualNodeImplSource, /getRecursiveSubGraphWarning/);
 });
 
 function sliceSourceBetween(source: string, startNeedle: string, endNeedle: string): string {
