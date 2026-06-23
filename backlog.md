@@ -1,6 +1,8 @@
 
 - Does the LLM chat node retry on non-200 even when it's not set in the node settings?
 
+- When looking at the chages in the compare mode, syncronize the scrollbars in the left and right windows of the same property
+
 - Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
 
 
