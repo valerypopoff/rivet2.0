@@ -60,7 +60,7 @@ const JSListNodeOutputBody: FC<{
           {splitOutputEntries
             .filter(([, outputs]) => outputs[outputId] != null)
             .map(([key, outputs]) => (
-              <StructuredNodeOutputSection label={resultLabel} key={key}>
+              <StructuredNodeOutputSection label={resultLabel} key={key} statsValue={outputs[outputId]}>
                 <RenderDataValue
                   value={outputs[outputId]}
                   mode={renderMode}
@@ -73,7 +73,7 @@ const JSListNodeOutputBody: FC<{
       )}
 
       {!hasError && !hasSplitOutputs && data.outputData?.[outputId] != null && (
-        <StructuredNodeOutputSection label={resultLabel}>
+        <StructuredNodeOutputSection label={resultLabel} statsValue={data.outputData?.[outputId]}>
           <RenderDataValue
             value={data.outputData?.[outputId]}
             mode={renderMode}

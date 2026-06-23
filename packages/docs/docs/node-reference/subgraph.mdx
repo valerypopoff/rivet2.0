@@ -17,6 +17,8 @@ The inputs and outputs of the Subgraph Node are defined by [Graph Input Nodes](.
 
 You can choose the graph from the Subgraph node body directly on the canvas, or from the **Graph** setting in the node settings panel. Both controls edit the same Subgraph setting.
 
+If a Subgraph node selects the same graph that contains it, Rivet shows a warning icon in the node header. This direct recursion is allowed, but it is easy to create accidentally and can run indefinitely unless the graph has its own stopping condition.
+
 ## Rearranging ports
 
 You can manually reorder a Subgraph node's visible graph input and graph output ports by right-clicking the Subgraph node and choosing **Rearrange inputs/outputs**. While draggable port labels have rounded backgrounds, drag a port label or row up and down; the other labels shift while you drag, so you can drop the port between existing ports. Click outside the node to exit rearrange mode. Drag the circular port handle when you want to create or rewire a connection. The saved order is specific to that Subgraph node instance; it does not rename ports, change connections, or change the keys in the subgraph output object. The optional `Error` output is not part of the subgraph boundary and stays after the graph outputs.

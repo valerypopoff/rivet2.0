@@ -657,10 +657,11 @@ export const GraphList: FC = memo(() => {
     [allFolderPaths, visibleFolderedGraphs],
   );
 
-  const { setShowContextMenu, showContextMenu, contextMenuData, handleContextMenu, floatingStyles, refs } =
+  const { setShowContextMenu, showContextMenu, contextMenuData, handleContextMenu, floatingStyles, setFloatingMenu } =
     useContextMenu();
   const handleSidebarContextMenu = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
     handleContextMenu(e);
   });
 
@@ -737,6 +738,12 @@ export const GraphList: FC = memo(() => {
     }
 
     graphListContainerRef.current?.focus({ preventScroll: true });
+  });
+
+  const handleGraphListMouseDownCapture = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) {
+      e.preventDefault();
+    }
   });
 
   const handleGraphListKeyDown = useStableCallback((e: KeyboardEvent<HTMLDivElement>) => {
@@ -968,6 +975,7 @@ export const GraphList: FC = memo(() => {
         onContextMenu={handleSidebarContextMenu}
         onKeyDown={handleGraphListKeyDown}
         onMouseDown={handleGraphListMouseDown}
+        onMouseDownCapture={handleGraphListMouseDownCapture}
         ref={graphListContainerRef}
         tabIndex={-1}
       >
@@ -1006,44 +1014,22 @@ export const GraphList: FC = memo(() => {
           <Portal>
             {showGraphItemContextMenu && (
               <div
-                className="graph-item-context-menu-pos"
-                ref={refs.setReference}
-                style={{
-                  zIndex: 500,
-                  position: 'absolute',
-                  left: contextMenuData.x,
-                  top: contextMenuData.y,
-                }}
+                className="graph-item-context-menu"
+                css={contextMenuStyles}
+                style={{ ...floatingStyles, zIndex: 500 }}
+                ref={setFloatingMenu}
               >
-                <div
-                  className="graph-item-context-menu"
-                  css={contextMenuStyles}
-                  style={floatingStyles}
-                  ref={refs.setFloating}
-                >
-                  <GraphListContextMenuItems items={graphItemMenuItems} onSelected={handleGraphItemMenuSelected} />
-                </div>
+                <GraphListContextMenuItems items={graphItemMenuItems} onSelected={handleGraphItemMenuSelected} />
               </div>
             )}
             {showFolderContextMenu && (
               <div
-                className="graph-item-context-menu-pos"
-                ref={refs.setReference}
-                style={{
-                  zIndex: 500,
-                  position: 'absolute',
-                  left: contextMenuData.x,
-                  top: contextMenuData.y,
-                }}
+                className="graph-item-context-menu"
+                css={contextMenuStyles}
+                style={{ ...floatingStyles, zIndex: 500 }}
+                ref={setFloatingMenu}
               >
-                <div
-                  className="graph-item-context-menu"
-                  css={contextMenuStyles}
-                  style={floatingStyles}
-                  ref={refs.setFloating}
-                >
-                  <GraphListContextMenuItems items={folderMenuItems} onSelected={handleFolderMenuSelected} />
-                </div>
+                <GraphListContextMenuItems items={folderMenuItems} onSelected={handleFolderMenuSelected} />
               </div>
             )}
           </Portal>
@@ -1051,23 +1037,12 @@ export const GraphList: FC = memo(() => {
         <Portal>
           {showGraphListContextMenu && (
             <div
-              className="graph-list-context-menu-pos"
-              ref={refs.setReference}
-              style={{
-                position: 'absolute',
-                zIndex: 500,
-                left: contextMenuData.x,
-                top: contextMenuData.y,
-              }}
+              className="graph-list-context-menu"
+              css={contextMenuStyles}
+              style={{ ...floatingStyles, zIndex: 500 }}
+              ref={setFloatingMenu}
             >
-              <div
-                className="graph-list-context-menu"
-                css={contextMenuStyles}
-                style={floatingStyles}
-                ref={refs.setFloating}
-              >
-                <GraphListContextMenuItems items={graphListMenuItems} onSelected={handleGraphListMenuSelected} />
-              </div>
+              <GraphListContextMenuItems items={graphListMenuItems} onSelected={handleGraphListMenuSelected} />
             </div>
           )}
         </Portal>

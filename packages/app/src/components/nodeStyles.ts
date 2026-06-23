@@ -768,8 +768,8 @@ export const nodeStyles = css`
     visibility: hidden;
   }
 
-  body.subgraph-port-reorder-dragging,
-  body.subgraph-port-reorder-dragging * {
+  body.port-reorder-dragging,
+  body.port-reorder-dragging * {
     cursor: grabbing !important;
     user-select: none !important;
   }

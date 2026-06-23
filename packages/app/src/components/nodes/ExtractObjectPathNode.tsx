@@ -53,7 +53,7 @@ const ExtractObjectPathNodeOutputBody: FC<{
       }
 
       return [
-        <StructuredNodeOutputSection label={label} key={`${keyPrefix}${id}`}>
+        <StructuredNodeOutputSection label={label} key={`${keyPrefix}${id}`} statsValue={outputValue}>
           <RenderDataValue
             value={outputValue}
             mode={renderMode}

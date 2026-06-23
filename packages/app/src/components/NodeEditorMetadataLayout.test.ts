@@ -35,8 +35,7 @@ test('node metadata title and description share the same text inset', () => {
 
 test('node metadata footer stays content-sized and pinned below settings content', () => {
   const nodeEditorSource = readFileSync(join(componentsDir, 'NodeEditor.tsx'), 'utf8');
-  const sectionFooterStyles = nodeEditorSource.match(/\.section-footer \{(?<styles>[\s\S]*?)\n  \}/)
-    ?.groups?.styles;
+  const sectionFooterStyles = nodeEditorSource.match(/\.section-footer \{(?<styles>[\s\S]*?)\n  \}/)?.groups?.styles;
 
   assert.ok(sectionFooterStyles);
   assert.match(sectionFooterStyles, /display: flex;/);
@@ -49,10 +48,12 @@ test('node metadata footer stays content-sized and pinned below settings content
 test('node settings panel uses regular UI typography outside embedded code editors', () => {
   const nodeEditorSource = readFileSync(join(componentsDir, 'NodeEditor.tsx'), 'utf8');
   const defaultNodeEditorSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditor.tsx'), 'utf8');
-  const panelContainerStyles = nodeEditorSource.match(/^  \.panel-container \{(?<styles>[\s\S]*?)\n  \}/m)
-    ?.groups?.styles;
-  const sectionFooterStyles = nodeEditorSource.match(/\.section-footer \{(?<styles>[\s\S]*?)\n  \}/)
-    ?.groups?.styles;
+  const panelContainerStyles = nodeEditorSource.match(/^  \.panel-container \{(?<styles>[\s\S]*?)\n  \}/m)?.groups
+    ?.styles;
+  const panelToggleHelperStyles = nodeEditorSource.match(
+    /\.panel-container \.labeled-toggle-helper-label,\s+\.panel-container \.labeled-toggle-helper,\s+\.panel-container \.labeled-toggle-helper \* \{(?<styles>[\s\S]*?)\n  \}/,
+  )?.groups?.styles;
+  const sectionFooterStyles = nodeEditorSource.match(/\.section-footer \{(?<styles>[\s\S]*?)\n  \}/)?.groups?.styles;
   const titleReadContentStyles = nodeEditorSource.match(
     /\.node-title-field \.node-title-read-button \.title-read-content \{(?<styles>[\s\S]*?)\n  \}/,
   )?.groups?.styles;
@@ -62,11 +63,11 @@ test('node settings panel uses regular UI typography outside embedded code edito
   const defaultFieldLabelStyles = defaultNodeEditorSource.match(
     /\.row > :first-child label\[id\$='-label'\],\s+\.row \.editor-wrapper-wrapper > label \{(?<styles>[\s\S]*?)\n  \}/,
   )?.groups?.styles;
-  const editorStatusLineStyles = defaultNodeEditorSource.match(
-    /\.editor-status-line \{(?<styles>[\s\S]*?)\n  \}/,
-  )?.groups?.styles;
+  const editorStatusLineStyles = defaultNodeEditorSource.match(/\.editor-status-line \{(?<styles>[\s\S]*?)\n  \}/)
+    ?.groups?.styles;
 
   assert.ok(panelContainerStyles);
+  assert.ok(panelToggleHelperStyles);
   assert.ok(sectionFooterStyles);
   assert.ok(titleReadContentStyles);
   assert.ok(metadataInputStyles);
@@ -79,6 +80,8 @@ test('node settings panel uses regular UI typography outside embedded code edito
   assert.match(panelContainerStyles, /--label-font-family: var\(--font-family\);/);
   assert.match(panelContainerStyles, /border-left: 1px solid var\(--grey-darkish\);/);
   assert.match(panelContainerStyles, /box-shadow: none;/);
+  assert.match(panelToggleHelperStyles, /font-size: var\(--ui-font-size-sm\) !important;/);
+  assert.match(panelToggleHelperStyles, /line-height: 1\.35;/);
   assert.match(titleReadContentStyles, /color: var\(--foreground\);/);
   assert.match(defaultFieldLabelStyles, /color: var\(--label-color\);/);
   assert.doesNotMatch(sectionFooterStyles, /font-family: var\(--font-family-monospace\);/);
@@ -99,7 +102,10 @@ test('node code editor lazy loading keeps the field shell visible', () => {
   const defaultNodeEditorSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditor.tsx'), 'utf8');
 
   assert.match(defaultNodeEditorSource, /const editorLoadKey = `\$\{node\.id\}:\$\{node\.type\}`;/);
-  assert.match(defaultNodeEditorSource, /editorState\?\.editorLoadKey === editorLoadKey \? editorState\.editors : \[\]/);
+  assert.match(
+    defaultNodeEditorSource,
+    /editorState\?\.editorLoadKey === editorLoadKey \? editorState\.editors : \[\]/,
+  );
   assert.match(codeEditorSource, /const CodeEditorLoadingFallback: FC = \(\) =>/);
   assert.match(codeEditorSource, /<Suspense fallback=\{<CodeEditorLoadingFallback \/>\}>/);
   assert.doesNotMatch(codeEditorSource, /<Suspense fallback=\{<div \/>\}>\s+<div className="editor-wrapper-wrapper">/);
@@ -146,7 +152,10 @@ test('default node color picker renders through color 0 without saving that toke
   assert.match(colorsSource, /--node-color-picker-trigger-icon: rgba\(255, 255, 255, 0\.3\);/);
   assert.match(colorsSource, /--node-color-picker-swatch-body-bg: var\(--node-body-bg\);/);
   assert.match(nodeColorPickerSource, /background-color: var\(--node-color-picker-swatch-body-bg\);/);
-  assert.match(colorsSource, /:root\.theme-bright,[\s\S]*--node-color-picker-trigger-border: rgba\(15, 23, 34, 0\.1\);/);
+  assert.match(
+    colorsSource,
+    /:root\.theme-bright,[\s\S]*--node-color-picker-trigger-border: rgba\(15, 23, 34, 0\.1\);/,
+  );
   assert.match(colorsSource, /:root\.theme-bright,[\s\S]*--node-color-picker-trigger-icon: rgba\(15, 23, 34, 0\.3\);/);
   assert.match(colorsSource, /:root\.theme-bright,[\s\S]*--node-color-picker-swatch-body-bg: #ffffff;/);
 });
@@ -209,18 +218,28 @@ test('node header warning state stays scoped to warning-specific canvas nodes', 
   const graphOutputVisualNodeSource = sliceSourceBetween(
     visualNodeSource,
     'const GraphOutputVisualNode = memo(',
+    'const SubGraphVisualNode = memo(',
+  );
+  const subGraphVisualNodeSource = sliceSourceBetween(
+    visualNodeSource,
+    'const SubGraphVisualNode = memo(',
     'export const VisualNode = memo(',
   );
 
   assert.match(visualNodeSource, /const VisualNodeImpl = memo\(/);
   assert.match(visualNodeSource, /const GetGlobalVisualNode = memo\(/);
   assert.match(visualNodeSource, /const GraphOutputVisualNode = memo\(/);
+  assert.match(visualNodeSource, /const SubGraphVisualNode = memo\(/);
   assert.match(visualNodeSource, /props\.node\.type === 'getGlobal'/);
   assert.match(visualNodeSource, /props\.node\.type === 'graphOutput'/);
+  assert.match(visualNodeSource, /props\.node\.type === 'subGraph'/);
   assert.match(getGlobalVisualNodeSource, /enabledStaticGlobalVariableIdsState/);
   assert.match(graphOutputVisualNodeSource, /duplicateGraphOutputIdsState/);
+  assert.match(subGraphVisualNodeSource, /graphMetadataState/);
+  assert.match(subGraphVisualNodeSource, /getRecursiveSubGraphWarning/);
   assert.doesNotMatch(visualNodeImplSource, /enabledStaticGlobalVariableIdsState/);
   assert.doesNotMatch(visualNodeImplSource, /duplicateGraphOutputIdsState/);
+  assert.doesNotMatch(visualNodeImplSource, /getRecursiveSubGraphWarning/);
 });
 
 function sliceSourceBetween(source: string, startNeedle: string, endNeedle: string): string {
@@ -247,12 +266,21 @@ test('node code editor uses project-scoped Monaco model caching', () => {
   assert.match(codeEditorSource, /editorMountKey[\s\S]*modelCacheKey \?\? 'uncached-model'/);
   assert.match(codeEditorSource, /modelCacheKey=\{modelCacheKey\}/);
   assert.match(lazyCodeEditorSource, /getOrCreateCodeEditorModel/);
-  assert.match(lazyCodeEditorSource, /const modelUri = modelCacheKey \? monaco\.Uri\.parse\(getCodeEditorModelUri\(modelCacheKey\)\) : undefined/);
-  assert.match(lazyCodeEditorSource, /getExistingModel: modelUri \? \(\) => monaco\.editor\.getModel\(modelUri\) : undefined/);
-  assert.match(lazyCodeEditorSource, /if \(model\.getValue\(\) !== text\) \{\s+currentOnChange\?\.\(model\.getValue\(\)\);/);
+  assert.match(
+    lazyCodeEditorSource,
+    /const modelUri = modelCacheKey \? monaco\.Uri\.parse\(getCodeEditorModelUri\(modelCacheKey\)\) : undefined/,
+  );
+  assert.match(
+    lazyCodeEditorSource,
+    /getExistingModel: modelUri \? \(\) => monaco\.editor\.getModel\(modelUri\) : undefined/,
+  );
+  assert.match(
+    lazyCodeEditorSource,
+    /if \(model\.getValue\(\) !== text\) \{\s+currentOnChange\?\.\(model\.getValue\(\)\);/,
+  );
   assert.match(lazyCodeEditorSource, /if \(!isCached\) \{\s+model\.dispose\(\);/);
   assert.match(workspaceHostSource, /function clearCodeEditorModelCacheForClosedProject/);
-  assert.match(workspaceHostSource, /clearCodeEditorModelCacheForClosedProject\(currentProjectId\);/);
+  assert.match(workspaceHostSource, /clearCodeEditorModelCacheForClosedProject\(replaceTargetProjectId\);/);
   assert.match(workspaceHostSource, /clearCodeEditorModelCacheForClosedProject\(projectId\);/);
 });
 
@@ -274,9 +302,18 @@ test('node settings code editors use the active app display theme', () => {
 test('node code editor lets panel scrolling continue at editor scroll edges', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
 
-  const scrollbarBlocks = [...codeEditorSource.matchAll(/scrollbar: \{\s+\.\.\.scrollbar,\s+alwaysConsumeMouseWheel: false,\s+\},/g)];
+  const scrollbarBlocks = [
+    ...codeEditorSource.matchAll(/scrollbar: \{\s+\.\.\.scrollbar,\s+alwaysConsumeMouseWheel: false,\s+\},/g),
+  ];
 
   assert.equal(scrollbarBlocks.length, 2);
+});
+
+test('readonly display code editors keep Monaco model text synchronized', () => {
+  const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
+
+  assert.match(codeEditorSource, /!isReadonly \|\| onChangeLatest\.current \|\| modelCacheKey/);
+  assert.match(codeEditorSource, /model\.setValue\(text\);[\s\S]*editor\.layout\(\);/);
 });
 
 test('node code editor popup widgets are allowed outside the rounded editor shell', () => {
@@ -285,15 +322,24 @@ test('node code editor popup widgets are allowed outside the rounded editor shel
 
   assert.doesNotMatch(codeEditorSource, /fixedOverflowWidgets/);
   assert.match(defaultNodeEditorSource, /\.editor-wrapper \{[\s\S]*?overflow: visible;/);
-  assert.match(defaultNodeEditorSource, /\.editor-container \{[\s\S]*?border-radius: inherit;[\s\S]*?overflow: visible;/);
-  assert.match(defaultNodeEditorSource, /\.node-editor-static-code-editor \.editor-container \{[\s\S]*?overflow: visible;/);
+  assert.match(
+    defaultNodeEditorSource,
+    /\.editor-container \{[\s\S]*?border-radius: inherit;[\s\S]*?overflow: visible;/,
+  );
+  assert.match(
+    defaultNodeEditorSource,
+    /\.node-editor-static-code-editor \.editor-container \{[\s\S]*?overflow: visible;/,
+  );
 });
 
 test('lazy Monaco editor chunk stays independent from app UI state', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
   const lazyComponentsSource = readFileSync(join(componentsDir, 'LazyComponents.tsx'), 'utf8');
   const legacyMonacoSource = readFileSync(join(componentsDir, '..', 'utils', 'monaco.ts'), 'utf8');
-  const codeEditorMonacoSource = readFileSync(join(componentsDir, '..', 'utils', 'monaco', 'codeEditorMonaco.ts'), 'utf8');
+  const codeEditorMonacoSource = readFileSync(
+    join(componentsDir, '..', 'utils', 'monaco', 'codeEditorMonaco.ts'),
+    'utf8',
+  );
 
   assert.match(lazyComponentsSource, /useMultilineEditorFontSize/);
   assert.match(lazyComponentsSource, /useIsNodeEditorResizing/);

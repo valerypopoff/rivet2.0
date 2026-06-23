@@ -136,10 +136,17 @@ const Container = styled.div`
     opacity: 1;
   }
 
-  /* Atlaskit HelperMessage hardcodes its own font family, so reset it in the panel scope. */
+  /* Atlaskit helper text hardcodes parts of its typography, so reset it in the panel scope. */
   .panel-container [aria-live='polite'],
   .panel-container [aria-live='polite'] * {
     font-family: inherit !important;
+  }
+
+  .panel-container .labeled-toggle-helper-label,
+  .panel-container .labeled-toggle-helper,
+  .panel-container .labeled-toggle-helper * {
+    font-size: var(--ui-font-size-sm) !important;
+    line-height: 1.35;
   }
 
   .panel {

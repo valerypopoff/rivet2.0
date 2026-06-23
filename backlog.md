@@ -1,7 +1,7 @@
 
+- A special node mode that works like a filter: in this mode the node can accept multiple connections from different nodes into one port. Without such mode, I have to copy-paste the same node multiple times. Probably, for each connection set there should be a separate execution path. Like, "add path". Or! Allow connecting an auxiliary node as a filter for selected inputs/outputs of a node.
 
-- In the full output modal show word and character counters with each output piece
-
+- In all tooltips that mention Ctrl/Cmd, let's automatically replace them with the appropriate OS-specific modifier key (Cmd on Mac, Ctrl on Windows/Linux). Nt sure how we're gonna determine the OS in the browser.
 
 - Node from rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?
 

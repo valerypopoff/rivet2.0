@@ -65,7 +65,7 @@ const CodeNewNodeOutputBody: FC<{
     }
 
     return (
-      <StructuredNodeOutputSection label="Returned value" key={key}>
+      <StructuredNodeOutputSection label="Returned value" key={key} statsValue={outputs?.[CODE_NEW_OUTPUT_PORT_ID]}>
         {renderedValue}
       </StructuredNodeOutputSection>
     );

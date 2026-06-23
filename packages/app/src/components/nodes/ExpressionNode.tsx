@@ -64,7 +64,7 @@ const ExpressionNodeOutputBody: FC<{
     }
 
     return (
-      <StructuredNodeOutputSection label="Resulting value" key={key}>
+      <StructuredNodeOutputSection label="Resulting value" key={key} statsValue={outputs?.[EXPRESSION_OUTPUT_PORT_ID]}>
         {renderedValue}
       </StructuredNodeOutputSection>
     );

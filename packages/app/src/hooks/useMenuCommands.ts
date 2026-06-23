@@ -14,6 +14,7 @@ import { useIOProvider } from '../providers/ProvidersContext.js';
 import { type NativeWindowHandle } from '../utils/platform/core.js';
 import { getCurrentWindowHandle } from '../utils/platform/window.js';
 import { openedProjectsSortedIdsState } from '../state/savedGraphs.js';
+import { selectedOpeningProjectTabIdState } from '../state/openingProjectTabs.js';
 import {
   isProjectWorkspaceSelected,
   shouldRunMenuCommandForProjectSelection,
@@ -86,9 +87,10 @@ export function useMenuCommands(
   const [graphData] = useAtom(graphState);
   const openOverlay = useAtomValue(overlayOpenState);
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
+  const selectedOpeningProjectTabId = useAtomValue(selectedOpeningProjectTabIdState);
   const projectWorkspaceSelected = isProjectWorkspaceSelected({
     openOverlay,
-    openProjectCount: openedProjectIds.length,
+    openProjectCount: selectedOpeningProjectTabId == null ? openedProjectIds.length : 0,
   });
   const { saveProject, saveProjectAs } = useSaveProject();
   const setNewProjectModalOpen = useSetAtom(newProjectModalOpenState);

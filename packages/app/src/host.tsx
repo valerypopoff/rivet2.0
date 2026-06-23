@@ -151,6 +151,9 @@ export {
 export { useRivetWorkspaceHost } from './hooks/useRivetWorkspaceHost.js';
 export type {
   MoveProjectPathsInput,
+  RivetOpeningProjectTabHandle,
+  RivetOpeningProjectTabInput,
+  RivetOpeningProjectTabOptions,
   RivetProjectCompareOptions,
   RivetProjectCleanBaselineSnapshotInput,
   RivetProjectOpenOptions,

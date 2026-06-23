@@ -20,6 +20,7 @@ import {
   prepareFrozenNodeOutputsForInternalExecutorTransport,
 } from '../utils/frozenNodeOutputs.js';
 import type { ExecutorSessionTarget } from './executorSessionTarget.js';
+import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
 
 const dataRefs: DataRefReader = {
   get: getGlobalDataRef,
@@ -310,23 +311,53 @@ export function createProcessEventDispatcher(currentExecution: {
   onUserInput: (event: ProcessEvents['userInput']) => void;
 }) {
   return {
-    nodeStart: (data: unknown) => currentExecution.onNodeStart(data as ProcessEvents['nodeStart']),
-    nodeFinish: (data: unknown) => currentExecution.onNodeFinish(data as ProcessEvents['nodeFinish']),
-    nodeError: (data: unknown) => currentExecution.onNodeError(data as ProcessEvents['nodeError']),
-    userInput: (data: unknown) => currentExecution.onUserInput(data as ProcessEvents['userInput']),
-    start: (data: unknown) => currentExecution.onStart(data as ProcessEvents['start']),
-    done: (data: unknown) => currentExecution.onDone(data as ProcessEvents['done']),
-    abort: (data: unknown) => currentExecution.onAbort(data as ProcessEvents['abort']),
-    graphAbort: (data: unknown) => currentExecution.onGraphAbort(data as ProcessEvents['graphAbort']),
-    graphError: (data: unknown) => currentExecution.onGraphError(data as ProcessEvents['graphError']),
-    partialOutput: (data: unknown) => currentExecution.onPartialOutput(data as ProcessEvents['partialOutput']),
-    graphStart: (data: unknown) => currentExecution.onGraphStart(data as ProcessEvents['graphStart']),
-    graphFinish: (data: unknown) => currentExecution.onGraphFinish(data as ProcessEvents['graphFinish']),
+    nodeStart: (data: unknown) =>
+      dispatchGraphExecutionEvent('nodeStart', () => currentExecution.onNodeStart(data as ProcessEvents['nodeStart'])),
+    nodeFinish: (data: unknown) =>
+      dispatchGraphExecutionEvent('nodeFinish', () =>
+        currentExecution.onNodeFinish(data as ProcessEvents['nodeFinish']),
+      ),
+    nodeError: (data: unknown) =>
+      dispatchGraphExecutionEvent('nodeError', () => currentExecution.onNodeError(data as ProcessEvents['nodeError'])),
+    userInput: (data: unknown) =>
+      dispatchGraphExecutionEvent('userInput', () => currentExecution.onUserInput(data as ProcessEvents['userInput'])),
+    start: (data: unknown) =>
+      dispatchGraphExecutionEvent('start', () => currentExecution.onStart(data as ProcessEvents['start'])),
+    done: (data: unknown) =>
+      dispatchGraphExecutionEvent('done', () => currentExecution.onDone(data as ProcessEvents['done'])),
+    abort: (data: unknown) =>
+      dispatchGraphExecutionEvent('abort', () => currentExecution.onAbort(data as ProcessEvents['abort'])),
+    graphAbort: (data: unknown) =>
+      dispatchGraphExecutionEvent('graphAbort', () =>
+        currentExecution.onGraphAbort(data as ProcessEvents['graphAbort']),
+      ),
+    graphError: (data: unknown) =>
+      dispatchGraphExecutionEvent('graphError', () =>
+        currentExecution.onGraphError(data as ProcessEvents['graphError']),
+      ),
+    partialOutput: (data: unknown) =>
+      dispatchGraphExecutionEvent('partialOutput', () =>
+        currentExecution.onPartialOutput(data as ProcessEvents['partialOutput']),
+      ),
+    graphStart: (data: unknown) =>
+      dispatchGraphExecutionEvent('graphStart', () =>
+        currentExecution.onGraphStart(data as ProcessEvents['graphStart']),
+      ),
+    graphFinish: (data: unknown) =>
+      dispatchGraphExecutionEvent('graphFinish', () =>
+        currentExecution.onGraphFinish(data as ProcessEvents['graphFinish']),
+      ),
     nodeOutputsCleared: (data: unknown) =>
-      currentExecution.onNodeOutputsCleared(data as ProcessEvents['nodeOutputsCleared']),
-    pause: () => currentExecution.onPause(),
-    resume: () => currentExecution.onResume(),
-    error: (data: unknown) => currentExecution.onError(data as ProcessEvents['error']),
-    nodeExcluded: (data: unknown) => currentExecution.onNodeExcluded(data as ProcessEvents['nodeExcluded']),
+      dispatchGraphExecutionEvent('nodeOutputsCleared', () =>
+        currentExecution.onNodeOutputsCleared(data as ProcessEvents['nodeOutputsCleared']),
+      ),
+    pause: () => dispatchGraphExecutionEvent('pause', () => currentExecution.onPause()),
+    resume: () => dispatchGraphExecutionEvent('resume', () => currentExecution.onResume()),
+    error: (data: unknown) =>
+      dispatchGraphExecutionEvent('error', () => currentExecution.onError(data as ProcessEvents['error'])),
+    nodeExcluded: (data: unknown) =>
+      dispatchGraphExecutionEvent('nodeExcluded', () =>
+        currentExecution.onNodeExcluded(data as ProcessEvents['nodeExcluded']),
+      ),
   } as const;
 }

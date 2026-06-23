@@ -4,7 +4,9 @@ import { memo, useEffect, useState } from 'react';
 export const NODE_RUNNING_INDICATOR_DELAY_MS = 500;
 
 const nodeRunningIndicatorStyles = css`
+  box-sizing: border-box;
   color: currentColor;
+  display: inline-block;
   width: calc(16px * var(--ui-font-scale));
   height: calc(16px * var(--ui-font-scale));
   border: calc(2px * var(--ui-font-scale)) solid currentColor;

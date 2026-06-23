@@ -46,7 +46,7 @@ test('conditional node ports render the if label outside the port and over conne
   assert.doesNotMatch(connectedLabelStyleBlock, /padding:/);
 });
 
-test('subgraph port labels expose reorder drag only in explicit rearrange mode', () => {
+test('port labels expose reorder drag only in explicit rearrange modes', () => {
   const portSource = readFileSync(join(componentsDir, 'Port.tsx'), 'utf8');
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
   const nodePortsSource = readFileSync(join(componentsDir, 'NodePorts.tsx'), 'utf8');
@@ -74,18 +74,30 @@ test('subgraph port labels expose reorder drag only in explicit rearrange mode',
   );
   assert.match(nodePortsSource, /const isSubGraphNode = node\.type === 'subGraph';/);
   assert.match(nodePortsSource, /subGraphPortRearrangeTargetState/);
+  assert.match(nodePortsSource, /variadicPortRearrangeTargetState/);
   assert.match(nodePortsSource, /const isRearrangingSubGraphPorts =/);
-  assert.match(nodePortsSource, /reorderable=\{isRearrangingSubGraphPorts\}/);
-  assert.match(nodePortsSource, /className=\{`node-ports\$\{isRearrangingSubGraphPorts \? ' subgraph-port-rearrange-mode' : ''\}`\}/);
+  assert.match(nodePortsSource, /const isRearrangingVariadicPorts =/);
+  assert.match(nodePortsSource, /getReorderableVariadicInputDefinitions/);
+  assert.match(nodePortsSource, /getReorderableVariadicOutputDefinitions/);
+  assert.match(nodePortsSource, /useReorderVariadicPortsCommand\(\)/);
+  assert.match(nodePortsSource, /reorderVariadicPorts\(\{/);
+  assert.match(nodePortsSource, /variadicPortReorderSpec\?\.kind === 'input-output-pair'/);
+  assert.match(nodePortsSource, /className=\{`node-ports\$\{isRearrangingSubGraphPorts \? ' subgraph-port-rearrange-mode' : ''\}\$\{/);
   assert.match(nodePortsSource, /document\.addEventListener\('pointerdown', handlePointerDown, true\)/);
   assert.match(nodePortsSource, /setSubGraphPortRearrangeTarget\(undefined\)/);
+  assert.match(nodePortsSource, /setVariadicPortRearrangeTarget\(undefined\)/);
   assert.match(nodePortsSource, /subGraphPortRearrangeTarget\?\.projectId === projectId/);
+  assert.match(nodePortsSource, /variadicPortRearrangeTarget\?\.projectId === projectId/);
   assert.match(nodeCanvasSource, /subGraphPortRearrangeTargetState/);
-  assert.match(nodeCanvasSource, /subGraphPortRearrangeTarget\.projectId !== project\.metadata\.id/);
-  assert.match(nodeCanvasSource, /subGraphPortRearrangeTarget\.graphId !== selectedGraphMetadata\?\.id/);
-  assert.match(nodeCanvasSource, /!nodes\.some\(\(node\) => node\.id === subGraphPortRearrangeTarget\.nodeId\)/);
+  assert.match(nodeCanvasSource, /variadicPortRearrangeTargetState/);
+  assert.match(nodeCanvasSource, /function shouldClearNodeScopedUiTarget/);
+  assert.match(nodeCanvasSource, /options\.target\.projectId !== options\.currentProjectId/);
+  assert.match(nodeCanvasSource, /options\.target\.graphId !== options\.currentGraphId/);
+  assert.match(nodeCanvasSource, /!options\.nodes\.some\(\(node\) => node\.id === options\.target!\.nodeId\)/);
+  assert.match(nodeCanvasSource, /target: subGraphPortRearrangeTarget/);
+  assert.match(nodeCanvasSource, /target: variadicPortRearrangeTarget/);
   assert.match(nodePortsSource, /document\.querySelectorAll<HTMLElement>\('\[data-reorder-nodeid\]\[data-reorder-portid\]'\)/);
-  assert.match(nodePortsSource, /getSubGraphPortOrderFromPoint/);
+  assert.match(nodePortsSource, /getPortOrderFromPoint/);
   assert.match(nodePortsSource, /moveSubGraphPortIdToIndexInOrder/);
   assert.match(nodePortsSource, /window\.addEventListener\('mousemove'/);
   assert.match(nodePortsSource, /window\.addEventListener\('mouseup'/);
@@ -104,12 +116,21 @@ test('subgraph port labels expose reorder drag only in explicit rearrange mode',
   assert.match(nodePortsSource, /mergeWithPrevious: false/);
   assert.match(contextMenuConfigurationSource, /id: 'node-rearrange-subgraph-ports'[\s\S]*label: 'Rearrange inputs\/outputs'/);
   assert.match(contextMenuConfigurationSource, /conditional: canRearrangeSubgraphPorts/);
+  assert.match(contextMenuConfigurationSource, /id: 'node-rearrange-variadic-inputs'[\s\S]*label: 'Rearrange inputs'/);
+  assert.match(
+    contextMenuConfigurationSource,
+    /id: 'node-rearrange-variadic-inputs-outputs'[\s\S]*label: 'Rearrange inputs\/outputs'/,
+  );
   assert.match(contextMenuHandlerSource, /\.with\('node-rearrange-subgraph-ports'/);
+  assert.match(contextMenuHandlerSource, /node-rearrange-variadic-inputs/);
+  assert.match(contextMenuHandlerSource, /setVariadicPortRearrangeTarget\(undefined\);/);
+  assert.match(contextMenuHandlerSource, /setSubGraphPortRearrangeTarget\(undefined\);/);
   assert.match(contextMenuHandlerSource, /setSubGraphPortRearrangeTarget\(\{ graphId, nodeId, projectId: project\.metadata\.id \}\)/);
+  assert.match(contextMenuHandlerSource, /setVariadicPortRearrangeTarget\(\{ graphId, nodeId, projectId: project\.metadata\.id \}\)/);
   assert.doesNotMatch(nodeStylesSource, /\.node-ports\.subgraph-port-rearrange-mode[\s\S]*outline:/);
   assert.match(nodeStylesSource, /\.port\.reorderable \.port-label \{/);
   assert.match(nodeStylesSource, /background: color-mix\(in srgb, var\(--primary\) 18%, var\(--grey-darkest\) 82%\);/);
   assert.match(nodeStylesSource, /border-radius: calc\(6px \* var\(--ui-font-scale\)\);/);
   assert.match(nodeStylesSource, /\.port\.reorder-dragging-source \.port-label \{[\s\S]*?visibility: hidden;/);
-  assert.match(nodeStylesSource, /body\.subgraph-port-reorder-dragging/);
+  assert.match(nodeStylesSource, /body\.port-reorder-dragging/);
 });

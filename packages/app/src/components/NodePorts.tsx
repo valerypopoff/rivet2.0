@@ -20,7 +20,8 @@ import { graphMetadataState } from '../state/graph.js';
 import { projectMetadataState } from '../state/savedGraphs.js';
 import { useCanvasHandlersContext, useCanvasViewContext } from './CanvasContext';
 import { useEditNodeCommand } from '../commands/editNodeCommand.js';
-import { subGraphPortRearrangeTargetState } from '../state/ui.js';
+import { useReorderVariadicPortsCommand } from '../commands/reorderVariadicPortsCommand.js';
+import { subGraphPortRearrangeTargetState, variadicPortRearrangeTargetState } from '../state/ui.js';
 import {
   getDefinitionPortIds,
   getSubGraphPortOrderKey,
@@ -28,6 +29,15 @@ import {
   normalizeSubGraphPortOrder,
   type SubGraphPortOrderSide,
 } from '../domain/graphEditing/subGraphPortOrder.js';
+import {
+  buildVariadicPortReorderMappings,
+  getMirroredPortId,
+  getReorderableVariadicInputDefinitions,
+  getReorderableVariadicOutputDefinitions,
+  getVariadicPortReorderSpec,
+  hasVariadicNodeConnectionAffectedByMapping,
+  type VariadicPortReorderSide,
+} from '../domain/graphEditing/variadicPortReorder.js';
 
 export type NodePortsProps = {
   node: ChartNode;
@@ -36,14 +46,15 @@ export type NodePortsProps = {
 };
 
 type ReorderablePortDefinition = NodeInputDefinition | NodeOutputDefinition;
-type SubGraphReorderDrag = {
+type PortReorderDrag = {
   clientX: number;
   clientY: number;
   height: number;
+  mode: 'subGraph' | 'variadic';
   portId: PortId;
   pointerOffsetX: number;
   pointerOffsetY: number;
-  side: SubGraphPortOrderSide;
+  side: SubGraphPortOrderSide | VariadicPortReorderSide;
   title: string;
   width: number;
 };
@@ -72,7 +83,34 @@ function getOrderedPortDefinitions<T extends ReorderablePortDefinition>(
     .filter((definition): definition is T => !!definition);
 }
 
-function getSubGraphPortOrderFromPoint({
+function applyOrderedDefinitionSubset<T extends ReorderablePortDefinition>(
+  definitions: readonly T[],
+  orderedSubset: readonly T[],
+): T[] {
+  if (!orderedSubset.length) {
+    return [...definitions];
+  }
+
+  const subsetIds = new Set(orderedSubset.map((definition) => definition.id));
+  const nextDefinitions: T[] = [];
+  let insertedSubset = false;
+
+  for (const definition of definitions) {
+    if (!subsetIds.has(definition.id)) {
+      nextDefinitions.push(definition);
+      continue;
+    }
+
+    if (!insertedSubset) {
+      nextDefinitions.push(...orderedSubset);
+      insertedSubset = true;
+    }
+  }
+
+  return nextDefinitions;
+}
+
+function getPortOrderFromPoint({
   clientY,
   nodeId,
   portIds,
@@ -140,11 +178,13 @@ export const NodePorts: FC<NodePortsProps> = ({
   const projectId = useAtomValue(projectMetadataState).id;
   const graphId = useAtomValue(graphMetadataState)?.id;
   const [subGraphPortRearrangeTarget, setSubGraphPortRearrangeTarget] = useAtom(subGraphPortRearrangeTargetState);
+  const [variadicPortRearrangeTarget, setVariadicPortRearrangeTarget] = useAtom(variadicPortRearrangeTargetState);
   const editNode = useEditNodeCommand();
+  const reorderVariadicPorts = useReorderVariadicPortsCommand();
   const portsRootRef = useRef<HTMLDivElement>(null);
-  const draggedPortRef = useRef<SubGraphReorderDrag | undefined>();
+  const draggedPortRef = useRef<PortReorderDrag | undefined>();
   const previewPortOrderRef = useRef<string[] | undefined>();
-  const [draggedPort, setDraggedPort] = useState<SubGraphReorderDrag | undefined>();
+  const [draggedPort, setDraggedPort] = useState<PortReorderDrag | undefined>();
   const [previewPortOrder, setPreviewPortOrder] = useState<string[] | undefined>();
 
   const isSubGraphNode = node.type === 'subGraph';
@@ -153,6 +193,13 @@ export const NodePorts: FC<NodePortsProps> = ({
     subGraphPortRearrangeTarget?.projectId === projectId &&
     subGraphPortRearrangeTarget?.graphId === graphId &&
     subGraphPortRearrangeTarget?.nodeId === node.id;
+  const variadicPortReorderSpec = getVariadicPortReorderSpec(node);
+  const isRearrangingVariadicPorts =
+    variadicPortReorderSpec != null &&
+    variadicPortRearrangeTarget?.projectId === projectId &&
+    variadicPortRearrangeTarget?.graphId === graphId &&
+    variadicPortRearrangeTarget?.nodeId === node.id;
+  const isRearrangingPorts = isRearrangingSubGraphPorts || isRearrangingVariadicPorts;
   const renderedInputDefinitions = useMemo(
     () => inputDefinitions.filter((input) => !isBuiltInInputDefinition(input)),
     [inputDefinitions],
@@ -165,17 +212,93 @@ export const NodePorts: FC<NodePortsProps> = ({
     () => outputDefinitions.filter((output) => isSubGraphErrorOutputDefinition(node, output)),
     [node, outputDefinitions],
   );
-  const displayedInputDefinitions =
-    draggedPort?.side === 'input' && previewPortOrder
-      ? getOrderedPortDefinitions(renderedInputDefinitions, previewPortOrder)
-      : renderedInputDefinitions;
-  const displayedOutputDefinitions =
-    isSubGraphNode && draggedPort?.side === 'output' && previewPortOrder
-      ? [
-          ...getOrderedPortDefinitions(reorderableOutputDefinitions, previewPortOrder),
-          ...nonReorderableOutputDefinitions,
-        ]
-      : outputDefinitions;
+  const reorderableVariadicInputDefinitions = useMemo(
+    () =>
+      getReorderableVariadicInputDefinitions({
+        connections,
+        definitions: renderedInputDefinitions,
+        node,
+      }),
+    [connections, node, renderedInputDefinitions],
+  );
+  const reorderableVariadicOutputDefinitions = useMemo(
+    () =>
+      getReorderableVariadicOutputDefinitions({
+        definitions: outputDefinitions,
+        inputDefinitions: reorderableVariadicInputDefinitions,
+        spec: variadicPortReorderSpec,
+      }),
+    [outputDefinitions, reorderableVariadicInputDefinitions, variadicPortReorderSpec],
+  );
+  const displayedInputDefinitions = useMemo(() => {
+    if (draggedPort?.mode === 'subGraph' && draggedPort.side === 'input' && previewPortOrder) {
+      return getOrderedPortDefinitions(renderedInputDefinitions, previewPortOrder);
+    }
+
+    if (isRearrangingVariadicPorts) {
+      let orderedSubset = reorderableVariadicInputDefinitions;
+
+      if (draggedPort?.mode === 'variadic' && previewPortOrder) {
+        if (draggedPort.side === 'input') {
+          orderedSubset = getOrderedPortDefinitions(reorderableVariadicInputDefinitions, previewPortOrder);
+        } else if (variadicPortReorderSpec?.outputPrefix) {
+          const nextInputOrder = previewPortOrder.map((portId) =>
+            getMirroredPortId(portId, variadicPortReorderSpec.outputPrefix!, variadicPortReorderSpec.inputPrefix),
+          );
+          orderedSubset = getOrderedPortDefinitions(reorderableVariadicInputDefinitions, nextInputOrder);
+        }
+      }
+
+      return applyOrderedDefinitionSubset(renderedInputDefinitions, orderedSubset);
+    }
+
+    return renderedInputDefinitions;
+  }, [
+    draggedPort?.mode,
+    draggedPort?.side,
+    isRearrangingVariadicPorts,
+    previewPortOrder,
+    renderedInputDefinitions,
+    reorderableVariadicInputDefinitions,
+    variadicPortReorderSpec,
+  ]);
+  const displayedOutputDefinitions = useMemo(() => {
+    if (draggedPort?.mode === 'subGraph' && draggedPort.side === 'output' && previewPortOrder) {
+      return [
+        ...getOrderedPortDefinitions(reorderableOutputDefinitions, previewPortOrder),
+        ...nonReorderableOutputDefinitions,
+      ];
+    }
+
+    if (isRearrangingVariadicPorts && variadicPortReorderSpec?.kind === 'input-output-pair') {
+      let orderedSubset = reorderableVariadicOutputDefinitions;
+
+      if (draggedPort?.mode === 'variadic' && previewPortOrder) {
+        if (draggedPort.side === 'output') {
+          orderedSubset = getOrderedPortDefinitions(reorderableVariadicOutputDefinitions, previewPortOrder);
+        } else if (variadicPortReorderSpec.outputPrefix) {
+          const nextOutputOrder = previewPortOrder.map((portId) =>
+            getMirroredPortId(portId, variadicPortReorderSpec.inputPrefix, variadicPortReorderSpec.outputPrefix!),
+          );
+          orderedSubset = getOrderedPortDefinitions(reorderableVariadicOutputDefinitions, nextOutputOrder);
+        }
+      }
+
+      return applyOrderedDefinitionSubset(outputDefinitions, orderedSubset);
+    }
+
+    return outputDefinitions;
+  }, [
+    draggedPort?.mode,
+    draggedPort?.side,
+    isRearrangingVariadicPorts,
+    nonReorderableOutputDefinitions,
+    outputDefinitions,
+    previewPortOrder,
+    reorderableOutputDefinitions,
+    reorderableVariadicOutputDefinitions,
+    variadicPortReorderSpec,
+  ]);
 
   const handlePortMouseDown = useStableCallback((event: MouseEvent<HTMLDivElement>, port: PortId, isInput: boolean) => {
     event.stopPropagation();
@@ -220,15 +343,60 @@ export const NodePorts: FC<NodePortsProps> = ({
     },
   );
 
-  const updatePreviewPortOrderFromPointer = useStableCallback((clientY: number, drag: SubGraphReorderDrag) => {
-    const definitions = drag.side === 'input' ? renderedInputDefinitions : reorderableOutputDefinitions;
+  const commitVariadicPortReorder = useStableCallback(
+    (side: VariadicPortReorderSide, nextPortOrder: string[] | undefined) => {
+      if (!variadicPortReorderSpec || !nextPortOrder) {
+        return;
+      }
+
+      const definitions = side === 'input' ? reorderableVariadicInputDefinitions : reorderableVariadicOutputDefinitions;
+      const currentPortOrder = getDefinitionPortIds(definitions);
+      const mappings = buildVariadicPortReorderMappings({
+        currentPortOrder,
+        nextPortOrder,
+        side,
+        spec: variadicPortReorderSpec,
+      });
+
+      if (!mappings) {
+        return;
+      }
+
+      const hasAffectedConnection = hasVariadicNodeConnectionAffectedByMapping({
+        connections,
+        inputPortMapping: mappings.inputPortMapping,
+        nodeId: node.id,
+        outputPortMapping: mappings.outputPortMapping,
+      });
+
+      if (!hasAffectedConnection) {
+        return;
+      }
+
+      reorderVariadicPorts({
+        inputPortMapping: mappings.inputPortMapping,
+        nodeId: node.id,
+        outputPortMapping: mappings.outputPortMapping,
+      });
+    },
+  );
+
+  const updatePreviewPortOrderFromPointer = useStableCallback((clientY: number, drag: PortReorderDrag) => {
+    const definitions =
+      drag.mode === 'subGraph'
+        ? drag.side === 'input'
+          ? renderedInputDefinitions
+          : reorderableOutputDefinitions
+        : drag.side === 'input'
+          ? reorderableVariadicInputDefinitions
+          : reorderableVariadicOutputDefinitions;
     const portIds = getDefinitionPortIds(definitions);
 
     if (!portIds.length) {
       return;
     }
 
-    const nextPortOrder = getSubGraphPortOrderFromPoint({
+    const nextPortOrder = getPortOrderFromPoint({
       clientY,
       nodeId: node.id,
       portIds,
@@ -247,24 +415,44 @@ export const NodePorts: FC<NodePortsProps> = ({
 
   const handleReorderMouseDown = useStableCallback(
     (event: MouseEvent<HTMLDivElement>, port: PortId, isInput: boolean, title: string) => {
-      if (!isRearrangingSubGraphPorts) {
+      if (!isRearrangingPorts) {
         return;
       }
 
       const side: SubGraphPortOrderSide = isInput ? 'input' : 'output';
-      const definitions = side === 'input' ? renderedInputDefinitions : reorderableOutputDefinitions;
-      const orderKey = getSubGraphPortOrderKey(side);
-      const nodeData = node.data as {
-        inputPortOrder?: string[];
-        outputPortOrder?: string[];
-      };
-      const currentPortOrder = orderKey === 'inputPortOrder' ? nodeData.inputPortOrder : nodeData.outputPortOrder;
-      const normalizedPortOrder = normalizeSubGraphPortOrder(getDefinitionPortIds(definitions), currentPortOrder);
+      const mode: PortReorderDrag['mode'] = isRearrangingSubGraphPorts ? 'subGraph' : 'variadic';
+      const definitions =
+        mode === 'subGraph'
+          ? side === 'input'
+            ? renderedInputDefinitions
+            : reorderableOutputDefinitions
+          : side === 'input'
+            ? reorderableVariadicInputDefinitions
+            : reorderableVariadicOutputDefinitions;
+
+      if (!definitions.some((definition) => definition.id === port)) {
+        return;
+      }
+
+      let normalizedPortOrder: string[];
+      if (mode === 'subGraph') {
+        const orderKey = getSubGraphPortOrderKey(side);
+        const nodeData = node.data as {
+          inputPortOrder?: string[];
+          outputPortOrder?: string[];
+        };
+        const currentPortOrder = orderKey === 'inputPortOrder' ? nodeData.inputPortOrder : nodeData.outputPortOrder;
+        normalizedPortOrder = normalizeSubGraphPortOrder(getDefinitionPortIds(definitions), currentPortOrder);
+      } else {
+        normalizedPortOrder = getDefinitionPortIds(definitions);
+      }
+
       const labelRect = event.currentTarget.getBoundingClientRect();
       const drag = {
         clientX: event.clientX,
         clientY: event.clientY,
         height: labelRect.height,
+        mode,
         portId: port,
         pointerOffsetX: event.clientX - labelRect.left,
         pointerOffsetY: event.clientY - labelRect.top,
@@ -280,10 +468,10 @@ export const NodePorts: FC<NodePortsProps> = ({
     },
   );
 
-  const draggedPortKey = draggedPort ? `${draggedPort.side}:${draggedPort.portId}` : undefined;
+  const draggedPortKey = draggedPort ? `${draggedPort.mode}:${draggedPort.side}:${draggedPort.portId}` : undefined;
 
   useEffect(() => {
-    if (!isRearrangingSubGraphPorts) {
+    if (!isRearrangingPorts) {
       return;
     }
 
@@ -296,6 +484,7 @@ export const NodePorts: FC<NodePortsProps> = ({
       }
 
       setSubGraphPortRearrangeTarget(undefined);
+      setVariadicPortRearrangeTarget(undefined);
     };
 
     document.addEventListener('pointerdown', handlePointerDown, true);
@@ -303,14 +492,14 @@ export const NodePorts: FC<NodePortsProps> = ({
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown, true);
     };
-  }, [isRearrangingSubGraphPorts, setSubGraphPortRearrangeTarget]);
+  }, [isRearrangingPorts, setSubGraphPortRearrangeTarget, setVariadicPortRearrangeTarget]);
 
   useEffect(() => {
     if (!draggedPortKey) {
       return;
     }
 
-    document.body.classList.add('subgraph-port-reorder-dragging');
+    document.body.classList.add('port-reorder-dragging', 'subgraph-port-reorder-dragging');
 
     const handleMouseMove = (event: globalThis.MouseEvent) => {
       const currentDrag = draggedPortRef.current;
@@ -335,7 +524,11 @@ export const NodePorts: FC<NodePortsProps> = ({
 
       if (currentDrag) {
         updatePreviewPortOrderFromPointer(event.clientY, currentDrag);
-        commitSubGraphPortReorder(currentDrag.side, previewPortOrderRef.current);
+        if (currentDrag.mode === 'subGraph') {
+          commitSubGraphPortReorder(currentDrag.side as SubGraphPortOrderSide, previewPortOrderRef.current);
+        } else {
+          commitVariadicPortReorder(currentDrag.side as VariadicPortReorderSide, previewPortOrderRef.current);
+        }
       }
 
       draggedPortRef.current = undefined;
@@ -348,18 +541,20 @@ export const NodePorts: FC<NodePortsProps> = ({
     window.addEventListener('mouseup', handleMouseUp, { once: true });
 
     return () => {
-      document.body.classList.remove('subgraph-port-reorder-dragging');
+      document.body.classList.remove('port-reorder-dragging', 'subgraph-port-reorder-dragging');
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [commitSubGraphPortReorder, draggedPortKey, updatePreviewPortOrderFromPointer]);
+  }, [commitSubGraphPortReorder, commitVariadicPortReorder, draggedPortKey, updatePreviewPortOrderFromPointer]);
 
   useDependsOnPlugins();
 
   return (
     <>
       <div
-        className={`node-ports${isRearrangingSubGraphPorts ? ' subgraph-port-rearrange-mode' : ''}`}
+        className={`node-ports${isRearrangingSubGraphPorts ? ' subgraph-port-rearrange-mode' : ''}${
+          isRearrangingVariadicPorts ? ' variadic-port-rearrange-mode' : ''
+        }`}
         ref={portsRootRef}
       >
         <div className="input-ports">
@@ -367,6 +562,10 @@ export const NodePorts: FC<NodePortsProps> = ({
             const connected =
               connections.some((conn) => conn.inputNodeId === node.id && conn.inputId === input.id) ||
               (draggingWire?.endNodeId === node.id && draggingWire?.endPortId === input.id);
+            const isVariadicInputReorderable =
+              isRearrangingVariadicPorts &&
+              reorderableVariadicInputDefinitions.some((definition) => definition.id === input.id);
+            const reorderable = isRearrangingSubGraphPorts || isVariadicInputReorderable;
 
             return (
               <Port
@@ -385,7 +584,7 @@ export const NodePorts: FC<NodePortsProps> = ({
                 onMouseUp={handlePortMouseUp}
                 onMouseOver={onPortMouseOver}
                 onMouseOut={onPortMouseOut}
-                reorderable={isRearrangingSubGraphPorts}
+                reorderable={reorderable}
                 reorderDragging={draggedPort?.side === 'input' && draggedPort.portId === input.id}
                 onReorderMouseDown={handleReorderMouseDown}
               />
@@ -397,7 +596,13 @@ export const NodePorts: FC<NodePortsProps> = ({
             const connected =
               connections.some((conn) => conn.outputNodeId === node.id && conn.outputId === output.id) ||
               (draggingWire?.startNodeId === node.id && draggingWire?.startPortId === output.id);
-            const reorderable = isRearrangingSubGraphPorts && !isSubGraphErrorOutputDefinition(node, output);
+            const isVariadicOutputReorderable =
+              isRearrangingVariadicPorts &&
+              variadicPortReorderSpec?.kind === 'input-output-pair' &&
+              reorderableVariadicOutputDefinitions.some((definition) => definition.id === output.id);
+            const reorderable =
+              (isRearrangingSubGraphPorts && !isSubGraphErrorOutputDefinition(node, output)) ||
+              isVariadicOutputReorderable;
 
             return (
               <Port

@@ -30,6 +30,9 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   );
   const structuredNodeOutputSource = readFileSync(join(componentsDir, 'nodes', 'StructuredNodeOutput.tsx'), 'utf8');
   const codeNewNodeSource = readFileSync(join(componentsDir, 'nodes', 'CodeNewNode.tsx'), 'utf8');
+  const expressionNodeSource = readFileSync(join(componentsDir, 'nodes', 'ExpressionNode.tsx'), 'utf8');
+  const jsListNodeSource = readFileSync(join(componentsDir, 'nodes', 'JSListNode.tsx'), 'utf8');
+  const extractObjectPathNodeSource = readFileSync(join(componentsDir, 'nodes', 'ExtractObjectPathNode.tsx'), 'utf8');
 
   const largeStoredWrapBlock =
     /\.fullscreen-output-body\.wrap-lines & \.json-preview-content pre \{(?<styles>[\s\S]*?)\n  \}/.exec(
@@ -91,12 +94,8 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
     structuredNodeOutputSource,
     /const useFoldableParsedSource = renderMode === 'expanded-preview' && allowLargeStoredValueActions === true;/,
   );
-  assert.match(
-    structuredNodeOutputSource,
-    /const placeParsedSourceBeforeChildren = useFoldableParsedSource && errorMessage === undefined;/,
-  );
-  assert.match(structuredNodeOutputSource, /\{placeParsedSourceBeforeChildren && parsedSourceSection\}/);
-  assert.match(structuredNodeOutputSource, /\{!placeParsedSourceBeforeChildren && parsedSourceSection\}/);
+  assert.doesNotMatch(structuredNodeOutputSource, /placeParsedSourceBeforeChildren/);
+  assert.match(structuredNodeOutputSource, /\{children\}\s*\{parsedSourceSection\}/);
   assert.match(
     structuredNodeOutputSource,
     /<FoldingCodeBlock text=\{source\} language=\{language\} wrapLines=\{wrapLines\} \/>/,
@@ -107,4 +106,7 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   );
   assert.match(codeNewNodeSource, /parsedSourceLabel="Parsed code"/);
   assert.match(codeNewNodeSource, /wrapLines=\{wrapLines\}/);
+  assert.match(expressionNodeSource, /parsedSourceLanguage="javascript"/);
+  assert.match(jsListNodeSource, /parsedSourceLanguage="javascript"/);
+  assert.match(extractObjectPathNodeSource, /parsedSourceLanguage="jsonpath"/);
 });

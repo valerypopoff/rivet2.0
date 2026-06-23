@@ -158,6 +158,8 @@ test('getNodeCanvasContextMenuContext hydrates node context data from the DOM ta
         canRunFromEditor: true,
         canRunFromHere: true,
         canRearrangeSubgraphPorts: false,
+        canRearrangeVariadicPorts: false,
+        variadicPortRearrangeKind: undefined,
         canFreeze: false,
         canUnfreeze: false,
         freezeNodeTargets: [],
@@ -247,6 +249,76 @@ test('getNodeCanvasContextMenuContext hides Subgraph port rearrange when the tar
 
   assert.equal(context.type, 'node');
   assert.equal(context.data.canRearrangeSubgraphPorts, false);
+});
+
+test('getNodeCanvasContextMenuContext enables one-side variadic input rearrange for connected Did Run slots', () => {
+  const didRunNode = makeNode('didRun', nodeId, 'Did Run');
+  const sourceNode = makeNode('text', 'source-node' as NodeId, 'Source');
+  const projectWithDidRun: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [didRunNode, sourceNode],
+        connections: [
+          {
+            inputId: 'input2' as PortId,
+            inputNodeId: didRunNode.id,
+            outputId: 'output' as PortId,
+            outputNodeId: sourceNode.id,
+          },
+        ],
+      },
+    },
+  };
+
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-didRun'),
+    nodesById: {
+      [nodeId]: didRunNode,
+    },
+    project: projectWithDidRun,
+  });
+
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.canRearrangeVariadicPorts, true);
+  assert.equal(context.data.variadicPortRearrangeKind, 'input-only');
+});
+
+test('getNodeCanvasContextMenuContext enables mirror variadic rearrange for connected Passthrough slots', () => {
+  const passthroughNode = makeNode('passthrough', nodeId, 'Passthrough');
+  const sourceNode = makeNode('text', 'source-node' as NodeId, 'Source');
+  const projectWithPassthrough: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [passthroughNode, sourceNode],
+        connections: [
+          {
+            inputId: 'input2' as PortId,
+            inputNodeId: passthroughNode.id,
+            outputId: 'output' as PortId,
+            outputNodeId: sourceNode.id,
+          },
+        ],
+      },
+    },
+  };
+
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-passthrough'),
+    nodesById: {
+      [nodeId]: passthroughNode,
+    },
+    project: projectWithPassthrough,
+  });
+
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.canRearrangeVariadicPorts, true);
+  assert.equal(context.data.variadicPortRearrangeKind, 'input-output-pair');
 });
 
 test('getNodeCanvasContextMenuContext enables Freeze for nodes with retained successful outputs', () => {

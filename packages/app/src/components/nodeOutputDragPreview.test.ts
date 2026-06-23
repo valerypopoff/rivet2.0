@@ -134,6 +134,7 @@ test('node output pagers clamp stale process page selections to the filtered pro
 test('inline node output actions reserve flow space without moving their hit targets', () => {
   const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
+  const renderDataValueSource = readFileSync(join(componentsDir, 'RenderDataValue.tsx'), 'utf8');
   const renderDataValueStylesSource = readFileSync(
     join(componentsDir, 'renderDataValue', 'renderDataValueStyles.ts'),
     'utf8',
@@ -212,13 +213,37 @@ test('inline node output actions reserve flow space without moving their hit tar
     nodeStylesSource,
     /\.expand-button svg \{[\s\S]*?width: var\(--node-output-fullscreen-icon-size\);[\s\S]*?height: var\(--node-output-fullscreen-icon-size\);[\s\S]*?transform: translate\(var\(--node-output-fullscreen-icon-offset-x\), var\(--node-output-fullscreen-icon-offset-y\)\);/,
   );
-  assert.match(renderedDataOutputsStylesBlock, /display: block;/);
-  assert.match(renderedDataOutputsStylesBlock, /\.port-value \+ \.port-value \{[\s\S]*?margin-top: \$\{outputSectionGroupGap\};/);
-  assert.doesNotMatch(renderedDataOutputsStylesBlock, /display: flex;/);
-  assert.match(structuredNodeOutputStylesBlock, /display: block;/);
+  assert.match(renderedDataOutputsStylesBlock.trimStart(), /^display: block;/);
+  assert.match(renderDataValueStylesSource, /export const outputSectionGroupGap = 'calc\(18px \* var\(--ui-font-scale\)\)';/);
+  assert.match(
+    renderDataValueStylesSource,
+    /export const outputSectionFullscreenGroupGap = 'calc\(28px \* var\(--ui-font-scale\)\)';/,
+  );
+  assert.match(
+    renderedDataOutputsStylesBlock,
+    /&\.large-output-sections \{[\s\S]*?--output-section-group-gap: \$\{outputSectionFullscreenGroupGap\};/,
+  );
+  assert.match(
+    renderedDataOutputsStylesBlock,
+    /\.port-value \+ \.port-value \{[\s\S]*?margin-top: var\(--output-section-group-gap, \$\{outputSectionGroupGap\}\);/,
+  );
+  assert.match(renderDataValueStylesSource, /export const outputSectionLabelStyles = css`[\s\S]*?font-size: var\(--ui-font-size-sm\);/);
+  assert.match(
+    renderDataValueStylesSource,
+    /export const outputSectionFullscreenLabelStyles = css`[\s\S]*?font-size: var\(--ui-font-size-lg\);/,
+  );
+  assert.match(renderDataValueStylesSource, /outputSectionHeaderMetaStyles/);
+  assert.match(renderDataValueSource, /<OutputSectionHeader[\s\S]*?isLarge=\{showSectionStats\}/);
+  assert.match(renderDataValueSource, /getOutputPortDisplayLabel\(definitions, portId, 'Output'\)/);
+  assert.match(renderedDataOutputsStylesBlock, /\.output-section-header \{[\s\S]*?align-items: baseline;/);
+  assert.match(structuredNodeOutputStylesBlock.trimStart(), /^display: block;/);
   assert.match(
     structuredNodeOutputStylesBlock,
-    /\.structured-node-output-section \+ \.structured-node-output-section \{[\s\S]*?margin-top: \$\{outputSectionGroupGap\};/,
+    /&\.large-output-sections \{[\s\S]*?--output-section-group-gap: \$\{outputSectionFullscreenGroupGap\};/,
   );
-  assert.doesNotMatch(structuredNodeOutputStylesBlock, /display: flex;/);
+  assert.match(
+    structuredNodeOutputStylesBlock,
+    /\.structured-node-output-section \+ \.structured-node-output-section \{[\s\S]*?margin-top: var\(--output-section-group-gap, \$\{outputSectionGroupGap\}\);/,
+  );
+  assert.match(structuredNodeOutputStylesBlock, /\.output-section-header \{[\s\S]*?align-items: baseline;/);
 });

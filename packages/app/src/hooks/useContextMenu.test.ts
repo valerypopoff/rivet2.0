@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { getContextMenuDataFromTarget } from './useContextMenu.js';
+import { createContextMenuVirtualElement, getContextMenuDataFromTarget } from './useContextMenu.js';
 
 type FakeContextMenuNode = {
   dataset?: {
@@ -56,4 +57,42 @@ test('context menu target lookup stops on cyclic parent chains', () => {
   ordinaryElement.parentElement = ordinaryElement;
 
   assert.equal(getContextMenuDataFromTarget(asEventTarget(ordinaryElement)), null);
+});
+
+test('context menu virtual reference anchors to the pointer without DOM nesting', () => {
+  const virtualElement = createContextMenuVirtualElement(42, 64);
+  const rect = virtualElement.getBoundingClientRect();
+
+  assert.deepEqual(
+    {
+      bottom: rect.bottom,
+      height: rect.height,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      width: rect.width,
+      x: rect.x,
+      y: rect.y,
+    },
+    {
+      bottom: 64,
+      height: 0,
+      left: 42,
+      right: 42,
+      top: 64,
+      width: 0,
+      x: 42,
+      y: 64,
+    },
+  );
+  assert.equal(rect.toJSON(), rect);
+});
+
+test('context menu hook keeps legacy reference refs separate from floating menu refs', () => {
+  const source = readFileSync(new URL('./useContextMenu.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /const setReference = useMergeRefs\(\[refs\.setReference, contextMenuRef\]\);/);
+  assert.match(source, /const setFloatingMenu = useMergeRefs\(\[refs\.setFloating, contextMenuRef\]\);/);
+  assert.match(source, /refs:\s*\{\s*\.\.\.refs,\s*setReference,\s*\}/s);
+  assert.match(source, /setFloatingMenu,/);
 });

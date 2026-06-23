@@ -38,17 +38,45 @@ export const outputSectionLabelStyles = css`
   line-height: 1.25;
 `;
 
+export const outputSectionFullscreenLabelStyles = css`
+  font-size: var(--ui-font-size-lg);
+`;
+
+export const outputSectionHeaderMetaStyles = css`
+  color: var(--grey-light);
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: calc(12px * var(--ui-font-scale));
+  font-family: var(--font-family-monospace);
+  font-size: var(--ui-font-size-sm);
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1.25;
+`;
+
 export const outputSectionGroupGap = 'calc(18px * var(--ui-font-scale))';
+export const outputSectionFullscreenGroupGap = 'calc(28px * var(--ui-font-scale))';
 
 export const renderedDataOutputsStyles = css`
   display: block;
 
+  &.large-output-sections {
+    --output-section-group-gap: ${outputSectionFullscreenGroupGap};
+  }
+
   .port-value + .port-value {
-    margin-top: ${outputSectionGroupGap};
+    margin-top: var(--output-section-group-gap, ${outputSectionGroupGap});
   }
 
   .port-value {
     display: block;
+  }
+
+  .output-section-header {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(10px * var(--ui-font-scale));
   }
 
   .port-value > * + * {
