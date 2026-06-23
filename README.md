@@ -122,6 +122,9 @@ To pin a specific image tag, set `RIVET_IMAGE_TAG` or override `RIVET_PROXY_IMAG
 | `npm run prod:prebuilt` | Same as `npm run prod`, kept as the explicit published-image path |
 | `npm run prod:restart` | Recreate production containers from already-local images without pulling |
 | `npm run prod:custom` | Build and run images from this wrapper checkout plus the current `rivet/` folder |
+| `npm run clean` | Prune Docker stopped containers, unused networks, unused images, and BuildKit cache without pruning volumes |
+
+Run `npm run clean` when the VM is low on disk space or `npm run prod` fails with `ENOSPC`. This is a Docker-host cleanup, so it can remove stopped containers and unused images for any project on that Docker host. It does not run `docker volume prune`, `docker system prune`, or any `--volumes` cleanup, so Compose-managed Postgres/app-data volumes and filesystem workflow mounts are left alone. It can remove unused images and build cache, so a later `npm run prod` may need to pull images again if the stack is stopped, and a later custom/dev build may rebuild more layers.
 
 #### Building locally from upstream Rivet source
 

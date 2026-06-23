@@ -28,6 +28,7 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 
 | Command | What it does | Typical use |
 |---|---|---|
+| `npm run clean` | Prunes Docker stopped containers, unused networks, unused images, and BuildKit cache without pruning Docker volumes | Recover VM disk space after repeated pulls/builds or `ENOSPC` failures |
 | `npm run dev` | Starts the Docker dev stack | Closest-to-production browser testing |
 | `npm run dev:recreate` | Rebuilds and recreates the Docker dev stack | Pick up Dockerfile/env/runtime changes |
 | `npm run dev:docker:recreate` | Rebuilds and recreates the Docker dev stack without going through the alias | Useful when you want the exact script name that repo instructions refer to |
@@ -67,6 +68,8 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 | `npm run ui:observe` | Runs the headed slow-motion Playwright flow against the current hosted app | Watch the browser click through a real scenario |
 | `npm run ui:observe:debug` | Runs the same flow with Playwright Inspector enabled | Step through or pause browser actions |
 | `npm run ui:observe:report` | Opens the last Playwright HTML report | Review traces, screenshots, and videos after a run |
+
+`npm run clean` is intentionally Docker-volume-safe but Docker-host-wide. It can remove stopped containers and unused images for any project on that Docker host, but it does not pass `--volumes` to Docker prune commands and does not run `docker volume prune` or `docker system prune`. Local Compose volumes that may hold Postgres data, app data, workspace cache, or runtime-library state are preserved. Filesystem workflow and recording host paths are also outside Docker's prune surface. `npm run verify:repo-structure` checks that this cleanup script stays volume-safe. The tradeoff is that unused images and build cache are removed, so stopped stacks may need to pull images again and custom/dev builds may rebuild layers.
 
 ## Environment loading
 

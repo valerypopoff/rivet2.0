@@ -9,6 +9,7 @@
     "setup": "node scripts/ensure-dev-deps.mjs",
     "setup:k8s-tools": "node scripts/ensure-k8s-tools.mjs",
     "setup:rivet": "node scripts/bootstrap-rivet.mjs",
+    "clean": "node scripts/clean-docker.mjs",
     "runtime-libraries:managed:audit": "node scripts/run-with-env.mjs \"npm --prefix wrapper/api run runtime-libraries:managed:audit\"",
     "runtime-libraries:managed:prune": "node scripts/run-with-env.mjs \"npm --prefix wrapper/api run runtime-libraries:managed:prune --\"",
     "workflow-storage:migrate": "node scripts/run-with-env.mjs \"npm --prefix wrapper/api run workflow-storage:migrate\"",
