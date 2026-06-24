@@ -3,6 +3,7 @@ import { dedent } from 'ts-dedent';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
+import type { NodeBodySpec } from '../NodeBodySpec.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
@@ -46,34 +47,72 @@ function usesBaseURLInput(data: LLMChatV2Node['data']): boolean {
   return data.provider === 'custom' ? data.useCustomProviderBaseURLInput : data.useBaseURLInput;
 }
 
-function getCustomProviderBaseURLBodyLine(data: LLMChatV2Node['data']): string | undefined {
+function getCustomProviderBaseURLBodyValue(data: LLMChatV2Node['data']): string | undefined {
   if (data.provider !== 'custom') {
     return undefined;
   }
 
   if (data.useCustomProviderBaseURLInput) {
-    return 'Provider base URL: (Using Input)';
+    return '(Using Input)';
   }
 
   const baseURL = data.customProviderBaseURL.trim();
-  return baseURL ? `Provider base URL: ${baseURL}` : undefined;
+  return baseURL || undefined;
 }
 
 function getOptionLabel(options: readonly { value: string; label: string }[], value: string | undefined): string {
   return options.find((option) => option.value === (value ?? ''))?.label ?? value ?? 'Default';
 }
 
-function getReasoningEffortBodyLine(data: LLMChatV2Node['data']): string | undefined {
+function getProviderBodyLabel(data: LLMChatV2Node['data']): string {
+  return data.provider === 'custom' ? 'Custom' : getChatV2ProviderLabel(data.provider);
+}
+
+function getReasoningEffortBodyValue(data: LLMChatV2Node['data']): string | undefined {
   switch (data.provider) {
     case 'openai':
-      return `Reasoning effort: ${getOptionLabel(openAIReasoningEffortOptions, data.openAIReasoningEffort)}`;
+      return getOptionLabel(openAIReasoningEffortOptions, data.openAIReasoningEffort);
     case 'anthropic':
-      return `Reasoning effort: ${getOptionLabel(anthropicEffortOptions, data.anthropicEffort)}`;
+      return getOptionLabel(anthropicEffortOptions, data.anthropicEffort);
     case 'google':
-      return `Reasoning effort: ${getOptionLabel(googleThinkingLevelOptions, data.googleThinkingLevel)}`;
+      return getOptionLabel(googleThinkingLevelOptions, data.googleThinkingLevel);
     case 'custom':
       return undefined;
   }
+}
+
+function escapeMarkdownInline(value: string): string {
+  return value
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/([\\`*_[\]{}()#+\-.!|])/g, '\\$1');
+}
+
+function getBodyLine(label: string, value: string): string {
+  return `<span style="opacity: 0.55">${label}:</span> ${escapeMarkdownInline(value)}`;
+}
+
+function getOptionalNumberBodyLine(label: string, value: number | undefined, usesInput: boolean): string | undefined {
+  if (usesInput) {
+    return getBodyLine(label, '(Using Input)');
+  }
+
+  return value === undefined ? undefined : getBodyLine(label, `${value}`);
+}
+
+function getStopSequencesBodyLine(data: LLMChatV2Node['data']): string | undefined {
+  if (data.useStopSequencesInput) {
+    return getBodyLine('Stop sequences', '(Using Input)');
+  }
+
+  const stopSequences = (data.stopSequences ?? []).filter((sequence) => sequence.length > 0);
+  return stopSequences.length === 0
+    ? undefined
+    : getBodyLine('Stop sequences', stopSequences.map((sequence) => JSON.stringify(sequence)).join(', '));
 }
 
 export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
@@ -256,20 +295,33 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     return getLLMChatV2Editors(this.data, context);
   }
 
-  getBody() {
+  getBody(): NodeBodySpec {
     const modelInfo = getChatV2ModelInfo(this.data.provider, this.data.model);
-    const providerLabel = getChatV2ProviderLabel(this.data.provider);
-    const baseURLLine = getCustomProviderBaseURLBodyLine(this.data);
+    const providerLabel = getProviderBodyLabel(this.data);
+    const baseURLValue = getCustomProviderBaseURLBodyValue(this.data);
     const modelLine = modelInfo?.displayName ?? this.data.model;
-    const providerDetails = baseURLLine ? [providerLabel, baseURLLine, modelLine] : [providerLabel, modelLine];
-    const reasoningEffortLine = getReasoningEffortBodyLine(this.data);
+    const providerDetails = [
+      getBodyLine('Provider', providerLabel),
+      ...(baseURLValue ? [getBodyLine('Base URL', baseURLValue)] : []),
+      getBodyLine('Model', modelLine),
+    ];
+    const reasoningEffortValue = getReasoningEffortBodyValue(this.data);
 
-    return [
-      ...providerDetails,
-      ...(reasoningEffortLine ? [reasoningEffortLine] : []),
-      `Temperature: ${this.data.useTemperatureInput ? '(Using Input)' : this.data.temperature}`,
-      `Max output tokens: ${this.data.useMaxTokensInput ? '(Using Input)' : this.data.maxTokens}`,
-    ].join('\n');
+    return {
+      type: 'markdown',
+      text: [
+        ...providerDetails,
+        ...(reasoningEffortValue ? [getBodyLine('Reasoning effort', reasoningEffortValue)] : []),
+        getBodyLine('Temperature', this.data.useTemperatureInput ? '(Using Input)' : `${this.data.temperature}`),
+        getBodyLine('Max output tokens', this.data.useMaxTokensInput ? '(Using Input)' : `${this.data.maxTokens}`),
+        getOptionalNumberBodyLine('Top P', this.data.topP, this.data.useTopPInput),
+        getOptionalNumberBodyLine('Top K', this.data.topK, this.data.useTopKInput),
+        getOptionalNumberBodyLine('Presence penalty', this.data.presencePenalty, this.data.usePresencePenaltyInput),
+        getOptionalNumberBodyLine('Frequency penalty', this.data.frequencyPenalty, this.data.useFrequencyPenaltyInput),
+        getStopSequencesBodyLine(this.data),
+        getOptionalNumberBodyLine('Seed', this.data.seed, this.data.useSeedInput),
+      ].filter((line): line is string => line !== undefined).join('\n'),
+    };
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {

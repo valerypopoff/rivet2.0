@@ -25,6 +25,15 @@ function createNode(data: Partial<LLMChatV2Node['data']> = {}) {
   });
 }
 
+function getMarkdownBodyText(node: LLMChatV2NodeImpl) {
+  const body = node.getBody();
+  assert.equal(typeof body, 'object');
+  assert.ok(body != null);
+  assert.equal(Array.isArray(body), false);
+  assert.equal(body.type, 'markdown');
+  return body.text;
+}
+
 function createRuntimeContext(overrides: Record<string, unknown> = {}) {
   return {
     settings: {
@@ -201,14 +210,34 @@ describe('LLMChatV2NodeImpl', () => {
     });
 
     assert.equal(
-      node.getBody(),
+      getMarkdownBodyText(node),
       [
-        'Custom provider',
-        'Provider base URL: https://api.cerebras.ai/v1',
-        'llama-custom',
-        'Temperature: 0.5',
-        'Max output tokens: 1024',
+        '<span style="opacity: 0.55">Provider:</span> Custom',
+        '<span style="opacity: 0.55">Base URL:</span> https://api\\.cerebras\\.ai/v1',
+        '<span style="opacity: 0.55">Model:</span> llama\\-custom',
+        '<span style="opacity: 0.55">Temperature:</span> 0\\.5',
+        '<span style="opacity: 0.55">Max output tokens:</span> 1024',
+        '<span style="opacity: 0.55">Top P:</span> 1',
       ].join('\n'),
+    );
+  });
+
+  it('labels provider and model in the node body', () => {
+    assert.match(
+      getMarkdownBodyText(createNode({ provider: 'openai', model: 'custom-openai-model' })),
+      /^<span style="opacity: 0\.55">Provider:<\/span> OpenAI\n<span style="opacity: 0\.55">Model:<\/span> custom\\-openai\\-model/m,
+    );
+    assert.match(
+      getMarkdownBodyText(createNode({ provider: 'anthropic', model: 'custom-anthropic-model' })),
+      /^<span style="opacity: 0\.55">Provider:<\/span> Anthropic\n<span style="opacity: 0\.55">Model:<\/span> custom\\-anthropic\\-model/m,
+    );
+  });
+
+  it('escapes node body values before rendering markdown labels', () => {
+    assert.ok(
+      getMarkdownBodyText(createNode({ provider: 'custom', model: 'model_<script>_[x]\nnext' })).includes(
+        'Model:</span> model\\_&lt;script&gt;\\_\\[x\\]\\\\nnext',
+      ),
     );
   });
 
@@ -220,19 +249,69 @@ describe('LLMChatV2NodeImpl', () => {
       useCustomProviderBaseURLInput: true,
     });
 
-    assert.match(node.getBody(), /Provider base URL: \(Using Input\)/);
-    assert.doesNotMatch(node.getBody(), /api\.cerebras/);
+    const body = getMarkdownBodyText(node);
+    assert.match(body, /<span style="opacity: 0\.55">Base URL:<\/span> \\\(Using Input\\\)/);
+    assert.doesNotMatch(body, /api\.cerebras/);
+  });
+
+  it('shows configured generation parameters in the node body', () => {
+    const body = getMarkdownBodyText(
+      createNode({
+        topP: 0.75,
+        topK: 40,
+        presencePenalty: 0.2,
+        frequencyPenalty: -0.1,
+        stopSequences: ['END', '', 'STOP'],
+        seed: 1234,
+      }),
+    );
+
+    assert.match(body, /<span style="opacity: 0\.55">Top P:<\/span> 0\\\.75/);
+    assert.match(body, /<span style="opacity: 0\.55">Top K:<\/span> 40/);
+    assert.match(body, /<span style="opacity: 0\.55">Presence penalty:<\/span> 0\\\.2/);
+    assert.match(body, /<span style="opacity: 0\.55">Frequency penalty:<\/span> \\\-0\\\.1/);
+    assert.match(body, /<span style="opacity: 0\.55">Stop sequences:<\/span> &quot;END&quot;, &quot;STOP&quot;/);
+    assert.match(body, /<span style="opacity: 0\.55">Seed:<\/span> 1234/);
+  });
+
+  it('shows input-driven generation parameters in the node body', () => {
+    const body = getMarkdownBodyText(
+      createNode({
+        topK: undefined,
+        presencePenalty: undefined,
+        frequencyPenalty: undefined,
+        useTopPInput: true,
+        useTopKInput: true,
+        usePresencePenaltyInput: true,
+        useFrequencyPenaltyInput: true,
+        useStopSequencesInput: true,
+        useSeedInput: true,
+      }),
+    );
+
+    assert.match(body, /<span style="opacity: 0\.55">Top P:<\/span> \\\(Using Input\\\)/);
+    assert.match(body, /<span style="opacity: 0\.55">Top K:<\/span> \\\(Using Input\\\)/);
+    assert.match(body, /<span style="opacity: 0\.55">Presence penalty:<\/span> \\\(Using Input\\\)/);
+    assert.match(body, /<span style="opacity: 0\.55">Frequency penalty:<\/span> \\\(Using Input\\\)/);
+    assert.match(body, /<span style="opacity: 0\.55">Stop sequences:<\/span> \\\(Using Input\\\)/);
+    assert.match(body, /<span style="opacity: 0\.55">Seed:<\/span> \\\(Using Input\\\)/);
   });
 
   it('shows built-in provider reasoning effort in the node body', () => {
-    assert.match(createNode().getBody(), /Reasoning effort: Default/);
-    assert.match(createNode({ provider: 'openai', openAIReasoningEffort: 'high' }).getBody(), /Reasoning effort: High/);
-    assert.match(createNode({ provider: 'anthropic', anthropicEffort: 'max' }).getBody(), /Reasoning effort: Max/);
+    assert.match(getMarkdownBodyText(createNode()), /<span style="opacity: 0\.55">Reasoning effort:<\/span> Default/);
     assert.match(
-      createNode({ provider: 'google', googleThinkingLevel: 'minimal' }).getBody(),
-      /Reasoning effort: Minimal/,
+      getMarkdownBodyText(createNode({ provider: 'openai', openAIReasoningEffort: 'high' })),
+      /<span style="opacity: 0\.55">Reasoning effort:<\/span> High/,
     );
-    assert.doesNotMatch(createNode({ provider: 'custom' }).getBody(), /Reasoning effort:/);
+    assert.match(
+      getMarkdownBodyText(createNode({ provider: 'anthropic', anthropicEffort: 'max' })),
+      /<span style="opacity: 0\.55">Reasoning effort:<\/span> Max/,
+    );
+    assert.match(
+      getMarkdownBodyText(createNode({ provider: 'google', googleThinkingLevel: 'minimal' })),
+      /<span style="opacity: 0\.55">Reasoning effort:<\/span> Minimal/,
+    );
+    assert.doesNotMatch(getMarkdownBodyText(createNode({ provider: 'custom' })), /Reasoning effort:/);
   });
 
   it('places technical details after all LLM settings sections', async () => {
