@@ -7,13 +7,25 @@ export interface SelectionBox {
   y: number;
   width: number;
   height: number;
+  baseSelectedNodeIds: NodeId[];
+}
+
+export function mergeSelectionBoxNodeIds(
+  baseSelectedNodeIds: readonly NodeId[],
+  boxedNodeIds: readonly NodeId[],
+): NodeId[] {
+  return [...new Set([...baseSelectedNodeIds, ...boxedNodeIds])];
+}
+
+function areSameNodeIdSet(left: readonly NodeId[], right: readonly NodeId[]): boolean {
+  return left.length === right.length && left.every((nodeId) => right.includes(nodeId));
 }
 
 export function useSelectionBox() {
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
 
-  const startSelectionBox = (clientX: number, clientY: number) => {
-    setSelectionBox({ x: clientX, y: clientY, width: 0, height: 0 });
+  const startSelectionBox = (clientX: number, clientY: number, baseSelectedNodeIds: readonly NodeId[]) => {
+    setSelectionBox({ x: clientX, y: clientY, width: 0, height: 0, baseSelectedNodeIds: [...baseSelectedNodeIds] });
   };
 
   const updateSelectionBox = (
@@ -68,12 +80,13 @@ export function useSelectionBox() {
       return overlapArea > 0 && overlapArea >= halfNodeArea;
     });
 
-    const isSameSetOfNodes =
-      selectedNodeIds.length === nodesInBox.length &&
-      selectedNodeIds.every((node) => nodesInBox.some((n) => n.id === node));
+    const nextSelectedNodeIds = mergeSelectionBoxNodeIds(
+      selectionBox.baseSelectedNodeIds,
+      nodesInBox.map((node) => node.id),
+    );
 
-    if (!isSameSetOfNodes) {
-      return nodesInBox.map((node) => node.id);
+    if (!areSameNodeIdSet(selectedNodeIds, nextSelectedNodeIds)) {
+      return nextSelectedNodeIds;
     }
 
     return null;

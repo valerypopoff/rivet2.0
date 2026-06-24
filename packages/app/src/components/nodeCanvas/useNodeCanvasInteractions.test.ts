@@ -168,6 +168,16 @@ test('canvas panning uses the same closed-hand cursor treatment as node dragging
   assert.match(nodeCanvasStylesSource, /&\.dragging-node,[\s\S]*&\.dragging-canvas,[\s\S]*cursor: grabbing !important;/);
 });
 
+test('shift selection boxes snapshot selected nodes and do not fall through to canvas click clearing', () => {
+  const interactionSource = readFileSync(join(testDir, 'useNodeCanvasInteractions.ts'), 'utf8');
+
+  assert.match(interactionSource, /startSelectionBox\(e\.clientX, e\.clientY, selectedNodeIds\)/);
+  assert.match(
+    interactionSource,
+    /if \(selectionBox\) \{[\s\S]*updateSelectionBox\(e\.clientX, e\.clientY, nodes, clientToCanvasPosition, selectedNodeIds\)[\s\S]*endSelectionBox\(\);[\s\S]*return;[\s\S]*\} else if \(!isDraggingCanvas\)/,
+  );
+});
+
 test('connection mode has explicit keyboard, context-menu, and outside-click exits', () => {
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
 

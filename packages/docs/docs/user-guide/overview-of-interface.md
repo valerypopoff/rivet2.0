@@ -56,7 +56,7 @@ The canvas is the main area of the graph. You can click and drag on the canvas t
 
 Right click to open the context menu to add new nodes.
 
-Hold shift and drag to create a selection box. Any nodes inside the selection box will be selected. You can then move all of the selected nodes as a group, or create a subgraph from the selected nodes. You can also hold shift and click the title bar of a node to add it to the selection.
+Hold shift and drag to create a selection box. Any nodes inside the selection box will be selected. You can keep holding shift and drag another selection box to add a separate group to the same selection. You can then move all of the selected nodes as a group, or create a subgraph from the selected nodes. You can also hold shift and click the title bar of a node to add it to the selection.
 
 In **Rivet settings** > **UI**, you can choose a built-in dark theme, the built-in **Bright** theme, or choose **Custom** and pick primary and secondary theme colors. Primary controls accents, while secondary tints the main UI surfaces. Under **Canvas**, you can change the canvas color and choose the canvas background pattern. **Theme** uses the current theme's canvas surface, and **Custom** lets you pick your own canvas color. Dark themes use a pale canvas pattern; the Bright theme uses a dark pattern so the grid, dots, or crosses stay visible on the light canvas.
 

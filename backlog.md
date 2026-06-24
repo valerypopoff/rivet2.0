@@ -1,8 +1,5 @@
 
 
-
-- When the new project is created, the automatically created graph should be called "Main graph"
-
 - When looking at the chages in the compare mode, synchronize the scrollbars in the left and right windows of the same property
 
 - Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size

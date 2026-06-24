@@ -67,7 +67,7 @@ export interface UseNodeCanvasInteractionsOptions {
     updater: (saved: Record<GraphId, CanvasPosition | undefined>) => Record<GraphId, CanvasPosition | undefined>,
   ) => void;
   setSelectedNodeIds: (ids: NodeId[]) => void;
-  startSelectionBox: (x: number, y: number) => void;
+  startSelectionBox: (x: number, y: number, baseSelectedNodeIds: readonly NodeId[]) => void;
   isNodeDragGestureActive?: () => boolean;
   updateSelectionBox: (
     x: number,
@@ -144,7 +144,7 @@ export const useNodeCanvasInteractions = ({
     e.preventDefault();
 
     if (e.shiftKey) {
-      startSelectionBox(e.clientX, e.clientY);
+      startSelectionBox(e.clientX, e.clientY, selectedNodeIds);
       return;
     }
 
@@ -254,7 +254,12 @@ export const useNodeCanvasInteractions = ({
     const wasDraggingCanvas = isDraggingCanvas;
 
     if (selectionBox) {
+      const newSelectedNodeIds = updateSelectionBox(e.clientX, e.clientY, nodes, clientToCanvasPosition, selectedNodeIds);
+      if (newSelectedNodeIds) {
+        setSelectedNodeIds(newSelectedNodeIds);
+      }
       endSelectionBox();
+      return;
     } else if (!isDraggingCanvas) {
       return;
     }
