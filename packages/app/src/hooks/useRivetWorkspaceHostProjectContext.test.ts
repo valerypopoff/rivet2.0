@@ -217,3 +217,19 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
   assert.match(hostSource, /RivetOpeningProjectTabInput/);
   assert.match(hostSource, /RivetOpeningProjectTabOptions/);
 });
+
+test('workspace host carries existing project executor mode through hosted snapshot opens', () => {
+  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
+
+  assert.match(workspaceHostSource, /const store = useStore\(\);/);
+  assert.match(
+    workspaceHostSource,
+    /const existingExecutorMode = store\.get\(projectsState\)\.openedProjects\[projectId\]\?\.executorMode;/,
+  );
+  assert.match(workspaceHostSource, /executorMode: existingExecutorMode,/);
+  assert.match(
+    workspaceHostSource,
+    /const nextExecutorMode = previousProjects\.openedProjects\[projectId\]\?\.executorMode \?\? existingExecutorMode;/,
+  );
+  assert.match(workspaceHostSource, /\.\.\.\(nextExecutorMode \? \{ executorMode: nextExecutorMode \} : \{\}\),/);
+});

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import type { GraphId, NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
 import { nanoid } from 'nanoid/non-secure';
 import type { TrivetState } from '../state/trivet.js';
@@ -186,6 +186,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const callbacks = useRivetAppHostCallbacks();
   const workspaceTransitions = useWorkspaceTransitions();
   const loadProject = useLoadProject();
+  const store = useStore();
   const [projects, setProjects] = useAtom(projectsState);
   const [projectTabUiStates, setProjectTabUiStates] = useAtom(projectTabUiState);
   const [openingProjectTabs, setOpeningProjectTabs] = useAtom(openingProjectTabsState);
@@ -225,6 +226,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       const projectId = normalized.project.metadata.id as ProjectId;
       const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
       const replaceTargetProjectId = options.replaceProjectId ?? currentProjectId;
+      const existingExecutorMode = store.get(projectsState).openedProjects[projectId]?.executorMode;
       const shouldPreseedTabUiState = options.tabUi !== undefined;
       const previousTabUiState = projectTabUiStates[projectId];
 
@@ -246,7 +248,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
           openedGraph: snapshot.openedGraph,
           graphToLoad: snapshot.graphToLoad,
           testSuites: snapshot.testSuites,
-          executorMode: projects.openedProjects[projectId]?.executorMode,
+          executorMode: existingExecutorMode,
           markClean: true,
         });
 
@@ -264,6 +266,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
             options.replaceCurrent && replaceTargetProjectId && replaceTargetProjectId !== projectId
               ? removeOpenedProject(previousProjects, replaceTargetProjectId)
               : previousProjects;
+          const nextExecutorMode = previousProjects.openedProjects[projectId]?.executorMode ?? existingExecutorMode;
 
           const withOpenedProject = addOpenedProject(
             withoutReplacedProject,
@@ -274,6 +277,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
             {
               fsPath: snapshot.path,
               openedGraph: snapshot.openedGraph ?? snapshot.graphToLoad?.metadata?.id,
+              ...(nextExecutorMode ? { executorMode: nextExecutorMode } : {}),
             },
           );
 

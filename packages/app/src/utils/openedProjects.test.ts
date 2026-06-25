@@ -6,6 +6,7 @@ import {
   moveOpenedProjectPaths,
   removeOpenedProject,
   resolveSyncedOpenedProjectFsPathOptions,
+  updateOpenedProjectExecutorMode,
   updateOpenedProjectMetadata,
 } from './openedProjects.js';
 
@@ -153,6 +154,55 @@ describe('openedProjects helpers', () => {
     assert.deepEqual(result.openedProjects[project.metadata.id]?.executorMode, {
       type: 'local',
       executor: 'nodejs',
+    });
+  });
+
+  test('updates only one opened project executor mode', () => {
+    const firstProject = makeProject('project-1', 'First');
+    const secondProject = makeProject('project-2', 'Second');
+
+    const result = updateOpenedProjectExecutorMode(
+      {
+        openedProjects: {
+          [firstProject.metadata.id]: {
+            projectId: firstProject.metadata.id,
+            title: firstProject.metadata.title,
+            fsPath: '/tmp/first.rivet-project',
+            openedGraph: 'graph-2' as GraphId,
+            executorMode: {
+              type: 'local',
+              executor: 'browser',
+            },
+          },
+          [secondProject.metadata.id]: {
+            projectId: secondProject.metadata.id,
+            title: secondProject.metadata.title,
+            fsPath: '/tmp/second.rivet-project',
+            executorMode: {
+              type: 'remote-debugger',
+              url: 'ws://second.example',
+            },
+          },
+        },
+        openedProjectsSortedIds: [firstProject.metadata.id, secondProject.metadata.id],
+      },
+      firstProject.metadata.id,
+      {
+        type: 'remote-debugger',
+        url: 'ws://first.example',
+      },
+    );
+
+    assert.deepEqual(result.openedProjectsSortedIds, [firstProject.metadata.id, secondProject.metadata.id]);
+    assert.equal(result.openedProjects[firstProject.metadata.id]?.fsPath, '/tmp/first.rivet-project');
+    assert.equal(result.openedProjects[firstProject.metadata.id]?.openedGraph, 'graph-2');
+    assert.deepEqual(result.openedProjects[firstProject.metadata.id]?.executorMode, {
+      type: 'remote-debugger',
+      url: 'ws://first.example',
+    });
+    assert.deepEqual(result.openedProjects[secondProject.metadata.id]?.executorMode, {
+      type: 'remote-debugger',
+      url: 'ws://second.example',
     });
   });
 

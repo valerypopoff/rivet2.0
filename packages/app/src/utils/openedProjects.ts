@@ -2,7 +2,7 @@ import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
 import type { OpenedProjectsInfo } from '../state/savedGraphs.js';
 import type { ProjectMetadataPatch } from './projectMetadataUpdates.js';
 import type { ProjectExecutorMode } from './projectExecutorMode.js';
-import { sanitizeProjectExecutorMode } from './projectExecutorMode.js';
+import { projectExecutorModesEqual, sanitizeProjectExecutorMode } from './projectExecutorMode.js';
 
 export type ProjectPathMove = {
   from: string;
@@ -135,6 +135,37 @@ export function moveOpenedProjectPaths(current: OpenedProjectsInfo, moves: Proje
         openedProjects,
       }
     : current;
+}
+
+export function updateOpenedProjectExecutorMode(
+  current: OpenedProjectsInfo,
+  projectId: ProjectId,
+  executorMode: ProjectExecutorMode,
+): OpenedProjectsInfo {
+  const existingProject = current.openedProjects[projectId];
+  if (!existingProject) {
+    return current;
+  }
+
+  const nextExecutorMode = sanitizeProjectExecutorMode(executorMode);
+  if (!nextExecutorMode) {
+    return current;
+  }
+
+  if (projectExecutorModesEqual(existingProject.executorMode, nextExecutorMode)) {
+    return current;
+  }
+
+  return {
+    ...current,
+    openedProjects: {
+      ...current.openedProjects,
+      [projectId]: {
+        ...existingProject,
+        executorMode: nextExecutorMode,
+      },
+    },
+  };
 }
 
 export function updateOpenedProjectMetadata(

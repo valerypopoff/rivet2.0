@@ -135,6 +135,46 @@ describe('ExecutorSessionRegistry', () => {
     }
   });
 
+  test('keeps same-url external debugger sockets independent for different project runtimes', async () => {
+    const originalWebSocket = globalThis.WebSocket;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const registry = createExecutorSessionRegistry({ onStateChange: () => {} });
+      const firstProjectId = 'project-a' as ProjectId;
+      const secondProjectId = 'project-b' as ProjectId;
+      const firstRuntime = registry.getRuntime(firstProjectId);
+      const secondRuntime = registry.getRuntime(secondProjectId);
+      const disconnects: ProjectId[] = [];
+      const unsubscribe = registry.subscribeDisconnectsForAllProjects((disconnectedProjectId) => {
+        disconnects.push(disconnectedProjectId);
+      });
+
+      const firstConnect = firstRuntime.connectExternalDebugger('ws://debugger.example/shared');
+      const firstSocket = FakeWebSocket.instances[0]!;
+      firstSocket.open();
+      await firstConnect;
+
+      const secondConnect = secondRuntime.connectExternalDebugger('ws://debugger.example/shared');
+      const secondSocket = FakeWebSocket.instances[1]!;
+      secondSocket.open();
+      await secondConnect;
+      unsubscribe();
+
+      assert.equal(FakeWebSocket.instances.length, 2);
+      assert.notEqual(firstRuntime, secondRuntime);
+      assert.notEqual(firstSocket, secondSocket);
+      assert.equal(firstRuntime.getRuntimeState().socket, firstSocket as unknown as WebSocket);
+      assert.equal(secondRuntime.getRuntimeState().socket, secondSocket as unknown as WebSocket);
+      assert.equal(firstRuntime.getRuntimeState().status, 'ready');
+      assert.equal(secondRuntime.getRuntimeState().status, 'ready');
+      assert.deepEqual(disconnects, []);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
   test('settles request-scoped inactive terminal events before visual dispatch filtering', async () => {
     const source = await readFile(new URL('./ExecutorSessionContext.tsx', import.meta.url), 'utf8');
 
