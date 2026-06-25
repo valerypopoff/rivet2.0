@@ -29,12 +29,12 @@ test('blank canvas context menu labels node creation affordances explicitly', ()
   );
 });
 
-test('canvas context menu hover uses the shared graph-tree hover fill', () => {
+test('canvas context menu hover uses the shared popup-menu row hover fill', () => {
   const contextMenuComponentSource = readFileSync(join(componentsDir, 'ContextMenu.tsx'), 'utf8');
 
   assert.match(
     contextMenuComponentSource,
-    /&:hover,[\s\S]*&\.active \{[\s\S]*background-color: var\(--grey-darkish\);/,
+    /&:hover,[\s\S]*&\.active \{[\s\S]*background-color: var\(--popup-menu-row-hover-bg\);/,
   );
   assert.doesNotMatch(contextMenuComponentSource, /background-color: rgba\(255, 255, 255, 0\.1\);/);
 });

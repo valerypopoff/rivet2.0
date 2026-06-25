@@ -257,7 +257,18 @@ function sliceSourceBetween(source: string, startNeedle: string, endNeedle: stri
 test('node code editor uses project-scoped Monaco model caching', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
   const lazyCodeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
-  const workspaceHostSource = readFileSync(join(componentsDir, '..', 'hooks', 'useRivetWorkspaceHost.ts'), 'utf8');
+  const workspaceHostCleanupSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'workspaceHost', 'useWorkspaceHostProjectCleanup.ts'),
+    'utf8',
+  );
+  const workspaceHostOpenSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'workspaceHost', 'useWorkspaceHostOpenProject.ts'),
+    'utf8',
+  );
+  const workspaceHostCloseSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'workspaceHost', 'useWorkspaceHostCloseProject.ts'),
+    'utf8',
+  );
 
   assert.match(codeEditorSource, /buildCodeEditorModelCacheKey/);
   assert.match(codeEditorSource, /codeEditorModelCacheKey\.js/);
@@ -280,9 +291,9 @@ test('node code editor uses project-scoped Monaco model caching', () => {
     /if \(model\.getValue\(\) !== text\) \{\s+currentOnChange\?\.\(model\.getValue\(\)\);/,
   );
   assert.match(lazyCodeEditorSource, /if \(!isCached\) \{\s+model\.dispose\(\);/);
-  assert.match(workspaceHostSource, /function clearCodeEditorModelCacheForClosedProject/);
-  assert.match(workspaceHostSource, /clearCodeEditorModelCacheForClosedProject\(replaceTargetProjectId\);/);
-  assert.match(workspaceHostSource, /clearCodeEditorModelCacheForClosedProject\(projectId\);/);
+  assert.match(workspaceHostCleanupSource, /function clearCodeEditorModelCacheForClosedProject/);
+  assert.match(workspaceHostOpenSource, /cleanupClosedProject\(replacedProjectId\);/);
+  assert.match(workspaceHostCloseSource, /cleanupClosedProject\(projectId,/);
 });
 
 test('node code editor text stats are editor-definition driven', () => {

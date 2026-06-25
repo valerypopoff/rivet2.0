@@ -1686,7 +1686,14 @@ inside the host tree, or call
 [`useRivetWorkspaceHost`](../packages/app/src/hooks/useRivetWorkspaceHost.ts)
 from their own bridge component. The workspace host is a stable imperative
 handle; its methods always act on the latest Rivet state after mount, so host
-apps do not need to resubscribe just because project state changes. It exposes
+apps do not need to resubscribe just because project state changes. The public
+facade remains `useRivetWorkspaceHost`; internal implementation ownership is
+split under [`hooks/workspaceHost`](../packages/app/src/hooks/workspaceHost/),
+where focused operation hooks own snapshot open/replace, loading placeholders,
+close/resource cleanup, metadata/path updates, clean-baseline marking, compare
+controls, and transient tab UI state. Hosted wrappers should continue importing
+the facade from [`host.tsx`](../packages/app/src/host.tsx) or
+`useRivetWorkspaceHost`, not the internal operation hooks. It exposes
 `openProjectSnapshot`, `openProjectPath`, `closeProject`, `moveProjectPaths`,
 `setProjectTabUiState`, `startOpeningProjectTab`, `finishOpeningProjectTab`,
 `cancelOpeningProjectTab`, `updateProjectMetadata`, `replaceCurrent`,

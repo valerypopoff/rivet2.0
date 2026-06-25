@@ -93,15 +93,16 @@ test('graph tree shows compare diagnostics for graphs and folders', () => {
 
 test('host package re-exports the project comparison helper for wrappers', () => {
   const hostSource = source('host.tsx');
-  const workspaceHostSource = source('hooks/useRivetWorkspaceHost.ts');
+  const workspaceHostTypesSource = source('hooks/workspaceHost/types.ts');
+  const workspaceHostCompareSource = source('hooks/workspaceHost/useWorkspaceHostCompare.ts');
 
   assert.match(hostSource, /compareProjects/);
   assert.match(hostSource, /getProjectNodeFieldComparisons/);
   assert.match(hostSource, /ProjectComparisonChangeKind/);
   assert.match(hostSource, /ProjectCompareSideLabels/);
   assert.match(hostSource, /RivetProjectCompareOptions/);
-  assert.match(workspaceHostSource, /startProjectCompare\(/);
-  assert.match(workspaceHostSource, /stopProjectCompare\(/);
-  assert.match(workspaceHostSource, /labels: options\?\.labels/);
-  assert.match(workspaceHostSource, /projectCompareReferenceState/);
+  assert.match(workspaceHostTypesSource, /startProjectCompare\(/);
+  assert.match(workspaceHostTypesSource, /stopProjectCompare\(/);
+  assert.match(workspaceHostCompareSource, /labels: options\?\.labels/);
+  assert.match(workspaceHostCompareSource, /projectCompareReferenceState/);
 });

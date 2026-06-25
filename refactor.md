@@ -365,7 +365,19 @@ No user-visible behavior should change. Future tab, Menu, or window-control work
 - Follow-up cleanup consolidated the shared tab surface for real/loading project tabs, the shared top-strip item CSS for Menu/graph controls, and the shared Windows window-action wrapper.
 - Source-contract tests and `developer-docs/APP-ARCHITECTURE.md` now describe the shell module boundaries.
 
-## 6. Hosted Workspace API Hook
+## 6. Hosted Workspace API Hook - DONE
+
+Completed by keeping `packages/app/src/hooks/useRivetWorkspaceHost.ts` as the
+public facade and moving hosted workflow ownership under
+`packages/app/src/hooks/workspaceHost/`. Public host types now live in the
+workspace-host types module and are re-exported from the facade, snapshot
+normalization is isolated, project close/replace cleanup is centralized, and
+open/replace, opening placeholder tabs, metadata/path updates, clean-baseline
+marking, compare controls, and tab UI state each have focused operation hooks.
+Wrapper-facing method names and semantics remain unchanged.
+Follow-up cleanup removed duplicated hosted option shapes and repeated
+open/replace branch logic, and dropped duplicated internal hook return
+signatures in favor of the public host facade type.
 
 ### Problem
 
