@@ -512,7 +512,7 @@ No interaction should change. The outcome should be smaller components and behav
 - Existing wire creation/rewire/break behavior stays in `packages/app/src/domain/graphEditing/wireDragActions.ts`, so connection-mode graph mutations remain in the graph-editing domain layer.
 - Developer docs now describe the canvas connection and port interaction ownership boundaries.
 
-## 8. Node Canvas Command Glue
+## 8. Node Canvas Command Glue - DONE
 
 ### Problem
 
@@ -568,6 +568,14 @@ Extract or strengthen:
 ### What Changes After Refactor
 
 No visible behavior should change. Future canvas features should be easier to add without editing one thousand-line shell.
+
+### Implemented
+
+- Multi-node resize command glue now lives in `packages/app/src/components/nodeCanvas/nodeCanvasResizeModel.ts`.
+- `NodeCanvas.tsx` still owns DOM measurement and command dispatch, but selected-resize membership, snapshot creation, previous-node undo payloads, unchanged-entry filtering, and live drag application are covered by focused helper tests.
+- Project comparison canvas overlay mapping now lives in `packages/app/src/components/nodeCanvas/projectComparisonCanvas.ts`.
+- `NodeCanvas.tsx` reads one comparison render state instead of rebuilding removed nodes, removed connections, connection kind maps, and removed-node lookups inline.
+- Developer docs now describe the canvas shell/helper boundary for resize command preparation and compare overlays.
 
 ## 9. Executor Session Ownership
 

@@ -1,12 +1,49 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { ChartNode, NodeId } from '@valerypopoff/rivet2-core';
 import {
+  applyResizeBoundsToNode,
+  applyResizeChangesToNodes,
   calculateNodeResizeGroupChanges,
   computeBoxNodeResizeBounds,
   computeHorizontalNodeResizeBounds,
   haveHorizontalNodeResizeBoundsChanged,
   MIN_NODE_WIDTH,
+  type NodeResizeBounds,
+  type NodeResizeChange,
 } from './nodeResize.js';
+
+function asNodeId(id: string): NodeId {
+  return id as NodeId;
+}
+
+function textNode(id: NodeId): ChartNode {
+  return {
+    id,
+    type: 'text',
+    title: id,
+    data: {},
+    visualData: {
+      x: 100,
+      y: 200,
+      width: 300,
+    },
+  };
+}
+
+function commentNode(id: NodeId): ChartNode {
+  return {
+    ...textNode(id),
+    type: 'comment',
+    data: {
+      height: 180,
+    },
+  };
+}
+
+function resizeChange(node: ChartNode, nextBounds: NodeResizeBounds): NodeResizeChange {
+  return { nodeId: node.id, nextBounds, previousNode: node };
+}
 
 test('computeHorizontalNodeResizeBounds expands from the right edge without moving x', () => {
   const resized = computeHorizontalNodeResizeBounds({
@@ -205,4 +242,60 @@ test('calculateNodeResizeGroupChanges returns no changes when the source snapsho
   });
 
   assert.deepEqual(changes, []);
+});
+
+test('applyResizeBoundsToNode updates normal node position and width without losing visual data', () => {
+  const node = {
+    ...textNode(asNodeId('node')),
+    visualData: {
+      x: 100,
+      y: 200,
+      width: 300,
+      zIndex: 7,
+    },
+  };
+
+  const resized = applyResizeBoundsToNode(node, { x: 140, width: 360 });
+
+  assert.deepEqual(resized.visualData, {
+    x: 140,
+    y: 200,
+    width: 360,
+    zIndex: 7,
+  });
+  assert.notEqual(resized, node);
+});
+
+test('applyResizeBoundsToNode updates comment height only when a height is provided', () => {
+  const node = commentNode(asNodeId('comment'));
+
+  const widthOnly = applyResizeBoundsToNode(node, { x: 120, width: 320 });
+  const withHeight = applyResizeBoundsToNode(node, { x: 120, y: 210, width: 320, height: 260 });
+
+  assert.deepEqual(widthOnly.data, { height: 180 });
+  assert.deepEqual(withHeight.visualData, { x: 120, y: 210, width: 320 });
+  assert.deepEqual(withHeight.data, { height: 260 });
+});
+
+test('applyResizeChangesToNodes updates node lists and can require every changed node to exist', () => {
+  const normalNode = textNode(asNodeId('normal'));
+  const noteNode = commentNode(asNodeId('comment'));
+  const missingNode = textNode(asNodeId('missing'));
+  const nextNodes = applyResizeChangesToNodes([normalNode, noteNode], [
+    resizeChange(normalNode, { x: 120, width: 340 }),
+    resizeChange(noteNode, { x: 140, y: 220, width: 360, height: 210 }),
+  ]);
+
+  assert.deepEqual(nextNodes[0]!.visualData, { x: 120, y: 200, width: 340 });
+  assert.deepEqual(nextNodes[1]!.visualData, { x: 140, y: 220, width: 360 });
+  assert.deepEqual(nextNodes[1]!.data, { height: 210 });
+  assert.throws(
+    () =>
+      applyResizeChangesToNodes(
+        [normalNode],
+        [resizeChange(missingNode, { x: 120, width: 340 })],
+        { requireAllChanges: true },
+      ),
+    /Node with id missing not found/,
+  );
 });

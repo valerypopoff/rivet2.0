@@ -41,9 +41,11 @@ test('canvas compare mode highlights nodes and wires without changing graph data
   assert.match(graphBuilderSource, /getOverallProjectComparisonCounts/);
   assert.match(graphBuilderSource, /getGraphProjectComparisonCounts/);
   assert.match(nodeCanvasSource, /selectedGraphProjectComparisonState/);
-  assert.match(nodeCanvasSource, /getCanvasNodeCompareKindsById/);
+  assert.match(nodeCanvasSource, /getCanvasProjectComparisonRenderState/);
   assert.match(nodeCanvasSource, /compareRemovedNodes/);
   assert.match(nodeCanvasSource, /connectionCompareKindsByKey/);
+  assert.match(projectComparisonCanvasSource, /getCanvasNodeCompareKindsById/);
+  assert.match(projectComparisonCanvasSource, /connectionCompareKindsByKey/);
   assert.match(projectComparisonCanvasSource, /graphComparison\.nodes/);
   assert.match(projectComparisonCanvasSource, /comparison\.kind === 'added'/);
   assert.match(projectComparisonCanvasSource, /comparison\.kind === 'changed'/);

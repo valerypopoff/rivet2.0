@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ChartNode, GraphId, NodeId, PortId, ProjectGraphComparison } from '@valerypopoff/rivet2-core';
-import { getCanvasNodeCompareKindsById } from './projectComparisonCanvas.js';
+import {
+  EMPTY_CANVAS_PROJECT_COMPARISON_RENDER_STATE,
+  getCanvasNodeCompareKindsById,
+  getCanvasProjectComparisonRenderState,
+} from './projectComparisonCanvas.js';
 
 function asGraphId(id: string): GraphId {
   return id as GraphId;
@@ -179,4 +183,96 @@ test('getCanvasNodeCompareKindsById highlights added nodes even when added wires
     [addedConnectedNodeId]: 'added',
     [addedStandaloneNodeId]: 'added',
   });
+});
+
+test('getCanvasProjectComparisonRenderState returns the shared empty state without a comparison', () => {
+  assert.equal(getCanvasProjectComparisonRenderState(undefined), EMPTY_CANVAS_PROJECT_COMPARISON_RENDER_STATE);
+});
+
+test('getCanvasProjectComparisonRenderState derives node and connection overlay data', () => {
+  const addedNodeId = asNodeId('added-node');
+  const removedNodeId = asNodeId('removed-node');
+  const changedConnectionKey = '["old-source","output","old-target","input"]';
+  const addedConnectionKey = '["source","output","added-node","input"]';
+  const removedConnectionKey = '["removed-source","output","removed-target","input"]';
+
+  const graphComparison = {
+    id: asGraphId('graph'),
+    kind: 'changed',
+    metadataChanged: false,
+    nodes: {
+      [addedNodeId]: {
+        id: addedNodeId,
+        kind: 'added',
+        after: node(addedNodeId),
+      },
+      [removedNodeId]: {
+        id: removedNodeId,
+        kind: 'removed',
+        before: node(removedNodeId),
+      },
+    },
+    connections: {
+      [addedConnectionKey]: {
+        key: addedConnectionKey,
+        kind: 'added',
+        after: {
+          inputId: asPortId('input'),
+          inputNodeId: addedNodeId,
+          outputId: asPortId('output'),
+          outputNodeId: asNodeId('source'),
+        },
+      },
+      [changedConnectionKey]: {
+        key: changedConnectionKey,
+        kind: 'changed',
+        before: {
+          inputId: asPortId('input'),
+          inputNodeId: asNodeId('old-target'),
+          outputId: asPortId('output'),
+          outputNodeId: asNodeId('old-source'),
+        },
+        after: {
+          inputId: asPortId('input'),
+          inputNodeId: addedNodeId,
+          outputId: asPortId('output'),
+          outputNodeId: asNodeId('source'),
+        },
+      },
+      [removedConnectionKey]: {
+        key: removedConnectionKey,
+        kind: 'removed',
+        before: {
+          inputId: asPortId('input'),
+          inputNodeId: asNodeId('removed-target'),
+          outputId: asPortId('output'),
+          outputNodeId: asNodeId('removed-source'),
+        },
+      },
+    },
+    summary: {
+      addedConnections: 1,
+      addedNodes: 1,
+      changedConnections: 1,
+      changedNodes: 0,
+      removedConnections: 1,
+      removedNodes: 1,
+    },
+  } satisfies ProjectGraphComparison;
+
+  const renderState = getCanvasProjectComparisonRenderState(graphComparison);
+
+  assert.deepEqual(renderState.nodeCompareKindsById, { [addedNodeId]: 'added' });
+  assert.deepEqual(renderState.compareRemovedNodes.map((node) => node.id), [removedNodeId]);
+  assert.deepEqual(Object.keys(renderState.compareNodesById), [removedNodeId]);
+  assert.deepEqual(renderState.connectionCompareKindsByKey, {
+    [addedConnectionKey]: 'added',
+    [changedConnectionKey]: 'changed',
+  });
+  assert.deepEqual(
+    renderState.compareRemovedConnections.map(
+      (connection) => `${connection.outputNodeId}:${connection.inputNodeId}`,
+    ),
+    ['old-source:old-target', 'removed-source:removed-target'],
+  );
 });

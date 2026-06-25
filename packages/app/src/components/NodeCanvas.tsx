@@ -2,7 +2,6 @@ import { DndContext, useDroppable } from '@dnd-kit/core';
 import clsx from 'clsx';
 import { useMergeRefs } from '@floating-ui/react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import { produce } from 'immer';
 import { type CSSProperties, type FC, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type ChartNode,
@@ -12,10 +11,9 @@ import {
   type NodeInputDefinition,
   type NodeOutputDefinition,
   type PortId,
-  type ProjectComparisonChangeKind,
 } from '@valerypopoff/rivet2-core';
 import { useDeleteNodesCommand } from '../commands/deleteNodeCommand';
-import { useResizeNodesCommand, type NodeResizeChange } from '../commands/resizeNodesCommand';
+import { useResizeNodesCommand } from '../commands/resizeNodesCommand';
 import { useCanvasHotkeys } from '../hooks/useCanvasHotkeys';
 import { useCanvasPositioning } from '../hooks/useCanvasPositioning.js';
 import { useContextMenu } from '../hooks/useContextMenu.js';
@@ -79,12 +77,7 @@ import { MultiNodeAlignmentToolbar } from './nodeCanvas/MultiNodeAlignmentToolba
 import { NodeCanvasViewport } from './nodeCanvas/NodeCanvasViewport.js';
 import { useNodeCanvasInteractions } from './nodeCanvas/useNodeCanvasInteractions.js';
 import { WireLayer } from './WireLayer.js';
-import {
-  calculateNodeResizeGroupChanges,
-  MIN_NODE_WIDTH,
-  type NodeResizeBounds,
-  type NodeResizeGroupSnapshot,
-} from '../utils/nodeResize.js';
+import { applyResizeChangesToNodes, type NodeResizeBounds } from '../utils/nodeResize.js';
 import { getCanvasCommentHeight, getCanvasNodeWidth } from '../hooks/canvasVisibilityBounds.js';
 import { MEDIUM_GRAPH_NODE_THRESHOLD } from './nodeCanvas/canvasPerformanceBudget.js';
 import { getCanvasPerfSnapshot } from './nodeCanvas/canvasPerfDebug.js';
@@ -106,18 +99,19 @@ import { getMinimumNodeWidthForPortLabels } from '../utils/nodePortLabelWidth.js
 import { getUiFontScale } from '../utils/uiFontSize.js';
 import { blurFocusedGraphFilterInput } from './graphList/graphFilterFocus.js';
 import { selectedGraphProjectComparisonState } from '../state/projectComparison.js';
-import { getCanvasNodeCompareKindsById } from './nodeCanvas/projectComparisonCanvas.js';
+import { getCanvasProjectComparisonRenderState } from './nodeCanvas/projectComparisonCanvas.js';
+import {
+  type ActiveResizeGroup,
+  type ResizeNodeSnapshot,
+  createResizeNodeSnapshot,
+  getChangedResizeEntries,
+  getRenderedMinWidth,
+  getResizeChangesForGroup,
+  getResizeNodeIds,
+  parseFiniteStyleNumber,
+} from './nodeCanvas/nodeCanvasResizeModel.js';
 
 const EMPTY_NODE_CONNECTIONS: NodeConnection[] = [];
-
-type ResizeNodeSnapshot = NodeResizeGroupSnapshot & {
-  previousNode: ChartNode;
-};
-
-type ActiveResizeGroup = {
-  sourceNodeId: NodeId;
-  snapshots: ResizeNodeSnapshot[];
-};
 
 type NodeScopedUiTarget = {
   graphId: string;
@@ -140,28 +134,6 @@ function shouldClearNodeScopedUiTarget(options: {
     options.target.graphId !== options.currentGraphId ||
     !options.nodes.some((node) => node.id === options.target!.nodeId)
   );
-}
-
-function parseFiniteStyleNumber(value: string | undefined, fallback: number): number {
-  if (value == null) {
-    return fallback;
-  }
-
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function hasResizeSnapshotChanged(snapshot: ResizeNodeSnapshot, nextBounds: NodeResizeBounds): boolean {
-  return (
-    snapshot.x !== nextBounds.x ||
-    snapshot.width !== nextBounds.width ||
-    (nextBounds.y !== undefined && snapshot.y !== nextBounds.y) ||
-    (nextBounds.height !== undefined && snapshot.height !== nextBounds.height)
-  );
-}
-
-function getRenderedMinWidth(computedStyle: CSSStyleDeclaration | undefined): number {
-  return Math.max(MIN_NODE_WIDTH, parseFiniteStyleNumber(computedStyle?.minWidth, MIN_NODE_WIDTH));
 }
 
 export interface NodeCanvasProps {
@@ -422,43 +394,9 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   } = useContextMenu();
 
   const connectionsByNodeId = useMemo(() => groupConnectionsByNode(previewConnections), [previewConnections]);
-  const nodeCompareKindsById = useMemo(
-    () => getCanvasNodeCompareKindsById(selectedGraphComparison),
+  const comparisonRenderState = useMemo(
+    () => getCanvasProjectComparisonRenderState(selectedGraphComparison),
     [selectedGraphComparison],
-  );
-  const compareRemovedNodes = useMemo(
-    () =>
-      selectedGraphComparison
-        ? Object.values(selectedGraphComparison.nodes)
-            .filter((comparison) => comparison.kind === 'removed' && comparison.before)
-            .map((comparison) => comparison.before!)
-        : [],
-    [selectedGraphComparison],
-  );
-  const connectionCompareKindsByKey = useMemo(() => {
-    if (!selectedGraphComparison) {
-      return {};
-    }
-
-    return Object.fromEntries(
-      Object.entries(selectedGraphComparison.connections)
-        .filter(([, comparison]) => comparison.kind !== 'unchanged' && comparison.after)
-        .map(([key, comparison]) => [key, comparison.kind]),
-    ) as Record<string, ProjectComparisonChangeKind>;
-  }, [selectedGraphComparison]);
-  const compareRemovedConnections = useMemo(
-    () =>
-      selectedGraphComparison
-        ? Object.values(selectedGraphComparison.connections)
-            .filter((comparison) => comparison.before && (comparison.kind === 'removed' || comparison.kind === 'changed'))
-            .map((comparison) => comparison.before!)
-        : [],
-    [selectedGraphComparison],
-  );
-  const compareNodesById = useMemo(
-    () =>
-      Object.fromEntries(compareRemovedNodes.map((node) => [node.id, node])) as Record<NodeId, ChartNode>,
-    [compareRemovedNodes],
   );
   const nodesWithConnections = useMemo(
     () =>
@@ -589,18 +527,12 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     const width = parseFiniteStyleNumber(computedStyle?.width, fallbackWidth);
     const minWidth = getResizeMinWidthForNode(node, computedStyle);
 
-    return {
-      nodeId: node.id,
-      x: node.visualData.x,
-      y: node.type === 'comment' ? node.visualData.y : undefined,
+    return createResizeNodeSnapshot({
+      node,
       width,
-      height:
-        node.type === 'comment'
-          ? parseFiniteStyleNumber(computedStyle?.height, fallbackHeight ?? width)
-          : undefined,
       minWidth,
-      previousNode: structuredClone(node),
-    };
+      height: node.type === 'comment' ? parseFiniteStyleNumber(computedStyle?.height, fallbackHeight ?? width) : undefined,
+    });
   });
 
   const getResizeGroupForNode = useStableCallback((node: ChartNode): ActiveResizeGroup => {
@@ -609,9 +541,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       return activeGroup;
     }
 
-    const selectedNodeIdSet = new Set(selectedNodeIds);
-    const shouldResizeSelection = selectedNodeIdSet.has(node.id) && selectedNodeIdSet.size > 1;
-    const resizeNodeIds = shouldResizeSelection ? selectedNodeIdSet : new Set<NodeId>([node.id]);
+    const resizeNodeIds = getResizeNodeIds(node.id, selectedNodeIds);
     const snapshots = nodes
       .filter((candidate) => resizeNodeIds.has(candidate.id))
       .map((candidate) => getResizeSnapshotForNode(candidate));
@@ -631,25 +561,10 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
 
   const getResizeChangesForNode = useStableCallback((node: ChartNode, nextBounds: NodeResizeBounds) => {
     const resizeGroup = getResizeGroupForNode(node);
-    const previousNodesByNodeId = new Map(
-      resizeGroup.snapshots.map((snapshot) => [snapshot.nodeId, snapshot.previousNode]),
-    );
-
-    return calculateNodeResizeGroupChanges({
+    return getResizeChangesForGroup({
       sourceNodeId: node.id,
       sourceNextBounds: nextBounds,
       snapshots: resizeGroup.snapshots,
-    }).map((change): NodeResizeChange => {
-      const previousNode = previousNodesByNodeId.get(change.nodeId as NodeId);
-      if (!previousNode) {
-        throw new Error(`No resize snapshot found for node ${change.nodeId}`);
-      }
-
-      return {
-        nodeId: change.nodeId as NodeId,
-        nextBounds: change.nextBounds,
-        previousNode,
-      };
     });
   });
 
@@ -659,24 +574,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       return;
     }
 
-    onNodesChanged(
-      produce(nodes, (draft) => {
-        for (const change of resizeChanges) {
-          const foundNode = draft.find((candidate) => candidate.id === change.nodeId);
-          if (!foundNode) {
-            continue;
-          }
-
-          foundNode.visualData.x = change.nextBounds.x;
-          foundNode.visualData.y = change.nextBounds.y ?? foundNode.visualData.y;
-          foundNode.visualData.width = change.nextBounds.width;
-
-          if (foundNode.type === 'comment' && change.nextBounds.height != null) {
-            (foundNode as CommentNode).data.height = change.nextBounds.height;
-          }
-        }
-      }),
-    );
+    onNodesChanged(applyResizeChangesToNodes(nodes, resizeChanges));
   });
 
   const onNodeMouseEnter = useStableCallback((_e: MouseEvent<HTMLElement>, nodeId: NodeId) => {
@@ -893,12 +791,10 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const onResizeFinish = useStableCallback(
     (node: ChartNode, nextBounds: NodeResizeBounds) => {
       try {
-        const snapshotsByNodeId = new Map(
-          getResizeGroupForNode(node).snapshots.map((snapshot) => [snapshot.nodeId, snapshot]),
-        );
-        const changedResizeEntries = getResizeChangesForNode(node, nextBounds).filter((change) => {
-          const snapshot = snapshotsByNodeId.get(change.nodeId);
-          return snapshot ? hasResizeSnapshotChanged(snapshot, change.nextBounds) : true;
+        const resizeGroup = getResizeGroupForNode(node);
+        const changedResizeEntries = getChangedResizeEntries({
+          changes: getResizeChangesForNode(node, nextBounds),
+          snapshots: resizeGroup.snapshots,
         });
 
         if (changedResizeEntries.length > 0) {
@@ -1017,8 +913,8 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           lastRunPerNode={lastRunPerNode}
           layer="comments"
           nodeTypes={nodeTypes}
-          nodeCompareKindsById={nodeCompareKindsById}
-          compareRemovedNodes={compareRemovedNodes}
+          nodeCompareKindsById={comparisonRenderState.nodeCompareKindsById}
+          compareRemovedNodes={comparisonRenderState.compareRemovedNodes}
           nodesWithConnections={nodesWithConnections}
           onNodeDragActivatorPointerDown={handleNodeDragActivatorPointerDown}
           expandedOutputNodeIds={expandedOutputNodeIds}
@@ -1031,9 +927,9 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           <WireLayer
             connections={previewConnections}
             draggingWire={draggingWire}
-            compareNodesById={compareNodesById}
-            compareRemovedConnections={compareRemovedConnections}
-            connectionCompareKindsByKey={connectionCompareKindsByKey}
+            compareNodesById={comparisonRenderState.compareNodesById}
+            compareRemovedConnections={comparisonRenderState.compareRemovedConnections}
+            connectionCompareKindsByKey={comparisonRenderState.connectionCompareKindsByKey}
             highlightedNodes={highlightedNodes}
             highlightedPort={hoveringPort}
             nearViewportNodeIdSet={nearViewportNodeIdSet}
@@ -1061,8 +957,8 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           lastRunPerNode={lastRunPerNode}
           layer="nodes"
           nodeTypes={nodeTypes}
-          nodeCompareKindsById={nodeCompareKindsById}
-          compareRemovedNodes={compareRemovedNodes}
+          nodeCompareKindsById={comparisonRenderState.nodeCompareKindsById}
+          compareRemovedNodes={comparisonRenderState.compareRemovedNodes}
           nodesWithConnections={nodesWithConnections}
           onNodeDragActivatorPointerDown={handleNodeDragActivatorPointerDown}
           expandedOutputNodeIds={expandedOutputNodeIds}
