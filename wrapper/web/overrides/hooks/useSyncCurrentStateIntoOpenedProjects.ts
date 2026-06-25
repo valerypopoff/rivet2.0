@@ -18,12 +18,20 @@ import {
 } from '../../../../rivet/packages/app/src/state/savedGraphs';
 import { trivetState } from '../../../../rivet/packages/app/src/state/trivet';
 import { addOpenedProject } from '../../../../rivet/packages/app/src/utils/openedProjects.js';
+import { useExecutorSessionState } from '../../../../rivet/packages/app/src/hooks/useExecutorSession.js';
+import {
+  projectExecutorModesEqual,
+  resolveCurrentProjectExecutorMode,
+  sanitizeProjectExecutorMode,
+  type ProjectExecutorMode,
+} from '../../../../rivet/packages/app/src/utils/projectExecutorMode.js';
 import {
   buildCurrentProjectContentSnapshot,
   getProjectContentDigest,
   markProjectClean,
   markProjectDirtyFlag,
 } from '../../../../rivet/packages/app/src/utils/projectUnsavedChanges.js';
+import { selectedExecutorState } from '../state/settings';
 import { resolveHostedProjectTitle, withHostedProjectTitle } from '../../dashboard/openedProjectMetadata';
 import { primeOpenedProjectSession, syncOpenedProjectSessionIds } from '../../io/openedProjectSessionCache';
 
@@ -63,6 +71,7 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
   const legacyProject = entry.project ?? null;
   const projectId = (entry.projectId ?? legacyProject?.metadata?.id ?? previousProjectId) as ProjectId;
   const fsPath = entry.fsPath ?? null;
+  const executorMode = sanitizeProjectExecutorMode(entry.executorMode);
   const title = resolveHostedProjectTitle(
     {
       metadata: {
@@ -77,8 +86,14 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
     projectId,
     title,
     fsPath,
+    ...(executorMode ? { executorMode } : {}),
     ...(openedGraph ? { openedGraph: openedGraph as GraphId } : {}),
   };
+  const rawExecutorMode = entry.executorMode as ProjectExecutorMode | undefined;
+  const executorModeChanged =
+    rawExecutorMode == null
+      ? executorMode !== undefined
+      : !executorMode || !projectExecutorModesEqual(rawExecutorMode, executorMode);
 
   return {
     projectId,
@@ -90,6 +105,7 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
       entry.title !== title ||
       entry.fsPath !== fsPath ||
       entry.openedGraph !== openedGraph ||
+      executorModeChanged ||
       'project' in entry,
   };
 }
@@ -155,7 +171,7 @@ function normalizeOpenedProjects(
     : previousProjects;
 }
 
-export function useSyncCurrentStateIntoOpenedProjects() {
+export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enabled?: boolean } = {}) {
   const setProjects = useSetAtom(projectsState);
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
@@ -167,10 +183,32 @@ export function useSyncCurrentStateIntoOpenedProjects() {
   const loadedProject = useAtomValue(loadedProjectState);
   const currentGraph = useAtomValue(graphState);
   const currentTrivetState = useAtomValue(trivetState);
+  const selectedExecutor = useAtomValue(selectedExecutorState);
+  const executorSession = useExecutorSessionState();
+  const executorTargetType = executorSession.target?.type;
+  const executorTargetUrl = executorSession.target?.url;
+  const executorTarget = useMemo(
+    () =>
+      executorTargetType != null && executorTargetUrl != null
+        ? {
+            type: executorTargetType,
+            url: executorTargetUrl,
+          }
+        : null,
+    [executorTargetType, executorTargetUrl],
+  );
   const savedProjectContentDigests = useAtomValue(savedProjectContentDigestsState);
   const openedProjects = useAtomValue(openedProjectsState);
   const openedProjectSnapshots = useAtomValue(openedProjectSnapshotsState);
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
+  const currentExecutorMode = useMemo(
+    () =>
+      resolveCurrentProjectExecutorMode({
+        selectedExecutor,
+        target: executorTarget,
+      }),
+    [executorTarget, selectedExecutor],
+  );
   const currentProjectWithData = useMemo(
     () => ({
       ...currentProject,
@@ -182,10 +220,18 @@ export function useSyncCurrentStateIntoOpenedProjects() {
   const suppressedClosedProjectIdsRef = useRef<Set<ProjectId>>(new Set());
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     syncOpenedProjectSessionIds(openedProjectIds);
-  }, [openedProjectIds]);
+  }, [enabled, openedProjectIds]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
     setProjects((previousProjects) =>
       normalizeOpenedProjects(previousProjects, {
@@ -193,9 +239,13 @@ export function useSyncCurrentStateIntoOpenedProjects() {
         openedProjectSnapshots,
       }),
     );
-  }, [currentProject.metadata.id, openedProjectSnapshots, setProjects]);
+  }, [currentProject.metadata.id, enabled, openedProjectSnapshots, setProjects]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     setOpenedProjectSnapshots((previousSnapshots) => {
       let changed = false;
       const nextSnapshots = { ...previousSnapshots };
@@ -224,9 +274,13 @@ export function useSyncCurrentStateIntoOpenedProjects() {
 
       return changed ? nextSnapshots : previousSnapshots;
     });
-  }, [openedProjectIds, openedProjects, setOpenedProjectSnapshots]);
+  }, [enabled, openedProjectIds, openedProjects, setOpenedProjectSnapshots]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
     const previousOpenedProjectIds = previousOpenedProjectIdsRef.current;
 
@@ -243,20 +297,28 @@ export function useSyncCurrentStateIntoOpenedProjects() {
     }
 
     previousOpenedProjectIdsRef.current = openedProjectIds;
-  }, [currentProject.metadata.id, openedProjectIds]);
+  }, [currentProject.metadata.id, enabled, openedProjectIds]);
 
   // Clear the file-backed loaded path when the last opened project tab is gone.
   // This keeps scratch-project state from still looking file-backed after everything closes.
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     if (openedProjectIds.length === 0 && loadedProject.path) {
       setLoadedProject({ loaded: false, path: '' });
     }
-  }, [loadedProject.path, openedProjectIds.length, setLoadedProject]);
+  }, [enabled, loadedProject.path, openedProjectIds.length, setLoadedProject]);
 
   // Ensure the active project exists in the opened-project registry unless the user just closed
   // that active tab. Rivet 2.0 keeps full project content in openedProjectSnapshotsState; this
   // registry is lightweight tab metadata only.
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
     if (!currentProjectId) {
       return;
@@ -282,6 +344,7 @@ export function useSyncCurrentStateIntoOpenedProjects() {
       const nextProjects = addOpenedProject(previousProjects, projectForTab, {
         ...(loadedProject.path ? { fsPath: loadedProject.path } : {}),
         ...(nextOpenedGraph ? { openedGraph: nextOpenedGraph } : {}),
+        executorMode: currentExecutorMode,
       });
       const nextProject = nextProjects.openedProjects[currentProjectId];
 
@@ -289,6 +352,7 @@ export function useSyncCurrentStateIntoOpenedProjects() {
         existingProject?.title === nextTitle &&
         existingProject?.fsPath === nextFsPath &&
         existingProject?.openedGraph === nextOpenedGraph &&
+        projectExecutorModesEqual(existingProject?.executorMode, currentExecutorMode) &&
         previousProjects.openedProjectsSortedIds.includes(currentProjectId)
       ) {
         return previousProjects;
@@ -297,15 +361,21 @@ export function useSyncCurrentStateIntoOpenedProjects() {
       return nextProject ? nextProjects : previousProjects;
     });
   }, [
+    currentExecutorMode,
     currentGraph?.metadata?.id,
     currentProject,
     currentProjectWithData,
+    enabled,
     loadedProject.path,
     openedProjectIds,
     setProjects,
   ]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
     if (!currentProjectId || !openedProjectIds.includes(currentProjectId)) {
       return;
@@ -327,12 +397,17 @@ export function useSyncCurrentStateIntoOpenedProjects() {
   }, [
     currentProject.metadata.id,
     currentTrivetState.testSuites,
+    enabled,
     loadedProject.path,
     openedProjectIds,
     openedProjects,
   ]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
     if (!currentProjectId || !currentGraph) {
       return;
@@ -357,6 +432,7 @@ export function useSyncCurrentStateIntoOpenedProjects() {
   }, [
     currentGraph,
     currentProject,
+    enabled,
     savedProjectContentDigests,
     setProjectUnsavedChanges,
     setSavedProjectContentDigests,

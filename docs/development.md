@@ -435,6 +435,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - if direct workflow activation fails, rely on the workspace host's boolean result and avoid posting `project-opened` to the dashboard
   - when fixing tab close/switch behavior, update the wrapper overrides rather than storing full project objects back into `projectsState.openedProjects`
   - if `useSyncCurrentStateIntoOpenedProjects` is overridden for hosted tab cleanup, carry forward upstream's dirty-digest sync as well: `buildCurrentProjectContentSnapshot`, `savedProjectContentDigestsState`, and `projectUnsavedChangesState` are what make the editor tab unsaved-changes dot appear after edits
+  - carry forward upstream's per-project executor metadata in hosted opened-project overrides: the active tab must write `OpenedProjectInfo.executorMode`, and `useLoadProject` must pass `projectInfo.executorMode` back into `workspaceTransitions.loadProject(...)` so Browser, Node, and Remote Debugger choices are restored when switching tabs
 - wrapper module overrides should stay scoped to upstream app importers
   - `wrapper/web/vite.config.ts` resolves override files only when the importer is under `rivet/packages/app/src`
   - keep the `savedGraphs` override narrow: it re-exports upstream state, maps the hosted `clearProjectContextState` compatibility helper to upstream `releaseProjectContextState` for normal tab close/reopen, and exposes an explicit storage-removing delete helper for actual workflow deletion
