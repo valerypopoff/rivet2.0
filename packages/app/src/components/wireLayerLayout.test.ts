@@ -41,6 +41,10 @@ test('wire hover uses transparent rendered-wire hit paths instead of global curv
 test('wire bend handles are local rendered-wire affordances with persisted connection data', () => {
   const wireLayerSource = readFileSync(join(componentsDir, 'WireLayer.tsx'), 'utf8');
   const wireSource = readFileSync(join(componentsDir, 'Wire.tsx'), 'utf8');
+  const connectionBendInteractionSource = readFileSync(
+    join(componentsDir, 'nodeCanvas', 'connectionBendInteraction.ts'),
+    'utf8',
+  );
   const useRenderableWiresSource = readFileSync(join(componentsDir, 'nodeCanvas', 'useRenderableWires.ts'), 'utf8');
   const wireStyles = /const wiresStyles = css`(?<styles>[\s\S]*?)`;/u.exec(wireLayerSource)?.groups?.styles;
   const ghostWireStyles = /\.wire-bend-point-ghost\s*\{(?<styles>[\s\S]*?)\n\s*\}/u.exec(wireStyles ?? '')?.groups
@@ -57,13 +61,18 @@ test('wire bend handles are local rendered-wire affordances with persisted conne
   assert.match(ghostWireStyles, /opacity:\s*0\.5;/);
   assert.doesNotMatch(ghostWireStyles, /stroke-dasharray/);
   assert.match(wireLayerSource, /useSetConnectionBendPointCommand\(\)/);
-  assert.match(wireLayerSource, /const CONNECTION_BEND_CLICK_THRESHOLD_PX = 5;/);
+  assert.match(wireLayerSource, /from '\.\/nodeCanvas\/connectionBendInteraction\.js';/);
+  assert.match(connectionBendInteractionSource, /CONNECTION_BEND_CLICK_THRESHOLD_PX = 5/);
+  assert.match(connectionBendInteractionSource, /CONNECTION_BEND_DRAG_THRESHOLD_PX = 2/);
+  assert.match(connectionBendInteractionSource, /shouldCommitConnectionBendClick/);
+  assert.match(connectionBendInteractionSource, /getGhostConnectionBendPoint/);
+  assert.match(connectionBendInteractionSource, /updateConnectionBendDrag/);
   assert.match(wireLayerSource, /const wireClickStartRef = useRef/);
   assert.match(wireLayerSource, /const \[hoveredConnectionPoint, setHoveredConnectionPoint\]/);
   assert.match(wireLayerSource, /const ghostBendPoint/);
   assert.match(wireLayerSource, /className="wire-bend-point wire-bend-point-ghost"/);
   assert.match(wireLayerSource, /onMouseDown=\{\(event\) => onConnectionMouseDown\(connectionKey, event\)\}/);
-  assert.match(wireLayerSource, /clickDistance >= CONNECTION_BEND_CLICK_THRESHOLD_PX/);
+  assert.match(wireLayerSource, /shouldCommitConnectionBendClick/);
   assert.match(wireLayerSource, /editable: allowConnectionBendEditing/);
   assert.match(wireLayerSource, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*setConnectionBendPoint/s);
   assert.match(wireLayerSource, /onDoubleClick=\{\(event\) => onConnectionBendDoubleClick\(connection, event\)\}/);

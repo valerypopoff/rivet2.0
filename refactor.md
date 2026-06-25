@@ -439,7 +439,7 @@ Keep `useRivetWorkspaceHost.ts` as the public type/export and assembly hook.
 
 No wrapper-facing API behavior should change. The implementation should become easier to audit and safer to extend.
 
-## 7. Canvas Connection And Port Interactions
+## 7. Canvas Connection And Port Interactions - DONE
 
 ### Problem
 
@@ -502,6 +502,15 @@ Only after those helpers are tested should React components be slimmed down.
 ### What Changes After Refactor
 
 No interaction should change. The outcome should be smaller components and behavior tests around gesture policy.
+
+### Implemented
+
+- Manual connection bend hover/click/drag thresholds and ghost visibility now live in `packages/app/src/components/nodeCanvas/connectionBendInteraction.ts`.
+- `WireLayer.tsx` remains the SVG rendering and event-routing owner, while bend gesture decisions are covered by focused helper tests.
+- Subgraph and variadic port reorder order math now lives in `packages/app/src/components/nodeCanvas/portReorderInteraction.ts`.
+- `NodePorts.tsx` remains the React state and command-dispatch owner, while ordered definitions, subset placement, visible-row midpoint insertion, and equality checks are covered by focused helper tests.
+- Existing wire creation/rewire/break behavior stays in `packages/app/src/domain/graphEditing/wireDragActions.ts`, so connection-mode graph mutations remain in the graph-editing domain layer.
+- Developer docs now describe the canvas connection and port interaction ownership boundaries.
 
 ## 8. Node Canvas Command Glue
 

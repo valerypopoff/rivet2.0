@@ -1,7 +1,6 @@
 import {
   type ChartNode,
   type NodeConnection,
-  type NodeInputDefinition,
   type NodeOutputDefinition,
   type PortId,
   isBuiltInInputDefinition,
@@ -25,7 +24,6 @@ import { subGraphPortRearrangeTargetState, variadicPortRearrangeTargetState } fr
 import {
   getDefinitionPortIds,
   getSubGraphPortOrderKey,
-  moveSubGraphPortIdToIndexInOrder,
   normalizeSubGraphPortOrder,
   type SubGraphPortOrderSide,
 } from '../domain/graphEditing/subGraphPortOrder.js';
@@ -38,25 +36,18 @@ import {
   hasVariadicNodeConnectionAffectedByMapping,
   type VariadicPortReorderSide,
 } from '../domain/graphEditing/variadicPortReorder.js';
+import {
+  applyOrderedDefinitionSubset,
+  areStringArraysEqual,
+  getOrderedPortDefinitions,
+  getPortOrderFromPoint,
+  type PortReorderDrag,
+} from './nodeCanvas/portReorderInteraction.js';
 
 export type NodePortsProps = {
   node: ChartNode;
   connections: NodeConnection[];
   zoomedOut?: boolean;
-};
-
-type ReorderablePortDefinition = NodeInputDefinition | NodeOutputDefinition;
-type PortReorderDrag = {
-  clientX: number;
-  clientY: number;
-  height: number;
-  mode: 'subGraph' | 'variadic';
-  portId: PortId;
-  pointerOffsetX: number;
-  pointerOffsetY: number;
-  side: SubGraphPortOrderSide | VariadicPortReorderSide;
-  title: string;
-  width: number;
 };
 
 function isSubGraphErrorOutputDefinition(node: ChartNode, output: NodeOutputDefinition): boolean {
@@ -66,97 +57,6 @@ function isSubGraphErrorOutputDefinition(node: ChartNode, output: NodeOutputDefi
     output.id === 'error' &&
     output.title === 'Error'
   );
-}
-
-function areStringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function getOrderedPortDefinitions<T extends ReorderablePortDefinition>(
-  definitions: readonly T[],
-  portOrder: readonly string[] | undefined,
-): T[] {
-  const definitionsById = new Map<string, T>(definitions.map((definition) => [definition.id, definition]));
-
-  return normalizeSubGraphPortOrder(getDefinitionPortIds(definitions), portOrder)
-    .map((id) => definitionsById.get(id))
-    .filter((definition): definition is T => !!definition);
-}
-
-function applyOrderedDefinitionSubset<T extends ReorderablePortDefinition>(
-  definitions: readonly T[],
-  orderedSubset: readonly T[],
-): T[] {
-  if (!orderedSubset.length) {
-    return [...definitions];
-  }
-
-  const subsetIds = new Set(orderedSubset.map((definition) => definition.id));
-  const nextDefinitions: T[] = [];
-  let insertedSubset = false;
-
-  for (const definition of definitions) {
-    if (!subsetIds.has(definition.id)) {
-      nextDefinitions.push(definition);
-      continue;
-    }
-
-    if (!insertedSubset) {
-      nextDefinitions.push(...orderedSubset);
-      insertedSubset = true;
-    }
-  }
-
-  return nextDefinitions;
-}
-
-function getPortOrderFromPoint({
-  clientY,
-  nodeId,
-  portIds,
-  portOrder,
-  side,
-  sourcePortId,
-}: {
-  clientY: number;
-  nodeId: string;
-  portIds: readonly string[];
-  portOrder: readonly string[] | undefined;
-  side: SubGraphPortOrderSide;
-  sourcePortId: PortId;
-}): string[] | undefined {
-  const portElements = Array.from(document.querySelectorAll<HTMLElement>('[data-reorder-nodeid][data-reorder-portid]'))
-    .filter((element) => element.dataset.reorderNodeid === nodeId && element.dataset.reorderPortside === side);
-
-  if (!portElements.length) {
-    return undefined;
-  }
-
-  let insertionIndex = portElements.length;
-
-  for (const [index, element] of portElements.entries()) {
-    const rect = element.getBoundingClientRect();
-
-    if (clientY < rect.top + rect.height / 2) {
-      insertionIndex = index;
-      break;
-    }
-  }
-
-  const sourceIndex = portElements.findIndex((element) => element.dataset.reorderPortid === sourcePortId);
-
-  if (sourceIndex < 0) {
-    return undefined;
-  }
-
-  const targetIndex = insertionIndex > sourceIndex ? insertionIndex - 1 : insertionIndex;
-
-  return moveSubGraphPortIdToIndexInOrder({
-    portIds,
-    portOrder,
-    sourcePortId,
-    targetIndex,
-  });
 }
 
 export const NodePortsRenderer: FC<NodePortsProps> = ({ ...props }) => {
@@ -499,7 +399,7 @@ export const NodePorts: FC<NodePortsProps> = ({
       return;
     }
 
-    document.body.classList.add('port-reorder-dragging', 'subgraph-port-reorder-dragging');
+    document.body.classList.add('port-reorder-dragging');
 
     const handleMouseMove = (event: globalThis.MouseEvent) => {
       const currentDrag = draggedPortRef.current;
@@ -541,7 +441,7 @@ export const NodePorts: FC<NodePortsProps> = ({
     window.addEventListener('mouseup', handleMouseUp, { once: true });
 
     return () => {
-      document.body.classList.remove('port-reorder-dragging', 'subgraph-port-reorder-dragging');
+      document.body.classList.remove('port-reorder-dragging');
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };

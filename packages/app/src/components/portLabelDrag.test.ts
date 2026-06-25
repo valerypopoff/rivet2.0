@@ -50,6 +50,10 @@ test('port labels expose reorder drag only in explicit rearrange modes', () => {
   const portSource = readFileSync(join(componentsDir, 'Port.tsx'), 'utf8');
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
   const nodePortsSource = readFileSync(join(componentsDir, 'NodePorts.tsx'), 'utf8');
+  const portReorderInteractionSource = readFileSync(
+    join(componentsDir, 'nodeCanvas', 'portReorderInteraction.ts'),
+    'utf8',
+  );
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
   const colorsSource = readFileSync(join(componentsDir, '..', 'colors.css'), 'utf8');
   const appSrcDir = dirname(componentsDir);
@@ -89,6 +93,7 @@ test('port labels expose reorder drag only in explicit rearrange modes', () => {
   assert.match(nodePortsSource, /setVariadicPortRearrangeTarget\(undefined\)/);
   assert.match(nodePortsSource, /subGraphPortRearrangeTarget\?\.projectId === projectId/);
   assert.match(nodePortsSource, /variadicPortRearrangeTarget\?\.projectId === projectId/);
+  assert.match(nodePortsSource, /from '\.\/nodeCanvas\/portReorderInteraction\.js';/);
   assert.match(nodeCanvasSource, /subGraphPortRearrangeTargetState/);
   assert.match(nodeCanvasSource, /variadicPortRearrangeTargetState/);
   assert.match(nodeCanvasSource, /function shouldClearNodeScopedUiTarget/);
@@ -97,9 +102,11 @@ test('port labels expose reorder drag only in explicit rearrange modes', () => {
   assert.match(nodeCanvasSource, /!options\.nodes\.some\(\(node\) => node\.id === options\.target!\.nodeId\)/);
   assert.match(nodeCanvasSource, /target: subGraphPortRearrangeTarget/);
   assert.match(nodeCanvasSource, /target: variadicPortRearrangeTarget/);
-  assert.match(nodePortsSource, /document\.querySelectorAll<HTMLElement>\('\[data-reorder-nodeid\]\[data-reorder-portid\]'\)/);
   assert.match(nodePortsSource, /getPortOrderFromPoint/);
-  assert.match(nodePortsSource, /moveSubGraphPortIdToIndexInOrder/);
+  assert.match(portReorderInteractionSource, /document\.querySelectorAll<HTMLElement>\('\[data-reorder-nodeid\]\[data-reorder-portid\]'\)/);
+  assert.match(portReorderInteractionSource, /moveSubGraphPortIdToIndexInOrder/);
+  assert.match(portReorderInteractionSource, /getPortOrderFromElementSnapshots/);
+  assert.match(portReorderInteractionSource, /applyOrderedDefinitionSubset/);
   assert.match(nodePortsSource, /window\.addEventListener\('mousemove'/);
   assert.match(nodePortsSource, /window\.addEventListener\('mouseup'/);
   assert.match(nodePortsSource, /createPortal\(/);
