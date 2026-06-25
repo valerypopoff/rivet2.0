@@ -24,7 +24,9 @@ The goal of every item is:
 - clearer ownership boundaries;
 - safer future feature work.
 
-## 1. Graph Tree Presentation Model
+## 1. Graph Tree Presentation Model - DONE
+
+Completed by strengthening `packages/app/src/components/graphList/useGraphListPresentation.ts` as the owner for graph-tree visible folder state, comparison-removed ghost graphs, graph compare badge kinds, and safe context-menu presentation. `GraphList.tsx` now consumes that presentation model and keeps command dispatch, DnD wiring, and modal ownership.
 
 ### Problem
 

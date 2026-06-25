@@ -36,63 +36,11 @@ export function createFoldersFromGraphs(graphs: NodeGraph[], folderNames: string
   };
 
   folderNames.forEach((folderName) => {
-    let currentFolder = rootFolder;
-    const folderNameParts = folderName.split('/');
-
-    for (let index = 0; index < folderNameParts.length; index++) {
-      const folderPart = folderNameParts[index] ?? '';
-      const existingFolder = currentFolder.children.find(
-        (child): child is NodeGraphFolder => child.name === folderPart && child.type === 'folder',
-      );
-
-      if (existingFolder) {
-        currentFolder = existingFolder;
-        continue;
-      }
-
-      const newFolder: NodeGraphFolder = {
-        name: folderPart,
-        fullPath: folderNameParts.slice(0, index + 1).join('/'),
-        type: 'folder',
-        children: [],
-      };
-
-      currentFolder.children.push(newFolder);
-      currentFolder = newFolder;
-    }
+    ensureFolderPath(rootFolder, folderName.split('/'));
   });
 
   graphs.forEach((graph) => {
-    const graphNameParts = graph.metadata?.name?.split('/') ?? [];
-    let currentFolder = rootFolder;
-
-    for (let index = 0; index < graphNameParts.length - 1; index++) {
-      const folderName = graphNameParts[index] ?? '';
-      const existingFolder = currentFolder.children.find(
-        (child): child is NodeGraphFolder => child.name === folderName && child.type === 'folder',
-      );
-
-      if (existingFolder) {
-        currentFolder = existingFolder;
-        continue;
-      }
-
-      const newFolder: NodeGraphFolder = {
-        name: folderName,
-        fullPath: graphNameParts.slice(0, index + 1).join('/'),
-        type: 'folder',
-        children: [],
-      };
-
-      currentFolder.children.push(newFolder);
-      currentFolder = newFolder;
-    }
-
-    currentFolder.children.push({
-      name: graphNameParts[graphNameParts.length - 1] ?? '',
-      type: 'graph',
-      graph,
-    });
+    addGraphToFolderTree(rootFolder, graph);
   });
 
   sortFolder(rootFolder);
@@ -184,38 +132,52 @@ export function countGraphsInFolder(folder: NodeGraphFolder): number {
 }
 
 function addComparisonRemovedGraph(rootFolder: NodeGraphFolder, graph: NodeGraph): void {
-  const graphNameParts = graph.metadata?.name?.split('/') ?? [];
-  let currentFolder = rootFolder;
-
-  for (let index = 0; index < graphNameParts.length - 1; index++) {
-    const folderName = graphNameParts[index] ?? '';
-    const existingFolder = currentFolder.children.find(
-      (child): child is NodeGraphFolder => child.name === folderName && child.type === 'folder',
-    );
-
-    if (existingFolder) {
-      currentFolder = existingFolder;
-      continue;
-    }
-
-    const newFolder: NodeGraphFolder = {
-      name: folderName,
-      fullPath: graphNameParts.slice(0, index + 1).join('/'),
-      type: 'folder',
-      children: [],
-    };
-
-    currentFolder.children.push(newFolder);
-    currentFolder = newFolder;
-  }
-
-  currentFolder.children.push({
+  addGraphToFolderTree(rootFolder, graph, {
     compareChangeKind: 'removed',
-    graph,
     isComparisonGhost: true,
+  });
+}
+
+function addGraphToFolderTree(
+  rootFolder: NodeGraphFolder,
+  graph: NodeGraph,
+  flags: Partial<Pick<NodeGraphFolderGraph, 'compareChangeKind' | 'isComparisonGhost'>> = {},
+): void {
+  const graphNameParts = graph.metadata?.name?.split('/') ?? [];
+  const parentFolder = ensureFolderPath(rootFolder, graphNameParts, graphNameParts.length - 1);
+
+  parentFolder.children.push({
+    ...flags,
+    graph,
     name: graphNameParts[graphNameParts.length - 1] ?? '',
     type: 'graph',
   });
+}
+
+function ensureFolderPath(rootFolder: NodeGraphFolder, folderNameParts: string[], partCount = folderNameParts.length) {
+  let currentFolder = rootFolder;
+
+  for (let index = 0; index < partCount; index++) {
+    const folderName = folderNameParts[index] ?? '';
+    const fullPath = folderNameParts.slice(0, index + 1).join('/');
+    let folder = currentFolder.children.find(
+      (child): child is NodeGraphFolder => child.name === folderName && child.type === 'folder',
+    );
+
+    if (!folder) {
+      folder = {
+        name: folderName,
+        fullPath,
+        type: 'folder',
+        children: [],
+      };
+      currentFolder.children.push(folder);
+    }
+
+    currentFolder = folder;
+  }
+
+  return currentFolder;
 }
 
 function cloneFolderItems(items: NodeGraphFolderItem[]): NodeGraphFolderItem[] {

@@ -4,7 +4,7 @@ import { type FC, type MouseEvent, type KeyboardEvent, memo, useMemo, useRef, us
 import { useAtomValue, useSetAtom } from 'jotai';
 import Button from '@atlaskit/button';
 import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
-import { type GraphId, type NodeGraph, type ProjectComparisonChangeKind } from '@valerypopoff/rivet2-core';
+import { type GraphId, type NodeGraph } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
 import { runningGraphsState } from '../state/dataFlow.js';
 import { graphState } from '../state/graph.js';
@@ -33,6 +33,7 @@ import InfoIcon from 'majesticons/line/info-circle-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import FolderIcon from 'majesticons/line/folder-line.svg?react';
+import SearchIcon from 'majesticons/line/search-line.svg?react';
 import { MainGraphIcon } from './graphList/MainGraphIcon';
 import { GraphInfoModal } from './GraphInfoModal';
 import { ProjectInfoModal } from './ProjectInfoModal';
@@ -40,16 +41,11 @@ import {
   buildFolderContextMenuItems,
   buildGraphItemContextMenuItems,
   buildGraphListContextMenuItems,
-  getGraphListContextMenuTarget,
   type GraphListContextMenuIcons,
   type GraphListContextMenuItem,
 } from './graphList/graphListContextMenu.js';
 import { useGraphListPresentation } from './graphList/useGraphListPresentation.js';
-import {
-  addComparisonRemovedGraphsToFolderTree,
-  getFolderNames,
-  setAllGraphFolderExpansionStates,
-} from './graphList/graphFolders.js';
+import { setAllGraphFolderExpansionStates } from './graphList/graphFolders.js';
 import { GRAPH_FILTER_INPUT_MARKER } from './graphList/graphFilterFocus.js';
 import { PopupMenuItem, popupMenuListStyles } from './PopupMenu.js';
 import { Tooltip } from './Tooltip.js';
@@ -630,24 +626,6 @@ export const GraphList: FC = memo(() => {
   const showUnreachableGraphTags = useAtomValue(showUnreachableGraphTagsState);
   const showGraphReferenceIndicators = useAtomValue(showGraphReferenceIndicatorsState);
   const activeComparison = useAtomValue(activeProjectComparisonState);
-  const removedComparisonGraphs = useMemo(
-    () =>
-      activeComparison
-        ? Object.values(activeComparison.comparison.graphs)
-            .filter((comparison) => comparison.kind === 'removed' && comparison.before)
-            .map((comparison) => comparison.before!)
-            .filter((removedGraph) => graphMatchesFilter(removedGraph, searchText))
-        : [],
-    [activeComparison, searchText],
-  );
-  const visibleFolderedGraphs = useMemo(
-    () => addComparisonRemovedGraphsToFolderTree(folderedGraphs, removedComparisonGraphs),
-    [folderedGraphs, removedComparisonGraphs],
-  );
-  const visibleFolderPaths = useMemo(
-    () => [...new Set([...allFolderPaths, ...getFolderNames(visibleFolderedGraphs)])],
-    [allFolderPaths, visibleFolderedGraphs],
-  );
 
   const { setShowContextMenu, showContextMenu, contextMenuData, handleContextMenu, floatingStyles, setFloatingMenu } =
     useContextMenu();
@@ -657,26 +635,28 @@ export const GraphList: FC = memo(() => {
     handleContextMenu(e);
   });
 
-  const hasFolders = visibleFolderPaths.length > 0;
-  const folderPathsForContextMenu = useMemo(() => new Set(visibleFolderPaths), [visibleFolderPaths]);
-  const contextMenuTarget = useMemo(
-    () =>
-      getGraphListContextMenuTarget({
-        contextMenuData,
-        folderPaths: folderPathsForContextMenu,
-        mainGraphId: project.metadata.mainGraphId,
-        savedGraphs,
-      }),
-    [contextMenuData, folderPathsForContextMenu, project.metadata.mainGraphId, savedGraphs],
-  );
-  const selectedGraphForContextMenu = contextMenuTarget?.type === 'graph-item' ? contextMenuTarget.graph : undefined;
-  const selectedFolderNameForContextMenu =
-    contextMenuTarget?.type === 'graph-item' || contextMenuTarget?.type === 'graph-folder'
-      ? contextMenuTarget.folderPath
-      : undefined;
-  const showGraphItemContextMenu = showContextMenu && contextMenuTarget?.type === 'graph-item';
-  const showFolderContextMenu = showContextMenu && contextMenuTarget?.type === 'graph-folder';
-  const showGraphListContextMenu = showContextMenu && contextMenuTarget?.type === 'graph-list';
+  const {
+    contextMenu: graphListContextMenu,
+    graphCompareKindByGraphId,
+    reachability: graphListReachability,
+    referencingSelectedGraphIds,
+    visible: graphListVisible,
+  } = useGraphListPresentation({
+    activeComparison,
+    allFolderPaths,
+    contextMenuData,
+    currentGraph: graph,
+    currentGraphId: graph.metadata?.id,
+    folderedGraphs,
+    plugins,
+    project,
+    projectNodeRegistry,
+    savedGraphs,
+    searchText,
+    showContextMenu,
+    showGraphReferenceIndicators,
+    showUnreachableGraphTags,
+  });
 
   const handleSearchKeyDown = useStableCallback((e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
@@ -694,7 +674,7 @@ export const GraphList: FC = memo(() => {
     setExpandedFolders((prev) =>
       setAllGraphFolderExpansionStates({
         expandedFolders: prev,
-        folderPaths: visibleFolderPaths,
+        folderPaths: graphListVisible.folderPaths,
         isExpanded,
         projectId: project.metadata.id,
       }),
@@ -758,27 +738,6 @@ export const GraphList: FC = memo(() => {
     startRename(currentGraphListName);
   });
 
-  const { reachability: graphListReachability, referencingSelectedGraphIds } = useGraphListPresentation({
-    currentGraph: graph,
-    currentGraphId: graph.metadata?.id,
-    plugins,
-    project,
-    projectNodeRegistry,
-    showGraphReferenceIndicators,
-    showUnreachableGraphTags,
-  });
-  const graphCompareKindByGraphId = useMemo(
-    () =>
-      activeComparison
-        ? (Object.fromEntries(
-            Object.entries(activeComparison.comparison.graphs)
-              .filter(([, comparison]) => comparison.kind !== 'unchanged')
-              .map(([graphId, comparison]) => [graphId, comparison.kind]),
-          ) as Record<GraphId, ProjectComparisonChangeKind | undefined>)
-        : {},
-    [activeComparison],
-  );
-
   const confirmDeleteGraph = useStableCallback(() => {
     if (!graphPendingDelete) {
       return;
@@ -806,55 +765,39 @@ export const GraphList: FC = memo(() => {
     }
   });
 
-  const graphItemMenuItems = useMemo(
-    (): GraphListContextMenuItem[] =>
-      buildGraphItemContextMenuItems({
-        icons: graphListContextMenuIcons,
-        isMainGraph: contextMenuTarget?.type === 'graph-item' ? contextMenuTarget.isMainGraph : false,
-      }),
-    [contextMenuTarget],
-  );
-
-  const folderMenuItems = useMemo(
-    (): GraphListContextMenuItem[] => buildFolderContextMenuItems(graphListContextMenuIcons),
-    [],
-  );
-
-  const graphListMenuItems = useMemo(
-    (): GraphListContextMenuItem[] =>
-      buildGraphListContextMenuItems({
-        hasFolders,
-        icons: graphListContextMenuIcons,
-      }),
-    [hasFolders],
-  );
+  const graphItemMenuItems = buildGraphItemContextMenuItems({
+    icons: graphListContextMenuIcons,
+    isMainGraph: graphListContextMenu.target?.type === 'graph-item' ? graphListContextMenu.target.isMainGraph : false,
+  });
+  const folderMenuItems = buildFolderContextMenuItems(graphListContextMenuIcons);
+  const graphListMenuItems = buildGraphListContextMenuItems({
+    hasFolders: graphListVisible.hasFolders,
+    icons: graphListContextMenuIcons,
+  });
 
   const handleGraphItemMenuSelected = useStableCallback((id: string) => {
+    const target = graphListContextMenu.target;
+
+    if (target?.type !== 'graph-item') {
+      setShowContextMenu(false);
+      return;
+    }
+
     switch (id) {
       case 'rename-graph':
-        if (selectedFolderNameForContextMenu) {
-          startRename(selectedFolderNameForContextMenu);
-        }
+        startRename(target.folderPath);
         break;
       case 'duplicate-graph':
-        if (selectedGraphForContextMenu) {
-          duplicateGraph(selectedGraphForContextMenu);
-        }
+        duplicateGraph(target.graph);
         break;
       case 'graph-info':
-        if (selectedGraphForContextMenu) {
-          setGraphPendingInfo(selectedGraphForContextMenu);
-        }
+        setGraphPendingInfo(target.graph);
         break;
       case 'make-main-graph':
-        if (selectedGraphForContextMenu) {
-          makeMainGraph(selectedGraphForContextMenu);
-        }
+        makeMainGraph(target.graph);
         break;
       case 'delete-graph':
-        if (selectedGraphForContextMenu) {
-          setGraphPendingDelete(selectedGraphForContextMenu);
-        }
+        setGraphPendingDelete(target.graph);
         break;
       default:
         break;
@@ -869,23 +812,25 @@ export const GraphList: FC = memo(() => {
       return;
     }
 
-    if (!selectedFolderNameForContextMenu) {
+    const target = graphListContextMenu.target;
+
+    if (target?.type !== 'graph-folder') {
       setShowContextMenu(false);
       return;
     }
 
     switch (id) {
       case 'rename-folder':
-        startRename(selectedFolderNameForContextMenu);
+        startRename(target.folderPath);
         break;
       case 'new-graph-in-folder':
-        handleNew(selectedFolderNameForContextMenu);
+        handleNew(target.folderPath);
         break;
       case 'new-folder-in-folder':
-        handleNewFolder(selectedFolderNameForContextMenu);
+        handleNewFolder(target.folderPath);
         break;
       case 'delete-folder':
-        handleDeleteFolder(selectedFolderNameForContextMenu);
+        handleDeleteFolder(target.folderPath);
         break;
       default:
         break;
@@ -982,7 +927,7 @@ export const GraphList: FC = memo(() => {
             onDragOver={handleDragOver}
             onDragStart={handleDragStart}
           >
-            {visibleFolderedGraphs.map((item) => (
+            {graphListVisible.folderedGraphs.map((item) => (
               <FolderItem
                 key={item.type === 'graph' ? item.graph.metadata?.id : item.fullPath}
                 item={item}
@@ -1004,7 +949,7 @@ export const GraphList: FC = memo(() => {
             <GraphListSpacer />
           </DndContext>
           <Portal>
-            {showGraphItemContextMenu && (
+            {graphListContextMenu.showGraphItemContextMenu && (
               <div
                 className="graph-item-context-menu"
                 css={contextMenuStyles}
@@ -1014,7 +959,7 @@ export const GraphList: FC = memo(() => {
                 <GraphListContextMenuItems items={graphItemMenuItems} onSelected={handleGraphItemMenuSelected} />
               </div>
             )}
-            {showFolderContextMenu && (
+            {graphListContextMenu.showFolderContextMenu && (
               <div
                 className="graph-item-context-menu"
                 css={contextMenuStyles}
@@ -1027,7 +972,7 @@ export const GraphList: FC = memo(() => {
           </Portal>
         </div>
         <Portal>
-          {showGraphListContextMenu && (
+          {graphListContextMenu.showGraphListContextMenu && (
             <div
               className="graph-list-context-menu"
               css={contextMenuStyles}
@@ -1105,29 +1050,6 @@ function ExpandAllFoldersIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M8 7v5M5.5 9.5h5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.55" />
     </svg>
   );
-}
-
-const SearchIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" {...props}>
-    <path
-      d="M7.25 11.25a4 4 0 1 1 0-8 4 4 0 0 1 0 8ZM10.25 10.25l3 3"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-    />
-  </svg>
-);
-
-function graphMatchesFilter(graph: NodeGraph, searchText: string): boolean {
-  const normalizedSearchText = searchText.trim().toLocaleLowerCase();
-  if (normalizedSearchText.length === 0) {
-    return true;
-  }
-
-  const name = graph.metadata?.name?.toLocaleLowerCase() ?? '';
-  const description = graph.metadata?.description?.toLocaleLowerCase() ?? '';
-  return name.includes(normalizedSearchText) || description.includes(normalizedSearchText);
 }
 
 // Allows the bottom of the list to be a drop target
