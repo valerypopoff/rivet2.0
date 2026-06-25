@@ -70,7 +70,7 @@ Browser execution can replay any frozen value that `structuredClone(...)` can cl
 
 Replay is not `preloadNodeData(...)`. A frozen node still receives its real current inputs in `nodeStart`, emits a normal `nodeFinish`, uses a normal process id, writes `nodeResults`, and schedules downstream nodes exactly like a computed node. The core frozen-output resolver resets its replay counter per graph run and keys lookup by the processor's current graph id plus node id. If a node is invoked more times within the same graph run than there are captured output instances, the resolver reuses the last captured output. A node inside a reusable subgraph is therefore frozen for every invocation of that graph node while the project remains open.
 
-The Browser and internal Node live run-from paths treat frozen boundary outputs as available preload data. If a boundary dependency has both previous execution history and frozen output data, the frozen output wins. Preload event suppression remains unchanged; frozen boundary data is only used to seed the run boundary and must not create duplicate output pages. Live `Run to here` also preserves visible execution data for frozen nodes that are outside the selected target's dependency slice, so a frozen node does not visually lose its output when the user runs to an unrelated node. Frozen nodes inside the run-to slice are allowed to replay normally and update through the ordinary node lifecycle. External Remote Debugger runs, recording playback, and Trivet/test execution do not consult frozen outputs, even for run-from preload planning or run-to visual preservation. While an external Remote Debugger target is selected, `VisualNode` hides frozen presentation state without clearing it; if the user disconnects before any accepted remote execution event arrives, the same frozen outputs become visible again. Once an accepted external Remote Debugger run event arrives, `useRemoteExecutor` clears `frozenNodeOutputsState` so stale local frozen data cannot reappear after remote execution has replaced the visible run history.
+The Browser and internal Node live run-from paths treat frozen boundary outputs as available preload data. If a boundary dependency has both previous execution history and frozen output data, the frozen output wins. Preload event suppression remains unchanged; frozen boundary data is only used to seed the run boundary and must not create duplicate output pages. Live `Run to here` also preserves visible execution data for frozen nodes that are outside the selected target's dependency slice, so a frozen node does not visually lose its output when the user runs to an unrelated node. Frozen nodes inside the run-to slice are allowed to replay normally and update through the ordinary node lifecycle. External Remote Debugger runs, recording playback, and Trivet/test execution do not consult frozen outputs, even for run-from preload planning or run-to visual preservation. While an external Remote Debugger target is selected, `VisualNode` hides frozen presentation state without clearing it; if the user disconnects before any accepted remote execution event arrives, the same frozen outputs become visible again. Once an accepted external Remote Debugger run event arrives, the active `useRemoteExecutor` subscriber clears visible `frozenNodeOutputsState`, and `ExecutorSessionProvider` applies the same flush to inactive project execution snapshots so stale local frozen data cannot reappear after remote execution has replaced that project's run history.
 
 ## Key Concept: Graph View Identity
 
@@ -266,7 +266,16 @@ SubProcessor emits nodeStart({ execution: { graphRunId: "child-run", ... } })
 ```
 
 For **local execution** (`useLocalExecutor`), events are received directly on the
-root processor via `attachGraphEvents()`.
+root processor via `attachGraphEvents()`. Browser processors are owned in a
+project-keyed map, so one open project tab can keep running in Browser mode
+while another tab starts its own Browser run. The event handlers compare the
+run's project id to the currently visible project: visible events go through the
+normal dispatcher, inactive open-project events are reduced into that project's
+execution snapshot, and events for a project that has since been closed are
+ignored after that processor is aborted and removed. The local executor also
+removes the closed project's editor-execution cache with the processor map entry,
+because Browser-mode execution caches are project-tab runtime state, not durable
+project data.
 
 For **remote execution** (`useRemoteExecutor`), events arrive as WebSocket messages
 from `app-executor`. The sidecar serializes processor events including full
@@ -275,8 +284,20 @@ handled separately and are not treated as replayable execution events.
 `createProcessEventDispatcher()` deserializes and dispatches processor events to
 the same handler functions.
 
-Remote execution is routed through the shared executor-session runtime rather
-than through Remote Debugger globals. The runtime exposes an explicit target:
+Remote execution is routed through project-keyed executor-session runtimes rather
+than through Remote Debugger globals. `ExecutorSessionProvider` owns an
+in-memory runtime registry keyed by `project.metadata.id`; the default hooks
+resolve the active project's runtime, while cleanup paths can address a specific
+project id. This lets several open project tabs keep external Remote Debugger or
+internal Node executor websockets connected at the same time, including tabs
+that use the same `ws://`/`wss://` URL and port. Target replacement is still
+local to one project's runtime: reconnecting the same project to a new target
+replaces only that project's socket, and closing/replacing a project removes
+only that project's runtime. Browser execution has no session target, but it
+follows the same project ownership rule through `useLocalExecutor`'s
+project-keyed processor map.
+
+Each runtime exposes an explicit target:
 
 - `internal-desktop`: the desktop/Tauri Node executor sidecar.
 - `internal-hosted`: a wrapper-provided internal executor URL from
@@ -295,16 +316,19 @@ capability: external Remote Debugger sessions show the stop/debugger affordance
 but disable editor-side run entrypoints, while Browser and internal Node
 executor sessions keep Run visibility aligned with readiness.
 
-Executor-session target identity is `type + url`, not URL alone. Reconnecting to
-the same target reuses the existing websocket when possible, while connecting the
-same URL as a different target emits a replacement lifecycle event and resets
-capabilities before the new socket opens. If the same target has a stale or
-closing websocket that cannot be reused, that handoff also uses the explicit
-`replaced` lifecycle path so old pending graph executions are rejected before
-the new socket is created. Replacement disconnect events report the old target
-and the post-transition `idle` status visible to subscribers. Target factories,
-internal/external classification, labels, and equality live in
-`executorSessionTarget.ts`; session code should not compare URLs directly.
+Executor-session target identity inside a single project runtime is `type + url`,
+not URL alone. Reconnecting the same project to the same target reuses the
+existing websocket when possible, while connecting that project to the same URL
+as a different target emits a replacement lifecycle event and resets
+capabilities before the new socket opens. The same URL in a different open
+project is not a replacement; it is a separate project runtime and a separate
+websocket. If the same target has a stale or closing websocket that cannot be
+reused, that handoff also uses the explicit `replaced` lifecycle path so old
+pending graph executions are rejected before the new socket is created.
+Replacement disconnect events report the old target and the post-transition
+`idle` status visible to subscribers. Target factories, internal/external
+classification, labels, and equality live in `executorSessionTarget.ts`; session
+code should not compare URLs directly.
 
 Transport features are exposed as session capabilities. For example,
 `canSendRun` controls whether remote run commands can be sent, `canUploadProject`
@@ -334,20 +358,33 @@ failed project or static-data sends do not update it.
 Remote run request ids are managed by `remoteExecutorRunRequest.ts`.
 Editor graph runs register one active request id before sending the `run`
 message; request-scoped process events are dispatched only when their request id
-matches that active request. Legacy/unscoped external-debugger events are
-scoped by the `start` event's project id when that id is available: runs for a
-different open project are ignored, and the root-run decision is remembered for
-the follow-up node/graph events. Root graph completion also carries that
-decision forward to the following unscoped terminal frame (`done`, `abort`, or
-top-level `error`), because those legacy terminal frames do not include
-execution metadata themselves. The remembered root-run route stays active until
-that terminal frame is consumed, so late node terminal messages for the accepted
-root are not rerouted just because another external-debugger project started
-between root `graphFinish` and `done`. A bounded recently-completed route cache
-keeps the same decision briefly after terminal completion too, so a late node
-terminal frame can still repair display state without being routed through a
-newer project run. Duplicate root graph terminal frames are deduped for both
-route decisions and successful-`done` reconciliation, because only one legacy
+matches that active request. The active request id is stored on the
+project-scoped executor runtime as well as the mounted `useRemoteExecutor`
+hook, so a project tab that becomes visible again while its Node/Remote run is
+still in flight can resume routing terminal events and abort responses for that
+same run. Remote control messages (`abort`, `pause`, `resume`, and
+`user-input`) include that active request id when available, and the Node
+debugger server filters attached processors by request id before invoking the
+control method. This is required when two open tabs share the same internal
+Node executor or external Remote Debugger URL: a control action from one tab
+must not pause, resume, abort, or answer a processor owned by another tab.
+Legacy/unscoped controls remain accepted for older clients or manually attached
+processors without request ids.
+
+Legacy/unscoped external-debugger events are scoped by the `start` event's
+project id when that id is available: runs for a different open project are
+ignored, and the root-run decision is remembered for the follow-up node/graph
+events. Root graph completion also carries that decision forward to the
+following unscoped terminal frame (`done`, `abort`, or top-level `error`),
+because those legacy terminal frames do not include execution metadata
+themselves. The remembered root-run route stays active until that terminal
+frame is consumed, so late node terminal messages for the accepted root are not
+rerouted just because another external-debugger project started between root
+`graphFinish` and `done`. A bounded recently-completed route cache keeps the
+same decision briefly after terminal completion too, so a late node terminal
+frame can still repair display state without being routed through a newer
+project run. Duplicate root graph terminal frames are deduped for both route
+decisions and successful-`done` reconciliation, because only one legacy
 terminal frame can correspond to a root run. Events from older transports that
 do not carry a project id keep the compatibility fallback and still pass
 through. `done`, `abort`, `error`, disconnect, and send-failure paths clear the
@@ -379,7 +416,7 @@ runtime clears the attempted target back to idle and the Remote Debugger command
 surface reports the connection failure instead of leaving stale session state
 behind.
 
-`useExecutorSessionCoordinator` owns connection policy. It starts/restores the
+`useExecutorSessionCoordinator` owns active-project connection policy. It starts/restores the
 internal Node executor when Node mode is selected, falls back to Browser mode in
 plain web contexts without a hosted internal executor URL, and restores only the
 internal Node executor after an external Remote Debugger disconnects while Node
@@ -389,6 +426,71 @@ debugger command surface. Startup decisions go through
 `runExecutorSessionStartupAction(...)` so hosted executor connects, Browser
 fallback, desktop sidecar readiness, and cleanup-before-ready cancellation all
 share one tested path.
+Coordinator startup and cleanup must not replace or disconnect an existing
+external Remote Debugger or internal Node runtime during tab switches. It may
+start missing internal executor sessions for the newly active project, but
+destructive cleanup happens only when the user explicitly switches that project
+to Browser mode, the project closes/replaces, or the provider shuts down.
+Desktop sidecar startup is asynchronous, so the coordinator also rechecks the
+runtime target after the sidecar is ready; a Remote Debugger connection that
+arrives while the sidecar is starting must win over the late internal-executor
+continuation.
+The external-debugger disconnect restore path uses the same desktop sidecar
+startup/ownership helper as normal Node-mode startup. Do not restore desktop
+Node mode by calling `connectInternalDesktopExecutor()` directly unless sidecar
+ownership has already been established for that project runtime.
+The desktop Node sidecar is process-wide but its ownership is tracked per
+project runtime through `executorSessionRuntimeResources.ts`. Starting the same
+project runtime twice does not double-count the sidecar consumer; removing a
+project runtime releases only that runtime's sidecar ownership, so another
+Node-mode project tab can keep using the same sidecar.
+Inside that shared sidecar, uploaded project/settings/static-data state and
+dataset proxy providers are also scoped by websocket client. `app-executor`
+uses `startDebuggerServer`'s `getClientDebuggerState` and
+`getDatasetProviderForClient` hooks, then passes the same client-local
+`DebuggerDatasetProvider` into the processor for that run. This prevents one
+Node-mode project tab from overwriting another tab's uploaded project or
+satisfying another tab's pending dataset request.
+The sidecar wraps the debugger object passed into `createProcessor(...)` so the
+processor is associated with its websocket client during the debugger `attach`
+call itself. Do not move this ownership registration after processor
+construction: `createProcessor(...)` attaches immediately, and a startup-time
+control message must already route to the new processor.
+Switching a project runtime from desktop Node to a hosted internal executor URL
+must invalidate pending desktop startup and release that runtime's sidecar
+ownership before the hosted socket connects, otherwise a late desktop startup
+can replace the hosted target.
+Execution-event rendering has two paths. The active project still uses
+`useRemoteExecutor` or `useLocalExecutor` and the normal
+`createProcessEventDispatcher(...)` path so UI-only behaviors such as
+diagnostics, frozen-output flushing, user-input modals, local toast display,
+Browser recording UI, and code-console logging stay tied to the visible editor. Inactive project tabs
+are handled by project snapshot reducers: `ExecutorSessionProvider` subscribes
+to every Node/Remote project runtime, while `useLocalExecutor` routes inactive
+Browser processor events directly. Both paths reduce accepted process events
+through `projectExecutionSnapshotEvents.ts` into that project's stored execution
+snapshot. This keeps hidden Browser/Node/Remote Debugger runs from getting stuck
+on spinners when the user switches tabs before `nodeFinish`, `graphFinish`, or
+`done` arrives. Browser runs that fail before a normal processor terminal event
+must still reduce an `error` terminal into the owning inactive snapshot, otherwise
+a background tab can remain visually running forever. The hidden reducer mirrors
+the same execution-data ref storage,
+pending user-input question storage, hidden Browser-run recording storage, and
+successful-`done` stale-running reconciliation as the visible path, but it does
+not show active-project-only UI surfaces. Request-scoped terminal messages still settle their pending promise
+even when they are not the active graph-run request, so hidden remote test or
+auxiliary runs can complete without being rendered into the tab snapshot.
+Unscoped terminal messages settle pending promises only when the routing
+decision accepted the run for that project. Restoring a hidden project's
+execution snapshot also restores any pending user-input questions for that
+project. `useGraphExecutor` owns the global user-input submit handler and
+installs the currently selected executor's submit path, so answering a restored
+prompt sends the answer to the active project's Browser/Node/Remote processor
+instead of whichever project last started a run. A `useRemoteExecutor`
+subscription and the local Browser event router must also check that their
+project is still the active project before writing visible execution atoms or
+calling `currentExecution.onStop()` from cleanup; inactive events belong to the
+project snapshot reducer.
 The disconnect restore path is tested through
 `handleExecutorSessionCoordinatorDisconnect(...)`, which reads the latest
 selected executor and hosted executor URL at lifecycle-event time instead of
@@ -801,6 +903,7 @@ Persisted app-side execution payloads now share one storage/preview utility laye
 - `useNodeExecutionEvents` uses that shared path for started, finished, excluded, and partial-output persistence
 - split-run partial outputs still keep their separate `splitOutputData[index]` storage model, but they now reuse the same storage transform and stable ref-id scheme before persistence. Render/copy helpers should only prefer split output data when at least one split entry contains a real visible stored port wrapper; an empty split map, warnings-only split map, or internal-port-only split map from partial outputs must not hide a later valid `outputData` payload.
 - `onStart`, `onTrivetStart`, and node-output clearing paths clear the corresponding execution-scoped refs when they wipe prior run data
+- error-only and timing-only node-run records can legitimately have no stored input/output payloads. Ref collection and cleanup must treat those records as node-run metadata with zero refs, not as malformed port maps, so one failed node cannot break the next run-start cleanup.
 - `executionDataStorage.ts` is the low-level storage/restore boundary. App-side read/restore behavior goes through `executionDataReaders.ts` so UI and executor-preload code share the same displayed-output restore, port-level restore/coercion, and warning extraction logic.
 - Preview-only or editor-assist consumers that interpolate stored inputs for display, such as Code, Expression, JS list, Extract Object Path parsed-source sections, and Prompt Designer attached-node hydration, should use `tryRestoreStoredPortMap(...)`. Missing ref-backed inputs are skipped port-by-port so available inputs still render in the parsed preview or editor assist surface, while an entirely unavailable input map simply removes the optional detail instead of breaking the visible output value. Strict `restoreStoredPortMap(...)` remains appropriate for executor preload paths that must fail loudly when required boundary data has been evicted.
 - display-oriented `Copy value` serialization is exported from `executionDataCopyValue.ts`, with implementation split under `executionDataCopy/`: visible `DataValue` projection in `projectDataValue.ts`, port/split serialization in `serializeDisplayedOutputs.ts`, and labelled copy metadata in `displayCopySections.ts`. It projects restored outputs into user-facing copy text instead of serializing raw `DataValue` wrappers. A single visible output copies the displayed value text; multiple visible outputs copy labelled sections using output-definition titles, matching the node/fullscreen output layout closely enough for pasted text to read like the UI. Node-specific copy projectors should use `displayCopySections(...)` for multi-section text so ordinary object values are never confused with copy metadata. Generic display-copy restores each visible port independently so a missing ref-backed value copies the same "Value no longer available in memory." fallback the renderer shows instead of failing the whole copy action. Warning and `__internalPort_*` outputs are not body output ports; `outputPortVisibility.ts` keeps generic render, split-output selection, and display-copy aligned on that rule. Custom copy projectors are only called for output maps and split-output entries that pass that visible-wrapper check; otherwise projectors with default text, such as loop-controller continue status, can create copy text for output that the UI did not render. Warning messages render through the dedicated output-warning UI in both inline and fullscreen output surfaces instead of being treated as ordinary body ports. The fullscreen `JSON` action remains the internal-representation path and copies the restored output map with `DataValue` wrappers. Its restore order deliberately prefers split output data only when at least one visible split body port exists, falls back to valid final `outputData`, and only then restores hidden-only split data when that is the only stored representation; this keeps warnings/internal split maps from blanking valid final output while still letting JSON copy/export inspect warning-only split runs.

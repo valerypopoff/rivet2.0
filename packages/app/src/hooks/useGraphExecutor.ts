@@ -1,4 +1,5 @@
 import { useAtomValue } from 'jotai';
+import { useEffect } from 'react';
 import { loadedRecordingState } from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
 import { canRunGraphFromEditor, shouldUseRemoteExecutor } from '../state/selectors/executionSelectors.js';
@@ -6,6 +7,7 @@ import { useLocalExecutor } from './useLocalExecutor';
 import { useRemoteExecutor } from './useRemoteExecutor';
 import { useExecutorSessionState } from './useExecutorSession';
 import { useStableCallback } from './useStableCallback';
+import { clearUserInputSubmitHandler, setUserInputSubmitHandler } from '../state/actions/userInputActions.js';
 
 export function useGraphExecutor() {
   const selectedExecutor = useAtomValue(selectedExecutorState);
@@ -37,6 +39,14 @@ export function useGraphExecutor() {
     : localExecutor;
 
   const graphControlExecutor = hasLoadedRecording ? localExecutor : liveExecutor;
+
+  useEffect(() => {
+    setUserInputSubmitHandler(liveExecutor.submitUserInput);
+
+    return () => {
+      clearUserInputSubmitHandler();
+    };
+  }, [liveExecutor.submitUserInput]);
 
   return {
     tryRunGraph: allowEditorGraphRun ? graphRunExecutor.tryRunGraph : ignoreEditorRun,

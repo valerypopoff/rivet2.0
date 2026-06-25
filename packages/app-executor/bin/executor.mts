@@ -1,6 +1,5 @@
 import {
   startDebuggerServer,
-  currentDebuggerState,
   createProcessor,
   assembleRegistry,
   resolveBuiltInPlugin,
@@ -30,18 +29,33 @@ import {
 } from './codeRunnerWorkerPool.mjs';
 import { parseExecutorHostFromArgs, parseExecutorPortFromArgs } from './executorConfig.mjs';
 
-const datasetProvider = new DebuggerDatasetProvider();
-const editorExecutionCachesByProjectId = new Map<string, Map<string, unknown>>();
+type AppExecutorDebugger = ReturnType<typeof startDebuggerServer>;
+type AppExecutorClient = Parameters<NonNullable<Parameters<typeof startDebuggerServer>[0]['dynamicGraphRun']>>[0]['client'];
+type AppExecutorProcessor = ReturnType<typeof createProcessor>['processor'];
+const processorsByClient = new WeakMap<AppExecutorClient, Set<AppExecutorProcessor>>();
+const clientByProcessor = new WeakMap<AppExecutorProcessor, AppExecutorClient>();
+const datasetProvidersByClient = new WeakMap<AppExecutorClient, DebuggerDatasetProvider>();
+const debuggerStatesByClient = new WeakMap<
+  AppExecutorClient,
+  { uploadedProject: Rivet.Project | undefined; settings: Rivet.Settings | undefined }
+>();
+const editorExecutionCachesByClient = new WeakMap<AppExecutorClient, Map<string, Map<string, unknown>>>();
 const sharedCodeWorkerPoolReady = prewarmSharedAppExecutorCodeWorkerPool().catch((error) => {
   logRuntimeError('Failed to prewarm app-executor code workers.', error);
 });
 
-function getEditorExecutionCache(project: Rivet.Project) {
-  let cache = editorExecutionCachesByProjectId.get(project.metadata.id);
+function getEditorExecutionCache(client: AppExecutorClient, project: Rivet.Project) {
+  let cachesByProjectId = editorExecutionCachesByClient.get(client);
+  if (!cachesByProjectId) {
+    cachesByProjectId = new Map<string, Map<string, unknown>>();
+    editorExecutionCachesByClient.set(client, cachesByProjectId);
+  }
+
+  let cache = cachesByProjectId.get(project.metadata.id);
 
   if (!cache) {
     cache = new Map<string, unknown>();
-    editorExecutionCachesByProjectId.set(project.metadata.id, cache);
+    cachesByProjectId.set(project.metadata.id, cache);
   }
 
   return cache;
@@ -123,11 +137,89 @@ function sendGraphRunError(client: { send(data: string): void }, requestId: Rive
   }
 }
 
+function trackClientProcessor(client: AppExecutorClient, processor: AppExecutorProcessor) {
+  let processors = processorsByClient.get(client);
+  if (!processors) {
+    processors = new Set();
+    processorsByClient.set(client, processors);
+  }
+
+  processors.add(processor);
+  clientByProcessor.set(processor, client);
+}
+
+function untrackClientProcessor(processor: AppExecutorProcessor) {
+  const client = clientByProcessor.get(processor);
+  clientByProcessor.delete(processor);
+
+  if (!client) {
+    return;
+  }
+
+  const processors = processorsByClient.get(client);
+  processors?.delete(processor);
+  if (processors?.size === 0) {
+    processorsByClient.delete(client);
+  }
+}
+
+function getDatasetProviderForClient(client: AppExecutorClient) {
+  let provider = datasetProvidersByClient.get(client);
+  if (!provider) {
+    provider = new DebuggerDatasetProvider();
+    datasetProvidersByClient.set(client, provider);
+  }
+
+  return provider;
+}
+
+function getDebuggerStateForClient(client: AppExecutorClient) {
+  let state = debuggerStatesByClient.get(client);
+  if (!state) {
+    state = { uploadedProject: undefined, settings: undefined };
+    debuggerStatesByClient.set(client, state);
+  }
+
+  return state;
+}
+
+function createClientScopedDebugger(client: AppExecutorClient): AppExecutorDebugger {
+  return {
+    ...rivetDebugger,
+    attach(processor, requestId) {
+      trackClientProcessor(client, processor);
+      try {
+        rivetDebugger.attach(processor, requestId);
+      } catch (error) {
+        untrackClientProcessor(processor);
+        throw error;
+      }
+    },
+    detach(processor) {
+      rivetDebugger.detach(processor);
+      untrackClientProcessor(processor);
+    },
+  };
+}
+
 const rivetDebugger = startDebuggerServer({
   port,
   host,
   allowGraphUpload: true,
-  datasetProvider,
+  getClientDebuggerState: getDebuggerStateForClient,
+  getDatasetProviderForClient,
+  getClientsForProcessor: (processor, fallbackClients) => {
+    const client = clientByProcessor.get(processor);
+    return client ? [client] : fallbackClients;
+  },
+  getProcessorsForClient: (client, fallbackProcessors) => {
+    const processors = processorsByClient.get(client);
+    if (!processors) {
+      return [];
+    }
+
+    return fallbackProcessors.filter((processor) => processors.has(processor));
+  },
   dynamicGraphRun: async ({
     client,
     requestId,
@@ -154,7 +246,8 @@ const rivetDebugger = startDebuggerServer({
       inputs: summarizePortMapForLog(inputs),
     });
 
-    const project = currentDebuggerState.uploadedProject;
+    const debuggerState = getDebuggerStateForClient(client);
+    const project = debuggerState.uploadedProject;
 
     if (project === undefined) {
       logRuntimeWarn(`Cannot run graph ${graphId} because no project is uploaded.`);
@@ -215,18 +308,19 @@ const rivetDebugger = startDebuggerServer({
           rivetDebugger.broadcast(processorForConsole, 'codeConsole', message, requestId);
         }
       });
+      const clientScopedDebugger = createClientScopedDebugger(client);
 
       const processor = createProcessor(project, {
         graph: graphId,
         inputs,
-        ...currentDebuggerState.settings!,
-        remoteDebugger: rivetDebugger,
+        ...debuggerState.settings!,
+        remoteDebugger: clientScopedDebugger,
         remoteDebuggerRequestId: requestId,
         captureNodeTimings: captureNodeTimings ?? false,
         registry,
-        datasetProvider,
+        datasetProvider: getDatasetProviderForClient(client),
         codeRunner,
-        editorExecutionCache: useEditorCache ? getEditorExecutionCache(project) : undefined,
+        editorExecutionCache: useEditorCache ? getEditorExecutionCache(client, project) : undefined,
         onTrace: (trace) => {
           logRuntimeDebug('Graph trace', { trace });
         },
@@ -253,6 +347,7 @@ const rivetDebugger = startDebuggerServer({
     } finally {
       if (processorForConsole) {
         rivetDebugger.detach(processorForConsole);
+        untrackClientProcessor(processorForConsole);
       }
     }
   },

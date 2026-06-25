@@ -459,6 +459,29 @@ The sidecar:
 - supports preload, pause, resume, abort, and user-input messages
 - supports editor run-from execution by accepting startup `preloadData` in the same `run` message as explicit `runToNodeIds`; the sidecar applies that preload after creating the processor and before calling `run()`
 
+When several app tabs connect to the same sidecar, the sidecar tracks which
+websocket client created each `GraphProcessor`. Processor lifecycle broadcasts
+and `codeConsole` messages are sent only back to that originating client, and
+client control messages such as abort, pause, resume, and user input are routed
+only to processors started by that same client. Control messages also carry the
+active remote run request id when the app knows it, and `startDebuggerServer`
+filters the client's processors to that matching request before invoking the
+control method. This protects overlapping runs that share one client or URL,
+while preserving legacy unscoped controls for clients/processors without request
+ids. This lets multiple Node-mode project tabs share one sidecar URL/port
+without one tab stealing another tab's terminal events or controls. Uploaded
+project/settings/static-data state and dataset proxying follow the same client
+boundary: the app-executor sidecar keeps debugger state and a
+`DebuggerDatasetProvider` per websocket client, so one open project tab cannot
+overwrite another tab's uploaded project or consume another tab's dataset
+request/response ids. Editor execution caches are scoped by websocket client and
+project id for the same reason: two tabs with the same project id but different
+unsaved editor state must not share cached node execution helpers through the
+process-wide sidecar. The sidecar passes `createProcessor(...)` a client-scoped
+debugger wrapper, so processor ownership is registered at debugger attach time
+rather than after processor construction; controls sent during run startup must
+still see the processor as owned by the originating websocket.
+
 The worker-backed runner is scoped to the app executor. `@valerypopoff/rivet2-node`
 compatible-profile `createProcessor(...)` callers still use `NodeCodeRunner` by
 default unless they pass a custom `codeRunner`; omitted-default

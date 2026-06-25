@@ -145,13 +145,13 @@ export function toStoredInlineDataValue(value: DataValue): StoredDataValue {
 export function isStoredRefDataValue(
   value: DataValueWithRefs | DataValue | undefined,
 ): value is Extract<StoredDataValue, { storage: 'ref' }> {
-  return !!value && 'storage' in value && value.storage === 'ref';
+  return isPlainRecord(value) && (value as { storage?: unknown }).storage === 'ref';
 }
 
 export function isStoredInlineDataValue(
   value: DataValueWithRefs | DataValue | undefined,
 ): value is Extract<StoredDataValue, { storage: 'inline' }> {
-  return !!value && 'storage' in value && value.storage === 'inline';
+  return isPlainRecord(value) && (value as { storage?: unknown }).storage === 'inline';
 }
 
 export function isPreviewOnlyStoredValue(
@@ -177,7 +177,7 @@ export function restoreStoredDataValue(value: DataValueWithRefs, refStore: DataR
     } as DataValue;
   }
 
-  if (!('storage' in value)) {
+  if (!isPlainRecord(value) || !('storage' in value)) {
     return cloneDeep(value) as DataValue;
   }
 
@@ -243,6 +243,10 @@ export function tryRestoreStoredInputsOrOutputs(
 
 export function collectStoredRefIds(data: InputsOrOutputsWithRefs | NodeRunDataWithRefs | undefined): string[] {
   if (!data) {
+    return [];
+  }
+
+  if (!isPlainRecord(data)) {
     return [];
   }
 
@@ -331,11 +335,61 @@ function buildExecutionDataRefId(scope: RefScope, portId: PortId): string {
 }
 
 function isStoredNodeRunData(value: InputsOrOutputsWithRefs | NodeRunDataWithRefs): value is NodeRunDataWithRefs {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+
   const candidate = value as NodeRunDataWithRefs;
+  if (hasNodeRunMetadata(candidate)) {
+    return true;
+  }
+
   return (
     isStoredPortMap(candidate.inputData) ||
     isStoredPortMap(candidate.outputData) ||
     isStoredSplitOutputData(candidate.splitOutputData)
+  );
+}
+
+function hasNodeRunMetadata(value: NodeRunDataWithRefs): boolean {
+  return (
+    typeof value.startedAt === 'number' ||
+    typeof value.finishedAt === 'number' ||
+    isNodeRunDurationMetadata(value, 'durationMs') ||
+    isNodeRunPlainMetadata(value.splitRunDurationMs) ||
+    isNodeRunPlainMetadata(value.debugData) ||
+    isNodeRunStatus(value.status)
+  );
+}
+
+function isNodeRunDurationMetadata(value: NodeRunDataWithRefs, key: 'durationMs'): boolean {
+  if (!Object.prototype.hasOwnProperty.call(value, key)) {
+    return false;
+  }
+
+  const durationMs = value[key];
+  return durationMs === undefined || typeof durationMs === 'number';
+}
+
+function isNodeRunPlainMetadata(value: unknown): boolean {
+  return isPlainRecord(value) && !isStoredDataValueLike(value);
+}
+
+function isNodeRunStatus(value: unknown): value is NonNullable<NodeRunDataWithRefs['status']> {
+  if (
+    !isPlainRecord(value) ||
+    typeof value.type !== 'string' ||
+    Object.prototype.hasOwnProperty.call(value, 'storage')
+  ) {
+    return false;
+  }
+
+  return (
+    value.type === 'ok' ||
+    value.type === 'error' ||
+    value.type === 'running' ||
+    value.type === 'interrupted' ||
+    value.type === 'notRan'
   );
 }
 

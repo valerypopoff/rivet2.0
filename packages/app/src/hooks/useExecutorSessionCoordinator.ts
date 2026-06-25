@@ -8,6 +8,14 @@ import {
   detachAndStopExecutorSidecar,
   executorSidecarRuntime,
 } from './useExecutorSidecar';
+import {
+  attachAndStartDesktopSidecarForRuntime,
+  createExecutorRuntimeStartupToken,
+  invalidateExecutorRuntimeStartup,
+  isExecutorRuntimeStartupTokenCurrent,
+  releaseDesktopSidecarForRuntime,
+  type ExecutorRuntimeSidecar,
+} from './executorSessionRuntimeResources.js';
 import type { DefaultExecutor } from '../state/settings.js';
 import type { ExecutorSessionLifecycleEvent, ExecutorSessionRuntime } from './executorSession.js';
 import { handleError } from '../utils/errorHandling.js';
@@ -58,11 +66,9 @@ type CoordinatorRuntime = Pick<
   'connectInternalDesktopExecutor' | 'connectInternalHostedExecutor' | 'disconnect'
 >;
 
-type CoordinatorSidecar = {
-  attachAndStart: () => Promise<void>;
-  detachAndStop: () => Promise<void>;
-  isStarted: () => boolean;
-};
+type RuntimeWithOptionalState = CoordinatorRuntime & Partial<Pick<ExecutorSessionRuntime, 'getRuntimeState'>>;
+
+type CoordinatorSidecar = ExecutorRuntimeSidecar;
 
 const defaultCoordinatorSidecar: CoordinatorSidecar = {
   attachAndStart: attachAndStartExecutorSidecar,
@@ -76,12 +82,39 @@ function handleCoordinatorError(error: unknown, context: string) {
   });
 }
 
-function connectInternalNodeExecutor(runtime: CoordinatorRuntime, internalExecutorUrl?: string) {
-  const promise = internalExecutorUrl
-    ? runtime.connectInternalHostedExecutor(internalExecutorUrl)
-    : runtime.connectInternalDesktopExecutor();
+function connectInternalNodeExecutor(
+  runtime: RuntimeWithOptionalState,
+  options: {
+    internalExecutorUrl?: string;
+    sidecar?: CoordinatorSidecar;
+  } = {},
+) {
+  const { internalExecutorUrl, sidecar = defaultCoordinatorSidecar } = options;
 
-  void promise.catch((error) => {
+  if (!internalExecutorUrl) {
+    const startupToken = createExecutorRuntimeStartupToken(runtime);
+
+    void (async () => {
+      try {
+        await attachAndStartDesktopSidecarForRuntime(runtime, sidecar);
+
+        if (
+          isExecutorRuntimeStartupTokenCurrent(runtime, startupToken) &&
+          sidecar.isStarted() &&
+          !hasExternalDebuggerTarget(runtime)
+        ) {
+          await runtime.connectInternalDesktopExecutor();
+        }
+      } catch (error) {
+        handleCoordinatorError(error, 'Executor session coordinator startup failed');
+      }
+    })();
+    return;
+  }
+
+  invalidateExecutorRuntimeStartup(runtime);
+  releaseDesktopSidecarForRuntime(runtime, sidecar);
+  void runtime.connectInternalHostedExecutor(internalExecutorUrl).catch((error) => {
     handleCoordinatorError(error, 'Executor session coordinator connect failed');
   });
 }
@@ -92,6 +125,7 @@ export function handleExecutorSessionCoordinatorDisconnect(options: {
   getSelectedExecutor: () => DefaultExecutor;
   isTauri: boolean;
   runtime: CoordinatorRuntime;
+  sidecar?: CoordinatorSidecar;
 }) {
   const internalExecutorUrl = options.getInternalExecutorUrl();
   const selectedExecutor = options.getSelectedExecutor();
@@ -107,63 +141,66 @@ export function handleExecutorSessionCoordinatorDisconnect(options: {
     return;
   }
 
-  connectInternalNodeExecutor(options.runtime, internalExecutorUrl);
+  connectInternalNodeExecutor(options.runtime, {
+    internalExecutorUrl,
+    sidecar: options.sidecar,
+  });
 }
 
-function stopSidecarAfterCleanup(sidecar: CoordinatorSidecar) {
-  void sidecar.detachAndStop().catch((error) => {
-    handleCoordinatorError(error, 'Executor session coordinator sidecar cleanup failed');
-  });
+function hasExternalDebuggerTarget(runtime: RuntimeWithOptionalState) {
+  return runtime.getRuntimeState?.().target?.type === 'external-debugger';
 }
 
 export function runExecutorSessionStartupAction(options: {
   action: ExecutorSessionStartupAction;
-  runtime: CoordinatorRuntime;
+  runtime: RuntimeWithOptionalState;
   setSelectedExecutor: (executor: DefaultExecutor) => void;
   sidecar?: CoordinatorSidecar;
 }) {
   const { action, runtime, setSelectedExecutor, sidecar = defaultCoordinatorSidecar } = options;
 
+  if (hasExternalDebuggerTarget(runtime)) {
+    return () => {
+      // Startup effects may mount while a project is already connected to an
+      // external debugger. Leave that runtime alone even if it later restores
+      // to an internal executor; explicit mode changes perform cleanup.
+    };
+  }
+
   if (action.type === 'disconnect') {
+    invalidateExecutorRuntimeStartup(runtime);
+    releaseDesktopSidecarForRuntime(runtime, sidecar);
     runtime.disconnect();
 
     return () => {
-      runtime.disconnect();
+      // Already disconnected by the action itself.
     };
   }
 
   if (action.type === 'connect-hosted-internal') {
-    connectInternalNodeExecutor(runtime, action.url);
+    connectInternalNodeExecutor(runtime, { internalExecutorUrl: action.url, sidecar });
 
     return () => {
-      runtime.disconnect();
+      // Project switches unmount the active coordinator for the previous project.
+      // Keep that runtime alive; explicit Browser-mode selection and project
+      // close/replacement perform destructive cleanup.
     };
   }
 
   if (action.type === 'fallback-browser') {
     setSelectedExecutor('browser');
+    invalidateExecutorRuntimeStartup(runtime);
+    releaseDesktopSidecarForRuntime(runtime, sidecar);
     runtime.disconnect();
     return;
   }
 
-  let cancelled = false;
-
-  void (async () => {
-    try {
-      await sidecar.attachAndStart();
-
-      if (!cancelled && sidecar.isStarted()) {
-        await runtime.connectInternalDesktopExecutor();
-      }
-    } catch (error) {
-      handleCoordinatorError(error, 'Executor session coordinator startup failed');
-    }
-  })();
+  connectInternalNodeExecutor(runtime, { sidecar });
 
   return () => {
-    cancelled = true;
-    runtime.disconnect();
-    stopSidecarAfterCleanup(sidecar);
+    // Project switches unmount the active coordinator for the previous project.
+    // Keep that runtime and its sidecar ownership alive; explicit Browser-mode
+    // selection and project close/replacement perform destructive cleanup.
   };
 }
 

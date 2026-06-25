@@ -129,7 +129,7 @@ export type DatasetRequestMap = {
 export type IncomingMessage = ProcessEventMessage | GraphUploadAllowedMessage | DatasetRequestMessage;
 
 export type OutgoingMessageMap = {
-  'user-input': { nodeId: NodeId; answers: StringArrayDataValue };
+  'user-input': { nodeId: NodeId; answers: StringArrayDataValue; requestId?: RemoteRunRequestId };
   'set-dynamic-data': { project: Project; settings: Settings };
   run: {
     requestId: RemoteRunRequestId;
@@ -143,10 +143,10 @@ export type OutgoingMessageMap = {
     useEditorCache?: boolean;
     captureNodeTimings?: boolean;
   };
-  abort: undefined;
-  pause: undefined;
-  resume: undefined;
-  preload: { nodeData: Record<NodeId, Outputs> };
+  abort: { requestId?: RemoteRunRequestId } | undefined;
+  pause: { requestId?: RemoteRunRequestId } | undefined;
+  resume: { requestId?: RemoteRunRequestId } | undefined;
+  preload: { nodeData: Record<NodeId, Outputs>; requestId?: RemoteRunRequestId };
   'datasets:response': { requestId: string; payload: unknown };
 };
 

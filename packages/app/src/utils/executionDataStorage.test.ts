@@ -104,6 +104,12 @@ test('restoreStoredInputsOrOutputs ignores legacy nullish port payloads', () => 
   });
 });
 
+test('restoreStoredDataValue tolerates malformed primitive legacy payloads', () => {
+  const dataRefs = createDataRefStore();
+
+  assert.doesNotThrow(() => restoreStoredDataValue(178 as never, dataRefs));
+});
+
 test('collectStoredRefIds collects input, output, and split-output refs from node run data', () => {
   const refIds = collectStoredRefIds({
     inputData: {
@@ -174,8 +180,44 @@ test('collectStoredRefIds tolerates legacy nullish split-output entries', () => 
   assert.deepEqual(refIds, ['split-ref']);
 });
 
+test('collectStoredRefIds ignores malformed primitive port payloads', () => {
+  const refIds = collectStoredRefIds({
+    output: 178,
+  } as never);
+
+  assert.deepEqual(refIds, []);
+});
+
 test('collectStoredRefIds treats status-like port names as ordinary port maps', () => {
   const refIds = collectStoredRefIds({
+    durationMs: {
+      type: 'number',
+      storage: 'ref',
+      refId: 'duration-ms-port-ref',
+      preview: {
+        kind: 'summary',
+        label: 'number',
+      },
+    },
+    debugData: {
+      type: 'object',
+      storage: 'ref',
+      refId: 'debug-data-port-ref',
+      preview: {
+        kind: 'json',
+        excerpt: '{}',
+        totalChars: 2,
+      },
+    },
+    finishedAt: {
+      type: 'number',
+      storage: 'ref',
+      refId: 'finished-at-port-ref',
+      preview: {
+        kind: 'summary',
+        label: 'number',
+      },
+    },
     status: {
       type: 'string',
       storage: 'ref',
@@ -217,14 +259,65 @@ test('collectStoredRefIds treats status-like port names as ordinary port maps', 
         totalChars: 2,
       },
     },
+    startedAt: {
+      type: 'number',
+      storage: 'ref',
+      refId: 'started-at-port-ref',
+      preview: {
+        kind: 'summary',
+        label: 'number',
+      },
+    },
   } as never);
 
   assert.deepEqual(refIds, [
+    'duration-ms-port-ref',
+    'debug-data-port-ref',
+    'finished-at-port-ref',
     'status-port-ref',
     'input-data-port-ref',
     'output-data-port-ref',
     'split-output-data-port-ref',
+    'started-at-port-ref',
   ]);
+});
+
+test('collectStoredRefIds treats timing and status-only node run data as metadata', () => {
+  const refIds = collectStoredRefIds({
+    status: {
+      type: 'error',
+      error: 'boom',
+    },
+    startedAt: 1782343899251,
+    finishedAt: 1782343899252,
+    durationMs: 1,
+  } as never);
+
+  assert.deepEqual(refIds, []);
+});
+
+test('clearExecutionDataRefs tolerates metadata-only node run data', () => {
+  const dataRefs = createDataRefStore();
+  dataRefs.set('retained-ref', { type: 'string', value: 'retained' });
+
+  assert.doesNotThrow(() => {
+    clearExecutionDataRefs(dataRefs, {
+      errorNode: [
+        {
+          processId: 'process-1' as never,
+          data: {
+            status: {
+              type: 'error',
+              error: 'boom',
+            },
+            finishedAt: 1782343899251,
+            durationMs: 1,
+          },
+        },
+      ],
+    } as never);
+  });
+  assert.equal(dataRefs.values.has('retained-ref'), true);
 });
 
 test('storeDataValueForHistory stores large strings by ref and restores them losslessly', () => {

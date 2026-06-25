@@ -6,6 +6,7 @@ import type { TrivetState } from '../state/trivet.js';
 import { isPathBasedIOProvider } from '../io/IOProvider.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
+import { useExecutorSessionRegistry } from '../providers/ExecutorSessionContext.js';
 import { graphState } from '../state/graph.js';
 import {
   loadedProjectState,
@@ -207,6 +208,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
   const setViewingProjectComparisonNode = useSetAtom(viewingProjectComparisonNodeState);
   const { persistCurrentProjectEditorSnapshot } = useCurrentProjectEditorSnapshot();
+  const executorSessionRegistry = useExecutorSessionRegistry();
   const { captureCurrentProjectExecutionSnapshot, removeProjectExecutionSnapshot, restoreProjectExecutionSnapshot } =
     useProjectExecutionSnapshots();
 
@@ -311,6 +313,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
           setProjectUnsavedChanges((flags) => removeProjectUnsavedState(flags, replaceTargetProjectId));
           setProjectDataUnsavedChanges((flags) => removeProjectUnsavedState(flags, replaceTargetProjectId));
           setProjectTabUiStates((states) => removeProjectTabUiState(states, replaceTargetProjectId));
+          executorSessionRegistry.removeProject(replaceTargetProjectId);
           removeProjectExecutionSnapshot(replaceTargetProjectId);
           releaseProjectContextState(replaceTargetProjectId);
           clearCodeEditorModelCacheForClosedProject(replaceTargetProjectId);
@@ -420,6 +423,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
     setProjectUnsavedChanges((flags) => removeProjectUnsavedState(flags, projectId));
     setProjectDataUnsavedChanges((flags) => removeProjectUnsavedState(flags, projectId));
     setProjectTabUiStates((states) => removeProjectTabUiState(states, projectId));
+    executorSessionRegistry.removeProject(projectId);
     releaseProjectContextState(projectId);
     clearCodeEditorModelCacheForClosedProject(projectId);
 

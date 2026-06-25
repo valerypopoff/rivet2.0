@@ -1,6 +1,8 @@
 import { useCallback } from 'react';
 import { useAtom, useAtomValue } from 'jotai';
-import { useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
+import { type ProjectId } from '@valerypopoff/rivet2-core';
+import { useExecutorSessionRegistry } from '../providers/ExecutorSessionContext.js';
+import { projectState } from '../state/savedGraphs.js';
 import { defaultExecutorState, selectedExecutorState } from '../state/settings.js';
 import { handleError } from '../utils/errorHandling.js';
 import {
@@ -10,13 +12,15 @@ import {
 } from '../utils/projectExecutorMode.js';
 
 export function useApplyProjectExecutorMode() {
-  const runtime = useExecutorSessionRuntime();
+  const registry = useExecutorSessionRegistry();
+  const currentProject = useAtomValue(projectState);
   const defaultExecutor = useAtomValue(defaultExecutorState);
   const [selectedExecutor, setSelectedExecutor] = useAtom(selectedExecutorState);
 
   return useCallback(
-    (mode: ProjectExecutorMode | undefined) => {
+    (mode: ProjectExecutorMode | undefined, options: { projectId?: ProjectId } = {}) => {
       const nextMode = sanitizeProjectExecutorMode(mode) ?? createLocalProjectExecutorMode(defaultExecutor);
+      const runtime = registry.getRuntime(options.projectId ?? currentProject.metadata.id);
 
       if (nextMode.type === 'remote-debugger') {
         void runtime.connectExternalDebugger(nextMode.url).catch((error) => {
@@ -44,6 +48,6 @@ export function useApplyProjectExecutorMode() {
         runtime.disconnect();
       }
     },
-    [defaultExecutor, runtime, selectedExecutor, setSelectedExecutor],
+    [currentProject.metadata.id, defaultExecutor, registry, selectedExecutor, setSelectedExecutor],
   );
 }

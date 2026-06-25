@@ -8,21 +8,23 @@ import {
   createFrozenNodeOutputResolver,
   type GraphOutputs,
   type GraphId,
+  type ProcessEventMessageMap,
   type ProcessEvents,
+  type ProjectId,
   GptTokenizerTokenizer,
   logRuntimeDebug,
   logRuntimeError,
   logRuntimeInfo,
 } from '@valerypopoff/rivet2-core';
 import { produce } from 'immer';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'react-toastify';
 import { TauriNativeApi } from '../model/native/TauriNativeApi';
 import { useStableCallback } from './useStableCallback';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph';
 import { useCurrentExecution } from './useCurrentExecution';
 import { userInputModalQuestionsState } from '../state/userInput';
-import { loadedProjectState, projectContextState, projectDataState, projectState } from '../state/savedGraphs';
+import { loadedProjectState, projectContextState, projectDataState, projectsState, projectState } from '../state/savedGraphs';
 import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
 import { graphState } from '../state/graph';
 import { lastRecordingState, loadedRecordingState, recordingPlaybackStartingState } from '../state/execution';
@@ -30,24 +32,35 @@ import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { getLLMChatV2CustomProviderApiKeyEnvVarNames } from '../utils/chatV2CustomProviderEnv';
 import { trivetState } from '../state/trivet';
 import { runTrivet } from '@valerypopoff/trivet';
-import { frozenNodeOutputsState, lastRunDataByNodeState } from '../state/dataFlow';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import {
+  createEmptyProjectExecutionSnapshot,
+  frozenNodeOutputsState,
+  lastRunDataByNodeState,
+  projectExecutionSnapshotsState,
+} from '../state/dataFlow';
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import { TauriProjectReferenceLoader } from '../model/TauriProjectReferenceLoader';
 import {
   useAudioProvider,
+  useDataRefs,
   useDatasetProvider,
   useEnvironmentProvider,
   usePathPolicyProvider,
 } from '../providers/ProvidersContext';
-import { setUserInputSubmitHandler } from '../state/actions/userInputActions';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import { handleError } from '../utils/errorHandling.js';
-import { getDependentDataForNodeForPreload, getEditorRunFromPlan, getEditorRunToPlan } from './remoteExecutorHelpers.js';
+import {
+  createProcessEventDispatcher,
+  getDependentDataForNodeForPreload,
+  getEditorRunFromPlan,
+  getEditorRunToPlan,
+} from './remoteExecutorHelpers.js';
 import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
 import { cloneFrozenNodeOutputsForExecutor } from '../utils/frozenNodeOutputs.js';
 import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
+import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
 
 /**
  * Yield to the macrotask queue so the browser can repaint.
@@ -77,15 +90,18 @@ function yieldToMacrotask(): Promise<void> {
 
 export function useLocalExecutor() {
   const audioProvider = useAudioProvider();
+  const dataRefs = useDataRefs();
   const datasetProvider = useDatasetProvider();
   const environmentProvider = useEnvironmentProvider();
   const pathPolicy = usePathPolicyProvider();
   const projectNodeRegistry = useProjectNodeRegistry();
   const project = useAtomValue(projectState);
   const graph = useAtomValue(graphState);
-  const currentProcessor = useRef<GraphProcessor | null>(null);
+  const store = useStore();
+  const currentProcessorsByProjectId = useRef(new Map<ProjectId, GraphProcessor>());
   const saveGraph = useSaveCurrentGraph();
   const currentExecution = useCurrentExecution();
+  const eventDispatcher = createProcessEventDispatcher(currentExecution);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
   const savedSettings = useAtomValue(settingsState);
   const loadedRecording = useAtomValue(loadedRecordingState);
@@ -100,10 +116,25 @@ export function useLocalExecutor() {
   const lastRunData = useAtomValue(lastRunDataByNodeState);
   const frozenNodeOutputs = useAtomValue(frozenNodeOutputsState);
   const loadedProject = useAtomValue(loadedProjectState);
+  const openedProjects = useAtomValue(projectsState).openedProjects;
   const pluginStates = useAtomValue(pluginsState);
   const editorExecutionCachesByProjectId = useRef(new Map<string, Map<string, unknown>>());
   const recordingPlaybackStartingRef = useRef(recordingPlaybackStarting);
   recordingPlaybackStartingRef.current = recordingPlaybackStarting;
+
+  useEffect(() => {
+    const openProjectIds = new Set(Object.keys(openedProjects));
+
+    for (const [projectId, processor] of currentProcessorsByProjectId.current) {
+      if (openProjectIds.has(projectId)) {
+        continue;
+      }
+
+      processor.abort();
+      currentProcessorsByProjectId.current.delete(projectId);
+      editorExecutionCachesByProjectId.current.delete(projectId);
+    }
+  }, [openedProjects]);
 
   function getEditorExecutionCache(projectId: string) {
     let cache = editorExecutionCachesByProjectId.current.get(projectId);
@@ -116,85 +147,149 @@ export function useLocalExecutor() {
     return cache;
   }
 
-  function attachGraphEvents(processor: GraphProcessor) {
+  function routeLocalProcessEvent<K extends keyof ProcessEventMessageMap>(
+    runProjectId: ProjectId,
+    message: K,
+    data: ProcessEventMessageMap[K],
+    dispatchActive: () => void,
+  ) {
+    if (store.get(projectState).metadata.id === runProjectId) {
+      dispatchActive();
+      return;
+    }
+
+    if (!store.get(projectsState).openedProjects[runProjectId]) {
+      return;
+    }
+
+    store.set(projectExecutionSnapshotsState, (previousSnapshots) => {
+      const result = applyProcessEventToProjectExecutionSnapshot({
+        data,
+        message,
+        projectId: runProjectId,
+        refStore: dataRefs,
+        snapshot: previousSnapshots[runProjectId],
+      });
+
+      if (!result.changed) {
+        return previousSnapshots;
+      }
+
+      return {
+        ...previousSnapshots,
+        [runProjectId]: result.snapshot,
+      };
+    });
+  }
+
+  function setLastRecordingForProject(runProjectId: ProjectId, recording: string) {
+    if (store.get(projectState).metadata.id === runProjectId) {
+      setLastRecordingState(recording);
+      return;
+    }
+
+    if (!store.get(projectsState).openedProjects[runProjectId]) {
+      return;
+    }
+
+    store.set(projectExecutionSnapshotsState, (previousSnapshots) => ({
+      ...previousSnapshots,
+      [runProjectId]: {
+        ...(previousSnapshots[runProjectId] ?? createEmptyProjectExecutionSnapshot()),
+        lastRecording: recording,
+      },
+    }));
+  }
+
+  function markInactiveLocalRunFailed(runProjectId: ProjectId, error: unknown) {
+    if (store.get(projectState).metadata.id === runProjectId) {
+      return;
+    }
+
+    routeLocalProcessEvent(
+      runProjectId,
+      'error',
+      {
+        error: error instanceof Error ? error : String(error),
+      },
+      () => {},
+    );
+  }
+
+  function attachGraphEvents(processor: GraphProcessor, runProjectId: ProjectId) {
     // nodeStart and nodeFinish use awaited emit in GraphProcessor, so returning
     // a Promise here pauses the processor until the macrotask yield completes,
     // giving the browser a chance to repaint with updated React state.
     processor.on('nodeStart', async (data: ProcessEvents['nodeStart']) => {
-      dispatchGraphExecutionEvent('nodeStart', () => currentExecution.onNodeStart(data));
+      routeLocalProcessEvent(runProjectId, 'nodeStart', data, () => eventDispatcher.nodeStart(data));
       await yieldToMacrotask();
     });
     processor.on('nodeFinish', async (data: ProcessEvents['nodeFinish']) => {
-      dispatchGraphExecutionEvent('nodeFinish', () => currentExecution.onNodeFinish(data));
+      routeLocalProcessEvent(runProjectId, 'nodeFinish', data, () => eventDispatcher.nodeFinish(data));
       await yieldToMacrotask();
     });
     processor.on('nodeError', (data) => {
-      dispatchGraphExecutionEvent('nodeError', () => currentExecution.onNodeError(data));
-    });
-
-    setUserInputSubmitHandler((nodeId: NodeId, answers: StringArrayDataValue) => {
-      processor.userInput(nodeId, answers);
-      setUserInputQuestions((q) =>
-        produce(q, (draft) => {
-          delete draft[nodeId];
-        }),
-      );
+      routeLocalProcessEvent(runProjectId, 'nodeError', data, () => eventDispatcher.nodeError(data));
     });
 
     processor.on('userInput', (data) => {
-      dispatchGraphExecutionEvent('userInput', () => currentExecution.onUserInput(data));
+      routeLocalProcessEvent(runProjectId, 'userInput', data, () => eventDispatcher.userInput(data));
     });
     // start and graphStart are already awaited by GraphProcessor, so yielding
     // here also creates a macrotask boundary before node processing begins.
     processor.on('start', async (data: ProcessEvents['start']) => {
-      dispatchGraphExecutionEvent('start', () => currentExecution.onStart(data));
+      routeLocalProcessEvent(runProjectId, 'start', data, () => eventDispatcher.start(data));
       await yieldToMacrotask();
     });
     processor.on('done', (data) => {
-      dispatchGraphExecutionEvent('done', () => currentExecution.onDone(data));
+      routeLocalProcessEvent(runProjectId, 'done', data, () => eventDispatcher.done(data));
     });
     processor.on('abort', (data) => {
-      dispatchGraphExecutionEvent('abort', () => currentExecution.onAbort(data));
+      routeLocalProcessEvent(runProjectId, 'abort', data, () => eventDispatcher.abort(data));
     });
     processor.on('graphAbort', (data) => {
-      dispatchGraphExecutionEvent('graphAbort', () => currentExecution.onGraphAbort(data));
+      routeLocalProcessEvent(runProjectId, 'graphAbort', data, () => eventDispatcher.graphAbort(data));
     });
     processor.on('graphError', (data) => {
-      dispatchGraphExecutionEvent('graphError', () => currentExecution.onGraphError(data));
+      routeLocalProcessEvent(runProjectId, 'graphError', data, () => eventDispatcher.graphError(data));
     });
     processor.on('partialOutput', (data) => {
-      dispatchGraphExecutionEvent('partialOutput', () => currentExecution.onPartialOutput(data));
+      routeLocalProcessEvent(runProjectId, 'partialOutput', data, () => eventDispatcher.partialOutput(data));
     });
     processor.on('graphStart', async (data: ProcessEvents['graphStart']) => {
-      dispatchGraphExecutionEvent('graphStart', () => currentExecution.onGraphStart(data));
+      routeLocalProcessEvent(runProjectId, 'graphStart', data, () => eventDispatcher.graphStart(data));
       await yieldToMacrotask();
     });
     processor.on('graphFinish', (data) => {
-      dispatchGraphExecutionEvent('graphFinish', () => currentExecution.onGraphFinish(data));
+      routeLocalProcessEvent(runProjectId, 'graphFinish', data, () => eventDispatcher.graphFinish(data));
     });
     processor.on('nodeOutputsCleared', (data) => {
-      dispatchGraphExecutionEvent('nodeOutputsCleared', () => currentExecution.onNodeOutputsCleared(data));
+      routeLocalProcessEvent(runProjectId, 'nodeOutputsCleared', data, () => eventDispatcher.nodeOutputsCleared(data));
     });
     processor.on('trace', (trace) => logRuntimeDebug('Local graph trace', { trace }));
     processor.on('pause', () => {
-      dispatchGraphExecutionEvent('pause', () => currentExecution.onPause());
+      routeLocalProcessEvent(runProjectId, 'pause', undefined, () => eventDispatcher.pause());
     });
     processor.on('resume', () => {
-      dispatchGraphExecutionEvent('resume', () => currentExecution.onResume());
+      routeLocalProcessEvent(runProjectId, 'resume', undefined, () => eventDispatcher.resume());
     });
     processor.on('error', (data) => {
-      dispatchGraphExecutionEvent('error', () => currentExecution.onError(data));
+      routeLocalProcessEvent(runProjectId, 'error', data, () => eventDispatcher.error(data));
     });
     processor.on('nodeExcluded', (data) => {
-      dispatchGraphExecutionEvent('nodeExcluded', () => currentExecution.onNodeExcluded(data));
+      routeLocalProcessEvent(runProjectId, 'nodeExcluded', data, () => eventDispatcher.nodeExcluded(data));
     });
 
     processor.onUserEvent('toast', (data: DataValue | undefined) => {
+      if (store.get(projectState).metadata.id !== runProjectId) {
+        return;
+      }
+
       const stringData = coerceTypeOptional(data, 'string');
       toast(stringData ?? 'Toast called, but no message was provided');
     });
 
-    currentProcessor.current = processor;
+    currentProcessorsByProjectId.current.set(runProjectId, processor);
   }
 
   const tryRunGraph = useStableCallback(
@@ -206,8 +301,16 @@ export function useLocalExecutor() {
       } = {},
     ) => {
       const recordingToReplay = loadedRecording;
+      const runProjectId = project.metadata.id;
 
-      if (currentProcessor.current?.isRunning || (recordingToReplay && recordingPlaybackStartingRef.current)) {
+      if (!runProjectId) {
+        return;
+      }
+
+      if (
+        currentProcessorsByProjectId.current.get(runProjectId)?.isRunning ||
+        (recordingToReplay && recordingPlaybackStartingRef.current)
+      ) {
         return;
       }
 
@@ -280,7 +383,7 @@ export function useLocalExecutor() {
           recorder.record(processor);
         }
 
-        attachGraphEvents(processor);
+        attachGraphEvents(processor, runProjectId);
 
         let results: GraphOutputs;
 
@@ -316,23 +419,32 @@ export function useLocalExecutor() {
         }
 
         if (recordExecutions) {
-          setLastRecordingState(recorder.serialize());
+          setLastRecordingForProject(runProjectId, recorder.serialize());
         }
       } catch (e) {
-        currentExecution.clearNodeRunDataPreservationForNextStart();
+        const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
+        if (runProjectIsActive) {
+          currentExecution.clearNodeRunDataPreservationForNextStart();
+        } else {
+          markInactiveLocalRunFailed(runProjectId, e);
+        }
         if (options.from) {
-          handleError(e, 'Failed to start local run from here');
+          if (runProjectIsActive) {
+            handleError(e, 'Failed to start local run from here');
+          } else {
+            logRuntimeError('Inactive local run from here failed.', e);
+          }
           return;
         }
 
         logRuntimeError('Local graph run failed.', e);
       } finally {
-        if (processor) {
+        if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
           dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
         }
 
-        if (processor && currentProcessor.current === processor) {
-          currentProcessor.current = null;
+        if (processor && runProjectId && currentProcessorsByProjectId.current.get(runProjectId) === processor) {
+          currentProcessorsByProjectId.current.delete(runProjectId);
         }
 
         if (recordingToReplay) {
@@ -397,30 +509,41 @@ export function useLocalExecutor() {
             }));
           },
           runGraph: async (project, graphId, inputs) => {
+            const runProjectId = project.metadata.id;
+            if (!runProjectId) {
+              throw new Error('Cannot run local Trivet graph without a project id.');
+            }
+
             const processor = new GraphProcessor(project, graphId, projectNodeRegistry, true, {
               captureNodeTimings: showNodeRunDurations,
             });
             processor.executor = 'browser';
-            attachGraphEvents(processor);
+            attachGraphEvents(processor, runProjectId);
             const contextValues = getProjectContextValues(projectContext);
-            return processor.processGraph(
-              {
-                settings: await fillMissingSettingsFromEnvironmentVariables(
-                  savedSettings,
-                  projectNodeRegistry.getPlugins(),
-                  {
-                    environmentProvider,
-                    extraEnvVarNames: getLLMChatV2CustomProviderApiKeyEnvVarNames(project),
-                  },
-                ),
-                nativeApi: new TauriNativeApi(),
-                datasetProvider,
-                audioProvider,
-                tokenizer: new GptTokenizerTokenizer(),
-              },
-              inputs,
-              contextValues,
-            );
+            try {
+              return await processor.processGraph(
+                {
+                  settings: await fillMissingSettingsFromEnvironmentVariables(
+                    savedSettings,
+                    projectNodeRegistry.getPlugins(),
+                    {
+                      environmentProvider,
+                      extraEnvVarNames: getLLMChatV2CustomProviderApiKeyEnvVarNames(project),
+                    },
+                  ),
+                  nativeApi: new TauriNativeApi(),
+                  datasetProvider,
+                  audioProvider,
+                  tokenizer: new GptTokenizerTokenizer(),
+                },
+                inputs,
+                contextValues,
+              );
+            } finally {
+              if (currentProcessorsByProjectId.current.get(runProjectId) === processor) {
+                currentProcessorsByProjectId.current.delete(runProjectId);
+              }
+            }
           },
         });
         setTrivetState((s) => ({
@@ -449,16 +572,31 @@ export function useLocalExecutor() {
   );
 
   function tryAbortGraph() {
-    currentProcessor.current?.abort();
+    currentProcessorsByProjectId.current.get(project.metadata.id as ProjectId)?.abort();
   }
 
   function tryPauseGraph() {
-    currentProcessor.current?.pause();
+    currentProcessorsByProjectId.current.get(project.metadata.id as ProjectId)?.pause();
   }
 
   function tryResumeGraph() {
-    currentProcessor.current?.resume();
+    currentProcessorsByProjectId.current.get(project.metadata.id as ProjectId)?.resume();
   }
+
+  const submitUserInput = useStableCallback((nodeId: NodeId, answers: StringArrayDataValue) => {
+    const processor = currentProcessorsByProjectId.current.get(project.metadata.id as ProjectId);
+    if (!processor?.isRunning) {
+      logRuntimeDebug('Local user input skipped because no local processor is running.');
+      return;
+    }
+
+    processor.userInput(nodeId, answers);
+    setUserInputQuestions((q) =>
+      produce(q, (draft) => {
+        delete draft[nodeId];
+      }),
+    );
+  });
 
   return {
     tryRunGraph,
@@ -466,5 +604,6 @@ export function useLocalExecutor() {
     tryPauseGraph,
     tryResumeGraph,
     tryRunTests,
+    submitUserInput,
   };
 }

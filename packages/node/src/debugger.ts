@@ -49,6 +49,8 @@ export const currentDebuggerState = {
   settings: undefined as Settings | undefined,
 };
 
+export type DebuggerClientState = typeof currentDebuggerState;
+
 export type DynamicGraphRunOptions = {
   client: WebSocket;
   requestId: RemoteRunRequestId;
@@ -68,6 +70,8 @@ export type DynamicGraphRun = (data: DynamicGraphRunOptions) => Promise<void>;
 export function startDebuggerServer(
   options: {
     getClientsForProcessor?: (processor: GraphProcessor, allClients: WebSocket[]) => WebSocket[];
+    getClientDebuggerState?: (client: WebSocket) => DebuggerClientState;
+    getDatasetProviderForClient?: (client: WebSocket) => DebuggerDatasetProvider | undefined;
     getProcessorsForClient?: (client: WebSocket, allProcessors: GraphProcessor[]) => GraphProcessor[];
     datasetProvider?: DebuggerDatasetProvider;
     server?: WebSocketServer;
@@ -129,8 +133,9 @@ export function startDebuggerServer(
       socketHeartbeats.delete(socket);
     });
 
-    if (options.datasetProvider) {
-      options.datasetProvider.onrequest = (type, data) => {
+    const datasetProvider = getDatasetProviderForClient(socket, options);
+    if (datasetProvider) {
+      datasetProvider.onrequest = (type, data) => {
         const payload = stringifyDebuggerMessage(
           {
             message: type,
@@ -150,10 +155,11 @@ export function startDebuggerServer(
 
         if (stringData.startsWith('set-static-data:')) {
           const [, id, value] = stringData.split(':');
+          const debuggerState = getDebuggerStateForClient(socket, options);
 
-          if (currentDebuggerState.uploadedProject) {
-            currentDebuggerState.uploadedProject.data ??= {};
-            currentDebuggerState.uploadedProject.data![id as DataId] = value!;
+          if (debuggerState.uploadedProject) {
+            debuggerState.uploadedProject.data ??= {};
+            debuggerState.uploadedProject.data![id as DataId] = value!;
           }
           return;
         }
@@ -211,16 +217,22 @@ export function startDebuggerServer(
                 settings: Settings;
                 datasets: string;
               };
-              currentDebuggerState.uploadedProject = project;
-              currentDebuggerState.settings = settings;
+              const debuggerState = getDebuggerStateForClient(socket, options);
+              debuggerState.uploadedProject = project;
+              debuggerState.settings = settings;
             }
           })
           .with({ type: 'datasets:response' }, async () => {
-            options.datasetProvider?.handleResponse(message.type, message.data);
+            getDatasetProviderForClient(socket, options)?.handleResponse(message.type, message.data);
           })
           .otherwise(async () => {
             const attachedProcessors = processorAttachments.getAttachedProcessors();
-            const processors = options.getProcessorsForClient?.(socket, attachedProcessors) ?? attachedProcessors;
+            const processorsForClient =
+              options.getProcessorsForClient?.(socket, attachedProcessors) ?? attachedProcessors;
+            const requestId = getRequestIdForControlMessage(message.data);
+            const processors = requestId
+              ? processorsForClient.filter((processor) => processorAttachments.getRequestId(processor) === requestId)
+              : processorsForClient;
 
             for (const processor of processors) {
               await match(message)
@@ -287,4 +299,32 @@ export function startDebuggerServer(
   };
 
   return debuggerServer;
+}
+
+function getRequestIdForControlMessage(data: unknown): RemoteRunRequestId | undefined {
+  if (typeof data !== 'object' || data == null) {
+    return undefined;
+  }
+
+  const requestId = (data as { requestId?: unknown }).requestId;
+  return typeof requestId === 'string' ? (requestId as RemoteRunRequestId) : undefined;
+}
+
+function getDatasetProviderForClient(
+  client: WebSocket,
+  options: {
+    getDatasetProviderForClient?: (client: WebSocket) => DebuggerDatasetProvider | undefined;
+    datasetProvider?: DebuggerDatasetProvider;
+  },
+): DebuggerDatasetProvider | undefined {
+  return options.getDatasetProviderForClient?.(client) ?? options.datasetProvider;
+}
+
+function getDebuggerStateForClient(
+  client: WebSocket,
+  options: {
+    getClientDebuggerState?: (client: WebSocket) => DebuggerClientState;
+  },
+): DebuggerClientState {
+  return options.getClientDebuggerState?.(client) ?? currentDebuggerState;
 }

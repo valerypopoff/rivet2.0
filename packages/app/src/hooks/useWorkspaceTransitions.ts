@@ -226,7 +226,7 @@ export function useWorkspaceTransitions() {
             ? currentProjectExecutionSnapshot ?? targetProjectExecutionSnapshot
             : targetProjectExecutionSnapshot,
         );
-        applyProjectExecutorMode(projectInfo.executorMode);
+        applyProjectExecutorMode(projectInfo.executorMode, { projectId: targetProjectId });
         await applyStaticData(projectInfo.data);
         setLoadedProject(transition.loadedProject);
         setTrivetState(createDefaultTrivetState(projectInfo.testSuites ?? []));

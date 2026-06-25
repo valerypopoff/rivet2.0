@@ -505,9 +505,12 @@ export const nodeStyles = css`
       width: calc(20px * var(--ui-font-scale));
     }
 
-    .changed-button:hover,
-    .edit-button:hover {
+    .changed-button:hover {
       color: var(--primary-text);
+    }
+
+    .edit-button:hover {
+      color: var(--node-bg-foreground);
     }
   }
 
@@ -571,9 +574,7 @@ export const nodeStyles = css`
   .title-controls .edit-button {
     opacity: 0;
     pointer-events: none;
-    transition:
-      opacity 0.15s ease-out,
-      color 0.2s ease-out;
+    transition: opacity 0.15s ease-out;
   }
 
   .node:is(:hover, .hovered, .showHoverControls, :focus-within)
