@@ -33,10 +33,11 @@ test('local executor isolates awaited processor event handlers from UI projectio
 });
 
 test('local executor routes inactive project browser events into execution snapshots', () => {
-  assert.match(useLocalExecutorSource, /applyProcessEventToProjectExecutionSnapshot/);
+  assert.match(useLocalExecutorSource, /applyProcessEventToProjectExecutionSnapshots/);
+  assert.match(useLocalExecutorSource, /shouldRouteProjectEventToSnapshot/);
   assert.match(useLocalExecutorSource, /projectExecutionSnapshotsState/);
-  assert.match(useLocalExecutorSource, /store\.get\(projectState\)\.metadata\.id === runProjectId/);
-  assert.match(useLocalExecutorSource, /store\.get\(projectsState\)\.openedProjects\[runProjectId\]/);
+  assert.match(useLocalExecutorSource, /if \(activeProjectId === runProjectId\) \{/);
+  assert.match(useLocalExecutorSource, /openedProjectsState\[runProjectId\]/);
 });
 
 test('local executor clears project-owned browser runtime resources on project close', () => {

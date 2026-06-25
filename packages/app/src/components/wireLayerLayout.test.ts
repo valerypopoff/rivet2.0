@@ -32,20 +32,14 @@ test('wire hover uses transparent rendered-wire hit paths instead of global curv
   assert.match(wireLayerSource, /interactive=\{allowConnectionHover\}/);
   assert.match(wireLayerSource, /onHoverStart=\{\(event\) => onConnectionHoverStart\(connectionKey, event\)\}/);
   assert.match(wireLayerSource, /onHoverMove=\{\(event\) => onConnectionHoverMove\(connectionKey, event\)\}/);
+  assert.match(wireSource, /from '\.\/nodeCanvas\/wireGeometry\.js';/);
   assert.match(wireSource, /const WireInteractionTarget/);
   assert.match(wireSource, /className="wire-hit-area"/);
   assert.match(wireSource, /d=\{getWirePath\(\{ sx, sy, ex, ey \}\)\}/);
-  assert.match(wireSource, /function getWirePath/);
 });
 
 test('wire bend handles are local rendered-wire affordances with persisted connection data', () => {
   const wireLayerSource = readFileSync(join(componentsDir, 'WireLayer.tsx'), 'utf8');
-  const wireSource = readFileSync(join(componentsDir, 'Wire.tsx'), 'utf8');
-  const connectionBendInteractionSource = readFileSync(
-    join(componentsDir, 'nodeCanvas', 'connectionBendInteraction.ts'),
-    'utf8',
-  );
-  const useRenderableWiresSource = readFileSync(join(componentsDir, 'nodeCanvas', 'useRenderableWires.ts'), 'utf8');
   const wireStyles = /const wiresStyles = css`(?<styles>[\s\S]*?)`;/u.exec(wireLayerSource)?.groups?.styles;
   const ghostWireStyles = /\.wire-bend-point-ghost\s*\{(?<styles>[\s\S]*?)\n\s*\}/u.exec(wireStyles ?? '')?.groups
     ?.styles;
@@ -62,11 +56,6 @@ test('wire bend handles are local rendered-wire affordances with persisted conne
   assert.doesNotMatch(ghostWireStyles, /stroke-dasharray/);
   assert.match(wireLayerSource, /useSetConnectionBendPointCommand\(\)/);
   assert.match(wireLayerSource, /from '\.\/nodeCanvas\/connectionBendInteraction\.js';/);
-  assert.match(connectionBendInteractionSource, /CONNECTION_BEND_CLICK_THRESHOLD_PX = 5/);
-  assert.match(connectionBendInteractionSource, /CONNECTION_BEND_DRAG_THRESHOLD_PX = 2/);
-  assert.match(connectionBendInteractionSource, /shouldCommitConnectionBendClick/);
-  assert.match(connectionBendInteractionSource, /getGhostConnectionBendPoint/);
-  assert.match(connectionBendInteractionSource, /updateConnectionBendDrag/);
   assert.match(wireLayerSource, /const wireClickStartRef = useRef/);
   assert.match(wireLayerSource, /const \[hoveredConnectionPoint, setHoveredConnectionPoint\]/);
   assert.match(wireLayerSource, /const ghostBendPoint/);
@@ -78,9 +67,4 @@ test('wire bend handles are local rendered-wire affordances with persisted conne
   assert.match(wireLayerSource, /onDoubleClick=\{\(event\) => onConnectionBendDoubleClick\(connection, event\)\}/);
   assert.match(wireLayerSource, /onMouseDown=\{\(event\) => onConnectionBendMouseDown\(connection, connectionKey, event\)\}/);
   assert.match(wireLayerSource, /bendPoint=\{bendPoint\}/);
-  assert.match(wireSource, /bendPoint: bendPointOverride/);
-  assert.match(wireSource, /const bendPoint = bendPointOverride \?\? connection\.bendPoint;/);
-  assert.match(wireSource, /const wireSegments = bendPoint/);
-  assert.match(useRenderableWiresSource, /const wireSegments = connection\.bendPoint/);
-  assert.match(useRenderableWiresSource, /wireSegments\.some/);
 });

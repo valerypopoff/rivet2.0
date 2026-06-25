@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import { ErrorBoundary } from 'react-error-boundary';
 import { nodeByIdState } from '../state/graph';
 import { type PortPositions } from './NodeCanvas';
+import { getWirePath, getWireSegments } from './nodeCanvas/wireGeometry.js';
 
 type WireProps = {
   connection: NodeConnection;
@@ -57,13 +58,11 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
 
   const start = getNodePortPosition(outputNode, connection.outputId, outputCacheKey, portPositions);
   const end = getNodePortPosition(inputNode, connection.inputId, inputCacheKey, portPositions);
-  const bendPoint = bendPointOverride ?? connection.bendPoint;
-  const wireSegments = bendPoint
-    ? [
-        { start, end: bendPoint },
-        { start: bendPoint, end },
-      ]
-    : [{ start, end }];
+  const wireSegments = getWireSegments({
+    bendPoint: bendPointOverride ?? connection.bendPoint,
+    end,
+    start,
+  });
 
   return (
     <ErrorBoundary fallback={<></>}>
@@ -178,23 +177,6 @@ const WireInteractionTarget: FC<{
 });
 
 WireInteractionTarget.displayName = 'WireInteractionTarget';
-
-function getWirePath({ sx, sy, ex, ey }: { sx: number; sy: number; ex: number; ey: number }): string {
-  const deltaX = Math.abs(ex - sx);
-  const handleDistance = sx <= ex ? deltaX * 0.5 : Math.abs(ey - sy) * 0.6;
-
-  const curveX1 = sx + handleDistance;
-  const curveY1 = sy;
-  const curveX2 = ex - handleDistance;
-  const curveY2 = ey;
-
-  const middleY = (sy + ey) / 2;
-
-  return sx <= ex
-    ? `M${sx},${sy} C${curveX1},${curveY1} ${curveX2},${curveY2} ${ex},${ey}`
-    : `M${sx},${sy} C${curveX1},${curveY1} ${curveX1},${middleY} ${sx},${middleY} ` +
-        `L${ex},${middleY} C${curveX2},${middleY} ${curveX2},${curveY2} ${ex},${ey}`;
-}
 
 export function getNodePortPosition(
   node: ChartNode,

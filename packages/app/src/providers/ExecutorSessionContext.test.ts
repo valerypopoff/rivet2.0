@@ -191,18 +191,16 @@ describe('ExecutorSessionRegistry', () => {
     assert.match(source, /shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent/);
     assert.match(source, /alreadyFlushed: false/);
     assert.match(source, /target: runtimeState\.target/);
-    assert.match(
-      source,
-      /const nextSnapshot = shouldFlushFrozenOutputs[\s\S]*frozenNodeOutputs: \{\},[\s\S]*: result\.snapshot;/,
-    );
+    assert.match(source, /applyProcessEventToProjectExecutionSnapshots/);
+    assert.match(source, /mapSnapshot: shouldFlushFrozenOutputs/);
+    assert.match(source, /frozenNodeOutputs: \{\}/);
   });
 
   test('settles running inactive project snapshots on executor disconnect', async () => {
     const source = await readFile(new URL('./ExecutorSessionContext.tsx', import.meta.url), 'utf8');
 
     assert.match(source, /subscribeDisconnectsForAllProjects/);
-    assert.match(source, /if \(!previousSnapshot\?\.graphRunning\) \{\s+return previousSnapshots;\s+\}/);
-    assert.match(source, /message: 'error'/);
+    assert.match(source, /applyExecutorDisconnectToProjectExecutionSnapshots/);
     assert.match(source, /Executor session disconnected/);
   });
 });

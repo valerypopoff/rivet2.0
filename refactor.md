@@ -577,7 +577,7 @@ No visible behavior should change. Future canvas features should be easier to ad
 - `NodeCanvas.tsx` reads one comparison render state instead of rebuilding removed nodes, removed connections, connection kind maps, and removed-node lookups inline.
 - Developer docs now describe the canvas shell/helper boundary for resize command preparation and compare overlays.
 
-## 9. Executor Session Ownership
+## 9. Executor Session Ownership - DONE
 
 ### Problem
 
@@ -643,7 +643,15 @@ Reduce duplication around the existing model:
 
 No execution behavior should change. The app should have fewer duplicated event-routing rules and a clearer adapter boundary.
 
-## 10. Brittle Source-Contract Tests
+### Implemented
+
+- Hidden-project event routing now has a shared helper boundary in `packages/app/src/hooks/projectExecutionSnapshotRouting.ts`.
+- Browser execution and the executor-session registry both use the same active-project/open-project guard before writing inactive execution snapshots.
+- Process-event snapshot-map writes, frozen-output cleanup mapping, and inactive executor-disconnect terminalization are centralized and covered by focused helper tests.
+- Existing active-project dispatch paths, Remote Debugger request routing, diagnostics, and session runtime ownership remain unchanged.
+- Developer docs now name the helper as the owner for inactive snapshot routing so future Browser/Node/Remote adapter changes do not reintroduce inline reducers.
+
+## 10. Brittle Source-Contract Tests - DONE
 
 ### Problem
 
@@ -697,6 +705,13 @@ Handle this opportunistically with the production refactors above:
 ### What Changes After Refactor
 
 No product behavior should change. The test suite should become less hostile to maintainability refactors while preserving real architecture constraints.
+
+### Implemented
+
+- Wire bend/path behavior now has focused behavior coverage in `packages/app/src/components/nodeCanvas/wireGeometry.test.ts` and `packages/app/src/components/nodeCanvas/connectionBendInteraction.test.ts`.
+- `packages/app/src/components/wireLayerLayout.test.ts` now keeps only the local SVG/CSS/render wiring source contracts for connection-bend affordances instead of pinning helper implementation details.
+- The repository test-style report now catches both sync `readFileSync(...)` and async `readFile(...)` source-reading tests, so remaining source contracts stay visible during cleanup.
+- Developer docs now state when source-contract tests are appropriate and when helper behavior tests should replace regex/string assertions.
 
 ## Suggested Order
 

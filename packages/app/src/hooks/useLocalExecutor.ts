@@ -60,7 +60,10 @@ import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
 import { cloneFrozenNodeOutputsForExecutor } from '../utils/frozenNodeOutputs.js';
 import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
-import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
+import {
+  applyProcessEventToProjectExecutionSnapshots,
+  shouldRouteProjectEventToSnapshot,
+} from './projectExecutionSnapshotRouting.js';
 
 /**
  * Yield to the macrotask queue so the browser can repaint.
@@ -153,33 +156,33 @@ export function useLocalExecutor() {
     data: ProcessEventMessageMap[K],
     dispatchActive: () => void,
   ) {
-    if (store.get(projectState).metadata.id === runProjectId) {
+    const activeProjectId = store.get(projectState).metadata.id as ProjectId | undefined;
+    const openedProjectsState = store.get(projectsState).openedProjects;
+
+    if (activeProjectId === runProjectId) {
       dispatchActive();
       return;
     }
 
-    if (!store.get(projectsState).openedProjects[runProjectId]) {
+    if (
+      !shouldRouteProjectEventToSnapshot({
+        activeProjectId,
+        isProjectOpen: Boolean(openedProjectsState[runProjectId]),
+        projectId: runProjectId,
+      })
+    ) {
       return;
     }
 
-    store.set(projectExecutionSnapshotsState, (previousSnapshots) => {
-      const result = applyProcessEventToProjectExecutionSnapshot({
+    store.set(projectExecutionSnapshotsState, (previousSnapshots) =>
+      applyProcessEventToProjectExecutionSnapshots({
         data,
         message,
         projectId: runProjectId,
         refStore: dataRefs,
-        snapshot: previousSnapshots[runProjectId],
-      });
-
-      if (!result.changed) {
-        return previousSnapshots;
-      }
-
-      return {
-        ...previousSnapshots,
-        [runProjectId]: result.snapshot,
-      };
-    });
+        snapshots: previousSnapshots,
+      }),
+    );
   }
 
   function setLastRecordingForProject(runProjectId: ProjectId, recording: string) {

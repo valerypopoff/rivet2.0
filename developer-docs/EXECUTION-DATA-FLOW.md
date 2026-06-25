@@ -468,8 +468,9 @@ Browser recording UI, and code-console logging stay tied to the visible editor. 
 are handled by project snapshot reducers: `ExecutorSessionProvider` subscribes
 to every Node/Remote project runtime, while `useLocalExecutor` routes inactive
 Browser processor events directly. Both paths reduce accepted process events
-through `projectExecutionSnapshotEvents.ts` into that project's stored execution
-snapshot. This keeps hidden Browser/Node/Remote Debugger runs from getting stuck
+through `projectExecutionSnapshotRouting.ts`, which delegates the per-event
+state transition to `projectExecutionSnapshotEvents.ts`, into that project's
+stored execution snapshot. This keeps hidden Browser/Node/Remote Debugger runs from getting stuck
 on spinners when the user switches tabs before `nodeFinish`, `graphFinish`, or
 `done` arrives. Browser runs that fail before a normal processor terminal event
 must still reduce an `error` terminal into the owning inactive snapshot, otherwise
@@ -490,7 +491,8 @@ instead of whichever project last started a run. A `useRemoteExecutor`
 subscription and the local Browser event router must also check that their
 project is still the active project before writing visible execution atoms or
 calling `currentExecution.onStop()` from cleanup; inactive events belong to the
-project snapshot reducer.
+project snapshot reducer, and closed-project events should be ignored instead of
+creating fresh hidden snapshots.
 The disconnect restore path is tested through
 `handleExecutorSessionCoordinatorDisconnect(...)`, which reads the latest
 selected executor and hosted executor URL at lifecycle-event time instead of

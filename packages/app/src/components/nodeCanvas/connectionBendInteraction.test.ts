@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NodeConnection } from '@valerypopoff/rivet2-core';
 import {
+  CONNECTION_BEND_CLICK_THRESHOLD_PX,
+  CONNECTION_BEND_DRAG_THRESHOLD_PX,
   getGhostConnectionBendPoint,
   shouldCommitConnectionBendClick,
   updateConnectionBendDrag,
@@ -28,6 +30,11 @@ function bendDrag(): DraggingConnectionBend {
     startClientY: 100,
   };
 }
+
+test('connection bend interaction thresholds stay intentionally small', () => {
+  assert.equal(CONNECTION_BEND_CLICK_THRESHOLD_PX, 5);
+  assert.equal(CONNECTION_BEND_DRAG_THRESHOLD_PX, 2);
+});
 
 test('getGhostConnectionBendPoint returns a ghost point only for editable hover on an unbent connection', () => {
   assert.equal(

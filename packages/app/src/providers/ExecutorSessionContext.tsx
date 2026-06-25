@@ -8,15 +8,19 @@ import {
 } from '../hooks/executorSession.js';
 import { releaseRuntimeExecutorResources } from '../hooks/executorSessionRuntimeResources.js';
 import { executorSessionRevisionState } from '../state/execution.js';
-import { projectState } from '../state/savedGraphs.js';
+import { projectsState, projectState } from '../state/savedGraphs.js';
 import { useDataRefs, useDatasetProvider, type AppDatasetProvider } from './ProvidersContext.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
-import { applyProcessEventToProjectExecutionSnapshot } from '../hooks/projectExecutionSnapshotEvents.js';
 import {
   createUnscopedRemoteExecutionRoutingState,
   getRemoteExecutionEventDispatchDecision,
 } from '../hooks/remoteExecutorRunRequest.js';
 import { shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent } from '../hooks/remoteExecutorHelpers.js';
+import {
+  applyExecutorDisconnectToProjectExecutionSnapshots,
+  applyProcessEventToProjectExecutionSnapshots,
+  shouldRouteProjectEventToSnapshot,
+} from '../hooks/projectExecutionSnapshotRouting.js';
 
 const FALLBACK_EXECUTOR_SESSION_PROJECT_ID = '__rivet_fallback_project__' as ProjectId;
 
@@ -170,10 +174,15 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
 
   useEffect(() => {
     const routingStatesByProjectId = new Map<ProjectId, ReturnType<typeof createUnscopedRemoteExecutionRoutingState>>();
+    const shouldRouteInactiveProjectEvent = (projectId: ProjectId) =>
+      shouldRouteProjectEventToSnapshot({
+        activeProjectId: store.get(projectState).metadata.id as ProjectId | undefined,
+        isProjectOpen: Boolean(store.get(projectsState).openedProjects[projectId]),
+        projectId,
+      });
 
     const unsubscribeMessages = registry.subscribeMessagesForAllProjects((projectId, runtime, message, data, requestId) => {
-      const activeProjectId = store.get(projectState).metadata.id as ProjectId | undefined;
-      if (activeProjectId === projectId) {
+      if (!shouldRouteInactiveProjectEvent(projectId)) {
         return;
       }
 
@@ -219,62 +228,30 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
         return;
       }
 
-      store.set(projectExecutionSnapshotsState, (previousSnapshots) => {
-        const previousSnapshot = previousSnapshots[projectId];
-        const result = applyProcessEventToProjectExecutionSnapshot({
+      store.set(projectExecutionSnapshotsState, (previousSnapshots) =>
+        applyProcessEventToProjectExecutionSnapshots({
           data,
+          mapSnapshot: shouldFlushFrozenOutputs ? (snapshot) => ({ ...snapshot, frozenNodeOutputs: {} }) : undefined,
           message,
           projectId,
           refStore: dataRefs,
-          snapshot: previousSnapshot,
-        });
-
-        if (!result.changed && !shouldFlushFrozenOutputs) {
-          return previousSnapshots;
-        }
-
-        const nextSnapshot = shouldFlushFrozenOutputs
-          ? {
-              ...result.snapshot,
-              frozenNodeOutputs: {},
-            }
-          : result.snapshot;
-
-        return {
-          ...previousSnapshots,
-          [projectId]: nextSnapshot,
-        };
-      });
+          snapshots: previousSnapshots,
+        }),
+      );
     });
     const unsubscribeDisconnects = registry.subscribeDisconnectsForAllProjects((projectId) => {
-      const activeProjectId = store.get(projectState).metadata.id as ProjectId | undefined;
-      if (activeProjectId === projectId) {
+      if (!shouldRouteInactiveProjectEvent(projectId)) {
         return;
       }
 
-      store.set(projectExecutionSnapshotsState, (previousSnapshots) => {
-        const previousSnapshot = previousSnapshots[projectId];
-        if (!previousSnapshot?.graphRunning) {
-          return previousSnapshots;
-        }
-
-        const result = applyProcessEventToProjectExecutionSnapshot({
-          data: { error: new Error('Executor session disconnected') } as ProcessEventMessageMap['error'],
-          message: 'error',
+      store.set(projectExecutionSnapshotsState, (previousSnapshots) =>
+        applyExecutorDisconnectToProjectExecutionSnapshots({
+          errorMessage: 'Executor session disconnected',
           projectId,
           refStore: dataRefs,
-          snapshot: previousSnapshot,
-        });
-
-        if (!result.changed) {
-          return previousSnapshots;
-        }
-
-        return {
-          ...previousSnapshots,
-          [projectId]: result.snapshot,
-        };
-      });
+          snapshots: previousSnapshots,
+        }),
+      );
     });
 
     return () => {
