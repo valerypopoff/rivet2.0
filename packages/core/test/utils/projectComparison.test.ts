@@ -145,14 +145,14 @@ test('project comparison node policy filters comments before node diffing', () =
   assert.equal(nodeComparisons['added' as NodeId]?.kind, 'added');
 });
 
-test('compareProjects ignores node placement and z-index-only changes', () => {
+test('compareProjects ignores node visualData-only changes', () => {
   const before = {
     ...node('same'),
-    visualData: { x: 10, y: 20, width: 200, zIndex: 1 },
+    visualData: { x: 10, y: 20, width: 200, zIndex: 1, color: { bg: 'red', border: 'transparent' } },
   };
   const after = {
     ...node('same'),
-    visualData: { x: 800, y: 900, width: 200, zIndex: 99 },
+    visualData: { x: 800, y: 900, width: 200, zIndex: 99, color: { bg: 'blue', border: 'transparent' } },
   };
   const result = compareProjects(project([graph('main', [before])]), project([graph('main', [after])]));
 
@@ -170,13 +170,13 @@ test('compareProjects ignores node placement and z-index-only changes', () => {
   });
 });
 
-test('getProjectNodeFieldComparisons omits node placement and z-index changes but keeps visual style changes', () => {
+test('getProjectNodeFieldComparisons omits visualData changes but keeps semantic node data changes', () => {
   const before = {
-    ...node('changed'),
+    ...node('changed', { value: 'before' }),
     visualData: { x: 10, y: 20, width: 200, zIndex: 1, color: { bg: 'red', border: 'transparent' } },
   };
   const after = {
-    ...node('changed'),
+    ...node('changed', { value: 'after' }),
     visualData: { x: 800, y: 900, width: 240, zIndex: 99, color: { bg: 'blue', border: 'transparent' } },
   };
   const result = compareProjects(project([graph('main', [before])]), project([graph('main', [after])]));
@@ -187,7 +187,7 @@ test('getProjectNodeFieldComparisons omits node placement and z-index changes bu
   assert.equal(changedNode.kind, 'changed');
   assert.deepEqual(
     fieldComparisons.map((field) => field.field),
-    ['visualData.color.bg', 'visualData.width'],
+    ['data.value'],
   );
 });
 

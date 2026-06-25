@@ -1,6 +1,7 @@
 
 
-- When looking at the chages in the compare mode, synchronize the scrollbars in the left and right windows of the same property
+- Node prefabs. Like, create and set it up once and just use the links on it
+
 
 - Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
 

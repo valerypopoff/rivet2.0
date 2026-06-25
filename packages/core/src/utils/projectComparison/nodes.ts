@@ -56,12 +56,11 @@ function areComparisonNodesEqual(left: ChartNode | undefined, right: ChartNode |
 }
 
 function getComparableNodeRecord(node: ChartNode): Record<string, unknown> {
-  const { data, visualData, ...rest } = node as unknown as Record<string, unknown>;
+  const { data, visualData: _visualData, ...rest } = node as unknown as Record<string, unknown>;
 
   return {
     ...rest,
     data: getComparableNodeData(node, data),
-    visualData: getComparableVisualData(visualData),
   };
 }
 
@@ -72,13 +71,4 @@ function getComparableNodeData(node: ChartNode, data: unknown): unknown {
 
   const { inputPortOrder: _inputPortOrder, outputPortOrder: _outputPortOrder, ...semanticData } = data;
   return semanticData;
-}
-
-function getComparableVisualData(visualData: unknown): Record<string, unknown> {
-  if (!isComparisonRecord(visualData)) {
-    return {};
-  }
-
-  const { x: _x, y: _y, zIndex: _zIndex, ...semanticVisualData } = visualData;
-  return semanticVisualData;
 }
