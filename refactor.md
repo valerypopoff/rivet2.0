@@ -293,7 +293,7 @@ No intentional visual change. Future theme work should require fewer one-off CSS
 
 Implementation note: completed by adding a semantic/component token layer in `colors.css` (`--surface-*`, `--modal-*`, `--popup-menu-*`, `--app-panel-*`, `--app-strip-*`, and node output/port aliases), moving modal, popup, app-shell, side-panel, and node-output CSS consumers to those tokens, and updating source-contract tests and developer docs to guard ownership rather than raw grey-token adjacency. Existing `--foreground-*` tokens remain the text/icon owner; no extra text/icon aliases were added because they would duplicate the same contract without reducing component complexity.
 
-## 5. Project Tab And Main Strip Shell
+## 5. Project Tab And Main Strip Shell - DONE
 
 ### Problem
 
@@ -352,6 +352,18 @@ Keep `ProjectSelector.tsx` as the shell composer.
 ### What Changes After Refactor
 
 No user-visible behavior should change. Future tab, Menu, or window-control work should touch smaller files.
+
+### Implemented
+
+- `ProjectSelector.tsx` is now a shell composer for workspace selection, tab list assembly, high-level project selection, opening-tab selection, tab reordering, and left-sidebar spacing.
+- Project-tab rendering and sortable-tab details moved to `components/projectSelector/ProjectTabRow.tsx`.
+- Dirty-tab close confirmation moved to `components/projectSelector/useProjectCloseConfirmation.tsx`.
+- In-strip Menu rendering moved to `components/projectSelector/ProjectFileMenu.tsx`.
+- Graph-tree/history top-strip controls moved to `components/projectSelector/GraphTopBarControls.tsx`.
+- Windows frameless drag/window controls moved to `components/projectSelector/WindowsWindowControls.tsx`.
+- Top-strip CSS moved to `components/projectSelector/projectSelectorStyles.ts`.
+- Follow-up cleanup consolidated the shared tab surface for real/loading project tabs, the shared top-strip item CSS for Menu/graph controls, and the shared Windows window-action wrapper.
+- Source-contract tests and `developer-docs/APP-ARCHITECTURE.md` now describe the shell module boundaries.
 
 ## 6. Hosted Workspace API Hook
 

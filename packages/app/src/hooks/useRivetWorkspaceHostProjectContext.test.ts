@@ -155,6 +155,10 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
   const openingTabsSource = readFileSync(join(hooksDir, '..', 'state', 'openingProjectTabs.ts'), 'utf8');
   const openingTabsUtilsSource = readFileSync(join(hooksDir, '..', 'utils', 'openingProjectTabs.ts'), 'utf8');
   const projectSelectorSource = readFileSync(join(hooksDir, '..', 'components', 'ProjectSelector.tsx'), 'utf8');
+  const projectTabRowSource = readFileSync(
+    join(hooksDir, '..', 'components', 'projectSelector', 'ProjectTabRow.tsx'),
+    'utf8',
+  );
   const rivetAppSource = readFileSync(join(hooksDir, '..', 'components', 'RivetApp.tsx'), 'utf8');
   const nodeRunningIndicatorSource = readFileSync(
     join(hooksDir, '..', 'components', 'visualNode', 'NodeRunningIndicator.tsx'),
@@ -190,8 +194,9 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
     projectSelectorSource,
     /useSyncCurrentStateIntoOpenedProjects\(\{ enabled: projectMode && selectedOpeningProjectTabId == null \}\);/,
   );
-  assert.match(projectSelectorSource, /<OpeningProjectTab/);
-  assert.match(projectSelectorSource, /void cancelOpeningProjectTab\(tabItem\.openingTabId\);/);
+  assert.match(projectSelectorSource, /<ProjectTabRow/);
+  assert.match(projectTabRowSource, /<OpeningProjectTab/);
+  assert.match(projectSelectorSource, /onCloseOpeningProjectTab=\{\(openingTabId\) => void cancelOpeningProjectTab\(openingTabId\)\}/);
   assert.doesNotMatch(projectSelectorSource, /LoadingSpinner/);
   assert.doesNotMatch(projectSelectorSource, /opening-project-spinner/);
   assert.match(rivetAppSource, /workspaceVisibleTabCountState/);
