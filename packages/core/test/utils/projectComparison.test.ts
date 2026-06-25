@@ -13,6 +13,11 @@ import {
   type Project,
   type ProjectId,
 } from '../../src/index.js';
+import { compareConnections } from '../../src/utils/projectComparison/connections.js';
+import { compareGraphs } from '../../src/utils/projectComparison/graphs.js';
+import { compareNodes, getComparableGraphNodes } from '../../src/utils/projectComparison/nodes.js';
+import { summarizeGraphComparison } from '../../src/utils/projectComparison/summaries.js';
+import { getChangedValueComparisons } from '../../src/utils/projectComparison/values.js';
 
 function node(id: string, data: unknown = { value: id }): ChartNode {
   return {
@@ -125,6 +130,19 @@ test('compareProjects ignores comment node additions, removals, changes, and com
     removedConnections: 0,
     changedConnections: 0,
   });
+});
+
+test('project comparison node policy filters comments before node diffing', () => {
+  const comparableNodes = getComparableGraphNodes([node('kept'), commentNode('comment')]);
+  const nodeComparisons = compareNodes([node('same'), node('removed')], [node('same'), node('added')]);
+
+  assert.deepEqual(
+    comparableNodes.map((item) => item.id),
+    ['kept' as NodeId],
+  );
+  assert.equal(nodeComparisons['same' as NodeId]?.kind, 'unchanged');
+  assert.equal(nodeComparisons['removed' as NodeId]?.kind, 'removed');
+  assert.equal(nodeComparisons['added' as NodeId]?.kind, 'added');
 });
 
 test('compareProjects ignores node placement and z-index-only changes', () => {
@@ -271,6 +289,71 @@ test('compareProjects compares connections exactly and marks port rewires as cha
   assert.equal(main.summary.addedConnections, 1);
 });
 
+test('project comparison connection policy pairs rewires before summarizing added and removed wires', () => {
+  const beforeRewired = connection('source', 'target', 'old-output', 'input');
+  const afterRewired = connection('source', 'target', 'new-output', 'input');
+  const removed = connection('removed-source', 'removed-target');
+  const added = connection('added-source', 'added-target');
+  const comparisons = compareConnections([beforeRewired, removed], [afterRewired, added]);
+  const summary = summarizeGraphComparison({}, comparisons);
+
+  assert.equal(comparisons[getProjectConnectionComparisonKey(beforeRewired)]?.kind, 'changed');
+  assert.equal(comparisons[getProjectConnectionComparisonKey(afterRewired)]?.kind, 'changed');
+  assert.equal(comparisons[getProjectConnectionComparisonKey(removed)]?.kind, 'removed');
+  assert.equal(comparisons[getProjectConnectionComparisonKey(added)]?.kind, 'added');
+  assert.deepEqual(summary, {
+    addedNodes: 0,
+    removedNodes: 0,
+    changedNodes: 0,
+    addedConnections: 1,
+    removedConnections: 1,
+    changedConnections: 1,
+  });
+});
+
+test('project comparison graph policy combines metadata, node, and connection changes', () => {
+  const beforeGraph = graph('main', [node('same')], [], 'Before');
+  const afterGraph = graph('main', [node('same'), node('added')], [connection('same', 'added')], 'After');
+  const comparison = compareGraphs('main' as GraphId, beforeGraph, afterGraph);
+
+  assert.equal(comparison.kind, 'changed');
+  assert.equal(comparison.metadataChanged, true);
+  assert.equal(comparison.nodes['same' as NodeId]?.kind, 'unchanged');
+  assert.equal(comparison.nodes['added' as NodeId]?.kind, 'added');
+  assert.equal(Object.values(comparison.connections)[0]?.kind, 'added');
+});
+
+test('project comparison one-sided graph connection entries preserve optional side shape', () => {
+  const addedConnection = connection('source', 'target');
+  const addedComparison = compareGraphs('added' as GraphId, undefined, graph('added', [node('source'), node('target')], [addedConnection]));
+  const removedComparison = compareGraphs(
+    'removed' as GraphId,
+    graph('removed', [node('source'), node('target')], [addedConnection]),
+    undefined,
+  );
+
+  assert.equal('before' in Object.values(addedComparison.connections)[0]!, false);
+  assert.equal('after' in Object.values(removedComparison.connections)[0]!, false);
+});
+
+test('compareProjects summarizes added and removed graph contents through the shared graph summary path', () => {
+  const beforeProject = project([graph('old', [node('old-source'), node('old-target')], [connection('old-source', 'old-target')])]);
+  const afterProject = project([graph('new', [node('new-source'), node('new-target')], [connection('new-source', 'new-target')])]);
+  const comparison = compareProjects(beforeProject, afterProject);
+
+  assert.deepEqual(comparison.summary, {
+    addedGraphs: 1,
+    removedGraphs: 1,
+    changedGraphs: 0,
+    addedNodes: 2,
+    removedNodes: 2,
+    changedNodes: 0,
+    addedConnections: 1,
+    removedConnections: 1,
+    changedConnections: 0,
+  });
+});
+
 test('compareProjects ignores connection bend-point-only changes', () => {
   const beforeConnection = connection('a', 'b');
   const afterConnection = { ...beforeConnection, bendPoint: { x: 120, y: 240 } };
@@ -342,6 +425,17 @@ test('getProjectNodeFieldComparisons reports array item changes by index', () =>
       before: 'before',
       field: 'data.items[1]',
       path: ['data', 'items', '1'],
+    },
+  ]);
+});
+
+test('project comparison field-path policy formats nested keys and array indexes', () => {
+  assert.deepEqual(getChangedValueComparisons([], { data: { 'spaced key': ['before'] } }, { data: { 'spaced key': ['after'] } }), [
+    {
+      before: 'before',
+      after: 'after',
+      field: 'data["spaced key"][0]',
+      path: ['data', 'spaced key', '0'],
     },
   ]);
 });

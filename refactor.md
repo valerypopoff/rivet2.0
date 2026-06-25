@@ -160,7 +160,15 @@ Finish consolidating the existing output model:
 
 No output content, order, copy behavior, or search behavior should change. The outcome should be fewer special cases in React components and clearer tests around output display policy.
 
-## 3. Project Comparison Engine
+## 3. Project Comparison Engine - DONE
+
+Completed by keeping the public `packages/core/src/utils/projectComparison.ts`
+facade stable, including public comparison types, while moving focused pure policies under
+`packages/core/src/utils/projectComparison/`: graph comparison, node
+normalization/diffing, connection key/rewire comparison, nested field-path
+diffing, and summary aggregation. Core tests now exercise both the public
+project-compare behavior and the focused helpers directly. App summary/canvas
+components remain render adapters over core comparison results.
 
 ### Problem
 

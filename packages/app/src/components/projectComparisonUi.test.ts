@@ -79,10 +79,12 @@ test('graph tree shows compare diagnostics for graphs and folders', () => {
   const graphListSource = source('components/GraphList.tsx');
   const folderItemSource = source('components/graphList/FolderItem.tsx');
   const graphFoldersSource = source('components/graphList/graphFolders.ts');
+  const useGraphListPresentationSource = source('components/graphList/useGraphListPresentation.ts');
 
   assert.match(graphListSource, /activeProjectComparisonState/);
   assert.match(graphListSource, /graphCompareKindByGraphId/);
-  assert.match(graphListSource, /removedComparisonGraphs/);
+  assert.match(useGraphListPresentationSource, /activeComparison\.comparison\.graphs/);
+  assert.match(useGraphListPresentationSource, /comparison\.kind === 'removed'/);
   assert.match(graphFoldersSource, /addComparisonRemovedGraphsToFolderTree/);
   assert.match(folderItemSource, /getFolderCompareKind/);
   assert.match(folderItemSource, /isComparisonGhost/);
