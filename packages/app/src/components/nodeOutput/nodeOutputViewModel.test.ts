@@ -7,6 +7,7 @@ import {
   createFullscreenNodeOutputViewModel,
   createNodeOutputBodyViewModel,
   createNodeOutputContentViewModel,
+  createNodeOutputSectionsViewModel,
   getNodeOutputCopySource,
   serializeNodeOutputDisplayCopy,
   serializeNodeOutputJsonCopy,
@@ -212,6 +213,115 @@ test('createNodeOutputBodyViewModel falls back to final outputData when split ou
   });
 
   assert.equal(body.kind, 'outputs');
+});
+
+test('createNodeOutputSectionsViewModel keeps single regular outputs headerless', () => {
+  const outputValue = inlineStored('string', 'single');
+  const sections = createNodeOutputSectionsViewModel({
+    definitions: [{ id: 'output' as PortId, title: 'Result' }],
+    outputs: {
+      ['output' as PortId]: outputValue,
+    },
+    isCompact: false,
+  });
+
+  assert.deepEqual(sections, [
+    {
+      headerMode: 'hidden',
+      label: 'Result',
+      portId: 'output',
+      value: outputValue,
+    },
+  ]);
+});
+
+test('createNodeOutputSectionsViewModel gives large single outputs a fallback Output label', () => {
+  const outputValue = inlineStored('string', 'single');
+  const sections = createNodeOutputSectionsViewModel({
+    outputs: {
+      ['output' as PortId]: outputValue,
+    },
+    isCompact: false,
+    showLargeHeaders: true,
+  });
+
+  assert.deepEqual(sections, [
+    {
+      headerMode: 'large',
+      label: 'Output',
+      portId: 'output',
+      value: outputValue,
+    },
+  ]);
+});
+
+test('createNodeOutputSectionsViewModel labels multiple outputs and preserves port order', () => {
+  const firstValue = inlineStored('string', 'first');
+  const secondValue = inlineStored('string', 'second');
+  const sections = createNodeOutputSectionsViewModel({
+    definitions: [
+      { id: 'first' as PortId, title: 'First title' },
+      { id: 'second' as PortId, title: 'Second title' },
+    ],
+    outputs: {
+      ['first' as PortId]: firstValue,
+      ['second' as PortId]: secondValue,
+    },
+    isCompact: false,
+  });
+
+  assert.deepEqual(
+    sections.map((section) => ({
+      headerMode: section.headerMode,
+      label: section.label,
+      portId: section.portId,
+      value: section.value,
+    })),
+    [
+      {
+        headerMode: 'standard',
+        label: 'First title',
+        portId: 'first',
+        value: firstValue,
+      },
+      {
+        headerMode: 'standard',
+        label: 'Second title',
+        portId: 'second',
+        value: secondValue,
+      },
+    ],
+  );
+});
+
+test('createNodeOutputSectionsViewModel uses the first visible output in compact mode', () => {
+  const firstValue = inlineStored('string', 'first');
+  const secondValue = inlineStored('string', 'second');
+  const sections = createNodeOutputSectionsViewModel({
+    outputs: {
+      [WarningsPort as PortId]: inlineStored('string[]', ['warning']),
+      ['first' as PortId]: firstValue,
+      ['second' as PortId]: secondValue,
+    },
+    isCompact: true,
+  });
+
+  assert.deepEqual(
+    sections.map((section) => ({
+      headerMode: section.headerMode,
+      label: section.label,
+      portId: section.portId,
+      value: section.value,
+    })),
+    [
+      {
+        headerMode: 'hidden',
+        label: 'first',
+        portId: 'first',
+        value: firstValue,
+      },
+    ],
+  );
 });
 
 test('createFullscreenNodeOutputViewModel reports the selected visible process and total pages', () => {

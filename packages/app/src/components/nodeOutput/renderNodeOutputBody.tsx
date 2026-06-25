@@ -1,7 +1,7 @@
 import { type ComponentType, type ReactNode } from 'react';
-import { RenderDataOutputs } from '../RenderDataValue.js';
 import { type InputsOrOutputsWithRefs, type NodeRunDataWithRefs } from '../../state/dataFlow.js';
-import { type ChartNode } from '@valerypopoff/rivet2-core';
+import { type ChartNode, type NodeOutputDefinition } from '@valerypopoff/rivet2-core';
+import { RenderDataOutputs } from './RenderDataOutputs.js';
 import { createNodeOutputBodyViewModel } from './nodeOutputViewModel.js';
 import type {
   FullscreenNodeOutputRendererProps,
@@ -18,7 +18,7 @@ type RenderNodeOutputBodyOptions = NodeOutputRenderPolicyProps & {
   FullscreenOutputSimple?: ComponentType<FullscreenNodeOutputSimpleRendererProps>;
   node: ChartNode;
   data: NodeRunDataWithRefs;
-  definitions: any;
+  definitions?: readonly Pick<NodeOutputDefinition, 'id' | 'title'>[];
   isCompact: boolean;
   renderMarkdown?: boolean;
 };

@@ -88,7 +88,19 @@ Leave `GraphList.tsx` as the renderer and command dispatcher.
 
 No behavior should change. The graph tree should become easier to modify because most "what should be shown" decisions will be testable without rendering the whole component.
 
-## 2. Output Rendering And Fullscreen Modal Pipeline
+## 2. Output Rendering And Fullscreen Modal Pipeline - DONE
+
+Completed by moving generic output-section policy into
+`packages/app/src/components/nodeOutput/nodeOutputViewModel.ts`. The shared
+section model now owns visible port filtering, compact first-port selection,
+definition-title/fallback labels, header visibility, fullscreen header sizing,
+and output ordering. `RenderDataOutputs` consumes that model and stays
+focused on rendering values, counters, and shared section styles without pulling
+node-output policy into the generic `RenderDataValue` component. Fullscreen
+search intentionally remains DOM/provider-based because folded Monaco blocks and
+loaded large values need provider-owned offset mapping; this refactor keeps that
+search path behaviorally unchanged instead of forcing it through section
+metadata.
 
 ### Problem
 
