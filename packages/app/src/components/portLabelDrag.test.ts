@@ -51,6 +51,7 @@ test('port labels expose reorder drag only in explicit rearrange modes', () => {
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
   const nodePortsSource = readFileSync(join(componentsDir, 'NodePorts.tsx'), 'utf8');
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
+  const colorsSource = readFileSync(join(componentsDir, '..', 'colors.css'), 'utf8');
   const appSrcDir = dirname(componentsDir);
   const contextMenuConfigurationSource = readFileSync(
     join(appSrcDir, 'hooks', 'useContextMenuConfiguration.ts'),
@@ -129,7 +130,11 @@ test('port labels expose reorder drag only in explicit rearrange modes', () => {
   assert.match(contextMenuHandlerSource, /setVariadicPortRearrangeTarget\(\{ graphId, nodeId, projectId: project\.metadata\.id \}\)/);
   assert.doesNotMatch(nodeStylesSource, /\.node-ports\.subgraph-port-rearrange-mode[\s\S]*outline:/);
   assert.match(nodeStylesSource, /\.port\.reorderable \.port-label \{/);
-  assert.match(nodeStylesSource, /background: color-mix\(in srgb, var\(--primary\) 18%, var\(--grey-darkest\) 82%\);/);
+  assert.match(nodeStylesSource, /background: var\(--node-port-reorder-label-bg\);/);
+  assert.match(
+    colorsSource,
+    /--node-port-reorder-label-bg: color-mix\(in srgb, var\(--primary\) 18%, var\(--grey-darkest\) 82%\);/,
+  );
   assert.match(nodeStylesSource, /border-radius: calc\(6px \* var\(--ui-font-scale\)\);/);
   assert.match(nodeStylesSource, /\.port\.reorder-dragging-source \.port-label \{[\s\S]*?visibility: hidden;/);
   assert.match(nodeStylesSource, /body\.port-reorder-dragging/);

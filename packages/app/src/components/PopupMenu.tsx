@@ -11,7 +11,7 @@ import {
 import clsx from 'clsx';
 
 export const popupMenuSurfaceStyles = css`
-  background-color: var(--grey-dark-colorish-seethrough);
+  background-color: var(--popup-menu-bg);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
   border-radius: 18px;
@@ -19,7 +19,7 @@ export const popupMenuSurfaceStyles = css`
   @supports not (corner-shape: squircle) {
     border-radius: 9px;
   }
-  border: 1px solid var(--settings-collapsible-border);
+  border: 1px solid var(--popup-menu-border);
   /*box-shadow: 3px 1px 10px rgba(0, 0, 0, 0.5);*/
   color: var(--grey-lighter);
   font-family: var(--font-family);
@@ -101,7 +101,7 @@ export const popupMenuRowStyles = css`
   &:hover,
   &:focus-visible,
   &.active {
-    background-color: var(--grey-darkish);
+    background-color: var(--popup-menu-row-hover-bg);
     outline: none;
   }
 
@@ -112,7 +112,7 @@ export const popupMenuRowStyles = css`
   &.danger:hover,
   &.danger:focus-visible,
   &.danger.active {
-    background-color: var(--grey-darkish);
+    background-color: var(--popup-menu-row-hover-bg);
     color: var(--error-light);
   }
 `;

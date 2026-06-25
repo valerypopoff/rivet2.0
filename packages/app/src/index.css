@@ -70,10 +70,10 @@
   --ds-text-subtlest: var(--foreground-muted);
   --ds-text-disabled: var(--foreground-disabled);
   --ds-text-selected: var(--primary);
-  --ds-surface: var(--grey-dark-colorish);
-  --ds-surface-overlay: var(--grey-dark-colorish);
-  --ds-border: var(--settings-collapsible-border);
-  --ds-shadow-overlay: 0 0 0 1px var(--settings-collapsible-border), 0 2px 1px var(--shadow),
+  --ds-surface: var(--modal-surface-bg);
+  --ds-surface-overlay: var(--modal-surface-bg);
+  --ds-border: var(--modal-border);
+  --ds-shadow-overlay: 0 0 0 1px var(--modal-border), 0 2px 1px var(--shadow),
     0 0 20px -6px var(--shadow-dark);
   --ds-background-input: var(--form-control-bg);
   --ds-background-input-hovered: var(--form-control-bg-hover);
@@ -251,7 +251,7 @@ legend[class],
 
 [class*='-control']:has(input[id^='react-select-']),
 [class*='-menu'] {
-  --ds-surface: var(--grey-dark-colorish);
+  --ds-surface: var(--modal-surface-bg);
   --ds-background-input: var(--form-control-bg);
   --ds-background-input-hovered: var(--form-control-bg-hover);
   --ds-background-input-pressed: var(--form-control-bg-focus);

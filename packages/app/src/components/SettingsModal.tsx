@@ -46,8 +46,8 @@ const modalBody = css`
 
   .settings-modal-sidebar {
     align-self: stretch;
-    background-color: var(--grey-dark-colorish);
-    border-right: 1px solid var(--settings-collapsible-border);
+    background-color: var(--modal-sidebar-bg);
+    border-right: 1px solid var(--modal-border);
     max-height: 100%;
     min-height: 0;
     overflow-x: hidden;

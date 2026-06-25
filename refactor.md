@@ -229,7 +229,7 @@ Keep public exports stable unless a compatibility alias is trivial.
 
 No comparison result should change. The compare engine should become easier to test and extend without app UI changes.
 
-## 4. Theme And Color Token Architecture
+## 4. Theme And Color Token Architecture - DONE
 
 ### Problem
 
@@ -258,7 +258,7 @@ Reorganize theme tokens into documented layers:
 - raw neutral/accent values;
 - theme primary/secondary values;
 - semantic surfaces;
-- semantic text and icon colors;
+- existing foreground/text tokens;
 - component aliases.
 
 Move repeated component-specific color math behind semantic variables where possible.
@@ -290,6 +290,8 @@ Move repeated component-specific color math behind semantic variables where poss
 ### What Changes After Refactor
 
 No intentional visual change. Future theme work should require fewer one-off CSS edits and less source-test churn.
+
+Implementation note: completed by adding a semantic/component token layer in `colors.css` (`--surface-*`, `--modal-*`, `--popup-menu-*`, `--app-panel-*`, `--app-strip-*`, and node output/port aliases), moving modal, popup, app-shell, side-panel, and node-output CSS consumers to those tokens, and updating source-contract tests and developer docs to guard ownership rather than raw grey-token adjacency. Existing `--foreground-*` tokens remain the text/icon owner; no extra text/icon aliases were added because they would duplicate the same contract without reducing component complexity.
 
 ## 5. Project Tab And Main Strip Shell
 

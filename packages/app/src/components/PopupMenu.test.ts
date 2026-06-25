@@ -11,11 +11,11 @@ test('shared popup menu surfaces use the translucent blurred theme-tinted materi
 
   assert.match(
     popupMenuSource,
-    /export const popupMenuSurfaceStyles = css`[\s\S]*background-color: var\(--grey-dark-colorish-seethrough\);/,
+    /export const popupMenuSurfaceStyles = css`[\s\S]*background-color: var\(--popup-menu-bg\);/,
   );
   assert.match(popupMenuSource, /backdrop-filter: blur\(2px\);/);
   assert.match(popupMenuSource, /-webkit-backdrop-filter: blur\(2px\);/);
-  assert.match(popupMenuSource, /border: 1px solid var\(--settings-collapsible-border\);/);
+  assert.match(popupMenuSource, /border: 1px solid var\(--popup-menu-border\);/);
   assert.doesNotMatch(popupMenuSource, /border: 2px solid var\(--grey-dark\);/);
   assert.doesNotMatch(popupMenuSource, /background-color: var\(--grey-dark-colorish\);/);
   assert.doesNotMatch(popupMenuSource, /background-color: var\(--foreground-on-primary\);/);
@@ -26,7 +26,7 @@ test('shared popup menu row hover matches graph tree hover fill', () => {
 
   assert.match(
     popupMenuSource,
-    /&:hover,[\s\S]*&:focus-visible,[\s\S]*&\.active \{[\s\S]*background-color: var\(--grey-darkish\);/,
+    /&:hover,[\s\S]*&:focus-visible,[\s\S]*&\.active \{[\s\S]*background-color: var\(--popup-menu-row-hover-bg\);/,
   );
   assert.doesNotMatch(popupMenuSource, /background-color: rgba\(255, 255, 255, 0\.1\);/);
 });
@@ -37,6 +37,9 @@ test('shared popup menu separators use a theme-controlled token', () => {
   const contextMenuSource = readFileSync(join(srcDir, 'ContextMenu.tsx'), 'utf8');
 
   assert.match(colorsSource, /--popup-menu-separator: var\(--grey-dark\);/);
+  assert.match(colorsSource, /--popup-menu-bg: var\(--surface-translucent\);/);
+  assert.match(colorsSource, /--popup-menu-border: var\(--surface-border\);/);
+  assert.match(colorsSource, /--popup-menu-row-hover-bg: var\(--surface-row-hover-bg\);/);
   assert.match(
     colorsSource,
     /:root\.theme-bright,[\s\S]*--popup-menu-separator: color-mix\(in srgb, var\(--secondary\) 8%, #bac5d2 92%\);/,

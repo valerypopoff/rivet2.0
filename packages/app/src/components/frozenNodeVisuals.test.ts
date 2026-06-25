@@ -53,9 +53,11 @@ test('frozen node output visuals stay compact and canvas-scoped', () => {
   );
   assert.match(nodeInlineOutputSource, /<div className="frozen-output-notice" aria-label="Output is frozen">/);
   assert.match(nodeInlineOutputSource, /<span>Output is frozen<\/span>/);
-  assert.match(nodeStylesSource, /--node-frozen-output-accent: #68b7ff;/);
+  const colorsSource = readFileSync(join(appSrcDir, 'colors.css'), 'utf8');
+
+  assert.match(colorsSource, /--node-frozen-output-accent: #68b7ff;/);
   assert.match(
-    nodeStylesSource,
+    colorsSource,
     /--node-frozen-output-bg: color-mix\(in srgb, var\(--node-frozen-output-accent\) 25%, var\(--grey-darkest\) 83%\);/,
   );
   assert.doesNotMatch(nodeStylesSource, /--node-frozen-output-pattern/);

@@ -115,12 +115,12 @@ const Container = styled.div`
     --ds-font-family-heading: var(--font-family);
     --ds-font-family-code: var(--font-family-monospace);
     --label-font-family: var(--font-family);
-    background-color: var(--grey-dark-colorish-seethrough);
+    background-color: var(--app-panel-bg);
     backdrop-filter: blur(2px);
     font-family: var(--font-family);
     width: 100%;
     box-shadow: none;
-    border-left: 1px solid var(--grey-darkish);
+    border-left: 1px solid var(--app-panel-border);
   }
 
   .panel-container input,

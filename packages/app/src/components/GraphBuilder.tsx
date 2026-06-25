@@ -91,7 +91,7 @@ const Container = styled.div`
     border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
     border-radius: 12px;
     corner-shape: squircle;
-    background: color-mix(in srgb, var(--grey-dark-colorish) 96%, var(--primary) 4%);
+    background: color-mix(in srgb, var(--modal-surface-bg) 96%, var(--primary) 4%);
     box-shadow: var(--popup-shadow);
     color: var(--foreground);
     font-size: var(--ui-font-size-sm);

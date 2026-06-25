@@ -78,7 +78,7 @@ test('node settings panel uses regular UI typography outside embedded code edito
   assert.match(panelContainerStyles, /--ds-font-family-heading: var\(--font-family\);/);
   assert.match(panelContainerStyles, /--ds-font-family-code: var\(--font-family-monospace\);/);
   assert.match(panelContainerStyles, /--label-font-family: var\(--font-family\);/);
-  assert.match(panelContainerStyles, /border-left: 1px solid var\(--grey-darkish\);/);
+  assert.match(panelContainerStyles, /border-left: 1px solid var\(--app-panel-border\);/);
   assert.match(panelContainerStyles, /box-shadow: none;/);
   assert.match(panelToggleHelperStyles, /font-size: var\(--ui-font-size-sm\) !important;/);
   assert.match(panelToggleHelperStyles, /line-height: 1\.35;/);
@@ -168,8 +168,9 @@ test('collapsible settings surfaces share opaque colors across panels and modals
 
   assert.match(
     colorsSource,
-    /--settings-collapsible-border: color-mix\(in srgb, var\(--secondary\) [^,]+, var\(--grey-darkish\) [^)]+\);/,
+    /--surface-border: color-mix\(in srgb, var\(--secondary\) [^,]+, var\(--grey-darkish\) [^)]+\);/,
   );
+  assert.match(colorsSource, /--settings-collapsible-border: var\(--surface-border\);/);
   assert.match(
     colorsSource,
     /--settings-collapsible-header-bg: color-mix\(in srgb, var\(--secondary\) [^,]+, var\(--grey-darker-darker\) [^)]+\);/,

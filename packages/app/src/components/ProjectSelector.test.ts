@@ -31,7 +31,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.match(projectSelectorTsx, /const showWindowsWindowControls = isInTauri\(\) && isWindowsPlatform\(\);/);
   assert.match(projectSelectorTsx, /import RivetLogo from '\.\.\/rivet-2-logo-no-background\.svg';/);
   assert.match(projectSelectorTsx, /className={clsx\(\{ 'graph-tree-open': reserveSidebarColumn \}\)}/);
-  assert.match(projectSelectorTsx, /--project-selector-strip-bg: var\(--grey-dark-colorish\);/);
+  assert.match(projectSelectorTsx, /--project-selector-strip-bg: var\(--app-strip-bg\);/);
   assert.doesNotMatch(colorsCss, new RegExp('blu' + 'ish'));
   assert.match(colorsCss, /--neutral-grey-darker: #303030;/);
   assert.match(
@@ -54,6 +54,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
     colorsCss,
     /--grey-dark-colorish-seethrough: color-mix\(in srgb, var\(--secondary\) [^,]+, rgba\(35, 35, 35, 0\.95\) [^)]+\);/,
   );
+  assert.match(colorsCss, /--surface-opaque: var\(--grey-dark-colorish\);/);
+  assert.match(colorsCss, /--surface-translucent: var\(--grey-dark-colorish-seethrough\);/);
+  assert.match(colorsCss, /--app-strip-bg: var\(--surface-opaque\);/);
+  assert.match(colorsCss, /--app-panel-bg: var\(--surface-translucent\);/);
   assert.match(colorsCss, /:root\.theme-bright,[\s\S]*\.app\.theme-bright \{/);
   assert.match(colorsCss, /:root\.theme-bright,[\s\S]*--neutral-grey-darkest: #ffffff;/);
   assert.match(colorsCss, /:root\.theme-bright,[\s\S]*--foreground: #1d2733;/);
@@ -86,10 +90,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.match(rivetAppSource, /secondaryColor: customThemeSecondaryColor/);
   assert.match(rivetAppSource, /rootStyle\.setProperty\(name, value\);/);
   assert.match(projectSelectorTsx, /background: var\(--project-selector-strip-bg\);/);
-  assert.match(
-    projectSelectorTsx,
-    /--project-selector-divider-color: color-mix\(in srgb, var\(--grey-light\) 18%, var\(--project-selector-strip-bg\) 82%\);/,
-  );
+  assert.match(projectSelectorTsx, /--project-selector-divider-color: var\(--app-strip-divider-color\);/);
   assert.match(projectSelectorTsx, /&::after \{[\s\S]*left: 0;[\s\S]*right: 0;/);
   assert.match(projectSelectorTsx, /&::after \{[\s\S]*z-index: 2;/);
   assert.match(projectSelectorTsx, /&::after \{[\s\S]*background: var\(--grey-darkish\);/);
@@ -326,7 +327,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   );
   assert.match(projectSelectorTsx, /&:not\(\.active\) > \.actions \{[\s\S]*display: none;/);
   assert.match(projectSelectorTsx, /{active && \(\s*<div className="actions">/);
-  assert.match(overlayTabsTsx, /background: var\(--project-selector-strip-bg, var\(--grey-dark-colorish\)\);/);
+  assert.match(overlayTabsTsx, /background: var\(--project-selector-strip-bg, var\(--app-strip-bg\)\);/);
   assert.match(projectSelectorTsx, /<img src={RivetLogo} alt="" aria-hidden="true" className="file-menu-logo" \/>/);
   assert.match(projectSelectorTsx, />\s*Menu\s*<\/button>/);
   assert.doesNotMatch(projectSelectorTsx, />\s*File\s*<\/button>/);
@@ -335,14 +336,14 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.doesNotMatch(overlayTabsTsx, /z-index: 200;/);
   assert.match(
     overlayTabsTsx,
-    /border-left: 1px solid var\(--project-selector-divider-color, var\(--grey-darkest\)\);/,
+    /border-left: 1px solid var\(--project-selector-divider-color, var\(--app-strip-divider-color\)\);/,
   );
   assert.match(
     overlayTabsTsx,
-    /\.menu-item \{[\s\S]*border-right: 1px solid var\(--project-selector-divider-color, var\(--grey-darkest\)\);/,
+    /\.menu-item \{[\s\S]*border-right: 1px solid var\(--project-selector-divider-color, var\(--app-strip-divider-color\)\);/,
   );
   assert.match(leftSidebarTsx, /id="graph-tree-sidebar"/);
-  assert.match(leftSidebarTsx, /border-right: 1px solid var\(--grey-darkish\);/);
+  assert.match(leftSidebarTsx, /border-right: 1px solid var\(--app-panel-border\);/);
   assert.match(leftSidebarTsx, /shouldCollapseLeftSidebarDrag\(rawWidth\)/);
   assert.match(leftSidebarTsx, /\{\(sidebarOpen \|\| isResizing\) && \(/);
   assert.match(

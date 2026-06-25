@@ -71,8 +71,8 @@ export const styles = css`
   height: var(--project-selector-height);
   z-index: 250;
 
-  --project-selector-strip-bg: var(--grey-dark-colorish);
-  --project-selector-divider-color: color-mix(in srgb, var(--grey-light) 18%, var(--project-selector-strip-bg) 82%);
+  --project-selector-strip-bg: var(--app-strip-bg);
+  --project-selector-divider-color: var(--app-strip-divider-color);
 
   background: var(--project-selector-strip-bg);
 

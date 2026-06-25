@@ -1,5 +1,5 @@
 :root {
-  /* Greyscale colors */
+  /* Neutral surface scale. The legacy grey names remain public aliases for existing component CSS. */
   --black-seethrough: rgba(0, 0, 0, 0.25);
   --neutral-grey-darkest: #1e1e1e;
   --neutral-grey-darker-darker: #282828;
@@ -34,8 +34,24 @@
   --foreground-on-primary: #000;
   --foreground-on-primary-light: #000;
 
+  /* Semantic surfaces. Prefer these in component CSS instead of choosing raw grey tokens locally. */
+  --surface-opaque: var(--grey-dark-colorish);
+  --surface-translucent: var(--grey-dark-colorish-seethrough);
+  --surface-border: color-mix(in srgb, var(--secondary) 4%, var(--grey-darkish) 96%);
+  --surface-row-hover-bg: var(--grey-darkish);
+  --app-panel-bg: var(--surface-translucent);
+  --app-panel-border: var(--grey-darkish);
+  --app-strip-bg: var(--surface-opaque);
+  --app-strip-divider-color: color-mix(in srgb, var(--grey-light) 18%, var(--app-strip-bg) 82%);
+  --modal-surface-bg: var(--surface-opaque);
+  --modal-sidebar-bg: var(--surface-opaque);
+  --modal-border: var(--surface-border);
+  --popup-menu-bg: var(--surface-translucent);
+  --popup-menu-border: var(--surface-border);
+  --popup-menu-row-hover-bg: var(--surface-row-hover-bg);
+
   /* Shared collapsible settings surfaces. Keep body background opaque so it matches panels and modals. */
-  --settings-collapsible-border: color-mix(in srgb, var(--secondary) 4%, var(--grey-darkish) 96%);
+  --settings-collapsible-border: var(--surface-border);
   --settings-collapsible-header-bg: color-mix(in srgb, var(--secondary) 2%, var(--grey-darker-darker) 98%);
   --settings-collapsible-body-bg: color-mix(in srgb, var(--secondary) 2%, var(--grey-darker) 98%);
   --settings-collapsible-hover-bg: color-mix(in srgb, var(--secondary) 8%, var(--grey-darkish) 92%);
@@ -48,13 +64,13 @@
   --form-control-border: color-mix(in srgb, var(--secondary) 6%, var(--grey-darkish) 94%);
   --form-control-border-focus: color-mix(in srgb, var(--primary) 55%, var(--grey-darkish) 45%);
   --form-control-neutral-bg: color-mix(in srgb, var(--secondary) 5%, var(--grey-darkish) 95%);
-  --form-control-selected-bg: color-mix(in srgb, var(--primary) 14%, var(--grey-dark-colorish) 86%);
-  --form-control-selected-bg-hover: color-mix(in srgb, var(--primary) 18%, var(--grey-dark-colorish) 82%);
-  --form-control-selected-bg-pressed: color-mix(in srgb, var(--primary) 22%, var(--grey-dark-colorish) 78%);
+  --form-control-selected-bg: color-mix(in srgb, var(--primary) 14%, var(--surface-opaque) 86%);
+  --form-control-selected-bg-hover: color-mix(in srgb, var(--primary) 18%, var(--surface-opaque) 82%);
+  --form-control-selected-bg-pressed: color-mix(in srgb, var(--primary) 22%, var(--surface-opaque) 78%);
   --form-control-color-scheme: dark;
-  --scrollbar-track-bg: var(--grey-dark-colorish);
-  --scrollbar-thumb-bg: color-mix(in srgb, var(--foreground) 28%, var(--grey-dark-colorish) 72%);
-  --scrollbar-thumb-bg-hover: color-mix(in srgb, var(--foreground) 42%, var(--grey-dark-colorish) 58%);
+  --scrollbar-track-bg: var(--modal-surface-bg);
+  --scrollbar-thumb-bg: color-mix(in srgb, var(--foreground) 28%, var(--modal-surface-bg) 72%);
+  --scrollbar-thumb-bg-hover: color-mix(in srgb, var(--foreground) 42%, var(--modal-surface-bg) 58%);
   --segmented-choice-bg: rgba(0, 0, 0, 0.22);
   --popup-menu-separator: var(--grey-dark);
   --settings-range-track-bg: var(--form-control-neutral-bg);
@@ -64,8 +80,28 @@
   --settings-range-fill-bg-pressed: var(--grey-lighter);
   --node-output-action-opacity: 0.2;
   --node-output-action-node-hover-opacity: 0.35;
+  --node-output-surface-bg: var(--grey-darkest);
+  --node-output-success-border: var(--success-light);
+  --node-output-warning-bg-start: var(--grey-darker);
+  --node-output-warning-bg-end: var(--grey-darkest);
+  --node-output-not-ran-border: var(--grey-lightish);
+  --node-output-multi-border: var(--grey-light);
   --node-output-error-bg: color-mix(in srgb, var(--error) 10%, var(--grey-darker) 90%);
   --node-output-error-border: var(--error-light);
+  --node-frozen-output-accent: #68b7ff;
+  --node-frozen-output-bg: color-mix(in srgb, var(--node-frozen-output-accent) 25%, var(--grey-darkest) 83%);
+  --node-skeleton-bg: var(--grey-light);
+  --node-comment-bg: rgba(46, 46, 46, 0.1);
+  --node-comment-title-bg: var(--grey-darkish);
+  --node-overlay-shadow: 10px 10px 16px rgba(0, 0, 0, 0.4);
+  --node-port-bg: var(--grey-dark);
+  --node-port-border: var(--grey);
+  --node-port-label-color: var(--grey-lighter);
+  --node-port-reorder-label-bg: color-mix(in srgb, var(--primary) 18%, var(--grey-darkest) 82%);
+  --node-port-reorder-label-border: color-mix(in srgb, var(--primary) 42%, transparent);
+  --node-port-reorder-label-color: var(--grey-lightest);
+  --node-output-picker-border: rgba(255, 255, 255, 0.1);
+  --node-output-picker-hover-bg: rgba(255, 255, 255, 0.1);
   --node-color-picker-trigger-border: rgba(255, 255, 255, 0.1);
   --node-color-picker-trigger-icon: rgba(255, 255, 255, 0.3);
   --node-color-picker-swatch-body-bg: var(--node-body-bg);
