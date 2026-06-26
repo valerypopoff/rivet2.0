@@ -9,6 +9,7 @@ import {
   type NodeRegistration,
   type NodeInputDefinition,
   isInterpolationInputDefinition,
+  resolveNodePrefabInstance,
 } from '@valerypopoff/rivet2-core';
 
 export type ReconcileNodeEditConnectionsResult = {
@@ -109,14 +110,18 @@ function resolveNodePortDefinitions({
     return undefined;
   }
 
-  const instance = projectNodeRegistry.createDynamicImpl(updatedNode);
+  const effectiveNodesById = Object.fromEntries(
+    Object.entries(nodesById).map(([id, node]) => [id, resolveNodePrefabInstance(project, node)]),
+  ) as Record<NodeId, ChartNode>;
+  const effectiveNode = effectiveNodesById[nodeId] ?? updatedNode;
+  const instance = projectNodeRegistry.createDynamicImpl(effectiveNode);
   const inputDefinitions = instance.getInputDefinitionsIncludingBuiltIn(
     nodeConnections,
-    nodesById,
+    effectiveNodesById,
     project,
     referencedProjects,
   );
-  const outputDefinitions = instance.getOutputDefinitions(nodeConnections, nodesById, project, referencedProjects);
+  const outputDefinitions = instance.getOutputDefinitions(nodeConnections, effectiveNodesById, project, referencedProjects);
 
   return {
     inputDefinitions,

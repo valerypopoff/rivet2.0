@@ -26,8 +26,31 @@ import { useGraphHistoryNavigation } from './useGraphHistoryNavigation.js';
 import { projectState } from '../state/savedGraphs.js';
 import { useLoadGraph } from './useLoadGraph.js';
 import { createRootGraphViewContext } from '../domain/graphEditing/navigationActions.js';
+import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
 
-export function useCanvasHotkeys() {
+type CanvasHotkeyOptions =
+  | boolean
+  | {
+      enabled?: boolean;
+      graphCommandsEnabled?: boolean;
+    };
+
+function resolveCanvasHotkeyOptions(options: CanvasHotkeyOptions) {
+  if (typeof options === 'boolean') {
+    return {
+      enabled: options,
+      graphCommandsEnabled: options,
+    };
+  }
+
+  return {
+    enabled: options.enabled ?? true,
+    graphCommandsEnabled: options.graphCommandsEnabled ?? true,
+  };
+}
+
+export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
+  const { enabled, graphCommandsEnabled } = resolveCanvasHotkeyOptions(options);
   const [canvasPosition, setCanvasPosition] = useAtom(canvasPositionState);
   const viewportBounds = useViewportBounds();
   const { canvasToClientPosition } = useCanvasPositioning();
@@ -44,6 +67,7 @@ export function useCanvasHotkeys() {
   const loadGraph = useLoadGraph();
   const graphMetadata = useAtomValue(graphMetadataState);
   const project = useAtomValue(projectState);
+  const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
 
   const nodes = useAtomValue(nodesState);
   const [selectedNodeIds, setSelectedNodes] = useAtom(selectedNodesState);
@@ -52,11 +76,15 @@ export function useCanvasHotkeys() {
   const redo = useRedo();
 
   const latestHandler = useLatest((e: KeyboardEvent) => {
+    if (!enabled) {
+      return;
+    }
+
     if (openOverlay !== undefined) {
       return;
     }
 
-    if (e.key === 'f' && (e.metaKey || e.ctrlKey) && !e.shiftKey && graphSearch.searching) {
+    if (graphCommandsEnabled && e.key === 'f' && (e.metaKey || e.ctrlKey) && !e.shiftKey && graphSearch.searching) {
       e.preventDefault();
       e.stopPropagation();
 
@@ -89,13 +117,17 @@ export function useCanvasHotkeys() {
         const mainGraphId = project.metadata.mainGraphId;
         const mainGraph = mainGraphId == null ? undefined : project.graphs[mainGraphId];
 
-        if (mainGraphId != null && mainGraph && graphMetadata?.id !== mainGraphId) {
+        if (mainGraphId != null && mainGraph && (nodeLibraryOpen || graphMetadata?.id !== mainGraphId)) {
           loadGraph(mainGraph, { graphView: createRootGraphViewContext(mainGraphId) });
         }
       } else {
         setSidebarOpen((open) => !open);
       }
 
+      return;
+    }
+
+    if (!graphCommandsEnabled) {
       return;
     }
 

@@ -1,4 +1,13 @@
-import type { ChartNode, FrozenNodeOutputsByGraph, GraphId, NodeId, Project } from '@valerypopoff/rivet2-core';
+import {
+  getNodePrefabInstancePrefabId,
+  isNodePrefabInstanceNode,
+  resolveNodePrefabInstance,
+  type ChartNode,
+  type FrozenNodeOutputsByGraph,
+  type GraphId,
+  type NodeId,
+  type Project,
+} from '@valerypopoff/rivet2-core';
 import type { ContextMenuContext } from '../ContextMenu.js';
 import type { ContextMenuData } from '../../hooks/useContextMenu.js';
 import {
@@ -39,6 +48,8 @@ export function getNodeCanvasContextMenuContext({
   projectNodeRegistry,
   selectedGraphId,
   selectedNodeIds = [],
+  graphCommandsEnabled = true,
+  pasteCommandsEnabled = graphCommandsEnabled,
 }: {
   canStartEditorGraphRun: boolean;
   canUseFrozenNodes: boolean;
@@ -55,18 +66,27 @@ export function getNodeCanvasContextMenuContext({
   projectNodeRegistry: ProjectNodeRegistry;
   selectedGraphId: GraphId | undefined;
   selectedNodeIds?: readonly NodeId[];
+  graphCommandsEnabled?: boolean;
+  pasteCommandsEnabled?: boolean;
 }): ContextMenuContext {
   const target = getNodeCanvasContextMenuTarget(contextMenuData.data);
 
   if (!target) {
     return {
       type: 'blankArea',
-      data: {},
+      data: { graphCommandsEnabled, pasteCommandsEnabled },
     };
   }
 
+  const targetNode = nodesById[target.nodeId];
+  const targetIsPrefabInstance = targetNode != null && isNodePrefabInstanceNode(targetNode);
+  const targetPrefabId = targetIsPrefabInstance ? getNodePrefabInstancePrefabId(targetNode) : undefined;
+  const resolvedTargetNode = targetNode ? resolveNodePrefabInstance(project, targetNode) : undefined;
+  const effectiveTarget = targetIsPrefabInstance
+    ? { nodeId: target.nodeId, nodeType: resolvedTargetNode!.type }
+    : target;
   const isFrozen = Boolean(selectedGraphId && frozenNodeOutputs[selectedGraphId]?.[target.nodeId]?.length);
-  const scopedTargets = getNodeCanvasContextMenuScopedTargets({ nodesById, selectedNodeIds, target });
+  const scopedTargets = getNodeCanvasContextMenuScopedTargets({ nodesById, project, selectedNodeIds, target: effectiveTarget });
   const frozenOutputsByNode = selectedGraphId ? frozenNodeOutputs[selectedGraphId] : undefined;
   const freezeTargetEligibility = selectedGraphId
     ? scopedTargets.map((scopedTarget): FreezeTargetEligibility => {
@@ -110,14 +130,16 @@ export function getNodeCanvasContextMenuContext({
   const selectedGraphConnections = selectedGraphId ? project.graphs[selectedGraphId]?.connections ?? [] : [];
   const variadicPortRearrangeKind = canRearrangeVariadicNodePorts({
     connections: selectedGraphConnections,
-    node: nodesById[target.nodeId],
+    node: resolvedTargetNode,
   });
 
   return {
     type: 'node',
     data: {
-      nodeType: target.nodeType,
+      nodeType: effectiveTarget.nodeType,
       nodeId: target.nodeId,
+      graphCommandsEnabled,
+      isLinkedNode: targetIsPrefabInstance,
       canRunFromEditor: canStartEditorGraphRun,
       canRunFromHere: canRunNodeCanvasContextMenuFromHere({
         canStartEditorGraphRun,
@@ -138,6 +160,7 @@ export function getNodeCanvasContextMenuContext({
       freezeDisabledReason,
       unfreezeNodeIds,
       isFrozen,
+      canOpenNodePrefabSource: targetPrefabId != null,
     },
   };
 }
@@ -229,10 +252,12 @@ function getMultiNodeFreezeDisabledReason(targets: FreezeTargetEligibility[]): s
 
 function getNodeCanvasContextMenuScopedTargets({
   nodesById,
+  project,
   selectedNodeIds,
   target,
 }: {
   nodesById: NodesById;
+  project: Project;
   selectedNodeIds: readonly NodeId[];
   target: NodeContextMenuTarget;
 }): NodeContextMenuTarget[] {
@@ -242,7 +267,14 @@ function getNodeCanvasContextMenuScopedTargets({
 
   const selectedTargets = [...new Set(selectedNodeIds)].flatMap((selectedNodeId): NodeContextMenuTarget[] => {
     const selectedNode = nodesById[selectedNodeId];
-    return selectedNode ? [{ nodeId: selectedNode.id, nodeType: selectedNode.type }] : [];
+    if (!selectedNode) {
+      return [];
+    }
+
+    const nodeType = isNodePrefabInstanceNode(selectedNode)
+      ? resolveNodePrefabInstance(project, selectedNode).type
+      : selectedNode.type;
+    return [{ nodeId: selectedNode.id, nodeType }];
   });
 
   return selectedTargets.length > 0 ? selectedTargets : [target];

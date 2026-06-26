@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBuiltInRegistry } from '@valerypopoff/rivet2-core';
+import {
+  createBuiltInRegistry,
+  type ChartNode,
+  type GraphId,
+  type NodeId,
+  type NodePrefabId,
+  type Project,
+  type ProjectId,
+} from '@valerypopoff/rivet2-core';
 import { createAddedNode, createPastedNodes, duplicateNodeWithConnections, duplicateNodesWithConnections } from './nodeActions';
 
 test('createAddedNode applies configured default colors to supported node types', () => {
@@ -77,6 +85,44 @@ test('createAddedNode leaves node colors untouched when default node colors are 
 
   assert.equal(graphInputNode.visualData.color, undefined);
   assert.equal(textNode.visualData.color, undefined);
+});
+
+test('createAddedNode sizes linked nodes from the library node', () => {
+  const registry = createBuiltInRegistry();
+  const prefabId = 'prefab-text' as NodePrefabId;
+  const project: Project = {
+    metadata: {
+      id: 'project' as ProjectId,
+      title: 'Project',
+      description: '',
+      mainGraphId: 'graph' as GraphId,
+    },
+    graphs: {},
+    nodePrefabs: {
+      [prefabId]: {
+        id: prefabId,
+        sourceNode: {
+          id: 'source' as NodeId,
+          type: 'text',
+          title: 'Shared Text',
+          visualData: { x: 0, y: 0, width: 420 },
+          data: { text: 'hello' },
+        } as ChartNode<'text'>,
+      },
+    },
+    plugins: [],
+  };
+
+  const instance = createAddedNode({
+    nodeType: `nodePrefabInstance:${prefabId}`,
+    position: { x: 10, y: 20 },
+    registry,
+    referencedProjects: {},
+    project,
+  });
+
+  assert.equal(instance.title, 'Shared Text');
+  assert.equal(instance.visualData.width, 420);
 });
 
 test('duplicateNodeWithConnections clones nested node data independently', () => {

@@ -1,7 +1,14 @@
 import { DragOverlay } from '@dnd-kit/core';
 import clsx from 'clsx';
 import { type FC, type ContextType, memo, useMemo } from 'react';
-import type { ChartNode, NodeConnection, NodeId, ProjectComparisonChangeKind } from '@valerypopoff/rivet2-core';
+import {
+  getNodePrefabInstancePrefabId,
+  type ChartNode,
+  type NodeConnection,
+  type NodeId,
+  type ProjectComparisonChangeKind,
+} from '@valerypopoff/rivet2-core';
+import { useAtomValue } from 'jotai';
 import { CanvasHandlersContext, CanvasViewContext } from '../CanvasContext.js';
 import { DraggableNode } from '../DraggableNode.js';
 import { VisualNode } from '../VisualNode.js';
@@ -15,6 +22,7 @@ import {
 import type { useNodeTypes } from '../../hooks/useNodeTypes.js';
 import type { PageValue, ProcessDataForNode } from '../../state/dataFlow.js';
 import { resolveDraggingExecutionContext } from './dragOverlayExecutionContext.js';
+import { projectState } from '../../state/savedGraphs.js';
 
 type CanvasViewValue = ContextType<typeof CanvasViewContext>;
 type CanvasHandlersValue = ContextType<typeof CanvasHandlersContext>;
@@ -97,6 +105,12 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
     visibleNodeIdSet,
   }) => {
     countCanvasPerf('NodeCanvasScene:renders');
+    const project = useAtomValue(projectState);
+    const isKnownNodeType = (node: ChartNode) => {
+      const prefabId = getNodePrefabInstancePrefabId(node);
+      const effectiveType = prefabId ? project.nodePrefabs?.[prefabId]?.sourceNode.type ?? node.type : node.type;
+      return effectiveType in nodeTypes;
+    };
     const draggingNodeEntries = useMemo(() => draggingNodes.map((node, index) => ({ node, index })), [draggingNodes]);
     const draggingNodeIdSet = useMemo(() => new Set(draggingNodes.map((node) => node.id)), [draggingNodes]);
     const backgroundCommentDragEntries = useMemo(
@@ -134,7 +148,7 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
                   key={`compare-removed-${node.id}`}
                   node={node}
                   compareChangeKind="removed"
-                  isKnownNodeType={node.type in nodeTypes}
+                  isKnownNodeType={isKnownNodeType(node)}
                   isOutputExpanded={false}
                   processPage={0}
                   renderHeavyContent={false}
@@ -159,7 +173,7 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
                   xDelta={constrainedCommentDragDelta.x}
                   yDelta={constrainedCommentDragDelta.y}
                   isOverlay
-                  isKnownNodeType={node.type in nodeTypes}
+                  isKnownNodeType={isKnownNodeType(node)}
                   isOutputExpanded={isOutputExpanded}
                   isSelected={selectedNodeIdSet.has(executionSourceNodeId)}
                   compareChangeKind={nodeCompareKindsById[node.id]}
@@ -192,7 +206,7 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
                   isHovered={hoveredNodeId === node.id}
                   isSelected={selectedNodeIdSet.has(node.id)}
                   isSearchMatch={searchMatchingNodeIdSet.has(node.id)}
-                  isKnownNodeType={node.type in nodeTypes}
+                  isKnownNodeType={isKnownNodeType(node)}
                   lastRun={lastRunPerNode[node.id]}
                   onDragActivatorPointerDown={onNodeDragActivatorPointerDown}
                   isOutputExpanded={expandedOutputNodeIdSet.has(node.id)}
@@ -239,7 +253,7 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
                     connections={draggingNodeConnections}
                     compareChangeKind={nodeCompareKindsById[node.id]}
                     isOverlay
-                    isKnownNodeType={node.type in nodeTypes}
+                    isKnownNodeType={isKnownNodeType(node)}
                     isOutputExpanded={isOutputExpanded}
                     lastRun={lastRun}
                     processPage={processPage}

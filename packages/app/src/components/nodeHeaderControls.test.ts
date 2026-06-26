@@ -21,3 +21,48 @@ test('node edit gear reveal does not animate icon color', () => {
   assert.match(editButtonHoverBlock, /color: var\(--node-bg-foreground\);/);
   assert.doesNotMatch(editButtonHoverBlock, /primary-text/);
 });
+
+test('linked node headers use the library-link control instead of the edit gear', () => {
+  const nodeBodySource = readFileSync(join(componentsDir, 'NodeBody.tsx'), 'utf8');
+  const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
+  const subGraphHeaderLinkSource = readFileSync(join(componentsDir, 'visualNode', 'SubGraphHeaderLink.tsx'), 'utf8');
+  const visualNodeSource = readFileSync(join(componentsDir, 'VisualNode.tsx'), 'utf8');
+  const normalNodeSource = readFileSync(join(componentsDir, 'visualNode', 'NormalVisualNodeContent.tsx'), 'utf8');
+  const zoomedOutNodeSource = readFileSync(join(componentsDir, 'visualNode', 'ZoomedOutVisualNodeContent.tsx'), 'utf8');
+  const splitRunSummarySource = readFileSync(join(componentsDir, 'visualNode', 'SplitRunSummary.tsx'), 'utf8');
+  const contextMenuConfigurationSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'useContextMenuConfiguration.ts'),
+    'utf8',
+  );
+
+  assert.match(visualNodeSource, /const nodeForEditing = editTargetNode \?\? node;/);
+  assert.match(visualNodeSource, /onNodeStartEditing\?\.\(nodeForEditing\);/);
+  assert.match(visualNodeSource, /editTargetNode=\{props\.node\}/);
+  assert.match(nodeBodySource, /interactive = true/);
+  assert.match(nodeBodySource, /'aria-disabled': true/);
+  assert.match(nodeBodySource, /inert: true/);
+  assert.match(nodeBodySource, /\.\.\.readOnlyAttributes/);
+  assert.match(nodeBodySource, /'node-body-readonly': !interactive/);
+  assert.match(nodeStylesSource, /\.node-body-readonly \{[\s\S]*pointer-events: none;/);
+
+  for (const source of [normalNodeSource, zoomedOutNodeSource]) {
+    assert.match(source, /isNodePrefabInstance && \(/);
+    assert.match(source, /className="node-prefab-instance-indicator"/);
+    assert.match(source, /aria-label="Open library node"/);
+    assert.match(source, /onClick=\{handleEditClick\}/);
+    assert.match(source, /onNodeStartEditing\?\.\(editTargetNode \?\? node\);/);
+    assert.match(source, /<SplitRunSummary node=\{node\} editTargetNode=\{editTargetNode\}/);
+    assert.match(source, /!\s*isNodePrefabInstance && \([\s\S]*className="edit-button"/);
+  }
+  assert.match(normalNodeSource, /interactive=\{!isNodePrefabInstance\}/);
+
+  assert.match(splitRunSummarySource, /onNodeStartEditing\?\.\(editTargetNode \?\? node\);/);
+  assert.match(subGraphHeaderLinkSource, /SubgraphGraphIcon/);
+  assert.doesNotMatch(subGraphHeaderLinkSource, /SubgraphLinkIcon/);
+
+  assert.match(contextMenuConfigurationSource, /const canEditNode = \(context: unknown\) =>/);
+  assert.match(
+    contextMenuConfigurationSource,
+    /id: 'node-edit',[\s\S]*label: 'Edit',[\s\S]*icon: SettingsCogIcon,[\s\S]*conditional: canEditNode,/,
+  );
+});

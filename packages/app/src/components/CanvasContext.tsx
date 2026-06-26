@@ -15,6 +15,7 @@ export type CanvasViewContextValue = {
   canvasZoom: number;
   closestPortToDraggingWire: { nodeId: NodeId; portId: PortId } | undefined;
   draggingWire: DraggingWireDef | undefined;
+  graphStateOverlaysEnabled: boolean;
   heightCache: HeightCache;
   isReallyZoomedOut: boolean;
   isZoomedOut: boolean;

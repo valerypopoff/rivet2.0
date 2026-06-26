@@ -125,6 +125,39 @@ test('node code editor is preloaded before settings need it', () => {
   assert.match(graphBuilderSource, /warmCodeEditor\(\);\s+setEditingNodeId\(node\.id\);/);
 });
 
+test('linked node settings entry points open the source library node', () => {
+  const graphBuilderSource = readFileSync(join(componentsDir, 'GraphBuilder.tsx'), 'utf8');
+  const nodeEditorSource = readFileSync(join(componentsDir, 'NodeEditor.tsx'), 'utf8');
+  const nodeLibraryBuilderSource = readFileSync(join(componentsDir, 'NodeLibraryBuilder.tsx'), 'utf8');
+  const contextMenuHandlerSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'useGraphBuilderContextMenuHandler.ts'),
+    'utf8',
+  );
+
+  assert.match(
+    graphBuilderSource,
+    /if \(isNodePrefabInstanceNode\(node\)\) \{[\s\S]*openNodeLibrary\(\{[\s\S]*editingPrefabId: prefabId,[\s\S]*selectedNodeIds: sourceNode \? \[sourceNode\.id\] : \[\],[\s\S]*return;/,
+  );
+  assert.match(contextMenuHandlerSource, /const openLinkedNodeLibraryNode = useStableCallback/);
+  assert.match(contextMenuHandlerSource, /\.with\('node-edit'[\s\S]*openLinkedNodeLibraryNode\(nodesById\[nodeId\]\)/);
+  assert.match(
+    contextMenuHandlerSource,
+    /\.with\('node-open-prefab-source'[\s\S]*openLinkedNodeLibraryNode\(nodesById\[nodeId\]\)/,
+  );
+  assert.doesNotMatch(nodeEditorSource, /NodePrefabInstanceEditor/);
+  assert.match(nodeEditorSource, /if \(selectedNode && isNodePrefabInstanceNode\(selectedNode\)\) \{[\s\S]*deselect\(\);/);
+  assert.match(nodeLibraryBuilderSource, /EditNodeCommandOverrideContext/);
+  assert.match(nodeLibraryBuilderSource, /const editPrefabSourceNode: EditNodeCommand = useStableCallback/);
+  assert.match(nodeLibraryBuilderSource, /prefabsBySourceNodeId\.get\(params\.nodeId\)/);
+  assert.match(nodeLibraryBuilderSource, /updatePrefabSource\(prefab\.id,[\s\S]*structuredClone\(params\.newNode\)/);
+  assert.match(nodeLibraryBuilderSource, /<EditNodeCommandOverrideContext\.Provider value=\{editPrefabSourceNode\}>/);
+  assert.match(nodeLibraryBuilderSource, /const centeredEditingPrefabIdRef = useRef<NodePrefabId \| undefined>/);
+  assert.match(
+    nodeLibraryBuilderSource,
+    /setCanvasPosition\(getCanvasPositionForNodes\(\[editingPrefab\.sourceNode\], sidebarOpen\)\);/,
+  );
+});
+
 test('node color picker is not split into a fragile dev lazy module', () => {
   const lazyComponentsSource = readFileSync(join(componentsDir, 'LazyComponents.tsx'), 'utf8');
   const colorEditorSource = readFileSync(join(componentsDir, 'editors', 'ColorEditor.tsx'), 'utf8');

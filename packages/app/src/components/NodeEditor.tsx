@@ -16,6 +16,7 @@ import {
   type ChartNode,
   type DataId,
   type LLMChatV2Node,
+  isNodePrefabInstanceNode,
 } from '@valerypopoff/rivet2-core';
 import { useUnknownNodeComponentDescriptorFor } from '../hooks/useNodeTypes.js';
 import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry';
@@ -48,7 +49,17 @@ export const NodeEditorRenderer: FC = () => {
 
   const selectedNode = editingNodeId ? nodesById[editingNodeId] : undefined;
 
+  useLayoutEffect(() => {
+    if (selectedNode && isNodePrefabInstanceNode(selectedNode)) {
+      deselect();
+    }
+  }, [deselect, selectedNode]);
+
   if (!editingNodeId || !selectedNode) {
+    return null;
+  }
+
+  if (isNodePrefabInstanceNode(selectedNode)) {
     return null;
   }
 
@@ -635,7 +646,7 @@ const Container = styled.div`
   }
 `;
 
-type NodeEditorProps = { selectedNode: ChartNode; onDeselect: () => void };
+type NodeEditorProps = { selectedNode: ChartNode; onDeselect: () => void; onUpdateNode?: NodeChanged };
 
 export type NodeChanged = (changed: ChartNode, newData?: Record<DataId, string>) => void;
 
@@ -744,7 +755,7 @@ function useNodeEditorActionBarAvoidance(containerRef: RefObject<HTMLDivElement 
   return avoidance;
 }
 
-export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect }) => {
+export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUpdateNode }) => {
   const [selectedVariant, setSelectedVariant] = useState<string | undefined>();
   const [addVariantPopupOpen, setAddVariantPopupOpen] = useState(false);
   const [llmChatFeatureConflictOpen, setLlmChatFeatureConflictOpen] = useState(false);
@@ -769,6 +780,11 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect }) =>
 
     if (llmChatConflict) {
       setLlmChatFeatureConflictOpen(true);
+      return;
+    }
+
+    if (onUpdateNode) {
+      onUpdateNode(node, newData);
       return;
     }
 

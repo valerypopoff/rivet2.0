@@ -11,6 +11,7 @@ import {
   type NodeInputDefinition,
   type NodeOutputDefinition,
   type PortId,
+  resolveNodePrefabInstance,
 } from '@valerypopoff/rivet2-core';
 import { useDeleteNodesCommand } from '../commands/deleteNodeCommand';
 import { useResizeNodesCommand } from '../commands/resizeNodesCommand';
@@ -67,7 +68,6 @@ import {
   zoomSensitivityState,
 } from '../state/settings';
 import { canvasPreviewConnectionsState } from '../state/selectors/canvasGraphSelectors.js';
-import { nodesByIdState } from '../state/selectors/graphSelectors.js';
 import { canRunGraphFromEditor } from '../state/selectors/executionSelectors.js';
 import { MouseIcon } from './MouseIcon';
 import { type ContextMenuContext } from './ContextMenu.js';
@@ -99,7 +99,10 @@ import { getMinimumNodeWidthForPortLabels } from '../utils/nodePortLabelWidth.js
 import { getUiFontScale } from '../utils/uiFontSize.js';
 import { blurFocusedGraphFilterInput } from './graphList/graphFilterFocus.js';
 import { selectedGraphProjectComparisonState } from '../state/projectComparison.js';
-import { getCanvasProjectComparisonRenderState } from './nodeCanvas/projectComparisonCanvas.js';
+import {
+  EMPTY_CANVAS_PROJECT_COMPARISON_RENDER_STATE,
+  getCanvasProjectComparisonRenderState,
+} from './nodeCanvas/projectComparisonCanvas.js';
 import {
   type ActiveResizeGroup,
   type ResizeNodeSnapshot,
@@ -112,6 +115,9 @@ import {
 } from './nodeCanvas/nodeCanvasResizeModel.js';
 
 const EMPTY_NODE_CONNECTIONS: NodeConnection[] = [];
+const EMPTY_EXPANDED_OUTPUT_NODE_IDS: NodeId[] = [];
+const EMPTY_RUN_DATA_BY_NODE: Record<NodeId, undefined> = {};
+const EMPTY_PROCESS_PAGE_BY_NODE: Record<NodeId, never> = {};
 
 type NodeScopedUiTarget = {
   graphId: string;
@@ -144,12 +150,17 @@ export interface NodeCanvasProps {
   onConnectionsChanged: (connections: NodeConnection[]) => void;
   onNodeSelected: (node: ChartNode, multi: boolean) => void;
   onNodeStartEditing?: (node: ChartNode) => void;
+  onCanvasClick?: () => void;
+  onNodesDeleted?: (nodeIds: NodeId[]) => void;
   onContextMenuItemSelected?: (
     menuItemId: string,
     data: unknown,
     context: ContextMenuContext,
     meta: { x: number; y: number },
   ) => void;
+  disableConnections?: boolean;
+  disableGraphCommands?: boolean;
+  pasteCommandsEnabled?: boolean;
 }
 
 export type PortPositions = Record<string, { x: number; y: number }>;
@@ -162,7 +173,12 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   onConnectionsChanged,
   onNodeSelected,
   onNodeStartEditing,
+  onCanvasClick,
+  onNodesDeleted,
   onContextMenuItemSelected,
+  disableConnections = false,
+  disableGraphCommands = false,
+  pasteCommandsEnabled = !disableGraphCommands,
 }) => {
   const [canvasPosition, setCanvasPosition] = useAtom(canvasPositionState);
   const [editingNodeId, setEditingNodeId] = useAtom(editingNodeState);
@@ -198,7 +214,6 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const preservePortCase = useAtomValue(preservePortTextCaseState);
   const uiFontSize = useAtomValue(uiFontSizeState);
   const rawPreviewConnections = useAtomValue(canvasPreviewConnectionsState);
-  const nodesById = useAtomValue(nodesByIdState);
   const project = useAtomValue(projectState);
   const referencedProjects = useAtomValue(referencedProjectsState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
@@ -207,7 +222,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     hasLoadedRecording: loadedRecording != null,
     selectedExecutor,
     session: executorSession,
-  });
+  }) && !disableGraphCommands;
   const freezeUnavailableReason =
     loadedRecording != null
       ? 'Freeze node output is unavailable while viewing a recording.'
@@ -235,28 +250,39 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const cache = useNodeHeightCache();
   const nodeTypes = useNodeTypes();
   const projectNodeRegistry = useProjectNodeRegistry();
+  const canvasNodesById = useMemo(() => Object.fromEntries(nodes.map((node) => [node.id, node])) as Record<NodeId, ChartNode>, [nodes]);
+  const canvasEffectiveNodesById = useMemo(
+    () =>
+      Object.fromEntries(nodes.map((node) => [node.id, resolveNodePrefabInstance(project, node)])) as Record<
+        NodeId,
+        ChartNode
+      >,
+    [nodes, project],
+  );
 
   const connections = useMemo(
     () =>
       filterValidSubGraphConnections({
         connections: _connections,
-        nodesById,
+        nodesById: canvasEffectiveNodesById,
         project,
         projectNodeRegistry,
         referencedProjects,
       }),
-    [_connections, nodesById, project, projectNodeRegistry, referencedProjects],
+    [_connections, canvasEffectiveNodesById, project, projectNodeRegistry, referencedProjects],
   );
   const previewConnections = useMemo(
     () =>
-      filterValidSubGraphConnections({
-        connections: rawPreviewConnections,
-        nodesById,
-        project,
-        projectNodeRegistry,
-        referencedProjects,
-      }),
-    [nodesById, project, projectNodeRegistry, rawPreviewConnections, referencedProjects],
+      disableConnections
+        ? []
+        : filterValidSubGraphConnections({
+            connections: rawPreviewConnections,
+            nodesById: canvasEffectiveNodesById,
+            project,
+            projectNodeRegistry,
+            referencedProjects,
+          }),
+    [canvasEffectiveNodesById, disableConnections, project, projectNodeRegistry, rawPreviewConnections, referencedProjects],
   );
 
   useEffect(() => {
@@ -332,15 +358,31 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     onNodeDraggedMove,
     onNodeStartDrag,
     onNodeDragged,
-  } = useDraggingNode();
+  } = useDraggingNode({
+    graphCommandsEnabled: !disableGraphCommands,
+    nodes,
+    onNodesChanged,
+  });
   const {
     clearDraggingWire: cancelWireDrag,
     draggingWire,
     onWireStartDrag,
     onWireEndDrag,
-  } = useDraggingWire(onConnectionsChanged);
+  } = useDraggingWire({
+    connections,
+    enabled: !disableConnections,
+    nodesById: canvasEffectiveNodesById,
+  });
+  useEffect(() => {
+    if (disableConnections) {
+      cancelWireDrag();
+    }
+  }, [cancelWireDrag, disableConnections]);
+
+  const visibleDraggingWire = disableConnections ? undefined : draggingWire;
+  const visibleClosestPort = disableConnections ? undefined : closestPort;
   const isDraggingNode = draggingNodes.length > 0;
-  const isDraggingWire = !!draggingWire;
+  const isDraggingWire = !!visibleDraggingWire;
 
   const isNodeDragGestureActive = useStableCallback(() => nodeDragGestureActiveRef.current);
 
@@ -377,7 +419,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     [],
   );
 
-  const shouldRenderWires = canvasPosition.zoom > 0.15;
+  const shouldRenderWires = !disableConnections && canvasPosition.zoom > 0.15;
   const viewportBounds = useViewportBounds(canvasRootRef);
   const draggingViewportNodeIds = useMemo(
     () => getDraggingViewportNodeIds({ draggedSourceNodeIds, draggingNodes }),
@@ -394,9 +436,13 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   } = useContextMenu();
 
   const connectionsByNodeId = useMemo(() => groupConnectionsByNode(previewConnections), [previewConnections]);
+  const graphStateOverlaysEnabled = !disableGraphCommands;
   const comparisonRenderState = useMemo(
-    () => getCanvasProjectComparisonRenderState(selectedGraphComparison),
-    [selectedGraphComparison],
+    () =>
+      graphStateOverlaysEnabled
+        ? getCanvasProjectComparisonRenderState(selectedGraphComparison)
+        : EMPTY_CANVAS_PROJECT_COMPARISON_RENDER_STATE,
+    [graphStateOverlaysEnabled, selectedGraphComparison],
   );
   const nodesWithConnections = useMemo(
     () =>
@@ -424,7 +470,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
 
   const handleCanvasContextMenuRequest = useStableCallback(
     (event: { clientX: number; clientY: number; target: EventTarget }) => {
-      if (draggingWire) {
+      if (visibleDraggingWire) {
         cancelWireDrag();
         setShowContextMenu(false);
         return;
@@ -448,6 +494,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     endSelectionBox,
     isDraggingCanvas,
     nodes,
+    onCanvasClick,
     onCanvasContextMenu: handleCanvasContextMenuRequest,
     selectedGraphId: selectedGraphMetadata?.id,
     selectedNodeIds,
@@ -498,11 +545,16 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
         const nodeConnections = connectionsByNodeId[node.id] ?? EMPTY_NODE_CONNECTIONS;
         const inputDefinitions = instance.getInputDefinitionsIncludingBuiltIn(
           nodeConnections,
-          nodesById,
+          canvasEffectiveNodesById,
           project,
           referencedProjects,
         );
-        const outputDefinitions = instance.getOutputDefinitions(nodeConnections, nodesById, project, referencedProjects);
+        const outputDefinitions = instance.getOutputDefinitions(
+          nodeConnections,
+          canvasEffectiveNodesById,
+          project,
+          referencedProjects,
+        );
 
         return Math.max(
           renderedMinWidth,
@@ -628,23 +680,30 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const selectedViewportNodeIds = useMemo(
     () =>
       getCanvasSelectedInteractionNodeIds({
-        editingNodeId,
-        fullscreenOutputNodeId,
+        editingNodeId: graphStateOverlaysEnabled ? editingNodeId : null,
+        fullscreenOutputNodeId: graphStateOverlaysEnabled ? fullscreenOutputNodeId : null,
         selectedNodeIds,
       }),
-    [editingNodeId, fullscreenOutputNodeId, selectedNodeIds],
+    [editingNodeId, fullscreenOutputNodeId, graphStateOverlaysEnabled, selectedNodeIds],
   );
 
   const searchMatchingNodeIds = useMemo(
     () =>
       getCanvasSearchMatchingNodeIds({
-        matches: graphSearch.matches,
-        panelOpen: graphSearch.panelOpen,
-        query: graphSearch.query,
-        searching: graphSearch.searching,
+        matches: graphStateOverlaysEnabled ? graphSearch.matches : [],
+        panelOpen: graphStateOverlaysEnabled && graphSearch.panelOpen,
+        query: graphStateOverlaysEnabled ? graphSearch.query : '',
+        searching: graphStateOverlaysEnabled && graphSearch.searching,
         selectedGraphId: selectedGraphMetadata?.id,
       }),
-    [graphSearch.matches, graphSearch.panelOpen, graphSearch.query, graphSearch.searching, selectedGraphMetadata?.id],
+    [
+      graphSearch.matches,
+      graphSearch.panelOpen,
+      graphSearch.query,
+      graphSearch.searching,
+      graphStateOverlaysEnabled,
+      selectedGraphMetadata?.id,
+    ],
   );
 
   const highlightedNodes = useMemo(
@@ -674,6 +733,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     enabled: shouldRenderWires,
     isDraggingNode,
     isDraggingWire,
+    nodes,
     visibleNodeIdSet,
   });
 
@@ -709,6 +769,11 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
         return;
       }
 
+      if (disableGraphCommands) {
+        onNodesDeleted?.(selectedNodeIds);
+        return;
+      }
+
       removeNodes({ nodeIds: selectedNodeIds });
       setSelectedNodeIds([]);
     },
@@ -716,7 +781,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   );
 
   useEffect(() => {
-    if (!draggingWire) {
+    if (!visibleDraggingWire) {
       return;
     }
 
@@ -748,7 +813,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       window.removeEventListener('keydown', handleWindowKeyDown, true);
       document.removeEventListener('mousedown', handleDocumentMouseDown, true);
     };
-  }, [cancelWireDrag, draggingWire]);
+  }, [cancelWireDrag, visibleDraggingWire]);
 
   const hydratedContextMenuData = useMemo(
     (): ContextMenuContext =>
@@ -760,11 +825,13 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
         frozenNodeOutputs,
         graphSelection,
         lastRunPerNode,
-        nodesById,
+        nodesById: canvasNodesById,
         project: projectWithCanvasGraph,
         projectNodeRegistry,
         selectedGraphId: selectedGraphMetadata?.id,
         selectedNodeIds,
+        graphCommandsEnabled: !disableGraphCommands,
+        pasteCommandsEnabled,
       }),
     [
       canStartEditorGraphRun,
@@ -774,16 +841,18 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       frozenNodeOutputs,
       graphSelection,
       lastRunPerNode,
-      nodesById,
+      canvasNodesById,
+      disableGraphCommands,
       projectNodeRegistry,
       projectWithCanvasGraph,
       selectedGraphMetadata?.id,
       selectedNodeIds,
+      pasteCommandsEnabled,
     ],
   );
 
-  useCanvasHotkeys();
-  useSearchGraph();
+  useCanvasHotkeys({ graphCommandsEnabled: !disableGraphCommands });
+  useSearchGraph(!disableGraphCommands);
 
   const isZoomedOut = canvasPosition.zoom < 0.4;
   const isReallyZoomedOut = canvasPosition.zoom < 0.2;
@@ -791,9 +860,18 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const onResizeFinish = useStableCallback(
     (node: ChartNode, nextBounds: NodeResizeBounds) => {
       try {
+        const resizeChanges = getResizeChangesForNode(node, nextBounds);
+
+        if (disableGraphCommands) {
+          if (resizeChanges.length > 0) {
+            onNodesChanged(applyResizeChangesToNodes(nodes, resizeChanges));
+          }
+          return;
+        }
+
         const resizeGroup = getResizeGroupForNode(node);
         const changedResizeEntries = getChangedResizeEntries({
-          changes: getResizeChangesForNode(node, nextBounds),
+          changes: resizeChanges,
           snapshots: resizeGroup.snapshots,
         });
 
@@ -809,13 +887,22 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const canvasViewContextValue = useMemo(
     () => ({
       canvasZoom: canvasPosition.zoom,
-      closestPortToDraggingWire: closestPort,
-      draggingWire,
+      closestPortToDraggingWire: visibleClosestPort,
+      draggingWire: visibleDraggingWire,
+      graphStateOverlaysEnabled,
       heightCache: cache,
       isReallyZoomedOut,
       isZoomedOut,
     }),
-    [cache, canvasPosition.zoom, closestPort, draggingWire, isReallyZoomedOut, isZoomedOut],
+    [
+      cache,
+      canvasPosition.zoom,
+      graphStateOverlaysEnabled,
+      isReallyZoomedOut,
+      isZoomedOut,
+      visibleClosestPort,
+      visibleDraggingWire,
+    ],
   );
 
   const canvasHandlersContextValue = useMemo(
@@ -828,10 +915,11 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       onPortMouseOut,
       onPortMouseOver,
       onResizeFinish,
-      onWireEndDrag,
-      onWireStartDrag,
+      onWireEndDrag: disableConnections ? undefined : onWireEndDrag,
+      onWireStartDrag: disableConnections ? undefined : onWireStartDrag,
     }),
     [
+      disableConnections,
       nodeSelected,
       nodeStartEditing,
       onNodeMouseEnter,
@@ -893,7 +981,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           pattern={normalizedCanvasBackgroundPattern}
         />
         <MouseIcon isDraggingNode={isDraggingNode} />
-        <CopyNodesHotkeys />
+        {!disableGraphCommands && <CopyNodesHotkeys />}
         <DebugOverlay enabled={false} />
         <NodeCanvasViewport
           canvasHandlersContextValue={canvasHandlersContextValue}
@@ -910,23 +998,23 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           draggingSourceNodeIds={draggedSourceNodeIds}
           heavyContentNodeIdSet={heavyContentNodeIdSet}
           hoveredNodeId={hoveringNode}
-          lastRunPerNode={lastRunPerNode}
+          lastRunPerNode={graphStateOverlaysEnabled ? lastRunPerNode : EMPTY_RUN_DATA_BY_NODE}
           layer="comments"
           nodeTypes={nodeTypes}
           nodeCompareKindsById={comparisonRenderState.nodeCompareKindsById}
           compareRemovedNodes={comparisonRenderState.compareRemovedNodes}
           nodesWithConnections={nodesWithConnections}
           onNodeDragActivatorPointerDown={handleNodeDragActivatorPointerDown}
-          expandedOutputNodeIds={expandedOutputNodeIds}
+          expandedOutputNodeIds={graphStateOverlaysEnabled ? expandedOutputNodeIds : EMPTY_EXPANDED_OUTPUT_NODE_IDS}
           searchMatchingNodeIds={searchMatchingNodeIds}
           selectedNodeIds={selectedViewportNodeIds}
-          selectedProcessPagePerNode={selectedProcessPagePerNode}
+          selectedProcessPagePerNode={graphStateOverlaysEnabled ? selectedProcessPagePerNode : EMPTY_PROCESS_PAGE_BY_NODE}
           visibleNodeIdSet={visibleNodeIdSet}
         />
         {shouldRenderWires && (
           <WireLayer
             connections={previewConnections}
-            draggingWire={draggingWire}
+            draggingWire={visibleDraggingWire}
             compareNodesById={comparisonRenderState.compareNodesById}
             compareRemovedConnections={comparisonRenderState.compareRemovedConnections}
             connectionCompareKindsByKey={comparisonRenderState.connectionCompareKindsByKey}
@@ -954,17 +1042,17 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           draggingSourceNodeIds={draggedSourceNodeIds}
           heavyContentNodeIdSet={heavyContentNodeIdSet}
           hoveredNodeId={hoveringNode}
-          lastRunPerNode={lastRunPerNode}
+          lastRunPerNode={graphStateOverlaysEnabled ? lastRunPerNode : EMPTY_RUN_DATA_BY_NODE}
           layer="nodes"
           nodeTypes={nodeTypes}
           nodeCompareKindsById={comparisonRenderState.nodeCompareKindsById}
           compareRemovedNodes={comparisonRenderState.compareRemovedNodes}
           nodesWithConnections={nodesWithConnections}
           onNodeDragActivatorPointerDown={handleNodeDragActivatorPointerDown}
-          expandedOutputNodeIds={expandedOutputNodeIds}
+          expandedOutputNodeIds={graphStateOverlaysEnabled ? expandedOutputNodeIds : EMPTY_EXPANDED_OUTPUT_NODE_IDS}
           searchMatchingNodeIds={searchMatchingNodeIds}
           selectedNodeIds={selectedViewportNodeIds}
-          selectedProcessPagePerNode={selectedProcessPagePerNode}
+          selectedProcessPagePerNode={graphStateOverlaysEnabled ? selectedProcessPagePerNode : EMPTY_PROCESS_PAGE_BY_NODE}
           visibleNodeIdSet={visibleNodeIdSet}
         />
         {hydratedContextMenuData && (
@@ -990,7 +1078,12 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
             showContextMenu={showContextMenu}
           />
         )}
-        <MultiNodeAlignmentToolbar canvasRootRef={canvasRef} selectedNodes={selectedNodes} />
+        <MultiNodeAlignmentToolbar
+          canvasRootRef={canvasRef}
+          selectedNodes={selectedNodes}
+          nodes={disableGraphCommands ? nodes : undefined}
+          onNodesChanged={disableGraphCommands ? onNodesChanged : undefined}
+        />
       </div>
     </DndContext>
   );

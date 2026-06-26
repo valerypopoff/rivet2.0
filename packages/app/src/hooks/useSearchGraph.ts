@@ -1,6 +1,7 @@
 import { useAtom, useAtomValue } from 'jotai';
 import { useEffect, useMemo, useRef } from 'react';
 import type { ChartNode } from '@valerypopoff/rivet2-core';
+import { resolveNodePrefabInstance } from '@valerypopoff/rivet2-core';
 import { graphState } from '../state/graph';
 import { searchingGraphState } from '../state/graphBuilder';
 import { useNodeTypes } from './useNodeTypes';
@@ -10,13 +11,14 @@ import { projectState } from '../state/savedGraphs';
 import {
   buildProjectGraphSearchItems,
   clampGraphSearchSelectedIndex,
+  NODE_LIBRARY_GRAPH_SEARCH_ID,
   getSynchronousSearchableEditorDataKeys,
   type GraphSearchNodeMetadata,
   type GraphSearchMatch,
   searchGraphNodesWithMode,
 } from './graphSearch';
 
-export function useSearchGraph() {
+export function useSearchGraph(enabled = true) {
   const project = useAtomValue(projectState);
   const currentGraph = useAtomValue(graphState);
   const [searchState, setSearchState] = useAtom(searchingGraphState);
@@ -25,19 +27,41 @@ export function useSearchGraph() {
   const nodeTypes = useNodeTypes();
   const projectNodeRegistry = useProjectNodeRegistry();
   const previousQueryRef = useRef(searchState.query);
-  const hasSearchQuery = searchState.searching && searchState.query.trim().length > 0;
+  const hasSearchQuery = enabled && searchState.searching && searchState.query.trim().length > 0;
 
   const searchableNodes = useMemo(() => {
     if (!hasSearchQuery) {
       return [];
     }
 
-    const searchableGraphs =
+    const graphs =
       currentGraph.metadata?.id != null
         ? { ...project.graphs, [currentGraph.metadata.id]: currentGraph }
         : project.graphs;
+    const searchableGraphs = Object.fromEntries(
+      Object.entries(graphs).map(([graphId, graph]) => [
+        graphId,
+        {
+          ...graph,
+          nodes: graph.nodes.map((node) => resolveNodePrefabInstance(project, node)),
+        },
+      ]),
+    );
+    const nodeLibraryGraph =
+      Object.keys(project.nodePrefabs ?? {}).length > 0
+        ? {
+            [NODE_LIBRARY_GRAPH_SEARCH_ID]: {
+              metadata: {
+                id: NODE_LIBRARY_GRAPH_SEARCH_ID,
+                name: 'Node Library',
+              },
+              nodes: Object.values(project.nodePrefabs ?? {}).map((prefab) => prefab.sourceNode),
+              connections: [],
+            },
+          }
+        : {};
 
-    return buildProjectGraphSearchItems(searchableGraphs, (node: ChartNode): GraphSearchNodeMetadata => {
+    return buildProjectGraphSearchItems({ ...searchableGraphs, ...nodeLibraryGraph }, (node: ChartNode): GraphSearchNodeMetadata => {
       const nodeTypeLabel = node.type in nodeTypes ? projectNodeRegistry.getDynamicDisplayName(node.type) : node.type;
 
       return {
@@ -45,7 +69,7 @@ export function useSearchGraph() {
         searchableContentKeys: getSearchableContentKeys(node, projectNodeRegistry),
       };
     });
-  }, [currentGraph, hasSearchQuery, nodeTypes, project.graphs, projectNodeRegistry]);
+  }, [currentGraph, hasSearchQuery, nodeTypes, project.graphs, project.nodePrefabs, projectNodeRegistry]);
 
   const searchResult = useMemo(
     () => (hasSearchQuery ? searchGraphNodesWithMode(searchableNodes, searchState.query) : { matches: [], fallbackToTerms: false }),
@@ -53,6 +77,10 @@ export function useSearchGraph() {
   );
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const queryChanged = previousQueryRef.current !== searchState.query;
     previousQueryRef.current = searchState.query;
 
@@ -84,7 +112,7 @@ export function useSearchGraph() {
         selectedIndex: nextSelectedIndex,
       };
     });
-  }, [searchResult, searchState.query, searchState.searching, setSearchState]);
+  }, [enabled, searchResult, searchState.query, searchState.searching, setSearchState]);
 }
 
 function getSearchableContentKeys(

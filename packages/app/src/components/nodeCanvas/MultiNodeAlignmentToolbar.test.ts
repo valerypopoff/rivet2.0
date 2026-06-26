@@ -41,3 +41,13 @@ test('MultiNodeAlignmentToolbar keeps vertical align row above horizontal align 
   assert.ok(equalWidthIndex > leftIndex);
   assert.ok(distributeIndex > equalWidthIndex);
 });
+
+test('MultiNodeAlignmentToolbar supports controlled non-graph canvases', () => {
+  const source = readFileSync(new URL('./MultiNodeAlignmentToolbar.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /nodes\?: ChartNode\[\]/);
+  assert.match(source, /onNodesChanged\?: \(nodes: ChartNode\[\]\) => void/);
+  assert.match(source, /const controlledCanvas = Boolean\(nodes && onNodesChanged\)/);
+  assert.match(source, /applyLocalNodeUpdates/);
+  assert.match(source, /isReadOnlyGraph: controlledCanvas \? false : isReadOnlyGraph/);
+});

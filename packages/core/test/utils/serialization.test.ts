@@ -383,6 +383,52 @@ describe('serialization compatibility', () => {
     assert.deepEqual((subgraph.data as Record<string, unknown>).outputPortOrder, ['result-b', 'result-a']);
   });
 
+  it('round-trips library nodes through V4 project serialization', () => {
+    const project: Project = {
+      metadata: {
+        id: 'project-node-prefabs',
+        title: 'Node Prefab Test',
+        description: '',
+      },
+      graphs: {
+        'main-graph': {
+          metadata: { id: 'main-graph', name: 'Main Graph', description: '' },
+          nodes: [
+            {
+              id: 'instance-node',
+              type: 'nodePrefabInstance',
+              title: 'Linked Text',
+              visualData: { x: 100, y: 200, width: 260 },
+              data: { prefabId: 'prefab-text' },
+            },
+          ],
+          connections: [],
+        },
+      },
+      nodePrefabs: {
+        'prefab-text': {
+          id: 'prefab-text' as any,
+          sourceNode: {
+            id: 'source-node',
+            type: 'text',
+            title: 'Shared Text',
+            visualData: { x: 0, y: 0, width: 240 },
+            data: { text: 'hello from library' },
+          },
+        },
+      },
+      plugins: [],
+      references: [],
+    };
+
+    const [deserialized] = deserializeProject(serializeProject(project) as string);
+
+    assert.equal(deserialized.nodePrefabs?.['prefab-text']?.sourceNode.title, 'Shared Text');
+    assert.deepEqual(deserialized.nodePrefabs?.['prefab-text']?.sourceNode.data, { text: 'hello from library' });
+    assert.equal(deserialized.graphs['main-graph']?.nodes[0]?.type, 'nodePrefabInstance');
+    assert.deepEqual(deserialized.graphs['main-graph']?.nodes[0]?.data, { prefabId: 'prefab-text' });
+  });
+
   it('deserializes old-style Subgraph nodes without manual port order fields', () => {
     const graph: NodeGraph = {
       metadata: { id: 'g-old-subgraph', name: 'Old Subgraph', description: '' },

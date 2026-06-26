@@ -45,6 +45,7 @@ import { getBoxResizeCursor } from '../../utils/resizeCursors.js';
 import { NodeHeaderWarningIcon } from './NodeHeaderWarningIcon.js';
 import { ConditionalIfPort } from './ConditionalIfPort.js';
 import { viewingProjectComparisonNodeState } from '../../state/projectComparison.js';
+import { SubgraphLinkIcon } from './SubgraphLinkIcon.js';
 
 export const NormalVisualNodeContent: FC<{
   heightCache: HeightCache;
@@ -61,6 +62,8 @@ export const NormalVisualNodeContent: FC<{
   headerWarning?: string;
   compareChangeKind?: ProjectComparisonChangeKind;
   graphId?: GraphId;
+  editTargetNode?: ChartNode;
+  isNodePrefabInstance?: boolean;
 }> = memo(
   ({
     heightCache,
@@ -77,6 +80,8 @@ export const NormalVisualNodeContent: FC<{
     headerWarning,
     compareChangeKind,
     graphId,
+    editTargetNode,
+    isNodePrefabInstance = false,
   }) => {
     useDependsOnPlugins();
     const {
@@ -127,7 +132,7 @@ export const NormalVisualNodeContent: FC<{
 
     const handleEditClick = useStableCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
-      onNodeStartEditing?.(node);
+      onNodeStartEditing?.(editTargetNode ?? node);
     });
 
     const handleEditMouseDown = useStableCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -266,7 +271,7 @@ export const NormalVisualNodeContent: FC<{
             <div className="title-text">
               <NodeTitleLabel node={node} />
               {nodeDescription && <span className="title-text-description">{nodeDescription}</span>}
-              <SplitRunSummary node={node} isKnownNodeType={isKnownNodeType} />
+              <SplitRunSummary node={node} editTargetNode={editTargetNode} isKnownNodeType={isKnownNodeType} />
             </div>
           </div>
           <div className="title-controls">
@@ -303,6 +308,20 @@ export const NormalVisualNodeContent: FC<{
               </button>
             )}
             <NodeRunningIndicator isRunning={showRunningIndicator} delayMs={0} />
+            {isNodePrefabInstance && (
+              <Tooltip className="node-prefab-instance-tooltip" content="Open library node">
+                <button
+                  type="button"
+                  className="node-prefab-instance-indicator"
+                  aria-label="Open library node"
+                  onClick={handleEditClick}
+                  onPointerDown={handleEditPointerDown}
+                  onMouseDown={handleEditMouseDown}
+                >
+                  <SubgraphLinkIcon />
+                </button>
+              </Tooltip>
+            )}
             {headerWarning && (
               <Tooltip className="node-header-warning-tooltip" content={headerWarning} tag="span" wrap width={260}>
                 <span className="node-header-warning" role="img" aria-label={headerWarning}>
@@ -310,21 +329,23 @@ export const NormalVisualNodeContent: FC<{
                 </span>
               </Tooltip>
             )}
-            <Tooltip className="edit-button-tooltip" content="Edit Node">
-              <button
-                type="button"
-                className="edit-button"
-                onClick={(event) => {
-                  if (isKnownNodeType) {
-                    handleEditClick(event);
-                  }
-                }}
-                onPointerDown={handleEditPointerDown}
-                onMouseDown={handleEditMouseDown}
-              >
-                <SettingsCogIcon />
-              </button>
-            </Tooltip>
+            {!isNodePrefabInstance && (
+              <Tooltip className="edit-button-tooltip" content="Edit Node">
+                <button
+                  type="button"
+                  className="edit-button"
+                  onClick={(event) => {
+                    if (isKnownNodeType) {
+                      handleEditClick(event);
+                    }
+                  }}
+                  onPointerDown={handleEditPointerDown}
+                  onMouseDown={handleEditMouseDown}
+                >
+                  <SettingsCogIcon />
+                </button>
+              </Tooltip>
+            )}
           </div>
         </div>
 
@@ -332,7 +353,12 @@ export const NormalVisualNodeContent: FC<{
 
         <ErrorBoundary fallback={<div>Error rendering node body</div>}>
           {isKnownNodeType ? (
-            <NodeBody heightCache={heightCache} node={node} suspended={!renderHeavyContent} />
+            <NodeBody
+              heightCache={heightCache}
+              interactive={!isNodePrefabInstance}
+              node={node}
+              suspended={!renderHeavyContent}
+            />
           ) : (
             <div>Unknown node type {node.type} - are you missing a plugin?</div>
           )}

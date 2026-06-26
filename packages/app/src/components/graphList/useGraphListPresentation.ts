@@ -258,7 +258,7 @@ export function getFolderItemPresentation(options: {
   const savedGraph = item.type === 'graph' ? item.graph : undefined;
   const graphId = savedGraph?.metadata?.id;
   const isRenaming = renamingItemFullPath === fullPath;
-  const isSelected = currentGraph.metadata?.id === graphId;
+  const isSelected = item.type === 'graph' && graphId != null && currentGraph.metadata?.id === graphId;
   const openGraphName = currentGraph.metadata?.name;
   const isCollapsedOpenGraphFolder =
     item.type === 'folder' && !isExpanded && openGraphName != null && isInFolder(fullPath, openGraphName);

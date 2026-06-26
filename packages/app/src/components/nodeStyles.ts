@@ -476,6 +476,7 @@ export const nodeStyles = css`
 
     .changed-button,
     .edit-button,
+    .node-prefab-instance-indicator,
     .node-header-warning {
       background-color: transparent;
       border: none;
@@ -503,6 +504,12 @@ export const nodeStyles = css`
       width: calc(20px * var(--ui-font-scale));
     }
 
+    .node-prefab-instance-indicator {
+      cursor: pointer;
+      pointer-events: auto;
+      width: calc(20px * var(--ui-font-scale));
+    }
+
     .changed-button:hover {
       color: var(--primary-text);
     }
@@ -522,6 +529,12 @@ export const nodeStyles = css`
   }
 
   .node.hasHeaderWarning:not(.isComment) .title-controls {
+    gap: calc(3px * var(--ui-font-scale));
+    min-width: calc(66px * var(--ui-font-scale));
+    width: max-content;
+  }
+
+  .node.hasPrefabIndicator:not(.isComment) .title-controls {
     gap: calc(3px * var(--ui-font-scale));
     min-width: calc(66px * var(--ui-font-scale));
     width: max-content;
@@ -556,6 +569,12 @@ export const nodeStyles = css`
   }
 
   .title-controls .node-header-warning-tooltip {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .title-controls .node-prefab-instance-tooltip {
     position: static;
     opacity: 1;
     pointer-events: auto;
@@ -599,6 +618,10 @@ export const nodeStyles = css`
 
   .node-body:empty {
     margin-bottom: 0;
+  }
+
+  .node-body-readonly {
+    pointer-events: none;
   }
 
   .node-body pre {

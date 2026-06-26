@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { ChartNode, GraphId, NodeGraph, PluginLoadSpec, Project } from '@valerypopoff/rivet2-core';
+import type { ChartNode, GraphId, NodeGraph, NodePrefabId, PluginLoadSpec, Project } from '@valerypopoff/rivet2-core';
 import {
   deriveProjectPluginSpecsFromGraphs,
   getMissingAppPluginSpecs,
@@ -24,9 +24,14 @@ const builtInPluginSpec: PluginLoadSpec = {
   name: 'OpenAI',
 };
 
-function makeProject(graphs: NodeGraph[], plugins: PluginLoadSpec[] = []): Pick<Project, 'graphs' | 'plugins'> {
+function makeProject(
+  graphs: NodeGraph[],
+  plugins: PluginLoadSpec[] = [],
+  nodePrefabs: Project['nodePrefabs'] = undefined,
+): Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'> {
   return {
     graphs: Object.fromEntries(graphs.map((graph) => [graph.metadata!.id!, graph])),
+    nodePrefabs,
     plugins,
   };
 }
@@ -191,6 +196,26 @@ describe('pluginUsage', () => {
     assert.deepEqual(
       deriveProjectPluginSpecsFromGraphs({
         appPluginStates: [],
+        project,
+        registry,
+      }),
+      [pluginSpec],
+    );
+  });
+
+  test('adds a project plugin spec when a loaded app plugin owns a library node', () => {
+    const prefabId = 'prefab-plugin' as NodePrefabId;
+    const project = makeProject([makeGraph('main', [])], [], {
+      [prefabId]: {
+        id: prefabId,
+        sourceNode: makeNode('examplePluginNode'),
+      },
+    });
+    const registry = makeRegistry({ examplePluginNode: 'runtime-plugin-id' });
+
+    assert.deepEqual(
+      deriveProjectPluginSpecsFromGraphs({
+        appPluginStates: [loadedPluginState(pluginSpec, 'runtime-plugin-id')],
         project,
         registry,
       }),

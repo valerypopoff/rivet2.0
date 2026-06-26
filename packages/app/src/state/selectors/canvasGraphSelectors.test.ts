@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createBuiltInRegistry, type NodeConnection } from '@valerypopoff/rivet2-core';
+import { createBuiltInRegistry, type NodeConnection, type NodePrefabId, type ProjectId } from '@valerypopoff/rivet2-core';
 import { createStore } from 'jotai/vanilla';
 import { graphState } from '../atoms/graph';
 import { draggingWireState } from '../graphBuilder';
 import { canvasIoDefinitionsForNodeState, canvasPreviewConnectionsState } from './canvasGraphSelectors';
+import { projectState } from '../savedGraphs';
 
 describe('canvasGraphSelectors', () => {
   it('keeps the source node dynamic ports stable during an input-origin rewire preview', () => {
@@ -45,5 +46,30 @@ describe('canvasGraphSelectors', () => {
 
     assert.ok(io.inputDefinitions.some((definition) => definition.id === 'input3'));
     assert.ok(io.inputDefinitions.some((definition) => definition.id === 'input4'));
+  });
+
+  it('returns decorative I/O definitions for library nodes outside the live graph', () => {
+    const store = createStore();
+    const registry = createBuiltInRegistry();
+    const sourceNode = registry.createDynamic('text');
+
+    store.set(projectState, {
+      metadata: {
+        description: '',
+        id: 'project-1' as ProjectId,
+        title: 'Project',
+      },
+      graphs: {},
+      nodePrefabs: {
+        ['prefab-1' as NodePrefabId]: {
+          id: 'prefab-1' as NodePrefabId,
+          sourceNode,
+        },
+      },
+    });
+
+    const io = store.get(canvasIoDefinitionsForNodeState(sourceNode.id));
+
+    assert.ok(io.outputDefinitions.some((definition) => definition.id === 'output'));
   });
 });

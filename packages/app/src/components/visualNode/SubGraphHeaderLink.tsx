@@ -4,7 +4,7 @@ import { type FC, type MouseEvent, type PointerEvent } from 'react';
 import { useGoToSubgraphNode } from '../../hooks/useGoToSubgraphNode.js';
 import { projectState } from '../../state/savedGraphs.js';
 import { Tooltip } from '../Tooltip.js';
-import { SubgraphLinkIcon } from './SubgraphLinkIcon.js';
+import { SubgraphGraphIcon } from './SubgraphGraphIcon.js';
 
 export const SubGraphHeaderLink: FC<{ node: ChartNode }> = ({ node }) => {
   const goToSubgraphNode = useGoToSubgraphNode();
@@ -41,7 +41,7 @@ export const SubGraphHeaderLink: FC<{ node: ChartNode }> = ({ node }) => {
         onMouseDown={stopHeaderDrag}
         onPointerDown={stopHeaderDrag}
       >
-        <SubgraphLinkIcon />
+        <SubgraphGraphIcon />
       </button>
     </Tooltip>
   );

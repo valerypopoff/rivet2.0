@@ -1,5 +1,7 @@
 import type { ChartNode, GraphId, NodeGraph, NodeId } from '@valerypopoff/rivet2-core';
 
+export const NODE_LIBRARY_GRAPH_SEARCH_ID = '__node-library__' as GraphId;
+
 const MAX_SERIALIZED_CHARS = 12_000;
 const MAX_SERIALIZED_DEPTH = 5;
 const MAX_CONTAINER_ENTRIES = 50;

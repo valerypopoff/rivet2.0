@@ -2,9 +2,9 @@
 
 ## Description
 
-`Project` is the top-level Rivet document shape. It contains project metadata, all graphs, optional attached data, project references, and the plugin specs required by the graph contents.
+`Project` is the top-level Rivet document shape. It contains project metadata, all graphs, optional library nodes, optional attached data, project references, and the plugin specs required by project node contents.
 
-Rivet project files keep this YAML shape. In the desktop app, installed plugins are app-level, but project YAML still serializes `plugins` for portability. Rivet derives that list from the plugin nodes used in the project graphs and preserves unresolved plugin specs when a project references plugins that are not installed.
+Rivet project files keep this YAML shape. In the desktop app, installed plugins are app-level, but project YAML still serializes `plugins` for portability. Rivet derives that list from the plugin nodes used in the project graphs and library nodes, and preserves unresolved plugin specs when a project references plugins that are not installed.
 
 ## Definition
 
@@ -16,8 +16,16 @@ export type Project = {
   metadata: ProjectMetadata;
   plugins?: PluginLoadSpec[];
   graphs: Record<GraphId, NodeGraph>;
+  nodePrefabs?: Record<NodePrefabId, NodePrefab>;
   data?: Record<DataId, string>;
   references?: ProjectReference[];
+};
+
+export type NodePrefabId = Opaque<string, 'NodePrefabId'>;
+
+export type NodePrefab = {
+  id: NodePrefabId;
+  sourceNode: ChartNode;
 };
 
 export type ProjectMetadata = {
@@ -57,7 +65,7 @@ Project-level information.
 
 Type: `PluginLoadSpec[] | undefined`
 
-Plugin load specs required by the project. App-installed plugins make nodes available globally in the editor. The project only needs plugin specs for plugins whose nodes are actually present in the project graphs.
+Plugin load specs required by the project. App-installed plugins make nodes available globally in the editor. The project only needs plugin specs for plugins whose nodes are actually present in the project graphs or library nodes.
 
 Do not treat this as the app's installed-plugin list. It is the portable project dependency list.
 
@@ -66,6 +74,12 @@ Do not treat this as the app's installed-plugin list. It is the portable project
 Type: `Record<GraphId, NodeGraph>`
 
 All graphs in the project, keyed by graph ID.
+
+### nodePrefabs
+
+Type: `Record<NodePrefabId, NodePrefab> | undefined`
+
+Library nodes, keyed by prefab ID. These source nodes are serialized with the project but are not executable graph nodes and do not have connections. Graphs link to them through `nodePrefabInstance` nodes.
 
 ### data
 

@@ -8,6 +8,7 @@ import type {
   ChartNode,
   ProjectId,
   ChartNodeVariant,
+  NodePrefabId,
 } from '../../index.js';
 import { type AttachedData, doubleCheckProject } from './serializationUtils.js';
 import { entries } from '../typeSafety.js';
@@ -28,6 +29,7 @@ type SerializedProject = {
   metadata: ProjectMetadata;
 
   graphs: Record<GraphId, SerializedGraph>;
+  nodePrefabs?: Record<NodePrefabId, SerializedNodePrefab>;
 
   attachedData?: AttachedData;
   plugins?: PluginLoadSpec[];
@@ -66,6 +68,17 @@ type SerializedNode = {
   isConditional?: boolean;
 };
 
+type SerializedNodePrefab = {
+  id: NodePrefabId;
+  sourceNode: SerializedIsolatedNode;
+};
+
+type SerializedIsolatedNode = Omit<SerializedNode, 'outgoingConnections'> & {
+  id: NodeId;
+  type: string;
+  title: string;
+};
+
 export function projectV4Deserializer(data: unknown): [Project, AttachedData] {
   const serializedProject = unwrapYamlEnvelope<SerializedProject>(data, 4, 'Project v4');
   const [project, attachedData] = fromSerializedProject(serializedProject);
@@ -95,9 +108,15 @@ export function graphV4Serializer(graph: NodeGraph): unknown {
 }
 
 function toSerializedProject(project: Project, attachedData?: AttachedData): SerializedProject {
+  const nodePrefabs = mapValues(project.nodePrefabs ?? {}, (prefab) => ({
+    id: prefab.id,
+    sourceNode: toSerializedIsolatedNode(prefab.sourceNode),
+  }));
+
   return {
     metadata: project.metadata,
     graphs: mapValues(project.graphs, (graph) => toSerializedGraph(graph)),
+    nodePrefabs: Object.keys(nodePrefabs).length > 0 ? nodePrefabs : undefined,
     attachedData,
     plugins: project.plugins ?? [],
     references: project.references ?? [],
@@ -105,15 +124,44 @@ function toSerializedProject(project: Project, attachedData?: AttachedData): Ser
 }
 
 function fromSerializedProject(serializedProject: SerializedProject): [Project, AttachedData] {
+  const nodePrefabs = mapValues(serializedProject.nodePrefabs ?? {}, (prefab) => ({
+    id: prefab.id,
+    sourceNode: fromSerializedIsolatedNode(prefab.sourceNode),
+  }));
+
   return [
     {
       metadata: serializedProject.metadata,
       graphs: mapValues(serializedProject.graphs, (graph) => fromSerializedGraph(graph)) as Record<GraphId, NodeGraph>,
+      nodePrefabs: Object.keys(nodePrefabs).length > 0 ? nodePrefabs : undefined,
       plugins: serializedProject.plugins ?? [],
       references: serializedProject.references ?? [],
     },
     serializedProject.attachedData ?? {},
   ];
+}
+
+function toSerializedIsolatedNode(node: ChartNode): SerializedIsolatedNode {
+  const { outgoingConnections: _outgoingConnections, ...serializedNode } = toSerializedNode(node, [node], []);
+
+  return {
+    ...serializedNode,
+    id: node.id,
+    type: node.type,
+    title: node.title,
+  };
+}
+
+function fromSerializedIsolatedNode(serializedNode: SerializedIsolatedNode): ChartNode {
+  const [node] = fromSerializedNode(
+    {
+      ...serializedNode,
+      outgoingConnections: undefined,
+    },
+    `[${serializedNode.id}]:${serializedNode.type} "${serializedNode.title}"`,
+  );
+
+  return node;
 }
 
 function toSerializedGraph(graph: NodeGraph): SerializedGraph {

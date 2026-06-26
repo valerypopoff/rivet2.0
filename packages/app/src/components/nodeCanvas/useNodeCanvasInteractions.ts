@@ -54,6 +54,7 @@ export interface UseNodeCanvasInteractionsOptions {
   endSelectionBox: () => void;
   isDraggingCanvas: boolean;
   nodes: ChartNode[];
+  onCanvasClick?: () => void;
   onCanvasContextMenu: (event: { clientX: number; clientY: number; target: EventTarget }) => void;
   selectedGraphId: GraphId | undefined;
   selectedNodeIds: NodeId[];
@@ -86,6 +87,7 @@ export const useNodeCanvasInteractions = ({
   endSelectionBox,
   isDraggingCanvas,
   nodes,
+  onCanvasClick,
   onCanvasContextMenu,
   selectedGraphId,
   selectedNodeIds,
@@ -284,6 +286,7 @@ export const useNodeCanvasInteractions = ({
     if (distance < 5) {
       setEditingNodeId(null);
       setSelectedNodeIds([]);
+      onCanvasClick?.();
     }
   });
 

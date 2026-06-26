@@ -50,6 +50,14 @@ import { GRAPH_FILTER_INPUT_MARKER } from './graphList/graphFilterFocus.js';
 import { PopupMenuItem, popupMenuListStyles } from './PopupMenu.js';
 import { Tooltip } from './Tooltip.js';
 import { activeProjectComparisonState } from '../state/projectComparison.js';
+import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
+import { SubgraphLinkIcon } from './visualNode/SubgraphLinkIcon.js';
+import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
+
+const NO_SELECTED_GRAPH: NodeGraph = {
+  nodes: [],
+  connections: [],
+};
 
 const styles = css`
   --collapsed-open-graph-folder-color: color-mix(in srgb, var(--primary) 28%, transparent);
@@ -245,6 +253,45 @@ const styles = css`
     font-weight: 400;
     letter-spacing: 0;
     line-height: calc(16px * var(--ui-font-scale));
+  }
+
+  .node-library-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: calc(34px * var(--ui-font-scale));
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 10px;
+    corner-shape: squircle;
+    background: transparent;
+    color: var(--foreground);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+
+    @supports not (corner-shape: squircle) {
+      border-radius: 2px;
+    }
+  }
+
+  .node-library-entry:hover {
+    background: var(--grey-darkish);
+  }
+
+  .node-library-entry.selected {
+    background: var(--primary);
+    color: var(--foreground-on-primary);
+
+    &:hover {
+      background: var(--primary-dark);
+    }
+  }
+
+  .node-library-entry .project-tree-panel-icon {
+    flex: 0 0 auto;
   }
 
   .graph-list,
@@ -604,6 +651,8 @@ export const GraphList: FC = memo(() => {
   const setGraphSearch = useSetAtom(searchingGraphState);
   const setOpenOverlay = useSetAtom(overlayOpenState);
   const setExpandedFolders = useSetAtom(expandedFoldersState);
+  const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
+  const openNodeLibrary = useOpenNodeLibrary();
   const graphListContainerRef = useRef<HTMLDivElement>(null);
 
   const { draggingItemFolder, dragOverFolderName, handleDragStart, handleDragEnd, handleDragOver } =
@@ -645,8 +694,8 @@ export const GraphList: FC = memo(() => {
     activeComparison,
     allFolderPaths,
     contextMenuData,
-    currentGraph: graph,
-    currentGraphId: graph.metadata?.id,
+    currentGraph: nodeLibraryOpen ? undefined : graph,
+    currentGraphId: nodeLibraryOpen ? undefined : graph.metadata?.id,
     folderedGraphs,
     plugins,
     project,
@@ -668,6 +717,14 @@ export const GraphList: FC = memo(() => {
   const openGraphSearch = useStableCallback(() => {
     setOpenOverlay(undefined);
     setGraphSearch(openOrFocusGraphSearchState);
+  });
+
+  const handleOpenNodeLibrary = useStableCallback(() => {
+    openNodeLibrary();
+  });
+
+  const selectGraph = useStableCallback((graph: NodeGraph) => {
+    loadGraph(graph);
   });
 
   const setAllFoldersExpanded = useStableCallback((isExpanded: boolean) => {
@@ -915,6 +972,16 @@ export const GraphList: FC = memo(() => {
         ref={graphListContainerRef}
         tabIndex={-1}
       >
+        <button
+          type="button"
+          className={clsx('node-library-entry', { selected: nodeLibraryOpen })}
+          onClick={handleOpenNodeLibrary}
+        >
+          <span className="project-tree-panel-icon">
+            <SubgraphLinkIcon />
+          </span>
+          <span>Node Library</span>
+        </button>
         <div className="graph-list-heading">Graphs</div>
         {graphListReachability.notice && <div className="graph-list-notice">{graphListReachability.notice}</div>}
         <div
@@ -933,14 +1000,14 @@ export const GraphList: FC = memo(() => {
                 item={item}
                 runningGraphs={runningGraphs}
                 renamingItemFullPath={renamingItemFullPath}
-                graph={graph}
+                graph={nodeLibraryOpen ? NO_SELECTED_GRAPH : graph}
                 dragOverFolderName={dragOverFolderName}
                 draggingItemFolder={draggingItemFolder}
                 graphReachabilityByGraphId={graphListReachability.bucketByGraphId}
                 graphCompareKindByGraphId={graphCompareKindByGraphId}
                 referencingSelectedGraphIds={referencingSelectedGraphIds}
                 depth={0}
-                onGraphSelected={loadGraph}
+                onGraphSelected={selectGraph}
                 onRenameItem={renameFolderItem}
                 onCancelRename={cancelRename}
                 showUnreachableBadges={graphListReachability.showUnreachableBadges}

@@ -14,7 +14,7 @@ export type PluginUsageState = {
 type ProjectPluginUsageInput = {
   appPluginStates: PluginUsageState[];
   currentGraph?: NodeGraph;
-  project: Pick<Project, 'graphs' | 'plugins'>;
+  project: Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'>;
   registry: PluginUsageRegistry;
 };
 
@@ -144,7 +144,7 @@ export function deriveProjectPluginSpecsFromGraphs({
   return nextSpecs;
 }
 
-export function withDerivedProjectPluginSpecs<TProject extends Pick<Project, 'graphs' | 'plugins'>>(
+export function withDerivedProjectPluginSpecs<TProject extends Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'>>(
   project: TProject,
   options: Omit<ProjectPluginUsageInput, 'project'>,
 ): TProject {
@@ -163,7 +163,7 @@ export function withDerivedProjectPluginSpecs<TProject extends Pick<Project, 'gr
   };
 }
 
-function getProjectNodes(project: Pick<Project, 'graphs'>, currentGraph?: NodeGraph): ChartNode[] {
+function getProjectNodes(project: Pick<Project, 'graphs' | 'nodePrefabs'>, currentGraph?: NodeGraph): ChartNode[] {
   const graphs = new Map(Object.entries(project.graphs ?? {}));
 
   if (currentGraph) {
@@ -171,7 +171,10 @@ function getProjectNodes(project: Pick<Project, 'graphs'>, currentGraph?: NodeGr
     graphs.set(graphId, currentGraph);
   }
 
-  return Array.from(graphs.values()).flatMap((graph) => graph.nodes ?? []);
+  return [
+    ...Array.from(graphs.values()).flatMap((graph) => graph.nodes ?? []),
+    ...Object.values(project.nodePrefabs ?? {}).map((prefab) => prefab.sourceNode),
+  ];
 }
 
 function getPluginSpecForNode(

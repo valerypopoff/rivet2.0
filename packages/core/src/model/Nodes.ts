@@ -268,6 +268,9 @@ export * from './nodes/MCPGetPromptNode.js';
 import { referencedGraphAliasNode } from './nodes/ReferencedGraphAliasNode.js';
 export * from './nodes/ReferencedGraphAliasNode.js';
 
+import { nodePrefabInstanceNode } from './nodes/NodePrefabInstanceNode.js';
+export * from './nodes/NodePrefabInstanceNode.js';
+
 export const registerBuiltInNodes = (registry: NodeRegistration) => {
   return registry
     .register(toYamlNode)
@@ -358,7 +361,8 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(mcpDiscoveryNode)
     .register(mcpToolCallNode)
     .register(mcpGetPromptNode)
-    .register(referencedGraphAliasNode);
+    .register(referencedGraphAliasNode)
+    .register(nodePrefabInstanceNode);
 };
 
 let globalRivetNodeRegistry = registerBuiltInNodes(new NodeRegistration());

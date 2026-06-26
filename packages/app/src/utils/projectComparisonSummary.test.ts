@@ -111,19 +111,22 @@ test('project comparison summary helpers format overall and current graph counts
     summary: {
       addedConnections: 1,
       addedGraphs: 0,
+      addedNodePrefabs: 1,
       addedNodes: 2,
       changedConnections: 1,
       changedGraphs: 1,
+      changedNodePrefabs: 1,
       changedNodes: 2,
       removedConnections: 0,
       removedGraphs: 0,
+      removedNodePrefabs: 1,
       removedNodes: 1,
     },
   } satisfies ProjectComparison;
 
   assert.equal(
     formatProjectComparisonCounts(getOverallProjectComparisonCounts(comparison)),
-    '1 graph, 2 nodes, 2 connection changes',
+    '1 graph, 2 nodes, 3 library nodes, 2 connection changes',
   );
 
   assert.equal(

@@ -3,9 +3,13 @@ import {
   type GraphId,
   type NodeConnection,
   type NodeId,
+  type NodePrefabId,
   type NodeRegistration,
   type Project,
   type ProjectId,
+  type NodePrefabInstanceNode,
+  NODE_PREFAB_INSTANCE_TYPE,
+  getNodePrefabDisplayName,
   type ReferencedGraphAliasNode,
   newId,
 } from '@valerypopoff/rivet2-core';
@@ -19,15 +23,21 @@ export function createAddedNode(options: {
   position: { x: number; y: number };
   registry: NodeRegistration<any, any>;
   referencedProjects: Record<ProjectId, Project>;
+  project?: Project;
   appliedId?: NodeId;
   applyDefaultColor?: boolean;
 }) {
   let nodeType = options.nodeType as string | undefined;
   let referencedProjectId: string | undefined;
   let referencedGraphId: string | undefined;
+  let nodePrefabId: string | undefined;
 
   if (nodeType?.startsWith('referencedGraphAlias')) {
     [nodeType, referencedProjectId, referencedGraphId] = nodeType.split(':');
+  }
+
+  if (nodeType?.startsWith(NODE_PREFAB_INSTANCE_TYPE)) {
+    [nodeType, nodePrefabId] = nodeType.split(':');
   }
 
   if (!nodeType) {
@@ -63,6 +73,21 @@ export function createAddedNode(options: {
 
     const graphName = options.referencedProjects[data.projectId]?.graphs[data.graphId]?.metadata?.name;
     newNode.title = graphName ?? 'Unknown Graph';
+  }
+
+  if (newNode.type === NODE_PREFAB_INSTANCE_TYPE) {
+    if (!nodePrefabId) {
+      throw new Error('Linked node requires a library node ID');
+    }
+
+    const data = newNode.data as NodePrefabInstanceNode['data'];
+    data.prefabId = nodePrefabId as NodePrefabId;
+    newNode.title = options.project ? getNodePrefabDisplayName(options.project, data.prefabId) : newNode.title;
+
+    const sourceWidth = options.project?.nodePrefabs?.[data.prefabId]?.sourceNode.visualData.width;
+    if (sourceWidth !== undefined) {
+      newNode.visualData.width = sourceWidth;
+    }
   }
 
   return newNode;

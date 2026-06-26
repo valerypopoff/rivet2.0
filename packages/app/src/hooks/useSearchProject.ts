@@ -1,22 +1,13 @@
 import { useAtomValue } from 'jotai';
 import { useMemo } from 'react';
-import { entries } from '../utils/typeSafety';
 import { useFuseSearch } from './useFuseSearch';
-import { type GraphId } from '@valerypopoff/rivet2-core';
 import { useNodeTypes } from './useNodeTypes';
 import { useDependsOnPlugins } from './useDependsOnPlugins';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import { projectState } from '../state/savedGraphs';
+import { buildProjectSearchItems, type SearchableItem } from './projectSearchItems.js';
 
-export type SearchableItem = {
-  type: 'node';
-  id: string;
-  title: string;
-  description: string;
-  joinedData: string;
-  containerGraph: GraphId;
-  nodeType: string;
-};
+export type { SearchableItem };
 
 export type RangeTuple = [number, number];
 
@@ -42,35 +33,9 @@ export function useSearchProject(query: string, enabled: boolean): SearchedItem[
   const projectNodeRegistry = useProjectNodeRegistry();
 
   const searchableNodes = useMemo(() => {
-    const graphs = Object.values(project.graphs);
-
-    const items: SearchableItem[] = [];
-
-    for (const graph of graphs) {
-      const graphNodes = graph.nodes;
-
-      for (const node of graphNodes) {
-        const joinedData = entries(node.data as object).map(([key, value]) => {
-          return `${value}`;
-        });
-
-        const isKnownNodeType = node.type in nodeTypes;
-
-        const searchableNode: SearchableItem = {
-          type: 'node',
-          title: node.title,
-          description: node.description ?? '',
-          id: node.id,
-          joinedData: joinedData.join(' '),
-          containerGraph: graph.metadata!.id!,
-          nodeType: isKnownNodeType ? projectNodeRegistry.getDynamicDisplayName(node.type) : '',
-        };
-
-        items.push(searchableNode);
-      }
-    }
-
-    return items;
+    return buildProjectSearchItems(project, (node) =>
+      node.type in nodeTypes ? projectNodeRegistry.getDynamicDisplayName(node.type) : '',
+    );
   }, [nodeTypes, project, projectNodeRegistry]);
 
   const searchedNodes = useFuseSearch(

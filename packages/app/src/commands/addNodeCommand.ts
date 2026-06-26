@@ -21,6 +21,7 @@ export function useAddNodeCommand() {
         nodeType: params.nodeType,
         position: params.position,
         registry: projectNodeRegistry,
+        project: currentState.project,
         referencedProjects: currentState.referencedProjects,
         appliedId: appliedData?.id,
         applyDefaultColor: editorPreferences.applyDefaultNodeColors,

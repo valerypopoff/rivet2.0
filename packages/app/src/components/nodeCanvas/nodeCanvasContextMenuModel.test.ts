@@ -6,6 +6,7 @@ import {
   type FrozenNodeOutputsByGraph,
   type GraphId,
   type NodeId,
+  type NodePrefabId,
   type PortId,
   type Project,
   type ProjectId,
@@ -123,7 +124,28 @@ test('getNodeCanvasContextMenuContext creates blank-area context for non-node ta
     }),
     {
       type: 'blankArea',
-      data: {},
+      data: {
+        graphCommandsEnabled: true,
+        pasteCommandsEnabled: true,
+      },
+    },
+  );
+});
+
+test('getNodeCanvasContextMenuContext can enable paste without enabling graph commands', () => {
+  assert.deepEqual(
+    getNodeCanvasContextMenuContext({
+      ...contextModelOptions,
+      contextMenuData: { x: 0, y: 0, data: null },
+      graphCommandsEnabled: false,
+      pasteCommandsEnabled: true,
+    }),
+    {
+      type: 'blankArea',
+      data: {
+        graphCommandsEnabled: false,
+        pasteCommandsEnabled: true,
+      },
     },
   );
 });
@@ -155,6 +177,8 @@ test('getNodeCanvasContextMenuContext hydrates node context data from the DOM ta
       data: {
         nodeType: 'text',
         nodeId,
+        graphCommandsEnabled: true,
+        isLinkedNode: false,
         canRunFromEditor: true,
         canRunFromHere: true,
         canRearrangeSubgraphPorts: false,
@@ -167,9 +191,47 @@ test('getNodeCanvasContextMenuContext hydrates node context data from the DOM ta
         freezeDisabledReason: undefined,
         unfreezeNodeIds: [],
         isFrozen: false,
+        canOpenNodePrefabSource: false,
       },
     },
   );
+});
+
+test('getNodeCanvasContextMenuContext marks linked nodes while resolving their source type', () => {
+  const prefabId = 'prefab-text' as NodePrefabId;
+  const linkedNode = makeNode('nodePrefabInstance', nodeId, 'Linked node');
+  linkedNode.data = { prefabId };
+  const sourceNode = makeNode('text', 'source-node' as NodeId, 'Library text');
+  const projectWithPrefab: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [linkedNode],
+        connections: [],
+      },
+    },
+    nodePrefabs: {
+      [prefabId]: {
+        id: prefabId,
+        sourceNode,
+      },
+    },
+  };
+
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-nodePrefabInstance'),
+    nodesById: {
+      [nodeId]: linkedNode,
+    },
+    project: projectWithPrefab,
+  });
+
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.nodeType, 'text');
+  assert.equal(context.data.isLinkedNode, true);
+  assert.equal(context.data.canOpenNodePrefabSource, true);
 });
 
 test('getNodeCanvasContextMenuContext enables Subgraph port rearrange when the target graph has boundary nodes', () => {
@@ -282,6 +344,51 @@ test('getNodeCanvasContextMenuContext enables one-side variadic input rearrange 
   });
 
   assert.equal(context.type, 'node');
+  assert.equal(context.data.canRearrangeVariadicPorts, true);
+  assert.equal(context.data.variadicPortRearrangeKind, 'input-only');
+});
+
+test('getNodeCanvasContextMenuContext enables variadic rearrange for linked nodes based on their source type', () => {
+  const prefabId = 'prefab-did-run' as NodePrefabId;
+  const linkedNode = makeNode('nodePrefabInstance', nodeId, 'Linked Did Run');
+  linkedNode.data = { prefabId };
+  const didRunSource = makeNode('didRun', 'library-did-run' as NodeId, 'Library Did Run');
+  const sourceNode = makeNode('text', 'source-node' as NodeId, 'Source');
+  const projectWithLinkedDidRun: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [linkedNode, sourceNode],
+        connections: [
+          {
+            inputId: 'input2' as PortId,
+            inputNodeId: linkedNode.id,
+            outputId: 'output' as PortId,
+            outputNodeId: sourceNode.id,
+          },
+        ],
+      },
+    },
+    nodePrefabs: {
+      [prefabId]: {
+        id: prefabId,
+        sourceNode: didRunSource,
+      },
+    },
+  };
+
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-nodePrefabInstance'),
+    nodesById: {
+      [nodeId]: linkedNode,
+    },
+    project: projectWithLinkedDidRun,
+  });
+
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.nodeType, 'didRun');
   assert.equal(context.data.canRearrangeVariadicPorts, true);
   assert.equal(context.data.variadicPortRearrangeKind, 'input-only');
 });

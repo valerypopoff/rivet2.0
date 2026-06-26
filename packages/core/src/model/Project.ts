@@ -1,4 +1,5 @@
 import type { Opaque } from 'type-fest';
+import type { ChartNode } from './NodeBase.js';
 import { type GraphId, type NodeGraph } from './NodeGraph.js';
 import { type PluginLoadSpec } from './PluginLoadSpec.js';
 import type { MCP } from '../integrations/mcp/MCPProvider.js';
@@ -7,12 +8,21 @@ export type ProjectId = Opaque<string, 'ProjectId'>;
 
 export type DataId = Opaque<string, 'DataId'>;
 
+export type NodePrefabId = Opaque<string, 'NodePrefabId'>;
+
+export type NodePrefab = {
+  id: NodePrefabId;
+  sourceNode: ChartNode;
+};
+
 export type Project = {
   metadata: ProjectMetadata;
 
   plugins?: PluginLoadSpec[];
 
   graphs: Record<GraphId, NodeGraph>;
+
+  nodePrefabs?: Record<NodePrefabId, NodePrefab>;
 
   data?: Record<DataId, string>;
 

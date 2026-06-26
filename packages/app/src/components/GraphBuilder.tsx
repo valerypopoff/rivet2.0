@@ -6,7 +6,13 @@ import { editingNodeState, selectedNodesState } from '../state/graphBuilder.js';
 import { NodeEditorRenderer } from './NodeEditor.js';
 import styled from '@emotion/styled';
 import { useStableCallback } from '../hooks/useStableCallback.js';
-import { type ArrayDataValue, type ChartNode, type StringDataValue } from '@valerypopoff/rivet2-core';
+import {
+  type ArrayDataValue,
+  type ChartNode,
+  getNodePrefabInstancePrefabId,
+  isNodePrefabInstanceNode,
+  type StringDataValue,
+} from '@valerypopoff/rivet2-core';
 import { type ProcessQuestions, userInputModalQuestionsState } from '../state/userInput.js';
 import { UserInputModal } from './UserInputModal.js';
 import Button from '@atlaskit/button';
@@ -45,6 +51,7 @@ import {
   getOverallProjectComparisonCounts,
   getProjectComparisonReferenceFileName,
 } from '../utils/projectComparisonSummary.js';
+import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
 
 const Container = styled.div`
   position: relative;
@@ -137,6 +144,7 @@ export const GraphBuilder: FC = () => {
 
   const nodesById = useAtomValue(nodesByIdState);
   const contextMenuHandler = useGraphBuilderContextMenuHandler();
+  const openNodeLibrary = useOpenNodeLibrary();
 
   const nodeSelected = useStableCallback((node: ChartNode, multi: boolean) => {
     if (!multi) {
@@ -146,6 +154,17 @@ export const GraphBuilder: FC = () => {
   });
 
   const nodeStartEditing = useStableCallback((node: ChartNode) => {
+    const prefabId = getNodePrefabInstancePrefabId(node);
+    const sourceNode = prefabId ? project.nodePrefabs?.[prefabId]?.sourceNode : undefined;
+
+    if (isNodePrefabInstanceNode(node)) {
+      openNodeLibrary({
+        editingPrefabId: prefabId,
+        selectedNodeIds: sourceNode ? [sourceNode.id] : [],
+      });
+      return;
+    }
+
     warmCodeEditor();
     setEditingNodeId(node.id);
   });

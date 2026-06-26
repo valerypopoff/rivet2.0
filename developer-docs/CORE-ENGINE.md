@@ -169,6 +169,7 @@ Projects currently include:
 
 - metadata
 - graph map
+- optional library nodes (`nodePrefabs`)
 - optional plugin load specs
 - optional project references
 - optional metadata path
@@ -1055,6 +1056,23 @@ Serialization lives in [`packages/core/src/utils/serialization/`](../packages/co
 - project and graph deserialization dispatch by detected version
 - v4 is the active serializer/deserializer path
 - dataset serialization is handled separately through v4 dataset helpers
+- project-level library nodes are stored in optional `Project.nodePrefabs`. Each entry is `{ id, sourceNode }`, where the source node is an isolated `ChartNode` outside executable graphs and has no connections. The v4 serializer writes `nodePrefabs` only when the project has entries, so old projects keep their previous shape. Older Rivet versions should ignore the extra top-level field, while `nodePrefabInstance` graph nodes appear as unknown/unavailable nodes if opened before this feature exists.
+
+### Node Library runtime model
+
+Node Library support is intentionally modeled as project-level data plus a tiny graph-local linked node:
+
+- [`Project.nodePrefabs`](../packages/core/src/model/Project.ts) stores library-node source definitions.
+- [`nodePrefabInstance`](../packages/core/src/model/nodes/NodePrefabInstanceNode.ts) stores only `{ prefabId }` plus normal graph-local node identity and visual data.
+- [`NodePrefabResolver.ts`](../packages/core/src/model/NodePrefabResolver.ts) resolves an instance into an effective clone of its source node before runtime node implementations are created.
+
+The effective-node model keeps graph execution behavior aligned with ordinary nodes. During preprocessing, `GraphPreprocessor` replaces every linked node with the resolved source semantics while preserving the instance `id` and graph-local geometry (`x`, `y`, `width`, and `zIndex`). Library-node visual styling such as node color stays source-owned so V1 does not accidentally create per-link style overrides. Node lifecycle events, execution history, recordings, run-to/run-from behavior, Browser execution, Node execution, and Remote Debugger routing therefore use the instance node id but the library node type and ports. Downstream connections continue to point at the instance id, so changing a library node can recover or drop invalid linked-node connections without rewriting unrelated graph structure.
+
+Missing or invalid library nodes stay as `nodePrefabInstance` fallback nodes. They render with a missing-source warning in the editor and fail only if execution reaches them, with a graph failure naming the missing library node.
+
+Runtime execution-plan caching remains enabled for projects with `nodePrefabs`, but cached plans are keyed by the `Project.nodePrefabs` object identity used to build them. Library-node edits replace that map and force the next run to rebuild the plan, while repeated runs without Node Library edits keep the normal cached path. Do not cache projects solely by `NodeGraph` identity; library-node edits can change the effective type, ports, split/conditional behavior, and implementation of many graph-local linked nodes without changing the graph object itself.
+
+Library nodes are not graph nodes. They have no connections, are not executable by themselves, are not main-graph candidates, and should not enter reachability analysis. `canUseNodeAsPrefabSource(...)` blocks graph-boundary and graph-reference node types (`Graph Input`, `Graph Output`, `Referenced Graph Alias`, `Comment`, and `nodePrefabInstance`) so a V1 source remains a standalone node implementation instead of becoming another graph wrapper. Compare/search tools can inspect serialized source-node definitions, but runtime dataflow must always go through graph-local `nodePrefabInstance` nodes.
 
 ### Shared helpers
 

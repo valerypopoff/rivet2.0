@@ -4,6 +4,7 @@ export type ProjectComparisonSummaryCounts = {
   connectionChanges: number;
   graphs: number;
   nodes: number;
+  nodePrefabs?: number;
 };
 
 export function getProjectComparisonReferenceFileName(referencePath: string | undefined, fallbackTitle: string): string {
@@ -16,6 +17,10 @@ export function getOverallProjectComparisonCounts(comparison: ProjectComparison)
     connectionChanges:
       comparison.summary.addedConnections + comparison.summary.removedConnections + comparison.summary.changedConnections,
     graphs: comparison.summary.addedGraphs + comparison.summary.removedGraphs + comparison.summary.changedGraphs,
+    nodePrefabs:
+      (comparison.summary.addedNodePrefabs ?? 0) +
+      (comparison.summary.removedNodePrefabs ?? 0) +
+      (comparison.summary.changedNodePrefabs ?? 0),
     nodes: Object.values(comparison.graphs).reduce(
       (count, graphComparison) => count + countHighlightedCurrentNodes(graphComparison),
       0,
@@ -31,6 +36,7 @@ export function getGraphProjectComparisonCounts(
       connectionChanges: 0,
       graphs: 0,
       nodes: 0,
+      nodePrefabs: 0,
     };
   }
 
@@ -41,6 +47,7 @@ export function getGraphProjectComparisonCounts(
       graphComparison.summary.changedConnections,
     graphs: graphComparison.kind === 'unchanged' ? 0 : 1,
     nodes: countHighlightedCurrentNodes(graphComparison),
+    nodePrefabs: 0,
   };
 }
 
@@ -48,6 +55,7 @@ export function formatProjectComparisonCounts(counts: ProjectComparisonSummaryCo
   return formatPresentCounts([
     formatPresentCount(counts.graphs, 'graph', 'graphs'),
     formatPresentCount(counts.nodes, 'node', 'nodes'),
+    formatPresentCount(counts.nodePrefabs ?? 0, 'library node', 'library nodes'),
     formatPresentCount(counts.connectionChanges, 'connection change', 'connection changes'),
   ]);
 }

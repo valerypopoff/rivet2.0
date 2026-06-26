@@ -3,13 +3,15 @@ import type {
   ProjectConnectionComparison,
   ProjectComparison,
   ProjectGraphComparison,
+  ProjectNodePrefabComparison,
   ProjectNodeComparison,
 } from '../projectComparison.js';
 
 export function summarizeProjectComparison(
   graphs: Record<ProjectGraphComparison['id'], ProjectGraphComparison>,
+  nodePrefabs: Record<string, ProjectNodePrefabComparison> = {},
 ): ProjectComparison['summary'] {
-  return Object.values(graphs).reduce(
+  const summary = Object.values(graphs).reduce(
     (acc, graph) => {
       if (graph.kind === 'added') acc.addedGraphs += 1;
       if (graph.kind === 'removed') acc.removedGraphs += 1;
@@ -25,6 +27,14 @@ export function summarizeProjectComparison(
     },
     createEmptyProjectSummary(),
   );
+
+  for (const prefab of Object.values(nodePrefabs)) {
+    if (prefab.kind === 'added') summary.addedNodePrefabs = (summary.addedNodePrefabs ?? 0) + 1;
+    if (prefab.kind === 'removed') summary.removedNodePrefabs = (summary.removedNodePrefabs ?? 0) + 1;
+    if (prefab.kind === 'changed') summary.changedNodePrefabs = (summary.changedNodePrefabs ?? 0) + 1;
+  }
+
+  return summary;
 }
 
 export function summarizeGraphComparison(

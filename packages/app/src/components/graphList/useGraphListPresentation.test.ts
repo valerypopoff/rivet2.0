@@ -261,6 +261,33 @@ describe('graph list presentation helpers', () => {
     assert.equal(presentation.containsReferencingSelectedGraph, false);
   });
 
+  it('does not select folder rows when no graph is selected', () => {
+    const item: NodeGraphFolderItem = {
+      type: 'folder',
+      name: 'Folder',
+      fullPath: 'Folder',
+      children: [{ type: 'graph', name: 'Child', graph: graph('child', 'Folder/Child') }],
+    };
+
+    const presentation = getFolderItemPresentation({
+      currentGraph: { nodes: [], connections: [] },
+      dragOverFolderName: undefined,
+      draggingItemFolder: undefined,
+      fullPath: getGraphListItemPath(item),
+      graphReachabilityByGraphId: {},
+      isExpanded: true,
+      item,
+      mainGraphId: 'main' as GraphId,
+      referencingSelectedGraphIds: new Set(),
+      renamingItemFullPath: undefined,
+      runningGraphs: [],
+      showUnreachableBadges: true,
+    });
+
+    assert.equal(presentation.isSelected, false);
+    assert.equal(presentation.isCollapsedOpenGraphFolder, false);
+  });
+
   it('detects collapsed folders that contain graphs referencing the open graph', () => {
     const item: NodeGraphFolderItem = {
       type: 'folder',

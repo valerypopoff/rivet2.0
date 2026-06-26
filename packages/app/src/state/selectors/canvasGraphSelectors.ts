@@ -1,6 +1,13 @@
 import { atom } from 'jotai';
 import { atomFamily } from 'jotai/utils';
-import { type NodeConnection, type NodeId, type NodeInputDefinition, type NodeOutputDefinition } from '@valerypopoff/rivet2-core';
+import {
+  type ChartNode,
+  type NodeConnection,
+  type NodeId,
+  type NodeImpl,
+  type NodeInputDefinition,
+  type NodeOutputDefinition,
+} from '@valerypopoff/rivet2-core';
 import { connectionsState } from '../atoms/graph.js';
 import { draggingWireState } from '../graphBuilder.js';
 import { getCanvasPreviewConnections } from '../../domain/graphEditing/wireDragActions.js';
@@ -8,6 +15,8 @@ import { handleError } from '../../utils/errorHandling.js';
 import { nodesByIdState } from './graphSelectors.js';
 import { projectState, referencedProjectsState } from '../savedGraphs.js';
 import { nodeInstanceByIdState } from './nodeSelectors.js';
+import { projectNodeRegistryState } from '../plugins.js';
+import { nodePrefabSourceNodesByIdState } from './nodePrefabSelectors.js';
 
 export const canvasPreviewConnectionsState = atom((get) => {
   const connections = get(connectionsState);
@@ -69,10 +78,26 @@ export const canvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | unde
       return { inputDefinitions: [], outputDefinitions: [] };
     }
 
-    const instance = get(nodeInstanceByIdState(nodeId));
-    const connections = get(canvasConnectionsForSingleNodeState(nodeId)) ?? [];
-    const nodesById = get(nodesByIdState);
     const project = get(projectState);
+    const sourceNode = get(nodePrefabSourceNodesByIdState)[nodeId];
+    const connections = sourceNode ? [] : (get(canvasConnectionsForSingleNodeState(nodeId)) ?? []);
+    const nodesById = sourceNode ? { ...get(nodesByIdState), [nodeId]: sourceNode } : get(nodesByIdState);
+    let instance: NodeImpl<ChartNode> | undefined;
+    if (sourceNode) {
+      try {
+        instance = get(projectNodeRegistryState).createDynamicImpl(sourceNode);
+      } catch (error) {
+        handleError(error, 'Error creating library node implementation for canvas', {
+          metadata: {
+            nodeId,
+            nodeType: sourceNode.type,
+          },
+          toastError: false,
+        });
+      }
+    } else {
+      instance = get(nodeInstanceByIdState(nodeId));
+    }
     const referencedProjects = get(referencedProjectsState);
 
     let inputDefinitions: NodeInputDefinition[] | undefined;

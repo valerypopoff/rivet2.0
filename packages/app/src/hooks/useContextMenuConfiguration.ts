@@ -61,6 +61,8 @@ const type = <T>() => undefined! as T;
 type NodeContextMenuData = {
   nodeType: ChartNode['type'];
   nodeId: NodeId;
+  graphCommandsEnabled: boolean;
+  isLinkedNode: boolean;
   canRunFromEditor: boolean;
   canRunFromHere: boolean;
   canRearrangeSubgraphPorts: boolean;
@@ -73,6 +75,7 @@ type NodeContextMenuData = {
   freezeDisabledReason?: string;
   unfreezeNodeIds: NodeId[];
   isFrozen: boolean;
+  canOpenNodePrefabSource: boolean;
 };
 
 type NodeFreezeTarget = {
@@ -104,6 +107,8 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
   if (
     typeof data.nodeType !== 'string' ||
     typeof data.nodeId !== 'string' ||
+    typeof data.graphCommandsEnabled !== 'boolean' ||
+    typeof data.isLinkedNode !== 'boolean' ||
     typeof data.canRunFromEditor !== 'boolean' ||
     typeof data.canRunFromHere !== 'boolean' ||
     typeof data.canRearrangeSubgraphPorts !== 'boolean' ||
@@ -111,7 +116,8 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
     typeof data.canFreeze !== 'boolean' ||
     typeof data.canUnfreeze !== 'boolean' ||
     typeof data.freezeMenuTargetCount !== 'number' ||
-    typeof data.isFrozen !== 'boolean'
+    typeof data.isFrozen !== 'boolean' ||
+    typeof data.canOpenNodePrefabSource !== 'boolean'
   ) {
     return undefined;
   }
@@ -119,6 +125,8 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
   return {
     nodeType: data.nodeType as ChartNode['type'],
     nodeId: data.nodeId as NodeId,
+    graphCommandsEnabled: data.graphCommandsEnabled,
+    isLinkedNode: data.isLinkedNode,
     canRunFromEditor: data.canRunFromEditor,
     canRunFromHere: data.canRunFromHere,
     canRearrangeSubgraphPorts: data.canRearrangeSubgraphPorts,
@@ -137,34 +145,38 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
         : undefined,
     unfreezeNodeIds,
     isFrozen: data.isFrozen,
+    canOpenNodePrefabSource: data.canOpenNodePrefabSource,
   };
 };
 
 const isExecutableNodeContext = (context: unknown) => {
   const data = getNodeContextMenuData(context);
-  return data != null && data.canRunFromEditor && data.nodeType !== 'comment';
+  return data != null && data.graphCommandsEnabled && data.canRunFromEditor && data.nodeType !== 'comment';
 };
 
 const canRunFromHere = (context: unknown) => {
   const data = getNodeContextMenuData(context);
-  return data != null && data.canRunFromEditor && data.nodeType !== 'comment' && data.canRunFromHere;
+  return data != null && data.graphCommandsEnabled && data.canRunFromEditor && data.nodeType !== 'comment' && data.canRunFromHere;
 };
 
 const getFreezeNodeTargetCount = (context: unknown) => {
   const data = getNodeContextMenuData(context);
-  return data?.canFreeze ? data.freezeNodeTargets.length : 0;
+  return data?.graphCommandsEnabled && data.canFreeze ? data.freezeNodeTargets.length : 0;
 };
 
 const getFreezeMenuTargetCount = (context: unknown) => {
   const data = getNodeContextMenuData(context);
-  return data?.freezeMenuTargetCount ?? 0;
+  return data?.graphCommandsEnabled ? data.freezeMenuTargetCount : 0;
 };
 
-const getFreezeDisabledReason = (context: unknown) => getNodeContextMenuData(context)?.freezeDisabledReason;
+const getFreezeDisabledReason = (context: unknown) => {
+  const data = getNodeContextMenuData(context);
+  return data?.graphCommandsEnabled ? data.freezeDisabledReason : undefined;
+};
 
 const getUnfreezeNodeTargetCount = (context: unknown) => {
   const data = getNodeContextMenuData(context);
-  return data?.canUnfreeze ? data.unfreezeNodeIds.length : 0;
+  return data?.graphCommandsEnabled && data.canUnfreeze ? data.unfreezeNodeIds.length : 0;
 };
 
 const isFreezeDisabled = (context: unknown) =>
@@ -184,20 +196,39 @@ const canUnfreezeOneNode = (context: unknown) => getUnfreezeNodeTargetCount(cont
 
 const canUnfreezeMultipleNodes = (context: unknown) => getUnfreezeNodeTargetCount(context) > 1;
 
-const isSubgraphNodeContext = (context: unknown) => getNodeContextMenuData(context)?.nodeType === 'subGraph';
+const isSubgraphNodeContext = (context: unknown) => {
+  const data = getNodeContextMenuData(context);
+  return data?.graphCommandsEnabled === true && data.nodeType === 'subGraph';
+};
 
-const canRearrangeSubgraphPorts = (context: unknown) =>
-  getNodeContextMenuData(context)?.canRearrangeSubgraphPorts === true;
+const canRearrangeSubgraphPorts = (context: unknown) => {
+  const data = getNodeContextMenuData(context);
+  return data?.graphCommandsEnabled === true && data.canRearrangeSubgraphPorts === true;
+};
 
 const canRearrangeVariadicInputPorts = (context: unknown) => {
   const data = getNodeContextMenuData(context);
-  return data?.canRearrangeVariadicPorts === true && data.variadicPortRearrangeKind === 'input-only';
+  return data?.graphCommandsEnabled === true && data.canRearrangeVariadicPorts === true && data.variadicPortRearrangeKind === 'input-only';
 };
 
 const canRearrangeVariadicMirrorPorts = (context: unknown) => {
   const data = getNodeContextMenuData(context);
-  return data?.canRearrangeVariadicPorts === true && data.variadicPortRearrangeKind === 'input-output-pair';
+  return data?.graphCommandsEnabled === true && data.canRearrangeVariadicPorts === true && data.variadicPortRearrangeKind === 'input-output-pair';
 };
+
+const canOpenNodePrefabSource = (context: unknown) => getNodeContextMenuData(context)?.canOpenNodePrefabSource === true;
+const canEditNode = (context: unknown) => {
+  const data = getNodeContextMenuData(context);
+  return data != null && !data.isLinkedNode;
+};
+const isGraphCommandNodeContext = (context: unknown) => getNodeContextMenuData(context)?.graphCommandsEnabled === true;
+const isPasteCommandBlankAreaContext = (context: unknown) =>
+  Boolean(
+    context &&
+      typeof context === 'object' &&
+      ((context as { graphCommandsEnabled?: unknown }).graphCommandsEnabled === true ||
+        (context as { pasteCommandsEnabled?: unknown }).pasteCommandsEnabled === true),
+  );
 
 export function useContextMenuConfiguration() {
   const addMenuConfig = useContextMenuAddNodeConfiguration();
@@ -261,6 +292,7 @@ export function useContextMenuConfiguration() {
                 id: 'node-copy',
                 label: 'Copy',
                 icon: CopyIcon,
+                conditional: isGraphCommandNodeContext,
                 separatorBefore: true,
               },
               {
@@ -278,6 +310,13 @@ export function useContextMenuConfiguration() {
                 id: 'node-edit',
                 label: 'Edit',
                 icon: SettingsCogIcon,
+                conditional: canEditNode,
+              },
+              {
+                id: 'node-open-prefab-source',
+                label: 'Open library node',
+                icon: SubgraphLinkIcon,
+                conditional: canOpenNodePrefabSource,
               },
               {
                 id: 'node-rearrange-subgraph-ports',
@@ -301,7 +340,7 @@ export function useContextMenuConfiguration() {
                 id: 'nodes-factor-into-subgraph',
                 label: 'Create Subgraph',
                 icon: DuplicateIcon,
-                conditional: () => selectedNodeIds.length > 0,
+                conditional: (context) => isGraphCommandNodeContext(context) && selectedNodeIds.length > 0,
               },
               {
                 id: 'node-delete',
@@ -313,7 +352,7 @@ export function useContextMenuConfiguration() {
             ],
           },
           blankArea: {
-            contextType: type<{}>(),
+            contextType: type<{ graphCommandsEnabled?: boolean; pasteCommandsEnabled?: boolean }>(),
             items: [
               {
                 id: 'add',
@@ -325,7 +364,7 @@ export function useContextMenuConfiguration() {
                 id: 'paste',
                 label: 'Paste',
                 icon: PasteIcon,
-                conditional: () => clipboard !== undefined,
+                conditional: (context) => isPasteCommandBlankAreaContext(context) && clipboard !== undefined,
               },
             ],
           },

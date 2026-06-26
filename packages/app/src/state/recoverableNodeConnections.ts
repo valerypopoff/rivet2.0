@@ -76,6 +76,25 @@ export function setRecoverableNodeConnectionsForGraphNode(
   };
 }
 
+export function setRecoverableNodeConnectionsForGraph(
+  entries: RecoverableNodeConnectionsByGraph,
+  graphId: GraphId | undefined,
+  connectionsByNode: RecoverableNodeConnectionsByNode,
+): RecoverableNodeConnectionsByGraph {
+  if (!graphId) {
+    return entries;
+  }
+
+  if (Object.keys(connectionsByNode).length === 0) {
+    return clearRecoverableNodeConnectionsForGraph(entries, graphId);
+  }
+
+  return {
+    ...entries,
+    [graphId]: connectionsByNode,
+  };
+}
+
 export function removeRecoverableNodeConnectionsForNodes(
   entriesByNode: RecoverableNodeConnectionsByNode,
   nodeIds: readonly NodeId[],

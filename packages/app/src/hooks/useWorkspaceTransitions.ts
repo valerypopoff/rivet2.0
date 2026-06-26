@@ -1,5 +1,5 @@
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
-import { type DataId, type GraphId, type Project } from '@valerypopoff/rivet2-core';
+import { type DataId, type GraphId, type NodeId, type NodePrefabId, type Project } from '@valerypopoff/rivet2-core';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
@@ -49,6 +49,7 @@ import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js'
 import { markProjectClean, markProjectDirtyFlag } from '../utils/projectUnsavedChanges.js';
 import { useApplyProjectExecutorMode } from './useProjectExecutorMode.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
+import { editingNodePrefabIdState, nodeLibraryOpenState } from '../state/nodeLibrary.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -71,6 +72,8 @@ export function useWorkspaceTransitions() {
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
   const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
   const setProjects = useSetAtom(projectsState);
+  const setNodeLibraryOpen = useSetAtom(nodeLibraryOpenState);
+  const setEditingNodePrefabId = useSetAtom(editingNodePrefabIdState);
   const centerViewOnGraph = useCenterViewOnGraph();
   const saveCurrentGraph = useSaveCurrentGraph();
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
@@ -201,6 +204,8 @@ export function useWorkspaceTransitions() {
         cleanupNodeAtomFamilies(transition.cleanupNodeIds);
         setIsReadOnlyGraph(false);
         setHistoricalGraph(null);
+        setNodeLibraryOpen(false);
+        setEditingNodePrefabId(undefined);
         setGraph(transition.graph);
         const persistedCanvasPositionsByGraph = resolvePersistedCanvasPositionsForLegacyCache({
           project: projectInfo.project,
@@ -315,6 +320,47 @@ export function useWorkspaceTransitions() {
       } else {
         setPosition({ x: 0, y: 0, zoom: 1 });
       }
+    },
+
+    switchToNodeLibrary(
+      options: { selectedNodeIds?: readonly NodeId[]; editingPrefabId?: NodePrefabId | undefined } = {},
+    ) {
+      const currentGraphId = currentGraph.metadata?.id;
+
+      if (project.metadata.id) {
+        persistCurrentProjectEditorSnapshot({
+          currentGraphId,
+        });
+
+        if (currentGraphId) {
+          setLastSavedPositions((previousPositionsByGraph) => ({
+            ...previousPositionsByGraph,
+            [currentGraphId]: {
+              x: canvasPosition.x,
+              y: canvasPosition.y,
+              zoom: canvasPosition.zoom,
+            },
+          }));
+        }
+      }
+
+      const savedCurrentGraph = saveCurrentGraph();
+      const latestProject = store.get(projectState);
+      const projectWithCurrentGraph = mergeCurrentGraphIntoProject(latestProject, savedCurrentGraph);
+      setProject(projectWithCurrentGraph);
+
+      if (latestProject.metadata.id && savedCurrentGraph) {
+        persistOpenedProjectSnapshot({
+          project: projectWithCurrentGraph,
+          graph: savedCurrentGraph,
+        });
+      }
+
+      setSelectedNodes([...(options.selectedNodeIds ?? [])]);
+      setIsReadOnlyGraph(false);
+      setHistoricalGraph(null);
+      setNodeLibraryOpen(true);
+      setEditingNodePrefabId(options.editingPrefabId);
     },
 
     buildProjectForSave() {

@@ -30,6 +30,7 @@ import {
   getGraphSearchStats,
   formatGraphSearchStats,
   groupGraphSearchMatches,
+  NODE_LIBRARY_GRAPH_SEARCH_ID,
   type GraphSearchNodeMatch,
   type GraphSearchStats,
 } from '../hooks/graphSearch';
@@ -39,6 +40,7 @@ import { createRootGraphViewContext } from '../domain/graphEditing/navigationAct
 import { graphSearchPanelHeightState } from '../state/ui';
 import { resizeCursorStyles } from '../utils/resizeCursors';
 import { getGraphSearchPanelMaxHeight, getNextGraphSearchPanelHeight } from './graphSearch/graphSearchPanelModel';
+import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary';
 
 const GRAPH_SEARCH_FOCUS_ZOOM = 0.8;
 const MIN_GRAPH_SEARCH_PANEL_HEIGHT = 180;
@@ -410,6 +412,7 @@ export const NavigationBar: FC = () => {
   const [graphSearchPanelHeight, setGraphSearchPanelHeight] = useAtom(graphSearchPanelHeightState);
   const goToNode = useGoToNode();
   const setSelectedNodes = useSetAtom(selectedNodesState);
+  const openNodeLibrary = useOpenNodeLibrary();
   const loadGraph = useLoadGraph();
   const project = useAtomValue(projectState);
   const currentGraph = useAtomValue(graphState);
@@ -551,6 +554,12 @@ export const NavigationBar: FC = () => {
   }
 
   function selectGraphSearchMatch(match: GraphSearchNodeMatch, selectedIndex: number) {
+    if (match.graphId === NODE_LIBRARY_GRAPH_SEARCH_ID) {
+      setSearching((state) => ({ ...state, selectedIndex }));
+      openNodeLibrary({ selectedNodeIds: [match.nodeId] });
+      return;
+    }
+
     const panelBottom = Math.min(
       window.innerHeight,
       Math.max(0, graphSearchPanelRef.current?.getBoundingClientRect().bottom ?? 0),
@@ -566,6 +575,11 @@ export const NavigationBar: FC = () => {
   }
 
   function selectGraphSearchGroup(graphId: GraphId) {
+    if (graphId === NODE_LIBRARY_GRAPH_SEARCH_ID) {
+      openNodeLibrary();
+      return;
+    }
+
     const graph = graphId === currentGraph.metadata?.id ? currentGraph : project.graphs[graphId];
 
     if (graph) {
@@ -729,7 +743,9 @@ const GraphSearchResults: FC<{
           <div className="search-result-group-title">
             <Tooltip content="Open graph" placement="right" tag="span" className="search-result-group-title-tooltip">
               <button className="search-result-group-title-button" onClick={() => onSelectGraph(group.graphId)}>
-                <span className="search-result-graph-label">Graph </span>
+                <span className="search-result-graph-label">
+                  {group.graphId === NODE_LIBRARY_GRAPH_SEARCH_ID ? 'Library ' : 'Graph '}
+                </span>
                 <HighlightedText
                   className="search-result-graph-name"
                   text={group.graphName}
@@ -784,6 +800,7 @@ const SearchResultItem: FC<{
   selected: boolean;
 }> = ({ entry, selected, searchText }) => {
   const project = useAtomValue(projectState);
+  const openNodeLibrary = useOpenNodeLibrary();
 
   const goToNode = useGoToNode();
 
@@ -793,16 +810,32 @@ const SearchResultItem: FC<{
       const element = document.querySelector('.search-result-item.selected');
       element?.scrollIntoView({ block: 'nearest' });
 
+      if (entry.item.containerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID) {
+        openNodeLibrary({ selectedNodeIds: [entry.item.id as NodeId] });
+        return;
+      }
+
       goToNode(entry.item.id as NodeId);
     }
-  }, [selected, entry.item.id, goToNode]);
+  }, [
+    selected,
+    entry.item.containerGraph,
+    entry.item.id,
+    goToNode,
+    openNodeLibrary,
+  ]);
+
+  const containerName =
+    entry.item.containerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID
+      ? 'Node Library'
+      : project.graphs[entry.item.containerGraph]?.metadata?.name ?? 'Unknown Graph';
 
   return (
     <div className={clsx('search-result-item', { selected })}>
       <div className="title">
         <HighlightedText text={entry.item.title} searchText={searchText} />
       </div>
-      <div className="graph">in {project.graphs[entry.item.containerGraph]?.metadata?.name ?? 'Unknown Graph'}</div>
+      <div className="graph">in {containerName}</div>
       <div className="description">
         <HighlightedText text={entry.item.description} searchText={searchText} />
       </div>

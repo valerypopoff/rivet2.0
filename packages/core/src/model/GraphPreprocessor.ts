@@ -5,6 +5,7 @@ import type { NodeGraph } from './NodeGraph.js';
 import type { NodeConnection, NodeId, ChartNode, NodeInputDefinition, NodeOutputDefinition, PortId } from './NodeBase.js';
 import type { NodeDefinitionContext, NodeImpl } from './NodeImpl.js';
 import type { Project, ProjectId } from './Project.js';
+import { resolveNodePrefabInstances } from './NodePrefabResolver.js';
 
 export type GraphNodeDefinitions = Record<NodeId, { inputs: NodeInputDefinition[]; outputs: NodeOutputDefinition[] }>;
 export type GraphPortConnectionMap = Record<NodeId, Partial<Record<PortId, NodeConnection>>>;
@@ -62,13 +63,14 @@ export function preprocessGraphState(
 export function preprocessGraphState(options: GraphPreprocessorOptions): GraphPreprocessedState {
   const { buildExecutionPlan, definitionContext, graph, loadedProjects, project, registry, warnOnInvalidGraph } =
     options;
+  const graphNodes = resolveNodePrefabInstances(project, graph.nodes);
   const effectiveDefinitionContext =
-    definitionContext && graph.nodes.some(usesGraphBoundaryDefinitionContext) ? definitionContext : undefined;
+    definitionContext && graphNodes.some(usesGraphBoundaryDefinitionContext) ? definitionContext : undefined;
   const nodeInstances: Record<NodeId, NodeImpl<ChartNode>> = {};
   const nodesById: Record<NodeId, ChartNode> = {};
   const connections: Record<NodeId, NodeConnection[]> = {};
 
-  for (const node of graph.nodes) {
+  for (const node of graphNodes) {
     nodeInstances[node.id] = registry.createDynamicImpl(node);
     nodesById[node.id] = node;
   }
@@ -110,7 +112,7 @@ export function preprocessGraphState(options: GraphPreprocessorOptions): GraphPr
     warnOnInvalidGraph,
   });
 
-  const stronglyConnectedComponents = findStronglyConnectedComponents(graph.nodes, (node) => {
+  const stronglyConnectedComponents = findStronglyConnectedComponents(graphNodes, (node) => {
     const nodeConnections = connections[node.id] ?? [];
     return nodeConnections
       .filter((connection) => connection.outputNodeId === node.id)
@@ -137,7 +139,7 @@ export function preprocessGraphState(options: GraphPreprocessorOptions): GraphPr
     ...buildGraphExecutionPlan({
       connections,
       definitions,
-      graphNodes: graph.nodes,
+      graphNodes,
       nodesById,
       stronglyConnectedComponents,
     }),
