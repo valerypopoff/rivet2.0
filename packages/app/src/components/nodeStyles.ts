@@ -309,13 +309,11 @@ export const nodeStyles = css`
   }
 
   .subgraph-link-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: calc(24px * var(--ui-font-scale));
-    height: calc(46px * var(--ui-font-scale));
-    margin: calc(-12px * var(--ui-font-scale)) 0;
-    margin-left: calc(-5px * var(--ui-font-scale));
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
     padding: 0;
     border: 0;
     background: transparent;
@@ -324,9 +322,11 @@ export const nodeStyles = css`
     transition: color 0.2s ease-out;
 
     svg {
+      position: absolute;
+      left: calc(12px * var(--ui-font-scale));
+      top: calc(12px * var(--ui-font-scale));
       width: 20px;
       height: 20px;
-      margin-bottom: 0.3em;
     }
   }
 
@@ -335,8 +335,19 @@ export const nodeStyles = css`
   }
 
   .subgraph-link-tooltip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
     display: flex;
-    align-items: center;
+    align-items: stretch;
+    width: calc(41px * var(--ui-font-scale));
+    margin: 0;
+    z-index: 4;
+  }
+
+  .grab-area.has-subgraph-header-link {
+    padding-left: calc(27px * var(--ui-font-scale));
   }
 
   .title-text {
@@ -507,10 +518,14 @@ export const nodeStyles = css`
     .node-prefab-instance-indicator {
       cursor: pointer;
       pointer-events: auto;
-      width: calc(20px * var(--ui-font-scale));
+      width: calc(26px * var(--ui-font-scale));
     }
 
     .changed-button:hover {
+      color: var(--primary-text);
+    }
+
+    .node-prefab-instance-indicator:hover {
       color: var(--primary-text);
     }
 

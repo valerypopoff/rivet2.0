@@ -14,6 +14,7 @@ import { selectedNodesState } from '../state/graphBuilder.js';
 import { useContextMenuCommands } from './useContextMenuCommands.js';
 import { clipboardState } from '../state/clipboard';
 import { useAtomValue } from 'jotai';
+import { SubgraphGraphIcon } from '../components/visualNode/SubgraphGraphIcon.js';
 import { SubgraphLinkIcon } from '../components/visualNode/SubgraphLinkIcon.js';
 import type { VariadicPortReorderKind } from '../domain/graphEditing/variadicPortReorder.js';
 
@@ -303,7 +304,7 @@ export function useContextMenuConfiguration() {
               {
                 id: 'node-go-to-subgraph',
                 label: 'Go to subgraph',
-                icon: SubgraphLinkIcon,
+                icon: SubgraphGraphIcon,
                 conditional: isSubgraphNodeContext,
               },
               {

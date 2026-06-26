@@ -70,7 +70,7 @@ export const ZoomedOutVisualNodeContent: FC<{
           onClick={isReallyZoomedOut ? undefined : handleGrabClick}
         >
           {!isReallyZoomedOut && (
-            <div className="grab-area">
+            <div className={clsx('grab-area', { 'has-subgraph-header-link': node.type === 'subGraph' })}>
               <SubGraphHeaderLink node={node} />
               <div className="title-text">
                 <NodeTitleLabel node={node} />

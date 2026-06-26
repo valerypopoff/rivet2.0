@@ -266,7 +266,7 @@ export const NormalVisualNodeContent: FC<{
           onMouseMove={watchShift}
           onClick={handleGrabClick}
         >
-          <div className="grab-area">
+          <div className={clsx('grab-area', { 'has-subgraph-header-link': node.type === 'subGraph' })}>
             <SubGraphHeaderLink node={node} />
             <div className="title-text">
               <NodeTitleLabel node={node} />

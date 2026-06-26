@@ -44,9 +44,15 @@ test('linked node headers use the library-link control instead of the edit gear'
   assert.match(nodeBodySource, /\.\.\.readOnlyAttributes/);
   assert.match(nodeBodySource, /'node-body-readonly': !interactive/);
   assert.match(nodeStylesSource, /\.node-body-readonly \{[\s\S]*pointer-events: none;/);
+  assert.match(
+    nodeStylesSource,
+    /\.node-prefab-instance-indicator \{[\s\S]*width: calc\(26px \* var\(--ui-font-scale\)\);[\s\S]*\}/,
+  );
+  assert.match(nodeStylesSource, /\.node-prefab-instance-indicator:hover \{[\s\S]*color: var\(--primary-text\);/);
 
   for (const source of [normalNodeSource, zoomedOutNodeSource]) {
     assert.match(source, /isNodePrefabInstance && \(/);
+    assert.match(source, /className=\{clsx\('grab-area', \{ 'has-subgraph-header-link': node\.type === 'subGraph' \}\)\}/);
     assert.match(source, /className="node-prefab-instance-indicator"/);
     assert.match(source, /aria-label="Open library node"/);
     assert.match(source, /onClick=\{handleEditClick\}/);
@@ -59,6 +65,30 @@ test('linked node headers use the library-link control instead of the edit gear'
   assert.match(splitRunSummarySource, /onNodeStartEditing\?\.\(editTargetNode \?\? node\);/);
   assert.match(subGraphHeaderLinkSource, /SubgraphGraphIcon/);
   assert.doesNotMatch(subGraphHeaderLinkSource, /SubgraphLinkIcon/);
+  assert.match(
+    nodeStylesSource,
+    /\.subgraph-link-tooltip \{[\s\S]*position: absolute;[\s\S]*top: 0;[\s\S]*bottom: 0;[\s\S]*left: 0;[\s\S]*width: calc\(41px \* var\(--ui-font-scale\)\);[\s\S]*\}/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.subgraph-link-button \{[\s\S]*position: relative;[\s\S]*width: 100%;[\s\S]*height: 100%;[\s\S]*\}/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.subgraph-link-button \{[\s\S]*svg \{[\s\S]*position: absolute;[\s\S]*left: calc\(12px \* var\(--ui-font-scale\)\);[\s\S]*top: calc\(12px \* var\(--ui-font-scale\)\);[\s\S]*\}/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.grab-area\.has-subgraph-header-link \{[\s\S]*padding-left: calc\(27px \* var\(--ui-font-scale\)\);[\s\S]*\}/,
+  );
+  assert.match(
+    contextMenuConfigurationSource,
+    /id: 'node-go-to-subgraph',[\s\S]*label: 'Go to subgraph',[\s\S]*icon: SubgraphGraphIcon,/,
+  );
+  assert.match(
+    contextMenuConfigurationSource,
+    /id: 'node-open-prefab-source',[\s\S]*label: 'Open library node',[\s\S]*icon: SubgraphLinkIcon,/,
+  );
 
   assert.match(contextMenuConfigurationSource, /const canEditNode = \(context: unknown\) =>/);
   assert.match(
