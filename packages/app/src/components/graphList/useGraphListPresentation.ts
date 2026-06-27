@@ -1,5 +1,12 @@
 import { useMemo } from 'react';
-import type { GraphId, NodeGraph, Project, ProjectComparisonChangeKind } from '@valerypopoff/rivet2-core';
+import type {
+  GraphId,
+  NodeGraph,
+  Project,
+  ProjectComparisonChangeKind,
+  UiGraph,
+  UiGraphId,
+} from '@valerypopoff/rivet2-core';
 import type { ContextMenuData } from '../../hooks/useContextMenu.js';
 import type { ActiveProjectComparison } from '../../state/projectComparison.js';
 import type { PluginState } from '../../state/plugins.js';
@@ -31,6 +38,7 @@ export type GraphListPresentation = {
     showFolderContextMenu: boolean;
     showGraphItemContextMenu: boolean;
     showGraphListContextMenu: boolean;
+    showUiGraphItemContextMenu: boolean;
     target: GraphListContextMenuTarget | null;
   };
   graphCompareKindByGraphId: Record<GraphId, ProjectComparisonChangeKind | undefined>;
@@ -58,6 +66,7 @@ export function useGraphListPresentation(options: {
   showContextMenu: boolean;
   showGraphReferenceIndicators: boolean;
   showUnreachableGraphTags: boolean;
+  uiGraphs?: Record<UiGraphId, UiGraph>;
 }): GraphListPresentation {
   const liveProject = useMemo(
     () => mergeGraphListCurrentGraphIntoProject(options.project, options.currentGraph),
@@ -114,6 +123,7 @@ export function useGraphListPresentation(options: {
     mainGraphId: options.project.metadata.mainGraphId,
     savedGraphs: options.savedGraphs,
     showContextMenu: options.showContextMenu,
+    uiGraphs: options.uiGraphs,
   });
 
   return {
@@ -168,19 +178,22 @@ export function getGraphListContextMenuPresentation(options: {
   mainGraphId: GraphId | undefined;
   savedGraphs: NodeGraph[];
   showContextMenu: boolean;
+  uiGraphs?: Record<UiGraphId, UiGraph>;
 }): GraphListPresentation['contextMenu'] {
-  const { contextMenuData, folderPaths, mainGraphId, savedGraphs, showContextMenu } = options;
+  const { contextMenuData, folderPaths, mainGraphId, savedGraphs, showContextMenu, uiGraphs } = options;
   const target = getGraphListContextMenuTarget({
     contextMenuData,
     folderPaths: new Set(folderPaths),
     mainGraphId,
     savedGraphs,
+    uiGraphs,
   });
 
   return {
     showFolderContextMenu: showContextMenu && target?.type === 'graph-folder',
     showGraphItemContextMenu: showContextMenu && target?.type === 'graph-item',
     showGraphListContextMenu: showContextMenu && target?.type === 'graph-list',
+    showUiGraphItemContextMenu: showContextMenu && target?.type === 'ui-graph-item',
     target,
   };
 }
@@ -190,7 +203,9 @@ export function graphMatchesFilter(graph: NodeGraph, searchText: string): boolea
   const name = graph.metadata?.name?.toLocaleLowerCase() ?? '';
   const description = graph.metadata?.description?.toLocaleLowerCase() ?? '';
   return (
-    normalizedSearchText.length === 0 || name.includes(normalizedSearchText) || description.includes(normalizedSearchText)
+    normalizedSearchText.length === 0 ||
+    name.includes(normalizedSearchText) ||
+    description.includes(normalizedSearchText)
   );
 }
 

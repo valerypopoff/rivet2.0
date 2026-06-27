@@ -41,6 +41,7 @@ import { graphSearchPanelHeightState } from '../state/ui';
 import { resizeCursorStyles } from '../utils/resizeCursors';
 import { getGraphSearchPanelMaxHeight, getNextGraphSearchPanelHeight } from './graphSearch/graphSearchPanelModel';
 import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary';
+import { useOpenUiGraph } from '../hooks/useOpenUiGraph';
 
 const GRAPH_SEARCH_FOCUS_ZOOM = 0.8;
 const MIN_GRAPH_SEARCH_PANEL_HEIGHT = 180;
@@ -703,12 +704,12 @@ const GoToSearchResults: FC = () => {
       entries: results,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results.map((r) => r.item.id).join(','), setGoToSearch]);
+  }, [results.map((result) => getSearchResultKey(result)).join(','), setGoToSearch]);
 
   return (
     <div className="entries">
       {goToSearch.entries.map((entry, index) => (
-        <div key={entry.item.id} className="entry">
+        <div key={getSearchResultKey(entry)} className="entry">
           <SearchResultItem entry={entry} selected={index === goToSearch.selectedIndex} searchText={goToSearch.query} />
         </div>
       ))}
@@ -801,6 +802,7 @@ const SearchResultItem: FC<{
 }> = ({ entry, selected, searchText }) => {
   const project = useAtomValue(projectState);
   const openNodeLibrary = useOpenNodeLibrary();
+  const openUiGraph = useOpenUiGraph();
 
   const goToNode = useGoToNode();
 
@@ -809,6 +811,11 @@ const SearchResultItem: FC<{
       // Scroll into view
       const element = document.querySelector('.search-result-item.selected');
       element?.scrollIntoView({ block: 'nearest' });
+
+      if (entry.item.type === 'uiGraph') {
+        openUiGraph(entry.item.uiGraphId);
+        return;
+      }
 
       if (entry.item.containerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID) {
         openNodeLibrary({ selectedNodeIds: [entry.item.id as NodeId] });
@@ -819,16 +826,21 @@ const SearchResultItem: FC<{
     }
   }, [
     selected,
-    entry.item.containerGraph,
+    entry.item.type,
+    entry.item.type === 'node' ? entry.item.containerGraph : undefined,
     entry.item.id,
+    entry.item.type === 'uiGraph' ? entry.item.uiGraphId : undefined,
     goToNode,
     openNodeLibrary,
+    openUiGraph,
   ]);
 
   const containerName =
-    entry.item.containerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID
-      ? 'Node Library'
-      : project.graphs[entry.item.containerGraph]?.metadata?.name ?? 'Unknown Graph';
+    entry.item.type === 'uiGraph'
+      ? 'Web Apps'
+      : entry.item.containerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID
+        ? 'Node Library'
+        : project.graphs[entry.item.containerGraph]?.metadata?.name ?? 'Unknown Graph';
 
   return (
     <div className={clsx('search-result-item', { selected })}>
@@ -845,6 +857,10 @@ const SearchResultItem: FC<{
     </div>
   );
 };
+
+function getSearchResultKey(entry: SearchedItem): string {
+  return `${entry.item.type}:${entry.item.id}`;
+}
 
 interface HighlightedTextProps {
   text: string;

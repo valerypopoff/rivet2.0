@@ -12,6 +12,8 @@ import {
   type PortId,
   type Project,
   type ProjectId,
+  type UiComponentId,
+  type UiGraphId,
 } from '../../src/index.js';
 import { compareConnections } from '../../src/utils/projectComparison/connections.js';
 import { compareGraphs } from '../../src/utils/projectComparison/graphs.js';
@@ -274,8 +276,12 @@ test('compareProjects compares connections exactly and marks port rewires as cha
   const beforeRemoved = connection('c', 'd');
   const afterAdded = connection('e', 'f');
   const result = compareProjects(
-    project([graph('main', [node('a'), node('b'), node('c'), node('d'), node('e'), node('f')], [beforeRewired, beforeRemoved])]),
-    project([graph('main', [node('a'), node('b'), node('c'), node('d'), node('e'), node('f')], [afterRewired, afterAdded])]),
+    project([
+      graph('main', [node('a'), node('b'), node('c'), node('d'), node('e'), node('f')], [beforeRewired, beforeRemoved]),
+    ]),
+    project([
+      graph('main', [node('a'), node('b'), node('c'), node('d'), node('e'), node('f')], [afterRewired, afterAdded]),
+    ]),
   );
 
   const main = result.graphs['main' as GraphId]!;
@@ -325,7 +331,11 @@ test('project comparison graph policy combines metadata, node, and connection ch
 
 test('project comparison one-sided graph connection entries preserve optional side shape', () => {
   const addedConnection = connection('source', 'target');
-  const addedComparison = compareGraphs('added' as GraphId, undefined, graph('added', [node('source'), node('target')], [addedConnection]));
+  const addedComparison = compareGraphs(
+    'added' as GraphId,
+    undefined,
+    graph('added', [node('source'), node('target')], [addedConnection]),
+  );
   const removedComparison = compareGraphs(
     'removed' as GraphId,
     graph('removed', [node('source'), node('target')], [addedConnection]),
@@ -337,8 +347,12 @@ test('project comparison one-sided graph connection entries preserve optional si
 });
 
 test('compareProjects summarizes added and removed graph contents through the shared graph summary path', () => {
-  const beforeProject = project([graph('old', [node('old-source'), node('old-target')], [connection('old-source', 'old-target')])]);
-  const afterProject = project([graph('new', [node('new-source'), node('new-target')], [connection('new-source', 'new-target')])]);
+  const beforeProject = project([
+    graph('old', [node('old-source'), node('old-target')], [connection('old-source', 'old-target')]),
+  ]);
+  const afterProject = project([
+    graph('new', [node('new-source'), node('new-target')], [connection('new-source', 'new-target')]),
+  ]);
   const comparison = compareProjects(beforeProject, afterProject);
 
   assert.deepEqual(comparison.summary, {
@@ -352,6 +366,50 @@ test('compareProjects summarizes added and removed graph contents through the sh
     removedConnections: 1,
     changedConnections: 0,
   });
+});
+
+test('compareProjects summarizes added, removed, and changed UI graphs', () => {
+  const removedUiGraphId = 'removed-ui-graph' as UiGraphId;
+  const changedUiGraphId = 'changed-ui-graph' as UiGraphId;
+  const addedUiGraphId = 'added-ui-graph' as UiGraphId;
+  const beforeProject = {
+    ...project([graph('main', [])]),
+    uiGraphs: {
+      [removedUiGraphId]: {
+        id: removedUiGraphId,
+        name: 'Removed app',
+        components: [],
+      },
+      [changedUiGraphId]: {
+        id: changedUiGraphId,
+        name: 'Changed app',
+        components: [],
+      },
+    },
+  } satisfies Project;
+  const afterProject = {
+    ...project([graph('main', [])]),
+    uiGraphs: {
+      [changedUiGraphId]: {
+        id: changedUiGraphId,
+        name: 'Changed app',
+        components: [{ id: 'text' as UiComponentId, kind: 'text', text: 'Updated' }],
+      },
+      [addedUiGraphId]: {
+        id: addedUiGraphId,
+        name: 'Added app',
+        components: [],
+      },
+    },
+  } satisfies Project;
+  const comparison = compareProjects(beforeProject, afterProject);
+
+  assert.equal(comparison.uiGraphs?.[removedUiGraphId]?.kind, 'removed');
+  assert.equal(comparison.uiGraphs?.[changedUiGraphId]?.kind, 'changed');
+  assert.equal(comparison.uiGraphs?.[addedUiGraphId]?.kind, 'added');
+  assert.equal(comparison.summary.removedUiGraphs, 1);
+  assert.equal(comparison.summary.changedUiGraphs, 1);
+  assert.equal(comparison.summary.addedUiGraphs, 1);
 });
 
 test('compareProjects ignores connection bend-point-only changes', () => {
@@ -383,12 +441,15 @@ test('getProjectNodeFieldComparisons reports changed node config fields', () => 
     fieldComparisons.map((field) => field.field),
     ['data.value', 'title'],
   );
-  assert.deepEqual(fieldComparisons.find((field) => field.field === 'title'), {
-    after: 'Renamed',
-    before: 'changed',
-    field: 'title',
-    path: ['title'],
-  });
+  assert.deepEqual(
+    fieldComparisons.find((field) => field.field === 'title'),
+    {
+      after: 'Renamed',
+      before: 'changed',
+      field: 'title',
+      path: ['title'],
+    },
+  );
 });
 
 test('getProjectNodeFieldComparisons reports only nested attributes that changed', () => {
@@ -430,12 +491,15 @@ test('getProjectNodeFieldComparisons reports array item changes by index', () =>
 });
 
 test('project comparison field-path policy formats nested keys and array indexes', () => {
-  assert.deepEqual(getChangedValueComparisons([], { data: { 'spaced key': ['before'] } }, { data: { 'spaced key': ['after'] } }), [
-    {
-      before: 'before',
-      after: 'after',
-      field: 'data["spaced key"][0]',
-      path: ['data', 'spaced key', '0'],
-    },
-  ]);
+  assert.deepEqual(
+    getChangedValueComparisons([], { data: { 'spaced key': ['before'] } }, { data: { 'spaced key': ['after'] } }),
+    [
+      {
+        before: 'before',
+        after: 'after',
+        field: 'data["spaced key"][0]',
+        path: ['data', 'spaced key', '0'],
+      },
+    ],
+  );
 });

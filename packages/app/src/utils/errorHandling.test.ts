@@ -115,6 +115,7 @@ describe('errorHandling', { concurrency: false }, () => {
       isIgnoredBrowserError({ message: 'ResizeObserver loop completed with undelivered notifications.' }),
       true,
     );
+    assert.equal(isIgnoredBrowserError(new Error('webview not found: invalid label or it was closed')), true);
     assert.equal(isIgnoredBrowserError(new Error('real layout failure')), false);
   });
 
@@ -158,5 +159,4 @@ describe('errorHandling', { concurrency: false }, () => {
       },
     ]);
   });
-
 });

@@ -1,6 +1,7 @@
 import { useInAppMenuHotkeys } from '../hooks/useInAppMenuHotkeys';
 import { GraphBuilder } from './GraphBuilder.js';
 import { NodeLibraryBuilder } from './NodeLibraryBuilder.js';
+import { UiGraphBuilder } from './UiGraphBuilder.js';
 import { type CSSProperties, type FC, useEffect, useMemo } from 'react';
 import { css } from '@emotion/react';
 import { SettingsModal } from './SettingsModal.js';
@@ -54,6 +55,7 @@ import { MissingAppPluginsModalRenderer } from './MissingAppPluginsModal.js';
 import { warmCodeEditor } from './LazyComponents.js';
 import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
+import { selectedUiGraphIdState } from '../state/uiGraphs.js';
 
 const styles = css`
   position: fixed;
@@ -118,6 +120,7 @@ export const RivetApp: FC = () => {
   const workspaceVisibleTabCount = useAtomValue(workspaceVisibleTabCountState);
   const selectedOpeningProjectTabId = useAtomValue(selectedOpeningProjectTabIdState);
   const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
+  const selectedUiGraphId = useAtomValue(selectedUiGraphIdState);
   const uiFontSizeCssVariables = useMemo(() => getUiFontSizeCssVariables(uiFontSize), [uiFontSize]);
   const customThemeCssVariables = useMemo<Record<string, string>>(
     () =>
@@ -149,13 +152,14 @@ export const RivetApp: FC = () => {
   const noProjectOpen = workspaceVisibleTabCount === 0;
   const isCanvasMode = openOverlay === undefined;
   const openingProjectSelected = isCanvasMode && selectedOpeningProjectTabId != null;
+  const uiGraphOpen = selectedUiGraphId != null;
 
   useLoadStaticData();
   useRestorePersistedWorkspace();
   useProjectPlugins();
 
   const runGraph = wrapAsync(async () => {
-    if (nodeLibraryOpen) {
+    if (nodeLibraryOpen || uiGraphOpen) {
       return;
     }
 
@@ -265,7 +269,7 @@ export const RivetApp: FC = () => {
         <>
           <ProjectSelector />
           {openingProjectSelected ? <OpeningProjectPlaceholder /> : null}
-          {isCanvasMode && !openingProjectSelected && !nodeLibraryOpen && (
+          {isCanvasMode && !openingProjectSelected && !nodeLibraryOpen && !uiGraphOpen && (
             <ActionBar
               onRunGraph={runGraph}
               onRunTests={runTests}
@@ -274,10 +278,17 @@ export const RivetApp: FC = () => {
               onResumeGraph={tryResumeGraph}
             />
           )}
-          {!openingProjectSelected && !nodeLibraryOpen && <StatusBar />}
-          {isCanvasMode && !openingProjectSelected && !nodeLibraryOpen && <DebuggerPanelRenderer />}
+          {!openingProjectSelected && !nodeLibraryOpen && !uiGraphOpen && <StatusBar />}
+          {isCanvasMode && !openingProjectSelected && !nodeLibraryOpen && !uiGraphOpen && <DebuggerPanelRenderer />}
           {!openingProjectSelected && <LeftSidebar />}
-          {!openingProjectSelected && (nodeLibraryOpen ? <NodeLibraryBuilder /> : <GraphBuilder />)}
+          {!openingProjectSelected &&
+            (nodeLibraryOpen ? (
+              <NodeLibraryBuilder />
+            ) : uiGraphOpen ? (
+              <UiGraphBuilder runGraph={tryRunGraph} />
+            ) : (
+              <GraphBuilder />
+            ))}
           <AppErrorBoundary context="Fullscreen Output Modal" fallback={<div>Failed to render Fullscreen Output</div>}>
             <FullscreenNodeOutputModalRenderer />
           </AppErrorBoundary>

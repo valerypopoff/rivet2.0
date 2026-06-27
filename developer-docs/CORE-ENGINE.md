@@ -170,6 +170,7 @@ Projects currently include:
 - metadata
 - graph map
 - optional library nodes (`nodePrefabs`)
+- optional declarative web apps (`uiGraphs`)
 - optional plugin load specs
 - optional project references
 - optional metadata path
@@ -1057,6 +1058,7 @@ Serialization lives in [`packages/core/src/utils/serialization/`](../packages/co
 - v4 is the active serializer/deserializer path
 - dataset serialization is handled separately through v4 dataset helpers
 - project-level library nodes are stored in optional `Project.nodePrefabs`. Each entry is `{ id, sourceNode }`, where the source node is an isolated `ChartNode` outside executable graphs and has no connections. The v4 serializer writes `nodePrefabs` only when the project has entries, so old projects keep their previous shape. Older Rivet versions should ignore the extra top-level field, while `nodePrefabInstance` graph nodes appear as unknown/unavailable nodes if opened before this feature exists.
+- project-level minimal web apps are stored in optional `Project.uiGraphs`. Each entry is a declarative `UiGraph` component tree, not a `NodeGraph`, and the v4 serializer writes `uiGraphs` only when the project has entries. Old projects load with no web apps. Older Rivet versions should ignore the extra top-level field, but they will not show or preserve web apps if they resave the project without opaque top-level field preservation.
 
 ### Node Library runtime model
 
@@ -1073,6 +1075,14 @@ Missing or invalid library nodes stay as `nodePrefabInstance` fallback nodes. Th
 Runtime execution-plan caching remains enabled for projects with `nodePrefabs`, but cached plans are keyed by the `Project.nodePrefabs` object identity used to build them. Library-node edits replace that map and force the next run to rebuild the plan, while repeated runs without Node Library edits keep the normal cached path. Do not cache projects solely by `NodeGraph` identity; library-node edits can change the effective type, ports, split/conditional behavior, and implementation of many graph-local linked nodes without changing the graph object itself.
 
 Library nodes are not graph nodes. They have no connections, are not executable by themselves, are not main-graph candidates, and should not enter reachability analysis. `canUseNodeAsPrefabSource(...)` blocks graph-boundary and graph-reference node types (`Graph Input`, `Graph Output`, `Referenced Graph Alias`, `Comment`, and `nodePrefabInstance`) so a V1 source remains a standalone node implementation instead of becoming another graph wrapper. Compare/search tools can inspect serialized source-node definitions, but runtime dataflow must always go through graph-local `nodePrefabInstance` nodes.
+
+### Minimal web app model
+
+Minimal Rivet web apps are stored in [`Project.uiGraphs`](../packages/core/src/model/Project.ts) and defined by [`UiGraph`](../packages/core/src/model/UiGraph.ts). A UI graph is a saved project resource, but it is not an executable workflow graph: it has no nodes, no connections, no graph inputs/outputs, cannot be selected as the Main Graph, and must not participate in graph reachability or execution scheduling. V1 components are declarative (`text`, `markdown`, `input`, `textarea`, `button`, and `output`) and actions can only run ordinary graphs in the same project. Markdown components and Markdown output mode render Markdown in both the app preview and hosted Node handler, but UI graphs still do not expose arbitrary JavaScript, arbitrary HTML, or a custom asset pipeline. This keeps the feature as a small app surface over existing workflow graphs rather than a custom frontend-code host.
+
+`resolveUiGraphActionInputs(...)` maps UI data into graph input values. New button actions use ordered `inputMappings` rows so the editor can preserve in-progress blank/renamed rows; legacy `inputs` maps are still accepted for old saved projects and literal bindings. `resolveUiGraphActionOutputStatePatch(...)` maps one or more graph outputs back into UI data. New button actions use ordered `outputs` rows; each row with no `outputKey` stores the whole output map, and each row with an `outputKey` stores the selected Rivet data value's inner `.value`, matching the user-facing value produced by a Graph Output node. Legacy `outputKey` / `outputStateKey` fields are still accepted as a single output binding. A missing configured `outputKey` throws so preview and hosted handlers show an explicit action error rather than storing `undefined`. Runtime callers still execute the target workflow through the normal graph processor path, so plugin providers, context values, datasets, project references, and node behavior stay owned by the existing processor options. In the desktop editor preview, UI actions are routed through the app's normal editor graph-run command rather than a hidden processor, so execution history and node outputs remain inspectable on the target graph. Hosted Node handlers run through `createProcessor(...)` because they serve deployed web requests outside the editor execution-history UI. `getUiGraphInitialState(...)` is the shared way to seed input/textarea defaults for both desktop preview and hosted Node rendering.
+
+Project comparison treats UI graph additions, removals, and changed serialized component trees as project-level changes. UI graphs do not create graph-level compare overlays because they are not canvases. Search can index UI graph names, descriptions, and component text/bindings, but selecting a result should open the UI graph editor, not a workflow graph.
 
 ### Shared helpers
 

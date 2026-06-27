@@ -1,0 +1,74 @@
+# createRivetWebAppHandler
+
+## Description
+
+`createRivetWebAppHandler` serves one minimal Rivet web app from a loaded project.
+
+The handler is framework-neutral. It accepts Fetch-style `Request` objects and returns Fetch-style `Response` objects, so wrappers can adapt it to Express, Fastify, custom HTTP servers, or their own VM routing layer.
+
+The handler serves:
+
+- the HTML/client renderer for the selected `Project.uiGraphs` entry
+- `GET /app.json` for the selected UI graph definition
+- `POST /actions/run` for button actions that run ordinary graphs in the same project
+
+It does not own authentication, routing, domains, tenancy, or deployment. Those stay wrapper-owned.
+
+Markdown components and Markdown-rendered outputs are rendered by the built-in client. The hosted client escapes raw text before applying its lightweight Markdown renderer, and it does not provide a custom HTML or JavaScript extension surface.
+
+## Syntax
+
+```typescript
+type RivetWebAppHandlerOptions = {
+  basePath?: string;
+  createProcessorOptions?: Omit<NodeCreateProcessorOptions, 'context' | 'graph' | 'inputs'>;
+  resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
+  uiGraphId?: UiGraphId | string;
+};
+
+function createRivetWebAppHandler(
+  project: Project,
+  options?: RivetWebAppHandlerOptions,
+): {
+  handleRequest(request: Request): Promise<Response>;
+};
+```
+
+If `uiGraphId` is omitted, Rivet serves the first UI graph in `project.uiGraphs`.
+
+`createProcessorOptions` are passed into the underlying `createProcessor(...)` call for action runs, after Rivet fills in the selected action graph, mapped action inputs, and context.
+
+`resolveContext` lets wrappers derive Rivet context values from the incoming HTTP request, for example authenticated user IDs or request headers.
+
+Button actions return both raw graph `outputs` and a `statePatch` for the client renderer. New UI graph actions can define several `inputMappings` and several output bindings in `outputs`. Each input mapping sends one web-app data key to one Graph Input ID. Each output binding saves either the whole output map, when its `outputKey` is empty, or the unwrapped Rivet data value from `outputs[outputKey].value` to its configured web-app data key. Legacy single-output `outputKey` / `outputStateKey` actions still work through the same mapper. If the target graph does not return a configured output key, the action endpoint returns an error response.
+
+## Example
+
+```typescript
+import { createRivetWebAppHandler, loadProjectFromFile } from '@valerypopoff/rivet2-node';
+
+const project = await loadProjectFromFile('./my-project.rivet-project');
+const webApp = createRivetWebAppHandler(project, {
+  basePath: '/app',
+  uiGraphId: 'my-ui-graph',
+  resolveContext: (request) => ({
+    url: {
+      type: 'string',
+      value: request.url,
+    },
+  }),
+});
+
+// In a Fetch-compatible server/runtime:
+export default {
+  fetch(request: Request) {
+    return webApp.handleRequest(request);
+  },
+};
+```
+
+## See Also
+
+- [Project](../core/Project.mdx)
+- [createProcessor](./createProcessor.mdx)
+- [RunGraphOptions](./RunGraphOptions.mdx)

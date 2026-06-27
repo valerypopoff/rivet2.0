@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ChartNode, GraphId, NodeId, NodePrefabId, Project } from '@valerypopoff/rivet2-core';
+import type {
+  ChartNode,
+  GraphId,
+  NodeId,
+  NodePrefabId,
+  Project,
+  UiComponentId,
+  UiGraphId,
+} from '@valerypopoff/rivet2-core';
 import { NODE_LIBRARY_GRAPH_SEARCH_ID } from './graphSearch.js';
 import { buildProjectSearchItems } from './projectSearchItems.js';
 
@@ -32,17 +40,52 @@ test('buildProjectSearchItems indexes graph nodes and library nodes', () => {
           sourceNode: node('source-node', 'text', 'Shared source text'),
         },
       },
+      uiGraphs: {
+        ['ui-app' as UiGraphId]: {
+          id: 'ui-app' as UiGraphId,
+          name: 'Prompt reviewer',
+          description: 'Checks prompts with a workflow',
+          components: [
+            {
+              id: 'input' as UiComponentId,
+              type: 'input',
+              label: 'Prompt',
+              placeholder: 'Paste text',
+              stateKey: 'prompt',
+            },
+            {
+              id: 'run' as UiComponentId,
+              type: 'button',
+              label: 'Run review',
+              action: {
+                type: 'runGraph',
+                graphId,
+                inputMappings: [{ inputKey: 'reviewInput', stateKey: 'prompt' }],
+                outputs: [{ outputKey: 'reviewOutput', stateKey: 'result' }],
+              },
+            },
+          ],
+        },
+      },
     },
     (item) => (item.type === 'text' ? 'Text' : item.type),
   );
 
   assert.deepEqual(
-    items.map((item) => ({ id: item.id, containerGraph: item.containerGraph, nodeType: item.nodeType })),
+    items.map((item) => ({
+      id: item.id,
+      containerGraph: item.type === 'node' ? item.containerGraph : undefined,
+      nodeType: item.nodeType,
+      type: item.type,
+    })),
     [
-      { id: 'graph-node', containerGraph: graphId, nodeType: 'Text' },
-      { id: 'source-node', containerGraph: NODE_LIBRARY_GRAPH_SEARCH_ID, nodeType: 'Text' },
+      { id: 'graph-node', containerGraph: graphId, nodeType: 'Text', type: 'node' },
+      { id: 'source-node', containerGraph: NODE_LIBRARY_GRAPH_SEARCH_ID, nodeType: 'Text', type: 'node' },
+      { id: 'ui-app', containerGraph: undefined, nodeType: 'Web app', type: 'uiGraph' },
     ],
   );
+  assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /reviewInput/);
+  assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /reviewOutput/);
 });
 
 test('buildProjectSearchItems ignores malformed graph entries without metadata ids', () => {
@@ -57,10 +100,7 @@ test('buildProjectSearchItems ignores malformed graph entries without metadata i
     nodePrefabs: {},
   } as unknown as Pick<Project, 'graphs' | 'nodePrefabs'>;
 
-  const items = buildProjectSearchItems(
-    project,
-    () => 'Text',
-  );
+  const items = buildProjectSearchItems(project, () => 'Text');
 
   assert.deepEqual(items, []);
 });

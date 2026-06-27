@@ -10,6 +10,11 @@ body {
   overflow: hidden;
 }
 
+#root {
+  width: 100%;
+  height: 100%;
+}
+
 html,
 body,
 .app,
@@ -101,8 +106,7 @@ textarea,
   --ds-surface: var(--modal-surface-bg);
   --ds-surface-overlay: var(--modal-surface-bg);
   --ds-border: var(--modal-border);
-  --ds-shadow-overlay: 0 0 0 1px var(--modal-border), 0 2px 1px var(--shadow),
-    0 0 20px -6px var(--shadow-dark);
+  --ds-shadow-overlay: 0 0 0 1px var(--modal-border), 0 2px 1px var(--shadow), 0 0 20px -6px var(--shadow-dark);
   --ds-background-input: var(--form-control-bg);
   --ds-background-input-hovered: var(--form-control-bg-hover);
   --ds-background-input-pressed: var(--form-control-bg-focus);
@@ -129,9 +133,7 @@ samp {
 
 input:not(.inputarea):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not(
     [type='file']
-  ):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not(
-    [type='image']
-  ),
+  ):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']),
 select,
 textarea:not(.inputarea) {
   border: var(--form-control-border-width) solid var(--form-control-border);
@@ -143,9 +145,7 @@ textarea:not(.inputarea) {
 
 input:not(.inputarea):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not(
     [type='file']
-  ):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not(
-    [type='image']
-  ):hover,
+  ):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):hover,
 select:hover,
 textarea:not(.inputarea):hover {
   border-color: var(--form-control-border);
@@ -154,9 +154,7 @@ textarea:not(.inputarea):hover {
 
 input:not(.inputarea):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not(
     [type='file']
-  ):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not(
-    [type='image']
-  ):focus,
+  ):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):focus,
 select:focus,
 textarea:not(.inputarea):focus {
   border-color: var(--form-control-border-focus);

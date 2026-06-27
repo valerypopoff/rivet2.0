@@ -1,6 +1,7 @@
 import type { ChartNode, NodeConnection, NodeId } from '../model/NodeBase.js';
 import type { GraphId, NodeGraph } from '../model/NodeGraph.js';
 import type { NodePrefab, NodePrefabId, Project } from '../model/Project.js';
+import type { UiGraph, UiGraphId } from '../model/UiGraph.js';
 import { compareGraphs } from './projectComparison/graphs.js';
 import { summarizeProjectComparison } from './projectComparison/summaries.js';
 import { compareNodes } from './projectComparison/nodes.js';
@@ -48,6 +49,9 @@ type ProjectComparisonSummary = {
   addedNodePrefabs?: number;
   removedNodePrefabs?: number;
   changedNodePrefabs?: number;
+  addedUiGraphs?: number;
+  removedUiGraphs?: number;
+  changedUiGraphs?: number;
 } & ProjectGraphComparisonSummary;
 
 export type ProjectNodePrefabComparison = {
@@ -69,12 +73,20 @@ export type ProjectGraphComparison = {
   summary: ProjectGraphComparisonSummary;
 };
 
+export type ProjectUiGraphComparison = {
+  id: UiGraphId;
+  kind: ProjectComparisonChangeKind;
+  before?: UiGraph;
+  after?: UiGraph;
+};
+
 export type ProjectComparison = {
   beforeProjectId: Project['metadata']['id'];
   afterProjectId: Project['metadata']['id'];
   metadataChanged: boolean;
   graphs: Record<GraphId, ProjectGraphComparison>;
   nodePrefabs?: Record<NodePrefabId, ProjectNodePrefabComparison>;
+  uiGraphs?: Record<UiGraphId, ProjectUiGraphComparison>;
   summary: ProjectComparisonSummary;
 };
 
@@ -84,6 +96,7 @@ export function compareProjects(before: Project, after: Project): ProjectCompari
     graphIds.map((graphId) => [graphId, compareGraphs(graphId, before.graphs[graphId], after.graphs[graphId])]),
   ) as Record<GraphId, ProjectGraphComparison>;
   const nodePrefabs = compareNodePrefabs(before.nodePrefabs ?? {}, after.nodePrefabs ?? {});
+  const uiGraphs = compareUiGraphs(before.uiGraphs ?? {}, after.uiGraphs ?? {});
 
   return {
     beforeProjectId: before.metadata.id,
@@ -91,7 +104,8 @@ export function compareProjects(before: Project, after: Project): ProjectCompari
     metadataChanged: !areComparisonValuesEqual(before.metadata, after.metadata),
     graphs,
     nodePrefabs,
-    summary: summarizeProjectComparison(graphs, nodePrefabs),
+    uiGraphs,
+    summary: summarizeProjectComparison(graphs, nodePrefabs, uiGraphs),
   };
 }
 
@@ -132,4 +146,40 @@ function compareNodePrefabs(
       ];
     }),
   ) as Record<NodePrefabId, ProjectNodePrefabComparison>;
+}
+
+function compareUiGraphs(
+  before: Record<UiGraphId, UiGraph>,
+  after: Record<UiGraphId, UiGraph>,
+): Record<UiGraphId, ProjectUiGraphComparison> {
+  const uiGraphIds = unionKeys(before, after) as UiGraphId[];
+
+  return Object.fromEntries(
+    uiGraphIds.map((uiGraphId) => {
+      const beforeUiGraph = before[uiGraphId];
+      const afterUiGraph = after[uiGraphId];
+
+      if (!beforeUiGraph && afterUiGraph) {
+        return [uiGraphId, { id: uiGraphId, kind: 'added', after: afterUiGraph }];
+      }
+
+      if (beforeUiGraph && !afterUiGraph) {
+        return [uiGraphId, { id: uiGraphId, kind: 'removed', before: beforeUiGraph }];
+      }
+
+      if (!beforeUiGraph || !afterUiGraph) {
+        throw new Error(`Cannot compare missing UI graph ${uiGraphId}`);
+      }
+
+      return [
+        uiGraphId,
+        {
+          id: uiGraphId,
+          kind: areComparisonValuesEqual(beforeUiGraph, afterUiGraph) ? 'unchanged' : 'changed',
+          before: beforeUiGraph,
+          after: afterUiGraph,
+        },
+      ];
+    }),
+  ) as Record<UiGraphId, ProjectUiGraphComparison>;
 }

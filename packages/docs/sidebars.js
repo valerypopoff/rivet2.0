@@ -21,6 +21,7 @@ const sidebars = {
         'user-guide/adding-connecting-nodes',
         'user-guide/working-with-graphs',
         'user-guide/working-with-projects',
+        'user-guide/rivet-web-apps',
         'user-guide/executing-ai-chains',
         'user-guide/splitting',
         'user-guide/subgraphs',
@@ -114,6 +115,7 @@ const sidebars = {
         'api-reference/node/overview',
         'api-reference/node/createProcessor',
         'api-reference/node/createGraphRunner',
+        'api-reference/node/createRivetWebAppHandler',
         'api-reference/node/loadProjectFromFile',
         'api-reference/node/loadProjectFromString',
         'api-reference/node/runGraph',
@@ -198,11 +200,7 @@ const sidebars = {
       label: 'MCP',
       collapsible: true,
       collapsed: false,
-      items: [
-        'node-reference/mcp-discovery',
-        'node-reference/mcp-tool-call',
-        'node-reference/mcp-get-prompt',
-      ],
+      items: ['node-reference/mcp-discovery', 'node-reference/mcp-tool-call', 'node-reference/mcp-get-prompt'],
     },
     {
       type: 'category',

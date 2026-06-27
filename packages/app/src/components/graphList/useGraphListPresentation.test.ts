@@ -8,6 +8,8 @@ import {
   type NodeId,
   type Project,
   type ProjectId,
+  type UiGraph,
+  type UiGraphId,
 } from '@valerypopoff/rivet2-core';
 import type { ContextMenuData } from '../../hooks/useContextMenu.js';
 import type { ActiveProjectComparison } from '../../state/projectComparison.js';
@@ -230,6 +232,29 @@ describe('graph list presentation helpers', () => {
       folderPath: 'Folder',
     });
     assert.equal(folderPresentation.showFolderContextMenu, true);
+  });
+
+  it('derives web app context-menu presentation for real UI graph targets', () => {
+    const uiGraph: UiGraph = {
+      id: 'ui-graph' as UiGraphId,
+      name: 'Support app',
+      components: [],
+    };
+    const presentation = getGraphListContextMenuPresentation({
+      contextMenuData: contextMenuData('ui-graph-item', { uigraphid: 'ui-graph' }),
+      folderPaths: [],
+      mainGraphId: 'main' as GraphId,
+      savedGraphs: [graph('main', 'Main')],
+      showContextMenu: true,
+      uiGraphs: { [uiGraph.id]: uiGraph },
+    });
+
+    assert.equal(presentation.showUiGraphItemContextMenu, true);
+    assert.equal(presentation.showGraphListContextMenu, false);
+    assert.deepEqual(presentation.target, {
+      type: 'ui-graph-item',
+      uiGraph,
+    });
   });
 
   it('detects collapsed folders that contain the open graph', () => {

@@ -48,6 +48,7 @@ Shared runtime foundation for the entire repo.
 - built-in plugins
 - `RegistryAssembly` - centralized registry creation and plugin assembly
 - project-level library-node types and `NodePrefabResolver`, which let graph-local `nodePrefabInstance` nodes execute as their project-level source nodes while keeping instance ids and placement
+- project-level minimal web app types (`Project.uiGraphs`, `UiGraph`, and UI action binding helpers) used by the app preview and Node web-app handler
 - serialization with shared V3/V4 helpers (`serializationHelpers.ts`)
 - recording/playback support
 - runtime integration contracts
@@ -57,6 +58,7 @@ Shared runtime foundation for the entire repo.
 - shared runtime settings normalization through `resolveProcessSettings(...)`
 - public execution helpers and streaming APIs
 - project comparison helpers such as `compareProjects(...)`, `getProjectConnectionComparisonKey(...)`, and `getProjectNodeFieldComparisons(...)`, which compare two project snapshots without mutating either side and expose stable graph/node/connection diagnostics for app and wrapper UIs. The public import surface and public comparison types stay at [`packages/core/src/utils/projectComparison.ts`](../packages/core/src/utils/projectComparison.ts); consumers should not import the focused internal helpers under [`packages/core/src/utils/projectComparison/`](../packages/core/src/utils/projectComparison/) directly. Those internal helpers own graph, node, connection, field-path, library-node, and summary policy. Node field comparisons recurse into nested node config, including `data`, so compare UIs can show only changed attributes instead of whole settings objects. Library-node additions/removals/changes are compared at the project level; linked nodes are not double-counted as changed merely because their source changed. Comment nodes are ignored entirely, including connections attached to comments, because they are canvas annotations rather than graph behavior. Node placement and z-order fields (`visualData.x`, `visualData.y`, and `visualData.zIndex`) are ignored for changed-node detection because they are canvas layout state, while visual size and color remain comparable node appearance fields. Subgraph per-instance port order fields (`data.inputPortOrder` and `data.outputPortOrder`) are also ignored because they only change the canvas order of existing ports, not the subgraph target or dataflow ids.
+  Minimal web app additions/removals/changes are compared as project-level UI graph changes; they do not create graph-level overlays because UI graphs are not workflow canvases.
 
 ### Important downstream consumers
 
@@ -90,6 +92,7 @@ From `src/index.ts` and related files:
 - `runGraph(...)`
 - `createProcessor(...)`
 - `createGraphRunner(...)`
+- `createRivetWebAppHandler(...)`
 - debugger server APIs
 - dataset/debugger/project-reference helpers
 
@@ -103,6 +106,8 @@ This package is the shared Node runtime used by:
 
 It is not just a convenience wrapper. It sets Node-default providers, debugger integration, env-based plugin config fallback, and Node-specific reference loading. Runtime settings still flow through core's shared `resolveProcessSettings(...)` helper instead of being rebuilt independently in the Node package.
 It also supplies a default tokenizer for Node-side runs when the caller does not provide one explicitly.
+
+`createRivetWebAppHandler(...)` is the minimal web-app serving seam. It takes a loaded `Project`, selects one `Project.uiGraphs` entry, serves a small declarative renderer, and exposes a Fetch-style action endpoint that runs ordinary same-project graphs through `createProcessor(...)`. Action state patches use the shared UI graph mappers: ordered `inputMappings` send several web-app data keys to several Graph Input IDs, ordered `outputs` can save several graph outputs back to several web-app data keys, no `outputKey` stores the full graph output map, and `outputKey` stores `outputs[outputKey].value` so wrappers and desktop preview agree on how to display Graph Output node values. Legacy `inputs` plus `outputKey` / `outputStateKey` are still accepted for old saved web apps. The server-rendered bootstrap payload is embedded with script-safe JSON escaping. Markdown components and Markdown output mode are rendered by the inline client after escaping raw text first; this keeps hosted web apps useful without adding an arbitrary HTML, JavaScript, or asset pipeline. The inline CSS intentionally mirrors the editor preview's card-backed field layout: text, markdown, input, textarea, and output components stand on a neutral card surface, while input and textarea controls keep their own bordered form-control surface. It deliberately does not own authentication, domains, tenancy, deployment routing, or wrapper-specific request adapters; wrappers should adapt its `{ handleRequest(request) }` shape to Express, Fastify, custom HTTP servers, or VM routing and pass their normal `createProcessorOptions` / `resolveContext` hooks.
 
 ### Runtime-speed characterization
 

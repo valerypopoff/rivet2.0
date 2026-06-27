@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ChartNode, GraphId, NodeId, ProjectComparison, ProjectGraphComparison, ProjectId } from '@valerypopoff/rivet2-core';
+import type {
+  ChartNode,
+  GraphId,
+  NodeId,
+  ProjectComparison,
+  ProjectGraphComparison,
+  ProjectId,
+} from '@valerypopoff/rivet2-core';
 import {
   formatProjectComparisonCounts,
   formatProjectComparisonCurrentGraphCounts,
@@ -42,7 +49,10 @@ function commentNode(id: NodeId): ChartNode {
 }
 
 test('project comparison summary helpers format overall and current graph counts', () => {
-  assert.equal(getProjectComparisonReferenceFileName('C:\\Projects\\before.rivet-project', 'Fallback'), 'before.rivet-project');
+  assert.equal(
+    getProjectComparisonReferenceFileName('C:\\Projects\\before.rivet-project', 'Fallback'),
+    'before.rivet-project',
+  );
   assert.equal(getProjectComparisonReferenceFileName(undefined, 'Fallback'), 'Fallback');
 
   const changedNodeId = asNodeId('changed-node');
@@ -113,20 +123,23 @@ test('project comparison summary helpers format overall and current graph counts
       addedGraphs: 0,
       addedNodePrefabs: 1,
       addedNodes: 2,
+      addedUiGraphs: 1,
       changedConnections: 1,
       changedGraphs: 1,
       changedNodePrefabs: 1,
       changedNodes: 2,
+      changedUiGraphs: 1,
       removedConnections: 0,
       removedGraphs: 0,
       removedNodePrefabs: 1,
       removedNodes: 1,
+      removedUiGraphs: 1,
     },
   } satisfies ProjectComparison;
 
   assert.equal(
     formatProjectComparisonCounts(getOverallProjectComparisonCounts(comparison)),
-    '1 graph, 2 nodes, 3 library nodes, 2 connection changes',
+    '1 graph, 2 nodes, 3 library nodes, 3 web apps, 2 connection changes',
   );
 
   assert.equal(

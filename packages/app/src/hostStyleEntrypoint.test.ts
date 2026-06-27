@@ -48,6 +48,7 @@ test('app root is locked to the iframe viewport', () => {
   const postResetCss = hostCss.slice(resetImportIndex);
 
   assert.match(postResetCss, /html,\s*body\s*{[\s\S]*width: 100%;[\s\S]*height: 100%;[\s\S]*overflow: hidden;/);
+  assert.match(postResetCss, /#root\s*{[\s\S]*width: 100%;[\s\S]*height: 100%;/);
   assert.match(appSource, /const styles = css`[\s\S]*position: fixed;[\s\S]*inset: 0;/);
   assert.match(appSource, /const styles = css`[\s\S]*width: 100%;[\s\S]*height: 100%;/);
 });
@@ -94,7 +95,10 @@ test('portal typography tokens keep popup surfaces on Rivet fonts', () => {
 test('native and react-select controls inherit tinted form-control surfaces', () => {
   const indexCss = readFileSync(join(srcDir, 'index.css'), 'utf8');
 
-  assert.match(indexCss, /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*background-color: var\(--form-control-bg\);/);
+  assert.match(
+    indexCss,
+    /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*background-color: var\(--form-control-bg\);/,
+  );
   assert.match(
     indexCss,
     /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*border: var\(--form-control-border-width\) solid var\(--form-control-border\);/,
@@ -104,7 +108,10 @@ test('native and react-select controls inherit tinted form-control surfaces', ()
     /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*border-width: var\(--form-control-border-width\) !important;/,
   );
   assert.match(indexCss, /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*color: var\(--foreground\);/);
-  assert.match(indexCss, /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*color-scheme: var\(--form-control-color-scheme\);/);
+  assert.match(
+    indexCss,
+    /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*color-scheme: var\(--form-control-color-scheme\);/,
+  );
   assert.match(indexCss, /:hover,[\s\S]*select:hover,[\s\S]*background-color: var\(--form-control-bg-hover\);/);
   assert.match(indexCss, /:focus,[\s\S]*select:focus,[\s\S]*border-color: var\(--form-control-border-focus\);/);
   assert.match(
@@ -116,7 +123,10 @@ test('native and react-select controls inherit tinted form-control surfaces', ()
     /\[data-ds--text-field--container\] \{[\s\S]*border-width: var\(--form-control-border-width\) !important;/,
   );
   assert.match(indexCss, /\[data-ds--text-field--input\] \{[\s\S]*border: 0 !important;/);
-  assert.match(indexCss, /\[class\*='-control'\]:has\(input\[id\^='react-select-'\]\),[\s\S]*\[class\*='-menu'\] \{[\s\S]*--ds-background-input: var\(--form-control-bg\);/);
+  assert.match(
+    indexCss,
+    /\[class\*='-control'\]:has\(input\[id\^='react-select-'\]\),[\s\S]*\[class\*='-menu'\] \{[\s\S]*--ds-background-input: var\(--form-control-bg\);/,
+  );
 });
 
 test('host entry reasserts one-pixel form-control borders after Atlaskit reset', () => {
@@ -160,7 +170,10 @@ test('theme color-scheme reaches app and portal scroll containers', () => {
   const colorsCss = readFileSync(join(srcDir, 'colors.css'), 'utf8');
 
   assert.match(colorsCss, /--scrollbar-track-bg: var\(--modal-surface-bg\);/);
-  assert.match(colorsCss, /--scrollbar-thumb-bg: color-mix\(in srgb, var\(--foreground\) 28%, var\(--modal-surface-bg\) 72%\);/);
+  assert.match(
+    colorsCss,
+    /--scrollbar-thumb-bg: color-mix\(in srgb, var\(--foreground\) 28%, var\(--modal-surface-bg\) 72%\);/,
+  );
 
   for (const source of [indexCss, hostCss]) {
     assert.match(

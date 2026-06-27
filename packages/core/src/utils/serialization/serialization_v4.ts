@@ -9,6 +9,8 @@ import type {
   ProjectId,
   ChartNodeVariant,
   NodePrefabId,
+  UiGraph,
+  UiGraphId,
 } from '../../index.js';
 import { type AttachedData, doubleCheckProject } from './serializationUtils.js';
 import { entries } from '../typeSafety.js';
@@ -30,6 +32,7 @@ type SerializedProject = {
 
   graphs: Record<GraphId, SerializedGraph>;
   nodePrefabs?: Record<NodePrefabId, SerializedNodePrefab>;
+  uiGraphs?: Record<UiGraphId, UiGraph>;
 
   attachedData?: AttachedData;
   plugins?: PluginLoadSpec[];
@@ -117,6 +120,7 @@ function toSerializedProject(project: Project, attachedData?: AttachedData): Ser
     metadata: project.metadata,
     graphs: mapValues(project.graphs, (graph) => toSerializedGraph(graph)),
     nodePrefabs: Object.keys(nodePrefabs).length > 0 ? nodePrefabs : undefined,
+    uiGraphs: project.uiGraphs && Object.keys(project.uiGraphs).length > 0 ? project.uiGraphs : undefined,
     attachedData,
     plugins: project.plugins ?? [],
     references: project.references ?? [],
@@ -134,6 +138,10 @@ function fromSerializedProject(serializedProject: SerializedProject): [Project, 
       metadata: serializedProject.metadata,
       graphs: mapValues(serializedProject.graphs, (graph) => fromSerializedGraph(graph)) as Record<GraphId, NodeGraph>,
       nodePrefabs: Object.keys(nodePrefabs).length > 0 ? nodePrefabs : undefined,
+      uiGraphs:
+        serializedProject.uiGraphs && Object.keys(serializedProject.uiGraphs).length > 0
+          ? serializedProject.uiGraphs
+          : undefined,
       plugins: serializedProject.plugins ?? [],
       references: serializedProject.references ?? [],
     },
@@ -257,8 +265,7 @@ function fromSerializedNode(
 
   const { x, y, width, zIndex, borderColor, bgColor } = parseVisualData(serializedNode.visualData);
 
-  const connections =
-    serializedNode.outgoingConnections?.map((conn) => deserializeConnection(conn, nodeId)) ?? [];
+  const connections = serializedNode.outgoingConnections?.map((conn) => deserializeConnection(conn, nodeId)) ?? [];
 
   const color = borderColor || bgColor ? { border: borderColor!, bg: bgColor! } : undefined;
 

@@ -24,7 +24,13 @@ import { useStableCallback } from './useStableCallback';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph';
 import { useCurrentExecution } from './useCurrentExecution';
 import { userInputModalQuestionsState } from '../state/userInput';
-import { loadedProjectState, projectContextState, projectDataState, projectsState, projectState } from '../state/savedGraphs';
+import {
+  loadedProjectState,
+  projectContextState,
+  projectDataState,
+  projectsState,
+  projectState,
+} from '../state/savedGraphs';
 import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
 import { graphState } from '../state/graph';
 import { lastRecordingState, loadedRecordingState, recordingPlaybackStartingState } from '../state/execution';
@@ -64,6 +70,7 @@ import {
   applyProcessEventToProjectExecutionSnapshots,
   shouldRouteProjectEventToSnapshot,
 } from './projectExecutionSnapshotRouting.js';
+import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 
 /**
  * Yield to the macrotask queue so the browser can repaint.
@@ -295,168 +302,179 @@ export function useLocalExecutor() {
     currentProcessorsByProjectId.current.set(runProjectId, processor);
   }
 
-  const tryRunGraph = useStableCallback(
-    async (
-      options: {
-        graphId?: GraphId;
-        to?: NodeId[];
-        from?: NodeId;
-      } = {},
-    ) => {
-      const recordingToReplay = loadedRecording;
-      const runProjectId = project.metadata.id;
+  const tryRunGraph = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
+    const recordingToReplay = loadedRecording;
+    const runProjectId = project.metadata.id;
 
-      if (!runProjectId) {
-        return;
+    if (!runProjectId) {
+      return;
+    }
+
+    if (
+      currentProcessorsByProjectId.current.get(runProjectId)?.isRunning ||
+      (recordingToReplay && recordingPlaybackStartingRef.current)
+    ) {
+      if (options.throwOnError) {
+        throw new Error('A graph is already running for this project.');
+      }
+      return undefined;
+    }
+
+    if (recordingToReplay && options.requireLiveRun) {
+      if (options.throwOnError) {
+        throw new Error('Web app actions cannot run while a recording is loaded.');
+      }
+      return undefined;
+    }
+
+    if (recordingToReplay) {
+      recordingPlaybackStartingRef.current = true;
+      setRecordingPlaybackStarting(true);
+    }
+
+    let processor: GraphProcessor | undefined;
+
+    try {
+      if (recordingToReplay) {
+        await yieldToMacrotask();
       }
 
-      if (
-        currentProcessorsByProjectId.current.get(runProjectId)?.isRunning ||
-        (recordingToReplay && recordingPlaybackStartingRef.current)
-      ) {
-        return;
+      const savedGraph = saveGraph() ?? graph;
+
+      const graphToRun = options.graphId ?? graph.metadata!.id!;
+
+      const tempProject = withDerivedProjectPluginSpecs(
+        {
+          ...project,
+          // Include the just-saved version of the currently selected graph, because saveGraph won't update the `project` until next render
+          graphs: {
+            ...project.graphs,
+            [savedGraph.metadata!.id!]: savedGraph,
+          },
+          data: projectData,
+        },
+        {
+          appPluginStates: pluginStates,
+          currentGraph: savedGraph,
+          registry: projectNodeRegistry,
+        },
+      );
+
+      const recorder = new ExecutionRecorder();
+      processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
+        captureNodeTimings: showNodeRunDurations,
+      });
+      processor.executor = 'browser';
+      processor.recordingPlaybackChatLatency = savedSettings.recordingPlaybackLatency ?? 1000;
+
+      if (options.from) {
+        const runFromPlan = getEditorRunFromPlan(tempProject, graphToRun, options.from, projectNodeRegistry);
+        processor.runToNodeIds = runFromPlan.runToNodeIds;
+        const preloadData = getDependentDataForNodeForPreload(
+          runFromPlan.preloadNodeIds,
+          lastRunData,
+          loadedRecording ? undefined : { frozenNodeOutputs, graphId: graphToRun },
+        );
+        for (const [nodeId, outputs] of Object.entries(preloadData)) {
+          processor.preloadNodeData(nodeId as NodeId, outputs);
+        }
+        currentExecution.preserveNodeRunDataForNextStart(runFromPlan.preserveNodeIds);
+        currentExecution.suppressPreloadedNodeEventsForCurrentRun(runFromPlan.preloadNodeIds);
+      } else if (options.to) {
+        const runToPlan = getEditorRunToPlan(
+          tempProject,
+          graphToRun,
+          options.to,
+          projectNodeRegistry,
+          loadedRecording ? undefined : { frozenNodeOutputs },
+        );
+        processor.runToNodeIds = runToPlan.runToNodeIds;
+        currentExecution.preserveNodeRunDataForNextStart(runToPlan.preserveNodeIds);
+      }
+
+      if (recordExecutions) {
+        recorder.record(processor);
+      }
+
+      attachGraphEvents(processor, runProjectId);
+
+      let results: GraphOutputs;
+
+      if (recordingToReplay) {
+        results = await processor.replayRecording(recordingToReplay.recorder);
+      } else {
+        processor.setFrozenNodeOutputResolver(
+          createFrozenNodeOutputResolver(cloneFrozenNodeOutputsForExecutor(frozenNodeOutputs)),
+        );
+        const contextValues = getProjectContextValues(projectContext);
+
+        results = await processor.processGraph(
+          {
+            settings: await fillMissingSettingsFromEnvironmentVariables(
+              savedSettings,
+              projectNodeRegistry.getPlugins(),
+              {
+                environmentProvider,
+                extraEnvVarNames: getLLMChatV2CustomProviderApiKeyEnvVarNames(tempProject),
+              },
+            ),
+            nativeApi: new TauriNativeApi(),
+            datasetProvider,
+            audioProvider,
+            tokenizer: new GptTokenizerTokenizer(),
+            projectPath: loadedProject.path ?? undefined,
+            projectReferenceLoader: new TauriProjectReferenceLoader(pathPolicy),
+            editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
+          },
+          options.inputs ?? {},
+          contextValues,
+        );
+      }
+
+      if (recordExecutions) {
+        setLastRecordingForProject(runProjectId, recorder.serialize());
+      }
+
+      return results;
+    } catch (e) {
+      const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
+      if (runProjectIsActive) {
+        currentExecution.clearNodeRunDataPreservationForNextStart();
+      } else {
+        markInactiveLocalRunFailed(runProjectId, e);
+      }
+      if (options.from) {
+        if (options.throwOnError) {
+          logRuntimeError('Local run from here failed.', e);
+          throw e;
+        } else if (runProjectIsActive) {
+          handleError(e, 'Failed to start local run from here');
+        } else {
+          logRuntimeError('Inactive local run from here failed.', e);
+        }
+        return undefined;
+      }
+
+      logRuntimeError('Local graph run failed.', e);
+      if (options.throwOnError) {
+        throw e;
+      }
+      return undefined;
+    } finally {
+      if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
+        dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
+      }
+
+      if (processor && runProjectId && currentProcessorsByProjectId.current.get(runProjectId) === processor) {
+        currentProcessorsByProjectId.current.delete(runProjectId);
       }
 
       if (recordingToReplay) {
-        recordingPlaybackStartingRef.current = true;
-        setRecordingPlaybackStarting(true);
+        recordingPlaybackStartingRef.current = false;
+        setRecordingPlaybackStarting(false);
       }
-
-      let processor: GraphProcessor | undefined;
-
-      try {
-        if (recordingToReplay) {
-          await yieldToMacrotask();
-        }
-
-        const savedGraph = saveGraph() ?? graph;
-
-        const graphToRun = options.graphId ?? graph.metadata!.id!;
-
-        const tempProject = withDerivedProjectPluginSpecs(
-          {
-            ...project,
-            // Include the just-saved version of the currently selected graph, because saveGraph won't update the `project` until next render
-            graphs: {
-              ...project.graphs,
-              [savedGraph.metadata!.id!]: savedGraph,
-            },
-            data: projectData,
-          },
-          {
-            appPluginStates: pluginStates,
-            currentGraph: savedGraph,
-            registry: projectNodeRegistry,
-          },
-        );
-
-        const recorder = new ExecutionRecorder();
-        processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
-          captureNodeTimings: showNodeRunDurations,
-        });
-        processor.executor = 'browser';
-        processor.recordingPlaybackChatLatency = savedSettings.recordingPlaybackLatency ?? 1000;
-
-        if (options.from) {
-          const runFromPlan = getEditorRunFromPlan(tempProject, graphToRun, options.from, projectNodeRegistry);
-          processor.runToNodeIds = runFromPlan.runToNodeIds;
-          const preloadData = getDependentDataForNodeForPreload(
-            runFromPlan.preloadNodeIds,
-            lastRunData,
-            loadedRecording ? undefined : { frozenNodeOutputs, graphId: graphToRun },
-          );
-          for (const [nodeId, outputs] of Object.entries(preloadData)) {
-            processor.preloadNodeData(nodeId as NodeId, outputs);
-          }
-          currentExecution.preserveNodeRunDataForNextStart(runFromPlan.preserveNodeIds);
-          currentExecution.suppressPreloadedNodeEventsForCurrentRun(runFromPlan.preloadNodeIds);
-        } else if (options.to) {
-          const runToPlan = getEditorRunToPlan(
-            tempProject,
-            graphToRun,
-            options.to,
-            projectNodeRegistry,
-            loadedRecording ? undefined : { frozenNodeOutputs },
-          );
-          processor.runToNodeIds = runToPlan.runToNodeIds;
-          currentExecution.preserveNodeRunDataForNextStart(runToPlan.preserveNodeIds);
-        }
-
-        if (recordExecutions) {
-          recorder.record(processor);
-        }
-
-        attachGraphEvents(processor, runProjectId);
-
-        let results: GraphOutputs;
-
-        if (recordingToReplay) {
-          results = await processor.replayRecording(recordingToReplay.recorder);
-        } else {
-          processor.setFrozenNodeOutputResolver(
-            createFrozenNodeOutputResolver(cloneFrozenNodeOutputsForExecutor(frozenNodeOutputs)),
-          );
-          const contextValues = getProjectContextValues(projectContext);
-
-          results = await processor.processGraph(
-            {
-              settings: await fillMissingSettingsFromEnvironmentVariables(
-                savedSettings,
-                projectNodeRegistry.getPlugins(),
-                {
-                  environmentProvider,
-                  extraEnvVarNames: getLLMChatV2CustomProviderApiKeyEnvVarNames(tempProject),
-                },
-              ),
-              nativeApi: new TauriNativeApi(),
-              datasetProvider,
-              audioProvider,
-              tokenizer: new GptTokenizerTokenizer(),
-              projectPath: loadedProject.path ?? undefined,
-              projectReferenceLoader: new TauriProjectReferenceLoader(pathPolicy),
-              editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
-            },
-            {},
-            contextValues,
-          );
-        }
-
-        if (recordExecutions) {
-          setLastRecordingForProject(runProjectId, recorder.serialize());
-        }
-      } catch (e) {
-        const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
-        if (runProjectIsActive) {
-          currentExecution.clearNodeRunDataPreservationForNextStart();
-        } else {
-          markInactiveLocalRunFailed(runProjectId, e);
-        }
-        if (options.from) {
-          if (runProjectIsActive) {
-            handleError(e, 'Failed to start local run from here');
-          } else {
-            logRuntimeError('Inactive local run from here failed.', e);
-          }
-          return;
-        }
-
-        logRuntimeError('Local graph run failed.', e);
-      } finally {
-        if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
-          dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
-        }
-
-        if (processor && runProjectId && currentProcessorsByProjectId.current.get(runProjectId) === processor) {
-          currentProcessorsByProjectId.current.delete(runProjectId);
-        }
-
-        if (recordingToReplay) {
-          recordingPlaybackStartingRef.current = false;
-          setRecordingPlaybackStarting(false);
-        }
-      }
-    },
-  );
+    }
+  });
 
   const tryRunTests = useStableCallback(
     async (options: { testSuiteIds?: string[]; testCaseIds?: string[]; iterationCount?: number } = {}) => {

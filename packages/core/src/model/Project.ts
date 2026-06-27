@@ -3,6 +3,7 @@ import type { ChartNode } from './NodeBase.js';
 import { type GraphId, type NodeGraph } from './NodeGraph.js';
 import { type PluginLoadSpec } from './PluginLoadSpec.js';
 import type { MCP } from '../integrations/mcp/MCPProvider.js';
+import type { UiGraph, UiGraphId } from './UiGraph.js';
 
 export type ProjectId = Opaque<string, 'ProjectId'>;
 
@@ -23,6 +24,8 @@ export type Project = {
   graphs: Record<GraphId, NodeGraph>;
 
   nodePrefabs?: Record<NodePrefabId, NodePrefab>;
+
+  uiGraphs?: Record<UiGraphId, UiGraph>;
 
   data?: Record<DataId, string>;
 

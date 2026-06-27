@@ -2,6 +2,7 @@ import {
   logRuntimeDebug,
   logRuntimeInfo,
   type CodeConsoleMessage,
+  type GraphOutputs,
   type NodeId,
   type Outputs,
   type RemoteRunRequestId,
@@ -63,6 +64,7 @@ import {
   summarizeRemoteDebuggerEvent,
   summarizeRemoteDebuggerRoutingState,
 } from './remoteDebuggerDiagnostics.js';
+import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
@@ -312,14 +314,17 @@ export function useRemoteExecutor() {
     });
   }, [eventDispatcher, executorSession, project.metadata.id, setFrozenNodeOutputs, store]);
 
-  const tryRunGraph = async (options: { to?: NodeId[]; from?: NodeId; graphId?: GraphId } = {}) => {
+  const tryRunGraph = async (options: EditorGraphRunOptions = {}): Promise<GraphOutputs | undefined> => {
     const sessionState = executorSession.getRuntimeState();
     if (!sessionState.capabilities.canSendRun) {
       logRuntimeDebug('Remote graph run skipped because executor session cannot send runs.', {
         status: sessionState.status,
         target: sessionState.target?.type ?? 'none',
       });
-      return;
+      if (options.throwOnError) {
+        throw new Error(`Executor cannot run graphs right now (status: ${sessionState.status}).`);
+      }
+      return undefined;
     }
 
     const graphToRun = options.graphId ?? graph.metadata!.id!;
@@ -395,19 +400,44 @@ export function useRemoteExecutor() {
         currentExecution.preserveNodeRunDataForNextStart(runToPlan.preserveNodeIds);
       }
 
+      const payload = {
+        graphId: graphToRun,
+        runToNodeIds,
+        preloadData,
+        frozenNodeOutputs: getFrozenNodeOutputsForExecutorRunPayload(frozenNodeOutputs, sessionState.target),
+        contextValues,
+        inputs: options.inputs,
+        projectPath: loadedProject.path,
+        useEditorCache: true,
+        captureNodeTimings: showNodeRunDurations,
+      };
+
+      if (options.waitForResults) {
+        const { requestId, promise } = executorSession.createPendingGraphExecution();
+        activeGraphRequestIdRef.current = requestId;
+        executorSession.setActiveGraphRunRequestId(requestId);
+
+        const runSent = remoteDebugger.send('run', {
+          ...payload,
+          requestId,
+        });
+
+        if (!runSent) {
+          const error = new Error('Remote executor disconnected before the graph run could be sent.');
+          executorSession.rejectPendingGraphExecution(requestId, error);
+          clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+          if (requestId === executorSession.getActiveGraphRunRequestId()) {
+            executorSession.setActiveGraphRunRequestId(null);
+          }
+        }
+
+        return await promise;
+      }
+
       const runRequest = startActiveRemoteGraphRunRequest({
         activeRequestIdRef: activeGraphRequestIdRef,
         createRequestId: () => executorSession.createRemoteExecutionRequest(),
-        payload: {
-          graphId: graphToRun,
-          runToNodeIds,
-          preloadData,
-          frozenNodeOutputs: getFrozenNodeOutputsForExecutorRunPayload(frozenNodeOutputs, sessionState.target),
-          contextValues,
-          projectPath: loadedProject.path,
-          useEditorCache: true,
-          captureNodeTimings: showNodeRunDurations,
-        },
+        payload,
         sendRun: (payload) => remoteDebugger.send('run', payload),
       });
       if (runRequest.type === 'sent') {
@@ -419,11 +449,16 @@ export function useRemoteExecutor() {
           target: executorSession.getRuntimeState().target?.type ?? 'none',
         });
       }
+      return undefined;
     } catch (e) {
       currentExecution.clearNodeRunDataPreservationForNextStart();
+      if (options.throwOnError) {
+        logRuntimeDebug('Remote graph run failed.', { error: e });
+        throw e;
+      }
       handleError(e, 'Failed to start remote graph run');
     }
-    return;
+    return undefined;
   };
 
   const tryRunTests = useStableCallback(

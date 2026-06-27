@@ -1,5 +1,5 @@
 import type { ComponentType, SVGProps } from 'react';
-import type { GraphId, NodeGraph } from '@valerypopoff/rivet2-core';
+import type { GraphId, NodeGraph, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
 import type { ContextMenuData } from '../../hooks/useContextMenu.js';
 
 type GraphListContextMenuIcon = ComponentType<SVGProps<SVGSVGElement>>;
@@ -38,13 +38,18 @@ export type GraphListContextMenuTarget =
     }
   | {
       type: 'graph-list';
+    }
+  | {
+      type: 'ui-graph-item';
+      uiGraph: UiGraph;
     };
 
 type GraphListContextMenuOptions = {
   contextMenuData: ContextMenuData;
   folderPaths?: ReadonlySet<string>;
-  savedGraphs: NodeGraph[];
   mainGraphId: GraphId | undefined;
+  savedGraphs: NodeGraph[];
+  uiGraphs?: Record<UiGraphId, UiGraph>;
 };
 
 export function getGraphListContextMenuTarget({
@@ -52,8 +57,15 @@ export function getGraphListContextMenuTarget({
   folderPaths,
   mainGraphId,
   savedGraphs,
+  uiGraphs,
 }: GraphListContextMenuOptions): GraphListContextMenuTarget | null {
   const data = contextMenuData.data;
+
+  if (data?.type === 'ui-graph-item') {
+    const uiGraphId = data.element.dataset.uigraphid as UiGraphId | undefined;
+    const uiGraph = uiGraphId ? uiGraphs?.[uiGraphId] : undefined;
+    return uiGraph ? { type: 'ui-graph-item', uiGraph } : null;
+  }
 
   if (data?.type === 'graph-list') {
     return { type: 'graph-list' };
@@ -92,6 +104,23 @@ export function getGraphListContextMenuTarget({
     folderPath: currentGraphPath,
     isMainGraph: graph.metadata?.id === mainGraphId,
   };
+}
+
+export function buildUiGraphItemContextMenuItems(icons: GraphListContextMenuIcons): GraphListContextMenuItem[] {
+  return [
+    {
+      id: 'duplicate-ui-graph',
+      label: 'Duplicate',
+      icon: icons.duplicateGraph,
+    },
+    {
+      id: 'delete-ui-graph',
+      label: 'Delete',
+      icon: icons.deleteGraph,
+      separatorBefore: true,
+      tone: 'danger',
+    },
+  ];
 }
 
 export function buildGraphItemContextMenuItems(options: {
