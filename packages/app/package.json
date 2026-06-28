@@ -1,7 +1,7 @@
 {
   "name": "@valerypopoff/rivet-app",
   "repository": "https://github.com/valerypopoff/rivet2.0",
-  "version": "2.6.8",
+  "version": "2.7.0",
   "private": true,
   "license": "MIT",
   "type": "module",
