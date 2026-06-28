@@ -21,9 +21,9 @@ A web app contains declarative components:
 
 The web app editor shows the component settings on the left and a live preview on the right.
 
-Use the **Components** palette to add blocks. Hover a component type to reveal the plus icon, then click to add it. Drag an added block by its header strip to change the order shown in the web app.
+Use the **Components** palette to add blocks. Hover a component type to reveal the plus icon, then click to add it. In the live preview, drag the large handle to the right of a component to change the order shown in the web app.
 
-When a block is focused in the settings panel, Rivet highlights the matching component in the live preview. Focusing or clicking a component in the preview highlights the matching settings block.
+When a block is focused in the settings panel, Rivet highlights the matching component in the live preview. Focusing or clicking a component in the preview highlights the matching settings block. Text input and textarea components save user-entered values into their **Data key**. Rivet warns on later components if that key is already used by an earlier value source.
 
 Markdown components render Markdown in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps.
 
@@ -33,16 +33,18 @@ Button components can run ordinary graphs from the same project.
 
 For each button, choose:
 
-- **Target graph**: the graph to run
-- one or more **Graph input ID** / **Data key to send** rows
-- at least one **Graph output ID** / **Data key to save to** row
+- **Graph to run**: the graph to run
+- **Graph input ID** / **Data key to send** rows, one for each Graph Input in the selected graph
+- **Graph output ID** / **Data key to save to** rows, one for each Graph Output in the selected graph
 - **Label**: the button text shown in the web app
+
+The **Graph input ID** and **Graph output ID** fields are dimmed, non-editable fields from the selected graph's current Graph Input and Graph Output nodes, so you do not need to type the IDs by hand. For graph inputs and output display components, choose an existing web-app **Data key** from the dropdown. Existing keys come from input and textarea components, plus values saved by button outputs. For graph outputs, type the **Data key** where the value should be saved; Rivet warns on later rows if that key is already used by an earlier value source. Choosing a different graph rebuilds the rows from that graph's boundary while preserving data-key text where possible.
 
 For example, a textarea can write to data key `input`, a button can send that value to graph input `input`, and an output component can render the resulting `result` data key.
 
 When a button sends raw web-app data to a graph, Rivet converts it into normal graph Data Values. Text, numbers, and booleans keep their matching scalar types. Objects become `object` values. Homogeneous arrays become typed arrays such as `string[]`, `number[]`, `boolean[]`, or `object[]`; mixed, empty, null-containing, or nested arrays are sent as `any[]`.
 
-If a **Graph output ID** is empty, Rivet stores the whole graph output object at the chosen data key. If it is set, Rivet reads that graph output and stores the inner Rivet value. For example, if the graph has a Graph Output node with ID `graphOutput` and the run returns `{ graphOutput: { type: 'string', value: 'Hello' } }`, setting **Graph output ID** to `graphOutput` stores `Hello` in the web app data. If the target graph does not return that ID, the action shows an error instead of silently storing an empty value.
+For each Graph Output row, Rivet reads that graph output and stores the inner Rivet value. For example, if the graph has a Graph Output node with ID `graphOutput` and the run returns `{ graphOutput: { type: 'string', value: 'Hello' } }`, the `graphOutput` row stores `Hello` in the chosen web app data key. If the target graph does not return that ID, the action shows an error instead of silently storing an empty value.
 
 ## Previewing Locally
 

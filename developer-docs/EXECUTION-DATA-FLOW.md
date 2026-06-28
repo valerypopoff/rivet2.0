@@ -444,12 +444,19 @@ continuation.
 The external-debugger disconnect restore path uses the same desktop sidecar
 startup/ownership helper as normal Node-mode startup. Do not restore desktop
 Node mode by calling `connectInternalDesktopExecutor()` directly unless sidecar
-ownership has already been established for that project runtime.
+ownership has already been established for that project runtime. Internal
+desktop executor drops also go back through that ownership layer: the
+coordinator restarts the process-wide sidecar while preserving the project
+runtime's sidecar ownership, waits for the websocket-listening marker, and only
+then reconnects that runtime.
 The desktop Node sidecar is process-wide but its ownership is tracked per
 project runtime through `executorSessionRuntimeResources.ts`. Starting the same
 project runtime twice does not double-count the sidecar consumer; removing a
 project runtime releases only that runtime's sidecar ownership, so another
-Node-mode project tab can keep using the same sidecar.
+Node-mode project tab can keep using the same sidecar. Preserving restarts keep
+that ownership marker even when restart startup fails or leaves the sidecar
+stopped; the shared sidecar consumer count is still retained, so retries must
+restart the owned sidecar instead of reattaching a second consumer.
 Inside that shared sidecar, uploaded project/settings/static-data state and
 dataset proxy providers are also scoped by websocket client. `app-executor`
 uses `startDebuggerServer`'s `getClientDebuggerState` and
@@ -1044,7 +1051,7 @@ This internal-executor rule must not be applied to
 external Remote Debugger sessions, which replace editor-run controls with a
 `Stop Remote Debugger` banner.
 The app logs the internal Node executor lifecycle at the sidecar/session seam.
-Sidecar spawn, readiness marker vs timeout fallback, socket close/reconnect
+Sidecar spawn, readiness marker, readiness timeout failures, socket close/reconnect
 scheduling, disconnect requests, and skipped run attempts are runtime debug logs
 gated by `rivet.debugRuntimeLogs`. These logs intentionally describe the phase
 and internal/external target, not full graph input values or secrets.

@@ -5,6 +5,8 @@ export * from './model/DataValue.js';
 export * from './model/NodeBase.js';
 export * from './model/NodeGraph.js';
 export * from './model/NodePrefabResolver.js';
+export { getGraphBoundary } from './model/GraphBoundaryCache.js';
+export type { GraphBoundary } from './model/GraphBoundaryCache.js';
 export * from './model/UiGraph.js';
 export * from './model/UiGraphRendererStyles.js';
 export * from './model/NodeImpl.js';

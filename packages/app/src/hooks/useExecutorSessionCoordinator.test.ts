@@ -5,6 +5,7 @@ import {
   getExecutorSessionStartupAction,
   handleExecutorSessionCoordinatorDisconnect,
   runExecutorSessionStartupAction,
+  shouldRestoreInternalNodeExecutorAfterDisconnect,
   shouldRestoreInternalNodeExecutorAfterExternalDebuggerDisconnect,
 } from './useExecutorSessionCoordinator.js';
 import type { ExecutorSessionLifecycleEvent, ExecutorSessionRuntime } from './executorSession.js';
@@ -16,6 +17,15 @@ const externalDropEvent: ExecutorSessionLifecycleEvent = {
   target: { type: 'external-debugger', url: 'ws://localhost:21888' },
   type: 'disconnected',
   url: 'ws://localhost:21888',
+};
+
+const internalDesktopDropEvent: ExecutorSessionLifecycleEvent = {
+  isInternalExecutor: true,
+  reason: 'unexpected-disconnect',
+  status: 'reconnecting',
+  target: { type: 'internal-desktop', url: 'ws://127.0.0.1:21889/internal' },
+  type: 'disconnected',
+  url: 'ws://127.0.0.1:21889/internal',
 };
 
 function createDeferred() {
@@ -57,6 +67,10 @@ function createStartupHarness() {
       calls.push('sidecar-stop');
     },
     isStarted: () => sidecarStarted,
+    restart: async () => {
+      calls.push('sidecar-restart');
+      sidecarStarted = true;
+    },
   };
 
   return {
@@ -101,6 +115,10 @@ function createLifecycleHarness() {
       calls.push('sidecar-stop');
     },
     isStarted: () => sidecarStarted,
+    restart: async () => {
+      calls.push('sidecar-restart');
+      sidecarStarted = true;
+    },
   };
 
   return {
@@ -237,7 +255,7 @@ describe('useExecutorSessionCoordinator', () => {
     );
   });
 
-  test('does not restore Node executor for Browser mode or internal executor drops', () => {
+  test('external-debugger restore helper ignores Browser mode and internal executor drops', () => {
     assert.equal(
       shouldRestoreInternalNodeExecutorAfterExternalDebuggerDisconnect({
         event: externalDropEvent,
@@ -261,6 +279,18 @@ describe('useExecutorSessionCoordinator', () => {
         selectedExecutor: 'nodejs',
       }),
       false,
+    );
+  });
+
+  test('restores desktop Node executor after an internal desktop drop', () => {
+    assert.equal(
+      shouldRestoreInternalNodeExecutorAfterDisconnect({
+        event: internalDesktopDropEvent,
+        hasInternalExecutorUrl: false,
+        isTauri: true,
+        selectedExecutor: 'nodejs',
+      }),
+      true,
     );
   });
 
@@ -341,6 +371,34 @@ describe('useExecutorSessionCoordinator', () => {
     await flushMicrotasks();
 
     assert.deepEqual(harness.calls, ['sidecar-start', 'connect-desktop']);
+  });
+
+  test('disconnect lifecycle handler restarts desktop sidecar before reconnecting desktop Node', async () => {
+    const harness = createStartupHarness();
+
+    runExecutorSessionStartupAction({
+      action: { type: 'connect-desktop-internal' },
+      runtime: harness.runtime,
+      setSelectedExecutor: harness.setSelectedExecutor,
+      sidecar: harness.sidecar,
+    });
+    await flushMicrotasks();
+    harness.setSidecarStarted(true);
+    harness.sidecarStart.resolve();
+    await flushMicrotasks();
+
+    handleExecutorSessionCoordinatorDisconnect({
+      event: internalDesktopDropEvent,
+      getInternalExecutorUrl: () => undefined,
+      getSelectedExecutor: () => 'nodejs',
+      isTauri: true,
+      runtime: harness.runtime,
+      sidecar: harness.sidecar,
+    });
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    assert.deepEqual(harness.calls, ['sidecar-start', 'connect-desktop', 'sidecar-restart', 'connect-desktop']);
   });
 
   test('runs the browser startup action by disconnecting the current session', () => {

@@ -4,7 +4,7 @@ import { createNativeSidecarCommand } from '../utils/platform/shell.js';
 import { handleError } from '../utils/errorHandling.js';
 
 const EXECUTOR_READY_MESSAGE = 'Rivet app executor websocket listening';
-const EXECUTOR_READY_TIMEOUT_MS = 5000;
+const EXECUTOR_READY_TIMEOUT_MS = 30_000;
 
 export type ExecutorSidecarRuntimeState = {
   started: boolean;
@@ -111,7 +111,19 @@ export async function startExecutorSidecar(
         }
 
         runtime.process = proc;
-        const readyReason = await ready.promise;
+        let readyReason: 'ready-marker';
+        try {
+          readyReason = await ready.promise;
+        } catch (error) {
+          if (runtime.process === proc) {
+            runtime.process = null;
+            runtime.started = false;
+          }
+
+          cleanupExecutorSidecarStreams(runtime, streamCleanup);
+          await proc.kill();
+          throw error;
+        }
 
         if (runtime.lifecycleGeneration !== lifecycleGeneration) {
           if (runtime.process === proc) {
@@ -190,6 +202,31 @@ export async function stopExecutorSidecar(runtime: ExecutorSidecarRuntimeState) 
   }
 }
 
+export async function restartExecutorSidecar(
+  runtime: ExecutorSidecarRuntimeState,
+  createSidecarCommand: typeof createNativeSidecarCommand = createNativeSidecarCommand,
+  options: { readyTimeoutMs?: number } = {},
+) {
+  runtime.lifecycleGeneration += 1;
+  runtime.startPromise = null;
+
+  const proc = runtime.process;
+  runtime.process = null;
+  runtime.started = false;
+  cleanupExecutorSidecarStreams(runtime);
+
+  if (proc) {
+    logRuntimeDebug('Restarting executor sidecar.', {
+      consumerCount: runtime.consumerCount,
+    });
+    await proc.kill();
+  }
+
+  if (runtime.consumerCount > 0) {
+    await startExecutorSidecar(runtime, createSidecarCommand, options);
+  }
+}
+
 export function forceStopExecutorSidecarForPageUnload(runtime: ExecutorSidecarRuntimeState) {
   runtime.lifecycleGeneration += 1;
   runtime.consumerCount = 0;
@@ -218,11 +255,11 @@ export function detachExecutorSidecarConsumer(runtime: ExecutorSidecarRuntimeSta
 
 function createExecutorReadySignal(timeoutMs: number) {
   let stdoutBuffer = '';
-  let resolveReady!: (reason: 'ready-marker' | 'timeout') => void;
+  let settleReady!: (reason: 'ready-marker') => void;
   let timeout: ReturnType<typeof setTimeout> | undefined;
 
-  const promise = new Promise<'ready-marker' | 'timeout'>((resolve) => {
-    resolveReady = (reason) => {
+  const promise = new Promise<'ready-marker'>((resolve, reject) => {
+    settleReady = (reason) => {
       if (timeout) {
         clearTimeout(timeout);
         timeout = undefined;
@@ -230,7 +267,10 @@ function createExecutorReadySignal(timeoutMs: number) {
       resolve(reason);
     };
 
-    timeout = setTimeout(() => resolveReady('timeout'), timeoutMs);
+    timeout = setTimeout(() => {
+      timeout = undefined;
+      reject(new Error(`Executor sidecar did not report websocket readiness within ${timeoutMs}ms.`));
+    }, timeoutMs);
   });
 
   return {
@@ -238,7 +278,7 @@ function createExecutorReadySignal(timeoutMs: number) {
     accept(text: string) {
       stdoutBuffer = `${stdoutBuffer}${text}`.slice(-4096);
       if (stdoutBuffer.includes(EXECUTOR_READY_MESSAGE)) {
-        resolveReady('ready-marker');
+        settleReady('ready-marker');
       }
     },
     dispose() {

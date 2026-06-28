@@ -7,6 +7,7 @@ import {
   attachAndStartExecutorSidecar,
   detachAndStopExecutorSidecar,
   executorSidecarRuntime,
+  restartSharedExecutorSidecar,
 } from './useExecutorSidecar';
 import {
   attachAndStartDesktopSidecarForRuntime,
@@ -14,6 +15,7 @@ import {
   invalidateExecutorRuntimeStartup,
   isExecutorRuntimeStartupTokenCurrent,
   releaseDesktopSidecarForRuntime,
+  restartDesktopSidecarForRuntime,
   type ExecutorRuntimeSidecar,
 } from './executorSessionRuntimeResources.js';
 import type { DefaultExecutor } from '../state/settings.js';
@@ -52,12 +54,33 @@ export function shouldRestoreInternalNodeExecutorAfterExternalDebuggerDisconnect
   isTauri: boolean;
   selectedExecutor: DefaultExecutor;
 }) {
+  if (options.event.target?.type !== 'external-debugger') {
+    return false;
+  }
+
+  return shouldRestoreInternalNodeExecutorAfterDisconnect(options);
+}
+
+export function shouldRestoreInternalNodeExecutorAfterDisconnect(options: {
+  event: ExecutorSessionLifecycleEvent;
+  hasInternalExecutorUrl: boolean;
+  isTauri: boolean;
+  selectedExecutor: DefaultExecutor;
+}) {
+  const isManualOrUnexpectedDisconnect =
+    options.event.reason === 'manual-disconnect' || options.event.reason === 'unexpected-disconnect';
+  const canUseInternalExecutor = options.hasInternalExecutorUrl || options.isTauri;
+
+  if (options.selectedExecutor !== 'nodejs' || !isManualOrUnexpectedDisconnect || !canUseInternalExecutor) {
+    return false;
+  }
+
   return (
-    options.selectedExecutor === 'nodejs' &&
-    options.event.type === 'disconnected' &&
-    (options.event.reason === 'manual-disconnect' || options.event.reason === 'unexpected-disconnect') &&
-    options.event.target?.type === 'external-debugger' &&
-    (options.hasInternalExecutorUrl || options.isTauri)
+    options.event.target?.type === 'external-debugger' ||
+    (options.event.reason === 'unexpected-disconnect' &&
+      options.event.target?.type === 'internal-desktop' &&
+      options.isTauri &&
+      !options.hasInternalExecutorUrl)
   );
 }
 
@@ -74,6 +97,7 @@ const defaultCoordinatorSidecar: CoordinatorSidecar = {
   attachAndStart: attachAndStartExecutorSidecar,
   detachAndStop: detachAndStopExecutorSidecar,
   isStarted: () => executorSidecarRuntime.started,
+  restart: restartSharedExecutorSidecar,
 };
 
 function handleCoordinatorError(error: unknown, context: string) {
@@ -86,17 +110,22 @@ function connectInternalNodeExecutor(
   runtime: RuntimeWithOptionalState,
   options: {
     internalExecutorUrl?: string;
+    restartDesktopSidecar?: boolean;
     sidecar?: CoordinatorSidecar;
   } = {},
 ) {
-  const { internalExecutorUrl, sidecar = defaultCoordinatorSidecar } = options;
+  const { internalExecutorUrl, restartDesktopSidecar = false, sidecar = defaultCoordinatorSidecar } = options;
 
   if (!internalExecutorUrl) {
     const startupToken = createExecutorRuntimeStartupToken(runtime);
 
     void (async () => {
       try {
-        await attachAndStartDesktopSidecarForRuntime(runtime, sidecar);
+        if (restartDesktopSidecar) {
+          await restartDesktopSidecarForRuntime(runtime, sidecar);
+        } else {
+          await attachAndStartDesktopSidecarForRuntime(runtime, sidecar);
+        }
 
         if (
           isExecutorRuntimeStartupTokenCurrent(runtime, startupToken) &&
@@ -131,7 +160,7 @@ export function handleExecutorSessionCoordinatorDisconnect(options: {
   const selectedExecutor = options.getSelectedExecutor();
 
   if (
-    !shouldRestoreInternalNodeExecutorAfterExternalDebuggerDisconnect({
+    !shouldRestoreInternalNodeExecutorAfterDisconnect({
       event: options.event,
       hasInternalExecutorUrl: !!internalExecutorUrl,
       isTauri: options.isTauri,
@@ -143,6 +172,7 @@ export function handleExecutorSessionCoordinatorDisconnect(options: {
 
   connectInternalNodeExecutor(options.runtime, {
     internalExecutorUrl,
+    restartDesktopSidecar: options.event.target?.type === 'internal-desktop',
     sidecar: options.sidecar,
   });
 }

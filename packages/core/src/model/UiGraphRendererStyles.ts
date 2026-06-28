@@ -6,17 +6,20 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   --rivet-web-app-card-border: var(--foldable-section-border, rgba(255, 255, 255, 0.04));
   --rivet-web-app-control-background: var(--form-control-bg, #20252d);
   --rivet-web-app-control-border: var(--form-control-border, rgba(255, 255, 255, 0.14));
-  --rivet-web-app-button-radius: var(--ui-button-radius, 6px);
+  --rivet-web-app-button-radius: var(--rivet-web-app-host-button-radius, 6px);
   --rivet-web-app-button-background: var(--success, #3ba85b);
   --rivet-web-app-button-foreground: var(--grey-lightest, #ffffff);
-  --rivet-web-app-output-title: var(--primary-text, #ff9e2c);
+  --rivet-web-app-output-title: var(--rivet-web-app-foreground, #ffffff);
   --rivet-web-app-error-color: var(--error, #ff6b5f);
+  --rivet-web-app-font-size: var(--rivet-web-app-host-font-size, 15px);
   box-sizing: border-box;
   height: 100%;
   background: var(--rivet-web-app-background);
   color: var(--rivet-web-app-foreground);
   overflow: auto;
   font-family: Inter, system-ui, sans-serif;
+  font-size: var(--rivet-web-app-font-size);
+  line-height: 1.4;
 }
 
 .rivet-web-app-root *,
@@ -55,7 +58,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   display: grid;
   gap: 8px;
   color: var(--rivet-web-app-foreground);
-  font-size: var(--ui-font-size-base, 13px);
+  font-size: inherit;
   font-weight: 600;
 }
 
@@ -109,6 +112,8 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   margin: 0;
   background: transparent;
   border-radius: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: inherit;
   padding: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -119,7 +124,12 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   word-break: break-word;
 }
 
-.rivet-web-app-markdown.markdown-body,
+.rivet-web-app-markdown.markdown-body {
+  background: var(--rivet-web-app-card-background);
+  font-family: inherit;
+  min-width: 0;
+}
+
 .rivet-web-app-output-markdown.markdown-body {
   background: transparent;
   font-family: inherit;
@@ -149,17 +159,18 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   margin: 0 0 12px;
 }
 
-.rivet-web-app-markdown code,
-.rivet-web-app-output-markdown code {
+.rivet-web-app-markdown.markdown-body code,
+.rivet-web-app-output-markdown.markdown-body code {
   border-radius: 4px;
   background: color-mix(in srgb, var(--rivet-web-app-control-background) 70%, var(--rivet-web-app-foreground) 6%);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   padding: 1px 4px;
 }
 
-.rivet-web-app-markdown pre,
-.rivet-web-app-output-markdown pre {
+.rivet-web-app-markdown.markdown-body pre,
+.rivet-web-app-output-markdown.markdown-body pre {
   background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   padding: 0;
   white-space: pre-wrap;
 }

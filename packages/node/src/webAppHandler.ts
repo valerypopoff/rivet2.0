@@ -17,7 +17,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
 
-const requireForWebAppAssets = createRequire(import.meta.url);
+let requireForWebAppAssets: ReturnType<typeof createRequire> | undefined;
 let githubMarkdownCss: string | undefined;
 let markedBrowserScript: string | undefined;
 
@@ -406,15 +406,32 @@ function styleForHtml(style: string): string {
 
 function getGithubMarkdownCss(): string {
   githubMarkdownCss ??= readFileSync(
-    requireForWebAppAssets.resolve('github-markdown-css/github-markdown-dark-dimmed.css'),
+    getRequireForWebAppAssets().resolve('github-markdown-css/github-markdown-dark-dimmed.css'),
     'utf8',
   );
   return githubMarkdownCss;
 }
 
 function getMarkedBrowserScript(): string {
-  markedBrowserScript ??= readFileSync(requireForWebAppAssets.resolve('marked/marked.min.js'), 'utf8');
+  markedBrowserScript ??= readFileSync(getRequireForWebAppAssets().resolve('marked/marked.min.js'), 'utf8');
   return markedBrowserScript;
+}
+
+function getRequireForWebAppAssets(): ReturnType<typeof createRequire> {
+  requireForWebAppAssets ??= createRequire(getCreateRequireAnchor());
+  return requireForWebAppAssets;
+}
+
+function getCreateRequireAnchor(): string {
+  if (typeof import.meta.url === 'string' && import.meta.url.length > 0) {
+    return import.meta.url;
+  }
+
+  if (typeof __filename === 'string' && __filename.length > 0) {
+    return __filename;
+  }
+
+  return `${process.cwd()}/package.json`;
 }
 
 function escapeHtml(value: unknown): string {
@@ -519,6 +536,7 @@ const WEB_APP_CLIENT_JS = String.raw`
     if (component.type === 'markdown') return renderMarkdownElement(component.markdown, 'rivet-web-app-card rivet-web-app-markdown markdown-body');
     if (component.type === 'input' || component.type === 'textarea') {
       const control = el(component.type === 'textarea' ? 'textarea' : 'input', {
+        className: 'rivet-web-app-control inputarea',
         placeholder: component.placeholder || '',
       });
       control.value = state[component.stateKey] ?? component.defaultValue ?? '';

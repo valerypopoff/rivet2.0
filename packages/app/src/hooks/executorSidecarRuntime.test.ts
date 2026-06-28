@@ -5,6 +5,7 @@ import {
   createExecutorSidecarRuntimeState,
   detachExecutorSidecarConsumer,
   forceStopExecutorSidecarForPageUnload,
+  restartExecutorSidecar,
   startExecutorSidecar,
   stopExecutorSidecar,
 } from './executorSidecarRuntime';
@@ -12,15 +13,20 @@ import {
 test('sidecar runtime starts once and tracks consumer lifecycle', async () => {
   let spawnCount = 0;
   let killCount = 0;
+  let stdoutDataHandler: ((data: string) => void) | undefined;
   const runtime = createExecutorSidecarRuntimeState();
 
   attachExecutorSidecarConsumer(runtime);
 
-  await startExecutorSidecar(
+  const startPromise = startExecutorSidecar(
     runtime,
     async () =>
       ({
-        stdout: { on: () => {} },
+        stdout: {
+          on: (_event: string, handler: (data: string) => void) => {
+            stdoutDataHandler = handler;
+          },
+        },
         stderr: { on: () => {} },
         spawn: async () => {
           spawnCount += 1;
@@ -31,8 +37,11 @@ test('sidecar runtime starts once and tracks consumer lifecycle', async () => {
           } as any;
         },
       }) as any,
-    { readyTimeoutMs: 0 },
+    { readyTimeoutMs: 1000 },
   );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  stdoutDataHandler?.('Rivet app executor websocket listening on 127.0.0.1:21889');
+  await startPromise;
 
   assert.equal(runtime.started, true);
   assert.equal(spawnCount, 1);
@@ -90,6 +99,7 @@ test('sidecar runtime reuses pending startup across quick detach and reattach', 
 });
 
 test('sidecar stderr is telemetry and does not report renderer errors', async () => {
+  let stdoutDataHandler: ((data: string) => void) | undefined;
   let stderrDataHandler: ((data: string) => void) | undefined;
   const runtime = createExecutorSidecarRuntimeState();
   const originalConsoleError = console.error;
@@ -102,11 +112,15 @@ test('sidecar stderr is telemetry and does not report renderer errors', async ()
   try {
     attachExecutorSidecarConsumer(runtime);
 
-    await startExecutorSidecar(
+    const startPromise = startExecutorSidecar(
       runtime,
       async () =>
         ({
-          stdout: { on: () => {} },
+          stdout: {
+            on: (_event: string, handler: (data: string) => void) => {
+              stdoutDataHandler = handler;
+            },
+          },
           stderr: {
             on: (_event: string, handler: (data: string) => void) => {
               stderrDataHandler = handler;
@@ -117,8 +131,11 @@ test('sidecar stderr is telemetry and does not report renderer errors', async ()
               kill: async () => {},
             }) as any,
         }) as any,
-      { readyTimeoutMs: 0 },
+      { readyTimeoutMs: 1000 },
     );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    stdoutDataHandler?.('Rivet app executor websocket listening on 127.0.0.1:21889');
+    await startPromise;
 
     stderrDataHandler?.('expected provider failure log');
 
@@ -169,6 +186,43 @@ test('sidecar runtime waits for ready stdout before reporting started', async ()
   }
 });
 
+test('sidecar runtime treats missing ready stdout as a startup failure', async () => {
+  let killCount = 0;
+  const runtime = createExecutorSidecarRuntimeState();
+  const originalConsoleError = console.error;
+
+  console.error = () => {};
+
+  try {
+    attachExecutorSidecarConsumer(runtime);
+
+    await startExecutorSidecar(
+      runtime,
+      async () =>
+        ({
+          stdout: { on: () => {} },
+          stderr: { on: () => {} },
+          spawn: async () =>
+            ({
+              kill: async () => {
+                killCount += 1;
+              },
+            }) as any,
+        }) as any,
+      { readyTimeoutMs: 1 },
+    );
+
+    assert.equal(runtime.started, false);
+    assert.equal(runtime.process, null);
+    assert.equal(runtime.startPromise, null);
+    assert.equal(killCount, 1);
+  } finally {
+    console.error = originalConsoleError;
+    detachExecutorSidecarConsumer(runtime);
+    await stopExecutorSidecar(runtime);
+  }
+});
+
 test('sidecar runtime force-stops and detaches stream listeners during page unload', async () => {
   let killCount = 0;
   const stdoutHandlers = new Set<(data: string) => void>();
@@ -177,7 +231,7 @@ test('sidecar runtime force-stops and detaches stream listeners during page unlo
 
   attachExecutorSidecarConsumer(runtime);
 
-  await startExecutorSidecar(
+  const startPromise = startExecutorSidecar(
     runtime,
     async () =>
       ({
@@ -204,8 +258,11 @@ test('sidecar runtime force-stops and detaches stream listeners during page unlo
             },
           }) as any,
       }) as any,
-    { readyTimeoutMs: 0 },
+    { readyTimeoutMs: 1000 },
   );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  stdoutHandlers.forEach((handler) => handler('Rivet app executor websocket listening on 127.0.0.1:21889'));
+  await startPromise;
 
   assert.equal(stdoutHandlers.size, 1);
   assert.equal(stderrHandlers.size, 1);
@@ -313,6 +370,58 @@ test('cancelled sidecar startup does not clear or stop a newer startup', async (
 
   assert.equal(commandCount, 2);
   assert.equal(runtime.started, true);
+  assert.equal(killCount, 1);
+
+  detachExecutorSidecarConsumer(runtime);
+  await stopExecutorSidecar(runtime);
+});
+
+test('sidecar runtime restart preserves consumers and starts a fresh process', async () => {
+  let spawnCount = 0;
+  let killCount = 0;
+  let firstStdoutDataHandler: ((data: string) => void) | undefined;
+  let secondStdoutDataHandler: ((data: string) => void) | undefined;
+  const runtime = createExecutorSidecarRuntimeState();
+
+  const createSidecarCommand = async () => {
+    spawnCount += 1;
+    const spawnNumber = spawnCount;
+
+    return {
+      stdout: {
+        on: (_event: string, handler: (data: string) => void) => {
+          if (spawnNumber === 1) {
+            firstStdoutDataHandler = handler;
+          } else {
+            secondStdoutDataHandler = handler;
+          }
+        },
+        off: () => {},
+      },
+      stderr: { on: () => {}, off: () => {} },
+      spawn: async () =>
+        ({
+          kill: async () => {
+            killCount += 1;
+          },
+        }) as any,
+    } as any;
+  };
+
+  attachExecutorSidecarConsumer(runtime);
+  const start = startExecutorSidecar(runtime, createSidecarCommand, { readyTimeoutMs: 1000 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  firstStdoutDataHandler?.('Rivet app executor websocket listening on 127.0.0.1:21889');
+  await start;
+
+  const restart = restartExecutorSidecar(runtime, createSidecarCommand, { readyTimeoutMs: 1000 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  secondStdoutDataHandler?.('Rivet app executor websocket listening on 127.0.0.1:21889');
+  await restart;
+
+  assert.equal(runtime.consumerCount, 1);
+  assert.equal(runtime.started, true);
+  assert.equal(spawnCount, 2);
   assert.equal(killCount, 1);
 
   detachExecutorSidecarConsumer(runtime);

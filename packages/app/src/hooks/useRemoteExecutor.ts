@@ -65,6 +65,7 @@ import {
   summarizeRemoteDebuggerRoutingState,
 } from './remoteDebuggerDiagnostics.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
+import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
 
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
@@ -315,7 +316,11 @@ export function useRemoteExecutor() {
   }, [eventDispatcher, executorSession, project.metadata.id, setFrozenNodeOutputs, store]);
 
   const tryRunGraph = async (options: EditorGraphRunOptions = {}): Promise<GraphOutputs | undefined> => {
-    const sessionState = executorSession.getRuntimeState();
+    let sessionState = executorSession.getRuntimeState();
+    if (!sessionState.capabilities.canSendRun && options.waitForResults) {
+      sessionState = await waitForExecutorSessionRunCapability(executorSession);
+    }
+
     if (!sessionState.capabilities.canSendRun) {
       logRuntimeDebug('Remote graph run skipped because executor session cannot send runs.', {
         status: sessionState.status,
