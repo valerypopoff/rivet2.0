@@ -7,6 +7,7 @@ import { useEditorCommandQueue } from './useEditorCommandQueue';
 import { focusIframeElement } from './editorBridgeFocus';
 import { useDashboardSidebar } from './useDashboardSidebar';
 import { useEditorBridgeEvents } from './useEditorBridgeEvents';
+import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
 import './DashboardPage.css';
 
@@ -16,6 +17,12 @@ const MAX_SIDEBAR_WIDTH = 560;
 
 export const DashboardPage: FC = () => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const pendingWorkflowProjectOpenPathRef = useRef<string | null>(null);
+  const pendingWorkflowProjectOpenRequestIdRef = useRef<string | null>(null);
+  const pendingWorkflowProjectOpenTimeoutRef = useRef<number | undefined>(undefined);
+  const workflowProjectOpenRequestSequenceRef = useRef(0);
+  const workflowPathMoveAckResolversRef = useRef(new Map<string, () => void>());
+  const workflowPathMoveRequestSequenceRef = useRef(0);
   const [openedProjectPath, setOpenedProjectPath] = useState('');
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
   const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
@@ -37,7 +44,57 @@ export const DashboardPage: FC = () => {
     minWidth: MIN_SIDEBAR_WIDTH,
   });
 
+  const clearPendingWorkflowProjectOpen = useCallback((path?: string, requestId?: string) => {
+    if (
+      path &&
+      pendingWorkflowProjectOpenPathRef.current &&
+      normalizeWorkflowPath(path) !== normalizeWorkflowPath(pendingWorkflowProjectOpenPathRef.current)
+    ) {
+      return;
+    }
+
+    if (
+      requestId &&
+      pendingWorkflowProjectOpenRequestIdRef.current &&
+      pendingWorkflowProjectOpenRequestIdRef.current !== requestId
+    ) {
+      return;
+    }
+
+    pendingWorkflowProjectOpenPathRef.current = null;
+    pendingWorkflowProjectOpenRequestIdRef.current = null;
+    if (pendingWorkflowProjectOpenTimeoutRef.current !== undefined) {
+      window.clearTimeout(pendingWorkflowProjectOpenTimeoutRef.current);
+      pendingWorkflowProjectOpenTimeoutRef.current = undefined;
+    }
+  }, []);
+
+  const rememberPendingWorkflowProjectOpen = useCallback((path: string, requestId?: string) => {
+    clearPendingWorkflowProjectOpen();
+    pendingWorkflowProjectOpenPathRef.current = path;
+    pendingWorkflowProjectOpenRequestIdRef.current = requestId ?? null;
+    pendingWorkflowProjectOpenTimeoutRef.current = window.setTimeout(() => {
+      pendingWorkflowProjectOpenPathRef.current = null;
+      pendingWorkflowProjectOpenRequestIdRef.current = null;
+      pendingWorkflowProjectOpenTimeoutRef.current = undefined;
+    }, 120_000);
+  }, [clearPendingWorkflowProjectOpen]);
+
+  const shouldIgnoreTransientActiveProjectPath = useCallback((path: string, requestId?: string) => {
+    const pendingPath = pendingWorkflowProjectOpenPathRef.current;
+    const pendingRequestId = pendingWorkflowProjectOpenRequestIdRef.current;
+    return Boolean(
+      pendingPath &&
+      (
+        (path && normalizeWorkflowPath(path) !== normalizeWorkflowPath(pendingPath)) ||
+        (requestId && pendingRequestId && requestId !== pendingRequestId)
+      ),
+    );
+  }, []);
+
   const handleOpenProject = useCallback((path: string, options?: WorkflowProjectOpenOptions) => {
+    const requestId = `open-project:${Date.now()}:${workflowProjectOpenRequestSequenceRef.current++}`;
+    rememberPendingWorkflowProjectOpen(path, requestId);
     postEditorCommand({
       type: 'open-project',
       path,
@@ -45,8 +102,13 @@ export const DashboardPage: FC = () => {
       title: options?.title,
       preview: options?.preview === true ? true : undefined,
       reloadFromDisk: options?.reloadFromDisk === true ? true : undefined,
+      requestId,
     });
-  }, [postEditorCommand]);
+  }, [postEditorCommand, rememberPendingWorkflowProjectOpen]);
+
+  const handleWorkflowProjectOpenIntent = useCallback((path: string) => {
+    rememberPendingWorkflowProjectOpen(path);
+  }, [rememberPendingWorkflowProjectOpen]);
 
   const handleRefreshOpenProjectFromDisk = useCallback((path: string) => {
     postEditorCommand({ type: 'refresh-open-project-from-disk', path });
@@ -110,10 +172,24 @@ export const DashboardPage: FC = () => {
     postEditorCommand({ type: 'delete-workflow-project', path, projectId });
   }, [postEditorCommand]);
 
+  const handleWorkflowPathsMovedApplied = useCallback((requestId?: string) => {
+    if (!requestId) {
+      return;
+    }
+
+    const resolve = workflowPathMoveAckResolversRef.current.get(requestId);
+    if (!resolve) {
+      return;
+    }
+
+    workflowPathMoveAckResolversRef.current.delete(requestId);
+    resolve();
+  }, []);
+
   const handleWorkflowPathsMoved = useCallback(
     (moves: WorkflowProjectPathMove[]) => {
       if (moves.length === 0) {
-        return;
+        return Promise.resolve();
       }
 
       setOpenedProjectPath((prev) => moves.find((move) => move.fromAbsolutePath === prev)?.toAbsolutePath ?? prev);
@@ -133,10 +209,36 @@ export const DashboardPage: FC = () => {
 
         return changed ? next : prev;
       });
-      postEditorCommand({ type: 'workflow-paths-moved', moves });
+
+      const requestId = `workflow-paths-moved:${Date.now()}:${workflowPathMoveRequestSequenceRef.current++}`;
+      const applied = !editorReady
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            const timeoutId = window.setTimeout(() => {
+              workflowPathMoveAckResolversRef.current.delete(requestId);
+              resolve();
+            }, 5_000);
+
+            workflowPathMoveAckResolversRef.current.set(requestId, () => {
+              window.clearTimeout(timeoutId);
+              resolve();
+            });
+          });
+
+      postEditorCommand({ type: 'workflow-paths-moved', moves, requestId });
+      return applied;
     },
-    [postEditorCommand],
+    [editorReady, postEditorCommand],
   );
+
+  useEffect(() => () => {
+    clearPendingWorkflowProjectOpen();
+    for (const resolve of workflowPathMoveAckResolversRef.current.values()) {
+      resolve();
+    }
+    workflowPathMoveAckResolversRef.current.clear();
+  }, [clearPendingWorkflowProjectOpen]);
+
   useEditorBridgeEvents({
     activeWorkflowProjectPath,
     editorReady,
@@ -144,6 +246,10 @@ export const DashboardPage: FC = () => {
     handleSaveProject,
     iframeRef,
     onActiveWorkflowProjectPathChange: (path) => {
+      if (shouldIgnoreTransientActiveProjectPath(path)) {
+        return;
+      }
+
       setOpenedProjectPath(path);
       setActiveWorkflowProjectPath(path);
     },
@@ -171,7 +277,16 @@ export const DashboardPage: FC = () => {
     },
     onProjectOpenFailed: () => {
     },
-    onProjectOpened: (path) => {
+    onProjectOpened: (path, requestId) => {
+      if (requestId && !pendingWorkflowProjectOpenPathRef.current) {
+        return;
+      }
+
+      if (shouldIgnoreTransientActiveProjectPath(path, requestId)) {
+        return;
+      }
+
+      clearPendingWorkflowProjectOpen(path, requestId);
       setOpenedProjectPath(path);
       setActiveWorkflowProjectPath(path);
     },
@@ -186,6 +301,7 @@ export const DashboardPage: FC = () => {
             }
       ));
     },
+    onWorkflowPathsMovedApplied: handleWorkflowPathsMovedApplied,
   });
 
   const showEditorLoading = !editorReady;
@@ -217,6 +333,7 @@ export const DashboardPage: FC = () => {
           onSaveProject={handleSaveProject}
           onDeleteProject={handleDeleteProject}
           onWorkflowPathsMoved={handleWorkflowPathsMoved}
+          onWorkflowProjectOpenIntent={handleWorkflowProjectOpenIntent}
           onActiveWorkflowProjectPathChange={setActiveWorkflowProjectPath}
           openedProjectPath={openedProjectPath}
           activeProjectHasUnsavedChanges={activeProjectHasUnsavedChanges}

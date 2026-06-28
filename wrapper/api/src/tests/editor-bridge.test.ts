@@ -43,6 +43,7 @@ test('editor bridge accepts valid dashboard commands', () => {
       replaceCurrent: false,
       preview: true,
       reloadFromDisk: true,
+      requestId: 'open-1',
     }),
     true,
   );
@@ -74,6 +75,7 @@ test('editor bridge accepts valid dashboard commands', () => {
     isDashboardToEditorCommand({
       type: 'workflow-paths-moved',
       moves: [{ fromAbsolutePath: '/a', toAbsolutePath: '/b' }],
+      requestId: 'move-1',
     }),
     true,
   );
@@ -96,6 +98,15 @@ test('editor bridge rejects malformed messages', () => {
       path: '/tmp/example.rivet-project',
       replaceCurrent: false,
       reloadFromDisk: 'yes',
+    }),
+    false,
+  );
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'open-project',
+      path: '/tmp/example.rivet-project',
+      replaceCurrent: false,
+      requestId: 123,
     }),
     false,
   );
@@ -126,12 +137,30 @@ test('editor bridge rejects malformed messages', () => {
     }),
     false,
   );
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'workflow-paths-moved',
+      moves: [{ fromAbsolutePath: '/a', toAbsolutePath: '/b' }],
+      requestId: 123,
+    }),
+    false,
+  );
   assert.equal(isEditorToDashboardEvent({ type: 'project-saved' }), false);
   assert.equal(isEditorToDashboardEvent({ type: 'unknown' }), false);
 });
 
 test('editor bridge accepts valid editor events', () => {
   assert.equal(isEditorToDashboardEvent({ type: 'editor-ready' }), true);
+  assert.equal(isEditorToDashboardEvent({ type: 'project-opened', path: '/tmp/example.rivet-project' }), true);
+  assert.equal(
+    isEditorToDashboardEvent({
+      type: 'project-opened',
+      path: '/tmp/example.rivet-project',
+      requestId: 'open-1',
+    }),
+    true,
+  );
+  assert.equal(isEditorToDashboardEvent({ type: 'project-opened', path: '/tmp/example.rivet-project', requestId: 123 }), false);
   assert.equal(
     isEditorToDashboardEvent({
       type: 'project-saved',
@@ -148,4 +177,6 @@ test('editor bridge accepts valid editor events', () => {
     true,
   );
   assert.equal(isEditorToDashboardEvent({ type: 'open-project-count-changed', count: 2 }), true);
+  assert.equal(isEditorToDashboardEvent({ type: 'workflow-paths-moved-applied', requestId: 'move-1' }), true);
+  assert.equal(isEditorToDashboardEvent({ type: 'workflow-paths-moved-applied', requestId: 123 }), false);
 });

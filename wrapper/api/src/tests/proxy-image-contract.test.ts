@@ -200,12 +200,14 @@ test('API images and launchers use the filtered Rivet source context and symlink
   }
   assert.match(devCompose, /api:[\s\S]*- rivet_node_modules:\/workspace\/rivet\/node_modules/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/workspace\/rivet node \/workspace\/scripts\/ensure-rivet-runtime-build\.mjs/);
-  assert.match(devCompose, /RIVET_SOURCE_ROOT=\/app\/\.rivet-source RIVET_API_PACKAGE_ROOT=\/app node \/workspace\/scripts\/link-rivet-node-package\.mjs/);
+  assert.match(devCompose, /RIVET_SOURCE_ROOT=\/tmp\/rivet-source RIVET_API_PACKAGE_ROOT=\/app node \/workspace\/scripts\/link-rivet-node-package\.mjs/);
   assert.match(ensureRivetRuntimeBuild, /yarn-4\.6\.0\.cjs/);
   assert.match(ensureRivetRuntimeBuild, /'build:runtime'/);
   assert.match(ensureRivetRuntimeBuild, /webAppHandler\.js/);
   assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);
   assert.match(devDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
+  assert.match(devDockerLauncher, /refreshRunningProxy = action === 'dev' && proxyAlreadyRunning/);
+  assert.match(devDockerLauncher, /up -d --no-deps --force-recreate --wait --wait-timeout \$\{waitTimeoutSeconds\} proxy/);
   assert.match(prodDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
   assert.ok(rivetContextHelper.includes("const defaultContextRelPath = path.join(contextRootRelPath, 'rivet-source');"));
   assert.match(rivetContextHelper, /'\.upstream-version'/);

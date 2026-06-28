@@ -31,6 +31,7 @@ type OpenWorkflowProjectOptions = {
   skipReplaceConfirmation?: boolean;
   previewTab?: boolean;
   openingTabId?: string;
+  openedProjectId?: ProjectId;
 };
 
 type OpenWorkflowProjectResult = {
@@ -180,7 +181,8 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     }
 
     const alreadyOpenByPath = activeOpenedProjects.find((projectInfo) =>
-      normalizeWorkflowPath(projectInfo.fsPath ?? '') === normalizedFilePath);
+      normalizeWorkflowPath(projectInfo.fsPath ?? '') === normalizedFilePath ||
+      (options?.openedProjectId != null && projectInfo.projectId === options.openedProjectId));
 
     if (alreadyOpenByPath) {
       let snapshot = reloadFromDisk

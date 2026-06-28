@@ -15,6 +15,7 @@ export type DashboardToEditorCommand =
       title?: string;
       preview?: boolean;
       reloadFromDisk?: boolean;
+      requestId?: string;
     }
   | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean }
   | { type: 'open-published-version-preview'; relativePath: string; versionId: string; replaceCurrent: boolean }
@@ -29,16 +30,17 @@ export type DashboardToEditorCommand =
   | { type: 'trigger-editor-find-shortcut'; modifier: EditorShortcutModifier }
   | { type: 'trigger-editor-duplicate-shortcut'; modifier: EditorShortcutModifier }
   | { type: 'delete-workflow-project'; path: string; projectId?: string | null }
-  | { type: 'workflow-paths-moved'; moves: WorkflowProjectPathMove[] };
+  | { type: 'workflow-paths-moved'; moves: WorkflowProjectPathMove[]; requestId?: string };
 
 export type EditorToDashboardEvent =
   | { type: 'editor-ready' }
-  | { type: 'project-opened'; path: string }
+  | { type: 'project-opened'; path: string; requestId?: string }
   | { type: 'project-open-failed'; path: string; error: string }
   | { type: 'active-project-path-changed'; path: string }
   | { type: 'active-project-unsaved-changes-changed'; path: string; hasUnsavedChanges: boolean }
   | { type: 'open-project-count-changed'; count: number }
   | { type: 'project-compare-failed'; path: string; error: string }
+  | { type: 'workflow-paths-moved-applied'; requestId?: string }
   | { type: 'project-saved'; path: string };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -78,7 +80,8 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         typeof value.replaceCurrent === 'boolean' &&
         (value.title == null || typeof value.title === 'string') &&
         (value.preview == null || typeof value.preview === 'boolean') &&
-        (value.reloadFromDisk == null || typeof value.reloadFromDisk === 'boolean')
+        (value.reloadFromDisk == null || typeof value.reloadFromDisk === 'boolean') &&
+        (value.requestId == null || typeof value.requestId === 'string')
       );
     case 'open-recording':
       return typeof value.recordingId === 'string' && typeof value.replaceCurrent === 'boolean';
@@ -105,7 +108,11 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
     case 'delete-workflow-project':
       return typeof value.path === 'string' && (value.projectId == null || typeof value.projectId === 'string');
     case 'workflow-paths-moved':
-      return Array.isArray(value.moves) && value.moves.every(isWorkflowMove);
+      return (
+        Array.isArray(value.moves) &&
+        value.moves.every(isWorkflowMove) &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
     default:
       return false;
   }
@@ -120,6 +127,7 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
     case 'editor-ready':
       return true;
     case 'project-opened':
+      return typeof value.path === 'string' && (value.requestId == null || typeof value.requestId === 'string');
     case 'active-project-path-changed':
     case 'project-saved':
       return typeof value.path === 'string';
@@ -128,6 +136,8 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
     case 'project-compare-failed':
     case 'project-open-failed':
       return typeof value.path === 'string' && typeof value.error === 'string';
+    case 'workflow-paths-moved-applied':
+      return value.requestId == null || typeof value.requestId === 'string';
     case 'open-project-count-changed':
       return typeof value.count === 'number';
     default:

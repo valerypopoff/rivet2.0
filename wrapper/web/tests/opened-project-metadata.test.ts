@@ -118,7 +118,7 @@ test('resolveHostedProjectMetadataUpdatesForPathMoves also handles already-retar
   ]);
 });
 
-test('resolveHostedProjectMetadataUpdatesForPathMoves ignores folder moves with the same project file name', () => {
+test('resolveHostedProjectMetadataUpdatesForPathMoves emits path-only updates for folder moves', () => {
   const current = {
     openedProjects: {
       'project-1': {
@@ -135,7 +135,39 @@ test('resolveHostedProjectMetadataUpdatesForPathMoves ignores folder moves with 
     },
   ]);
 
-  assert.deepEqual(result, []);
+  assert.deepEqual(result, [
+    {
+      projectId: 'project-1',
+      path: '/managed/workflows/Renamed Folder/Current Name.rivet-project',
+      title: undefined,
+    },
+  ]);
+});
+
+test('resolveHostedProjectMetadataUpdatesForPathMoves matches native Windows move paths against normalized editor paths', () => {
+  const current = {
+    openedProjects: {
+      'project-1': {
+        title: 'Current Name',
+        fsPath: 'F:/Programming/workflows/Folder/Current Name.rivet-project',
+      },
+    },
+  };
+
+  const result = resolveHostedProjectMetadataUpdatesForPathMoves(current, [
+    {
+      fromAbsolutePath: 'F:\\Programming\\workflows\\Folder\\Current Name.rivet-project',
+      toAbsolutePath: 'F:\\Programming\\workflows\\Renamed Folder\\Current Name.rivet-project',
+    },
+  ]);
+
+  assert.deepEqual(result, [
+    {
+      projectId: 'project-1',
+      path: 'F:\\Programming\\workflows\\Renamed Folder\\Current Name.rivet-project',
+      title: undefined,
+    },
+  ]);
 });
 
 test('resolveHostedProjectMetadataUpdatesForPathMoves ignores virtual project paths', () => {

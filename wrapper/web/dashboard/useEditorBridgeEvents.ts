@@ -23,8 +23,9 @@ type UseEditorBridgeEventsOptions = {
   onEditorReady: () => void;
   onOpenProjectCountChange: (count: number) => void;
   onProjectOpenFailed: (error: string) => void;
-  onProjectOpened: (path: string) => void;
+  onProjectOpened: (path: string, requestId?: string) => void;
   onProjectSaved: (path: string) => void;
+  onWorkflowPathsMovedApplied: (requestId?: string) => void;
 };
 
 export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
@@ -41,6 +42,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onProjectOpenFailed,
     onProjectOpened,
     onProjectSaved,
+    onWorkflowPathsMovedApplied,
   } = options;
 
   useEffect(() => {
@@ -141,7 +143,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           onEditorReady();
           break;
         case 'project-opened':
-          onProjectOpened(event.data.path);
+          onProjectOpened(event.data.path, event.data.requestId);
           focusEditorFrame();
           break;
         case 'active-project-path-changed':
@@ -155,6 +157,9 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           break;
         case 'project-saved':
           onProjectSaved(event.data.path);
+          break;
+        case 'workflow-paths-moved-applied':
+          onWorkflowPathsMovedApplied(event.data.requestId);
           break;
         case 'project-open-failed':
           onProjectOpenFailed(event.data.error);
@@ -177,5 +182,6 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onProjectOpenFailed,
     onProjectOpened,
     onProjectSaved,
+    onWorkflowPathsMovedApplied,
   ]);
 }

@@ -41,15 +41,20 @@ test.describe('Hosted open-project cache after rename', () => {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await authenticateIfNeeded(page);
       await waitForDashboardReady(page);
+      const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+      const activeNestedEditorTab = editorFrame.locator('.projects-container .project.active', { hasText: nestedProjectName });
+      const activeRootEditorTab = editorFrame.locator('.projects-container .project.active', { hasText: rootProjectName });
 
       await ensureFolderExpanded(page, initialFolderName, nestedProjectName);
       await page.locator('.project-row', { hasText: nestedProjectName }).dblclick();
       await expect(page.locator('.active-project-name')).toHaveText(nestedProjectName, { timeout: 120_000 });
-      await expect(page.locator('.active-project-save-button')).toHaveText('Save', { timeout: 120_000 });
+      await expect(activeNestedEditorTab).toBeVisible({ timeout: 120_000 });
+      await expect(page.locator('.active-project-save-button')).toHaveCount(0, { timeout: 120_000 });
 
       await page.locator('.project-row', { hasText: rootProjectName }).dblclick();
       await expect(page.locator('.active-project-name')).toHaveText(rootProjectName, { timeout: 120_000 });
-      await expect(page.locator('.active-project-save-button')).toHaveText('Save', { timeout: 120_000 });
+      await expect(activeRootEditorTab).toBeVisible({ timeout: 120_000 });
+      await expect(page.locator('.active-project-save-button')).toHaveCount(0, { timeout: 120_000 });
 
       await renameWorkflowFolderInline(page, initialFolderName, renamedFolderName);
 
@@ -74,7 +79,8 @@ test.describe('Hosted open-project cache after rename', () => {
       try {
         await page.locator('.project-row', { hasText: nestedProjectName }).dblclick();
         await expect(page.locator('.active-project-name')).toHaveText(nestedProjectName, { timeout: 30_000 });
-        await expect(page.locator('.active-project-save-button')).toHaveText('Save', { timeout: 30_000 });
+        await expect(activeNestedEditorTab).toBeVisible({ timeout: 30_000 });
+        await expect(page.locator('.active-project-save-button')).toHaveCount(0, { timeout: 30_000 });
         await page.waitForTimeout(750);
       } finally {
         page.off('request', handleRequest);

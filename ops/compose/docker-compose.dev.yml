@@ -186,13 +186,13 @@ services:
         cd /workspace/rivet &&
         RIVET_SOURCE_ROOT=/workspace/rivet node /workspace/scripts/ensure-rivet-runtime-build.mjs &&
         cd /app &&
-        rm -rf /app/.rivet-source &&
-        mkdir -p /app/.rivet-source/packages &&
-        cp -a /workspace/rivet/packages/core /app/.rivet-source/packages/core &&
-        cp -a /workspace/rivet/packages/node /app/.rivet-source/packages/node &&
-        rm -rf /app/.rivet-source/packages/core/node_modules /app/.rivet-source/packages/node/node_modules &&
-        ln -s /workspace/rivet/node_modules /app/.rivet-source/node_modules &&
-        RIVET_SOURCE_ROOT=/app/.rivet-source RIVET_API_PACKAGE_ROOT=/app node /workspace/scripts/link-rivet-node-package.mjs &&
+        rm -rf /tmp/rivet-source &&
+        mkdir -p /tmp/rivet-source/packages &&
+        cp -R /workspace/rivet/packages/core /tmp/rivet-source/packages/core &&
+        cp -R /workspace/rivet/packages/node /tmp/rivet-source/packages/node &&
+        rm -rf /tmp/rivet-source/packages/core/node_modules /tmp/rivet-source/packages/node/node_modules &&
+        ln -s /workspace/rivet/node_modules /tmp/rivet-source/node_modules &&
+        RIVET_SOURCE_ROOT=/tmp/rivet-source RIVET_API_PACKAGE_ROOT=/app node /workspace/scripts/link-rivet-node-package.mjs &&
         NODE_OPTIONS='${NODE_OPTIONS:-} --import=/opt/proxy-bootstrap/bootstrap.mjs' npm run dev
       "
     healthcheck:

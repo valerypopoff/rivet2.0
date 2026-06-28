@@ -22,7 +22,8 @@ interface WorkflowLibraryPanelProps {
   onCompareOpenProjectWith: (path: string, referencePath?: string, labels?: ProjectCompareSideLabels) => void;
   onSaveProject: () => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
-  onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => void;
+  onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => Promise<void> | void;
+  onWorkflowProjectOpenIntent: (path: string) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   openedProjectPath: string;
   activeProjectHasUnsavedChanges: boolean;
@@ -55,6 +56,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onSaveProject,
   onDeleteProject,
   onWorkflowPathsMoved,
+  onWorkflowProjectOpenIntent,
   onActiveWorkflowProjectPathChange,
   openedProjectPath,
   activeProjectHasUnsavedChanges,
@@ -72,6 +74,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onCompareOpenProjectWith,
     onDeleteProject,
     onWorkflowPathsMoved,
+    onWorkflowProjectOpenIntent,
     onActiveWorkflowProjectPathChange,
     openedProjectPath,
     projectSaveSequence,

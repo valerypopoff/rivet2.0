@@ -132,7 +132,7 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await firstProjectLoadStarted;
   await expect(firstOpeningEditorTab).toBeVisible();
   await expect(firstOpeningEditorTab).toHaveClass(/\bpreview\b/);
-  await expect(firstOpeningEditorTab.locator('.opening-project-spinner')).toBeVisible();
+  await expect(frame.getByRole('status', { name: 'Opening project' })).toBeVisible();
   await expect(frame.locator('.opening-project-placeholder-title')).toContainText('Opening project...');
   releaseFirstProjectLoad?.();
   await expect(frame.locator('.node-canvas')).toBeVisible({ timeout: 30_000 });
@@ -160,8 +160,9 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await firstRow.dblclick();
   await expect(firstActiveEditorTab).toBeVisible();
   await expectProjectTabPreview(firstActiveEditorTab, false);
-  await expect(secondEditorTab).toHaveCount(0);
-  await expect(editorTabs).toHaveCount(1);
+  await expect(secondEditorTab).toBeVisible();
+  await expectProjectTabPreview(secondEditorTab, true);
+  await expect(editorTabs).toHaveCount(2);
 
   await secondRow.click();
   await expect(firstEditorTab).toBeVisible();
@@ -172,6 +173,7 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
 
   await firstRow.click();
   await expect(firstActiveEditorTab).toBeVisible();
+  await expect(firstRow).toHaveClass(/\bactive\b/);
   await expect(secondEditorTab).toBeVisible();
   await expectProjectTabPreview(firstActiveEditorTab, false);
   await expectProjectTabPreview(secondEditorTab, true);
@@ -179,11 +181,23 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
 
   await page.evaluate(() => {
     const activeRowChanges: string[] = [];
-    const observer = new MutationObserver(() => {
-      const activeLabel = document.querySelector('.workflow-library-panel .project-row.active .label')?.textContent;
-      if (activeLabel) {
-        activeRowChanges.push(activeLabel);
+    let scheduled = false;
+    const sampleActiveRowOnFrame = () => {
+      if (scheduled) {
+        return;
       }
+
+      scheduled = true;
+      window.requestAnimationFrame(() => {
+        scheduled = false;
+        const activeLabel = document.querySelector('.workflow-library-panel .project-row.active .label')?.textContent;
+        if (activeLabel) {
+          activeRowChanges.push(activeLabel);
+        }
+      });
+    };
+    const observer = new MutationObserver(() => {
+      sampleActiveRowOnFrame();
     });
 
     for (const row of document.querySelectorAll('.workflow-library-panel .project-row')) {

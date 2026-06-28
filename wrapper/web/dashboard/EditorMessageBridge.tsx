@@ -42,7 +42,11 @@ import {
   getWorkflowPublishedVersionPreviewFromVirtualProjectPath,
   getWorkflowPublishedVersionPreviewVirtualProjectPath,
 } from '../../shared/workflow-types';
-import { resolveHostedProjectMetadataUpdatesForPathMoves } from './openedProjectMetadata';
+import {
+  resolveHostedProjectMetadataUpdatesForPathMoves,
+  resolveHostedProjectTitleFromPath,
+  type HostedProjectMetadataUpdateForPathMove,
+} from './openedProjectMetadata';
 import {
   fetchHostedProjectFile,
   fetchWorkflowPublishedVersionPreview,
@@ -185,6 +189,32 @@ function waitForOpeningProjectTabFrame(): Promise<void> {
   });
 }
 
+function getHostedProjectPathMoveInputs(moves: WorkflowProjectPathMove[]) {
+  const moveKeys = new Set<string>();
+  return moves.flatMap((move) => {
+    const candidates = [
+      {
+        from: move.fromAbsolutePath,
+        to: move.toAbsolutePath,
+      },
+      {
+        from: normalizeWorkflowPath(move.fromAbsolutePath),
+        to: normalizeWorkflowPath(move.toAbsolutePath),
+      },
+    ];
+
+    return candidates.filter((candidate) => {
+      const key = `${candidate.from}\n${candidate.to}`;
+      if (moveKeys.has(key)) {
+        return false;
+      }
+
+      moveKeys.add(key);
+      return true;
+    });
+  });
+}
+
 async function fetchLoadedWorkflowRecording(recordingId: string): Promise<LoadedWorkflowRecording> {
   const serializedRecording = await fetchWorkflowRecordingArtifactText(recordingId, 'recording');
 
@@ -242,6 +272,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   const saveProjectRef = useRef(saveProject);
   const serializedCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
   const recordingByProjectPathRef = useRef(new Map<string, LoadedWorkflowRecording>());
+  const openedProjectPathAliasesRef = useRef(new Map<string, ProjectId>());
   projectsRef.current = projects;
   loadedProjectRef.current = loadedProject;
   currentProjectRef.current = currentProject;
@@ -566,7 +597,8 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
         | 'open-recording'
         | 'open-published-version-preview'
         | 'refresh-open-project-from-disk'
-        | 'compare-open-project-with';
+        | 'compare-open-project-with'
+        | 'workflow-paths-moved';
     }>;
 
     const findOpenedProjectByPath = (path: string): OpenedProjectInfo | null => {
@@ -574,8 +606,25 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
       const openedProjects = projectsRef.current.openedProjects;
       const openedProjectId = projectsRef.current.openedProjectsSortedIds.find((projectId) =>
         normalizeWorkflowPath(openedProjects[projectId]?.fsPath ?? '') === normalizedPath);
+      const aliasedProjectId = openedProjectPathAliasesRef.current.get(normalizedPath);
 
-      return openedProjectId ? openedProjects[openedProjectId] ?? null : null;
+      if (openedProjectId) {
+        return openedProjects[openedProjectId] ?? null;
+      }
+
+      return aliasedProjectId ? openedProjects[aliasedProjectId] ?? null : null;
+    };
+
+    const removeOpenedProjectPathAliasesForProject = (projectId: ProjectId): void => {
+      for (const [path, aliasedProjectId] of openedProjectPathAliasesRef.current.entries()) {
+        if (aliasedProjectId === projectId) {
+          openedProjectPathAliasesRef.current.delete(path);
+        }
+      }
+    };
+
+    const rememberOpenedProjectPathAlias = (path: string, projectId: ProjectId): void => {
+      openedProjectPathAliasesRef.current.set(normalizeWorkflowPath(path), projectId);
     };
 
     const closeReplaceablePreviewProject = async (nextPath: string): Promise<void> => {
@@ -657,6 +706,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
             const openResult = await openProjectRef.current(command.path, {
               replaceCurrent,
               openingTabId,
+              openedProjectId: existingOpenedProject?.projectId,
               reloadFromDisk: Boolean(command.reloadFromDisk),
               skipReplaceConfirmation: shouldReplaceActivePreview,
               previewTab: shouldUsePreviewSlot,
@@ -678,6 +728,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
                 ? { projectId: openResult.projectId }
                 : findOpenedProjectByPath(command.path);
               if (openedProject?.projectId) {
+                rememberOpenedProjectPathAlias(command.path, openedProject.projectId);
                 rememberPreviewProject({
                   path: command.path,
                   projectId: openedProject.projectId,
@@ -686,6 +737,9 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
                 console.warn('Opened preview project without a project id; leaving it persistent.', command.path);
               }
             } else {
+              if (openResult.projectId) {
+                rememberOpenedProjectPathAlias(command.path, openResult.projectId);
+              }
               promotePreviewProjectByPath(command.path);
             }
 
@@ -695,7 +749,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
             }
             setLoadedRecording(null);
             focusHostedEditorFrame();
-            postMessageToDashboard({ type: 'project-opened', path: command.path });
+            postMessageToDashboard({ type: 'project-opened', path: command.path, requestId: command.requestId });
           } catch (error) {
             if (openingTabId) {
               try {
@@ -737,6 +791,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
           try {
             const openResult = await openProjectRef.current(command.path, {
               replaceCurrent: true,
+              openedProjectId: openedProject.projectId,
               reloadFromDisk: true,
               previewTab: false,
             });
@@ -744,6 +799,9 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
               throw new Error('Rivet could not reload the restored project.');
             }
 
+            if (openResult.projectId) {
+              rememberOpenedProjectPathAlias(command.path, openResult.projectId);
+            }
             promotePreviewProjectByPath(command.path);
             setLoadedRecording(null);
             postMessageToDashboard({ type: 'project-opened', path: command.path });
@@ -842,6 +900,81 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
 
           break;
         }
+
+        case 'workflow-paths-moved': {
+          const moves: WorkflowProjectPathMove[] = command.moves;
+          if (moves.length === 0) {
+            postMessageToDashboard({ type: 'workflow-paths-moved-applied', requestId: command.requestId });
+            break;
+          }
+
+          try {
+            const metadataUpdatesByProjectId = new Map<ProjectId, HostedProjectMetadataUpdateForPathMove>();
+            for (const update of resolveHostedProjectMetadataUpdatesForPathMoves(projectsRef.current, moves)) {
+              metadataUpdatesByProjectId.set(update.projectId, update);
+            }
+            remapOpenedProjectSessionPaths(moves);
+            remapHostedProjectRevisionPaths(moves);
+            for (const move of moves) {
+              const normalizedFromPath = normalizeWorkflowPath(move.fromAbsolutePath);
+              const normalizedToPath = normalizeWorkflowPath(move.toAbsolutePath);
+              const aliasedProjectId = openedProjectPathAliasesRef.current.get(normalizedFromPath);
+              openedProjectPathAliasesRef.current.delete(normalizedFromPath);
+              if (aliasedProjectId) {
+                openedProjectPathAliasesRef.current.set(normalizedToPath, aliasedProjectId);
+                if (!metadataUpdatesByProjectId.has(aliasedProjectId)) {
+                  const previousTitle = resolveHostedProjectTitleFromPath(move.fromAbsolutePath);
+                  const nextTitle = resolveHostedProjectTitleFromPath(move.toAbsolutePath) ?? undefined;
+                  metadataUpdatesByProjectId.set(aliasedProjectId, {
+                    projectId: aliasedProjectId,
+                    path: move.toAbsolutePath,
+                    title: nextTitle && previousTitle !== nextTitle ? nextTitle : undefined,
+                  });
+                }
+              }
+            }
+            for (const update of metadataUpdatesByProjectId.values()) {
+              openedProjectPathAliasesRef.current.set(normalizeWorkflowPath(update.path), update.projectId);
+            }
+            const preview = previewProjectRef.current;
+            if (preview) {
+              const movedPreviewPath = moves.find((move) => move.fromAbsolutePath === preview.path)?.toAbsolutePath;
+              if (movedPreviewPath) {
+                rememberPreviewProject({
+                  ...preview,
+                  path: movedPreviewPath,
+                });
+              }
+            }
+            workspaceRef.current.moveProjectPaths(getHostedProjectPathMoveInputs(moves));
+
+            let metadataUpdated = false;
+            for (const update of metadataUpdatesByProjectId.values()) {
+              try {
+                const updated = await workspaceRef.current.updateProjectMetadata(
+                  update.projectId,
+                  update.title ? { title: update.title } : {},
+                  {
+                    path: update.path,
+                    persistedExternally: true,
+                    changeSource: 'external-wrapper-rename',
+                  },
+                );
+                metadataUpdated ||= updated;
+              } catch (error) {
+                console.error('Failed to update renamed hosted project metadata:', error);
+              }
+            }
+
+            if (metadataUpdated) {
+              await flushHybridStorageGroup('project');
+            }
+          } finally {
+            postMessageToDashboard({ type: 'workflow-paths-moved-applied', requestId: command.requestId });
+          }
+
+          break;
+        }
       }
     };
 
@@ -895,6 +1028,10 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
           if (deletedProjectId && previewProjectRef.current?.projectId === deletedProjectId) {
             clearPreviewProject(previewProjectRef.current);
           }
+          if (deletedProjectId) {
+            removeOpenedProjectPathAliasesForProject(deletedProjectId);
+          }
+          openedProjectPathAliasesRef.current.delete(normalizeWorkflowPath(deletedPath));
           clearHostedProjectRevisionPath(deletedPath);
 
           let closed = false;
@@ -915,62 +1052,12 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
           break;
         }
 
-        case 'workflow-paths-moved': {
-          const moves: WorkflowProjectPathMove[] = event.data.moves;
-          if (moves.length === 0) {
-            break;
-          }
-
-          const metadataUpdates = resolveHostedProjectMetadataUpdatesForPathMoves(projectsRef.current, moves);
-          remapOpenedProjectSessionPaths(moves);
-          remapHostedProjectRevisionPaths(moves);
-          const preview = previewProjectRef.current;
-          if (preview) {
-            const movedPreviewPath = moves.find((move) => move.fromAbsolutePath === preview.path)?.toAbsolutePath;
-            if (movedPreviewPath) {
-              rememberPreviewProject({
-                ...preview,
-                path: movedPreviewPath,
-              });
-            }
-          }
-          workspaceRef.current.moveProjectPaths(
-            moves.map((move) => ({
-              from: move.fromAbsolutePath,
-              to: move.toAbsolutePath,
-            })),
-          );
-
-          let metadataUpdated = false;
-          for (const update of metadataUpdates) {
-            try {
-              const updated = await workspaceRef.current.updateProjectMetadata(
-                update.projectId,
-                { title: update.title },
-                {
-                  path: update.path,
-                  persistedExternally: true,
-                  changeSource: 'external-wrapper-rename',
-                },
-              );
-              metadataUpdated ||= updated;
-            } catch (error) {
-              console.error('Failed to update renamed hosted project metadata:', error);
-            }
-          }
-
-          if (metadataUpdated) {
-            await flushHybridStorageGroup('project');
-          }
-
-          break;
-        }
-
         case 'open-project':
         case 'open-recording':
         case 'open-published-version-preview':
         case 'refresh-open-project-from-disk':
         case 'compare-open-project-with':
+        case 'workflow-paths-moved':
           enqueueSerializedCommand(event.data);
           break;
       }
