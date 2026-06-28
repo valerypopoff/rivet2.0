@@ -67,6 +67,46 @@ docker run \
   valerypopoff/rivet-server:latest --dev --allow-specifying-graph-id
 ```
 
+### Endpoint Aliases and Auth
+
+The Docker image accepts the same `rivet serve` options as the CLI:
+
+```bash
+docker run \
+  -p 3000:3000 \
+  -v /path/to/project:/project \
+  -e RIVET_CLI_BEARER_TOKEN=secret \
+  valerypopoff/rivet-server:latest \
+  --endpoint ask="Ask Graph" \
+  --cors-origin https://example.com
+```
+
+The endpoint above is available at `POST /endpoints/ask` and requires `Authorization: Bearer secret`.
+
+### Dataset Files
+
+If your project uses Data Studio datasets, mount the project directory with the `.rivet-data` file next to the `.rivet-project` file:
+
+```text
+/project/my-project.rivet-project
+/project/my-project.rivet-data
+```
+
+Dataset mutations stay in memory unless `--save-datasets` is passed.
+
+### Serving Rivet Web Apps
+
+The published Docker entrypoint runs `rivet serve /project`. To serve a Rivet web app instead, override the entrypoint command:
+
+```bash
+docker run \
+  -p 3000:3000 \
+  -v /path/to/project:/project \
+  --entrypoint rivet \
+  valerypopoff/rivet-server:latest \
+  serve-app /project "Support assistant"
+```
+
 ## Building Custom Images
 
 Instead of mounting your project at runtime, you can create your own Docker image that includes your Rivet project files. This is useful when you want to:

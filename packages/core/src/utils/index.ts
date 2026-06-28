@@ -16,3 +16,4 @@ export * from './orderedStringPortIds.js';
 export * from './runtimeLogging.js';
 export * from './providerStreamParsing.js';
 export * from './projectComparison.js';
+export * from './jsonValueToDataValue.js';

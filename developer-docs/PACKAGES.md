@@ -107,7 +107,7 @@ This package is the shared Node runtime used by:
 It is not just a convenience wrapper. It sets Node-default providers, debugger integration, env-based plugin config fallback, and Node-specific reference loading. Runtime settings still flow through core's shared `resolveProcessSettings(...)` helper instead of being rebuilt independently in the Node package.
 It also supplies a default tokenizer for Node-side runs when the caller does not provide one explicitly.
 
-`createRivetWebAppHandler(...)` is the minimal web-app serving seam. It takes a loaded `Project`, selects one `Project.uiGraphs` entry, serves a small declarative renderer, and exposes a Fetch-style action endpoint that runs ordinary same-project graphs through `createProcessor(...)`. Wrappers can also use `renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` directly when they need Express-owned timing, recording metadata, debug headers, or error envelopes. `createProcessorOptions` can be static for simple hosts or a request-scoped resolver that receives the `Request`, UI graph, button component, current UI state, mapped action input, and optional revision key; the selected button graph always overrides any supplied `graph` value. Resolver-provided `inputs` and `context` win, otherwise Rivet uses the UI input mappings and `resolveContext(request)`. Action lifecycle hooks are observability-only and are not an auth or route-policy seam. Optional `revisionKey` is embedded in the served HTML and echoed by action calls so wrappers can detect stale page/action mismatches; Rivet treats it as an opaque consistency token, not as authorization. Action requests are JSON-only and require object-shaped UI state; malformed JSON, non-object request bodies, non-object state, and revision mismatches fail with `RivetWebAppActionHttpError` statuses so lower-level wrapper adapters can preserve clear HTTP responses. Action state patches use the shared UI graph mappers: ordered `inputMappings` send several web-app data keys to several Graph Input IDs, ordered `outputs` can save several graph outputs back to several web-app data keys, no `outputKey` stores the full graph output map, and `outputKey` stores `outputs[outputKey].value` so wrappers and desktop preview agree on how to display Graph Output node values. Legacy `inputs` plus `outputKey` / `outputStateKey` are still accepted for old saved web apps. The server-rendered bootstrap payload is embedded with script-safe JSON escaping, and embedded client scripts are guarded against accidental `</script>` terminators. Markdown components and Markdown output mode use the same `marked` engine version and GitHub Markdown CSS baseline as the app preview, but web apps configure the renderer to escape raw HTML tokens so project content cannot inject arbitrary HTML or scripts. Node-hosted HTML inlines the packaged `github-markdown-css/github-markdown-dark-dimmed.css` before [`RIVET_WEB_APP_RENDERER_CSS`](../packages/core/src/model/UiGraphRendererStyles.ts), then inlines the packaged `marked` browser build before the declarative client renderer. Hosted HTML and the desktop preview share the same `.rivet-web-app-root` / `.rivet-web-app-surface` DOM shell; Node-hosted pages add only the exported document reset needed to remove browser body margins and fill the viewport. The shared renderer CSS owns web-app Markdown-body neutralization, including transparent Markdown backgrounds and inherited typography, so hosted pages do not depend on app-global `index.css` overrides. This keeps text, markdown, input, textarea, button, and output card styling synchronized without duplicating CSS in the app and node packages. It deliberately does not own authentication, domains, tenancy, deployment routing, or wrapper-specific request adapters; wrappers should adapt its `{ handleRequest(request) }` shape or its lower-level helpers to Express, Fastify, custom HTTP servers, or VM routing.
+`createRivetWebAppHandler(...)` is the minimal web-app serving seam. It takes a loaded `Project`, selects one `Project.uiGraphs` entry, serves a small declarative renderer, and exposes a Fetch-style action endpoint that runs ordinary same-project graphs through `createProcessor(...)`. Wrappers can also use `renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` directly when they need Express-owned timing, recording metadata, debug headers, or error envelopes. `createProcessorOptions` can be static for simple hosts or a request-scoped resolver that receives the `Request`, UI graph, button component, current UI state, mapped action input, and optional revision key; the selected button graph always overrides any supplied `graph` value. Resolver-provided `inputs` and `context` win, otherwise Rivet uses the UI input mappings and `resolveContext(request)`. Raw UI state values are converted into Rivet Data Values consistently in desktop preview and Node-hosted actions: raw objects become `object`, homogeneous raw arrays become typed arrays such as `string[]`, `number[]`, `boolean[]`, or `object[]`, and mixed, empty, null-containing, or nested arrays become `any[]`. Action lifecycle hooks are observability-only and are not an auth or route-policy seam. Optional `revisionKey` is embedded in the served HTML and echoed by action calls so wrappers can detect stale page/action mismatches; Rivet treats it as an opaque consistency token, not as authorization. Action requests are JSON-only and require object-shaped UI state; malformed JSON, non-object request bodies, non-object state, and revision mismatches fail with `RivetWebAppActionHttpError` statuses so lower-level wrapper adapters can preserve clear HTTP responses. Action state patches use the shared UI graph mappers: ordered `inputMappings` send several web-app data keys to several Graph Input IDs, ordered `outputs` can save several graph outputs back to several web-app data keys, no `outputKey` stores the full graph output map, and `outputKey` stores `outputs[outputKey].value` so wrappers and desktop preview agree on how to display Graph Output node values. Legacy `inputs` plus `outputKey` / `outputStateKey` are still accepted for old saved web apps. The server-rendered bootstrap payload is embedded with script-safe JSON escaping, and embedded client scripts are guarded against accidental `</script>` terminators. Markdown components and Markdown output mode use the same `marked` engine version and GitHub Markdown CSS baseline as the app preview, but web apps configure the renderer to escape raw HTML tokens so project content cannot inject arbitrary HTML or scripts. Node-hosted HTML inlines the packaged `github-markdown-css/github-markdown-dark-dimmed.css` before [`RIVET_WEB_APP_RENDERER_CSS`](../packages/core/src/model/UiGraphRendererStyles.ts), then inlines the packaged `marked` browser build before the declarative client renderer. Hosted HTML and the desktop preview share the same `.rivet-web-app-root` / `.rivet-web-app-surface` DOM shell; Node-hosted pages add only the exported document reset needed to remove browser body margins and fill the viewport. The shared renderer CSS owns web-app Markdown-body neutralization, including transparent Markdown backgrounds and inherited typography, so hosted pages do not depend on app-global `index.css` overrides. This keeps text, markdown, input, textarea, button, and output card styling synchronized without duplicating CSS in the app and node packages. It deliberately does not own authentication, domains, tenancy, deployment routing, or wrapper-specific request adapters; wrappers should adapt its `{ handleRequest(request) }` shape or its lower-level helpers to Express, Fastify, custom HTTP servers, or VM routing.
 
 The Node CJS bundle maps `import.meta.url` to `__filename` in [`packages/core/bundle.esbuild.ts`](../packages/core/bundle.esbuild.ts). Keep that mapping while the web-app handler resolves packaged browser-side assets such as `marked/marked.min.js`; ESM uses `import.meta.url`, and CJS needs the bundled filename as the equivalent resolver base.
 
@@ -567,6 +567,7 @@ Current command families:
 
 - `run <projectFile> [graphName]`
 - `serve [projectFile]`
+- `serve-app <projectFile> [uiGraph]`
 
 ### `run` command behavior
 
@@ -576,15 +577,23 @@ Supports:
 
 - graph selection by name/ID
 - stdin JSON object inputs through `--inputs-stdin`
+- JSON file inputs through `--inputs-file`
 - repeated `--input key=value`
+- repeated `--input-json key=json`
 - repeated `--context key=value`
+- repeated `--context-json key=json` and `--context-file`
+- project-adjacent or explicit `.rivet-data` files through `NodeDatasetProvider`
+- project-reference resolution through the resolved `projectPath`
+- selected-output and unwrapped-output printing
 - optional cost suppression
 
 Internally:
 
 - resolves the project file
 - loads the project through `rivet-node`
-- parses command input through `src/commandInputs.ts`, which rejects non-object JSON, allows empty string values, and preserves `=` characters inside values
+- parses command input through `src/commandInputs.ts`, which rejects non-object top-level JSON, allows empty string values, preserves `=` characters inside values, and wraps structured JSON values as Rivet Data Values. Raw JSON objects become `object` values; homogeneous raw JSON arrays become typed array Data Values such as `string[]`, `number[]`, `boolean[]`, or `object[]`; mixed, empty, null-containing, or nested arrays become `any[]` instead of guessing a narrower type.
+- creates a dataset provider from either `--dataset-file` or the project-adjacent `.rivet-data` path
+- validates missing or stale main graph references before processor creation, using positional `rivet run <projectFile> <graph>` suggestions rather than `serve --graph` suggestions
 - builds a processor
 - runs it
 - prints JSON outputs
@@ -599,15 +608,40 @@ Supports:
 - optional dev reload mode
 - optional graph selection
 - optional graph-by-path routing
+- named endpoint aliases at `/endpoints/:endpointName`
+- bearer-token auth through `--bearer-token` or `RIVET_CLI_BEARER_TOKEN`
+- exact-origin CORS headers through repeated `--cors-origin`
+- unauthenticated `GET /healthz`
+- project-adjacent or explicit `.rivet-data` files through `NodeDatasetProvider`
+- project-reference resolution through the resolved `projectPath`
+- selected output unwrapping through `--unwrap-output`
 - optional SSE streaming
 - optional single-node streaming
 - OpenAI-related option overrides
 
 Architecturally, it is a thin HTTP wrapper around `rivet-node` processor creation and streaming helpers. Request bodies are parsed through the same object-input helper as `run`, so empty bodies become `{}` and arrays/primitives are rejected before execution. Project-file lookup resolves relative paths to absolute paths, handles directory inputs, and uses platform path helpers for suggestions so Windows paths do not get split with POSIX-only separators. Graph validation also checks that a stored main graph ID actually exists before the server starts. Non-streaming `run` and `serve` requests use the default omitted-profile Node runtime policy, so eligible headless runs get the automatic fast scheduler/cache path. `serve --stream` and `serve --stream-node` explicitly pass `runtimeProfile: 'compatible'` because those modes expose node lifecycle events over SSE, making scheduler ordering part of the client-visible contract.
 
+`serve` is implemented around a testable Hono app factory rather than binding a port directly in the command handler. Keep HTTP behavior such as auth, CORS, timing headers, endpoint alias validation, and JSON error envelopes in the CLI package; do not move wrapper-specific project resolution, recordings, or managed runtime-library behavior into the CLI. Malformed request JSON and graph-selection problems return `400`; unexpected graph execution failures return `500`.
+
+### `serve-app` command behavior
+
+Implemented in `src/commands/serveApp.ts`.
+
+Supports:
+
+- serving one project-contained Rivet web app by UI graph name or ID
+- automatic selection when the project contains exactly one web app
+- `GET /`, `GET /app.json`, and `POST /actions/run` through `createRivetWebAppHandler(...)`
+- optional base-path mounting through `--base-path`
+- optional opaque revision consistency through `--revision-key`
+- the same bearer-token, CORS, dataset, and project-path behavior as `serve`
+
+The CLI uses the Node package web-app serving API directly and does not duplicate renderer or UI-action protocol code. Production wrapper servers should still prefer `createRivetWebAppHandler(...)`, `renderRivetWebAppHtml(...)`, or `runRivetWebAppAction(...)` directly so wrappers can own authentication, endpoint slug mapping, project materialization, recordings, telemetry, and deployment policy.
+`/healthz` is reserved for the CLI health endpoint and cannot be used as the web-app base path.
+
 ### Docker image behavior
 
-The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project`, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. Do not hardcode a separate package version in the Dockerfile.
+The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project`, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. The Dockerfile's default build arg is only a local-build fallback and should be kept in sync with the package version when the CLI version is bumped.
 
 ## `@valerypopoff/trivet` (`packages/trivet/`)
 

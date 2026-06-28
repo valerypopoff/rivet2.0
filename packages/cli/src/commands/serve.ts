@@ -3,32 +3,43 @@ import { createProcessor, getSingleNodeStream, loadProjectFromFile } from '@vale
 import type {
   LooseDataValue,
   NodeCreateProcessorOptions,
-  Outputs,
   Project,
   RivetEventStreamFilterSpec,
 } from '@valerypopoff/rivet2-node';
 import chalk from 'chalk';
-import didYouMean from 'didyoumean2';
 import { configDotenv } from 'dotenv';
 import { Hono } from 'hono';
-import { readdir, stat } from 'node:fs/promises';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import type { Context } from 'hono';
 import type * as yargs from 'yargs';
 import { parseJsonInputRecord } from '../commandInputs.js';
+import {
+  loadProjectRuntime,
+  resolveServedGraphName,
+  throwIfInvalidGraph,
+  throwIfNoMainGraph,
+  withRuntimeProcessorOptions,
+  type DatasetCliOptions,
+  type LoadedProjectRuntime,
+} from '../cliRuntime.js';
+import { CliHttpError, createHttpMiddleware, jsonErrorResponse, jsonTimedResponse, type HttpCliOptions } from '../http.js';
+import { shapeOutputs } from '../output.js';
 
-type ServeArgs = {
-  port: number;
-  projectFile: string | undefined;
-  dev: boolean;
-  graph: string | undefined;
+export type ServeArgs = {
   allowSpecifyingGraphId: boolean;
+  dev: boolean;
+  endpoint: string[];
+  exposeCost: boolean;
+  graph: string | undefined;
   openaiApiKey: string | undefined;
   openaiEndpoint: string | undefined;
   openaiOrganization: string | undefined;
-  exposeCost: boolean;
+  port: number;
+  projectFile: string | undefined;
   stream: string | undefined;
   streamNode: string | undefined;
-};
+  unwrapOutput: string | undefined;
+} & DatasetCliOptions &
+  HttpCliOptions;
 
 type GraphRunArgs = {
   exposeCost: boolean;
@@ -38,9 +49,17 @@ type GraphRunArgs = {
   openaiEndpoint: string | undefined;
   openaiOrganization: string | undefined;
   project: Project;
+  runtime: Pick<LoadedProjectRuntime, 'datasetProvider' | 'projectPath'>;
+  unwrapOutput: string | undefined;
 };
 
-type GraphProcessorArgs = Omit<GraphRunArgs, 'exposeCost' | 'project'>;
+type GraphProcessorArgs = Omit<GraphRunArgs, 'exposeCost' | 'project' | 'runtime' | 'unwrapOutput'>;
+
+export type ServeAppInfo = {
+  app: Hono;
+  projectFilePath: string;
+  servedGraphName: string;
+};
 
 export function makeCommand<T>(y: yargs.Argv<T>) {
   return y
@@ -61,6 +80,36 @@ export function makeCommand<T>(y: yargs.Argv<T>) {
     })
     .option('allow-specifying-graph-id', {
       describe: 'Allow specifying the graph ID in the URL path',
+      type: 'boolean',
+      default: false,
+    })
+    .option('endpoint', {
+      describe: 'Expose a named endpoint alias using endpointName=graphNameOrId',
+      type: 'string',
+      array: true,
+      default: [],
+    })
+    .option('bearer-token', {
+      describe: 'Require Authorization: Bearer <token>. Defaults to RIVET_CLI_BEARER_TOKEN.',
+      type: 'string',
+    })
+    .option('cors-origin', {
+      describe: 'Allow a CORS origin. Can be repeated, or set to *.',
+      type: 'string',
+      array: true,
+      default: [],
+    })
+    .option('dataset-file', {
+      describe: 'Use a specific .rivet-data file instead of the project-adjacent default',
+      type: 'string',
+    })
+    .option('save-datasets', {
+      describe: 'Persist dataset mutations back to the dataset file',
+      type: 'boolean',
+      default: false,
+    })
+    .option('require-dataset-file', {
+      describe: 'Fail if the dataset file does not exist',
       type: 'boolean',
       default: false,
     })
@@ -87,6 +136,10 @@ export function makeCommand<T>(y: yargs.Argv<T>) {
       type: 'boolean',
       default: false,
     })
+    .option('unwrap-output', {
+      describe: 'Respond with only the .value field from one named output',
+      type: 'string',
+    })
     .option('stream', {
       describe:
         'Turns on streaming mode. Rivet events will be sent to the client using SSE (Server-Sent Events). If this is set to a Node ID or node title, only events for that node will be sent.',
@@ -110,66 +163,11 @@ export async function serve(args: ServeArgs) {
   try {
     configDotenv();
 
-    const app = new Hono();
-    const projectFilePath = await getProjectFile(args.projectFile);
-    const initialProject = await loadProjectFromFile(projectFilePath);
-
-    throwIfNoMainGraph(initialProject, args.graph, projectFilePath);
-    throwIfInvalidGraph(initialProject, args.graph);
-
-    if (args.stream != null) {
-      console.log('Streaming is enabled');
-    }
-
-    if (args.streamNode != null) {
-      if (args.stream == null) {
-        throw new Error('--stream-node requires --stream.');
-      }
-
-      console.log(`Streaming node ${chalk.bold(args.streamNode)}`);
-    }
-
-    app.post('/', async (c) => {
-      const project = args.dev ? await loadProjectFromFile(projectFilePath) : initialProject;
-      const inputs = parseJsonInputRecord(await c.req.text(), 'Request body');
-      const graphRunArgs = buildGraphRunArgs(args, project, inputs, args.graph);
-
-      if (args.stream != null) {
-        const stream = await streamGraph({
-          ...graphRunArgs,
-          stream: args.stream,
-          streamNode: args.streamNode,
-        });
-
-        return new Response(stream, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            Connection: 'keep-alive',
-          },
-        });
-      }
-
-      return c.json(await runGraph(graphRunArgs));
-    });
-
-    if (args.allowSpecifyingGraphId) {
-      app.post('/:graphId', async (c) => {
-        const project = args.dev ? await loadProjectFromFile(projectFilePath) : initialProject;
-        const graph = c.req.param('graphId');
-        throwIfInvalidGraph(project, graph);
-
-        const inputs = parseJsonInputRecord(await c.req.text(), 'Request body');
-        return c.json(await runGraph(buildGraphRunArgs(args, project, inputs, graph)));
-      });
-    }
-
+    const { app, projectFilePath, servedGraphName } = await createServeApp(args);
     const server = serveHono({
       port: args.port,
       fetch: app.fetch,
     });
-
-    const servedGraphName = resolveServedGraphName(initialProject, args.graph);
 
     console.log(
       chalk.green(
@@ -198,8 +196,103 @@ export async function serve(args: ServeArgs) {
   }
 }
 
+export async function createServeApp(args: ServeArgs): Promise<ServeAppInfo> {
+  const runtime = await loadProjectRuntime(args.projectFile, args);
+  const endpointAliases = parseEndpointAliases(args.endpoint, runtime.project);
+
+  throwIfNoMainGraph(runtime.project, args.graph, runtime.projectPath);
+  throwIfInvalidGraph(runtime.project, args.graph);
+
+  if (args.stream != null) {
+    console.log('Streaming is enabled');
+  }
+
+  if (args.streamNode != null) {
+    if (args.stream == null) {
+      throw new Error('--stream-node requires --stream.');
+    }
+
+    console.log(`Streaming node ${chalk.bold(args.streamNode)}`);
+  }
+
+  const app = new Hono();
+  app.use('*', createHttpMiddleware(args));
+  app.get('/healthz', (c) =>
+    c.json({
+      ok: true,
+      projectPath: runtime.projectPath,
+    }),
+  );
+
+  app.post('/', async (c) => handleGraphRequest(c, args, runtime, args.graph));
+
+  app.post('/endpoints/:endpointName', async (c) => {
+    const endpointName = c.req.param('endpointName');
+    const graph = endpointAliases.get(endpointName);
+
+    if (!graph) {
+      return jsonErrorResponse(c, new CliHttpError(`Endpoint "${endpointName}" not found.`, 404), Date.now(), 404);
+    }
+
+    return handleGraphRequest(c, args, runtime, graph);
+  });
+
+  if (args.allowSpecifyingGraphId) {
+    app.post('/:graphId', async (c) => handleGraphRequest(c, args, runtime, c.req.param('graphId')));
+  }
+
+  return {
+    app,
+    projectFilePath: runtime.projectPath,
+    servedGraphName: resolveServedGraphName(runtime.project, args.graph),
+  };
+}
+
+async function handleGraphRequest(
+  c: Context,
+  args: ServeArgs,
+  runtime: LoadedProjectRuntime,
+  graph: string | undefined,
+): Promise<Response> {
+  const startedAt = Date.now();
+  let graphRunArgs: GraphRunArgs;
+
+  try {
+    const project = args.dev ? await loadProjectFromFile(runtime.projectPath) : runtime.project;
+    throwIfInvalidGraph(project, graph);
+
+    const inputs = parseJsonInputRecord(await c.req.text(), 'Request body');
+    graphRunArgs = buildGraphRunArgs(args, runtime, project, inputs, graph);
+  } catch (error) {
+    return jsonErrorResponse(c, toBadRequestError(error), startedAt, 400);
+  }
+
+  try {
+    if (args.stream != null) {
+      const stream = await streamGraph({
+        ...graphRunArgs,
+        stream: args.stream,
+        streamNode: args.streamNode,
+      });
+
+      return new Response(stream, {
+        headers: {
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+          'Content-Type': 'text/event-stream',
+        },
+      });
+    }
+
+    return jsonTimedResponse(c, await runGraph(graphRunArgs), startedAt);
+  } catch (error) {
+    return jsonErrorResponse(c, error, startedAt, 500);
+  }
+}
+
 function buildGraphRunArgs(
   args: ServeArgs,
+  runtime: Pick<LoadedProjectRuntime, 'datasetProvider' | 'projectPath'>,
   project: Project,
   inputs: Record<string, LooseDataValue>,
   graph: string | undefined,
@@ -212,6 +305,8 @@ function buildGraphRunArgs(
     openaiEndpoint: args.openaiEndpoint,
     openaiOrganization: args.openaiOrganization,
     project,
+    runtime,
+    unwrapOutput: args.unwrapOutput,
   };
 }
 
@@ -222,18 +317,22 @@ async function streamGraph({
   openaiApiKey,
   openaiEndpoint,
   openaiOrganization,
+  runtime,
   stream,
   streamNode,
 }: GraphRunArgs & { stream: string | undefined; streamNode: string | undefined }): Promise<ReadableStream> {
   const { run, processor, getSSEStream } = createProcessor(
     project,
-    buildStreamingGraphProcessorOptions({
-      graph,
-      inputs,
-      openaiApiKey,
-      openaiEndpoint,
-      openaiOrganization,
-    }),
+    withRuntimeProcessorOptions(
+      runtime,
+      buildStreamingGraphProcessorOptions({
+        graph,
+        inputs,
+        openaiApiKey,
+        openaiEndpoint,
+        openaiOrganization,
+      }),
+    ),
   );
 
   const responseStream = streamNode
@@ -255,10 +354,10 @@ export function buildGraphProcessorOptions({
   openaiOrganization,
 }: GraphProcessorArgs): NodeCreateProcessorOptions {
   return {
-    inputs,
     graph,
-    openAiKey: openaiApiKey,
+    inputs,
     openAiEndpoint: openaiEndpoint,
+    openAiKey: openaiApiKey,
     openAiOrganization: openaiOrganization,
   };
 }
@@ -275,15 +374,15 @@ export function buildStreamEventFilter(stream: string | undefined): RivetEventSt
 
   if (!streamTarget) {
     return {
-      nodeStart: true,
       nodeFinish: true,
+      nodeStart: true,
       partialOutputs: true,
     };
   }
 
   return {
-    nodeStart: [streamTarget],
     nodeFinish: [streamTarget],
+    nodeStart: [streamTarget],
     partialOutputs: [streamTarget],
   };
 }
@@ -296,161 +395,65 @@ async function runGraph({
   openaiEndpoint,
   openaiOrganization,
   exposeCost,
-}: GraphRunArgs): Promise<Outputs> {
-  const { run } = createProcessor(project, buildGraphProcessorOptions({
-    graph,
-    inputs,
-    openaiApiKey,
-    openaiEndpoint,
-    openaiOrganization,
-  }));
-
-  const outputs = await run();
-
-  if (!exposeCost) {
-    delete outputs.cost;
-  }
-
-  return outputs;
-}
-
-function getGraphSummaries(project: Project): Array<{ id: string; name: string }> {
-  return Object.values(project.graphs).map((graph) => ({
-    id: graph.metadata!.id!,
-    name: graph.metadata!.name!,
-  }));
-}
-
-function findGraph(project: Project, graphIdOrName: string | undefined) {
-  if (!graphIdOrName) {
-    return undefined;
-  }
-
-  return getGraphSummaries(project).find((graph) => graph.id === graphIdOrName || graph.name === graphIdOrName);
-}
-
-function formatGraphList(project: Project): string {
-  return getGraphSummaries(project)
-    .map((graph) => `- "${graph.name}" (${graph.id})`)
-    .join('\n');
-}
-
-function resolveServedGraphName(project: Project, graph: string | undefined) {
-  const servedGraph = findGraph(project, graph ?? project.metadata.mainGraphId);
-
-  if (!servedGraph) {
-    throw new Error(`Project main graph "${project.metadata.mainGraphId}" was not found in the project file.`);
-  }
-
-  return servedGraph.name;
-}
-
-function throwIfNoMainGraph(project: Project, graph: string | undefined, projectFilePath: string) {
-  if (project.metadata.mainGraphId || graph) {
-    return;
-  }
-
-  const validGraphs = getGraphSummaries(project);
-
-  if (validGraphs.length === 0) {
-    throw new Error('No graphs found in the project file. Please edit the project file in Rivet and add a graph.');
-  }
-
-  const firstExample = `rivet serve ${projectFilePath} --graph ${validGraphs[0]!.id}`;
-  const secondExample = `rivet serve ${projectFilePath} --graph "${validGraphs[0]!.name}"`;
-
-  throw new Error(
-    `No graph name provided, and project does not specify a main graph. Valid graphs are: \n\n${formatGraphList(
-      project,
-    )}\n\nUse either the graph's name or its ID. For example, \n- \`${chalk.bold(firstExample)}\` or\n- \`${chalk.bold(secondExample)}\``,
-  );
-}
-
-function throwIfInvalidGraph(project: Project, graph: string | undefined) {
-  if (!graph) {
-    const mainGraphId = project.metadata.mainGraphId;
-
-    if (!mainGraphId || findGraph(project, mainGraphId)) {
-      return;
-    }
-
-    throw new Error(`Project main graph "${mainGraphId}" was not found in the project file.`);
-  }
-
-  if (findGraph(project, graph)) {
-    return;
-  }
-
-  const validGraphsAndIds = getGraphSummaries(project).flatMap((graph) => [graph.id, graph.name]);
-  const suggestion = didYouMean(graph, validGraphsAndIds);
-
-  if (suggestion) {
-    throw new Error(
-      `Graph "${graph}" not found in project file. Did you mean \`${chalk.bold(`--graph "${suggestion}"`)}\`?`,
-    );
-  }
-
-  throw new Error(`Graph "${graph}" not found in project file. Valid graphs are: \n${formatGraphList(project)}`);
-}
-
-async function getProjectFile(initialProjectFilePath: string | undefined): Promise<string> {
-  let projectFilePath = resolve(
-    process.cwd(),
-    initialProjectFilePath ?? (await getProjectFilePathFromDirectory(process.cwd())),
+  runtime,
+  unwrapOutput,
+}: GraphRunArgs): Promise<unknown> {
+  const { run } = createProcessor(
+    project,
+    withRuntimeProcessorOptions(
+      runtime,
+      buildGraphProcessorOptions({
+        graph,
+        inputs,
+        openaiApiKey,
+        openaiEndpoint,
+        openaiOrganization,
+      }),
+    ),
   );
 
-  await throwIfMissingFile(projectFilePath);
-
-  if ((await stat(projectFilePath)).isDirectory()) {
-    projectFilePath = await getProjectFilePathFromDirectory(projectFilePath);
-  }
-
-  return projectFilePath;
+  return shapeOutputs(await run(), {
+    includeCost: exposeCost,
+    unwrapOutput,
+  });
 }
 
-async function getProjectFilePathFromDirectory(directory: string): Promise<string> {
-  const files = await readdir(directory);
-  const projectFiles = files.filter((file) => extname(file).toLowerCase() === '.rivet-project');
+export function parseEndpointAliases(endpointSpecs: string[], project: Project): Map<string, string> {
+  const aliases = new Map<string, string>();
 
-  if (projectFiles.length === 0) {
-    throw new Error('No project file found in the current directory. Project files should end with .rivet-project.');
+  for (const spec of endpointSpecs) {
+    const separatorIndex = spec.indexOf('=');
+
+    if (separatorIndex <= 0) {
+      throw new Error(`Invalid endpoint "${spec}". Expected endpointName=graphNameOrId.`);
+    }
+
+    const endpointName = spec.slice(0, separatorIndex).trim();
+    const graph = spec.slice(separatorIndex + 1).trim();
+
+    if (!endpointName || endpointName.includes('/')) {
+      throw new Error(`Invalid endpoint name "${endpointName}". Endpoint names cannot be empty or contain "/".`);
+    }
+
+    if (!graph) {
+      throw new Error(`Invalid endpoint "${spec}". Expected a graph name or ID after "=".`);
+    }
+
+    if (aliases.has(endpointName)) {
+      throw new Error(`Duplicate endpoint "${endpointName}".`);
+    }
+
+    throwIfInvalidGraph(project, graph);
+    aliases.set(endpointName, graph);
   }
 
-  if (projectFiles.length > 1) {
-    throw new Error(
-      `Multiple project files found in the current directory. Please specify which one to serve: \n${projectFiles.join(
-        '\n',
-      )}`,
-    );
-  }
-
-  return join(directory, projectFiles[0]!);
+  return aliases;
 }
 
-async function throwIfMissingFile(filePath: string) {
-  try {
-    await stat(filePath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw err;
-    }
-
-    let possibleFiles: string[] = [];
-
-    try {
-      possibleFiles = await readdir(dirname(filePath));
-    } catch {
-      throw new Error(`Could not find project file "${filePath}".`);
-    }
-
-    const suggestion = didYouMean(basename(filePath), possibleFiles);
-
-    if (suggestion) {
-      throw new Error(
-        `Could not find project file "${filePath}". Did you mean "${join(dirname(filePath), suggestion)}"?`,
-      );
-    }
-
-    throw new Error(`Could not find project file "${filePath}".`);
+function toBadRequestError(error: unknown): CliHttpError {
+  if (error instanceof CliHttpError) {
+    return error;
   }
+
+  return new CliHttpError(error instanceof Error ? error.message : String(error), 400);
 }

@@ -18,6 +18,12 @@ npx @valerypopoff/rivet2-cli serve --port 8080
 
 # Start server in development mode
 npx @valerypopoff/rivet2-cli serve --dev
+
+# Serve named graph endpoints
+npx @valerypopoff/rivet2-cli serve my-project.rivet-project --endpoint ask="Ask Graph"
+
+# Require bearer-token auth
+npx @valerypopoff/rivet2-cli serve my-project.rivet-project --bearer-token "$RIVET_KEY"
 ```
 
 ## Description
@@ -45,6 +51,8 @@ npx @valerypopoff/rivet2-cli serve my-project.rivet-project --port 8080
 
 Once the server is running, you can make POST requests to the server to run graphs.
 
+The CLI passes the resolved `.rivet-project` path to the Node runtime, so project references are resolved relative to the served project file.
+
 ## Inputs
 
 Inputs to graphs are provided via the request body of the HTTP request. The request body should be a JSON object with the input values.
@@ -52,6 +60,7 @@ Inputs to graphs are provided via the request body of the HTTP request. The requ
 An empty request body is treated as `{}`. Non-object JSON values such as arrays, strings, numbers, booleans, and `null` are rejected before the graph runs.
 
 Input values should be provided as [Data Values](../user-guide/data-types.md), except for simple types like strings, numbers, and booleans.
+Raw JSON objects are converted to `object` Data Values. Raw homogeneous JSON arrays are converted to typed array Data Values, such as `string[]`, `number[]`, `boolean[]`, or `object[]`. Mixed, empty, null-containing, or nested arrays are sent as `any[]`.
 
 For example, for a graph with two inputs, `input1` (string) and `input2` (object),
 the request body should look like this:
@@ -92,6 +101,10 @@ For example, if a graph has two Graph Output Nodes, `output1` (a string) and `ou
 
 ## Endpoints
 
+### `GET /healthz`
+
+Returns a small health response. This endpoint is always available and does not require bearer-token auth.
+
 ### `POST /`
 
 Run the main graph in the project file. The request body should contain the input values as described above.
@@ -108,17 +121,39 @@ Outputs a JSON object with the output values of the graph.
 
 The path graph is validated against the project on every request. In `--dev` mode, that validation uses the freshly reloaded project file.
 
+### `POST /endpoints/:endpointName`
+
+This route is enabled for endpoint aliases passed with `--endpoint endpointName=graphNameOrId`.
+
+For example:
+
+```bash
+npx @valerypopoff/rivet2-cli serve my-project.rivet-project --endpoint ask="Ask Graph"
+curl -X POST http://localhost:3000/endpoints/ask -d '{"input":"Hello"}'
+```
+
+Endpoint aliases are validated when the server starts. Duplicate endpoint names, empty endpoint names, endpoint names containing `/`, and unknown target graphs fail fast.
+
 ## Options
 
 ### Server Configuration
 
 - `--port <port>`: The port to run the server on. Default is 3000.
 - `--dev`: Runs the server in development mode, which will reread the project file on each request. Useful for development.
+- `--bearer-token <token>`: Requires `Authorization: Bearer <token>` on graph and web-app requests. If omitted, `RIVET_CLI_BEARER_TOKEN` is used when set.
+- `--cors-origin <origin>`: Adds CORS headers for an allowed origin. Can be repeated. Use `*` to allow any origin.
 
 ### Graph Selection
 
 - `--graph <graphNameOrId>`: The name or ID of the graph to run. If not provided, the main graph will be run. If there is no main graph, an error will be returned.
 - `--allow-specifying-graph-id`: Allows specifying the graph ID in the URL path. This is disabled by default.
+- `--endpoint <endpointName=graphNameOrId>`: Adds a named graph endpoint at `/endpoints/:endpointName`. Can be used multiple times.
+
+### Dataset Configuration
+
+- `--dataset-file`: Use a specific `.rivet-data` file instead of the adjacent project data file.
+- `--save-datasets`: Persist dataset mutations back to the dataset file.
+- `--require-dataset-file`: Fail if the dataset file does not exist.
 
 ### Provider Configuration
 
@@ -131,6 +166,21 @@ For LLM Chat, the node's API key source controls where the key comes from. If a 
 ### Monitoring
 
 - `--expose-cost`: Exposes the graph run cost as a property in the JSON response object. Disabled by default.
+- `--unwrap-output <id>`: Responds with only `outputs[id].value` instead of the full output map.
+
+Every non-streaming response includes an `x-duration-ms` header. Errors use this shape:
+
+```json
+{
+  "error": {
+    "name": "Error",
+    "message": "What went wrong"
+  },
+  "durationMs": 12
+}
+```
+
+Malformed request JSON and graph-selection problems return `400`. Unexpected graph execution failures return `500`.
 
 ## Examples
 
@@ -163,7 +213,8 @@ Response:
 ## Security Considerations
 
 - The server is intended for development and testing purposes
-- No authentication is provided by the server, so it should not be exposed to the internet without additional security measures.
+- No authentication is enabled by default, so it should not be exposed to the internet without additional security measures.
+- For small internal deployments, `--bearer-token` can protect graph routes with a static bearer token.
 - Consider running behind a reverse proxy if exposed to the internet, to add security features like SSL, rate limiting, and authentication.
 - Use environment variables for sensitive configuration like API keys
 

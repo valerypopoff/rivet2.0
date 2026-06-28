@@ -11,6 +11,7 @@ import {
   type UiGraphId,
   getUiGraphActionComponent,
   getUiGraphInitialState,
+  jsonValueToDataValue,
   resolveUiGraphActionOutputStatePatch,
   resolveUiGraphActionInputs,
 } from '@valerypopoff/rivet2-core';
@@ -222,7 +223,7 @@ export async function runRivetWebAppAction(
       graph: component.action.graphId,
       inputs:
         processorOptions.inputs ??
-        Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, toDataValue(value)])),
+        Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)])),
     });
     const outputs = await processor.run();
     const result = {
@@ -236,39 +237,6 @@ export async function runRivetWebAppAction(
     await callActionHook(onActionError, { ...actionContext, error });
     throw error;
   }
-}
-
-function toDataValue(value: unknown): DataValue {
-  if (isDataValue(value)) {
-    return value;
-  }
-
-  if (typeof value === 'string') {
-    return { type: 'string', value };
-  }
-
-  if (typeof value === 'number') {
-    return { type: 'number', value };
-  }
-
-  if (typeof value === 'boolean') {
-    return { type: 'boolean', value };
-  }
-
-  if (value != null && typeof value === 'object' && !Array.isArray(value)) {
-    return { type: 'object', value: value as Record<string, unknown> };
-  }
-
-  return { type: 'any', value };
-}
-
-function isDataValue(value: unknown): value is DataValue {
-  return (
-    value != null &&
-    typeof value === 'object' &&
-    typeof (value as { type?: unknown }).type === 'string' &&
-    'value' in value
-  );
 }
 
 function resolveUiGraph(project: Project, uiGraphId: UiGraphId | string | undefined): UiGraph | undefined {

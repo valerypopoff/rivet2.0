@@ -116,6 +116,46 @@ test('web app actions can map multiple inputs and outputs', async () => {
   });
 });
 
+test('web app actions map array state values to typed Data Values', async () => {
+  const componentId = 'button-1' as UiComponentId;
+  const graphId = 'graph-1' as GraphId;
+  const outputs: GraphOutputs = {
+    tags: { type: 'string[]', value: ['one', 'two'] },
+  };
+  const calls: EditorGraphRunOptions[] = [];
+  const uiGraph: UiGraph = {
+    id: 'ui-graph-1' as UiGraphId,
+    name: 'Test app',
+    components: [
+      {
+        id: componentId,
+        type: 'button',
+        label: 'Run',
+        action: {
+          type: 'runGraph',
+          graphId,
+          inputMappings: [{ inputKey: 'tags', stateKey: 'draftTags' }],
+          outputStateKey: 'lastResult',
+        },
+      },
+    ],
+  };
+
+  await runUiGraphAction({
+    componentId,
+    state: { draftTags: ['one', 'two'] },
+    tryRunGraph: async (options) => {
+      calls.push(options ?? {});
+      return outputs;
+    },
+    uiGraph,
+  });
+
+  assert.deepEqual(calls[0]?.inputs, {
+    tags: { type: 'string[]', value: ['one', 'two'] },
+  });
+});
+
 test('web app actions can store one unwrapped graph output value', async () => {
   const componentId = 'button-1' as UiComponentId;
   const graphId = 'graph-1' as GraphId;

@@ -40,6 +40,8 @@ For each button, choose:
 
 For example, a textarea can write to data key `input`, a button can send that value to graph input `input`, and an output component can render the resulting `result` data key.
 
+When a button sends raw web-app data to a graph, Rivet converts it into normal graph Data Values. Text, numbers, and booleans keep their matching scalar types. Objects become `object` values. Homogeneous arrays become typed arrays such as `string[]`, `number[]`, `boolean[]`, or `object[]`; mixed, empty, null-containing, or nested arrays are sent as `any[]`.
+
 If a **Graph output ID** is empty, Rivet stores the whole graph output object at the chosen data key. If it is set, Rivet reads that graph output and stores the inner Rivet value. For example, if the graph has a Graph Output node with ID `graphOutput` and the run returns `{ graphOutput: { type: 'string', value: 'Hello' } }`, setting **Graph output ID** to `graphOutput` stores `Hello` in the web app data. If the target graph does not return that ID, the action shows an error instead of silently storing an empty value.
 
 ## Previewing Locally

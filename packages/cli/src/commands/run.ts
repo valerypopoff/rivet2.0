@@ -1,7 +1,37 @@
-import { createProcessor, loadProjectFromFile, type LooseDataValue } from '@valerypopoff/rivet2-node';
+import { createProcessor, type LooseDataValue } from '@valerypopoff/rivet2-node';
 import { resolve } from 'node:path';
 import type * as yargs from 'yargs';
-import { parseJsonInputRecord, parseKeyValueInputRecord } from '../commandInputs.js';
+import {
+  parseJsonInputRecord,
+  parseJsonInputRecordFromFile,
+  parseJsonKeyValueInputRecord,
+  parseKeyValueInputRecord,
+  throwIfConflictingInputSources,
+} from '../commandInputs.js';
+import {
+  loadProjectRuntime,
+  throwIfInvalidGraph,
+  throwIfNoMainGraph,
+  withRuntimeProcessorOptions,
+  type DatasetCliOptions,
+} from '../cliRuntime.js';
+import { shapeOutputs, writeJsonOutput } from '../output.js';
+
+type RunArgs = {
+  context: string[];
+  contextFile: string | undefined;
+  contextJson: string[];
+  graphName: string | undefined;
+  includeCost: boolean;
+  input: string[];
+  inputJson: string[];
+  inputsFile: string | undefined;
+  inputsStdin: boolean;
+  outputFile: string | undefined;
+  outputKey: string | undefined;
+  projectFile: string;
+  unwrapOutput: string | undefined;
+} & DatasetCliOptions;
 
 export function makeCommand<T>(y: yargs.Argv<T>) {
   return y
@@ -19,10 +49,32 @@ export function makeCommand<T>(y: yargs.Argv<T>) {
       type: 'boolean',
       default: false,
     })
+    .option('inputs-file', {
+      describe: 'Read inputs from a JSON file',
+      type: 'string',
+    })
+    .option('input-json', {
+      describe: 'Adds a JSON input to the graph run using key=json',
+      type: 'string',
+      array: true,
+      default: [],
+    })
     .option('include-cost', {
       describe: 'Include the total cost in the output',
       type: 'boolean',
       default: false,
+    })
+    .option('output-key', {
+      describe: 'Print only one named output Data Value wrapper',
+      type: 'string',
+    })
+    .option('unwrap-output', {
+      describe: 'Print only the .value field from one named output',
+      type: 'string',
+    })
+    .option('output-file', {
+      describe: 'Write the JSON output to a file instead of stdout',
+      type: 'string',
     })
     .option('context', {
       describe: 'Adds a context value to the graph run',
@@ -30,71 +82,118 @@ export function makeCommand<T>(y: yargs.Argv<T>) {
       array: true,
       default: [],
     })
+    .option('context-json', {
+      describe: 'Adds a JSON context value using key=json',
+      type: 'string',
+      array: true,
+      default: [],
+    })
+    .option('context-file', {
+      describe: 'Read context values from a JSON file',
+      type: 'string',
+    })
     .option('input', {
       describe: 'Adds an input to the graph run',
       type: 'string',
       array: true,
       default: [],
+    })
+    .option('dataset-file', {
+      describe: 'Use a specific .rivet-data file instead of the project-adjacent default',
+      type: 'string',
+    })
+    .option('save-datasets', {
+      describe: 'Persist dataset mutations back to the dataset file',
+      type: 'boolean',
+      default: false,
+    })
+    .option('require-dataset-file', {
+      describe: 'Fail if the dataset file does not exist',
+      type: 'boolean',
+      default: false,
     });
 }
 
-export async function run(args: {
-  projectFile: string;
-  graphName: string | undefined;
-  inputsStdin: boolean;
-  includeCost: boolean;
-  context: string[];
-  input: string[];
-}) {
+export async function run(args: RunArgs) {
   try {
-    const projectPath = resolve(process.cwd(), args.projectFile);
-    const project = await loadProjectFromFile(projectPath);
+    const runtime = await loadProjectRuntime(args.projectFile, args);
 
-    if (!args.graphName && !project.metadata.mainGraphId) {
-      const validGraphs = Object.values(project.graphs).map((graph) => [graph.metadata!.id!, graph.metadata!.name!]);
-      const validGraphNames = validGraphs.map(([id, name]) => `- "${name}" (${id})`);
+    throwIfNoMainGraph(runtime.project, args.graphName, runtime.projectPath, 'positional');
+    throwIfInvalidGraph(runtime.project, args.graphName, 'positional');
 
-      console.error(
-        `No graph name provided, and project does not specify a main graph. Valid graphs are: \n${validGraphNames.join(
-          '\n',
-        )}\n\nUse either the graph's name or its ID. For example, \`rivet run my-project.rivet-project my-graph\` or \`rivet run my-project.rivet-project 1234abcd\``,
-      );
-      process.exit(1);
-    }
+    const { run: runProcessor } = createProcessor(
+      runtime.project,
+      withRuntimeProcessorOptions(runtime, {
+        context: await readContext(args),
+        graph: args.graphName,
+        inputs: await readInputs(args),
+      }),
+    );
 
-    let inputs: Record<string, LooseDataValue>;
-
-    if (args.inputsStdin) {
-      const stdin = process.stdin;
-      stdin.setEncoding('utf8');
-
-      let inputText = '';
-      for await (const chunk of stdin) {
-        inputText += chunk;
-      }
-
-      inputs = parseJsonInputRecord(inputText, 'Input stdin');
-    } else {
-      inputs = parseKeyValueInputRecord(args.input, 'input');
-    }
-
-    const contextValues = parseKeyValueInputRecord(args.context, 'context');
-
-    const { run } = createProcessor(project, {
-      graph: args.graphName,
-      inputs,
-      context: contextValues,
-    });
-
-    const outputs = await run();
-
-    if (!args.includeCost) {
-      delete outputs.cost;
-    }
-
-    console.log(JSON.stringify(outputs, null, 2));
+    await writeJsonOutput(
+      shapeOutputs(await runProcessor(), {
+        includeCost: args.includeCost,
+        outputKey: args.outputKey,
+        unwrapOutput: args.unwrapOutput,
+      }),
+      args.outputFile,
+    );
   } catch (err) {
     console.error(err);
     process.exit(1);
   }
+}
+
+async function readInputs(args: RunArgs): Promise<Record<string, LooseDataValue>> {
+  throwIfConflictingInputSources(
+    [
+      { enabled: args.inputsStdin, name: '--inputs-stdin' },
+      { enabled: args.inputsFile != null, name: '--inputs-file' },
+      { enabled: args.input.length > 0 || args.inputJson.length > 0, name: '--input/--input-json' },
+    ],
+    'input',
+  );
+
+  if (args.inputsStdin) {
+    return parseJsonInputRecord(await readStdin(), 'Input stdin');
+  }
+
+  if (args.inputsFile) {
+    return parseJsonInputRecordFromFile(resolve(process.cwd(), args.inputsFile), 'Input file');
+  }
+
+  return {
+    ...parseKeyValueInputRecord(args.input, 'input'),
+    ...parseJsonKeyValueInputRecord(args.inputJson, 'input-json'),
+  };
+}
+
+async function readContext(args: RunArgs): Promise<Record<string, LooseDataValue>> {
+  throwIfConflictingInputSources(
+    [
+      { enabled: args.contextFile != null, name: '--context-file' },
+      { enabled: args.context.length > 0 || args.contextJson.length > 0, name: '--context/--context-json' },
+    ],
+    'context',
+  );
+
+  if (args.contextFile) {
+    return parseJsonInputRecordFromFile(resolve(process.cwd(), args.contextFile), 'Context file');
+  }
+
+  return {
+    ...parseKeyValueInputRecord(args.context, 'context'),
+    ...parseJsonKeyValueInputRecord(args.contextJson, 'context-json'),
+  };
+}
+
+async function readStdin(): Promise<string> {
+  process.stdin.setEncoding('utf8');
+
+  let inputText = '';
+  for await (const chunk of process.stdin) {
+    inputText += chunk;
+  }
+
+  return inputText;
 }

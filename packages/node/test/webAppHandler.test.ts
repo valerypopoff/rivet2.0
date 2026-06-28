@@ -170,6 +170,27 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(body.statePatch.result, 'hello');
   });
 
+  void it('maps array action inputs to typed Data Values', async () => {
+    const project = makeProject();
+    const graph = project.graphs[graphId]!;
+    graph.nodes[0]!.data = { dataType: 'string[]', id: 'input' };
+    graph.nodes[1]!.data = { dataType: 'string[]', id: 'value' };
+
+    const handler = createRivetWebAppHandler(project, { basePath: '/app', uiGraphId: 'ui-graph' });
+    const response = await handler.handleRequest(
+      new Request('https://example.test/app/actions/run', {
+        body: JSON.stringify({ componentId: 'run-button', state: { prompt: ['one', 'two'] } }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+    );
+    const body = (await response.json()) as { outputs: Record<string, DataValue>; statePatch: Record<string, unknown> };
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.outputs.value, { type: 'string[]', value: ['one', 'two'] });
+    assert.deepEqual(body.statePatch.result, ['one', 'two']);
+  });
+
   void it('supports static processor options without letting graph override the action target', async () => {
     const handler = createRivetWebAppHandler(makeProject(), {
       basePath: '/app',

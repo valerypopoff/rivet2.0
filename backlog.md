@@ -1,5 +1,7 @@
 
+- Markdown in the text editor in the node settings should be foldable just like the json structures
 
+- Changes in the web apps should be considered project changes and should show the dot in the tab. It's not shown in RIvet server
 
 - Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
 
