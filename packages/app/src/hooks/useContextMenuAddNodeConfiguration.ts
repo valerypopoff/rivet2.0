@@ -1,4 +1,11 @@
-import { type BuiltInNodeType, type NodeUIData } from '@valerypopoff/rivet2-core';
+import {
+  NODE_PREFAB_INSTANCE_TYPE,
+  type BuiltInNodeType,
+  type ChartNode,
+  type NodePrefabId,
+  type NodeUIData,
+  getNodePrefabDisplayName,
+} from '@valerypopoff/rivet2-core';
 import { type ContextMenuItem } from './useContextMenuConfiguration';
 import { useMemo, useState } from 'react';
 import { useBuiltInNodeImages } from './useBuiltInNodeImages';
@@ -9,8 +16,10 @@ import { isNotNull } from '../utils/genericUtilFunctions';
 import { orderBy, uniqBy } from 'lodash-es';
 import { useAtomValue } from 'jotai';
 import { nodeConstructorsState } from '../state/graph';
-import { referencedProjectsState } from '../state/savedGraphs';
+import { projectState, referencedProjectsState } from '../state/savedGraphs';
 import { handleError } from '../utils/errorHandling.js';
+import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
+import { canUseNodeAsPrefabSource } from '../domain/nodeLibrary/nodePrefabs.js';
 
 export const addContextMenuGroups = [
   {
@@ -71,6 +80,8 @@ export const addContextMenuGroups = [
 
 export function useContextMenuAddNodeConfiguration() {
   const referencedProjects = useAtomValue(referencedProjectsState);
+  const project = useAtomValue(projectState);
+  const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
   const constructors = useAtomValue(nodeConstructorsState);
   const builtInImages = useBuiltInNodeImages();
   const getUIContext = useGetRivetUIContext();
@@ -108,28 +119,36 @@ export function useContextMenuAddNodeConfiguration() {
       )
     ).filter(isNotNull);
 
-    nodeTypesWithUiData = nodeTypesWithUiData.filter((x) => x.type !== 'referencedGraphAlias');
+    nodeTypesWithUiData = nodeTypesWithUiData.filter((x) => {
+      if (x.type === 'referencedGraphAlias' || x.type === NODE_PREFAB_INSTANCE_TYPE) {
+        return false;
+      }
 
-    for (const project of Object.values(referencedProjects)) {
-      for (const graph of Object.values(project.graphs)) {
-        const type: BuiltInNodeType = 'referencedGraphAlias';
+      return !nodeLibraryOpen || canUseNodeAsPrefabSource({ type: x.type } as ChartNode);
+    });
 
-        const uiData: NodeUIData = {
-          group: 'Library',
-          contextMenuTitle: graph.metadata?.name ?? 'Unknown Graph',
-          infoBoxBody: graph.metadata?.description ?? 'Creates a node that references a graph from another project.',
-          infoBoxTitle: graph.metadata?.name ?? 'Unknown Graph',
-        };
+    if (!nodeLibraryOpen) {
+      for (const project of Object.values(referencedProjects)) {
+        for (const graph of Object.values(project.graphs)) {
+          const type: BuiltInNodeType = 'referencedGraphAlias';
 
-        nodeTypesWithUiData.push({
-          type: `${type}:${project.metadata!.id!}:${graph.metadata!.id!}`,
-          uiData,
-        });
+          const uiData: NodeUIData = {
+            group: 'Library',
+            contextMenuTitle: graph.metadata?.name ?? 'Unknown Graph',
+            infoBoxBody: graph.metadata?.description ?? 'Creates a node that references a graph from another project.',
+            infoBoxTitle: graph.metadata?.name ?? 'Unknown Graph',
+          };
+
+          nodeTypesWithUiData.push({
+            type: `${type}:${project.metadata!.id!}:${graph.metadata!.id!}`,
+            uiData,
+          });
+        }
       }
     }
 
     setNodeTypesWithUiData(nodeTypesWithUiData);
-  }, [constructors, referencedProjects, getUIContext]);
+  }, [constructors, referencedProjects, getUIContext, nodeLibraryOpen]);
 
   const plugins = useDependsOnPlugins();
   const groupsWithItems = useMemo(() => {
@@ -138,34 +157,56 @@ export function useContextMenuAddNodeConfiguration() {
       (g) => g.id,
     );
 
-    if (Object.values(referencedProjects).length > 0) {
+    if (!nodeLibraryOpen && Object.values(referencedProjects).length > 0) {
       allGroups.push({
         id: 'add-node-group:references',
         label: 'Library',
       });
     }
 
-    const groups = allGroups.map((group) => {
-      let items = nodeTypesWithUiData
-        .filter((item) =>
-          Array.isArray(item.uiData.group)
-            ? item.uiData.group.includes(group.label)
-            : item.uiData.group === group.label,
-        )
-        .map((item): ContextMenuItem => {
-          const { type } = item;
-
-          return {
-            id: `add-node:${type}`,
-            label: item.uiData.contextMenuTitle ?? type,
-            data: type,
-            infoBox: {
-              title: item.uiData.infoBoxTitle ?? type,
-              description: item.uiData.infoBoxBody ?? '',
-              image: builtInImages[type as keyof typeof builtInImages] ?? undefined,
-            },
-          };
+      if (!nodeLibraryOpen && Object.keys(project.nodePrefabs ?? {}).length > 0) {
+        allGroups.push({
+          id: 'add-node-group:node-library',
+          label: 'Library',
         });
+      }
+
+      const groups = allGroups.map((group) => {
+        let items =
+          group.label === 'Library'
+            ? Object.values(project.nodePrefabs ?? {}).map((prefab): ContextMenuItem => {
+                const label = getNodePrefabDisplayName(project, prefab.id as NodePrefabId);
+
+              return {
+                id: `add-node:${NODE_PREFAB_INSTANCE_TYPE}:${prefab.id}`,
+                label,
+                  data: `${NODE_PREFAB_INSTANCE_TYPE}:${prefab.id}`,
+                  infoBox: {
+                    title: label,
+                    description: 'Creates a linked node.',
+                  },
+                };
+              })
+          : nodeTypesWithUiData
+              .filter((item) =>
+                Array.isArray(item.uiData.group)
+                  ? item.uiData.group.includes(group.label)
+                  : item.uiData.group === group.label,
+              )
+              .map((item): ContextMenuItem => {
+                const { type } = item;
+
+                return {
+                  id: `add-node:${type}`,
+                  label: item.uiData.contextMenuTitle ?? type,
+                  data: type,
+                  infoBox: {
+                    title: item.uiData.infoBoxTitle ?? type,
+                    description: item.uiData.infoBoxBody ?? '',
+                    image: builtInImages[type as keyof typeof builtInImages] ?? undefined,
+                  },
+                };
+              });
 
       items = orderBy(items, (item) => item.label);
 
@@ -173,7 +214,7 @@ export function useContextMenuAddNodeConfiguration() {
     });
 
     return groups.filter((group) => group.items.length > 0);
-  }, [builtInImages, nodeTypesWithUiData, plugins, referencedProjects]);
+  }, [builtInImages, nodeLibraryOpen, nodeTypesWithUiData, plugins, project, referencedProjects]);
 
   return groupsWithItems;
 }

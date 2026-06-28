@@ -13,11 +13,11 @@ const styles = css`
   top: var(--project-selector-height);
   left: 0;
   width: var(--left-sidebar-width);
-  background-color: var(--grey-dark-colorish-seethrough);
+  background-color: var(--app-panel-bg);
   backdrop-filter: blur(2px);
   padding: 0;
   z-index: 50;
-  border-right: 1px solid var(--grey-darkish);
+  border-right: 1px solid var(--app-panel-border);
   height: calc(100vh - var(--project-selector-height));
 
   .panel {

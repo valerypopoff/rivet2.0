@@ -226,15 +226,15 @@ Plugin availability is app-level, while project YAML plugin specs are derived fr
 
 `appPluginSpecsState` is persisted app state. Adding a plugin from Settings > Plugins writes there, so the plugin's nodes appear in the node picker for every project. Removing a plugin from Settings > Plugins removes that spec from `appPluginSpecsState`; it unregisters the plugin from the app registry, but it does not directly edit any project YAML.
 
-`projectPluginsState` still writes the existing `Project.plugins` YAML field, but users do not manually add or delete entries there. [`pluginUsage.ts`](../packages/app/src/utils/pluginUsage.ts) derives project plugin specs by scanning project graphs, asking the loaded registry which plugin owns each node type, and mapping the runtime plugin id back to the app-installed `PluginLoadSpec`. It also centralizes plugin spec identity, display labels, details, and search matching so Settings > Plugins and the missing-plugin modal describe specs consistently.
+`projectPluginsState` still writes the existing `Project.plugins` YAML field, but users do not manually add or delete entries there. [`pluginUsage.ts`](../packages/app/src/utils/pluginUsage.ts) derives project plugin specs by scanning project graphs plus library nodes, asking the loaded registry which plugin owns each node type, and mapping the runtime plugin id back to the app-installed `PluginLoadSpec`. It also centralizes plugin spec identity, display labels, details, and search matching so Settings > Plugins and the missing-plugin modal describe specs consistently.
 
 Save, run, and remote-upload paths derive project plugin specs before serializing or sending a project. This prevents a newly added plugin node from racing ahead of the background sync hook.
 
-Unresolved project specs are preserved. If a project declares a plugin that is not installed in the app, has just been removed from the app, failed to load, or the current graph contains unknown node types, Rivet cannot prove whether all corresponding nodes are gone, so the YAML spec is kept until plugin ownership can be resolved.
+Stale project specs are removed once Rivet can prove they are unused. If every node type in the project is known to the current registry and none belongs to a declared plugin, the derived `Project.plugins` list drops that spec even when the plugin is not installed in this app. Unresolved project specs are preserved only while unknown node types remain, because those nodes may belong to a missing, removed, or failed plugin and Rivet cannot safely prove the plugin is unused yet.
 
 ### Missing app plugins
 
-Opening a project whose YAML declares plugins not present in `appPluginSpecsState` shows [`MissingAppPluginsModal`](../packages/app/src/components/MissingAppPluginsModal.tsx). The modal lists the missing specs and offers explicit Install buttons.
+Opening a project whose derived graph usage still requires plugins not present in `appPluginSpecsState` shows [`MissingAppPluginsModal`](../packages/app/src/components/MissingAppPluginsModal.tsx). The modal derives the current project plugin list from graph usage before comparing it to app-installed specs, so stale YAML-only plugin declarations do not show a false install prompt. Missing specs are listed with explicit Install buttons.
 
 Rivet does not install project-declared plugins automatically. If the user closes the modal, unknown plugin nodes continue to render through the normal "Unknown node type ... are you missing a plugin?" fallback.
 

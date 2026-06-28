@@ -104,6 +104,7 @@ export type ExecutorSessionRuntime = {
   createPendingGraphExecution(requestId?: RemoteRunRequestId): PendingGraphExecution;
   createRemoteExecutionRequest(): RemoteRunRequestId;
   disconnect(options?: ExecutorSessionDisconnectOptions): void;
+  getActiveGraphRunRequestId(): RemoteRunRequestId | null;
   getRuntimeState(): Pick<
     ExecutorSessionState,
     'capabilities' | 'isInternalExecutor' | 'remoteUploadAllowed' | 'socket' | 'status' | 'target' | 'url'
@@ -114,6 +115,7 @@ export type ExecutorSessionRuntime = {
   resolvePendingGraphExecution(requestId: RemoteRunRequestId | undefined, outputs: GraphOutputs): void;
   sendMessage<T extends keyof OutgoingMessageMap>(type: T, data: OutgoingMessageMap[T]): boolean;
   sendRaw(data: string): boolean;
+  setActiveGraphRunRequestId(requestId: RemoteRunRequestId | null): void;
   setDatasetProvider(datasetProvider: AppDatasetProvider | null): void;
   subscribeLifecycle(type: 'connect' | 'disconnect', callback: LifecycleCallback): () => void;
   subscribeMessages(handler: DebuggerMessageHandler): () => void;
@@ -129,6 +131,7 @@ export function createExecutorSessionRuntime(options: {
   let currentSocketGeneration = 0;
   let currentStatus: ExecutorSessionStatus = 'idle';
   let currentTarget: ExecutorSessionTarget | null = null;
+  let activeGraphRunRequestId: RemoteRunRequestId | null = null;
   let reconnectingTimeout: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = 0;
 
@@ -295,6 +298,7 @@ export function createExecutorSessionRuntime(options: {
       });
 
       pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session disconnected'));
+      activeGraphRunRequestId = null;
 
       if (!isInternalExecutorTarget(closedTarget)) {
         logRuntimeDebug('External debugger websocket closed; automatic reconnect skipped.', {
@@ -425,6 +429,7 @@ export function createExecutorSessionRuntime(options: {
     currentTarget = null;
     currentRemoteUploadAllowed = false;
     pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session replaced'));
+    activeGraphRunRequestId = null;
     notifySessionStateChanged();
 
     if (oldSocket && oldSocket.readyState !== WebSocket.CLOSED) {
@@ -464,6 +469,7 @@ export function createExecutorSessionRuntime(options: {
     currentRemoteUploadAllowed = false;
     clearReconnectTimeout();
     pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session disconnected'));
+    activeGraphRunRequestId = null;
     notifySessionStateChanged();
 
     if (socketToClose && socketToClose.readyState !== WebSocket.CLOSED) {
@@ -515,6 +521,9 @@ export function createExecutorSessionRuntime(options: {
     createPendingGraphExecution: pendingGraphExecutions.createPendingGraphExecution,
     createRemoteExecutionRequest: pendingGraphExecutions.createRemoteExecutionRequest,
     disconnect,
+    getActiveGraphRunRequestId() {
+      return activeGraphRunRequestId;
+    },
     getRuntimeState() {
       return {
         capabilities: getCapabilities(),
@@ -561,6 +570,9 @@ export function createExecutorSessionRuntime(options: {
       return safeSendExecutorSocket(currentSocket, data, 'Failed to send raw executor message', {
         target: currentTarget?.type ?? 'none',
       });
+    },
+    setActiveGraphRunRequestId(requestId) {
+      activeGraphRunRequestId = requestId;
     },
     setDatasetProvider(datasetProvider) {
       currentDatasetProvider = datasetProvider;

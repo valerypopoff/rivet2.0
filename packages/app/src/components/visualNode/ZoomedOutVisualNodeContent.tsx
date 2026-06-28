@@ -13,6 +13,7 @@ import { NodeTitleLabel } from './NodeTitleLabel.js';
 import { Tooltip } from '../Tooltip.js';
 import { NodeHeaderWarningIcon } from './NodeHeaderWarningIcon.js';
 import { ConditionalIfPort } from './ConditionalIfPort.js';
+import { SubgraphLinkIcon } from './SubgraphLinkIcon.js';
 
 export const ZoomedOutVisualNodeContent: FC<{
   node: ChartNode;
@@ -22,6 +23,8 @@ export const ZoomedOutVisualNodeContent: FC<{
   isReallyZoomedOut: boolean;
   showRunningIndicator: boolean;
   headerWarning?: string;
+  editTargetNode?: ChartNode;
+  isNodePrefabInstance?: boolean;
 }> = memo(
   ({
     node,
@@ -31,13 +34,15 @@ export const ZoomedOutVisualNodeContent: FC<{
     isReallyZoomedOut,
     showRunningIndicator,
     headerWarning,
+    editTargetNode,
+    isNodePrefabInstance = false,
   }) => {
     useDependsOnPlugins();
     const { onNodeSelected, onNodeStartEditing } = useCanvasHandlersContext();
 
     const handleEditClick = useStableCallback((event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
-      onNodeStartEditing?.(node);
+      onNodeStartEditing?.(editTargetNode ?? node);
     });
 
     const handleEditMouseDown = useStableCallback((event: MouseEvent<HTMLButtonElement>) => {
@@ -65,18 +70,32 @@ export const ZoomedOutVisualNodeContent: FC<{
           onClick={isReallyZoomedOut ? undefined : handleGrabClick}
         >
           {!isReallyZoomedOut && (
-            <div className="grab-area">
+            <div className={clsx('grab-area', { 'has-subgraph-header-link': node.type === 'subGraph' })}>
               <SubGraphHeaderLink node={node} />
               <div className="title-text">
                 <NodeTitleLabel node={node} />
                 {nodeDescription && <span className="title-text-description">{nodeDescription}</span>}
-                <SplitRunSummary node={node} isKnownNodeType={isKnownNodeType} />
+                <SplitRunSummary node={node} editTargetNode={editTargetNode} isKnownNodeType={isKnownNodeType} />
               </div>
             </div>
           )}
           {!isReallyZoomedOut && (
             <div className="title-controls">
               <NodeRunningIndicator isRunning={showRunningIndicator} delayMs={0} />
+              {isNodePrefabInstance && (
+                <Tooltip className="node-prefab-instance-tooltip" content="Open library node">
+                  <button
+                    type="button"
+                    className="node-prefab-instance-indicator"
+                    aria-label="Open library node"
+                    onClick={handleEditClick}
+                    onPointerDown={handleEditPointerDown}
+                    onMouseDown={handleEditMouseDown}
+                  >
+                    <SubgraphLinkIcon />
+                  </button>
+                </Tooltip>
+              )}
               {headerWarning && (
                 <Tooltip className="node-header-warning-tooltip" content={headerWarning} tag="span" wrap width={260}>
                   <span className="node-header-warning" role="img" aria-label={headerWarning}>
@@ -84,16 +103,18 @@ export const ZoomedOutVisualNodeContent: FC<{
                   </span>
                 </Tooltip>
               )}
-              <button
-                type="button"
-                className="edit-button"
-                onClick={handleEditClick}
-                onPointerDown={handleEditPointerDown}
-                onMouseDown={handleEditMouseDown}
-                title="Edit"
-              >
-                <SettingsCogIcon />
-              </button>
+              {!isNodePrefabInstance && (
+                <button
+                  type="button"
+                  className="edit-button"
+                  onClick={handleEditClick}
+                  onPointerDown={handleEditPointerDown}
+                  onMouseDown={handleEditMouseDown}
+                  title="Edit"
+                >
+                  <SettingsCogIcon />
+                </button>
+              )}
             </div>
           )}
         </div>

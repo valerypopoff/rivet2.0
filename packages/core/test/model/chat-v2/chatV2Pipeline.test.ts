@@ -186,6 +186,7 @@ void describe('streamChatV2', () => {
     assert.deepEqual(capturedArgs?.stopSequences, ['END']);
     assert.equal(capturedArgs?.seed, 123);
     assert.equal(capturedArgs?.output, responseOutput);
+    assert.equal(capturedArgs?.maxRetries, 0);
     assert.equal('tools' in capturedArgs!, false);
   });
 
@@ -313,6 +314,7 @@ void describe('streamChatV2', () => {
     assert.equal('output' in capturedArgs, false);
     assert.equal('providerOptions' in capturedArgs, false);
     assert.equal('maxOutputTokens' in capturedArgs, false);
+    assert.equal(capturedArgs.maxRetries, 0);
   });
 });
 
@@ -967,6 +969,7 @@ void describe('runChatV2Pipeline', () => {
     assert.equal(streamCalls, 0);
     assert.equal(generateCalls, 1);
     assert.equal(capturedGenerateArgs?.model, model);
+    assert.equal(capturedGenerateArgs?.maxRetries, 0);
     assert.equal('stream' in capturedGenerateArgs!, false);
     assert.equal(result.response, 'Generated answer');
     assert.equal(result.requestStatus, 200);
@@ -1365,6 +1368,7 @@ void describe('runChatV2Pipeline', () => {
     assert.deepEqual(capturedArgs?.stopSequences, ['END']);
     assert.equal(capturedArgs?.seed, 123);
     assert.equal(capturedArgs?.output, responseOutput);
+    assert.equal(capturedArgs?.maxRetries, 0);
   });
 
   void it('emits parsed object response output for structured response formats', async () => {

@@ -14,7 +14,7 @@ export type PluginUsageState = {
 type ProjectPluginUsageInput = {
   appPluginStates: PluginUsageState[];
   currentGraph?: NodeGraph;
-  project: Pick<Project, 'graphs' | 'plugins'>;
+  project: Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'>;
   registry: PluginUsageRegistry;
 };
 
@@ -98,7 +98,6 @@ export function deriveProjectPluginSpecsFromGraphs({
   registry,
 }: ProjectPluginUsageInput): PluginLoadSpec[] {
   const currentProjectSpecs = dedupePluginSpecs(project.plugins);
-  const pluginStateBySpecId = new Map(appPluginStates.map((state) => [getPluginSpecId(state.spec), state]));
   const specByRuntimePluginId = new Map<string, PluginLoadSpec>();
 
   for (const state of appPluginStates) {
@@ -130,7 +129,7 @@ export function deriveProjectPluginSpecsFromGraphs({
 
     if (usedSpec) {
       pushSpec(nextSpecs, seen, usedSpec);
-    } else if (shouldPreserveExistingProjectSpec(existingSpec, pluginStateBySpecId, hasUnresolvedNodeTypes)) {
+    } else if (hasUnresolvedNodeTypes) {
       pushSpec(nextSpecs, seen, existingSpec);
     }
   }
@@ -145,7 +144,7 @@ export function deriveProjectPluginSpecsFromGraphs({
   return nextSpecs;
 }
 
-export function withDerivedProjectPluginSpecs<TProject extends Pick<Project, 'graphs' | 'plugins'>>(
+export function withDerivedProjectPluginSpecs<TProject extends Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'>>(
   project: TProject,
   options: Omit<ProjectPluginUsageInput, 'project'>,
 ): TProject {
@@ -164,7 +163,7 @@ export function withDerivedProjectPluginSpecs<TProject extends Pick<Project, 'gr
   };
 }
 
-function getProjectNodes(project: Pick<Project, 'graphs'>, currentGraph?: NodeGraph): ChartNode[] {
+function getProjectNodes(project: Pick<Project, 'graphs' | 'nodePrefabs'>, currentGraph?: NodeGraph): ChartNode[] {
   const graphs = new Map(Object.entries(project.graphs ?? {}));
 
   if (currentGraph) {
@@ -172,7 +171,10 @@ function getProjectNodes(project: Pick<Project, 'graphs'>, currentGraph?: NodeGr
     graphs.set(graphId, currentGraph);
   }
 
-  return Array.from(graphs.values()).flatMap((graph) => graph.nodes ?? []);
+  return [
+    ...Array.from(graphs.values()).flatMap((graph) => graph.nodes ?? []),
+    ...Object.values(project.nodePrefabs ?? {}).map((prefab) => prefab.sourceNode),
+  ];
 }
 
 function getPluginSpecForNode(
@@ -191,16 +193,6 @@ function getPluginSpecForNode(
   } catch {
     return { unresolved: true };
   }
-}
-
-function shouldPreserveExistingProjectSpec(
-  spec: PluginLoadSpec,
-  pluginStateBySpecId: Map<string, PluginUsageState>,
-  hasUnresolvedNodeTypes: boolean,
-): boolean {
-  const state = pluginStateBySpecId.get(getPluginSpecId(spec));
-
-  return hasUnresolvedNodeTypes || !state || !state.loaded || !!state.error || !state.plugin;
 }
 
 function pushSpec(specs: PluginLoadSpec[], seen: Set<string>, spec: PluginLoadSpec): void {

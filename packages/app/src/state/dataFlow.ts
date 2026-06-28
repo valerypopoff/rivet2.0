@@ -19,6 +19,7 @@ import {
 import { graphNavigationStackState } from './graphBuilder.js';
 import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
 import { getGraphSelectionOptions } from './selectors/executionSelectors.js';
+import type { ProcessQuestions } from './userInput.js';
 
 export type GraphRunSelection = GraphRunId | 'latest';
 
@@ -49,11 +50,13 @@ export type ProjectExecutionSnapshot = {
   graphRunning: boolean;
   graphStartTime: number | undefined;
   frozenNodeOutputs?: FrozenNodeOutputsByGraph;
+  lastRecording?: string;
   lastRunDataByNode: RunDataByNodeId;
   rootGraph: GraphId | undefined;
   runningGraphs: GraphId[];
   selectedGraphRunByView: Record<GraphViewKey, GraphRunSelection>;
   selectedProcessPageNodes: Record<NodeId, PageValue>;
+  userInputQuestions: Record<NodeId, ProcessQuestions[]>;
 };
 
 export type NodeRunDataBase = {
@@ -219,10 +222,12 @@ export function createEmptyProjectExecutionSnapshot(): ProjectExecutionSnapshot 
     graphRunning: false,
     graphStartTime: undefined,
     frozenNodeOutputs: {},
+    lastRecording: undefined,
     lastRunDataByNode: {},
     rootGraph: undefined,
     runningGraphs: [],
     selectedGraphRunByView: {},
     selectedProcessPageNodes: {},
+    userInputQuestions: {},
   };
 }

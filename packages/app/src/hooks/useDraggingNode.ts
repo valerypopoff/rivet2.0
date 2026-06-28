@@ -6,6 +6,7 @@ import { canvasPositionState, selectedNodesState } from '../state/graphBuilder.j
 import { nodesByIdState, nodesState } from '../state/graph.js';
 import { useMoveNodeCommand } from '../commands/moveNodeCommand';
 import { useDuplicateNodesCommand } from '../commands/duplicateNodesCommand.js';
+import { duplicateNodesWithConnections } from '../domain/graphEditing/nodeActions.js';
 import {
   constrainDragDeltaToAxisLock,
   createDragDuplicatePreviewNodes,
@@ -29,6 +30,12 @@ import {
 } from '../components/nodeCanvas/nodeDragInteraction.js';
 
 type DragStartPositionMap = Map<NodeId, { x: number; y: number }>;
+
+type UseDraggingNodeOptions = {
+  nodes?: ChartNode[];
+  onNodesChanged?: (nodes: ChartNode[]) => void;
+  graphCommandsEnabled?: boolean;
+};
 
 function createDragStartPositionMap(nodes: ChartNode[]): DragStartPositionMap {
   return new Map(
@@ -63,12 +70,26 @@ function bringNodesToFront(nodes: ChartNode[], nodeIdsToFront: NodeId[]): ChartN
   );
 }
 
-export const useDraggingNode = () => {
+export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
   const selectedNodeIds = useAtomValue(selectedNodesState);
+  const setSelectedNodeIds = useSetAtom(selectedNodesState);
   const canvasPosition = useAtomValue(canvasPositionState);
-  const nodes = useAtomValue(nodesState);
-  const nodesById = useAtomValue(nodesByIdState);
+  const graphNodes = useAtomValue(nodesState);
+  const graphNodesById = useAtomValue(nodesByIdState);
   const setNodes = useSetAtom(nodesState);
+  const controlledNodes = options.nodes;
+  const controlledOnNodesChanged = options.onNodesChanged;
+  const graphCommandsEnabled = options.graphCommandsEnabled ?? true;
+  const controlledCanvas = Boolean(controlledNodes && controlledOnNodesChanged);
+  const duplicateDragEnabled = graphCommandsEnabled || controlledCanvas;
+  const nodes = controlledNodes ?? graphNodes;
+  const nodesById = useMemo(
+    () =>
+      controlledNodes
+        ? (Object.fromEntries(controlledNodes.map((node) => [node.id, node])) as Record<NodeId, ChartNode>)
+        : graphNodesById,
+    [controlledNodes, graphNodesById],
+  );
 
   const [draggedSourceNodes, setDraggedSourceNodesState] = useState<ChartNode[]>([]);
   const [draggedHoverControlSourceNodeIds, setDraggedHoverControlSourceNodeIds] = useState<NodeId[]>([]);
@@ -193,7 +214,7 @@ export const useDraggingNode = () => {
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (shouldUseDuplicateDragModeOnKeyDown(event)) {
+      if (duplicateDragEnabled && shouldUseDuplicateDragModeOnKeyDown(event)) {
         setSessionDragMode('duplicate');
       }
 
@@ -244,7 +265,7 @@ export const useDraggingNode = () => {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [isDragActive, setSessionDragAxisLock, setSessionDragMode, updateDragSourceNodes]);
+  }, [duplicateDragEnabled, isDragActive, setSessionDragAxisLock, setSessionDragMode, updateDragSourceNodes]);
 
   const draggingNodes = useMemo(
     () =>
@@ -290,10 +311,11 @@ export const useDraggingNode = () => {
       isShiftDragConstraintEnabledRef.current = lastDragActivatorShiftRef.current;
       lastDragDeltaRef.current = { x: 0, y: 0 };
       setSessionDragAxisLock(undefined);
-      setSessionDragMode(resolveDragModeFromAlt(lastDragActivatorAltRef.current));
+      setSessionDragMode(duplicateDragEnabled ? resolveDragModeFromAlt(lastDragActivatorAltRef.current) : 'move');
       setIsDragActive(true);
     },
     [
+      duplicateDragEnabled,
       resetDragSession,
       selectedNodeIds,
       setSessionDragAxisLock,
@@ -344,6 +366,19 @@ export const useDraggingNode = () => {
             return;
           }
 
+          if (!graphCommandsEnabled && controlledOnNodesChanged) {
+            const { newNodes } = duplicateNodesWithConnections({
+              nodes,
+              nodeIds: sourceNodeIds,
+              connections: [],
+              delta: actualDelta,
+            });
+
+            controlledOnNodesChanged(bringNodesToFront([...nodes, ...newNodes], newNodes.map((node) => node.id)));
+            setSelectedNodeIds(newNodes.map((node) => node.id));
+            return;
+          }
+
           duplicateNodes({
             nodeIds: sourceNodeIds,
             delta: actualDelta,
@@ -353,6 +388,30 @@ export const useDraggingNode = () => {
         }
 
         if (sourceNodeIds.length === 0) {
+          return;
+        }
+
+        if (!graphCommandsEnabled) {
+          controlledOnNodesChanged?.(
+            bringNodesToFront(
+              nodes.map((node) => {
+                const initialPosition = initialPositions.get(node.id);
+                if (!initialPosition) {
+                  return node;
+                }
+
+                return {
+                  ...node,
+                  visualData: {
+                    ...node.visualData,
+                    x: initialPosition.x + actualDelta.x,
+                    y: initialPosition.y + actualDelta.y,
+                  },
+                };
+              }),
+              sourceNodeIds,
+            ),
+          );
           return;
         }
 
@@ -377,7 +436,17 @@ export const useDraggingNode = () => {
         resetDragSession();
       }
     },
-    [canvasPosition.zoom, duplicateNodes, moveNode, resetDragSession, setNodes],
+    [
+      canvasPosition.zoom,
+      controlledOnNodesChanged,
+      duplicateNodes,
+      graphCommandsEnabled,
+      moveNode,
+      nodes,
+      resetDragSession,
+      setSelectedNodeIds,
+      setNodes,
+    ],
   );
 
   const onNodeDragCancelled = useCallback(() => {

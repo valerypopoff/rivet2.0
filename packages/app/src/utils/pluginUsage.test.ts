@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { ChartNode, GraphId, NodeGraph, PluginLoadSpec, Project } from '@valerypopoff/rivet2-core';
+import type { ChartNode, GraphId, NodeGraph, NodePrefabId, PluginLoadSpec, Project } from '@valerypopoff/rivet2-core';
 import {
   deriveProjectPluginSpecsFromGraphs,
   getMissingAppPluginSpecs,
@@ -24,9 +24,14 @@ const builtInPluginSpec: PluginLoadSpec = {
   name: 'OpenAI',
 };
 
-function makeProject(graphs: NodeGraph[], plugins: PluginLoadSpec[] = []): Pick<Project, 'graphs' | 'plugins'> {
+function makeProject(
+  graphs: NodeGraph[],
+  plugins: PluginLoadSpec[] = [],
+  nodePrefabs: Project['nodePrefabs'] = undefined,
+): Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'> {
   return {
     graphs: Object.fromEntries(graphs.map((graph) => [graph.metadata!.id!, graph])),
+    nodePrefabs,
     plugins,
   };
 }
@@ -156,9 +161,37 @@ describe('pluginUsage', () => {
     );
   });
 
-  test('preserves unresolved project plugin specs until the app can prove they are unused', () => {
+  test('removes stale project plugin specs when all node types are known without them', () => {
     const project = makeProject([makeGraph('main', [makeNode('text')])], [pluginSpec]);
     const registry = makeRegistry({ text: undefined });
+
+    assert.deepEqual(
+      deriveProjectPluginSpecsFromGraphs({
+        appPluginStates: [],
+        project,
+        registry,
+      }),
+      [],
+    );
+  });
+
+  test('removes stale built-in project plugin specs when all node types are known without them', () => {
+    const project = makeProject([makeGraph('main', [makeNode('text')])], [builtInPluginSpec]);
+    const registry = makeRegistry({ text: undefined });
+
+    assert.deepEqual(
+      deriveProjectPluginSpecsFromGraphs({
+        appPluginStates: [],
+        project,
+        registry,
+      }),
+      [],
+    );
+  });
+
+  test('preserves unresolved project plugin specs when unknown node types prevent proving usage', () => {
+    const project = makeProject([makeGraph('main', [makeNode('unknownPluginNode')])], [pluginSpec]);
+    const registry = makeRegistry({});
 
     assert.deepEqual(
       deriveProjectPluginSpecsFromGraphs({
@@ -170,9 +203,29 @@ describe('pluginUsage', () => {
     );
   });
 
-  test('preserves failed app plugin specs that are already declared by the project', () => {
-    const project = makeProject([makeGraph('main', [makeNode('text')])], [pluginSpec]);
-    const registry = makeRegistry({ text: undefined });
+  test('adds a project plugin spec when a loaded app plugin owns a library node', () => {
+    const prefabId = 'prefab-plugin' as NodePrefabId;
+    const project = makeProject([makeGraph('main', [])], [], {
+      [prefabId]: {
+        id: prefabId,
+        sourceNode: makeNode('examplePluginNode'),
+      },
+    });
+    const registry = makeRegistry({ examplePluginNode: 'runtime-plugin-id' });
+
+    assert.deepEqual(
+      deriveProjectPluginSpecsFromGraphs({
+        appPluginStates: [loadedPluginState(pluginSpec, 'runtime-plugin-id')],
+        project,
+        registry,
+      }),
+      [pluginSpec],
+    );
+  });
+
+  test('preserves failed app plugin specs when unknown node types prevent proving usage', () => {
+    const project = makeProject([makeGraph('main', [makeNode('unknownPluginNode')])], [pluginSpec]);
+    const registry = makeRegistry({});
 
     assert.deepEqual(
       deriveProjectPluginSpecsFromGraphs({

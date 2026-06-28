@@ -238,6 +238,8 @@ const ToolbarButton: FC<{
 
 export interface MultiNodeAlignmentToolbarProps {
   canvasRootRef: RefObject<HTMLDivElement | null>;
+  nodes?: ChartNode[];
+  onNodesChanged?: (nodes: ChartNode[]) => void;
   selectedNodes: ChartNode[];
 }
 
@@ -248,10 +250,49 @@ export function shouldShowMultiNodeAlignmentToolbar(options: {
   return options.selectedNodeCount >= 2 && !options.isReadOnlyGraph;
 }
 
-export const MultiNodeAlignmentToolbar: FC<MultiNodeAlignmentToolbarProps> = ({ canvasRootRef, selectedNodes }) => {
+export const MultiNodeAlignmentToolbar: FC<MultiNodeAlignmentToolbarProps> = ({
+  canvasRootRef,
+  nodes,
+  onNodesChanged,
+  selectedNodes,
+}) => {
   const moveNode = useMoveNodeCommand();
   const setNodeWidths = useSetNodeWidthsCommand();
   const isReadOnlyGraph = useAtomValue(isReadOnlyGraphState);
+  const controlledCanvas = Boolean(nodes && onNodesChanged);
+
+  const applyLocalNodeUpdates = useStableCallback(
+    (
+      update: (
+        node: ChartNode,
+      ) => {
+        position?: { x: number; y: number };
+        width?: number;
+      },
+    ) => {
+      if (!nodes || !onNodesChanged) {
+        return;
+      }
+
+      onNodesChanged(
+        nodes.map((node) => {
+          const next = update(node);
+          if (!next.position && next.width === undefined) {
+            return node;
+          }
+
+          return {
+            ...node,
+            visualData: {
+              ...node.visualData,
+              ...(next.position ? { x: next.position.x, y: next.position.y } : {}),
+              ...(next.width !== undefined ? { width: next.width } : {}),
+            },
+          };
+        }),
+      );
+    },
+  );
 
   const applyAction = useStableCallback((action: MultiNodeAlignmentAction) => {
     const bounds = measureNodeBounds(selectedNodes, canvasRootRef.current);
@@ -261,6 +302,12 @@ export const MultiNodeAlignmentToolbar: FC<MultiNodeAlignmentToolbarProps> = ({ 
     });
 
     if (moves.length === 0) {
+      return;
+    }
+
+    if (controlledCanvas) {
+      const movesByNodeId = new Map(moves.map((move) => [move.nodeId, move.position]));
+      applyLocalNodeUpdates((node) => ({ position: movesByNodeId.get(node.id) }));
       return;
     }
 
@@ -279,13 +326,19 @@ export const MultiNodeAlignmentToolbar: FC<MultiNodeAlignmentToolbarProps> = ({ 
       return;
     }
 
+    if (controlledCanvas) {
+      const widthsByNodeId = new Map(widths.map((widthChange) => [widthChange.nodeId, widthChange.width]));
+      applyLocalNodeUpdates((node) => ({ width: widthsByNodeId.get(node.id) }));
+      return;
+    }
+
     setNodeWidths({ widths });
   });
 
   if (
     !shouldShowMultiNodeAlignmentToolbar({
       selectedNodeCount: selectedNodes.length,
-      isReadOnlyGraph,
+      isReadOnlyGraph: controlledCanvas ? false : isReadOnlyGraph,
     })
   ) {
     return null;

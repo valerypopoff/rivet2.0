@@ -11,6 +11,7 @@ import {
 import { nodesState, connectionsState } from '../state/graph';
 import { produce } from 'immer';
 import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry';
+import { useStableCallback } from '../hooks/useStableCallback';
 import {
   getRecoverableNodeConnectionsForNode,
   recoverableNodeConnectionsStatePerGraph,
@@ -26,6 +27,7 @@ import {
   rewriteSubGraphCallerGraphForGraphOutputRename,
 } from '../domain/graphEditing/graphOutputRenamePropagation';
 import { projectState } from '../state/savedGraphs';
+import { createContext, useContext } from 'react';
 
 const MERGE_WINDOW_MS = 5000;
 
@@ -43,6 +45,10 @@ type EditNodeParams = {
   previousNodeOverride?: Partial<ChartNode>;
   mergeWithPrevious?: boolean;
 };
+
+export type EditNodeCommand = (params: EditNodeParams) => unknown;
+
+export const EditNodeCommandOverrideContext = createContext<EditNodeCommand | null>(null);
 
 type EditNodeAppliedData = {
   previousNode: Partial<ChartNode>;
@@ -433,7 +439,7 @@ export function buildEditNodeAppliedData({
   };
 }
 
-export function useEditNodeCommand() {
+function useDefaultEditNodeCommand() {
   const setNodes = useSetAtom(nodesState);
   const setConnections = useSetAtom(connectionsState);
   const setProject = useSetAtom(projectState);
@@ -571,5 +577,18 @@ export function useEditNodeCommand() {
         ),
       );
     },
+  });
+}
+
+export function useEditNodeCommand() {
+  const override = useContext(EditNodeCommandOverrideContext);
+  const defaultEditNode = useDefaultEditNodeCommand();
+
+  return useStableCallback((params: EditNodeParams) => {
+    if (override) {
+      return override(params);
+    }
+
+    return defaultEditNode(params);
   });
 }

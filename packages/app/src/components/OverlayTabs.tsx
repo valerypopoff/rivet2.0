@@ -20,7 +20,7 @@ const styles = css`
   flex: 0 1 auto;
   min-width: 0;
   max-width: min(760px, 65vw);
-  border-left: 1px solid var(--project-selector-divider-color, var(--grey-darkest));
+  border-left: 1px solid var(--project-selector-divider-color, var(--app-strip-divider-color));
 
   .left-menu {
     display: flex;
@@ -45,7 +45,7 @@ const styles = css`
     transition:
       background-color 0.2s ease-out,
       color 0.2s ease-out;
-    border-right: 1px solid var(--project-selector-divider-color, var(--grey-darkest));
+    border-right: 1px solid var(--project-selector-divider-color, var(--app-strip-divider-color));
 
     margin: 0;
     display: flex;
@@ -53,7 +53,7 @@ const styles = css`
     min-width: 0;
     height: 100%;
 
-    background: var(--project-selector-strip-bg, var(--grey-dark-colorish));
+    background: var(--project-selector-strip-bg, var(--app-strip-bg));
   }
 
   .menu-item > button {

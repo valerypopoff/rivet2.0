@@ -4,8 +4,17 @@ import { type FC, type MouseEvent, type KeyboardEvent, memo, useMemo, useRef, us
 import { useAtomValue, useSetAtom } from 'jotai';
 import Button from '@atlaskit/button';
 import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
-import { type GraphId, type NodeGraph, type ProjectComparisonChangeKind } from '@valerypopoff/rivet2-core';
+import {
+  createDefaultUiGraph,
+  newId,
+  type GraphId,
+  type NodeGraph,
+  type UiComponentId,
+  type UiGraph,
+  type UiGraphId,
+} from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
+import { produce } from 'immer';
 import { runningGraphsState } from '../state/dataFlow.js';
 import { graphState } from '../state/graph.js';
 import { openOrFocusGraphSearchState, searchingGraphState } from '../state/graphBuilder.js';
@@ -33,6 +42,7 @@ import InfoIcon from 'majesticons/line/info-circle-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import FolderIcon from 'majesticons/line/folder-line.svg?react';
+import SearchIcon from 'majesticons/line/search-line.svg?react';
 import { MainGraphIcon } from './graphList/MainGraphIcon';
 import { GraphInfoModal } from './GraphInfoModal';
 import { ProjectInfoModal } from './ProjectInfoModal';
@@ -40,20 +50,26 @@ import {
   buildFolderContextMenuItems,
   buildGraphItemContextMenuItems,
   buildGraphListContextMenuItems,
-  getGraphListContextMenuTarget,
+  buildUiGraphItemContextMenuItems,
   type GraphListContextMenuIcons,
   type GraphListContextMenuItem,
 } from './graphList/graphListContextMenu.js';
 import { useGraphListPresentation } from './graphList/useGraphListPresentation.js';
-import {
-  addComparisonRemovedGraphsToFolderTree,
-  getFolderNames,
-  setAllGraphFolderExpansionStates,
-} from './graphList/graphFolders.js';
+import { setAllGraphFolderExpansionStates } from './graphList/graphFolders.js';
 import { GRAPH_FILTER_INPUT_MARKER } from './graphList/graphFilterFocus.js';
 import { PopupMenuItem, popupMenuListStyles } from './PopupMenu.js';
 import { Tooltip } from './Tooltip.js';
 import { activeProjectComparisonState } from '../state/projectComparison.js';
+import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
+import { SubgraphLinkIcon } from './visualNode/SubgraphLinkIcon.js';
+import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
+import { selectedUiGraphIdState } from '../state/uiGraphs.js';
+import { useOpenUiGraph } from '../hooks/useOpenUiGraph.js';
+
+const NO_SELECTED_GRAPH: NodeGraph = {
+  nodes: [],
+  connections: [],
+};
 
 const styles = css`
   --collapsed-open-graph-folder-color: color-mix(in srgb, var(--primary) 28%, transparent);
@@ -249,6 +265,73 @@ const styles = css`
     font-weight: 400;
     letter-spacing: 0;
     line-height: calc(16px * var(--ui-font-scale));
+  }
+
+  .node-library-entry,
+  .ui-graph-entry,
+  .ui-graph-create {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: calc(34px * var(--ui-font-scale));
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 10px;
+    corner-shape: squircle;
+    background: transparent;
+    color: var(--foreground);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+
+    @supports not (corner-shape: squircle) {
+      border-radius: 2px;
+    }
+  }
+
+  .node-library-entry:hover,
+  .ui-graph-entry:hover,
+  .ui-graph-create:hover {
+    background: var(--grey-darkish);
+  }
+
+  .node-library-entry.selected,
+  .ui-graph-entry.selected {
+    background: var(--primary);
+    color: var(--foreground-on-primary);
+
+    &:hover {
+      background: var(--primary-dark);
+    }
+  }
+
+  .node-library-entry .project-tree-panel-icon {
+    flex: 0 0 auto;
+  }
+
+  .project-tree-panel-icon-web-app {
+    --project-tree-panel-icon-y: -0.08em;
+  }
+
+  .ui-graph-list {
+    display: grid;
+    gap: 4px;
+    margin: 0 0 12px;
+  }
+
+  .ui-graph-entry,
+  .ui-graph-create {
+    min-height: calc(30px * var(--ui-font-scale));
+    margin: 0;
+  }
+
+  .ui-graph-entry-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .graph-list,
@@ -472,20 +555,11 @@ const styles = css`
     &:hover {
       background: var(--grey-lightish);
     }
-
   }
 
   .graph-list-notice {
-    margin: 8px 12px 0;
-    padding: 6px 8px;
-    border: 1px solid var(--warning);
-    border-radius: 12px;
-    corner-shape: squircle;
-    @supports not (corner-shape: squircle) {
-      border-radius: 6px;
-    }
-    background: var(--warning-lighter);
-    color: var(--warning-dark);
+    margin: -2px 10px 10px;
+    color: color-mix(in srgb, var(--grey-light) 82%, transparent);
     font-size: var(--ui-font-size-xs);
     line-height: 1.4;
   }
@@ -612,10 +686,16 @@ export const GraphList: FC = memo(() => {
     renameFolderItem,
   } = useGraphOperations();
   const setGraph = useSetAtom(graphState);
+  const setProject = useSetAtom(projectState);
   const setSavedGraphs = useSetAtom(savedGraphsState);
   const setGraphSearch = useSetAtom(searchingGraphState);
   const setOpenOverlay = useSetAtom(overlayOpenState);
   const setExpandedFolders = useSetAtom(expandedFoldersState);
+  const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
+  const selectedUiGraphId = useAtomValue(selectedUiGraphIdState);
+  const setSelectedUiGraphId = useSetAtom(selectedUiGraphIdState);
+  const openNodeLibrary = useOpenNodeLibrary();
+  const openUiGraph = useOpenUiGraph();
   const graphListContainerRef = useRef<HTMLDivElement>(null);
 
   const { draggingItemFolder, dragOverFolderName, handleDragStart, handleDragEnd, handleDragOver } =
@@ -633,29 +713,12 @@ export const GraphList: FC = memo(() => {
   const plugins = useAtomValue(pluginsState);
   const projectNodeRegistry = useProjectNodeRegistry();
   const [graphPendingDelete, setGraphPendingDelete] = useState<NodeGraph | null>(null);
+  const [uiGraphPendingDelete, setUiGraphPendingDelete] = useState<UiGraph | null>(null);
   const [graphPendingInfo, setGraphPendingInfo] = useState<NodeGraph | null>(null);
   const [isProjectInfoOpen, setIsProjectInfoOpen] = useState(false);
   const showUnreachableGraphTags = useAtomValue(showUnreachableGraphTagsState);
   const showGraphReferenceIndicators = useAtomValue(showGraphReferenceIndicatorsState);
   const activeComparison = useAtomValue(activeProjectComparisonState);
-  const removedComparisonGraphs = useMemo(
-    () =>
-      activeComparison
-        ? Object.values(activeComparison.comparison.graphs)
-            .filter((comparison) => comparison.kind === 'removed' && comparison.before)
-            .map((comparison) => comparison.before!)
-            .filter((removedGraph) => graphMatchesFilter(removedGraph, searchText))
-        : [],
-    [activeComparison, searchText],
-  );
-  const visibleFolderedGraphs = useMemo(
-    () => addComparisonRemovedGraphsToFolderTree(folderedGraphs, removedComparisonGraphs),
-    [folderedGraphs, removedComparisonGraphs],
-  );
-  const visibleFolderPaths = useMemo(
-    () => [...new Set([...allFolderPaths, ...getFolderNames(visibleFolderedGraphs)])],
-    [allFolderPaths, visibleFolderedGraphs],
-  );
 
   const { setShowContextMenu, showContextMenu, contextMenuData, handleContextMenu, floatingStyles, setFloatingMenu } =
     useContextMenu();
@@ -665,26 +728,29 @@ export const GraphList: FC = memo(() => {
     handleContextMenu(e);
   });
 
-  const hasFolders = visibleFolderPaths.length > 0;
-  const folderPathsForContextMenu = useMemo(() => new Set(visibleFolderPaths), [visibleFolderPaths]);
-  const contextMenuTarget = useMemo(
-    () =>
-      getGraphListContextMenuTarget({
-        contextMenuData,
-        folderPaths: folderPathsForContextMenu,
-        mainGraphId: project.metadata.mainGraphId,
-        savedGraphs,
-      }),
-    [contextMenuData, folderPathsForContextMenu, project.metadata.mainGraphId, savedGraphs],
-  );
-  const selectedGraphForContextMenu = contextMenuTarget?.type === 'graph-item' ? contextMenuTarget.graph : undefined;
-  const selectedFolderNameForContextMenu =
-    contextMenuTarget?.type === 'graph-item' || contextMenuTarget?.type === 'graph-folder'
-      ? contextMenuTarget.folderPath
-      : undefined;
-  const showGraphItemContextMenu = showContextMenu && contextMenuTarget?.type === 'graph-item';
-  const showFolderContextMenu = showContextMenu && contextMenuTarget?.type === 'graph-folder';
-  const showGraphListContextMenu = showContextMenu && contextMenuTarget?.type === 'graph-list';
+  const {
+    contextMenu: graphListContextMenu,
+    graphCompareKindByGraphId,
+    reachability: graphListReachability,
+    referencingSelectedGraphIds,
+    visible: graphListVisible,
+  } = useGraphListPresentation({
+    activeComparison,
+    allFolderPaths,
+    contextMenuData,
+    currentGraph: nodeLibraryOpen || selectedUiGraphId ? undefined : graph,
+    currentGraphId: nodeLibraryOpen || selectedUiGraphId ? undefined : graph.metadata?.id,
+    folderedGraphs,
+    plugins,
+    project,
+    projectNodeRegistry,
+    savedGraphs,
+    searchText,
+    showContextMenu,
+    showGraphReferenceIndicators,
+    showUnreachableGraphTags,
+    uiGraphs: project.uiGraphs,
+  });
 
   const handleSearchKeyDown = useStableCallback((e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
@@ -698,11 +764,35 @@ export const GraphList: FC = memo(() => {
     setGraphSearch(openOrFocusGraphSearchState);
   });
 
+  const handleOpenNodeLibrary = useStableCallback(() => {
+    openNodeLibrary();
+  });
+
+  const handleCreateUiGraph = useStableCallback(() => {
+    const uiGraph = createDefaultUiGraph({ graphId: project.metadata.mainGraphId });
+
+    setProject((currentProject) =>
+      produce(currentProject, (draft) => {
+        draft.uiGraphs ??= {};
+        draft.uiGraphs[uiGraph.id] = uiGraph;
+      }),
+    );
+    openUiGraph(uiGraph.id);
+  });
+
+  const handleOpenUiGraph = useStableCallback((uiGraphId: UiGraphId) => {
+    openUiGraph(uiGraphId);
+  });
+
+  const selectGraph = useStableCallback((graph: NodeGraph) => {
+    loadGraph(graph);
+  });
+
   const setAllFoldersExpanded = useStableCallback((isExpanded: boolean) => {
     setExpandedFolders((prev) =>
       setAllGraphFolderExpansionStates({
         expandedFolders: prev,
-        folderPaths: visibleFolderPaths,
+        folderPaths: graphListVisible.folderPaths,
         isExpanded,
         projectId: project.metadata.id,
       }),
@@ -766,27 +856,6 @@ export const GraphList: FC = memo(() => {
     startRename(currentGraphListName);
   });
 
-  const { reachability: graphListReachability, referencingSelectedGraphIds } = useGraphListPresentation({
-    currentGraph: graph,
-    currentGraphId: graph.metadata?.id,
-    plugins,
-    project,
-    projectNodeRegistry,
-    showGraphReferenceIndicators,
-    showUnreachableGraphTags,
-  });
-  const graphCompareKindByGraphId = useMemo(
-    () =>
-      activeComparison
-        ? (Object.fromEntries(
-            Object.entries(activeComparison.comparison.graphs)
-              .filter(([, comparison]) => comparison.kind !== 'unchanged')
-              .map(([graphId, comparison]) => [graphId, comparison.kind]),
-          ) as Record<GraphId, ProjectComparisonChangeKind | undefined>)
-        : {},
-    [activeComparison],
-  );
-
   const confirmDeleteGraph = useStableCallback(() => {
     if (!graphPendingDelete) {
       return;
@@ -794,6 +863,47 @@ export const GraphList: FC = memo(() => {
 
     handleDelete(graphPendingDelete);
     setGraphPendingDelete(null);
+  });
+
+  const duplicateUiGraph = useStableCallback((uiGraph: UiGraph) => {
+    const duplicate = cloneUiGraph(uiGraph);
+
+    setProject((currentProject) =>
+      produce(currentProject, (draft) => {
+        draft.uiGraphs ??= {};
+        draft.uiGraphs[duplicate.id] = duplicate;
+      }),
+    );
+    openUiGraph(duplicate.id);
+  });
+
+  const confirmDeleteUiGraph = useStableCallback(() => {
+    if (!uiGraphPendingDelete) {
+      return;
+    }
+
+    const deletedUiGraphId = uiGraphPendingDelete.id;
+    const fallbackGraph =
+      savedGraphs.find((savedGraph) => savedGraph.metadata?.id === project.metadata.mainGraphId) ?? savedGraphs[0];
+
+    setProject((currentProject) =>
+      produce(currentProject, (draft) => {
+        delete draft.uiGraphs?.[deletedUiGraphId];
+
+        if (draft.uiGraphs && Object.keys(draft.uiGraphs).length === 0) {
+          delete draft.uiGraphs;
+        }
+      }),
+    );
+    setUiGraphPendingDelete(null);
+
+    if (selectedUiGraphId === deletedUiGraphId) {
+      if (fallbackGraph) {
+        loadGraph(fallbackGraph);
+      } else {
+        setSelectedUiGraphId(undefined);
+      }
+    }
   });
 
   const updateGraphInfo = useStableCallback((updatedGraph: NodeGraph) => {
@@ -814,55 +924,40 @@ export const GraphList: FC = memo(() => {
     }
   });
 
-  const graphItemMenuItems = useMemo(
-    (): GraphListContextMenuItem[] =>
-      buildGraphItemContextMenuItems({
-        icons: graphListContextMenuIcons,
-        isMainGraph: contextMenuTarget?.type === 'graph-item' ? contextMenuTarget.isMainGraph : false,
-      }),
-    [contextMenuTarget],
-  );
-
-  const folderMenuItems = useMemo(
-    (): GraphListContextMenuItem[] => buildFolderContextMenuItems(graphListContextMenuIcons),
-    [],
-  );
-
-  const graphListMenuItems = useMemo(
-    (): GraphListContextMenuItem[] =>
-      buildGraphListContextMenuItems({
-        hasFolders,
-        icons: graphListContextMenuIcons,
-      }),
-    [hasFolders],
-  );
+  const graphItemMenuItems = buildGraphItemContextMenuItems({
+    icons: graphListContextMenuIcons,
+    isMainGraph: graphListContextMenu.target?.type === 'graph-item' ? graphListContextMenu.target.isMainGraph : false,
+  });
+  const folderMenuItems = buildFolderContextMenuItems(graphListContextMenuIcons);
+  const graphListMenuItems = buildGraphListContextMenuItems({
+    hasFolders: graphListVisible.hasFolders,
+    icons: graphListContextMenuIcons,
+  });
+  const uiGraphItemMenuItems = buildUiGraphItemContextMenuItems(graphListContextMenuIcons);
 
   const handleGraphItemMenuSelected = useStableCallback((id: string) => {
+    const target = graphListContextMenu.target;
+
+    if (target?.type !== 'graph-item') {
+      setShowContextMenu(false);
+      return;
+    }
+
     switch (id) {
       case 'rename-graph':
-        if (selectedFolderNameForContextMenu) {
-          startRename(selectedFolderNameForContextMenu);
-        }
+        startRename(target.folderPath);
         break;
       case 'duplicate-graph':
-        if (selectedGraphForContextMenu) {
-          duplicateGraph(selectedGraphForContextMenu);
-        }
+        duplicateGraph(target.graph);
         break;
       case 'graph-info':
-        if (selectedGraphForContextMenu) {
-          setGraphPendingInfo(selectedGraphForContextMenu);
-        }
+        setGraphPendingInfo(target.graph);
         break;
       case 'make-main-graph':
-        if (selectedGraphForContextMenu) {
-          makeMainGraph(selectedGraphForContextMenu);
-        }
+        makeMainGraph(target.graph);
         break;
       case 'delete-graph':
-        if (selectedGraphForContextMenu) {
-          setGraphPendingDelete(selectedGraphForContextMenu);
-        }
+        setGraphPendingDelete(target.graph);
         break;
       default:
         break;
@@ -877,23 +972,25 @@ export const GraphList: FC = memo(() => {
       return;
     }
 
-    if (!selectedFolderNameForContextMenu) {
+    const target = graphListContextMenu.target;
+
+    if (target?.type !== 'graph-folder') {
       setShowContextMenu(false);
       return;
     }
 
     switch (id) {
       case 'rename-folder':
-        startRename(selectedFolderNameForContextMenu);
+        startRename(target.folderPath);
         break;
       case 'new-graph-in-folder':
-        handleNew(selectedFolderNameForContextMenu);
+        handleNew(target.folderPath);
         break;
       case 'new-folder-in-folder':
-        handleNewFolder(selectedFolderNameForContextMenu);
+        handleNewFolder(target.folderPath);
         break;
       case 'delete-folder':
-        handleDeleteFolder(selectedFolderNameForContextMenu);
+        handleDeleteFolder(target.folderPath);
         break;
       default:
         break;
@@ -917,6 +1014,28 @@ export const GraphList: FC = memo(() => {
         break;
       case 'import-graph':
         importGraph();
+        break;
+      default:
+        break;
+    }
+
+    setShowContextMenu(false);
+  });
+
+  const handleUiGraphItemMenuSelected = useStableCallback((id: string) => {
+    const target = graphListContextMenu.target;
+
+    if (target?.type !== 'ui-graph-item') {
+      setShowContextMenu(false);
+      return;
+    }
+
+    switch (id) {
+      case 'duplicate-ui-graph':
+        duplicateUiGraph(target.uiGraph);
+        break;
+      case 'delete-ui-graph':
+        setUiGraphPendingDelete(target.uiGraph);
         break;
       default:
         break;
@@ -963,13 +1082,15 @@ export const GraphList: FC = memo(() => {
             </label>
             {searchText.length > 0 && (
               <button type="button" className="clear" onClick={() => setSearchText('')} aria-label="Clear graph filter">
-                <CrossIcon aria-hidden="true" className="project-tree-panel-icon project-tree-panel-icon-filter-clear" />
+                <CrossIcon
+                  aria-hidden="true"
+                  className="project-tree-panel-icon project-tree-panel-icon-filter-clear"
+                />
               </button>
             )}
           </div>
         </div>
       </div>
-      {graphListReachability.notice && <div className="graph-list-notice">{graphListReachability.notice}</div>}
       <div
         className="graph-list-container"
         onContextMenu={handleSidebarContextMenu}
@@ -979,7 +1100,40 @@ export const GraphList: FC = memo(() => {
         ref={graphListContainerRef}
         tabIndex={-1}
       >
+        <button
+          type="button"
+          className={clsx('node-library-entry', { selected: nodeLibraryOpen })}
+          onClick={handleOpenNodeLibrary}
+        >
+          <span className="project-tree-panel-icon">
+            <SubgraphLinkIcon />
+          </span>
+          <span>Node Library</span>
+        </button>
+        <div className="graph-list-heading">Web Apps</div>
+        <div className="ui-graph-list">
+          {Object.values(project.uiGraphs ?? {}).map((uiGraph) => (
+            <button
+              key={uiGraph.id}
+              type="button"
+              className={clsx('ui-graph-entry', { selected: selectedUiGraphId === uiGraph.id })}
+              data-contextmenutype="ui-graph-item"
+              data-uigraphid={uiGraph.id}
+              onClick={() => handleOpenUiGraph(uiGraph.id)}
+            >
+              <span className="project-tree-panel-icon project-tree-panel-icon-web-app">
+                <WebAppIcon />
+              </span>
+              <span className="ui-graph-entry-name">{uiGraph.name}</span>
+            </button>
+          ))}
+          <button type="button" className="ui-graph-create" onClick={handleCreateUiGraph}>
+            <PlusIcon aria-hidden="true" className="project-tree-panel-icon" />
+            <span>New web app</span>
+          </button>
+        </div>
         <div className="graph-list-heading">Graphs</div>
+        {graphListReachability.notice && <div className="graph-list-notice">{graphListReachability.notice}</div>}
         <div
           className={clsx('graph-list', { 'dragging-over': dragOverFolderName === '' && draggingItemFolder !== '' })}
           data-contextmenutype="graph-list"
@@ -990,20 +1144,20 @@ export const GraphList: FC = memo(() => {
             onDragOver={handleDragOver}
             onDragStart={handleDragStart}
           >
-            {visibleFolderedGraphs.map((item) => (
+            {graphListVisible.folderedGraphs.map((item) => (
               <FolderItem
                 key={item.type === 'graph' ? item.graph.metadata?.id : item.fullPath}
                 item={item}
                 runningGraphs={runningGraphs}
                 renamingItemFullPath={renamingItemFullPath}
-                graph={graph}
+                graph={nodeLibraryOpen || selectedUiGraphId ? NO_SELECTED_GRAPH : graph}
                 dragOverFolderName={dragOverFolderName}
                 draggingItemFolder={draggingItemFolder}
                 graphReachabilityByGraphId={graphListReachability.bucketByGraphId}
                 graphCompareKindByGraphId={graphCompareKindByGraphId}
                 referencingSelectedGraphIds={referencingSelectedGraphIds}
                 depth={0}
-                onGraphSelected={loadGraph}
+                onGraphSelected={selectGraph}
                 onRenameItem={renameFolderItem}
                 onCancelRename={cancelRename}
                 showUnreachableBadges={graphListReachability.showUnreachableBadges}
@@ -1012,7 +1166,7 @@ export const GraphList: FC = memo(() => {
             <GraphListSpacer />
           </DndContext>
           <Portal>
-            {showGraphItemContextMenu && (
+            {graphListContextMenu.showGraphItemContextMenu && (
               <div
                 className="graph-item-context-menu"
                 css={contextMenuStyles}
@@ -1022,7 +1176,7 @@ export const GraphList: FC = memo(() => {
                 <GraphListContextMenuItems items={graphItemMenuItems} onSelected={handleGraphItemMenuSelected} />
               </div>
             )}
-            {showFolderContextMenu && (
+            {graphListContextMenu.showFolderContextMenu && (
               <div
                 className="graph-item-context-menu"
                 css={contextMenuStyles}
@@ -1032,10 +1186,20 @@ export const GraphList: FC = memo(() => {
                 <GraphListContextMenuItems items={folderMenuItems} onSelected={handleFolderMenuSelected} />
               </div>
             )}
+            {graphListContextMenu.showUiGraphItemContextMenu && (
+              <div
+                className="ui-graph-context-menu"
+                css={contextMenuStyles}
+                style={{ ...floatingStyles, zIndex: 500 }}
+                ref={setFloatingMenu}
+              >
+                <GraphListContextMenuItems items={uiGraphItemMenuItems} onSelected={handleUiGraphItemMenuSelected} />
+              </div>
+            )}
           </Portal>
         </div>
         <Portal>
-          {showGraphListContextMenu && (
+          {graphListContextMenu.showGraphListContextMenu && (
             <div
               className="graph-list-context-menu"
               css={contextMenuStyles}
@@ -1050,6 +1214,11 @@ export const GraphList: FC = memo(() => {
           graph={graphPendingDelete}
           onClose={() => setGraphPendingDelete(null)}
           onConfirm={confirmDeleteGraph}
+        />
+        <DeleteUiGraphConfirmModal
+          uiGraph={uiGraphPendingDelete}
+          onClose={() => setUiGraphPendingDelete(null)}
+          onConfirm={confirmDeleteUiGraph}
         />
         <GraphInfoModal graph={graphPendingInfo} onChange={updateGraphInfo} onClose={() => setGraphPendingInfo(null)} />
         <ProjectInfoModal isOpen={isProjectInfoOpen} onClose={() => setIsProjectInfoOpen(false)} />
@@ -1079,9 +1248,29 @@ const GraphListContextMenuItems: FC<{
   </div>
 );
 
+function cloneUiGraph(uiGraph: UiGraph): UiGraph {
+  const duplicate = structuredClone(uiGraph) as UiGraph;
+
+  duplicate.id = newId<UiGraphId>();
+  duplicate.name = `${uiGraph.name} (Copy)`;
+  duplicate.components = duplicate.components.map((component) => ({
+    ...component,
+    id: newId<UiComponentId>(),
+  })) as UiGraph['components'];
+
+  return duplicate;
+}
+
 const FilterIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
   <svg viewBox="0 0 16 16" fill="none" {...props}>
     <path d="M2.5 3.5h11L9.25 8.35v3.4l-2.5.9v-4.3L2.5 3.5Z" fill="currentColor" />
+  </svg>
+);
+
+const WebAppIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
+  <svg viewBox="0 0 16 16" fill="none" {...props}>
+    <rect x="2.5" y="3" width="11" height="10" rx="1.6" stroke="currentColor" strokeWidth="1.45" />
+    <path d="M2.9 6h10.2" stroke="currentColor" strokeLinecap="round" strokeWidth="1.45" />
   </svg>
 );
 
@@ -1115,29 +1304,6 @@ function ExpandAllFoldersIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-const SearchIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" {...props}>
-    <path
-      d="M7.25 11.25a4 4 0 1 1 0-8 4 4 0 0 1 0 8ZM10.25 10.25l3 3"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-    />
-  </svg>
-);
-
-function graphMatchesFilter(graph: NodeGraph, searchText: string): boolean {
-  const normalizedSearchText = searchText.trim().toLocaleLowerCase();
-  if (normalizedSearchText.length === 0) {
-    return true;
-  }
-
-  const name = graph.metadata?.name?.toLocaleLowerCase() ?? '';
-  const description = graph.metadata?.description?.toLocaleLowerCase() ?? '';
-  return name.includes(normalizedSearchText) || description.includes(normalizedSearchText);
-}
-
 // Allows the bottom of the list to be a drop target
 export const GraphListSpacer: FC = memo(() => {
   const { setNodeRef: setDroppableNodeRef } = useDroppable({ id: '/' });
@@ -1151,7 +1317,7 @@ const DeleteGraphConfirmModal: FC<{
   onClose: () => void;
   onConfirm: () => void;
 }> = ({ graph, onClose, onConfirm }) => {
-  const graphName = graph?.metadata?.name ?? 'Untitled Graph';
+  const graphName = graph?.metadata?.name ?? 'Untitled graph';
 
   return (
     <ModalTransition>
@@ -1162,6 +1328,36 @@ const DeleteGraphConfirmModal: FC<{
             <div css={deleteGraphConfirmBody}>
               <p>
                 Delete <strong>{graphName}</strong>?
+              </p>
+              <p>This cannot be undone.</p>
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button onClick={onClose}>Cancel</Button>
+            <Button appearance="danger" onClick={onConfirm}>
+              Delete
+            </Button>
+          </ModalFooter>
+        </Modal>
+      )}
+    </ModalTransition>
+  );
+};
+
+const DeleteUiGraphConfirmModal: FC<{
+  uiGraph: UiGraph | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}> = ({ uiGraph, onClose, onConfirm }) => {
+  return (
+    <ModalTransition>
+      {uiGraph && (
+        <Modal autoFocus={false} onClose={onClose} width="small">
+          <AppModalHeader title="Delete Web App?" onClose={onClose} />
+          <ModalBody>
+            <div css={deleteGraphConfirmBody}>
+              <p>
+                Delete <strong>{uiGraph.name}</strong>?
               </p>
               <p>This cannot be undone.</p>
             </div>

@@ -32,6 +32,9 @@ const options: esbuild.BuildOptions = {
   format: 'cjs',
   target: 'node16',
   packages: 'external',
+  define: {
+    'import.meta.url': '__filename',
+  },
   sourcemap: true,
   plugins: [
     aliasModule('lodash-es', 'lodash'), // lodash-es is ESM-only; lodash is CJS

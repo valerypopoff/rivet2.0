@@ -1,5 +1,14 @@
 import { useMemo } from 'react';
-import type { GraphId, NodeGraph, Project } from '@valerypopoff/rivet2-core';
+import type {
+  GraphId,
+  NodeGraph,
+  Project,
+  ProjectComparisonChangeKind,
+  UiGraph,
+  UiGraphId,
+} from '@valerypopoff/rivet2-core';
+import type { ContextMenuData } from '../../hooks/useContextMenu.js';
+import type { ActiveProjectComparison } from '../../state/projectComparison.js';
 import type { PluginState } from '../../state/plugins.js';
 import {
   buildGraphListReachabilityPresentation,
@@ -13,40 +22,69 @@ import {
   resolveSupportedBuiltInPluginIds,
 } from '../../utils/graphReachability.js';
 import { mergeCurrentGraphIntoProject } from '../../utils/workspaceTransitions.js';
-import { countGraphsInFolder, isInFolder, type NodeGraphFolderItem } from './graphFolders.js';
+import {
+  addComparisonRemovedGraphsToFolderTree,
+  countGraphsInFolder,
+  getFolderNames,
+  isInFolder,
+  type NodeGraphFolderItem,
+} from './graphFolders.js';
+import { getGraphListContextMenuTarget, type GraphListContextMenuTarget } from './graphListContextMenu.js';
 
 type GraphListProject = Omit<Project, 'data'>;
 
 export type GraphListPresentation = {
+  contextMenu: {
+    showFolderContextMenu: boolean;
+    showGraphItemContextMenu: boolean;
+    showGraphListContextMenu: boolean;
+    showUiGraphItemContextMenu: boolean;
+    target: GraphListContextMenuTarget | null;
+  };
+  graphCompareKindByGraphId: Record<GraphId, ProjectComparisonChangeKind | undefined>;
   reachability: GraphListReachabilityPresentation;
   referencingSelectedGraphIds: ReadonlySet<GraphId>;
+  visible: {
+    folderedGraphs: NodeGraphFolderItem[];
+    folderPaths: string[];
+    hasFolders: boolean;
+  };
 };
 
 export function useGraphListPresentation(options: {
+  activeComparison: ActiveProjectComparison | undefined;
+  allFolderPaths: readonly string[];
+  contextMenuData: ContextMenuData;
   currentGraph: NodeGraph | undefined;
   currentGraphId: GraphId | undefined;
+  folderedGraphs: NodeGraphFolderItem[];
   plugins: PluginState[];
   project: GraphListProject;
   projectNodeRegistry: GraphReachabilityRegistry;
+  savedGraphs: NodeGraph[];
+  searchText: string;
+  showContextMenu: boolean;
   showGraphReferenceIndicators: boolean;
   showUnreachableGraphTags: boolean;
+  uiGraphs?: Record<UiGraphId, UiGraph>;
 }): GraphListPresentation {
-  const {
-    currentGraph,
-    currentGraphId,
-    plugins,
-    project,
-    projectNodeRegistry,
-    showGraphReferenceIndicators,
-    showUnreachableGraphTags,
-  } = options;
   const liveProject = useMemo(
-    () => mergeGraphListCurrentGraphIntoProject(project, currentGraph),
-    [currentGraph, project],
+    () => mergeGraphListCurrentGraphIntoProject(options.project, options.currentGraph),
+    [options.currentGraph, options.project],
+  );
+  const visible = useMemo(
+    () =>
+      getGraphListVisiblePresentation({
+        activeComparison: options.activeComparison,
+        allFolderPaths: options.allFolderPaths,
+        folderedGraphs: options.folderedGraphs,
+        searchText: options.searchText,
+      }),
+    [options.activeComparison, options.allFolderPaths, options.folderedGraphs, options.searchText],
   );
 
   const reachability = useMemo<GraphListReachabilityPresentation>(() => {
-    if (!showUnreachableGraphTags) {
+    if (!options.showUnreachableGraphTags) {
       return {
         bucketByGraphId: {},
         showUnreachableBadges: false,
@@ -54,13 +92,13 @@ export function useGraphListPresentation(options: {
     }
 
     const builtInPluginIds = resolveSupportedBuiltInPluginIds(liveProject.plugins);
-    const pluginStatesById = new Map(plugins.map((plugin) => [plugin.id, plugin]));
+    const pluginStatesById = new Map(options.plugins.map((plugin) => [plugin.id, plugin]));
     const graphListPlugins = (liveProject.plugins ?? [])
       .map((spec) => pluginStatesById.get(spec.id))
       .filter((plugin) => plugin != null);
 
     const report = getGraphReachabilityReport(liveProject, {
-      registry: projectNodeRegistry,
+      registry: options.projectNodeRegistry,
       builtInPluginIds,
     });
 
@@ -69,20 +107,106 @@ export function useGraphListPresentation(options: {
       graphIds: Object.keys(liveProject.graphs) as GraphId[],
       plugins: graphListPlugins,
     });
-  }, [liveProject, plugins, projectNodeRegistry, showUnreachableGraphTags]);
+  }, [liveProject, options.plugins, options.projectNodeRegistry, options.showUnreachableGraphTags]);
 
   const referencingSelectedGraphIds = useMemo(() => {
-    if (!showGraphReferenceIndicators || !currentGraphId) {
+    if (!options.showGraphReferenceIndicators || !options.currentGraphId) {
       return new Set<GraphId>();
     }
 
-    return getGraphIdsReferencingGraph(liveProject, currentGraphId);
-  }, [currentGraphId, liveProject, showGraphReferenceIndicators]);
+    return getGraphIdsReferencingGraph(liveProject, options.currentGraphId);
+  }, [liveProject, options.currentGraphId, options.showGraphReferenceIndicators]);
+  const graphCompareKindByGraphId = getGraphCompareKindByGraphId(options.activeComparison);
+  const contextMenu = getGraphListContextMenuPresentation({
+    contextMenuData: options.contextMenuData,
+    folderPaths: visible.folderPaths,
+    mainGraphId: options.project.metadata.mainGraphId,
+    savedGraphs: options.savedGraphs,
+    showContextMenu: options.showContextMenu,
+    uiGraphs: options.uiGraphs,
+  });
 
   return {
+    contextMenu,
+    graphCompareKindByGraphId,
     reachability,
     referencingSelectedGraphIds,
+    visible,
   };
+}
+
+export function getGraphListVisiblePresentation(options: {
+  activeComparison: ActiveProjectComparison | undefined;
+  allFolderPaths: readonly string[];
+  folderedGraphs: NodeGraphFolderItem[];
+  searchText: string;
+}): GraphListPresentation['visible'] {
+  const { activeComparison, allFolderPaths, folderedGraphs, searchText } = options;
+  const removedGraphs = activeComparison
+    ? Object.values(activeComparison.comparison.graphs)
+        .filter((comparison) => comparison.kind === 'removed' && comparison.before)
+        .map((comparison) => comparison.before!)
+        .filter((removedGraph) => graphMatchesFilter(removedGraph, searchText))
+    : [];
+  const visibleFolderedGraphs = addComparisonRemovedGraphsToFolderTree(folderedGraphs, removedGraphs);
+  const visibleFolderPaths = [...new Set([...allFolderPaths, ...getFolderNames(visibleFolderedGraphs)])];
+
+  return {
+    folderedGraphs: visibleFolderedGraphs,
+    folderPaths: visibleFolderPaths,
+    hasFolders: visibleFolderPaths.length > 0,
+  };
+}
+
+export function getGraphCompareKindByGraphId(
+  activeComparison: ActiveProjectComparison | undefined,
+): Record<GraphId, ProjectComparisonChangeKind | undefined> {
+  if (!activeComparison) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(activeComparison.comparison.graphs)
+      .filter(([, comparison]) => comparison.kind !== 'unchanged')
+      .map(([graphId, comparison]) => [graphId, comparison.kind]),
+  ) as Record<GraphId, ProjectComparisonChangeKind | undefined>;
+}
+
+export function getGraphListContextMenuPresentation(options: {
+  contextMenuData: ContextMenuData;
+  folderPaths: readonly string[];
+  mainGraphId: GraphId | undefined;
+  savedGraphs: NodeGraph[];
+  showContextMenu: boolean;
+  uiGraphs?: Record<UiGraphId, UiGraph>;
+}): GraphListPresentation['contextMenu'] {
+  const { contextMenuData, folderPaths, mainGraphId, savedGraphs, showContextMenu, uiGraphs } = options;
+  const target = getGraphListContextMenuTarget({
+    contextMenuData,
+    folderPaths: new Set(folderPaths),
+    mainGraphId,
+    savedGraphs,
+    uiGraphs,
+  });
+
+  return {
+    showFolderContextMenu: showContextMenu && target?.type === 'graph-folder',
+    showGraphItemContextMenu: showContextMenu && target?.type === 'graph-item',
+    showGraphListContextMenu: showContextMenu && target?.type === 'graph-list',
+    showUiGraphItemContextMenu: showContextMenu && target?.type === 'ui-graph-item',
+    target,
+  };
+}
+
+export function graphMatchesFilter(graph: NodeGraph, searchText: string): boolean {
+  const normalizedSearchText = searchText.trim().toLocaleLowerCase();
+  const name = graph.metadata?.name?.toLocaleLowerCase() ?? '';
+  const description = graph.metadata?.description?.toLocaleLowerCase() ?? '';
+  return (
+    normalizedSearchText.length === 0 ||
+    name.includes(normalizedSearchText) ||
+    description.includes(normalizedSearchText)
+  );
 }
 
 export function mergeGraphListCurrentGraphIntoProject(
@@ -98,7 +222,7 @@ export function mergeGraphListCurrentGraphIntoProject(
 }
 
 export function getGraphListItemPath(item: NodeGraphFolderItem): string {
-  return item.type === 'folder' ? item.fullPath : item.graph.metadata?.name ?? 'Untitled Graph';
+  return item.type === 'folder' ? item.fullPath : item.graph.metadata?.name ?? 'Untitled graph';
 }
 
 export type FolderItemPresentation = {
@@ -149,7 +273,7 @@ export function getFolderItemPresentation(options: {
   const savedGraph = item.type === 'graph' ? item.graph : undefined;
   const graphId = savedGraph?.metadata?.id;
   const isRenaming = renamingItemFullPath === fullPath;
-  const isSelected = currentGraph.metadata?.id === graphId;
+  const isSelected = item.type === 'graph' && graphId != null && currentGraph.metadata?.id === graphId;
   const openGraphName = currentGraph.metadata?.name;
   const isCollapsedOpenGraphFolder =
     item.type === 'folder' && !isExpanded && openGraphName != null && isInFolder(fullPath, openGraphName);

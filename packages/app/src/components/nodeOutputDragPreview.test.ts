@@ -134,9 +134,16 @@ test('node output pagers clamp stale process page selections to the filtered pro
 test('inline node output actions reserve flow space without moving their hit targets', () => {
   const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
-  const renderDataValueSource = readFileSync(join(componentsDir, 'RenderDataValue.tsx'), 'utf8');
+  const renderDataOutputsSource = readFileSync(
+    join(componentsDir, 'nodeOutput', 'RenderDataOutputs.tsx'),
+    'utf8',
+  );
   const renderDataValueStylesSource = readFileSync(
     join(componentsDir, 'renderDataValue', 'renderDataValueStyles.ts'),
+    'utf8',
+  );
+  const outputSectionHeaderSource = readFileSync(
+    join(componentsDir, 'renderDataValue', 'OutputSectionHeader.tsx'),
     'utf8',
   );
   const structuredNodeOutputSource = readFileSync(join(componentsDir, 'nodes', 'StructuredNodeOutput.tsx'), 'utf8');
@@ -233,8 +240,18 @@ test('inline node output actions reserve flow space without moving their hit tar
     /export const outputSectionFullscreenLabelStyles = css`[\s\S]*?font-size: var\(--ui-font-size-lg\);/,
   );
   assert.match(renderDataValueStylesSource, /outputSectionHeaderMetaStyles/);
-  assert.match(renderDataValueSource, /<OutputSectionHeader[\s\S]*?isLarge=\{showSectionStats\}/);
-  assert.match(renderDataValueSource, /getOutputPortDisplayLabel\(definitions, portId, 'Output'\)/);
+  assert.match(
+    renderDataOutputsSource,
+    /createNodeOutputSectionsViewModel\(\{[\s\S]*?showLargeHeaders: showSectionStats,/,
+  );
+  assert.match(renderDataOutputsSource, /serializeDisplayedPortValue\(outputs, section\.portId, dataRefs\)/);
+  assert.match(
+    structuredNodeOutputSource,
+    /const getCopyValue =[\s\S]*?statsText \?\? serializeDisplayedDataValue\(statsValue, dataRefs\)/,
+  );
+  assert.match(outputSectionHeaderSource, /content="Copy value"/);
+  assert.match(outputSectionHeaderSource, /className="output-section-copy-button"/);
+  assert.match(renderDataOutputsSource, /<OutputSectionHeader[\s\S]*?isLarge=\{section\.headerMode === 'large'\}/);
   assert.match(renderedDataOutputsStylesBlock, /\.output-section-header \{[\s\S]*?align-items: baseline;/);
   assert.match(structuredNodeOutputStylesBlock.trimStart(), /^display: block;/);
   assert.match(

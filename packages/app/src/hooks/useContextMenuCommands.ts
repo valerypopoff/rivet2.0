@@ -11,7 +11,7 @@ export function useContextMenuCommands() {
     const goToGraphCommands = values(projectInfo.graphs).map(
       (graph): ContextMenuItem => ({
         id: `go-to-graph:${graph.id}`,
-        label: graph.name || 'Untitled Graph',
+        label: graph.name || 'Untitled graph',
         searchSection: 'graphs',
         data: graph.id,
       }),

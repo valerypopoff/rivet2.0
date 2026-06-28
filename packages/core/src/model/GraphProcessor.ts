@@ -284,6 +284,7 @@ export type GraphProcessorConcurrency = {
 };
 
 export type GraphProcessorRuntimeCache = {
+  executionPlanNodePrefabs?: WeakMap<NodeGraph, Project['nodePrefabs']>;
   executionPlans?: WeakMap<NodeGraph, GraphExecutionPlan>;
   graphBoundaries?: GraphBoundaryCache;
   loadedProjects?: Record<ProjectId, Project>;
@@ -627,7 +628,7 @@ export class GraphProcessor {
       const shouldUseRuntimeCache = runtimeCache != null;
       const cachedPlan = runtimeCache?.executionPlans?.get(this.#graph);
 
-      if (cachedPlan) {
+      if (cachedPlan && runtimeCache?.executionPlanNodePrefabs?.get(this.#graph) === this.#project.nodePrefabs) {
         this.#applyPreprocessedGraph(cachedPlan, { recreateNodeInstances: true });
         return;
       }
@@ -648,7 +649,9 @@ export class GraphProcessor {
 
       if (shouldUseRuntimeCache && isGraphExecutionPlan(preprocessedGraph)) {
         runtimeCache.executionPlans ??= new WeakMap();
+        runtimeCache.executionPlanNodePrefabs ??= new WeakMap();
         runtimeCache.executionPlans.set(this.#graph, toReusableGraphExecutionPlan(preprocessedGraph));
+        runtimeCache.executionPlanNodePrefabs.set(this.#graph, this.#project.nodePrefabs);
       }
 
       this.#applyPreprocessedGraph(preprocessedGraph);
@@ -692,7 +695,11 @@ export class GraphProcessor {
   ): void {
     const nodeInstances =
       options.recreateNodeInstances || !('nodeInstances' in preprocessedGraph)
-        ? this.#createNodeInstances(isGraphExecutionPlan(preprocessedGraph) ? preprocessedGraph.graphNodes : this.#graph.nodes)
+        ? this.#createNodeInstances(
+            isGraphExecutionPlan(preprocessedGraph)
+              ? preprocessedGraph.graphNodes
+              : Object.values(preprocessedGraph.nodesById),
+          )
         : preprocessedGraph.nodeInstances;
 
     replaceRecordContents(this.#nodeInstances, nodeInstances);

@@ -2,6 +2,7 @@ import {
   logRuntimeDebug,
   logRuntimeInfo,
   type CodeConsoleMessage,
+  type GraphOutputs,
   type NodeId,
   type Outputs,
   type RemoteRunRequestId,
@@ -22,9 +23,8 @@ import { runTrivet } from '@valerypopoff/trivet';
 import { produce } from 'immer';
 import { userInputModalQuestionsState } from '../state/userInput';
 import { frozenNodeOutputsState, lastRunDataByNodeState } from '../state/dataFlow';
-import { useAtomValue, useSetAtom, useAtom } from 'jotai';
-import { setUserInputSubmitHandler } from '../state/actions/userInputActions';
-import { useEffect, useRef } from 'react';
+import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai';
+import { type RefObject, useEffect, useRef } from 'react';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import {
   createProcessEventDispatcher,
@@ -64,10 +64,13 @@ import {
   summarizeRemoteDebuggerEvent,
   summarizeRemoteDebuggerRoutingState,
 } from './remoteDebuggerDiagnostics.js';
+import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
+import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
 
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
   const environmentProvider = useEnvironmentProvider();
+  const store = useStore();
   const activeGraphRequestIdRef = useRef<RemoteRunRequestId | null>(null);
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
@@ -102,6 +105,11 @@ export function useRemoteExecutor() {
   const remoteDebugger = useRemoteDebugger({
     onDisconnect: () => {
       clearActiveRemoteRunRequest(activeGraphRequestIdRef);
+      executorSession.setActiveGraphRunRequestId(null);
+      if (store.get(projectState).metadata.id !== project.metadata.id) {
+        return;
+      }
+
       currentExecution.onStop();
     },
   });
@@ -112,7 +120,8 @@ export function useRemoteExecutor() {
     externalDebuggerRunFlushedFrozenOutputsRef.current = false;
     remoteDebuggerDiagnosticsRef.current.reset();
     resetUnscopedRemoteExecutionRoutingState(unscopedEventRoutingRef.current);
-  }, [project.metadata.id]);
+    activeGraphRequestIdRef.current = executorSession.getActiveGraphRunRequestId();
+  }, [executorSession, project.metadata.id]);
 
   useEffect(() => {
     const resetSessionCaches = () => {
@@ -131,6 +140,10 @@ export function useRemoteExecutor() {
 
   useEffect(() => {
     return executorSession.subscribeMessages((message, data, requestId) => {
+      if (store.get(projectState).metadata.id !== project.metadata.id) {
+        return;
+      }
+
       const sessionState = executorSession.getRuntimeState();
       const externalDebuggerTarget =
         sessionState.target?.type === 'external-debugger' ? sessionState.target : undefined;
@@ -139,7 +152,7 @@ export function useRemoteExecutor() {
         : undefined;
       const eventSummary = externalDebuggerTarget ? summarizeRemoteDebuggerEvent(message, data) : undefined;
       const dispatchDecision = getRemoteExecutionEventDispatchDecision({
-        activeRequestId: activeGraphRequestIdRef.current,
+        activeRequestId: activeGraphRequestIdRef.current ?? executorSession.getActiveGraphRunRequestId(),
         currentProjectId: project.metadata.id,
         data,
         message,
@@ -218,6 +231,9 @@ export function useRemoteExecutor() {
         case 'done':
           executorSession.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+          if (requestId === executorSession.getActiveGraphRunRequestId()) {
+            executorSession.setActiveGraphRunRequestId(null);
+          }
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.done(data);
           }
@@ -225,6 +241,9 @@ export function useRemoteExecutor() {
         case 'abort':
           executorSession.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+          if (requestId === executorSession.getActiveGraphRunRequestId()) {
+            executorSession.setActiveGraphRunRequestId(null);
+          }
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.abort(data);
           }
@@ -277,6 +296,9 @@ export function useRemoteExecutor() {
         case 'error':
           executorSession.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+          if (requestId === executorSession.getActiveGraphRunRequestId()) {
+            executorSession.setActiveGraphRunRequestId(null);
+          }
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.error(data);
           }
@@ -291,31 +313,24 @@ export function useRemoteExecutor() {
           break;
       }
     });
-  }, [eventDispatcher, executorSession, project.metadata.id, setFrozenNodeOutputs]);
+  }, [eventDispatcher, executorSession, project.metadata.id, setFrozenNodeOutputs, store]);
 
-  const tryRunGraph = async (options: { to?: NodeId[]; from?: NodeId; graphId?: GraphId } = {}) => {
-    const sessionState = executorSession.getRuntimeState();
+  const tryRunGraph = async (options: EditorGraphRunOptions = {}): Promise<GraphOutputs | undefined> => {
+    let sessionState = executorSession.getRuntimeState();
+    if (!sessionState.capabilities.canSendRun && options.waitForResults) {
+      sessionState = await waitForExecutorSessionRunCapability(executorSession);
+    }
+
     if (!sessionState.capabilities.canSendRun) {
       logRuntimeDebug('Remote graph run skipped because executor session cannot send runs.', {
         status: sessionState.status,
         target: sessionState.target?.type ?? 'none',
       });
-      return;
-    }
-
-    setUserInputSubmitHandler((nodeId: NodeId, answers: StringArrayDataValue) => {
-      const inputSent = remoteDebugger.send('user-input', { nodeId, answers });
-      if (!inputSent) {
-        logRuntimeDebug('Remote user input skipped because executor session disconnected before send.', {
-          target: executorSession.getRuntimeState().target?.type ?? 'none',
-        });
+      if (options.throwOnError) {
+        throw new Error(`Executor cannot run graphs right now (status: ${sessionState.status}).`);
       }
-      setUserInputQuestions((q) =>
-        produce(q, (draft) => {
-          delete draft[nodeId];
-        }),
-      );
-    });
+      return undefined;
+    }
 
     const graphToRun = options.graphId ?? graph.metadata!.id!;
 
@@ -390,32 +405,65 @@ export function useRemoteExecutor() {
         currentExecution.preserveNodeRunDataForNextStart(runToPlan.preserveNodeIds);
       }
 
+      const payload = {
+        graphId: graphToRun,
+        runToNodeIds,
+        preloadData,
+        frozenNodeOutputs: getFrozenNodeOutputsForExecutorRunPayload(frozenNodeOutputs, sessionState.target),
+        contextValues,
+        inputs: options.inputs,
+        projectPath: loadedProject.path,
+        useEditorCache: true,
+        captureNodeTimings: showNodeRunDurations,
+      };
+
+      if (options.waitForResults) {
+        const { requestId, promise } = executorSession.createPendingGraphExecution();
+        activeGraphRequestIdRef.current = requestId;
+        executorSession.setActiveGraphRunRequestId(requestId);
+
+        const runSent = remoteDebugger.send('run', {
+          ...payload,
+          requestId,
+        });
+
+        if (!runSent) {
+          const error = new Error('Remote executor disconnected before the graph run could be sent.');
+          executorSession.rejectPendingGraphExecution(requestId, error);
+          clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+          if (requestId === executorSession.getActiveGraphRunRequestId()) {
+            executorSession.setActiveGraphRunRequestId(null);
+          }
+        }
+
+        return await promise;
+      }
+
       const runRequest = startActiveRemoteGraphRunRequest({
         activeRequestIdRef: activeGraphRequestIdRef,
         createRequestId: () => executorSession.createRemoteExecutionRequest(),
-        payload: {
-          graphId: graphToRun,
-          runToNodeIds,
-          preloadData,
-          frozenNodeOutputs: getFrozenNodeOutputsForExecutorRunPayload(frozenNodeOutputs, sessionState.target),
-          contextValues,
-          projectPath: loadedProject.path,
-          useEditorCache: true,
-          captureNodeTimings: showNodeRunDurations,
-        },
+        payload,
         sendRun: (payload) => remoteDebugger.send('run', payload),
       });
+      if (runRequest.type === 'sent') {
+        executorSession.setActiveGraphRunRequestId(runRequest.requestId);
+      }
       if (runRequest.type === 'send-failed') {
         currentExecution.clearNodeRunDataPreservationForNextStart();
         logRuntimeDebug('Remote graph run skipped because executor session disconnected before send.', {
           target: executorSession.getRuntimeState().target?.type ?? 'none',
         });
       }
+      return undefined;
     } catch (e) {
       currentExecution.clearNodeRunDataPreservationForNextStart();
+      if (options.throwOnError) {
+        logRuntimeDebug('Remote graph run failed.', { error: e });
+        throw e;
+      }
       handleError(e, 'Failed to start remote graph run');
     }
-    return;
+    return undefined;
   };
 
   const tryRunTests = useStableCallback(
@@ -561,7 +609,8 @@ export function useRemoteExecutor() {
     }
 
     logRuntimeInfo('Aborting via remote debugger');
-    const abortSent = remoteDebugger.send('abort', undefined);
+    const requestId = getActiveGraphRunRequestId(activeGraphRequestIdRef, executorSession);
+    const abortSent = remoteDebugger.send('abort', requestId ? { requestId } : undefined);
     if (!abortSent) {
       logRuntimeDebug('Remote graph abort skipped because executor session disconnected before send.', {
         target: executorSession.getRuntimeState().target?.type ?? 'none',
@@ -580,7 +629,8 @@ export function useRemoteExecutor() {
     }
 
     logRuntimeInfo('Pausing via remote debugger');
-    const pauseSent = remoteDebugger.send('pause', undefined);
+    const requestId = getActiveGraphRunRequestId(activeGraphRequestIdRef, executorSession);
+    const pauseSent = remoteDebugger.send('pause', requestId ? { requestId } : undefined);
     if (!pauseSent) {
       logRuntimeDebug('Remote graph pause skipped because executor session disconnected before send.', {
         target: executorSession.getRuntimeState().target?.type ?? 'none',
@@ -599,13 +649,32 @@ export function useRemoteExecutor() {
     }
 
     logRuntimeInfo('Resuming via remote debugger');
-    const resumeSent = remoteDebugger.send('resume', undefined);
+    const requestId = getActiveGraphRunRequestId(activeGraphRequestIdRef, executorSession);
+    const resumeSent = remoteDebugger.send('resume', requestId ? { requestId } : undefined);
     if (!resumeSent) {
       logRuntimeDebug('Remote graph resume skipped because executor session disconnected before send.', {
         target: executorSession.getRuntimeState().target?.type ?? 'none',
       });
     }
   }
+
+  const submitUserInput = useStableCallback((nodeId: NodeId, answers: StringArrayDataValue) => {
+    const requestId = getActiveGraphRunRequestId(activeGraphRequestIdRef, executorSession);
+    const inputSent = remoteDebugger.send(
+      'user-input',
+      requestId ? { nodeId, answers, requestId } : { nodeId, answers },
+    );
+    if (!inputSent) {
+      logRuntimeDebug('Remote user input skipped because executor session disconnected before send.', {
+        target: executorSession.getRuntimeState().target?.type ?? 'none',
+      });
+    }
+    setUserInputQuestions((q) =>
+      produce(q, (draft) => {
+        delete draft[nodeId];
+      }),
+    );
+  });
 
   return {
     remoteDebugger,
@@ -615,7 +684,15 @@ export function useRemoteExecutor() {
     tryResumeGraph,
     active: remoteDebugger.sessionState.capabilities.canSendRun,
     tryRunTests,
+    submitUserInput,
   };
+}
+
+function getActiveGraphRunRequestId(
+  activeGraphRequestIdRef: RefObject<RemoteRunRequestId | null>,
+  executorSession: ExecutorSessionRuntime,
+): RemoteRunRequestId | null {
+  return activeGraphRequestIdRef.current ?? executorSession.getActiveGraphRunRequestId();
 }
 
 function getRemoteExecutorUploadSessionKey(

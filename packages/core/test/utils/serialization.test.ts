@@ -305,9 +305,7 @@ describe('serialization compatibility', () => {
               variants: [],
             },
           ],
-          connections: [
-            { outputNodeId: 'n1', outputId: 'output', inputNodeId: 'n2', inputId: 'input' },
-          ],
+          connections: [{ outputNodeId: 'n1', outputId: 'output', inputNodeId: 'n2', inputId: 'input' }],
         },
       },
       plugins: [],
@@ -383,6 +381,102 @@ describe('serialization compatibility', () => {
     assert.deepEqual((subgraph.data as Record<string, unknown>).outputPortOrder, ['result-b', 'result-a']);
   });
 
+  it('round-trips library nodes through V4 project serialization', () => {
+    const project: Project = {
+      metadata: {
+        id: 'project-node-prefabs',
+        title: 'Node Prefab Test',
+        description: '',
+      },
+      graphs: {
+        'main-graph': {
+          metadata: { id: 'main-graph', name: 'Main Graph', description: '' },
+          nodes: [
+            {
+              id: 'instance-node',
+              type: 'nodePrefabInstance',
+              title: 'Linked Text',
+              visualData: { x: 100, y: 200, width: 260 },
+              data: { prefabId: 'prefab-text' },
+            },
+          ],
+          connections: [],
+        },
+      },
+      nodePrefabs: {
+        'prefab-text': {
+          id: 'prefab-text' as any,
+          sourceNode: {
+            id: 'source-node',
+            type: 'text',
+            title: 'Shared Text',
+            visualData: { x: 0, y: 0, width: 240 },
+            data: { text: 'hello from library' },
+          },
+        },
+      },
+      plugins: [],
+      references: [],
+    };
+
+    const [deserialized] = deserializeProject(serializeProject(project) as string);
+
+    assert.equal(deserialized.nodePrefabs?.['prefab-text']?.sourceNode.title, 'Shared Text');
+    assert.deepEqual(deserialized.nodePrefabs?.['prefab-text']?.sourceNode.data, { text: 'hello from library' });
+    assert.equal(deserialized.graphs['main-graph']?.nodes[0]?.type, 'nodePrefabInstance');
+    assert.deepEqual(deserialized.graphs['main-graph']?.nodes[0]?.data, { prefabId: 'prefab-text' });
+  });
+
+  it('round-trips UI graphs through V4 project serialization', () => {
+    const project: Project = {
+      metadata: {
+        id: 'project-ui-graphs',
+        title: 'UI Graph Test',
+        description: '',
+      },
+      graphs: {
+        'main-graph': {
+          metadata: { id: 'main-graph', name: 'Main Graph', description: '' },
+          nodes: [],
+          connections: [],
+        },
+      },
+      uiGraphs: {
+        'ui-graph-1': {
+          id: 'ui-graph-1' as any,
+          name: 'Simple web app',
+          description: 'A tiny UI',
+          components: [
+            {
+              id: 'ui-component-1' as any,
+              type: 'button',
+              label: 'Run',
+              action: {
+                type: 'runGraph',
+                graphId: 'main-graph' as any,
+                inputs: {
+                  input: { type: 'state', key: 'prompt' },
+                },
+                outputKey: 'graphOutput',
+                outputStateKey: 'result',
+              },
+            },
+          ],
+        },
+      },
+      plugins: [],
+      references: [],
+    };
+
+    const [deserialized] = deserializeProject(serializeProject(project) as string);
+
+    assert.equal(deserialized.uiGraphs?.['ui-graph-1']?.name, 'Simple web app');
+    assert.deepEqual(
+      deserialized.uiGraphs?.['ui-graph-1']?.components[0],
+      project.uiGraphs?.['ui-graph-1']?.components[0],
+    );
+  });
+
   it('deserializes old-style Subgraph nodes without manual port order fields', () => {
     const graph: NodeGraph = {
       metadata: { id: 'g-old-subgraph', name: 'Old Subgraph', description: '' },
@@ -413,11 +507,16 @@ describe('serialization compatibility', () => {
       metadata: { id: 'g1', name: 'Test', description: '' },
       nodes: [
         { id: 'a', type: 'text', title: 'A', visualData: { x: 0, y: 0 }, data: {}, variants: [] },
-        { id: 'b', type: 'text', title: 'B', visualData: { x: 1, y: 1, width: 200, zIndex: 3 }, data: {}, variants: [] },
+        {
+          id: 'b',
+          type: 'text',
+          title: 'B',
+          visualData: { x: 1, y: 1, width: 200, zIndex: 3 },
+          data: {},
+          variants: [],
+        },
       ],
-      connections: [
-        { outputNodeId: 'a', outputId: 'out', inputNodeId: 'b', inputId: 'in' },
-      ],
+      connections: [{ outputNodeId: 'a', outputId: 'out', inputNodeId: 'b', inputId: 'in' }],
     };
 
     const serialized = serializeGraph(graph) as string;
@@ -610,7 +709,9 @@ describe('serialization helpers', () => {
   });
 
   it('packVisualDataV4 packs with color fields', () => {
-    const node = { visualData: { x: 5, y: 10, width: undefined, zIndex: undefined, color: { border: 'red', bg: 'blue' } } } as any;
+    const node = {
+      visualData: { x: 5, y: 10, width: undefined, zIndex: undefined, color: { border: 'red', bg: 'blue' } },
+    } as any;
     assert.equal(packVisualDataV4(node), '5/10/null/null/red/blue');
   });
 });

@@ -30,6 +30,7 @@ import {
   getGraphSearchStats,
   formatGraphSearchStats,
   groupGraphSearchMatches,
+  NODE_LIBRARY_GRAPH_SEARCH_ID,
   type GraphSearchNodeMatch,
   type GraphSearchStats,
 } from '../hooks/graphSearch';
@@ -39,6 +40,8 @@ import { createRootGraphViewContext } from '../domain/graphEditing/navigationAct
 import { graphSearchPanelHeightState } from '../state/ui';
 import { resizeCursorStyles } from '../utils/resizeCursors';
 import { getGraphSearchPanelMaxHeight, getNextGraphSearchPanelHeight } from './graphSearch/graphSearchPanelModel';
+import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary';
+import { useOpenUiGraph } from '../hooks/useOpenUiGraph';
 
 const GRAPH_SEARCH_FOCUS_ZOOM = 0.8;
 const MIN_GRAPH_SEARCH_PANEL_HEIGHT = 180;
@@ -410,6 +413,7 @@ export const NavigationBar: FC = () => {
   const [graphSearchPanelHeight, setGraphSearchPanelHeight] = useAtom(graphSearchPanelHeightState);
   const goToNode = useGoToNode();
   const setSelectedNodes = useSetAtom(selectedNodesState);
+  const openNodeLibrary = useOpenNodeLibrary();
   const loadGraph = useLoadGraph();
   const project = useAtomValue(projectState);
   const currentGraph = useAtomValue(graphState);
@@ -551,6 +555,12 @@ export const NavigationBar: FC = () => {
   }
 
   function selectGraphSearchMatch(match: GraphSearchNodeMatch, selectedIndex: number) {
+    if (match.graphId === NODE_LIBRARY_GRAPH_SEARCH_ID) {
+      setSearching((state) => ({ ...state, selectedIndex }));
+      openNodeLibrary({ selectedNodeIds: [match.nodeId] });
+      return;
+    }
+
     const panelBottom = Math.min(
       window.innerHeight,
       Math.max(0, graphSearchPanelRef.current?.getBoundingClientRect().bottom ?? 0),
@@ -566,6 +576,11 @@ export const NavigationBar: FC = () => {
   }
 
   function selectGraphSearchGroup(graphId: GraphId) {
+    if (graphId === NODE_LIBRARY_GRAPH_SEARCH_ID) {
+      openNodeLibrary();
+      return;
+    }
+
     const graph = graphId === currentGraph.metadata?.id ? currentGraph : project.graphs[graphId];
 
     if (graph) {
@@ -689,12 +704,12 @@ const GoToSearchResults: FC = () => {
       entries: results,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results.map((r) => r.item.id).join(','), setGoToSearch]);
+  }, [results.map((result) => getSearchResultKey(result)).join(','), setGoToSearch]);
 
   return (
     <div className="entries">
       {goToSearch.entries.map((entry, index) => (
-        <div key={entry.item.id} className="entry">
+        <div key={getSearchResultKey(entry)} className="entry">
           <SearchResultItem entry={entry} selected={index === goToSearch.selectedIndex} searchText={goToSearch.query} />
         </div>
       ))}
@@ -729,7 +744,9 @@ const GraphSearchResults: FC<{
           <div className="search-result-group-title">
             <Tooltip content="Open graph" placement="right" tag="span" className="search-result-group-title-tooltip">
               <button className="search-result-group-title-button" onClick={() => onSelectGraph(group.graphId)}>
-                <span className="search-result-graph-label">Graph </span>
+                <span className="search-result-graph-label">
+                  {group.graphId === NODE_LIBRARY_GRAPH_SEARCH_ID ? 'Library ' : 'Graph '}
+                </span>
                 <HighlightedText
                   className="search-result-graph-name"
                   text={group.graphName}
@@ -784,8 +801,15 @@ const SearchResultItem: FC<{
   selected: boolean;
 }> = ({ entry, selected, searchText }) => {
   const project = useAtomValue(projectState);
+  const openNodeLibrary = useOpenNodeLibrary();
+  const openUiGraph = useOpenUiGraph();
 
   const goToNode = useGoToNode();
+  const entryItem = entry.item;
+  const entryItemType = entryItem.type;
+  const entryItemId = entryItem.id;
+  const entryContainerGraph = entryItem.type === 'uiGraph' ? undefined : entryItem.containerGraph;
+  const entryUiGraphId = entryItem.type === 'uiGraph' ? entryItem.uiGraphId : undefined;
 
   useEffect(() => {
     if (selected) {
@@ -793,25 +817,50 @@ const SearchResultItem: FC<{
       const element = document.querySelector('.search-result-item.selected');
       element?.scrollIntoView({ block: 'nearest' });
 
-      goToNode(entry.item.id as NodeId);
+      if (entryItemType === 'uiGraph') {
+        if (entryUiGraphId) {
+          openUiGraph(entryUiGraphId);
+        }
+        return;
+      }
+
+      if (entryContainerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID) {
+        openNodeLibrary({ selectedNodeIds: [entryItemId as NodeId] });
+        return;
+      }
+
+      goToNode(entryItemId as NodeId);
     }
-  }, [selected, entry.item.id, goToNode]);
+  }, [selected, entryItemType, entryItemId, entryContainerGraph, entryUiGraphId, goToNode, openNodeLibrary, openUiGraph]);
+
+  const containerName =
+    entryItemType === 'uiGraph'
+      ? 'Web Apps'
+      : entryContainerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID
+        ? 'Node Library'
+        : entryContainerGraph
+          ? (project.graphs[entryContainerGraph]?.metadata?.name ?? 'Unknown Graph')
+          : 'Unknown Graph';
 
   return (
     <div className={clsx('search-result-item', { selected })}>
       <div className="title">
-        <HighlightedText text={entry.item.title} searchText={searchText} />
+        <HighlightedText text={entryItem.title} searchText={searchText} />
       </div>
-      <div className="graph">in {project.graphs[entry.item.containerGraph]?.metadata?.name ?? 'Unknown Graph'}</div>
+      <div className="graph">in {containerName}</div>
       <div className="description">
-        <HighlightedText text={entry.item.description} searchText={searchText} />
+        <HighlightedText text={entryItem.description} searchText={searchText} />
       </div>
       <div className="data">
-        <HighlightedText text={entry.item.joinedData} searchText={searchText} />
+        <HighlightedText text={entryItem.joinedData} searchText={searchText} />
       </div>
     </div>
   );
 };
+
+function getSearchResultKey(entry: SearchedItem): string {
+  return `${entry.item.type}:${entry.item.id}`;
+}
 
 interface HighlightedTextProps {
   text: string;

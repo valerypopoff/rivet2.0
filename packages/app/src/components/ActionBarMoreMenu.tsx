@@ -1,19 +1,23 @@
 import { css } from '@emotion/react';
 import { type FC, type MouseEvent } from 'react';
+import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useExecutorSessionState } from '../hooks/useExecutorSession';
 import { getExecutorOptions, selectedExecutorState } from '../state/settings';
 import { useExecutorSessionHostConfig } from '../providers/ExecutorSessionContext.js';
 import { getExecutorProductState, isExternalDebuggerProductState } from '../state/selectors/executionSelectors.js';
+import { projectState, projectsState } from '../state/savedGraphs.js';
 import {
   debuggerPanelAnchorState,
   type DebuggerPanelAnchor,
   debuggerPanelOpenState,
 } from '../state/ui';
+import { updateOpenedProjectExecutorMode } from '../utils/openedProjects.js';
+import { createLocalProjectExecutorMode } from '../utils/projectExecutorMode.js';
 import { SegmentedEditor } from './editors/SegmentedEditor';
 import { PopupMenu, PopupMenuItem } from './PopupMenu.js';
 import BugIcon from 'majesticons/line/bug-2-line.svg?react';
-import { useSetAtom, useAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 
 const moreMenuStyles = css`
   .executor {
@@ -65,6 +69,8 @@ export const ActionBarMoreMenu: FC<{
   const setDebuggerPanelOpen = useSetAtom(debuggerPanelOpenState);
   const setDebuggerPanelAnchor = useSetAtom(debuggerPanelAnchorState);
   const [selectedExecutor, setSelectedExecutor] = useAtom(selectedExecutorState);
+  const currentProject = useAtomValue(projectState);
+  const setProjects = useSetAtom(projectsState);
   const { loadRecording } = useLoadRecording();
   const hostConfig = useExecutorSessionHostConfig();
   const executorOptions = getExecutorOptions({ hasInternalExecutorUrl: !!hostConfig?.internalExecutorUrl });
@@ -91,6 +97,14 @@ export const ActionBarMoreMenu: FC<{
   const setExecutorMode = (value: string | boolean) => {
     if (value === 'browser' || value === 'nodejs') {
       setSelectedExecutor(value);
+      const projectId = currentProject.metadata.id as ProjectId | undefined;
+
+      if (projectId) {
+        const projectExecutorMode = createLocalProjectExecutorMode(value);
+        setProjects((previousProjects) =>
+          updateOpenedProjectExecutorMode(previousProjects, projectId, projectExecutorMode),
+        );
+      }
     }
   };
 

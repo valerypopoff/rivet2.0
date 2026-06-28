@@ -16,6 +16,7 @@ import {
 } from '../renderDataValue/outputSectionStats.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import type { DataValueWithRefs } from '../../state/dataFlow.js';
+import { serializeDisplayedDataValue } from '../../utils/executionDataCopyValue.js';
 
 const structuredNodeOutputCss = css`
   display: block;
@@ -123,10 +124,14 @@ export const StructuredNodeOutputSection: FC<{
       ? getOutputSectionStatsFromText(statsText)
       : getOutputSectionStatsForValue(statsValue, dataRefs)
     : undefined;
+  const getCopyValue =
+    showSectionStats && (statsText !== undefined || statsValue !== undefined)
+      ? () => statsText ?? serializeDisplayedDataValue(statsValue, dataRefs)
+      : undefined;
 
   return (
     <div className={className ? `structured-node-output-section ${className}` : 'structured-node-output-section'}>
-      <OutputSectionHeader isLarge={showSectionStats} label={label} stats={stats} />
+      <OutputSectionHeader getCopyValue={getCopyValue} isLarge={showSectionStats} label={label} stats={stats} />
       {children}
     </div>
   );

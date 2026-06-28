@@ -7,7 +7,7 @@ const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const testFilePattern = /\.(?:test|spec)\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/;
 const focusedTestPattern = /\b(?:context|describe|it|suite|test)\.only\b/;
 const skippedTestPattern = /\b(?:context|describe|it|suite|test)\.skip\b/;
-const sourceReadPattern = /\breadFileSync\s*\(/;
+const sourceReadPattern = /\breadFile(?:Sync)?\s*\(/;
 
 function getCandidateTestFiles() {
   return execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {

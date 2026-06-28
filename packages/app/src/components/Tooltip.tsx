@@ -6,6 +6,7 @@ import { useStableCallback } from '../hooks/useStableCallback';
 import { CSSTransition } from 'react-transition-group';
 import Portal from '@atlaskit/portal';
 import clsx from 'clsx';
+import { formatShortcutTextForPlatform } from '../utils/keyboardShortcutLabels';
 
 export type TooltipProps = {
   children: ReactNode;
@@ -99,6 +100,7 @@ export const Tooltip: FC<TooltipProps> = ({
   const timeoutRef = useRef<number | null>(null);
   const outTimeoutRef = useRef<number | null>(null);
   const floatingRef = useRef<HTMLDivElement | null>(null);
+  const renderedContent = typeof content === 'string' ? formatShortcutTextForPlatform(content) : content;
 
   const combinedFloatingRefs = useMergeRefs([floatingRef, refs.setFloating]);
 
@@ -150,7 +152,7 @@ export const Tooltip: FC<TooltipProps> = ({
               width,
             }}
           >
-            <div className="box">{content}</div>
+            <div className="box">{renderedContent}</div>
           </div>
         </CSSTransition>
       </Portal>

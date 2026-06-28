@@ -16,6 +16,8 @@ import {
   selectedProcessPageNodesState,
   type ProjectExecutionSnapshot,
 } from '../state/dataFlow.js';
+import { lastRecordingState } from '../state/execution.js';
+import { userInputModalQuestionsState } from '../state/userInput.js';
 import { useDataRefs } from '../providers/ProvidersContext.js';
 import { clearExecutionDataRefs } from '../utils/executionDataStorage.js';
 
@@ -31,11 +33,13 @@ export function useProjectExecutionSnapshots() {
       graphRunning: store.get(graphRunningState),
       graphStartTime: store.get(graphStartTimeState),
       frozenNodeOutputs: store.get(frozenNodeOutputsState),
+      lastRecording: store.get(lastRecordingState),
       lastRunDataByNode: store.get(lastRunDataByNodeState),
       rootGraph: store.get(rootGraphState),
       runningGraphs: store.get(runningGraphsState),
       selectedGraphRunByView: store.get(selectedGraphRunByViewState),
       selectedProcessPageNodes: store.get(selectedProcessPageNodesState),
+      userInputQuestions: store.get(userInputModalQuestionsState),
     };
   }, [store]);
 
@@ -48,11 +52,13 @@ export function useProjectExecutionSnapshots() {
       store.set(graphRunningState, nextSnapshot.graphRunning);
       store.set(graphStartTimeState, nextSnapshot.graphStartTime);
       store.set(frozenNodeOutputsState, nextSnapshot.frozenNodeOutputs ?? {});
+      store.set(lastRecordingState, nextSnapshot.lastRecording);
       store.set(lastRunDataByNodeState, nextSnapshot.lastRunDataByNode);
       store.set(rootGraphState, nextSnapshot.rootGraph);
       store.set(runningGraphsState, nextSnapshot.runningGraphs);
       store.set(selectedGraphRunByViewState, nextSnapshot.selectedGraphRunByView);
       store.set(selectedProcessPageNodesState, nextSnapshot.selectedProcessPageNodes);
+      store.set(userInputModalQuestionsState, nextSnapshot.userInputQuestions ?? {});
     },
     [store],
   );

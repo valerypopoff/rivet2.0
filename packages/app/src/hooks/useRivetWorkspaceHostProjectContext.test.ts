@@ -6,23 +6,31 @@ import { fileURLToPath } from 'node:url';
 
 const hooksDir = dirname(fileURLToPath(import.meta.url));
 
+function source(...pathParts: string[]): string {
+  return readFileSync(join(hooksDir, ...pathParts), 'utf8');
+}
+
 test('workspace host releases cached context atoms without deleting persisted context values', () => {
-  const savedGraphsSource = readFileSync(join(hooksDir, '..', 'state', 'savedGraphs.ts'), 'utf8');
-  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
+  const savedGraphsSource = source('..', 'state', 'savedGraphs.ts');
+  const workspaceHostCleanupSource = source('workspaceHost', 'useWorkspaceHostProjectCleanup.ts');
+  const workspaceHostOpenSource = source('workspaceHost', 'useWorkspaceHostOpenProject.ts');
+  const workspaceHostCloseSource = source('workspaceHost', 'useWorkspaceHostCloseProject.ts');
 
   assert.match(savedGraphsSource, /export function releaseProjectContextState\(projectId: ProjectId\): void \{/);
   assert.match(savedGraphsSource, /projectContextState\.remove\(projectId\);/);
   assert.doesNotMatch(savedGraphsSource, /storage\.removeItem\(`projectContext__"\$\{projectId\}"`\)/);
-  assert.match(workspaceHostSource, /releaseProjectContextState\(replaceTargetProjectId\);/);
-  assert.match(workspaceHostSource, /releaseProjectContextState\(projectId\);/);
-  assert.doesNotMatch(workspaceHostSource, /clearProjectContextState/);
+  assert.match(workspaceHostCleanupSource, /releaseProjectContextState\(projectId\);/);
+  assert.match(workspaceHostOpenSource, /cleanupClosedProject\(replacedProjectId\);/);
+  assert.match(workspaceHostCloseSource, /cleanupClosedProject\(projectId,/);
+  assert.doesNotMatch(workspaceHostCleanupSource, /clearProjectContextState/);
 });
 
 test('workspace host exposes a narrow clean-baseline API for hosted wrappers', () => {
-  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
-  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
+  const workspaceHostTypesSource = source('workspaceHost', 'types.ts');
+  const workspaceHostCleanBaselineSource = source('workspaceHost', 'useWorkspaceHostCleanBaseline.ts');
+  const hostSource = source('..', 'host.tsx');
 
-  const cleanBaselineType = workspaceHostSource.match(
+  const cleanBaselineType = workspaceHostTypesSource.match(
     /export type RivetProjectCleanBaselineSnapshotInput = \{(?<body>[\s\S]*?)\};/,
   )?.groups?.body;
 
@@ -33,79 +41,87 @@ test('workspace host exposes a narrow clean-baseline API for hosted wrappers', (
   assert.doesNotMatch(cleanBaselineType, /openedGraph\?:/);
   assert.doesNotMatch(cleanBaselineType, /testSuites\?:/);
   assert.match(
-    workspaceHostSource,
+    workspaceHostTypesSource,
     /markCurrentProjectClean\(snapshot\?: RivetProjectCleanBaselineSnapshotInput\): Promise<boolean>;/,
   );
   assert.match(
-    workspaceHostSource,
+    workspaceHostTypesSource,
     /markProjectClean\(projectId: ProjectId, snapshot\?: RivetProjectCleanBaselineSnapshotInput\): Promise<boolean>;/,
   );
-  assert.match(workspaceHostSource, /buildCurrentProjectContentSnapshot\(/);
-  assert.match(workspaceHostSource, /markProjectContentClean\(previousDigests, cleanBaseline\)/);
-  assert.match(workspaceHostSource, /markProjectDirtyFlag\(previousFlags, projectId, false\)/);
+  assert.match(workspaceHostCleanBaselineSource, /buildCurrentProjectContentSnapshot\(/);
+  assert.match(workspaceHostCleanBaselineSource, /markProjectContentClean\(previousDigests, cleanBaseline\)/);
+  assert.match(workspaceHostCleanBaselineSource, /markProjectDirtyFlag\(previousFlags, projectId, false\)/);
   assert.match(
-    workspaceHostSource,
+    workspaceHostCleanBaselineSource,
     /if \(!projects\.openedProjects\[projectId\] && currentProject\.metadata\.id !== projectId\) \{/,
   );
   assert.match(hostSource, /RivetProjectCleanBaselineSnapshotInput/);
 });
 
 test('workspace host exposes project compare controls for hosted wrappers', () => {
-  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
-  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
+  const workspaceHostTypesSource = source('workspaceHost', 'types.ts');
+  const workspaceHostCompareSource = source('workspaceHost', 'useWorkspaceHostCompare.ts');
+  const workspaceHostCleanupSource = source('workspaceHost', 'useWorkspaceHostProjectCleanup.ts');
+  const workspaceHostOpenSource = source('workspaceHost', 'useWorkspaceHostOpenProject.ts');
+  const hostSource = source('..', 'host.tsx');
 
-  assert.match(workspaceHostSource, /export type RivetProjectCompareOptions = \{/);
-  assert.match(workspaceHostSource, /labels\?: ProjectCompareSideLabels;/);
+  assert.match(workspaceHostTypesSource, /export type RivetProjectCompareOptions = \{/);
+  assert.match(workspaceHostTypesSource, /labels\?: ProjectCompareSideLabels;/);
   assert.match(
-    workspaceHostSource,
+    workspaceHostTypesSource,
     /startProjectCompare\(\s*referenceProject: Project,\s*referencePath\?: string \| null,\s*options\?: RivetProjectCompareOptions,\s*\): Promise<boolean>;/,
   );
-  assert.match(workspaceHostSource, /stopProjectCompare\(projectId\?: ProjectId\): Promise<boolean>;/);
-  assert.match(workspaceHostSource, /setViewingProjectComparisonNode\(undefined\);/);
-  assert.match(workspaceHostSource, /setProjectCompareReference\(\{/);
-  assert.match(workspaceHostSource, /reference\?\.projectId === projectId \? undefined : reference/);
-  assert.match(workspaceHostSource, /reference\?\.projectId === replaceTargetProjectId \? undefined : reference/);
-  assert.match(workspaceHostSource, /labels: options\?\.labels/);
+  assert.match(workspaceHostTypesSource, /stopProjectCompare\(projectId\?: ProjectId\): Promise<boolean>;/);
+  assert.match(workspaceHostCompareSource, /setViewingProjectComparisonNode\(undefined\);/);
+  assert.match(workspaceHostCompareSource, /setProjectCompareReference\(\{/);
+  assert.match(workspaceHostCompareSource, /projectCompareReference\.projectId !== projectId/);
+  assert.match(workspaceHostCleanupSource, /reference\?\.projectId === projectId \? undefined : reference/);
+  assert.match(workspaceHostOpenSource, /cleanupClosedProject\(replacedProjectId\);/);
+  assert.match(workspaceHostCompareSource, /labels: options\?\.labels/);
   assert.match(hostSource, /RivetProjectCompareOptions/);
   assert.match(hostSource, /ProjectCompareSideLabels/);
 });
 
 test('workspace host exposes a narrow project metadata update API for hosted wrappers', () => {
-  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
-  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
-  const metadataUpdateSource = readFileSync(join(hooksDir, '..', 'utils', 'projectMetadataUpdates.ts'), 'utf8');
+  const workspaceHostTypesSource = source('workspaceHost', 'types.ts');
+  const workspaceHostMetadataSource = source('workspaceHost', 'useWorkspaceHostProjectMetadata.ts');
+  const hostSource = source('..', 'host.tsx');
+  const metadataUpdateSource = source('..', 'utils', 'projectMetadataUpdates.ts');
 
-  assert.match(workspaceHostSource, /export type RivetProjectMetadataUpdateOptions = \{/);
-  assert.match(workspaceHostSource, /path\?: string \| null;/);
-  assert.match(workspaceHostSource, /persistedExternally\?: boolean;/);
-  assert.match(workspaceHostSource, /changeSource\?: 'external-wrapper-rename';/);
-  assert.match(workspaceHostSource, /export type RivetProjectMetadataPatch = ProjectMetadataPatch;/);
+  assert.match(workspaceHostTypesSource, /export type RivetProjectMetadataUpdateOptions = \{/);
+  assert.match(workspaceHostTypesSource, /path\?: string \| null;/);
+  assert.match(workspaceHostTypesSource, /persistedExternally\?: boolean;/);
+  assert.match(workspaceHostTypesSource, /changeSource\?: 'external-wrapper-rename';/);
+  assert.match(workspaceHostTypesSource, /export type RivetProjectMetadataPatch = ProjectMetadataPatch;/);
   assert.match(
     metadataUpdateSource,
     /export type ProjectMetadataPatch = Pick<Partial<Project\['metadata'\]>, 'title' \| 'description'>;/,
   );
   assert.match(
-    workspaceHostSource,
+    workspaceHostTypesSource,
     /updateProjectMetadata\(\s*projectId: ProjectId,\s*metadataPatch: RivetProjectMetadataPatch,\s*options\?: RivetProjectMetadataUpdateOptions,\s*\): Promise<boolean>;/,
   );
-  assert.match(workspaceHostSource, /updateOpenedProjectMetadata\(/);
-  assert.match(workspaceHostSource, /setCurrentProject\(patchedProject\);/);
-  assert.match(workspaceHostSource, /setOpenedProjectSnapshots\(/);
-  assert.match(workspaceHostSource, /if \(options\.persistedExternally\) \{/);
-  assert.match(workspaceHostSource, /if \(!wasProjectDirty && patchedProject\) \{/);
+  assert.match(workspaceHostMetadataSource, /updateOpenedProjectMetadata\(/);
+  assert.match(workspaceHostMetadataSource, /setCurrentProject\(patchedProject\);/);
+  assert.match(workspaceHostMetadataSource, /setOpenedProjectSnapshots\(/);
+  assert.match(workspaceHostMetadataSource, /if \(options\.persistedExternally\) \{/);
+  assert.match(workspaceHostMetadataSource, /if \(!wasProjectDirty && patchedProject\) \{/);
   assert.match(
-    workspaceHostSource,
+    workspaceHostMetadataSource,
     /hasProjectContentChangedFromCleanDigest\(savedProjectContentDigests, contentBeforePatch\)/,
   );
-  assert.match(workspaceHostSource, /markProjectDirtyFlag\(previousFlags, projectId, true\)/);
+  assert.match(workspaceHostMetadataSource, /markProjectDirtyFlag\(previousFlags, projectId, true\)/);
   assert.match(hostSource, /RivetProjectMetadataPatch/);
   assert.match(hostSource, /RivetProjectMetadataUpdateOptions/);
 });
 
 test('workspace host exposes transient project tab UI state for hosted wrappers', () => {
-  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
-  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
-  const projectTabUiSource = readFileSync(join(hooksDir, '..', 'state', 'projectTabUi.ts'), 'utf8');
+  const workspaceHostTypesSource = source('workspaceHost', 'types.ts');
+  const workspaceHostTabUiSource = source('workspaceHost', 'useWorkspaceHostTabUi.ts');
+  const workspaceHostOpenSource = source('workspaceHost', 'useWorkspaceHostOpenProject.ts');
+  const workspaceHostCleanupSource = source('workspaceHost', 'useWorkspaceHostProjectCleanup.ts');
+  const hostSource = source('..', 'host.tsx');
+  const projectTabUiSource = source('..', 'state', 'projectTabUi.ts');
 
   assert.match(projectTabUiSource, /export type ProjectTabUiState = \{/);
   assert.match(projectTabUiSource, /preview\?: boolean;/);
@@ -114,53 +130,55 @@ test('workspace host exposes transient project tab UI state for hosted wrappers'
     /export const projectTabUiState = atom<Record<ProjectId, ProjectTabUiState \| undefined>>\(\{\}\);/,
   );
   assert.doesNotMatch(projectTabUiSource, /atomWithStorage/);
-  assert.match(workspaceHostSource, /export type RivetProjectTabUiState = ProjectTabUiState;/);
-  assert.match(workspaceHostSource, /export type RivetProjectOpenOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/);
+  assert.match(workspaceHostTypesSource, /export type RivetProjectTabUiState = ProjectTabUiState;/);
+  assert.match(workspaceHostTypesSource, /export type RivetProjectOpenOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/);
+  assert.match(workspaceHostTypesSource, /export type RivetProjectReplaceOptions = RivetProjectOpenOptions;/);
   assert.match(
-    workspaceHostSource,
-    /export type RivetProjectReplaceOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/,
-  );
-  assert.match(
-    workspaceHostSource,
+    workspaceHostTypesSource,
     /openProjectSnapshot\(snapshot: RivetProjectSnapshotInput, options\?: RivetProjectOpenOptions\): Promise<boolean>;/,
   );
   assert.match(
-    workspaceHostSource,
+    workspaceHostTypesSource,
     /replaceCurrent\(snapshot: RivetProjectSnapshotInput, options\?: RivetProjectReplaceOptions\): Promise<boolean>;/,
   );
   assert.match(
-    workspaceHostSource,
+    workspaceHostTypesSource,
     /setProjectTabUiState\(projectId: ProjectId, state\?: RivetProjectTabUiState\): Promise<boolean>;/,
   );
-  assert.match(workspaceHostSource, /if \(!projects\.openedProjects\[projectId\]\) \{/);
-  assert.match(workspaceHostSource, /const shouldPreseedTabUiState = options\.tabUi !== undefined;/);
+  assert.match(workspaceHostTabUiSource, /if \(!projects\.openedProjects\[projectId\]\) \{/);
+  assert.match(workspaceHostOpenSource, /const shouldPreseedTabUiState = options\.tabUi !== undefined;/);
   assert.match(
-    workspaceHostSource,
+    workspaceHostOpenSource,
     /if \(shouldPreseedTabUiState\) \{[\s\S]*updateProjectTabUiState\(states, projectId, options\.tabUi\)/,
   );
   assert.match(
-    workspaceHostSource,
+    workspaceHostOpenSource,
     /if \(shouldPreseedTabUiState\) \{[\s\S]*updateProjectTabUiState\(states, projectId, previousTabUiState\)/,
   );
-  assert.match(workspaceHostSource, /removeProjectTabUiState\(states, projectId\)/);
-  assert.match(workspaceHostSource, /removeProjectTabUiState\(states, replaceTargetProjectId\)/);
+  assert.match(workspaceHostCleanupSource, /removeProjectTabUiState\(states, projectId\)/);
+  assert.match(workspaceHostOpenSource, /cleanupClosedProject\(replacedProjectId\);/);
   assert.match(hostSource, /RivetProjectOpenOptions/);
   assert.match(hostSource, /RivetProjectReplaceOptions/);
   assert.match(hostSource, /RivetProjectTabUiState/);
 });
 
 test('workspace host exposes transient opening project tabs for hosted wrappers', () => {
-  const workspaceHostSource = readFileSync(join(hooksDir, 'useRivetWorkspaceHost.ts'), 'utf8');
-  const hostSource = readFileSync(join(hooksDir, '..', 'host.tsx'), 'utf8');
-  const openingTabsSource = readFileSync(join(hooksDir, '..', 'state', 'openingProjectTabs.ts'), 'utf8');
-  const openingTabsUtilsSource = readFileSync(join(hooksDir, '..', 'utils', 'openingProjectTabs.ts'), 'utf8');
-  const projectSelectorSource = readFileSync(join(hooksDir, '..', 'components', 'ProjectSelector.tsx'), 'utf8');
-  const rivetAppSource = readFileSync(join(hooksDir, '..', 'components', 'RivetApp.tsx'), 'utf8');
+  const workspaceHostTypesSource = source('workspaceHost', 'types.ts');
+  const workspaceHostOpeningTabsSource = source('workspaceHost', 'useWorkspaceHostOpeningTabs.ts');
+  const hostSource = source('..', 'host.tsx');
+  const openingTabsSource = source('..', 'state', 'openingProjectTabs.ts');
+  const openingTabsUtilsSource = source('..', 'utils', 'openingProjectTabs.ts');
+  const projectSelectorSource = source('..', 'components', 'ProjectSelector.tsx');
+  const projectTabRowSource = readFileSync(
+    join(hooksDir, '..', 'components', 'projectSelector', 'ProjectTabRow.tsx'),
+    'utf8',
+  );
+  const rivetAppSource = source('..', 'components', 'RivetApp.tsx');
   const nodeRunningIndicatorSource = readFileSync(
     join(hooksDir, '..', 'components', 'visualNode', 'NodeRunningIndicator.tsx'),
     'utf8',
   );
-  const menuCommandsSource = readFileSync(join(hooksDir, 'useMenuCommands.ts'), 'utf8');
+  const menuCommandsSource = source('useMenuCommands.ts');
 
   assert.match(openingTabsSource, /export type OpeningProjectTabInfo = \{/);
   assert.match(openingTabsSource, /replaceTargetProjectId\?: ProjectId;/);
@@ -171,18 +189,18 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
   assert.match(openingTabsUtilsSource, /export function buildProjectTabListItems/);
   assert.match(openingTabsUtilsSource, /export function getWorkspaceVisibleTabCount/);
 
-  assert.match(workspaceHostSource, /export type RivetOpeningProjectTabInput = \{/);
-  assert.match(workspaceHostSource, /title: string;/);
-  assert.match(workspaceHostSource, /path\?: string \| null;/);
-  assert.match(workspaceHostSource, /export type RivetOpeningProjectTabOptions = \{/);
-  assert.match(workspaceHostSource, /replaceCurrent\?: boolean;/);
-  assert.match(workspaceHostSource, /startOpeningProjectTab\(/);
-  assert.match(workspaceHostSource, /finishOpeningProjectTab\(/);
-  assert.match(workspaceHostSource, /cancelOpeningProjectTab\(openingTabId: string\): Promise<boolean>;/);
-  assert.match(workspaceHostSource, /replaceProjectId\?: ProjectId/);
-  assert.match(workspaceHostSource, /projects\.openedProjects\[currentProject\.metadata\.id as ProjectId\]/);
-  assert.match(workspaceHostSource, /setSelectedOpeningProjectTabId\(openingTabId\);/);
-  assert.match(workspaceHostSource, /await removeOpeningProjectTab\(openingTabId\);/);
+  assert.match(workspaceHostTypesSource, /export type RivetOpeningProjectTabInput = \{/);
+  assert.match(workspaceHostTypesSource, /title: string;/);
+  assert.match(workspaceHostTypesSource, /path\?: string \| null;/);
+  assert.match(workspaceHostTypesSource, /export type RivetOpeningProjectTabOptions = RivetProjectOpenOptions & \{/);
+  assert.match(workspaceHostTypesSource, /replaceCurrent\?: boolean;/);
+  assert.match(workspaceHostOpeningTabsSource, /const startOpeningProjectTab = useStableCallback\(/);
+  assert.match(workspaceHostOpeningTabsSource, /const finishOpeningProjectTab = useStableCallback\(/);
+  assert.match(workspaceHostTypesSource, /cancelOpeningProjectTab\(openingTabId: string\): Promise<boolean>;/);
+  assert.match(workspaceHostTypesSource, /replaceProjectId\?: ProjectId/);
+  assert.match(workspaceHostOpeningTabsSource, /projects\.openedProjects\[currentProject\.metadata\.id as ProjectId\]/);
+  assert.match(workspaceHostOpeningTabsSource, /setSelectedOpeningProjectTabId\(openingTabId\);/);
+  assert.match(workspaceHostOpeningTabsSource, /await cancelOpeningProjectTab\(openingTabId\);/);
 
   assert.match(projectSelectorSource, /buildProjectTabListItems\(/);
   assert.match(projectSelectorSource, /const sortableProjectIds = useMemo\(/);
@@ -190,8 +208,9 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
     projectSelectorSource,
     /useSyncCurrentStateIntoOpenedProjects\(\{ enabled: projectMode && selectedOpeningProjectTabId == null \}\);/,
   );
-  assert.match(projectSelectorSource, /<OpeningProjectTab/);
-  assert.match(projectSelectorSource, /void cancelOpeningProjectTab\(tabItem\.openingTabId\);/);
+  assert.match(projectSelectorSource, /<ProjectTabRow/);
+  assert.match(projectTabRowSource, /<OpeningProjectTab/);
+  assert.match(projectSelectorSource, /onCloseOpeningProjectTab=\{\(openingTabId\) => void cancelOpeningProjectTab\(openingTabId\)\}/);
   assert.doesNotMatch(projectSelectorSource, /LoadingSpinner/);
   assert.doesNotMatch(projectSelectorSource, /opening-project-spinner/);
   assert.match(rivetAppSource, /workspaceVisibleTabCountState/);
@@ -216,4 +235,20 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
   assert.match(hostSource, /RivetOpeningProjectTabHandle/);
   assert.match(hostSource, /RivetOpeningProjectTabInput/);
   assert.match(hostSource, /RivetOpeningProjectTabOptions/);
+});
+
+test('workspace host carries existing project executor mode through hosted snapshot opens', () => {
+  const workspaceHostOpenSource = source('workspaceHost', 'useWorkspaceHostOpenProject.ts');
+
+  assert.match(workspaceHostOpenSource, /const store = useStore\(\);/);
+  assert.match(
+    workspaceHostOpenSource,
+    /const existingExecutorMode = store\.get\(projectsState\)\.openedProjects\[projectId\]\?\.executorMode;/,
+  );
+  assert.match(workspaceHostOpenSource, /executorMode: existingExecutorMode,/);
+  assert.match(
+    workspaceHostOpenSource,
+    /const nextExecutorMode = previousProjects\.openedProjects\[projectId\]\?\.executorMode \?\? existingExecutorMode;/,
+  );
+  assert.match(workspaceHostOpenSource, /\.\.\.\(nextExecutorMode \? \{ executorMode: nextExecutorMode \} : \{\}\),/);
 });

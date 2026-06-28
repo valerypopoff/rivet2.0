@@ -6,6 +6,9 @@ export type NativeCommandResult = {
 
 export type NativeDataStream = {
   on(event: 'data', handler: (data: string) => void): void;
+  off?(event: 'data', handler: (data: string) => void): void;
+  removeAllListeners?(event?: 'data'): void;
+  removeListener?(event: 'data', handler: (data: string) => void): void;
 };
 
 export type NativeChildProcess = {

@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { type FC, memo, useState } from 'react';
 import {
   type HeightCache,
@@ -25,24 +26,41 @@ import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry';
 import { useAsyncEffect } from 'use-async-effect';
 import { handleError } from '../utils/errorHandling.js';
 
-export const NodeBody: FC<{ heightCache: HeightCache; node: ChartNode; suspended?: boolean }> = memo(
-  ({ heightCache, node, suspended = false }) =>
+export const NodeBody: FC<{ heightCache: HeightCache; node: ChartNode; interactive?: boolean; suspended?: boolean }> = memo(
+  ({ heightCache, node, interactive = true, suspended = false }) =>
     suspended ? (
       <SuspendedNodeBody heightCache={heightCache} node={node} />
     ) : (
-      <ActiveNodeBody heightCache={heightCache} node={node} />
+      <ActiveNodeBody heightCache={heightCache} interactive={interactive} node={node} />
     ),
 );
 
 NodeBody.displayName = 'NodeBody';
 
-const ActiveNodeBody: FC<{ heightCache: HeightCache; node: ChartNode }> = ({ heightCache, node }) => {
+const ActiveNodeBody: FC<{ heightCache: HeightCache; interactive: boolean; node: ChartNode }> = ({
+  heightCache,
+  interactive,
+  node,
+}) => {
   const { Body } = useUnknownNodeComponentDescriptorFor(node);
   useDependsOnPlugins();
 
   const body = Body ? <Body node={node} /> : <UnknownNodeBody heightCache={heightCache} node={node} />;
+  const readOnlyAttributes = interactive
+    ? {}
+    : ({
+        'aria-disabled': true,
+        inert: true,
+      } as Record<string, unknown>);
 
-  return <div className="node-body">{body}</div>;
+  return (
+    <div
+      {...readOnlyAttributes}
+      className={clsx('node-body', { 'node-body-readonly': !interactive })}
+    >
+      {body}
+    </div>
+  );
 };
 
 const SuspendedNodeBody: FC<{ heightCache: HeightCache; node: ChartNode }> = ({ heightCache, node }) => {
@@ -185,8 +203,8 @@ export const PlainNodeBody: FC<PlainNodeBodySpec> = memo(({ text }) => {
 
 PlainNodeBody.displayName = 'PlainNodeBody';
 
-export const MarkdownNodeBody: FC<MarkdownNodeBodySpec> = memo(({ text }) => {
-  const markdownBody = useMarkdown(text);
+export const MarkdownNodeBody: FC<MarkdownNodeBodySpec> = memo(({ text, disableLinks }) => {
+  const markdownBody = useMarkdown(text, true, { disableLinks });
 
   return <div className="pre-wrap node-body-markdown" dangerouslySetInnerHTML={markdownBody} />;
 });

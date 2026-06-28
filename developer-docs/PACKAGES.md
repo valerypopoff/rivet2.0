@@ -47,6 +47,8 @@ Shared runtime foundation for the entire repo.
 - built-in nodes
 - built-in plugins
 - `RegistryAssembly` - centralized registry creation and plugin assembly
+- project-level library-node types and `NodePrefabResolver`, which let graph-local `nodePrefabInstance` nodes execute as their project-level source nodes while keeping instance ids and placement
+- project-level minimal web app types (`Project.uiGraphs`, `UiGraph`, and UI action binding helpers) used by the app preview and Node web-app handler
 - serialization with shared V3/V4 helpers (`serializationHelpers.ts`)
 - recording/playback support
 - runtime integration contracts
@@ -55,7 +57,8 @@ Shared runtime foundation for the entire repo.
 - `pQueueCompat` - CJS/ESM interop for p-queue
 - shared runtime settings normalization through `resolveProcessSettings(...)`
 - public execution helpers and streaming APIs
-- project comparison helpers such as `compareProjects(...)`, `getProjectConnectionComparisonKey(...)`, and `getProjectNodeFieldComparisons(...)`, which compare two project snapshots without mutating either side and expose stable graph/node/connection diagnostics for app and wrapper UIs. Node field comparisons recurse into nested node config, including `data`, so compare UIs can show only changed attributes instead of whole settings objects. Comment nodes are ignored entirely, including connections attached to comments, because they are canvas annotations rather than graph behavior. Node placement and z-order fields (`visualData.x`, `visualData.y`, and `visualData.zIndex`) are ignored for changed-node detection because they are canvas layout state, while visual size and color remain comparable node appearance fields. Subgraph per-instance port order fields (`data.inputPortOrder` and `data.outputPortOrder`) are also ignored because they only change the canvas order of existing ports, not the subgraph target or dataflow ids.
+- project comparison helpers such as `compareProjects(...)`, `getProjectConnectionComparisonKey(...)`, and `getProjectNodeFieldComparisons(...)`, which compare two project snapshots without mutating either side and expose stable graph/node/connection diagnostics for app and wrapper UIs. The public import surface and public comparison types stay at [`packages/core/src/utils/projectComparison.ts`](../packages/core/src/utils/projectComparison.ts); consumers should not import the focused internal helpers under [`packages/core/src/utils/projectComparison/`](../packages/core/src/utils/projectComparison/) directly. Those internal helpers own graph, node, connection, field-path, library-node, and summary policy. Node field comparisons recurse into nested node config, including `data`, so compare UIs can show only changed attributes instead of whole settings objects. Library-node additions/removals/changes are compared at the project level; linked nodes are not double-counted as changed merely because their source changed. Comment nodes are ignored entirely, including connections attached to comments, because they are canvas annotations rather than graph behavior. Node placement and z-order fields (`visualData.x`, `visualData.y`, and `visualData.zIndex`) are ignored for changed-node detection because they are canvas layout state, while visual size and color remain comparable node appearance fields. Subgraph per-instance port order fields (`data.inputPortOrder` and `data.outputPortOrder`) are also ignored because they only change the canvas order of existing ports, not the subgraph target or dataflow ids.
+  Minimal web app additions/removals/changes are compared as project-level UI graph changes; they do not create graph-level overlays because UI graphs are not workflow canvases.
 
 ### Important downstream consumers
 
@@ -89,6 +92,7 @@ From `src/index.ts` and related files:
 - `runGraph(...)`
 - `createProcessor(...)`
 - `createGraphRunner(...)`
+- `createRivetWebAppHandler(...)`
 - debugger server APIs
 - dataset/debugger/project-reference helpers
 
@@ -102,6 +106,10 @@ This package is the shared Node runtime used by:
 
 It is not just a convenience wrapper. It sets Node-default providers, debugger integration, env-based plugin config fallback, and Node-specific reference loading. Runtime settings still flow through core's shared `resolveProcessSettings(...)` helper instead of being rebuilt independently in the Node package.
 It also supplies a default tokenizer for Node-side runs when the caller does not provide one explicitly.
+
+`createRivetWebAppHandler(...)` is the minimal web-app serving seam. It takes a loaded `Project`, selects one `Project.uiGraphs` entry, serves a small declarative renderer, and exposes a Fetch-style action endpoint that runs ordinary same-project graphs through `createProcessor(...)`. Wrappers can also use `renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` directly when they need Express-owned timing, recording metadata, debug headers, or error envelopes. `createProcessorOptions` can be static for simple hosts or a request-scoped resolver that receives the `Request`, UI graph, button component, current UI state, mapped action input, and optional revision key; the selected button graph always overrides any supplied `graph` value. Resolver-provided `inputs` and `context` win, otherwise Rivet uses the UI input mappings and `resolveContext(request)`. Raw UI state values are converted into Rivet Data Values consistently in desktop preview and Node-hosted actions: raw objects become `object`, homogeneous raw arrays become typed arrays such as `string[]`, `number[]`, `boolean[]`, or `object[]`, and mixed, empty, null-containing, or nested arrays become `any[]`. Action lifecycle hooks are observability-only and are not an auth or route-policy seam. Optional `revisionKey` is embedded in the served HTML and echoed by action calls so wrappers can detect stale page/action mismatches; Rivet treats it as an opaque consistency token, not as authorization. Action requests are JSON-only and require object-shaped UI state; malformed JSON, non-object request bodies, non-object state, and revision mismatches fail with `RivetWebAppActionHttpError` statuses so lower-level wrapper adapters can preserve clear HTTP responses. Action state patches use the shared UI graph mappers: ordered `inputMappings` send several web-app data keys to several Graph Input IDs, ordered `outputs` can save several graph outputs back to several web-app data keys, no `outputKey` stores the full graph output map, and `outputKey` stores `outputs[outputKey].value` so wrappers and desktop preview agree on how to display Graph Output node values. Legacy `inputs` plus `outputKey` / `outputStateKey` are still accepted for old saved web apps. The server-rendered bootstrap payload is embedded with script-safe JSON escaping, and embedded client scripts are guarded against accidental `</script>` terminators. Markdown components and Markdown output mode use the same `marked` engine version and GitHub Markdown CSS baseline as the app preview, but web apps configure the renderer to escape raw HTML tokens so project content cannot inject arbitrary HTML or scripts. Node-hosted HTML inlines the packaged `github-markdown-css/github-markdown-dark-dimmed.css` before [`RIVET_WEB_APP_RENDERER_CSS`](../packages/core/src/model/UiGraphRendererStyles.ts), then inlines the packaged `marked` browser build before the declarative client renderer. Hosted HTML and the desktop preview share the same `.rivet-web-app-root` / `.rivet-web-app-surface` DOM shell; Node-hosted pages add only the exported document reset needed to remove browser body margins and fill the viewport. The shared renderer CSS owns web-app Markdown-body neutralization, including transparent Markdown backgrounds and inherited typography, so hosted pages do not depend on app-global `index.css` overrides. It also owns the web-app root font size, button radius, Markdown code/pre selectors, and preformatted output typography: hosted and preview surfaces use the same 15px and 6px defaults, wrappers can override them with `--rivet-web-app-host-font-size` / `--rivet-web-app-host-button-radius`, and output `<pre>` content uses an explicit monospace stack so it does not drift to browser defaults. Web-app input and textarea controls carry the app-global `inputarea` escape class in both renderers so Rivet's editor-wide form-control reset cannot affect preview-only controls. This keeps text, markdown, input, textarea, button, and output card styling synchronized without duplicating CSS in the app and node packages. It deliberately does not own authentication, domains, tenancy, deployment routing, or wrapper-specific request adapters; wrappers should adapt its `{ handleRequest(request) }` shape or its lower-level helpers to Express, Fastify, custom HTTP servers, or VM routing.
+
+The Node CJS bundle maps `import.meta.url` to `__filename` in [`packages/core/bundle.esbuild.ts`](../packages/core/bundle.esbuild.ts). Keep that mapping while the web-app handler resolves packaged browser-side assets such as `marked/marked.min.js`; ESM uses `import.meta.url`, and CJS needs the bundled filename as the equivalent resolver base.
 
 ### Runtime-speed characterization
 
@@ -400,11 +408,12 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 - downstream package source imports core through `@valerypopoff/rivet2-core`, not by reaching into `packages/core/src/...`; the shared root ESLint config enforces that boundary with `no-restricted-imports`
 - app-only convenience helpers, such as type-safe object iteration, live in the app package; shared behavior that must match core runtime semantics is exported intentionally by core first
-- hosted/wrapper applications that mount Rivet's editor from a vendored `rivet/` folder should import directly from local source paths such as `../rivet/packages/app/src/host` and `../rivet/packages/app/src/host.css`, then render `RivetAppHost` instead of rendering `RivetApp` directly; that host shell owns QueryClient, provider context, executor-session context, async storage bootstrap, optional post-app bridge children, lifecycle callbacks, host UI policy such as browser top-bar Menu visibility, a stable imperative workspace-host handle through `onWorkspaceHostReady` / `RivetWorkspaceHostBridge` / `useRivetWorkspaceHost`, optional hosted executor websocket configuration through `executor.internalExecutorUrl`, project-comparison helper re-exports for wrapper-owned compare UIs including node field diffs, and the shared host style entrypoint, including the Atlaskit reset that keeps canvas Markdown spacing consistent with standalone Rivet. The workspace-host handle also exposes `setProjectTabUiState(...)` and the `tabUi` open/replace option for transient wrapper-owned project-tab presentation such as preview tabs, `startOpeningProjectTab(...)` / `finishOpeningProjectTab(...)` / `cancelOpeningProjectTab(...)` for transient loading project tabs before a full snapshot is available, `updateProjectMetadata(...)` for externally owned project title/description changes on an already-open project, `markCurrentProjectClean(...)` / `markProjectClean(...)` for wrapper-owned save flows that need to re-seed Rivet's unsaved-changes baseline without reaching into app-internal dirty-state atoms or reloading the project, plus `startProjectCompare(...)` / `stopProjectCompare(...)` for wrapper-owned compare flows that need optional reference/current side labels such as `Published` / `Unpublished`. `setProjectTabUiState(projectId, { preview: true })` makes the upstream project tab render as a preview tab for the current editor session only; `{ preview: false }` clears it, closing the tab clears it automatically, and the state is never written to project YAML, project data, workspace storage, or wrapper metadata. `startOpeningProjectTab({ title, path }, { tabUi: { preview: true }, replaceCurrent: true })` creates only a loading tab and canvas placeholder; it does not create a project, dirty baseline, context state, or runnable/savable editor target. The tab itself shows only the title/preview/close affordances; the visible preloader belongs in the editor area and uses the same canvas background color setting plus Rivet's text-colored node-running circular indicator. `finishOpeningProjectTab(openingTabId, snapshot)` swaps in a real clean snapshot through the normal open path and returns `false` if the placeholder was already closed; `cancelOpeningProjectTab(openingTabId)` removes the placeholder without unsaved-change confirmation. Opening tabs count for hosted open-tab count callbacks, while callback `projectIds` still contains only real project ids. `updateProjectMetadata(..., { title }, { path, persistedExternally: true })` updates the active project metadata or inactive opened-project snapshot plus the tab title/path; when the project was already dirty, the external-persisted flag does not clear unrelated unsaved graph edits. Compare labels are transient UI state for the active compare session and are not project YAML or wrapper metadata. The style entrypoint also locks the document and Rivet app shell to the iframe viewport so modal scroll restoration cannot shift or clip the editor after fullscreen output modals close. Hosted shells must make both `Roboto` and `Roboto Mono` available, because Rivet's shared typography tokens default ordinary UI text to Roboto and explicit code/monospace surfaces to Roboto Mono.
+- hosted/wrapper applications that mount Rivet's editor from a vendored `rivet/` folder should import directly from local source paths such as `../rivet/packages/app/src/host` and `../rivet/packages/app/src/host.css`, then render `RivetAppHost` instead of rendering `RivetApp` directly; that host shell owns QueryClient, provider context, executor-session context, async storage bootstrap, optional post-app bridge children, lifecycle callbacks, host UI policy such as browser top-bar Menu visibility, a stable imperative workspace-host handle through `onWorkspaceHostReady` / `RivetWorkspaceHostBridge` / `useRivetWorkspaceHost`, optional hosted executor websocket configuration through `executor.internalExecutorUrl`, project-comparison helper re-exports for wrapper-owned compare UIs including node field diffs, and the shared host style entrypoint, including the Atlaskit reset that keeps canvas Markdown spacing consistent with standalone Rivet. The public workspace-host facade remains `useRivetWorkspaceHost`; its internal implementation is split under `packages/app/src/hooks/workspaceHost/`, but hosted wrappers should not import those internal operation hooks. The workspace-host handle also exposes `setProjectTabUiState(...)` and the `tabUi` open/replace option for transient wrapper-owned project-tab presentation such as preview tabs, `startOpeningProjectTab(...)` / `finishOpeningProjectTab(...)` / `cancelOpeningProjectTab(...)` for transient loading project tabs before a full snapshot is available, `updateProjectMetadata(...)` for externally owned project title/description changes on an already-open project, `markCurrentProjectClean(...)` / `markProjectClean(...)` for wrapper-owned save flows that need to re-seed Rivet's unsaved-changes baseline without reaching into app-internal dirty-state atoms or reloading the project, plus `startProjectCompare(...)` / `stopProjectCompare(...)` for wrapper-owned compare flows that need optional reference/current side labels such as `Published` / `Unpublished`. `setProjectTabUiState(projectId, { preview: true })` makes the upstream project tab render as a preview tab for the current editor session only; `{ preview: false }` clears it, closing the tab clears it automatically, and the state is never written to project YAML, project data, workspace storage, or wrapper metadata. `startOpeningProjectTab({ title, path }, { tabUi: { preview: true }, replaceCurrent: true })` creates only a loading tab and canvas placeholder; it does not create a project, dirty baseline, context state, or runnable/savable editor target. The tab itself shows only the title/preview/close affordances; the visible preloader belongs in the editor area and uses the same canvas background color setting plus Rivet's text-colored node-running circular indicator. `finishOpeningProjectTab(openingTabId, snapshot)` swaps in a real clean snapshot through the normal open path and returns `false` if the placeholder was already closed; `cancelOpeningProjectTab(openingTabId)` removes the placeholder without unsaved-change confirmation. Opening tabs count for hosted open-tab count callbacks, while callback `projectIds` still contains only real project ids. `updateProjectMetadata(..., { title }, { path, persistedExternally: true })` updates the active project metadata or inactive opened-project snapshot plus the tab title/path; when the project was already dirty, the external-persisted flag does not clear unrelated unsaved graph edits. Compare labels are transient UI state for the active compare session and are not project YAML or wrapper metadata. The style entrypoint also locks the document and Rivet app shell to the iframe viewport so modal scroll restoration cannot shift or clip the editor after fullscreen output modals close. Hosted shells must make both `Roboto` and `Roboto Mono` available, because Rivet's shared typography tokens default ordinary UI text to Roboto and explicit code/monospace surfaces to Roboto Mono.
 - `RivetAppHost` provider overrides are the supported hosted integration layer for IO, datasets, env vars, storage, and path policy behavior; wrappers should inject those providers instead of aliasing private globals or Tauri modules
 - `RivetAppHost` UI config is the supported wrapper layer for hiding top-level browser Menu items. Pass `ui={{ fileMenu: { visibleItems: [...] } }}` with stable `FileMenuItemId` values to filter the canonical dropdown order and labels, including the browser-only `Rivet settings` label for the stable `settings` command id and the `Help` item for the stable `get_help` command id. The public config key and item-id type retain the `fileMenu` name for compatibility even though the visible top-bar trigger is labeled `Menu`. This does not disable commands globally, and it does not rewrite the desktop/Tauri native application menu; `useMenuCommands` remains the command-behavior owner.
 - execution transport/session ownership is centralized under `src/hooks/executorSession.ts`, `src/providers/ExecutorSessionContext.tsx`, and `src/hooks/useExecutorSessionCoordinator.ts`; `src/hooks/useExecutorSession.ts` is now only a compatibility/read-only state hook that exposes `useExecutorSessionState()` plus coordinator exports
 - project/graph load-save-switch sequencing is centralized under `src/hooks/useWorkspaceTransitions.ts` and `src/utils/workspaceTransitions.ts`; per-open-project executor mode restoration is part of that transition layer and uses editor tab metadata rather than project serialization
+- Remote Debugger endpoints used by hosted wrappers must allow multiple simultaneous websocket clients for the same URL/port. Rivet's editor keeps one executor-session runtime per open project tab and will open independent browser WebSocket objects for different projects even when the URL is identical; if the hosted endpoint enforces a single active client and closes the previous socket when a new tab connects, the older project tab will appear to detach even though the app-side registry is correctly project-scoped.
 - remembered editor-view persistence is handled app-side through `src/state/projectEditor.ts`, `src/hooks/useSyncCurrentProjectEditorState.ts`, and `src/hooks/useRestorePersistedWorkspace.ts` rather than through project-file serialization
 - platform-specific capabilities are split under `src/utils/platform/*`; the old `nativeApp.ts` barrel has been removed so desktop integrations import only the capability they actually use
 - because the app's Vite dev/build path resolves `@valerypopoff/rivet2-core` to core source, browser-reachable provider dependencies that are imported by core Chat v2 code may also need visibility in `packages/app/package.json`; `@ai-sdk/openai-compatible` is intentionally listed in both core and app for that PnP/Vite source-resolution boundary
@@ -459,6 +468,29 @@ The sidecar:
 - supports preload, pause, resume, abort, and user-input messages
 - supports editor run-from execution by accepting startup `preloadData` in the same `run` message as explicit `runToNodeIds`; the sidecar applies that preload after creating the processor and before calling `run()`
 
+When several app tabs connect to the same sidecar, the sidecar tracks which
+websocket client created each `GraphProcessor`. Processor lifecycle broadcasts
+and `codeConsole` messages are sent only back to that originating client, and
+client control messages such as abort, pause, resume, and user input are routed
+only to processors started by that same client. Control messages also carry the
+active remote run request id when the app knows it, and `startDebuggerServer`
+filters the client's processors to that matching request before invoking the
+control method. This protects overlapping runs that share one client or URL,
+while preserving legacy unscoped controls for clients/processors without request
+ids. This lets multiple Node-mode project tabs share one sidecar URL/port
+without one tab stealing another tab's terminal events or controls. Uploaded
+project/settings/static-data state and dataset proxying follow the same client
+boundary: the app-executor sidecar keeps debugger state and a
+`DebuggerDatasetProvider` per websocket client, so one open project tab cannot
+overwrite another tab's uploaded project or consume another tab's dataset
+request/response ids. Editor execution caches are scoped by websocket client and
+project id for the same reason: two tabs with the same project id but different
+unsaved editor state must not share cached node execution helpers through the
+process-wide sidecar. The sidecar passes `createProcessor(...)` a client-scoped
+debugger wrapper, so processor ownership is registered at debugger attach time
+rather than after processor construction; controls sent during run startup must
+still see the processor as owned by the originating websocket.
+
 The worker-backed runner is scoped to the app executor. `@valerypopoff/rivet2-node`
 compatible-profile `createProcessor(...)` callers still use `NodeCodeRunner` by
 default unless they pass a custom `codeRunner`; omitted-default
@@ -508,7 +540,7 @@ still giving hosted executors a stable "prepare, then resolve" seam.
 
 ### Build model
 
-The executor source is ESM (`.mts`) but is bundled to CJS (`executor-bundle.cjs`) by esbuild so that `pkg` can statically analyze it for native binary compilation. A custom esbuild plugin inlines `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` from their workspace source entrypoints instead of going through built package exports. That source mapping is part of the desktop Node-executor contract: rebuilding the sidecar during `yarn dev` must pick up current core/node execution changes even when package `dist` folders are stale.
+The executor source is ESM (`.mts`) but is bundled to CJS (`executor-bundle.cjs`) by esbuild so that `pkg` can statically analyze it for native binary compilation. A custom esbuild plugin inlines `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` from their workspace source entrypoints instead of going through built package exports. The app-executor bundle also maps `import.meta.url` to `__filename`, matching the Node package's CJS build, because the inlined Node web-app handler lazily resolves packaged browser assets from the bundle/package location. That source mapping is part of the desktop Node-executor contract: rebuilding the sidecar during `yarn dev` must pick up current core/node execution changes even when package `dist` folders are stale.
 
 ### Architectural significance
 
@@ -533,8 +565,25 @@ Operational CLI for running or serving Rivet graphs.
 
 Current command families:
 
+- `list <projectFile>`
+- `inspect <projectFile>`
+- `doctor <projectFile>`
 - `run <projectFile> [graphName]`
 - `serve [projectFile]`
+- `serve-app <projectFile> [uiGraph]`
+- `completion`
+
+### `list` / `inspect` command behavior
+
+Implemented in `src/commands/list.ts`.
+
+These commands load a `.rivet-project` file without opening datasets, creating processors, or running graphs. `list` prints a human-readable inventory, while `list --json` and `inspect` print the same machine-readable summary. The summary includes project metadata, resolved file path, graph names/IDs/main marker/node counts, web app names/IDs/component counts, Node Library items, and declared plugins. Keep these commands read-only; they are discovery and scripting helpers rather than execution paths.
+
+### `doctor` command behavior
+
+Implemented in `src/commands/doctor.ts`.
+
+`doctor` loads a `.rivet-project` file and reports common local/runtime readiness checks without creating processors, loading dataset contents, or mutating anything. It checks graph count, stale/missing main graph state, web app count, Node Library item count, declared plugins, project-reference hint paths, and the adjacent or explicit `.rivet-data` file path. Missing dataset files are informational by default and become errors only with `--require-dataset-file`. Human output is for users; `--json` is the stable scripting surface. Keep this command conservative: it should catch obvious CLI/runtime setup problems, not become a full semantic graph linter.
 
 ### `run` command behavior
 
@@ -544,15 +593,26 @@ Supports:
 
 - graph selection by name/ID
 - stdin JSON object inputs through `--inputs-stdin`
+- JSON file inputs through `--inputs-file`
 - repeated `--input key=value`
+- repeated `--input-json key=json`
 - repeated `--context key=value`
+- repeated `--context-json key=json` and `--context-file`
+- project-adjacent or explicit `.rivet-data` files through `NodeDatasetProvider`
+- project-reference resolution through the resolved `projectPath`
+- selected-output and unwrapped-output printing, with `--output-key` and `--unwrap-output` treated as mutually exclusive selectors before the project is loaded or executed
 - optional cost suppression
+- the same provider option override flags as the server commands
 
 Internally:
 
 - resolves the project file
+- loads `.env` before creating the processor, matching the server commands
 - loads the project through `rivet-node`
-- parses command input through `src/commandInputs.ts`, which rejects non-object JSON, allows empty string values, and preserves `=` characters inside values
+- parses command input through `src/commandInputs.ts`, which rejects non-object top-level JSON, allows empty string values, preserves `=` characters inside values, and wraps structured JSON values as Rivet Data Values. Raw JSON objects become `object` values; homogeneous raw JSON arrays become typed array Data Values such as `string[]`, `number[]`, `boolean[]`, or `object[]`; mixed, empty, null-containing, or nested arrays become `any[]` instead of guessing a narrower type.
+- creates a dataset provider from either `--dataset-file` or the project-adjacent `.rivet-data` path
+- validates missing or stale main graph references before processor creation, using positional `rivet run <projectFile> <graph>` suggestions rather than `serve --graph` suggestions
+- omits provider override fields unless the matching CLI flag is supplied, preserving `rivet-node`'s normal environment fallback behavior
 - builds a processor
 - runs it
 - prints JSON outputs
@@ -567,15 +627,49 @@ Supports:
 - optional dev reload mode
 - optional graph selection
 - optional graph-by-path routing
+- URL-safe named endpoint aliases at `/endpoints/:endpointName`
+- bearer-token auth through `--bearer-token` or `RIVET_CLI_BEARER_TOKEN`
+- exact-origin CORS headers through repeated `--cors-origin`
+- unauthenticated `GET /healthz`
+- project-adjacent or explicit `.rivet-data` files through `NodeDatasetProvider`
+- project-reference resolution through the resolved `projectPath`
+- selected output unwrapping through `--unwrap-output`
 - optional SSE streaming
 - optional single-node streaming
+- explicit host binding through `--host`, defaulting to `0.0.0.0` for Docker-friendly serving
 - OpenAI-related option overrides
 
 Architecturally, it is a thin HTTP wrapper around `rivet-node` processor creation and streaming helpers. Request bodies are parsed through the same object-input helper as `run`, so empty bodies become `{}` and arrays/primitives are rejected before execution. Project-file lookup resolves relative paths to absolute paths, handles directory inputs, and uses platform path helpers for suggestions so Windows paths do not get split with POSIX-only separators. Graph validation also checks that a stored main graph ID actually exists before the server starts. Non-streaming `run` and `serve` requests use the default omitted-profile Node runtime policy, so eligible headless runs get the automatic fast scheduler/cache path. `serve --stream` and `serve --stream-node` explicitly pass `runtimeProfile: 'compatible'` because those modes expose node lifecycle events over SSE, making scheduler ordering part of the client-visible contract.
 
+`serve` is implemented around a testable Hono app factory rather than binding a port directly in the command handler. Keep HTTP behavior such as auth, CORS, timing headers, endpoint alias validation, and JSON error envelopes in the CLI package; do not move wrapper-specific project resolution, recordings, or managed runtime-library behavior into the CLI. Shared CLI option builders own repeated dataset, provider, bearer-token, and CORS flags so `run`, `serve`, `serve-app`, and `doctor` do not drift. `serve` and `serve-app` use the shared HTTP server lifecycle helper for Hono binding and shutdown handling. Malformed request JSON and graph-selection problems return `400`; unexpected graph execution failures return `500`.
+When `--save-datasets` is used, the CLI warns that mutations are persisted by this single server process and are not a production concurrency policy.
+
+### `serve-app` command behavior
+
+Implemented in `src/commands/serveApp.ts`.
+
+Supports:
+
+- serving one project-contained Rivet web app by UI graph name or ID
+- automatic selection when the project contains exactly one web app
+- `GET /`, `GET /app.json`, and `POST /actions/run` through `createRivetWebAppHandler(...)`
+- optional base-path mounting through `--base-path`
+- optional dev reload mode through `--dev`, which reloads the project and recreates the dataset provider per web-app request
+- optional opaque revision consistency through `--revision-key`
+- the same host, bearer-token, CORS, dataset, provider-option, and project-path behavior as `serve`
+
+The CLI uses the Node package web-app serving API directly and does not duplicate renderer or UI-action protocol code. Both server commands pass `--host` to the Hono Node server and format startup URLs through the shared CLI HTTP helper so IPv4, hostnames, and IPv6 bindings are displayed consistently. Production wrapper servers should still prefer `createRivetWebAppHandler(...)`, `renderRivetWebAppHtml(...)`, or `runRivetWebAppAction(...)` directly so wrappers can own authentication, endpoint slug mapping, project materialization, recordings, telemetry, and deployment policy.
+In `--dev` mode, the selected web-app ID is pinned at startup so adding a second web app during reload does not make later requests ambiguous; project reload failures return JSON `500` responses instead of being conflated with missing routes.
+`/healthz` is reserved for the CLI health endpoint and cannot be used as the web-app base path.
+`serve-app --bearer-token` protects the HTML route too; browser navigation cannot attach that header by itself, so browser-facing deployments should put authentication in a reverse proxy or wrapper-owned session layer.
+
 ### Docker image behavior
 
-The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project`, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. Do not hardcode a separate package version in the Dockerfile.
+The CLI package's `prepack` script only builds the package; it deliberately does not copy the repository root README over the package-local CLI README. The CLI `verify` script runs build, lint, tests, package smoke, and a dry-run npm pack so release checks exercise the generated package contents. `smoke:package` creates packed tarballs from package-local metadata plus built files, checks that the generated CLI bin/type files are present, installs the local package tarballs into a temporary npm project, runs the direct built `bin/cli.js` against the checked-in example project, and also checks the installed `rivet` command through offline `npm exec`. Installed-package smoke subprocesses clear inherited Yarn PnP `NODE_OPTIONS` preloads so the check behaves like a normal npm installation even when launched from a Yarn workspace script. `smoke:docker` is opt-in because it requires a Docker daemon; it builds a temporary image from the current local package tarball plus the real entrypoint, runs the image against the example project, and removes the temporary smoke image afterward.
+
+Public workspace package manifests intentionally do not define a `publish` lifecycle script. Direct `npm publish` from `packages/core`, `packages/node`, `packages/trivet`, or `packages/cli` is not the supported release path because those manifests can still contain workspace-only metadata and dependencies. Use the root npm publish script, which stages package-manager-neutral manifests before publishing.
+
+The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project` when no CLI subcommand is passed, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. If the first argument is `completion`, `doctor`, `list`, `inspect`, `run`, `serve`, or `serve-app`, the entrypoint runs that CLI command directly, which lets the same image inspect projects or host web apps without overriding the Docker entrypoint. CLI shell scripts are kept LF-only through `.gitattributes` because they run inside Linux containers. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. The Dockerfile's default build arg is only a local-build fallback and should be kept in sync with the package version when the CLI version is bumped.
 
 ## `@valerypopoff/trivet` (`packages/trivet/`)
 

@@ -12,7 +12,14 @@ import {
   type PortId,
   type Project,
   type ProjectId,
+  type UiComponentId,
+  type UiGraphId,
 } from '../../src/index.js';
+import { compareConnections } from '../../src/utils/projectComparison/connections.js';
+import { compareGraphs } from '../../src/utils/projectComparison/graphs.js';
+import { compareNodes, getComparableGraphNodes } from '../../src/utils/projectComparison/nodes.js';
+import { summarizeGraphComparison } from '../../src/utils/projectComparison/summaries.js';
+import { getChangedValueComparisons } from '../../src/utils/projectComparison/values.js';
 
 function node(id: string, data: unknown = { value: id }): ChartNode {
   return {
@@ -127,14 +134,27 @@ test('compareProjects ignores comment node additions, removals, changes, and com
   });
 });
 
-test('compareProjects ignores node placement and z-index-only changes', () => {
+test('project comparison node policy filters comments before node diffing', () => {
+  const comparableNodes = getComparableGraphNodes([node('kept'), commentNode('comment')]);
+  const nodeComparisons = compareNodes([node('same'), node('removed')], [node('same'), node('added')]);
+
+  assert.deepEqual(
+    comparableNodes.map((item) => item.id),
+    ['kept' as NodeId],
+  );
+  assert.equal(nodeComparisons['same' as NodeId]?.kind, 'unchanged');
+  assert.equal(nodeComparisons['removed' as NodeId]?.kind, 'removed');
+  assert.equal(nodeComparisons['added' as NodeId]?.kind, 'added');
+});
+
+test('compareProjects ignores node visualData-only changes', () => {
   const before = {
     ...node('same'),
-    visualData: { x: 10, y: 20, width: 200, zIndex: 1 },
+    visualData: { x: 10, y: 20, width: 200, zIndex: 1, color: { bg: 'red', border: 'transparent' } },
   };
   const after = {
     ...node('same'),
-    visualData: { x: 800, y: 900, width: 200, zIndex: 99 },
+    visualData: { x: 800, y: 900, width: 200, zIndex: 99, color: { bg: 'blue', border: 'transparent' } },
   };
   const result = compareProjects(project([graph('main', [before])]), project([graph('main', [after])]));
 
@@ -152,13 +172,13 @@ test('compareProjects ignores node placement and z-index-only changes', () => {
   });
 });
 
-test('getProjectNodeFieldComparisons omits node placement and z-index changes but keeps visual style changes', () => {
+test('getProjectNodeFieldComparisons omits visualData changes but keeps semantic node data changes', () => {
   const before = {
-    ...node('changed'),
+    ...node('changed', { value: 'before' }),
     visualData: { x: 10, y: 20, width: 200, zIndex: 1, color: { bg: 'red', border: 'transparent' } },
   };
   const after = {
-    ...node('changed'),
+    ...node('changed', { value: 'after' }),
     visualData: { x: 800, y: 900, width: 240, zIndex: 99, color: { bg: 'blue', border: 'transparent' } },
   };
   const result = compareProjects(project([graph('main', [before])]), project([graph('main', [after])]));
@@ -169,7 +189,7 @@ test('getProjectNodeFieldComparisons omits node placement and z-index changes bu
   assert.equal(changedNode.kind, 'changed');
   assert.deepEqual(
     fieldComparisons.map((field) => field.field),
-    ['visualData.color.bg', 'visualData.width'],
+    ['data.value'],
   );
 });
 
@@ -256,8 +276,12 @@ test('compareProjects compares connections exactly and marks port rewires as cha
   const beforeRemoved = connection('c', 'd');
   const afterAdded = connection('e', 'f');
   const result = compareProjects(
-    project([graph('main', [node('a'), node('b'), node('c'), node('d'), node('e'), node('f')], [beforeRewired, beforeRemoved])]),
-    project([graph('main', [node('a'), node('b'), node('c'), node('d'), node('e'), node('f')], [afterRewired, afterAdded])]),
+    project([
+      graph('main', [node('a'), node('b'), node('c'), node('d'), node('e'), node('f')], [beforeRewired, beforeRemoved]),
+    ]),
+    project([
+      graph('main', [node('a'), node('b'), node('c'), node('d'), node('e'), node('f')], [afterRewired, afterAdded]),
+    ]),
   );
 
   const main = result.graphs['main' as GraphId]!;
@@ -269,6 +293,123 @@ test('compareProjects compares connections exactly and marks port rewires as cha
   assert.equal(main.summary.changedConnections, 1);
   assert.equal(main.summary.removedConnections, 1);
   assert.equal(main.summary.addedConnections, 1);
+});
+
+test('project comparison connection policy pairs rewires before summarizing added and removed wires', () => {
+  const beforeRewired = connection('source', 'target', 'old-output', 'input');
+  const afterRewired = connection('source', 'target', 'new-output', 'input');
+  const removed = connection('removed-source', 'removed-target');
+  const added = connection('added-source', 'added-target');
+  const comparisons = compareConnections([beforeRewired, removed], [afterRewired, added]);
+  const summary = summarizeGraphComparison({}, comparisons);
+
+  assert.equal(comparisons[getProjectConnectionComparisonKey(beforeRewired)]?.kind, 'changed');
+  assert.equal(comparisons[getProjectConnectionComparisonKey(afterRewired)]?.kind, 'changed');
+  assert.equal(comparisons[getProjectConnectionComparisonKey(removed)]?.kind, 'removed');
+  assert.equal(comparisons[getProjectConnectionComparisonKey(added)]?.kind, 'added');
+  assert.deepEqual(summary, {
+    addedNodes: 0,
+    removedNodes: 0,
+    changedNodes: 0,
+    addedConnections: 1,
+    removedConnections: 1,
+    changedConnections: 1,
+  });
+});
+
+test('project comparison graph policy combines metadata, node, and connection changes', () => {
+  const beforeGraph = graph('main', [node('same')], [], 'Before');
+  const afterGraph = graph('main', [node('same'), node('added')], [connection('same', 'added')], 'After');
+  const comparison = compareGraphs('main' as GraphId, beforeGraph, afterGraph);
+
+  assert.equal(comparison.kind, 'changed');
+  assert.equal(comparison.metadataChanged, true);
+  assert.equal(comparison.nodes['same' as NodeId]?.kind, 'unchanged');
+  assert.equal(comparison.nodes['added' as NodeId]?.kind, 'added');
+  assert.equal(Object.values(comparison.connections)[0]?.kind, 'added');
+});
+
+test('project comparison one-sided graph connection entries preserve optional side shape', () => {
+  const addedConnection = connection('source', 'target');
+  const addedComparison = compareGraphs(
+    'added' as GraphId,
+    undefined,
+    graph('added', [node('source'), node('target')], [addedConnection]),
+  );
+  const removedComparison = compareGraphs(
+    'removed' as GraphId,
+    graph('removed', [node('source'), node('target')], [addedConnection]),
+    undefined,
+  );
+
+  assert.equal('before' in Object.values(addedComparison.connections)[0]!, false);
+  assert.equal('after' in Object.values(removedComparison.connections)[0]!, false);
+});
+
+test('compareProjects summarizes added and removed graph contents through the shared graph summary path', () => {
+  const beforeProject = project([
+    graph('old', [node('old-source'), node('old-target')], [connection('old-source', 'old-target')]),
+  ]);
+  const afterProject = project([
+    graph('new', [node('new-source'), node('new-target')], [connection('new-source', 'new-target')]),
+  ]);
+  const comparison = compareProjects(beforeProject, afterProject);
+
+  assert.deepEqual(comparison.summary, {
+    addedGraphs: 1,
+    removedGraphs: 1,
+    changedGraphs: 0,
+    addedNodes: 2,
+    removedNodes: 2,
+    changedNodes: 0,
+    addedConnections: 1,
+    removedConnections: 1,
+    changedConnections: 0,
+  });
+});
+
+test('compareProjects summarizes added, removed, and changed UI graphs', () => {
+  const removedUiGraphId = 'removed-ui-graph' as UiGraphId;
+  const changedUiGraphId = 'changed-ui-graph' as UiGraphId;
+  const addedUiGraphId = 'added-ui-graph' as UiGraphId;
+  const beforeProject = {
+    ...project([graph('main', [])]),
+    uiGraphs: {
+      [removedUiGraphId]: {
+        id: removedUiGraphId,
+        name: 'Removed app',
+        components: [],
+      },
+      [changedUiGraphId]: {
+        id: changedUiGraphId,
+        name: 'Changed app',
+        components: [],
+      },
+    },
+  } satisfies Project;
+  const afterProject = {
+    ...project([graph('main', [])]),
+    uiGraphs: {
+      [changedUiGraphId]: {
+        id: changedUiGraphId,
+        name: 'Changed app',
+        components: [{ id: 'text' as UiComponentId, kind: 'text', text: 'Updated' }],
+      },
+      [addedUiGraphId]: {
+        id: addedUiGraphId,
+        name: 'Added app',
+        components: [],
+      },
+    },
+  } satisfies Project;
+  const comparison = compareProjects(beforeProject, afterProject);
+
+  assert.equal(comparison.uiGraphs?.[removedUiGraphId]?.kind, 'removed');
+  assert.equal(comparison.uiGraphs?.[changedUiGraphId]?.kind, 'changed');
+  assert.equal(comparison.uiGraphs?.[addedUiGraphId]?.kind, 'added');
+  assert.equal(comparison.summary.removedUiGraphs, 1);
+  assert.equal(comparison.summary.changedUiGraphs, 1);
+  assert.equal(comparison.summary.addedUiGraphs, 1);
 });
 
 test('compareProjects ignores connection bend-point-only changes', () => {
@@ -300,12 +441,15 @@ test('getProjectNodeFieldComparisons reports changed node config fields', () => 
     fieldComparisons.map((field) => field.field),
     ['data.value', 'title'],
   );
-  assert.deepEqual(fieldComparisons.find((field) => field.field === 'title'), {
-    after: 'Renamed',
-    before: 'changed',
-    field: 'title',
-    path: ['title'],
-  });
+  assert.deepEqual(
+    fieldComparisons.find((field) => field.field === 'title'),
+    {
+      after: 'Renamed',
+      before: 'changed',
+      field: 'title',
+      path: ['title'],
+    },
+  );
 });
 
 test('getProjectNodeFieldComparisons reports only nested attributes that changed', () => {
@@ -344,4 +488,18 @@ test('getProjectNodeFieldComparisons reports array item changes by index', () =>
       path: ['data', 'items', '1'],
     },
   ]);
+});
+
+test('project comparison field-path policy formats nested keys and array indexes', () => {
+  assert.deepEqual(
+    getChangedValueComparisons([], { data: { 'spaced key': ['before'] } }, { data: { 'spaced key': ['after'] } }),
+    [
+      {
+        before: 'before',
+        after: 'after',
+        field: 'data["spaced key"][0]',
+        path: ['data', 'spaced key', '0'],
+      },
+    ],
+  );
 });

@@ -187,7 +187,7 @@ and [`scripts/checks/check-doc-links.mjs`](../scripts/checks/check-doc-links.mjs
 The test-style script fails when `test.only`, `it.only`, `describe.only`,
 `suite.only`, or `context.only` calls are present in tracked or untracked
 non-ignored test files. It also prints report-only lists of test files that use
-`readFileSync` or `.skip`; those reports keep the remaining source-shape
+`readFileSync`, async `readFile(...)`, or `.skip`; those reports keep the remaining source-shape
 guardrails and any temporary skipped tests visible without blocking cleanup
 work.
 
@@ -754,6 +754,13 @@ normal npm dependency on `@valerypopoff/rivet2-core`,
 `@valerypopoff/trivet` receives the same normal npm dependency on core, and
 `@valerypopoff/rivet2-cli` receives a normal npm dependency on
 `@valerypopoff/rivet2-node`.
+
+The public workspace packages intentionally do not define package-level
+`publish` lifecycle scripts. Publishing directly from a workspace package
+directory is not supported because those manifests can still contain
+workspace-only metadata and dependencies. Always use the root
+`scripts/publish-npm-packages.mjs` path, or the GitHub workflow that calls it,
+so package manifests are staged and normalized before npm sees them.
 
 ## `rename-release-assets.yml`
 

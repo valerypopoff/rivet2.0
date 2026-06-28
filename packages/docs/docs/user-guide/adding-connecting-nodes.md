@@ -14,6 +14,18 @@ Nodes are grouped by their category. Selecting a node will add it to the graph w
 
 See the [Node Reference](../node-reference) for more information about all possible nodes that can be added.
 
+## Reusing Nodes with the Node Library
+
+Use the **Node Library** entry in the graph tree when you have one configured node that you want to reuse in several graphs. Nodes created there are **library nodes**. They are saved in the project file, but they are not executable graphs and cannot be wired together inside the library. Their input and output ports are shown only to help you verify their setup. Graph Input, Graph Output, Referenced Graph Alias, Comment, and linked nodes cannot be added to the library.
+
+The library canvas uses the same spatial editing tools as normal graphs. You can select several library nodes, align them, resize them, delete unused ones, open their settings, close settings by clicking the canvas, and Alt-drag a library node to duplicate it. To turn existing duplicated graph nodes into library nodes, copy nodes in a normal graph, open the Node Library, and paste them there. Rivet creates one library node per supported pasted node; graph connections are not pasted into the library, and Graph Input, Graph Output, Referenced Graph Alias, Comment, and linked nodes are skipped.
+
+To use a library node in a graph, right-click the graph canvas, open the **Library** section of the add-node menu, and choose it. Rivet creates a **linked node**. The linked node keeps its own position, size, and graph connections, but its title, color, settings, ports, split/conditional/disabled behavior, and runtime behavior all come from the library node.
+
+Editing a library node updates every linked node. Per-link overrides are not supported yet, so linked nodes do not open their own settings panel, do not show their own gear icon, and any controls shown in the linked node body are display-only. Double-clicking a linked node, clicking its link icon, or choosing **Open library node** opens the Node Library, centers the library node, and opens its settings. You cannot delete a library node while any graph still links to it.
+
+Side-effect library nodes still run separately for every link. For example, two linked nodes for the same Set Global, HTTP Call, Code, or LLM node each execute at their own place in the graph.
+
 ## Moving Nodes
 
 Click and drag on the title bar of a node to move it on the node canvas. You can also select multiple nodes by holding shift and clicking on the title bars of multiple nodes. You can then move all of the selected nodes as a group.
@@ -22,7 +34,7 @@ When moving a Comment node, hold **Ctrl** on Windows/Linux or **Cmd** on macOS t
 
 ## Deleting Nodes
 
-Right click on a node and select **Delete** to delete it. **Warning: There is no undo at this time!**
+Right click on a node and select **Delete** to delete it. You can also select one or more nodes and press **Delete**. On macOS keyboards without a dedicated Delete key, press **Backspace** instead.
 
 ## Connecting Nodes
 
@@ -38,7 +50,7 @@ For nodes that are far apart, you can start a connection from an output port and
 
 To manually bend a connection, hover the wire and click the ghost circle that appears. The circle becomes a bend handle; drag it anywhere on the canvas to route the wire through that point. Double-click the bend handle to remove it and return the connection to its automatic route. Bend handles are saved in the project file as visual layout only: they do not change which ports are connected or how the graph runs.
 
-Some nodes create numbered ports as you connect more wires, such as Did Run, Array, Join, Coalesce, Assemble Prompt, Assemble Message, Race Inputs, Passthrough, and Delay. To clean up crossed wires on these nodes, right-click the node and choose **Rearrange inputs** or **Rearrange inputs/outputs**, then drag the rounded port labels into the order you want. The port circles still create and rewire connections; only the labels drag in rearrange mode. For Passthrough and Delay, each input's matching output moves with it. For order-sensitive nodes like Array, Join, Assemble Prompt, Assemble Message, and Coalesce, rearranging ports is equivalent to reconnecting those wires by hand and can change the value the node produces.
+Some nodes create numbered ports as you connect more wires, such as Did Run, Array, Join, Coalesce, Assemble Prompt, Assemble Message, Race Inputs, Passthrough, and Delay. To clean up crossed wires on these nodes, right-click the node and choose **Rearrange inputs** or **Rearrange inputs/outputs**, then drag the rounded port labels into the order you want. This also works on linked nodes whose library source has rearrangeable variadic ports, because the command only rewires the graph-local connections. The port circles still create and rewire connections; only the labels drag in rearrange mode. For Passthrough and Delay, each input's matching output moves with it. For order-sensitive nodes like Array, Join, Assemble Prompt, Assemble Message, and Coalesce, rearranging ports is equivalent to reconnecting those wires by hand and can change the value the node produces.
 
 The data type of every port is available in the documentation for each node in the [Node Reference](../node-reference).
 
@@ -52,7 +64,7 @@ To create a subgraph, select multiple nodes by holding shift and clicking on the
 
 ![creating a subgraph](assets/create-subgraph.gif)
 
-Make sure you go into the graph info section for the subgraph and give it a name and description, or else it will be Untitled Graph.
+Make sure you go into the graph info section for the subgraph and give it a name and description, or else it will be Untitled graph.
 
 Make sure you save your new graph! (CMD+S or CTRL+S)
 
@@ -60,4 +72,4 @@ The source nodes will **not** be removed from the parent graph at this time. It 
 
 ## Editing a Node
 
-Click the gear icon on the top right of a node to edit it. This will open the Node Editor. See the [interface overview](./overview-of-interface) for more information about the Node Editor.
+Click the gear icon on the top right of a node to edit it. This will open the Node Editor. Linked nodes show a link icon instead; double-click them or click that icon to edit the source library node. See the [interface overview](./overview-of-interface) for more information about the Node Editor.

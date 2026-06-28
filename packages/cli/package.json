@@ -2,7 +2,7 @@
   "name": "@valerypopoff/rivet2-cli",
   "license": "MIT",
   "repository": "https://github.com/valerypopoff/rivet2.0",
-  "version": "2.0.11",
+  "version": "2.1.0",
   "src": "src/cli.ts",
   "bin": {
     "rivet": "bin/cli.js"
@@ -15,8 +15,10 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "prepack": "yarn build && cp -r ../../LICENSE ../../README.md .",
-    "publish": "yarn npm publish --access public",
+    "prepack": "yarn build",
+    "smoke:docker": "node scripts/smoke-docker.mjs",
+    "smoke:package": "node scripts/smoke-package.mjs",
+    "verify": "yarn build && yarn lint && yarn test && yarn smoke:package && yarn pack --dry-run",
     "docker-publish": "./docker-publish.sh",
     "lint": "eslint ./src",
     "test": "tsx --test test/**/*.test.ts",

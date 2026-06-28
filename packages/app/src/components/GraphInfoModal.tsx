@@ -62,7 +62,7 @@ export const GraphInfoPanel: FC<{
             onConfirm={(newValue) =>
               onChange({ ...graph, metadata: { ...graph.metadata, name: newValue } })
             }
-            defaultValue={graph.metadata?.name ?? 'Untitled Graph'}
+            defaultValue={graph.metadata?.name ?? 'Untitled graph'}
             readViewFitContainerWidth
           />
         </div>

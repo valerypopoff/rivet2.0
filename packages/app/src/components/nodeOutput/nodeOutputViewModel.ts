@@ -1,18 +1,20 @@
 import type { ChartNode, NodeOutputDefinition } from '@valerypopoff/rivet2-core';
 import type { DataRefReader } from '../../providers/ProvidersContext.js';
 import type {
+  DataValueWithRefs,
   InputsOrOutputsWithRefs,
   NodeRunDataWithRefs,
   PageValue,
   ProcessDataForNode,
 } from '../../state/dataFlow.js';
 import { getSelectedProcessData } from '../../state/selectors/executionSelectors.js';
-import { getStoredOutputWarnings, restoreDisplayedNodeOutputs } from '../../utils/executionDataReaders.js';
-import { hasVisibleStoredPortMapValues } from '../../utils/outputPortVisibility.js';
 import {
   type NodeOutputCopyValueProjector,
   serializeDisplayedOutputs,
 } from '../../utils/executionDataCopyValue.js';
+import { getStoredOutputWarnings, restoreDisplayedNodeOutputs } from '../../utils/executionDataReaders.js';
+import { hasVisibleStoredPortMapValues, isVisibleOutputPort } from '../../utils/outputPortVisibility.js';
+import { keys } from '../../utils/typeSafety.js';
 import { getSortedRenderableSplitOutputEntries } from './splitOutputEntries.js';
 import {
   getSelectedVisibleOutputProcess,
@@ -61,6 +63,15 @@ export type NodeOutputBodyViewModel =
   | {
       kind: 'empty';
     };
+
+export type NodeOutputSectionHeaderMode = 'hidden' | 'standard' | 'large';
+
+export type NodeOutputSectionViewModel = {
+  headerMode: NodeOutputSectionHeaderMode;
+  label: string;
+  portId: string;
+  value: DataValueWithRefs;
+};
 
 export type FullscreenNodeOutputViewModel =
   | {
@@ -147,6 +158,48 @@ export function createNodeOutputBodyViewModel(options: {
   }
 
   return { kind: 'empty' };
+}
+
+export function createNodeOutputSectionsViewModel(options: {
+  definitions?: readonly Pick<NodeOutputDefinition, 'id' | 'title'>[];
+  outputs: InputsOrOutputsWithRefs;
+  isCompact: boolean;
+  showLargeHeaders?: boolean;
+}): NodeOutputSectionViewModel[] {
+  const { definitions, outputs, isCompact, showLargeHeaders = false } = options;
+  const visibleOutputPorts = keys(outputs).filter((portId) => isVisibleOutputPort(portId) && outputs[portId] != null);
+  const outputPorts = isCompact ? visibleOutputPorts.slice(0, 1) : visibleOutputPorts;
+
+  if (outputPorts.length === 0) {
+    return [];
+  }
+
+  const hasMultipleOutputs = outputPorts.length > 1;
+  const headerMode: NodeOutputSectionHeaderMode = showLargeHeaders
+    ? 'large'
+    : hasMultipleOutputs
+      ? 'standard'
+      : 'hidden';
+
+  return outputPorts.map((portId) => {
+    const fallbackLabel = !hasMultipleOutputs && showLargeHeaders ? 'Output' : undefined;
+
+    return {
+      headerMode,
+      label: getNodeOutputPortDisplayLabel(definitions, portId, fallbackLabel),
+      portId: String(portId),
+      value: outputs[portId]!,
+    };
+  });
+}
+
+function getNodeOutputPortDisplayLabel(
+  definitions: readonly Pick<NodeOutputDefinition, 'id' | 'title'>[] | undefined,
+  portId: string,
+  fallbackLabel?: string,
+): string {
+  const title = definitions?.find((definition) => definition.id === portId)?.title?.trim();
+  return title || fallbackLabel || portId;
 }
 
 export function createFullscreenNodeOutputViewModel(options: {

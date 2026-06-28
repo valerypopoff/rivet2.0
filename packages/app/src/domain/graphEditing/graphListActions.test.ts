@@ -19,10 +19,10 @@ function makeGraph(id: string, name: string): NodeGraph {
 }
 
 test('buildUntitledGraph increments names within a folder', () => {
-  const graphs = [makeGraph('g-1', 'folder/Untitled Graph')];
+  const graphs = [makeGraph('g-1', 'folder/Untitled graph')];
   const graph = buildUntitledGraph(graphs, 'folder');
 
-  assert.equal(graph.metadata?.name, 'folder/Untitled Graph 2');
+  assert.equal(graph.metadata?.name, 'folder/Untitled graph 2');
 });
 
 test('buildNewFolderPath creates nested folder names', () => {

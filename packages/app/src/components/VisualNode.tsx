@@ -5,6 +5,10 @@ import {
   type CommentNode,
   type NodeConnection,
   type ProjectComparisonChangeKind,
+  canUseNodeAsPrefabSource,
+  getNodePrefabInstancePrefabId,
+  isNodePrefabInstanceNode,
+  resolveNodePrefabInstance,
 } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins';
@@ -31,6 +35,7 @@ import { enabledStaticGlobalVariableIdsState } from '../state/selectors/globalVa
 import { getDuplicateGraphOutputIdWarning } from '../domain/graphEditing/graphOutputs.js';
 import { duplicateGraphOutputIdsState } from '../state/selectors/graphOutputs.js';
 import { getRecursiveSubGraphWarning } from '../domain/graphEditing/subGraphs.js';
+import { projectState } from '../state/savedGraphs.js';
 
 export type VisualNodeProps = {
   node: ChartNode;
@@ -56,6 +61,8 @@ export type VisualNodeProps = {
 
 type VisualNodeImplProps = VisualNodeProps & {
   headerWarning?: string;
+  editTargetNode?: ChartNode;
+  isNodePrefabInstance?: boolean;
 };
 
 const VisualNodeImpl = memo(
@@ -82,10 +89,12 @@ const VisualNodeImpl = memo(
         renderHeavyContent,
         renderSkeleton,
         headerWarning,
+        editTargetNode,
+        isNodePrefabInstance = false,
       },
       ref,
     ) => {
-      const { heightCache, isReallyZoomedOut, isZoomedOut } = useCanvasViewContext();
+      const { graphStateOverlaysEnabled, heightCache, isReallyZoomedOut, isZoomedOut } = useCanvasViewContext();
       const { onNodeMouseEnter, onNodeMouseLeave, onNodeStartEditing } = useCanvasHandlersContext();
       const isComment = node.type === 'comment';
       const effectiveIsZoomedOut = isZoomedOut && !isComment;
@@ -136,11 +145,14 @@ const VisualNodeImpl = memo(
         yDelta,
       ]);
 
-      const selectedProcessRun = getSelectedProcessRun(lastRun, processPage, graphSelectionOptions);
+      const selectedProcessRun = graphStateOverlaysEnabled
+        ? getSelectedProcessRun(lastRun, processPage, graphSelectionOptions)
+        : undefined;
       const executionClassFlags = getNodeExecutionClassFlags(selectedProcessRun);
       const showRunningChrome = useDelayedRunningState(executionClassFlags.running);
-      const showFrozenState = executorSession.target?.type !== 'external-debugger';
+      const showFrozenState = graphStateOverlaysEnabled && executorSession.target?.type !== 'external-debugger';
       const isFrozen = showFrozenState && Boolean(graphId && frozenNodeOutputs[graphId]?.[node.id]?.length);
+      const nodeForEditing = editTargetNode ?? node;
 
       if (renderSkeleton) {
         return <div className="node-skeleton" style={style} {...nodeAttributes} />;
@@ -176,6 +188,7 @@ const VisualNodeImpl = memo(
               frozen: isFrozen,
               disabled: node.disabled,
               conditional: !!node.isConditional,
+              hasPrefabIndicator: isNodePrefabInstance,
               hasHeaderWarning: Boolean(headerWarning),
               hasCompareChange: compareChangeKind === 'changed',
               [`compare-${compareChangeKind}`]: compareChangeKind && compareChangeKind !== 'unchanged',
@@ -196,7 +209,7 @@ const VisualNodeImpl = memo(
           onDoubleClick={(event) => {
             if (isKnownNodeType) {
               event.currentTarget.blur();
-              onNodeStartEditing?.(node);
+              onNodeStartEditing?.(nodeForEditing);
             }
           }}
         >
@@ -209,6 +222,8 @@ const VisualNodeImpl = memo(
               isReallyZoomedOut={effectiveIsReallyZoomedOut}
               showRunningIndicator={showRunningChrome}
               headerWarning={headerWarning}
+              editTargetNode={nodeForEditing}
+              isNodePrefabInstance={isNodePrefabInstance}
             />
           ) : (
             <NormalVisualNodeContent
@@ -226,6 +241,8 @@ const VisualNodeImpl = memo(
               headerWarning={headerWarning}
               compareChangeKind={compareChangeKind}
               graphId={graphId}
+              editTargetNode={nodeForEditing}
+              isNodePrefabInstance={isNodePrefabInstance}
             />
           )}
           <div className="node-border-overlay" aria-hidden="true" />
@@ -236,34 +253,34 @@ const VisualNodeImpl = memo(
 );
 
 const GetGlobalVisualNode = memo(
-  forwardRef<HTMLDivElement, VisualNodeProps>((props, ref) => {
+  forwardRef<HTMLDivElement, VisualNodeImplProps>((props, ref) => {
     const enabledStaticGlobalVariableIds = useAtomValue(enabledStaticGlobalVariableIdsState);
-    const headerWarning = getMissingStaticSetGlobalWarning(props.node, enabledStaticGlobalVariableIds);
+    const headerWarning = props.headerWarning ?? getMissingStaticSetGlobalWarning(props.node, enabledStaticGlobalVariableIds);
 
     return <VisualNodeImpl {...props} ref={ref} headerWarning={headerWarning} />;
   }),
 );
 
 const GraphOutputVisualNode = memo(
-  forwardRef<HTMLDivElement, VisualNodeProps>((props, ref) => {
+  forwardRef<HTMLDivElement, VisualNodeImplProps>((props, ref) => {
     const duplicateGraphOutputIds = useAtomValue(duplicateGraphOutputIdsState);
-    const headerWarning = getDuplicateGraphOutputIdWarning(props.node, duplicateGraphOutputIds);
+    const headerWarning = props.headerWarning ?? getDuplicateGraphOutputIdWarning(props.node, duplicateGraphOutputIds);
 
     return <VisualNodeImpl {...props} ref={ref} headerWarning={headerWarning} />;
   }),
 );
 
 const SubGraphVisualNode = memo(
-  forwardRef<HTMLDivElement, VisualNodeProps>((props, ref) => {
+  forwardRef<HTMLDivElement, VisualNodeImplProps>((props, ref) => {
     const containingGraphId = useAtomValue(graphMetadataState)?.id;
-    const headerWarning = getRecursiveSubGraphWarning(props.node, containingGraphId);
+    const headerWarning = props.headerWarning ?? getRecursiveSubGraphWarning(props.node, containingGraphId);
 
     return <VisualNodeImpl {...props} ref={ref} headerWarning={headerWarning} />;
   }),
 );
 
-export const VisualNode = memo(
-  forwardRef<HTMLDivElement, VisualNodeProps>((props, ref) => {
+const RoutedVisualNode = memo(
+  forwardRef<HTMLDivElement, VisualNodeImplProps>((props, ref) => {
     if (props.node.type === 'getGlobal') {
       return <GetGlobalVisualNode {...props} ref={ref} />;
     }
@@ -277,5 +294,39 @@ export const VisualNode = memo(
     }
 
     return <VisualNodeImpl {...props} ref={ref} />;
+  }),
+);
+
+const ResolvedNodePrefabInstanceVisualNode = memo(
+  forwardRef<HTMLDivElement, VisualNodeProps>((props, ref) => {
+    const project = useAtomValue(projectState);
+    const prefabId = getNodePrefabInstancePrefabId(props.node);
+    const sourceNode = prefabId ? project.nodePrefabs?.[prefabId]?.sourceNode : undefined;
+    const headerWarning =
+      prefabId && (!sourceNode || !canUseNodeAsPrefabSource(sourceNode))
+        ? 'Missing library node. Reconnect this linked node or recreate its source.'
+        : undefined;
+    const resolvedNode = useMemo(() => resolveNodePrefabInstance(project, props.node), [project, props.node]);
+
+    return (
+      <RoutedVisualNode
+        {...props}
+        ref={ref}
+        node={resolvedNode}
+        headerWarning={headerWarning}
+        editTargetNode={props.node}
+        isNodePrefabInstance
+      />
+    );
+  }),
+);
+
+export const VisualNode = memo(
+  forwardRef<HTMLDivElement, VisualNodeProps>((props, ref) => {
+    if (isNodePrefabInstanceNode(props.node)) {
+      return <ResolvedNodePrefabInstanceVisualNode {...props} ref={ref} />;
+    }
+
+    return <RoutedVisualNode {...props} ref={ref} />;
   }),
 );

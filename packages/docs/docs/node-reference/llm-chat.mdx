@@ -112,7 +112,7 @@ Provider Advanced contains optional Base URL, Headers, and Extra provider option
 | Setting               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Stream response       | When enabled, the provider request uses streaming so Rivet can show live response updates while the node runs. When disabled, Rivet uses a non-streaming provider request and only displays the final response. Connected downstream nodes receive only the final response in both modes. Tool-call rounds can return tool calls before a final structured response exists; in that case Rivet keeps the tool calls, and auto-continue can produce the final structured response on a later model round. |
-| Retry on non-200      | Retries provider requests when the Vercel AI SDK reports a non-200 HTTP status.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Retry on non-200      | Retries provider requests when the Vercel AI SDK reports a non-200 HTTP status. When this is off, Rivet disables the SDK's built-in retry layer and makes one provider attempt.                                                                                                                                                                                                                                                                                                                           |
 | Repeat times          | Number of repeats after the initial request.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Cooldown, ms          | Delay between retry attempts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Output request status | Adds Response Status and Response Error outputs. Retry mode changes both outputs to per-attempt arrays.                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -128,11 +128,12 @@ Choose Custom provider for OpenAI-compatible APIs such as local model servers or
 For Custom provider, the expected node body order is:
 
 ```text
-Custom provider
-
-Provider base URL: <url>
-<model name>
+Provider: Custom
+Base URL: <url>
+Model: <model name>
 ```
+
+The Base URL line is shown as plain configuration text in the node body, not as a clickable link.
 
 The custom provider API key can come from either:
 
@@ -143,7 +144,7 @@ The custom provider API key can come from either:
 
 LLM Chat normalizes common provider failures into readable errors. For example, an invalid API key should produce a provider request error that includes the HTTP status, provider, model, endpoint, and a hint to check the API key source.
 
-Enable Output request status when you want machine-readable response status/error outputs. With Retry on non-200 enabled, Response Status and Response Error become arrays so you can see what happened on each attempt.
+Enable Output request status when you want machine-readable response status/error outputs. With Retry on non-200 enabled, Response Status and Response Error become arrays so you can see what happened on each Rivet retry attempt. Rivet disables the Vercel AI SDK's hidden default retries, so the Retry on non-200 switch is the only retry policy for LLM Chat provider requests.
 
 ## See Also
 

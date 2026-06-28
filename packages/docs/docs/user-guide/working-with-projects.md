@@ -4,9 +4,11 @@ title: 'Working with Projects'
 
 A Rivet project contains a set of graphs. These graphs can call each other by using a [Subgraph Node](../node-reference/subgraph). Any graph can call any other graph in the project (including itself).
 
+Projects can also contain project-level resources such as the Node Library and [Rivet web apps](./rivet-web-apps). Web apps are declarative UI screens that can call ordinary graphs in the same project.
+
 ## Creating a Project
 
-To create a new project, choose **New Project** in the top-bar **Menu** dropdown. This will create a new blank project. The new project is unsaved by default.
+To create a new project, choose **New Project** in the top-bar **Menu** dropdown. This will create a new blank project with one empty graph named **Main graph**. The new project is unsaved by default.
 
 ## Project Settings
 
@@ -16,7 +18,7 @@ Use **Project settings** at the top of the graph tree panel to give your project
 
 Use **Project settings** -> **Compare to an older version** to compare the currently opened project with another `.rivet-project` file. This is useful when you have a newer copy of a project open and want to see what changed since an older version.
 
-After you choose the older project file, the current project stays open and enters compare mode. The open project is treated as the current version, and the selected file is treated as the previous version. Rivet compares all graphs in the two projects, including subgraphs.
+After you choose the older project file, the current project stays open and enters compare mode. The open project is treated as the current version, and the selected file is treated as the previous version. Rivet compares all graphs in the two projects, including subgraphs. It also compares project-level library nodes and Rivet web apps.
 
 Compare mode highlights changes in the graph tree and on the canvas:
 
@@ -27,7 +29,7 @@ Compare mode highlights changes in the graph tree and on the canvas:
 
 The compare banner shows what changed in the whole project and in the currently opened graph. Categories with no changes are hidden, so the summary only mentions what matters. If nothing changed, the line says **No changes**.
 
-For the whole project, the summary can include changed graphs, nodes, and connections. For the currently opened graph, the summary includes only node and connection changes because the graph context is already known.
+For the whole project, the summary can include changed graphs, nodes, library nodes, web apps, and connections. For the currently opened graph, the summary includes only node and connection changes because the graph context is already known.
 
 Node counts only include current non-comment nodes that are new or whose own configuration changed. If a node is merely connected to a new or changed wire, the wire is highlighted but the node is not counted or framed as changed. Comment nodes are ignored because they are canvas annotations.
 

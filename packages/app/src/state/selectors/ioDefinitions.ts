@@ -1,10 +1,18 @@
 import { atom } from 'jotai';
 import { atomFamily } from 'jotai/utils';
-import { type NodeId, type NodeInputDefinition, type NodeOutputDefinition } from '@valerypopoff/rivet2-core';
+import {
+  type ChartNode,
+  type NodeId,
+  type NodeImpl,
+  type NodeInputDefinition,
+  type NodeOutputDefinition,
+} from '@valerypopoff/rivet2-core';
 import { projectState, referencedProjectsState } from '../savedGraphs';
-import { connectionsForSingleNodeState, nodesByIdState } from './graphSelectors';
-import { nodeInstanceByIdState } from './nodeSelectors';
+import { connectionsForSingleNodeState } from './graphSelectors';
+import { effectiveNodesByIdState, nodeInstanceByIdState } from './nodeSelectors';
 import { handleError } from '../../utils/errorHandling.js';
+import { projectNodeRegistryState } from '../plugins.js';
+import { nodePrefabSourceNodesByIdState } from './nodePrefabSelectors.js';
 
 export const ioDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
   atom((get) => {
@@ -12,10 +20,28 @@ export const ioDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined)
       return { inputDefinitions: [], outputDefinitions: [] };
     }
 
-    const instance = get(nodeInstanceByIdState(nodeId));
-    const connections = get(connectionsForSingleNodeState(nodeId)) ?? [];
-    const nodesById = get(nodesByIdState);
     const project = get(projectState);
+    const sourceNode = get(nodePrefabSourceNodesByIdState)[nodeId];
+    const connections = sourceNode ? [] : (get(connectionsForSingleNodeState(nodeId)) ?? []);
+    const nodesById = sourceNode
+      ? { ...get(effectiveNodesByIdState), [nodeId]: sourceNode }
+      : get(effectiveNodesByIdState);
+    let instance: NodeImpl<ChartNode> | undefined;
+    if (sourceNode) {
+      try {
+        instance = get(projectNodeRegistryState).createDynamicImpl(sourceNode);
+      } catch (error) {
+        handleError(error, 'Error creating library node implementation', {
+          metadata: {
+            nodeId,
+            nodeType: sourceNode.type,
+          },
+          toastError: false,
+        });
+      }
+    } else {
+      instance = get(nodeInstanceByIdState(nodeId));
+    }
     const referencedProjects = get(referencedProjectsState);
 
     let inputDefinitions: NodeInputDefinition[] | undefined;

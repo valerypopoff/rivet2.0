@@ -48,6 +48,7 @@ test('app root is locked to the iframe viewport', () => {
   const postResetCss = hostCss.slice(resetImportIndex);
 
   assert.match(postResetCss, /html,\s*body\s*{[\s\S]*width: 100%;[\s\S]*height: 100%;[\s\S]*overflow: hidden;/);
+  assert.match(postResetCss, /#root\s*{[\s\S]*width: 100%;[\s\S]*height: 100%;/);
   assert.match(appSource, /const styles = css`[\s\S]*position: fixed;[\s\S]*inset: 0;/);
   assert.match(appSource, /const styles = css`[\s\S]*width: 100%;[\s\S]*height: 100%;/);
 });
@@ -55,6 +56,8 @@ test('app root is locked to the iframe viewport', () => {
 test('portal typography tokens keep popup surfaces on Rivet fonts', () => {
   const hostCss = readFileSync(join(srcDir, 'host.css'), 'utf8');
   const indexCss = readFileSync(join(srcDir, 'index.css'), 'utf8');
+  const resetImportIndex = hostCss.indexOf("@import '@atlaskit/css-reset';");
+  const postResetCss = hostCss.slice(resetImportIndex);
 
   for (const token of [
     '--ds-font-family-body: var(--font-family);',
@@ -67,48 +70,35 @@ test('portal typography tokens keep popup surfaces on Rivet fonts', () => {
     '--ds-font-label:',
     '--ds-text: var(--foreground);',
     '--ds-text-disabled: var(--foreground-disabled);',
-    '--ds-surface: var(--grey-dark-colorish);',
-    '--ds-surface-overlay: var(--grey-dark-colorish);',
-    '--ds-border: var(--settings-collapsible-border);',
-    '--ds-shadow-overlay: 0 0 0 1px var(--settings-collapsible-border), 0 2px 1px var(--shadow),',
+    '--ds-surface: var(--modal-surface-bg);',
+    '--ds-surface-overlay: var(--modal-surface-bg);',
+    '--ds-border: var(--modal-border);',
+    '--ds-shadow-overlay: 0 0 0 1px var(--modal-border), 0 2px 1px var(--shadow),',
     '--ds-background-input: var(--form-control-bg);',
     '--ds-background-input-hovered: var(--form-control-bg-hover);',
     '--ds-background-input-pressed: var(--form-control-bg-focus);',
     '--ds-border-input: var(--form-control-border);',
     '--ds-border-focused: var(--form-control-border-focus);',
     '--ds-background-selected: var(--form-control-selected-bg);',
-    '--form-control-border-width: 1px;',
     '--toastify-font-family: var(--font-family);',
   ]) {
     assert.ok(indexCss.includes(token), `index.css should define ${token}`);
+    assert.ok(postResetCss.includes(token), `host.css should reassert ${token} after Atlaskit reset`);
   }
-
-  const resetImportIndex = hostCss.indexOf("@import '@atlaskit/css-reset';");
-  const postResetCss = hostCss.slice(resetImportIndex);
+  assert.ok(indexCss.includes('--form-control-border-width: 1px;'));
 
   assert.match(postResetCss, /\.atlaskit-portal,[\s\S]*\.atlaskit-portal-container\s*{/);
-  assert.match(postResetCss, /--ds-font-family-heading: var\(--font-family\);/);
   assert.match(postResetCss, /--ds-font-heading-xxsmall:[\s\S]*var\(--ds-font-family-heading, var\(--font-family\)\)/);
   assert.match(postResetCss, /--ds-font-label:[\s\S]*var\(--label-font-family,/);
-  assert.match(postResetCss, /--ds-text: var\(--foreground\);/);
-  assert.match(postResetCss, /--ds-text-disabled: var\(--foreground-disabled\);/);
-  assert.match(postResetCss, /--ds-surface: var\(--grey-dark-colorish\);/);
-  assert.match(postResetCss, /--ds-surface-overlay: var\(--grey-dark-colorish\);/);
-  assert.match(postResetCss, /--ds-border: var\(--settings-collapsible-border\);/);
-  assert.match(postResetCss, /--ds-shadow-overlay: 0 0 0 1px var\(--settings-collapsible-border\),/);
-  assert.match(postResetCss, /--ds-background-input: var\(--form-control-bg\);/);
-  assert.match(postResetCss, /--ds-background-input-hovered: var\(--form-control-bg-hover\);/);
-  assert.match(postResetCss, /--ds-background-input-pressed: var\(--form-control-bg-focus\);/);
-  assert.match(postResetCss, /--ds-border-input: var\(--form-control-border\);/);
-  assert.match(postResetCss, /--ds-border-focused: var\(--form-control-border-focus\);/);
-  assert.match(postResetCss, /--ds-background-selected: var\(--form-control-selected-bg\);/);
-  assert.match(postResetCss, /--toastify-font-family: var\(--font-family\);/);
 });
 
 test('native and react-select controls inherit tinted form-control surfaces', () => {
   const indexCss = readFileSync(join(srcDir, 'index.css'), 'utf8');
 
-  assert.match(indexCss, /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*background-color: var\(--form-control-bg\);/);
+  assert.match(
+    indexCss,
+    /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*background-color: var\(--form-control-bg\);/,
+  );
   assert.match(
     indexCss,
     /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*border: var\(--form-control-border-width\) solid var\(--form-control-border\);/,
@@ -118,7 +108,10 @@ test('native and react-select controls inherit tinted form-control surfaces', ()
     /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*border-width: var\(--form-control-border-width\) !important;/,
   );
   assert.match(indexCss, /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*color: var\(--foreground\);/);
-  assert.match(indexCss, /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*color-scheme: var\(--form-control-color-scheme\);/);
+  assert.match(
+    indexCss,
+    /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*color-scheme: var\(--form-control-color-scheme\);/,
+  );
   assert.match(indexCss, /:hover,[\s\S]*select:hover,[\s\S]*background-color: var\(--form-control-bg-hover\);/);
   assert.match(indexCss, /:focus,[\s\S]*select:focus,[\s\S]*border-color: var\(--form-control-border-focus\);/);
   assert.match(
@@ -130,7 +123,10 @@ test('native and react-select controls inherit tinted form-control surfaces', ()
     /\[data-ds--text-field--container\] \{[\s\S]*border-width: var\(--form-control-border-width\) !important;/,
   );
   assert.match(indexCss, /\[data-ds--text-field--input\] \{[\s\S]*border: 0 !important;/);
-  assert.match(indexCss, /\[class\*='-control'\]:has\(input\[id\^='react-select-'\]\),[\s\S]*\[class\*='-menu'\] \{[\s\S]*--ds-background-input: var\(--form-control-bg\);/);
+  assert.match(
+    indexCss,
+    /\[class\*='-control'\]:has\(input\[id\^='react-select-'\]\),[\s\S]*\[class\*='-menu'\] \{[\s\S]*--ds-background-input: var\(--form-control-bg\);/,
+  );
 });
 
 test('host entry reasserts one-pixel form-control borders after Atlaskit reset', () => {
@@ -173,8 +169,11 @@ test('theme color-scheme reaches app and portal scroll containers', () => {
   const hostCss = readFileSync(join(srcDir, 'host.css'), 'utf8');
   const colorsCss = readFileSync(join(srcDir, 'colors.css'), 'utf8');
 
-  assert.match(colorsCss, /--scrollbar-track-bg: var\(--grey-dark-colorish\);/);
-  assert.match(colorsCss, /--scrollbar-thumb-bg: color-mix\(in srgb, var\(--foreground\) 28%, var\(--grey-dark-colorish\) 72%\);/);
+  assert.match(colorsCss, /--scrollbar-track-bg: var\(--modal-surface-bg\);/);
+  assert.match(
+    colorsCss,
+    /--scrollbar-thumb-bg: color-mix\(in srgb, var\(--foreground\) 28%, var\(--modal-surface-bg\) 72%\);/,
+  );
 
   for (const source of [indexCss, hostCss]) {
     assert.match(

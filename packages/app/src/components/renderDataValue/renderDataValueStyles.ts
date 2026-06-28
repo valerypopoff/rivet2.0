@@ -54,6 +54,35 @@ export const outputSectionHeaderMetaStyles = css`
   line-height: 1.25;
 `;
 
+export const outputSectionCopyButtonStyles = css`
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--grey-light);
+  cursor: pointer;
+  display: inline-flex;
+  height: calc(22px * var(--ui-font-scale));
+  justify-content: center;
+  margin: 0;
+  opacity: var(--node-output-action-opacity);
+  padding: 0;
+  transition:
+    color 120ms ease,
+    opacity 120ms ease;
+  width: calc(22px * var(--ui-font-scale));
+
+  svg {
+    display: block;
+    height: calc(17px * var(--ui-font-scale));
+    width: calc(17px * var(--ui-font-scale));
+  }
+
+  &:hover {
+    color: var(--foreground);
+    opacity: var(--node-output-action-node-hover-opacity);
+  }
+`;
+
 export const outputSectionGroupGap = 'calc(18px * var(--ui-font-scale))';
 export const outputSectionFullscreenGroupGap = 'calc(28px * var(--ui-font-scale))';
 

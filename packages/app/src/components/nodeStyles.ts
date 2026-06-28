@@ -9,8 +9,6 @@ export const nodeStyles = css`
     --node-output-hover-max-height: calc(20 * 1.4em + 36px);
     --node-output-multi-collapsed-max-height: calc(3 * 1.4em + 60px);
     --node-output-multi-hover-max-height: calc(20 * 1.4em + 60px);
-    --node-frozen-output-accent: #68b7ff;
-    --node-frozen-output-bg: color-mix(in srgb, var(--node-frozen-output-accent) 25%, var(--grey-darkest) 83%);
     background-color: var(--node-body-bg);
     background-clip: padding-box;
     border-radius: var(--node-card-radius);
@@ -97,12 +95,12 @@ export const nodeStyles = css`
   }
 
   .node-skeleton {
-    background: var(--grey-light);
+    background: var(--node-skeleton-bg);
     height: 100px;
   }
 
   .node.isComment {
-    background-color: rgba(46, 46, 46, 0.1);
+    background-color: var(--node-comment-bg);
     pointer-events: auto;
     padding: 0;
   }
@@ -123,7 +121,7 @@ export const nodeStyles = css`
     --node-frame-border-color: var(--primary);
     transition-duration: 0;
     pointer-events: none;
-    box-shadow: 10px 10px 16px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--node-overlay-shadow);
   }
 
   .node.selected:not(.isComment) {
@@ -238,7 +236,7 @@ export const nodeStyles = css`
   .node.node.isComment .node-title {
     align-items: center;
     padding: calc(4px * var(--ui-font-scale)) calc(8px * var(--ui-font-scale));
-    background-color: var(--grey-darkish);
+    background-color: var(--node-comment-title-bg);
     pointer-events: auto;
     margin: 0;
   }
@@ -311,13 +309,11 @@ export const nodeStyles = css`
   }
 
   .subgraph-link-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: calc(24px * var(--ui-font-scale));
-    height: calc(46px * var(--ui-font-scale));
-    margin: calc(-12px * var(--ui-font-scale)) 0;
-    margin-left: calc(-5px * var(--ui-font-scale));
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
     padding: 0;
     border: 0;
     background: transparent;
@@ -326,9 +322,11 @@ export const nodeStyles = css`
     transition: color 0.2s ease-out;
 
     svg {
+      position: absolute;
+      left: calc(12px * var(--ui-font-scale));
+      top: calc(12px * var(--ui-font-scale));
       width: 20px;
       height: 20px;
-      margin-bottom: 0.3em;
     }
   }
 
@@ -337,8 +335,19 @@ export const nodeStyles = css`
   }
 
   .subgraph-link-tooltip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
     display: flex;
-    align-items: center;
+    align-items: stretch;
+    width: calc(41px * var(--ui-font-scale));
+    margin: 0;
+    z-index: 4;
+  }
+
+  .grab-area.has-subgraph-header-link {
+    padding-left: calc(27px * var(--ui-font-scale));
   }
 
   .title-text {
@@ -478,6 +487,7 @@ export const nodeStyles = css`
 
     .changed-button,
     .edit-button,
+    .node-prefab-instance-indicator,
     .node-header-warning {
       background-color: transparent;
       border: none;
@@ -505,9 +515,22 @@ export const nodeStyles = css`
       width: calc(20px * var(--ui-font-scale));
     }
 
-    .changed-button:hover,
-    .edit-button:hover {
+    .node-prefab-instance-indicator {
+      cursor: pointer;
+      pointer-events: auto;
+      width: calc(26px * var(--ui-font-scale));
+    }
+
+    .changed-button:hover {
       color: var(--primary-text);
+    }
+
+    .node-prefab-instance-indicator:hover {
+      color: var(--primary-text);
+    }
+
+    .edit-button:hover {
+      color: var(--node-bg-foreground);
     }
   }
 
@@ -521,6 +544,12 @@ export const nodeStyles = css`
   }
 
   .node.hasHeaderWarning:not(.isComment) .title-controls {
+    gap: calc(3px * var(--ui-font-scale));
+    min-width: calc(66px * var(--ui-font-scale));
+    width: max-content;
+  }
+
+  .node.hasPrefabIndicator:not(.isComment) .title-controls {
     gap: calc(3px * var(--ui-font-scale));
     min-width: calc(66px * var(--ui-font-scale));
     width: max-content;
@@ -560,6 +589,12 @@ export const nodeStyles = css`
     pointer-events: auto;
   }
 
+  .title-controls .node-prefab-instance-tooltip {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .title-controls .edit-button-tooltip,
   .title-controls > .edit-button {
     opacity: 0;
@@ -571,9 +606,7 @@ export const nodeStyles = css`
   .title-controls .edit-button {
     opacity: 0;
     pointer-events: none;
-    transition:
-      opacity 0.15s ease-out,
-      color 0.2s ease-out;
+    transition: opacity 0.15s ease-out;
   }
 
   .node:is(:hover, .hovered, .showHoverControls, :focus-within)
@@ -600,6 +633,10 @@ export const nodeStyles = css`
 
   .node-body:empty {
     margin-bottom: 0;
+  }
+
+  .node-body-readonly {
+    pointer-events: none;
   }
 
   .node-body pre {
@@ -640,7 +677,7 @@ export const nodeStyles = css`
   }
 
   .conditional-if-port-label {
-    color: var(--grey-lighter);
+    color: var(--node-port-label-color);
     font-size: var(--ui-font-size-2xs);
     left: -32px;
     line-height: 16px;
@@ -735,7 +772,7 @@ export const nodeStyles = css`
   }
 
   .port-label {
-    color: var(--grey-lighter);
+    color: var(--node-port-label-color);
     font-size: var(--ui-font-size-2xs);
     line-height: 16px;
     margin: 0 4px;
@@ -746,10 +783,10 @@ export const nodeStyles = css`
   }
 
   .port.reorderable .port-label {
-    background: color-mix(in srgb, var(--primary) 18%, var(--grey-darkest) 82%);
-    border: 1px solid color-mix(in srgb, var(--primary) 42%, transparent);
+    background: var(--node-port-reorder-label-bg);
+    border: 1px solid var(--node-port-reorder-label-border);
     border-radius: calc(6px * var(--ui-font-scale));
-    color: var(--grey-lightest);
+    color: var(--node-port-reorder-label-color);
     cursor: grab;
     opacity: 1;
     padding: 2px 6px;
@@ -804,8 +841,8 @@ export const nodeStyles = css`
 
   .input-port,
   .output-port {
-    background-color: var(--grey-dark);
-    border: 2px solid var(--grey);
+    background-color: var(--node-port-bg);
+    border: 2px solid var(--node-port-border);
     border-radius: 50%;
     height: 16px;
     width: 16px;
@@ -912,11 +949,10 @@ export const nodeStyles = css`
     --node-output-fullscreen-icon-offset-x: var(--node-output-action-icon-offset-x);
     --node-output-fullscreen-icon-offset-y: var(--node-output-action-icon-offset-y);
 
-    background-color: var(--grey-darkest);
-    /*background-image: linear-gradient(to bottom, var(--grey-darker) 0%, var(--grey-darkest) 100%);*/
+    background-color: var(--node-output-surface-bg);
     border-radius: 0 0 var(--node-card-radius) var(--node-card-radius);
     corner-shape: var(--node-card-corner-shape);
-    border-top: 2px solid var(--success-light);
+    border-top: 2px solid var(--node-output-success-border);
     color: var(--foreground);
     font-size: var(--ui-font-size-sm);
     line-height: 1.4;
@@ -944,8 +980,8 @@ export const nodeStyles = css`
   }
 
   .node-output-warnings {
-    background-color: var(--grey-darker);
-    background-image: linear-gradient(to bottom, var(--grey-darker) 0%, var(--grey-darkest) 100%);
+    background-color: var(--node-output-warning-bg-start);
+    background-image: linear-gradient(to bottom, var(--node-output-warning-bg-start) 0%, var(--node-output-warning-bg-end) 100%);
     border-radius: 0 0 var(--node-card-radius) var(--node-card-radius);
     corner-shape: var(--node-card-corner-shape);
     border-top: 2px solid var(--warning-light);
@@ -975,7 +1011,7 @@ export const nodeStyles = css`
 
   .node.success .node-output:not(.multi) .node-output-inner,
   .node.success .multi-node-output {
-    border-top-color: var(--success-light);
+    border-top-color: var(--node-output-success-border);
   }
 
   .node.frozen.success:not(.running) .node-output:not(.multi) .node-output-inner,
@@ -1054,11 +1090,11 @@ export const nodeStyles = css`
   .node.not-ran .node-output:not(.multi) .node-output-inner,
   .node.not-ran .multi-node-output {
     border-top-style: dashed;
-    border-top-color: var(--grey-lightish);
+    border-top-color: var(--node-output-not-ran-border);
   }
 
   .node-output.multi .node-output-inner.node-output-inner {
-    border-top: 1px solid var(--grey-light);
+    border-top: 1px solid var(--node-output-multi-border);
   }
 
   .node:is(:hover, .hovered, .showHoverControls) .node-output-inner,
@@ -1099,11 +1135,11 @@ export const nodeStyles = css`
     height: 0;
     border-left: 8px solid transparent;
     border-right: 8px solid transparent;
-    border-top: 8px solid var(--success-light);
+    border-top: 8px solid var(--node-output-success-border);
   }
 
   .node.success .node-output:before {
-    border-top-color: var(--success-light);
+    border-top-color: var(--node-output-success-border);
   }
 
   .node.frozen.success:not(.running) .node-output:before {
@@ -1116,7 +1152,7 @@ export const nodeStyles = css`
   }
 
   .node.not-ran .node-output:before {
-    border-top-color: var(--grey-lightish);
+    border-top-color: var(--node-output-not-ran-border);
   }
 
   .node-output.errored:before {
@@ -1310,7 +1346,7 @@ export const nodeStyles = css`
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--node-output-picker-border);
     user-select: none;
     height: 32px;
 
@@ -1328,16 +1364,16 @@ export const nodeStyles = css`
       height: 32px;
 
       &:hover {
-        background: rgba(255, 255, 255, 0.1);
+        background: var(--node-output-picker-hover-bg);
       }
     }
 
     .picker-left {
-      border-right: 1px solid rgba(255, 255, 255, 0.1);
+      border-right: 1px solid var(--node-output-picker-border);
     }
 
     .picker-right {
-      border-left: 1px solid rgba(255, 255, 255, 0.1);
+      border-left: 1px solid var(--node-output-picker-border);
     }
   }
 

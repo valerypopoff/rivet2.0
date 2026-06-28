@@ -17,6 +17,8 @@ interface ViewportBounds {
   clientRect: ViewportClientRect;
 }
 
+export const MAX_AUTO_FIT_ZOOM = 1;
+
 function areViewportClientRectsEqual(previous: ViewportClientRect, next: ViewportClientRect): boolean {
   return (
     previous.left === next.left &&
@@ -146,7 +148,7 @@ export function fitBoundsToViewport(
   // Calculate the required zoom level
   const zoomX = viewportWidth / nodeBounds.width;
   const zoomY = viewportHeight / nodeBounds.height;
-  const zoom = Math.min(zoomX, zoomY);
+  const zoom = Math.min(zoomX, zoomY, MAX_AUTO_FIT_ZOOM);
 
   // Calculate the required position
   let x = -nodeBounds.x + (viewportWidth - nodeBounds.width * zoom) / (2 * zoom);

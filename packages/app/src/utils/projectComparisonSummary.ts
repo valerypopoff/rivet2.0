@@ -4,9 +4,14 @@ export type ProjectComparisonSummaryCounts = {
   connectionChanges: number;
   graphs: number;
   nodes: number;
+  nodePrefabs?: number;
+  uiGraphs?: number;
 };
 
-export function getProjectComparisonReferenceFileName(referencePath: string | undefined, fallbackTitle: string): string {
+export function getProjectComparisonReferenceFileName(
+  referencePath: string | undefined,
+  fallbackTitle: string,
+): string {
   const fileName = referencePath?.split(/[\\/]/).filter(Boolean).at(-1);
   return fileName && fileName.length > 0 ? fileName : fallbackTitle;
 }
@@ -14,8 +19,18 @@ export function getProjectComparisonReferenceFileName(referencePath: string | un
 export function getOverallProjectComparisonCounts(comparison: ProjectComparison): ProjectComparisonSummaryCounts {
   return {
     connectionChanges:
-      comparison.summary.addedConnections + comparison.summary.removedConnections + comparison.summary.changedConnections,
+      comparison.summary.addedConnections +
+      comparison.summary.removedConnections +
+      comparison.summary.changedConnections,
     graphs: comparison.summary.addedGraphs + comparison.summary.removedGraphs + comparison.summary.changedGraphs,
+    nodePrefabs:
+      (comparison.summary.addedNodePrefabs ?? 0) +
+      (comparison.summary.removedNodePrefabs ?? 0) +
+      (comparison.summary.changedNodePrefabs ?? 0),
+    uiGraphs:
+      (comparison.summary.addedUiGraphs ?? 0) +
+      (comparison.summary.removedUiGraphs ?? 0) +
+      (comparison.summary.changedUiGraphs ?? 0),
     nodes: Object.values(comparison.graphs).reduce(
       (count, graphComparison) => count + countHighlightedCurrentNodes(graphComparison),
       0,
@@ -31,6 +46,8 @@ export function getGraphProjectComparisonCounts(
       connectionChanges: 0,
       graphs: 0,
       nodes: 0,
+      nodePrefabs: 0,
+      uiGraphs: 0,
     };
   }
 
@@ -41,6 +58,8 @@ export function getGraphProjectComparisonCounts(
       graphComparison.summary.changedConnections,
     graphs: graphComparison.kind === 'unchanged' ? 0 : 1,
     nodes: countHighlightedCurrentNodes(graphComparison),
+    nodePrefabs: 0,
+    uiGraphs: 0,
   };
 }
 
@@ -48,6 +67,8 @@ export function formatProjectComparisonCounts(counts: ProjectComparisonSummaryCo
   return formatPresentCounts([
     formatPresentCount(counts.graphs, 'graph', 'graphs'),
     formatPresentCount(counts.nodes, 'node', 'nodes'),
+    formatPresentCount(counts.nodePrefabs ?? 0, 'library node', 'library nodes'),
+    formatPresentCount(counts.uiGraphs ?? 0, 'web app', 'web apps'),
     formatPresentCount(counts.connectionChanges, 'connection change', 'connection changes'),
   ]);
 }

@@ -21,7 +21,14 @@ export {
 } from './selectors/graphSelectors';
 export { connectionsForSingleNodeState } from './selectors/graphSelectors';
 export { ioDefinitionsForNodeState } from './selectors/ioDefinitions';
-export { nodeByIdState, nodeConstructorsState, nodeInstanceByIdState, nodeInstancesState } from './selectors/nodeSelectors';
+export {
+  effectiveNodeByIdState,
+  effectiveNodesByIdState,
+  nodeByIdState,
+  nodeConstructorsState,
+  nodeInstanceByIdState,
+  nodeInstancesState,
+} from './selectors/nodeSelectors';
 
 export function removeGraphNodeStateFamilies(nodeId: NodeId): void {
   connectionsForSingleNodeState.remove(nodeId);

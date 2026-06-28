@@ -7,7 +7,34 @@ import { fileURLToPath } from 'node:url';
 const srcDir = dirname(fileURLToPath(import.meta.url));
 
 test('project top bar owns the graph tree sidebar toggle for the active project workspace', () => {
-  const projectSelectorTsx = readFileSync(join(srcDir, 'ProjectSelector.tsx'), 'utf8');
+  const projectSelectorShellSource = readFileSync(join(srcDir, 'ProjectSelector.tsx'), 'utf8');
+  const projectSelectorStylesSource = readFileSync(
+    join(srcDir, 'projectSelector', 'projectSelectorStyles.ts'),
+    'utf8',
+  );
+  const graphTopBarControlsSource = readFileSync(
+    join(srcDir, 'projectSelector', 'GraphTopBarControls.tsx'),
+    'utf8',
+  );
+  const projectFileMenuSource = readFileSync(join(srcDir, 'projectSelector', 'ProjectFileMenu.tsx'), 'utf8');
+  const projectTabRowSource = readFileSync(join(srcDir, 'projectSelector', 'ProjectTabRow.tsx'), 'utf8');
+  const projectCloseConfirmSource = readFileSync(
+    join(srcDir, 'projectSelector', 'useProjectCloseConfirmation.tsx'),
+    'utf8',
+  );
+  const windowsWindowControlsSource = readFileSync(
+    join(srcDir, 'projectSelector', 'WindowsWindowControls.tsx'),
+    'utf8',
+  );
+  const projectSelectorTsx = [
+    projectSelectorShellSource,
+    projectSelectorStylesSource,
+    graphTopBarControlsSource,
+    projectFileMenuSource,
+    projectTabRowSource,
+    projectCloseConfirmSource,
+    windowsWindowControlsSource,
+  ].join('\n');
   const leftSidebarTsx = readFileSync(join(srcDir, 'LeftSidebar.tsx'), 'utf8');
   const overlayTabsTsx = readFileSync(join(srcDir, 'OverlayTabs.tsx'), 'utf8');
   const noProjectTsx = readFileSync(join(srcDir, 'NoProject.tsx'), 'utf8');
@@ -23,15 +50,23 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
     projectSelectorTsx,
     /{projectTabsSelected && <GraphTreeSidebarToggle \/>}[\s\S]*{projectTabsSelected && <GraphHistoryControls \/>}[\s\S]*{reserveSidebarColumn && <div className="sidebar-panel-spacer" aria-hidden="true" \/>}[\s\S]*{showFileMenu && <ProjectFileMenu \/>}/,
   );
+  assert.match(projectSelectorShellSource, /import \{ ProjectTabRow \} from '\.\/projectSelector\/ProjectTabRow\.js';/);
+  assert.match(
+    projectSelectorShellSource,
+    /import \{ useProjectCloseConfirmation \} from '\.\/projectSelector\/useProjectCloseConfirmation\.js';/,
+  );
+  assert.doesNotMatch(projectSelectorShellSource, /const ProjectTab: FC/);
+  assert.doesNotMatch(projectSelectorShellSource, /const WindowsWindowControls: FC/);
+  assert.doesNotMatch(projectSelectorShellSource, /const ProjectFileMenu: FC/);
   assert.match(projectSelectorTsx, /const reserveSidebarColumn = projectTabsSelected && sidebarOpen;/);
   assert.match(
     projectSelectorTsx,
     /const showFileMenu = !isInTauri\(\) \|\| isWindowsPlatform\(\) \|\| isMacOSPlatform\(\);/,
   );
   assert.match(projectSelectorTsx, /const showWindowsWindowControls = isInTauri\(\) && isWindowsPlatform\(\);/);
-  assert.match(projectSelectorTsx, /import RivetLogo from '\.\.\/rivet-2-logo-no-background\.svg';/);
+  assert.match(projectSelectorTsx, /import RivetLogo from '\.\.\/\.\.\/rivet-2-logo-no-background\.svg';/);
   assert.match(projectSelectorTsx, /className={clsx\(\{ 'graph-tree-open': reserveSidebarColumn \}\)}/);
-  assert.match(projectSelectorTsx, /--project-selector-strip-bg: var\(--grey-dark-colorish\);/);
+  assert.match(projectSelectorTsx, /--project-selector-strip-bg: var\(--app-strip-bg\);/);
   assert.doesNotMatch(colorsCss, new RegExp('blu' + 'ish'));
   assert.match(colorsCss, /--neutral-grey-darker: #303030;/);
   assert.match(
@@ -54,6 +89,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
     colorsCss,
     /--grey-dark-colorish-seethrough: color-mix\(in srgb, var\(--secondary\) [^,]+, rgba\(35, 35, 35, 0\.95\) [^)]+\);/,
   );
+  assert.match(colorsCss, /--surface-opaque: var\(--grey-dark-colorish\);/);
+  assert.match(colorsCss, /--surface-translucent: var\(--grey-dark-colorish-seethrough\);/);
+  assert.match(colorsCss, /--app-strip-bg: var\(--surface-opaque\);/);
+  assert.match(colorsCss, /--app-panel-bg: var\(--surface-translucent\);/);
   assert.match(colorsCss, /:root\.theme-bright,[\s\S]*\.app\.theme-bright \{/);
   assert.match(colorsCss, /:root\.theme-bright,[\s\S]*--neutral-grey-darkest: #ffffff;/);
   assert.match(colorsCss, /:root\.theme-bright,[\s\S]*--foreground: #1d2733;/);
@@ -86,10 +125,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.match(rivetAppSource, /secondaryColor: customThemeSecondaryColor/);
   assert.match(rivetAppSource, /rootStyle\.setProperty\(name, value\);/);
   assert.match(projectSelectorTsx, /background: var\(--project-selector-strip-bg\);/);
-  assert.match(
-    projectSelectorTsx,
-    /--project-selector-divider-color: color-mix\(in srgb, var\(--grey-light\) 18%, var\(--project-selector-strip-bg\) 82%\);/,
-  );
+  assert.match(projectSelectorTsx, /--project-selector-divider-color: var\(--app-strip-divider-color\);/);
   assert.match(projectSelectorTsx, /&::after \{[\s\S]*left: 0;[\s\S]*right: 0;/);
   assert.match(projectSelectorTsx, /&::after \{[\s\S]*z-index: 2;/);
   assert.match(projectSelectorTsx, /&::after \{[\s\S]*background: var\(--grey-darkish\);/);
@@ -133,18 +169,19 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   );
   assert.doesNotMatch(projectSelectorTsx, /no-left-controls/);
   assert.doesNotMatch(projectSelectorTsx, /\.project[\s\S]*?border-bottom:/);
-  const sidebarToggleStyles = projectSelectorTsx.match(/\.sidebar-toggle-menu \{(?<styles>[\s\S]*?)\n  \}/)?.groups
-    ?.styles;
+  const sharedStripItemStyles = projectSelectorTsx.match(
+    /\.sidebar-toggle-menu,\s+\.graph-history-menu,\s+\.file-menu \{(?<styles>[\s\S]*?)\n  \}/,
+  )?.groups?.styles;
   const graphHistoryStyles = projectSelectorTsx.match(
     /\.graph-history-menu \{(?<styles>[\s\S]*?)\n  \.sidebar-toggle-tooltip/,
   )?.groups?.styles;
-  assert.ok(sidebarToggleStyles);
+  assert.ok(sharedStripItemStyles);
   assert.ok(graphHistoryStyles);
-  assert.doesNotMatch(sidebarToggleStyles, /border-right:/);
+  assert.doesNotMatch(sharedStripItemStyles, /border-left:|border-right:/);
   assert.doesNotMatch(graphHistoryStyles, /border-right:/);
   assert.match(
     projectSelectorTsx,
-    /\.sidebar-toggle-menu,\s+\.graph-history-menu \{[\s\S]*--project-tab-bg: var\(--project-selector-strip-bg\);[\s\S]*background: var\(--project-tab-current-bg\);[\s\S]*border-radius: 7px;[\s\S]*height: calc\(100% - 9px\);[\s\S]*margin: 4px 0 5px;/,
+    /\.sidebar-toggle-menu,\s+\.graph-history-menu,\s+\.file-menu \{[\s\S]*--project-tab-bg: var\(--project-selector-strip-bg\);[\s\S]*background: var\(--project-tab-current-bg\);[\s\S]*border-radius: 7px;[\s\S]*height: calc\(100% - 9px\);[\s\S]*margin: 4px 0 5px;/,
   );
   assert.match(
     projectSelectorTsx,
@@ -153,7 +190,10 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.doesNotMatch(graphHistoryStyles, /opacity: 0\.45;/);
   assert.doesNotMatch(graphHistoryStyles, /\.disabled[\s\S]*background:/);
   assert.match(projectSelectorTsx, /\.graph-history-button \{[\s\S]*&:disabled \{[\s\S]*opacity: 0\.45;/);
-  assert.match(projectSelectorTsx, /{showWindowsWindowControls && <WindowsWindowDragRegion \/>}/);
+  assert.match(
+    projectSelectorShellSource,
+    /windowDragRegion={showWindowsWindowControls \? <WindowsWindowDragRegion \/> : undefined}/,
+  );
   assert.match(projectSelectorTsx, /{showWindowsWindowControls && <WindowsWindowControls \/>}/);
   assert.match(projectSelectorTsx, /\.projects-container\.empty\.with-window-drag-region \{[\s\S]*flex: 1 1 auto;/);
   assert.match(projectSelectorTsx, /\.window-drag-region \{[\s\S]*flex: 1 0 40px;/);
@@ -167,17 +207,12 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.match(projectSelectorTsx, /appWindow\?\.listen\?\.\('tauri:\/\/resize'/);
   assert.match(projectSelectorTsx, /isWindowMaximized \? <RestoreWindowIcon \/> : <MaximizeWindowIcon \/>/);
   assert.match(projectSelectorTsx, /d="M5\.25 3\.25h7\.5v7\.5M3\.25 5\.25h8\.5v8\.5h-8\.5z"/);
-  const fileMenuStyles = [...projectSelectorTsx.matchAll(/\n  \.file-menu \{(?<styles>[\s\S]*?)\n  \}/g)]
-    .map((match) => match.groups?.styles ?? '')
-    .find((styles) => styles.includes('--project-tab-bg'));
-  assert.ok(fileMenuStyles);
-  assert.doesNotMatch(fileMenuStyles, /border-left:/);
-  assert.doesNotMatch(fileMenuStyles, /border-right:/);
-  assert.match(fileMenuStyles, /--project-tab-bg: var\(--project-selector-strip-bg\);/);
-  assert.match(fileMenuStyles, /background: var\(--project-tab-current-bg\);/);
-  assert.match(fileMenuStyles, /border-radius: 7px;/);
-  assert.match(fileMenuStyles, /height: calc\(100% - 9px\);/);
-  assert.match(fileMenuStyles, /margin: 4px 0 5px;/);
+  assert.match(sharedStripItemStyles, /--project-tab-bg: var\(--project-selector-strip-bg\);/);
+  assert.match(sharedStripItemStyles, /background: var\(--project-tab-current-bg\);/);
+  assert.match(sharedStripItemStyles, /border-radius: 7px;/);
+  assert.match(sharedStripItemStyles, /height: calc\(100% - 9px\);/);
+  assert.match(sharedStripItemStyles, /margin: 4px 0 5px;/);
+  assert.match(projectSelectorTsx, /\.file-menu \{[\s\S]*min-width: 78px;/);
   assert.match(
     projectSelectorTsx,
     /\.file-menu:not\(:hover\):not\(\.open\):has\([\s\S]*\+ \.projects-container \.draggableProject:first-child \.project:not\(\.active\):not\(:hover\)[\s\S]*\)::after \{[\s\S]*right: -2px;/,
@@ -255,7 +290,11 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   );
   assert.match(
     projectSelectorTsx,
-    /className={clsx\('project', \{ active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges \}\)}/,
+    /const ProjectTabSurface: FC<\{/,
+  );
+  assert.match(
+    projectSelectorTsx,
+    /className={clsx\('project', className, \{ active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges \}\)}/,
   );
   assert.match(
     projectTabUiSource,
@@ -326,7 +365,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   );
   assert.match(projectSelectorTsx, /&:not\(\.active\) > \.actions \{[\s\S]*display: none;/);
   assert.match(projectSelectorTsx, /{active && \(\s*<div className="actions">/);
-  assert.match(overlayTabsTsx, /background: var\(--project-selector-strip-bg, var\(--grey-dark-colorish\)\);/);
+  assert.match(overlayTabsTsx, /background: var\(--project-selector-strip-bg, var\(--app-strip-bg\)\);/);
   assert.match(projectSelectorTsx, /<img src={RivetLogo} alt="" aria-hidden="true" className="file-menu-logo" \/>/);
   assert.match(projectSelectorTsx, />\s*Menu\s*<\/button>/);
   assert.doesNotMatch(projectSelectorTsx, />\s*File\s*<\/button>/);
@@ -335,14 +374,14 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
   assert.doesNotMatch(overlayTabsTsx, /z-index: 200;/);
   assert.match(
     overlayTabsTsx,
-    /border-left: 1px solid var\(--project-selector-divider-color, var\(--grey-darkest\)\);/,
+    /border-left: 1px solid var\(--project-selector-divider-color, var\(--app-strip-divider-color\)\);/,
   );
   assert.match(
     overlayTabsTsx,
-    /\.menu-item \{[\s\S]*border-right: 1px solid var\(--project-selector-divider-color, var\(--grey-darkest\)\);/,
+    /\.menu-item \{[\s\S]*border-right: 1px solid var\(--project-selector-divider-color, var\(--app-strip-divider-color\)\);/,
   );
   assert.match(leftSidebarTsx, /id="graph-tree-sidebar"/);
-  assert.match(leftSidebarTsx, /border-right: 1px solid var\(--grey-darkish\);/);
+  assert.match(leftSidebarTsx, /border-right: 1px solid var\(--app-panel-border\);/);
   assert.match(leftSidebarTsx, /shouldCollapseLeftSidebarDrag\(rawWidth\)/);
   assert.match(leftSidebarTsx, /\{\(sidebarOpen \|\| isResizing\) && \(/);
   assert.match(
@@ -354,7 +393,15 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
 });
 
 test('windows and macos desktop use the in-strip Menu dropdown instead of a full native Tauri menubar', () => {
-  const projectSelectorTsx = readFileSync(join(srcDir, 'ProjectSelector.tsx'), 'utf8');
+  const projectSelectorShellSource = readFileSync(join(srcDir, 'ProjectSelector.tsx'), 'utf8');
+  const projectFileMenuSource = readFileSync(join(srcDir, 'projectSelector', 'ProjectFileMenu.tsx'), 'utf8');
+  const windowsWindowControlsSource = readFileSync(
+    join(srcDir, 'projectSelector', 'WindowsWindowControls.tsx'),
+    'utf8',
+  );
+  const projectSelectorTsx = [projectSelectorShellSource, projectFileMenuSource, windowsWindowControlsSource].join(
+    '\n',
+  );
   const platformOsSource = readFileSync(join(srcDir, '..', 'utils', 'platform', 'os.ts'), 'utf8');
   const platformCoreSource = readFileSync(join(srcDir, '..', 'utils', 'platform', 'core.ts'), 'utf8');
   const inAppMenuHotkeysSource = readFileSync(join(srcDir, '..', 'hooks', 'useInAppMenuHotkeys.tsx'), 'utf8');
@@ -372,7 +419,7 @@ test('windows and macos desktop use the in-strip Menu dropdown instead of a full
   );
   assert.match(platformOsSource, /export function isMacOSPlatform\(\): boolean/);
   assert.match(platformOsSource, /Macintosh\|MacIntel\|MacPPC\|Mac68K\|Mac OS X/);
-  assert.match(projectSelectorTsx, /import \{ getAppWindowHandle \} from '\.\.\/utils\/platform\/window\.js';/);
+  assert.match(projectSelectorTsx, /import \{ getAppWindowHandle \} from '\.\.\/\.\.\/utils\/platform\/window\.js';/);
   assert.match(
     projectSelectorTsx,
     /const showFileMenu = !isInTauri\(\) \|\| isWindowsPlatform\(\) \|\| isMacOSPlatform\(\);/,
@@ -383,7 +430,8 @@ test('windows and macos desktop use the in-strip Menu dropdown instead of a full
   assert.match(projectSelectorTsx, /appWindow\.toggleMaximize\?\.\(\)/);
   assert.match(projectSelectorTsx, /appWindow\.isMaximized\?\.\(\)/);
   assert.match(projectSelectorTsx, /appWindow\.close\(\)/);
-  assert.match(projectSelectorTsx, /appWindow\?\.startDragging\?\.\(\)/);
+  assert.match(projectSelectorTsx, /const runWindowAction = \(getAppWindow: GetAppWindow, action: WindowAction, errorMessage: string\) => \{/);
+  assert.match(projectSelectorTsx, /appWindow\.startDragging\?\.\(\)/);
   assert.match(projectSelectorTsx, /event\.detail > 1/);
   assert.match(projectSelectorTsx, /onDoubleClick={toggleMaximize}/);
   assert.match(platformCoreSource, /minimize\?\(\): Promise<void>;/);

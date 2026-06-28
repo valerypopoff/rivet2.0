@@ -79,7 +79,7 @@ export function useRestorePersistedWorkspace() {
         setGraph(restoreTarget.graph);
       }
 
-      applyProjectExecutorMode(openedProjects[currentProjectId]?.executorMode);
+      applyProjectExecutorMode(openedProjects[currentProjectId]?.executorMode, { projectId: currentProjectId });
     } catch (error) {
       handleError(error, 'Failed to restore persisted workspace view', {
         metadata: {

@@ -6,8 +6,13 @@ Command-line tools for running and serving Rivet 2 projects through the Node run
 
 ```bash
 npx @valerypopoff/rivet2-cli --help
+npx @valerypopoff/rivet2-cli list my-project.rivet-project
+npx @valerypopoff/rivet2-cli inspect my-project.rivet-project
+npx @valerypopoff/rivet2-cli doctor my-project.rivet-project
 npx @valerypopoff/rivet2-cli run my-project.rivet-project
 npx @valerypopoff/rivet2-cli serve my-project.rivet-project --port 8080
+npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project "My web app"
+npx @valerypopoff/rivet2-cli completion
 ```
 
 The CLI package exposes the `rivet` binary when installed globally:
@@ -23,6 +28,13 @@ rivet --help
 yarn workspace @valerypopoff/rivet2-cli run build
 yarn workspace @valerypopoff/rivet2-cli run test
 yarn workspace @valerypopoff/rivet2-cli run lint
+yarn workspace @valerypopoff/rivet2-cli run smoke:package
+yarn workspace @valerypopoff/rivet2-cli run smoke:docker
+yarn workspace @valerypopoff/rivet2-cli run verify
 ```
+
+`smoke:package` is part of `verify` and checks the generated package contents, direct built binary, and installed `rivet` command. `smoke:docker` is opt-in because it requires a local Docker daemon; it removes its temporary smoke image after the check.
+
+Publish the public packages through the repo-root publish script or GitHub workflow, not by running `npm publish` inside `packages/cli`.
 
 See the root [README](../../README.md), [package docs](../../developer-docs/PACKAGES.md), and public CLI docs under [packages/docs/docs/cli.md](../docs/docs/cli.md).

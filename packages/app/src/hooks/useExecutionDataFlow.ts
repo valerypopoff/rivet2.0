@@ -255,7 +255,10 @@ function isTerminalNodeRunStatus(status: NodeRunDataWithRefs['status']): boolean
   );
 }
 
-function collectReplacedRefIds(previousData: NodeRunDataWithRefs, nextData: Partial<NodeRunDataWithRefs>): string[] {
+export function collectReplacedRefIds(
+  previousData: NodeRunDataWithRefs,
+  nextData: Partial<NodeRunDataWithRefs>,
+): string[] {
   const previousRefIds = new Set<string>();
   const nextRefIds = new Set<string>();
 

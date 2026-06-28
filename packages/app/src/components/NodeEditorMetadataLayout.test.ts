@@ -78,7 +78,7 @@ test('node settings panel uses regular UI typography outside embedded code edito
   assert.match(panelContainerStyles, /--ds-font-family-heading: var\(--font-family\);/);
   assert.match(panelContainerStyles, /--ds-font-family-code: var\(--font-family-monospace\);/);
   assert.match(panelContainerStyles, /--label-font-family: var\(--font-family\);/);
-  assert.match(panelContainerStyles, /border-left: 1px solid var\(--grey-darkish\);/);
+  assert.match(panelContainerStyles, /border-left: 1px solid var\(--app-panel-border\);/);
   assert.match(panelContainerStyles, /box-shadow: none;/);
   assert.match(panelToggleHelperStyles, /font-size: var\(--ui-font-size-sm\) !important;/);
   assert.match(panelToggleHelperStyles, /line-height: 1\.35;/);
@@ -125,6 +125,39 @@ test('node code editor is preloaded before settings need it', () => {
   assert.match(graphBuilderSource, /warmCodeEditor\(\);\s+setEditingNodeId\(node\.id\);/);
 });
 
+test('linked node settings entry points open the source library node', () => {
+  const graphBuilderSource = readFileSync(join(componentsDir, 'GraphBuilder.tsx'), 'utf8');
+  const nodeEditorSource = readFileSync(join(componentsDir, 'NodeEditor.tsx'), 'utf8');
+  const nodeLibraryBuilderSource = readFileSync(join(componentsDir, 'NodeLibraryBuilder.tsx'), 'utf8');
+  const contextMenuHandlerSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'useGraphBuilderContextMenuHandler.ts'),
+    'utf8',
+  );
+
+  assert.match(
+    graphBuilderSource,
+    /if \(isNodePrefabInstanceNode\(node\)\) \{[\s\S]*openNodeLibrary\(\{[\s\S]*editingPrefabId: prefabId,[\s\S]*selectedNodeIds: sourceNode \? \[sourceNode\.id\] : \[\],[\s\S]*return;/,
+  );
+  assert.match(contextMenuHandlerSource, /const openLinkedNodeLibraryNode = useStableCallback/);
+  assert.match(contextMenuHandlerSource, /\.with\('node-edit'[\s\S]*openLinkedNodeLibraryNode\(nodesById\[nodeId\]\)/);
+  assert.match(
+    contextMenuHandlerSource,
+    /\.with\('node-open-prefab-source'[\s\S]*openLinkedNodeLibraryNode\(nodesById\[nodeId\]\)/,
+  );
+  assert.doesNotMatch(nodeEditorSource, /NodePrefabInstanceEditor/);
+  assert.match(nodeEditorSource, /if \(selectedNode && isNodePrefabInstanceNode\(selectedNode\)\) \{[\s\S]*deselect\(\);/);
+  assert.match(nodeLibraryBuilderSource, /EditNodeCommandOverrideContext/);
+  assert.match(nodeLibraryBuilderSource, /const editPrefabSourceNode: EditNodeCommand = useStableCallback/);
+  assert.match(nodeLibraryBuilderSource, /prefabsBySourceNodeId\.get\(params\.nodeId\)/);
+  assert.match(nodeLibraryBuilderSource, /updatePrefabSource\(prefab\.id,[\s\S]*structuredClone\(params\.newNode\)/);
+  assert.match(nodeLibraryBuilderSource, /<EditNodeCommandOverrideContext\.Provider value=\{editPrefabSourceNode\}>/);
+  assert.match(nodeLibraryBuilderSource, /const centeredEditingPrefabIdRef = useRef<NodePrefabId \| undefined>/);
+  assert.match(
+    nodeLibraryBuilderSource,
+    /setCanvasPosition\(getCanvasPositionForNodes\(\[editingPrefab\.sourceNode\], sidebarOpen\)\);/,
+  );
+});
+
 test('node color picker is not split into a fragile dev lazy module', () => {
   const lazyComponentsSource = readFileSync(join(componentsDir, 'LazyComponents.tsx'), 'utf8');
   const colorEditorSource = readFileSync(join(componentsDir, 'editors', 'ColorEditor.tsx'), 'utf8');
@@ -168,8 +201,9 @@ test('collapsible settings surfaces share opaque colors across panels and modals
 
   assert.match(
     colorsSource,
-    /--settings-collapsible-border: color-mix\(in srgb, var\(--secondary\) [^,]+, var\(--grey-darkish\) [^)]+\);/,
+    /--surface-border: color-mix\(in srgb, var\(--secondary\) [^,]+, var\(--grey-darkish\) [^)]+\);/,
   );
+  assert.match(colorsSource, /--settings-collapsible-border: var\(--surface-border\);/);
   assert.match(
     colorsSource,
     /--settings-collapsible-header-bg: color-mix\(in srgb, var\(--secondary\) [^,]+, var\(--grey-darker-darker\) [^)]+\);/,
@@ -256,7 +290,18 @@ function sliceSourceBetween(source: string, startNeedle: string, endNeedle: stri
 test('node code editor uses project-scoped Monaco model caching', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
   const lazyCodeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
-  const workspaceHostSource = readFileSync(join(componentsDir, '..', 'hooks', 'useRivetWorkspaceHost.ts'), 'utf8');
+  const workspaceHostCleanupSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'workspaceHost', 'useWorkspaceHostProjectCleanup.ts'),
+    'utf8',
+  );
+  const workspaceHostOpenSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'workspaceHost', 'useWorkspaceHostOpenProject.ts'),
+    'utf8',
+  );
+  const workspaceHostCloseSource = readFileSync(
+    join(componentsDir, '..', 'hooks', 'workspaceHost', 'useWorkspaceHostCloseProject.ts'),
+    'utf8',
+  );
 
   assert.match(codeEditorSource, /buildCodeEditorModelCacheKey/);
   assert.match(codeEditorSource, /codeEditorModelCacheKey\.js/);
@@ -279,9 +324,9 @@ test('node code editor uses project-scoped Monaco model caching', () => {
     /if \(model\.getValue\(\) !== text\) \{\s+currentOnChange\?\.\(model\.getValue\(\)\);/,
   );
   assert.match(lazyCodeEditorSource, /if \(!isCached\) \{\s+model\.dispose\(\);/);
-  assert.match(workspaceHostSource, /function clearCodeEditorModelCacheForClosedProject/);
-  assert.match(workspaceHostSource, /clearCodeEditorModelCacheForClosedProject\(replaceTargetProjectId\);/);
-  assert.match(workspaceHostSource, /clearCodeEditorModelCacheForClosedProject\(projectId\);/);
+  assert.match(workspaceHostCleanupSource, /function clearCodeEditorModelCacheForClosedProject/);
+  assert.match(workspaceHostOpenSource, /cleanupClosedProject\(replacedProjectId\);/);
+  assert.match(workspaceHostCloseSource, /cleanupClosedProject\(projectId,/);
 });
 
 test('node code editor text stats are editor-definition driven', () => {

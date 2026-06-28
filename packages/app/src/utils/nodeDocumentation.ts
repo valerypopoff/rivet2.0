@@ -1,8 +1,9 @@
 import type { BuiltInNodeType } from '@valerypopoff/rivet2-core';
 
 export const NODE_REFERENCE_BASE_URL = 'https://valerypopoff.github.io/rivet2.0/node-reference';
+export const INTERNAL_BUILT_IN_NODE_TYPES_WITHOUT_NODE_REFERENCE = new Set<BuiltInNodeType>(['nodePrefabInstance']);
 
-export const BUILT_IN_NODE_DOCUMENTATION_SLUGS = {
+export const BUILT_IN_NODE_DOCUMENTATION_SLUGS: Partial<Record<BuiltInNodeType, string>> = {
   abortGraph: 'abort-graph',
   appendToDataset: 'append-to-dataset',
   array: 'array',
@@ -92,13 +93,17 @@ export const BUILT_IN_NODE_DOCUMENTATION_SLUGS = {
   vectorNearestNeighbors: 'vector-knn',
   vectorStore: 'vector-store',
   waitForEvent: 'wait-for-event',
-} satisfies Record<BuiltInNodeType, string>;
+};
 
 export function getBuiltInNodeDocumentationUrl(nodeType: string): string | undefined {
   if (!Object.prototype.hasOwnProperty.call(BUILT_IN_NODE_DOCUMENTATION_SLUGS, nodeType)) {
     return undefined;
   }
 
-  const slug = BUILT_IN_NODE_DOCUMENTATION_SLUGS[nodeType as BuiltInNodeType];
+  const slug = (BUILT_IN_NODE_DOCUMENTATION_SLUGS as Record<string, string | undefined>)[nodeType];
+  if (!slug) {
+    return undefined;
+  }
+
   return `${NODE_REFERENCE_BASE_URL}/${slug}`;
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { type NodeConnection, type NodeId, type PortId } from '@valerypopoff/rivet2-core';
-import { useAtom, useAtomValue, useStore } from 'jotai';
-import { connectionsState, ioDefinitionsForNodeState, nodesByIdState } from '../state/graph.js';
+import { type ChartNode, type NodeConnection, type NodeId, type PortId } from '@valerypopoff/rivet2-core';
+import { useAtom, useStore } from 'jotai';
+import { ioDefinitionsForNodeState } from '../state/graph.js';
 import { draggingWireClosestPortState, draggingWireState, type DraggingWireDef } from '../state/graphBuilder.js';
 import { useLatest } from 'ahooks';
 import { useMakeConnectionCommand } from '../commands/makeConnectionCommand';
@@ -25,11 +25,17 @@ function shouldHandleGlobalWireMouseUpTarget(target: EventTarget | null): boolea
   return true;
 }
 
-export const useDraggingWire = (onConnectionsChanged: (connections: NodeConnection[]) => void) => {
+export const useDraggingWire = ({
+  connections,
+  enabled = true,
+  nodesById,
+}: {
+  connections: readonly NodeConnection[];
+  enabled?: boolean;
+  nodesById: Record<NodeId, ChartNode>;
+}) => {
   const [draggingWire, setDraggingWire] = useAtom(draggingWireState);
   const store = useStore();
-  const connections = useAtomValue(connectionsState);
-  const nodesById = useAtomValue(nodesByIdState);
   const [closestPortToDraggingWire, setClosestPortToDraggingWire] = useAtom(draggingWireClosestPortState);
   const isDragging = !!draggingWire;
 
@@ -49,6 +55,10 @@ export const useDraggingWire = (onConnectionsChanged: (connections: NodeConnecti
   );
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     if (closestPortToDraggingWire && isDragging) {
       setDraggingWire((w) => {
         if (!w) {
@@ -76,7 +86,7 @@ export const useDraggingWire = (onConnectionsChanged: (connections: NodeConnecti
         return nextWire;
       });
     }
-  }, [closestPortToDraggingWire, setDraggingWire, isDragging, latestDraggingWire]);
+  }, [closestPortToDraggingWire, enabled, setDraggingWire, isDragging, latestDraggingWire]);
 
   const clearDraggingWire = useCallback(() => {
     wireGestureStartRef.current = undefined;
@@ -86,13 +96,15 @@ export const useDraggingWire = (onConnectionsChanged: (connections: NodeConnecti
 
   const resolveDropTargetFromPointerPosition = useCallback(
     (clientX: number, clientY: number) =>
-      resolveClosestWireDropTargetFromPoint({
-        clientX,
-        clientY,
-        getInputDefinition: (nodeId, portId) =>
-          store.get(canvasIoDefinitionsForNodeState(nodeId))?.inputDefinitions.find((definition) => definition.id === portId),
-      }),
-    [store],
+      enabled
+        ? resolveClosestWireDropTargetFromPoint({
+            clientX,
+            clientY,
+            getInputDefinition: (nodeId, portId) =>
+              store.get(canvasIoDefinitionsForNodeState(nodeId))?.inputDefinitions.find((definition) => definition.id === portId),
+          })
+        : undefined,
+    [enabled, store],
   );
 
   const continueDraggingWire = useCallback(
@@ -215,6 +227,10 @@ export const useDraggingWire = (onConnectionsChanged: (connections: NodeConnecti
 
   const onWireStartDrag = useCallback(
     (event: React.MouseEvent<HTMLElement>, startNodeId: NodeId, startPortId: PortId, isInput: boolean) => {
+      if (!enabled) {
+        return;
+      }
+
       if (event.button !== 0) {
         return;
       }
@@ -264,11 +280,15 @@ export const useDraggingWire = (onConnectionsChanged: (connections: NodeConnecti
       wireGestureStartRef.current = { x: event.clientX, y: event.clientY };
       setActiveDraggingWire({ startNodeId, startPortId, startPortIsInput: isInput, dataType: def.dataType });
     },
-    [clearDraggingWire, connections, isStickyConnectionModePending, store, setActiveDraggingWire],
+    [clearDraggingWire, connections, enabled, isStickyConnectionModePending, store, setActiveDraggingWire],
   );
 
   const onWireEndDrag = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
+      if (!enabled) {
+        return;
+      }
+
       if (event.button !== 0) {
         return;
       }
@@ -286,10 +306,14 @@ export const useDraggingWire = (onConnectionsChanged: (connections: NodeConnecti
         keepDragging: event.ctrlKey || event.metaKey,
       });
     },
-    [didCurrentWireGestureMove, finalizeWireDrag, latestDraggingWire, resolveDropTargetFromPointerPosition],
+    [didCurrentWireGestureMove, enabled, finalizeWireDrag, latestDraggingWire, resolveDropTargetFromPointerPosition],
   );
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const handleWindowMouseUp = (event: MouseEvent) => {
       if (event.button !== 0) {
         return;
@@ -320,7 +344,7 @@ export const useDraggingWire = (onConnectionsChanged: (connections: NodeConnecti
     return () => {
       window.removeEventListener('mouseup', handleWindowMouseUp, { capture: true });
     };
-  }, [didCurrentWireGestureMove, finalizeWireDrag, latestDraggingWire, resolveDropTargetFromPointerPosition]);
+  }, [didCurrentWireGestureMove, enabled, finalizeWireDrag, latestDraggingWire, resolveDropTargetFromPointerPosition]);
 
   useEffect(() => clearDraggingWire, [clearDraggingWire]);
 

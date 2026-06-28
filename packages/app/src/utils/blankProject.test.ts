@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBlankProjectWithDefaultGraph } from './blankProject.js';
+import { createBlankProjectWithDefaultGraph, DEFAULT_PROJECT_GRAPH_NAME } from './blankProject.js';
 
-test('createBlankProjectWithDefaultGraph creates a single untitled main graph', () => {
+test('createBlankProjectWithDefaultGraph creates a single named main graph', () => {
   const project = createBlankProjectWithDefaultGraph();
   const graphIds = Object.keys(project.graphs);
 
   assert.equal(graphIds.length, 1);
   assert.equal(project.metadata.mainGraphId, graphIds[0]);
-  assert.equal(project.graphs[project.metadata.mainGraphId!]?.metadata?.name, 'Untitled Graph');
+  assert.equal(project.graphs[project.metadata.mainGraphId!]?.metadata?.name, DEFAULT_PROJECT_GRAPH_NAME);
 });
 
 test('createBlankProjectWithDefaultGraph applies title and description overrides', () => {

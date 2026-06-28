@@ -1,5 +1,12 @@
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
-import { type DataId, type GraphId, type Project } from '@valerypopoff/rivet2-core';
+import {
+  type DataId,
+  type GraphId,
+  type NodeId,
+  type NodePrefabId,
+  type Project,
+  type UiGraphId,
+} from '@valerypopoff/rivet2-core';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
@@ -30,6 +37,7 @@ import {
   createGraphSwitchTransition,
   createProjectLoadTransition,
   mergeCurrentGraphIntoProject,
+  shouldPersistProjectBeforeLoad,
 } from '../utils/workspaceTransitions.js';
 import { handleError } from '../utils/errorHandling.js';
 import { useStaticDataDatabase } from './useStaticDataDatabase.js';
@@ -48,6 +56,8 @@ import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js'
 import { markProjectClean, markProjectDirtyFlag } from '../utils/projectUnsavedChanges.js';
 import { useApplyProjectExecutorMode } from './useProjectExecutorMode.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
+import { editingNodePrefabIdState, nodeLibraryOpenState } from '../state/nodeLibrary.js';
+import { selectedUiGraphIdState } from '../state/uiGraphs.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -70,13 +80,13 @@ export function useWorkspaceTransitions() {
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
   const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
   const setProjects = useSetAtom(projectsState);
+  const setNodeLibraryOpen = useSetAtom(nodeLibraryOpenState);
+  const setEditingNodePrefabId = useSetAtom(editingNodePrefabIdState);
+  const setSelectedUiGraphId = useSetAtom(selectedUiGraphIdState);
   const centerViewOnGraph = useCenterViewOnGraph();
   const saveCurrentGraph = useSaveCurrentGraph();
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
-  const {
-    persistCurrentProjectExecutionSnapshot,
-    restoreProjectExecutionSnapshot,
-  } = useProjectExecutionSnapshots();
+  const { persistCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
   const { testSuites } = useAtomValue(trivetState);
   const {
     canvasPosition,
@@ -137,9 +147,15 @@ export function useWorkspaceTransitions() {
       try {
         const currentProjectId = project.metadata.id;
         const targetProjectId = projectInfo.project.metadata.id;
-        const shouldPersistCurrentProjectEditorState =
-          Boolean(currentProjectId) &&
-          (loadedProject.loaded || Object.keys(project.graphs).length > 0 || graphNavigationStack.stack.length > 0);
+        const currentProjectHasOpenTab = Boolean(
+          currentProjectId && store.get(projectsState).openedProjects[currentProjectId],
+        );
+        const shouldPersistCurrentProjectEditorState = shouldPersistProjectBeforeLoad({
+          currentProjectHasOpenTab,
+          loadedProject,
+          navigationStack: graphNavigationStack,
+          project,
+        });
 
         const currentProjectEditorSnapshot = shouldPersistCurrentProjectEditorState
           ? persistCurrentProjectEditorSnapshot()
@@ -181,12 +197,8 @@ export function useWorkspaceTransitions() {
               project: projectInfo.project,
             }),
           );
-          setProjectUnsavedChanges((previousFlags) =>
-            markProjectDirtyFlag(previousFlags, targetProjectId, false),
-          );
-          setProjectDataUnsavedChanges((previousFlags) =>
-            markProjectDirtyFlag(previousFlags, targetProjectId, false),
-          );
+          setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, targetProjectId, false));
+          setProjectDataUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, targetProjectId, false));
         }
 
         setProject(transition.project);
@@ -194,6 +206,9 @@ export function useWorkspaceTransitions() {
         cleanupNodeAtomFamilies(transition.cleanupNodeIds);
         setIsReadOnlyGraph(false);
         setHistoricalGraph(null);
+        setNodeLibraryOpen(false);
+        setEditingNodePrefabId(undefined);
+        setSelectedUiGraphId(undefined);
         setGraph(transition.graph);
         const persistedCanvasPositionsByGraph = resolvePersistedCanvasPositionsForLegacyCache({
           project: projectInfo.project,
@@ -219,7 +234,7 @@ export function useWorkspaceTransitions() {
             ? currentProjectExecutionSnapshot ?? targetProjectExecutionSnapshot
             : targetProjectExecutionSnapshot,
         );
-        applyProjectExecutorMode(projectInfo.executorMode);
+        applyProjectExecutorMode(projectInfo.executorMode, { projectId: targetProjectId });
         await applyStaticData(projectInfo.data);
         setLoadedProject(transition.loadedProject);
         setTrivetState(createDefaultTrivetState(projectInfo.testSuites ?? []));
@@ -296,6 +311,9 @@ export function useWorkspaceTransitions() {
       setSelectedNodes(transition.selectedNodes);
       setIsReadOnlyGraph(false);
       setHistoricalGraph(null);
+      setNodeLibraryOpen(false);
+      setEditingNodePrefabId(undefined);
+      setSelectedUiGraphId(undefined);
 
       if (transition.navigationStack) {
         setNavigationStack(transition.navigationStack);
@@ -308,6 +326,88 @@ export function useWorkspaceTransitions() {
       } else {
         setPosition({ x: 0, y: 0, zoom: 1 });
       }
+    },
+
+    switchToNodeLibrary(
+      options: { selectedNodeIds?: readonly NodeId[]; editingPrefabId?: NodePrefabId | undefined } = {},
+    ) {
+      const currentGraphId = currentGraph.metadata?.id;
+
+      if (project.metadata.id) {
+        persistCurrentProjectEditorSnapshot({
+          currentGraphId,
+        });
+
+        if (currentGraphId) {
+          setLastSavedPositions((previousPositionsByGraph) => ({
+            ...previousPositionsByGraph,
+            [currentGraphId]: {
+              x: canvasPosition.x,
+              y: canvasPosition.y,
+              zoom: canvasPosition.zoom,
+            },
+          }));
+        }
+      }
+
+      const savedCurrentGraph = saveCurrentGraph();
+      const latestProject = store.get(projectState);
+      const projectWithCurrentGraph = mergeCurrentGraphIntoProject(latestProject, savedCurrentGraph);
+      setProject(projectWithCurrentGraph);
+
+      if (latestProject.metadata.id && savedCurrentGraph) {
+        persistOpenedProjectSnapshot({
+          project: projectWithCurrentGraph,
+          graph: savedCurrentGraph,
+        });
+      }
+
+      setSelectedNodes([...(options.selectedNodeIds ?? [])]);
+      setIsReadOnlyGraph(false);
+      setHistoricalGraph(null);
+      setSelectedUiGraphId(undefined);
+      setNodeLibraryOpen(true);
+      setEditingNodePrefabId(options.editingPrefabId);
+    },
+
+    switchToUiGraph(uiGraphId: UiGraphId) {
+      const currentGraphId = currentGraph.metadata?.id;
+
+      if (project.metadata.id) {
+        persistCurrentProjectEditorSnapshot({
+          currentGraphId,
+        });
+
+        if (currentGraphId) {
+          setLastSavedPositions((previousPositionsByGraph) => ({
+            ...previousPositionsByGraph,
+            [currentGraphId]: {
+              x: canvasPosition.x,
+              y: canvasPosition.y,
+              zoom: canvasPosition.zoom,
+            },
+          }));
+        }
+      }
+
+      const savedCurrentGraph = saveCurrentGraph();
+      const latestProject = store.get(projectState);
+      const projectWithCurrentGraph = mergeCurrentGraphIntoProject(latestProject, savedCurrentGraph);
+      setProject(projectWithCurrentGraph);
+
+      if (latestProject.metadata.id && savedCurrentGraph) {
+        persistOpenedProjectSnapshot({
+          project: projectWithCurrentGraph,
+          graph: savedCurrentGraph,
+        });
+      }
+
+      setSelectedNodes([]);
+      setIsReadOnlyGraph(false);
+      setHistoricalGraph(null);
+      setNodeLibraryOpen(false);
+      setEditingNodePrefabId(undefined);
+      setSelectedUiGraphId(uiGraphId);
     },
 
     buildProjectForSave() {

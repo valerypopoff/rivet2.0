@@ -412,7 +412,7 @@ export const ContextMenuItemDiv = styled.div<{
 
   &:hover,
   &.active {
-    background-color: var(--grey-darkish);
+    background-color: var(--popup-menu-row-hover-bg);
     color: var(--grey-lightest);
   }
 
@@ -434,7 +434,7 @@ export const ContextMenuItemDiv = styled.div<{
     css`
       &:hover,
       &.active {
-        background-color: var(--grey-darkish);
+        background-color: var(--popup-menu-row-hover-bg);
         color: var(--error-light);
       }
     `}

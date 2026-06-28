@@ -1,8 +1,6 @@
-import { type PortId, type NodeId } from '@valerypopoff/rivet2-core';
-import { useState, useLayoutEffect, useRef, useCallback } from 'react';
+import { type ChartNode, type PortId, type NodeId } from '@valerypopoff/rivet2-core';
+import { useState, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { type PortPositions } from '../components/NodeCanvas';
-import { useAtomValue } from 'jotai';
-import { nodesByIdState } from '../state/graph';
 
 const OBSERVED_PORT_LAYOUT_SELECTOR = [
   '.node:not(.overlayNode)',
@@ -36,11 +34,13 @@ export function useNodePortPositions({
   enabled,
   isDraggingNode,
   isDraggingWire,
+  nodes,
   visibleNodeIdSet,
 }: {
   enabled: boolean;
   isDraggingNode: boolean;
   isDraggingWire: boolean;
+  nodes: readonly ChartNode[];
   visibleNodeIdSet: ReadonlySet<NodeId>;
 }) {
   const [nodePortPositions, setNodePortPositions] = useState<PortPositions>({});
@@ -48,7 +48,10 @@ export function useNodePortPositions({
   const liveMeasurementAnimationFrameRef = useRef<number | undefined>(undefined);
   const scheduledRecalculateAnimationFrameRef = useRef<number | undefined>(undefined);
   const observedPortLayoutElementsRef = useRef<HTMLElement[]>([]);
-  const nodesById = useAtomValue(nodesByIdState);
+  const nodesById = useMemo(() => Object.fromEntries(nodes.map((node) => [node.id, node])), [nodes]) as Record<
+    NodeId,
+    ChartNode
+  >;
   const canvasRef = useRef<HTMLDivElement>(null);
 
   const recalculate = useCallback(() => {
@@ -78,7 +81,12 @@ export function useNodePortPositions({
       }
 
       // For most nodes we can grab the harcoded position from the node data for the root position of the node
-      const node = nodesById[nodeId]!;
+      const node = nodesById[nodeId];
+
+      if (!node) {
+        continue;
+      }
+
       const nodePos = { x: node.visualData.x, y: node.visualData.y };
 
       // Then we add the port's offset position from the node
@@ -128,7 +136,11 @@ export function useNodePortPositions({
           continue;
         }
 
-        const node = nodesById[nodeId]!;
+        const node = nodesById[nodeId];
+
+        if (!node) {
+          continue;
+        }
 
         const nodePos = { x: node.visualData.x, y: node.visualData.y };
 

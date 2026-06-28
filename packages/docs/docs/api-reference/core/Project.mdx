@@ -2,9 +2,9 @@
 
 ## Description
 
-`Project` is the top-level Rivet document shape. It contains project metadata, all graphs, optional attached data, project references, and the plugin specs required by the graph contents.
+`Project` is the top-level Rivet document shape. It contains project metadata, all graphs, optional library nodes, optional minimal web apps, optional attached data, project references, and the plugin specs required by project node contents.
 
-Rivet project files keep this YAML shape. In the desktop app, installed plugins are app-level, but project YAML still serializes `plugins` for portability. Rivet derives that list from the plugin nodes used in the project graphs and preserves unresolved plugin specs when a project references plugins that are not installed.
+Rivet project files keep this YAML shape. In the desktop app, installed plugins are app-level, but project YAML still serializes `plugins` for portability. Rivet derives that list from the plugin nodes used in the project graphs and library nodes, and preserves unresolved plugin specs when a project references plugins that are not installed.
 
 ## Definition
 
@@ -16,8 +16,51 @@ export type Project = {
   metadata: ProjectMetadata;
   plugins?: PluginLoadSpec[];
   graphs: Record<GraphId, NodeGraph>;
+  nodePrefabs?: Record<NodePrefabId, NodePrefab>;
+  uiGraphs?: Record<UiGraphId, UiGraph>;
   data?: Record<DataId, string>;
   references?: ProjectReference[];
+};
+
+export type NodePrefabId = Opaque<string, 'NodePrefabId'>;
+
+export type NodePrefab = {
+  id: NodePrefabId;
+  sourceNode: ChartNode;
+};
+
+export type UiGraphId = Opaque<string, 'UiGraphId'>;
+export type UiComponentId = Opaque<string, 'UiComponentId'>;
+
+export type UiGraph = {
+  id: UiGraphId;
+  name: string;
+  description?: string;
+  components: UiGraphComponent[];
+};
+
+export type UiGraphComponent =
+  | { id: UiComponentId; type: 'text'; text: string }
+  | { id: UiComponentId; type: 'markdown'; markdown: string }
+  | {
+      id: UiComponentId;
+      type: 'input' | 'textarea';
+      label: string;
+      stateKey: string;
+      placeholder?: string;
+      defaultValue?: string;
+    }
+  | { id: UiComponentId; type: 'button'; label: string; action: UiGraphAction }
+  | { id: UiComponentId; type: 'output'; label?: string; stateKey: string; renderAs?: 'text' | 'json' | 'markdown' };
+
+export type UiGraphAction = {
+  type: 'runGraph';
+  graphId?: GraphId;
+  inputMappings?: { inputKey: string; stateKey: string }[];
+  inputs?: Record<string, { type: 'state'; key: string } | { type: 'literal'; value: unknown }>;
+  outputs?: { outputKey?: string; stateKey: string }[];
+  outputKey?: string;
+  outputStateKey?: string;
 };
 
 export type ProjectMetadata = {
@@ -44,20 +87,20 @@ Type: `ProjectMetadata`
 
 Project-level information.
 
-| Field | Purpose |
-| --- | --- |
-| `id` | Stable project ID. |
-| `title` | Project title shown in the app. |
-| `description` | Project description. |
-| `mainGraphId` | Graph to run by default when no graph is specified. |
-| `path` | Current project path when known. |
-| `mcpServer` | Optional MCP server configuration stored with the project. |
+| Field         | Purpose                                                    |
+| ------------- | ---------------------------------------------------------- |
+| `id`          | Stable project ID.                                         |
+| `title`       | Project title shown in the app.                            |
+| `description` | Project description.                                       |
+| `mainGraphId` | Graph to run by default when no graph is specified.        |
+| `path`        | Current project path when known.                           |
+| `mcpServer`   | Optional MCP server configuration stored with the project. |
 
 ### plugins
 
 Type: `PluginLoadSpec[] | undefined`
 
-Plugin load specs required by the project. App-installed plugins make nodes available globally in the editor. The project only needs plugin specs for plugins whose nodes are actually present in the project graphs.
+Plugin load specs required by the project. App-installed plugins make nodes available globally in the editor. The project only needs plugin specs for plugins whose nodes are actually present in the project graphs or library nodes.
 
 Do not treat this as the app's installed-plugin list. It is the portable project dependency list.
 
@@ -66,6 +109,18 @@ Do not treat this as the app's installed-plugin list. It is the portable project
 Type: `Record<GraphId, NodeGraph>`
 
 All graphs in the project, keyed by graph ID.
+
+### nodePrefabs
+
+Type: `Record<NodePrefabId, NodePrefab> | undefined`
+
+Library nodes, keyed by prefab ID. These source nodes are serialized with the project but are not executable graph nodes and do not have connections. Graphs link to them through `nodePrefabInstance` nodes.
+
+### uiGraphs
+
+Type: `Record<UiGraphId, UiGraph> | undefined`
+
+Minimal web apps, keyed by UI graph ID. UI graphs are declarative component trees saved with the project. They are not executable workflow graphs, cannot be selected as the Main Graph, and do not have nodes or connections. Button actions can run regular graphs in the same project through the app preview or the Node package web-app handler. New button actions use ordered `inputMappings` rows to send web-app data keys to Graph Input IDs, and ordered `outputs` rows to save one or more graph outputs back into web-app data. An output row without `outputKey` stores the whole graph output object; an output row with `outputKey` stores `outputs[outputKey].value`. Legacy `inputs`, `outputKey`, and `outputStateKey` fields remain supported for older project files. A configured `outputKey` must be returned by the target graph, or the action fails with a clear error.
 
 ### data
 
@@ -81,11 +136,11 @@ References to other project files. Project references cannot be cyclic.
 
 Each reference can include:
 
-| Field | Purpose |
-| --- | --- |
-| `id` | ID of the referenced project. |
+| Field       | Purpose                                                 |
+| ----------- | ------------------------------------------------------- |
+| `id`        | ID of the referenced project.                           |
 | `hintPaths` | Candidate paths used to resolve the referenced project. |
-| `title` | Human-readable title for UI and diagnostics. |
+| `title`     | Human-readable title for UI and diagnostics.            |
 
 ## Loading a Project
 

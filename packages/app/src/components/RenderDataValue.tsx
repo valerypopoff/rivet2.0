@@ -1,8 +1,6 @@
-import { type DataValue, type NodeOutputDefinition } from '@valerypopoff/rivet2-core';
-import { keys } from '../utils/typeSafety.js';
-import { type FC } from 'react';
+import { type DataValue } from '@valerypopoff/rivet2-core';
 import { type DataRefReader, useDataRefs } from '../providers/ProvidersContext.js';
-import { type DataValueWithRefs, type InputsOrOutputsWithRefs } from '../state/dataFlow.js';
+import { type DataValueWithRefs } from '../state/dataFlow.js';
 import {
   isPreviewOnlyStoredValue,
   isStoredInlineDataValue,
@@ -13,13 +11,6 @@ import { createDataValueRendererMap } from './renderDataValue/createDataValueRen
 import { createScalarRenderers } from './renderDataValue/createScalarRenderers.js';
 import { LargeStoredValuePreview } from './renderDataValue/LargeStoredValuePreview.js';
 import type { OutputRenderMode } from './renderDataValue/outputRenderTypes.js';
-import { renderedDataOutputsStyles } from './renderDataValue/renderDataValueStyles.js';
-import { isVisibleOutputPort } from '../utils/outputPortVisibility.js';
-import { OutputSectionHeader } from './renderDataValue/OutputSectionHeader.js';
-import {
-  getOutputSectionStatsForValue,
-  shouldShowOutputSectionStats,
-} from './renderDataValue/outputSectionStats.js';
 
 export type { OutputRenderMode } from './renderDataValue/outputRenderTypes.js';
 
@@ -86,107 +77,6 @@ export function RenderDataValue({
       wrapLines={wrapLines}
     />
   );
-}
-
-export const RenderDataOutputs: FC<{
-  definitions?: NodeOutputDefinition[];
-  outputs: InputsOrOutputsWithRefs;
-  renderMarkdown?: boolean;
-  isCompact: boolean;
-  mode?: OutputRenderMode;
-  allowLargeStoredValueActions?: boolean;
-  wrapLines?: boolean;
-}> = ({ definitions, outputs, renderMarkdown, isCompact, mode, allowLargeStoredValueActions, wrapLines }) => {
-  const dataRefs = useDataRefs();
-  const visibleOutputPorts = keys(outputs).filter((portId) => isVisibleOutputPort(portId) && outputs[portId] != null);
-  const outputPorts = isCompact ? visibleOutputPorts.slice(0, 1) : visibleOutputPorts;
-  const effectiveMode = mode ?? (isCompact ? 'compact' : 'full');
-  const showSectionStats = shouldShowOutputSectionStats({
-    mode: effectiveMode,
-    allowLargeStoredValueActions,
-  });
-
-  if (outputPorts.length === 0) {
-    return null;
-  }
-
-  if (outputPorts.length === 1) {
-    const portId = outputPorts[0]!;
-    const value = outputs[portId]!;
-
-    if (showSectionStats) {
-      return (
-        <div css={renderedDataOutputsStyles} className="rendered-data-outputs large-output-sections">
-          <div className="port-value">
-            <OutputSectionHeader
-              isLarge={showSectionStats}
-              label={getOutputPortDisplayLabel(definitions, portId, 'Output')}
-              stats={getOutputSectionStatsForValue(value, dataRefs)}
-            />
-            <RenderDataValue
-              value={value}
-              renderMarkdown={renderMarkdown}
-              isCompact={isCompact}
-              mode={effectiveMode}
-              allowLargeStoredValueActions={allowLargeStoredValueActions}
-              wrapLines={wrapLines}
-            />
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div>
-        <RenderDataValue
-          value={value}
-          renderMarkdown={renderMarkdown}
-          isCompact={isCompact}
-          mode={effectiveMode}
-          allowLargeStoredValueActions={allowLargeStoredValueActions}
-          wrapLines={wrapLines}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div
-      css={renderedDataOutputsStyles}
-      className={showSectionStats ? 'rendered-data-outputs large-output-sections' : 'rendered-data-outputs'}
-    >
-      {outputPorts.map((portId) => {
-        const label = getOutputPortDisplayLabel(definitions, portId);
-
-        return (
-          <div className="port-value" key={portId}>
-            <OutputSectionHeader
-              isLarge={showSectionStats}
-              label={label}
-              stats={showSectionStats ? getOutputSectionStatsForValue(outputs[portId]!, dataRefs) : undefined}
-            />
-            <RenderDataValue
-              value={outputs[portId]!}
-              renderMarkdown={renderMarkdown}
-              isCompact={isCompact}
-              mode={effectiveMode}
-              allowLargeStoredValueActions={allowLargeStoredValueActions}
-              wrapLines={wrapLines}
-            />
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
-function getOutputPortDisplayLabel(
-  definitions: NodeOutputDefinition[] | undefined,
-  portId: string,
-  fallbackLabel?: string,
-): string {
-  const title = definitions?.find((d) => d.id === portId)?.title?.trim();
-  return title || fallbackLabel || portId;
 }
 
 function getRendererMap(): ReturnType<typeof createDataValueRendererMap> {

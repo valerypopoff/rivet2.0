@@ -7,6 +7,7 @@ import {
   decodeDebuggerTransportSentinels,
   type ChartNode,
   type DataType,
+  type DatasetId,
   type GraphId,
   type GraphProcessor,
   type GraphRunId,
@@ -16,10 +17,18 @@ import {
   type PortId,
   type Project,
   type ProjectId,
+  type RemoteRunRequestId,
   type RootRunId,
+  type Settings,
 } from '@valerypopoff/rivet2-core';
 import WebSocket, { type WebSocketServer } from 'ws';
-import { DEBUGGER_HEARTBEAT_INTERVAL_MS, DEBUGGER_HEARTBEAT_TIMEOUT_MS, startDebuggerServer } from '../src/debugger.js';
+import {
+  DEBUGGER_HEARTBEAT_INTERVAL_MS,
+  DEBUGGER_HEARTBEAT_TIMEOUT_MS,
+  startDebuggerServer,
+  type DebuggerClientState,
+} from '../src/debugger.js';
+import { DebuggerDatasetProvider } from '../src/native/DebuggerDatasetProvider.js';
 import { createProcessor } from '../src/api.js';
 import { loadTestGraphs } from './testUtils.js';
 import { makeThrowingCodeProject } from './runtimeSpeedFixtures.js';
@@ -111,6 +120,30 @@ function makeExecution(graphId = 'graph-1' as GraphId) {
     graphId,
     graphRunId: `${graphId}-run` as GraphRunId,
     rootRunId: 'root-run' as RootRunId,
+  };
+}
+
+function makeUploadedProject(id: string, title: string): Project {
+  const graphId = `${id}-graph` as GraphId;
+  return {
+    graphs: {
+      [graphId]: {
+        connections: [],
+        metadata: {
+          description: '',
+          id: graphId,
+          name: graphId,
+        },
+        nodes: [],
+      },
+    },
+    metadata: {
+      description: '',
+      id: id as ProjectId,
+      mainGraphId: graphId,
+      title,
+    },
+    plugins: [],
   };
 }
 
@@ -1409,6 +1442,158 @@ describe('startDebuggerServer broadcast', () => {
 
     assert.deepEqual(processorCounts, [1, 1]);
     debuggerServer.detach(processor.processor);
+  });
+
+  it('routes request-scoped control messages only to matching processors', async () => {
+    const server = new FakeWebSocketServer();
+    const socket = new FakeWebSocket();
+    const pauseCalls: string[] = [];
+    const debuggerServer = startDebuggerServer({
+      server: server as unknown as WebSocketServer,
+      heartbeatIntervalMs: 0,
+    });
+    const makeControllableProcessor = (id: string) =>
+      ({
+        id,
+        on: () => () => {},
+        pause: () => {
+          pauseCalls.push(id);
+        },
+      }) as unknown as GraphProcessor;
+    const processorA = makeControllableProcessor('processor-a');
+    const processorB = makeControllableProcessor('processor-b');
+
+    server.connect(socket);
+    debuggerServer.attach(processorA, 'request-a' as RemoteRunRequestId);
+    debuggerServer.attach(processorB, 'request-b' as RemoteRunRequestId);
+
+    socket.emit('message', Buffer.from(JSON.stringify({ type: 'pause', data: { requestId: 'request-b' } })));
+
+    await waitFor(() => assert.deepEqual(pauseCalls, ['processor-b']));
+
+    debuggerServer.detach(processorA);
+    debuggerServer.detach(processorB);
+    socket.close();
+  });
+
+  it('keeps uploaded project and static data state scoped to each debugger client', async () => {
+    const server = new FakeWebSocketServer();
+    const socketA = new FakeWebSocket();
+    const socketB = new FakeWebSocket();
+    const states = new WeakMap<WebSocket, DebuggerClientState>();
+    const getState = (client: WebSocket) => {
+      let state = states.get(client);
+      if (!state) {
+        state = { uploadedProject: undefined, settings: undefined };
+        states.set(client, state);
+      }
+      return state;
+    };
+
+    startDebuggerServer({
+      server: server as unknown as WebSocketServer,
+      heartbeatIntervalMs: 0,
+      allowGraphUpload: true,
+      getClientDebuggerState: getState,
+    });
+
+    server.connect(socketA);
+    server.connect(socketB);
+
+    const projectA = makeUploadedProject('project-a', 'Project A');
+    const projectB = makeUploadedProject('project-b', 'Project B');
+    const settingsA = { editorVersion: 'a' } as unknown as Settings;
+    const settingsB = { editorVersion: 'b' } as unknown as Settings;
+
+    socketA.emit(
+      'message',
+      Buffer.from(JSON.stringify({ type: 'set-dynamic-data', data: { project: projectA, settings: settingsA } })),
+    );
+    socketB.emit(
+      'message',
+      Buffer.from(JSON.stringify({ type: 'set-dynamic-data', data: { project: projectB, settings: settingsB } })),
+    );
+
+    await waitFor(() => {
+      assert.equal(getState(socketA as unknown as WebSocket).uploadedProject?.metadata.id, 'project-a');
+      assert.equal(getState(socketB as unknown as WebSocket).uploadedProject?.metadata.id, 'project-b');
+    });
+    assert.deepEqual(getState(socketA as unknown as WebSocket).settings, settingsA);
+    assert.deepEqual(getState(socketB as unknown as WebSocket).settings, settingsB);
+
+    socketA.emit('message', Buffer.from('set-static-data:data-a:value-a'));
+    await waitFor(() => {
+      assert.equal(getState(socketA as unknown as WebSocket).uploadedProject?.data?.['data-a' as DataId], 'value-a');
+    });
+    assert.equal(getState(socketB as unknown as WebSocket).uploadedProject?.data?.['data-a' as DataId], undefined);
+
+    socketA.close();
+    socketB.close();
+  });
+
+  it('routes dataset requests and responses through the matching client provider', async () => {
+    const server = new FakeWebSocketServer();
+    const socketA = new FakeWebSocket();
+    const socketB = new FakeWebSocket();
+    const providers = new WeakMap<WebSocket, DebuggerDatasetProvider>();
+    const getProvider = (client: WebSocket) => {
+      let provider = providers.get(client);
+      if (!provider) {
+        provider = new DebuggerDatasetProvider();
+        providers.set(client, provider);
+      }
+      return provider;
+    };
+
+    startDebuggerServer({
+      server: server as unknown as WebSocketServer,
+      heartbeatIntervalMs: 0,
+      getDatasetProviderForClient: getProvider,
+    });
+
+    server.connect(socketA);
+    server.connect(socketB);
+
+    const promiseA = getProvider(socketA as unknown as WebSocket).getDatasetData('dataset-a' as DatasetId);
+    await waitFor(() => assert.equal(socketA.sentMessages.length, 1));
+    assert.equal(socketB.sentMessages.length, 0);
+
+    const requestA = JSON.parse(socketA.sentMessages[0]!) as {
+      data: { requestId: string };
+      message: string;
+    };
+    assert.equal(requestA.message, 'datasets:get-data');
+
+    let resolvedA = false;
+    promiseA.then(() => {
+      resolvedA = true;
+    });
+
+    socketB.emit(
+      'message',
+      Buffer.from(
+        JSON.stringify({
+          type: 'datasets:response',
+          data: { requestId: requestA.data.requestId, payload: { id: 'wrong-client' } },
+        }),
+      ),
+    );
+    await wait(10);
+    assert.equal(resolvedA, false);
+
+    socketA.emit(
+      'message',
+      Buffer.from(
+        JSON.stringify({
+          type: 'datasets:response',
+          data: { requestId: requestA.data.requestId, payload: { id: 'right-client' } },
+        }),
+      ),
+    );
+
+    assert.deepEqual(await promiseA, { id: 'right-client' });
+    socketA.close();
+    socketB.close();
   });
 
   it('reattaches createProcessor remote debugger listeners for repeated runs', async () => {

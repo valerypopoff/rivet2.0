@@ -1,5 +1,7 @@
+/.gitattributes text eol=lf
 /.yarn/** linguist-vendored
 /.yarn/releases/* binary
 /.yarn/plugins/**/* binary
 /.pnp.* binary linguist-generated
 /packages/app/sidecars/pnpm/pnpm-* binary linguist-vendored
+*.sh text eol=lf

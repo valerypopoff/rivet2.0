@@ -32,6 +32,7 @@ test('canvas compare mode highlights nodes and wires without changing graph data
   const nodeStylesSource = source('components/nodeStyles.ts');
   const normalVisualNodeContentSource = source('components/visualNode/NormalVisualNodeContent.tsx');
   const projectComparisonNodeChangesModalSource = source('components/ProjectComparisonNodeChangesModal.tsx');
+  const projectComparisonDiffEditorSource = source('components/ProjectComparisonDiffEditor.tsx');
   const projectComparisonCanvasSource = source('components/nodeCanvas/projectComparisonCanvas.ts');
   const graphBuilderSource = source('components/GraphBuilder.tsx');
 
@@ -41,9 +42,11 @@ test('canvas compare mode highlights nodes and wires without changing graph data
   assert.match(graphBuilderSource, /getOverallProjectComparisonCounts/);
   assert.match(graphBuilderSource, /getGraphProjectComparisonCounts/);
   assert.match(nodeCanvasSource, /selectedGraphProjectComparisonState/);
-  assert.match(nodeCanvasSource, /getCanvasNodeCompareKindsById/);
+  assert.match(nodeCanvasSource, /getCanvasProjectComparisonRenderState/);
   assert.match(nodeCanvasSource, /compareRemovedNodes/);
   assert.match(nodeCanvasSource, /connectionCompareKindsByKey/);
+  assert.match(projectComparisonCanvasSource, /getCanvasNodeCompareKindsById/);
+  assert.match(projectComparisonCanvasSource, /connectionCompareKindsByKey/);
   assert.match(projectComparisonCanvasSource, /graphComparison\.nodes/);
   assert.match(projectComparisonCanvasSource, /comparison\.kind === 'added'/);
   assert.match(projectComparisonCanvasSource, /comparison\.kind === 'changed'/);
@@ -66,11 +69,31 @@ test('canvas compare mode highlights nodes and wires without changing graph data
   assert.match(projectComparisonNodeChangesModalSource, /labels\.currentLabel/);
   assert.doesNotMatch(projectComparisonNodeChangesModalSource, />Previous</);
   assert.doesNotMatch(projectComparisonNodeChangesModalSource, />Current</);
-  assert.match(projectComparisonNodeChangesModalSource, /project-compare-value-diff/);
-  assert.match(projectComparisonNodeChangesModalSource, /diffStringsRaw/);
-  assert.match(projectComparisonNodeChangesModalSource, /project-compare-diff-marker/);
-  assert.match(projectComparisonNodeChangesModalSource, /project-compare-value-diff-before/);
-  assert.match(projectComparisonNodeChangesModalSource, /project-compare-value-diff-after/);
+  assert.match(projectComparisonNodeChangesModalSource, /LazyProjectComparisonDiffEditor/);
+  assert.match(projectComparisonNodeChangesModalSource, /Loading diff editor/);
+  assert.match(projectComparisonDiffEditorSource, /monaco\.editor\.createDiffEditor/);
+  assert.match(projectComparisonDiffEditorSource, /const DIFF_EDITOR_MIN_HEIGHT = 56/);
+  assert.match(projectComparisonDiffEditorSource, /renderSideBySide: true/);
+  assert.match(projectComparisonDiffEditorSource, /renderSideBySideInlineBreakpoint: 0/);
+  assert.match(projectComparisonDiffEditorSource, /enableSplitViewResizing: false/);
+  assert.match(projectComparisonDiffEditorSource, /lineHeight: DIFF_EDITOR_LINE_HEIGHT/);
+  assert.match(projectComparisonDiffEditorSource, /onDidUpdateDiff\(updateEditorHeight\)/);
+  assert.match(projectComparisonDiffEditorSource, /getContentHeight\(\)/);
+  assert.match(projectComparisonDiffEditorSource, /getEstimatedDiffEditorHeight/);
+  assert.match(projectComparisonDiffEditorSource, /lineCount \* DIFF_EDITOR_LINE_HEIGHT/);
+  assert.doesNotMatch(projectComparisonDiffEditorSource, /lineCount \* DIFF_EDITOR_LINE_HEIGHT \+ 16/);
+  assert.match(projectComparisonDiffEditorSource, /left: 50%/);
+  assert.match(projectComparisonDiffEditorSource, /\.monaco-sash/);
+  assert.match(projectComparisonDiffEditorSource, /\.scroll-decoration/);
+  assert.match(projectComparisonDiffEditorSource, /original-in-monaco-diff-editor/);
+  assert.match(projectComparisonDiffEditorSource, /alwaysConsumeMouseWheel: false/);
+  assert.match(projectComparisonDiffEditorSource, /horizontal: 'hidden'/);
+  assert.match(projectComparisonDiffEditorSource, /horizontalScrollbarSize: 0/);
+  assert.match(projectComparisonDiffEditorSource, /overviewRulerBorder: false/);
+  assert.match(projectComparisonDiffEditorSource, /\.scrollbar\.horizontal/);
+  assert.match(projectComparisonDiffEditorSource, /height: min\(58vh, var\(--project-compare-monaco-diff-height\)\)/);
+  assert.match(projectComparisonDiffEditorSource, /background: transparent !important/);
+  assert.match(projectComparisonDiffEditorSource, /ResizeObserver/);
   assert.match(projectComparisonNodeChangesModalSource, /PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH/);
   assert.match(projectComparisonNodeChangesModalSource, /max\(30vw, min\(968px, calc\(100vw - 48px\)\)\)/);
 });
@@ -79,10 +102,12 @@ test('graph tree shows compare diagnostics for graphs and folders', () => {
   const graphListSource = source('components/GraphList.tsx');
   const folderItemSource = source('components/graphList/FolderItem.tsx');
   const graphFoldersSource = source('components/graphList/graphFolders.ts');
+  const useGraphListPresentationSource = source('components/graphList/useGraphListPresentation.ts');
 
   assert.match(graphListSource, /activeProjectComparisonState/);
   assert.match(graphListSource, /graphCompareKindByGraphId/);
-  assert.match(graphListSource, /removedComparisonGraphs/);
+  assert.match(useGraphListPresentationSource, /activeComparison\.comparison\.graphs/);
+  assert.match(useGraphListPresentationSource, /comparison\.kind === 'removed'/);
   assert.match(graphFoldersSource, /addComparisonRemovedGraphsToFolderTree/);
   assert.match(folderItemSource, /getFolderCompareKind/);
   assert.match(folderItemSource, /isComparisonGhost/);
@@ -91,15 +116,16 @@ test('graph tree shows compare diagnostics for graphs and folders', () => {
 
 test('host package re-exports the project comparison helper for wrappers', () => {
   const hostSource = source('host.tsx');
-  const workspaceHostSource = source('hooks/useRivetWorkspaceHost.ts');
+  const workspaceHostTypesSource = source('hooks/workspaceHost/types.ts');
+  const workspaceHostCompareSource = source('hooks/workspaceHost/useWorkspaceHostCompare.ts');
 
   assert.match(hostSource, /compareProjects/);
   assert.match(hostSource, /getProjectNodeFieldComparisons/);
   assert.match(hostSource, /ProjectComparisonChangeKind/);
   assert.match(hostSource, /ProjectCompareSideLabels/);
   assert.match(hostSource, /RivetProjectCompareOptions/);
-  assert.match(workspaceHostSource, /startProjectCompare\(/);
-  assert.match(workspaceHostSource, /stopProjectCompare\(/);
-  assert.match(workspaceHostSource, /labels: options\?\.labels/);
-  assert.match(workspaceHostSource, /projectCompareReferenceState/);
+  assert.match(workspaceHostTypesSource, /startProjectCompare\(/);
+  assert.match(workspaceHostTypesSource, /stopProjectCompare\(/);
+  assert.match(workspaceHostCompareSource, /labels: options\?\.labels/);
+  assert.match(workspaceHostCompareSource, /projectCompareReferenceState/);
 });

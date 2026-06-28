@@ -1,3 +1,5 @@
+import type { ChartNode, CommentNode, NodeId } from '@valerypopoff/rivet2-core';
+
 export type HorizontalNodeResizeDirection = 'left' | 'right';
 
 export type BoxNodeResizeDirection =
@@ -27,6 +29,12 @@ export type NodeResizeGroupSnapshot = NodeResizeBounds & {
 export type NodeResizeGroupChange = {
   nodeId: string;
   nextBounds: NodeResizeBounds;
+};
+
+export type NodeResizeChange = {
+  nodeId: NodeId;
+  nextBounds: NodeResizeBounds;
+  previousNode: ChartNode;
 };
 
 export const DEFAULT_NODE_WIDTH = 300;
@@ -166,5 +174,49 @@ export function calculateNodeResizeGroupChanges({
         width: nextWidth,
       },
     };
+  });
+}
+
+export function applyResizeBoundsToNode(node: ChartNode, nextBounds: NodeResizeBounds): ChartNode {
+  const nextNode: ChartNode = {
+    ...node,
+    visualData: {
+      ...node.visualData,
+      x: nextBounds.x,
+      y: nextBounds.y ?? node.visualData.y,
+      width: nextBounds.width,
+    },
+  };
+
+  if (nextNode.type === 'comment' && nextBounds.height != null) {
+    return {
+      ...nextNode,
+      data: {
+        ...(nextNode as CommentNode).data,
+        height: nextBounds.height,
+      },
+    } as ChartNode;
+  }
+
+  return nextNode;
+}
+
+export function applyResizeChangesToNodes(
+  nodes: ChartNode[],
+  resizeChanges: readonly NodeResizeChange[],
+  options?: { requireAllChanges?: boolean },
+): ChartNode[] {
+  if (options?.requireAllChanges) {
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const missingChange = resizeChanges.find((change) => !nodeIds.has(change.nodeId));
+    if (missingChange) {
+      throw new Error(`Node with id ${missingChange.nodeId} not found`);
+    }
+  }
+
+  const resizeChangesByNodeId = new Map(resizeChanges.map((change) => [change.nodeId, change.nextBounds]));
+  return nodes.map((node) => {
+    const nextBounds = resizeChangesByNodeId.get(node.id);
+    return nextBounds ? applyResizeBoundsToNode(node, nextBounds) : node;
   });
 }

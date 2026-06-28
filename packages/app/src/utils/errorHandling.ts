@@ -6,6 +6,7 @@ const ERROR_DEDUPE_WINDOW_MS = 5_000;
 const IGNORED_BROWSER_ERROR_MESSAGES = new Set([
   'ResizeObserver loop completed with undelivered notifications.',
   'ResizeObserver loop limit exceeded',
+  'webview not found: invalid label or it was closed',
 ]);
 
 export type HandleErrorOptions = {

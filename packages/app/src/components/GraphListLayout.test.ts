@@ -44,7 +44,17 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
   );
   assert.match(graphListSource, /\.graph-list-toolbar \{[\s\S]*gap: 16px;/);
   assert.match(graphListSource, /className="graph-list-heading">Graphs<\/div>/);
+  assert.match(
+    graphListSource,
+    /className="graph-list-heading">Graphs<\/div>\s+\{graphListReachability\.notice && <div className="graph-list-notice">/,
+  );
   assert.match(graphListSource, /\.graph-list-heading \{[\s\S]*color: color-mix\(in srgb, var\(--grey-light\) 64%, transparent\);/);
+  const graphListNoticeStyles = graphListSource.match(/\.graph-list-notice \{(?<styles>[\s\S]*?)\n  \}/)?.groups
+    ?.styles;
+  assert.ok(graphListNoticeStyles);
+  assert.match(graphListNoticeStyles, /color: color-mix\(in srgb, var\(--grey-light\) 82%, transparent\);/);
+  assert.doesNotMatch(graphListNoticeStyles, /border:/);
+  assert.doesNotMatch(graphListNoticeStyles, /var\(--warning/);
   assert.match(graphListSource, /<span>Project settings<\/span>/);
   assert.match(graphListSource, /className="graph-list-filter"/);
   assert.match(graphListSource, /import \{ GRAPH_FILTER_INPUT_MARKER \} from '\.\/graphList\/graphFilterFocus\.js';/);

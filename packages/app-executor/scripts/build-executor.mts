@@ -37,6 +37,9 @@ await esbuild.build({
   outfile: './bin/executor-bundle.cjs',
   format: 'cjs',
   target: 'node16',
+  define: {
+    'import.meta.url': '__filename',
+  },
   external: [],
   plugins: [resolveRivet],
 });

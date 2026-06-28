@@ -1,6 +1,13 @@
 import { P, match } from 'ts-pattern';
 import { useStableCallback } from './useStableCallback';
-import { type ChartNode, type NodeId, type GraphId } from '@valerypopoff/rivet2-core';
+import {
+  type ChartNode,
+  type NodeId,
+  type GraphId,
+  getNodePrefabInstancePrefabId,
+  isNodePrefabInstanceNode,
+  resolveNodePrefabInstance,
+} from '@valerypopoff/rivet2-core';
 import { type ContextMenuContext } from '../components/ContextMenu';
 import { createRootGraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import { editingNodeState } from '../state/graphBuilder';
@@ -20,6 +27,7 @@ import { copyToClipboard } from '../utils/copyToClipboard';
 import { useGoToSubgraphNode } from './useGoToSubgraphNode.js';
 import { useFrozenNodeOutputActions } from './useFrozenNodeOutputActions.js';
 import { subGraphPortRearrangeTargetState, variadicPortRearrangeTargetState } from '../state/ui.js';
+import { useOpenNodeLibrary } from './useOpenNodeLibrary.js';
 
 type NodeFreezeTarget = {
   nodeId: NodeId;
@@ -43,8 +51,22 @@ export function useGraphBuilderContextMenuHandler() {
   const { freezeNode, unfreezeNode } = useFrozenNodeOutputActions();
   const setSubGraphPortRearrangeTarget = useSetAtom(subGraphPortRearrangeTargetState);
   const setVariadicPortRearrangeTarget = useSetAtom(variadicPortRearrangeTargetState);
+  const openNodeLibrary = useOpenNodeLibrary();
 
   const addNode = useAddNodeCommand();
+  const openLinkedNodeLibraryNode = useStableCallback((node: ChartNode | undefined) => {
+    if (!node || !isNodePrefabInstanceNode(node)) {
+      return false;
+    }
+
+    const prefabId = getNodePrefabInstancePrefabId(node);
+    const sourceNodeId = prefabId ? project.nodePrefabs?.[prefabId]?.sourceNode.id : undefined;
+    openNodeLibrary({
+      editingPrefabId: prefabId,
+      selectedNodeIds: sourceNodeId ? [sourceNodeId] : [],
+    });
+    return true;
+  });
 
   return useStableCallback(
     (menuItemId: string, data: unknown, context: ContextMenuContext, meta: { x: number; y: number }) => {
@@ -65,7 +87,15 @@ export function useGraphBuilderContextMenuHandler() {
         })
         .with('node-edit', () => {
           const { nodeId } = context.data as { nodeId: NodeId };
+          if (openLinkedNodeLibraryNode(nodesById[nodeId])) {
+            return;
+          }
+
           setEditingNodeId(nodeId);
+        })
+        .with('node-open-prefab-source', () => {
+          const { nodeId } = context.data as { nodeId: NodeId };
+          openLinkedNodeLibraryNode(nodesById[nodeId]);
         })
         .with('node-rearrange-subgraph-ports', () => {
           const { nodeId } = context.data as { nodeId: NodeId };
@@ -90,7 +120,8 @@ export function useGraphBuilderContextMenuHandler() {
         })
         .with('node-go-to-subgraph', () => {
           const { nodeId } = context.data as { nodeId: NodeId };
-          goToSubgraphNode(nodesById[nodeId]);
+          const node = nodesById[nodeId];
+          goToSubgraphNode(node ? resolveNodePrefabInstance(project, node) : undefined);
         })
         .with(P.string.startsWith('go-to-graph:'), () => {
           const graphId = data as GraphId;

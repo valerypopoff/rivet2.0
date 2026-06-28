@@ -14,6 +14,7 @@ import {
   type NodeConnection,
   type NodeGraph,
   type NodeId,
+  type NodePrefabId,
   type NodeInputDefinition,
   type NodeOutputDefinition,
   type Outputs,
@@ -1312,6 +1313,58 @@ void describe('GraphProcessor characterization', () => {
     assert.deepEqual(outputs.parentResult, { type: 'string', value: 'child value' });
     assert.notEqual(runtimeCache.executionPlans?.has(parentGraph), true);
     assert.equal(runtimeCache.executionPlans?.has(childGraph), true);
+  });
+
+  void it('rebuilds a cached execution plan when library nodes change', async () => {
+    const prefabId = 'cached-prefab' as NodePrefabId;
+    const instanceNode: ChartNode = {
+      id: 'prefab-instance' as NodeId,
+      type: 'nodePrefabInstance',
+      title: 'Linked item',
+      data: {
+        prefabId,
+      },
+      visualData: { x: 0, y: 0, width: 240 },
+    };
+    const outputNode = makeGraphOutputNode('result');
+    const graph = makeGraph(
+      [instanceNode, outputNode],
+      [connect(instanceNode.id, outputNode.id, 'value')],
+      'prefab-cache-graph' as GraphId,
+    );
+    const project = {
+      ...makeProject(graph),
+      nodePrefabs: {
+        [prefabId]: {
+          id: prefabId,
+          sourceNode: makeProbeNode('prefab-source-a', { value: { type: 'string', value: 'first' } }),
+        },
+      },
+    };
+    const runtimeCache: GraphProcessorRuntimeCache = {};
+
+    const firstProcessor = new GraphProcessor(project, graph.metadata!.id, createRegistry(), false, { runtimeCache });
+    const firstOutputs = await firstProcessor.processGraph(testProcessContext());
+
+    assert.deepEqual(firstOutputs.result, { type: 'string', value: 'first' });
+    assert.equal(runtimeCache.executionPlans?.has(graph), true);
+
+    const updatedProject = {
+      ...project,
+      nodePrefabs: {
+        [prefabId]: {
+          id: prefabId,
+          sourceNode: makeProbeNode('prefab-source-b', { value: { type: 'string', value: 'second' } }),
+        },
+      },
+    };
+    const secondProcessor = new GraphProcessor(updatedProject, graph.metadata!.id, createRegistry(), false, {
+      runtimeCache,
+    });
+    const secondOutputs = await secondProcessor.processGraph(testProcessContext());
+
+    assert.deepEqual(secondOutputs.result, { type: 'string', value: 'second' });
+    assert.equal(runtimeCache.executionPlanNodePrefabs?.get(graph), updatedProject.nodePrefabs);
   });
 
   void it('uses the runtime graph boundary cache while preprocessing subgraph definitions', () => {

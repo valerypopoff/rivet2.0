@@ -99,7 +99,7 @@ export const savedGraphsState = atom(
         if (graph.metadata == null) {
           graph.metadata = {
             id: nanoid() as GraphId,
-            name: 'Untitled Graph',
+            name: 'Untitled graph',
             description: '',
           };
         } else if (graph.metadata.id == null) {

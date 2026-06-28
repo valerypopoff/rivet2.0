@@ -6,8 +6,9 @@ import { SplitRunModeIcon } from './SplitRunModeIcon.js';
 
 export const SplitRunSummary: FC<{
   node: ChartNode;
+  editTargetNode?: ChartNode;
   isKnownNodeType: boolean;
-}> = ({ node, isKnownNodeType }) => {
+}> = ({ node, editTargetNode, isKnownNodeType }) => {
   const { onNodeStartEditing } = useCanvasHandlersContext();
 
   if (!node.isSplitRun) {
@@ -32,7 +33,7 @@ export const SplitRunSummary: FC<{
         onClick={(event: MouseEvent<HTMLButtonElement>) => {
           event.stopPropagation();
           if (isKnownNodeType) {
-            onNodeStartEditing?.(node);
+            onNodeStartEditing?.(editTargetNode ?? node);
           }
         }}
         onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {

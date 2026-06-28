@@ -168,10 +168,82 @@ test('canvas panning uses the same closed-hand cursor treatment as node dragging
   assert.match(nodeCanvasStylesSource, /&\.dragging-node,[\s\S]*&\.dragging-canvas,[\s\S]*cursor: grabbing !important;/);
 });
 
+test('non-graph canvases keep drag, resize, and alignment commands out of graph state', () => {
+  const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
+  const nodeLibraryBuilderSource = readFileSync(join(componentsDir, 'NodeLibraryBuilder.tsx'), 'utf8');
+  const draggingNodeSource = readFileSync(join(testDir, '../../hooks/useDraggingNode.ts'), 'utf8');
+  const canvasHotkeysSource = readFileSync(join(hooksDir, 'useCanvasHotkeys.ts'), 'utf8');
+
+  assert.match(nodeCanvasSource, /useCanvasHotkeys\(\{\s*graphCommandsEnabled: !disableGraphCommands\s*\}\)/);
+  assert.match(nodeCanvasSource, /pasteCommandsEnabled = !disableGraphCommands/);
+  assert.match(nodeCanvasSource, /pasteCommandsEnabled,\s*}\)/);
+  assert.match(
+    nodeCanvasSource,
+    /useDraggingNode\(\{[\s\S]*graphCommandsEnabled: !disableGraphCommands,[\s\S]*nodes,[\s\S]*onNodesChanged,[\s\S]*\}\)/,
+  );
+  assert.match(
+    nodeCanvasSource,
+    /if \(disableGraphCommands\) \{[\s\S]*onNodesChanged\(applyResizeChangesToNodes\(nodes, resizeChanges\)\)[\s\S]*return;[\s\S]*\}/,
+  );
+  assert.match(nodeCanvasSource, /nodes=\{disableGraphCommands \? nodes : undefined\}/);
+  assert.match(nodeCanvasSource, /onNodesChanged=\{disableGraphCommands \? onNodesChanged : undefined\}/);
+  assert.match(nodeCanvasSource, /if \(disableGraphCommands\) \{[\s\S]*onNodesDeleted\?\.\(selectedNodeIds\);[\s\S]*return;[\s\S]*\}/);
+  assert.match(nodeLibraryBuilderSource, /getCanvasPositionForNodes/);
+  assert.match(
+    nodeLibraryBuilderSource,
+    /setCanvasPosition\(getCanvasPositionForNodes\(editingPrefab \? \[editingPrefab\.sourceNode\] : nodes, sidebarOpen\)\)/,
+  );
+  assert.match(nodeLibraryBuilderSource, /setCanvasPosition\(getCanvasPositionForNodes\(\[editingPrefab\.sourceNode\], sidebarOpen\)\)/);
+  assert.match(nodeLibraryBuilderSource, /else if \(canUseNodeAsPrefabSource\(nextNode\)\)[\s\S]*buildNodePrefab\(nextNode\)/);
+  assert.match(nodeLibraryBuilderSource, /onCanvasClick=\{closeEditor\}/);
+  assert.match(nodeLibraryBuilderSource, /onNodesDeleted=\{deletePrefabSources\}/);
+  assert.match(nodeLibraryBuilderSource, /pasteCommandsEnabled/);
+  assert.match(nodeLibraryBuilderSource, /createPastedNodeLibraryPrefabs/);
+  assert.match(draggingNodeSource, /duplicateDragEnabled/);
+  assert.match(draggingNodeSource, /duplicateNodesWithConnections/);
+  assert.match(draggingNodeSource, /controlledOnNodesChanged\(bringNodesToFront\(\[\.\.\.nodes, \.\.\.newNodes\]/);
+  assert.match(draggingNodeSource, /setSelectedNodeIds\(newNodes\.map\(\(node\) => node\.id\)\)/);
+  assert.match(
+    canvasHotkeysSource,
+    /const navigationShortcut = getCanvasNavigationShortcut\(e\);[\s\S]*if \(!graphCommandsEnabled\) \{[\s\S]*return;[\s\S]*\}/,
+  );
+  assert.match(canvasHotkeysSource, /nodeLibraryOpen \|\| graphMetadata\?\.id !== mainGraphId/);
+  assert.match(nodeCanvasSource, /useDraggingWire\(\{[\s\S]*connections,[\s\S]*enabled: !disableConnections,[\s\S]*nodesById: canvasEffectiveNodesById,[\s\S]*\}\)/);
+  assert.doesNotMatch(readFileSync(join(hooksDir, 'useDraggingWire.ts'), 'utf8'), /connectionsState|nodesByIdState/);
+  assert.match(nodeCanvasSource, /const shouldRenderWires = !disableConnections && canvasPosition\.zoom > 0\.15/);
+});
+
+test('canvas deletion hotkeys support macOS Backspace through the same delete path', () => {
+  const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
+  const globalHotkeySource = readFileSync(join(hooksDir, 'useGlobalHotkey.ts'), 'utf8');
+
+  assert.match(nodeCanvasSource, /import \{ isMacOSPlatform \} from '\.\.\/utils\/platform\/os\.js';/);
+  assert.match(nodeCanvasSource, /const supportsBackspaceDeleteHotkey = isMacOSPlatform\(\);/);
+  assert.match(nodeCanvasSource, /const deleteSelectedNodesFromHotkey = useStableCallback\(\(event: KeyboardEvent\) => \{/);
+  assert.match(nodeCanvasSource, /useGlobalHotkey\('Delete', deleteSelectedNodesFromHotkey, \{ notWhenInputFocused: true \}\)/);
+  assert.match(
+    nodeCanvasSource,
+    /useGlobalHotkey\(\s*'Backspace',[\s\S]*!supportsBackspaceDeleteHotkey \|\| selectedNodeIds\.length === 0[\s\S]*deleteSelectedNodesFromHotkey\(event\)/,
+  );
+  assert.match(globalHotkeySource, /\['INPUT', 'TEXTAREA', 'SELECT'\]\.includes\(activeElement\.tagName\)/);
+  assert.match(globalHotkeySource, /activeElement\.isContentEditable/);
+  assert.match(globalHotkeySource, /\[key, latestAction, notWhenInputFocused\]/);
+});
+
+test('shift selection boxes snapshot selected nodes and do not fall through to canvas click clearing', () => {
+  const interactionSource = readFileSync(join(testDir, 'useNodeCanvasInteractions.ts'), 'utf8');
+
+  assert.match(interactionSource, /startSelectionBox\(e\.clientX, e\.clientY, selectedNodeIds\)/);
+  assert.match(
+    interactionSource,
+    /if \(selectionBox\) \{[\s\S]*updateSelectionBox\(e\.clientX, e\.clientY, nodes, clientToCanvasPosition, selectedNodeIds\)[\s\S]*endSelectionBox\(\);[\s\S]*return;[\s\S]*\} else if \(!isDraggingCanvas\)/,
+  );
+});
+
 test('connection mode has explicit keyboard, context-menu, and outside-click exits', () => {
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
 
-  assert.match(nodeCanvasSource, /handleCanvasContextMenuRequest[\s\S]*if \(draggingWire\)[\s\S]*cancelWireDrag\(\)/);
+  assert.match(nodeCanvasSource, /handleCanvasContextMenuRequest[\s\S]*if \(visibleDraggingWire\)[\s\S]*cancelWireDrag\(\)/);
   assert.match(
     nodeCanvasSource,
     /handleWindowKeyDown[\s\S]*event\.code !== 'Escape'[\s\S]*event\.preventDefault\(\)[\s\S]*event\.stopPropagation\(\)[\s\S]*event\.stopImmediatePropagation\(\)[\s\S]*cancelWireDrag\(\)/,

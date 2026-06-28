@@ -16,6 +16,9 @@ test('Bright theme tightens canvas node contrast through dedicated node visual t
 
   assert.match(colorsSource, /--node-output-action-opacity: 0\.2;/);
   assert.match(colorsSource, /--node-output-action-node-hover-opacity: 0\.35;/);
+  assert.match(colorsSource, /--node-output-surface-bg: var\(--grey-darkest\);/);
+  assert.match(colorsSource, /--node-output-success-border: var\(--success-light\);/);
+  assert.match(colorsSource, /--node-port-label-color: var\(--grey-lighter\);/);
   assert.match(colorsSource, /--node-output-error-bg: color-mix\(in srgb, var\(--error\) 10%, var\(--grey-darker\) 90%\);/);
   assert.match(colorsSource, /--node-output-error-border: var\(--error-light\);/);
   assert.match(colorsSource, /--node-body-bg: var\(--grey-darker-darker\);/);
@@ -50,6 +53,9 @@ test('Bright theme tightens canvas node contrast through dedicated node visual t
   assert.match(nodeStylesSource, /--node-output-status-bg: var\(--node-output-error-bg\);/);
   assert.match(nodeStylesSource, /--node-output-status-border: var\(--node-output-error-border\);/);
   assert.match(nodeStylesSource, /color: var\(--port-connected-label-color\);/);
+  assert.match(nodeStylesSource, /background-color: var\(--node-output-surface-bg\);/);
+  assert.match(nodeStylesSource, /border-top: 2px solid var\(--node-output-success-border\);/);
+  assert.match(nodeStylesSource, /color: var\(--node-port-label-color\);/);
   assert.match(nodeStylesSource, /opacity: var\(--port-connected-label-opacity\);/);
   assert.match(nodeStylesSource, /opacity: var\(--node-stack-front-opacity\);/);
   assert.match(nodeStylesSource, /opacity: var\(--node-stack-back-opacity\);/);

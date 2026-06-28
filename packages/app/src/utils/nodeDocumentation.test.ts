@@ -7,6 +7,7 @@ import { createBuiltInRegistry, type BuiltInNodeType } from '@valerypopoff/rivet
 import {
   BUILT_IN_NODE_DOCUMENTATION_SLUGS,
   getBuiltInNodeDocumentationUrl,
+  INTERNAL_BUILT_IN_NODE_TYPES_WITHOUT_NODE_REFERENCE,
   NODE_REFERENCE_BASE_URL,
 } from './nodeDocumentation.js';
 
@@ -32,7 +33,9 @@ function getFrontmatterId(source: string): string | undefined {
 }
 
 test('every built-in node type has a specific Node Reference URL', () => {
-  const builtInTypes = createBuiltInRegistry().getNodeTypes() as BuiltInNodeType[];
+  const builtInTypes = (createBuiltInRegistry().getNodeTypes() as BuiltInNodeType[]).filter(
+    (nodeType) => !INTERNAL_BUILT_IN_NODE_TYPES_WITHOUT_NODE_REFERENCE.has(nodeType),
+  );
   const mappedTypes = Object.keys(BUILT_IN_NODE_DOCUMENTATION_SLUGS).sort();
   const slugs = Object.values(BUILT_IN_NODE_DOCUMENTATION_SLUGS);
 
@@ -40,8 +43,11 @@ test('every built-in node type has a specific Node Reference URL', () => {
   assert.equal(new Set(slugs).size, slugs.length);
 
   for (const nodeType of builtInTypes) {
+    const slug = (BUILT_IN_NODE_DOCUMENTATION_SLUGS as Record<string, string | undefined>)[nodeType];
+    assert.ok(slug);
+
     const url = getBuiltInNodeDocumentationUrl(nodeType);
-    assert.equal(url, `${NODE_REFERENCE_BASE_URL}/${BUILT_IN_NODE_DOCUMENTATION_SLUGS[nodeType]}`);
+    assert.equal(url, `${NODE_REFERENCE_BASE_URL}/${slug}`);
   }
 });
 
@@ -78,5 +84,6 @@ test('built-in node documentation pages are linked from the Node Reference index
 test('unknown and plugin node types do not get built-in Node Reference links', () => {
   assert.equal(getBuiltInNodeDocumentationUrl('plugin:example'), undefined);
   assert.equal(getBuiltInNodeDocumentationUrl('missing-node-type'), undefined);
+  assert.equal(getBuiltInNodeDocumentationUrl('nodePrefabInstance'), undefined);
   assert.equal(getBuiltInNodeDocumentationUrl('toString'), undefined);
 });

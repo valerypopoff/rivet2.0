@@ -19,8 +19,8 @@ test('SettingsModal uses independent viewport-capped column scrolling', () => {
   assert.match(source, /const settingsModalScrollContainerOverrides = css`/);
   assert.match(source, /<Global styles=\{settingsModalScrollContainerOverrides\} \/>/);
   assert.match(source, /const modalBody = css`[\s\S]*flex: 1 1 auto;[\s\S]*height: 100%;/);
-  assert.match(source, /\.settings-modal-sidebar \{[\s\S]*background-color: var\(--grey-dark-colorish\);/);
-  assert.match(source, /\.settings-modal-sidebar \{[\s\S]*border-right: 1px solid var\(--settings-collapsible-border\);/);
+  assert.match(source, /\.settings-modal-sidebar \{[\s\S]*background-color: var\(--modal-sidebar-bg\);/);
+  assert.match(source, /\.settings-modal-sidebar \{[\s\S]*border-right: 1px solid var\(--modal-border\);/);
   assert.match(source, /\.settings-modal-sidebar \{[\s\S]*max-height: 100%;[\s\S]*overflow-x: hidden;[\s\S]*overflow-y: auto;/);
   assert.match(source, /\.settings-modal-nav \{[\s\S]*display: flex;[\s\S]*gap: 2px;/);
   assert.match(source, /<aside className="settings-modal-sidebar">[\s\S]*<nav className="settings-modal-nav" aria-label="Settings">/);
