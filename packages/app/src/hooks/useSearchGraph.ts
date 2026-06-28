@@ -69,7 +69,7 @@ export function useSearchGraph(enabled = true) {
         searchableContentKeys: getSearchableContentKeys(node, projectNodeRegistry),
       };
     });
-  }, [currentGraph, hasSearchQuery, nodeTypes, project.graphs, project.nodePrefabs, projectNodeRegistry]);
+  }, [currentGraph, hasSearchQuery, nodeTypes, project, projectNodeRegistry]);
 
   const searchResult = useMemo(
     () => (hasSearchQuery ? searchGraphNodesWithMode(searchableNodes, searchState.query) : { matches: [], fallbackToTerms: false }),

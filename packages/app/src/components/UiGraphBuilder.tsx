@@ -434,7 +434,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
         }
       }
     });
-  }, [project.graphs, selectedUiGraphId, updateUiGraph]);
+  }, [project, selectedUiGraphId, updateUiGraph]);
 
   const openPreviewWindow = useStableCallback(async () => {
     if (!uiGraph) {

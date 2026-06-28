@@ -24,3 +24,12 @@ test('waitForExecutorSessionRunCapability returns immediately when the session i
   assert.equal(idleState.status, 'idle');
   assert.equal(idleState.capabilities.canSendRun, false);
 });
+
+test('waitForExecutorSessionRunCapability resolves with the current state when readiness times out', async () => {
+  await runtime.connectInternal('ws://executor.example/internal');
+
+  const timedOutState = await waitForExecutorSessionRunCapability(runtime, 1);
+
+  assert.equal(timedOutState.status, 'connecting');
+  assert.equal(timedOutState.capabilities.canSendRun, false);
+});

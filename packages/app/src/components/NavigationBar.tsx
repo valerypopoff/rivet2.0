@@ -805,6 +805,11 @@ const SearchResultItem: FC<{
   const openUiGraph = useOpenUiGraph();
 
   const goToNode = useGoToNode();
+  const entryItem = entry.item;
+  const entryItemType = entryItem.type;
+  const entryItemId = entryItem.id;
+  const entryContainerGraph = entryItem.type === 'uiGraph' ? undefined : entryItem.containerGraph;
+  const entryUiGraphId = entryItem.type === 'uiGraph' ? entryItem.uiGraphId : undefined;
 
   useEffect(() => {
     if (selected) {
@@ -812,47 +817,42 @@ const SearchResultItem: FC<{
       const element = document.querySelector('.search-result-item.selected');
       element?.scrollIntoView({ block: 'nearest' });
 
-      if (entry.item.type === 'uiGraph') {
-        openUiGraph(entry.item.uiGraphId);
+      if (entryItemType === 'uiGraph') {
+        if (entryUiGraphId) {
+          openUiGraph(entryUiGraphId);
+        }
         return;
       }
 
-      if (entry.item.containerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID) {
-        openNodeLibrary({ selectedNodeIds: [entry.item.id as NodeId] });
+      if (entryContainerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID) {
+        openNodeLibrary({ selectedNodeIds: [entryItemId as NodeId] });
         return;
       }
 
-      goToNode(entry.item.id as NodeId);
+      goToNode(entryItemId as NodeId);
     }
-  }, [
-    selected,
-    entry.item.type,
-    entry.item.type === 'node' ? entry.item.containerGraph : undefined,
-    entry.item.id,
-    entry.item.type === 'uiGraph' ? entry.item.uiGraphId : undefined,
-    goToNode,
-    openNodeLibrary,
-    openUiGraph,
-  ]);
+  }, [selected, entryItemType, entryItemId, entryContainerGraph, entryUiGraphId, goToNode, openNodeLibrary, openUiGraph]);
 
   const containerName =
-    entry.item.type === 'uiGraph'
+    entryItemType === 'uiGraph'
       ? 'Web Apps'
-      : entry.item.containerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID
+      : entryContainerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID
         ? 'Node Library'
-        : project.graphs[entry.item.containerGraph]?.metadata?.name ?? 'Unknown Graph';
+        : entryContainerGraph
+          ? (project.graphs[entryContainerGraph]?.metadata?.name ?? 'Unknown Graph')
+          : 'Unknown Graph';
 
   return (
     <div className={clsx('search-result-item', { selected })}>
       <div className="title">
-        <HighlightedText text={entry.item.title} searchText={searchText} />
+        <HighlightedText text={entryItem.title} searchText={searchText} />
       </div>
       <div className="graph">in {containerName}</div>
       <div className="description">
-        <HighlightedText text={entry.item.description} searchText={searchText} />
+        <HighlightedText text={entryItem.description} searchText={searchText} />
       </div>
       <div className="data">
-        <HighlightedText text={entry.item.joinedData} searchText={searchText} />
+        <HighlightedText text={entryItem.joinedData} searchText={searchText} />
       </div>
     </div>
   );

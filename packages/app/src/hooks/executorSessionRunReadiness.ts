@@ -15,7 +15,7 @@ export async function waitForExecutorSessionRunCapability(
 
   return await new Promise<ExecutorSessionRuntimeState>((resolve) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeout = setTimeout(() => finish(runtime.getRuntimeState()), timeoutMs);
 
     const unsubscribeConnect = runtime.subscribeLifecycle('connect', check);
     const unsubscribeDisconnect = runtime.subscribeLifecycle('disconnect', check);
@@ -26,9 +26,7 @@ export async function waitForExecutorSessionRunCapability(
       }
 
       settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+      clearTimeout(timeout);
       unsubscribeConnect();
       unsubscribeDisconnect();
       resolve(state);
@@ -41,7 +39,6 @@ export async function waitForExecutorSessionRunCapability(
       }
     }
 
-    timeout = setTimeout(() => finish(runtime.getRuntimeState()), timeoutMs);
     check();
   });
 }

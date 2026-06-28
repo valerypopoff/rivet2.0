@@ -55,7 +55,10 @@ export function renderMarkdown(text: string | undefined, enabled: boolean = true
 }
 
 export function useMarkdown(text: string | undefined, enabled: boolean = true, options?: MarkdownRenderOptions) {
+  const allowHtml = options?.allowHtml ?? true;
+  const disableLinks = options?.disableLinks ?? false;
+
   return useMemo(() => {
-    return { __html: renderMarkdown(text, enabled, options) };
-  }, [text, enabled, options?.allowHtml, options?.disableLinks]);
+    return { __html: renderMarkdown(text, enabled, { allowHtml, disableLinks }) };
+  }, [text, enabled, allowHtml, disableLinks]);
 }
