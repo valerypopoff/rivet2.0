@@ -542,6 +542,7 @@ test.describe('Project settings modal', () => {
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
     await endpointInput.fill(endpointName);
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
+    await expect(modal.getByRole('button', { name: 'Unpublish' })).toHaveCSS('margin-left', '8px');
     await expect(deleteButton).toBeVisible();
     await expect(deleteButton).toBeDisabled();
 
@@ -646,9 +647,22 @@ test.describe('Project settings modal', () => {
     await expect(webAppSection.locator('.project-settings-web-app-state')).toHaveCount(3);
     await expect(alphaRow).toContainText('Published');
     await expect(betaRow).toContainText('Published');
+    await expect(alphaRow.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
     await expect(alphaRow).toContainText('The web app is accessible via the endpoint on');
     await expect(alphaRow).toContainText('/apps/alpha-helper');
     await expect(alphaRow).toContainText('/apps-latest/alpha-helper');
+    const currentOrigin = await page.evaluate(() => window.location.origin);
+    const publishedAppLink = alphaRow.getByRole('link', { name: 'Open /apps/alpha-helper in a new tab' });
+    const latestAppLink = alphaRow.getByRole('link', { name: 'Open /apps-latest/alpha-helper in a new tab' });
+    await expect(publishedAppLink).toHaveAttribute('href', `${currentOrigin}/apps/alpha-helper`);
+    await expect(publishedAppLink).toHaveAttribute('target', '_blank');
+    await expect(latestAppLink).toHaveAttribute('href', `${currentOrigin}/apps-latest/alpha-helper`);
+    await expect(latestAppLink).toHaveAttribute('target', '_blank');
+    await expect(alphaRow.getByRole('button', { name: 'Unpublish' })).toHaveCSS('margin-left', '8px');
+    await alphaRow.locator('input').fill('alpha-helper-renamed');
+    await expect(alphaRow.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
+    await expect(alphaRow).toContainText('/apps/alpha-helper');
+    await expect(alphaRow).not.toContainText('/apps/alpha-helper-renamed');
     await expect.poll(() => routeTrackers.webAppPublishRequests.length).toBe(2);
     expect(routeTrackers.webAppPublishRequests[1]).toEqual({
       relativePath: project.relativePath,

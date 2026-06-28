@@ -391,6 +391,25 @@
   word-break: break-all;
 }
 
+.project-settings-endpoint-link {
+  display: inline-block;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.project-settings-endpoint-link:hover .project-settings-endpoint-code,
+.project-settings-endpoint-link:focus-visible .project-settings-endpoint-code {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--grey-lightest);
+  text-decoration: underline;
+}
+
+.project-settings-endpoint-link:focus-visible {
+  outline: 2px solid rgba(84, 169, 255, 0.9);
+  outline-offset: 2px;
+}
+
 .workflow-library-panel .active-project-save-button,
 .workflow-library-panel .active-project-more-button {
   min-width: 72px;
@@ -1415,6 +1434,10 @@
 .project-settings-prefixed-input-row .project-settings-primary-button,
 .project-settings-prefixed-input-row .project-settings-secondary-button {
   align-self: stretch;
+}
+
+.project-settings-prefixed-input-row .project-settings-primary-button + .project-settings-secondary-button {
+  margin-left: 8px;
 }
 
 .project-settings-web-app-access-help {

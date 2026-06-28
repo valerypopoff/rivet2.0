@@ -59,6 +59,26 @@ const renderWorkflowEndpointHelp = (status: WorkflowProjectStatus, endpointName:
   }
 };
 
+const toCurrentOriginUrl = (path: string): string => {
+  if (typeof window === 'undefined') {
+    return path;
+  }
+
+  return new URL(path, window.location.origin).toString();
+};
+
+const renderWebAppEndpointLink = (path: string): ReactNode => (
+  <a
+    className="project-settings-endpoint-link"
+    href={toCurrentOriginUrl(path)}
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label={`Open ${path} in a new tab`}
+  >
+    <code className="project-settings-endpoint-code">{path}</code>
+  </a>
+);
+
 type ProjectSettingsTab = 'workflow' | 'web-apps';
 
 type ProjectSettingsModalProps = {
@@ -262,6 +282,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
             const slugDraft = webAppSlugDrafts[webApp.uiGraphId] ?? '';
             const validationError = webAppSlugValidationErrors[webApp.uiGraphId] ?? null;
             const isPublished = webApp.publishedSlug != null;
+            const hasWebAppSlugDraftChange = isPublished && slugDraft.trim() !== webApp.publishedSlug;
             const displaySlug = isPublished ? webApp.publishedSlug! : slugDraft.trim() || 'slug';
             return (
               <div className="project-settings-web-app-row" key={webApp.uiGraphId}>
@@ -293,7 +314,11 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                         appearance="primary"
                         className="project-settings-primary-button button-size-l"
                         onClick={() => void handlePublishWebApps(webApp.uiGraphId)}
-                        isDisabled={disableWebAppActions || validationError != null}
+                        isDisabled={
+                          disableWebAppActions ||
+                          validationError != null ||
+                          (isPublished && !hasWebAppSlugDraftChange)
+                        }
                         isLoading={savingWebApps}
                       >
                         {isPublished ? 'Update' : 'Publish'}
@@ -315,16 +340,12 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                   <div className="project-settings-help project-settings-web-app-access-help">
                     The web app is accessible via the endpoint on
                     <br />
-                    <code className="project-settings-endpoint-code">
-                      {`${RIVET_WEB_APPS_BASE_PATH}/${displaySlug}`}
-                    </code>
+                    {renderWebAppEndpointLink(`${RIVET_WEB_APPS_BASE_PATH}/${displaySlug}`)}
                     <br />
                     <br />
                     The latest saved project changes are accessible on
                     <br />
-                    <code className="project-settings-endpoint-code">
-                      {`${RIVET_LATEST_WEB_APPS_BASE_PATH}/${displaySlug}`}
-                    </code>
+                    {renderWebAppEndpointLink(`${RIVET_LATEST_WEB_APPS_BASE_PATH}/${displaySlug}`)}
                   </div>
                 ) : null}
                 {webApp.isMissingFromProject ? (

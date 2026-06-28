@@ -276,12 +276,22 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       ? webApps.filter((webApp) => webApp.uiGraphId === uiGraphId)
       : webApps;
 
-    return selectedWebApps
-      .filter((webApp) => !webApp.isMissingFromProject)
-      .map((webApp) => ({
+    return selectedWebApps.reduce<WorkflowProjectWebAppPublicationDraft[]>((drafts, webApp) => {
+      if (webApp.isMissingFromProject) {
+        return drafts;
+      }
+
+      const slug = (webAppSlugDrafts[webApp.uiGraphId] ?? '').trim();
+      if (webApp.publishedSlug != null && slug === webApp.publishedSlug) {
+        return drafts;
+      }
+
+      drafts.push({
         uiGraphId: webApp.uiGraphId,
-        slug: (webAppSlugDrafts[webApp.uiGraphId] ?? '').trim(),
-      }));
+        slug,
+      });
+      return drafts;
+    }, []);
   };
 
   const handlePublishWebApps = async (uiGraphId?: string) => {
@@ -295,7 +305,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
 
     const publications = createWebAppPublicationDrafts(uiGraphId);
     if (publications.length === 0) {
-      toast.error('No web apps in the project.');
+      toast.error(uiGraphId ? 'No web app changes to update.' : 'No web app changes to publish.');
       return;
     }
 
