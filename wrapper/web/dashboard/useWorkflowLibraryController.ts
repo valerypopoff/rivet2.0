@@ -164,7 +164,8 @@ export function useWorkflowLibraryController(options: {
   ) => void;
   onCompareOpenProjectWith: (path: string, referencePath?: string, labels?: ProjectCompareSideLabels) => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
-  onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => void;
+  onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => Promise<void> | void;
+  onWorkflowProjectOpenIntent: (path: string) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   openedProjectPath: string;
   projectSaveSequence: number;
@@ -177,6 +178,7 @@ export function useWorkflowLibraryController(options: {
     onCompareOpenProjectWith,
     onDeleteProject,
     onWorkflowPathsMoved,
+    onWorkflowProjectOpenIntent,
     onActiveWorkflowProjectPathChange,
     openedProjectPath,
     projectSaveSequence,
@@ -224,6 +226,7 @@ export function useWorkflowLibraryController(options: {
   });
   const refreshRequestIdRef = useRef(0);
   const projectSaveRefreshTimeoutRef = useRef<number | null>(null);
+  const previewOpenTimeoutRef = useRef<number | null>(null);
   const lastAutoExpandedActivePathRef = useRef<string | null>(null);
   const suppressedActiveAncestorExpansionIdsRef = useRef<Set<string>>(new Set());
   const openedWorkflowProjectRef = useRef<WorkflowProjectItem | null>(null);
@@ -239,6 +242,15 @@ export function useWorkflowLibraryController(options: {
 
   const openRunRecordingsModal = useCallback(() => {
     setRunRecordingsOpen(true);
+  }, []);
+
+  const clearPendingPreviewOpen = useCallback(() => {
+    if (previewOpenTimeoutRef.current == null) {
+      return;
+    }
+
+    window.clearTimeout(previewOpenTimeoutRef.current);
+    previewOpenTimeoutRef.current = null;
   }, []);
 
   const hideRunRecordingsModal = useCallback(() => {
@@ -354,7 +366,8 @@ export function useWorkflowLibraryController(options: {
     if (projectSaveRefreshTimeoutRef.current != null) {
       window.clearTimeout(projectSaveRefreshTimeoutRef.current);
     }
-  }, []);
+    clearPendingPreviewOpen();
+  }, [clearPendingPreviewOpen]);
 
   const activePath = selectedProjectPath;
   const flattenedFolders = useMemo(() => flattenFolders(folders), [folders]);
@@ -537,7 +550,7 @@ export function useWorkflowLibraryController(options: {
     setExpandedFolders((prev) => ({ ...prev, [folderId]: !(prev[folderId] ?? false) }));
   }, []);
 
-  const applyWorkflowProjectPathMoves = useCallback((moves: WorkflowProjectPathMove[]) => {
+  const applyWorkflowProjectPathMoves = useCallback(async (moves: WorkflowProjectPathMove[]) => {
     if (moves.length === 0) {
       return;
     }
@@ -551,7 +564,7 @@ export function useWorkflowLibraryController(options: {
       const nextPath = moves.find((move) => move.fromAbsolutePath === prev.absolutePath)?.toAbsolutePath;
       return nextPath ? { ...prev, absolutePath: nextPath } : prev;
     });
-    onWorkflowPathsMoved(moves);
+    await onWorkflowPathsMoved(moves);
   }, [onWorkflowPathsMoved]);
 
   const handleMoveDraggedItem = useCallback(async (destinationFolderRelativePath: string) => {
@@ -590,7 +603,7 @@ export function useWorkflowLibraryController(options: {
         }
       }
 
-      applyWorkflowProjectPathMoves(result.movedProjectPaths);
+      await applyWorkflowProjectPathMoves(result.movedProjectPaths);
 
       if (draggedItem.itemType === 'folder' && result.folder && sourceFolder) {
         reconcileWorkflowTreeInBackground('Workflow moved, but failed to refresh the tree');
@@ -738,7 +751,7 @@ export function useWorkflowLibraryController(options: {
       setFolders(nextTree.folders);
       setRootProjects(nextTree.rootProjects);
       setExpandedFolders((prev) => remapExpandedFolderIds(prev, folder.relativePath, result.folder.relativePath));
-      applyWorkflowProjectPathMoves(result.movedProjectPaths);
+      await applyWorkflowProjectPathMoves(result.movedProjectPaths);
       reconcileWorkflowTreeInBackground('Folder renamed, but failed to refresh the tree');
     } catch (err: any) {
       toast.error(err.message || 'Failed to rename folder');
@@ -773,7 +786,7 @@ export function useWorkflowLibraryController(options: {
       setFolders(nextTree.folders);
       setRootProjects(nextTree.rootProjects);
 
-      applyWorkflowProjectPathMoves(result.movedProjectPaths);
+      await applyWorkflowProjectPathMoves(result.movedProjectPaths);
 
       reconcileWorkflowTreeInBackground('Project renamed, but failed to refresh the tree');
     } catch (err: any) {
@@ -1446,14 +1459,20 @@ export function useWorkflowLibraryController(options: {
   );
 
   const handleProjectPreviewOpen = useCallback((project: WorkflowProjectItem) => {
+    clearPendingPreviewOpen();
     setSelectedProjectPath(project.absolutePath);
-    onOpenProject(project.absolutePath, { preview: true, title: project.name });
-  }, [onOpenProject]);
+    onWorkflowProjectOpenIntent(project.absolutePath);
+    previewOpenTimeoutRef.current = window.setTimeout(() => {
+      previewOpenTimeoutRef.current = null;
+      onOpenProject(project.absolutePath, { preview: true, title: project.name });
+    }, 180);
+  }, [clearPendingPreviewOpen, onOpenProject, onWorkflowProjectOpenIntent]);
 
   const handleProjectPersistentOpen = useCallback((project: WorkflowProjectItem) => {
+    clearPendingPreviewOpen();
     setSelectedProjectPath(project.absolutePath);
     onOpenProject(project.absolutePath, { title: project.name });
-  }, [onOpenProject]);
+  }, [clearPendingPreviewOpen, onOpenProject]);
 
   return {
     folders,

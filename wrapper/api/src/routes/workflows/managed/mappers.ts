@@ -87,6 +87,7 @@ export function mapWorkflowRowToProjectItem(row: WorkflowRow): WorkflowProjectIt
       status: getWorkflowStatus(row),
       endpointName: row.endpoint_name,
       lastPublishedAt: toIsoString(row.last_published_at),
+      publishedWebApps: [],
     },
   };
 }

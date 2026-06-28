@@ -7,6 +7,9 @@ import type {
   WorkflowProjectSettings,
   WorkflowProjectSettingsDraft,
   WorkflowProjectStatus,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppSummary,
+  WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionCommentResponse,
   WorkflowPublishedVersionStarResponse,
@@ -36,6 +39,9 @@ export type {
   WorkflowProjectSettings,
   WorkflowProjectSettingsDraft,
   WorkflowProjectStatus,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppSummary,
+  WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionCommentResponse,
   WorkflowPublishedVersionStarResponse,
@@ -63,6 +69,13 @@ export type WorkflowTreeResponse = {
   root: string;
   folders: WorkflowFolderItem[];
   projects: WorkflowProjectItem[];
+};
+
+export type HostedRouteConfig = {
+  publishedWorkflowsBasePath: string;
+  latestWorkflowsBasePath: string;
+  publishedAppsBasePath: string;
+  latestAppsBasePath: string;
 };
 
 export type WorkflowProjectOpenOptions = {

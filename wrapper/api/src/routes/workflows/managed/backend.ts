@@ -3,6 +3,8 @@ import type {
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
   WorkflowProjectPathMove,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionSummary,
   WorkflowPublishedVersionsResponse,
@@ -184,6 +186,21 @@ export class ManagedWorkflowBackend {
     return this.#publication.publishWorkflowProjectItem(relativePath, settings);
   }
 
+  async listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse> {
+    return this.#publication.listWorkflowProjectWebApps(relativePath);
+  }
+
+  async publishWorkflowProjectWebApps(
+    relativePath: unknown,
+    publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
+  ): Promise<WorkflowProjectItem> {
+    return this.#publication.publishWorkflowProjectWebApps(relativePath, publications);
+  }
+
+  async unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown): Promise<WorkflowProjectItem> {
+    return this.#publication.unpublishWorkflowProjectWebApp(relativePath, uiGraphId);
+  }
+
   async unpublishWorkflowProjectItem(relativePath: unknown): Promise<WorkflowProjectItem> {
     return this.#publication.unpublishWorkflowProjectItem(relativePath);
   }
@@ -200,6 +217,16 @@ export class ManagedWorkflowBackend {
   async loadLatestExecutionProject(endpointName: string): Promise<ManagedExecutionProjectResult | null> {
     await this.initialize();
     return this.#executionService.loadLatestExecutionProject(endpointName);
+  }
+
+  async loadPublishedWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {
+    await this.initialize();
+    return this.#executionService.loadPublishedWebAppExecutionProject(slug);
+  }
+
+  async loadLatestWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {
+    await this.initialize();
+    return this.#executionService.loadLatestWebAppExecutionProject(slug);
   }
 
   createProjectReferenceLoader() {

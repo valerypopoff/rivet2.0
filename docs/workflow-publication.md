@@ -1,6 +1,6 @@
 # Workflow Publication
 
-Workflows can be published as HTTP endpoints. This document describes the current publication, execution, and recording model.
+Workflows can be published as HTTP endpoints, and project-contained Rivet web apps can be published as browser pages. This document describes the current publication, execution, app-serving, and recording model.
 
 In the current deployment model:
 
@@ -13,9 +13,10 @@ In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In s
 ## Concepts
 
 - **Project file** (`*.rivet-project`): the live, editable workflow file
-- **Settings sidecar** (`*.rivet-project.wrapper-settings.json`): stores the endpoint draft plus publication state
+- **Settings sidecar** (`*.rivet-project.wrapper-settings.json`): stores the endpoint draft plus endpoint and web-app publication state
 - **Stats sidecar** (`*.rivet-project.wrapper-stats.json`): generated wrapper cache for graph/node counts in `filesystem` mode; it is rebuilt when the project file changes and is not part of publication state
 - **Published snapshot** (`.published/<snapshotId>.rivet-project`): frozen copy of the currently published project version
+- **Published web app**: one `Project.uiGraphs` entry pinned to a frozen project snapshot and exposed as `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>`, with a companion `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>` route that serves the latest saved draft for the same published app slug
 - **Published version history**: every successful publish creates a durable downloadable history entry for that project
   - in `filesystem` mode: `.published/<versionId>.rivet-project` plus `.published/<versionId>.json` metadata and an optional `.rivet-data` sidecar
   - in `managed` mode: a `workflow_published_versions` row pointing at a durable `workflow_revisions` project blob in object storage
@@ -40,7 +41,7 @@ Published version history also belongs to workflow storage. It is not stored in 
 
 ## Stored settings model
 
-The settings sidecar stores five publication-related fields:
+The settings sidecar stores endpoint publication fields plus any web-app publications:
 
 - `endpointName`
   - the editable draft endpoint name shown in the UI
@@ -52,12 +53,17 @@ The settings sidecar stores five publication-related fields:
   - SHA-256 of `endpointName + project file + dataset state` at publish time
 - `lastPublishedAt`
   - ISO timestamp of the last successful publish operation
+- `publishedWebApps`
+  - array of published web-app entries keyed by `uiGraphId`
+  - each entry stores the web app display name, public slug, published snapshot id, and publish timestamp
 
 Important current behavior:
 
 - publishing updates both `endpointName` and `publishedEndpointName`
 - publishing also updates `lastPublishedAt`
 - unpublishing clears only the `published*` fields and keeps `endpointName` as the saved draft/default
+- publishing or unpublishing workflow endpoints does not remove independently published web apps
+- publishing or unpublishing a web app does not change workflow endpoint publication state
 - that saved draft endpoint does not keep either public execution route open after full unpublish
 - fully unpublished saved draft endpoints do not reserve the endpoint name; another workflow can publish on that endpoint, and the old project must choose a free endpoint before republishing
 - unpublishing keeps `lastPublishedAt`, so the UI can still show when the project was last published once it becomes published again
@@ -81,12 +87,14 @@ Tree project stats are intentionally separate from publication state. Filesystem
 
 In Project Settings:
 
-- `Published` and `Unpublished changes` show `Last published at ...`
-- `Unpublished` does not show that line
+- `Published` and `Unpublished changes` show `Last published at ...` directly beside the status pill
+- `Unpublished` does not show that line and instead shows `Workflow is not published as endpoint.` in the same secondary status-text size and vertical alignment
 - older already-published projects that predate the explicit `lastPublishedAt` field fall back to the settings-sidecar file timestamp
-- the `Published version history` secondary action sits to the right of the idle publish/unpublish controls and opens the version-history modal for the current project
-- when an unpublished project is in the endpoint-entry publish UI, the history action is hidden and a `Cancel` button hides the publish UI without saving
+- the `Workflow` tab always shows one compact endpoint row with a non-editable base path prefix, editable endpoint slug, and no extra visible field label; `Publish` creates the first workflow endpoint, while `Update` republishes unpublished changes or applies an endpoint slug change
+- `Unpublish` sits next to the workflow endpoint row whenever the workflow is currently published or has unpublished changes
+- `Delete project` is in a separated lower section that remains visible regardless of the selected Project Settings tab; it is enabled only for fully unpublished projects. On the `Workflow` tab only, that same lower section also shows the `Published version history` secondary action as a visible button.
 - endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
+- Project Settings is split into `Workflow` and `Web apps` tabs. The `Workflow` tab owns normal endpoint publication and published-version history. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` and `/apps-latest/<slug>` paths are links that open in a new browser tab using the current Rivet server origin, and the app's `Update` button remains disabled until the slug draft changes.
 
 ## Publish flow
 
@@ -102,6 +110,28 @@ In Project Settings:
 Every publish gets a new version ID. The latest publish becomes the current `publishedSnapshotId`, while older snapshots remain in published version history.
 
 In managed mode, publish inserts a `workflow_published_versions` row and updates `workflows.published_version_id` to that row. The row points at the draft revision that was published, so the actual project bytes remain in the same managed object-storage revision store as ordinary workflow revisions.
+
+## Web app publish flow
+
+Rivet web apps are stored in project YAML under `Project.uiGraphs`. They are published separately from workflow HTTP endpoints:
+
+1. Project Settings loads the project's web-app list from `GET /api/workflows/projects/web-apps?relativePath=...`.
+2. The user assigns a slug for one or more web apps. Slugs use the same public-name rule as workflow endpoints: letters, numbers, and hyphens only.
+3. The dashboard posts `{ relativePath, publications: [{ uiGraphId, slug }] }` to `POST /api/workflows/projects/web-apps/publish`.
+4. The server validates that every `uiGraphId` exists in the current saved project and that every slug is globally unique across published web apps, case-insensitively.
+5. The server pins the selected web apps to the current saved project snapshot/revision and exposes each as `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>`.
+6. The same published app slug also opens `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>`, which serves the latest saved draft/current server-side project for that app's UI graph.
+
+Multiple web apps from the same project may be published at the same time as long as their slugs differ. Republish replaces only the selected UI graph publications; other web apps from that project keep serving their previous pinned snapshots. Unpublishing one web app removes only that `uiGraphId` publication and leaves any workflow endpoint publication plus other web apps intact. If a published UI graph is later removed from the draft project, the pinned app still serves from its old snapshot/revision; Project Settings lists it as missing from the current project so it can be explicitly unpublished, but it cannot be republished until the UI graph exists again.
+
+Web apps have a binary wrapper publication state: published or not published. They do not show workflow-style `Published` versus `Unpublished changes` state. Instead, a published app exposes two browser routes:
+
+- `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>` serves the frozen project snapshot captured when that web app was published.
+- `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>` serves the latest saved draft/current server-side project for that same app slug.
+
+The latest web-app route cannot see unsaved in-browser editor state until the editor saves the project. It is "latest saved", matching the server-side latest workflow route model, not a live read from Rivet's in-memory editor tab.
+
+In `filesystem` mode, web-app publications live in the settings sidecar's `publishedWebApps` array, and each publish writes a frozen `.published/<snapshotId>.rivet-project`. When multiple web apps are published in the same request, they share the same frozen snapshot id. In `managed` mode, each published app is a row in `workflow_web_apps` pointing at the immutable workflow revision that was current when the app was published. Filesystem-to-managed migration imports those web-app publication rows from the frozen snapshot files, so an existing `/apps/<slug>` route keeps serving the same pinned project content after cutover.
 
 ## Save flow after publish
 
@@ -194,7 +224,7 @@ Projects are renamed from the workflow-library project context menu or by pressi
 
 Rename treats the workflow tree/file name as the project-title source of truth. After the project file and sidecars move to the new path, the backend also rewrites the saved `.rivet-project` payload so `project.metadata.title` matches the new tree name. In managed storage, the same rule is applied by creating a new current draft revision with the rewritten title and the existing dataset contents; published revisions and published version history remain immutable. This content rewrite is tied to file-name renames only; moving the same project file into another folder does not rewrite the draft payload.
 
-When the API returns `movedProjectPaths`, the dashboard retargets the selected project, open editor tabs, and Project Settings state to the new absolute path without opening a different project. If an already-open project file was renamed, the editor bridge calls `RivetWorkspaceHost.updateProjectMetadata(projectId, { title }, { path, persistedExternally: true, changeSource: 'external-wrapper-rename' })` so Rivet updates the tab title, live project metadata, inactive opened snapshot, remembered path, and clean baseline through its hosted workspace seam. The wrapper does not reload the active project or import Rivet dirty-state atoms just to refresh title surfaces, and unrelated unsaved graph edits stay dirty. If the API rejects the rename, the preloader clears and the tree returns to the original row name while the error toast reports the server message.
+When the API returns `movedProjectPaths`, the dashboard retargets the selected project, open editor tabs, and Project Settings state to the new absolute path without opening a different project. The editor bridge waits for Rivet to acknowledge the path move before the rename/move interaction completes, so immediately reactivating an already-open moved project does not race against stale editor paths and reload from disk. If an already-open project file was renamed, the editor bridge calls `RivetWorkspaceHost.updateProjectMetadata(projectId, { title }, { path, persistedExternally: true, changeSource: 'external-wrapper-rename' })` so Rivet updates the tab title, live project metadata, inactive opened snapshot, remembered path, and clean baseline through its hosted workspace seam. Folder moves and renames where the project file name is unchanged still use the same method with an empty metadata patch plus the new `path`, because the path is the part that changed. The wrapper does not reload the active project or import Rivet dirty-state atoms just to refresh title surfaces, and unrelated unsaved graph edits stay dirty. If the API rejects the rename, the preloader clears and the tree returns to the original row name while the error toast reports the server message.
 
 ## Project duplication
 
@@ -325,31 +355,62 @@ Unpublishing clears the current published pointer but keeps history rows/snapsho
 
 ## Endpoint resolution
 
-Two public endpoint families exist:
+Four public endpoint families exist:
 
 - **Published** (`${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}/:endpointName`)
   - serves the frozen published snapshot
   - stable across live edits
   - belongs to the execution surface
+- **Published Rivet web app** (`${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug`)
+  - serves one declarative `Project.uiGraphs` entry from the frozen snapshot/revision captured for that published app
+  - belongs to the execution surface
+- **Latest Rivet web app** (`${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug`)
+  - serves the same published app slug from the latest saved draft/current server-side project
+  - belongs to the control surface
 - **Latest** (`${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}/:endpointName`)
   - serves the live draft project file for a workflow that still has active published lineage
   - uses the current draft endpoint name rather than the frozen published endpoint name
   - reflects unpublished changes immediately
   - belongs to the control surface
 
-Both routes:
+The published and latest workflow execution routes:
 
 - are `POST`-only
 - match endpoint names case-insensitively
 
+Published web app routes match app slugs case-insensitively, but preserve the stored slug casing. They have their own HTTP shape:
+
+- `GET ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug`
+  - renders HTML for the published UI graph attached to that slug
+- `GET ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/app.json`
+  - returns the published UI graph JSON
+- `POST ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/actions/run`
+  - runs the clicked button's same-project graph action
+- `GET ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug`
+  - renders HTML for the latest saved draft of the published UI graph attached to that slug
+- `GET ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/app.json`
+  - returns the latest saved draft UI graph JSON
+- `POST ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
+  - runs the clicked button's same-project graph action against the latest saved draft
+
+`RIVET_PUBLISHED_APPS_BASE_PATH` and `RIVET_LATEST_APPS_BASE_PATH` are the preferred route-prefix env names for web apps. The older `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` names still work as aliases, but the preferred names win when both are set.
+
+Project Settings displays workflow and web-app endpoint prefixes from the runtime `/api/config` response instead of hardcoding bundled Vite env values. After changing these prefixes in `.env` for a prebuilt `npm run prod` deployment, run `npm run prod:restart` and reload the browser so both nginx/API routing and the dashboard UI use the new values.
+
+The action routes use the same project resolver family, dataset provider, project-reference loader, `ManagedCodeRunner`, and request-header context injection as workflow execution. The wrapper deliberately does not pass endpoint `inputs` to `runRivetWebAppAction`; Rivet maps the declarative UI state into graph inputs from the button action. HTML embeds an opaque `revisionKey`, and action posts with an older key fail with `409` after that app slug is republished or the latest saved draft changes.
+
+Published web app action runs do not attach Remote Debugger. Latest web app action runs attach the same `/ws/latest-debugger` remote debugger as latest workflow endpoint runs when `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true`, because they execute against the latest saved draft on the control-plane backend. Web app action runs are not yet persisted into Run recordings. Add recording support only through an upstream/action seam that can attach `ExecutionRecorder` without reimplementing Rivet's web-app action runner.
+
+Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by `RIVET_REQUIRE_UI_GATE_KEY`, not `RIVET_REQUIRE_WORKFLOW_KEY`. When the UI gate is enabled, nginx shows the same key prompt used by the main Rivet server UI, submits the originally requested local URL as a sanitized `return_to` path, and sets the same HTTP-only `rivet_ui_token` cookie after the user enters `RIVET_KEY`. Successful form login returns the browser to the original web-app URL, such as `/apps/my-tool/` or `/apps-latest/my-tool/`, instead of always redirecting to `/`. Hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass that UI gate for web apps too. Workflow endpoint routes remain bearer/token-free-host routes and do not accept the UI session cookie as a substitute for `Authorization`.
+
 Endpoint resolution is backend-specific:
 
-- in `filesystem` mode, the API resolves published routes from the published endpoint identity and latest routes from the current draft endpoint identity, but latest is still gated on active published lineage
-- in `managed` mode, the API resolves endpoint ownership and the selected revision from Postgres, with project/dataset blobs stored in object storage
+- in `filesystem` mode, the API resolves published workflow routes from the published endpoint identity, latest routes from the current draft endpoint identity, and both web-app route families from `publishedWebApps` slugs
+- in `managed` mode, the API resolves workflow endpoint ownership from `workflow_endpoints`, web-app ownership from `workflow_web_apps`, and selected revisions from Postgres, with project/dataset blobs stored in object storage; `/apps` reads the app's pinned revision while `/apps-latest` reads the workflow's current draft revision
 - in `managed` mode, the first request after startup or after an invalidating mutation can still be a cold shared-state miss, but warm requests reuse API-local derived caches instead of repeating remote Postgres/object-storage reads for the same revision
 - in `managed` mode, API replicas invalidate endpoint-pointer cache entries through same-process post-commit invalidation plus Postgres `LISTEN/NOTIFY`; immutable revision-payload cache entries remain valid by revision id
 
-Fully unpublished projects are not served by either public route family.
+Fully unpublished projects are not served by the workflow execution route families. Published web apps are independent and remain served until their own web-app publication is removed.
 
 There is also an internal published-only route:
 
@@ -448,6 +509,7 @@ In `managed` mode, shared services remain authoritative, but steady-state endpoi
 - the revision-materialization cache stores immutable raw project and dataset contents by `revisionId`
 - the API rebuilds a fresh per-request `Project`, attached data, and `NodeDatasetProvider` from cached raw contents so request isolation is preserved
 - publish, save, unpublish, rename, move, and delete operations invalidate the affected endpoint-pointer entries immediately
+- a managed save invalidates execution cache whenever the workflow has either a published workflow endpoint or at least one `workflow_web_apps` row, because `/apps-latest/<slug>` reads the current draft revision even when the project is not published as a workflow endpoint
 - if the invalidation listener is unhealthy, the API clears and bypasses the pointer cache until listener health is restored; correctness wins over latency in degraded mode
 
 That means a managed endpoint can have a slower first hit after pod start or after an invalidating workflow mutation, while repeated hits for the same trivial workflow settle onto the warm local path.
@@ -502,8 +564,8 @@ Do not replace this path with `runGraph(...)` unless upstream exposes an equival
 
 Public execution auth is separate from the browser UI gate:
 
-- when `RIVET_REQUIRE_WORKFLOW_KEY=true`, both public route families require `Authorization: Bearer <RIVET_KEY>`
-- hosts allowlisted in `RIVET_UI_TOKEN_FREE_HOSTS` bypass that public-route auth because nginx forwards a trusted internal-host signal
+- when `RIVET_REQUIRE_WORKFLOW_KEY=true`, workflow endpoint routes require `Authorization: Bearer <RIVET_KEY>`
+- hosts allowlisted in `RIVET_UI_TOKEN_FREE_HOSTS` bypass public-route bearer auth because nginx forwards a trusted internal-host signal
 - if public auth is enabled but `RIVET_KEY` is empty, the public execution routes fail with `500`
 
 See [access-and-routing.md](access-and-routing.md) for the nginx-side details.
@@ -719,6 +781,7 @@ The workflow-publication UI now follows the same controller-versus-view split as
 
 - `wrapper/api/src/routes/workflows/endpoint-names.ts` - shared endpoint-name validation and case-insensitive lookup normalization
 - `wrapper/api/src/routes/workflows/publication.ts` - filesystem publication logic, status derivation, and endpoint lookup
+- `wrapper/api/src/routes/workflows/web-app-publication.ts` - filesystem web-app publication, republish, and per-app unpublish mutations
 - `wrapper/api/src/routes/workflows/published-versions.ts` - filesystem published-version history metadata, star state, listing, download, preview, restore, and cleanup
 - `wrapper/api/src/routes/workflows/execution.ts` - public/latest/internal execution handlers and recording enqueue path
 - `wrapper/api/src/routes/workflows/hosted-project-contents.ts` - hosted project content normalization shared by filesystem and managed saves

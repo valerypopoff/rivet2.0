@@ -13,6 +13,7 @@ test('open project bridge command accepts optional title and preview flags', () 
     replaceCurrent: false,
     title: 'Example',
     preview: true,
+    requestId: 'open-1',
   }), true);
   assert.equal(isDashboardToEditorCommand({
     type: 'open-project',
@@ -25,6 +26,25 @@ test('open project bridge command accepts optional title and preview flags', () 
     path: '/workflows/example.rivet-project',
     replaceCurrent: false,
     preview: 'true',
+  }), false);
+  assert.equal(isDashboardToEditorCommand({
+    type: 'open-project',
+    path: '/workflows/example.rivet-project',
+    replaceCurrent: false,
+    requestId: 12,
+  }), false);
+});
+
+test('project opened event accepts optional request ownership', () => {
+  assert.equal(isEditorToDashboardEvent({
+    type: 'project-opened',
+    path: '/workflows/example.rivet-project',
+    requestId: 'open-1',
+  }), true);
+  assert.equal(isEditorToDashboardEvent({
+    type: 'project-opened',
+    path: '/workflows/example.rivet-project',
+    requestId: 12,
   }), false);
 });
 

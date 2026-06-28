@@ -4,7 +4,7 @@ import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
 import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
 import { WorkflowLibraryModals } from './WorkflowLibraryModals';
-import type { WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
+import type { HostedRouteConfig, WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
 import { getParentRelativePath } from './workflowLibraryHelpers';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
@@ -22,7 +22,8 @@ interface WorkflowLibraryPanelProps {
   onCompareOpenProjectWith: (path: string, referencePath?: string, labels?: ProjectCompareSideLabels) => void;
   onSaveProject: () => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
-  onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => void;
+  onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => Promise<void> | void;
+  onWorkflowProjectOpenIntent: (path: string) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   openedProjectPath: string;
   activeProjectHasUnsavedChanges: boolean;
@@ -31,6 +32,7 @@ interface WorkflowLibraryPanelProps {
   collapsed: boolean;
   contentVisible: boolean;
   onToggleCollapse: () => void;
+  routeConfig: HostedRouteConfig;
 }
 
 const SidebarOpenIcon: FC = () => (
@@ -55,6 +57,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onSaveProject,
   onDeleteProject,
   onWorkflowPathsMoved,
+  onWorkflowProjectOpenIntent,
   onActiveWorkflowProjectPathChange,
   openedProjectPath,
   activeProjectHasUnsavedChanges,
@@ -63,6 +66,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   collapsed,
   contentVisible,
   onToggleCollapse,
+  routeConfig,
 }) => {
   const controller = useWorkflowLibraryController({
     onOpenProject,
@@ -72,6 +76,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onCompareOpenProjectWith,
     onDeleteProject,
     onWorkflowPathsMoved,
+    onWorkflowProjectOpenIntent,
     onActiveWorkflowProjectPathChange,
     openedProjectPath,
     projectSaveSequence,
@@ -252,7 +257,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <WorkflowLibraryContextMenus controller={controller} />
-        <WorkflowLibraryModals controller={controller} />
+        <WorkflowLibraryModals controller={controller} routeConfig={routeConfig} />
       </div>
 
       {collapsed ? (

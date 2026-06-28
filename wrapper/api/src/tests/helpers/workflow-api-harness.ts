@@ -13,6 +13,8 @@ type WorkflowApiServerHarnessOptions = {
 };
 
 type WorkflowExecutionServerHarnessOptions = WorkflowApiServerHarnessOptions & {
+  latestWebAppsRouter?: Router;
+  publishedWebAppsRouter?: Router;
   publishedWorkflowsRouter: Router;
   latestWorkflowsRouter: Router;
 };
@@ -20,6 +22,8 @@ type WorkflowExecutionServerHarnessOptions = WorkflowApiServerHarnessOptions & {
 type WorkflowExecutionServerUrls = {
   apiBaseUrl: string;
   publishedBaseUrl: string;
+  webAppsBaseUrl: string;
+  latestWebAppsBaseUrl: string;
   latestBaseUrl: string;
 };
 
@@ -122,6 +126,12 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
     app.use(express.json({ strict: false }));
     app.use('/api/workflows', options.workflowsRouter);
     app.use('/workflows', options.publishedWorkflowsRouter);
+    if (options.publishedWebAppsRouter) {
+      app.use('/apps', options.publishedWebAppsRouter);
+    }
+    if (options.latestWebAppsRouter) {
+      app.use('/apps-latest', options.latestWebAppsRouter);
+    }
     app.use('/workflows-latest', options.latestWorkflowsRouter);
     attachJsonFallbackHandlers(app);
 
@@ -132,6 +142,8 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
       await run({
         apiBaseUrl: `${listener.baseUrl}/api/workflows`,
         publishedBaseUrl: `${listener.baseUrl}/workflows`,
+        webAppsBaseUrl: `${listener.baseUrl}/apps`,
+        latestWebAppsBaseUrl: `${listener.baseUrl}/apps-latest`,
         latestBaseUrl: `${listener.baseUrl}/workflows-latest`,
       });
     } finally {

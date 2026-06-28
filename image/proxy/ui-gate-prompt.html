@@ -118,6 +118,7 @@
         >
         <label for="gate-key">Access key</label>
         <input id="gate-key" name="key" type="password" autocomplete="current-password" autofocus required>
+        <input id="gate-return-to" name="return_to" type="hidden" value="/">
         <button type="submit">Continue</button>
         <div id="gate-error" class="error" aria-live="polite"></div>
       </form>
@@ -127,17 +128,19 @@
       (function () {
         const input = document.getElementById("gate-key");
         const error = document.getElementById("gate-error");
-        const params = new URLSearchParams(window.location.search);
-        const authError = params.get("auth_error");
+        const returnTo = document.getElementById("gate-return-to");
+        const currentUrl = new URL(window.location.href);
+        const authError = currentUrl.searchParams.get("auth_error");
+        currentUrl.searchParams.delete("auth_error");
+        const returnPath = currentUrl.pathname + currentUrl.search + currentUrl.hash;
+        returnTo.value = returnPath || "/";
         if (authError === "invalid") {
           error.textContent = "Access key was rejected. Try again.";
         } else if (authError === "forbidden" || authError === "unavailable") {
           error.textContent = "Unable to authenticate right now.";
         }
         if (authError) {
-          params.delete("auth_error");
-          const nextSearch = params.toString();
-          history.replaceState(null, "", window.location.pathname + (nextSearch ? "?" + nextSearch : "") + window.location.hash);
+          history.replaceState(null, "", returnTo.value);
           input.focus();
           input.select();
         }

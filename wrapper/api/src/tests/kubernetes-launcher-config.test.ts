@@ -52,6 +52,8 @@ test('kubernetes launcher config uses managed canonical envs and local rehearsal
   assert.equal(config.replicas.execution, 4);
   assert.equal(config.objectStorage.bucket, 'rivet-prod');
   assert.equal(config.objectStorage.region, 'us-east-1');
+  assert.equal(config.routeConfig.webAppsBasePath, '/apps');
+  assert.equal(config.routeConfig.latestWebAppsBasePath, '/apps-latest');
   assert.equal(config.routeConfig.enableLatestRemoteDebugger, true);
   assert.equal(config.routeConfig.requireWorkflowKey, false);
   assert.equal(config.routeConfig.requireUiGateKey, false);
@@ -100,6 +102,10 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
   assert.match(valuesYaml, /accessKeySecretName: "rivet-object-storage"/);
   assert.match(valuesYaml, /clusterDomain: "cluster\.local"/);
   assert.match(valuesYaml, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "true"/);
+  assert.match(valuesYaml, /RIVET_PUBLISHED_APPS_BASE_PATH: "\/apps"/);
+  assert.match(valuesYaml, /RIVET_LATEST_APPS_BASE_PATH: "\/apps-latest"/);
+  assert.match(valuesYaml, /RIVET_WEB_APPS_BASE_PATH: "\/apps"/);
+  assert.match(valuesYaml, /RIVET_LATEST_WEB_APPS_BASE_PATH: "\/apps-latest"/);
   assert.match(valuesYaml, /RIVET_REQUIRE_WORKFLOW_KEY: "false"/);
   assert.match(valuesYaml, /RIVET_REQUIRE_UI_GATE_KEY: "false"/);
 

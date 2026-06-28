@@ -2,26 +2,56 @@ import { useCallback, useEffect, useRef, useState, type FC } from 'react';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel';
-import type { WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
+import type { HostedRouteConfig, WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
 import { useEditorCommandQueue } from './useEditorCommandQueue';
 import { focusIframeElement } from './editorBridgeFocus';
 import { useDashboardSidebar } from './useDashboardSidebar';
 import { useEditorBridgeEvents } from './useEditorBridgeEvents';
+import { fetchHostedConfig } from './workflowApi';
+import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
+import {
+  RIVET_LATEST_WEB_APPS_BASE_PATH,
+  RIVET_LATEST_WORKFLOWS_BASE_PATH,
+  RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
+  RIVET_WEB_APPS_BASE_PATH,
+} from '../../shared/hosted-env';
 import './DashboardPage.css';
 
 const WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH = 30;
 const MIN_SIDEBAR_WIDTH = 240;
 const MAX_SIDEBAR_WIDTH = 560;
+const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
+  publishedWorkflowsBasePath: RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
+  latestWorkflowsBasePath: RIVET_LATEST_WORKFLOWS_BASE_PATH,
+  publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
+  latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
+};
+
+function resolveHostedRouteConfig(config: Partial<HostedRouteConfig>): HostedRouteConfig {
+  return {
+    publishedWorkflowsBasePath: config.publishedWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedWorkflowsBasePath,
+    latestWorkflowsBasePath: config.latestWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestWorkflowsBasePath,
+    publishedAppsBasePath: config.publishedAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedAppsBasePath,
+    latestAppsBasePath: config.latestAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestAppsBasePath,
+  };
+}
 
 export const DashboardPage: FC = () => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const pendingWorkflowProjectOpenPathRef = useRef<string | null>(null);
+  const pendingWorkflowProjectOpenRequestIdRef = useRef<string | null>(null);
+  const pendingWorkflowProjectOpenTimeoutRef = useRef<number | undefined>(undefined);
+  const workflowProjectOpenRequestSequenceRef = useRef(0);
+  const workflowPathMoveAckResolversRef = useRef(new Map<string, () => void>());
+  const workflowPathMoveRequestSequenceRef = useRef(0);
   const [openedProjectPath, setOpenedProjectPath] = useState('');
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
   const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
   const [editorReady, setEditorReady] = useState(false);
   const [openProjectCount, setOpenProjectCount] = useState(0);
   const [projectSaveSequence, setProjectSaveSequence] = useState(0);
+  const [routeConfig, setRouteConfig] = useState<HostedRouteConfig>(DEFAULT_HOSTED_ROUTE_CONFIG);
   const postEditorCommand = useEditorCommandQueue(iframeRef, editorReady);
   const {
     handleResizeMouseDown,
@@ -37,7 +67,57 @@ export const DashboardPage: FC = () => {
     minWidth: MIN_SIDEBAR_WIDTH,
   });
 
+  const clearPendingWorkflowProjectOpen = useCallback((path?: string, requestId?: string) => {
+    if (
+      path &&
+      pendingWorkflowProjectOpenPathRef.current &&
+      normalizeWorkflowPath(path) !== normalizeWorkflowPath(pendingWorkflowProjectOpenPathRef.current)
+    ) {
+      return;
+    }
+
+    if (
+      requestId &&
+      pendingWorkflowProjectOpenRequestIdRef.current &&
+      pendingWorkflowProjectOpenRequestIdRef.current !== requestId
+    ) {
+      return;
+    }
+
+    pendingWorkflowProjectOpenPathRef.current = null;
+    pendingWorkflowProjectOpenRequestIdRef.current = null;
+    if (pendingWorkflowProjectOpenTimeoutRef.current !== undefined) {
+      window.clearTimeout(pendingWorkflowProjectOpenTimeoutRef.current);
+      pendingWorkflowProjectOpenTimeoutRef.current = undefined;
+    }
+  }, []);
+
+  const rememberPendingWorkflowProjectOpen = useCallback((path: string, requestId?: string) => {
+    clearPendingWorkflowProjectOpen();
+    pendingWorkflowProjectOpenPathRef.current = path;
+    pendingWorkflowProjectOpenRequestIdRef.current = requestId ?? null;
+    pendingWorkflowProjectOpenTimeoutRef.current = window.setTimeout(() => {
+      pendingWorkflowProjectOpenPathRef.current = null;
+      pendingWorkflowProjectOpenRequestIdRef.current = null;
+      pendingWorkflowProjectOpenTimeoutRef.current = undefined;
+    }, 120_000);
+  }, [clearPendingWorkflowProjectOpen]);
+
+  const shouldIgnoreTransientActiveProjectPath = useCallback((path: string, requestId?: string) => {
+    const pendingPath = pendingWorkflowProjectOpenPathRef.current;
+    const pendingRequestId = pendingWorkflowProjectOpenRequestIdRef.current;
+    return Boolean(
+      pendingPath &&
+      (
+        (path && normalizeWorkflowPath(path) !== normalizeWorkflowPath(pendingPath)) ||
+        (requestId && pendingRequestId && requestId !== pendingRequestId)
+      ),
+    );
+  }, []);
+
   const handleOpenProject = useCallback((path: string, options?: WorkflowProjectOpenOptions) => {
+    const requestId = `open-project:${Date.now()}:${workflowProjectOpenRequestSequenceRef.current++}`;
+    rememberPendingWorkflowProjectOpen(path, requestId);
     postEditorCommand({
       type: 'open-project',
       path,
@@ -45,8 +125,13 @@ export const DashboardPage: FC = () => {
       title: options?.title,
       preview: options?.preview === true ? true : undefined,
       reloadFromDisk: options?.reloadFromDisk === true ? true : undefined,
+      requestId,
     });
-  }, [postEditorCommand]);
+  }, [postEditorCommand, rememberPendingWorkflowProjectOpen]);
+
+  const handleWorkflowProjectOpenIntent = useCallback((path: string) => {
+    rememberPendingWorkflowProjectOpen(path);
+  }, [rememberPendingWorkflowProjectOpen]);
 
   const handleRefreshOpenProjectFromDisk = useCallback((path: string) => {
     postEditorCommand({ type: 'refresh-open-project-from-disk', path });
@@ -110,10 +195,24 @@ export const DashboardPage: FC = () => {
     postEditorCommand({ type: 'delete-workflow-project', path, projectId });
   }, [postEditorCommand]);
 
+  const handleWorkflowPathsMovedApplied = useCallback((requestId?: string) => {
+    if (!requestId) {
+      return;
+    }
+
+    const resolve = workflowPathMoveAckResolversRef.current.get(requestId);
+    if (!resolve) {
+      return;
+    }
+
+    workflowPathMoveAckResolversRef.current.delete(requestId);
+    resolve();
+  }, []);
+
   const handleWorkflowPathsMoved = useCallback(
     (moves: WorkflowProjectPathMove[]) => {
       if (moves.length === 0) {
-        return;
+        return Promise.resolve();
       }
 
       setOpenedProjectPath((prev) => moves.find((move) => move.fromAbsolutePath === prev)?.toAbsolutePath ?? prev);
@@ -133,10 +232,53 @@ export const DashboardPage: FC = () => {
 
         return changed ? next : prev;
       });
-      postEditorCommand({ type: 'workflow-paths-moved', moves });
+
+      const requestId = `workflow-paths-moved:${Date.now()}:${workflowPathMoveRequestSequenceRef.current++}`;
+      const applied = !editorReady
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            const timeoutId = window.setTimeout(() => {
+              workflowPathMoveAckResolversRef.current.delete(requestId);
+              resolve();
+            }, 5_000);
+
+            workflowPathMoveAckResolversRef.current.set(requestId, () => {
+              window.clearTimeout(timeoutId);
+              resolve();
+            });
+          });
+
+      postEditorCommand({ type: 'workflow-paths-moved', moves, requestId });
+      return applied;
     },
-    [postEditorCommand],
+    [editorReady, postEditorCommand],
   );
+
+  useEffect(() => () => {
+    clearPendingWorkflowProjectOpen();
+    for (const resolve of workflowPathMoveAckResolversRef.current.values()) {
+      resolve();
+    }
+    workflowPathMoveAckResolversRef.current.clear();
+  }, [clearPendingWorkflowProjectOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchHostedConfig()
+      .then((config) => {
+        if (!cancelled) {
+          setRouteConfig(resolveHostedRouteConfig(config));
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load hosted route config; using bundled defaults.', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEditorBridgeEvents({
     activeWorkflowProjectPath,
     editorReady,
@@ -144,6 +286,10 @@ export const DashboardPage: FC = () => {
     handleSaveProject,
     iframeRef,
     onActiveWorkflowProjectPathChange: (path) => {
+      if (shouldIgnoreTransientActiveProjectPath(path)) {
+        return;
+      }
+
       setOpenedProjectPath(path);
       setActiveWorkflowProjectPath(path);
     },
@@ -171,7 +317,16 @@ export const DashboardPage: FC = () => {
     },
     onProjectOpenFailed: () => {
     },
-    onProjectOpened: (path) => {
+    onProjectOpened: (path, requestId) => {
+      if (requestId && !pendingWorkflowProjectOpenPathRef.current) {
+        return;
+      }
+
+      if (shouldIgnoreTransientActiveProjectPath(path, requestId)) {
+        return;
+      }
+
+      clearPendingWorkflowProjectOpen(path, requestId);
       setOpenedProjectPath(path);
       setActiveWorkflowProjectPath(path);
     },
@@ -186,6 +341,7 @@ export const DashboardPage: FC = () => {
             }
       ));
     },
+    onWorkflowPathsMovedApplied: handleWorkflowPathsMovedApplied,
   });
 
   const showEditorLoading = !editorReady;
@@ -217,6 +373,7 @@ export const DashboardPage: FC = () => {
           onSaveProject={handleSaveProject}
           onDeleteProject={handleDeleteProject}
           onWorkflowPathsMoved={handleWorkflowPathsMoved}
+          onWorkflowProjectOpenIntent={handleWorkflowProjectOpenIntent}
           onActiveWorkflowProjectPathChange={setActiveWorkflowProjectPath}
           openedProjectPath={openedProjectPath}
           activeProjectHasUnsavedChanges={activeProjectHasUnsavedChanges}
@@ -225,6 +382,7 @@ export const DashboardPage: FC = () => {
           collapsed={sidebarCollapsed}
           contentVisible={sidebarContentVisible}
           onToggleCollapse={handleToggleSidebar}
+          routeConfig={routeConfig}
         />
       </aside>
       {!sidebarCollapsed || sidebarResizing ? (

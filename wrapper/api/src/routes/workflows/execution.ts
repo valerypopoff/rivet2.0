@@ -3,11 +3,16 @@ import { Router, type Request, type Response } from 'express';
 import {
   createProcessor,
   ExecutionRecorder,
+  renderRivetWebAppHtml,
+  RivetWebAppActionHttpError,
+  runRivetWebAppAction,
+  type UiGraph,
 } from '@valerypopoff/rivet2-node';
 
 import { getLatestWorkflowRemoteDebugger, isLatestWorkflowRemoteDebuggerEnabled } from '../../latestWorkflowRemoteDebugger.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
+import { RIVET_LATEST_WEB_APPS_BASE_PATH, RIVET_WEB_APPS_BASE_PATH } from '../../workflowEndpointPaths.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
 import {
   createManagedCodeRunnerTelemetry,
@@ -17,13 +22,15 @@ import {
   type ManagedCodeRunnerTelemetry,
 } from '../../runtime-libraries/managed-code-runner.js';
 import { getRootPath } from '../../runtime-libraries/manifest.js';
-import { isTrustedTokenFreeHostRequest } from '../../auth.js';
+import { isTrustedTokenFreeHostRequest, isTrustedUiSessionRequest } from '../../auth.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import {
   createExecutionProjectReferenceLoader,
   persistWorkflowExecutionRecordingWithBackend,
   resolveLatestExecutionProject,
+  resolveLatestWebAppExecutionProject as resolveLatestWebAppExecutionProjectWithBackend,
   resolvePublishedExecutionProject,
+  resolvePublishedWebAppExecutionProject as resolvePublishedWebAppExecutionProjectWithBackend,
 } from './storage-backend.js';
 import {
   getWorkflowExecutionRecorderOptions,
@@ -34,6 +41,8 @@ import {
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
 export const latestWorkflowsRouter = Router();
+export const publishedWebAppsRouter = Router();
+export const latestWebAppsRouter = Router();
 
 type WorkflowRequestHeadersContext = Record<string, string>;
 type WorkflowExecutionContext = {
@@ -42,6 +51,10 @@ type WorkflowExecutionContext = {
     value: WorkflowRequestHeadersContext;
   };
 };
+
+type WorkflowExecutionProject = Awaited<ReturnType<typeof resolvePublishedExecutionProject>> extends infer T
+  ? Exclude<T, null>
+  : never;
 
 const WORKFLOW_CONTEXT_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const UNSAFE_WORKFLOW_CONTEXT_HEADER_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
@@ -172,7 +185,9 @@ function sendWorkflowErrorWithDuration(
     ? error.status
     : 500;
 
-  console.error('Workflow execution failed:', error);
+  if (status >= 500) {
+    console.error('Workflow execution failed:', error);
+  }
 
   const errorPayload = error instanceof Error
     ? {
@@ -248,9 +263,7 @@ function getWorkflowExecutionContext(
 
 function setWorkflowExecutionDebugHeaders(
   res: Response,
-  executionProject: Awaited<ReturnType<typeof resolvePublishedExecutionProject>> extends infer T
-    ? Exclude<T, null>
-    : never,
+  executionProject: WorkflowExecutionProject,
   executionMs: number,
 ): void {
   if (!shouldEmitWorkflowExecutionDebugHeaders() || !executionProject.debug) {
@@ -306,10 +319,180 @@ function requirePublishedWorkflowApiKey(req: Request): void {
   }
 }
 
+function requirePublishedWebAppUiGate(req: Request): void {
+  const isUiGateRequired = isEnvFlagEnabled(process.env.RIVET_REQUIRE_UI_GATE_KEY, false);
+  if (!isUiGateRequired) {
+    return;
+  }
+
+  if (isTrustedTokenFreeHostRequest(req)) {
+    return;
+  }
+
+  if (isTrustedUiSessionRequest(req)) {
+    return;
+  }
+
+  const expectedSharedKey = process.env.RIVET_KEY?.trim();
+  if (!expectedSharedKey) {
+    throw createHttpError(500, 'UI gate key is required but RIVET_KEY is not configured');
+  }
+
+  throw createHttpError(401, 'Unauthorized');
+}
+
+function getForwardedRequestProtocol(req: Request): string {
+  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  return forwardedProto || req.protocol || 'http';
+}
+
+function createFetchRequestFromExpress(req: Request): globalThis.Request {
+  const host = req.get('host') || 'localhost';
+  const url = `${getForwardedRequestProtocol(req)}://${host}${req.originalUrl || req.url}`;
+  const headers = new Headers();
+
+  for (const [name, rawValue] of Object.entries(req.headers)) {
+    const value = normalizeWorkflowContextHeaderValue(rawValue);
+    if (value != null) {
+      headers.set(name, value);
+    }
+  }
+
+  return new Request(url, {
+    headers,
+    method: req.method,
+  });
+}
+
+function encodeUrlPathSegment(value: string): string {
+  return encodeURIComponent(value).replace(/%2F/gi, '%252F');
+}
+
+type WebAppRouteKind = 'published' | 'latest';
+
+function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
+  const basePath = routeKind === 'published'
+    ? RIVET_WEB_APPS_BASE_PATH
+    : RIVET_LATEST_WEB_APPS_BASE_PATH;
+
+  return `${basePath}/${encodeUrlPathSegment(slug)}`;
+}
+
+function getLatestRemoteDebuggerForExecution(options?: { enableRemoteDebugger?: boolean }) {
+  return options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
+    ? getLatestWorkflowRemoteDebugger()
+    : undefined;
+}
+
+function resolveWebAppUiGraph(executionProject: WorkflowExecutionProject): UiGraph | null {
+  const uiGraphId = executionProject.webAppUiGraphId;
+
+  return uiGraphId
+    ? (executionProject.project.uiGraphs?.[uiGraphId as keyof typeof executionProject.project.uiGraphs] ?? null)
+    : null;
+}
+
+function sendHtmlWithDuration(
+  res: Response,
+  statusCode: number,
+  html: string,
+  requestStartedAt: number,
+): void {
+  const durationMs = Math.max(0, Math.round(performance.now() - requestStartedAt));
+  res.set('x-duration-ms', String(durationMs));
+  res.status(statusCode).type('html').send(html);
+}
+
+function sendWebAppActionErrorWithDuration(
+  res: Response,
+  error: unknown,
+  requestStartedAt: number,
+): void {
+  const status = error instanceof RivetWebAppActionHttpError ? error.status : 500;
+  if (status >= 500) {
+    console.error('Rivet web app action failed:', error);
+  }
+  sendJsonWithDuration(res, status, {
+    error: getWorkflowErrorMessage(error),
+  }, requestStartedAt);
+}
+
+function getWebAppActionComponentId(body: Record<string, unknown>): string {
+  const componentId = body.componentId;
+  if (typeof componentId !== 'string' || !componentId) {
+    throw new RivetWebAppActionHttpError('Invalid componentId.', 400);
+  }
+
+  return componentId;
+}
+
+function getOptionalWebAppActionRevisionKey(body: Record<string, unknown>): string | undefined {
+  const revisionKey = body.revisionKey;
+  if (revisionKey == null) {
+    return undefined;
+  }
+
+  if (typeof revisionKey !== 'string') {
+    throw new RivetWebAppActionHttpError('Invalid revisionKey.', 400);
+  }
+
+  return revisionKey;
+}
+
+async function resolveWebAppExecutionProject(
+  req: Request,
+  requestStartedAt: number,
+  res: Response,
+  routeKind: WebAppRouteKind,
+): Promise<{ slug: string; executionProject: WorkflowExecutionProject } | null> {
+  requirePublishedWebAppUiGate(req);
+
+  const slug = normalizeStoredEndpointName(String(req.params.slug ?? ''));
+  if (!slug) {
+    throw badRequest('Web app slug is required');
+  }
+
+  const executionProject = routeKind === 'published'
+    ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
+    : await resolveLatestWebAppExecutionProjectWithBackend(slug);
+  if (!executionProject) {
+    sendJsonWithDuration(
+      res,
+      404,
+      { error: routeKind === 'published' ? 'Published Rivet web app not found' : 'Latest Rivet web app not found' },
+      requestStartedAt,
+    );
+    return null;
+  }
+
+  return { slug, executionProject };
+}
+
+async function createWebAppProcessorOptions(
+  executionProject: WorkflowExecutionProject,
+  req: Request,
+  codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
+  options?: {
+    enableRemoteDebugger?: boolean;
+  },
+) {
+  const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
+
+  return {
+    codeRunner: new ManagedCodeRunner(
+      getRootPath(),
+      codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {},
+    ) as any,
+    context: getWorkflowExecutionContext(req),
+    datasetProvider: executionProject.datasetProvider,
+    projectPath: executionProject.projectVirtualPath,
+    projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
+    remoteDebugger,
+  };
+}
+
 async function executeWorkflowEndpoint(
-  executionProject: Awaited<ReturnType<typeof resolvePublishedExecutionProject>> extends infer T
-    ? Exclude<T, null>
-    : never,
+  executionProject: WorkflowExecutionProject,
   requestStartedAt: number,
   req: Request,
   res: Response,
@@ -321,9 +504,7 @@ async function executeWorkflowEndpoint(
 ): Promise<void> {
   const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
   const projectReferenceLoader = await createExecutionProjectReferenceLoader(projectVirtualPath);
-  const remoteDebugger = options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
-    ? getLatestWorkflowRemoteDebugger()
-    : undefined;
+  const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
   const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
     ? createManagedCodeRunnerTelemetry()
     : null;
@@ -478,4 +659,129 @@ latestWorkflowsRouter.post('/:endpointName', asyncHandler(async (req, res) => {
   } catch (error) {
     sendWorkflowErrorWithDuration(res, error, requestStartedAt);
   }
+}));
+
+async function handleWebAppHtmlRequest(req: Request, res: Response, routeKind: WebAppRouteKind): Promise<void> {
+  const requestStartedAt = performance.now();
+
+  try {
+    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind);
+    if (!resolved) {
+      return;
+    }
+
+    const uiGraph = resolveWebAppUiGraph(resolved.executionProject);
+    if (!uiGraph) {
+      sendHtmlWithDuration(
+        res,
+        404,
+        '<!doctype html><meta charset="utf-8"><title>Rivet web app</title><body>Rivet web app not found</body>',
+        requestStartedAt,
+      );
+      return;
+    }
+
+    sendHtmlWithDuration(
+      res,
+      200,
+      renderRivetWebAppHtml(uiGraph, {
+        actionPath: `${getWebAppBasePath(routeKind, resolved.slug)}/actions/run`,
+        revisionKey: resolved.executionProject.revisionKey,
+      }),
+      requestStartedAt,
+    );
+  } catch (error) {
+    sendWorkflowErrorWithDuration(res, error, requestStartedAt);
+  }
+}
+
+async function handleWebAppJsonRequest(req: Request, res: Response, routeKind: WebAppRouteKind): Promise<void> {
+  const requestStartedAt = performance.now();
+
+  try {
+    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind);
+    if (!resolved) {
+      return;
+    }
+
+    const uiGraph = resolveWebAppUiGraph(resolved.executionProject);
+    if (!uiGraph) {
+      sendJsonWithDuration(res, 404, { error: 'Rivet web app not found' }, requestStartedAt);
+      return;
+    }
+
+    sendJsonWithDuration(res, 200, uiGraph, requestStartedAt);
+  } catch (error) {
+    sendWorkflowErrorWithDuration(res, error, requestStartedAt);
+  }
+}
+
+async function handleWebAppActionRequest(req: Request, res: Response, routeKind: WebAppRouteKind): Promise<void> {
+  const requestStartedAt = performance.now();
+  let codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null = null;
+
+  try {
+    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind);
+    if (!resolved) {
+      return;
+    }
+
+    const uiGraph = resolveWebAppUiGraph(resolved.executionProject);
+    if (!uiGraph) {
+      sendJsonWithDuration(res, 404, { error: 'Rivet web app not found' }, requestStartedAt);
+      return;
+    }
+
+    if (!isJsonObjectRecord(req.body)) {
+      throw new RivetWebAppActionHttpError('Invalid action request body.', 400);
+    }
+
+    codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
+      ? createManagedCodeRunnerTelemetry()
+      : null;
+
+    const executionStartedAt = performance.now();
+    const result = await runRivetWebAppAction(resolved.executionProject.project, {
+      componentId: getWebAppActionComponentId(req.body),
+      createProcessorOptions: () => createWebAppProcessorOptions(
+        resolved.executionProject,
+        req,
+        codeRunnerTelemetry,
+        { enableRemoteDebugger: routeKind === 'latest' },
+      ),
+      request: createFetchRequestFromExpress(req),
+      requestRevisionKey: getOptionalWebAppActionRevisionKey(req.body),
+      revisionKey: resolved.executionProject.revisionKey,
+      state: req.body.state as Record<string, unknown> | undefined,
+      uiGraph,
+    });
+    const executionDurationMs = performance.now() - executionStartedAt;
+
+    setWorkflowExecutionDebugHeaders(res, resolved.executionProject, executionDurationMs);
+    setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
+    sendJsonWithDuration(res, 200, result, requestStartedAt);
+  } catch (error) {
+    setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
+    sendWebAppActionErrorWithDuration(res, error, requestStartedAt);
+  }
+}
+
+publishedWebAppsRouter.get('/:slug/app.json', asyncHandler(async (req, res) => {
+  await handleWebAppJsonRequest(req, res, 'published');
+}));
+publishedWebAppsRouter.post('/:slug/actions/run', asyncHandler(async (req, res) => {
+  await handleWebAppActionRequest(req, res, 'published');
+}));
+publishedWebAppsRouter.get('/:slug', asyncHandler(async (req, res) => {
+  await handleWebAppHtmlRequest(req, res, 'published');
+}));
+
+latestWebAppsRouter.get('/:slug/app.json', asyncHandler(async (req, res) => {
+  await handleWebAppJsonRequest(req, res, 'latest');
+}));
+latestWebAppsRouter.post('/:slug/actions/run', asyncHandler(async (req, res) => {
+  await handleWebAppActionRequest(req, res, 'latest');
+}));
+latestWebAppsRouter.get('/:slug', asyncHandler(async (req, res) => {
+  await handleWebAppHtmlRequest(req, res, 'latest');
 }));

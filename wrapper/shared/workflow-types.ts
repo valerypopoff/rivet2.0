@@ -104,10 +104,35 @@ export type WorkflowProjectSettings = {
   status: WorkflowProjectStatus;
   endpointName: string;
   lastPublishedAt: string | null;
+  publishedWebApps: WorkflowPublishedWebAppSummary[];
 };
 
 export type WorkflowProjectSettingsDraft = {
   endpointName: string;
+};
+
+export type WorkflowPublishedWebAppSummary = {
+  uiGraphId: string;
+  uiGraphName: string;
+  slug: string;
+  publishedAt: string;
+};
+
+export type WorkflowProjectWebAppSummary = {
+  uiGraphId: string;
+  name: string;
+  publishedSlug: string | null;
+  publishedAt: string | null;
+  isMissingFromProject: boolean;
+};
+
+export type WorkflowProjectWebAppsResponse = {
+  webApps: WorkflowProjectWebAppSummary[];
+};
+
+export type WorkflowProjectWebAppPublicationDraft = {
+  uiGraphId: string;
+  slug: string;
 };
 
 export type WorkflowProjectStats = {

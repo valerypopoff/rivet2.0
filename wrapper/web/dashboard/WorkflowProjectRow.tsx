@@ -48,6 +48,15 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
     renaming ? 'renaming' : null,
     draggedItem?.itemType === 'project' && draggedItem.absolutePath === project.absolutePath ? 'dragging' : null,
   ].filter(Boolean).join(' ');
+
+  const handleClick = () => {
+    onPreviewOpen(project);
+  };
+
+  const handleDoubleClick = () => {
+    onPersistentOpen(project);
+  };
+
   const projectRowContent = (
     <ProjectRowContent
       project={project}
@@ -89,8 +98,8 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
         parentRelativePath: getParentRelativePath(project.relativePath),
       })}
       onDragEnd={onDragEnd}
-      onClick={() => onPreviewOpen(project)}
-      onDoubleClick={() => onPersistentOpen(project)}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       onContextMenu={(event) => onContextMenu(project, event)}
       onKeyDown={onKeyDown(project)}
       title={editorReady ? project.fileName : 'Loading editor...'}

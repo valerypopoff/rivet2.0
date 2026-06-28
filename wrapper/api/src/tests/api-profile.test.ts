@@ -97,6 +97,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
   assert.deepEqual(getApiRouteExposureMatrix('control'), [
     '/ui-auth',
     '/workflows-latest/:endpointName',
+    '/apps-latest/:slug',
     '/api/native/*',
     '/api/shell/*',
     '/api/plugins/*',
@@ -108,12 +109,14 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
 
   assert.deepEqual(getApiRouteExposureMatrix('execution'), [
     '/workflows/:endpointName',
+    '/apps/:slug',
     '/internal/workflows/:endpointName',
   ]);
 
   assert.deepEqual(getApiRouteExposureMatrix('combined'), [
     '/ui-auth',
     '/workflows-latest/:endpointName',
+    '/apps-latest/:slug',
     '/api/native/*',
     '/api/shell/*',
     '/api/plugins/*',
@@ -122,6 +125,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/runtime-libraries/*',
     '/api/config*',
     '/workflows/:endpointName',
+    '/apps/:slug',
     '/internal/workflows/:endpointName',
   ]);
 });
@@ -206,6 +210,16 @@ test('control profile exposes control-plane routes and does not expose published
       assert.equal(publishedResponse.headers.get('x-duration-ms'), null);
       assert.deepEqual(await publishedResponse.json(), { error: 'Not found' });
 
+      const webAppResponse = await fetch(`${server.baseUrl}/apps/phase4-missing`);
+      assert.equal(webAppResponse.status, 404);
+      assert.equal(webAppResponse.headers.get('x-duration-ms'), null);
+      assert.deepEqual(await webAppResponse.json(), { error: 'Not found' });
+
+      const latestWebAppResponse = await fetch(`${server.baseUrl}/apps-latest/phase4-missing`);
+      assert.equal(latestWebAppResponse.status, 404);
+      assert.match(latestWebAppResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
+      assert.equal((await latestWebAppResponse.json()).error, 'Latest Rivet web app not found');
+
       const internalResponse = await fetch(`${server.baseUrl}/internal/workflows/phase4-missing`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -261,6 +275,18 @@ test('execution profile exposes published execution routes and hides control-pla
       assert.equal(publishedPayload.error, 'Published workflow not found');
       assert.equal(typeof publishedPayload.durationMs, 'number');
 
+      const webAppResponse = await fetch(`${server.baseUrl}/apps/phase4-missing`);
+      assert.equal(webAppResponse.status, 404);
+      assert.match(webAppResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
+      const webAppPayload = await webAppResponse.json() as { error: string; durationMs: number };
+      assert.equal(webAppPayload.error, 'Published Rivet web app not found');
+      assert.equal(typeof webAppPayload.durationMs, 'number');
+
+      const latestWebAppResponse = await fetch(`${server.baseUrl}/apps-latest/phase4-missing`);
+      assert.equal(latestWebAppResponse.status, 404);
+      assert.equal(latestWebAppResponse.headers.get('x-duration-ms'), null);
+      assert.deepEqual(await latestWebAppResponse.json(), { error: 'Not found' });
+
       const internalResponse = await fetch(`${server.baseUrl}/internal/workflows/phase4-missing`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -295,6 +321,11 @@ test('combined profile preserves both control-plane and published/latest executi
       assert.match(publishedResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
       assert.equal((await publishedResponse.json()).error, 'Published workflow not found');
 
+      const webAppResponse = await fetch(`${server.baseUrl}/apps/phase4-missing`);
+      assert.equal(webAppResponse.status, 404);
+      assert.match(webAppResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
+      assert.equal((await webAppResponse.json()).error, 'Published Rivet web app not found');
+
       const latestResponse = await fetch(`${server.baseUrl}/workflows-latest/phase4-missing`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -303,6 +334,11 @@ test('combined profile preserves both control-plane and published/latest executi
       assert.equal(latestResponse.status, 404);
       assert.match(latestResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
       assert.equal((await latestResponse.json()).error, 'Latest workflow not found');
+
+      const latestWebAppResponse = await fetch(`${server.baseUrl}/apps-latest/phase4-missing`);
+      assert.equal(latestWebAppResponse.status, 404);
+      assert.match(latestWebAppResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
+      assert.equal((await latestWebAppResponse.json()).error, 'Latest Rivet web app not found');
     } finally {
       await server.close();
     }

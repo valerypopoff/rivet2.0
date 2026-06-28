@@ -31,6 +31,9 @@ esbuild
     outfile: path.join(appExecutorDir, 'bin', 'executor-bundle.cjs'),
     format: 'cjs',
     target: 'node20',
+    define: {
+      'import.meta.url': '__filename',
+    },
     external: [],
     nodePaths: [path.join(wrapperExecutorDir, 'node_modules')],
     plugins: [resolveRivet],

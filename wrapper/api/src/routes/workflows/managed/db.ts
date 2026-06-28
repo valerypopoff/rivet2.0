@@ -128,7 +128,7 @@ export type ManagedWorkflowQueries = {
   assertFolderExists(client: ManagedWorkflowDbClient, folderRelativePath: string): Promise<void>;
   resolveExecutionPointerFromDatabase(
     client: Pool,
-    runKind: 'published' | 'latest',
+    runKind: 'published' | 'latest' | 'web-app' | 'latest-web-app',
     lookupName: string,
   ): Promise<ManagedExecutionPointerLookupResult | null>;
 };
@@ -271,9 +271,59 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
 
     async resolveExecutionPointerFromDatabase(
       client: Pool,
-      runKind: 'published' | 'latest',
+      runKind: 'published' | 'latest' | 'web-app' | 'latest-web-app',
       lookupName: string,
     ): Promise<ManagedExecutionPointerLookupResult | null> {
+      if (runKind === 'web-app' || runKind === 'latest-web-app') {
+        const row = await queryOne<CurrentDraftRevisionRow & { ui_graph_id: string }>(
+          client,
+          `
+            SELECT
+              w.workflow_id,
+              w.name,
+              w.file_name,
+              w.relative_path,
+              w.folder_relative_path,
+              w.updated_at,
+              w.current_draft_revision_id,
+              w.published_revision_id,
+              w.published_version_id,
+              w.endpoint_name,
+              w.published_endpoint_name,
+              w.last_published_at,
+              r.revision_id,
+              r.workflow_id AS revision_workflow_id,
+              r.project_blob_key,
+              r.dataset_blob_key,
+              r.stats_graph_count,
+              r.stats_total_node_count,
+              r.created_at AS revision_created_at,
+              app.ui_graph_id
+            FROM workflow_web_apps app
+            JOIN workflows w ON w.workflow_id = app.workflow_id
+            JOIN workflow_revisions r ON r.revision_id = ${
+              runKind === 'web-app' ? 'app.revision_id' : 'w.current_draft_revision_id'
+            }
+            WHERE app.slug_lookup_name = $1
+          `,
+          [lookupName],
+        );
+        if (!row) {
+          return null;
+        }
+
+        const split = splitCurrentDraftRevisionRow(row);
+        return {
+          pointer: {
+            workflowId: split.workflow.workflow_id,
+            relativePath: split.workflow.relative_path,
+            revisionId: split.revision.revision_id,
+            webAppUiGraphId: row.ui_graph_id,
+          },
+          revision: split.revision,
+        };
+      }
+
       const row = await queryOne<CurrentDraftRevisionRow>(
         client,
         runKind === 'published'

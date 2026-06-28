@@ -8,6 +8,9 @@ export type {
   WorkflowProjectSettingsDraft,
   WorkflowProjectStats,
   WorkflowProjectStatus,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppsResponse,
+  WorkflowPublishedWebAppSummary,
 } from '../../../../shared/workflow-types.js';
 
 export type StoredWorkflowProjectSettings = {
@@ -16,11 +19,27 @@ export type StoredWorkflowProjectSettings = {
   publishedSnapshotId: string | null;
   publishedStateHash: string | null;
   lastPublishedAt: string | null;
+  publishedWebApps: StoredWorkflowPublishedWebApp[];
   legacyStatus?: SharedWorkflowProjectStatus;
+};
+
+export type StoredWorkflowPublishedWebApp = {
+  uiGraphId: string;
+  uiGraphName: string;
+  slug: string;
+  publishedSnapshotId: string;
+  publishedAt: string;
 };
 
 export type PublishedWorkflowMatch = {
   endpointName: string;
+  projectPath: string;
+  publishedProjectPath: string;
+};
+
+export type PublishedWorkflowWebAppMatch = {
+  slug: string;
+  uiGraphId: string;
   projectPath: string;
   publishedProjectPath: string;
 };

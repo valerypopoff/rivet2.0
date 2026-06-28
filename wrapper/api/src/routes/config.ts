@@ -2,7 +2,12 @@ import { Router, type Request } from 'express';
 import path from 'node:path';
 import { LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH, isLatestWorkflowRemoteDebuggerEnabled } from '../latestWorkflowRemoteDebugger.js';
 import { getAppDataRoot, isEnvAllowed } from '../security.js';
-import { LATEST_WORKFLOWS_BASE_PATH, PUBLISHED_WORKFLOWS_BASE_PATH } from '../workflowEndpointPaths.js';
+import {
+  LATEST_WORKFLOWS_BASE_PATH,
+  PUBLISHED_WORKFLOWS_BASE_PATH,
+  RIVET_LATEST_WEB_APPS_BASE_PATH,
+  RIVET_WEB_APPS_BASE_PATH,
+} from '../workflowEndpointPaths.js';
 
 export const configRouter = Router();
 
@@ -35,6 +40,8 @@ configRouter.get('/config', (req, res) => {
     apiBaseUrl: '/api',
     publishedWorkflowsBasePath: PUBLISHED_WORKFLOWS_BASE_PATH,
     latestWorkflowsBasePath: LATEST_WORKFLOWS_BASE_PATH,
+    publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
+    latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
   });
 });
 

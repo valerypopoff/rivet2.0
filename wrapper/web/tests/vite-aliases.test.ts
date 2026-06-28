@@ -10,6 +10,11 @@ const overrideDir = resolve('/repo/wrapper/web/overrides');
 const updateCheckScript = readFileSync(new URL('../../../scripts/update-check.sh', import.meta.url), 'utf8');
 const settingsOverride = readFileSync(new URL('../overrides/state/settings.ts', import.meta.url), 'utf8');
 const contextMenuOverride = readFileSync(new URL('../overrides/hooks/useContextMenu.ts', import.meta.url), 'utf8');
+const loadProjectOverride = readFileSync(new URL('../overrides/hooks/useLoadProject.ts', import.meta.url), 'utf8');
+const syncOpenedProjectsOverride = readFileSync(
+  new URL('../overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts', import.meta.url),
+  'utf8',
+);
 
 function replacementFor(source: string): string | null {
   const alias = createModuleOverrideAliases(overrideDir).find((candidate) => candidate.find.test(source));
@@ -89,6 +94,17 @@ test('context menu override keeps upstream virtual anchor contract and hosted fo
   assert.doesNotMatch(contextMenuOverride, /refs\.setReference\s*=/);
 });
 
+test('hosted opened-project overrides preserve upstream project executor mode contract', () => {
+  assert.match(syncOpenedProjectsOverride, /resolveCurrentProjectExecutorMode/);
+  assert.match(syncOpenedProjectsOverride, /executorMode:\s*currentExecutorMode/);
+  assert.match(
+    syncOpenedProjectsOverride,
+    /projectExecutorModesEqual\(existingProject\?\.executorMode,\s*currentExecutorMode\)/,
+  );
+  assert.match(syncOpenedProjectsOverride, /useSyncCurrentStateIntoOpenedProjects\(\{ enabled = true \}/);
+  assert.match(loadProjectOverride, /executorMode:\s*projectInfo\.executorMode/);
+});
+
 test('hosted project tab label transform handles legacy upstream labels', () => {
   const source = [
     '  const fileName = unsaved ? \'Unsaved\' : project.fsPath!.split(\'/\').pop();',
@@ -165,6 +181,6 @@ test('hosted project tab label transform handles opening project tabs', () => {
   );
 });
 
-test('hosted project tab label transform fails closed on unknown upstream labels', () => {
+test('hosted project tab label transform no-ops on unknown upstream labels', () => {
   assert.equal(replaceHostedProjectTabLabelExpression('const projectDisplayName = project?.title;'), null);
 });

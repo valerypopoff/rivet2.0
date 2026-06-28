@@ -43,6 +43,7 @@ async function main() {
 
   const waitTimeoutSeconds = parseInt(mergedEnv.RIVET_DOCKER_WAIT_TIMEOUT ?? '900', 10);
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
+  let refreshRunningProxy = false;
 
   const commandsByAction = {
     build: [`${composeBase} build api executor`],
@@ -70,6 +71,8 @@ async function main() {
         cwd: rootDir,
         env: mergedEnv,
       });
+      refreshRunningProxy = action === 'dev' && proxyAlreadyRunning;
+
       if (!proxyAlreadyRunning) {
         await ensurePortAvailable(proxyPort, {
           envFileLabel,
@@ -80,6 +83,14 @@ async function main() {
 
     for (const command of commands) {
       await run(command, mergedEnv, { cwd: rootDir });
+    }
+
+    if (refreshRunningProxy) {
+      await run(
+        `${composeBase} up -d --no-deps --force-recreate --wait --wait-timeout ${waitTimeoutSeconds} proxy`,
+        mergedEnv,
+        { cwd: rootDir },
+      );
     }
   } catch (error) {
     if (action === 'dev' || action === 'up') {

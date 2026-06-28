@@ -1,9 +1,10 @@
-export type ManagedWorkflowRunKind = 'published' | 'latest';
+export type ManagedWorkflowRunKind = 'published' | 'latest' | 'web-app' | 'latest-web-app';
 
 export type ManagedEndpointPointerCacheEntry = {
   workflowId: string;
   relativePath: string;
   revisionId: string;
+  webAppUiGraphId?: string;
 };
 
 export type ManagedRevisionMaterializationCacheEntry = {

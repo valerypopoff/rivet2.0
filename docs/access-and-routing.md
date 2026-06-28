@@ -7,11 +7,13 @@ The current runtime split keeps:
 - `control plane`
   - `/api/*`
   - `/ui-auth`
-  - latest-workflow execution
+  - latest workflow execution
+  - latest Rivet web apps
   - latest debugger websocket
   - runtime-library and plugin admin flows
 - `execution plane`
   - published workflow execution
+  - published Rivet web apps
   - internal published-only execution for trusted in-cluster callers
 
 Those labels describe logical ownership. In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In split deployments, `RIVET_API_PROFILE=control` and `RIVET_API_PROFILE=execution` separate them.
@@ -27,8 +29,10 @@ The Docker dev and production stacks expose these route families through nginx:
 | `POST /__rivet_auth` | control-plane `api` (`/ui-auth`) | UI gate form exchange |
 | `/api/*` | control-plane `api` | Wrapper API surface |
 | `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}/:endpointName` | execution-plane `api` | Execute frozen published workflow snapshot |
+| `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug` | execution-plane `api` | Serve one published declarative Rivet web app from its frozen project snapshot |
 | `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}/:endpointName` | control-plane `api` | Execute the latest live draft for a still-published workflow, keyed by the current draft endpoint |
-| `/ws/latest-debugger` | control-plane `api` | Latest-workflow remote debugger websocket |
+| `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug` | control-plane `api` | Serve one published declarative Rivet web app from the latest saved draft/current server-side project |
+| `/ws/latest-debugger` | control-plane `api` | Latest workflow and latest web-app action remote debugger websocket |
 | `/ws/executor/internal` | `executor` | Hosted editor execution websocket |
 | `/ws/executor` | `executor` | Upstream-compatible executor websocket path |
 
@@ -36,14 +40,14 @@ The nginx configs also set `client_max_body_size 100m`, so large API/editor payl
 
 Current proxy timeout behavior:
 
-- `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` now use `RIVET_PROXY_READ_TIMEOUT`, which defaults to `180s` in the tracked Docker images and Compose stacks
+- `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` now use `RIVET_PROXY_READ_TIMEOUT`, which defaults to `180s` in the tracked Docker images and Compose stacks
 - websocket routes stay long-lived at `86400s`; `RIVET_PROXY_READ_TIMEOUT` is only for the standard HTTP upstream routes
 - this proxy timeout is separate from `RIVET_COMMAND_TIMEOUT`, which only limits hosted shell commands under `/api/shell/exec`
 
 Important local-Docker wiring note:
 
 - the repo-local Docker stacks still run a single `api` container in `combined` mode
-- nginx therefore proxies both `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` to that same container there
+- nginx therefore proxies `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` to that same container there
 - the control-plane vs execution-plane labels in the table describe the intended split topology and the route ownership enforced by `RIVET_API_PROFILE`, not a guarantee that local Docker physically runs two API services
 - the executor websocket upstream remains a separate internal service on port `21889`; it must not inherit the API `PORT` value from `.env`
 - in Docker modes the executor process binds to `0.0.0.0` inside its container so nginx can reach the `executor:21889` service; external clients should still use the proxy routes, not the executor container directly
@@ -75,6 +79,9 @@ The wrapper API currently exposes these groups behind `/api`:
   - `POST /api/workflows/projects/download`
   - `POST /api/workflows/projects/publish`
   - `POST /api/workflows/projects/unpublish`
+  - `GET /api/workflows/projects/web-apps?relativePath=...`
+  - `POST /api/workflows/projects/web-apps/publish`
+  - `POST /api/workflows/projects/web-apps/unpublish`
   - `GET /api/workflows/recordings/workflows`
   - `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed`
     - optional input filter query: `inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar&inputCursor=0`
@@ -180,7 +187,7 @@ Current download-route behavior:
 
 ## UI gate
 
-The browser/editor surface can be protected at the nginx layer:
+The browser/editor surface and Rivet web apps can be protected at the nginx layer:
 
 - `RIVET_REQUIRE_UI_GATE_KEY=true` enables the gate.
 - `RIVET_KEY` is the shared secret used for the gate.
@@ -192,8 +199,10 @@ When the gate is enabled for a host that is not exempt:
 - `GET /` serves that staged prompt page
 - `POST /__rivet_auth` forwards to the API's internal `/ui-auth` route
 - the API validates the submitted `key` or `token` form field
-- on success the response sets an HTTP-only `rivet_ui_token` cookie
-- the cookie then gates `/`, `/api/*`, `/ws/executor*`, and `/ws/latest-debugger`
+- the prompt submits a sanitized local `return_to` path for the URL the browser originally tried to open
+- on success the response sets an HTTP-only `rivet_ui_token` cookie and redirects back to that local path, such as `/` or `/apps/my-tool/`
+- form failures redirect back to the same local path with `auth_error` added so the prompt can show the error without losing the original destination
+- the cookie then gates `/`, `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/*`, `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/*`, `/api/*`, `/ws/executor*`, and `/ws/latest-debugger`
 
 The Compose stacks mount the prompt source at `/tmp/ui-gate-prompt.html` and copy it before nginx starts. nginx never serves the host-mounted file directly, so a long-running Windows bind mount cannot turn gated requests into runtime `stat()` failures.
 
@@ -223,7 +232,45 @@ Operationally, that means `RIVET_KEY` is still mandatory anywhere nginx fronts t
 
 Those two flags disable optional browser/public-workflow checks. They do not disable the proxy-to-API trust channel.
 
-The public workflow execution routes are mounted outside `/api`, so they do not use the `requireAuth` middleware. They still rely on nginx to mediate access and, for token-free hosts, inject the token-free-host hint.
+The public workflow execution routes are mounted outside `/api`, so they do not use the `requireAuth` middleware. They still rely on nginx to mediate access and, for token-free hosts, inject the token-free-host hint. Web-app routes are also mounted outside `/api`, but they are browser surfaces and use the UI gate policy rather than `RIVET_REQUIRE_WORKFLOW_KEY`.
+
+## Published Rivet web app contract
+
+Published Rivet web apps are published independently from workflow HTTP endpoints. A project can expose multiple web apps at the same time, each mapped to a distinct user-defined slug under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}`. Each slug points at the frozen project snapshot/revision captured when that UI graph was published:
+
+- `GET ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug`
+  - renders the published UI graph attached to that slug as HTML
+- `GET ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/app.json`
+  - returns the published UI graph JSON
+- `POST ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/actions/run`
+  - runs the button action's target graph in the same published project
+
+Each published web-app slug also exposes a latest-saved-draft route under `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}`:
+
+- `GET ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug`
+  - renders the same UI graph from the current saved server-side project
+- `GET ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/app.json`
+  - returns the current saved UI graph JSON
+- `POST ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
+  - runs the button action's target graph against the current saved server-side project
+
+`RIVET_PUBLISHED_APPS_BASE_PATH` and `RIVET_LATEST_APPS_BASE_PATH` are the preferred env names for those prefixes. `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` remain supported aliases for older deployments, with the preferred names taking precedence.
+
+The wrapper intentionally uses the lower-level upstream web-app helpers instead of the single Fetch-style handler so route ownership, browser/session auth, timing headers, code-runner setup, dataset providers, project-reference loading, and response envelopes stay consistent with the existing endpoint execution stack.
+
+Web-app action requests use the same `ManagedCodeRunner`, dataset provider, project path, project-reference loader, and `context.headers` injection as published workflow execution. The wrapper does not pass `inputs` for web-app actions; Rivet maps the declarative UI state into graph inputs according to the clicked button's action definition.
+
+The slug segment resolves through published web-app state, not workflow endpoint state, so a project does not need to be published as a workflow endpoint before its web apps can be published. Saved project edits affect `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}` immediately, but do not affect `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` until that web-app slug is republished. Unsaved in-browser editor edits are not visible to either server route until the project is saved. If the draft project later deletes a published UI graph, the old slug still serves the pinned snapshot/revision until the user explicitly unpublishes that app from Project Settings.
+
+The HTML embeds an opaque published `revisionKey`. Action requests include that key and are rejected with `409` when that slug is republished between page load and button click.
+
+Auth follows the browser UI gate policy:
+
+- `RIVET_REQUIRE_UI_GATE_KEY=true` gates the HTML, `app.json`, and action routes with the same key prompt used by the main Rivet server UI
+- hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass that UI gate for both web-app route families too
+- after the user enters `RIVET_KEY`, nginx forwards the request with the HTTP-only `rivet_ui_token` cookie and the trusted proxy header, returning the browser to the original web-app URL instead of always sending it to `/`
+- workflow endpoint routes remain bearer/token-free-host routes and do not accept the UI session cookie as a substitute for `Authorization`
+- web-app action routes do not attach the Remote Debugger in this first server integration
 
 ## Workflow execution contract
 
@@ -236,7 +283,9 @@ All three workflow execution handlers are `POST`-only:
 Public route exposure rules:
 
 - `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` resolves only the actively published endpoint identity
+- `${RIVET_PUBLISHED_APPS_BASE_PATH}` resolves only actively published web-app slugs and serves their pinned UI graph from the frozen project snapshot/revision
 - `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` resolves the current draft endpoint identity only while the workflow still has active published lineage
+- `${RIVET_LATEST_APPS_BASE_PATH}` resolves only actively published web-app slugs and serves the matching UI graph from the latest saved draft/current server-side project
 - full unpublish closes both public route families even though the saved draft `endpointName` remains in project settings for later republish convenience
 - endpoint uniqueness follows those same active public identities; a fully unpublished saved draft endpoint does not block another workflow from publishing on that name
 
@@ -351,27 +400,27 @@ Important limitation:
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
 
-## Latest debugger model
+## Latest Debugger Model
 
-Latest-workflow remote debugging is opt-in and separate from the executor websocket:
+Latest remote debugging is opt-in and separate from the executor websocket:
 
 - it is enabled only when `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true`
-- it applies only to latest-workflow endpoint runs
-- published workflow endpoint runs never attach the remote debugger
+- it applies to latest workflow endpoint runs and latest web-app action runs under `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
+- published workflow endpoint runs and published web-app action runs never attach the remote debugger
 - the browser-facing websocket path is `/ws/latest-debugger`
 - when disabled, websocket upgrades on `/ws/latest-debugger` are rejected with `404`
 
-Endpoint recording persistence is unaffected by debugger state. Latest-workflow runs still persist normal recording history when recordings are enabled:
+Endpoint recording persistence is unaffected by debugger state. Latest workflow runs still persist normal recording history when recordings are enabled:
 
 - in `filesystem` mode, as recording bundles under `RIVET_WORKFLOW_RECORDINGS_ROOT` plus SQLite index rows
 - in `managed` mode, as Postgres metadata plus recording/replay blobs in object storage
 
 Kubernetes support note:
 
-- the supported Kubernetes topology keeps `/ws/latest-debugger` and `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}` on the singleton control-plane backend
-- execution-plane API replicas may scale independently for `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}`
-- latest endpoint runs remain debuggable in that topology because both the latest execution route and `/ws/latest-debugger` stay on the same backend process boundary
-- published endpoint runs remain non-debuggable
+- the supported Kubernetes topology keeps `/ws/latest-debugger`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}`, and `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}` on the singleton control-plane backend
+- execution-plane API replicas may scale independently for `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}` and `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}`
+- latest workflow endpoint runs and latest web-app action runs remain debuggable in that topology because both the latest execution route family and `/ws/latest-debugger` stay on the same backend process boundary
+- published workflow endpoint runs and published web-app action runs remain non-debuggable
 - manually scaling the backend outside the chart guardrails is unsupported for latest debugging because the current debugger is still process-local, not a distributed cross-replica debugger
 
 ## Local dev note
@@ -384,7 +433,7 @@ Current Vite wiring in that mode:
 
 - `/api/*` is proxied directly to `http://localhost:3100`
 - `/ws/executor` and `/ws/executor/internal` are proxied directly to the local executor websocket service
-- published/latest workflow endpoints, `/ui-auth`, and `/ws/latest-debugger` are not recreated through a trusted proxy layer
+- published/latest workflow endpoints, Rivet web app routes, `/ui-auth`, and `/ws/latest-debugger` are not recreated through a trusted proxy layer
 - Vite does not inject nginx's trusted proxy headers when it proxies `/api/*`
 
 That means browser-driven control-plane routes that depend on proxy trust, including `/api/*`, `/ui-auth`, and `/ws/latest-debugger`, are not representative in `dev:local` unless you add your own trusted proxy in front. Use Docker dev for full hosted-shell routing and auth validation.

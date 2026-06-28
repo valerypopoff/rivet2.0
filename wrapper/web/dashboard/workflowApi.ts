@@ -5,7 +5,10 @@ import type {
   WorkflowProjectDownloadVersion,
   WorkflowMoveResponse,
   WorkflowProjectItem,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppsResponse,
   WorkflowProjectSettingsDraft,
+  HostedRouteConfig,
   WorkflowRecordingFilterStatus,
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
@@ -30,6 +33,11 @@ const workflowJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(re
 const hostedProjectJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
   nonJsonErrorMessage:
     'Project API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/projects is routed to the API service.',
+});
+
+const hostedConfigJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
+  nonJsonErrorMessage:
+    'Config API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/config is routed to the API service.',
 });
 
 async function parseBlobResponse(response: Response): Promise<{ blob: Blob; fileName: string | null }> {
@@ -99,6 +107,13 @@ export async function fetchWorkflowTree(): Promise<WorkflowTreeResponse> {
     cache: 'no-store',
   });
   return workflowJsonResponse<WorkflowTreeResponse>(response);
+}
+
+export async function fetchHostedConfig(): Promise<Partial<HostedRouteConfig>> {
+  const response = await fetch(`${API}/config`, {
+    cache: 'no-store',
+  });
+  return hostedConfigJsonResponse<Partial<HostedRouteConfig>>(response);
 }
 
 export async function fetchWorkflowRecordingWorkflows(options: { signal?: AbortSignal } = {}): Promise<WorkflowRecordingWorkflowListResponse> {
@@ -368,6 +383,42 @@ export async function restoreWorkflowPublishedVersion(
   });
 
   return workflowJsonResponse<WorkflowPublishedVersionRestoreResponse>(response);
+}
+
+export async function fetchWorkflowProjectWebApps(relativePath: string): Promise<WorkflowProjectWebAppsResponse> {
+  const query = new URLSearchParams({ relativePath });
+  const response = await fetch(`${API}/workflows/projects/web-apps?${query}`, {
+    cache: 'no-store',
+  });
+  return workflowJsonResponse<WorkflowProjectWebAppsResponse>(response);
+}
+
+export async function publishWorkflowProjectWebApps(
+  relativePath: string,
+  publications: WorkflowProjectWebAppPublicationDraft[],
+): Promise<WorkflowProjectItem> {
+  const response = await fetch(`${API}/workflows/projects/web-apps/publish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relativePath, publications }),
+  });
+
+  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
+  return data.project;
+}
+
+export async function unpublishWorkflowProjectWebApp(
+  relativePath: string,
+  uiGraphId: string,
+): Promise<WorkflowProjectItem> {
+  const response = await fetch(`${API}/workflows/projects/web-apps/unpublish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relativePath, uiGraphId }),
+  });
+
+  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
+  return data.project;
 }
 
 export async function moveWorkflowItem(

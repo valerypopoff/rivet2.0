@@ -8,6 +8,10 @@ services:
     environment:
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
+      - RIVET_PUBLISHED_APPS_BASE_PATH=${RIVET_PUBLISHED_APPS_BASE_PATH:-}
+      - RIVET_LATEST_APPS_BASE_PATH=${RIVET_LATEST_APPS_BASE_PATH:-}
+      - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
+      - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
       - RIVET_PROXY_READ_TIMEOUT=${RIVET_PROXY_READ_TIMEOUT:-180s}
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
@@ -46,6 +50,10 @@ services:
       - VITE_RIVET_DEBUG_LOGS=${VITE_RIVET_DEBUG_LOGS:-false}
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
+      - RIVET_PUBLISHED_APPS_BASE_PATH=${RIVET_PUBLISHED_APPS_BASE_PATH:-}
+      - RIVET_LATEST_APPS_BASE_PATH=${RIVET_LATEST_APPS_BASE_PATH:-}
+      - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
+      - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=300
     volumes:
@@ -130,6 +138,10 @@ services:
       - RIVET_RUNTIME_PROCESS_ROLE=api
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
+      - RIVET_PUBLISHED_APPS_BASE_PATH=${RIVET_PUBLISHED_APPS_BASE_PATH:-}
+      - RIVET_LATEST_APPS_BASE_PATH=${RIVET_LATEST_APPS_BASE_PATH:-}
+      - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
+      - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
       - RIVET_STORAGE_MODE
       - RIVET_DATABASE_MODE
       - RIVET_DATABASE_CONNECTION_STRING
@@ -177,13 +189,16 @@ services:
           npm ci &&
           cp /app/package-lock.json node_modules/.package-lock.json;
         fi &&
-        rm -rf /app/.rivet-source &&
-        mkdir -p /app/.rivet-source/packages &&
-        cp -a /workspace/rivet/packages/core /app/.rivet-source/packages/core &&
-        cp -a /workspace/rivet/packages/node /app/.rivet-source/packages/node &&
-        rm -rf /app/.rivet-source/packages/core/node_modules /app/.rivet-source/packages/node/node_modules &&
-        ln -s /workspace/rivet/node_modules /app/.rivet-source/node_modules &&
-        RIVET_SOURCE_ROOT=/app/.rivet-source RIVET_API_PACKAGE_ROOT=/app node /workspace/scripts/link-rivet-node-package.mjs &&
+        cd /workspace/rivet &&
+        RIVET_SOURCE_ROOT=/workspace/rivet node /workspace/scripts/ensure-rivet-runtime-build.mjs &&
+        cd /app &&
+        rm -rf /tmp/rivet-source &&
+        mkdir -p /tmp/rivet-source/packages &&
+        cp -R /workspace/rivet/packages/core /tmp/rivet-source/packages/core &&
+        cp -R /workspace/rivet/packages/node /tmp/rivet-source/packages/node &&
+        rm -rf /tmp/rivet-source/packages/core/node_modules /tmp/rivet-source/packages/node/node_modules &&
+        ln -s /workspace/rivet/node_modules /tmp/rivet-source/node_modules &&
+        RIVET_SOURCE_ROOT=/tmp/rivet-source RIVET_API_PACKAGE_ROOT=/app node /workspace/scripts/link-rivet-node-package.mjs &&
         NODE_OPTIONS='${NODE_OPTIONS:-} --import=/opt/proxy-bootstrap/bootstrap.mjs' npm run dev
       "
     healthcheck:

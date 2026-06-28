@@ -5,3 +5,15 @@ export function normalizeBasePath(value: string | undefined, fallback: string): 
   const withoutTrailingSlash = withLeadingSlash.replace(/\/+$/, '');
   return withoutTrailingSlash || fallback;
 }
+
+export function normalizeBasePathFromAliases(
+  values: Array<string | undefined>,
+  fallback: string,
+): string {
+  const firstConfigured = values.find((value) => {
+    const trimmed = value?.trim();
+    return trimmed != null && trimmed.length > 0;
+  });
+
+  return normalizeBasePath(firstConfigured, fallback);
+}

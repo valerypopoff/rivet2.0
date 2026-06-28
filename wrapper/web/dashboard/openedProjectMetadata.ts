@@ -1,4 +1,5 @@
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
+import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 
 const PROJECT_FILE_EXTENSION = /\.rivet-project$/i;
 const VIRTUAL_PROJECT_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -15,7 +16,7 @@ type OpenedProjectPathMetadata = {
 export type HostedProjectMetadataUpdateForPathMove = {
   projectId: ProjectId;
   path: string;
-  title: string;
+  title?: string;
 };
 
 function normalizeTitleCandidate(value: string | null | undefined): string | null {
@@ -106,18 +107,15 @@ export function resolveHostedProjectMetadataUpdatesForPathMoves<
     }
 
     const previousTitle = resolveHostedProjectTitleFromPath(move.fromAbsolutePath);
-    const nextTitle = resolveHostedProjectTitleFromPath(move.toAbsolutePath);
-    if (!nextTitle || previousTitle === nextTitle) {
-      continue;
-    }
-
-    const update = { path: move.toAbsolutePath, title: nextTitle };
-    updatesByPath.set(move.fromAbsolutePath, update);
-    updatesByPath.set(move.toAbsolutePath, update);
+    const nextTitle = resolveHostedProjectTitleFromPath(move.toAbsolutePath) ?? undefined;
+    const title = nextTitle && previousTitle !== nextTitle ? nextTitle : undefined;
+    const update = { path: move.toAbsolutePath, title };
+    updatesByPath.set(normalizeWorkflowPath(move.fromAbsolutePath), update);
+    updatesByPath.set(normalizeWorkflowPath(move.toAbsolutePath), update);
   }
 
   return Object.entries(current.openedProjects).flatMap(([projectId, projectInfo]) => {
-    const update = projectInfo.fsPath ? updatesByPath.get(projectInfo.fsPath) : undefined;
+    const update = projectInfo.fsPath ? updatesByPath.get(normalizeWorkflowPath(projectInfo.fsPath)) : undefined;
     return update ? [{ projectId: projectId as ProjectId, ...update }] : [];
   });
 }

@@ -83,8 +83,8 @@ test('chart validation keeps the supported managed singleton control-plane bound
   const validateValuesTemplate = readRepoFile('charts/templates/validate-values.yaml');
 
   assert.match(validateValuesTemplate, /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/);
-  assert.match(validateValuesTemplate, /replicaCount\.backend=1 because latest-workflow execution and \/ws\/latest-debugger are still process-local control-plane features/);
-  assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false because latest-workflow execution and \/ws\/latest-debugger are still process-local control-plane features/);
+  assert.match(validateValuesTemplate, /replicaCount\.backend=1 because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
+  assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
 });
 
 test('production overlay keeps the supported ingress, Vault, and scale boundaries for the real cluster topology', () => {
@@ -143,6 +143,22 @@ test('chart validation rejects placeholder images, route-prefix drift, and unsup
   await assertHelmTemplateFails(
     ['env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/custom-workflows'],
     /RIVET_PUBLISHED_WORKFLOWS_BASE_PATH fixed at \/workflows/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_PUBLISHED_APPS_BASE_PATH=/custom-apps'],
+    /RIVET_PUBLISHED_APPS_BASE_PATH fixed at \/apps/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_LATEST_APPS_BASE_PATH=/custom-apps-latest'],
+    /RIVET_LATEST_APPS_BASE_PATH fixed at \/apps-latest/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_WEB_APPS_BASE_PATH=/custom-apps'],
+    /RIVET_WEB_APPS_BASE_PATH fixed at \/apps/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_LATEST_WEB_APPS_BASE_PATH=/custom-apps-latest'],
+    /RIVET_LATEST_WEB_APPS_BASE_PATH fixed at \/apps-latest/,
   );
   await assertHelmTemplateFails(
     [

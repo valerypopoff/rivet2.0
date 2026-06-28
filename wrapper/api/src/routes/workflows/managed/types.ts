@@ -48,6 +48,16 @@ export type PublishedVersionRow = {
   comment: string;
 };
 
+export type WebAppPublicationRow = {
+  app_id: string;
+  workflow_id: string;
+  revision_id: string;
+  ui_graph_id: string;
+  slug: string;
+  slug_lookup_name: string;
+  published_at: TimestampValue;
+};
+
 export type CurrentDraftRevisionRow = {
   workflow_id: string;
   name: string;
@@ -161,6 +171,15 @@ export type ImportManagedWorkflowOptions = {
   publishedDatasetsContents?: string | null;
   lastPublishedAt?: string | null;
   updatedAt?: string | null;
+  publishedWebApps?: ImportManagedWorkflowPublishedWebAppOptions[];
+};
+
+export type ImportManagedWorkflowPublishedWebAppOptions = {
+  uiGraphId: string;
+  slug: string;
+  publishedAt: string;
+  contents: string;
+  datasetsContents: string | null;
 };
 
 export type ImportManagedWorkflowRecordingOptions = {
