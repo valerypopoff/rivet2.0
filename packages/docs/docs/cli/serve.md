@@ -16,6 +16,9 @@ npx @valerypopoff/rivet2-cli serve
 # Start server on custom port
 npx @valerypopoff/rivet2-cli serve --port 8080
 
+# Bind to localhost only
+npx @valerypopoff/rivet2-cli serve --host 127.0.0.1
+
 # Start server in development mode
 npx @valerypopoff/rivet2-cli serve --dev
 
@@ -139,6 +142,7 @@ Endpoint aliases are validated when the server starts. Duplicate endpoint names,
 ### Server Configuration
 
 - `--port <port>`: The port to run the server on. Default is 3000.
+- `--host <host>`: The host interface to bind to. Default is `0.0.0.0`, which is suitable for Docker and remote access. Use `127.0.0.1` for local-only serving.
 - `--dev`: Runs the server in development mode, which will reread the project file on each request. Useful for development.
 - `--bearer-token <token>`: Requires `Authorization: Bearer <token>` on graph and web-app requests. If omitted, `RIVET_CLI_BEARER_TOKEN` is used when set.
 - `--cors-origin <origin>`: Adds CORS headers for an allowed origin. Can be repeated. Use `*` to allow any origin.

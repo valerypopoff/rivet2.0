@@ -21,7 +21,14 @@ import {
   type DatasetCliOptions,
   type LoadedProjectRuntime,
 } from '../cliRuntime.js';
-import { CliHttpError, createHttpMiddleware, jsonErrorResponse, jsonTimedResponse, type HttpCliOptions } from '../http.js';
+import {
+  CliHttpError,
+  createHttpMiddleware,
+  formatListenUrl,
+  jsonErrorResponse,
+  jsonTimedResponse,
+  type HttpCliOptions,
+} from '../http.js';
 import { shapeOutputs } from '../output.js';
 
 export type ServeArgs = {
@@ -30,6 +37,7 @@ export type ServeArgs = {
   endpoint: string[];
   exposeCost: boolean;
   graph: string | undefined;
+  host: string;
   openaiApiKey: string | undefined;
   openaiEndpoint: string | undefined;
   openaiOrganization: string | undefined;
@@ -67,6 +75,11 @@ export function makeCommand<T>(y: yargs.Argv<T>) {
       describe: 'The port to serve on',
       type: 'number',
       default: 3000,
+    })
+    .option('host', {
+      describe: 'The host interface to bind to',
+      type: 'string',
+      default: '0.0.0.0',
     })
     .option('dev', {
       describe: 'Run in development mode: rereads the project file on each request',
@@ -165,13 +178,16 @@ export async function serve(args: ServeArgs) {
 
     const { app, projectFilePath, servedGraphName } = await createServeApp(args);
     const server = serveHono({
+      hostname: args.host,
       port: args.port,
       fetch: app.fetch,
     });
 
     console.log(
       chalk.green(
-        `Serving project file ${chalk.bold.white(projectFilePath)} on port ${chalk.bold.white(args.port)}.\nServing graph "${chalk.bold.white(servedGraphName)}".`,
+        `Serving project file ${chalk.bold.white(projectFilePath)} at ${chalk.bold.white(
+          formatListenUrl(args.host, args.port),
+        )}.\nServing graph "${chalk.bold.white(servedGraphName)}".`,
       ),
     );
 

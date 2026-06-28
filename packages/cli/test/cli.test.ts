@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import {
   serializeProject,
+  type ChartNode,
   type GraphId,
+  type NodeId,
+  type PortId,
   type Project,
   type ProjectId,
   type UiComponentId,
@@ -13,7 +16,7 @@ import {
 } from '@valerypopoff/rivet2-node';
 import yargs from 'yargs';
 import { parseJsonInputRecord, parseJsonKeyValueInputRecord, parseKeyValueInputRecord } from '../src/commandInputs.js';
-import { makeCommand as makeRunCommand } from '../src/commands/run.js';
+import { makeCommand as makeRunCommand, run } from '../src/commands/run.js';
 import {
   buildGraphProcessorOptions,
   buildStreamEventFilter,
@@ -23,8 +26,9 @@ import {
   parseEndpointAliases,
   type ServeArgs,
 } from '../src/commands/serve.js';
-import { createWebAppServeApp, type ServeAppArgs } from '../src/commands/serveApp.js';
+import { createWebAppServeApp, makeCommand as makeServeAppCommand, type ServeAppArgs } from '../src/commands/serveApp.js';
 import { throwIfInvalidGraph, throwIfNoMainGraph } from '../src/cliRuntime.js';
+import { formatListenUrl } from '../src/http.js';
 import { shapeOutputs } from '../src/output.js';
 
 test('run command builder registers its default option values', async () => {
@@ -51,11 +55,75 @@ test('serve command exposes its expected defaults', async () => {
     .parse();
 
   assert.equal(argv.port, 3000);
+  assert.equal(argv.host, '0.0.0.0');
   assert.equal(argv.dev, false);
   assert.equal(argv.allowSpecifyingGraphId, false);
   assert.equal(argv.exposeCost, false);
   assert.deepEqual(argv.endpoint, []);
   assert.deepEqual(argv.corsOrigin, []);
+});
+
+test('serve commands parse custom host bindings', async () => {
+  const serveArgs = await makeServeCommand(yargs(['project.rivet-project', '--host', '127.0.0.1']))
+    .exitProcess(false)
+    .parse();
+  const serveAppArgs = await makeServeAppCommand(yargs(['project.rivet-project', '--host', '127.0.0.1']))
+    .exitProcess(false)
+    .parse();
+
+  assert.equal(serveArgs.host, '127.0.0.1');
+  assert.equal(serveAppArgs.host, '127.0.0.1');
+});
+
+test('formatListenUrl renders IPv4, hostnames, and IPv6 host bindings', () => {
+  assert.equal(formatListenUrl('0.0.0.0', 3000), 'http://0.0.0.0:3000');
+  assert.equal(formatListenUrl('localhost', 3000), 'http://localhost:3000');
+  assert.equal(formatListenUrl('::1', 3000), 'http://[::1]:3000');
+});
+
+test('serve-app command exposes its expected defaults', () => {
+  const command = makeServeAppCommand(yargs([])).exitProcess(false);
+  const options = command.getOptions();
+
+  assert.equal(options.default.port, 3000);
+  assert.equal(options.default.host, '0.0.0.0');
+  assert.equal(options.default['base-path'], '/');
+  assert.deepEqual(options.default['cors-origin'], []);
+});
+
+test('run command executes a real project and writes shaped output', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rivet-cli-run-test-'));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+
+  const outputFile = join(directory, 'output.json');
+  await run({
+    ...buildRunArgs(),
+    graphName: 'Passthrough',
+    input: ['input=hello'],
+    outputFile,
+    projectFile: resolve('cli-example.rivet-project'),
+    unwrapOutput: 'output',
+  });
+
+  assert.equal(await readFile(outputFile, 'utf8'), '"hello"\n');
+});
+
+test('run command can persist dataset mutations through the project-adjacent data file', async (t) => {
+  const projectFile = await writeTemporaryProject(t, createDatasetAppendProject());
+  const outputFile = join(dirname(projectFile), 'output.json');
+
+  await run({
+    ...buildRunArgs(),
+    graphName: 'Append',
+    inputJson: ['data=["alpha","beta"]'],
+    outputFile,
+    projectFile,
+    saveDatasets: true,
+    unwrapOutput: 'datasetId',
+  });
+
+  assert.equal(await readFile(outputFile, 'utf8'), '"dataset"\n');
+  assert.match(await readFile(projectFile.replace(/\.rivet-project$/, '.rivet-data'), 'utf8'), /alpha/);
 });
 
 test('graph validation messages match positional and option command styles', () => {
@@ -310,6 +378,7 @@ function buildServeArgs(): ServeArgs {
     endpoint: [],
     exposeCost: false,
     graph: undefined,
+    host: '0.0.0.0',
     openaiApiKey: undefined,
     openaiEndpoint: undefined,
     openaiOrganization: undefined,
@@ -325,10 +394,32 @@ function buildServeAppArgs(): ServeAppArgs {
   return {
     basePath: '/',
     corsOrigin: [],
+    host: '0.0.0.0',
     port: 3000,
     projectFile: '',
     revisionKey: undefined,
     uiGraph: undefined,
+  };
+}
+
+function buildRunArgs() {
+  return {
+    context: [],
+    contextFile: undefined,
+    contextJson: [],
+    datasetFile: undefined,
+    graphName: undefined,
+    includeCost: false,
+    input: [],
+    inputJson: [],
+    inputsFile: undefined,
+    inputsStdin: false,
+    outputFile: undefined,
+    outputKey: undefined,
+    projectFile: '',
+    requireDatasetFile: false,
+    saveDatasets: false,
+    unwrapOutput: undefined,
   };
 }
 
@@ -372,6 +463,109 @@ function createProjectWithWebApp(): Project {
         name: 'Test web app',
       },
     },
+  };
+}
+
+function createDatasetAppendProject(): Project {
+  const graphId = 'append-graph' as GraphId;
+  const inputNodeId = 'input-node' as NodeId;
+  const textNodeId = 'dataset-id-node' as NodeId;
+  const createDatasetNodeId = 'create-dataset-node' as NodeId;
+  const appendNodeId = 'append-node' as NodeId;
+  const outputNodeId = 'output-node' as NodeId;
+  const inputNode: ChartNode<'graphInput'> = {
+    data: {
+      dataType: 'string[]',
+      id: 'data',
+      useDefaultValueInput: false,
+    },
+    id: inputNodeId,
+    title: 'Graph Input',
+    type: 'graphInput',
+    visualData: { x: 0, y: 0, width: 300 },
+  };
+  const appendNode: ChartNode<'appendToDataset'> = {
+    data: {
+      datasetId: 'dataset',
+      useDatasetIdInput: true,
+    },
+    id: appendNodeId,
+    title: 'Append to Dataset',
+    type: 'appendToDataset',
+    visualData: { x: 400, y: 0, width: 300 },
+  };
+  const textNode: ChartNode<'text'> = {
+    data: {
+      normalizeLineEndings: true,
+      text: 'dataset',
+    },
+    id: textNodeId,
+    title: 'Text',
+    type: 'text',
+    visualData: { x: 0, y: 200, width: 300 },
+  };
+  const createDatasetNode: ChartNode<'createDataset'> = {
+    data: {},
+    id: createDatasetNodeId,
+    title: 'Create Dataset',
+    type: 'createDataset',
+    visualData: { x: 400, y: 200, width: 300 },
+  };
+  const outputNode: ChartNode<'graphOutput'> = {
+    data: {
+      dataType: 'string',
+      id: 'datasetId',
+    },
+    id: outputNodeId,
+    title: 'Graph Output',
+    type: 'graphOutput',
+    visualData: { x: 800, y: 0, width: 300 },
+  };
+
+  return {
+    graphs: {
+      [graphId]: {
+        connections: [
+          {
+            inputId: 'data' as PortId,
+            inputNodeId: appendNodeId,
+            outputId: 'data' as PortId,
+            outputNodeId: inputNodeId,
+          },
+          {
+            inputId: 'datasetId' as PortId,
+            inputNodeId: createDatasetNodeId,
+            outputId: 'output' as PortId,
+            outputNodeId: textNodeId,
+          },
+          {
+            inputId: 'datasetId' as PortId,
+            inputNodeId: appendNodeId,
+            outputId: 'datasetId_out' as PortId,
+            outputNodeId: createDatasetNodeId,
+          },
+          {
+            inputId: 'value' as PortId,
+            inputNodeId: outputNodeId,
+            outputId: 'id_out' as PortId,
+            outputNodeId: appendNodeId,
+          },
+        ],
+        metadata: {
+          description: '',
+          id: graphId,
+          name: 'Append',
+        },
+        nodes: [inputNode, textNode, createDatasetNode, appendNode, outputNode],
+      },
+    },
+    metadata: {
+      description: '',
+      id: 'dataset-project' as ProjectId,
+      mainGraphId: graphId,
+      title: 'Dataset test project',
+    },
+    plugins: [],
   };
 }
 

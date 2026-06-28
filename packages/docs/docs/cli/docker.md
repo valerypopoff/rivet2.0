@@ -11,7 +11,7 @@ The `serve` command from the Rivet CLI is available as a Docker image, allowing 
 
 ```bash
 # Start a server on port 3000 with a mounted project directory
-docker run -p 3000:3000 -v /path/to-project:/project valerypopoff/rivet-server:latest
+docker run -p 3000:3000 -v /path/to/project:/project valerypopoff/rivet-server:latest
 ```
 
 ## Description
@@ -96,13 +96,12 @@ Dataset mutations stay in memory unless `--save-datasets` is passed.
 
 ### Serving Rivet Web Apps
 
-The published Docker entrypoint runs `rivet serve /project`. To serve a Rivet web app instead, override the entrypoint command:
+The published Docker entrypoint defaults to `rivet serve /project` when no command is provided. To serve a Rivet web app instead, pass the CLI subcommand directly:
 
 ```bash
 docker run \
   -p 3000:3000 \
   -v /path/to/project:/project \
-  --entrypoint rivet \
   valerypopoff/rivet-server:latest \
   serve-app /project "Support assistant"
 ```
@@ -142,7 +141,7 @@ See the [Rivet CLI documentation](./serve.md#options) for a list of environment 
 
 The container expects your Rivet project file to be mounted at `/project` inside the container. The mounted directory should contain the Rivet project file and any other files needed by the project, such as any `.rivet-data` file.
 
-The image entrypoint runs the globally installed CLI as `rivet serve /project`. Additional arguments appended to `docker run` are forwarded to `rivet serve`.
+The image entrypoint runs the globally installed CLI as `rivet serve /project` when no CLI subcommand is passed. Additional non-command arguments appended to `docker run` are forwarded to that default `serve /project` command. If the first argument is `run`, `serve`, or `serve-app`, the entrypoint runs that CLI command directly.
 
 Maintainers building the published image should pass the CLI package version through the `RIVET_CLI_VERSION` Docker build argument. The package's `docker-publish.sh` script does this automatically.
 

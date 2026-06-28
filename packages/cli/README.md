@@ -24,6 +24,7 @@ rivet --help
 yarn workspace @valerypopoff/rivet2-cli run build
 yarn workspace @valerypopoff/rivet2-cli run test
 yarn workspace @valerypopoff/rivet2-cli run lint
+yarn workspace @valerypopoff/rivet2-cli run verify
 ```
 
 See the root [README](../../README.md), [package docs](../../developer-docs/PACKAGES.md), and public CLI docs under [packages/docs/docs/cli.md](../docs/docs/cli.md).

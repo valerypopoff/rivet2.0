@@ -617,6 +617,7 @@ Supports:
 - selected output unwrapping through `--unwrap-output`
 - optional SSE streaming
 - optional single-node streaming
+- explicit host binding through `--host`, defaulting to `0.0.0.0` for Docker-friendly serving
 - OpenAI-related option overrides
 
 Architecturally, it is a thin HTTP wrapper around `rivet-node` processor creation and streaming helpers. Request bodies are parsed through the same object-input helper as `run`, so empty bodies become `{}` and arrays/primitives are rejected before execution. Project-file lookup resolves relative paths to absolute paths, handles directory inputs, and uses platform path helpers for suggestions so Windows paths do not get split with POSIX-only separators. Graph validation also checks that a stored main graph ID actually exists before the server starts. Non-streaming `run` and `serve` requests use the default omitted-profile Node runtime policy, so eligible headless runs get the automatic fast scheduler/cache path. `serve --stream` and `serve --stream-node` explicitly pass `runtimeProfile: 'compatible'` because those modes expose node lifecycle events over SSE, making scheduler ordering part of the client-visible contract.
@@ -634,14 +635,16 @@ Supports:
 - `GET /`, `GET /app.json`, and `POST /actions/run` through `createRivetWebAppHandler(...)`
 - optional base-path mounting through `--base-path`
 - optional opaque revision consistency through `--revision-key`
-- the same bearer-token, CORS, dataset, and project-path behavior as `serve`
+- the same host, bearer-token, CORS, dataset, and project-path behavior as `serve`
 
-The CLI uses the Node package web-app serving API directly and does not duplicate renderer or UI-action protocol code. Production wrapper servers should still prefer `createRivetWebAppHandler(...)`, `renderRivetWebAppHtml(...)`, or `runRivetWebAppAction(...)` directly so wrappers can own authentication, endpoint slug mapping, project materialization, recordings, telemetry, and deployment policy.
+The CLI uses the Node package web-app serving API directly and does not duplicate renderer or UI-action protocol code. Both server commands pass `--host` to the Hono Node server and format startup URLs through the shared CLI HTTP helper so IPv4, hostnames, and IPv6 bindings are displayed consistently. Production wrapper servers should still prefer `createRivetWebAppHandler(...)`, `renderRivetWebAppHtml(...)`, or `runRivetWebAppAction(...)` directly so wrappers can own authentication, endpoint slug mapping, project materialization, recordings, telemetry, and deployment policy.
 `/healthz` is reserved for the CLI health endpoint and cannot be used as the web-app base path.
 
 ### Docker image behavior
 
-The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project`, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. The Dockerfile's default build arg is only a local-build fallback and should be kept in sync with the package version when the CLI version is bumped.
+The CLI package's `prepack` script only builds the package; it deliberately does not copy the repository root README over the package-local CLI README. The `verify` script runs build, lint, tests, and a dry-run npm pack so release checks exercise the generated package contents.
+
+The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project` when no CLI subcommand is passed, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. If the first argument is `run`, `serve`, or `serve-app`, the entrypoint runs that CLI command directly, which lets the same image host web apps without overriding the Docker entrypoint. CLI shell scripts are kept LF-only through `.gitattributes` because they run inside Linux containers. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. The Dockerfile's default build arg is only a local-build fallback and should be kept in sync with the package version when the CLI version is bumped.
 
 ## `@valerypopoff/trivet` (`packages/trivet/`)
 

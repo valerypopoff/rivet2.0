@@ -18,6 +18,9 @@ npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project "Support assista
 
 # Mount under a base path
 npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project --base-path /apps/support
+
+# Bind to localhost only
+npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project --host 127.0.0.1
 ```
 
 ## Description
@@ -72,6 +75,7 @@ npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project --dataset-file .
 ### Server Configuration
 
 - `--port <port>`: The port to run the server on. Default is 3000.
+- `--host <host>`: The host interface to bind to. Default is `0.0.0.0`, which is suitable for Docker and remote access. Use `127.0.0.1` for local-only serving.
 - `--base-path <path>`: The base URL path where the web app routes are mounted. Default is `/`. `/healthz` is reserved for the CLI health endpoint.
 - `--revision-key <key>`: Embeds an opaque revision key in the page and rejects action requests that send a different key.
 - `--bearer-token <token>`: Requires `Authorization: Bearer <token>` on web app requests. If omitted, `RIVET_CLI_BEARER_TOKEN` is used when set.

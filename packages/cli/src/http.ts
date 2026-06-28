@@ -79,6 +79,11 @@ export function jsonTimedResponse(c: Context, payload: unknown, startedAt: numbe
   return c.json(payload as never);
 }
 
+export function formatListenUrl(host: string, port: number): string {
+  const displayHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  return `http://${displayHost}:${port}`;
+}
+
 function applyCorsHeaders(c: Context, corsOrigins: string[]): void {
   if (corsOrigins.length === 0) {
     return;

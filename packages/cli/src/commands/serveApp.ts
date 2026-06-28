@@ -10,10 +10,11 @@ import {
   withRuntimeProcessorOptions,
   type DatasetCliOptions,
 } from '../cliRuntime.js';
-import { createHttpMiddleware, type HttpCliOptions } from '../http.js';
+import { createHttpMiddleware, formatListenUrl, type HttpCliOptions } from '../http.js';
 
 export type ServeAppArgs = {
   basePath: string;
+  host: string;
   port: number;
   projectFile: string;
   revisionKey: string | undefined;
@@ -42,6 +43,11 @@ export function makeCommand<T>(y: yargs.Argv<T>) {
       describe: 'The port to serve on',
       type: 'number',
       default: 3000,
+    })
+    .option('host', {
+      describe: 'The host interface to bind to',
+      type: 'string',
+      default: '0.0.0.0',
     })
     .option('base-path', {
       describe: 'The URL base path where the web app is mounted',
@@ -84,6 +90,7 @@ export async function serveApp(args: ServeAppArgs) {
 
     const { app, projectFilePath, uiGraphName } = await createWebAppServeApp(args);
     const server = serveHono({
+      hostname: args.host,
       port: args.port,
       fetch: app.fetch,
     });
@@ -92,7 +99,7 @@ export async function serveApp(args: ServeAppArgs) {
       chalk.green(
         `Serving Rivet web app "${chalk.bold.white(uiGraphName)}" from ${chalk.bold.white(
           projectFilePath,
-        )} on port ${chalk.bold.white(args.port)}.`,
+        )} at ${chalk.bold.white(formatListenUrl(args.host, args.port))}.`,
       ),
     );
 
