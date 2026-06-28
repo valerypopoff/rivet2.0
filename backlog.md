@@ -1,3 +1,6 @@
+
+- In the Chat LLm node, the provider URL looks weird: ![alt text](image.png)
+
 - In the full output modal, each named output has to have its own copy button. It should copy the output as it's shown in the modal.
   <Name> Words: N Characters: M [Copy icon]
   Copy icon should have a tooltip "Copy value"

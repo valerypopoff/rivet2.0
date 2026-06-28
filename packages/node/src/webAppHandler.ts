@@ -1,8 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import {
   type DataValue,
   type Project,
+  RIVET_WEB_APP_DOCUMENT_CSS,
+  RIVET_WEB_APP_RENDERER_CSS,
   type UiComponentId,
   type UiGraph,
+  type UiGraphComponent,
   type UiGraphId,
   getUiGraphActionComponent,
   getUiGraphInitialState,
@@ -11,10 +16,43 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
 
+const requireForWebAppAssets = createRequire(import.meta.url);
+let githubMarkdownCss: string | undefined;
+let markedBrowserScript: string | undefined;
+
+export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
+
+export type RivetWebAppActionContext = {
+  actionInput: Record<string, unknown>;
+  component: Extract<UiGraphComponent, { type: 'button' }>;
+  componentId: UiComponentId;
+  request: Request;
+  revisionKey?: string;
+  state: Record<string, unknown>;
+  uiGraph: UiGraph;
+};
+
+export type RivetWebAppProcessorOptionsResult = RivetWebAppProcessorOptions | null | undefined;
+
+export type RivetWebAppCreateProcessorOptions =
+  | RivetWebAppProcessorOptions
+  | ((
+      context: RivetWebAppActionContext,
+    ) => Promise<RivetWebAppProcessorOptionsResult> | RivetWebAppProcessorOptionsResult);
+
+export type RivetWebAppActionResult = {
+  outputs: Record<string, DataValue>;
+  statePatch: Record<string, unknown>;
+};
+
 export type RivetWebAppHandlerOptions = {
   basePath?: string;
-  createProcessorOptions?: Omit<NodeCreateProcessorOptions, 'context' | 'graph' | 'inputs'>;
+  createProcessorOptions?: RivetWebAppCreateProcessorOptions;
+  onActionError?: (context: RivetWebAppActionContext & { error: unknown }) => Promise<void> | void;
+  onActionFinish?: (context: RivetWebAppActionContext & RivetWebAppActionResult) => Promise<void> | void;
+  onActionStart?: (context: RivetWebAppActionContext) => Promise<void> | void;
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
+  revisionKey?: string;
   uiGraphId?: UiGraphId | string;
 };
 
@@ -24,8 +62,33 @@ export type RivetWebAppHandler = {
 
 type RunActionRequestBody = {
   componentId?: string;
+  revisionKey?: string;
   state?: Record<string, unknown>;
 };
+
+export type RunRivetWebAppActionOptions = {
+  componentId?: string;
+  createProcessorOptions?: RivetWebAppCreateProcessorOptions;
+  onActionError?: RivetWebAppHandlerOptions['onActionError'];
+  onActionFinish?: RivetWebAppHandlerOptions['onActionFinish'];
+  onActionStart?: RivetWebAppHandlerOptions['onActionStart'];
+  request?: Request;
+  requestRevisionKey?: string;
+  resolveContext?: RivetWebAppHandlerOptions['resolveContext'];
+  revisionKey?: string;
+  state?: Record<string, unknown>;
+  uiGraph: UiGraph;
+};
+
+export class RivetWebAppActionHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'RivetWebAppActionHttpError';
+  }
+}
 
 export function createRivetWebAppHandler(
   project: Project,
@@ -48,7 +111,12 @@ export function createRivetWebAppHandler(
           return htmlResponse(renderErrorHtml('Rivet web app not found'), 404);
         }
 
-        return htmlResponse(renderWebAppHtml(uiGraph, { actionPath: joinUrlPath(basePath, '/actions/run') }));
+        return htmlResponse(
+          renderRivetWebAppHtml(uiGraph, {
+            actionPath: joinUrlPath(basePath, '/actions/run'),
+            revisionKey: options.revisionKey,
+          }),
+        );
       }
 
       if (request.method === 'GET' && routePath === '/app.json') {
@@ -63,19 +131,27 @@ export function createRivetWebAppHandler(
         }
 
         try {
-          const body = (await request.json()) as RunActionRequestBody;
-          const result = await runUiGraphAction({
-            body,
+          const body = await readActionRequestBody(request);
+          const result = await runRivetWebAppAction(project, {
+            componentId: body.componentId,
             createProcessorOptions: options.createProcessorOptions,
-            project,
+            onActionError: options.onActionError,
+            onActionFinish: options.onActionFinish,
+            onActionStart: options.onActionStart,
             request,
+            requestRevisionKey: body.revisionKey,
             resolveContext: options.resolveContext,
+            revisionKey: options.revisionKey,
+            state: body.state,
             uiGraph,
           });
 
           return jsonResponse(result);
         } catch (error) {
-          return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : String(error) },
+            getActionErrorStatus(error),
+          );
         }
       }
 
@@ -84,26 +160,35 @@ export function createRivetWebAppHandler(
   };
 }
 
-async function runUiGraphAction({
-  body,
-  createProcessorOptions,
-  project,
-  request,
-  resolveContext,
-  uiGraph,
-}: {
-  body: RunActionRequestBody;
-  createProcessorOptions: RivetWebAppHandlerOptions['createProcessorOptions'];
-  project: Project;
-  request: Request;
-  resolveContext: RivetWebAppHandlerOptions['resolveContext'];
-  uiGraph: UiGraph;
-}): Promise<{ outputs: Record<string, DataValue>; statePatch: Record<string, unknown> }> {
-  if (!body.componentId) {
+export async function runRivetWebAppAction(
+  project: Project,
+  {
+    componentId,
+    createProcessorOptions,
+    onActionError,
+    onActionFinish,
+    onActionStart,
+    request,
+    requestRevisionKey,
+    resolveContext,
+    revisionKey,
+    state = {},
+    uiGraph,
+  }: RunRivetWebAppActionOptions,
+): Promise<RivetWebAppActionResult> {
+  const actionRequest = request ?? new Request('https://rivet.local/web-app-action');
+  const actionState = normalizeActionState(state);
+
+  if (revisionKey != null && requestRevisionKey !== revisionKey) {
+    throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409);
+  }
+
+  if (typeof componentId !== 'string' || !componentId) {
     throw new Error('Missing componentId.');
   }
 
-  const component = getUiGraphActionComponent(uiGraph, body.componentId as UiComponentId);
+  const resolvedComponentId = componentId as UiComponentId;
+  const component = getUiGraphActionComponent(uiGraph, resolvedComponentId);
   if (!component) {
     throw new Error('UI action component not found.');
   }
@@ -116,19 +201,41 @@ async function runUiGraphAction({
     throw new Error('This UI action is not connected to a graph.');
   }
 
-  const rawInputs = resolveUiGraphActionInputs(component.action, body.state ?? {});
-  const processor = createProcessor(project, {
-    ...createProcessorOptions,
-    context: resolveContext ? await resolveContext(request) : {},
-    graph: component.action.graphId,
-    inputs: Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, toDataValue(value)])),
-  });
-  const outputs = await processor.run();
-
-  return {
-    outputs,
-    statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
+  const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
+  const actionContext: RivetWebAppActionContext = {
+    actionInput: rawInputs,
+    component,
+    componentId: resolvedComponentId,
+    request: actionRequest,
+    revisionKey,
+    state: actionState,
+    uiGraph,
   };
+
+  try {
+    await callActionHook(onActionStart, actionContext);
+
+    const processorOptions = await resolveProcessorOptions(createProcessorOptions, actionContext);
+    const processor = createProcessor(project, {
+      ...processorOptions,
+      context: processorOptions.context ?? (resolveContext ? await resolveContext(actionRequest) : {}),
+      graph: component.action.graphId,
+      inputs:
+        processorOptions.inputs ??
+        Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, toDataValue(value)])),
+    });
+    const outputs = await processor.run();
+    const result = {
+      outputs,
+      statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
+    };
+
+    await callActionHook(onActionFinish, { ...actionContext, ...result });
+    return result;
+  } catch (error) {
+    await callActionHook(onActionError, { ...actionContext, error });
+    throw error;
+  }
 }
 
 function toDataValue(value: unknown): DataValue {
@@ -172,23 +279,107 @@ function resolveUiGraph(project: Project, uiGraphId: UiGraphId | string | undefi
   return Object.values(project.uiGraphs ?? {})[0];
 }
 
-function renderWebAppHtml(uiGraph: UiGraph, options: { actionPath: string }): string {
+export function renderRivetWebAppHtml(uiGraph: UiGraph, options: { actionPath: string; revisionKey?: string }): string {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(uiGraph.name)}</title>
-  <style>${WEB_APP_CSS}</style>
+  <style>${styleForHtml(RIVET_WEB_APP_DOCUMENT_CSS)}</style>
+  <style>${styleForHtml(getGithubMarkdownCss())}</style>
+  <style>${styleForHtml(RIVET_WEB_APP_RENDERER_CSS)}</style>
 </head>
 <body>
-  <main id="app" class="rivet-web-app"></main>
+  <div id="app" class="rivet-web-app-root"></div>
   <script>
-    window.__RIVET_WEB_APP__ = ${jsonForScript({ actionPath: options.actionPath, initialState: getUiGraphInitialState(uiGraph), uiGraph })};
+    window.__RIVET_WEB_APP__ = ${jsonForScript({ actionPath: options.actionPath, initialState: getUiGraphInitialState(uiGraph), revisionKey: options.revisionKey, uiGraph })};
   </script>
-  <script>${WEB_APP_CLIENT_JS}</script>
+  <script>${scriptForHtml(getMarkedBrowserScript())}</script>
+  <script>${scriptForHtml(WEB_APP_CLIENT_JS)}</script>
 </body>
 </html>`;
+}
+
+async function readActionRequestBody(request: Request): Promise<RunActionRequestBody> {
+  try {
+    const body = await request.json();
+    if (!isRecord(body)) {
+      throw new RivetWebAppActionHttpError('Invalid action request body.', 400);
+    }
+
+    const componentId = body.componentId;
+    const revisionKey = body.revisionKey;
+
+    if (componentId != null && typeof componentId !== 'string') {
+      throw new RivetWebAppActionHttpError('Invalid componentId.', 400);
+    }
+
+    if (revisionKey != null && typeof revisionKey !== 'string') {
+      throw new RivetWebAppActionHttpError('Invalid revisionKey.', 400);
+    }
+
+    return {
+      componentId: componentId ?? undefined,
+      revisionKey: revisionKey ?? undefined,
+      state: normalizeActionState(body.state),
+    };
+  } catch (error) {
+    if (error instanceof RivetWebAppActionHttpError) {
+      throw error;
+    }
+
+    throw new RivetWebAppActionHttpError('Invalid JSON request body.', 400);
+  }
+}
+
+function normalizeActionState(state: unknown): Record<string, unknown> {
+  if (state == null) {
+    return {};
+  }
+
+  if (isRecord(state)) {
+    return state;
+  }
+
+  throw new RivetWebAppActionHttpError('Invalid action state.', 400);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function getActionErrorStatus(error: unknown): number {
+  return error instanceof RivetWebAppActionHttpError ? error.status : 400;
+}
+
+async function resolveProcessorOptions(
+  createProcessorOptions: RivetWebAppCreateProcessorOptions | undefined,
+  context: RivetWebAppActionContext,
+): Promise<RivetWebAppProcessorOptions> {
+  if (!createProcessorOptions) {
+    return {};
+  }
+
+  const options =
+    typeof createProcessorOptions === 'function' ? await createProcessorOptions(context) : createProcessorOptions;
+  if (options == null) {
+    return {};
+  }
+
+  const { graph: _ignoredGraph, ...processorOptions } = options as RivetWebAppProcessorOptions & { graph?: unknown };
+  return processorOptions;
+}
+
+async function callActionHook<TContext>(
+  hook: ((context: TContext) => Promise<void> | void) | undefined,
+  context: TContext,
+): Promise<void> {
+  try {
+    await hook?.(context);
+  } catch {
+    // Web app action hooks are observability-only; route policy stays wrapper-owned.
+  }
 }
 
 function renderErrorHtml(message: string): string {
@@ -237,6 +428,27 @@ function jsonForScript(value: unknown): string {
     .replace(/\u2029/g, '\\u2029');
 }
 
+function scriptForHtml(script: string): string {
+  return script.replace(/<\/script/gi, '<\\/script');
+}
+
+function styleForHtml(style: string): string {
+  return style.replace(/<\/style/gi, '<\\/style');
+}
+
+function getGithubMarkdownCss(): string {
+  githubMarkdownCss ??= readFileSync(
+    requireForWebAppAssets.resolve('github-markdown-css/github-markdown-dark-dimmed.css'),
+    'utf8',
+  );
+  return githubMarkdownCss;
+}
+
+function getMarkedBrowserScript(): string {
+  markedBrowserScript ??= readFileSync(requireForWebAppAssets.resolve('marked/marked.min.js'), 'utf8');
+  return markedBrowserScript;
+}
+
 function escapeHtml(value: unknown): string {
   return `${value ?? ''}`
     .replace(/&/g, '&amp;')
@@ -246,27 +458,7 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#039;');
 }
 
-const WEB_APP_CSS = `
-:root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background: #191d24; color: #f4f7fb; }
-body { margin: 0; min-height: 100vh; background: #191d24; }
-.rivet-web-app { box-sizing: border-box; display: grid; gap: 16px; margin: 0 auto; max-width: 760px; padding: 48px 20px; }
-.rivet-card, .rivet-field { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); border-radius: 12px; padding: 16px; }
-.rivet-markdown > :first-child { margin-top: 0; }
-.rivet-markdown > :last-child { margin-bottom: 0; }
-.rivet-markdown code { background: rgba(255,255,255,.12); border-radius: 4px; padding: 1px 4px; }
-.rivet-markdown pre { white-space: pre-wrap; }
-.rivet-field { display: grid; gap: 8px; font-size: 13px; font-weight: 600; }
-.rivet-field-label { opacity: .9; }
-input, textarea, button { border-radius: 8px; box-sizing: border-box; font: inherit; }
-input, textarea { appearance: none; background: rgba(0,0,0,.22); border: 1px solid rgba(255,255,255,.18); color: inherit; padding: 10px 12px; width: 100%; }
-textarea { min-height: 110px; resize: vertical; }
-button { align-items: center; background: #3ba85b; border: 0; color: #fff; cursor: pointer; display: inline-flex; font-weight: 700; justify-content: center; padding: 10px 16px; }
-button:disabled { cursor: wait; opacity: .65; }
-pre { background: rgba(0,0,0,.22); border-radius: 8px; overflow: auto; padding: 12px; white-space: pre-wrap; }
-.rivet-error { color: #ff938a; font-weight: 700; }
-`;
-
-const WEB_APP_CLIENT_JS = `
+const WEB_APP_CLIENT_JS = String.raw`
 (() => {
   const config = window.__RIVET_WEB_APP__;
   const root = document.getElementById('app');
@@ -302,67 +494,27 @@ const WEB_APP_CLIENT_JS = `
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 
-  const renderInlineMarkdown = (value) => escapeHtml(value)
-    .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/_([^_]+)_/g, '<em>$1</em>');
-
-  const renderMarkdown = (value) => {
-    const lines = String(value ?? '').replace(/\r\n/g, '\n').split('\n');
-    const blocks = [];
-    let paragraph = [];
-    let listItems = [];
-
-    const flushParagraph = () => {
-      if (paragraph.length) {
-        blocks.push('<p>' + renderInlineMarkdown(paragraph.join(' ')) + '</p>');
-        paragraph = [];
-      }
-    };
-    const flushList = () => {
-      if (listItems.length) {
-        blocks.push('<ul>' + listItems.map((item) => '<li>' + renderInlineMarkdown(item) + '</li>').join('') + '</ul>');
-        listItems = [];
-      }
-    };
-
-    for (const line of lines) {
-      const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-      const listItem = /^[-*]\s+(.*)$/.exec(line);
-
-      if (!line.trim()) {
-        flushParagraph();
-        flushList();
-        continue;
-      }
-
-      if (heading) {
-        flushParagraph();
-        flushList();
-        const level = heading[1].length;
-        blocks.push('<h' + level + '>' + renderInlineMarkdown(heading[2]) + '</h' + level + '>');
-        continue;
-      }
-
-      if (listItem) {
-        flushParagraph();
-        listItems.push(listItem[1]);
-        continue;
-      }
-
-      flushList();
-      paragraph.push(line);
-    }
-
-    flushParagraph();
-    flushList();
-    return blocks.join('');
+  const createSafeMarkdownRenderer = () => {
+    const Renderer = globalThis.marked?.Renderer;
+    if (typeof Renderer !== 'function') return undefined;
+    const renderer = new Renderer();
+    renderer.html = (html) => escapeHtml(html);
+    return renderer;
   };
 
-  const renderMarkdownElement = (value) => {
-    const node = el('div', { className: 'rivet-markdown' });
+  const safeMarkdownRenderer = createSafeMarkdownRenderer();
+
+  const renderMarkdown = (value) => {
+    const parser = globalThis.marked?.parse ?? globalThis.marked?.marked;
+    if (typeof parser !== 'function' || !safeMarkdownRenderer) {
+      return escapeHtml(value);
+    }
+
+    return parser(String(value ?? ''), { renderer: safeMarkdownRenderer });
+  };
+
+  const renderMarkdownElement = (value, className) => {
+    const node = el('div', { className });
     node.innerHTML = renderMarkdown(value);
     return node;
   };
@@ -379,8 +531,9 @@ const WEB_APP_CLIENT_JS = `
     try {
       const response = await fetch(config.actionPath, {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ componentId: component.id, state }),
+        body: JSON.stringify({ componentId: component.id, revisionKey: config.revisionKey, state }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Action failed.');
@@ -394,40 +547,44 @@ const WEB_APP_CLIENT_JS = `
   }
 
   function renderComponent(component) {
-    if (component.type === 'text') return el('div', { className: 'rivet-card', text: component.text });
-    if (component.type === 'markdown') return el('div', { className: 'rivet-card' }, [renderMarkdownElement(component.markdown)]);
+    if (component.type === 'text') return el('div', { className: 'rivet-web-app-card', text: component.text });
+    if (component.type === 'markdown') return renderMarkdownElement(component.markdown, 'rivet-web-app-card rivet-web-app-markdown markdown-body');
     if (component.type === 'input' || component.type === 'textarea') {
       const control = el(component.type === 'textarea' ? 'textarea' : 'input', {
         placeholder: component.placeholder || '',
       });
       control.value = state[component.stateKey] ?? component.defaultValue ?? '';
       control.addEventListener('input', () => { state = { ...state, [component.stateKey]: control.value }; });
-      return el('label', { className: 'rivet-field' }, [
-        el('span', { className: 'rivet-field-label', text: component.label || component.stateKey }),
+      return el('label', { className: 'rivet-web-app-field' }, [
+        el('span', { text: component.label || component.stateKey }),
         control,
       ]);
     }
     if (component.type === 'button') {
-      const button = el('button', { text: pending ? 'Running...' : component.label, onClick: () => runAction(component) });
+      const button = el('button', { className: 'rivet-web-app-button', text: pending ? 'Running...' : component.label, onClick: () => runAction(component) });
       button.disabled = pending;
       return button;
     }
     if (component.type === 'output') {
       const value = state[component.stateKey];
       const outputBody = component.renderAs === 'markdown'
-        ? renderMarkdownElement(renderValue(value, 'markdown'))
+        ? renderMarkdownElement(renderValue(value, 'markdown'), 'rivet-web-app-output-markdown markdown-body rivet-markdown-output')
         : el('pre', { text: renderValue(value, component.renderAs || 'text') });
 
-      return el('section', { className: 'rivet-card' }, [
-        el('strong', { text: component.label || component.stateKey }),
+      return el('section', { className: 'rivet-web-app-card rivet-web-app-output' }, [
+        el('div', { className: 'rivet-web-app-output-title', text: component.label || component.stateKey }),
         outputBody,
       ]);
     }
-    return el('div', { className: 'rivet-card', text: 'Unsupported component' });
+    return el('div', { className: 'rivet-web-app-card', text: 'Unsupported component' });
   }
 
   function render() {
-    root.replaceChildren(...config.uiGraph.components.map(renderComponent), ...(error ? [el('div', { className: 'rivet-error', text: error })] : []));
+    const surface = el('main', { className: 'rivet-web-app-surface' }, [
+      ...config.uiGraph.components.map(renderComponent),
+      ...(error ? [el('div', { className: 'rivet-web-app-error', text: error })] : []),
+    ]);
+    root.replaceChildren(surface);
   }
 
   render();

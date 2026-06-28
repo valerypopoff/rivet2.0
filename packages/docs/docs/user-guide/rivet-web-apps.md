@@ -25,7 +25,7 @@ Use the **Components** palette to add blocks. Hover a component type to reveal t
 
 When a block is focused in the settings panel, Rivet highlights the matching component in the live preview. Focusing or clicking a component in the preview highlights the matching settings block.
 
-Markdown components render Markdown in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**.
+Markdown components render Markdown in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps.
 
 ## Binding a Button to a Graph
 
@@ -52,7 +52,18 @@ Preview state is temporary. Editing the web app changes the project and can be s
 
 ## Serving From a Wrapper
 
-The `@valerypopoff/rivet2-node` package exports `createRivetWebAppHandler(...)`. A wrapper can load a project, choose a UI graph, and adapt the handler to its own HTTP server.
+The `@valerypopoff/rivet2-node` package exports `createRivetWebAppHandler(...)`. A wrapper can load a project, choose a UI graph, and adapt the handler to its own HTTP server. Wrapper servers usually mount web apps under their own route family, for example `/apps/my-tool`, while Rivet serves the HTML renderer and the button action endpoint under that base path.
+
+Button actions are ordinary same-project graph runs. A wrapper can provide request-scoped processor options so web app actions use the same code runner, runtime libraries, dataset provider, project reference loader, context, recordings, and telemetry policy as normal workflow endpoints.
+
+Wrappers can also use lower-level helpers:
+
+- `renderRivetWebAppHtml(...)` to serve the HTML from a wrapper-owned route
+- `runRivetWebAppAction(...)` to run a button action from an existing route handler
+
+Action requests are JSON-only and the web app state must be an object. If a wrapper uses the lower-level action helper, Rivet throws `RivetWebAppActionHttpError` for request-shaped failures such as malformed state or stale revision keys so the wrapper can return the matching HTTP status.
+
+If a wrapper publishes immutable project revisions, it can pass a `revisionKey`. Rivet embeds that opaque key into the served page and rejects action requests that send a different key, helping wrappers avoid a stale page running against a newer published app revision.
 
 Wrappers still own:
 
@@ -62,6 +73,8 @@ Wrappers still own:
 - tenancy
 - request context
 - project loading and permissions
+- revision routing and cache invalidation
+- response headers, debug headers, recordings, and public error envelopes
 
 Rivet only provides the declarative renderer and the action endpoint that runs same-project graphs.
 
@@ -71,8 +84,8 @@ V1 is intentionally small and safe:
 
 - web apps can call only graphs in the same project
 - there is no custom JavaScript
-- there is no arbitrary HTML
-- markdown components and markdown output mode render Markdown, but custom HTML is not a supported web-app authoring surface
+- there is no separate raw HTML component
+- markdown components and markdown output mode follow Rivet's standard Markdown renderer, with raw HTML escaped
 - there is no custom asset pipeline
 - there are no reusable UI components or page navigation yet
 

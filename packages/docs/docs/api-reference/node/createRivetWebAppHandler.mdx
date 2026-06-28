@@ -14,17 +14,48 @@ The handler serves:
 
 It does not own authentication, routing, domains, tenancy, or deployment. Those stay wrapper-owned.
 
-Markdown components and Markdown-rendered outputs are rendered by the built-in client. The hosted client escapes raw text before applying its lightweight Markdown renderer, and it does not provide a custom HTML or JavaScript extension surface.
+Markdown components and Markdown-rendered outputs are rendered by the built-in client with the same `marked` Markdown engine and GitHub Markdown CSS baseline used by the Rivet app preview. Raw HTML tokens inside Markdown are escaped for web apps; V1 does not expose arbitrary HTML or JavaScript authoring. The hosted HTML embeds the packaged CSS and browser script, so wrapper servers do not need to mount a separate Markdown asset or provide their own renderer.
 
 ## Syntax
 
 ```typescript
+type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
+
+type RivetWebAppActionContext = {
+  request: Request;
+  uiGraph: UiGraph;
+  component: Extract<UiGraphComponent, { type: 'button' }>;
+  componentId: UiComponentId;
+  state: Record<string, unknown>;
+  actionInput: Record<string, unknown>;
+  revisionKey?: string;
+};
+
+type RivetWebAppCreateProcessorOptions =
+  | RivetWebAppProcessorOptions
+  | ((
+      context: RivetWebAppActionContext,
+    ) => Promise<RivetWebAppProcessorOptions | null | undefined> | RivetWebAppProcessorOptions | null | undefined);
+
 type RivetWebAppHandlerOptions = {
   basePath?: string;
-  createProcessorOptions?: Omit<NodeCreateProcessorOptions, 'context' | 'graph' | 'inputs'>;
+  createProcessorOptions?: RivetWebAppCreateProcessorOptions;
+  onActionError?: (context: RivetWebAppActionContext & { error: unknown }) => Promise<void> | void;
+  onActionFinish?: (
+    context: RivetWebAppActionContext & {
+      outputs: Record<string, DataValue>;
+      statePatch: Record<string, unknown>;
+    },
+  ) => Promise<void> | void;
+  onActionStart?: (context: RivetWebAppActionContext) => Promise<void> | void;
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
+  revisionKey?: string;
   uiGraphId?: UiGraphId | string;
 };
+
+class RivetWebAppActionHttpError extends Error {
+  readonly status: number;
+}
 
 function createRivetWebAppHandler(
   project: Project,
@@ -36,11 +67,17 @@ function createRivetWebAppHandler(
 
 If `uiGraphId` is omitted, Rivet serves the first UI graph in `project.uiGraphs`.
 
-`createProcessorOptions` are passed into the underlying `createProcessor(...)` call for action runs, after Rivet fills in the selected action graph, mapped action inputs, and context.
+`createProcessorOptions` can be a static object or a request-scoped resolver. Rivet always fills in the selected button action graph after resolving those options, so the UI action target cannot be overridden by a wrapper option. If the returned options include `inputs`, those inputs are used. Otherwise Rivet maps the web app state into graph inputs through the button's input bindings. If the returned options include `context`, that context is used. Otherwise Rivet calls `resolveContext(request)` when provided. If a resolver returns `undefined` or `null`, Rivet treats it like an empty options object and uses the default input/context mapping.
 
 `resolveContext` lets wrappers derive Rivet context values from the incoming HTTP request, for example authenticated user IDs or request headers.
 
+`revisionKey` is an opaque host-owned consistency token. Rivet embeds it in the served HTML and the browser sends it back with action requests. If a handler was configured with a `revisionKey` and an action request sends a different key, the handler returns a revision mismatch error. Rivet does not use this as authentication.
+
+The action lifecycle hooks are for observability only. Use wrapper route middleware for auth, endpoint ownership, and final response policy.
+
 Button actions return both raw graph `outputs` and a `statePatch` for the client renderer. New UI graph actions can define several `inputMappings` and several output bindings in `outputs`. Each input mapping sends one web-app data key to one Graph Input ID. Each output binding saves either the whole output map, when its `outputKey` is empty, or the unwrapped Rivet data value from `outputs[outputKey].value` to its configured web-app data key. Legacy single-output `outputKey` / `outputStateKey` actions still work through the same mapper. If the target graph does not return a configured output key, the action endpoint returns an error response.
+
+Action requests are JSON-only. The request body and `state` must be objects; malformed bodies return `400` responses from the Fetch-style handler. The lower-level helper throws `RivetWebAppActionHttpError` for HTTP-shaped action failures such as revision mismatches or malformed action state, so wrappers can preserve `error.status` in their own Express responses.
 
 ## Example
 
@@ -66,6 +103,81 @@ export default {
   },
 };
 ```
+
+## Request-scoped processor options
+
+Use a resolver when a wrapper needs the same per-request dependencies as ordinary workflow endpoints:
+
+```typescript
+const webApp = createRivetWebAppHandler(project, {
+  basePath: '/apps/story-helper',
+  revisionKey: publishedRevisionId,
+  uiGraphId: 'story-helper-ui',
+  createProcessorOptions: async ({ actionInput, request }) => ({
+    codeRunner: new ManagedCodeRunner(runtimeLibrariesRoot),
+    datasetProvider,
+    projectPath,
+    projectReferenceLoader,
+    context: {
+      headers: {
+        type: 'any',
+        value: normalizeHeaders(request.headers),
+      },
+    },
+    inputs: {
+      input: {
+        type: 'any',
+        value: actionInput,
+      },
+    },
+  }),
+});
+```
+
+## Lower-level helpers
+
+Wrappers that already own Express timing, recordings, debug headers, and error envelopes can call the lower-level helpers directly:
+
+```typescript
+import { RivetWebAppActionHttpError, renderRivetWebAppHtml, runRivetWebAppAction } from '@valerypopoff/rivet2-node';
+
+app.get('/apps/:endpointName', async (req, res) => {
+  const { project, uiGraph, revisionKey } = await resolvePublishedWebApp(req.params.endpointName);
+  res.type('html').send(
+    renderRivetWebAppHtml(uiGraph, {
+      actionPath: `/apps/${req.params.endpointName}/actions/run`,
+      revisionKey,
+    }),
+  );
+});
+
+app.post('/apps/:endpointName/actions/run', async (req, res) => {
+  const { project, uiGraph, revisionKey } = await resolvePublishedWebApp(req.params.endpointName);
+  try {
+    const result = await runRivetWebAppAction(project, {
+      componentId: req.body.componentId,
+      requestRevisionKey: req.body.revisionKey,
+      revisionKey,
+      state: req.body.state,
+      uiGraph,
+      createProcessorOptions: async ({ actionInput }) => ({
+        inputs: {
+          input: {
+            type: 'any',
+            value: actionInput,
+          },
+        },
+      }),
+    });
+    res.json(result);
+  } catch (error) {
+    const status = error instanceof RivetWebAppActionHttpError ? error.status : 500;
+    res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+```
+
+`runRivetWebAppAction(...)` accepts an optional `request`. If it is omitted, Rivet creates an internal placeholder request. Pass the real request when your processor option resolver or `resolveContext` needs headers, cookies, URL, or other request metadata.
 
 ## See Also
 

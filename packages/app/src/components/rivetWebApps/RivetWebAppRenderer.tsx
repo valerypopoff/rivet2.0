@@ -1,10 +1,10 @@
-import { css } from '@emotion/react';
 import { type FC, useEffect, useRef, useState } from 'react';
 import {
   type DataValue,
   type UiComponentId,
   type UiGraph,
   type UiGraphComponent,
+  RIVET_WEB_APP_RENDERER_CSS,
   getUiGraphInitialState,
 } from '@valerypopoff/rivet2-core';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
@@ -20,120 +20,6 @@ export type RivetWebAppRendererProps = {
   onRunAction(componentId: UiComponentId, state: Record<string, unknown>): Promise<RivetWebAppActionResult>;
   uiGraph: UiGraph;
 };
-
-const styles = css`
-  height: 100%;
-  background: var(--grey-dark-colorish);
-  color: var(--foreground);
-  overflow: auto;
-
-  .rivet-web-app-surface {
-    box-sizing: border-box;
-    display: grid;
-    gap: 16px;
-    margin: 0 auto;
-    max-width: 760px;
-    padding: 48px 20px;
-  }
-
-  .rivet-web-app-card,
-  .rivet-web-app-field {
-    border: 1px solid var(--foldable-section-border);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--modal-surface-bg) 88%, var(--foreground) 4%);
-    padding: 16px;
-  }
-
-  .rivet-web-app-component-frame {
-    border-radius: 12px;
-    margin: -5px;
-    padding: 4px;
-  }
-
-  .rivet-web-app-component-frame.active {
-    background: color-mix(in srgb, var(--modal-surface-bg) 75%, var(--primary) 16%);
-  }
-
-  .rivet-web-app-field {
-    display: grid;
-    gap: 8px;
-    color: var(--foreground);
-    font-size: var(--ui-font-size-base);
-    font-weight: 600;
-  }
-
-  .rivet-web-app-field input,
-  .rivet-web-app-field textarea {
-    appearance: none;
-    width: 100%;
-    box-sizing: border-box;
-    border: 1px solid var(--form-control-border);
-    border-radius: 8px;
-    background: var(--form-control-bg);
-    color: var(--foreground);
-    font: inherit;
-    font-weight: 400;
-    padding: 10px 12px;
-  }
-
-  .rivet-web-app-field textarea {
-    min-height: 110px;
-    resize: vertical;
-  }
-
-  .rivet-web-app-button {
-    width: fit-content;
-    border: 0;
-    border-radius: var(--ui-button-radius);
-    background: var(--success);
-    color: var(--grey-lightest);
-    cursor: pointer;
-    font: inherit;
-    font-weight: 700;
-    padding: 10px 16px;
-  }
-
-  .rivet-web-app-button:disabled {
-    cursor: wait;
-    opacity: 0.72;
-  }
-
-  .rivet-web-app-output {
-    display: grid;
-    gap: 8px;
-  }
-
-  .rivet-web-app-output-title {
-    color: var(--primary-text);
-    font-weight: 700;
-  }
-
-  .rivet-web-app-output pre {
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .rivet-web-app-markdown,
-  .rivet-web-app-output-markdown {
-    word-break: break-word;
-  }
-
-  .rivet-web-app-markdown > :first-child,
-  .rivet-web-app-output-markdown > :first-child {
-    margin-top: 0;
-  }
-
-  .rivet-web-app-markdown > :last-child,
-  .rivet-web-app-output-markdown > :last-child {
-    margin-bottom: 0;
-  }
-
-  .rivet-web-app-error {
-    color: var(--error);
-    font-weight: 700;
-  }
-`;
 
 export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   activeComponentId,
@@ -176,7 +62,8 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   };
 
   return (
-    <div css={styles}>
+    <div className="rivet-web-app-root">
+      <style>{RIVET_WEB_APP_RENDERER_CSS}</style>
       <main className="rivet-web-app-surface">
         {uiGraph.components.map((component) => (
           <div
@@ -214,7 +101,7 @@ const RivetWebAppComponent: FC<{
       : component.type === 'output' && outputRenderMode === 'markdown'
         ? renderOutputValue(state[component.stateKey], 'markdown')
         : undefined;
-  const markdownHtml = useMarkdown(markdownText, markdownText != null);
+  const markdownHtml = useMarkdown(markdownText, markdownText != null, { allowHtml: false });
 
   switch (component.type) {
     case 'text':
