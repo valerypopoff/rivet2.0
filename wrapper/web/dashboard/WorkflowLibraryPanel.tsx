@@ -4,7 +4,7 @@ import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
 import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
 import { WorkflowLibraryModals } from './WorkflowLibraryModals';
-import type { WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
+import type { HostedRouteConfig, WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
 import { getParentRelativePath } from './workflowLibraryHelpers';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
@@ -32,6 +32,7 @@ interface WorkflowLibraryPanelProps {
   collapsed: boolean;
   contentVisible: boolean;
   onToggleCollapse: () => void;
+  routeConfig: HostedRouteConfig;
 }
 
 const SidebarOpenIcon: FC = () => (
@@ -65,6 +66,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   collapsed,
   contentVisible,
   onToggleCollapse,
+  routeConfig,
 }) => {
   const controller = useWorkflowLibraryController({
     onOpenProject,
@@ -255,7 +257,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <WorkflowLibraryContextMenus controller={controller} />
-        <WorkflowLibraryModals controller={controller} />
+        <WorkflowLibraryModals controller={controller} routeConfig={routeConfig} />
       </div>
 
       {collapsed ? (

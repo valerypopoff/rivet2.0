@@ -33,6 +33,8 @@ const envKeys = [
   'RIVET_RECORDINGS_ENABLED',
   'RIVET_PUBLISHED_WORKFLOWS_BASE_PATH',
   'RIVET_LATEST_WORKFLOWS_BASE_PATH',
+  'RIVET_PUBLISHED_APPS_BASE_PATH',
+  'RIVET_LATEST_APPS_BASE_PATH',
   'RIVET_WEB_APPS_BASE_PATH',
   'RIVET_LATEST_WEB_APPS_BASE_PATH',
 ] as const;
@@ -56,6 +58,8 @@ process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = 'false';
 process.env.RIVET_RECORDINGS_ENABLED = 'false';
 process.env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH = '/workflows';
 process.env.RIVET_LATEST_WORKFLOWS_BASE_PATH = '/workflows-latest';
+process.env.RIVET_PUBLISHED_APPS_BASE_PATH = '/apps';
+process.env.RIVET_LATEST_APPS_BASE_PATH = '/apps-latest';
 process.env.RIVET_WEB_APPS_BASE_PATH = '/apps';
 process.env.RIVET_LATEST_WEB_APPS_BASE_PATH = '/apps-latest';
 
@@ -424,8 +428,14 @@ test('api config advertises latest debugger websocket only when supported', asyn
       signal: AbortSignal.timeout(5000),
     });
     assert.equal(response.status, 200);
-    const payload = await response.json() as { remoteDebuggerDefaultWs: string };
+    const payload = await response.json() as {
+      latestAppsBasePath: string;
+      publishedAppsBasePath: string;
+      remoteDebuggerDefaultWs: string;
+    };
     assert.match(payload.remoteDebuggerDefaultWs, /^ws:\/\/127\.0\.0\.1:\d+\/ws\/latest-debugger$/);
+    assert.equal(payload.publishedAppsBasePath, '/apps');
+    assert.equal(payload.latestAppsBasePath, '/apps-latest');
   } finally {
     await controlEnabled.close();
   }

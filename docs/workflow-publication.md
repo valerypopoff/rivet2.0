@@ -16,7 +16,7 @@ In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In s
 - **Settings sidecar** (`*.rivet-project.wrapper-settings.json`): stores the endpoint draft plus endpoint and web-app publication state
 - **Stats sidecar** (`*.rivet-project.wrapper-stats.json`): generated wrapper cache for graph/node counts in `filesystem` mode; it is rebuilt when the project file changes and is not part of publication state
 - **Published snapshot** (`.published/<snapshotId>.rivet-project`): frozen copy of the currently published project version
-- **Published web app**: one `Project.uiGraphs` entry pinned to a frozen project snapshot and exposed as `${RIVET_WEB_APPS_BASE_PATH:-/apps}/<slug>`, with a companion `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/<slug>` route that serves the latest saved draft for the same published app slug
+- **Published web app**: one `Project.uiGraphs` entry pinned to a frozen project snapshot and exposed as `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>`, with a companion `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>` route that serves the latest saved draft for the same published app slug
 - **Published version history**: every successful publish creates a durable downloadable history entry for that project
   - in `filesystem` mode: `.published/<versionId>.rivet-project` plus `.published/<versionId>.json` metadata and an optional `.rivet-data` sidecar
   - in `managed` mode: a `workflow_published_versions` row pointing at a durable `workflow_revisions` project blob in object storage
@@ -94,7 +94,7 @@ In Project Settings:
 - `Unpublish` sits next to the workflow endpoint row whenever the workflow is currently published or has unpublished changes
 - `Delete project` is in a separated lower section that remains visible regardless of the selected Project Settings tab; it is enabled only for fully unpublished projects. On the `Workflow` tab only, that same lower section also shows the `Published version history` secondary action as a visible button.
 - endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
-- Project Settings is split into `Workflow` and `Web apps` tabs. The `Workflow` tab owns normal endpoint publication and published-version history. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_WEB_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` and `/apps-latest/<slug>` paths are links that open in a new browser tab using the current Rivet server origin, and the app's `Update` button remains disabled until the slug draft changes.
+- Project Settings is split into `Workflow` and `Web apps` tabs. The `Workflow` tab owns normal endpoint publication and published-version history. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` and `/apps-latest/<slug>` paths are links that open in a new browser tab using the current Rivet server origin, and the app's `Update` button remains disabled until the slug draft changes.
 
 ## Publish flow
 
@@ -119,15 +119,15 @@ Rivet web apps are stored in project YAML under `Project.uiGraphs`. They are pub
 2. The user assigns a slug for one or more web apps. Slugs use the same public-name rule as workflow endpoints: letters, numbers, and hyphens only.
 3. The dashboard posts `{ relativePath, publications: [{ uiGraphId, slug }] }` to `POST /api/workflows/projects/web-apps/publish`.
 4. The server validates that every `uiGraphId` exists in the current saved project and that every slug is globally unique across published web apps, case-insensitively.
-5. The server pins the selected web apps to the current saved project snapshot/revision and exposes each as `${RIVET_WEB_APPS_BASE_PATH:-/apps}/<slug>`.
-6. The same published app slug also opens `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/<slug>`, which serves the latest saved draft/current server-side project for that app's UI graph.
+5. The server pins the selected web apps to the current saved project snapshot/revision and exposes each as `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>`.
+6. The same published app slug also opens `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>`, which serves the latest saved draft/current server-side project for that app's UI graph.
 
 Multiple web apps from the same project may be published at the same time as long as their slugs differ. Republish replaces only the selected UI graph publications; other web apps from that project keep serving their previous pinned snapshots. Unpublishing one web app removes only that `uiGraphId` publication and leaves any workflow endpoint publication plus other web apps intact. If a published UI graph is later removed from the draft project, the pinned app still serves from its old snapshot/revision; Project Settings lists it as missing from the current project so it can be explicitly unpublished, but it cannot be republished until the UI graph exists again.
 
 Web apps have a binary wrapper publication state: published or not published. They do not show workflow-style `Published` versus `Unpublished changes` state. Instead, a published app exposes two browser routes:
 
-- `${RIVET_WEB_APPS_BASE_PATH:-/apps}/<slug>` serves the frozen project snapshot captured when that web app was published.
-- `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/<slug>` serves the latest saved draft/current server-side project for that same app slug.
+- `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>` serves the frozen project snapshot captured when that web app was published.
+- `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>` serves the latest saved draft/current server-side project for that same app slug.
 
 The latest web-app route cannot see unsaved in-browser editor state until the editor saves the project. It is "latest saved", matching the server-side latest workflow route model, not a live read from Rivet's in-memory editor tab.
 
@@ -361,10 +361,10 @@ Four public endpoint families exist:
   - serves the frozen published snapshot
   - stable across live edits
   - belongs to the execution surface
-- **Published Rivet web app** (`${RIVET_WEB_APPS_BASE_PATH:-/apps}/:slug`)
+- **Published Rivet web app** (`${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug`)
   - serves one declarative `Project.uiGraphs` entry from the frozen snapshot/revision captured for that published app
   - belongs to the execution surface
-- **Latest Rivet web app** (`${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/:slug`)
+- **Latest Rivet web app** (`${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug`)
   - serves the same published app slug from the latest saved draft/current server-side project
   - belongs to the control surface
 - **Latest** (`${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}/:endpointName`)
@@ -380,18 +380,22 @@ The published and latest workflow execution routes:
 
 Published web app routes match app slugs case-insensitively, but preserve the stored slug casing. They have their own HTTP shape:
 
-- `GET ${RIVET_WEB_APPS_BASE_PATH:-/apps}/:slug`
+- `GET ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug`
   - renders HTML for the published UI graph attached to that slug
-- `GET ${RIVET_WEB_APPS_BASE_PATH:-/apps}/:slug/app.json`
+- `GET ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/app.json`
   - returns the published UI graph JSON
-- `POST ${RIVET_WEB_APPS_BASE_PATH:-/apps}/:slug/actions/run`
+- `POST ${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/actions/run`
   - runs the clicked button's same-project graph action
-- `GET ${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/:slug`
+- `GET ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug`
   - renders HTML for the latest saved draft of the published UI graph attached to that slug
-- `GET ${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/:slug/app.json`
+- `GET ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/app.json`
   - returns the latest saved draft UI graph JSON
-- `POST ${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
+- `POST ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
   - runs the clicked button's same-project graph action against the latest saved draft
+
+`RIVET_PUBLISHED_APPS_BASE_PATH` and `RIVET_LATEST_APPS_BASE_PATH` are the preferred route-prefix env names for web apps. The older `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` names still work as aliases, but the preferred names win when both are set.
+
+Project Settings displays workflow and web-app endpoint prefixes from the runtime `/api/config` response instead of hardcoding bundled Vite env values. After changing these prefixes in `.env` for a prebuilt `npm run prod` deployment, run `npm run prod:restart` and reload the browser so both nginx/API routing and the dashboard UI use the new values.
 
 The action routes use the same project resolver family, dataset provider, project-reference loader, `ManagedCodeRunner`, and request-header context injection as workflow execution. The wrapper deliberately does not pass endpoint `inputs` to `runRivetWebAppAction`; Rivet maps the declarative UI state into graph inputs from the button action. HTML embeds an opaque `revisionKey`, and action posts with an older key fail with `409` after that app slug is republished or the latest saved draft changes.
 

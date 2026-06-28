@@ -71,6 +71,13 @@ export type WorkflowTreeResponse = {
   projects: WorkflowProjectItem[];
 };
 
+export type HostedRouteConfig = {
+  publishedWorkflowsBasePath: string;
+  latestWorkflowsBasePath: string;
+  publishedAppsBasePath: string;
+  latestAppsBasePath: string;
+};
+
 export type WorkflowProjectOpenOptions = {
   preview?: boolean;
   replaceCurrent?: boolean;

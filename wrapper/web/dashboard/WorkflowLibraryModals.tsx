@@ -5,6 +5,7 @@ import { RuntimeLibrariesModal } from './RuntimeLibrariesModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
 import { WorkflowPublishedVersionHistoryModal } from './WorkflowPublishedVersionHistoryModal';
 import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
+import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
 type WorkflowLibraryController = ReturnType<typeof useWorkflowLibraryController>;
@@ -23,7 +24,8 @@ function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectMo
 
 export const WorkflowLibraryModals: FC<{
   controller: WorkflowLibraryController;
-}> = ({ controller }) => {
+  routeConfig: HostedRouteConfig;
+}> = ({ controller, routeConfig }) => {
   const {
     settingsModalOpen,
     settingsModalProject,
@@ -65,6 +67,7 @@ export const WorkflowLibraryModals: FC<{
           onRefresh={() => refresh(false)}
           onDeleteProject={onDeleteProject}
           onOpenPublishedHistory={openPublishedHistoryModal}
+          routeConfig={routeConfig}
         />
       ) : null}
       <WorkflowPublishedVersionHistoryModal

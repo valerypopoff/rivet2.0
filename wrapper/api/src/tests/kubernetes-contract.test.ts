@@ -145,6 +145,14 @@ test('chart validation rejects placeholder images, route-prefix drift, and unsup
     /RIVET_PUBLISHED_WORKFLOWS_BASE_PATH fixed at \/workflows/,
   );
   await assertHelmTemplateFails(
+    ['env.RIVET_PUBLISHED_APPS_BASE_PATH=/custom-apps'],
+    /RIVET_PUBLISHED_APPS_BASE_PATH fixed at \/apps/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_LATEST_APPS_BASE_PATH=/custom-apps-latest'],
+    /RIVET_LATEST_APPS_BASE_PATH fixed at \/apps-latest/,
+  );
+  await assertHelmTemplateFails(
     ['env.RIVET_WEB_APPS_BASE_PATH=/custom-apps'],
     /RIVET_WEB_APPS_BASE_PATH fixed at \/apps/,
   );

@@ -101,9 +101,9 @@ The important operational detail is that these tiers scale independently. A new 
 - `/api/shell/exec` runs allowlisted shell commands (`git` and `pnpm` by default, extendable via env).
 - `/api/config`, `/api/path/*`, and `/api/config/env/:name` expose hosted-mode configuration, app-data paths, and allowlisted env vars.
 - `POST ${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}/:endpointName` executes the frozen published snapshot through the execution-plane API.
-- `GET ${RIVET_WEB_APPS_BASE_PATH}/:slug` serves one published declarative Rivet web app from its frozen snapshot/revision through the execution-plane API; `POST ${RIVET_WEB_APPS_BASE_PATH}/:slug/actions/run` runs that web app's same-project graph actions through the same execution dependencies.
+- `GET ${RIVET_PUBLISHED_APPS_BASE_PATH}/:slug` serves one published declarative Rivet web app from its frozen snapshot/revision through the execution-plane API; `POST ${RIVET_PUBLISHED_APPS_BASE_PATH}/:slug/actions/run` runs that web app's same-project graph actions through the same execution dependencies.
 - `POST ${RIVET_LATEST_WORKFLOWS_BASE_PATH}/:endpointName` executes the latest live draft for a still-published workflow through the control-plane API, keyed by the current draft endpoint name.
-- `GET ${RIVET_LATEST_WEB_APPS_BASE_PATH}/:slug` serves a published web-app slug from the latest saved draft/current server-side project through the control-plane API; `POST ${RIVET_LATEST_WEB_APPS_BASE_PATH}/:slug/actions/run` runs that web app's same-project graph actions against that saved draft.
+- `GET ${RIVET_LATEST_APPS_BASE_PATH}/:slug` serves a published web-app slug from the latest saved draft/current server-side project through the control-plane API; `POST ${RIVET_LATEST_APPS_BASE_PATH}/:slug/actions/run` runs that web app's same-project graph actions against that saved draft.
 - `POST /internal/workflows/:endpointName` is an internal published-only execution route mounted on the execution-plane API service and not exposed through nginx.
 - In `managed` mode, those execution routes use API-local derived caches for warm endpoint execution; Postgres plus object storage remain authoritative, and cache invalidation is driven by same-process post-commit clearing plus Postgres `LISTEN/NOTIFY` across both control-plane and execution-plane API replicas.
 - A later cleanup pass kept that behavior intact but extracted the managed execution subsystem into focused internal modules so the large managed backend remains orchestration-oriented instead of owning the whole execution state machine inline. The later hardening pass also made the writer replica ignore self-originated `NOTIFY` payloads and tightened listener startup/disposal behavior without changing route contracts or cache semantics.
@@ -200,8 +200,10 @@ Interpretation rules:
 ### Routing and auth
 
 - `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH` and `RIVET_LATEST_WORKFLOWS_BASE_PATH` change the public execution route prefixes.
-- `RIVET_WEB_APPS_BASE_PATH` changes the published Rivet web app route prefix. In Kubernetes it is fixed at `/apps` with the rest of the chart route contract.
-- `RIVET_LATEST_WEB_APPS_BASE_PATH` changes the latest saved draft Rivet web app route prefix. In Kubernetes it is fixed at `/apps-latest` with the rest of the chart route contract.
+- `RIVET_PUBLISHED_APPS_BASE_PATH` changes the published Rivet web app route prefix. In Kubernetes it is fixed at `/apps` with the rest of the chart route contract.
+- `RIVET_LATEST_APPS_BASE_PATH` changes the latest saved draft Rivet web app route prefix. In Kubernetes it is fixed at `/apps-latest` with the rest of the chart route contract.
+- `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` remain backward-compatible aliases. When both names are present, the newer `RIVET_PUBLISHED_APPS_BASE_PATH` and `RIVET_LATEST_APPS_BASE_PATH` values win so local `.env` overrides are not masked by older Compose defaults.
+- `/api/config` returns the normalized workflow and web-app route prefixes. The dashboard uses that runtime response for Project Settings links and prefixed slug inputs, so production images can pick up `.env` route-prefix changes after container restart and browser reload without rebuilding the web bundle.
 - `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER` enables the API-hosted `/ws/latest-debugger` websocket for latest workflow endpoint runs and latest web-app action runs.
 - `RIVET_KEY` is the shared secret used for proxy-auth token derivation, public workflow bearer auth, and the optional UI gate.
 - In any nginx/proxy-fronted deployment such as Docker or Kubernetes, `RIVET_KEY` must always be present on both `proxy` and `api` even if `RIVET_REQUIRE_WORKFLOW_KEY=false` and `RIVET_REQUIRE_UI_GATE_KEY=false`, because `/api/*`, `/ui-auth`, and `/ws/latest-debugger` still rely on the trusted proxy header derived from that key.
@@ -209,7 +211,7 @@ Interpretation rules:
 - `RIVET_REQUIRE_UI_GATE_KEY` enables the browser-side nginx gate for the main UI and Rivet web apps.
 - `RIVET_UI_TOKEN_FREE_HOSTS` lists hosts that bypass the UI gate for the main UI and Rivet web apps, and also bypass public workflow bearer auth.
 - The UI gate prompt is staged into container-local `/tmp/nginx/html` at proxy startup. Compose mounts the source HTML at `/tmp/ui-gate-prompt.html`, but nginx serves only the staged copy.
-- `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_WEB_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_WEB_APPS_BASE_PATH}`. The tracked Docker defaults now pin that to `180s`, while websocket routes keep their separate long-lived timeouts.
+- `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}`. The tracked Docker defaults now pin that to `180s`, while websocket routes keep their separate long-lived timeouts.
 
 ### Storage and runtime libraries
 

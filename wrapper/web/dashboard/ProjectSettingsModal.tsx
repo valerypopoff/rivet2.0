@@ -4,22 +4,21 @@ import TextField from '@atlaskit/textfield';
 import { type FC, useEffect, useMemo, type ReactNode, useState } from 'react';
 
 import {
-  RIVET_LATEST_WEB_APPS_BASE_PATH,
-  RIVET_LATEST_WORKFLOWS_BASE_PATH,
-  RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
-  RIVET_WEB_APPS_BASE_PATH,
-} from '../../shared/hosted-env';
-import {
   formatLastPublishedAtLabel,
   getWorkflowProjectStatusLabel,
 } from './projectSettingsForm';
 import type {
+  HostedRouteConfig,
   WorkflowProjectItem,
   WorkflowProjectStatus,
 } from './types';
 import { useProjectSettingsActions } from './useProjectSettingsActions';
 
-const renderWorkflowEndpointHelp = (status: WorkflowProjectStatus, endpointName: string): ReactNode => {
+const renderWorkflowEndpointHelp = (
+  routeConfig: HostedRouteConfig,
+  status: WorkflowProjectStatus,
+  endpointName: string,
+): ReactNode => {
   switch (status) {
     case 'unpublished':
       return null;
@@ -29,7 +28,7 @@ const renderWorkflowEndpointHelp = (status: WorkflowProjectStatus, endpointName:
           The workflow is accessible via the endpoint on 
           <br />
           <code className="project-settings-endpoint-code">
-            {`${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}/${endpointName}`}
+            {`${routeConfig.publishedWorkflowsBasePath}/${endpointName}`}
           </code>
         </>
       );
@@ -43,14 +42,14 @@ const renderWorkflowEndpointHelp = (status: WorkflowProjectStatus, endpointName:
           The published workflow version is still accessible on 
           <br />
           <code className="project-settings-endpoint-code">
-            {`${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}/${endpointName}`}
+            {`${routeConfig.publishedWorkflowsBasePath}/${endpointName}`}
           </code>
           <br />
           <br />
           The unpublished changes are accessible on 
           <br />
           <code className="project-settings-endpoint-code">
-            {`${RIVET_LATEST_WORKFLOWS_BASE_PATH}/${endpointName}`}
+            {`${routeConfig.latestWorkflowsBasePath}/${endpointName}`}
           </code>
         </>
       );
@@ -89,6 +88,7 @@ type ProjectSettingsModalProps = {
   onRefresh: () => void | Promise<void>;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onOpenPublishedHistory: (project: WorkflowProjectItem) => void;
+  routeConfig: HostedRouteConfig;
 };
 
 export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
@@ -99,6 +99,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   onRefresh,
   onDeleteProject,
   onOpenPublishedHistory,
+  routeConfig,
 }) => {
   const [activeTab, setActiveTab] = useState<ProjectSettingsTab>('workflow');
   useEffect(() => {
@@ -205,7 +206,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
       <div className="project-settings-field">
         <div className="project-settings-input-row project-settings-prefixed-input-row">
           <span className="project-settings-url-prefix">
-            {`${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}/`}
+            {`${routeConfig.publishedWorkflowsBasePath}/`}
           </span>
           <TextField
             id="workflow-project-endpoint-name"
@@ -239,7 +240,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         </div>
         {!isUnpublishedProject ? (
           <div className="project-settings-help project-settings-status-help">
-            {renderWorkflowEndpointHelp(displayedProjectStatus, publishedEndpointName)}
+            {renderWorkflowEndpointHelp(routeConfig, displayedProjectStatus, publishedEndpointName)}
           </div>
         ) : null}
         {endpointValidationError ? <div className="project-settings-error">{endpointValidationError}</div> : null}
@@ -297,7 +298,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                 <div className="project-settings-field">
                   <div className="project-settings-input-row project-settings-prefixed-input-row">
                     <span className="project-settings-url-prefix">
-                      {`${RIVET_WEB_APPS_BASE_PATH}/`}
+                      {`${routeConfig.publishedAppsBasePath}/`}
                     </span>
                     <TextField
                       id={`workflow-project-web-app-slug-${webApp.uiGraphId}`}
@@ -340,12 +341,12 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                   <div className="project-settings-help project-settings-web-app-access-help">
                     The web app is accessible via the endpoint on
                     <br />
-                    {renderWebAppEndpointLink(`${RIVET_WEB_APPS_BASE_PATH}/${displaySlug}`)}
+                    {renderWebAppEndpointLink(`${routeConfig.publishedAppsBasePath}/${displaySlug}`)}
                     <br />
                     <br />
                     The latest saved project changes are accessible on
                     <br />
-                    {renderWebAppEndpointLink(`${RIVET_LATEST_WEB_APPS_BASE_PATH}/${displaySlug}`)}
+                    {renderWebAppEndpointLink(`${routeConfig.latestAppsBasePath}/${displaySlug}`)}
                   </div>
                 ) : null}
                 {webApp.isMissingFromProject ? (

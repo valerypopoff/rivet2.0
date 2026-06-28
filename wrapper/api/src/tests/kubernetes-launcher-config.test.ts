@@ -102,6 +102,8 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
   assert.match(valuesYaml, /accessKeySecretName: "rivet-object-storage"/);
   assert.match(valuesYaml, /clusterDomain: "cluster\.local"/);
   assert.match(valuesYaml, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "true"/);
+  assert.match(valuesYaml, /RIVET_PUBLISHED_APPS_BASE_PATH: "\/apps"/);
+  assert.match(valuesYaml, /RIVET_LATEST_APPS_BASE_PATH: "\/apps-latest"/);
   assert.match(valuesYaml, /RIVET_WEB_APPS_BASE_PATH: "\/apps"/);
   assert.match(valuesYaml, /RIVET_LATEST_WEB_APPS_BASE_PATH: "\/apps-latest"/);
   assert.match(valuesYaml, /RIVET_REQUIRE_WORKFLOW_KEY: "false"/);

@@ -18,6 +18,14 @@
 {{- fail "Phase 3 and the first Phase 4 split keep RIVET_LATEST_WORKFLOWS_BASE_PATH fixed at /workflows-latest because the web image is still build-time configured" -}}
 {{- end -}}
 
+{{- if ne (index .Values.env "RIVET_PUBLISHED_APPS_BASE_PATH") "/apps" -}}
+{{- fail "RIVET_PUBLISHED_APPS_BASE_PATH fixed at /apps because the published web app route is part of the execution-plane contract" -}}
+{{- end -}}
+
+{{- if ne (index .Values.env "RIVET_LATEST_APPS_BASE_PATH") "/apps-latest" -}}
+{{- fail "RIVET_LATEST_APPS_BASE_PATH fixed at /apps-latest because the latest web app route is part of the control-plane contract" -}}
+{{- end -}}
+
 {{- if ne (index .Values.env "RIVET_WEB_APPS_BASE_PATH") "/apps" -}}
 {{- fail "RIVET_WEB_APPS_BASE_PATH fixed at /apps because the published web app route is part of the execution-plane contract" -}}
 {{- end -}}

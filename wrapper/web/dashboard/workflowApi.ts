@@ -8,6 +8,7 @@ import type {
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowProjectSettingsDraft,
+  HostedRouteConfig,
   WorkflowRecordingFilterStatus,
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
@@ -32,6 +33,11 @@ const workflowJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(re
 const hostedProjectJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
   nonJsonErrorMessage:
     'Project API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/projects is routed to the API service.',
+});
+
+const hostedConfigJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
+  nonJsonErrorMessage:
+    'Config API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/config is routed to the API service.',
 });
 
 async function parseBlobResponse(response: Response): Promise<{ blob: Blob; fileName: string | null }> {
@@ -101,6 +107,13 @@ export async function fetchWorkflowTree(): Promise<WorkflowTreeResponse> {
     cache: 'no-store',
   });
   return workflowJsonResponse<WorkflowTreeResponse>(response);
+}
+
+export async function fetchHostedConfig(): Promise<Partial<HostedRouteConfig>> {
+  const response = await fetch(`${API}/config`, {
+    cache: 'no-store',
+  });
+  return hostedConfigJsonResponse<Partial<HostedRouteConfig>>(response);
 }
 
 export async function fetchWorkflowRecordingWorkflows(options: { signal?: AbortSignal } = {}): Promise<WorkflowRecordingWorkflowListResponse> {

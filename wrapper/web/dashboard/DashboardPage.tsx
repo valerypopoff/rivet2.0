@@ -2,18 +2,40 @@ import { useCallback, useEffect, useRef, useState, type FC } from 'react';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel';
-import type { WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
+import type { HostedRouteConfig, WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
 import { useEditorCommandQueue } from './useEditorCommandQueue';
 import { focusIframeElement } from './editorBridgeFocus';
 import { useDashboardSidebar } from './useDashboardSidebar';
 import { useEditorBridgeEvents } from './useEditorBridgeEvents';
+import { fetchHostedConfig } from './workflowApi';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
+import {
+  RIVET_LATEST_WEB_APPS_BASE_PATH,
+  RIVET_LATEST_WORKFLOWS_BASE_PATH,
+  RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
+  RIVET_WEB_APPS_BASE_PATH,
+} from '../../shared/hosted-env';
 import './DashboardPage.css';
 
 const WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH = 30;
 const MIN_SIDEBAR_WIDTH = 240;
 const MAX_SIDEBAR_WIDTH = 560;
+const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
+  publishedWorkflowsBasePath: RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
+  latestWorkflowsBasePath: RIVET_LATEST_WORKFLOWS_BASE_PATH,
+  publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
+  latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
+};
+
+function resolveHostedRouteConfig(config: Partial<HostedRouteConfig>): HostedRouteConfig {
+  return {
+    publishedWorkflowsBasePath: config.publishedWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedWorkflowsBasePath,
+    latestWorkflowsBasePath: config.latestWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestWorkflowsBasePath,
+    publishedAppsBasePath: config.publishedAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedAppsBasePath,
+    latestAppsBasePath: config.latestAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestAppsBasePath,
+  };
+}
 
 export const DashboardPage: FC = () => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -29,6 +51,7 @@ export const DashboardPage: FC = () => {
   const [editorReady, setEditorReady] = useState(false);
   const [openProjectCount, setOpenProjectCount] = useState(0);
   const [projectSaveSequence, setProjectSaveSequence] = useState(0);
+  const [routeConfig, setRouteConfig] = useState<HostedRouteConfig>(DEFAULT_HOSTED_ROUTE_CONFIG);
   const postEditorCommand = useEditorCommandQueue(iframeRef, editorReady);
   const {
     handleResizeMouseDown,
@@ -239,6 +262,23 @@ export const DashboardPage: FC = () => {
     workflowPathMoveAckResolversRef.current.clear();
   }, [clearPendingWorkflowProjectOpen]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetchHostedConfig()
+      .then((config) => {
+        if (!cancelled) {
+          setRouteConfig(resolveHostedRouteConfig(config));
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load hosted route config; using bundled defaults.', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEditorBridgeEvents({
     activeWorkflowProjectPath,
     editorReady,
@@ -342,6 +382,7 @@ export const DashboardPage: FC = () => {
           collapsed={sidebarCollapsed}
           contentVisible={sidebarContentVisible}
           onToggleCollapse={handleToggleSidebar}
+          routeConfig={routeConfig}
         />
       </aside>
       {!sidebarCollapsed || sidebarResizing ? (

@@ -101,7 +101,7 @@ Operational note:
 - use the repo launchers (`npm run dev`, `npm run prod`, `npm run dev:docker:*`, or the Docker launcher scripts) for Docker runs; a raw `docker compose --env-file .env ...` invocation only reads the variables already present in the env file and does not derive absolute workflow, recording, or runtime-library host paths from `RIVET_ARTIFACTS_HOST_PATH`
 - Docker launchers intentionally drop ambient host `NODE_OPTIONS` unless `.env` defines `NODE_OPTIONS` explicitly. This keeps Yarn 4/PnP host preloads such as `--require F:\...\.pnp.cjs` from being interpolated into Linux container startup commands while leaving non-Docker local runners alone.
 - Docker dev mode bind-mounts the live upstream Rivet checkout into the web and API containers. Because the API links `@valerypopoff/rivet2-node` through built `dist` files, API startup runs `scripts/ensure-rivet-runtime-build.mjs` against the mounted Rivet source before linking packages. If upstream `packages/core` or `packages/node` source is newer than the required runtime outputs, it runs upstream `yarn build:runtime`; otherwise it logs that the runtime dist is fresh. This prevents fixed upstream source, such as published web-app renderer changes, from being hidden by stale local `dist` files.
-- `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_WEB_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_WEB_APPS_BASE_PATH}` in the Docker stacks; the default tracked value is `180s`
+- `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` in the Docker stacks; the default tracked value is `180s`
 - `RIVET_COMMAND_TIMEOUT` is unrelated to workflow HTTP lifetime; it only bounds hosted shell execution under `/api/shell/exec`
 - `RIVET_STORAGE_MODE=managed` switches both workflows and runtime libraries to managed Postgres plus object storage; in that mode `RIVET_RUNTIME_LIBRARIES_ROOT` remains only a local cache/workspace
 - optional managed runtime-library readiness tuning uses:
@@ -279,13 +279,14 @@ Current behavior:
 - the browser entrypoint is still `http://localhost:8080` through nginx by default; override it with `RIVET_PORT` if needed
 - `npm run prod` and `npm run prod:prebuilt` pull prebuilt images under `ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/{proxy,web,api,executor}:${RIVET_IMAGE_TAG:-latest}`, then force-recreate the stack with `--no-build`; set `RIVET_PROXY_IMAGE`, `RIVET_WEB_IMAGE`, `RIVET_API_IMAGE`, or `RIVET_EXECUTOR_IMAGE` to pin any service to a different image. Keep the image examples in `.env.example` on that same namespace so VM overrides do not accidentally pull the legacy wrapper images.
 - `npm run prod:restart` skips the pull/build step and force-recreates the stack from the images already present locally. Use it after changing `.env` when you want containers to pick up new env values without updating to newer GHCR images.
+- Project Settings reads route prefixes from the runtime `/api/config` response, not just from the prebuilt web bundle. After changing values such as `RIVET_PUBLISHED_APPS_BASE_PATH` or `RIVET_LATEST_APPS_BASE_PATH`, `npm run prod:restart` plus a browser reload is enough for nginx, API routing, and the displayed web-app links to agree.
 - `npm run prod:custom` rebuilds the stack from the current wrapper repo and the current `rivet/` source folder, using the filtered `rivet_source` and `rivet_dependency_metadata` Docker build contexts
 - the API is also exposed directly on `http://localhost:3100` for diagnostics
-- `npm run dev` / `npm run dev:docker` force-recreate only the already-running dev `proxy` service after the stack is up, so nginx re-reads mounted route templates and the staged UI gate prompt without forcing a full API/web/executor recreate. If a new proxied route such as `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}` falls through to the wrapper UI, rerun `npm run dev` or use `npm run dev:recreate` for a full reset.
+- `npm run dev` / `npm run dev:docker` force-recreate only the already-running dev `proxy` service after the stack is up, so nginx re-reads mounted route templates and the staged UI gate prompt without forcing a full API/web/executor recreate. If a new proxied route such as `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}` falls through to the wrapper UI, rerun `npm run dev` or use `npm run dev:recreate` for a full reset.
 - proxy startup scripts are Linux shell scripts; dev Compose mounts them from the repo, while production images bake them into the proxy image. The repo pins `*.sh` files to LF line endings so Windows checkouts do not inject CRLF characters into `/bin/sh`
 - proxy startup copies the UI gate prompt from its mounted or baked source into `/tmp/nginx/html` before nginx starts; nginx serves the staged copy instead of repeatedly reading a host-mounted HTML file on each gated request. When changing the prompt, recreate the proxy so the staged copy is refreshed. The prompt posts a sanitized local `return_to` path so successful key entry returns to the requested dashboard/editor or published web-app URL instead of always landing on `/`.
 - standard proxied HTTP routes now default to a `180s` upstream timeout through `RIVET_PROXY_READ_TIMEOUT`; websocket routes stay long-lived separately
-- the local Docker stacks keep `RIVET_API_PROFILE=combined` by default, so `/api/*`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, `${RIVET_LATEST_WEB_APPS_BASE_PATH}`, `${RIVET_WEB_APPS_BASE_PATH}`, and `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` all land on the same `api` container there
+- the local Docker stacks keep `RIVET_API_PROFILE=combined` by default, so `/api/*`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, `${RIVET_LATEST_APPS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, and `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` all land on the same `api` container there
 - the `web` service runs the Vite dev server inside the container with live bind mounts
 - Docker dev rebuilds the `api` and `executor` services from Dockerfiles while running `web` through Vite; `npm run prod:custom` rebuilds `proxy`, `web`, `api`, and `executor`
 - the launchers compute host bind mounts before calling Compose. With `RIVET_ARTIFACTS_HOST_PATH=../` from the repo root, both dev and production-style Docker mount `<repo>/../workflows` at `/workflows`, `<repo>/../workflow-recordings` at `/workflow-recordings`, and `<repo>/../runtime-libraries` at `/data/runtime-libraries`. If you bypass the launcher and run Compose directly, set those three `RIVET_*_HOST_PATH` values explicitly or Compose may fall back to repo-local defaults.
@@ -672,7 +673,7 @@ For the current Helm chart and images:
 4. keep `replicaCount.backend=1`
 5. keep `autoscaling.backend.enabled=false`
 6. keep `workflowStorage.backend=managed` and `runtimeLibraries.backend=managed`
-7. keep `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`, `RIVET_WEB_APPS_BASE_PATH=/apps`, `RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`, and `RIVET_LATEST_WEB_APPS_BASE_PATH=/apps-latest`
+7. keep `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`, `RIVET_PUBLISHED_APPS_BASE_PATH=/apps`, `RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`, and `RIVET_LATEST_APPS_BASE_PATH=/apps-latest`
 8. set `env.RIVET_PROXY_RESOLVER` for in-cluster nginx DNS resolution
 9. provide `RIVET_KEY` through `auth.keySecretName` or Vault, even if the optional UI gate and public workflow bearer checks are disabled
 10. keep the control-plane API on `RIVET_API_PROFILE=control` and the execution Deployment on `RIVET_API_PROFILE=execution`
@@ -742,7 +743,7 @@ For the current execution-plane split specifically:
 1. keep the control plane conservative and scale the execution Deployment instead of the backend StatefulSet
 2. keep the proxy Deployment redundant because every published endpoint call still crosses it
 3. treat `execution` as the primary endpoint-throughput scale boundary and `proxy` as a separate ingress tier rather than a one-for-one partner
-4. confirm `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_WEB_APPS_BASE_PATH}` reach the execution-plane API while `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` and `${RIVET_LATEST_WEB_APPS_BASE_PATH}` still reach the control-plane API
+4. confirm `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_PUBLISHED_APPS_BASE_PATH}` reach the execution-plane API while `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` and `${RIVET_LATEST_APPS_BASE_PATH}` still reach the control-plane API
 5. confirm `/api/*` and `POST /__rivet_auth` still reach the control-plane API
 6. confirm `/internal/workflows/:endpointName` is not exposed through nginx and is only reachable inside the cluster
 7. confirm runtime-library `Endpoint execution` readiness reflects execution-plane API replicas, not control-plane API replicas
@@ -775,7 +776,7 @@ Current follow-up expectations:
 
 Use the current compatibility commands intentionally:
 
-- the repo-local test portions scrub ambient runtime-root, managed-storage, execution-route, runtime-library, and recording env such as `RIVET_WORKFLOWS_ROOT`, `RIVET_ARTIFACTS_HOST_PATH`, `RIVET_DATABASE_CONNECTION_STRING`, `RIVET_STORAGE_URL`, `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_WEB_APPS_BASE_PATH`, `RIVET_LATEST_WEB_APPS_BASE_PATH`, and `RIVET_ENV_FILE` before spawning API tests, so local `.env` or shell state cannot redirect those tests into a real workflow folder, database, object store, route prefix, runtime-library role, or recording policy
+- the repo-local test portions scrub ambient runtime-root, managed-storage, execution-route, runtime-library, and recording env such as `RIVET_WORKFLOWS_ROOT`, `RIVET_ARTIFACTS_HOST_PATH`, `RIVET_DATABASE_CONNECTION_STRING`, `RIVET_STORAGE_URL`, `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, `RIVET_WEB_APPS_BASE_PATH`, `RIVET_LATEST_WEB_APPS_BASE_PATH`, and `RIVET_ENV_FILE` before spawning API tests, so local `.env` or shell state cannot redirect those tests into a real workflow folder, database, object store, route prefix, runtime-library role, or recording policy
 - `npm run verify:filesystem`
   - runs the repo-local baseline for filesystem compatibility:
     - `wrapper/api` build

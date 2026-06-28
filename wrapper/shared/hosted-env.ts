@@ -1,4 +1,4 @@
-import { normalizeBasePath } from './normalize-base-path';
+import { normalizeBasePath, normalizeBasePathFromAliases } from './normalize-base-path';
 
 const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const wsBase = typeof window !== 'undefined' ? `${wsProtocol}//${window.location.host}` : 'ws://localhost';
@@ -17,12 +17,18 @@ export const RIVET_LATEST_WORKFLOWS_BASE_PATH = normalizeBasePath(
   viteEnv?.RIVET_LATEST_WORKFLOWS_BASE_PATH,
   '/workflows-latest',
 );
-export const RIVET_WEB_APPS_BASE_PATH = normalizeBasePath(
-  viteEnv?.RIVET_WEB_APPS_BASE_PATH,
+export const RIVET_WEB_APPS_BASE_PATH = normalizeBasePathFromAliases(
+  [
+    viteEnv?.RIVET_PUBLISHED_APPS_BASE_PATH,
+    viteEnv?.RIVET_WEB_APPS_BASE_PATH,
+  ],
   '/apps',
 );
-export const RIVET_LATEST_WEB_APPS_BASE_PATH = normalizeBasePath(
-  viteEnv?.RIVET_LATEST_WEB_APPS_BASE_PATH,
+export const RIVET_LATEST_WEB_APPS_BASE_PATH = normalizeBasePathFromAliases(
+  [
+    viteEnv?.RIVET_LATEST_APPS_BASE_PATH,
+    viteEnv?.RIVET_LATEST_WEB_APPS_BASE_PATH,
+  ],
   '/apps-latest',
 );
 

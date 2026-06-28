@@ -12,13 +12,13 @@ That split is intentional. The singleton `backend` owns:
 - `/api/*`
 - `/ui-auth`
 - `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}`
-- `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}`
+- `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}`
 - `/ws/latest-debugger`
 
 The `execution` Deployment owns:
 
 - `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}`
-- `${RIVET_WEB_APPS_BASE_PATH:-/apps}`
+- `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}`
 - `/internal/workflows/:endpointName`
 
 Do not scale `backend` horizontally in the current chart shape. Latest workflow execution, latest web-app action execution, and `/ws/latest-debugger` are still process-local control-plane features.
@@ -527,8 +527,8 @@ The production contract today is:
 - `autoscaling.execution.enabled=true`
 - `env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`
 - `env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
-- `env.RIVET_WEB_APPS_BASE_PATH=/apps`
-- `env.RIVET_LATEST_WEB_APPS_BASE_PATH=/apps-latest`
+- `env.RIVET_PUBLISHED_APPS_BASE_PATH=/apps`
+- `env.RIVET_LATEST_APPS_BASE_PATH=/apps-latest`
 - `clusterDomain=cluster.local` unless the cluster DNS suffix is different
 - `env.RIVET_PROXY_RESOLVER` must be set for in-cluster nginx DNS resolution
 - control-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=none` with the job worker enabled there
@@ -580,7 +580,7 @@ Then validate:
 - do not couple `proxy` and `execution` replica counts mechanically; let each tier scale for its own pressure
 - set concrete CPU and memory requests for `proxy` and `execution` before treating HPA as production-ready
 - keep the same `RIVET_KEY` available to both `proxy` and the API workloads
-- route `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, `${RIVET_LATEST_WEB_APPS_BASE_PATH}`, and `/ws/latest-debugger` to the singleton control plane
-- route `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_WEB_APPS_BASE_PATH}` to the execution plane
+- route `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, `${RIVET_LATEST_APPS_BASE_PATH}`, and `/ws/latest-debugger` to the singleton control plane
+- route `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_PUBLISHED_APPS_BASE_PATH}` to the execution plane
 - keep runtime-library job ownership on the singleton control plane and keep execution replicas in sync-only mode
 - treat the local launcher as a rehearsal wrapper around the real chart, not a separate deployment contract

@@ -53,6 +53,8 @@ test('proxy templates route public workflow traffic to the right API plane', () 
 
   assert.ok(!imageProxyTemplate.includes('location /internal/workflows'));
   assert.match(proxyBootstrap, /resolve_proxy_resolver\(\)/);
+  assert.match(proxyBootstrap, /RIVET_PUBLISHED_APPS_BASE_PATH:-\$\{RIVET_WEB_APPS_BASE_PATH:-\}/);
+  assert.match(proxyBootstrap, /RIVET_LATEST_APPS_BASE_PATH:-\$\{RIVET_LATEST_WEB_APPS_BASE_PATH:-\}/);
   assert.match(proxyBootstrap, /export RIVET_PROXY_RESOLVER="\$\(resolve_proxy_resolver "\$\{RIVET_PROXY_RESOLVER:-\}"\)"/);
 });
 

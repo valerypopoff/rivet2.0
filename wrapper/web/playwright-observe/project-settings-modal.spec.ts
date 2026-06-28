@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type {
+  HostedRouteConfig,
   WorkflowProjectItem,
   WorkflowProjectWebAppSummary,
   WorkflowPublishedVersionSummary,
@@ -23,6 +24,13 @@ type ProjectSettingsRouteTrackers = {
 
 type ProjectSettingsFixtureProject = WorkflowProjectItem & {
   webApps?: WorkflowProjectWebAppSummary[];
+};
+
+const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
+  publishedWorkflowsBasePath: '/workflows',
+  latestWorkflowsBasePath: '/workflows-latest',
+  publishedAppsBasePath: '/apps',
+  latestAppsBasePath: '/apps-latest',
 };
 
 function isRouteRequest(routeRequest: { method: () => string; url: () => string }, method: string, pathname: string): boolean {
@@ -93,9 +101,14 @@ async function installProjectSettingsRoutes(
   page: Page,
   projectOrProjects: ProjectSettingsFixtureProject | ProjectSettingsFixtureProject[],
   trackers: ProjectSettingsRouteTrackers,
+  options: { routeConfig?: Partial<HostedRouteConfig> } = {},
 ): Promise<void> {
   const projects = Array.isArray(projectOrProjects) ? projectOrProjects : [projectOrProjects];
   const project = projects[0]!;
+  const routeConfig = {
+    ...DEFAULT_HOSTED_ROUTE_CONFIG,
+    ...options.routeConfig,
+  };
   const publishedVersions: WorkflowPublishedVersionSummary[] = Array.from({ length: 12 }, (_, index) => ({
     id: `published-version-${index + 1}`,
     projectId: project.id,
@@ -114,6 +127,19 @@ async function installProjectSettingsRoutes(
       isCurrent: index === 0 && project.settings.status !== 'unpublished',
     }));
   };
+
+  await page.route('**/api/config', async (route) => {
+    if (!isRouteRequest(route.request(), 'GET', '/api/config')) {
+      await route.fallback();
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(routeConfig),
+    });
+  });
 
   await page.route('**/api/workflows/tree', async (route) => {
     if (!isRouteRequest(route.request(), 'GET', '/api/workflows/tree')) {
@@ -609,7 +635,12 @@ test.describe('Project settings modal', () => {
       },
     ];
     const routeTrackers = createProjectSettingsRouteTrackers();
-    await installProjectSettingsRoutes(page, project, routeTrackers);
+    await installProjectSettingsRoutes(page, project, routeTrackers, {
+      routeConfig: {
+        publishedAppsBasePath: '/custom-apps',
+        latestAppsBasePath: '/custom-apps-latest',
+      },
+    });
 
     const { modal } = await openProjectSettingsModal(page, project);
     await expect(modal.getByRole('tab', { name: 'Workflow' })).toHaveAttribute('aria-selected', 'true');
@@ -649,20 +680,20 @@ test.describe('Project settings modal', () => {
     await expect(betaRow).toContainText('Published');
     await expect(alphaRow.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
     await expect(alphaRow).toContainText('The web app is accessible via the endpoint on');
-    await expect(alphaRow).toContainText('/apps/alpha-helper');
-    await expect(alphaRow).toContainText('/apps-latest/alpha-helper');
+    await expect(alphaRow).toContainText('/custom-apps/alpha-helper');
+    await expect(alphaRow).toContainText('/custom-apps-latest/alpha-helper');
     const currentOrigin = await page.evaluate(() => window.location.origin);
-    const publishedAppLink = alphaRow.getByRole('link', { name: 'Open /apps/alpha-helper in a new tab' });
-    const latestAppLink = alphaRow.getByRole('link', { name: 'Open /apps-latest/alpha-helper in a new tab' });
-    await expect(publishedAppLink).toHaveAttribute('href', `${currentOrigin}/apps/alpha-helper`);
+    const publishedAppLink = alphaRow.getByRole('link', { name: 'Open /custom-apps/alpha-helper in a new tab' });
+    const latestAppLink = alphaRow.getByRole('link', { name: 'Open /custom-apps-latest/alpha-helper in a new tab' });
+    await expect(publishedAppLink).toHaveAttribute('href', `${currentOrigin}/custom-apps/alpha-helper`);
     await expect(publishedAppLink).toHaveAttribute('target', '_blank');
-    await expect(latestAppLink).toHaveAttribute('href', `${currentOrigin}/apps-latest/alpha-helper`);
+    await expect(latestAppLink).toHaveAttribute('href', `${currentOrigin}/custom-apps-latest/alpha-helper`);
     await expect(latestAppLink).toHaveAttribute('target', '_blank');
     await expect(alphaRow.getByRole('button', { name: 'Unpublish' })).toHaveCSS('margin-left', '8px');
     await alphaRow.locator('input').fill('alpha-helper-renamed');
     await expect(alphaRow.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
-    await expect(alphaRow).toContainText('/apps/alpha-helper');
-    await expect(alphaRow).not.toContainText('/apps/alpha-helper-renamed');
+    await expect(alphaRow).toContainText('/custom-apps/alpha-helper');
+    await expect(alphaRow).not.toContainText('/custom-apps/alpha-helper-renamed');
     await expect.poll(() => routeTrackers.webAppPublishRequests.length).toBe(2);
     expect(routeTrackers.webAppPublishRequests[1]).toEqual({
       relativePath: project.relativePath,
