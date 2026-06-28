@@ -26,7 +26,7 @@ Browser
   |- /apps/*                -> execution-plane API
   |- /workflows-latest/*    -> control-plane API
   |- /apps-latest/*         -> control-plane API
-  |- /ws/latest-debugger    -> control-plane latest-workflow debugger websocket
+  |- /ws/latest-debugger    -> control-plane latest debugger websocket
   |- /ws/executor/internal  -> executor websocket used by the hosted editor
   `- /ws/executor           -> executor websocket kept for upstream-compatible clients
 ```
@@ -56,7 +56,7 @@ That control-plane singleton is intentional, not accidental. In the current supp
 - `execution` is the horizontal scale boundary for endpoint traffic
 - `proxy` stays as a separate scalable ingress tier in front of the execution plane
 - `web` may stay at `1` when dashboard/editor traffic is negligible
-- latest-workflow execution, latest web apps, and `/ws/latest-debugger` stay on the same control-plane process boundary
+- latest workflow execution, latest web-app action execution, and `/ws/latest-debugger` stay on the same control-plane process boundary
 - published endpoint execution and published web-app action execution scale on the execution Deployment and remain non-debuggable
 - the latest debugger is still process-local rather than a distributed cross-replica service
 
@@ -202,7 +202,7 @@ Interpretation rules:
 - `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH` and `RIVET_LATEST_WORKFLOWS_BASE_PATH` change the public execution route prefixes.
 - `RIVET_WEB_APPS_BASE_PATH` changes the published Rivet web app route prefix. In Kubernetes it is fixed at `/apps` with the rest of the chart route contract.
 - `RIVET_LATEST_WEB_APPS_BASE_PATH` changes the latest saved draft Rivet web app route prefix. In Kubernetes it is fixed at `/apps-latest` with the rest of the chart route contract.
-- `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER` enables the API-hosted `/ws/latest-debugger` websocket for latest-workflow runs only.
+- `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER` enables the API-hosted `/ws/latest-debugger` websocket for latest workflow endpoint runs and latest web-app action runs.
 - `RIVET_KEY` is the shared secret used for proxy-auth token derivation, public workflow bearer auth, and the optional UI gate.
 - In any nginx/proxy-fronted deployment such as Docker or Kubernetes, `RIVET_KEY` must always be present on both `proxy` and `api` even if `RIVET_REQUIRE_WORKFLOW_KEY=false` and `RIVET_REQUIRE_UI_GATE_KEY=false`, because `/api/*`, `/ui-auth`, and `/ws/latest-debugger` still rely on the trusted proxy header derived from that key.
 - `RIVET_REQUIRE_WORKFLOW_KEY` enables `Authorization: Bearer <RIVET_KEY>` checks on public workflow endpoint routes.

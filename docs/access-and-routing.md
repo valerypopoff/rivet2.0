@@ -7,7 +7,7 @@ The current runtime split keeps:
 - `control plane`
   - `/api/*`
   - `/ui-auth`
-  - latest-workflow execution
+  - latest workflow execution
   - latest Rivet web apps
   - latest debugger websocket
   - runtime-library and plugin admin flows
@@ -32,7 +32,7 @@ The Docker dev and production stacks expose these route families through nginx:
 | `${RIVET_WEB_APPS_BASE_PATH:-/apps}/:slug` | execution-plane `api` | Serve one published declarative Rivet web app from its frozen project snapshot |
 | `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}/:endpointName` | control-plane `api` | Execute the latest live draft for a still-published workflow, keyed by the current draft endpoint |
 | `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/:slug` | control-plane `api` | Serve one published declarative Rivet web app from the latest saved draft/current server-side project |
-| `/ws/latest-debugger` | control-plane `api` | Latest-workflow remote debugger websocket |
+| `/ws/latest-debugger` | control-plane `api` | Latest workflow and latest web-app action remote debugger websocket |
 | `/ws/executor/internal` | `executor` | Hosted editor execution websocket |
 | `/ws/executor` | `executor` | Upstream-compatible executor websocket path |
 
@@ -398,17 +398,17 @@ Important limitation:
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
 
-## Latest debugger model
+## Latest Debugger Model
 
-Latest-workflow remote debugging is opt-in and separate from the executor websocket:
+Latest remote debugging is opt-in and separate from the executor websocket:
 
 - it is enabled only when `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true`
-- it applies only to latest-workflow endpoint runs
-- published workflow endpoint runs never attach the remote debugger
+- it applies to latest workflow endpoint runs and latest web-app action runs under `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
+- published workflow endpoint runs and published web-app action runs never attach the remote debugger
 - the browser-facing websocket path is `/ws/latest-debugger`
 - when disabled, websocket upgrades on `/ws/latest-debugger` are rejected with `404`
 
-Endpoint recording persistence is unaffected by debugger state. Latest-workflow runs still persist normal recording history when recordings are enabled:
+Endpoint recording persistence is unaffected by debugger state. Latest workflow runs still persist normal recording history when recordings are enabled:
 
 - in `filesystem` mode, as recording bundles under `RIVET_WORKFLOW_RECORDINGS_ROOT` plus SQLite index rows
 - in `managed` mode, as Postgres metadata plus recording/replay blobs in object storage
@@ -417,8 +417,8 @@ Kubernetes support note:
 
 - the supported Kubernetes topology keeps `/ws/latest-debugger`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}`, and `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}` on the singleton control-plane backend
 - execution-plane API replicas may scale independently for `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}` and `${RIVET_WEB_APPS_BASE_PATH:-/apps}`
-- latest endpoint runs remain debuggable in that topology because both the latest execution route and `/ws/latest-debugger` stay on the same backend process boundary
-- published endpoint runs remain non-debuggable
+- latest workflow endpoint runs and latest web-app action runs remain debuggable in that topology because both the latest execution route family and `/ws/latest-debugger` stay on the same backend process boundary
+- published workflow endpoint runs and published web-app action runs remain non-debuggable
 - manually scaling the backend outside the chart guardrails is unsupported for latest debugging because the current debugger is still process-local, not a distributed cross-replica debugger
 
 ## Local dev note

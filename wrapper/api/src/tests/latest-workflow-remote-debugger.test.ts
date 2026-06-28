@@ -6,6 +6,13 @@ import WebSocket from 'ws';
 import { listenTestServer } from './helpers/http-server-harness.js';
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
 import {
+  createWebAppProject,
+  extractWebAppRevisionKey,
+  serializeWebAppProject,
+  WEB_APP_TEST_ACTION_COMPONENT_ID,
+  WEB_APP_TEST_UI_GRAPH_ID,
+} from './helpers/workflow-web-app-fixtures.js';
+import {
   closeWebSocket,
   connectWebSocket,
   expectWebSocketConnectionFailure,
@@ -21,8 +28,13 @@ const envKeys = [
   'RIVET_STORAGE_MODE',
   'RIVET_KEY',
   'RIVET_REQUIRE_WORKFLOW_KEY',
+  'RIVET_REQUIRE_UI_GATE_KEY',
   'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER',
   'RIVET_RECORDINGS_ENABLED',
+  'RIVET_PUBLISHED_WORKFLOWS_BASE_PATH',
+  'RIVET_LATEST_WORKFLOWS_BASE_PATH',
+  'RIVET_WEB_APPS_BASE_PATH',
+  'RIVET_LATEST_WEB_APPS_BASE_PATH',
 ] as const;
 
 const previousEnv = new Map<string, string | undefined>();
@@ -39,8 +51,13 @@ process.env.RIVET_RUNTIME_LIBRARIES_ROOT = runtimeLibrariesRoot;
 process.env.RIVET_STORAGE_MODE = 'filesystem';
 process.env.RIVET_KEY = 'latest-debugger-test-key';
 process.env.RIVET_REQUIRE_WORKFLOW_KEY = 'false';
+process.env.RIVET_REQUIRE_UI_GATE_KEY = 'false';
 process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = 'false';
 process.env.RIVET_RECORDINGS_ENABLED = 'false';
+process.env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH = '/workflows';
+process.env.RIVET_LATEST_WORKFLOWS_BASE_PATH = '/workflows-latest';
+process.env.RIVET_WEB_APPS_BASE_PATH = '/apps';
+process.env.RIVET_LATEST_WEB_APPS_BASE_PATH = '/apps-latest';
 
 const { getExpectedProxyAuthToken } = await import('../auth.js');
 const { createApiApp } = await import('../app.js');
@@ -50,7 +67,9 @@ const {
 } = await import('../latestWorkflowRemoteDebugger.js');
 const workflowFs = await import('../routes/workflows/fs-helpers.js');
 const workflowMutations = await import('../routes/workflows/workflow-mutations.js');
+const workflowStorageBackend = await import('../routes/workflows/storage-backend.js');
 const filesystemExecutionCache = await import('../routes/workflows/filesystem-execution-cache.js');
+const rivetNode = await import('@valerypopoff/rivet2-node');
 
 type ApiProfile = 'combined' | 'control' | 'execution';
 
@@ -75,6 +94,21 @@ async function resetFilesystemState(): Promise<void> {
 async function createPublishedWorkflow(projectName: string, endpointName: string) {
   const created = await workflowMutations.createWorkflowProjectItem('', projectName);
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName });
+  return created;
+}
+
+async function createPublishedWebApp(projectName: string, slug: string, appName: string) {
+  const created = await workflowMutations.createWorkflowProjectItem('', projectName);
+  const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
+  const project = createWebAppProject(rivetNode, blankProjectContents, appName);
+  const serializedProject = serializeWebAppProject(rivetNode, project);
+
+  await fs.writeFile(created.absolutePath, serializedProject, 'utf8');
+  await workflowStorageBackend.publishWorkflowProjectWebAppsWithBackend(created.relativePath, [{
+    uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+    slug,
+  }]);
+
   return created;
 }
 
@@ -153,6 +187,31 @@ async function assertNoDebuggerMessages(socket: WebSocket, timeoutMs = 500): Pro
   });
 }
 
+async function assertNoDebuggerMessagesDuring<T>(
+  socket: WebSocket,
+  action: () => Promise<T>,
+  timeoutMs = 500,
+): Promise<T> {
+  let unexpectedMessage: string | null = null;
+
+  const handleMessage = (raw: WebSocket.RawData) => {
+    unexpectedMessage = raw.toString();
+  };
+
+  socket.on('message', handleMessage);
+  try {
+    const result = await action();
+    if (unexpectedMessage != null) {
+      throw new Error(`Expected no debugger messages, got ${unexpectedMessage}`);
+    }
+
+    await assertNoDebuggerMessages(socket, timeoutMs);
+    return result;
+  } finally {
+    socket.off('message', handleMessage);
+  }
+}
+
 function closeDebuggerSocket(socket: WebSocket | null | undefined): void {
   if (!socket) {
     return;
@@ -217,6 +276,51 @@ test('latest debugger receives events for latest endpoint execution', async () =
   }
 });
 
+test('latest debugger receives events for latest web app action execution', async () => {
+  await createPublishedWebApp(
+    'Latest Debugger Web App Fixture',
+    'latest-debugger-web-app',
+    'Latest Debugger Web App',
+  );
+  const server = await startApiServer('control', { debuggerEnabled: true });
+  let socket: WebSocket | null = null;
+
+  try {
+    socket = await connectDebuggerSocket(server.baseUrl);
+
+    const htmlResponse = await fetch(`${server.baseUrl}/apps-latest/latest-debugger-web-app`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(htmlResponse.status, 200);
+    const revisionKey = extractWebAppRevisionKey(await htmlResponse.text());
+
+    const messagesPromise = waitForDebuggerMessages(socket, ['start', 'done']);
+    const response = await fetch(`${server.baseUrl}/apps-latest/latest-debugger-web-app/actions/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+        revisionKey,
+        state: {
+          prompt: 'latest web app action',
+        },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as { statePatch?: Record<string, unknown> };
+    assert.deepEqual(payload.statePatch, { result: 'latest web app action' });
+
+    const messages = await messagesPromise;
+    assert.ok(messages.some((message) => message.message === 'start'));
+    assert.ok(messages.some((message) => message.message === 'done'));
+  } finally {
+    closeDebuggerSocket(socket);
+    await server.close();
+  }
+});
+
 test('published endpoint execution does not emit latest debugger events', async () => {
   await createPublishedWorkflow('Published Debugger Fixture', 'published-no-debugger-endpoint');
   const server = await startApiServer('combined', { debuggerEnabled: true });
@@ -225,16 +329,54 @@ test('published endpoint execution does not emit latest debugger events', async 
   try {
     socket = await connectDebuggerSocket(server.baseUrl);
 
-    const response = await fetch(`${server.baseUrl}/workflows/published-no-debugger-endpoint`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ value: 'published' }),
-      signal: AbortSignal.timeout(5000),
-    });
+    const response = await assertNoDebuggerMessagesDuring(socket, () =>
+      fetch(`${server.baseUrl}/workflows/published-no-debugger-endpoint`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value: 'published' }),
+        signal: AbortSignal.timeout(5000),
+      }));
 
     await assertSuccessfulBlankWorkflowResponse(response);
+  } finally {
+    closeDebuggerSocket(socket);
+    await server.close();
+  }
+});
 
-    await assertNoDebuggerMessages(socket);
+test('published web app action execution does not emit latest debugger events', async () => {
+  await createPublishedWebApp(
+    'Published Debugger Web App Fixture',
+    'published-no-debugger-web-app',
+    'Published Debugger Web App',
+  );
+  const server = await startApiServer('combined', { debuggerEnabled: true });
+  let socket: WebSocket | null = null;
+
+  try {
+    socket = await connectDebuggerSocket(server.baseUrl);
+
+    const htmlResponse = await fetch(`${server.baseUrl}/apps/published-no-debugger-web-app`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(htmlResponse.status, 200);
+    const revisionKey = extractWebAppRevisionKey(await htmlResponse.text());
+
+    const response = await assertNoDebuggerMessagesDuring(socket, () =>
+      fetch(`${server.baseUrl}/apps/published-no-debugger-web-app/actions/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+          revisionKey,
+          state: {
+            prompt: 'published web app action',
+          },
+        }),
+        signal: AbortSignal.timeout(5000),
+      }));
+
+    assert.equal(response.status, 200);
   } finally {
     closeDebuggerSocket(socket);
     await server.close();

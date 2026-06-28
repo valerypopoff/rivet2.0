@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
-import type { GraphId, NodeGraph, Project, UiGraphId } from '@valerypopoff/rivet2-node';
 
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
 import { readJson, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
+import {
+  createWebAppProject,
+  createWebAppProjectWithUiGraphs,
+  extractWebAppRevisionKey,
+  serializeWebAppProject,
+  WEB_APP_TEST_ACTION_COMPONENT_ID,
+  WEB_APP_TEST_UI_GRAPH_ID,
+} from './helpers/workflow-web-app-fixtures.js';
 
 const {
   workflowMutations,
@@ -21,108 +28,27 @@ const {
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
 
-function createWebAppProject(projectName: string, appName: string): Project {
-  return createWebAppProjectWithUiGraphs(projectName, [['ui-graph', appName]]);
-}
-
-function createWebAppProjectWithUiGraphs(projectName: string, uiGraphs: Array<[string, string]>): Project {
-  const project = rivetNode.loadProjectFromString(workflowFs.createBlankProjectFile(projectName));
-  const graphId = project.metadata.mainGraphId as GraphId;
-  const graph: NodeGraph = {
-    metadata: {
-      description: '',
-      id: graphId,
-      name: 'Main Graph',
-    },
-    nodes: [
-      {
-        type: 'graphInput',
-        title: 'Input',
-        id: 'input-node',
-        visualData: { x: 0, y: 0, width: 300 },
-        data: {
-          id: 'input',
-          dataType: 'string',
-        },
-      } as never,
-      {
-        type: 'graphOutput',
-        title: 'Output',
-        id: 'output-node',
-        visualData: { x: 360, y: 0, width: 300 },
-        data: {
-          id: 'value',
-          dataType: 'string',
-        },
-      } as never,
-    ],
-    connections: [
-      {
-        outputNodeId: 'input-node',
-        outputId: 'data',
-        inputNodeId: 'output-node',
-        inputId: 'value',
-      } as never,
-    ],
-  };
-
-  project.graphs[graphId] = graph;
-  project.uiGraphs = Object.fromEntries(uiGraphs.map(([uiGraphId, appName]) => [
-    uiGraphId as UiGraphId,
-    {
-      id: uiGraphId as UiGraphId,
-      name: appName,
-      components: [
-        {
-          id: 'run-button' as never,
-          type: 'button',
-          label: 'Run',
-          action: {
-            type: 'runGraph',
-            graphId,
-            inputs: {
-              input: { type: 'state', key: 'prompt' },
-            },
-            outputKey: 'value',
-            outputStateKey: 'result',
-          },
-        },
-      ],
-    },
-  ])) as Project['uiGraphs'];
-
-  return project;
-}
-
 async function writeWebAppProject(projectPath: string, projectName: string, appName: string): Promise<void> {
-  const serializedProject = rivetNode.serializeProject(createWebAppProject(projectName, appName));
-  if (typeof serializedProject !== 'string') {
-    throw new TypeError('Expected serialized project to be a string');
-  }
+  const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
+  const project = createWebAppProject(rivetNode, blankProjectContents, appName);
+  const serializedProject = serializeWebAppProject(rivetNode, project);
 
   await fs.writeFile(projectPath, serializedProject, 'utf8');
 }
 
 async function writeMultiWebAppProject(projectPath: string, projectName: string, appNames: Array<[string, string]>): Promise<void> {
-  const serializedProject = rivetNode.serializeProject(createWebAppProjectWithUiGraphs(projectName, appNames));
-  if (typeof serializedProject !== 'string') {
-    throw new TypeError('Expected serialized project to be a string');
-  }
+  const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
+  const project = createWebAppProjectWithUiGraphs(rivetNode, blankProjectContents, appNames);
+  const serializedProject = serializeWebAppProject(rivetNode, project);
 
   await fs.writeFile(projectPath, serializedProject, 'utf8');
 }
 
 async function publishWebApp(relativePath: string, slug: string): Promise<void> {
   await workflowStorageBackend.publishWorkflowProjectWebAppsWithBackend(relativePath, [{
-    uiGraphId: 'ui-graph',
+    uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
     slug,
   }]);
-}
-
-function extractRevisionKey(html: string): string {
-  const match = html.match(/"revisionKey":"([^"]+)"/);
-  assert.ok(match?.[1], 'web app HTML should embed a revision key');
-  return match[1];
 }
 
 test('workflow web app publication routes publish multiple project web apps independently', async () => {
@@ -267,7 +193,7 @@ test('workflow web app publication routes keep stale published apps visible for 
         webApp.publishedSlug,
         webApp.isMissingFromProject,
       ]),
-      [['ui-graph', 'Legacy Web App', 'legacy-web-app', true]],
+      [[WEB_APP_TEST_UI_GRAPH_ID, 'Legacy Web App', 'legacy-web-app', true]],
     );
 
     await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/unpublish`, {
@@ -275,7 +201,7 @@ test('workflow web app publication routes keep stale published apps visible for 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
-        uiGraphId: 'ui-graph',
+        uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
       }),
     }));
 
@@ -361,21 +287,21 @@ test('latest filesystem web app actions reject stale saved-draft revisions', asy
     const oldHtml = await (await fetch(`${latestWebAppsBaseUrl}/latest-web-app-revision`, {
       signal: AbortSignal.timeout(5000),
     })).text();
-    const oldRevisionKey = extractRevisionKey(oldHtml);
+    const oldRevisionKey = extractWebAppRevisionKey(oldHtml);
 
     await writeWebAppProject(created.absolutePath, 'LatestWebAppRevision', 'Changed Draft Web App With New Text');
 
     const nextHtml = await (await fetch(`${latestWebAppsBaseUrl}/latest-web-app-revision`, {
       signal: AbortSignal.timeout(5000),
     })).text();
-    const nextRevisionKey = extractRevisionKey(nextHtml);
+    const nextRevisionKey = extractWebAppRevisionKey(nextHtml);
     assert.notEqual(nextRevisionKey, oldRevisionKey);
 
     const staleActionResponse = await fetch(`${latestWebAppsBaseUrl}/latest-web-app-revision/actions/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        componentId: 'run-button',
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
         revisionKey: oldRevisionKey,
         state: {
           prompt: 'stale latest',
@@ -421,7 +347,7 @@ test('published filesystem web apps use the UI gate instead of workflow bearer a
 
           assert.equal(htmlResponse.status, 200);
           assert.match(html, /Published UI Session App/);
-          const revisionKey = extractRevisionKey(html);
+          const revisionKey = extractWebAppRevisionKey(html);
 
           const appJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
             headers: uiSessionHeaders,
@@ -436,7 +362,7 @@ test('published filesystem web apps use the UI gate instead of workflow bearer a
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              componentId: 'run-button',
+              componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
               revisionKey,
               state: {
                 prompt: 'hello with ui session',
@@ -493,12 +419,12 @@ test('published filesystem web app actions run through the wrapper execution dep
     const html = await (await fetch(`${webAppsBaseUrl}/published-web-app-action`, {
       signal: AbortSignal.timeout(5000),
     })).text();
-    const revisionKey = extractRevisionKey(html);
+    const revisionKey = extractWebAppRevisionKey(html);
     const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-action/actions/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        componentId: 'run-button',
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
         revisionKey,
         state: {
           prompt: 'hello from web app',
@@ -548,7 +474,7 @@ test('published filesystem web app actions reject stale published revisions', as
     const oldHtml = await (await fetch(`${webAppsBaseUrl}/published-web-app-revision`, {
       signal: AbortSignal.timeout(5000),
     })).text();
-    const oldRevisionKey = extractRevisionKey(oldHtml);
+    const oldRevisionKey = extractWebAppRevisionKey(oldHtml);
 
     await writeWebAppProject(created.absolutePath, 'PublishedWebAppRevision', 'Republished Revision App');
     await publishWebApp(created.relativePath, 'published-web-app-revision');
@@ -556,14 +482,14 @@ test('published filesystem web app actions reject stale published revisions', as
     const nextHtml = await (await fetch(`${webAppsBaseUrl}/published-web-app-revision`, {
       signal: AbortSignal.timeout(5000),
     })).text();
-    const nextRevisionKey = extractRevisionKey(nextHtml);
+    const nextRevisionKey = extractWebAppRevisionKey(nextHtml);
     assert.notEqual(nextRevisionKey, oldRevisionKey);
 
     const staleActionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-revision/actions/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        componentId: 'run-button',
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
         revisionKey: oldRevisionKey,
         state: {
           prompt: 'stale',

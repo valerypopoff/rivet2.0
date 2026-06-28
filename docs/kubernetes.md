@@ -21,7 +21,7 @@ The `execution` Deployment owns:
 - `${RIVET_WEB_APPS_BASE_PATH:-/apps}`
 - `/internal/workflows/:endpointName`
 
-Do not scale `backend` horizontally in the current chart shape. Latest execution, latest web apps, and `/ws/latest-debugger` are still process-local control-plane features.
+Do not scale `backend` horizontally in the current chart shape. Latest workflow execution, latest web-app action execution, and `/ws/latest-debugger` are still process-local control-plane features.
 
 ## Scaling model
 
@@ -569,7 +569,7 @@ Then validate:
 - the proxy URL opens successfully
 - `/api/config` returns the expected published/latest base paths
 - published workflow runs succeed through the scaled `execution` Deployment
-- latest workflow runs still debug through the singleton `backend`
+- latest workflow runs and latest web-app action runs still debug through the singleton `backend`
 
 ## Operator checklist
 

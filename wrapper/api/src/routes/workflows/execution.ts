@@ -378,6 +378,12 @@ function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
   return `${basePath}/${encodeUrlPathSegment(slug)}`;
 }
 
+function getLatestRemoteDebuggerForExecution(options?: { enableRemoteDebugger?: boolean }) {
+  return options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
+    ? getLatestWorkflowRemoteDebugger()
+    : undefined;
+}
+
 function resolveWebAppUiGraph(executionProject: WorkflowExecutionProject): UiGraph | null {
   const uiGraphId = executionProject.webAppUiGraphId;
 
@@ -466,7 +472,12 @@ async function createWebAppProcessorOptions(
   executionProject: WorkflowExecutionProject,
   req: Request,
   codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
+  options?: {
+    enableRemoteDebugger?: boolean;
+  },
 ) {
+  const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
+
   return {
     codeRunner: new ManagedCodeRunner(
       getRootPath(),
@@ -476,6 +487,7 @@ async function createWebAppProcessorOptions(
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
     projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
+    remoteDebugger,
   };
 }
 
@@ -492,9 +504,7 @@ async function executeWorkflowEndpoint(
 ): Promise<void> {
   const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
   const projectReferenceLoader = await createExecutionProjectReferenceLoader(projectVirtualPath);
-  const remoteDebugger = options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
-    ? getLatestWorkflowRemoteDebugger()
-    : undefined;
+  const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
   const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
     ? createManagedCodeRunnerTelemetry()
     : null;
@@ -737,6 +747,7 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
         resolved.executionProject,
         req,
         codeRunnerTelemetry,
+        { enableRemoteDebugger: routeKind === 'latest' },
       ),
       request: createFetchRequestFromExpress(req),
       requestRevisionKey: getOptionalWebAppActionRevisionKey(req.body),

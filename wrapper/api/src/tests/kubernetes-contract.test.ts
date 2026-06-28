@@ -83,8 +83,8 @@ test('chart validation keeps the supported managed singleton control-plane bound
   const validateValuesTemplate = readRepoFile('charts/templates/validate-values.yaml');
 
   assert.match(validateValuesTemplate, /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/);
-  assert.match(validateValuesTemplate, /replicaCount\.backend=1 because latest-workflow execution and \/ws\/latest-debugger are still process-local control-plane features/);
-  assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false because latest-workflow execution and \/ws\/latest-debugger are still process-local control-plane features/);
+  assert.match(validateValuesTemplate, /replicaCount\.backend=1 because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
+  assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
 });
 
 test('production overlay keeps the supported ingress, Vault, and scale boundaries for the real cluster topology', () => {
