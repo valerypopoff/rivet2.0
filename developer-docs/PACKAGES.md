@@ -565,9 +565,25 @@ Operational CLI for running or serving Rivet graphs.
 
 Current command families:
 
+- `list <projectFile>`
+- `inspect <projectFile>`
+- `doctor <projectFile>`
 - `run <projectFile> [graphName]`
 - `serve [projectFile]`
 - `serve-app <projectFile> [uiGraph]`
+- `completion`
+
+### `list` / `inspect` command behavior
+
+Implemented in `src/commands/list.ts`.
+
+These commands load a `.rivet-project` file without opening datasets, creating processors, or running graphs. `list` prints a human-readable inventory, while `list --json` and `inspect` print the same machine-readable summary. The summary includes project metadata, resolved file path, graph names/IDs/main marker/node counts, web app names/IDs/component counts, Node Library items, and declared plugins. Keep these commands read-only; they are discovery and scripting helpers rather than execution paths.
+
+### `doctor` command behavior
+
+Implemented in `src/commands/doctor.ts`.
+
+`doctor` loads a `.rivet-project` file and reports common local/runtime readiness checks without creating processors, loading dataset contents, or mutating anything. It checks graph count, stale/missing main graph state, web app count, Node Library item count, declared plugins, project-reference hint paths, and the adjacent or explicit `.rivet-data` file path. Missing dataset files are informational by default and become errors only with `--require-dataset-file`. Human output is for users; `--json` is the stable scripting surface. Keep this command conservative: it should catch obvious CLI/runtime setup problems, not become a full semantic graph linter.
 
 ### `run` command behavior
 
@@ -584,16 +600,19 @@ Supports:
 - repeated `--context-json key=json` and `--context-file`
 - project-adjacent or explicit `.rivet-data` files through `NodeDatasetProvider`
 - project-reference resolution through the resolved `projectPath`
-- selected-output and unwrapped-output printing
+- selected-output and unwrapped-output printing, with `--output-key` and `--unwrap-output` treated as mutually exclusive selectors before the project is loaded or executed
 - optional cost suppression
+- the same provider option override flags as the server commands
 
 Internally:
 
 - resolves the project file
+- loads `.env` before creating the processor, matching the server commands
 - loads the project through `rivet-node`
 - parses command input through `src/commandInputs.ts`, which rejects non-object top-level JSON, allows empty string values, preserves `=` characters inside values, and wraps structured JSON values as Rivet Data Values. Raw JSON objects become `object` values; homogeneous raw JSON arrays become typed array Data Values such as `string[]`, `number[]`, `boolean[]`, or `object[]`; mixed, empty, null-containing, or nested arrays become `any[]` instead of guessing a narrower type.
 - creates a dataset provider from either `--dataset-file` or the project-adjacent `.rivet-data` path
 - validates missing or stale main graph references before processor creation, using positional `rivet run <projectFile> <graph>` suggestions rather than `serve --graph` suggestions
+- omits provider override fields unless the matching CLI flag is supplied, preserving `rivet-node`'s normal environment fallback behavior
 - builds a processor
 - runs it
 - prints JSON outputs
@@ -608,7 +627,7 @@ Supports:
 - optional dev reload mode
 - optional graph selection
 - optional graph-by-path routing
-- named endpoint aliases at `/endpoints/:endpointName`
+- URL-safe named endpoint aliases at `/endpoints/:endpointName`
 - bearer-token auth through `--bearer-token` or `RIVET_CLI_BEARER_TOKEN`
 - exact-origin CORS headers through repeated `--cors-origin`
 - unauthenticated `GET /healthz`
@@ -622,7 +641,8 @@ Supports:
 
 Architecturally, it is a thin HTTP wrapper around `rivet-node` processor creation and streaming helpers. Request bodies are parsed through the same object-input helper as `run`, so empty bodies become `{}` and arrays/primitives are rejected before execution. Project-file lookup resolves relative paths to absolute paths, handles directory inputs, and uses platform path helpers for suggestions so Windows paths do not get split with POSIX-only separators. Graph validation also checks that a stored main graph ID actually exists before the server starts. Non-streaming `run` and `serve` requests use the default omitted-profile Node runtime policy, so eligible headless runs get the automatic fast scheduler/cache path. `serve --stream` and `serve --stream-node` explicitly pass `runtimeProfile: 'compatible'` because those modes expose node lifecycle events over SSE, making scheduler ordering part of the client-visible contract.
 
-`serve` is implemented around a testable Hono app factory rather than binding a port directly in the command handler. Keep HTTP behavior such as auth, CORS, timing headers, endpoint alias validation, and JSON error envelopes in the CLI package; do not move wrapper-specific project resolution, recordings, or managed runtime-library behavior into the CLI. Malformed request JSON and graph-selection problems return `400`; unexpected graph execution failures return `500`.
+`serve` is implemented around a testable Hono app factory rather than binding a port directly in the command handler. Keep HTTP behavior such as auth, CORS, timing headers, endpoint alias validation, and JSON error envelopes in the CLI package; do not move wrapper-specific project resolution, recordings, or managed runtime-library behavior into the CLI. Shared CLI option builders own repeated dataset, provider, bearer-token, and CORS flags so `run`, `serve`, `serve-app`, and `doctor` do not drift. `serve` and `serve-app` use the shared HTTP server lifecycle helper for Hono binding and shutdown handling. Malformed request JSON and graph-selection problems return `400`; unexpected graph execution failures return `500`.
+When `--save-datasets` is used, the CLI warns that mutations are persisted by this single server process and are not a production concurrency policy.
 
 ### `serve-app` command behavior
 
@@ -634,17 +654,20 @@ Supports:
 - automatic selection when the project contains exactly one web app
 - `GET /`, `GET /app.json`, and `POST /actions/run` through `createRivetWebAppHandler(...)`
 - optional base-path mounting through `--base-path`
+- optional dev reload mode through `--dev`, which reloads the project and recreates the dataset provider per web-app request
 - optional opaque revision consistency through `--revision-key`
-- the same host, bearer-token, CORS, dataset, and project-path behavior as `serve`
+- the same host, bearer-token, CORS, dataset, provider-option, and project-path behavior as `serve`
 
 The CLI uses the Node package web-app serving API directly and does not duplicate renderer or UI-action protocol code. Both server commands pass `--host` to the Hono Node server and format startup URLs through the shared CLI HTTP helper so IPv4, hostnames, and IPv6 bindings are displayed consistently. Production wrapper servers should still prefer `createRivetWebAppHandler(...)`, `renderRivetWebAppHtml(...)`, or `runRivetWebAppAction(...)` directly so wrappers can own authentication, endpoint slug mapping, project materialization, recordings, telemetry, and deployment policy.
+In `--dev` mode, the selected web-app ID is pinned at startup so adding a second web app during reload does not make later requests ambiguous; project reload failures return JSON `500` responses instead of being conflated with missing routes.
 `/healthz` is reserved for the CLI health endpoint and cannot be used as the web-app base path.
+`serve-app --bearer-token` protects the HTML route too; browser navigation cannot attach that header by itself, so browser-facing deployments should put authentication in a reverse proxy or wrapper-owned session layer.
 
 ### Docker image behavior
 
-The CLI package's `prepack` script only builds the package; it deliberately does not copy the repository root README over the package-local CLI README. The `verify` script runs build, lint, tests, and a dry-run npm pack so release checks exercise the generated package contents.
+The CLI package's `prepack` script only builds the package; it deliberately does not copy the repository root README over the package-local CLI README. The `verify` script runs build, lint, tests, package smoke, and a dry-run npm pack so release checks exercise the generated package contents. `smoke:package` creates packed tarballs from package-local metadata plus built files, checks that the generated CLI bin/type files are present, installs the local package tarballs into a temporary npm project, runs the direct built `bin/cli.js` against the checked-in example project, and also checks the installed `rivet` command through offline `npm exec`. Installed-package smoke subprocesses clear inherited Yarn PnP `NODE_OPTIONS` preloads so the check behaves like a normal npm installation even when launched from a Yarn workspace script. `smoke:docker` is opt-in because it requires a Docker daemon; it builds a temporary image from the current local package tarball plus the real entrypoint, runs the image against the example project, and removes the temporary smoke image afterward.
 
-The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project` when no CLI subcommand is passed, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. If the first argument is `run`, `serve`, or `serve-app`, the entrypoint runs that CLI command directly, which lets the same image host web apps without overriding the Docker entrypoint. CLI shell scripts are kept LF-only through `.gitattributes` because they run inside Linux containers. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. The Dockerfile's default build arg is only a local-build fallback and should be kept in sync with the package version when the CLI version is bumped.
+The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project` when no CLI subcommand is passed, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. If the first argument is `completion`, `doctor`, `list`, `inspect`, `run`, `serve`, or `serve-app`, the entrypoint runs that CLI command directly, which lets the same image inspect projects or host web apps without overriding the Docker entrypoint. CLI shell scripts are kept LF-only through `.gitattributes` because they run inside Linux containers. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. The Dockerfile's default build arg is only a local-build fallback and should be kept in sync with the package version when the CLI version is bumped.
 
 ## `@valerypopoff/trivet` (`packages/trivet/`)
 

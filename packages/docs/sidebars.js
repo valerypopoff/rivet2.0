@@ -336,7 +336,7 @@ const sidebars = {
       label: 'Commands',
       collapsible: true,
       collapsed: false,
-      items: ['cli/run', 'cli/serve', 'cli/serve-app'],
+      items: ['cli/list', 'cli/doctor', 'cli/run', 'cli/serve', 'cli/serve-app', 'cli/completion', 'cli/recipes'],
     },
     'cli/docker',
   ],

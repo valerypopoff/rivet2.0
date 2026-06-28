@@ -1,4 +1,5 @@
 import { createProcessor, type LooseDataValue } from '@valerypopoff/rivet2-node';
+import { configDotenv } from 'dotenv';
 import { resolve } from 'node:path';
 import type * as yargs from 'yargs';
 import {
@@ -9,13 +10,16 @@ import {
   throwIfConflictingInputSources,
 } from '../commandInputs.js';
 import {
+  addDatasetOptions,
+  addProviderOptions,
   loadProjectRuntime,
   throwIfInvalidGraph,
   throwIfNoMainGraph,
-  withRuntimeProcessorOptions,
+  withCliProcessorOptions,
   type DatasetCliOptions,
+  type ProviderCliOptions,
 } from '../cliRuntime.js';
-import { shapeOutputs, writeJsonOutput } from '../output.js';
+import { shapeOutputs, validateOutputShapeOptions, writeJsonOutput } from '../output.js';
 
 type RunArgs = {
   context: string[];
@@ -31,10 +35,11 @@ type RunArgs = {
   outputKey: string | undefined;
   projectFile: string;
   unwrapOutput: string | undefined;
-} & DatasetCliOptions;
+} & DatasetCliOptions &
+  ProviderCliOptions;
 
 export function makeCommand<T>(y: yargs.Argv<T>) {
-  return y
+  const command = addProviderOptions(y)
     .positional('projectFile', {
       describe: 'The project file to run',
       type: 'string',
@@ -97,51 +102,37 @@ export function makeCommand<T>(y: yargs.Argv<T>) {
       type: 'string',
       array: true,
       default: [],
-    })
-    .option('dataset-file', {
-      describe: 'Use a specific .rivet-data file instead of the project-adjacent default',
-      type: 'string',
-    })
-    .option('save-datasets', {
-      describe: 'Persist dataset mutations back to the dataset file',
-      type: 'boolean',
-      default: false,
-    })
-    .option('require-dataset-file', {
-      describe: 'Fail if the dataset file does not exist',
-      type: 'boolean',
-      default: false,
     });
+
+  return addDatasetOptions(command);
 }
 
 export async function run(args: RunArgs) {
-  try {
-    const runtime = await loadProjectRuntime(args.projectFile, args);
+  configDotenv();
+  validateOutputShapeOptions(args);
 
-    throwIfNoMainGraph(runtime.project, args.graphName, runtime.projectPath, 'positional');
-    throwIfInvalidGraph(runtime.project, args.graphName, 'positional');
+  const runtime = await loadProjectRuntime(args.projectFile, args);
 
-    const { run: runProcessor } = createProcessor(
-      runtime.project,
-      withRuntimeProcessorOptions(runtime, {
-        context: await readContext(args),
-        graph: args.graphName,
-        inputs: await readInputs(args),
-      }),
-    );
+  throwIfNoMainGraph(runtime.project, args.graphName, runtime.projectPath, 'positional');
+  throwIfInvalidGraph(runtime.project, args.graphName, 'positional');
 
-    await writeJsonOutput(
-      shapeOutputs(await runProcessor(), {
-        includeCost: args.includeCost,
-        outputKey: args.outputKey,
-        unwrapOutput: args.unwrapOutput,
-      }),
-      args.outputFile,
-    );
-  } catch (err) {
-    console.error(err);
-    process.exit(1);
-  }
+  const { run: runProcessor } = createProcessor(
+    runtime.project,
+    withCliProcessorOptions(runtime, args, {
+      context: await readContext(args),
+      graph: args.graphName,
+      inputs: await readInputs(args),
+    }),
+  );
+
+  await writeJsonOutput(
+    shapeOutputs(await runProcessor(), {
+      includeCost: args.includeCost,
+      outputKey: args.outputKey,
+      unwrapOutput: args.unwrapOutput,
+    }),
+    args.outputFile,
+  );
 }
 
 async function readInputs(args: RunArgs): Promise<Record<string, LooseDataValue>> {

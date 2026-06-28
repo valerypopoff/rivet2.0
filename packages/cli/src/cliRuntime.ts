@@ -9,11 +9,18 @@ import chalk from 'chalk';
 import didYouMean from 'didyoumean2';
 import { readdir, stat } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
+import type * as yargs from 'yargs';
 
 export type DatasetCliOptions = {
   datasetFile?: string;
   requireDatasetFile?: boolean;
   saveDatasets?: boolean;
+};
+
+export type ProviderCliOptions = {
+  openaiApiKey?: string;
+  openaiEndpoint?: string;
+  openaiOrganization?: string;
 };
 
 export type LoadedProjectRuntime = {
@@ -49,8 +56,10 @@ export async function createDatasetProvider(
   projectPath: string,
   { datasetFile, requireDatasetFile = false, saveDatasets = false }: DatasetCliOptions,
 ): Promise<NodeDatasetProvider> {
+  const datasetsFilePath = resolveDatasetFilePath(projectPath, datasetFile);
+
   if (datasetFile) {
-    return NodeDatasetProvider.fromDatasetsFile(resolve(process.cwd(), datasetFile), {
+    return NodeDatasetProvider.fromDatasetsFile(datasetsFilePath, {
       requireFile: requireDatasetFile,
       save: saveDatasets,
     });
@@ -62,6 +71,10 @@ export async function createDatasetProvider(
   });
 }
 
+export function resolveDatasetFilePath(projectPath: string, datasetFile?: string): string {
+  return datasetFile ? resolve(process.cwd(), datasetFile) : projectPath.replace(/\.rivet-project$/i, '.rivet-data');
+}
+
 export function withRuntimeProcessorOptions(
   runtime: Pick<LoadedProjectRuntime, 'datasetProvider' | 'projectPath'>,
   options: Omit<NodeCreateProcessorOptions, 'datasetProvider' | 'projectPath'>,
@@ -71,6 +84,99 @@ export function withRuntimeProcessorOptions(
     datasetProvider: runtime.datasetProvider,
     projectPath: runtime.projectPath,
   };
+}
+
+export function withCliProcessorOptions(
+  runtime: Pick<LoadedProjectRuntime, 'datasetProvider' | 'projectPath'>,
+  providerOptions: ProviderCliOptions,
+  options: Omit<
+    NodeCreateProcessorOptions,
+    'datasetProvider' | 'openAiEndpoint' | 'openAiKey' | 'openAiOrganization' | 'projectPath'
+  >,
+): NodeCreateProcessorOptions {
+  return withRuntimeProcessorOptions(runtime, withProviderProcessorOptions(providerOptions, options));
+}
+
+export function withProviderProcessorOptions(
+  providerOptions: ProviderCliOptions,
+  options: Omit<NodeCreateProcessorOptions, 'openAiEndpoint' | 'openAiKey' | 'openAiOrganization'>,
+): NodeCreateProcessorOptions {
+  const providerSettings: Partial<NodeCreateProcessorOptions> = {};
+
+  if (providerOptions.openaiEndpoint != null) {
+    providerSettings.openAiEndpoint = providerOptions.openaiEndpoint;
+  }
+
+  if (providerOptions.openaiApiKey != null) {
+    providerSettings.openAiKey = providerOptions.openaiApiKey;
+  }
+
+  if (providerOptions.openaiOrganization != null) {
+    providerSettings.openAiOrganization = providerOptions.openaiOrganization;
+  }
+
+  return {
+    ...options,
+    ...providerSettings,
+  };
+}
+
+export function addProviderOptions<T>(y: yargs.Argv<T>): yargs.Argv<T> {
+  return y
+    .option('openai-api-key', {
+      describe:
+        'The OpenAI API key to use for the project. If omitted, the environment variable OPENAI_API_KEY is used.',
+      type: 'string',
+      demandOption: false,
+    })
+    .option('openai-endpoint', {
+      describe:
+        'The OpenAI API endpoint to use for the project. If omitted, the environment variable OPENAI_ENDPOINT is used.',
+      type: 'string',
+      demandOption: false,
+    })
+    .option('openai-organization', {
+      describe:
+        'The OpenAI organization to use for the project. If omitted, the environment variable OPENAI_ORGANIZATION is used.',
+      type: 'string',
+      demandOption: false,
+    });
+}
+
+export function addDatasetOptions<T>(
+  y: yargs.Argv<T>,
+  { includeSaveDatasets = true }: { includeSaveDatasets?: boolean } = {},
+): yargs.Argv<T> {
+  let result = y.option('dataset-file', {
+    describe: 'Use a specific .rivet-data file instead of the project-adjacent default',
+    type: 'string',
+  });
+
+  if (includeSaveDatasets) {
+    result = result.option('save-datasets', {
+      describe: 'Persist dataset mutations back to the dataset file',
+      type: 'boolean',
+      default: false,
+    });
+  }
+
+  return result.option('require-dataset-file', {
+    describe: 'Fail if the dataset file does not exist',
+    type: 'boolean',
+    default: false,
+  });
+}
+
+export function warnIfServerSavesDatasets(saveDatasets: boolean | undefined, label = 'CLI server'): void {
+  if (!saveDatasets) {
+    return;
+  }
+
+  console.warn(
+    chalk.yellow(
+      `--save-datasets persists mutations from this ${label} process. Avoid concurrent production writes; use a wrapper with explicit write policy for shared deployments.`,
+    ),
+  );
 }
 
 export function getGraphSummaries(project: Project): GraphSummary[] {

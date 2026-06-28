@@ -8,6 +8,7 @@ import {
   type ChartNode,
   type GraphId,
   type NodeId,
+  type NodePrefabId,
   type PortId,
   type Project,
   type ProjectId,
@@ -16,6 +17,8 @@ import {
 } from '@valerypopoff/rivet2-node';
 import yargs from 'yargs';
 import { parseJsonInputRecord, parseJsonKeyValueInputRecord, parseKeyValueInputRecord } from '../src/commandInputs.js';
+import { buildDoctorReport, makeDoctorCommand } from '../src/commands/doctor.js';
+import { buildProjectInspection } from '../src/commands/list.js';
 import { makeCommand as makeRunCommand, run } from '../src/commands/run.js';
 import {
   buildGraphProcessorOptions,
@@ -27,7 +30,7 @@ import {
   type ServeArgs,
 } from '../src/commands/serve.js';
 import { createWebAppServeApp, makeCommand as makeServeAppCommand, type ServeAppArgs } from '../src/commands/serveApp.js';
-import { throwIfInvalidGraph, throwIfNoMainGraph } from '../src/cliRuntime.js';
+import { resolveDatasetFilePath, throwIfInvalidGraph, throwIfNoMainGraph } from '../src/cliRuntime.js';
 import { formatListenUrl } from '../src/http.js';
 import { shapeOutputs } from '../src/output.js';
 
@@ -47,6 +50,9 @@ test('run command builder registers its default option values', async () => {
   assert.equal(options.key['inputs-stdin'], true);
   assert.equal(options.key['dataset-file'], true);
   assert.equal(options.key['save-datasets'], true);
+  assert.equal(options.key['openai-api-key'], true);
+  assert.equal(options.key['openai-endpoint'], true);
+  assert.equal(options.key['openai-organization'], true);
 });
 
 test('serve command exposes its expected defaults', async () => {
@@ -81,6 +87,10 @@ test('formatListenUrl renders IPv4, hostnames, and IPv6 host bindings', () => {
   assert.equal(formatListenUrl('::1', 3000), 'http://[::1]:3000');
 });
 
+test('resolveDatasetFilePath handles project extensions case-insensitively', () => {
+  assert.equal(resolveDatasetFilePath('Example.RIVET-PROJECT'), 'Example.rivet-data');
+});
+
 test('serve-app command exposes its expected defaults', () => {
   const command = makeServeAppCommand(yargs([])).exitProcess(false);
   const options = command.getOptions();
@@ -88,7 +98,21 @@ test('serve-app command exposes its expected defaults', () => {
   assert.equal(options.default.port, 3000);
   assert.equal(options.default.host, '0.0.0.0');
   assert.equal(options.default['base-path'], '/');
+  assert.equal(options.default.dev, false);
   assert.deepEqual(options.default['cors-origin'], []);
+  assert.equal(options.key['openai-api-key'], true);
+  assert.equal(options.key['openai-endpoint'], true);
+  assert.equal(options.key['openai-organization'], true);
+});
+
+test('doctor command exposes dataset and JSON options', () => {
+  const command = makeDoctorCommand(yargs([])).exitProcess(false);
+  const options = command.getOptions();
+
+  assert.equal(options.default.json, false);
+  assert.equal(options.default['require-dataset-file'], false);
+  assert.equal(options.key['dataset-file'], true);
+  assert.equal(options.key['require-dataset-file'], true);
 });
 
 test('run command executes a real project and writes shaped output', async (t) => {
@@ -124,6 +148,19 @@ test('run command can persist dataset mutations through the project-adjacent dat
 
   assert.equal(await readFile(outputFile, 'utf8'), '"dataset"\n');
   assert.match(await readFile(projectFile.replace(/\.rivet-project$/, '.rivet-data'), 'utf8'), /alpha/);
+});
+
+test('run command rejects conflicting output selectors before loading the project', async () => {
+  await assert.rejects(
+    () =>
+      run({
+        ...buildRunArgs(),
+        outputKey: 'output',
+        projectFile: 'missing-project.rivet-project',
+        unwrapOutput: 'output',
+      }),
+    /Use only one output selector/,
+  );
 });
 
 test('graph validation messages match positional and option command styles', () => {
@@ -224,14 +261,29 @@ test('serve processor options keep non-streaming runs on the default runtime pol
   const options = buildGraphProcessorOptions({
     graph: 'Main',
     inputs: { input: 'value' },
-    openaiApiKey: 'key',
+    openaiApiKey: undefined,
     openaiEndpoint: undefined,
     openaiOrganization: undefined,
   });
 
   assert.equal('runtimeProfile' in options, false);
+  assert.equal('openAiKey' in options, false);
   assert.equal(options.graph, 'Main');
   assert.deepEqual(options.inputs, { input: 'value' });
+});
+
+test('serve processor options include only explicit provider overrides', () => {
+  const options = buildGraphProcessorOptions({
+    graph: 'Main',
+    inputs: {},
+    openaiApiKey: 'key',
+    openaiEndpoint: 'https://example.test/v1',
+    openaiOrganization: undefined,
+  });
+
+  assert.equal(options.openAiKey, 'key');
+  assert.equal(options.openAiEndpoint, 'https://example.test/v1');
+  assert.equal('openAiOrganization' in options, false);
 });
 
 test('serve streaming runs force the compatible runtime policy', () => {
@@ -248,6 +300,18 @@ test('serve streaming runs force the compatible runtime policy', () => {
   assert.deepEqual(options.inputs, { input: 'value' });
 });
 
+test('createServeApp rejects single-node streaming without event streaming enabled', async () => {
+  await assert.rejects(
+    () =>
+      createServeApp({
+        ...buildServeArgs(),
+        graph: 'Passthrough',
+        streamNode: 'Chat',
+      }),
+    /--stream-node requires --stream/,
+  );
+});
+
 test('shapeOutputs can select and unwrap graph outputs', () => {
   const outputs = {
     cost: { type: 'number', value: 1 },
@@ -260,6 +324,7 @@ test('shapeOutputs can select and unwrap graph outputs', () => {
   assert.deepEqual(shapeOutputs(outputs, { outputKey: 'output' }), { type: 'string', value: 'hello' });
   assert.equal(shapeOutputs(outputs, { unwrapOutput: 'output' }), 'hello');
   assert.throws(() => shapeOutputs(outputs, { outputKey: 'missing' }), /was not returned/);
+  assert.throws(() => shapeOutputs(outputs, { outputKey: 'output', unwrapOutput: 'output' }), /Use only one/);
 });
 
 test('parseEndpointAliases validates aliases and duplicate endpoint names', async () => {
@@ -268,6 +333,7 @@ test('parseEndpointAliases validates aliases and duplicate endpoint names', asyn
 
   assert.deepEqual([...parseEndpointAliases(['pass=Passthrough'], project)], [['pass', 'Passthrough']]);
   assert.throws(() => parseEndpointAliases(['pass=Passthrough', 'pass=Passthrough Context'], project), /Duplicate/);
+  assert.throws(() => parseEndpointAliases(['bad name=Passthrough'], project), /Invalid endpoint name/);
   assert.throws(() => parseEndpointAliases(['missing=Nope'], project), /Graph "Nope" not found/);
 });
 
@@ -319,6 +385,25 @@ test('createServeApp exposes health, auth, CORS, and endpoint aliases', async ()
   assert.match(await invalidJsonResponse.text(), /Request body must be valid JSON/);
 });
 
+test('createServeApp returns an SSE response in streaming mode', async () => {
+  const { app } = await createServeApp({
+    ...buildServeArgs(),
+    graph: 'Passthrough',
+    stream: '',
+  });
+
+  const response = await app.fetch(
+    new Request('http://localhost/', {
+      body: '{"input":"hello"}',
+      method: 'POST',
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
+  await response.body?.cancel();
+});
+
 test('createWebAppServeApp serves app JSON and rejects stale revision keys', async (t) => {
   const projectFile = await writeTemporaryProject(t, createProjectWithWebApp());
   const { app } = await createWebAppServeApp({
@@ -340,6 +425,33 @@ test('createWebAppServeApp serves app JSON and rejects stale revision keys', asy
   assert.equal(appResponse.status, 200);
   assert.equal((await appResponse.json() as { name: string }).name, 'Test web app');
 
+  const actionResponse = await app.fetch(
+    new Request('http://localhost/actions/run', {
+      body: JSON.stringify({
+        componentId: 'button',
+        revisionKey: 'current',
+        state: { prompt: 'hello' },
+      }),
+      method: 'POST',
+    }),
+  );
+  assert.equal(actionResponse.status, 200);
+  assert.deepEqual(await actionResponse.json(), {
+    outputs: {
+      answer: {
+        type: 'string',
+        value: 'hello',
+      },
+      cost: {
+        type: 'number',
+        value: 0,
+      },
+    },
+    statePatch: {
+      result: 'hello',
+    },
+  });
+
   const staleActionResponse = await app.fetch(
     new Request('http://localhost/actions/run', {
       body: JSON.stringify({
@@ -352,6 +464,43 @@ test('createWebAppServeApp serves app JSON and rejects stale revision keys', asy
   );
   assert.equal(staleActionResponse.status, 409);
   assert.match(await staleActionResponse.text(), /revision mismatch/);
+});
+
+test('createWebAppServeApp dev mode rereads the project file for web app routes', async (t) => {
+  const project = createProjectWithWebApp();
+  const projectFile = await writeTemporaryProject(t, project);
+  const { app } = await createWebAppServeApp({
+    ...buildServeAppArgs(),
+    dev: true,
+    projectFile,
+  });
+
+  project.uiGraphs!.app!.name = 'Changed web app';
+  project.uiGraphs!['second-app' as UiGraphId] = {
+    components: [],
+    id: 'second-app' as UiGraphId,
+    name: 'Second web app',
+  };
+  await writeFile(projectFile, serializeProject(project) as string, 'utf8');
+
+  const response = await app.fetch(new Request('http://localhost/app.json'));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json() as { name: string }).name, 'Changed web app');
+});
+
+test('createWebAppServeApp dev mode reports project reload failures as server errors', async (t) => {
+  const projectFile = await writeTemporaryProject(t, createProjectWithWebApp());
+  const { app } = await createWebAppServeApp({
+    ...buildServeAppArgs(),
+    dev: true,
+    projectFile,
+  });
+
+  await writeFile(projectFile, 'not: [valid', 'utf8');
+
+  const response = await app.fetch(new Request('http://localhost/app.json'));
+  assert.equal(response.status, 500);
+  assert.equal(response.headers.has('x-duration-ms'), true);
 });
 
 test('createWebAppServeApp rejects the health endpoint as a base path', async (t) => {
@@ -368,6 +517,86 @@ test('createWebAppServeApp rejects the health endpoint as a base path', async (t
       /reserved/,
     );
   }
+});
+
+test('buildProjectInspection summarizes graphs, web apps, node library items, and plugins', () => {
+  const project = createProjectWithWebApp();
+  project.plugins = ['openai'];
+  project.nodePrefabs = {
+    prefab: {
+      id: 'prefab' as NodePrefabId,
+      sourceNode: {
+        data: {
+          normalizeLineEndings: true,
+          text: 'hello',
+        },
+        id: 'prefab-node' as NodeId,
+        title: 'Reusable text',
+        type: 'text',
+        visualData: {
+          x: 0,
+          y: 0,
+          width: 300,
+        },
+      },
+    },
+  };
+
+  assert.deepEqual(buildProjectInspection(project, 'project.rivet-project'), {
+    graphs: [
+      {
+        id: 'main',
+        main: true,
+        name: 'Main',
+        nodes: 2,
+      },
+    ],
+    libraryNodes: [
+      {
+        id: 'prefab',
+        nodeType: 'text',
+        title: 'Reusable text',
+      },
+    ],
+    path: 'project.rivet-project',
+    plugins: ['openai'],
+    project: {
+      description: '',
+      id: 'project',
+      mainGraphId: 'main',
+      title: 'Test project',
+    },
+    webApps: [
+      {
+        components: 1,
+        id: 'app',
+        name: 'Test web app',
+      },
+    ],
+  });
+});
+
+test('buildDoctorReport reports healthy projects and missing required dataset files', async (t) => {
+  const projectFile = await writeTemporaryProject(t, createProjectWithWebApp());
+
+  const healthyReport = await buildDoctorReport(projectFile);
+  assert.equal(healthyReport.ok, true);
+  assert.equal(healthyReport.summary.errors, 0);
+  assert.equal(healthyReport.checks.find((check) => check.id === 'main-graph')?.status, 'ok');
+
+  const missingDatasetReport = await buildDoctorReport(projectFile, { requireDatasetFile: true });
+  assert.equal(missingDatasetReport.ok, false);
+  assert.equal(missingDatasetReport.checks.find((check) => check.id === 'dataset-file')?.status, 'error');
+});
+
+test('buildDoctorReport reports stale main graph references', async (t) => {
+  const project = createProjectWithWebApp();
+  project.metadata.mainGraphId = 'missing' as GraphId;
+  const projectFile = await writeTemporaryProject(t, project);
+
+  const report = await buildDoctorReport(projectFile);
+  assert.equal(report.ok, false);
+  assert.equal(report.checks.find((check) => check.id === 'main-graph')?.status, 'error');
 });
 
 function buildServeArgs(): ServeArgs {
@@ -394,6 +623,7 @@ function buildServeAppArgs(): ServeAppArgs {
   return {
     basePath: '/',
     corsOrigin: [],
+    dev: false,
     host: '0.0.0.0',
     port: 3000,
     projectFile: '',
@@ -426,17 +656,47 @@ function buildRunArgs() {
 function createProjectWithWebApp(): Project {
   const graphId = 'main' as GraphId;
   const uiGraphId = 'app' as UiGraphId;
+  const inputNodeId = 'input-node' as NodeId;
+  const outputNodeId = 'output-node' as NodeId;
+  const inputNode: ChartNode<'graphInput'> = {
+    data: {
+      dataType: 'string',
+      id: 'input',
+      useDefaultValueInput: false,
+    },
+    id: inputNodeId,
+    title: 'Graph Input',
+    type: 'graphInput',
+    visualData: { x: 0, y: 0, width: 300 },
+  };
+  const outputNode: ChartNode<'graphOutput'> = {
+    data: {
+      dataType: 'string',
+      id: 'answer',
+    },
+    id: outputNodeId,
+    title: 'Graph Output',
+    type: 'graphOutput',
+    visualData: { x: 400, y: 0, width: 300 },
+  };
 
   return {
     graphs: {
       [graphId]: {
-        connections: [],
+        connections: [
+          {
+            inputId: 'value' as PortId,
+            inputNodeId: outputNodeId,
+            outputId: 'data' as PortId,
+            outputNodeId: inputNodeId,
+          },
+        ],
         metadata: {
           description: '',
           id: graphId,
           name: 'Main',
         },
-        nodes: [],
+        nodes: [inputNode, outputNode],
       },
     },
     metadata: {
@@ -452,6 +712,8 @@ function createProjectWithWebApp(): Project {
           {
             action: {
               graphId,
+              inputMappings: [{ inputKey: 'input', stateKey: 'prompt' }],
+              outputs: [{ outputKey: 'answer', stateKey: 'result' }],
               type: 'runGraph',
             },
             id: 'button' as UiComponentId,

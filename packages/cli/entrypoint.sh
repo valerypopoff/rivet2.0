@@ -3,7 +3,7 @@
 PROJECT_DIR=${PROJECT_DIR:-/project}
 
 case "${1:-}" in
-  run|serve|serve-app|-h|--help|--version)
+  completion|doctor|inspect|list|run|serve|serve-app|-h|--help|--version)
     exec rivet "$@"
     ;;
 esac

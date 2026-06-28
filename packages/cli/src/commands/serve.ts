@@ -1,4 +1,3 @@
-import { serve as serveHono } from '@hono/node-server';
 import { createProcessor, getSingleNodeStream, loadProjectFromFile } from '@valerypopoff/rivet2-node';
 import type {
   LooseDataValue,
@@ -13,20 +12,27 @@ import type { Context } from 'hono';
 import type * as yargs from 'yargs';
 import { parseJsonInputRecord } from '../commandInputs.js';
 import {
+  addDatasetOptions,
+  addProviderOptions,
   loadProjectRuntime,
   resolveServedGraphName,
   throwIfInvalidGraph,
   throwIfNoMainGraph,
-  withRuntimeProcessorOptions,
+  warnIfServerSavesDatasets,
+  withCliProcessorOptions,
+  withProviderProcessorOptions,
   type DatasetCliOptions,
   type LoadedProjectRuntime,
+  type ProviderCliOptions,
 } from '../cliRuntime.js';
 import {
   CliHttpError,
+  addHttpOptions,
   createHttpMiddleware,
   formatListenUrl,
   jsonErrorResponse,
   jsonTimedResponse,
+  startHttpServer,
   type HttpCliOptions,
 } from '../http.js';
 import { shapeOutputs } from '../output.js';
@@ -38,30 +44,27 @@ export type ServeArgs = {
   exposeCost: boolean;
   graph: string | undefined;
   host: string;
-  openaiApiKey: string | undefined;
-  openaiEndpoint: string | undefined;
-  openaiOrganization: string | undefined;
   port: number;
   projectFile: string | undefined;
   stream: string | undefined;
   streamNode: string | undefined;
   unwrapOutput: string | undefined;
 } & DatasetCliOptions &
+  ProviderCliOptions &
   HttpCliOptions;
 
 type GraphRunArgs = {
   exposeCost: boolean;
   graph: string | undefined;
   inputs: Record<string, LooseDataValue>;
-  openaiApiKey: string | undefined;
-  openaiEndpoint: string | undefined;
-  openaiOrganization: string | undefined;
   project: Project;
+  providerOptions: ProviderCliOptions;
   runtime: Pick<LoadedProjectRuntime, 'datasetProvider' | 'projectPath'>;
   unwrapOutput: string | undefined;
 };
 
-type GraphProcessorArgs = Omit<GraphRunArgs, 'exposeCost' | 'project' | 'runtime' | 'unwrapOutput'>;
+type GraphProcessorArgs = Omit<GraphRunArgs, 'exposeCost' | 'project' | 'providerOptions' | 'runtime' | 'unwrapOutput'> &
+  ProviderCliOptions;
 
 export type ServeAppInfo = {
   app: Hono;
@@ -70,80 +73,42 @@ export type ServeAppInfo = {
 };
 
 export function makeCommand<T>(y: yargs.Argv<T>) {
-  return y
-    .option('port', {
-      describe: 'The port to serve on',
-      type: 'number',
-      default: 3000,
-    })
-    .option('host', {
-      describe: 'The host interface to bind to',
-      type: 'string',
-      default: '0.0.0.0',
-    })
-    .option('dev', {
-      describe: 'Run in development mode: rereads the project file on each request',
-      type: 'boolean',
-      default: false,
-    })
-    .option('graph', {
-      describe: 'The ID or name of the graph to run. If omitted, the main graph is used.',
-      type: 'string',
-      demandOption: false,
-    })
-    .option('allow-specifying-graph-id', {
-      describe: 'Allow specifying the graph ID in the URL path',
-      type: 'boolean',
-      default: false,
-    })
-    .option('endpoint', {
-      describe: 'Expose a named endpoint alias using endpointName=graphNameOrId',
-      type: 'string',
-      array: true,
-      default: [],
-    })
-    .option('bearer-token', {
-      describe: 'Require Authorization: Bearer <token>. Defaults to RIVET_CLI_BEARER_TOKEN.',
-      type: 'string',
-    })
-    .option('cors-origin', {
-      describe: 'Allow a CORS origin. Can be repeated, or set to *.',
-      type: 'string',
-      array: true,
-      default: [],
-    })
-    .option('dataset-file', {
-      describe: 'Use a specific .rivet-data file instead of the project-adjacent default',
-      type: 'string',
-    })
-    .option('save-datasets', {
-      describe: 'Persist dataset mutations back to the dataset file',
-      type: 'boolean',
-      default: false,
-    })
-    .option('require-dataset-file', {
-      describe: 'Fail if the dataset file does not exist',
-      type: 'boolean',
-      default: false,
-    })
-    .option('openai-api-key', {
-      describe:
-        'The OpenAI API key to use for the project. If omitted, the environment variable OPENAI_API_KEY is used.',
-      type: 'string',
-      demandOption: false,
-    })
-    .option('openai-endpoint', {
-      describe:
-        'The OpenAI API endpoint to use for the project. If omitted, the environment variable OPENAI_ENDPOINT is used.',
-      type: 'string',
-      demandOption: false,
-    })
-    .option('openai-organization', {
-      describe:
-        'The OpenAI organization to use for the project. If omitted, the environment variable OPENAI_ORGANIZATION is used.',
-      type: 'string',
-      demandOption: false,
-    })
+  const command = addHttpOptions(
+    addProviderOptions(y)
+      .option('port', {
+        describe: 'The port to serve on',
+        type: 'number',
+        default: 3000,
+      })
+      .option('host', {
+        describe: 'The host interface to bind to',
+        type: 'string',
+        default: '0.0.0.0',
+      })
+      .option('dev', {
+        describe: 'Run in development mode: rereads the project file on each request',
+        type: 'boolean',
+        default: false,
+      })
+      .option('graph', {
+        describe: 'The ID or name of the graph to run. If omitted, the main graph is used.',
+        type: 'string',
+        demandOption: false,
+      })
+      .option('allow-specifying-graph-id', {
+        describe: 'Allow specifying the graph ID in the URL path',
+        type: 'boolean',
+        default: false,
+      })
+      .option('endpoint', {
+        describe: 'Expose a named endpoint alias using endpointName=graphNameOrId',
+        type: 'string',
+        array: true,
+        default: [],
+      }),
+  );
+
+  return addDatasetOptions(command)
     .option('expose-cost', {
       describe: 'Expose the cost of the graph run in the response',
       type: 'boolean',
@@ -173,43 +138,18 @@ export function makeCommand<T>(y: yargs.Argv<T>) {
 }
 
 export async function serve(args: ServeArgs) {
-  try {
-    configDotenv();
+  configDotenv();
 
-    const { app, projectFilePath, servedGraphName } = await createServeApp(args);
-    const server = serveHono({
-      hostname: args.host,
-      port: args.port,
-      fetch: app.fetch,
-    });
+  const { app, projectFilePath, servedGraphName } = await createServeApp(args);
+  startHttpServer(app, args.host, args.port);
 
-    console.log(
-      chalk.green(
-        `Serving project file ${chalk.bold.white(projectFilePath)} at ${chalk.bold.white(
-          formatListenUrl(args.host, args.port),
-        )}.\nServing graph "${chalk.bold.white(servedGraphName)}".`,
-      ),
-    );
-
-    function shutdown() {
-      console.log('Shutting down...');
-
-      server.close((err) => {
-        if (err) {
-          console.error(err);
-          process.exit(1);
-        }
-
-        process.exit(0);
-      });
-    }
-
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-  } catch (err) {
-    console.error(chalk.red(err));
-    process.exit(1);
-  }
+  console.log(
+    chalk.green(
+      `Serving project file ${chalk.bold.white(projectFilePath)} at ${chalk.bold.white(
+        formatListenUrl(args.host, args.port),
+      )}.\nServing graph "${chalk.bold.white(servedGraphName)}".`,
+    ),
+  );
 }
 
 export async function createServeApp(args: ServeArgs): Promise<ServeAppInfo> {
@@ -222,6 +162,8 @@ export async function createServeApp(args: ServeArgs): Promise<ServeAppInfo> {
   if (args.stream != null) {
     console.log('Streaming is enabled');
   }
+
+  warnIfServerSavesDatasets(args.saveDatasets, 'CLI server');
 
   if (args.streamNode != null) {
     if (args.stream == null) {
@@ -317,10 +259,8 @@ function buildGraphRunArgs(
     exposeCost: args.exposeCost,
     graph,
     inputs,
-    openaiApiKey: args.openaiApiKey,
-    openaiEndpoint: args.openaiEndpoint,
-    openaiOrganization: args.openaiOrganization,
     project,
+    providerOptions: args,
     runtime,
     unwrapOutput: args.unwrapOutput,
   };
@@ -330,25 +270,14 @@ async function streamGraph({
   project,
   inputs,
   graph,
-  openaiApiKey,
-  openaiEndpoint,
-  openaiOrganization,
+  providerOptions,
   runtime,
   stream,
   streamNode,
 }: GraphRunArgs & { stream: string | undefined; streamNode: string | undefined }): Promise<ReadableStream> {
   const { run, processor, getSSEStream } = createProcessor(
     project,
-    withRuntimeProcessorOptions(
-      runtime,
-      buildStreamingGraphProcessorOptions({
-        graph,
-        inputs,
-        openaiApiKey,
-        openaiEndpoint,
-        openaiOrganization,
-      }),
-    ),
+    withCliProcessorOptions(runtime, providerOptions, buildStreamingGraphProcessorOptions({ graph, inputs })),
   );
 
   const responseStream = streamNode
@@ -369,13 +298,13 @@ export function buildGraphProcessorOptions({
   openaiEndpoint,
   openaiOrganization,
 }: GraphProcessorArgs): NodeCreateProcessorOptions {
-  return {
-    graph,
-    inputs,
-    openAiEndpoint: openaiEndpoint,
-    openAiKey: openaiApiKey,
-    openAiOrganization: openaiOrganization,
-  };
+  return withProviderProcessorOptions(
+    { openaiApiKey, openaiEndpoint, openaiOrganization },
+    {
+      graph,
+      inputs,
+    },
+  );
 }
 
 export function buildStreamingGraphProcessorOptions(args: GraphProcessorArgs): NodeCreateProcessorOptions {
@@ -407,25 +336,14 @@ async function runGraph({
   project,
   inputs,
   graph,
-  openaiApiKey,
-  openaiEndpoint,
-  openaiOrganization,
+  providerOptions,
   exposeCost,
   runtime,
   unwrapOutput,
 }: GraphRunArgs): Promise<unknown> {
   const { run } = createProcessor(
     project,
-    withRuntimeProcessorOptions(
-      runtime,
-      buildGraphProcessorOptions({
-        graph,
-        inputs,
-        openaiApiKey,
-        openaiEndpoint,
-        openaiOrganization,
-      }),
-    ),
+    withCliProcessorOptions(runtime, providerOptions, { graph, inputs }),
   );
 
   return shapeOutputs(await run(), {
@@ -447,8 +365,10 @@ export function parseEndpointAliases(endpointSpecs: string[], project: Project):
     const endpointName = spec.slice(0, separatorIndex).trim();
     const graph = spec.slice(separatorIndex + 1).trim();
 
-    if (!endpointName || endpointName.includes('/')) {
-      throw new Error(`Invalid endpoint name "${endpointName}". Endpoint names cannot be empty or contain "/".`);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(endpointName)) {
+      throw new Error(
+        `Invalid endpoint name "${endpointName}". Endpoint names must use letters, numbers, hyphens, or underscores, and must start with a letter or number.`,
+      );
     }
 
     if (!graph) {

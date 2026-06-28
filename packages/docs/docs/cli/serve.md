@@ -56,6 +56,8 @@ Once the server is running, you can make POST requests to the server to run grap
 
 The CLI passes the resolved `.rivet-project` path to the Node runtime, so project references are resolved relative to the served project file.
 
+Use [`rivet doctor`](./doctor.md) before deployment to catch stale main graph IDs or missing required dataset files. See [CLI recipes](./recipes.md) for endpoint, auth, CORS, and Docker examples.
+
 ## Inputs
 
 Inputs to graphs are provided via the request body of the HTTP request. The request body should be a JSON object with the input values.
@@ -135,7 +137,7 @@ npx @valerypopoff/rivet2-cli serve my-project.rivet-project --endpoint ask="Ask 
 curl -X POST http://localhost:3000/endpoints/ask -d '{"input":"Hello"}'
 ```
 
-Endpoint aliases are validated when the server starts. Duplicate endpoint names, empty endpoint names, endpoint names containing `/`, and unknown target graphs fail fast.
+Endpoint aliases are validated when the server starts. Duplicate endpoint names, endpoint names that are not URL-safe single segments, and unknown target graphs fail fast. Endpoint names must use letters, numbers, hyphens, or underscores, and must start with a letter or number.
 
 ## Options
 
@@ -144,20 +146,22 @@ Endpoint aliases are validated when the server starts. Duplicate endpoint names,
 - `--port <port>`: The port to run the server on. Default is 3000.
 - `--host <host>`: The host interface to bind to. Default is `0.0.0.0`, which is suitable for Docker and remote access. Use `127.0.0.1` for local-only serving.
 - `--dev`: Runs the server in development mode, which will reread the project file on each request. Useful for development.
-- `--bearer-token <token>`: Requires `Authorization: Bearer <token>` on graph and web-app requests. If omitted, `RIVET_CLI_BEARER_TOKEN` is used when set.
+- `--bearer-token <token>`: Requires `Authorization: Bearer <token>` on graph requests. If omitted, `RIVET_CLI_BEARER_TOKEN` is used when set.
 - `--cors-origin <origin>`: Adds CORS headers for an allowed origin. Can be repeated. Use `*` to allow any origin.
 
 ### Graph Selection
 
 - `--graph <graphNameOrId>`: The name or ID of the graph to run. If not provided, the main graph will be run. If there is no main graph, an error will be returned.
 - `--allow-specifying-graph-id`: Allows specifying the graph ID in the URL path. This is disabled by default.
-- `--endpoint <endpointName=graphNameOrId>`: Adds a named graph endpoint at `/endpoints/:endpointName`. Can be used multiple times.
+- `--endpoint <endpointName=graphNameOrId>`: Adds a named graph endpoint at `/endpoints/:endpointName`. Can be used multiple times. Endpoint names must use letters, numbers, hyphens, or underscores.
 
 ### Dataset Configuration
 
 - `--dataset-file`: Use a specific `.rivet-data` file instead of the adjacent project data file.
 - `--save-datasets`: Persist dataset mutations back to the dataset file.
 - `--require-dataset-file`: Fail if the dataset file does not exist.
+
+`--save-datasets` writes mutations from this single CLI server process. It is useful for local/reference hosting, but it is not a substitute for a production wrapper with explicit write coordination when several clients can mutate datasets concurrently.
 
 ### Provider Configuration
 

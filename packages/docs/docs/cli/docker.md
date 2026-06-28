@@ -94,6 +94,15 @@ If your project uses Data Studio datasets, mount the project directory with the 
 
 Dataset mutations stay in memory unless `--save-datasets` is passed.
 
+You can check the mounted project before serving it:
+
+```bash
+docker run --rm \
+  -v /path/to/project:/project \
+  valerypopoff/rivet-server:latest \
+  doctor /project/my-project.rivet-project
+```
+
 ### Serving Rivet Web Apps
 
 The published Docker entrypoint defaults to `rivet serve /project` when no command is provided. To serve a Rivet web app instead, pass the CLI subcommand directly:
@@ -141,9 +150,17 @@ See the [Rivet CLI documentation](./serve.md#options) for a list of environment 
 
 The container expects your Rivet project file to be mounted at `/project` inside the container. The mounted directory should contain the Rivet project file and any other files needed by the project, such as any `.rivet-data` file.
 
-The image entrypoint runs the globally installed CLI as `rivet serve /project` when no CLI subcommand is passed. Additional non-command arguments appended to `docker run` are forwarded to that default `serve /project` command. If the first argument is `run`, `serve`, or `serve-app`, the entrypoint runs that CLI command directly.
+The image entrypoint runs the globally installed CLI as `rivet serve /project` when no CLI subcommand is passed. Additional non-command arguments appended to `docker run` are forwarded to that default `serve /project` command. If the first argument is `completion`, `doctor`, `list`, `inspect`, `run`, `serve`, or `serve-app`, the entrypoint runs that CLI command directly.
 
 Maintainers building the published image should pass the CLI package version through the `RIVET_CLI_VERSION` Docker build argument. The package's `docker-publish.sh` script does this automatically.
+
+Maintainers can run the repository Docker smoke check when Docker is available:
+
+```bash
+yarn workspace @valerypopoff/rivet2-cli run smoke:docker
+```
+
+That smoke check builds a temporary Docker image from the current local CLI package tarball and the real entrypoint script, verifies the image can run `list`, `doctor`, and `--help`, then removes the temporary smoke image.
 
 ## Examples
 

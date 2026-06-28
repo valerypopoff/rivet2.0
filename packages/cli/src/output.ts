@@ -10,8 +10,12 @@ export type OutputShapeOptions = {
 
 export function shapeOutputs(
   outputs: Outputs,
-  { includeCost = false, outputKey, unwrapOutput }: OutputShapeOptions,
+  options: OutputShapeOptions,
 ): unknown {
+  validateOutputShapeOptions(options);
+
+  const { includeCost = false, outputKey, unwrapOutput } = options;
+
   const visibleOutputs: Record<string, DataValue | undefined> = { ...outputs };
 
   if (!includeCost) {
@@ -30,6 +34,12 @@ export function shapeOutputs(
 
   const selectedOutput = visibleOutputs[selectedOutputKey];
   return unwrapOutput ? selectedOutput?.value : selectedOutput;
+}
+
+export function validateOutputShapeOptions({ outputKey, unwrapOutput }: OutputShapeOptions): void {
+  if (outputKey && unwrapOutput) {
+    throw new Error('Use only one output selector. Received: --output-key, --unwrap-output.');
+  }
 }
 
 export async function writeJsonOutput(payload: unknown, outputFile: string | undefined): Promise<void> {

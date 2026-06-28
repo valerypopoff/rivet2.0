@@ -1,4 +1,6 @@
-import type { Context, MiddlewareHandler } from 'hono';
+import { serve as serveHono } from '@hono/node-server';
+import type { Context, Hono, MiddlewareHandler } from 'hono';
+import type * as yargs from 'yargs';
 
 export type HttpCliOptions = {
   bearerToken?: string;
@@ -23,6 +25,20 @@ export class CliHttpError extends Error {
     super(message);
     this.name = 'CliHttpError';
   }
+}
+
+export function addHttpOptions<T>(y: yargs.Argv<T>): yargs.Argv<T> {
+  return y
+    .option('bearer-token', {
+      describe: 'Require Authorization: Bearer <token>. Defaults to RIVET_CLI_BEARER_TOKEN.',
+      type: 'string',
+    })
+    .option('cors-origin', {
+      describe: 'Allow a CORS origin. Can be repeated, or set to *.',
+      type: 'string',
+      array: true,
+      default: [],
+    });
 }
 
 export function createHttpMiddleware({ bearerToken, corsOrigin = [] }: HttpCliOptions): MiddlewareHandler {
@@ -82,6 +98,30 @@ export function jsonTimedResponse(c: Context, payload: unknown, startedAt: numbe
 export function formatListenUrl(host: string, port: number): string {
   const displayHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
   return `http://${displayHost}:${port}`;
+}
+
+export function startHttpServer(app: Hono, host: string, port: number): void {
+  const server = serveHono({
+    fetch: app.fetch,
+    hostname: host,
+    port,
+  });
+
+  function shutdown() {
+    console.log('Shutting down...');
+
+    server.close((err) => {
+      if (err) {
+        console.error(err);
+        process.exit(1);
+      }
+
+      process.exit(0);
+    });
+  }
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 function applyCorsHeaders(c: Context, corsOrigins: string[]): void {
