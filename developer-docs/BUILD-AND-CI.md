@@ -755,6 +755,13 @@ normal npm dependency on `@valerypopoff/rivet2-core`,
 `@valerypopoff/rivet2-cli` receives a normal npm dependency on
 `@valerypopoff/rivet2-node`.
 
+The public workspace packages intentionally do not define package-level
+`publish` lifecycle scripts. Publishing directly from a workspace package
+directory is not supported because those manifests can still contain
+workspace-only metadata and dependencies. Always use the root
+`scripts/publish-npm-packages.mjs` path, or the GitHub workflow that calls it,
+so package manifests are staged and normalized before npm sees them.
+
 ## `rename-release-assets.yml`
 
 ### Trigger conditions

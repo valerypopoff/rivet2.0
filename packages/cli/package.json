@@ -16,7 +16,6 @@
   "scripts": {
     "build": "tsc -b",
     "prepack": "yarn build",
-    "publish": "yarn npm publish --access public",
     "smoke:docker": "node scripts/smoke-docker.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
     "verify": "yarn build && yarn lint && yarn test && yarn smoke:package && yarn pack --dry-run",
