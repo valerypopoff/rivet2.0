@@ -4,6 +4,9 @@ export {
   isVisiblePort,
   type NodeOutputCopyValueProjector,
   type NodeOutputCopyValueProjectorArgs,
+  projectDataValueForCopy,
   projectStoredPortValueForCopy,
+  serializeDisplayedDataValue,
+  serializeDisplayedPortValue,
   serializeDisplayedOutputs,
 } from './executionDataCopy/serializeDisplayedOutputs.js';

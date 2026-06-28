@@ -142,6 +142,10 @@ test('inline node output actions reserve flow space without moving their hit tar
     join(componentsDir, 'renderDataValue', 'renderDataValueStyles.ts'),
     'utf8',
   );
+  const outputSectionHeaderSource = readFileSync(
+    join(componentsDir, 'renderDataValue', 'OutputSectionHeader.tsx'),
+    'utf8',
+  );
   const structuredNodeOutputSource = readFileSync(join(componentsDir, 'nodes', 'StructuredNodeOutput.tsx'), 'utf8');
   const renderedDataOutputsStylesBlock = /export const renderedDataOutputsStyles = css`(?<styles>[\s\S]*?)`;/u.exec(
     renderDataValueStylesSource,
@@ -240,6 +244,13 @@ test('inline node output actions reserve flow space without moving their hit tar
     renderDataOutputsSource,
     /createNodeOutputSectionsViewModel\(\{[\s\S]*?showLargeHeaders: showSectionStats,/,
   );
+  assert.match(renderDataOutputsSource, /serializeDisplayedPortValue\(outputs, section\.portId, dataRefs\)/);
+  assert.match(
+    structuredNodeOutputSource,
+    /const getCopyValue =[\s\S]*?statsText \?\? serializeDisplayedDataValue\(statsValue, dataRefs\)/,
+  );
+  assert.match(outputSectionHeaderSource, /content="Copy value"/);
+  assert.match(outputSectionHeaderSource, /className="output-section-copy-button"/);
   assert.match(renderDataOutputsSource, /<OutputSectionHeader[\s\S]*?isLarge=\{section\.headerMode === 'large'\}/);
   assert.match(renderedDataOutputsStylesBlock, /\.output-section-header \{[\s\S]*?align-items: baseline;/);
   assert.match(structuredNodeOutputStylesBlock.trimStart(), /^display: block;/);

@@ -33,6 +33,7 @@ import { useStableCallback } from '../hooks/useStableCallback.js';
 import { useViewportBounds } from '../hooks/useViewportBounds.js';
 import { useVisibleCanvasNodes } from '../hooks/useVisibleCanvasNodes';
 import { useWireDragScrolling } from '../hooks/useWireDragScrolling';
+import { isMacOSPlatform } from '../utils/platform/os.js';
 import {
   canvasPositionState,
   editingNodeState,
@@ -747,6 +748,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const nodeStartEditing = useStableCallback((node: ChartNode) => {
     onNodeStartEditing?.(node);
   });
+  const supportsBackspaceDeleteHotkey = isMacOSPlatform();
 
   useGlobalHotkey(
     'Space',
@@ -761,21 +763,31 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     { notWhenInputFocused: true },
   );
 
+  const deleteSelectedNodesFromHotkey = useStableCallback((event: KeyboardEvent) => {
+    event.preventDefault();
+    if (selectedNodeIds.length === 0) {
+      return;
+    }
+
+    if (disableGraphCommands) {
+      onNodesDeleted?.(selectedNodeIds);
+      return;
+    }
+
+    removeNodes({ nodeIds: selectedNodeIds });
+    setSelectedNodeIds([]);
+  });
+
+  useGlobalHotkey('Delete', deleteSelectedNodesFromHotkey, { notWhenInputFocused: true });
+
   useGlobalHotkey(
-    'Delete',
-    (e) => {
-      e.preventDefault();
-      if (selectedNodeIds.length === 0) {
+    'Backspace',
+    (event) => {
+      if (!supportsBackspaceDeleteHotkey || selectedNodeIds.length === 0) {
         return;
       }
 
-      if (disableGraphCommands) {
-        onNodesDeleted?.(selectedNodeIds);
-        return;
-      }
-
-      removeNodes({ nodeIds: selectedNodeIds });
-      setSelectedNodeIds([]);
+      deleteSelectedNodesFromHotkey(event);
     },
     { notWhenInputFocused: true },
   );

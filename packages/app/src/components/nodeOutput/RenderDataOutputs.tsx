@@ -7,6 +7,7 @@ import { OutputSectionHeader } from '../renderDataValue/OutputSectionHeader.js';
 import type { OutputRenderMode } from '../renderDataValue/outputRenderTypes.js';
 import { getOutputSectionStatsForValue, shouldShowOutputSectionStats } from '../renderDataValue/outputSectionStats.js';
 import { renderedDataOutputsStyles } from '../renderDataValue/renderDataValueStyles.js';
+import { serializeDisplayedPortValue } from '../../utils/executionDataCopyValue.js';
 import { createNodeOutputSectionsViewModel } from './nodeOutputViewModel.js';
 
 export const RenderDataOutputs: FC<{
@@ -59,6 +60,11 @@ export const RenderDataOutputs: FC<{
       {sections.map((section) => (
         <div className="port-value" key={section.portId}>
           <OutputSectionHeader
+            getCopyValue={
+              section.headerMode === 'large'
+                ? () => serializeDisplayedPortValue(outputs, section.portId, dataRefs)
+                : undefined
+            }
             isLarge={section.headerMode === 'large'}
             label={section.label}
             stats={section.headerMode === 'large' ? getOutputSectionStatsForValue(section.value, dataRefs) : undefined}

@@ -5,20 +5,27 @@ interface UseGlobalHotkeyOptions {
   notWhenInputFocused?: boolean;
 }
 
+function isTextEntryFocused(): boolean {
+  const activeElement = document.activeElement;
+
+  if (!(activeElement instanceof HTMLElement)) {
+    return false;
+  }
+
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement.tagName) || activeElement.isContentEditable;
+}
+
 export const useGlobalHotkey = (
   key: string,
   action: (event: KeyboardEvent) => void,
   options: UseGlobalHotkeyOptions = { notWhenInputFocused: false },
 ) => {
   const latestAction = useLatest(action);
+  const notWhenInputFocused = options.notWhenInputFocused ?? false;
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const activeElement = document.activeElement as HTMLElement;
-      const isInputOrTextarea =
-        activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA');
-
-      if (e.code === key && (!options.notWhenInputFocused || !isInputOrTextarea)) {
+      if (e.code === key && (!notWhenInputFocused || !isTextEntryFocused())) {
         latestAction.current(e);
       }
     };
@@ -28,5 +35,5 @@ export const useGlobalHotkey = (
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [key, latestAction, options]);
+  }, [key, latestAction, notWhenInputFocused]);
 };

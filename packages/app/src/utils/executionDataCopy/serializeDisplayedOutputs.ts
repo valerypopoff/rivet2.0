@@ -1,8 +1,7 @@
-import { type NodeOutputDefinition, type PortId } from '@valerypopoff/rivet2-core';
+import { type DataValue, type NodeOutputDefinition, type PortId } from '@valerypopoff/rivet2-core';
 import type { DataRefReader } from '../../providers/ProvidersContext.js';
-import type { InputsOrOutputsWithRefs, NodeRunDataWithRefs } from '../../state/dataFlow.js';
-import { restoreStoredPortValue } from '../executionDataReaders.js';
-import { isStoredRefDataValue } from '../executionDataStorage.js';
+import type { DataValueWithRefs, InputsOrOutputsWithRefs, NodeRunDataWithRefs } from '../../state/dataFlow.js';
+import { isStoredRefDataValue, tryRestoreStoredDataValue } from '../executionDataStorage.js';
 import { hasVisibleStoredPortMapValues, isVisibleOutputPort } from '../outputPortVisibility.js';
 import { displayCopySections, isDisplayCopySections } from './displayCopySections.js';
 import { projectDataValue } from './projectDataValue.js';
@@ -60,16 +59,44 @@ export function projectStoredPortValueForCopy(
   portId: PortId,
   dataRefs: DataRefReader,
 ): unknown | undefined {
-  if (outputs[portId] == null) {
+  return projectDataValueForCopy(outputs[portId], dataRefs);
+}
+
+export function projectDataValueForCopy(
+  value: DataValueWithRefs | DataValue | undefined,
+  dataRefs: DataRefReader,
+): unknown | undefined {
+  if (value == null) {
     return undefined;
   }
 
-  const restoredValue = restoreStoredPortValue(outputs, portId, dataRefs);
+  const restoredValue = tryRestoreStoredDataValue(value as DataValueWithRefs, dataRefs);
   if (restoredValue) {
     return projectDataValue(restoredValue);
   }
 
-  return isStoredRefDataValue(outputs[portId]) ? MISSING_STORED_VALUE_TEXT : 'undefined';
+  return isStoredRefDataValue(value) ? MISSING_STORED_VALUE_TEXT : 'undefined';
+}
+
+export function serializeDisplayedDataValue(
+  value: DataValueWithRefs | DataValue | undefined,
+  dataRefs: DataRefReader,
+): string | undefined {
+  const projectedValue = projectDataValueForCopy(value, dataRefs);
+  return projectedValue === undefined ? undefined : serializeProjectedCopyValue(projectedValue);
+}
+
+export function serializeDisplayedPortValue(
+  outputs: InputsOrOutputsWithRefs,
+  portId: PortId | string,
+  dataRefs: DataRefReader,
+): string | undefined {
+  const value = outputs[portId as PortId];
+  if (value == null) {
+    return undefined;
+  }
+
+  return serializeDisplayedDataValue(value, dataRefs);
 }
 
 function serializeGenericDisplayedOutputs(

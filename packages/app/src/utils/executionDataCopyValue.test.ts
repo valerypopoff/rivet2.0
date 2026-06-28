@@ -7,6 +7,8 @@ import {
   displayCopySections,
   projectStoredPortValueForCopy,
   projectDataValue,
+  serializeDisplayedDataValue,
+  serializeDisplayedPortValue,
   serializeDisplayedOutputs,
 } from './executionDataCopyValue.js';
 
@@ -252,6 +254,37 @@ test('projectStoredPortValueForCopy preserves explicit any undefined but skips a
 
   assert.equal(projectStoredPortValueForCopy(outputs, 'missing' as PortId, dataRefs), undefined);
   assert.equal(projectStoredPortValueForCopy(outputs, 'output' as PortId, dataRefs), 'undefined');
+});
+
+test('serializeDisplayedPortValue copies one output without labelled section text', () => {
+  const outputs = {
+    first: inlineStored('string', 'first value'),
+    second: inlineStored('object', { key: 'second value' }),
+  } as never;
+  const dataRefs = createDataRefStore();
+
+  assert.equal(serializeDisplayedPortValue(outputs, 'first' as PortId, dataRefs), 'first value');
+  assert.equal(serializeDisplayedPortValue(outputs, 'second' as PortId, dataRefs), '{\n  "key": "second value"\n}');
+});
+
+test('serializeDisplayedDataValue matches visible display-copy fallbacks for structured sections', () => {
+  assert.equal(serializeDisplayedDataValue(inlineStored('any', undefined), createDataRefStore()), 'undefined');
+  assert.equal(
+    serializeDisplayedDataValue(
+      {
+        type: 'object',
+        storage: 'ref',
+        refId: 'missing-output',
+        preview: {
+          kind: 'json',
+          excerpt: '{}',
+          totalChars: 2,
+        },
+      },
+      createDataRefStore(),
+    ),
+    'Value no longer available in memory.',
+  );
 });
 
 test('serializeDisplayedOutputs preserves explicit any undefined in multi-port output text', () => {

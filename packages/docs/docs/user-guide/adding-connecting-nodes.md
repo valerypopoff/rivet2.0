@@ -34,7 +34,7 @@ When moving a Comment node, hold **Ctrl** on Windows/Linux or **Cmd** on macOS t
 
 ## Deleting Nodes
 
-Right click on a node and select **Delete** to delete it. **Warning: There is no undo at this time!**
+Right click on a node and select **Delete** to delete it. You can also select one or more nodes and press **Delete**. On macOS keyboards without a dedicated Delete key, press **Backspace** instead.
 
 ## Connecting Nodes
 

@@ -213,6 +213,23 @@ test('non-graph canvases keep drag, resize, and alignment commands out of graph 
   assert.match(nodeCanvasSource, /const shouldRenderWires = !disableConnections && canvasPosition\.zoom > 0\.15/);
 });
 
+test('canvas deletion hotkeys support macOS Backspace through the same delete path', () => {
+  const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
+  const globalHotkeySource = readFileSync(join(hooksDir, 'useGlobalHotkey.ts'), 'utf8');
+
+  assert.match(nodeCanvasSource, /import \{ isMacOSPlatform \} from '\.\.\/utils\/platform\/os\.js';/);
+  assert.match(nodeCanvasSource, /const supportsBackspaceDeleteHotkey = isMacOSPlatform\(\);/);
+  assert.match(nodeCanvasSource, /const deleteSelectedNodesFromHotkey = useStableCallback\(\(event: KeyboardEvent\) => \{/);
+  assert.match(nodeCanvasSource, /useGlobalHotkey\('Delete', deleteSelectedNodesFromHotkey, \{ notWhenInputFocused: true \}\)/);
+  assert.match(
+    nodeCanvasSource,
+    /useGlobalHotkey\(\s*'Backspace',[\s\S]*!supportsBackspaceDeleteHotkey \|\| selectedNodeIds\.length === 0[\s\S]*deleteSelectedNodesFromHotkey\(event\)/,
+  );
+  assert.match(globalHotkeySource, /\['INPUT', 'TEXTAREA', 'SELECT'\]\.includes\(activeElement\.tagName\)/);
+  assert.match(globalHotkeySource, /activeElement\.isContentEditable/);
+  assert.match(globalHotkeySource, /\[key, latestAction, notWhenInputFocused\]/);
+});
+
 test('shift selection boxes snapshot selected nodes and do not fall through to canvas click clearing', () => {
   const interactionSource = readFileSync(join(testDir, 'useNodeCanvasInteractions.ts'), 'utf8');
 
