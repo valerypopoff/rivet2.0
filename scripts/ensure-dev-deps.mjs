@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const rootDir = process.cwd();
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(scriptDir, '..');
 const rivetDir = path.join(rootDir, 'rivet');
 const rivetRepoUrl = process.env.RIVET_REPO_URL || 'https://github.com/valerypopoff/rivet2.0.git';
 const rivetRepoRef = process.env.RIVET_REPO_REF || process.env.RIVET_BRANCH || 'main';

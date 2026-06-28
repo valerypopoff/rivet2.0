@@ -1,11 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFileSync } from 'node:fs';
 import type { WorkflowProjectItem, WorkflowProjectStatus } from '../../shared/workflow-types';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
-
-const rootPackageJson = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')) as {
-  version: string;
-};
 
 const STATUS_DOT_BACKGROUND: Record<WorkflowProjectStatus, string> = {
   unpublished: 'rgb(187, 187, 187)',
@@ -98,7 +93,7 @@ test.describe('Workflow library layout', () => {
     await expect(aboutModal).toBeVisible();
     await expect(aboutModal).toContainText('Rivet Studio Server');
     await expect(aboutModal).toContainText('Version');
-    await expect(aboutModal).toContainText(rootPackageJson.version);
+    await expect(aboutModal).toContainText(/Version\s*\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/);
     await page.getByRole('button', { name: 'Close about' }).click();
     await expect(aboutModal).toHaveCount(0);
 

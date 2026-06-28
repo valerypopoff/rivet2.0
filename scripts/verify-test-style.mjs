@@ -154,6 +154,37 @@ function assertRootPretestCommand(command) {
   );
 }
 
+function assertApiFocusedTestCommand(command) {
+  assert.match(
+    command,
+    /node \.\.\/\.\.\/scripts\/run-preserve-symlinks\.mjs\b/,
+    'wrapper/api test:files should preserve symlinks so local Rivet package links resolve like the default API suite.',
+  );
+  assert.match(
+    command,
+    /\btsx --test\b/,
+    'wrapper/api test:files should use the same Node test runner path as the default API suite.',
+  );
+  assert.match(
+    command,
+    /--test-concurrency=1\b/,
+    'wrapper/api test:files should keep focused API files serialized like the default API suite.',
+  );
+  assert.doesNotMatch(
+    command,
+    /\.test\.ts\b/,
+    'wrapper/api test:files should not list files; callers pass the focused files after `--`.',
+  );
+}
+
+function assertApiPackagePretestCommand(command, label) {
+  assert.equal(
+    command,
+    'node ../../scripts/ensure-dev-deps.mjs',
+    `${label} should run the shared dependency bootstrap before API tests.`,
+  );
+}
+
 function assertNoRetiredTestFiles() {
   const candidateDirs = [
     'wrapper/api/src/tests',
@@ -183,6 +214,17 @@ function assertPlaywrightFileStyle(testFiles) {
   for (const testFile of testFiles) {
     const contents = readFile(testFile);
     assert.match(contents, /from ['"]@playwright\/test['"]/, `${testFile} should use the Playwright test runner.`);
+  }
+}
+
+function assertPlaywrightSpecsDoNotReadLocalPackageMetadata(testFiles) {
+  for (const testFile of testFiles) {
+    const contents = readFile(testFile);
+    assert.doesNotMatch(
+      contents,
+      /(?:readFileSync|new URL|from\s+['"])[^;\n]*package\.json/,
+      `${testFile} should not read local package.json metadata; observable Playwright specs validate the live app target, which may be a previously built container.`,
+    );
   }
 }
 
@@ -223,7 +265,10 @@ function main() {
   assert.equal(typeof rootScripts.test, 'string', 'Root package.json should expose test.');
   assert.equal(typeof rootScripts.pretest, 'string', 'Root package.json should expose pretest.');
   assert.equal(typeof rootScripts['verify:test-style'], 'string', 'Root package.json should expose verify:test-style.');
+  assert.equal(typeof apiScripts.pretest, 'string', 'wrapper/api package.json should expose pretest.');
   assert.equal(typeof apiScripts.test, 'string', 'wrapper/api package.json should expose the default API test command.');
+  assert.equal(typeof apiScripts['pretest:files'], 'string', 'wrapper/api package.json should expose pretest:files.');
+  assert.equal(typeof apiScripts['test:files'], 'string', 'wrapper/api package.json should expose test:files for focused API test runs.');
   assert.equal(typeof rootScripts['verify:web-pure'], 'string', 'Root package.json should expose verify:web-pure.');
   assert.equal(typeof rootScripts['verify:kubernetes'], 'string', 'Root package.json should expose verify:kubernetes.');
 
@@ -252,6 +297,9 @@ function main() {
   );
   assertRootTestCommand(rootScripts.test);
   assertRootPretestCommand(rootScripts.pretest);
+  assertApiPackagePretestCommand(apiScripts.pretest, 'wrapper/api pretest');
+  assertApiPackagePretestCommand(apiScripts['pretest:files'], 'wrapper/api pretest:files');
+  assertApiFocusedTestCommand(apiScripts['test:files']);
 
   const apiCommandFiles = extractTestPaths(apiScripts.test);
   const webCommandFiles = extractTestPaths(rootScripts['verify:web-pure']);
@@ -304,6 +352,7 @@ function main() {
 
   assertNodeTestFileStyle(nodeTestFiles);
   assertPlaywrightFileStyle(playwrightSpecFiles);
+  assertPlaywrightSpecsDoNotReadLocalPackageMetadata(playwrightSpecFiles);
   assertNoFocusedTests(allTestFiles);
   assertNoUpstreamAppSourceContracts(allTestFiles);
 
