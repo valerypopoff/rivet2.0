@@ -31,6 +31,8 @@ export async function createFilesystemWorkflowSuiteHarness() {
   const withWorkflowExecutionServer = createWorkflowExecutionServerHarness({
     initializeWorkflowStorage: workflowStorageBackend.initializeWorkflowStorage,
     workflowsRouter: workflowRoutes.workflowsRouter,
+    latestWebAppsRouter: workflowRoutes.latestWebAppsRouter,
+    publishedWebAppsRouter: workflowRoutes.publishedWebAppsRouter,
     publishedWorkflowsRouter: workflowRoutes.publishedWorkflowsRouter,
     latestWorkflowsRouter: workflowRoutes.latestWorkflowsRouter,
   });

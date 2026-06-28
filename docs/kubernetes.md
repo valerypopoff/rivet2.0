@@ -12,14 +12,16 @@ That split is intentional. The singleton `backend` owns:
 - `/api/*`
 - `/ui-auth`
 - `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}`
+- `${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}`
 - `/ws/latest-debugger`
 
 The `execution` Deployment owns:
 
 - `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}`
+- `${RIVET_WEB_APPS_BASE_PATH:-/apps}`
 - `/internal/workflows/:endpointName`
 
-Do not scale `backend` horizontally in the current chart shape. Latest execution and `/ws/latest-debugger` are still process-local control-plane features.
+Do not scale `backend` horizontally in the current chart shape. Latest execution, latest web apps, and `/ws/latest-debugger` are still process-local control-plane features.
 
 ## Scaling model
 
@@ -358,6 +360,8 @@ Ingress should route all public traffic to the chart's `proxy` service. The prox
 | `/api/*` and `/ui-auth` | singleton `backend` API |
 | `/workflows/*` | scalable `execution` API |
 | `/workflows-latest/*` | singleton `backend` API |
+| `/apps/*` | scalable `execution` API |
+| `/apps-latest/*` | singleton `backend` API |
 | `/ws/latest-debugger` | singleton `backend` API websocket |
 | `/ws/executor/internal` and `/ws/executor` | executor container in the singleton `backend` StatefulSet |
 
@@ -496,7 +500,7 @@ curl -i -c rivet-cookies.txt \
 curl -i -b rivet-cookies.txt http://127.0.0.1:8080/api/config
 ```
 
-Public workflow execution routes also require `Authorization: Bearer <RIVET_KEY>` when `RIVET_REQUIRE_WORKFLOW_KEY=true`.
+Public workflow execution routes also require `Authorization: Bearer <RIVET_KEY>` when `RIVET_REQUIRE_WORKFLOW_KEY=true`. Web-app routes under `/apps/*` and `/apps-latest/*` follow the UI gate instead: they show the same key prompt when `RIVET_REQUIRE_UI_GATE_KEY=true`, return the browser to the originally requested web-app URL after login, reuse the `rivet_ui_token` cookie after login, and are bypassed for hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS`.
 
 If `fullnameOverride` is not set, replace `rivet-*` with the rendered object names from `kubectl get`.
 
@@ -523,6 +527,8 @@ The production contract today is:
 - `autoscaling.execution.enabled=true`
 - `env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`
 - `env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
+- `env.RIVET_WEB_APPS_BASE_PATH=/apps`
+- `env.RIVET_LATEST_WEB_APPS_BASE_PATH=/apps-latest`
 - `clusterDomain=cluster.local` unless the cluster DNS suffix is different
 - `env.RIVET_PROXY_RESOLVER` must be set for in-cluster nginx DNS resolution
 - control-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=none` with the job worker enabled there
@@ -574,7 +580,7 @@ Then validate:
 - do not couple `proxy` and `execution` replica counts mechanically; let each tier scale for its own pressure
 - set concrete CPU and memory requests for `proxy` and `execution` before treating HPA as production-ready
 - keep the same `RIVET_KEY` available to both `proxy` and the API workloads
-- route `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` and `/ws/latest-debugger` to the singleton control plane
-- route `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` to the execution plane
+- route `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, `${RIVET_LATEST_WEB_APPS_BASE_PATH}`, and `/ws/latest-debugger` to the singleton control plane
+- route `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_WEB_APPS_BASE_PATH}` to the execution plane
 - keep runtime-library job ownership on the singleton control plane and keep execution replicas in sync-only mode
 - treat the local launcher as a rehearsal wrapper around the real chart, not a separate deployment contract

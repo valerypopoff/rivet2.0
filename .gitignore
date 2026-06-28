@@ -16,6 +16,7 @@ wrapper/api/.rivet-source/
 wrapper/web/dist/
 artifacts/playwright/
 artifacts/benchmarks/
+artifacts/web-app-debug/
 artifacts/runtime-library-cleanup/
 artifacts/*.png
 tmp-*.png

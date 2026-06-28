@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 const PROXY_AUTH_HEADER = 'x-rivet-proxy-auth';
 const TOKEN_FREE_HOST_HEADER = 'x-rivet-token-free-host';
+const UI_SESSION_COOKIE_NAME = 'rivet_ui_token';
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -62,4 +63,42 @@ export function isTrustedTokenFreeHostRequest(request: Request | IncomingMessage
   const headerValue = request.headers[TOKEN_FREE_HOST_HEADER];
   const tokenFreeHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
   return typeof tokenFreeHeader === 'string' && tokenFreeHeader.trim() === '1';
+}
+
+function readCookieValue(cookieHeader: string | undefined, name: string): string | null {
+  if (!cookieHeader) {
+    return null;
+  }
+
+  for (const cookie of cookieHeader.split(';')) {
+    const separatorIndex = cookie.indexOf('=');
+    if (separatorIndex < 0) {
+      continue;
+    }
+
+    const cookieName = cookie.slice(0, separatorIndex).trim();
+    if (cookieName !== name) {
+      continue;
+    }
+
+    return cookie.slice(separatorIndex + 1).trim();
+  }
+
+  return null;
+}
+
+export function isTrustedUiSessionRequest(request: Request | IncomingMessage): boolean {
+  if (!isTrustedProxyRequest(request)) {
+    return false;
+  }
+
+  const expectedSessionToken = getExpectedUiSessionToken();
+  if (!expectedSessionToken) {
+    return false;
+  }
+
+  const cookieHeader = request.headers.cookie;
+  const rawCookieHeader = Array.isArray(cookieHeader) ? cookieHeader.join(';') : cookieHeader;
+  const providedSessionToken = readCookieValue(rawCookieHeader, UI_SESSION_COOKIE_NAME);
+  return providedSessionToken != null && timingSafeStringEqual(providedSessionToken, expectedSessionToken);
 }

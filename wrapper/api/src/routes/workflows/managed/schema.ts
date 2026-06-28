@@ -73,6 +73,22 @@ CREATE TABLE IF NOT EXISTS workflow_endpoints (
 CREATE INDEX IF NOT EXISTS workflow_endpoints_workflow_id_idx ON workflow_endpoints(workflow_id);
 CREATE INDEX IF NOT EXISTS workflow_endpoints_is_published_idx ON workflow_endpoints(is_published);
 
+CREATE TABLE IF NOT EXISTS workflow_web_apps (
+  app_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL,
+  ui_graph_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  slug_lookup_name TEXT NOT NULL UNIQUE,
+  published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE,
+  FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE,
+  UNIQUE (workflow_id, ui_graph_id)
+);
+
+CREATE INDEX IF NOT EXISTS workflow_web_apps_workflow_id_idx ON workflow_web_apps(workflow_id);
+CREATE INDEX IF NOT EXISTS workflow_web_apps_revision_id_idx ON workflow_web_apps(revision_id);
+
 DROP FUNCTION IF EXISTS move_managed_workflow_folder(TEXT, TEXT, TEXT, TEXT);
 
 CREATE FUNCTION move_managed_workflow_folder(

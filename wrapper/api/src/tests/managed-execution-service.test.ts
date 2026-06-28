@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { Pool } from 'pg';
 
 import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
-import { ManagedWorkflowExecutionCache } from '../routes/workflows/managed/execution-cache.js';
+import { ManagedWorkflowExecutionCache, type ManagedWorkflowRunKind } from '../routes/workflows/managed/execution-cache.js';
 import { ManagedWorkflowExecutionInvalidationController } from '../routes/workflows/managed/execution-invalidation.js';
 import { ManagedWorkflowExecutionService } from '../routes/workflows/managed/execution-service.js';
 import { getManagedWorkflowProjectVirtualPath } from '../routes/workflows/virtual-paths.js';
@@ -33,7 +33,7 @@ function createControllerFixture() {
 
 function createExecutionServiceFixture(options: {
   resolveExecutionPointerFromDatabase?: (
-    runKind: 'published' | 'latest',
+    runKind: ManagedWorkflowRunKind,
     lookupName: string,
   ) => Promise<ManagedExecutionPointerLookupResult | null>;
   getWorkflowByRelativePath?: (relativePath: string) => Promise<ManagedExecutionWorkflowRecord | null>;
@@ -159,7 +159,7 @@ type ManagedWorkflowExecutionContextFixture = Pick<
     getRevision(client: Pool, revisionId: string | null | undefined): Promise<ManagedExecutionRevisionRecord | null>;
     resolveExecutionPointerFromDatabase(
       client: Pool,
-      runKind: 'published' | 'latest',
+      runKind: ManagedWorkflowRunKind,
       lookupName: string,
     ): Promise<ManagedExecutionPointerLookupResult | null>;
   };
@@ -183,8 +183,8 @@ test('warm pointer hit does not re-run joined DB resolution', async () => {
   assert.equal(fixture.readRevisionContentsCount, 1);
 });
 
-test('service forwards the correct run kind for published and latest endpoint resolution', async () => {
-  const observedCalls: Array<{ runKind: 'published' | 'latest'; lookupName: string }> = [];
+test('service forwards the correct run kind for workflow and web app endpoint resolution', async () => {
+  const observedCalls: Array<{ runKind: ManagedWorkflowRunKind; lookupName: string }> = [];
   const fixture = createExecutionServiceFixture({
     resolveExecutionPointerFromDatabase: async (runKind, lookupName) => {
       observedCalls.push({ runKind, lookupName });
@@ -193,6 +193,7 @@ test('service forwards the correct run kind for published and latest endpoint re
           workflowId: 'workflow-a',
           relativePath: 'Managed Cache.rivet-project',
           revisionId: 'revision-a',
+          webAppUiGraphId: runKind === 'web-app' || runKind === 'latest-web-app' ? 'ui-graph-a' : undefined,
         },
         revision: {
           revision_id: 'revision-a',
@@ -208,12 +209,20 @@ test('service forwards the correct run kind for published and latest endpoint re
 
   const published = await fixture.service.loadPublishedExecutionProject('public-live');
   const latest = await fixture.service.loadLatestExecutionProject('latest-only');
+  const webApp = await fixture.service.loadPublishedWebAppExecutionProject('app-slug');
+  const latestWebApp = await fixture.service.loadLatestWebAppExecutionProject('app-slug-latest');
 
   assert.ok(published);
   assert.ok(latest);
+  assert.ok(webApp);
+  assert.ok(latestWebApp);
+  assert.equal(webApp.webAppUiGraphId, 'ui-graph-a');
+  assert.equal(latestWebApp.webAppUiGraphId, 'ui-graph-a');
   assert.deepEqual(observedCalls, [
     { runKind: 'published', lookupName: 'public-live' },
     { runKind: 'latest', lookupName: 'latest-only' },
+    { runKind: 'web-app', lookupName: 'app-slug' },
+    { runKind: 'latest-web-app', lookupName: 'app-slug-latest' },
   ]);
 });
 

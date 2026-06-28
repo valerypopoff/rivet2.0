@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { createHash } from 'node:crypto';
 import {
   NodeDatasetProvider,
   deserializeDatasets,
@@ -30,6 +31,7 @@ export type FilesystemExecutionProjectResult = {
   attachedData: AttachedData;
   datasetProvider: NodeDatasetProvider;
   projectVirtualPath: string;
+  revisionKey: string;
   debug: {
     cacheStatus: 'hit' | 'miss' | 'bypass';
     resolveMs: number;
@@ -69,6 +71,27 @@ function createCachedExecutionPointer(
       liveInputSignatures: new Map(liveInputSignatures ?? []),
     },
   };
+}
+
+function createFilesystemExecutionRevisionKey(
+  pointer: FilesystemExecutionPointer,
+  materialization: FilesystemExecutionMaterialization,
+): string {
+  const hash = createHash('sha256');
+  for (const signature of [materialization.projectSignature, materialization.datasetSignature]) {
+    hash.update(signature.type);
+    hash.update('\0');
+    hash.update(String(signature.size ?? ''));
+    hash.update('\0');
+    hash.update(String(signature.mtimeMs ?? ''));
+    hash.update('\0');
+    hash.update(signature.entriesKey ?? '');
+    hash.update('\0');
+  }
+  hash.update(pointer.sourceProjectPath);
+  hash.update('\0');
+  hash.update(pointer.executionProjectPath);
+  return `filesystem:${hash.digest('hex').slice(0, 32)}`;
 }
 
 async function isMaterializationFresh(entry: FilesystemMaterializationCacheEntry): Promise<boolean> {
@@ -324,6 +347,7 @@ export class FilesystemExecutionCache {
       attachedData: materialization.attachedData,
       datasetProvider,
       projectVirtualPath: pointer.sourceProjectPath,
+      revisionKey: createFilesystemExecutionRevisionKey(pointer, materialization),
       debug: {
         cacheStatus,
         resolveMs,

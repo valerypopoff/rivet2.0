@@ -477,6 +477,7 @@ export async function publishWorkflowProjectItem(relativePath: unknown, settings
       publishedSnapshotId,
       publishedStateHash,
       lastPublishedAt,
+      publishedWebApps: existingSettings.publishedWebApps,
     });
   } catch (error) {
     await deletePublishedWorkflowSnapshot(root, publishedSnapshotId).catch(() => {});
@@ -505,6 +506,7 @@ export async function unpublishWorkflowProjectItem(relativePath: unknown) {
     publishedSnapshotId: null,
     publishedStateHash: null,
     lastPublishedAt: existingSettings.lastPublishedAt,
+    publishedWebApps: existingSettings.publishedWebApps,
   });
 
   return getWorkflowProject(root, projectPath);
@@ -522,6 +524,8 @@ export async function deleteWorkflowProjectItem(relativePath: unknown) {
     .then((project) => project.metadata.id ?? null)
     .catch(() => null);
   await deletePublishedWorkflowSnapshot(root, existingSettings.publishedSnapshotId);
+  await Promise.all(existingSettings.publishedWebApps.map((webApp) =>
+    deletePublishedWorkflowSnapshot(root, webApp.publishedSnapshotId).catch(() => {})));
   await deleteWorkflowPublishedVersionsByProjectId(root, projectMetadataId);
   await deleteProjectWithSidecars(projectPath);
   await deleteWorkflowRecordingsByWorkflowId(root, projectMetadataId);

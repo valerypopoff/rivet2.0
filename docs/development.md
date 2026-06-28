@@ -100,7 +100,8 @@ Operational note:
 - `RIVET_WORKFLOWS_HOST_PATH`, `RIVET_WORKFLOW_RECORDINGS_HOST_PATH`, and `RIVET_RUNTIME_LIBS_HOST_PATH` remain compatibility overrides for the launcher
 - use the repo launchers (`npm run dev`, `npm run prod`, `npm run dev:docker:*`, or the Docker launcher scripts) for Docker runs; a raw `docker compose --env-file .env ...` invocation only reads the variables already present in the env file and does not derive absolute workflow, recording, or runtime-library host paths from `RIVET_ARTIFACTS_HOST_PATH`
 - Docker launchers intentionally drop ambient host `NODE_OPTIONS` unless `.env` defines `NODE_OPTIONS` explicitly. This keeps Yarn 4/PnP host preloads such as `--require F:\...\.pnp.cjs` from being interpolated into Linux container startup commands while leaving non-Docker local runners alone.
-- `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` in the Docker stacks; the default tracked value is `180s`
+- Docker dev mode bind-mounts the live upstream Rivet checkout into the web and API containers. Because the API links `@valerypopoff/rivet2-node` through built `dist` files, API startup runs `scripts/ensure-rivet-runtime-build.mjs` against the mounted Rivet source before linking packages. If upstream `packages/core` or `packages/node` source is newer than the required runtime outputs, it runs upstream `yarn build:runtime`; otherwise it logs that the runtime dist is fresh. This prevents fixed upstream source, such as published web-app renderer changes, from being hidden by stale local `dist` files.
+- `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_WEB_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_WEB_APPS_BASE_PATH}` in the Docker stacks; the default tracked value is `180s`
 - `RIVET_COMMAND_TIMEOUT` is unrelated to workflow HTTP lifetime; it only bounds hosted shell execution under `/api/shell/exec`
 - `RIVET_STORAGE_MODE=managed` switches both workflows and runtime libraries to managed Postgres plus object storage; in that mode `RIVET_RUNTIME_LIBRARIES_ROOT` remains only a local cache/workspace
 - optional managed runtime-library readiness tuning uses:
@@ -256,7 +257,7 @@ Important constraints:
 - host Node must be `24+` for local API execution because the API now uses Node's built-in `node:sqlite`
 - this mode does not recreate the nginx trusted-proxy layer
 - the Vite dev server only proxies `/api/*` to the API and `/ws/executor*` to the executor
-- Vite does not proxy the published/latest workflow route families, `/ui-auth`, or `/ws/latest-debugger`, and it does not inject the trusted proxy headers that those control-plane routes expect
+- Vite does not proxy the published/latest workflow route families, Rivet web app route families, `/ui-auth`, or `/ws/latest-debugger`, and it does not inject the trusted proxy headers that those control-plane routes expect
 - use it for service-level debugging, direct API/executor work, or frontend iteration that does not rely on fully wired hosted-shell control-plane routing
 - Docker dev remains the best path for testing the full hosted browser flow exactly as deployed
 
@@ -281,16 +282,16 @@ Current behavior:
 - `npm run prod:custom` rebuilds the stack from the current wrapper repo and the current `rivet/` source folder, using the filtered `rivet_source` and `rivet_dependency_metadata` Docker build contexts
 - the API is also exposed directly on `http://localhost:3100` for diagnostics
 - proxy startup scripts are Linux shell scripts; dev Compose mounts them from the repo, while production images bake them into the proxy image. The repo pins `*.sh` files to LF line endings so Windows checkouts do not inject CRLF characters into `/bin/sh`
-- proxy startup copies the UI gate prompt from its mounted or baked source into `/tmp/nginx/html` before nginx starts; nginx serves the staged copy instead of repeatedly reading a host-mounted HTML file on each gated request
+- proxy startup copies the UI gate prompt from its mounted or baked source into `/tmp/nginx/html` before nginx starts; nginx serves the staged copy instead of repeatedly reading a host-mounted HTML file on each gated request. When changing the prompt, recreate the proxy so the staged copy is refreshed. The prompt posts a sanitized local `return_to` path so successful key entry returns to the requested dashboard/editor or published web-app URL instead of always landing on `/`.
 - standard proxied HTTP routes now default to a `180s` upstream timeout through `RIVET_PROXY_READ_TIMEOUT`; websocket routes stay long-lived separately
-- the local Docker stacks keep `RIVET_API_PROFILE=combined` by default, so `/api/*`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` all land on the same `api` container there
+- the local Docker stacks keep `RIVET_API_PROFILE=combined` by default, so `/api/*`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, `${RIVET_LATEST_WEB_APPS_BASE_PATH}`, `${RIVET_WEB_APPS_BASE_PATH}`, and `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` all land on the same `api` container there
 - the `web` service runs the Vite dev server inside the container with live bind mounts
 - Docker dev rebuilds the `api` and `executor` services from Dockerfiles while running `web` through Vite; `npm run prod:custom` rebuilds `proxy`, `web`, `api`, and `executor`
 - the launchers compute host bind mounts before calling Compose. With `RIVET_ARTIFACTS_HOST_PATH=../` from the repo root, both dev and production-style Docker mount `<repo>/../workflows` at `/workflows`, `<repo>/../workflow-recordings` at `/workflow-recordings`, and `<repo>/../runtime-libraries` at `/data/runtime-libraries`. If you bypass the launcher and run Compose directly, set those three `RIVET_*_HOST_PATH` values explicitly or Compose may fall back to repo-local defaults.
 - the production web image installs wrapper web dependencies from `wrapper/web/package.json` and `wrapper/web/package-lock.json` before copying web/shared source, then uses the root `package.json` as build metadata for the About modal version. Keep `wrapper/web/package.json` free of `file:../..` root dependencies so GitHub Actions can build the web image from the same minimal context.
 - the API image uses upstream Rivet's wrapper-facing `yarn build:runtime` script to build `core + node`, then links `wrapper/api` to those built package directories before compiling the API; this keeps hosted endpoint execution on the same Rivet source tree as the editor and executor
 - the web image uses upstream Rivet's `yarn build:hosted-web-deps` script to build `core + trivet` without the Dockerfile knowing Rivet's internal workspace build order
-- the executor image uses `yarn build:runtime` for `core + node`, then keeps the wrapper's Docker-specific bundle-only app-executor step. Do not replace that with upstream `yarn build:executor-runtime` unless the image needs native app-executor sidecar binaries and the build runs on the same target platform; the current container runs `bin/executor-bundle.cjs` directly and deliberately skips the slower native `pkg` sidecar build.
+- the executor image uses `yarn build:runtime` for `core + node`, then keeps the wrapper's Docker-specific bundle-only app-executor step. Do not replace that with upstream `yarn build:executor-runtime` unless the image needs native app-executor sidecar binaries and the build runs on the same target platform; the current container runs `bin/executor-bundle.cjs` directly and deliberately skips the slower native `pkg` sidecar build. The wrapper bundler emits CommonJS, so it defines `import.meta.url` as `__filename`; this keeps upstream node modules that create an asset resolver with `createRequire(import.meta.url)` from crashing when they are imported by the app-executor bundle.
 - the Docker dev API waits for the web service to populate the shared `rivet_node_modules` volume, then copies only `rivet/packages/core` and `rivet/packages/node` into `/app/.rivet-source`, attaches `/workspace/rivet/node_modules` beside that copy, and points the generated `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and `@rivet2/*` package overlays at the internal copy. That keeps Node package resolution inside the container even when `rivet/` is a Windows junction target, avoids duplicating the upstream dependency install, and avoids writing API helper links into the external Rivet checkout.
 - local and image API entrypoints run with symlink preservation (`preserveSymlinks` for TypeScript and `--preserve-symlinks` for Node/tsx), while `scripts/link-rivet-node-package.mjs` creates generated package overlays that expose the built Rivet package `dist` folders and route third-party dependency lookup back to `rivet/node_modules`
 - the Docker dev API mounts the repo scripts directory at `/scripts`, matching the `../../scripts/...` path seen from `/app`, so the same `wrapper/api` package scripts run locally and inside Compose
@@ -670,7 +671,7 @@ For the current Helm chart and images:
 4. keep `replicaCount.backend=1`
 5. keep `autoscaling.backend.enabled=false`
 6. keep `workflowStorage.backend=managed` and `runtimeLibraries.backend=managed`
-7. keep `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows` and `RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
+7. keep `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`, `RIVET_WEB_APPS_BASE_PATH=/apps`, `RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`, and `RIVET_LATEST_WEB_APPS_BASE_PATH=/apps-latest`
 8. set `env.RIVET_PROXY_RESOLVER` for in-cluster nginx DNS resolution
 9. provide `RIVET_KEY` through `auth.keySecretName` or Vault, even if the optional UI gate and public workflow bearer checks are disabled
 10. keep the control-plane API on `RIVET_API_PROFILE=control` and the execution Deployment on `RIVET_API_PROFILE=execution`
@@ -740,7 +741,7 @@ For the current execution-plane split specifically:
 1. keep the control plane conservative and scale the execution Deployment instead of the backend StatefulSet
 2. keep the proxy Deployment redundant because every published endpoint call still crosses it
 3. treat `execution` as the primary endpoint-throughput scale boundary and `proxy` as a separate ingress tier rather than a one-for-one partner
-4. confirm `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` reaches the execution-plane API while `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` still reaches the control-plane API
+4. confirm `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_WEB_APPS_BASE_PATH}` reach the execution-plane API while `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` and `${RIVET_LATEST_WEB_APPS_BASE_PATH}` still reach the control-plane API
 5. confirm `/api/*` and `POST /__rivet_auth` still reach the control-plane API
 6. confirm `/internal/workflows/:endpointName` is not exposed through nginx and is only reachable inside the cluster
 7. confirm runtime-library `Endpoint execution` readiness reflects execution-plane API replicas, not control-plane API replicas
@@ -757,8 +758,8 @@ Use the three validation layers intentionally:
   - this is where `npm run verify:kubernetes` and Helm lint/template checks belong
 - managed Docker rehearsal:
   - proves managed-state behavior against disposable Postgres plus object storage
-  - use this for workflow-storage migration rehearsal, `workflow-storage:verify`, managed endpoint measurement, hosted browser flows, and runtime-library install/remove/readiness checks
-  - the current Docker stacks still run the API in the `combined` profile, so they do not prove the real control-plane versus execution-plane split by themselves even though the route families are still exposed at their normal published/latest paths
+  - use this for workflow-storage migration rehearsal, `workflow-storage:verify`, managed endpoint and published web-app measurement, hosted browser flows, and runtime-library install/remove/readiness checks
+  - the current Docker stacks still run the API in the `combined` profile, so they do not prove the real control-plane versus execution-plane split by themselves even though the route families are still exposed at their normal published/latest and web-app paths
 - live Kubernetes validation:
   - proves the real split topology, ingress/proxy behavior, control-plane versus execution-plane routing, restart boundaries, and execution scaling
   - do not treat chart render success or Docker rehearsal as a substitute for this layer when the question is about real in-cluster behavior
@@ -773,7 +774,7 @@ Current follow-up expectations:
 
 Use the current compatibility commands intentionally:
 
-- the repo-local test portions scrub ambient runtime-root, managed-storage, execution-route, runtime-library, and recording env such as `RIVET_WORKFLOWS_ROOT`, `RIVET_ARTIFACTS_HOST_PATH`, `RIVET_DATABASE_CONNECTION_STRING`, `RIVET_STORAGE_URL`, `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, and `RIVET_ENV_FILE` before spawning API tests, so local `.env` or shell state cannot redirect those tests into a real workflow folder, database, object store, route prefix, runtime-library role, or recording policy
+- the repo-local test portions scrub ambient runtime-root, managed-storage, execution-route, runtime-library, and recording env such as `RIVET_WORKFLOWS_ROOT`, `RIVET_ARTIFACTS_HOST_PATH`, `RIVET_DATABASE_CONNECTION_STRING`, `RIVET_STORAGE_URL`, `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_WEB_APPS_BASE_PATH`, `RIVET_LATEST_WEB_APPS_BASE_PATH`, and `RIVET_ENV_FILE` before spawning API tests, so local `.env` or shell state cannot redirect those tests into a real workflow folder, database, object store, route prefix, runtime-library role, or recording policy
 - `npm run verify:filesystem`
   - runs the repo-local baseline for filesystem compatibility:
     - `wrapper/api` build
@@ -792,5 +793,5 @@ Use the current compatibility commands intentionally:
 
 These commands do not replace full browser-level or live-cluster validation:
 
-- use the managed Docker rehearsal for migration/import, hosted editor parity, runtime-library install/remove/readiness checks, and endpoint measurement
+- use the managed Docker rehearsal for migration/import, hosted editor parity, runtime-library install/remove/readiness checks, endpoint measurement, and published web-app route checks
 - use Kubernetes for real split-topology routing, restart, and scaling proof

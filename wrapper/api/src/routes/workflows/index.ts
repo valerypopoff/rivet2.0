@@ -10,7 +10,13 @@ import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../share
 import {
   PROJECT_EXTENSION,
 } from './fs-helpers.js';
-import { internalPublishedWorkflowsRouter, latestWorkflowsRouter, publishedWorkflowsRouter } from './execution.js';
+import {
+  internalPublishedWorkflowsRouter,
+  latestWebAppsRouter,
+  latestWorkflowsRouter,
+  publishedWebAppsRouter,
+  publishedWorkflowsRouter,
+} from './execution.js';
 import { normalizeWorkflowRecordingInputFilter } from './recording-input-filter.js';
 import {
   createWorkflowFolderItemWithBackend,
@@ -20,9 +26,11 @@ import {
   deleteWorkflowRecordingWithBackend,
   duplicateWorkflowProjectItemWithBackend,
   getWorkflowTree,
+  listWorkflowProjectWebAppsWithBackend,
   listWorkflowRecordingRunsPageWithBackend,
   listWorkflowRecordingWorkflowsWithBackend,
   moveWorkflowItemWithBackend,
+  publishWorkflowProjectWebAppsWithBackend,
   publishWorkflowProjectItemWithBackend,
   listWorkflowPublishedVersionsWithBackend,
   readWorkflowProjectDownloadWithBackend,
@@ -34,6 +42,7 @@ import {
   renameWorkflowProjectItemWithBackend,
   setWorkflowPublishedVersionCommentWithBackend,
   setWorkflowPublishedVersionStarWithBackend,
+  unpublishWorkflowProjectWebAppWithBackend,
   unpublishWorkflowProjectItemWithBackend,
   uploadWorkflowProjectItemWithBackend,
 } from './storage-backend.js';
@@ -109,6 +118,19 @@ const renameProjectSchema = z.object({
 const publishProjectSchema = z.object({
   relativePath: z.unknown(),
   settings: z.unknown().optional(),
+});
+
+const publishProjectWebAppsSchema = z.object({
+  relativePath: z.unknown(),
+  publications: z.array(z.object({
+    uiGraphId: z.string(),
+    slug: z.string(),
+  })),
+});
+
+const unpublishProjectWebAppSchema = z.object({
+  relativePath: z.unknown(),
+  uiGraphId: z.unknown(),
 });
 
 const pathOnlySchema = z.object({
@@ -320,6 +342,21 @@ workflowsRouter.post('/projects/published-versions/restore', validateBody(publis
   res.json(await restoreWorkflowPublishedVersionWithBackend(relativePath, versionId));
 }));
 
+workflowsRouter.get('/projects/web-apps', asyncHandler(async (req, res) => {
+  const { relativePath } = publishedVersionsQuerySchema.parse(req.query);
+  res.json(await listWorkflowProjectWebAppsWithBackend(relativePath));
+}));
+
+workflowsRouter.post('/projects/web-apps/publish', validateBody(publishProjectWebAppsSchema), asyncHandler(async (req, res) => {
+  const { relativePath, publications } = req.body as z.infer<typeof publishProjectWebAppsSchema>;
+  res.json({ project: await publishWorkflowProjectWebAppsWithBackend(relativePath, publications) });
+}));
+
+workflowsRouter.post('/projects/web-apps/unpublish', validateBody(unpublishProjectWebAppSchema), asyncHandler(async (req, res) => {
+  const { relativePath, uiGraphId } = req.body as z.infer<typeof unpublishProjectWebAppSchema>;
+  res.json({ project: await unpublishWorkflowProjectWebAppWithBackend(relativePath, uiGraphId) });
+}));
+
 workflowsRouter.post('/projects/publish', validateBody(publishProjectSchema), asyncHandler(async (req, res) => {
   const { relativePath, settings } = req.body as z.infer<typeof publishProjectSchema>;
   res.json({ project: await publishWorkflowProjectItemWithBackend(relativePath, settings) });
@@ -336,7 +373,13 @@ workflowsRouter.delete('/projects', validateBody(pathOnlySchema), asyncHandler(a
   res.json({ deleted: true, projectId });
 }));
 
-export { internalPublishedWorkflowsRouter, latestWorkflowsRouter, publishedWorkflowsRouter };
+export {
+  internalPublishedWorkflowsRouter,
+  latestWebAppsRouter,
+  latestWorkflowsRouter,
+  publishedWebAppsRouter,
+  publishedWorkflowsRouter,
+};
 export type {
   LatestWorkflowMatch,
   PublishedWorkflowMatch,

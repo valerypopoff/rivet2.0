@@ -3,16 +3,26 @@ import { expect, test, type Page } from '@playwright/test';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type {
   WorkflowProjectItem,
+  WorkflowProjectWebAppSummary,
   WorkflowPublishedVersionSummary,
   WorkflowTreeResponse,
 } from '../dashboard/types';
 
 type ProjectSettingsRouteTrackers = {
   projectLoadRequests: Array<{ path: string }>;
+  webAppPublishRequests: Array<{
+    relativePath: string;
+    publications: Array<{ uiGraphId: string; slug: string }>;
+  }>;
+  webAppUnpublishRequests: Array<{ relativePath: string; uiGraphId: string }>;
   publishedVersionCommentRequests: Array<{ relativePath: string; versionId: string; comment: string }>;
   publishedVersionPreviewRequests: Array<{ relativePath: string; versionId: string }>;
   publishedVersionStarRequests: Array<{ relativePath: string; versionId: string; isStarred: boolean }>;
   publishedVersionRestoreRequests: Array<{ relativePath: string; versionId: string }>;
+};
+
+type ProjectSettingsFixtureProject = WorkflowProjectItem & {
+  webApps?: WorkflowProjectWebAppSummary[];
 };
 
 function isRouteRequest(routeRequest: { method: () => string; url: () => string }, method: string, pathname: string): boolean {
@@ -24,6 +34,8 @@ function isRouteRequest(routeRequest: { method: () => string; url: () => string 
 function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
   return {
     projectLoadRequests: [],
+    webAppPublishRequests: [],
+    webAppUnpublishRequests: [],
     publishedVersionCommentRequests: [],
     publishedVersionPreviewRequests: [],
     publishedVersionStarRequests: [],
@@ -31,7 +43,7 @@ function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
   };
 }
 
-function createProjectSettingsFixture(name: string): WorkflowProjectItem {
+function createProjectSettingsFixture(name: string): ProjectSettingsFixtureProject {
   return {
     id: `project-settings-fixture-${name}`,
     name,
@@ -47,7 +59,9 @@ function createProjectSettingsFixture(name: string): WorkflowProjectItem {
       status: 'unpublished',
       endpointName: '',
       lastPublishedAt: null,
+      publishedWebApps: [],
     },
+    webApps: [],
   };
 }
 
@@ -77,7 +91,7 @@ function createPublishedVersionPreviewProject(project: WorkflowProjectItem, vers
 
 async function installProjectSettingsRoutes(
   page: Page,
-  projectOrProjects: WorkflowProjectItem | WorkflowProjectItem[],
+  projectOrProjects: ProjectSettingsFixtureProject | ProjectSettingsFixtureProject[],
   trackers: ProjectSettingsRouteTrackers,
 ): Promise<void> {
   const projects = Array.isArray(projectOrProjects) ? projectOrProjects : [projectOrProjects];
@@ -135,6 +149,7 @@ async function installProjectSettingsRoutes(
       status: 'published',
       endpointName: requestBody.settings?.endpointName ?? targetProject.settings.endpointName,
       lastPublishedAt: '2026-04-08T10:30:00.000Z',
+      publishedWebApps: targetProject.settings.publishedWebApps,
     };
     await route.fulfill({
       status: 200,
@@ -157,7 +172,98 @@ async function installProjectSettingsRoutes(
       status: 'unpublished',
       endpointName: targetProject.settings.endpointName,
       lastPublishedAt: targetProject.settings.lastPublishedAt,
+      publishedWebApps: targetProject.settings.publishedWebApps,
     };
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ project: targetProject }),
+    });
+  });
+
+  await page.route('**/api/workflows/projects/web-apps**', async (route) => {
+    if (!isRouteRequest(route.request(), 'GET', '/api/workflows/projects/web-apps')) {
+      await route.fallback();
+      return;
+    }
+
+    const relativePath = new URL(route.request().url()).searchParams.get('relativePath') ?? '';
+    const targetProject = projects.find((candidate) => candidate.relativePath === relativePath) ?? project;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        webApps: targetProject.webApps ?? [],
+      }),
+    });
+  });
+
+  await page.route('**/api/workflows/projects/web-apps/publish', async (route) => {
+    if (!isRouteRequest(route.request(), 'POST', '/api/workflows/projects/web-apps/publish')) {
+      await route.fallback();
+      return;
+    }
+
+    const requestBody = route.request().postDataJSON() as {
+      relativePath: string;
+      publications: Array<{ uiGraphId: string; slug: string }>;
+    };
+    trackers.webAppPublishRequests.push(requestBody);
+    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    const publishedAt = '2026-04-08T10:35:00.000Z';
+    targetProject.webApps = (targetProject.webApps ?? []).map((webApp) => {
+      const publication = requestBody.publications.find((candidate) => candidate.uiGraphId === webApp.uiGraphId);
+      if (!publication) {
+        return webApp;
+      }
+
+      return {
+        ...webApp,
+        publishedSlug: publication.slug,
+        publishedAt,
+      };
+    });
+    targetProject.settings = {
+      ...targetProject.settings,
+      publishedWebApps: targetProject.webApps
+        .filter((webApp) => webApp.publishedSlug != null)
+        .map((webApp) => ({
+          uiGraphId: webApp.uiGraphId,
+          uiGraphName: webApp.name,
+          slug: webApp.publishedSlug!,
+          publishedAt: webApp.publishedAt ?? publishedAt,
+        })),
+    };
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ project: targetProject }),
+    });
+  });
+
+  await page.route('**/api/workflows/projects/web-apps/unpublish', async (route) => {
+    if (!isRouteRequest(route.request(), 'POST', '/api/workflows/projects/web-apps/unpublish')) {
+      await route.fallback();
+      return;
+    }
+
+    const requestBody = route.request().postDataJSON() as {
+      relativePath: string;
+      uiGraphId: string;
+    };
+    trackers.webAppUnpublishRequests.push(requestBody);
+    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    targetProject.webApps = (targetProject.webApps ?? [])
+      .map((webApp) => webApp.uiGraphId === requestBody.uiGraphId
+        ? { ...webApp, publishedSlug: null, publishedAt: null }
+        : webApp)
+      .filter((webApp) => !(webApp.isMissingFromProject && webApp.publishedSlug == null));
+    targetProject.settings = {
+      ...targetProject.settings,
+      publishedWebApps: targetProject.settings.publishedWebApps.filter((webApp) => webApp.uiGraphId !== requestBody.uiGraphId),
+    };
+
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -327,6 +433,7 @@ async function installProjectSettingsRoutes(
       status: 'published',
       endpointName: restoredVersion.endpointName,
       lastPublishedAt: restoredVersion.publishedAt,
+      publishedWebApps: project.settings.publishedWebApps,
     };
 
     await route.fulfill({
@@ -372,16 +479,35 @@ test.describe('Project settings modal', () => {
     const deleteButton = modal.getByRole('button', { name: 'Delete project' });
     await expect(deleteButton).toBeVisible();
     await expect(deleteButton).toBeEnabled();
+    const footerSection = modal.locator('.project-settings-danger-section');
+    await expect(footerSection.getByRole('button', { name: 'Published version history' })).toBeVisible();
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    await expect(modal).toContainText('No web apps in the project.');
+    await expect(footerSection.getByRole('button', { name: 'Published version history' })).toHaveCount(0);
+    await expect(deleteButton).toBeVisible();
+    await expect(deleteButton).toBeEnabled();
+    await modal.getByRole('tab', { name: 'Workflow' }).click();
+    await expect(footerSection.getByRole('button', { name: 'Published version history' })).toBeVisible();
 
-    await modal.getByRole('button', { name: 'Publish...' }).click();
     const endpointInput = modal.locator('#workflow-project-endpoint-name');
-    await expect(modal.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
-    await expect(modal.getByRole('button', { name: 'Published version history' })).toHaveCount(0);
-    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await expect(endpointInput).toHaveCount(0);
-    await expect(modal.getByRole('button', { name: 'Published version history' })).toBeVisible();
+    await expect(endpointInput).toBeVisible();
+    await expect(modal.locator('.active-project-status-row')).toContainText('Workflow is not published as endpoint.');
+    const unpublishedStatusNoteFontSize = await modal.locator('.project-settings-status-note').evaluate(
+      (element) => getComputedStyle(element).fontSize,
+    );
+    const unpublishedStatusNoteCenterOffset = await modal.locator('.active-project-status-row').evaluate((row) => {
+      const badge = row.querySelector('.project-status-badge');
+      const note = row.querySelector('.project-settings-status-note');
+      if (!(badge instanceof HTMLElement) || !(note instanceof HTMLElement)) {
+        throw new Error('Expected unpublished workflow status badge and note');
+      }
 
-    await modal.getByRole('button', { name: 'Publish...' }).click();
+      const badgeRect = badge.getBoundingClientRect();
+      const noteRect = note.getBoundingClientRect();
+      return Math.abs((badgeRect.top + badgeRect.height / 2) - (noteRect.top + noteRect.height / 2));
+    });
+    await expect(modal.getByText('Endpoint path')).toHaveCount(0);
+
     await endpointInput.fill('bad endpoint');
     await expect(modal.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
     await expect(modal.locator('.project-settings-error')).toContainText(
@@ -392,12 +518,38 @@ test.describe('Project settings modal', () => {
     await expect(modal.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
     await modal.getByRole('button', { name: 'Publish', exact: true }).click();
     await expect(modal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
-    await expect(modal.getByRole('button', { name: 'Delete project' })).toHaveCount(0);
+    await expect(modal.locator('.project-settings-last-published-at')).toBeVisible();
+    const lastPublishedAtFontSize = await modal.locator('.project-settings-last-published-at').evaluate(
+      (element) => getComputedStyle(element).fontSize,
+    );
+    expect(lastPublishedAtFontSize).toBe(unpublishedStatusNoteFontSize);
+    const lastPublishedAtCenterOffset = await modal.locator('.active-project-status-row').evaluate((row) => {
+      const badge = row.querySelector('.project-status-badge');
+      const timestamp = row.querySelector('.project-settings-last-published-at');
+      if (!(badge instanceof HTMLElement) || !(timestamp instanceof HTMLElement)) {
+        throw new Error('Expected published workflow status badge and timestamp');
+      }
+
+      const badgeRect = badge.getBoundingClientRect();
+      const timestampRect = timestamp.getBoundingClientRect();
+      return Math.abs((badgeRect.top + badgeRect.height / 2) - (timestampRect.top + timestampRect.height / 2));
+    });
+    expect(Math.abs(lastPublishedAtCenterOffset - unpublishedStatusNoteCenterOffset)).toBeLessThanOrEqual(1);
+    await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
+    await endpointInput.fill(`${endpointName}-renamed`);
+    await expect(modal.locator('.project-settings-status-help')).toContainText(`/workflows/${endpointName}`);
+    await expect(modal.locator('.project-settings-status-help')).not.toContainText(`/workflows/${endpointName}-renamed`);
+    await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
+    await endpointInput.fill(endpointName);
+    await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
+    await expect(deleteButton).toBeVisible();
+    await expect(deleteButton).toBeDisabled();
 
     page.once('dialog', (dialog) => dialog.accept());
     await modal.getByRole('button', { name: 'Unpublish' }).click();
     await expect(modal.locator('.project-status-badge.unpublished')).toBeVisible({ timeout: 30_000 });
-    await expect(modal.getByRole('button', { name: 'Delete project' })).toBeVisible();
+    await expect(deleteButton).toBeVisible();
+    await expect(deleteButton).toBeEnabled();
   });
 
   test('publish validation ignores endpoints saved on fully unpublished projects', async ({ page }) => {
@@ -407,6 +559,7 @@ test.describe('Project settings modal', () => {
       status: 'published',
       endpointName,
       lastPublishedAt: '2026-04-08T10:30:00.000Z',
+      publishedWebApps: previousProject.settings.publishedWebApps,
     };
     const nextProject = createProjectSettingsFixture('codex-next-endpoint-owner');
     await installProjectSettingsRoutes(page, [previousProject, nextProject], createProjectSettingsRouteTrackers());
@@ -419,7 +572,6 @@ test.describe('Project settings modal', () => {
     await previousModal.getByRole('button', { name: 'Close project settings' }).click();
 
     const { modal: nextModal } = await openProjectSettingsModal(page, nextProject);
-    await nextModal.getByRole('button', { name: 'Publish...' }).click();
     const endpointInput = nextModal.locator('#workflow-project-endpoint-name');
     await endpointInput.fill(endpointName);
     await expect(nextModal.locator('.project-settings-error')).toHaveCount(0);
@@ -427,6 +579,125 @@ test.describe('Project settings modal', () => {
     await nextModal.getByRole('button', { name: 'Publish', exact: true }).click();
     await expect(nextModal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
     await expect(nextModal.locator('.project-settings-endpoint-code')).toContainText(endpointName);
+  });
+
+  test('publishes and unpublishes multiple web apps from project settings', async ({ page }) => {
+    const unique = 'codex-project-settings-web-apps';
+    const project = createProjectSettingsFixture(unique);
+    project.webApps = [
+      {
+        uiGraphId: 'ui-graph-alpha',
+        name: 'Alpha Helper',
+        publishedSlug: null,
+        publishedAt: null,
+        isMissingFromProject: false,
+      },
+      {
+        uiGraphId: 'ui-graph-beta',
+        name: 'Beta Console',
+        publishedSlug: null,
+        publishedAt: null,
+        isMissingFromProject: false,
+      },
+      {
+        uiGraphId: 'ui-graph-stale',
+        name: 'Legacy Tool',
+        publishedSlug: 'legacy-tool',
+        publishedAt: '2026-04-08T10:20:00.000Z',
+        isMissingFromProject: true,
+      },
+    ];
+    const routeTrackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, routeTrackers);
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    await expect(modal.getByRole('tab', { name: 'Workflow' })).toHaveAttribute('aria-selected', 'true');
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    await expect(modal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');
+
+    const webAppSection = modal.locator('.project-settings-web-app-section');
+    await expect(webAppSection.locator('.project-settings-web-app-row')).toHaveCount(3);
+    await expect(webAppSection.getByText('Endpoint path')).toHaveCount(0);
+    await expect(webAppSection).not.toContainText('No web apps are published.');
+    await expect(webAppSection).toContainText('Alpha Helper');
+    await expect(webAppSection).toContainText('Beta Console');
+    await expect(webAppSection).toContainText('Legacy Tool');
+    await expect(webAppSection).toContainText('still published from an older snapshot');
+
+    const alphaRow = webAppSection.locator('.project-settings-web-app-row', { hasText: 'Alpha Helper' });
+    const betaRow = webAppSection.locator('.project-settings-web-app-row', { hasText: 'Beta Console' });
+    const staleRow = webAppSection.locator('.project-settings-web-app-row', { hasText: 'Legacy Tool' });
+    await expect(staleRow.locator('.project-settings-web-app-state')).toHaveText('Published');
+    await alphaRow.locator('input').fill('legacy-tool');
+    await expect(alphaRow).toContainText('URL slug is already used by Legacy Tool.');
+    await expect(alphaRow.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
+    await alphaRow.locator('input').fill('alpha-helper');
+    await betaRow.locator('input').fill('beta-console');
+    await alphaRow.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect.poll(() => routeTrackers.webAppPublishRequests.length).toBe(1);
+    expect(routeTrackers.webAppPublishRequests[0]).toEqual({
+      relativePath: project.relativePath,
+      publications: [
+        { uiGraphId: 'ui-graph-alpha', slug: 'alpha-helper' },
+      ],
+    });
+    await betaRow.getByRole('button', { name: 'Publish', exact: true }).click();
+
+    await expect(webAppSection.locator('.project-settings-web-app-state')).toHaveCount(3);
+    await expect(alphaRow).toContainText('Published');
+    await expect(betaRow).toContainText('Published');
+    await expect(alphaRow).toContainText('The web app is accessible via the endpoint on');
+    await expect(alphaRow).toContainText('/apps/alpha-helper');
+    await expect(alphaRow).toContainText('/apps-latest/alpha-helper');
+    await expect.poll(() => routeTrackers.webAppPublishRequests.length).toBe(2);
+    expect(routeTrackers.webAppPublishRequests[1]).toEqual({
+      relativePath: project.relativePath,
+      publications: [
+        { uiGraphId: 'ui-graph-beta', slug: 'beta-console' },
+      ],
+    });
+    await expect(staleRow.getByRole('button', { name: 'Publish', exact: true })).toHaveCount(0);
+    await expect(staleRow.getByRole('button', { name: 'Update', exact: true })).toHaveCount(0);
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await alphaRow.getByRole('button', { name: 'Unpublish' }).click();
+    await expect.poll(() => routeTrackers.webAppUnpublishRequests.length).toBe(1);
+    expect(routeTrackers.webAppUnpublishRequests).toEqual([{
+      relativePath: project.relativePath,
+      uiGraphId: 'ui-graph-alpha',
+    }]);
+    await expect(alphaRow.locator('.project-settings-web-app-state')).toHaveText('Not published');
+    await expect(betaRow.locator('.project-settings-web-app-state')).toHaveText('Published');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await staleRow.getByRole('button', { name: 'Unpublish' }).click();
+    await expect.poll(() => routeTrackers.webAppUnpublishRequests.length).toBe(2);
+    expect(routeTrackers.webAppUnpublishRequests[1]).toEqual({
+      relativePath: project.relativePath,
+      uiGraphId: 'ui-graph-stale',
+    });
+    await expect(staleRow).toHaveCount(0);
+  });
+
+  test('web app settings explains when available web apps are not published yet', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-project-settings-unpublished-web-apps');
+    project.webApps = [
+      {
+        uiGraphId: 'ui-graph-draft',
+        name: 'Draft Helper',
+        publishedSlug: null,
+        publishedAt: null,
+        isMissingFromProject: false,
+      },
+    ];
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    const webAppSection = modal.locator('.project-settings-web-app-section');
+    await expect(webAppSection).toContainText('No web apps are published.');
+    await expect(webAppSection.locator('.project-settings-web-app-row')).toHaveCount(1);
+    await expect(webAppSection).toContainText('Draft Helper');
   });
 
   test('published version history paginates, stars, previews, and restores versions', async ({ page }) => {
@@ -439,6 +710,7 @@ test.describe('Project settings modal', () => {
       status: 'published',
       endpointName,
       lastPublishedAt: '2026-04-08T10:30:00.000Z',
+      publishedWebApps: project.settings.publishedWebApps,
     };
     const routeTrackers = createProjectSettingsRouteTrackers();
     await installProjectSettingsRoutes(page, project, routeTrackers);

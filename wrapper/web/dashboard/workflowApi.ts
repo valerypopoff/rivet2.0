@@ -5,6 +5,8 @@ import type {
   WorkflowProjectDownloadVersion,
   WorkflowMoveResponse,
   WorkflowProjectItem,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppsResponse,
   WorkflowProjectSettingsDraft,
   WorkflowRecordingFilterStatus,
   WorkflowRecordingInputFilter,
@@ -368,6 +370,42 @@ export async function restoreWorkflowPublishedVersion(
   });
 
   return workflowJsonResponse<WorkflowPublishedVersionRestoreResponse>(response);
+}
+
+export async function fetchWorkflowProjectWebApps(relativePath: string): Promise<WorkflowProjectWebAppsResponse> {
+  const query = new URLSearchParams({ relativePath });
+  const response = await fetch(`${API}/workflows/projects/web-apps?${query}`, {
+    cache: 'no-store',
+  });
+  return workflowJsonResponse<WorkflowProjectWebAppsResponse>(response);
+}
+
+export async function publishWorkflowProjectWebApps(
+  relativePath: string,
+  publications: WorkflowProjectWebAppPublicationDraft[],
+): Promise<WorkflowProjectItem> {
+  const response = await fetch(`${API}/workflows/projects/web-apps/publish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relativePath, publications }),
+  });
+
+  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
+  return data.project;
+}
+
+export async function unpublishWorkflowProjectWebApp(
+  relativePath: string,
+  uiGraphId: string,
+): Promise<WorkflowProjectItem> {
+  const response = await fetch(`${API}/workflows/projects/web-apps/unpublish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relativePath, uiGraphId }),
+  });
+
+  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
+  return data.project;
 }
 
 export async function moveWorkflowItem(

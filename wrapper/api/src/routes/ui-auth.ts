@@ -1,25 +1,68 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { getExpectedUiSessionToken, isTrustedProxyRequest, isValidSharedKey } from '../auth.js';
 import { createHttpError } from '../utils/httpError.js';
 
 export const uiAuthRouter = Router();
+const defaultUiReturnTo = '/';
 
 function isFormPost(contentType: string | undefined): boolean {
   return (contentType ?? '').toLowerCase().startsWith('application/x-www-form-urlencoded');
 }
 
-function setNoStoreHeaders(res: Parameters<typeof uiAuthRouter.post>[1] extends never ? never : any): void {
+function setNoStoreHeaders(res: Response): void {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
 }
 
+export function sanitizeUiAuthReturnTo(value: unknown): string {
+  if (typeof value !== 'string') {
+    return defaultUiReturnTo;
+  }
+
+  const candidate = value.trim();
+  if (
+    !candidate ||
+    !candidate.startsWith('/') ||
+    candidate.startsWith('//') ||
+    /[\u0000-\u001f\u007f\\]/.test(candidate)
+  ) {
+    return defaultUiReturnTo;
+  }
+
+  try {
+    const parsed = new URL(candidate, 'http://rivet.local');
+    if (parsed.origin !== 'http://rivet.local') {
+      return defaultUiReturnTo;
+    }
+
+    return `${parsed.pathname}${parsed.search}${parsed.hash}` || defaultUiReturnTo;
+  } catch {
+    return defaultUiReturnTo;
+  }
+}
+
+export function addUiAuthErrorToReturnTo(returnTo: string, authError: string): string {
+  const parsed = new URL(sanitizeUiAuthReturnTo(returnTo), 'http://rivet.local');
+  parsed.searchParams.set('auth_error', authError);
+  return `${parsed.pathname}${parsed.search}${parsed.hash}` || defaultUiReturnTo;
+}
+
+function getFormReturnTo(req: Request): string {
+  return sanitizeUiAuthReturnTo(req.body?.return_to);
+}
+
+function redirectFormError(res: Response, returnTo: string, authError: string): void {
+  res.redirect(303, addUiAuthErrorToReturnTo(returnTo, authError));
+}
+
 uiAuthRouter.post('/ui-auth', (req, res, next) => {
   const formPost = isFormPost(req.get('content-type'));
+  const formReturnTo = getFormReturnTo(req);
   setNoStoreHeaders(res);
 
   if (!isTrustedProxyRequest(req)) {
     if (formPost) {
-      res.redirect(303, '/?auth_error=forbidden');
+      redirectFormError(res, formReturnTo, 'forbidden');
       return;
     }
     next(createHttpError(403, 'Forbidden'));
@@ -29,7 +72,7 @@ uiAuthRouter.post('/ui-auth', (req, res, next) => {
   const configuredKey = process.env.RIVET_KEY?.trim();
   if (!configuredKey) {
     if (formPost) {
-      res.redirect(303, '/?auth_error=unavailable');
+      redirectFormError(res, formReturnTo, 'unavailable');
       return;
     }
     next(createHttpError(500, 'UI access key is not configured'));
@@ -43,7 +86,7 @@ uiAuthRouter.post('/ui-auth', (req, res, next) => {
       : '';
   if (!isValidSharedKey(providedKey)) {
     if (formPost) {
-      res.redirect(303, '/?auth_error=invalid');
+      redirectFormError(res, formReturnTo, 'invalid');
       return;
     }
     next(createHttpError(401, 'Invalid access key'));
@@ -57,7 +100,7 @@ uiAuthRouter.post('/ui-auth', (req, res, next) => {
 
   res.setHeader('Set-Cookie', `rivet_ui_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax${secureSuffix}`);
   if (formPost) {
-    res.redirect(303, '/');
+    res.redirect(303, formReturnTo);
     return;
   }
 

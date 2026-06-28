@@ -196,6 +196,75 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
   assert.equal(savedProject.metadata.description, 'managed description from editor save');
 });
 
+test('managed saveHostedProject invalidates latest web app caches when only web apps are published', async () => {
+  const workflow = createWorkflowRow();
+  const currentRevision = createRevisionRow(workflow.workflow_id, workflow.current_draft_revision_id);
+  const currentContents = workflowFs.createBlankProjectFile(workflow.name);
+  const editedContents = rewriteProjectMetadata(currentContents, {
+    title: 'Editor Settings Name',
+    description: 'managed web app draft change',
+  });
+  let invalidatedWorkflowId: string | null = null;
+
+  const revisionService = createManagedWorkflowRevisionService({
+    context: {
+      pool: {} as never,
+      initialize: async () => {},
+      withTransaction: async (run: (client: unknown, hooks: TransactionHooks) => Promise<unknown>) => run(
+        {
+          query: async (sql: string) => {
+            const normalizedSql = sql.replace(/\s+/g, ' ').trim();
+            if (normalizedSql === 'SELECT 1 FROM workflow_web_apps WHERE workflow_id = $1 LIMIT 1') {
+              return { rows: [{ '?column?': 1 }] };
+            }
+
+            return { rows: [] };
+          },
+        },
+        {
+          onCommit: () => {},
+          onRollback: () => {},
+        },
+      ),
+      queries: {
+        ensureFolderChain: async () => {},
+        getWorkflowByRelativePath: async () => workflow,
+        getWorkflowById: async () => null,
+        getRevision: async (_client: unknown, revisionId: string | null | undefined) =>
+          revisionId === currentRevision.revision_id ? currentRevision : null,
+      },
+      revisions: {
+        readRevisionContents: async () => ({
+          contents: currentContents,
+          datasetsContents: null,
+        }),
+        createRevision: async (workflowId: string): Promise<RevisionRow> =>
+          createRevisionRow(workflowId, 'revision-saved'),
+        scheduleRevisionBlobCleanup: () => {},
+        insertRevision: async () => {},
+      },
+      endpointSync: {
+        syncWorkflowEndpointRows: async () => {},
+      },
+      mappers: managedMappers,
+      executionInvalidationController: {
+        queueWorkflowInvalidation: async (_client: unknown, _hooks: TransactionHooks, workflowId: string) => {
+          invalidatedWorkflowId = workflowId;
+        },
+      },
+    } as never,
+  });
+
+  await revisionService.saveHostedProject({
+    projectPath: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
+    contents: editedContents,
+    datasetsContents: null,
+    expectedRevisionId: workflow.current_draft_revision_id,
+  });
+
+  assert.equal(invalidatedWorkflowId, workflow.workflow_id);
+});
+
 test('managed project rename stores a new draft revision with the YAML title matching the tree name', async () => {
   let workflow = createWorkflowRow({
     name: 'Managed Old Name',

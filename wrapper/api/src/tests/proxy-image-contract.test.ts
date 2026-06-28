@@ -32,7 +32,15 @@ test('proxy templates route public workflow traffic to the right API plane', () 
     /proxy_pass \$execution_upstream;/,
   );
   assert.match(
+    proxyLocation(imageProxyTemplate, /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/\s*\{/),
+    /proxy_pass \$execution_upstream;/,
+  );
+  assert.match(
     proxyLocation(imageProxyTemplate, /location \$\{RIVET_LATEST_WORKFLOWS_BASE_PATH\}\/\s*\{/),
+    /proxy_pass \$api_upstream;/,
+  );
+  assert.match(
+    proxyLocation(imageProxyTemplate, /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\s*\{/),
     /proxy_pass \$api_upstream;/,
   );
 
@@ -51,6 +59,7 @@ test('proxy templates route public workflow traffic to the right API plane', () 
 test('proxy UI gate prompt is served from container-local staged storage', () => {
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
   const proxyDockerfile = readRepoFile('image/proxy/Dockerfile');
+  const promptHtml = readRepoFile('image/proxy/ui-gate-prompt.html');
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
 
@@ -65,9 +74,26 @@ test('proxy UI gate prompt is served from container-local staged storage', () =>
   assert.match(proxyBootstrap, /destination_dir="\/tmp\/nginx\/html"/);
   assert.match(proxyBootstrap, /for candidate in \/tmp\/ui-gate-prompt\.html \/usr\/share\/nginx\/html\/ui-gate-prompt\.html; do/);
   assert.match(proxyDockerfile, /COPY --chown=10001:10001 image\/proxy\/ui-gate-prompt\.html \/usr\/share\/nginx\/html\/ui-gate-prompt\.html/);
+  assert.match(promptHtml, /id="gate-return-to" name="return_to" type="hidden" value="\/"/);
+  assert.match(promptHtml, /const currentUrl = new URL\(window\.location\.href\);/);
+  assert.match(promptHtml, /currentUrl\.searchParams\.delete\("auth_error"\);/);
+  assert.match(promptHtml, /returnTo\.value = returnPath \|\| "\/";/);
   assert.match(devCompose, /image\/proxy\/ui-gate-prompt\.html:\/tmp\/ui-gate-prompt\.html:ro/);
   assert.doesNotMatch(devCompose, /ui-gate-prompt\.html:\/usr\/share\/nginx\/html\/ui-gate-prompt\.html:ro/);
   assert.doesNotMatch(prodCompose, /image\/proxy\/ui-gate-prompt\.html:/);
+});
+
+test('proxy templates gate hosted web apps through the browser UI gate', () => {
+  for (const template of readProxyTemplates()) {
+    for (const locationPattern of [
+      /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/\s*\{/,
+      /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\s*\{/,
+    ]) {
+      const webAppsLocation = proxyLocation(template, locationPattern);
+      assert.match(webAppsLocation, /if \(\$rivet_ui_gate_result = deny\) \{\s*return 401;\s*\}/);
+      assert.match(webAppsLocation, /proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;/);
+    }
+  }
 });
 
 test('proxy templates keep HTTP workflow routes bounded and websocket routes long-lived', () => {
@@ -77,7 +103,9 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
     for (const locationPattern of [
       /location \/api\/\s*\{/,
       /location \$\{RIVET_PUBLISHED_WORKFLOWS_BASE_PATH\}\/\s*\{/,
+      /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/\s*\{/,
       /location \$\{RIVET_LATEST_WORKFLOWS_BASE_PATH\}\/\s*\{/,
+      /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\s*\{/,
     ]) {
       const location = proxyLocation(template, locationPattern);
       assert.match(location, /proxy_read_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
@@ -94,6 +122,7 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
 test('executor image and compose contracts keep the websocket service independent from API PORT', () => {
   const executorEntrypoint = readRepoFile('image/executor/entrypoint.sh');
   const executorDockerfile = readRepoFile('image/executor/Dockerfile');
+  const executorBundler = readRepoFile('wrapper/executor/build/bundle-executor.cjs');
   const composeExecutorDockerfile = readRepoFile('ops/docker/Dockerfile.executor');
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
@@ -108,6 +137,7 @@ test('executor image and compose contracts keep the websocket service independen
   assert.doesNotMatch(executorDockerfile, /ENV PORT=21889/);
   assert.match(composeExecutorDockerfile, /ENV RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
   assert.ok(composeExecutorDockerfile.includes('node executor-bundle.cjs --host \\"${RIVET_EXECUTOR_HOST}\\" --port 21889'));
+  assert.match(executorBundler, /'import\.meta\.url': '__filename'/);
 
   for (const compose of [prodCompose, devCompose]) {
     assert.match(compose, /executor:[\s\S]*- PORT=21889[\s\S]*- RIVET_EXECUTOR_PORT=21889[\s\S]*- RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
@@ -128,6 +158,7 @@ test('API images and launchers use the filtered Rivet source context and symlink
   const devDockerLauncher = readRepoFile('scripts/dev-docker.mjs');
   const prodDockerLauncher = readRepoFile('scripts/prod-docker.mjs');
   const rivetContextHelper = readRepoFile('scripts/lib/rivet-source-context.mjs');
+  const ensureRivetRuntimeBuild = readRepoFile('scripts/ensure-rivet-runtime-build.mjs');
   const linkScript = readRepoFile('scripts/link-rivet-node-package.mjs');
   const ensureDevDeps = readRepoFile('scripts/ensure-dev-deps.mjs');
   const apiPackageJson = readRepoFile('wrapper/api/package.json');
@@ -168,7 +199,11 @@ test('API images and launchers use the filtered Rivet source context and symlink
     );
   }
   assert.match(devCompose, /api:[\s\S]*- rivet_node_modules:\/workspace\/rivet\/node_modules/);
+  assert.match(devCompose, /RIVET_SOURCE_ROOT=\/workspace\/rivet node \/workspace\/scripts\/ensure-rivet-runtime-build\.mjs/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/app\/\.rivet-source RIVET_API_PACKAGE_ROOT=\/app node \/workspace\/scripts\/link-rivet-node-package\.mjs/);
+  assert.match(ensureRivetRuntimeBuild, /yarn-4\.6\.0\.cjs/);
+  assert.match(ensureRivetRuntimeBuild, /'build:runtime'/);
+  assert.match(ensureRivetRuntimeBuild, /webAppHandler\.js/);
   assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);
   assert.match(devDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
   assert.match(prodDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);

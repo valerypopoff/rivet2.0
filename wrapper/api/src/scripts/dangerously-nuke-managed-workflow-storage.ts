@@ -17,6 +17,7 @@ import {
 const WORKFLOW_TABLES = [
   'workflow_recordings',
   'workflow_endpoints',
+  'workflow_web_apps',
   'workflow_revisions',
   'workflows',
   'workflow_folders',

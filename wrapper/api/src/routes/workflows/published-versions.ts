@@ -664,6 +664,7 @@ export async function restoreWorkflowPublishedVersion(
       publishedSnapshotId: restoredSnapshotId,
       publishedStateHash,
       lastPublishedAt,
+      publishedWebApps: existingSettings.publishedWebApps,
     });
   } catch (error) {
     await fs.rm(getPublishedWorkflowSnapshotPath(root, restoredSnapshotId), { force: true }).catch(() => {});

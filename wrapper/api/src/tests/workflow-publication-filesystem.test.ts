@@ -38,6 +38,7 @@ async function writeSettings(
     publishedSnapshotId: null,
     publishedStateHash: null,
     lastPublishedAt: null,
+    publishedWebApps: [],
     ...settings,
   });
 }

@@ -83,6 +83,14 @@ export class ManagedWorkflowExecutionService {
     return this.#loadExecutionProjectByEndpoint('latest', endpointName);
   }
 
+  async loadPublishedWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {
+    return this.#loadExecutionProjectByEndpoint('web-app', slug);
+  }
+
+  async loadLatestWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {
+    return this.#loadExecutionProjectByEndpoint('latest-web-app', slug);
+  }
+
   createProjectReferenceLoader() {
     const service = this;
 
@@ -264,6 +272,8 @@ export class ManagedWorkflowExecutionService {
         attachedData,
         datasetProvider,
         projectVirtualPath: getManagedWorkflowProjectVirtualPath(pointer.relativePath),
+        revisionKey: `managed:${pointer.revisionId}`,
+        webAppUiGraphId: pointer.webAppUiGraphId,
         debug: {
           cacheStatus,
           resolveMs,

@@ -14,6 +14,8 @@ export type ManagedExecutionProjectResult = {
   attachedData: AttachedData;
   datasetProvider: NodeDatasetProvider;
   projectVirtualPath: string;
+  revisionKey: string;
+  webAppUiGraphId?: string;
   debug: ManagedExecutionDebugInfo;
 };
 

@@ -210,7 +210,7 @@ const normalizeHostedProjectTabLabels = (): PluginOption => {
 
       const updatedCode = replaceHostedProjectTabLabelExpression(code);
       if (updatedCode == null) {
-        this.error('Expected upstream ProjectSelector tab label expression was not found.');
+        return null;
       }
 
       return {

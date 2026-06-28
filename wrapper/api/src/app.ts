@@ -5,11 +5,23 @@ import { nativeRouter } from './routes/native.js';
 import { shellRouter } from './routes/shell.js';
 import { pluginsRouter } from './routes/plugins.js';
 import { projectsRouter } from './routes/projects.js';
-import { internalPublishedWorkflowsRouter, latestWorkflowsRouter, publishedWorkflowsRouter, workflowsRouter } from './routes/workflows/index.js';
+import {
+  internalPublishedWorkflowsRouter,
+  latestWebAppsRouter,
+  latestWorkflowsRouter,
+  publishedWebAppsRouter,
+  publishedWorkflowsRouter,
+  workflowsRouter,
+} from './routes/workflows/index.js';
 import { configRouter } from './routes/config.js';
 import { uiAuthRouter } from './routes/ui-auth.js';
 import { runtimeLibrariesRouter } from './routes/runtime-libraries.js';
-import { LATEST_WORKFLOWS_BASE_PATH, PUBLISHED_WORKFLOWS_BASE_PATH } from './workflowEndpointPaths.js';
+import {
+  LATEST_WORKFLOWS_BASE_PATH,
+  PUBLISHED_WORKFLOWS_BASE_PATH,
+  RIVET_LATEST_WEB_APPS_BASE_PATH,
+  RIVET_WEB_APPS_BASE_PATH,
+} from './workflowEndpointPaths.js';
 import { requireAuth } from './middleware/auth.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
 
@@ -32,6 +44,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
     surfaces.push(
       '/ui-auth',
       `${LATEST_WORKFLOWS_BASE_PATH}/:endpointName`,
+      `${RIVET_LATEST_WEB_APPS_BASE_PATH}/:slug`,
       '/api/native/*',
       '/api/shell/*',
       '/api/plugins/*',
@@ -45,6 +58,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
   if (profile === 'combined' || profile === 'execution') {
     surfaces.push(
       `${PUBLISHED_WORKFLOWS_BASE_PATH}/:endpointName`,
+      `${RIVET_WEB_APPS_BASE_PATH}/:slug`,
       '/internal/workflows/:endpointName',
     );
   }
@@ -61,6 +75,7 @@ export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRunt
 function mountControlPlaneRoutes(app: Express): void {
   app.use('/', uiAuthRouter);
   app.use(LATEST_WORKFLOWS_BASE_PATH, latestWorkflowsRouter);
+  app.use(RIVET_LATEST_WEB_APPS_BASE_PATH, latestWebAppsRouter);
   app.use('/api', requireAuth);
   app.use('/api/native', nativeRouter);
   app.use('/api/shell', shellRouter);
@@ -73,6 +88,7 @@ function mountControlPlaneRoutes(app: Express): void {
 
 function mountPublishedExecutionRoutes(app: Express): void {
   app.use(PUBLISHED_WORKFLOWS_BASE_PATH, publishedWorkflowsRouter);
+  app.use(RIVET_WEB_APPS_BASE_PATH, publishedWebAppsRouter);
   app.use('/internal/workflows', internalPublishedWorkflowsRouter);
 }
 

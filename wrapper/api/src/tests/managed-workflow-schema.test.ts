@@ -26,6 +26,7 @@ function createExecutionLookupRow() {
     stats_graph_count: 1,
     stats_total_node_count: 2,
     revision_created_at: new Date().toISOString(),
+    ui_graph_id: 'ui-graph-a',
   };
 }
 
@@ -88,6 +89,17 @@ test('managed schema keeps published version history physically tied to workflow
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('workflow_published_versions_workflow_id_published_at_idx'));
 });
 
+test('managed schema keeps web app publications tied to immutable workflow revisions', () => {
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS workflow_web_apps'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ui_graph_id TEXT NOT NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('slug_lookup_name TEXT NOT NULL UNIQUE'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('UNIQUE (workflow_id, ui_graph_id)'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('workflow_web_apps_workflow_id_idx'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('workflow_web_apps_revision_id_idx'));
+});
+
 test('managed published execution lookup uses published endpoint rows and the published revision join', async () => {
   const { pool, queries } = createExecutionLookupPool();
   const managedQueries = createManagedWorkflowQueries(pool);
@@ -120,4 +132,42 @@ test('managed latest execution lookup uses draft endpoint rows but still require
   const normalizedSql = queries[0]!.text.replace(/\s+/g, ' ').trim();
   assert.match(normalizedSql, /JOIN workflow_revisions r ON r\.revision_id = w\.current_draft_revision_id/);
   assert.match(normalizedSql, /WHERE e\.lookup_name = \$1 AND e\.is_draft = TRUE AND w\.published_revision_id IS NOT NULL$/);
+});
+
+test('managed web app execution lookup uses the published web app slug and pinned revision', async () => {
+  const { pool, queries } = createExecutionLookupPool();
+  const managedQueries = createManagedWorkflowQueries(pool);
+
+  const result = await managedQueries.resolveExecutionPointerFromDatabase(pool, 'web-app', 'app-slug');
+
+  assert.ok(result);
+  assert.equal(result.pointer.relativePath, 'Main.rivet-project');
+  assert.equal(result.pointer.revisionId, 'resolved-revision');
+  assert.equal(result.pointer.webAppUiGraphId, 'ui-graph-a');
+  assert.equal(queries.length, 1);
+  assert.deepEqual(queries[0]?.params, ['app-slug']);
+
+  const normalizedSql = queries[0]!.text.replace(/\s+/g, ' ').trim();
+  assert.match(normalizedSql, /FROM workflow_web_apps app/);
+  assert.match(normalizedSql, /JOIN workflow_revisions r ON r\.revision_id = app\.revision_id/);
+  assert.match(normalizedSql, /WHERE app\.slug_lookup_name = \$1$/);
+});
+
+test('managed latest web app execution lookup uses the published web app slug and current draft revision', async () => {
+  const { pool, queries } = createExecutionLookupPool();
+  const managedQueries = createManagedWorkflowQueries(pool);
+
+  const result = await managedQueries.resolveExecutionPointerFromDatabase(pool, 'latest-web-app', 'app-slug');
+
+  assert.ok(result);
+  assert.equal(result.pointer.relativePath, 'Main.rivet-project');
+  assert.equal(result.pointer.revisionId, 'resolved-revision');
+  assert.equal(result.pointer.webAppUiGraphId, 'ui-graph-a');
+  assert.equal(queries.length, 1);
+  assert.deepEqual(queries[0]?.params, ['app-slug']);
+
+  const normalizedSql = queries[0]!.text.replace(/\s+/g, ' ').trim();
+  assert.match(normalizedSql, /FROM workflow_web_apps app/);
+  assert.match(normalizedSql, /JOIN workflow_revisions r ON r\.revision_id = w\.current_draft_revision_id/);
+  assert.match(normalizedSql, /WHERE app\.slug_lookup_name = \$1$/);
 });

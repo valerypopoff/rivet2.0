@@ -6,7 +6,7 @@ import { type Pool, type PoolClient } from 'pg';
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../shared/workflow-types.js';
 import { conflict, createHttpError } from '../../../utils/httpError.js';
 import { normalizeHostedProjectTitle } from '../hosted-project-contents.js';
-import { normalizeStoredEndpointName } from '../endpoint-names.js';
+import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
 import {
   getManagedWorkflowProjectVirtualPath,
   normalizeManagedWorkflowRelativePath,
@@ -28,6 +28,17 @@ type ManagedWorkflowRevisionServiceDependencies = {
   context: ManagedWorkflowContext;
 };
 
+function getManagedRevisionContentsKey(contents: string, datasetsContents: string | null): string {
+  return JSON.stringify([contents, datasetsContents]);
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' &&
+    error != null &&
+    'code' in error &&
+    String((error as { code?: unknown }).code ?? '') === '23505';
+}
+
 export function createManagedWorkflowRevisionService(options: ManagedWorkflowRevisionServiceDependencies) {
   const deps = {
     pool: options.context.pool,
@@ -46,6 +57,21 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
     mapWorkflowRowToProjectItem: options.context.mappers.mapWorkflowRowToProjectItem,
     resolveManagedHostedProjectSaveTarget,
     queueWorkflowInvalidation: options.context.executionInvalidationController.queueWorkflowInvalidation.bind(options.context.executionInvalidationController),
+  };
+
+  const shouldInvalidateExecutionCacheAfterDraftChange = async (
+    client: Pool | PoolClient,
+    workflow: WorkflowRow,
+  ): Promise<boolean> => {
+    if (workflow.published_endpoint_name) {
+      return true;
+    }
+
+    const publishedWebAppResult = await client.query(
+      'SELECT 1 FROM workflow_web_apps WHERE workflow_id = $1 LIMIT 1',
+      [workflow.workflow_id],
+    );
+    return publishedWebAppResult.rows.length > 0;
   };
 
   return {
@@ -161,7 +187,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
                 throw createHttpError(500, 'Saved workflow could not be loaded');
               }
 
-              if (workflow.published_endpoint_name) {
+              if (await shouldInvalidateExecutionCacheAfterDraftChange(client, workflow)) {
                 await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
               }
             }
@@ -240,7 +266,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
           throw createHttpError(500, 'Saved workflow could not be loaded');
         }
 
-        if (!created && workflow.published_endpoint_name) {
+        if (!created && await shouldInvalidateExecutionCacheAfterDraftChange(client, workflow)) {
           await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
         }
 
@@ -262,6 +288,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
       const publishedEndpointName = normalizeStoredEndpointName(options.publishedEndpointName);
       const updatedAt = options.updatedAt?.trim() || new Date().toISOString();
       const lastPublishedAt = options.lastPublishedAt?.trim() || null;
+      const importedWebApps = options.publishedWebApps ?? [];
 
       return deps.withTransaction(async (client, hooks) => {
         await deps.ensureFolderChain(client, folderRelativePath);
@@ -302,6 +329,50 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
           publishedVersionId = randomUUID();
         }
 
+        const revisionIdsByContents = new Map<string, string>([
+          [getManagedRevisionContentsKey(options.contents, options.datasetsContents), draftRevision.revision_id],
+        ]);
+        if (publishedRevisionId) {
+          revisionIdsByContents.set(
+            getManagedRevisionContentsKey(
+              options.publishedContents ?? options.contents,
+              options.publishedDatasetsContents ?? options.datasetsContents,
+            ),
+            publishedRevisionId,
+          );
+        }
+
+        const importedWebAppRevisions: RevisionRow[] = [];
+        const importedWebAppRows: Array<{
+          uiGraphId: string;
+          slug: string;
+          publishedAt: string;
+          revisionId: string;
+        }> = [];
+        for (const webApp of importedWebApps) {
+          const revisionContentsKey = getManagedRevisionContentsKey(webApp.contents, webApp.datasetsContents);
+          let revisionId = revisionIdsByContents.get(revisionContentsKey);
+          if (!revisionId) {
+            const revision = await deps.createRevision(options.workflowId, webApp.contents, webApp.datasetsContents);
+            deps.scheduleRevisionBlobCleanup(hooks, revision);
+            importedWebAppRevisions.push(revision);
+            revisionId = revision.revision_id;
+            revisionIdsByContents.set(revisionContentsKey, revisionId);
+          }
+
+          const slug = normalizeStoredEndpointName(webApp.slug);
+          if (!webApp.uiGraphId || !slug) {
+            continue;
+          }
+
+          importedWebAppRows.push({
+            uiGraphId: webApp.uiGraphId,
+            slug,
+            publishedAt: webApp.publishedAt.trim() || updatedAt,
+            revisionId,
+          });
+        }
+
         await client.query(
           `
             INSERT INTO workflows (
@@ -329,6 +400,9 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
         if (publishedRevision) {
           await deps.insertRevision(client, publishedRevision);
         }
+        for (const revision of importedWebAppRevisions) {
+          await deps.insertRevision(client, revision);
+        }
         if (publishedVersionId && publishedRevisionId) {
           await client.query(
             `
@@ -337,6 +411,33 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
             `,
             [publishedVersionId, options.workflowId, publishedRevisionId, publishedEndpointName, lastPublishedAt ?? updatedAt],
           );
+        }
+        for (const webApp of importedWebAppRows) {
+          try {
+            await client.query(
+              `
+                INSERT INTO workflow_web_apps (
+                  app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, published_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)
+              `,
+              [
+                randomUUID(),
+                options.workflowId,
+                webApp.revisionId,
+                webApp.uiGraphId,
+                webApp.slug,
+                normalizeWorkflowEndpointLookupName(webApp.slug),
+                webApp.publishedAt,
+              ],
+            );
+          } catch (error) {
+            if (isUniqueViolation(error)) {
+              throw conflict(`Managed workflow web app slug already exists: ${webApp.slug}`);
+            }
+
+            throw error;
+          }
         }
 
         const workflow = await deps.getWorkflowById(client, options.workflowId);
@@ -349,7 +450,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
           publishedEndpointName,
         });
 
-        if (publishedEndpointName) {
+        if (publishedEndpointName || importedWebAppRows.length > 0) {
           await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
         }
 

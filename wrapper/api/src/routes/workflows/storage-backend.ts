@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { loadProjectAndAttachedDataFromFile } from '@valerypopoff/rivet2-node';
+import { createHash } from 'node:crypto';
+import { deserializeDatasets, loadProjectAndAttachedDataFromFile } from '@valerypopoff/rivet2-node';
 
 import type {
   WorkflowFolderItem,
@@ -8,6 +9,8 @@ import type {
   WorkflowProjectItem,
   WorkflowProjectPathMove,
   WorkflowProjectSettingsDraft,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionSummary,
   WorkflowPublishedVersionsResponse,
@@ -43,6 +46,11 @@ import {
   uploadWorkflowProjectItem,
   unpublishWorkflowProjectItem,
 } from './workflow-mutations.js';
+import {
+  listWorkflowProjectWebApps,
+  publishWorkflowProjectWebApps,
+  unpublishWorkflowProjectWebApp,
+} from './web-app-publication.js';
 import { readWorkflowProjectDownload } from './workflow-download.js';
 import {
   listWorkflowPublishedVersions,
@@ -60,7 +68,7 @@ import {
   persistWorkflowExecutionRecording,
   readWorkflowRecordingArtifact,
 } from './recordings.js';
-import { createPublishedWorkflowProjectReferenceLoader } from './publication.js';
+import { createPublishedWorkflowProjectReferenceLoader, findPublishedWorkflowWebAppBySlug } from './publication.js';
 import { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
 import type { AttachedData, Project, CombinedDataset } from '@valerypopoff/rivet2-node';
 import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
@@ -105,6 +113,8 @@ type ExecutionProjectResult = {
   attachedData: AttachedData;
   datasetProvider: NodeDatasetProvider;
   projectVirtualPath: string;
+  revisionKey: string;
+  webAppUiGraphId?: string;
   debug?: {
     cacheStatus: 'hit' | 'miss' | 'bypass';
     resolveMs: number;
@@ -168,6 +178,87 @@ async function loadFilesystemExecutionProjectWithMissingRootRetry(
     getFilesystemExecutionCache().reset(ensuredRoot);
     return load(ensuredRoot);
   }
+}
+
+async function createFilesystemPublishedWebAppRevisionKey(
+  sourceProjectPath: string,
+  publishedProjectPath: string,
+  slug: string,
+  uiGraphId: string,
+): Promise<string> {
+  const hash = createHash('sha256');
+  for (const filePath of [publishedProjectPath, getWorkflowDatasetPath(publishedProjectPath)]) {
+    const signature = await fs.stat(filePath).then(
+      (stats) => `${stats.isFile() ? 'file' : 'other'}:${stats.size}:${stats.mtimeMs}`,
+      (error) => ((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : Promise.reject(error)),
+    );
+    hash.update(signature);
+    hash.update('\0');
+  }
+  hash.update(sourceProjectPath);
+  hash.update('\0');
+  hash.update(publishedProjectPath);
+  hash.update('\0');
+  hash.update(slug);
+  hash.update('\0');
+  hash.update(uiGraphId);
+  return `filesystem-web-app:${hash.digest('hex').slice(0, 32)}`;
+}
+
+async function loadFilesystemPublishedWebAppExecutionProject(root: string, slug: string): Promise<ExecutionProjectResult | null> {
+  const match = await findPublishedWorkflowWebAppBySlug(root, slug);
+  if (!match) {
+    return null;
+  }
+
+  const [project, attachedData] = await loadProjectAndAttachedDataFromFile(match.publishedProjectPath);
+  const datasetPath = getWorkflowDatasetPath(match.publishedProjectPath);
+  const datasetsContents = await pathExists(datasetPath) ? await fs.readFile(datasetPath, 'utf8') : null;
+  const datasetProvider = new NodeDatasetProvider(
+    datasetsContents ? deserializeDatasets(datasetsContents) : [],
+  );
+
+  return {
+    project,
+    attachedData,
+    datasetProvider,
+    projectVirtualPath: match.projectPath,
+    revisionKey: await createFilesystemPublishedWebAppRevisionKey(
+      match.projectPath,
+      match.publishedProjectPath,
+      match.slug,
+      match.uiGraphId,
+    ),
+    webAppUiGraphId: match.uiGraphId,
+  };
+}
+
+async function loadFilesystemLatestWebAppExecutionProject(root: string, slug: string): Promise<ExecutionProjectResult | null> {
+  const match = await findPublishedWorkflowWebAppBySlug(root, slug);
+  if (!match) {
+    return null;
+  }
+
+  const [project, attachedData] = await loadProjectAndAttachedDataFromFile(match.projectPath);
+  const datasetPath = getWorkflowDatasetPath(match.projectPath);
+  const datasetsContents = await pathExists(datasetPath) ? await fs.readFile(datasetPath, 'utf8') : null;
+  const datasetProvider = new NodeDatasetProvider(
+    datasetsContents ? deserializeDatasets(datasetsContents) : [],
+  );
+
+  return {
+    project,
+    attachedData,
+    datasetProvider,
+    projectVirtualPath: match.projectPath,
+    revisionKey: await createFilesystemPublishedWebAppRevisionKey(
+      match.projectPath,
+      match.projectPath,
+      match.slug,
+      match.uiGraphId,
+    ),
+    webAppUiGraphId: match.uiGraphId,
+  };
 }
 
 function invalidateFilesystemExecutionMaterializations(projectPaths: Iterable<string>): void {
@@ -548,6 +639,40 @@ export async function publishWorkflowProjectItemWithBackend(relativePath: unknow
   );
 }
 
+export async function listWorkflowProjectWebAppsWithBackend(
+  relativePath: unknown,
+): Promise<WorkflowProjectWebAppsResponse> {
+  return delegate(
+    async (backend) => backend.listWorkflowProjectWebApps(relativePath),
+    async () => listWorkflowProjectWebApps(relativePath),
+  );
+}
+
+export async function publishWorkflowProjectWebAppsWithBackend(
+  relativePath: unknown,
+  publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
+) {
+  return delegate(
+    async (backend) => backend.publishWorkflowProjectWebApps(relativePath, publications),
+    async () => {
+      const project = await publishWorkflowProjectWebApps(relativePath, publications);
+      markFilesystemExecutionStructureDirty([project.absolutePath]);
+      return project;
+    },
+  );
+}
+
+export async function unpublishWorkflowProjectWebAppWithBackend(relativePath: unknown, uiGraphId: unknown) {
+  return delegate(
+    async (backend) => backend.unpublishWorkflowProjectWebApp(relativePath, uiGraphId),
+    async () => {
+      const project = await unpublishWorkflowProjectWebApp(relativePath, uiGraphId);
+      markFilesystemExecutionStructureDirty([project.absolutePath]);
+      return project;
+    },
+  );
+}
+
 export async function unpublishWorkflowProjectItemWithBackend(relativePath: unknown) {
   return delegate(
     async (backend) => backend.unpublishWorkflowProjectItem(relativePath),
@@ -582,6 +707,24 @@ export async function resolvePublishedExecutionProject(endpointName: string): Pr
 
   return loadFilesystemExecutionProjectWithMissingRootRetry((root) =>
     getFilesystemExecutionCache().loadPublishedExecutionProject(root, endpointName));
+}
+
+export async function resolvePublishedWebAppExecutionProject(slug: string): Promise<ExecutionProjectResult | null> {
+  if (isManagedWorkflowStorageEnabled()) {
+    return (await getManagedBackend()).loadPublishedWebAppExecutionProject(slug);
+  }
+
+  return loadFilesystemExecutionProjectWithMissingRootRetry((root) =>
+    loadFilesystemPublishedWebAppExecutionProject(root, slug));
+}
+
+export async function resolveLatestWebAppExecutionProject(slug: string): Promise<ExecutionProjectResult | null> {
+  if (isManagedWorkflowStorageEnabled()) {
+    return (await getManagedBackend()).loadLatestWebAppExecutionProject(slug);
+  }
+
+  return loadFilesystemExecutionProjectWithMissingRootRetry((root) =>
+    loadFilesystemLatestWebAppExecutionProject(root, slug));
 }
 
 export async function resolveLatestExecutionProject(endpointName: string): Promise<ExecutionProjectResult | null> {

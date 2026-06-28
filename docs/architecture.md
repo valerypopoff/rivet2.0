@@ -23,7 +23,9 @@ Browser
   |- /?editor               -> hosted Rivet editor inside an iframe
   |- /api/*                 -> control-plane API
   |- /workflows/*           -> execution-plane API
+  |- /apps/*                -> execution-plane API
   |- /workflows-latest/*    -> control-plane API
+  |- /apps-latest/*         -> control-plane API
   |- /ws/latest-debugger    -> control-plane latest-workflow debugger websocket
   |- /ws/executor/internal  -> executor websocket used by the hosted editor
   `- /ws/executor           -> executor websocket kept for upstream-compatible clients
@@ -33,7 +35,7 @@ In Docker dev and production, nginx fronts the stack and injects the trusted pro
 The repo-local Docker stacks still run the API in `combined` mode, so both workflow route families terminate at the same `api` container there even though the published-vs-latest split remains a first-class deployment contract.
 The executor websocket remains a separate internal service on port `21889` in those Docker modes; it does not follow the API's generic `PORT` contract.
 The executor container listens on `0.0.0.0` inside the Docker network because the proxy is a separate container that connects to `executor:21889`; external browser access still flows through the proxy's `/ws/executor*` routes.
-In local direct-process mode, the services run separately without nginx. The Vite dev server only proxies `/api/*` and `/ws/executor*`, so published/latest workflow endpoints, `/ui-auth`, and `/ws/latest-debugger` are not recreated there with production-like routing or trust behavior.
+In local direct-process mode, the services run separately without nginx. The Vite dev server only proxies `/api/*` and `/ws/executor*`, so published/latest workflow endpoints, Rivet web apps, `/ui-auth`, and `/ws/latest-debugger` are not recreated there with production-like routing or trust behavior.
 
 The current runtime keeps the control plane conservative while published execution scales separately:
 
@@ -42,9 +44,10 @@ The current runtime keeps the control plane conservative while published executi
   - workflow mutation and publication
   - runtime-library admin flows
   - plugin admin flows
-  - latest execution and latest debugger
+  - latest execution, latest web apps, and latest debugger
 - execution plane
-  - published endpoint execution only
+  - published endpoint execution
+  - published Rivet web app HTML, app JSON, and action execution
   - internal published-only execution for trusted in-cluster callers
 
 That control-plane singleton is intentional, not accidental. In the current supported Kubernetes topology:
@@ -53,8 +56,8 @@ That control-plane singleton is intentional, not accidental. In the current supp
 - `execution` is the horizontal scale boundary for endpoint traffic
 - `proxy` stays as a separate scalable ingress tier in front of the execution plane
 - `web` may stay at `1` when dashboard/editor traffic is negligible
-- latest-workflow execution and `/ws/latest-debugger` stay on the same control-plane process boundary
-- published endpoint execution scales on the execution Deployment and remains non-debuggable
+- latest-workflow execution, latest web apps, and `/ws/latest-debugger` stay on the same control-plane process boundary
+- published endpoint execution and published web-app action execution scale on the execution Deployment and remain non-debuggable
 - the latest debugger is still process-local rather than a distributed cross-replica service
 
 The important operational detail is that these tiers scale independently. A new execution replica is only another execution-plane API pod; it does not automatically imply a matching proxy pod. In an endpoint-heavy deployment, `execution` is the primary scale target, `proxy` is the supporting ingress tier, `web` can remain fixed at `1`, and `backend` remains singleton by constraint rather than by capacity preference.
@@ -78,7 +81,7 @@ The important operational detail is that these tiers scale independently. A new 
 - `Download` streams a saved `.rivet-project` file to the browser. It ignores unsaved editor changes and, for `unpublished_changes`, lets the user choose between the saved live file and the published snapshot. The download flow also leaves selection, open tabs, and folder expansion unchanged.
 - `Delete project` in the project context menu never deletes immediately. For unpublished projects it opens the existing Project Settings modal, where the user must click `Delete project` again. For published or `unpublished_changes` projects it shows a toast telling the user to unpublish first.
 - `Upload project` opens a browser file picker, uploads a chosen `.rivet-project` into the target folder, refreshes the tree, and leaves selection, open tabs, and folder expansion unchanged.
-- Project Settings shows `Last published at ...` next to the `Published` or `Unpublished changes` status badge. That timestamp comes from stored publication metadata, with a fallback for older already-published projects that predate the explicit field. It also links to a published-version-history modal that lists every successful publish for the project and lets users star, add comment labels, download, preview, or restore the selected stored snapshot.
+- Project Settings shows `Last published at ...` next to the `Published` or `Unpublished changes` workflow status badge. `Unpublished` shows `Workflow is not published as endpoint.` beside the status badge instead, using the same secondary status-text size and vertical alignment as the timestamp. The timestamp comes from stored publication metadata, with a fallback for older already-published projects that predate the explicit field. The `Workflow` tab uses the same compact prefixed endpoint-path control style as web apps, with no extra visible field label and with `Publish`/`Update` and `Unpublish` actions attached to the row. Workflow endpoint help describes the saved published slug until the user clicks `Publish` or `Update`, so editing the field alone does not imply that the live URL changed. The history modal lists every successful publish for the project and lets users star, add comment labels, download, preview, or restore the selected stored snapshot. Project Settings is split into `Workflow` and `Web apps` tabs, with the guarded `Delete project` action in a separated lower section that remains visible across both tabs; on the `Workflow` tab only, that lower section also shows `Published version history` as a visible secondary button. The `Web apps` tab lists `Project.uiGraphs`, lets each app use its own `/apps/<slug>` URL, shows the companion `/apps-latest/<slug>` URL for latest saved draft serving, and lets each app publish, update, or unpublish independently without requiring or changing the workflow endpoint publication. Projects with no web apps and projects with unpublished-only web apps get explicit empty-state text before any available rows. Published apps whose UI graph was removed from the current draft remain visible there only for unpublish cleanup.
 - `Run recordings` is likewise controller-driven: `useRunRecordingsController.ts` owns workflow loading, status/input filtering, run paging, retained modal state, and delete flow, while `RecordingWorkflowSelect.tsx` and `RecordingRunsTable.tsx` render the focused UI slices. Opening a recording hides the modal without flushing that controller state; the explicit modal close button is the reset boundary.
 - `Runtime libraries` keeps `useRuntimeLibrariesModalState.ts` as the public controller. SSE framing, log merging, and job status patching live in `runtimeLibrariesJobStream.ts`, while the modal panels stay largely presentational.
 - in `filesystem` mode, that modal treats install/remove logs and terminal status as session-local UI state: once the modal is closed after a finished job, reopening it falls back to the installed libraries list unless another job is still actively running. `managed` mode keeps its persisted job-state behavior.
@@ -90,7 +93,7 @@ The important operational detail is that these tiers scale independently. A new 
 
 ## API surface overview
 
-- `/api/workflows/*` manages workflow folders/projects, project creation/duplication/uploading/downloading, publication, published-version history, movement/rename, and the recordings browser APIs.
+- `/api/workflows/*` manages workflow folders/projects, project creation/duplication/uploading/downloading, workflow endpoint publication, web-app publication, published-version history, movement/rename, and the recordings browser APIs.
 - `/api/runtime-libraries/*` manages runtime-library state, replica readiness, stale-replica cleanup, install/remove jobs, job cancellation, and live log streaming over SSE from the control plane.
 - `/api/native/*` exposes the hosted editor's filesystem API, constrained to allowed roots and supported base dirs.
 - `/api/projects/*` exposes hosted project discovery and IO helper routes (`/list`, `/open-dialog`, `/load`, `/save`, `/workspace-root`) for the hosted IO provider.
@@ -98,7 +101,9 @@ The important operational detail is that these tiers scale independently. A new 
 - `/api/shell/exec` runs allowlisted shell commands (`git` and `pnpm` by default, extendable via env).
 - `/api/config`, `/api/path/*`, and `/api/config/env/:name` expose hosted-mode configuration, app-data paths, and allowlisted env vars.
 - `POST ${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}/:endpointName` executes the frozen published snapshot through the execution-plane API.
+- `GET ${RIVET_WEB_APPS_BASE_PATH}/:slug` serves one published declarative Rivet web app from its frozen snapshot/revision through the execution-plane API; `POST ${RIVET_WEB_APPS_BASE_PATH}/:slug/actions/run` runs that web app's same-project graph actions through the same execution dependencies.
 - `POST ${RIVET_LATEST_WORKFLOWS_BASE_PATH}/:endpointName` executes the latest live draft for a still-published workflow through the control-plane API, keyed by the current draft endpoint name.
+- `GET ${RIVET_LATEST_WEB_APPS_BASE_PATH}/:slug` serves a published web-app slug from the latest saved draft/current server-side project through the control-plane API; `POST ${RIVET_LATEST_WEB_APPS_BASE_PATH}/:slug/actions/run` runs that web app's same-project graph actions against that saved draft.
 - `POST /internal/workflows/:endpointName` is an internal published-only execution route mounted on the execution-plane API service and not exposed through nginx.
 - In `managed` mode, those execution routes use API-local derived caches for warm endpoint execution; Postgres plus object storage remain authoritative, and cache invalidation is driven by same-process post-commit clearing plus Postgres `LISTEN/NOTIFY` across both control-plane and execution-plane API replicas.
 - A later cleanup pass kept that behavior intact but extracted the managed execution subsystem into focused internal modules so the large managed backend remains orchestration-oriented instead of owning the whole execution state machine inline. The later hardening pass also made the writer replica ignore self-originated `NOTIFY` payloads and tightened listener startup/disposal behavior without changing route contracts or cache semantics.
@@ -122,6 +127,7 @@ The important operational detail is that these tiers scale independently. A new 
 - The hosted `state/settings` override delegates upstream settings exports and keeps only hosted-specific additions local: the hosted debugger default URL and the wrapper update-check modal atom. This keeps browser UI settings such as canvas background and custom theme colors on the upstream public module shape instead of copying them into the wrapper.
 - API workflow execution keeps importing `@valerypopoff/rivet2-node`, but local setup and API image builds replace that package with generated package overlays under `wrapper/api/node_modules/.rivet-package-links`. Those overlays also expose `@rivet2/rivet-node` and `@rivet2/rivet-core` for stale local upstream build outputs that still reference that alias. The overlays point package `dist` folders at the built `rivet/packages/node` and `rivet/packages/core` outputs and point package dependency lookup at `rivet/node_modules`. API TypeScript and Node entrypoints preserve symlink paths without writing dependency helper links inside the external `rivet/` checkout. This keeps endpoint execution on the embedded Rivet 2.0 source tree without scattering deep upstream imports through `wrapper/api`.
 - Docker and local Kubernetes image builds receive that embedded source through the named `rivet_source` build context and receive a smaller install-time manifest set through `rivet_dependency_metadata`. The root launchers default `RIVET_SOURCE_HOST_PATH` to the real path behind `<repo>/rivet`, then create `RIVET_SOURCE_BUILD_CONTEXT_PATH` under `.data/docker-contexts/rivet-source` and `RIVET_DEPENDENCY_BUILD_CONTEXT_PATH` under `.data/docker-contexts/rivet-dependency-metadata`, so linked checkouts outside the repo still build without sending their local dependency/cache state to BuildKit and source-only upstream edits do not invalidate the Yarn install layer. The source snapshot includes upstream `scripts/` because wrapper Dockerfiles call Rivet's minimal build scripts and those scripts can import local helpers, and context prep validates the required wrapper-facing scripts and image-facing workspaces before Docker starts. The dependency metadata snapshot follows declared upstream Yarn workspaces instead of scanning arbitrary local `package.json` files.
+- Docker dev API startup uses the live `RIVET_SOURCE_HOST_PATH` bind mount rather than the built image's `/app/rivet` tree. Before it links `@valerypopoff/rivet2-node`, it runs `scripts/ensure-rivet-runtime-build.mjs` against that mounted checkout so upstream `core` and `node` `dist` outputs are rebuilt when source is newer. Without this guard, a fixed upstream TypeScript file could still be served through stale local `dist` files in dev mode.
 - Hosted browser/file IO lives in `wrapper/web/io/HostedIOProvider.ts`.
 - Shared browser/backend contracts live in `wrapper/shared/`.
 
@@ -150,6 +156,7 @@ Storage mode decides which of those paths are authoritative:
 - `RIVET_STORAGE_MODE=filesystem`
   - workflows are authoritative under `RIVET_WORKFLOWS_ROOT`
   - published version history and its durable star/comment state live under the workflow root's hidden `.published/` directory
+  - published web-app state lives in the project settings sidecar and points at frozen `.published/` snapshots by `uiGraphId`
   - runtime libraries are authoritative under `RIVET_RUNTIME_LIBRARIES_ROOT`
   - published/latest workflow execution now keeps a local startup-warmed endpoint index plus a lazy materialization cache on the API process
   - the cache facade delegates uncached resolution/materialization to a dedicated filesystem execution source, so degraded requests can bypass the cache without inventing separate publication rules
@@ -160,6 +167,7 @@ Storage mode decides which of those paths are authoritative:
 - `RIVET_STORAGE_MODE=managed`
   - workflow metadata lives in Postgres and workflow blobs live in object storage
   - published version history and its durable star/comment state live in Postgres `workflow_published_versions` and points at durable workflow revision blobs in object storage
+  - published web-app state lives in Postgres `workflow_web_apps`, with each slug pointing at the immutable workflow revision that was current when the UI graph was published
   - workflow recording metadata lives in Postgres `workflow_recordings`
   - workflow recording artifacts live in object storage
   - API replicas may keep local warm execution caches for endpoint pointers and immutable revision payloads; those caches are derived accelerators, not a new source of truth
@@ -192,14 +200,16 @@ Interpretation rules:
 ### Routing and auth
 
 - `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH` and `RIVET_LATEST_WORKFLOWS_BASE_PATH` change the public execution route prefixes.
+- `RIVET_WEB_APPS_BASE_PATH` changes the published Rivet web app route prefix. In Kubernetes it is fixed at `/apps` with the rest of the chart route contract.
+- `RIVET_LATEST_WEB_APPS_BASE_PATH` changes the latest saved draft Rivet web app route prefix. In Kubernetes it is fixed at `/apps-latest` with the rest of the chart route contract.
 - `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER` enables the API-hosted `/ws/latest-debugger` websocket for latest-workflow runs only.
 - `RIVET_KEY` is the shared secret used for proxy-auth token derivation, public workflow bearer auth, and the optional UI gate.
 - In any nginx/proxy-fronted deployment such as Docker or Kubernetes, `RIVET_KEY` must always be present on both `proxy` and `api` even if `RIVET_REQUIRE_WORKFLOW_KEY=false` and `RIVET_REQUIRE_UI_GATE_KEY=false`, because `/api/*`, `/ui-auth`, and `/ws/latest-debugger` still rely on the trusted proxy header derived from that key.
-- `RIVET_REQUIRE_WORKFLOW_KEY` enables `Authorization: Bearer <RIVET_KEY>` checks on the public workflow routes.
-- `RIVET_REQUIRE_UI_GATE_KEY` enables the browser-side nginx gate.
-- `RIVET_UI_TOKEN_FREE_HOSTS` lists hosts that bypass the UI gate and public workflow bearer auth.
+- `RIVET_REQUIRE_WORKFLOW_KEY` enables `Authorization: Bearer <RIVET_KEY>` checks on public workflow endpoint routes.
+- `RIVET_REQUIRE_UI_GATE_KEY` enables the browser-side nginx gate for the main UI and Rivet web apps.
+- `RIVET_UI_TOKEN_FREE_HOSTS` lists hosts that bypass the UI gate for the main UI and Rivet web apps, and also bypass public workflow bearer auth.
 - The UI gate prompt is staged into container-local `/tmp/nginx/html` at proxy startup. Compose mounts the source HTML at `/tmp/ui-gate-prompt.html`, but nginx serves only the staged copy.
-- `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`. The tracked Docker defaults now pin that to `180s`, while websocket routes keep their separate long-lived timeouts.
+- `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_WEB_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_WEB_APPS_BASE_PATH}`. The tracked Docker defaults now pin that to `180s`, while websocket routes keep their separate long-lived timeouts.
 
 ### Storage and runtime libraries
 

@@ -17,6 +17,8 @@ import {
 import type {
   LatestWorkflowMatch,
   PublishedWorkflowMatch,
+  PublishedWorkflowWebAppMatch,
+  StoredWorkflowPublishedWebApp,
   StoredWorkflowProjectSettings,
   WorkflowProjectSettings,
   WorkflowProjectSettingsDraft,
@@ -42,6 +44,12 @@ export async function getWorkflowProjectSettings(projectPath: string, projectNam
     status,
     endpointName: storedSettings.endpointName,
     lastPublishedAt: await resolveWorkflowLastPublishedAt(projectPath, storedSettings, status),
+    publishedWebApps: storedSettings.publishedWebApps.map((webApp) => ({
+      uiGraphId: webApp.uiGraphId,
+      uiGraphName: webApp.uiGraphName,
+      slug: webApp.slug,
+      publishedAt: webApp.publishedAt,
+    })),
   };
 }
 
@@ -73,6 +81,7 @@ export function createDefaultStoredWorkflowProjectSettings(): StoredWorkflowProj
     publishedSnapshotId: null,
     publishedStateHash: null,
     lastPublishedAt: null,
+    publishedWebApps: [],
   };
 }
 
@@ -112,8 +121,41 @@ export function normalizeStoredWorkflowProjectSettings(value: unknown): StoredWo
     publishedSnapshotId,
     publishedStateHash,
     lastPublishedAt,
+    publishedWebApps: normalizeStoredWorkflowPublishedWebApps(raw.publishedWebApps),
     legacyStatus,
   };
+}
+
+function normalizeStoredWorkflowPublishedWebApps(value: unknown): StoredWorkflowPublishedWebApp[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seenUiGraphIds = new Set<string>();
+  const normalized: StoredWorkflowPublishedWebApp[] = [];
+
+  for (const item of value) {
+    const raw = (item ?? {}) as Record<string, unknown>;
+    const uiGraphId = coerceString(raw.uiGraphId, '').trim();
+    const publishedSnapshotId = coerceString(raw.publishedSnapshotId, '').trim();
+    const slug = normalizeStoredEndpointName(coerceString(raw.slug, ''));
+    const publishedAt = coerceString(raw.publishedAt, '').trim();
+
+    if (!uiGraphId || !publishedSnapshotId || !slug || !publishedAt || seenUiGraphIds.has(uiGraphId)) {
+      continue;
+    }
+
+    seenUiGraphIds.add(uiGraphId);
+    normalized.push({
+      uiGraphId,
+      uiGraphName: coerceString(raw.uiGraphName, '').trim() || uiGraphId,
+      slug,
+      publishedSnapshotId,
+      publishedAt,
+    });
+  }
+
+  return normalized;
 }
 
 export function getDerivedWorkflowProjectStatus(
@@ -190,6 +232,10 @@ export function getReservedWorkflowEndpointLookupNames(settings: StoredWorkflowP
   return lookupNames;
 }
 
+export function getReservedWorkflowWebAppSlugLookupNames(settings: StoredWorkflowProjectSettings): Set<string> {
+  return new Set(settings.publishedWebApps.map((webApp) => normalizeWorkflowEndpointLookupName(webApp.slug)));
+}
+
 export async function ensureWorkflowEndpointNameIsUnique(root: string, currentProjectPath: string, endpointName: string): Promise<void> {
   if (!endpointName) {
     throw badRequest('Endpoint name is required');
@@ -209,6 +255,38 @@ export async function ensureWorkflowEndpointNameIsUnique(root: string, currentPr
 
     if (getReservedWorkflowEndpointLookupNames(settings).has(requestedLookupName)) {
       throw conflict(`Endpoint name is already used by ${path.basename(projectPath)}`);
+    }
+  }
+}
+
+export async function ensureWorkflowWebAppSlugIsUnique(
+  root: string,
+  currentProjectPath: string,
+  slug: string,
+  currentUiGraphIds?: string | Iterable<string>,
+): Promise<void> {
+  if (!slug) {
+    throw badRequest('Web app slug is required');
+  }
+
+  const requestedLookupName = normalizeWorkflowEndpointLookupName(slug);
+  const replacementUiGraphIds = new Set(typeof currentUiGraphIds === 'string'
+    ? [currentUiGraphIds]
+    : currentUiGraphIds ?? []);
+  const projectPaths = await listProjectPathsRecursive(root);
+
+  for (const projectPath of projectPaths) {
+    const projectName = path.basename(projectPath, PROJECT_EXTENSION);
+    const settings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+
+    for (const webApp of settings.publishedWebApps) {
+      if (projectPath === currentProjectPath && replacementUiGraphIds.has(webApp.uiGraphId)) {
+        continue;
+      }
+
+      if (normalizeWorkflowEndpointLookupName(webApp.slug) === requestedLookupName) {
+        throw conflict(`Web app URL slug is already used by ${path.basename(projectPath)}`);
+      }
     }
   }
 }
@@ -302,6 +380,36 @@ export async function findPublishedWorkflowByEndpoint(root: string, endpointName
     return {
       endpointName,
       projectPath: match.projectPath,
+      publishedProjectPath,
+    };
+  }
+
+  return null;
+}
+
+export async function findPublishedWorkflowWebAppBySlug(root: string, slug: string): Promise<PublishedWorkflowWebAppMatch | null> {
+  const requestedLookupName = normalizeWorkflowEndpointLookupName(slug);
+  const projectPaths = await listProjectPathsRecursive(root);
+
+  for (const projectPath of projectPaths) {
+    const projectName = path.basename(projectPath, PROJECT_EXTENSION);
+    const settings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+    const webApp = settings.publishedWebApps.find((candidate) =>
+      normalizeWorkflowEndpointLookupName(candidate.slug) === requestedLookupName);
+
+    if (!webApp) {
+      continue;
+    }
+
+    const publishedProjectPath = getPublishedWorkflowSnapshotPath(root, webApp.publishedSnapshotId);
+    if (!await pathExists(publishedProjectPath)) {
+      continue;
+    }
+
+    return {
+      slug: webApp.slug,
+      uiGraphId: webApp.uiGraphId,
+      projectPath,
       publishedProjectPath,
     };
   }

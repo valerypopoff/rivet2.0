@@ -186,6 +186,8 @@ export function buildKubernetesLauncherConfig(env) {
     routeConfig: {
       publishedBasePath: readEnv(env, 'RIVET_PUBLISHED_WORKFLOWS_BASE_PATH') ?? '/workflows',
       latestBasePath: readEnv(env, 'RIVET_LATEST_WORKFLOWS_BASE_PATH') ?? '/workflows-latest',
+      webAppsBasePath: readEnv(env, 'RIVET_WEB_APPS_BASE_PATH') ?? '/apps',
+      latestWebAppsBasePath: readEnv(env, 'RIVET_LATEST_WEB_APPS_BASE_PATH') ?? '/apps-latest',
       proxyResolver: readEnv(env, 'RIVET_PROXY_RESOLVER') ?? 'kube-dns.kube-system.svc.cluster.local',
       enableLatestRemoteDebugger: parseBoolean(readEnv(env, 'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER'), true),
       requireWorkflowKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_WORKFLOW_KEY'), false),
@@ -248,6 +250,8 @@ export function renderKubernetesLauncherValuesYaml(config) {
     'env:',
     `  RIVET_PUBLISHED_WORKFLOWS_BASE_PATH: ${yamlString(config.routeConfig.publishedBasePath)}`,
     `  RIVET_LATEST_WORKFLOWS_BASE_PATH: ${yamlString(config.routeConfig.latestBasePath)}`,
+    `  RIVET_WEB_APPS_BASE_PATH: ${yamlString(config.routeConfig.webAppsBasePath)}`,
+    `  RIVET_LATEST_WEB_APPS_BASE_PATH: ${yamlString(config.routeConfig.latestWebAppsBasePath)}`,
     `  RIVET_PROXY_RESOLVER: ${yamlString(config.routeConfig.proxyResolver)}`,
     `  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: ${yamlString(String(config.routeConfig.enableLatestRemoteDebugger))}`,
     `  RIVET_REQUIRE_WORKFLOW_KEY: ${yamlString(String(config.routeConfig.requireWorkflowKey))}`,

@@ -8,7 +8,14 @@ import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../../../shared/workflow-types.js';
 import type { WorkflowRecordingWorkflowSummary } from '../../../shared/workflow-recording-types.js';
 import { listWorkflowFolders } from '../routes/workflows/workflow-query.js';
-import { listProjectPathsRecursive, getWorkflowDatasetPath, pathExists, PROJECT_EXTENSION } from '../routes/workflows/fs-helpers.js';
+import {
+  getPublishedWorkflowSnapshotDatasetPath,
+  getPublishedWorkflowSnapshotPath,
+  listProjectPathsRecursive,
+  getWorkflowDatasetPath,
+  pathExists,
+  PROJECT_EXTENSION,
+} from '../routes/workflows/fs-helpers.js';
 import { readStoredWorkflowProjectSettings, resolvePublishedWorkflowProjectPath } from '../routes/workflows/publication.js';
 import {
   initializeWorkflowRecordingStorage,
@@ -41,6 +48,15 @@ type SourceWorkflow = {
   lastPublishedAt: string | null;
   publishedContents: string | null;
   publishedDatasetsContents: string | null;
+  publishedWebApps: SourcePublishedWebApp[];
+};
+
+type SourcePublishedWebApp = {
+  uiGraphId: string;
+  slug: string;
+  publishedAt: string;
+  contents: string;
+  datasetsContents: string | null;
 };
 
 function loadNearestEnvFile(startDir: string): void {
@@ -85,6 +101,30 @@ async function readOptionalUtf8(filePath: string): Promise<string | null> {
   return await pathExists(filePath) ? await fs.readFile(filePath, 'utf8') : null;
 }
 
+async function readSourcePublishedWebApps(
+  root: string,
+  settings: Awaited<ReturnType<typeof readStoredWorkflowProjectSettings>>,
+): Promise<SourcePublishedWebApp[]> {
+  const webApps: SourcePublishedWebApp[] = [];
+
+  for (const webApp of settings.publishedWebApps) {
+    const snapshotPath = getPublishedWorkflowSnapshotPath(root, webApp.publishedSnapshotId);
+    if (!await pathExists(snapshotPath)) {
+      continue;
+    }
+
+    webApps.push({
+      uiGraphId: webApp.uiGraphId,
+      slug: webApp.slug,
+      publishedAt: webApp.publishedAt,
+      contents: await fs.readFile(snapshotPath, 'utf8'),
+      datasetsContents: await readOptionalUtf8(getPublishedWorkflowSnapshotDatasetPath(root, webApp.publishedSnapshotId)),
+    });
+  }
+
+  return webApps;
+}
+
 async function collectSourceWorkflows(root: string): Promise<SourceWorkflow[]> {
   const projectPaths = await listProjectPathsRecursive(root);
   const workflows: SourceWorkflow[] = [];
@@ -113,6 +153,7 @@ async function collectSourceWorkflows(root: string): Promise<SourceWorkflow[]> {
       publishedDatasetsContents: publishedProjectPath
         ? await readOptionalUtf8(getWorkflowDatasetPath(publishedProjectPath))
         : null,
+      publishedWebApps: await readSourcePublishedWebApps(root, settings),
     });
   }
 
@@ -138,6 +179,7 @@ async function importSourceWorkflows(root: string, backend: ManagedWorkflowBacke
       lastPublishedAt: workflow.lastPublishedAt,
       publishedContents: workflow.publishedContents,
       publishedDatasetsContents: workflow.publishedDatasetsContents,
+      publishedWebApps: workflow.publishedWebApps,
     });
 
     importedProjects.set(workflow.relativePath, importedProject);

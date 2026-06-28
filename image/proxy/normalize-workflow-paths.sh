@@ -205,6 +205,8 @@ build_host_regex() {
 
 export RIVET_PUBLISHED_WORKFLOWS_BASE_PATH="$(normalize_path "${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-}" "/workflows")"
 export RIVET_LATEST_WORKFLOWS_BASE_PATH="$(normalize_path "${RIVET_LATEST_WORKFLOWS_BASE_PATH:-}" "/workflows-latest")"
+export RIVET_WEB_APPS_BASE_PATH="$(normalize_path "${RIVET_WEB_APPS_BASE_PATH:-}" "/apps")"
+export RIVET_LATEST_WEB_APPS_BASE_PATH="$(normalize_path "${RIVET_LATEST_WEB_APPS_BASE_PATH:-}" "/apps-latest")"
 export RIVET_REQUIRE_UI_GATE_KEY="$(normalize_bool "${RIVET_REQUIRE_UI_GATE_KEY:-}" "0")"
 export RIVET_UI_GATE_KEY_PRESENT="$(has_nonempty_value "${RIVET_KEY:-}")"
 export RIVET_UI_TOKEN_FREE_HOSTS_REGEX="$(build_host_regex "${RIVET_UI_TOKEN_FREE_HOSTS:-}" "${RIVET_KEY:-}")"

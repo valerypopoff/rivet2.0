@@ -181,6 +181,6 @@ test('hosted project tab label transform handles opening project tabs', () => {
   );
 });
 
-test('hosted project tab label transform fails closed on unknown upstream labels', () => {
+test('hosted project tab label transform no-ops on unknown upstream labels', () => {
   assert.equal(replaceHostedProjectTabLabelExpression('const projectDisplayName = project?.title;'), null);
 });
