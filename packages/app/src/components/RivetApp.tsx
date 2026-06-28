@@ -289,9 +289,6 @@ export const RivetApp: FC = () => {
             ) : (
               <GraphBuilder />
             ))}
-          <AppErrorBoundary context="Fullscreen Output Modal" fallback={<div>Failed to render Fullscreen Output</div>}>
-            <FullscreenNodeOutputModalRenderer />
-          </AppErrorBoundary>
           <AppErrorBoundary context="Settings Modal" fallback={<div>Failed to render Settings</div>}>
             <SettingsModal />
           </AppErrorBoundary>
@@ -304,6 +301,9 @@ export const RivetApp: FC = () => {
           <DeleteGraphInputConfirmModalRenderer />
         </>
       )}
+      <AppErrorBoundary context="Fullscreen Output Modal" fallback={<div>Failed to render Fullscreen Output</div>}>
+        <FullscreenNodeOutputModalRenderer />
+      </AppErrorBoundary>
       <HelpModal />
       <ToastContainer enableMultiContainer position="bottom-right" hideProgressBar newestOnTop />
       <ToastContainer
