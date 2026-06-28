@@ -203,8 +203,8 @@ export const PlainNodeBody: FC<PlainNodeBodySpec> = memo(({ text }) => {
 
 PlainNodeBody.displayName = 'PlainNodeBody';
 
-export const MarkdownNodeBody: FC<MarkdownNodeBodySpec> = memo(({ text }) => {
-  const markdownBody = useMarkdown(text);
+export const MarkdownNodeBody: FC<MarkdownNodeBodySpec> = memo(({ text, disableLinks }) => {
+  const markdownBody = useMarkdown(text, true, { disableLinks });
 
   return <div className="pre-wrap node-body-markdown" dangerouslySetInnerHTML={markdownBody} />;
 });

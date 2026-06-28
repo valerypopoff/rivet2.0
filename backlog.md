@@ -1,11 +1,10 @@
 
-- In the Chat LLm node, the provider URL looks weird: ![alt text](image.png)
 
 - In the full output modal, each named output has to have its own copy button. It should copy the output as it's shown in the modal.
   <Name> Words: N Characters: M [Copy icon]
   Copy icon should have a tooltip "Copy value"
 
-- In macos backspace should delete the selected node because they don't usually have del button on macs
+- In MacOS Rivet app, the backspace key should delete the selected node because they don't usually have a delete button on macs
 
 - Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
 

@@ -25,12 +25,17 @@ function createNode(data: Partial<LLMChatV2Node['data']> = {}) {
   });
 }
 
-function getMarkdownBodyText(node: LLMChatV2NodeImpl) {
+function getMarkdownBody(node: LLMChatV2NodeImpl) {
   const body = node.getBody();
   assert.equal(typeof body, 'object');
   assert.ok(body != null);
   assert.equal(Array.isArray(body), false);
   assert.equal(body.type, 'markdown');
+  return body;
+}
+
+function getMarkdownBodyText(node: LLMChatV2NodeImpl) {
+  const body = getMarkdownBody(node);
   return body.text;
 }
 
@@ -220,6 +225,18 @@ describe('LLMChatV2NodeImpl', () => {
         '<span style="opacity: 0.55">Top P:</span> 1',
       ].join('\n'),
     );
+  });
+
+  it('breaks custom provider base URL autolinks in the markdown node body', () => {
+    const body = getMarkdownBody(
+      createNode({
+        provider: 'custom',
+        customProviderBaseURL: 'https://api.cerebras.ai/v1',
+      }),
+    );
+
+    assert.equal(body.disableLinks, true);
+    assert.match(body.text, /Base URL:<\/span> https:\/\/api\\\.cerebras\\\.ai\/v1/);
   });
 
   it('labels provider and model in the node body', () => {

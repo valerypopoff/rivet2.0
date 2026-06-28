@@ -11,6 +11,7 @@ export type PlainNodeBodySpec = {
 export type MarkdownNodeBodySpec = {
   type: 'markdown';
   text: string;
+  disableLinks?: boolean;
 };
 
 export type ColorizedNodeBodySpec = {

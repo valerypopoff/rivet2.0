@@ -309,6 +309,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
 
     return {
       type: 'markdown',
+      disableLinks: true,
       text: [
         ...providerDetails,
         ...(reasoningEffortValue ? [getBodyLine('Reasoning effort', reasoningEffortValue)] : []),

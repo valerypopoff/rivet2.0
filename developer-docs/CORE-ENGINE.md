@@ -307,6 +307,8 @@ Core also defines UI-facing contracts used by the app:
 
 That is why core is not purely headless business logic. It also carries enough metadata for the editor to render and edit nodes.
 
+`MarkdownNodeBodySpec.disableLinks` lets a node keep Markdown formatting for compact canvas previews while flattening any parsed links back to plain text, which is useful for dynamic configuration values such as provider URLs.
+
 `EditorDefinition` includes read-only `type: 'info'` rows for settings-panel explanatory copy that is not project data. Info rows have no `dataKey`, do not mutate node data, and should be used instead of adding dummy fields or canvas-body text when a node only needs a settings-panel note.
 
 ## Node Registration
