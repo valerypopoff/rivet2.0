@@ -1,8 +1,4 @@
 
-- Сделать так, чтобы можно было в воркфлоу ходить гет запросом и это было бы простым фронтенд-приложением, которое использует форкфлоу как бэкенд
-
-
-
 - Feature to move from local mode to managed (transfer all files (including libs) and metadata)
 
 
