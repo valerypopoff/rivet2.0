@@ -26,6 +26,7 @@ test('hosted editor shell mounts RivetAppHost with wrapper providers, executor U
   assert.match(hostedEditorApp, /<EditorMessageBridge workspaceHost=\{workspaceHost\} \/>/);
 
   assert.match(hostedEditorApp, /const HOSTED_FILE_MENU_VISIBLE_ITEMS = \[/);
+  assert.match(hostedEditorApp, /webApps:\s*\{\s*desktopPreview:\s*false,\s*\}/);
   for (const visibleItem of ['import_graph', 'export_graph', 'settings', 'get_help']) {
     assert.match(hostedEditorApp, new RegExp(`'${visibleItem}'`));
   }

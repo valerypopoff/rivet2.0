@@ -1,4 +1,4 @@
-import type { WorkflowProjectStatus } from './types';
+import type { WorkflowProjectItem, WorkflowProjectStatus } from './types';
 
 export const ENDPOINT_NAME_PATTERN = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/;
 
@@ -10,6 +10,10 @@ const WORKFLOW_PROJECT_STATUS_LABELS: Record<WorkflowProjectStatus, string> = {
 
 export function getWorkflowProjectStatusLabel(status: WorkflowProjectStatus): string {
   return WORKFLOW_PROJECT_STATUS_LABELS[status];
+}
+
+export function isWorkflowProjectFullyUnpublished(project: WorkflowProjectItem): boolean {
+  return project.settings.status === 'unpublished' && project.settings.publishedWebApps.length === 0;
 }
 
 export function validateEndpointName(

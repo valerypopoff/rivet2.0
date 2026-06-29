@@ -282,7 +282,11 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       }
 
       const slug = (webAppSlugDrafts[webApp.uiGraphId] ?? '').trim();
-      if (webApp.publishedSlug != null && slug === webApp.publishedSlug) {
+      if (
+        webApp.publishedSlug != null &&
+        webApp.status !== 'unpublished_changes' &&
+        slug === webApp.publishedSlug
+      ) {
         return drafts;
       }
 

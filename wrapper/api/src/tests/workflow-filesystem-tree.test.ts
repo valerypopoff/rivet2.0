@@ -28,7 +28,7 @@ test('workflow project rename and move preserve wrapper sidecars', async () => {
 
   await fs.writeFile(sidecars.dataset, '{"rows":[]}', 'utf8');
   await fs.writeFile(sidecars.settings, '{"endpointName":""}', 'utf8');
-  await fs.writeFile(sidecars.stats, '{"schemaVersion":2,"fileSize":0,"fileMtimeMs":0,"fileCtimeMs":0,"stats":{"graphCount":1,"totalNodeCount":0}}', 'utf8');
+  await fs.writeFile(sidecars.stats, '{"schemaVersion":3,"fileSize":0,"fileMtimeMs":0,"fileCtimeMs":0,"stats":{"graphCount":1,"totalNodeCount":0,"webAppCount":0}}', 'utf8');
 
   const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'Renamed');
   const renamedSidecars = workflowFs.getProjectSidecarPaths(renamed.project.absolutePath);
@@ -180,7 +180,7 @@ test('workflow folder rename reports moved project paths for nested projects', a
   ]);
 });
 
-test('workflow project stats count serialized graph nodes', async () => {
+test('workflow project stats count serialized graph nodes and web apps', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Stats');
   const projectContents = await fs.readFile(created.absolutePath, 'utf8');
   const withNode = projectContents.replace(
@@ -192,6 +192,20 @@ test('workflow project stats count serialized graph nodes', async () => {
       '          data:',
       '            text: hello',
     ].join('\n'),
+  ).replace(
+    '  plugins: []',
+    [
+      '  uiGraphs:',
+      '    "ui-graph-a":',
+      '      id: "ui-graph-a"',
+      '      name: "App A"',
+      '      components: []',
+      '    "ui-graph-b":',
+      '      id: "ui-graph-b"',
+      '      name: "App B"',
+      '      components: []',
+      '  plugins: []',
+    ].join('\n'),
   );
 
   await fs.writeFile(created.absolutePath, withNode, 'utf8');
@@ -200,6 +214,7 @@ test('workflow project stats count serialized graph nodes', async () => {
 
   assert.equal(project.stats?.graphCount, 1);
   assert.equal(project.stats?.totalNodeCount, 1);
+  assert.equal(project.stats?.webAppCount, 2);
 });
 
 test('workflow project stats cache is rebuilt when the project file changes', async () => {
@@ -211,13 +226,14 @@ test('workflow project stats cache is rebuilt when the project file changes', as
   await fs.writeFile(
     sidecars.stats,
     `${JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       fileSize: fileStats.size,
       fileMtimeMs: fileStats.mtimeMs,
       fileCtimeMs: fileStats.ctimeMs,
       stats: {
         graphCount: 99,
         totalNodeCount: 99,
+        webAppCount: 99,
       },
     })}\n`,
     'utf8',
@@ -226,6 +242,7 @@ test('workflow project stats cache is rebuilt when the project file changes', as
   const cachedProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(cachedProject.stats?.graphCount, 99);
   assert.equal(cachedProject.stats?.totalNodeCount, 99);
+  assert.equal(cachedProject.stats?.webAppCount, 99);
 
   await fs.writeFile(
     created.absolutePath,
@@ -245,6 +262,7 @@ test('workflow project stats cache is rebuilt when the project file changes', as
   const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(rebuiltProject.stats?.graphCount, 1);
   assert.equal(rebuiltProject.stats?.totalNodeCount, 1);
+  assert.equal(rebuiltProject.stats?.webAppCount, 0);
 });
 
 test('workflow project stats cache is rebuilt when file ctime changes', async () => {
@@ -255,13 +273,14 @@ test('workflow project stats cache is rebuilt when file ctime changes', async ()
   await fs.writeFile(
     sidecars.stats,
     `${JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       fileSize: fileStats.size,
       fileMtimeMs: fileStats.mtimeMs,
       fileCtimeMs: fileStats.ctimeMs,
       stats: {
         graphCount: 99,
         totalNodeCount: 99,
+        webAppCount: 99,
       },
     })}\n`,
     'utf8',
@@ -274,6 +293,7 @@ test('workflow project stats cache is rebuilt when file ctime changes', async ()
   const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(rebuiltProject.stats?.graphCount, 1);
   assert.equal(rebuiltProject.stats?.totalNodeCount, 0);
+  assert.equal(rebuiltProject.stats?.webAppCount, 0);
 });
 
 test('workflow tree route disables caching', async () => {
@@ -956,7 +976,7 @@ test('delete workflow project removes project and sidecars', async () => {
   assert.equal(await workflowFs.pathExists(sidecars.stats), false);
 });
 
-test('delete workflow project removes published snapshots', async () => {
+test('delete workflow project is blocked until workflow publication is unpublished', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'DeletePublished');
   const published = await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'delete-published',
@@ -966,7 +986,34 @@ test('delete workflow project removes published snapshots', async () => {
 
   assert.equal(await workflowFs.pathExists(publishedSnapshotPath), true);
 
+  await assert.rejects(
+    () => workflowMutations.deleteWorkflowProjectItem(created.relativePath),
+    /Unpublish the workflow endpoint and web apps before deleting the project/,
+  );
+
+  await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
   await workflowMutations.deleteWorkflowProjectItem(created.relativePath);
 
   assert.equal(await workflowFs.pathExists(publishedSnapshotPath), false);
+});
+
+test('delete workflow project is blocked by legacy published settings', async () => {
+  for (const legacyStatus of ['published', 'unpublished_changes'] as const) {
+    const created = await workflowMutations.createWorkflowProjectItem('', `DeleteLegacy${legacyStatus}`);
+    const settingsPath = workflowFs.getProjectSidecarPaths(created.absolutePath).settings;
+    await fs.writeFile(settingsPath, `${JSON.stringify({
+      endpointName: `delete-legacy-${legacyStatus.replace('_', '-')}`,
+      publishedEndpointName: '',
+      publishedSnapshotId: null,
+      publishedStateHash: null,
+      lastPublishedAt: null,
+      publishedWebApps: [],
+      status: legacyStatus,
+    }, null, 2)}\n`, 'utf8');
+
+    await assert.rejects(
+      () => workflowMutations.deleteWorkflowProjectItem(created.relativePath),
+      /Unpublish the workflow endpoint and web apps before deleting the project/,
+    );
+  }
 });

@@ -24,6 +24,9 @@ const HOSTED_RIVET_UI = {
   fileMenu: {
     visibleItems: HOSTED_FILE_MENU_VISIBLE_ITEMS,
   },
+  webApps: {
+    desktopPreview: false,
+  },
 } satisfies RivetAppHostUiConfig;
 
 export const HostedEditorApp: FC = () => {

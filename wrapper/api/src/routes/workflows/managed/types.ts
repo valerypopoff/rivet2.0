@@ -35,6 +35,7 @@ export type RevisionRow = {
   dataset_blob_key: string | null;
   stats_graph_count: number | null;
   stats_total_node_count: number | null;
+  stats_web_app_count: number | null;
   created_at: TimestampValue;
 };
 
@@ -77,6 +78,7 @@ export type CurrentDraftRevisionRow = {
   dataset_blob_key: string | null;
   stats_graph_count: number | null;
   stats_total_node_count: number | null;
+  stats_web_app_count: number | null;
   revision_created_at: TimestampValue;
 };
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { loadProjectFromString, serializeProject } from '@valerypopoff/rivet2-node';
 import type { Pool, PoolClient } from 'pg';
 
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
@@ -11,8 +12,11 @@ import type {
   PublishedVersionRow,
   RevisionRow,
   TransactionHooks,
+  WebAppPublicationRow,
   WorkflowRow,
 } from '../routes/workflows/managed/types.js';
+import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
+import { createWebAppProjectWithUiGraphs } from './helpers/workflow-web-app-fixtures.js';
 
 type QueryRecord = {
   sql: string;
@@ -53,6 +57,7 @@ function createRevision(overrides: Partial<RevisionRow> = {}): RevisionRow {
     dataset_blob_key: null,
     stats_graph_count: 1,
     stats_total_node_count: 0,
+    stats_web_app_count: 0,
     created_at: now,
     ...overrides,
   };
@@ -71,6 +76,33 @@ function createPublishedVersion(overrides: Partial<PublishedVersionRow> = {}): P
   };
 }
 
+function createWebAppPublicationRow(overrides: Partial<WebAppPublicationRow> = {}): WebAppPublicationRow {
+  return {
+    app_id: 'app-a',
+    workflow_id: 'workflow-a',
+    revision_id: 'draft-revision',
+    ui_graph_id: 'ui-current',
+    slug: 'current-app',
+    slug_lookup_name: 'current-app',
+    published_at: now,
+    ...overrides,
+  };
+}
+
+function createManagedWebAppProjectContents(uiGraphs: Array<[string, string]>): string {
+  const project = createWebAppProjectWithUiGraphs(
+    { loadProjectFromString },
+    createBlankProjectFile('Main'),
+    uiGraphs,
+  );
+  const serializedProject = serializeProject(project);
+  if (typeof serializedProject !== 'string') {
+    throw new TypeError('Expected serialized project to be a string');
+  }
+
+  return serializedProject;
+}
+
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim();
 }
@@ -80,6 +112,8 @@ function createPublicationHarness(options: {
   workflowAfterMutation?: WorkflowRow;
   revisions?: RevisionRow[];
   publishedVersions?: PublishedVersionRow[];
+  webAppRows?: WebAppPublicationRow[];
+  revisionContents?: Record<string, string>;
 } = {}) {
   const workflow = options.workflow ?? createWorkflow();
   const workflowAfterMutation = options.workflowAfterMutation ?? workflow;
@@ -87,6 +121,8 @@ function createPublicationHarness(options: {
   const publishedVersions = new Map(
     (options.publishedVersions ?? []).map((version) => [version.version_id, version]),
   );
+  const webAppRows = options.webAppRows ?? [];
+  const revisionContents = options.revisionContents ?? {};
 
   const clientQueries: QueryRecord[] = [];
   const queryOneCalls: QueryRecord[] = [];
@@ -167,7 +203,14 @@ function createPublicationHarness(options: {
       return result;
     },
     db: {
-      queryRows: async () => [],
+      queryRows: async <T>(_client: ManagedWorkflowDbClient, sql: string) => {
+        const normalized = normalizeSql(sql);
+        if (normalized.includes('FROM workflow_web_apps')) {
+          return webAppRows as T[];
+        }
+
+        return [];
+      },
       queryOne,
     },
     queries: {
@@ -197,7 +240,7 @@ function createPublicationHarness(options: {
     },
     revisions: {
       readRevisionContents: async (revision: RevisionRow) => ({
-        contents: `project:${revision.revision_id}`,
+        contents: revisionContents[revision.revision_id] ?? createManagedWebAppProjectContents([]),
         datasetsContents: revision.dataset_blob_key ? `dataset:${revision.revision_id}` : null,
       }),
       readRevisionProjectContents: async (revision: RevisionRow) => `project:${revision.revision_id}`,
@@ -239,6 +282,64 @@ function createPublicationHarness(options: {
     invalidationCommits,
   };
 }
+
+test('managed web app publication list exposes revision-based statuses', async () => {
+  const draftContents = createManagedWebAppProjectContents([
+    ['ui-current', 'Current Web App'],
+    ['ui-changed', 'Changed Web App'],
+    ['ui-unpublished', 'Draft Only Web App'],
+  ]);
+  const { service } = createPublicationHarness({
+    workflow: createWorkflow({
+      current_draft_revision_id: 'draft-revision',
+    }),
+    revisions: [
+      createRevision({ revision_id: 'draft-revision' }),
+      createRevision({ revision_id: 'published-revision' }),
+    ],
+    revisionContents: {
+      'draft-revision': draftContents,
+    },
+    webAppRows: [
+      createWebAppPublicationRow({
+        app_id: 'app-current',
+        revision_id: 'draft-revision',
+        ui_graph_id: 'ui-current',
+        slug: 'current-app',
+      }),
+      createWebAppPublicationRow({
+        app_id: 'app-changed',
+        revision_id: 'published-revision',
+        ui_graph_id: 'ui-changed',
+        slug: 'changed-app',
+      }),
+      createWebAppPublicationRow({
+        app_id: 'app-removed',
+        revision_id: 'published-revision',
+        ui_graph_id: 'ui-removed',
+        slug: 'removed-app',
+      }),
+    ],
+  });
+
+  const response = await service.listWorkflowProjectWebApps('Main.rivet-project');
+
+  assert.deepEqual(
+    response.webApps.map((webApp) => [
+      webApp.uiGraphId,
+      webApp.name,
+      webApp.publishedSlug,
+      webApp.status,
+      webApp.isMissingFromProject,
+    ]).sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+    [
+      ['ui-changed', 'Changed Web App', 'changed-app', 'unpublished_changes', false],
+      ['ui-current', 'Current Web App', 'current-app', 'published', false],
+      ['ui-removed', 'removed-app', 'removed-app', 'unpublished_changes', true],
+      ['ui-unpublished', 'Draft Only Web App', null, 'unpublished', false],
+    ],
+  );
+});
 
 test('managed publication backfills legacy current versions before new publishes', async () => {
   const legacyPublishedAt = '2026-05-20T08:30:00.000Z';

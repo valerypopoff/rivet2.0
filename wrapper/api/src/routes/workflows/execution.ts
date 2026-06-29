@@ -412,8 +412,11 @@ function sendWebAppActionErrorWithDuration(
   if (status >= 500) {
     console.error('Rivet web app action failed:', error);
   }
+  const message = getWorkflowErrorMessage(error);
+  const code = error instanceof RivetWebAppActionHttpError ? error.code : undefined;
   sendJsonWithDuration(res, status, {
-    error: getWorkflowErrorMessage(error),
+    error: message,
+    ...(code ? { code } : {}),
   }, requestStartedAt);
 }
 

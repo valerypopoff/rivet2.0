@@ -3,12 +3,14 @@ import type {
   WorkflowProjectItem,
   WorkflowProjectStatus,
 } from '../../../../../shared/workflow-types.js';
+import { getAggregateWorkflowProjectStatus } from '../../../../../shared/workflow-types.js';
 import { normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
 import {
   getManagedWorkflowFolderVirtualPath,
   getManagedWorkflowProjectVirtualPath,
 } from '../virtual-paths.js';
 import type { CurrentDraftRevisionRow, FolderRow, RevisionRow, WorkflowRow } from './types.js';
+import type { WebAppPublicationRow } from './types.js';
 
 function withTablePrefix(columnNames: readonly string[], tableAlias: string): string {
   return columnNames.map((columnName) => `${tableAlias}.${columnName}`).join(', ');
@@ -75,7 +77,20 @@ export function getWorkflowStatus(row: WorkflowRow): WorkflowProjectStatus {
     : 'unpublished_changes';
 }
 
-export function mapWorkflowRowToProjectItem(row: WorkflowRow): WorkflowProjectItem {
+export function getWorkflowWebAppPublicationStatuses(
+  row: WorkflowRow,
+  webAppRows: readonly WebAppPublicationRow[] = [],
+): WorkflowProjectStatus[] {
+  return webAppRows.map((webApp) =>
+    webApp.revision_id === row.current_draft_revision_id ? 'published' : 'unpublished_changes');
+}
+
+export function mapWorkflowRowToProjectItem(
+  row: WorkflowRow,
+  options: { webAppRows?: readonly WebAppPublicationRow[] } = {},
+): WorkflowProjectItem {
+  const status = getWorkflowStatus(row);
+
   return {
     id: row.workflow_id,
     name: row.name,
@@ -84,7 +99,11 @@ export function mapWorkflowRowToProjectItem(row: WorkflowRow): WorkflowProjectIt
     absolutePath: getManagedWorkflowProjectVirtualPath(row.relative_path),
     updatedAt: toIsoString(row.updated_at) ?? new Date().toISOString(),
     settings: {
-      status: getWorkflowStatus(row),
+      status,
+      publicationStatus: getAggregateWorkflowProjectStatus(
+        status,
+        getWorkflowWebAppPublicationStatuses(row, options.webAppRows),
+      ),
       endpointName: row.endpoint_name,
       lastPublishedAt: toIsoString(row.last_published_at),
       publishedWebApps: [],
@@ -127,6 +146,7 @@ export function splitCurrentDraftRevisionRow(row: CurrentDraftRevisionRow): { wo
       dataset_blob_key: row.dataset_blob_key,
       stats_graph_count: row.stats_graph_count,
       stats_total_node_count: row.stats_total_node_count,
+      stats_web_app_count: row.stats_web_app_count,
       created_at: row.revision_created_at,
     },
   };

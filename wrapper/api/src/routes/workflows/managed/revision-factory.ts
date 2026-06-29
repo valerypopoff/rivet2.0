@@ -93,6 +93,7 @@ export function createManagedWorkflowRevisionFactory(options: {
         dataset_blob_key: datasetBlobKey,
         stats_graph_count: stats.graphCount,
         stats_total_node_count: stats.totalNodeCount,
+        stats_web_app_count: stats.webAppCount,
         created_at: new Date(),
       };
     },
@@ -102,9 +103,9 @@ export function createManagedWorkflowRevisionFactory(options: {
         `
           INSERT INTO workflow_revisions (
             revision_id, workflow_id, project_blob_key, dataset_blob_key,
-            stats_graph_count, stats_total_node_count, created_at
+            stats_graph_count, stats_total_node_count, stats_web_app_count, created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
         `,
         [
           revision.revision_id,
@@ -113,6 +114,7 @@ export function createManagedWorkflowRevisionFactory(options: {
           revision.dataset_blob_key,
           revision.stats_graph_count,
           revision.stats_total_node_count,
+          revision.stats_web_app_count,
         ],
       );
     },

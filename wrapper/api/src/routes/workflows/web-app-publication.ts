@@ -8,6 +8,7 @@ import type {
 } from '../../../../shared/workflow-types.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
 import {
+  createWorkflowProjectContentHash,
   deletePublishedWorkflowSnapshot,
   ensureWorkflowWebAppSlugIsUnique,
   normalizeStoredEndpointName,
@@ -17,16 +18,20 @@ import {
 } from './publication.js';
 import {
   ensureWorkflowsRoot,
+  getPublishedWorkflowSnapshotPath,
   PROJECT_EXTENSION,
   requireProjectPath,
   resolveWorkflowRelativePath,
 } from './fs-helpers.js';
+import type { StoredWorkflowPublishedWebApp } from './types.js';
 import { getWorkflowProject } from './workflow-query.js';
 
 type UiGraphSummary = {
   uiGraphId: string;
   name: string;
 };
+
+type WebAppStatus = WorkflowProjectWebAppsResponse['webApps'][number]['status'];
 
 function getProjectUiGraphSummaries(project: Awaited<ReturnType<typeof loadProjectFromFile>>): UiGraphSummary[] {
   return Object.entries(project.uiGraphs ?? {}).map(([uiGraphId, uiGraph]) => ({
@@ -95,6 +100,40 @@ function getUnusedPublishedWebAppSnapshotIds(options: {
   return [...new Set(options.previousSnapshotIds)].filter((snapshotId) => !nextSnapshotIds.has(snapshotId));
 }
 
+async function getPublishedWebAppStatus(options: {
+  root: string;
+  published: StoredWorkflowPublishedWebApp | undefined;
+  getCurrentContentHash: () => Promise<string>;
+  publishedContentHashBySnapshotId: Map<string, Promise<string>>;
+}): Promise<WebAppStatus> {
+  const { root, published, getCurrentContentHash, publishedContentHashBySnapshotId } = options;
+  if (!published) {
+    return 'unpublished';
+  }
+
+  let publishedContentHashPromise = publishedContentHashBySnapshotId.get(published.publishedSnapshotId);
+  if (!publishedContentHashPromise) {
+    const publishedProjectPath = getPublishedWorkflowSnapshotPath(root, published.publishedSnapshotId);
+    publishedContentHashPromise = createWorkflowProjectContentHash(publishedProjectPath);
+    publishedContentHashBySnapshotId.set(published.publishedSnapshotId, publishedContentHashPromise);
+  }
+
+  try {
+    const [currentContentHash, publishedContentHash] = await Promise.all([
+      getCurrentContentHash(),
+      publishedContentHashPromise,
+    ]);
+
+    return currentContentHash === publishedContentHash ? 'published' : 'unpublished_changes';
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') {
+      return 'unpublished_changes';
+    }
+
+    throw error;
+  }
+}
+
 export async function listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse> {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
@@ -108,19 +147,31 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
   const currentUiGraphs = getProjectUiGraphSummaries(project);
   const currentUiGraphIds = new Set(currentUiGraphs.map((uiGraph) => uiGraph.uiGraphId));
   const publishedByUiGraphId = new Map(settings.publishedWebApps.map((webApp) => [webApp.uiGraphId, webApp]));
+  let currentContentHashPromise: Promise<string> | null = null;
+  const getCurrentContentHash = () => {
+    currentContentHashPromise ??= createWorkflowProjectContentHash(projectPath);
+    return currentContentHashPromise;
+  };
+  const publishedContentHashBySnapshotId = new Map<string, Promise<string>>();
 
   return {
     webApps: [
-      ...currentUiGraphs.map((uiGraph) => {
+      ...(await Promise.all(currentUiGraphs.map(async (uiGraph) => {
         const published = publishedByUiGraphId.get(uiGraph.uiGraphId);
         return {
           uiGraphId: uiGraph.uiGraphId,
           name: uiGraph.name,
           publishedSlug: published?.slug ?? null,
           publishedAt: published?.publishedAt ?? null,
+          status: await getPublishedWebAppStatus({
+            root,
+            published,
+            getCurrentContentHash,
+            publishedContentHashBySnapshotId,
+          }),
           isMissingFromProject: false,
         };
-      }),
+      }))),
       ...settings.publishedWebApps
         .filter((webApp) => !currentUiGraphIds.has(webApp.uiGraphId))
         .map((webApp) => ({
@@ -128,6 +179,7 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
           name: webApp.uiGraphName,
           publishedSlug: webApp.slug,
           publishedAt: webApp.publishedAt,
+          status: 'unpublished_changes' as const,
           isMissingFromProject: true,
         })),
     ],

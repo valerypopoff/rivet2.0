@@ -178,14 +178,19 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(apiDockerfile, /COPY --from=builder --chown=10001:10001 \/app\/rivet\/node_modules \/app\/rivet\/node_modules/);
   assert.match(apiDockerfile, /COPY --from=builder --chown=10001:10001 \/app\/rivet\/packages\/core \/app\/rivet\/packages\/core/);
   assert.match(apiDockerfile, /COPY --from=builder --chown=10001:10001 \/app\/rivet\/packages\/node \/app\/rivet\/packages\/node/);
-  assert.match(linkScript, /function ensureRivetNodeModulesReady\(\)/);
+  assert.match(linkScript, /const dependencyNodeModulesRoots = \[/);
+  assert.match(linkScript, /function ensureRuntimeDependenciesReady\(\)/);
+  assert.match(linkScript, /function createDependencyOverlay\(pkg, packageLinkDir\)/);
+  assert.match(linkScript, /\.rivet-dependency-overlay/);
+  assert.match(linkScript, /getLocalRivetPackageNames\(\)/);
   assert.match(linkScript, /function removeRetiredPackageAliases\(\)/);
   assert.match(linkScript, /\.rivet-package-links/);
-  assert.match(linkScript, /linkDirectory\(rivetNodeModulesDir, path\.join\(packageLinkDir, 'node_modules'\)\)/);
+  assert.match(linkScript, /linkDependencyEntriesFromRoot\(dependencyRoot, destinationNodeModulesDir, skippedPackageNames\)/);
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-core', 'rivet\/packages\/core', \[/);
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-node', 'rivet\/packages\/node', \[/);
   assert.match(ensureDevDeps, /YARN_NODE_LINKER: 'node-modules'/);
-  assert.match(ensureDevDeps, /isLinkedTo\(path\.join\(overlayRelPath, 'node_modules'\), 'rivet\/node_modules'\)/);
+  assert.match(ensureDevDeps, /'\.rivet-dependency-overlay'/);
+  assert.match(ensureDevDeps, /'wrapper\/web\/node_modules'/);
 
   assert.match(apiTsconfig, /"preserveSymlinks": true/);
   assert.match(apiPackageJson, /run-preserve-symlinks\.mjs tsx/);

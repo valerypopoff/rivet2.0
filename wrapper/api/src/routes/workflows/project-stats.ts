@@ -4,7 +4,7 @@ import { loadProjectFromString } from '@valerypopoff/rivet2-node';
 import type { WorkflowProjectStats } from './types.js';
 import { getWorkflowProjectStatsPath } from './fs-helpers.js';
 
-const WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION = 2;
+const WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION = 3;
 
 type WorkflowProjectStatsCache = {
   schemaVersion: typeof WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION;
@@ -18,6 +18,7 @@ function emptyWorkflowProjectStats(): WorkflowProjectStats {
   return {
     graphCount: 0,
     totalNodeCount: 0,
+    webAppCount: 0,
   };
 }
 
@@ -31,7 +32,9 @@ function normalizeStats(value: unknown): WorkflowProjectStats | null {
     typeof raw.graphCount !== 'number' ||
     !Number.isFinite(raw.graphCount) ||
     typeof raw.totalNodeCount !== 'number' ||
-    !Number.isFinite(raw.totalNodeCount)
+    !Number.isFinite(raw.totalNodeCount) ||
+    typeof raw.webAppCount !== 'number' ||
+    !Number.isFinite(raw.webAppCount)
   ) {
     return null;
   }
@@ -39,6 +42,7 @@ function normalizeStats(value: unknown): WorkflowProjectStats | null {
   return {
     graphCount: Math.max(0, Math.trunc(raw.graphCount)),
     totalNodeCount: Math.max(0, Math.trunc(raw.totalNodeCount)),
+    webAppCount: Math.max(0, Math.trunc(raw.webAppCount)),
   };
 }
 
@@ -78,6 +82,7 @@ export function getWorkflowProjectStatsFromContents(contents: string): WorkflowP
 
     return {
       graphCount: graphs.length,
+      webAppCount: Object.keys(project.uiGraphs ?? {}).length,
       totalNodeCount: graphs.reduce((count, graph) => {
         const nodes = graph.nodes as unknown;
         if (Array.isArray(nodes)) {

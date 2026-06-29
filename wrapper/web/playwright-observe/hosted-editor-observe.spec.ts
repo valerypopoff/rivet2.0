@@ -208,6 +208,9 @@ test.describe('Observable hosted editor flow', () => {
     expect(nodeCountAfterCut).toBeLessThan(nodeCountAfterFirstPaste);
     await saveStepScreenshot(page, testInfo, '05-after-shift-cut.png');
 
+    await nodes.first().click();
+    await page.keyboard.press(`${shortcutModifier}+C`);
+
     await test.step('Return focus to the sidebar again and recover it with a blank-canvas click', async () => {
       await openedProjectRow.click();
       await waitForFocusTag(page, 'BUTTON', 'sidebar refocus before blank canvas');

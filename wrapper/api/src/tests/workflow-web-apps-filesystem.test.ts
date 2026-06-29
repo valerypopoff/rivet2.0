@@ -60,14 +60,14 @@ test('workflow web app publication routes publish multiple project web apps inde
 
   await withWorkflowApiServer(async (baseUrl) => {
     const initialList = await readJson<{
-      webApps: Array<{ uiGraphId: string; name: string; publishedSlug: string | null }>;
+      webApps: Array<{ uiGraphId: string; name: string; publishedSlug: string | null; status: string }>;
     }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
 
     assert.deepEqual(
-      initialList.webApps.map((webApp) => [webApp.uiGraphId, webApp.name, webApp.publishedSlug]),
+      initialList.webApps.map((webApp) => [webApp.uiGraphId, webApp.name, webApp.publishedSlug, webApp.status]),
       [
-        ['ui-one', 'First Web App', null],
-        ['ui-two', 'Second Web App', null],
+        ['ui-one', 'First Web App', null, 'unpublished'],
+        ['ui-two', 'Second Web App', null, 'unpublished'],
       ],
     );
 
@@ -84,13 +84,13 @@ test('workflow web app publication routes publish multiple project web apps inde
     }));
 
     const publishedList = await readJson<{
-      webApps: Array<{ uiGraphId: string; publishedSlug: string | null }>;
+      webApps: Array<{ uiGraphId: string; publishedSlug: string | null; status: string }>;
     }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
     assert.deepEqual(
-      publishedList.webApps.map((webApp) => [webApp.uiGraphId, webApp.publishedSlug]),
+      publishedList.webApps.map((webApp) => [webApp.uiGraphId, webApp.publishedSlug, webApp.status]),
       [
-        ['ui-one', 'first-app'],
-        ['ui-two', 'second-app'],
+        ['ui-one', 'first-app', 'published'],
+        ['ui-two', 'second-app', 'published'],
       ],
     );
 
@@ -104,13 +104,13 @@ test('workflow web app publication routes publish multiple project web apps inde
     }));
 
     const afterUnpublishList = await readJson<{
-      webApps: Array<{ uiGraphId: string; publishedSlug: string | null }>;
+      webApps: Array<{ uiGraphId: string; publishedSlug: string | null; status: string }>;
     }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
     assert.deepEqual(
-      afterUnpublishList.webApps.map((webApp) => [webApp.uiGraphId, webApp.publishedSlug]),
+      afterUnpublishList.webApps.map((webApp) => [webApp.uiGraphId, webApp.publishedSlug, webApp.status]),
       [
-        ['ui-one', null],
-        ['ui-two', 'second-app'],
+        ['ui-one', null, 'unpublished'],
+        ['ui-two', 'second-app', 'published'],
       ],
     );
   });
@@ -158,16 +158,112 @@ test('workflow web app publication routes allow batch slug swaps for selected ap
     }
 
     const publishedList = await readJson<{
-      webApps: Array<{ uiGraphId: string; publishedSlug: string | null }>;
+      webApps: Array<{ uiGraphId: string; publishedSlug: string | null; status: string }>;
     }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
     assert.deepEqual(
-      publishedList.webApps.map((webApp) => [webApp.uiGraphId, webApp.publishedSlug]),
+      publishedList.webApps.map((webApp) => [webApp.uiGraphId, webApp.publishedSlug, webApp.status]),
       [
-        ['ui-one', 'second-app'],
-        ['ui-two', 'first-app'],
+        ['ui-one', 'second-app', 'published'],
+        ['ui-two', 'first-app', 'published'],
       ],
     );
   });
+});
+
+test('workflow web app publication status tracks saved draft changes and republish', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'WebAppPublicationStatus');
+  await writeWebAppProject(created.absolutePath, 'WebAppPublicationStatus', 'Published Status Web App');
+  await publishWebApp(created.relativePath, 'web-app-publication-status');
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const readTreePublicationStatus = async () => {
+      const tree = await workflowStorageBackend.getWorkflowTree();
+      return tree.projects.find((project) => project.relativePath === created.relativePath)?.settings.publicationStatus;
+    };
+    const readStatus = async () => {
+      const response = await readJson<{
+        webApps: Array<{ uiGraphId: string; publishedSlug: string | null; status: string }>;
+      }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
+
+      const webApp = response.webApps.find((candidate) => candidate.uiGraphId === WEB_APP_TEST_UI_GRAPH_ID);
+      return webApp
+        ? {
+          uiGraphId: webApp.uiGraphId,
+          publishedSlug: webApp.publishedSlug,
+          status: webApp.status,
+        }
+        : null;
+    };
+
+    assert.deepEqual(await readStatus(), {
+      uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+      publishedSlug: 'web-app-publication-status',
+      status: 'published',
+    });
+    assert.equal(await readTreePublicationStatus(), 'published');
+
+    const datasetPath = workflowFs.getWorkflowDatasetPath(created.absolutePath);
+    await fs.writeFile(datasetPath, 'dataset: changed\n', 'utf8');
+    assert.deepEqual(await readStatus(), {
+      uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+      publishedSlug: 'web-app-publication-status',
+      status: 'unpublished_changes',
+    });
+    assert.equal(await readTreePublicationStatus(), 'unpublished_changes');
+
+    await fs.rm(datasetPath);
+    assert.deepEqual(await readStatus(), {
+      uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+      publishedSlug: 'web-app-publication-status',
+      status: 'published',
+    });
+    assert.equal(await readTreePublicationStatus(), 'published');
+
+    await writeWebAppProject(created.absolutePath, 'WebAppPublicationStatus', 'Changed Status Web App');
+    assert.deepEqual(await readStatus(), {
+      uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+      publishedSlug: 'web-app-publication-status',
+      status: 'unpublished_changes',
+    });
+    assert.equal(await readTreePublicationStatus(), 'unpublished_changes');
+
+    await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        publications: [
+          { uiGraphId: WEB_APP_TEST_UI_GRAPH_ID, slug: 'web-app-publication-status' },
+        ],
+      }),
+    }));
+
+    assert.deepEqual(await readStatus(), {
+      uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+      publishedSlug: 'web-app-publication-status',
+      status: 'published',
+    });
+    assert.equal(await readTreePublicationStatus(), 'published');
+  });
+});
+
+test('published workflow web apps block project deletion until unpublished', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'DeleteWebAppPublishedProject');
+  await writeWebAppProject(created.absolutePath, 'DeleteWebAppPublishedProject', 'Delete Guard Web App');
+  await publishWebApp(created.relativePath, 'delete-guard-web-app');
+
+  await assert.rejects(
+    () => workflowMutations.deleteWorkflowProjectItem(created.relativePath),
+    /Unpublish the workflow endpoint and web apps before deleting the project/,
+  );
+
+  await workflowStorageBackend.unpublishWorkflowProjectWebAppWithBackend(
+    created.relativePath,
+    WEB_APP_TEST_UI_GRAPH_ID,
+  );
+  await workflowMutations.deleteWorkflowProjectItem(created.relativePath);
+
+  assert.equal(await workflowFs.pathExists(created.absolutePath), false);
 });
 
 test('workflow web app publication routes keep stale published apps visible for unpublish', async () => {
@@ -182,6 +278,7 @@ test('workflow web app publication routes keep stale published apps visible for 
         uiGraphId: string;
         name: string;
         publishedSlug: string | null;
+        status: string;
         isMissingFromProject: boolean;
       }>;
     }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
@@ -191,9 +288,10 @@ test('workflow web app publication routes keep stale published apps visible for 
         webApp.uiGraphId,
         webApp.name,
         webApp.publishedSlug,
+        webApp.status,
         webApp.isMissingFromProject,
       ]),
-      [[WEB_APP_TEST_UI_GRAPH_ID, 'Legacy Web App', 'legacy-web-app', true]],
+      [[WEB_APP_TEST_UI_GRAPH_ID, 'Legacy Web App', 'legacy-web-app', 'unpublished_changes', true]],
     );
 
     await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/unpublish`, {
@@ -309,10 +407,11 @@ test('latest filesystem web app actions reject stale saved-draft revisions', asy
       }),
       signal: AbortSignal.timeout(5000),
     });
-    const staleBody = await staleActionResponse.json() as { error?: string };
+    const staleBody = await staleActionResponse.json() as { code?: string; error?: string };
 
     assert.equal(staleActionResponse.status, 409);
     assert.equal(staleBody.error, 'Rivet web app revision mismatch.');
+    assert.equal(staleBody.code, 'revision_mismatch');
   });
 });
 
@@ -458,10 +557,11 @@ test('published filesystem web app actions reject malformed action metadata', as
       }),
       signal: AbortSignal.timeout(5000),
     });
-    const body = await response.json() as { error?: string };
+    const body = await response.json() as { code?: string; error?: string };
 
     assert.equal(response.status, 400);
     assert.equal(body.error, 'Invalid componentId.');
+    assert.equal(body.code, undefined);
   });
 });
 
@@ -497,9 +597,10 @@ test('published filesystem web app actions reject stale published revisions', as
       }),
       signal: AbortSignal.timeout(5000),
     });
-    const staleBody = await staleActionResponse.json() as { error?: string };
+    const staleBody = await staleActionResponse.json() as { code?: string; error?: string };
 
     assert.equal(staleActionResponse.status, 409);
     assert.equal(staleBody.error, 'Rivet web app revision mismatch.');
+    assert.equal(staleBody.code, 'revision_mismatch');
   });
 });

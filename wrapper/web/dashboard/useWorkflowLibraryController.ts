@@ -37,6 +37,7 @@ import {
 } from './workflowTreeOps';
 import { getWorkflowPublishedVersionPreviewVirtualProjectPath } from '../../shared/workflow-types';
 import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
+import { isWorkflowProjectFullyUnpublished } from './projectSettingsForm';
 
 const PROJECT_SAVE_REFRESH_DELAY_MS = 150;
 
@@ -1298,8 +1299,8 @@ export function useWorkflowLibraryController(options: {
       return;
     }
 
-    if (targetProject.settings.status !== 'unpublished') {
-      toast.error('To delete a project, unpublish it first', {
+    if (!isWorkflowProjectFullyUnpublished(targetProject)) {
+      toast.error('To delete a project, unpublish its workflow endpoint and web apps first', {
         transition: instantWarningToastTransition,
       });
       return;

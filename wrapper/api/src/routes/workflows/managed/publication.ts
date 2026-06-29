@@ -210,6 +210,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           r.dataset_blob_key,
           r.stats_graph_count,
           r.stats_total_node_count,
+          r.stats_web_app_count,
           r.created_at
         FROM workflow_published_versions pv
         JOIN workflow_revisions r ON r.revision_id = pv.revision_id
@@ -585,11 +586,15 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         webApps: [
           ...currentUiGraphs.map((uiGraph) => {
             const published = publishedByUiGraphId.get(uiGraph.uiGraphId);
+            const status: WorkflowProjectWebAppsResponse['webApps'][number]['status'] = published
+              ? (published.revision_id === workflow.current_draft_revision_id ? 'published' : 'unpublished_changes')
+              : 'unpublished';
             return {
               uiGraphId: uiGraph.uiGraphId,
               name: uiGraph.name,
               publishedSlug: published?.slug ?? null,
               publishedAt: toIsoString(published?.published_at) ?? null,
+              status,
               isMissingFromProject: false,
             };
           }),
@@ -600,6 +605,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
               name: webApp.slug || webApp.ui_graph_id,
               publishedSlug: webApp.slug,
               publishedAt: toIsoString(webApp.published_at) ?? null,
+              status: 'unpublished_changes' as const,
               isMissingFromProject: true,
             })),
         ],
@@ -667,7 +673,9 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         }
 
         await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
-        return deps.mapWorkflowRowToProjectItem(workflow);
+        return deps.mapWorkflowRowToProjectItem(workflow, {
+          webAppRows: await listWebAppPublicationRows(client, workflow.workflow_id),
+        });
       });
     },
 
@@ -693,7 +701,9 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         }
 
         await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
-        return deps.mapWorkflowRowToProjectItem(workflow);
+        return deps.mapWorkflowRowToProjectItem(workflow, {
+          webAppRows: await listWebAppPublicationRows(client, workflow.workflow_id),
+        });
       });
     },
 
