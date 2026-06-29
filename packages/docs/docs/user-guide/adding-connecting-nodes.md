@@ -14,15 +14,15 @@ Nodes are grouped by their category. Selecting a node will add it to the graph w
 
 See the [Node Reference](../node-reference) for more information about all possible nodes that can be added.
 
-## Reusing Nodes with the Node Library
+## Reusing Nodes with the Node library
 
-Use the **Node Library** entry in the graph tree when you have one configured node that you want to reuse in several graphs. Nodes created there are **library nodes**. They are saved in the project file, but they are not executable graphs and cannot be wired together inside the library. Their input and output ports are shown only to help you verify their setup. Graph Input, Graph Output, Referenced Graph Alias, Comment, and linked nodes cannot be added to the library.
+Use the **Node library** entry in the graph tree when you have one configured node that you want to reuse in several graphs. Nodes created there are **library nodes**. They are saved in the project file, but they are not executable graphs and cannot be wired together inside the library. Their input and output ports are shown only to help you verify their setup. Graph Input, Graph Output, Referenced Graph Alias, Comment, and linked nodes cannot be added to the library.
 
-The library canvas uses the same spatial editing tools as normal graphs. You can select several library nodes, align them, resize them, delete unused ones, open their settings, close settings by clicking the canvas, and Alt-drag a library node to duplicate it. To turn existing duplicated graph nodes into library nodes, copy nodes in a normal graph, open the Node Library, and paste them there. Rivet creates one library node per supported pasted node; graph connections are not pasted into the library, and Graph Input, Graph Output, Referenced Graph Alias, Comment, and linked nodes are skipped.
+The library canvas uses the same spatial editing tools as normal graphs. You can select several library nodes, align them, resize them, delete unused ones, open their settings, close settings by clicking the canvas, and Alt-drag a library node to duplicate it. To turn existing duplicated graph nodes into library nodes, copy nodes in a normal graph, open the Node library, and paste them there. Rivet creates one library node per supported pasted node; graph connections are not pasted into the library, and Graph Input, Graph Output, Referenced Graph Alias, Comment, and linked nodes are skipped.
 
 To use a library node in a graph, right-click the graph canvas, open the **Library** section of the add-node menu, and choose it. Rivet creates a **linked node**. The linked node keeps its own position, size, and graph connections, but its title, color, settings, ports, split/conditional/disabled behavior, and runtime behavior all come from the library node.
 
-Editing a library node updates every linked node. Per-link overrides are not supported yet, so linked nodes do not open their own settings panel, do not show their own gear icon, and any controls shown in the linked node body are display-only. Double-clicking a linked node, clicking its link icon, or choosing **Open library node** opens the Node Library, centers the library node, and opens its settings. You cannot delete a library node while any graph still links to it.
+Editing a library node updates every linked node. Per-link overrides are not supported yet, so linked nodes do not open their own settings panel, do not show their own gear icon, and any controls shown in the linked node body are display-only. Double-clicking a linked node, clicking its link icon, or choosing **Open library node** opens the Node library, centers the library node, and opens its settings. You cannot delete a library node while any graph still links to it.
 
 Side-effect library nodes still run separately for every link. For example, two linked nodes for the same Set Global, HTTP Call, Code, or LLM node each execute at their own place in the graph.
 

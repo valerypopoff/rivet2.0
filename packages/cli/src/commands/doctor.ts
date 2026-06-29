@@ -159,8 +159,8 @@ function buildNodeLibraryCheck(project: Project): DoctorCheck {
     id: 'node-library',
     message:
       libraryNodes.length > 0
-        ? `Found ${formatCount(libraryNodes.length, 'Node Library item')}.`
-        : 'No Node Library items found.',
+        ? `Found ${formatCount(libraryNodes.length, 'Node library item')}.`
+        : 'No Node library items found.',
     status: 'ok',
   };
 }

@@ -581,13 +581,13 @@ Current command families:
 
 Implemented in `src/commands/list.ts`.
 
-These commands load a `.rivet-project` file without opening datasets, creating processors, or running graphs. `list` prints a human-readable inventory, while `list --json` and `inspect` print the same machine-readable summary. The summary includes project metadata, resolved file path, graph names/IDs/main marker/node counts, web app names/IDs/component counts, Node Library items, and declared plugins. Keep these commands read-only; they are discovery and scripting helpers rather than execution paths.
+These commands load a `.rivet-project` file without opening datasets, creating processors, or running graphs. `list` prints a human-readable inventory, while `list --json` and `inspect` print the same machine-readable summary. The summary includes project metadata, resolved file path, graph names/IDs/main marker/node counts, web app names/IDs/component counts, Node library items, and declared plugins. Keep these commands read-only; they are discovery and scripting helpers rather than execution paths.
 
 ### `doctor` command behavior
 
 Implemented in `src/commands/doctor.ts`.
 
-`doctor` loads a `.rivet-project` file and reports common local/runtime readiness checks without creating processors, loading dataset contents, or mutating anything. It checks graph count, stale/missing main graph state, web app count, Node Library item count, declared plugins, project-reference hint paths, and the adjacent or explicit `.rivet-data` file path. Missing dataset files are informational by default and become errors only with `--require-dataset-file`. Human output is for users; `--json` is the stable scripting surface. Keep this command conservative: it should catch obvious CLI/runtime setup problems, not become a full semantic graph linter.
+`doctor` loads a `.rivet-project` file and reports common local/runtime readiness checks without creating processors, loading dataset contents, or mutating anything. It checks graph count, stale/missing main graph state, web app count, Node library item count, declared plugins, project-reference hint paths, and the adjacent or explicit `.rivet-data` file path. Missing dataset files are informational by default and become errors only with `--require-dataset-file`. Human output is for users; `--json` is the stable scripting surface. Keep this command conservative: it should catch obvious CLI/runtime setup problems, not become a full semantic graph linter.
 
 ### `run` command behavior
 

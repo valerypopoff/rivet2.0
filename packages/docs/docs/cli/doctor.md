@@ -28,7 +28,7 @@ npx @valerypopoff/rivet2-cli doctor my-project.rivet-project --require-dataset-f
 - graph count
 - whether the configured main graph exists
 - Rivet web app count
-- Node Library item count
+- Node library item count
 - declared plugins
 - project references with or without hint paths
 - adjacent or explicit `.rivet-data` file presence

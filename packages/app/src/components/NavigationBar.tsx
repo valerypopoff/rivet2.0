@@ -837,7 +837,7 @@ const SearchResultItem: FC<{
     entryItemType === 'uiGraph'
       ? 'Web Apps'
       : entryContainerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID
-        ? 'Node Library'
+        ? 'Node library'
         : entryContainerGraph
           ? (project.graphs[entryContainerGraph]?.metadata?.name ?? 'Unknown Graph')
           : 'Unknown Graph';
