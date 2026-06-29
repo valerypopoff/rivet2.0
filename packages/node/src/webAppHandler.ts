@@ -85,6 +85,7 @@ export class RivetWebAppActionHttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'RivetWebAppActionHttpError';
@@ -149,8 +150,12 @@ export function createRivetWebAppHandler(
 
           return jsonResponse(result);
         } catch (error) {
+          const errorCode = getActionErrorCode(error);
           return jsonResponse(
-            { error: error instanceof Error ? error.message : String(error) },
+            {
+              error: error instanceof Error ? error.message : String(error),
+              ...(errorCode ? { code: errorCode } : {}),
+            },
             getActionErrorStatus(error),
           );
         }
@@ -181,7 +186,7 @@ export async function runRivetWebAppAction(
   const actionState = normalizeActionState(state);
 
   if (revisionKey != null && requestRevisionKey !== revisionKey) {
-    throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409);
+    throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
   }
 
   if (typeof componentId !== 'string' || !componentId) {
@@ -321,6 +326,10 @@ function getActionErrorStatus(error: unknown): number {
   return error instanceof RivetWebAppActionHttpError ? error.status : 400;
 }
 
+function getActionErrorCode(error: unknown): string | undefined {
+  return error instanceof RivetWebAppActionHttpError ? error.code : undefined;
+}
+
 async function resolveProcessorOptions(
   createProcessorOptions: RivetWebAppCreateProcessorOptions | undefined,
   context: RivetWebAppActionContext,
@@ -450,6 +459,7 @@ const WEB_APP_CLIENT_JS = String.raw`
   let state = { ...(config.initialState || {}) };
   let pending = false;
   let error = '';
+  let revisionMismatch = false;
 
   const el = (tag, attrs = {}, children = []) => {
     const node = document.createElement(tag);
@@ -465,8 +475,7 @@ const WEB_APP_CLIENT_JS = String.raw`
 
   const stringifyOutputValue = (value) => {
     try {
-      const json = JSON.stringify(value ?? null, null, 2);
-      return json == null ? String(value ?? '') : json;
+      return JSON.stringify(value, null, 2) ?? '';
     } catch {
       return '[Unserializable value]';
     }
@@ -512,6 +521,7 @@ const WEB_APP_CLIENT_JS = String.raw`
   async function runAction(component) {
     pending = true;
     error = '';
+    revisionMismatch = false;
     render();
     try {
       const response = await fetch(config.actionPath, {
@@ -521,7 +531,14 @@ const WEB_APP_CLIENT_JS = String.raw`
         body: JSON.stringify({ componentId: component.id, revisionKey: config.revisionKey, state }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Action failed.');
+      if (!response.ok) {
+        if (response.status === 409 && data?.code === 'revision_mismatch') {
+          revisionMismatch = true;
+          return;
+        }
+
+        throw new Error(data.error || 'Action failed.');
+      }
       state = { ...state, ...(data.statePatch || {}) };
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -529,6 +546,38 @@ const WEB_APP_CLIENT_JS = String.raw`
       pending = false;
       render();
     }
+  }
+
+  function renderError() {
+    if (!error || revisionMismatch) return [];
+
+    return [el('div', { className: 'rivet-web-app-error' }, [
+      el('span', { text: error }),
+    ])];
+  }
+
+  function renderRevisionMismatchModal() {
+    if (!revisionMismatch) return [];
+
+    return [el('div', { className: 'rivet-web-app-modal-backdrop' }, [
+      el('div', {
+        className: 'rivet-web-app-modal',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-labelledby': 'rivet-web-app-revision-mismatch-title',
+      }, [
+        el('div', {
+          className: 'rivet-web-app-modal-message',
+          id: 'rivet-web-app-revision-mismatch-title',
+          text: 'This app was updated. Reload to continue.',
+        }),
+        el('button', {
+          className: 'rivet-web-app-button rivet-web-app-modal-button',
+          text: 'Reload',
+          onClick: () => window.location.reload(),
+        }),
+      ]),
+    ])];
   }
 
   function renderComponent(component) {
@@ -568,9 +617,10 @@ const WEB_APP_CLIENT_JS = String.raw`
   function render() {
     const surface = el('main', { className: 'rivet-web-app-surface' }, [
       ...config.uiGraph.components.map(renderComponent),
-      ...(error ? [el('div', { className: 'rivet-web-app-error', text: error })] : []),
+      ...renderError(),
     ]);
-    root.replaceChildren(surface);
+    root.replaceChildren(surface, ...renderRevisionMismatchModal());
+    if (revisionMismatch) root.querySelector('.rivet-web-app-modal-button')?.focus();
   }
 
   render();

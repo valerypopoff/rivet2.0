@@ -1,17 +1,19 @@
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getChildProcessEnvWithoutMissingPnpPreload } from './pnp-env.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(scriptDir, '..');
 const repoRoot = resolve(appDir, '..', '..');
 const yarnPath = resolve(repoRoot, '.yarn', 'releases', 'yarn-4.6.0.cjs');
+const childProcessEnv = getChildProcessEnvWithoutMissingPnpPreload(repoRoot);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     stdio: 'inherit',
     cwd: appDir,
-    env: process.env,
+    env: childProcessEnv,
     ...options,
   });
 

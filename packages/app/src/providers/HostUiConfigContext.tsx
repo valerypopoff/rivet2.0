@@ -3,6 +3,9 @@ import type { FileMenuConfig } from '../utils/fileMenuConfiguration.js';
 
 export type RivetAppHostUiConfig = {
   fileMenu?: FileMenuConfig;
+  webApps?: {
+    desktopPreview?: boolean;
+  };
 };
 
 const DEFAULT_HOST_UI_CONFIG: RivetAppHostUiConfig = {};

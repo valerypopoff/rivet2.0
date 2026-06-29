@@ -85,7 +85,7 @@ In `--dev` mode, the project and dataset provider are recreated for each web-app
 - `--host <host>`: The host interface to bind to. Default is `0.0.0.0`, which is suitable for Docker and remote access. Use `127.0.0.1` for local-only serving.
 - `--dev`: Rereads the project file and recreates the dataset provider on each request. Useful while editing the project.
 - `--base-path <path>`: The base URL path where the web app routes are mounted. Default is `/`. `/healthz` is reserved for the CLI health endpoint.
-- `--revision-key <key>`: Embeds an opaque revision key in the page and rejects action requests that send a different key.
+- `--revision-key <key>`: Embeds an opaque revision key in the page and rejects action requests that send a different key with `409` and `code: "revision_mismatch"`.
 - `--bearer-token <token>`: Requires `Authorization: Bearer <token>` on web app requests. If omitted, `RIVET_CLI_BEARER_TOKEN` is used when set.
 - `--cors-origin <origin>`: Adds CORS headers for an allowed origin. Can be repeated. Use `*` to allow any origin.
 

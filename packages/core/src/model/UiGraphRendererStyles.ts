@@ -189,6 +189,39 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   color: var(--rivet-web-app-error-color);
   font-weight: 700;
 }
+
+.rivet-web-app-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.46);
+  background: color-mix(in srgb, var(--rivet-web-app-background) 78%, transparent);
+  padding: 20px;
+}
+
+.rivet-web-app-modal {
+  display: grid;
+  gap: 18px;
+  width: min(420px, 100%);
+  border: 1px solid var(--rivet-web-app-card-border);
+  border-radius: 12px;
+  background: var(--rivet-web-app-card-background);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.32);
+  color: var(--rivet-web-app-foreground);
+  padding: 22px;
+}
+
+.rivet-web-app-modal-message {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.rivet-web-app-modal-button {
+  justify-self: start;
+}
 `;
 
 export const RIVET_WEB_APP_DOCUMENT_CSS = `

@@ -156,10 +156,14 @@ That host seam provides the same React Query, provider, executor-session, and
 storage-bootstrap wrapper used by the desktop app while still allowing external
 shells to inject IO, datasets, environment variables, storage, path policies, an
 internal executor websocket URL, wrapper UI policy, and post-app bridge
-components. The first wrapper UI policy is
-`ui.fileMenu.visibleItems`, which filters the browser top-bar Menu by stable item
-ids, including optional app-level items such as `settings` and `get_help`,
-while leaving command behavior owned by the app command layer.
+components. Wrapper UI policy is exposed through `ui`: `ui.fileMenu.visibleItems`
+filters the browser top-bar Menu by stable item ids, including optional app-level
+items such as `settings` and `get_help`, while leaving command behavior owned by
+the app command layer. Hosted shells can also pass
+`ui.webApps.desktopPreview: false` when they publish web apps as endpoints and do
+not support local Tauri preview windows; this hides only editor-side desktop
+preview actions and does not affect web-app YAML, publishing, or Node serving
+APIs.
 
 Wrapper shells can receive a stable imperative workspace handle through
 `RivetAppHost`'s `onWorkspaceHostReady` callback, render

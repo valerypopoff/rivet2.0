@@ -63,6 +63,34 @@ test('web app preview renders input and textarea as card-backed bordered fields'
   assert.match(nodeHandlerSource, /className: 'rivet-web-app-control inputarea'/);
 });
 
+test('web app output renderers keep missing output state blank', () => {
+  const rendererSource = readFileSync(join(componentsDir, 'rivetWebApps', 'RivetWebAppRenderer.tsx'), 'utf8');
+  const nodeHandlerSource = readFileSync(join(rootDir, 'packages', 'node', 'src', 'webAppHandler.ts'), 'utf8');
+
+  assert.match(rendererSource, /JSON\.stringify\(value, null, 2\) \?\? ''/);
+  assert.doesNotMatch(rendererSource, /JSON\.stringify\(value \?\? null/);
+  assert.match(nodeHandlerSource, /JSON\.stringify\(value, null, 2\) \?\? ''/);
+  assert.doesNotMatch(nodeHandlerSource, /JSON\.stringify\(value \?\? null/);
+});
+
+test('web app desktop preview action is host-configurable', () => {
+  const builderSource = readFileSync(join(componentsDir, 'UiGraphBuilder.tsx'), 'utf8');
+  const hostUiConfigSource = readFileSync(
+    join(rootDir, 'packages', 'app', 'src', 'providers', 'HostUiConfigContext.tsx'),
+    'utf8',
+  );
+
+  assert.match(hostUiConfigSource, /webApps\?: \{\s+desktopPreview\?: boolean;/);
+  assert.match(builderSource, /useRivetAppHostUiConfig/);
+  assert.match(builderSource, /hostUiConfig\.webApps\?\.desktopPreview !== false/);
+  assert.match(builderSource, /\{canRunDesktopPreview \? \(/);
+  assert.match(builderSource, /ui-graph-builder-preview-action/);
+  assert.match(builderSource, /BrowserIcon aria-hidden="true"/);
+  assert.match(builderSource, /Run detached/);
+  assert.doesNotMatch(builderSource, /<h1 className="ui-graph-builder-title">Web app<\/h1>/);
+  assert.doesNotMatch(builderSource, /Run web app/);
+});
+
 test('web app renderer fills its parent so editor preview and preview windows own scrolling correctly', () => {
   const sharedStyles = readFileSync(
     join(rootDir, 'packages', 'core', 'src', 'model', 'UiGraphRendererStyles.ts'),

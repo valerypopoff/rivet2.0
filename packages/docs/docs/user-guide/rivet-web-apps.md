@@ -25,7 +25,7 @@ Use the **Components** palette to add blocks. Hover a component type to reveal t
 
 When a block is focused in the settings panel, Rivet highlights the matching component in the live preview. Focusing or clicking a component in the preview highlights the matching settings block. Text input and textarea components save user-entered values into their **Data key**. Rivet warns on later components if that key is already used by an earlier value source.
 
-Markdown components render Markdown in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps.
+Markdown components render Markdown in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps. Output components start blank until the selected data key receives a value.
 
 ## Binding a Button to a Graph
 
@@ -48,7 +48,7 @@ For each Graph Output row, Rivet reads that graph output and stores the inner Ri
 
 ## Previewing Locally
 
-Click **Run web app** to open a separate preview window named after the web app. The preview uses the same declarative renderer as hosted web apps. When you click a button in the preview, Rivet runs the target graph through the editor's normal graph-run path with the editor's current providers, context values, settings, attached data, plugins, and project references.
+In the desktop app, click **Run detached** in the preview area to open a separate preview window named after the web app. Hosted/server Rivet shells can hide this desktop-preview action when web apps are meant to run only after being published as endpoints. The preview uses the same declarative renderer as hosted web apps. When you click a button in the preview, Rivet runs the target graph through the editor's normal graph-run path with the editor's current providers, context values, settings, attached data, plugins, and project references.
 
 Because preview actions are real editor graph runs, you can open the target graph after clicking a web app button and inspect the generated node outputs, run history, durations, errors, and graph outputs just like you can after clicking **Run project**.
 
@@ -65,9 +65,9 @@ Wrappers can also use lower-level helpers:
 - `renderRivetWebAppHtml(...)` to serve the HTML from a wrapper-owned route
 - `runRivetWebAppAction(...)` to run a button action from an existing route handler
 
-Action requests are JSON-only and the web app state must be an object. If a wrapper uses the lower-level action helper, Rivet throws `RivetWebAppActionHttpError` for request-shaped failures such as malformed state or stale revision keys so the wrapper can return the matching HTTP status.
+Action requests are JSON-only and the web app state must be an object. If a wrapper uses the lower-level action helper, Rivet throws `RivetWebAppActionHttpError` for request-shaped failures such as malformed state or stale revision keys so the wrapper can return the matching HTTP status and optional machine-readable error code.
 
-If a wrapper publishes immutable project revisions, it can pass a `revisionKey`. Rivet embeds that opaque key into the served page and rejects action requests that send a different key, helping wrappers avoid a stale page running against a newer published app revision.
+If a wrapper publishes immutable project revisions, it can pass a `revisionKey`. Rivet embeds that opaque key into the served page and rejects action requests that send a different key, helping wrappers avoid a stale page running against a newer published app revision. When a served page becomes stale, Rivet shows a blocking message, **This app was updated. Reload to continue.**, with a **Reload** button. The app does not refresh automatically, so typed input remains visible until you choose to reload.
 
 Wrappers still own:
 
