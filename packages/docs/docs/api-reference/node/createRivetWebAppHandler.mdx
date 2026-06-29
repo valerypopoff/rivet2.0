@@ -55,6 +55,7 @@ type RivetWebAppHandlerOptions = {
 
 class RivetWebAppActionHttpError extends Error {
   readonly status: number;
+  readonly code?: string;
 }
 
 function createRivetWebAppHandler(
@@ -71,13 +72,13 @@ If `uiGraphId` is omitted, Rivet serves the first UI graph in `project.uiGraphs`
 
 `resolveContext` lets wrappers derive Rivet context values from the incoming HTTP request, for example authenticated user IDs or request headers.
 
-`revisionKey` is an opaque host-owned consistency token. Rivet embeds it in the served HTML and the browser sends it back with action requests. If a handler was configured with a `revisionKey` and an action request sends a different key, the handler returns a revision mismatch error. Rivet does not use this as authentication.
+`revisionKey` is an opaque host-owned consistency token. Rivet embeds it in the served HTML and the browser sends it back with action requests. If a handler was configured with a `revisionKey` and an action request sends a different key, the handler returns `409` with `{ "error": "Rivet web app revision mismatch.", "code": "revision_mismatch" }`. The embedded client shows a blocking reload dialog for that code so users explicitly refresh before running actions against the updated app. Rivet does not use revision keys as authentication.
 
 The action lifecycle hooks are for observability only. Use wrapper route middleware for auth, endpoint ownership, and final response policy.
 
 Button actions return both raw graph `outputs` and a `statePatch` for the client renderer. New UI graph actions can define several `inputMappings` and several output bindings in `outputs`. Each input mapping sends one web-app data key to one Graph Input ID. Each output binding saves either the whole output map, when its `outputKey` is empty, or the unwrapped Rivet data value from `outputs[outputKey].value` to its configured web-app data key. Legacy single-output `outputKey` / `outputStateKey` actions still work through the same mapper. If the target graph does not return a configured output key, the action endpoint returns an error response.
 
-Action requests are JSON-only. The request body and `state` must be objects; malformed bodies return `400` responses from the Fetch-style handler. The lower-level helper throws `RivetWebAppActionHttpError` for HTTP-shaped action failures such as revision mismatches or malformed action state, so wrappers can preserve `error.status` in their own Express responses.
+Action requests are JSON-only. The request body and `state` must be objects; malformed bodies return `400` responses from the Fetch-style handler. The lower-level helper throws `RivetWebAppActionHttpError` for HTTP-shaped action failures such as revision mismatches or malformed action state, so wrappers can preserve `error.status` and optional `error.code` in their own Express responses.
 
 ## Example
 
@@ -172,7 +173,11 @@ app.post('/apps/:endpointName/actions/run', async (req, res) => {
     res.json(result);
   } catch (error) {
     const status = error instanceof RivetWebAppActionHttpError ? error.status : 500;
-    res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
+    const code = error instanceof RivetWebAppActionHttpError ? error.code : undefined;
+    res.status(status).json({
+      error: error instanceof Error ? error.message : String(error),
+      ...(code ? { code } : {}),
+    });
   }
 });
 ```

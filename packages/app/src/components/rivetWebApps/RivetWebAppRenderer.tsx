@@ -194,7 +194,7 @@ function renderOutputValue(value: unknown, renderAs: 'text' | 'json' | 'markdown
 
 function stringifyOutputValue(value: unknown): string {
   try {
-    return JSON.stringify(value ?? null, null, 2) ?? `${value ?? ''}`;
+    return JSON.stringify(value, null, 2) ?? '';
   } catch {
     return '[Unserializable value]';
   }

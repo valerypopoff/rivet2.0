@@ -181,7 +181,7 @@ export const NodeLibraryBuilder: FC = () => {
 
   const updatePrefabSource = useStableCallback((prefabId: NodePrefabId, nextNode: ChartNode, newData?: Record<DataId, string>) => {
     if (!canUseNodeAsPrefabSource(nextNode)) {
-      handleError(new Error(`"${nextNode.type}" cannot be a library node.`), 'Node Library update failed');
+      handleError(new Error(`"${nextNode.type}" cannot be a library node.`), 'Node library update failed');
       return;
     }
 

@@ -463,7 +463,10 @@ test('createWebAppServeApp serves app JSON and rejects stale revision keys', asy
     }),
   );
   assert.equal(staleActionResponse.status, 409);
-  assert.match(await staleActionResponse.text(), /revision mismatch/);
+  assert.deepEqual(await staleActionResponse.json(), {
+    code: 'revision_mismatch',
+    error: 'Rivet web app revision mismatch.',
+  });
 });
 
 test('createWebAppServeApp dev mode rereads the project file for web app routes', async (t) => {

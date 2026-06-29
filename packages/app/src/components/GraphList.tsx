@@ -195,6 +195,11 @@ const styles = css`
     --project-tree-panel-icon-y: -0.1em;
   }
 
+  .project-tree-panel-icon-node-library {
+    --project-tree-panel-icon-x: 0;
+    --project-tree-panel-icon-y: -0.05em;
+  }
+
   .project-tree-panel-icon-filter {
     --project-tree-panel-icon-x: 0;
     --project-tree-panel-icon-y: 0;
@@ -216,6 +221,19 @@ const styles = css`
   .graph-list-filter:hover .graph-list-filter-label::before,
   .graph-list-filter:focus-within .graph-list-filter-label::before {
     background-color: var(--grey-darkish);
+  }
+
+  .graph-list-action.selected {
+    --project-tree-panel-icon-color: currentColor;
+    color: var(--foreground-on-primary);
+  }
+
+  .graph-list-action.selected::before {
+    background-color: var(--primary);
+  }
+
+  .graph-list-action.selected:hover::before {
+    background-color: var(--primary-dark);
   }
 
   .graph-list-filter {
@@ -267,7 +285,6 @@ const styles = css`
     line-height: calc(16px * var(--ui-font-scale));
   }
 
-  .node-library-entry,
   .ui-graph-entry,
   .ui-graph-create {
     display: flex;
@@ -291,13 +308,11 @@ const styles = css`
     }
   }
 
-  .node-library-entry:hover,
   .ui-graph-entry:hover,
   .ui-graph-create:hover {
     background: var(--grey-darkish);
   }
 
-  .node-library-entry.selected,
   .ui-graph-entry.selected {
     background: var(--primary);
     color: var(--foreground-on-primary);
@@ -305,10 +320,6 @@ const styles = css`
     &:hover {
       background: var(--primary-dark);
     }
-  }
-
-  .node-library-entry .project-tree-panel-icon {
-    flex: 0 0 auto;
   }
 
   .project-tree-panel-icon-web-app {
@@ -1065,6 +1076,17 @@ export const GraphList: FC = memo(() => {
             />
             <span>Project settings</span>
           </button>
+          <button
+            type="button"
+            className={clsx('graph-list-action', { selected: nodeLibraryOpen })}
+            aria-current={nodeLibraryOpen ? 'page' : undefined}
+            onClick={handleOpenNodeLibrary}
+          >
+            <span className="project-tree-panel-icon project-tree-panel-icon-node-library">
+              <SubgraphLinkIcon />
+            </span>
+            <span>Node library</span>
+          </button>
           <div className="graph-list-filter">
             <label className="graph-list-filter-label">
               <FilterIcon aria-hidden="true" className="project-tree-panel-icon project-tree-panel-icon-filter" />
@@ -1100,16 +1122,6 @@ export const GraphList: FC = memo(() => {
         ref={graphListContainerRef}
         tabIndex={-1}
       >
-        <button
-          type="button"
-          className={clsx('node-library-entry', { selected: nodeLibraryOpen })}
-          onClick={handleOpenNodeLibrary}
-        >
-          <span className="project-tree-panel-icon">
-            <SubgraphLinkIcon />
-          </span>
-          <span>Node Library</span>
-        </button>
         <div className="graph-list-heading">Web Apps</div>
         <div className="ui-graph-list">
           {Object.values(project.uiGraphs ?? {}).map((uiGraph) => (

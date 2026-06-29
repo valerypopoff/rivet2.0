@@ -53,7 +53,7 @@ export function useSearchGraph(enabled = true) {
             [NODE_LIBRARY_GRAPH_SEARCH_ID]: {
               metadata: {
                 id: NODE_LIBRARY_GRAPH_SEARCH_ID,
-                name: 'Node Library',
+                name: 'Node library',
               },
               nodes: Object.values(project.nodePrefabs ?? {}).map((prefab) => prefab.sourceNode),
               connections: [],

@@ -4,6 +4,7 @@ import { type CSSProperties, type FC, useEffect, useState } from 'react';
 import { useAtom, useAtomValue, useStore } from 'jotai';
 import { DndContext, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import BrowserIcon from 'majesticons/line/browser-line.svg?react';
 import {
   type GraphId,
   getGraphBoundary,
@@ -25,6 +26,7 @@ import { selectedUiGraphIdState } from '../state/uiGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
 import { leftSidebarLiveWidthState } from '../state/ui.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
+import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { createWebviewWindowHandle } from '../utils/platform/window.js';
 import {
   createRivetWebAppPreviewUrl,
@@ -59,24 +61,10 @@ const styles = css`
   .ui-graph-builder-panel {
     display: flex;
     flex-direction: column;
-    gap: 18px;
     overflow: hidden;
     padding: 18px;
   }
 
-  .ui-graph-builder-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .ui-graph-builder-title {
-    margin: 0;
-    font-size: var(--ui-font-size-xl);
-  }
-
-  .ui-graph-builder-actions,
   .ui-graph-builder-add {
     display: flex;
     flex-wrap: wrap;
@@ -95,6 +83,10 @@ const styles = css`
   }
 
   .ui-graph-builder-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
     border: 0;
     border-radius: var(--ui-button-radius);
     background: var(--primary);
@@ -103,6 +95,12 @@ const styles = css`
     font: inherit;
     font-weight: 700;
     padding: 8px 12px;
+  }
+
+  .ui-graph-builder-button svg {
+    width: 1.15em;
+    height: 1.15em;
+    flex: 0 0 auto;
   }
 
   .ui-graph-builder-button.secondary {
@@ -346,7 +344,16 @@ const styles = css`
   }
 
   .ui-graph-builder-preview {
+    position: relative;
     overflow: hidden;
+  }
+
+  .ui-graph-builder-preview-action {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 3;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
   }
 `;
 
@@ -357,6 +364,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const runUiGraphAction = useRunUiGraphAction(runGraph);
   const sidebarOpen = useAtomValue(sidebarOpenState);
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const canRunDesktopPreview = hostUiConfig.webApps?.desktopPreview !== false;
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [activeComponentId, setActiveComponentId] = useState<UiComponentId | undefined>();
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
@@ -541,14 +550,6 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   return (
     <div css={styles} style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}>
       <section className="ui-graph-builder-panel">
-        <div className="ui-graph-builder-header">
-          <h1 className="ui-graph-builder-title">Web app</h1>
-          <div className="ui-graph-builder-actions">
-            <button type="button" className="ui-graph-builder-button" onClick={() => void openPreviewWindow()}>
-              Run web app
-            </button>
-          </div>
-        </div>
         <div className="ui-graph-builder-scroll">
           <div className="ui-graph-builder-fields">
             <label className="ui-graph-builder-field">
@@ -609,6 +610,16 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
         </div>
       </section>
       <section className="ui-graph-builder-preview">
+        {canRunDesktopPreview ? (
+          <button
+            type="button"
+            className="ui-graph-builder-button ui-graph-builder-preview-action"
+            onClick={() => void openPreviewWindow()}
+          >
+            <BrowserIcon aria-hidden="true" />
+            <span>Run detached</span>
+          </button>
+        ) : null}
         <DndContext sensors={dragSensors} collisionDetection={closestCenter} onDragEnd={handleComponentDragEnd}>
           <SortableContext
             items={uiGraph.components.map((component) => component.id)}

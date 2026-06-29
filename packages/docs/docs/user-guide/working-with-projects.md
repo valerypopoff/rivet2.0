@@ -4,7 +4,7 @@ title: 'Working with Projects'
 
 A Rivet project contains a set of graphs. These graphs can call each other by using a [Subgraph Node](../node-reference/subgraph). Any graph can call any other graph in the project (including itself).
 
-Projects can also contain project-level resources such as the Node Library and [Rivet web apps](./rivet-web-apps). Web apps are declarative UI screens that can call ordinary graphs in the same project.
+Projects can also contain project-level resources such as the Node library and [Rivet web apps](./rivet-web-apps). Web apps are declarative UI screens that can call ordinary graphs in the same project.
 
 ## Creating a Project
 

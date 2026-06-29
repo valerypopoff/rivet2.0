@@ -25,7 +25,7 @@ npx @valerypopoff/rivet2-cli inspect my-project.rivet-project
 - project title, ID, path, and main graph
 - workflow graphs with node counts
 - Rivet web apps with component counts
-- Node Library items
+- Node library items
 - declared plugins
 
 `inspect` prints the same information as formatted JSON. It is useful in scripts that need to discover graph IDs, web app IDs, or project contents before calling `run`, `serve`, or `serve-app`.

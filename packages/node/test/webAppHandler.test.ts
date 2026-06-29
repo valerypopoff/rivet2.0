@@ -110,6 +110,8 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(clientScript, /globalThis\.marked\?\.parse/);
     assert.match(clientScript, /createSafeMarkdownRenderer/);
     assert.match(clientScript, /renderer\.html = \(html\) => escapeHtml\(html\);/);
+    assert.match(clientScript, /JSON\.stringify\(value, null, 2\) \?\? ''/);
+    assert.doesNotMatch(clientScript, /JSON\.stringify\(value \?\? null/);
     assert.doesNotMatch(clientScript, /renderInlineMarkdown/);
     assert.doesNotThrow(() => new Function(markedScript));
     assert.doesNotThrow(() => new Function(clientScript));
@@ -324,9 +326,24 @@ void describe('createRivetWebAppHandler', () => {
         method: 'POST',
       }),
     );
-    const rejectedBody = (await rejected.json()) as { error?: string };
+    const rejectedBody = (await rejected.json()) as { code?: string; error?: string };
     assert.equal(rejected.status, 409);
     assert.equal(rejectedBody.error, 'Rivet web app revision mismatch.');
+    assert.equal(rejectedBody.code, 'revision_mismatch');
+    assert.match(html, /data\?\.code === 'revision_mismatch'/);
+    assert.match(html, /renderRevisionMismatchModal/);
+    assert.match(html, /role: 'dialog'/);
+    assert.match(html, /'aria-modal': 'true'/);
+    assert.match(html, /This app was updated\. Reload to continue\./);
+    assert.match(html, /text: 'Reload'/);
+    assert.match(html, /window\.location\.reload\(\)/);
+    assert.match(html, /root\.querySelector\('\.rivet-web-app-modal-button'\)\?\.focus\(\)/);
+    assert.ok(RIVET_WEB_APP_RENDERER_CSS.includes('.rivet-web-app-modal-backdrop'));
+    assert.ok(RIVET_WEB_APP_RENDERER_CSS.includes('.rivet-web-app-modal'));
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /background: rgba\(0, 0, 0, 0\.46\);[\s\S]*background: color-mix/,
+    );
   });
 
   void it('exports a lower-level action helper', async () => {
@@ -356,6 +373,7 @@ void describe('createRivetWebAppHandler', () => {
       (error) =>
         error instanceof RivetWebAppActionHttpError &&
         error.status === 409 &&
+        error.code === 'revision_mismatch' &&
         error.message === 'Rivet web app revision mismatch.',
     );
   });
@@ -429,10 +447,11 @@ void describe('createRivetWebAppHandler', () => {
         method: 'POST',
       }),
     );
-    const body = (await response.json()) as { error?: string };
+    const body = (await response.json()) as { code?: string; error?: string };
 
     assert.equal(response.status, 400);
     assert.equal(body.error, 'Invalid JSON request body.');
+    assert.equal(body.code, undefined);
   });
 
   void it('reports malformed action request shapes clearly', async () => {
@@ -444,10 +463,11 @@ void describe('createRivetWebAppHandler', () => {
         method: 'POST',
       }),
     );
-    const body = (await response.json()) as { error?: string };
+    const body = (await response.json()) as { code?: string; error?: string };
 
     assert.equal(response.status, 400);
     assert.equal(body.error, 'Invalid action request body.');
+    assert.equal(body.code, undefined);
   });
 
   void it('reports malformed action state clearly', async () => {
@@ -459,10 +479,11 @@ void describe('createRivetWebAppHandler', () => {
         method: 'POST',
       }),
     );
-    const body = (await response.json()) as { error?: string };
+    const body = (await response.json()) as { code?: string; error?: string };
 
     assert.equal(response.status, 400);
     assert.equal(body.error, 'Invalid action state.');
+    assert.equal(body.code, undefined);
   });
 
   void it('reports a clear action error when the selected graph output is missing', async () => {

@@ -27,7 +27,11 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
   assert.match(graphListSource, /<span className="project-tree-header-label">Project:<\/span>/);
   assert.match(graphListSource, /content="Search \(Ctrl\/Cmd\+F\)"/);
   assert.match(graphListSource, /setGraphSearch\(openOrFocusGraphSearchState\)/);
-  assert.match(graphListSource, /<span>Search<\/span>[\s\S]*<span>Project settings<\/span>/);
+  assert.match(
+    graphListSource,
+    /<span>Search<\/span>[\s\S]*<span>Project settings<\/span>[\s\S]*<span>Node library<\/span>[\s\S]*className="graph-list-filter"/,
+  );
+  assert.doesNotMatch(graphListSource, /<span>Node Library<\/span>/);
   assert.match(graphListSource, /className="graph-list-action"/);
   assert.match(graphListSource, /color: var\(--grey-lightest\);/);
   assert.match(
@@ -42,6 +46,9 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
     graphListSource,
     /\.graph-list-action:hover::before,\s+\.graph-list-filter:hover \.graph-list-filter-label::before,\s+\.graph-list-filter:focus-within \.graph-list-filter-label::before \{[\s\S]*background-color: var\(--grey-darkish\);/,
   );
+  assert.match(graphListSource, /\.graph-list-action\.selected \{[\s\S]*color: var\(--foreground-on-primary\);/);
+  assert.match(graphListSource, /\.graph-list-action\.selected::before \{[\s\S]*background-color: var\(--primary\);/);
+  assert.match(graphListSource, /aria-current=\{nodeLibraryOpen \? 'page' : undefined\}/);
   assert.match(graphListSource, /\.graph-list-toolbar \{[\s\S]*gap: 16px;/);
   assert.match(graphListSource, /className="graph-list-heading">Graphs<\/div>/);
   assert.match(
@@ -108,6 +115,7 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
   );
   assert.match(graphListSource, /\.project-tree-panel-icon-search \{[^}]*--project-tree-panel-icon-y:/s);
   assert.match(graphListSource, /\.project-tree-panel-icon-project-settings \{[^}]*--project-tree-panel-icon-y:/s);
+  assert.match(graphListSource, /\.project-tree-panel-icon-node-library \{[^}]*--project-tree-panel-icon-y:/s);
   assert.match(graphListSource, /\.project-tree-panel-icon-filter \{[^}]*--project-tree-panel-icon-y:/s);
   assert.match(
     graphListSource,
@@ -122,6 +130,7 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
     /<SearchIcon aria-hidden="true" className="project-tree-panel-icon project-tree-panel-icon-search" \/>/,
   );
   assert.match(graphListSource, /className="project-tree-panel-icon project-tree-panel-icon-project-settings"/);
+  assert.match(graphListSource, /className="project-tree-panel-icon project-tree-panel-icon-node-library"/);
   assert.match(
     graphListSource,
     /<FilterIcon aria-hidden="true" className="project-tree-panel-icon project-tree-panel-icon-filter" \/>/,

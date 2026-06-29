@@ -35,14 +35,14 @@ export class NodePrefabInstanceNodeImpl extends NodeImpl<NodePrefabInstanceNode>
   }
 
   async process(_inputData: Inputs): Promise<Outputs> {
-    throw new Error('Library node is missing. Open the Node Library and reconnect this linked node.');
+    throw new Error('Library node is missing. Open the Node library and reconnect this linked node.');
   }
 
   static getUIData(): NodeUIData {
     return {
       contextMenuTitle: 'Linked node',
       infoBoxTitle: 'Linked node',
-      infoBoxBody: 'Runs a node from the project Node Library.',
+      infoBoxBody: 'Runs a node from the project Node library.',
       group: 'Advanced',
     };
   }
