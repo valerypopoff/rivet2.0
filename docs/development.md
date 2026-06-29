@@ -400,7 +400,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
 - dashboard/editor bridge wiring should stay explicit
   - `DashboardPage.tsx` is the composition root
   - `HostedEditorApp.tsx` mounts `RivetAppHost`, passes the hosted provider overrides from `hostedRivetProviders.ts`, captures the upstream `RivetWorkspaceHost` through `onWorkspaceHostReady`, and forwards upstream host callbacks for active project, open-project count, and save completion
-  - `HostedEditorApp.tsx` also passes `RivetAppHost.ui.fileMenu.visibleItems` so the iframe File menu shows only `import_graph`, `export_graph`, `settings`, and `get_help`; keep this on the upstream host UI policy seam instead of hiding menu DOM or aliasing menu command hooks
+  - `HostedEditorApp.tsx` also passes hosted UI policy through `RivetAppHost.ui`: `fileMenu.visibleItems` keeps the iframe File menu to `import_graph`, `export_graph`, `settings`, and `get_help`, and `webApps.desktopPreview: false` hides the desktop-only `Run web app` preview action in hosted mode; keep both on the upstream host UI policy seam instead of hiding DOM or aliasing command hooks
   - `useEditorCommandQueue.ts` owns pre-ready command buffering
   - `useEditorBridgeEvents.ts` owns dashboard-side message listeners and cross-iframe save shortcut capture
   - `EditorMessageBridge.tsx` owns editor-side message handling after the workspace host handle is ready, and should pass that `RivetWorkspaceHost` through to project open, replace-current, close, and path-move commands instead of rewriting Rivet tab atoms directly
@@ -419,7 +419,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
 - editor executor transport should prefer Rivet's upstream host/session seam
   - mount the editor through `RivetAppHost`
   - pass the hosted executor websocket through `executor.internalExecutorUrl`
-  - use `RivetAppHost.ui.fileMenu.visibleItems` for hosted File menu visibility and leave command execution in upstream `useMenuCommands`
+  - use `RivetAppHost.ui.fileMenu.visibleItems` for hosted File menu visibility and `RivetAppHost.ui.webApps.desktopPreview` for the hosted web-app preview capability; leave command execution in upstream Rivet
   - keep graph execution, upload, abort, pause/resume, and websocket message ownership in upstream Rivet hooks
   - do not alias `useExecutorSession`, `useRemoteDebugger`, `useGraphExecutor`, or `useRemoteExecutor`; upstream Rivet owns internal executor UI classification and debugger handoff for `executor.internalExecutorUrl`
   - stale wrapper transport override files were removed; do not reintroduce them unless the upstream seam no longer covers hosted behavior
