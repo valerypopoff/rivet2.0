@@ -80,7 +80,7 @@ export async function getWorkflowProject(root: string, filePath: string): Promis
     relativePath,
     absolutePath: filePath,
     updatedAt: stats.mtime.toISOString(),
-    settings: await getWorkflowProjectSettings(filePath, projectName),
+    settings: await getWorkflowProjectSettings(filePath, projectName, { root }),
     stats: await getWorkflowProjectStats(filePath),
   };
 }

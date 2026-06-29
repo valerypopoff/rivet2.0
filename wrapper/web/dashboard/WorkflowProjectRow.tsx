@@ -1,6 +1,7 @@
 import type { FC } from 'react';
 import type { WorkflowProjectItem } from './types';
 import { WorkflowInlineRenameInput } from './WorkflowInlineRenameInput';
+import { getWorkflowProjectDotStatus, getWorkflowProjectPublicationStatus } from './workflowProjectPublicationStatus';
 import type { DraggedWorkflowItem } from './workflowLibraryHelpers';
 
 type WorkflowProjectRowProps = {
@@ -40,9 +41,10 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
   onRenameCancel,
   getParentRelativePath,
 }) => {
+  const publicationStatus = getWorkflowProjectPublicationStatus(project);
   const rowClassName = [
     'project-row',
-    `project-row-status-${project.settings.status}`,
+    `project-row-status-${publicationStatus}`,
     activePath === project.absolutePath ? 'active' : null,
     editing ? 'editing' : null,
     renaming ? 'renaming' : null,
@@ -123,23 +125,27 @@ const ProjectRowContent: FC<ProjectRowContentProps> = ({
   renaming,
   onRenameSubmit,
   onRenameCancel,
-}) => (
-  <div className="project-main">
-    {project.settings.status !== 'unpublished' ? <span className={`project-status-dot ${project.settings.status}`} aria-hidden="true" /> : null}
-    {editing ? (
-      <ProjectRenameInput
-        project={project}
-        onSubmit={onRenameSubmit}
-        onCancel={onRenameCancel}
-      />
-    ) : (
-      <div className="project-label-wrap">
-        {renaming ? <span className="project-rename-spinner" aria-hidden="true" /> : null}
-        <div className="label">{project.name}</div>
-      </div>
-    )}
-  </div>
-);
+}) => {
+  const dotStatus = getWorkflowProjectDotStatus(project);
+
+  return (
+    <div className="project-main">
+      {dotStatus ? <span className={`project-status-dot ${dotStatus}`} aria-hidden="true" /> : null}
+      {editing ? (
+        <ProjectRenameInput
+          project={project}
+          onSubmit={onRenameSubmit}
+          onCancel={onRenameCancel}
+        />
+      ) : (
+        <div className="project-label-wrap">
+          {renaming ? <span className="project-rename-spinner" aria-hidden="true" /> : null}
+          <div className="label">{project.name}</div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 type ProjectRenameInputProps = {
   project: WorkflowProjectItem;

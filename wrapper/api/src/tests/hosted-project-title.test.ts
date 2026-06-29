@@ -65,6 +65,7 @@ function createRevisionRow(workflowId: string, revisionId: string): RevisionRow 
     dataset_blob_key: null,
     stats_graph_count: 1,
     stats_total_node_count: 0,
+    stats_web_app_count: 0,
     created_at: '2026-05-05T00:00:00.000Z',
   };
 }

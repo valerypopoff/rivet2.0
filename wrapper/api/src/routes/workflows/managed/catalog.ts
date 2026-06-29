@@ -38,6 +38,7 @@ import type {
   RevisionRow,
   SaveHostedProjectResult,
   TransactionHooks,
+  WebAppPublicationRow,
   WorkflowRow,
 } from './types.js';
 
@@ -84,6 +85,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
   const emptyProjectStats = {
     graphCount: 0,
     totalNodeCount: 0,
+    webAppCount: 0,
   } as const;
 
   const moveFolderRelativePath = async (
@@ -142,10 +144,15 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
   };
 
   const getRevisionStats = async (revision: RevisionRow): Promise<WorkflowProjectStats> => {
-    if (revision.stats_graph_count != null && revision.stats_total_node_count != null) {
+    if (
+      revision.stats_graph_count != null &&
+      revision.stats_total_node_count != null &&
+      revision.stats_web_app_count != null
+    ) {
       return {
         graphCount: revision.stats_graph_count,
         totalNodeCount: revision.stats_total_node_count,
+        webAppCount: revision.stats_web_app_count,
       };
     }
 
@@ -156,11 +163,12 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         `
           UPDATE workflow_revisions
           SET stats_graph_count = $2,
-              stats_total_node_count = $3
+              stats_total_node_count = $3,
+              stats_web_app_count = $4
           WHERE revision_id = $1
-            AND (stats_graph_count IS NULL OR stats_total_node_count IS NULL)
+            AND (stats_graph_count IS NULL OR stats_total_node_count IS NULL OR stats_web_app_count IS NULL)
         `,
-        [revision.revision_id, stats.graphCount, stats.totalNodeCount],
+        [revision.revision_id, stats.graphCount, stats.totalNodeCount, stats.webAppCount],
       ).catch(() => {});
 
       return stats;
@@ -268,10 +276,27 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
   return {
     async getTree(): Promise<{ root: string; folders: WorkflowFolderItem[]; projects: WorkflowProjectItem[] }> {
       await deps.initialize();
-      const [folderRows, workflowRows] = await Promise.all([
+      const [folderRows, workflowRows, webAppRows] = await Promise.all([
         deps.listFolderRows(),
         deps.listWorkflowRows(),
+        deps.queryRows<WebAppPublicationRow>(
+          deps.pool,
+          `
+            SELECT app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, published_at
+            FROM workflow_web_apps
+          `,
+          [],
+        ),
       ]);
+      const webAppRowsByWorkflowId = new Map<string, WebAppPublicationRow[]>();
+      for (const row of webAppRows) {
+        const rows = webAppRowsByWorkflowId.get(row.workflow_id);
+        if (rows) {
+          rows.push(row);
+        } else {
+          webAppRowsByWorkflowId.set(row.workflow_id, [row]);
+        }
+      }
 
       const folderMap = new Map<string, WorkflowFolderItem>();
       for (const row of folderRows) {
@@ -292,7 +317,9 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       }
 
       const workflowProjects = await Promise.all(workflowRows.map(async (row) => {
-        const project = deps.mapWorkflowRowToProjectItem(row);
+        const project = deps.mapWorkflowRowToProjectItem(row, {
+          webAppRows: webAppRowsByWorkflowId.get(row.workflow_id) ?? [],
+        });
         const revision = await deps.getRevision(deps.pool, row.current_draft_revision_id);
         if (!revision) {
           return {
@@ -677,7 +704,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         const revisions = await deps.queryRows<RevisionRow>(
           client,
           `
-            SELECT revision_id, workflow_id, project_blob_key, dataset_blob_key, stats_graph_count, stats_total_node_count, created_at
+            SELECT revision_id, workflow_id, project_blob_key, dataset_blob_key, stats_graph_count, stats_total_node_count, stats_web_app_count, created_at
             FROM workflow_revisions
             WHERE workflow_id = $1
           `,

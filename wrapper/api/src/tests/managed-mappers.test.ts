@@ -97,6 +97,7 @@ test('splitCurrentDraftRevisionRow separates workflow and revision fields withou
     dataset_blob_key: 'dataset-blob',
     stats_graph_count: 3,
     stats_total_node_count: 42,
+    stats_web_app_count: 2,
     revision_created_at: '2026-04-07T10:00:00.000Z',
   };
 
@@ -108,6 +109,7 @@ test('splitCurrentDraftRevisionRow separates workflow and revision fields withou
   assert.equal(split.revision.project_blob_key, 'project-blob');
   assert.equal(split.revision.stats_graph_count, 3);
   assert.equal(split.revision.stats_total_node_count, 42);
+  assert.equal(split.revision.stats_web_app_count, 2);
 });
 
 test('toIsoString returns null for missing values and preserves Date inputs', () => {

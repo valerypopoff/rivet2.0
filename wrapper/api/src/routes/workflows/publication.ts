@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
+import { getAggregateWorkflowProjectStatus } from '../../../../shared/workflow-types.js';
 import { validatePath } from '../../security.js';
 import { badRequest, conflict } from '../../utils/httpError.js';
 import {
@@ -46,13 +47,21 @@ async function appendWorkflowDatasetContentHash(hash: ReturnType<typeof createHa
   }
 }
 
-export async function getWorkflowProjectSettings(projectPath: string, projectName: string): Promise<WorkflowProjectSettings> {
+export async function getWorkflowProjectSettings(
+  projectPath: string,
+  projectName: string,
+  options: { root?: string } = {},
+): Promise<WorkflowProjectSettings> {
   const storedSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   const currentStateHash = await createWorkflowPublicationStateHash(projectPath, storedSettings.endpointName);
   const status = getDerivedWorkflowProjectStatus(storedSettings, currentStateHash);
+  const webAppStatuses = options.root
+    ? await getPublishedWebAppPublicationStatuses(options.root, projectPath, storedSettings.publishedWebApps)
+    : [];
 
   return {
     status,
+    publicationStatus: getAggregateWorkflowProjectStatus(status, webAppStatuses),
     endpointName: storedSettings.endpointName,
     lastPublishedAt: await resolveWorkflowLastPublishedAt(projectPath, storedSettings, status),
     publishedWebApps: storedSettings.publishedWebApps.map((webApp) => ({
@@ -62,6 +71,49 @@ export async function getWorkflowProjectSettings(projectPath: string, projectNam
       publishedAt: webApp.publishedAt,
     })),
   };
+}
+
+async function getPublishedWebAppPublicationStatuses(
+  root: string,
+  projectPath: string,
+  publishedWebApps: readonly StoredWorkflowPublishedWebApp[],
+): Promise<WorkflowProjectStatus[]> {
+  if (publishedWebApps.length === 0) {
+    return [];
+  }
+
+  let currentContentHashPromise: Promise<string> | null = null;
+  const getCurrentContentHash = () => {
+    currentContentHashPromise ??= createWorkflowProjectContentHash(projectPath);
+    return currentContentHashPromise;
+  };
+
+  const publishedContentHashBySnapshotId = new Map<string, Promise<string>>();
+
+  return Promise.all(publishedWebApps.map(async (webApp) => {
+    let publishedContentHashPromise = publishedContentHashBySnapshotId.get(webApp.publishedSnapshotId);
+    if (!publishedContentHashPromise) {
+      publishedContentHashPromise = createWorkflowProjectContentHash(
+        getPublishedWorkflowSnapshotPath(root, webApp.publishedSnapshotId),
+      );
+      publishedContentHashBySnapshotId.set(webApp.publishedSnapshotId, publishedContentHashPromise);
+    }
+
+    try {
+      const [currentContentHash, publishedContentHash] = await Promise.all([
+        getCurrentContentHash(),
+        publishedContentHashPromise,
+      ]);
+
+      return currentContentHash === publishedContentHash ? 'published' : 'unpublished_changes';
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        return 'unpublished_changes';
+      }
+
+      throw error;
+    }
+  }));
 }
 
 export async function readStoredWorkflowProjectSettings(projectPath: string, _projectName: string): Promise<StoredWorkflowProjectSettings> {

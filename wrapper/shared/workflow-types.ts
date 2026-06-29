@@ -102,6 +102,7 @@ export function getWorkflowPublishedVersionPreviewFromVirtualProjectPath(
 
 export type WorkflowProjectSettings = {
   status: WorkflowProjectStatus;
+  publicationStatus?: WorkflowProjectStatus;
   endpointName: string;
   lastPublishedAt: string | null;
   publishedWebApps: WorkflowPublishedWebAppSummary[];
@@ -139,6 +140,7 @@ export type WorkflowProjectWebAppPublicationDraft = {
 export type WorkflowProjectStats = {
   graphCount: number;
   totalNodeCount: number;
+  webAppCount: number;
 };
 
 export type WorkflowProjectItem = {
@@ -151,6 +153,23 @@ export type WorkflowProjectItem = {
   settings: WorkflowProjectSettings;
   stats?: WorkflowProjectStats;
 };
+
+export function getAggregateWorkflowProjectStatus(
+  endpointStatus: WorkflowProjectStatus,
+  webAppStatuses: readonly WorkflowProjectStatus[] = [],
+): WorkflowProjectStatus {
+  const statuses = [endpointStatus, ...webAppStatuses];
+
+  if (statuses.includes('unpublished_changes')) {
+    return 'unpublished_changes';
+  }
+
+  if (statuses.includes('published')) {
+    return 'published';
+  }
+
+  return 'unpublished';
+}
 
 export type WorkflowProjectDeleteResponse = {
   deleted: true;

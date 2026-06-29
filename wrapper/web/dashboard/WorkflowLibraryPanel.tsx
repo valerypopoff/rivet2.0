@@ -6,6 +6,7 @@ import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
 import { WorkflowLibraryModals } from './WorkflowLibraryModals';
 import type { HostedRouteConfig, WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
 import { getParentRelativePath } from './workflowLibraryHelpers';
+import { getWorkflowProjectDotStatus } from './workflowProjectPublicationStatus';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
 import './WorkflowLibraryPanel.css';
@@ -174,7 +175,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   }
 
   const panelContentVisible = contentVisible && !collapsed;
-  const openedProjectStatus = openedWorkflowProject?.settings.status ?? null;
+  const openedProjectDotStatus = openedWorkflowProject ? getWorkflowProjectDotStatus(openedWorkflowProject) : null;
 
   return (
     <div className="workflow-library-panel">
@@ -270,9 +271,9 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           aria-expanded="false"
         >
           <SidebarExpandIcon />
-          {openedProjectStatus ? (
+          {openedProjectDotStatus ? (
             <span
-              className={`collapsed-strip-status-dot ${openedProjectStatus}`}
+              className={`collapsed-strip-status-dot ${openedProjectDotStatus}`}
               aria-hidden="true"
             />
           ) : null}

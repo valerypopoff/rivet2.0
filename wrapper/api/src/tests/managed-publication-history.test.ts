@@ -57,6 +57,7 @@ function createRevision(overrides: Partial<RevisionRow> = {}): RevisionRow {
     dataset_blob_key: null,
     stats_graph_count: 1,
     stats_total_node_count: 0,
+    stats_web_app_count: 0,
     created_at: now,
     ...overrides,
   };

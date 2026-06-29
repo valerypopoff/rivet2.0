@@ -174,7 +174,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         aria-selected={activeTab === 'workflow'}
         onClick={() => setActiveTab('workflow')}
       >
-        Workflow
+        Endpoint
       </button>
       <button
         type="button"
@@ -248,12 +248,12 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
             </Button>
           ) : null}
         </div>
+        {endpointValidationError ? <div className="project-settings-error">{endpointValidationError}</div> : null}
         {!isUnpublishedProject ? (
           <div className="project-settings-help project-settings-status-help">
             {renderWorkflowEndpointHelp(routeConfig, displayedProjectStatus, publishedEndpointName)}
           </div>
         ) : null}
-        {endpointValidationError ? <div className="project-settings-error">{endpointValidationError}</div> : null}
       </div>
 
     </div>
@@ -295,16 +295,17 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
             const isPublished = webApp.publishedSlug != null;
             const hasWebAppSlugDraftChange = isPublished && slugDraft.trim() !== webApp.publishedSlug;
             const hasWebAppChangesToPublish = webApp.status === 'unpublished_changes' && !webApp.isMissingFromProject;
+            const showLatestWebAppLink = hasWebAppChangesToPublish;
             const displaySlug = isPublished ? webApp.publishedSlug! : slugDraft.trim() || 'slug';
             return (
               <div className="project-settings-web-app-row" key={webApp.uiGraphId}>
                 <div className="project-settings-web-app-title-row">
-                  <div className="project-settings-web-app-name" title={webApp.name}>
-                    {webApp.name}
-                  </div>
                   <span className={`project-settings-web-app-state ${webApp.status}`}>
                     {getWebAppStatusLabel(webApp.status)}
                   </span>
+                  <div className="project-settings-web-app-name" title={webApp.name}>
+                    {webApp.name}
+                  </div>
                 </div>
                 <div className="project-settings-field">
                   <div className="project-settings-input-row project-settings-prefixed-input-row">
@@ -347,17 +348,22 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                       </Button>
                     ) : null}
                   </div>
+                  {validationError ? <div className="project-settings-error">{validationError}</div> : null}
                 </div>
                 {isPublished ? (
                   <div className="project-settings-help project-settings-web-app-access-help">
                     The web app is accessible via the endpoint on
                     <br />
                     {renderWebAppEndpointLink(`${routeConfig.publishedAppsBasePath}/${displaySlug}`)}
-                    <br />
-                    <br />
-                    The latest saved project changes are accessible on
-                    <br />
-                    {renderWebAppEndpointLink(`${routeConfig.latestAppsBasePath}/${displaySlug}`)}
+                    {showLatestWebAppLink ? (
+                      <>
+                        <br />
+                        <br />
+                        The latest saved project changes are accessible on
+                        <br />
+                        {renderWebAppEndpointLink(`${routeConfig.latestAppsBasePath}/${displaySlug}`)}
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
                 {webApp.isMissingFromProject ? (
@@ -365,7 +371,6 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                     This web app is still published from an older snapshot, but it is no longer in the current project.
                   </div>
                 ) : null}
-                {validationError ? <div className="project-settings-error">{validationError}</div> : null}
               </div>
             );
           })}

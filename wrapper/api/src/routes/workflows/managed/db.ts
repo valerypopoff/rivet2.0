@@ -187,7 +187,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
       return queryOne<RevisionRow>(
         client,
         `
-          SELECT revision_id, workflow_id, project_blob_key, dataset_blob_key, stats_graph_count, stats_total_node_count, created_at
+          SELECT revision_id, workflow_id, project_blob_key, dataset_blob_key, stats_graph_count, stats_total_node_count, stats_web_app_count, created_at
           FROM workflow_revisions
           WHERE revision_id = $1
         `,
@@ -221,6 +221,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
             r.dataset_blob_key,
             r.stats_graph_count,
             r.stats_total_node_count,
+            r.stats_web_app_count,
             r.created_at AS revision_created_at
           FROM workflows w
           JOIN workflow_revisions r ON r.revision_id = w.current_draft_revision_id
@@ -297,6 +298,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
               r.dataset_blob_key,
               r.stats_graph_count,
               r.stats_total_node_count,
+              r.stats_web_app_count,
               r.created_at AS revision_created_at,
               app.ui_graph_id
             FROM workflow_web_apps app
@@ -347,6 +349,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
               r.dataset_blob_key,
               r.stats_graph_count,
               r.stats_total_node_count,
+              r.stats_web_app_count,
               r.created_at AS revision_created_at
             FROM workflow_endpoints e
             JOIN workflows w ON w.workflow_id = e.workflow_id
@@ -373,6 +376,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
               r.dataset_blob_key,
               r.stats_graph_count,
               r.stats_total_node_count,
+              r.stats_web_app_count,
               r.created_at AS revision_created_at
             FROM workflow_endpoints e
             JOIN workflows w ON w.workflow_id = e.workflow_id

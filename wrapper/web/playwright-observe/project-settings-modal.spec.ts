@@ -62,6 +62,7 @@ function createProjectSettingsFixture(name: string): ProjectSettingsFixtureProje
     stats: {
       graphCount: 2,
       totalNodeCount: 7,
+      webAppCount: 0,
     },
     settings: {
       status: 'unpublished',
@@ -499,7 +500,15 @@ test.describe('Project settings modal', () => {
     await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
 
     const { modal } = await openProjectSettingsModal(page, project);
-    await expect(page.locator('.active-project-stats')).toHaveText('2 graphs, 7 nodes total');
+    const activeProjectSection = page.locator('.active-project-section');
+    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(/active-project-name-row/);
+    await expect(activeProjectSection.locator('.active-project-name')).toHaveText(unique);
+    const activeProjectStatusLines = activeProjectSection.locator('.active-project-status-line');
+    await expect(activeProjectStatusLines).toHaveCount(2);
+    await expect(activeProjectStatusLines.first()).toContainText('Endpoint:');
+    await expect(activeProjectStatusLines.nth(1)).toContainText('Web app:');
+    await expect(activeProjectStatusLines.nth(1).locator('.active-project-status-text')).toHaveText('none');
+    await expect(activeProjectSection.locator('.active-project-stats')).toHaveText('2 graphs, 7 nodes');
     await expect(modal.getByRole('button', { name: 'Rename project' })).toHaveCount(0);
     await expect(modal.locator('.project-settings-title-input input')).toHaveCount(0);
 
@@ -513,7 +522,7 @@ test.describe('Project settings modal', () => {
     await expect(footerSection.getByRole('button', { name: 'Published version history' })).toHaveCount(0);
     await expect(deleteButton).toBeVisible();
     await expect(deleteButton).toBeEnabled();
-    await modal.getByRole('tab', { name: 'Workflow' }).click();
+    await modal.getByRole('tab', { name: 'Endpoint' }).click();
     await expect(footerSection.getByRole('button', { name: 'Published version history' })).toBeVisible();
 
     const endpointInput = modal.locator('#workflow-project-endpoint-name');
@@ -646,6 +655,10 @@ test.describe('Project settings modal', () => {
         isMissingFromProject: true,
       },
     ];
+    project.stats = {
+      ...project.stats!,
+      webAppCount: 3,
+    };
     const routeTrackers = createProjectSettingsRouteTrackers();
     await installProjectSettingsRoutes(page, project, routeTrackers, {
       routeConfig: {
@@ -655,7 +668,13 @@ test.describe('Project settings modal', () => {
     });
 
     const { modal } = await openProjectSettingsModal(page, project);
-    await expect(modal.getByRole('tab', { name: 'Workflow' })).toHaveAttribute('aria-selected', 'true');
+    const activeProjectSection = page.locator('.active-project-section');
+    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(/active-project-name-row/);
+    await expect(activeProjectSection.locator('.active-project-status-line')).toHaveCount(2);
+    await expect(activeProjectSection.locator('.active-project-status-line').nth(1)).toContainText('Web apps:');
+    await expect(activeProjectSection.locator('.active-project-various-statuses')).toHaveText('various statuses');
+    await expect(activeProjectSection.locator('.active-project-stats')).toHaveText('2 graphs, 7 nodes, 3 web apps');
+    await expect(modal.getByRole('tab', { name: 'Endpoint' })).toHaveAttribute('aria-selected', 'true');
     await modal.getByRole('tab', { name: 'Web apps' }).click();
     await expect(modal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');
     const deleteButton = modal.getByRole('button', { name: 'Delete project' });
@@ -679,6 +698,10 @@ test.describe('Project settings modal', () => {
     await expect(gammaRow.locator('.project-settings-web-app-state.unpublished_changes')).toHaveText('Unpublished changes');
     await expect(staleRow.locator('.project-settings-web-app-state.unpublished_changes')).toHaveText('Unpublished changes');
     await expect(gammaRow.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
+    await expect(gammaRow).toContainText('/custom-apps/gamma-reporter');
+    await expect(gammaRow).toContainText('/custom-apps-latest/gamma-reporter');
+    await expect(staleRow).toContainText('/custom-apps/legacy-tool');
+    await expect(staleRow).not.toContainText('/custom-apps-latest/legacy-tool');
     await gammaRow.getByRole('button', { name: 'Update', exact: true }).click();
     await expect.poll(() => routeTrackers.webAppPublishRequests.length).toBe(1);
     expect(routeTrackers.webAppPublishRequests[0]).toEqual({
@@ -689,6 +712,7 @@ test.describe('Project settings modal', () => {
     });
     await expect(gammaRow.locator('.project-settings-web-app-state.published')).toHaveText('Published');
     await expect(gammaRow.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
+    await expect(gammaRow).not.toContainText('/custom-apps-latest/gamma-reporter');
     await alphaRow.locator('input').fill('legacy-tool');
     await expect(alphaRow).toContainText('URL slug is already used by Legacy Tool.');
     await expect(alphaRow.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
@@ -711,14 +735,12 @@ test.describe('Project settings modal', () => {
     await expect(alphaRow.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
     await expect(alphaRow).toContainText('The web app is accessible via the endpoint on');
     await expect(alphaRow).toContainText('/custom-apps/alpha-helper');
-    await expect(alphaRow).toContainText('/custom-apps-latest/alpha-helper');
+    await expect(alphaRow).not.toContainText('/custom-apps-latest/alpha-helper');
     const currentOrigin = await page.evaluate(() => window.location.origin);
     const publishedAppLink = alphaRow.getByRole('link', { name: 'Open /custom-apps/alpha-helper in a new tab' });
-    const latestAppLink = alphaRow.getByRole('link', { name: 'Open /custom-apps-latest/alpha-helper in a new tab' });
     await expect(publishedAppLink).toHaveAttribute('href', `${currentOrigin}/custom-apps/alpha-helper`);
     await expect(publishedAppLink).toHaveAttribute('target', '_blank');
-    await expect(latestAppLink).toHaveAttribute('href', `${currentOrigin}/custom-apps-latest/alpha-helper`);
-    await expect(latestAppLink).toHaveAttribute('target', '_blank');
+    await expect(alphaRow.getByRole('link', { name: 'Open /custom-apps-latest/alpha-helper in a new tab' })).toHaveCount(0);
     await expect(alphaRow.getByRole('button', { name: 'Unpublish' })).toHaveCSS('margin-left', '8px');
     await alphaRow.locator('input').fill('alpha-helper-renamed');
     await expect(alphaRow.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();

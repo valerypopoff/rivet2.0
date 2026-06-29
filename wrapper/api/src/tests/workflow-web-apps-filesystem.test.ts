@@ -176,6 +176,10 @@ test('workflow web app publication status tracks saved draft changes and republi
   await publishWebApp(created.relativePath, 'web-app-publication-status');
 
   await withWorkflowApiServer(async (baseUrl) => {
+    const readTreePublicationStatus = async () => {
+      const tree = await workflowStorageBackend.getWorkflowTree();
+      return tree.projects.find((project) => project.relativePath === created.relativePath)?.settings.publicationStatus;
+    };
     const readStatus = async () => {
       const response = await readJson<{
         webApps: Array<{ uiGraphId: string; publishedSlug: string | null; status: string }>;
@@ -196,6 +200,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'published',
     });
+    assert.equal(await readTreePublicationStatus(), 'published');
 
     const datasetPath = workflowFs.getWorkflowDatasetPath(created.absolutePath);
     await fs.writeFile(datasetPath, 'dataset: changed\n', 'utf8');
@@ -204,6 +209,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'unpublished_changes',
     });
+    assert.equal(await readTreePublicationStatus(), 'unpublished_changes');
 
     await fs.rm(datasetPath);
     assert.deepEqual(await readStatus(), {
@@ -211,6 +217,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'published',
     });
+    assert.equal(await readTreePublicationStatus(), 'published');
 
     await writeWebAppProject(created.absolutePath, 'WebAppPublicationStatus', 'Changed Status Web App');
     assert.deepEqual(await readStatus(), {
@@ -218,6 +225,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'unpublished_changes',
     });
+    assert.equal(await readTreePublicationStatus(), 'unpublished_changes');
 
     await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/publish`, {
       method: 'POST',
@@ -235,6 +243,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'published',
     });
+    assert.equal(await readTreePublicationStatus(), 'published');
   });
 });
 
