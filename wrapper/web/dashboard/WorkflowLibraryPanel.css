@@ -1385,16 +1385,24 @@
 .project-settings-web-app-state {
   flex: 0 0 auto;
   padding: 2px 7px;
+  border: 1px solid currentColor;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
   color: var(--grey-light);
   font-size: var(--workflow-library-font-size-xs);
   font-weight: 700;
   line-height: 1.3;
 }
 
+.project-settings-web-app-state.unpublished {
+  color: var(--workflow-status-unpublished-color);
+}
+
 .project-settings-web-app-state.published {
-  color: var(--grey-lightest);
+  color: var(--workflow-status-published-color);
+}
+
+.project-settings-web-app-state.unpublished_changes {
+  color: var(--workflow-status-unpublished-changes-color);
 }
 
 .project-settings-web-app-code {

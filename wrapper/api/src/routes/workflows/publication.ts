@@ -35,6 +35,17 @@ function getRivetNode() {
   return rivetNodeImport;
 }
 
+async function appendWorkflowDatasetContentHash(hash: ReturnType<typeof createHash>, projectPath: string): Promise<void> {
+  const datasetPath = getWorkflowDatasetPath(projectPath);
+
+  if (await pathExists(datasetPath)) {
+    const datasetContents = await fs.readFile(datasetPath, 'utf8');
+    hash.update('\n--dataset--\n').update(datasetContents);
+  } else {
+    hash.update('\n--dataset-missing--\n');
+  }
+}
+
 export async function getWorkflowProjectSettings(projectPath: string, projectName: string): Promise<WorkflowProjectSettings> {
   const storedSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   const currentStateHash = await createWorkflowPublicationStateHash(projectPath, storedSettings.endpointName);
@@ -293,15 +304,18 @@ export async function ensureWorkflowWebAppSlugIsUnique(
 
 export async function createWorkflowPublicationStateHash(projectPath: string, endpointName: string): Promise<string> {
   const projectContents = await fs.readFile(projectPath, 'utf8');
-  const datasetPath = getWorkflowDatasetPath(projectPath);
   const hash = createHash('sha256').update(endpointName).update('\n').update(projectContents);
 
-  if (await pathExists(datasetPath)) {
-    const datasetContents = await fs.readFile(datasetPath, 'utf8');
-    hash.update('\n--dataset--\n').update(datasetContents);
-  } else {
-    hash.update('\n--dataset-missing--\n');
-  }
+  await appendWorkflowDatasetContentHash(hash, projectPath);
+
+  return hash.digest('hex');
+}
+
+export async function createWorkflowProjectContentHash(projectPath: string): Promise<string> {
+  const projectContents = await fs.readFile(projectPath, 'utf8');
+  const hash = createHash('sha256').update(projectContents);
+
+  await appendWorkflowDatasetContentHash(hash, projectPath);
 
   return hash.digest('hex');
 }

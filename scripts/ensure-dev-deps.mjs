@@ -71,7 +71,7 @@ function hasExpectedApiRivetLink(packageName, sourcePackageRelPath, packageAlias
   return (
     packageAliases.every((packageAlias) => isLinkedTo(`wrapper/api/node_modules/${packageAlias}`, overlayRelPath)) &&
     isLinkedTo(path.join(overlayRelPath, 'dist'), sourceDistRelPath) &&
-    isLinkedTo(path.join(overlayRelPath, 'node_modules'), 'rivet/node_modules')
+    exists(path.join(overlayRelPath, 'node_modules', '.rivet-dependency-overlay'))
   );
 }
 
@@ -135,12 +135,16 @@ function collectRivetDependencyNames() {
 }
 
 function hasExpectedRivetNodeModulesInstall() {
-  if (!exists('rivet/node_modules')) {
-    return false;
-  }
+  const dependencyRoots = [
+    'rivet/node_modules',
+    'wrapper/api/node_modules',
+    'wrapper/web/node_modules',
+  ];
 
   return collectRivetDependencyNames().every((dependencyName) =>
-    exists(path.join('rivet/node_modules', packageNameToNodeModulesRelPath(dependencyName))),
+    dependencyRoots.some((dependencyRoot) =>
+      exists(path.join(dependencyRoot, packageNameToNodeModulesRelPath(dependencyName))),
+    ),
   );
 }
 

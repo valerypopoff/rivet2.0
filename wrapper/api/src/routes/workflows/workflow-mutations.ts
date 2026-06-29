@@ -32,6 +32,7 @@ import {
   deletePublishedWorkflowSnapshot,
   ensureWorkflowEndpointNameIsUnique,
   getWorkflowProjectSettings,
+  hasPublishedWorkflowLineage,
   normalizeWorkflowProjectSettingsDraft,
   readStoredWorkflowProjectSettings,
   resolvePublishedWorkflowProjectPath,
@@ -520,6 +521,14 @@ export async function deleteWorkflowProjectItem(relativePath: unknown) {
 
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+  if (
+    existingSettings.publishedEndpointName ||
+    hasPublishedWorkflowLineage(existingSettings) ||
+    existingSettings.publishedWebApps.length > 0
+  ) {
+    throw conflict('Unpublish the workflow endpoint and web apps before deleting the project');
+  }
+
   const projectMetadataId = await loadProjectFromFile(projectPath)
     .then((project) => project.metadata.id ?? null)
     .catch(() => null);

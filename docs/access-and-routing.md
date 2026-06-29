@@ -80,6 +80,7 @@ The wrapper API currently exposes these groups behind `/api`:
   - `POST /api/workflows/projects/publish`
   - `POST /api/workflows/projects/unpublish`
   - `GET /api/workflows/projects/web-apps?relativePath=...`
+    - returns current and still-published-missing web apps with per-row `Not published`, `Published`, or `Unpublished changes` status derived from the web app's own pinned `/apps` snapshot/revision versus the latest saved `/apps-latest` draft
   - `POST /api/workflows/projects/web-apps/publish`
   - `POST /api/workflows/projects/web-apps/unpublish`
   - `GET /api/workflows/recordings/workflows`
@@ -262,7 +263,7 @@ Web-app action requests use the same `ManagedCodeRunner`, dataset provider, proj
 
 The slug segment resolves through published web-app state, not workflow endpoint state, so a project does not need to be published as a workflow endpoint before its web apps can be published. Saved project edits affect `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}` immediately, but do not affect `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` until that web-app slug is republished. Unsaved in-browser editor edits are not visible to either server route until the project is saved. If the draft project later deletes a published UI graph, the old slug still serves the pinned snapshot/revision until the user explicitly unpublishes that app from Project Settings.
 
-The HTML embeds an opaque published `revisionKey`. Action requests include that key and are rejected with `409` when that slug is republished between page load and button click.
+The HTML embeds an opaque published `revisionKey`. Action requests include that key and are rejected with `409` plus `code: "revision_mismatch"` when that slug is republished between page load and button click. The embedded Rivet web-app client uses that coded response to show a blocking reload modal, so stale open pages recover without an automatic refresh or action rerun.
 
 Auth follows the browser UI gate policy:
 
@@ -286,7 +287,8 @@ Public route exposure rules:
 - `${RIVET_PUBLISHED_APPS_BASE_PATH}` resolves only actively published web-app slugs and serves their pinned UI graph from the frozen project snapshot/revision
 - `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` resolves the current draft endpoint identity only while the workflow still has active published lineage
 - `${RIVET_LATEST_APPS_BASE_PATH}` resolves only actively published web-app slugs and serves the matching UI graph from the latest saved draft/current server-side project
-- full unpublish closes both public route families even though the saved draft `endpointName` remains in project settings for later republish convenience
+- workflow unpublish closes only the workflow route families even though the saved draft `endpointName` remains in project settings for later republish convenience
+- web-app route families stay open until each web-app publication is explicitly unpublished
 - endpoint uniqueness follows those same active public identities; a fully unpublished saved draft endpoint does not block another workflow from publishing on that name
 
 Current request/response behavior:

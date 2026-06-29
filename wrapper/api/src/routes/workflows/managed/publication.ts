@@ -585,11 +585,15 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         webApps: [
           ...currentUiGraphs.map((uiGraph) => {
             const published = publishedByUiGraphId.get(uiGraph.uiGraphId);
+            const status: WorkflowProjectWebAppsResponse['webApps'][number]['status'] = published
+              ? (published.revision_id === workflow.current_draft_revision_id ? 'published' : 'unpublished_changes')
+              : 'unpublished';
             return {
               uiGraphId: uiGraph.uiGraphId,
               name: uiGraph.name,
               publishedSlug: published?.slug ?? null,
               publishedAt: toIsoString(published?.published_at) ?? null,
+              status,
               isMissingFromProject: false,
             };
           }),
@@ -600,6 +604,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
               name: webApp.slug || webApp.ui_graph_id,
               publishedSlug: webApp.slug,
               publishedAt: toIsoString(webApp.published_at) ?? null,
+              status: 'unpublished_changes' as const,
               isMissingFromProject: true,
             })),
         ],

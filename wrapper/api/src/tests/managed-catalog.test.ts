@@ -35,6 +35,78 @@ function createRevisionRow(workflowId: string, revisionId: string): RevisionRow 
   };
 }
 
+function createCatalogForDeleteGuard(workflowRow: WorkflowRow, webAppRows: unknown[] = []) {
+  const client = {
+    query: async (sql: string, params: unknown[] = []) => {
+      assert.match(sql, /FROM workflow_web_apps/);
+      assert.deepEqual(params, [workflowRow.workflow_id]);
+      return { rows: webAppRows };
+    },
+  };
+  const hooks = {
+    onCommit() {},
+    onRollback() {},
+  };
+
+  return createManagedWorkflowCatalogService({
+    context: {
+      pool: {} as never,
+      initialize: async () => {},
+      withTransaction: async <T,>(
+        run: (transactionClient: typeof client, transactionHooks: typeof hooks) => Promise<T>,
+      ) => run(client, hooks),
+      db: {
+        queryOne: async () => null,
+        queryRows: async () => {
+          throw new Error('Unexpected queryRows after delete guard');
+        },
+        isUniqueViolation: () => false,
+        withManagedDbRetry: async <T,>(_scope: string, run: () => Promise<T>) => run(),
+        getManagedDbConnectionConfig: () => ({}),
+        getManagedDbPoolConfig: () => ({}),
+      },
+      queries: {
+        listFolderRows: async () => [],
+        listWorkflowRows: async () => [],
+        getWorkflowByRelativePath: async () => workflowRow,
+        getWorkflowById: async () => null,
+        getRevision: async () => null,
+        getCurrentDraftWorkflowRevision: async () => null,
+        ensureFolderChain: async () => {},
+        assertFolderExists: async () => {},
+        resolveExecutionPointerFromDatabase: async () => null,
+      },
+      revisions: {
+        readRevisionProjectContents: async () => {
+          throw new Error('Unexpected project blob read');
+        },
+        readRevisionContents: async () => {
+          throw new Error('Unexpected revision read');
+        },
+        deleteBlobKeysBestEffort: async () => {},
+      },
+      endpointSync: {
+        syncWorkflowEndpointRows: async () => {},
+      },
+      mappers: managedMappers,
+      blobStore: {
+        getText: async () => {
+          throw new Error('Unexpected blob store access');
+        },
+      },
+      executionCache: {} as never,
+      executionInvalidationController: {
+        queueWorkflowInvalidation: async () => {},
+        queueGlobalInvalidation: async () => {},
+      },
+      dispose: async () => {},
+    } as never,
+    saveHostedProject: async () => {
+      throw new Error('Unexpected saveHostedProject call');
+    },
+  });
+}
+
 test('managed workflow tree includes graph and node stats from current draft revision metadata', async () => {
   const workflowRow = createWorkflowRow();
   const revisionRow = createRevisionRow(workflowRow.workflow_id, workflowRow.current_draft_revision_id);
@@ -102,6 +174,36 @@ test('managed workflow tree includes graph and node stats from current draft rev
   assert.equal(tree.projects.length, 1);
   assert.equal(tree.projects[0]?.stats?.graphCount, 1);
   assert.equal(tree.projects[0]?.stats?.totalNodeCount, 2);
+});
+
+test('managed workflow deletion is blocked by every active publication marker', async () => {
+  const cases: Array<{ name: string; workflowRow: WorkflowRow; webAppRows?: unknown[] }> = [
+    {
+      name: 'published revision',
+      workflowRow: createWorkflowRow({ published_revision_id: 'published-revision' }),
+    },
+    {
+      name: 'published version',
+      workflowRow: createWorkflowRow({ published_version_id: 'published-version' }),
+    },
+    {
+      name: 'published endpoint name',
+      workflowRow: createWorkflowRow({ published_endpoint_name: 'published-endpoint' }),
+    },
+    {
+      name: 'published web app',
+      workflowRow: createWorkflowRow(),
+      webAppRows: [{ app_id: 'published-web-app' }],
+    },
+  ];
+
+  for (const { name, workflowRow, webAppRows } of cases) {
+    await assert.rejects(
+      () => createCatalogForDeleteGuard(workflowRow, webAppRows).deleteWorkflowProjectItem(workflowRow.relative_path),
+      /Unpublish the workflow endpoint and web apps before deleting the project/,
+      name,
+    );
+  }
 });
 
 test('managed workflow tree backfills legacy revision stats when metadata is missing', async () => {

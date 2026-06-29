@@ -661,6 +661,19 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
           throw createHttpError(404, 'Project not found');
         }
 
+        const publishedWebAppResult = await client.query(
+          'SELECT 1 FROM workflow_web_apps WHERE workflow_id = $1 LIMIT 1',
+          [workflow.workflow_id],
+        );
+        if (
+          workflow.published_revision_id ||
+          workflow.published_version_id ||
+          workflow.published_endpoint_name ||
+          publishedWebAppResult.rows.length > 0
+        ) {
+          throw conflict('Unpublish the workflow endpoint and web apps before deleting the project');
+        }
+
         const revisions = await deps.queryRows<RevisionRow>(
           client,
           `

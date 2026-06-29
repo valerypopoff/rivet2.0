@@ -956,7 +956,7 @@ test('delete workflow project removes project and sidecars', async () => {
   assert.equal(await workflowFs.pathExists(sidecars.stats), false);
 });
 
-test('delete workflow project removes published snapshots', async () => {
+test('delete workflow project is blocked until workflow publication is unpublished', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'DeletePublished');
   const published = await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'delete-published',
@@ -966,7 +966,34 @@ test('delete workflow project removes published snapshots', async () => {
 
   assert.equal(await workflowFs.pathExists(publishedSnapshotPath), true);
 
+  await assert.rejects(
+    () => workflowMutations.deleteWorkflowProjectItem(created.relativePath),
+    /Unpublish the workflow endpoint and web apps before deleting the project/,
+  );
+
+  await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
   await workflowMutations.deleteWorkflowProjectItem(created.relativePath);
 
   assert.equal(await workflowFs.pathExists(publishedSnapshotPath), false);
+});
+
+test('delete workflow project is blocked by legacy published settings', async () => {
+  for (const legacyStatus of ['published', 'unpublished_changes'] as const) {
+    const created = await workflowMutations.createWorkflowProjectItem('', `DeleteLegacy${legacyStatus}`);
+    const settingsPath = workflowFs.getProjectSidecarPaths(created.absolutePath).settings;
+    await fs.writeFile(settingsPath, `${JSON.stringify({
+      endpointName: `delete-legacy-${legacyStatus.replace('_', '-')}`,
+      publishedEndpointName: '',
+      publishedSnapshotId: null,
+      publishedStateHash: null,
+      lastPublishedAt: null,
+      publishedWebApps: [],
+      status: legacyStatus,
+    }, null, 2)}\n`, 'utf8');
+
+    await assert.rejects(
+      () => workflowMutations.deleteWorkflowProjectItem(created.relativePath),
+      /Unpublish the workflow endpoint and web apps before deleting the project/,
+    );
+  }
 });

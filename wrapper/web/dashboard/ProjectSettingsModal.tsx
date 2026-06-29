@@ -6,6 +6,7 @@ import { type FC, useEffect, useMemo, type ReactNode, useState } from 'react';
 import {
   formatLastPublishedAtLabel,
   getWorkflowProjectStatusLabel,
+  isWorkflowProjectFullyUnpublished,
 } from './projectSettingsForm';
 import type {
   HostedRouteConfig,
@@ -78,6 +79,14 @@ const renderWebAppEndpointLink = (path: string): ReactNode => (
   </a>
 );
 
+function getWebAppStatusLabel(status: WorkflowProjectStatus): string {
+  if (status === 'unpublished') {
+    return 'Not published';
+  }
+
+  return getWorkflowProjectStatusLabel(status);
+}
+
 type ProjectSettingsTab = 'workflow' | 'web-apps';
 
 type ProjectSettingsModalProps = {
@@ -141,6 +150,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   const hasWorkflowEndpointDraftChange = settingsDraft.endpointName.trim() !== activeProject.settings.endpointName.trim();
   const hasWebApps = webApps.length > 0;
   const hasPublishedWebApps = webApps.some((webApp) => webApp.publishedSlug != null);
+  const canDeleteProject = isWorkflowProjectFullyUnpublished(activeProject) && !loadingWebApps && !hasPublishedWebApps;
   const lastPublishedAtLabel = useMemo(
     () => formatLastPublishedAtLabel(displayedProjectStatus, activeProject.settings.lastPublishedAt),
     [activeProject.settings.lastPublishedAt, displayedProjectStatus],
@@ -152,7 +162,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     endpointValidationError != null ||
     (!isUnpublishedProject && !hasWorkflowChangesToPublish && !hasWorkflowEndpointDraftChange);
   const disableUnpublishAction = savingSettings || deletingProject;
-  const disableDeleteProjectAction = savingSettings || savingWebApps || deletingProject || !isUnpublishedProject;
+  const disableDeleteProjectAction = savingSettings || savingWebApps || deletingProject || !canDeleteProject;
   const disableWebAppActions = savingSettings || savingWebApps || deletingProject || loadingWebApps;
   const workflowPublishButtonLabel = isUnpublishedProject ? 'Publish' : 'Update';
   const renderTabs = () => (
@@ -284,6 +294,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
             const validationError = webAppSlugValidationErrors[webApp.uiGraphId] ?? null;
             const isPublished = webApp.publishedSlug != null;
             const hasWebAppSlugDraftChange = isPublished && slugDraft.trim() !== webApp.publishedSlug;
+            const hasWebAppChangesToPublish = webApp.status === 'unpublished_changes' && !webApp.isMissingFromProject;
             const displaySlug = isPublished ? webApp.publishedSlug! : slugDraft.trim() || 'slug';
             return (
               <div className="project-settings-web-app-row" key={webApp.uiGraphId}>
@@ -291,8 +302,8 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                   <div className="project-settings-web-app-name" title={webApp.name}>
                     {webApp.name}
                   </div>
-                  <span className={`project-settings-web-app-state${isPublished ? ' published' : ''}`}>
-                    {isPublished ? 'Published' : 'Not published'}
+                  <span className={`project-settings-web-app-state ${webApp.status}`}>
+                    {getWebAppStatusLabel(webApp.status)}
                   </span>
                 </div>
                 <div className="project-settings-field">
@@ -318,7 +329,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                         isDisabled={
                           disableWebAppActions ||
                           validationError != null ||
-                          (isPublished && !hasWebAppSlugDraftChange)
+                          (isPublished && !hasWebAppSlugDraftChange && !hasWebAppChangesToPublish)
                         }
                         isLoading={savingWebApps}
                       >

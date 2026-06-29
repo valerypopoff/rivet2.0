@@ -123,6 +123,7 @@ export type WorkflowProjectWebAppSummary = {
   name: string;
   publishedSlug: string | null;
   publishedAt: string | null;
+  status: WorkflowProjectStatus;
   isMissingFromProject: boolean;
 };
 

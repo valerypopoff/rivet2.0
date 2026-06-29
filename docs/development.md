@@ -10,7 +10,7 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
   - ensures `wrapper/api` and `wrapper/web` dependencies exist
   - clones `rivet/` from the configured Rivet 2 repo if it is missing
   - installs upstream Yarn dependencies with `YARN_NODE_LINKER=node-modules` and builds `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` when needed
-  - links `wrapper/api/node_modules/@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and Rivet 2's `@rivet2/*` runtime aliases to generated package overlays under `wrapper/api/node_modules/.rivet-package-links`; those overlays point `dist` at the built packages under `rivet/` and resolve package dependencies through `rivet/node_modules`
+  - links `wrapper/api/node_modules/@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and Rivet 2's `@rivet2/*` runtime aliases to generated package overlays under `wrapper/api/node_modules/.rivet-package-links`; those overlays point `dist` at the built packages under `rivet/` and build a generated dependency overlay from installed `rivet/`, API, and web package dependencies
   - removes retired generated API package links from older setup runs before writing the current Rivet 2 package links
   - keeps API runtime and TypeScript resolution on symlink-preserved paths, so setup does not need to create helper dependency links inside the external `rivet/` checkout
   - accepts either a Git checkout, a valid upstream snapshot, or a local symlink/junction already present in `rivet/`
@@ -295,7 +295,7 @@ Current behavior:
 - the web image uses upstream Rivet's `yarn build:hosted-web-deps` script to build `core + trivet` without the Dockerfile knowing Rivet's internal workspace build order
 - the executor image uses `yarn build:runtime` for `core + node`, then keeps the wrapper's Docker-specific bundle-only app-executor step. Do not replace that with upstream `yarn build:executor-runtime` unless the image needs native app-executor sidecar binaries and the build runs on the same target platform; the current container runs `bin/executor-bundle.cjs` directly and deliberately skips the slower native `pkg` sidecar build. The wrapper bundler emits CommonJS, so it defines `import.meta.url` as `__filename`; this keeps upstream node modules that create an asset resolver with `createRequire(import.meta.url)` from crashing when they are imported by the app-executor bundle.
 - the Docker dev API waits for the web service to populate the shared `rivet_node_modules` volume, then copies only `rivet/packages/core` and `rivet/packages/node` into container-local `/tmp/rivet-source`, attaches `/workspace/rivet/node_modules` beside that copy, and points the generated `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and `@rivet2/*` package overlays at the internal copy. Keeping this staging copy outside the `/app` bind mount avoids Windows host-volume link/copy failures while preserving Node package resolution inside the container, avoiding a duplicate upstream dependency install, and avoiding API helper links in the external Rivet checkout.
-- local and image API entrypoints run with symlink preservation (`preserveSymlinks` for TypeScript and `--preserve-symlinks` for Node/tsx), while `scripts/link-rivet-node-package.mjs` creates generated package overlays that expose the built Rivet package `dist` folders and route third-party dependency lookup back to `rivet/node_modules`
+- local and image API entrypoints run with symlink preservation (`preserveSymlinks` for TypeScript and `--preserve-symlinks` for Node/tsx), while `scripts/link-rivet-node-package.mjs` creates generated package overlays that expose the built Rivet package `dist` folders and build a package-local `node_modules` overlay from the available installed dependency roots: `rivet/node_modules`, `wrapper/api/node_modules`, and `wrapper/web/node_modules`. This keeps aggregate API tests from depending on one mutable upstream install layout while still resolving hosted Rivet runtime dependencies without writing helper links inside the external `rivet/` checkout.
 - the Docker dev API mounts the repo scripts directory at `/scripts`, matching the `../../scripts/...` path seen from `/app`, so the same `wrapper/api` package scripts run locally and inside Compose
 - Docker image builds receive upstream Rivet through the named `rivet_source` and `rivet_dependency_metadata` build contexts instead of `COPY rivet/` from the main repo context; local launchers feed those contexts from `.data/docker-contexts/rivet-source` and `.data/docker-contexts/rivet-dependency-metadata` so linked Rivet checkouts do not send `node_modules`, `.git`, or Yarn cache artifacts to BuildKit
 - `npm run dev:docker:prepare-rivet-context` refreshes those filtered contexts without starting Docker, which is useful before manual `docker build --build-context rivet_source=.data/docker-contexts/rivet-source --build-context rivet_dependency_metadata=.data/docker-contexts/rivet-dependency-metadata ...` checks
@@ -591,11 +591,11 @@ For workflow-library project deletion behavior:
 
 1. `npm run dev`
 2. validate the browser flow through `http://localhost:8080` by default, or your configured `RIVET_PORT`
-3. right-click an `unpublished` project in the left panel and run `Delete project`
+3. right-click a project with no workflow endpoint publication and no published web apps in the left panel and run `Delete project`
 4. confirm the context-menu action only opens Project Settings and does not delete immediately
 5. confirm the project is deleted only after clicking `Delete project` again inside Project Settings
-6. right-click a `published` or `unpublished_changes` project and run `Delete project`
-7. confirm the UI shows `To delete a project, unpublish it first`
+6. right-click a project that has a published workflow endpoint, unpublished workflow changes, or published web apps and run `Delete project`
+7. confirm the UI shows `To delete a project, unpublish its workflow endpoint and web apps first`
 8. confirm the guarded delete action does not change selection, open a different tab, or delete anything directly from the context menu
 
 For workflow-library project rename entry behavior:
