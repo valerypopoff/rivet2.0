@@ -388,3 +388,16 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
     next(error);
   }
 });
+
+webAppOAuthRouter.get('/auth/logout', (req, res) => {
+  const returnTo = typeof req.query.return_to === 'string'
+    ? req.query.return_to
+    : RIVET_WEB_APPS_BASE_PATH;
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Set-Cookie', [
+    clearCookie(OAUTH_STATE_COOKIE_NAME, req),
+    clearCookie(OAUTH_SESSION_COOKIE_NAME, req),
+  ]);
+  res.redirect(303, sanitizeUiAuthReturnTo(returnTo));
+});

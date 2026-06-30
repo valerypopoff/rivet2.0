@@ -87,8 +87,12 @@ test('proxy UI gate prompt is served from container-local staged storage', () =>
 
 test('proxy templates gate hosted web apps through the configured web app auth mode', () => {
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
+  const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
+  const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
   assert.match(proxyBootstrap, /normalize_web_apps_auth_mode\(\)/);
   assert.match(proxyBootstrap, /export RIVET_WEB_APPS_AUTH_MODE="\$\(normalize_web_apps_auth_mode "\$\{RIVET_WEB_APPS_AUTH_MODE:-\}"\)"/);
+  assert.match(prodCompose, /OAUTH_DEBUG_LOG_PROFILE=\$\{OAUTH_DEBUG_LOG_PROFILE:-\}/);
+  assert.match(devCompose, /OAUTH_DEBUG_LOG_PROFILE=\$\{OAUTH_DEBUG_LOG_PROFILE:-\}/);
 
   for (const template of readProxyTemplates()) {
     assert.match(template, /map \$http_x_forwarded_host \$rivet_forwarded_host/);

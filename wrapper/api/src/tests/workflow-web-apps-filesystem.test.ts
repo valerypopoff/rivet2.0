@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import fs from 'node:fs/promises';
 import test from 'node:test';
 
@@ -67,6 +68,15 @@ async function publishWebApp(relativePath: string, slug: string): Promise<void> 
     uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
     slug,
   }]);
+}
+
+function createSignedOAuthSessionCookie(email: string, secret: string): string {
+  const payload = Buffer.from(JSON.stringify({
+    email,
+    expiresAt: Date.now() + 60_000,
+  }), 'utf8').toString('base64url');
+  const signature = createHmac('sha256', secret).update(payload).digest('base64url');
+  return `rivet_web_app_oauth_session=${payload}.${signature}`;
 }
 
 test('workflow web app publication routes publish multiple project web apps independently', async () => {
@@ -604,6 +614,7 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
     OAUTH_CLIENT_ID: 'client-id',
     OAUTH_CLIENT_SECRET: 'client-secret',
     OAUTH_CALLBACK_URL: 'https://rivet.example.test/apps/auth/callback',
+    OAUTH_SESSION_SECRET: 'session-secret',
   }, async () => {
     const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppOAuth');
     await writeWebAppProject(created.absolutePath, 'PublishedWebAppOAuth', 'Published OAuth App');
@@ -614,6 +625,8 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
     }]);
 
     await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+      const allowedSessionCookie = createSignedOAuthSessionCookie('user@example.com', 'session-secret');
+      const deniedSessionCookie = createSignedOAuthSessionCookie('other@example.com', 'session-secret');
       const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth`, {
         redirect: 'manual',
         signal: AbortSignal.timeout(5000),
@@ -631,6 +644,26 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
       assert.match(authErrorHtml, /Web app sign-in failed/);
       assert.match(authErrorHtml, /profile response did not include the configured email claim/);
       assert.match(authErrorHtml, /href="\/apps\/published-web-app-oauth"/);
+
+      const deniedResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth`, {
+        headers: { cookie: deniedSessionCookie },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(deniedResponse.status, 403);
+      const deniedHtml = await deniedResponse.text();
+      assert.match(deniedHtml, /Web app access denied/);
+      assert.match(deniedHtml, /other@example\.com/);
+      assert.match(deniedHtml, /Sign out and choose another account/);
+      assert.match(deniedHtml, /href="\/apps\/auth\/logout\?return_to=%2Fapps%2Fpublished-web-app-oauth"/);
+
+      const allowedResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth`, {
+        headers: { cookie: allowedSessionCookie },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(allowedResponse.status, 200);
+      const allowedHtml = await allowedResponse.text();
+      assert.match(allowedHtml, /rivet-web-app-auth-logout/);
+      assert.match(allowedHtml, /href="\/apps\/auth\/logout\?return_to=%2Fapps%2Fpublished-web-app-oauth"/);
 
       const crossOriginActionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth/actions/run`, {
         method: 'POST',

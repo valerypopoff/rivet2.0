@@ -421,6 +421,8 @@ Successful UI-gate or OAuth login returns the browser to the original web-app UR
 
 For OAuth provider integration, `OAUTH_EMAIL_CLAIM` accepts dot paths such as `data.email`. If the provider's profile shape is unknown, set `OAUTH_DEBUG_LOG_PROFILE=true` only temporarily; the API logs the raw profile JSON after the user-info request so operators can choose the claim path, and the flag should be disabled again because the payload can contain profile data.
 
+OAuth-authenticated web app HTML gets a small wrapper-owned sign-out link so users can switch accounts without clearing browser cookies manually. If the signed-in email is not allowed for that specific published app, the HTML route shows `Web app access denied` with a sign-out-and-retry action instead of a raw `Forbidden` page. Non-HTML action and `app.json` requests keep machine-readable `403` JSON responses.
+
 Endpoint resolution is backend-specific:
 
 - in `filesystem` mode, the API resolves published workflow routes from the published endpoint identity, latest routes from the current draft endpoint identity, and both web-app route families from `publishedWebApps` slugs
