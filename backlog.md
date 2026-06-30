@@ -2,7 +2,6 @@
 
 - While the workflow is running, send some kind of a number of run nodes that can be a progress indicator
 
-- Markdown in the text editor in the node settings should be foldable just like the json structures
 
 - Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
 

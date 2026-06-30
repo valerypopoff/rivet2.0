@@ -69,6 +69,7 @@ export const outputSectionCopyButtonStyles = css`
   transition:
     color 120ms ease,
     opacity 120ms ease;
+  transform: translateY(calc(4px * var(--ui-font-scale)));
   width: calc(22px * var(--ui-font-scale));
 
   svg {

@@ -354,6 +354,24 @@ test('node code editor lets panel scrolling continue at editor scroll edges', ()
   assert.equal(scrollbarBlocks.length, 2);
 });
 
+test('node Markdown code editors opt into Monaco folding', () => {
+  const nodeEditorCodeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
+  const codeEditorMonacoSource = readFileSync(
+    join(componentsDir, '..', 'utils', 'monaco', 'codeEditorMonaco.ts'),
+    'utf8',
+  );
+
+  assert.match(nodeEditorCodeEditorSource, /shouldEnableMarkdownFolding/);
+  assert.match(
+    nodeEditorCodeEditorSource,
+    /const effectiveEnableFolding = enableFolding \|\| shouldEnableMarkdownFolding\(language\);/,
+  );
+  assert.match(nodeEditorCodeEditorSource, /enableFolding=\{effectiveEnableFolding\}/);
+  assert.match(codeEditorMonacoSource, /registerMarkdownFoldingProviders/);
+  assert.match(codeEditorMonacoSource, /MARKDOWN_FOLDING_LANGUAGES/);
+  assert.match(codeEditorMonacoSource, /registerFoldingRangeProvider/);
+});
+
 test('readonly display code editors keep Monaco model text synchronized', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
 

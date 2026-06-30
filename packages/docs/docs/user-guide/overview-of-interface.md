@@ -90,6 +90,8 @@ This area contains the editors for the currently selected node. The editor will 
 
 Text and code editors have their own font-size control, separate from the main app UI font size. When focus is inside one of these editors, press **Ctrl + +** or **Cmd + +** to make the editor text larger, **Ctrl + -** or **Cmd + -** to make it smaller, and **Ctrl + 0** or **Cmd + 0** to reset it. You can also hold **Ctrl** or **Cmd** and use the mouse wheel or trackpad scroll while the pointer is over the editor to scale the editor font.
 
+Markdown editors in node settings can fold heading sections and fenced code blocks, similar to code and JSON editors that show fold controls for structured content.
+
 When the **Bright** theme is active, node text and code editors use Monaco's light editor theme so Comment, Code, Expression, JS Filter, and LLM Chat technical-option editors match the rest of the light interface.
 
 ## Workspaces
