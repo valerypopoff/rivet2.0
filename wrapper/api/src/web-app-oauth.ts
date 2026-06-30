@@ -27,8 +27,18 @@ type OAuthStatePayload = SignedPayload & {
   returnTo: string;
 };
 
+type OAuthStateCookiePayload = SignedPayload & {
+  nonce: string;
+  returnTo?: string;
+};
+
 function getEnvString(name: string): string {
   return process.env[name]?.trim() ?? '';
+}
+
+function isEnvFlagEnabled(name: string): boolean {
+  const value = getEnvString(name).toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
 }
 
 export function getWebAppAuthMode(): WebAppAuthMode {
@@ -186,8 +196,9 @@ export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: s
   } satisfies OAuthStatePayload);
   const stateCookie = signPayload({
     nonce,
+    returnTo: sanitizedReturnTo,
     expiresAt,
-  });
+  } satisfies OAuthStateCookiePayload);
 
   const authorizeUrl = new URL(config.authorizeUrl);
   authorizeUrl.searchParams.set('response_type', 'code');
@@ -291,12 +302,33 @@ async function fetchOAuthUserEmail(accessToken: string): Promise<string> {
     },
   });
   const profile = await readJsonResponse(response, 'profile request');
+  if (isEnvFlagEnabled('OAUTH_DEBUG_LOG_PROFILE')) {
+    console.warn('[web-app-oauth] OAuth profile response:', JSON.stringify(profile));
+  }
+
   const email = getClaimFromObject(profile, config.emailClaim);
   if (typeof email !== 'string' || !email.trim()) {
     throw createHttpError(401, `OAuth profile did not include ${config.emailClaim}`);
   }
 
   return email.trim().toLowerCase();
+}
+
+function getOAuthCallbackFailureCode(error: unknown): string {
+  if (error instanceof Error && error.message.includes('profile did not include')) {
+    return 'oauth_profile';
+  }
+
+  if (error instanceof Error && error.message.includes('token')) {
+    return 'oauth_token';
+  }
+
+  return 'oauth_failed';
+}
+
+function shouldRedirectOAuthCallbackFailure(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status !== 'number' || status < 500;
 }
 
 export const webAppOAuthRouter = Router();
@@ -306,10 +338,10 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
     const state = typeof req.query.state === 'string' ? req.query.state : '';
     const code = typeof req.query.code === 'string' ? req.query.code : '';
     const statePayload = readSignedPayload<OAuthStatePayload>(state);
-    const stateCookie = readSignedPayload<{ nonce: string; expiresAt: number }>(
+    const stateCookie = readSignedPayload<OAuthStateCookiePayload>(
       readCookie(req, OAUTH_STATE_COOKIE_NAME),
     );
-    const fallbackReturnTo = sanitizeUiAuthReturnTo(statePayload?.returnTo);
+    const fallbackReturnTo = sanitizeUiAuthReturnTo(statePayload?.returnTo ?? stateCookie?.returnTo);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Set-Cookie', clearCookie(OAUTH_STATE_COOKIE_NAME, req));
@@ -324,8 +356,19 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
       return;
     }
 
-    const accessToken = await exchangeCodeForToken(req, code);
-    const email = await fetchOAuthUserEmail(accessToken);
+    let email: string;
+    try {
+      const accessToken = await exchangeCodeForToken(req, code);
+      email = await fetchOAuthUserEmail(accessToken);
+    } catch (error) {
+      if (!shouldRedirectOAuthCallbackFailure(error)) {
+        throw error;
+      }
+
+      res.redirect(303, addUiAuthErrorToReturnTo(fallbackReturnTo, getOAuthCallbackFailureCode(error)));
+      return;
+    }
+
     const ttlSeconds = Math.max(60, Number.parseInt(getEnvString('OAUTH_SESSION_TTL_SECONDS'), 10) || DEFAULT_SESSION_TTL_SECONDS);
     const sessionCookie = createCookie(
       OAUTH_SESSION_COOKIE_NAME,

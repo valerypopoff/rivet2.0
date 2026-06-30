@@ -33,6 +33,7 @@ const OAUTH_ENV_KEYS = [
   'OAUTH_SESSION_SECRET',
   'OAUTH_SESSION_TTL_SECONDS',
   'OAUTH_CLIENT_AUTH_METHOD',
+  'OAUTH_DEBUG_LOG_PROFILE',
 ] as const;
 
 function createMockRequest(headers: Record<string, string> = {}): MockRequest {
@@ -222,6 +223,151 @@ test('web app OAuth callback exchanges code, sets session cookie, and supports a
       });
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('web app OAuth callback returns to the original app when provider errors without state', async () => {
+  await withEnv({
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    OAUTH_SESSION_SECRET: 'session-secret',
+  }, async () => {
+    await withOAuthCallbackServer(async (baseUrl) => {
+      const redirect = createWebAppOAuthAuthorizationRedirect(
+        createMockRequest({ host: '127.0.0.1', 'x-forwarded-proto': 'http' }) as any,
+        '/apps/my-tool/?x=1#top',
+      );
+      const stateCookie = getCookieValue(redirect.cookies.join('; '), 'rivet_web_app_oauth_state');
+
+      const callbackResponse = await fetch(`${baseUrl}/auth/callback?error=invalid_scope`, {
+        headers: { cookie: `rivet_web_app_oauth_state=${stateCookie}` },
+        redirect: 'manual',
+      });
+
+      assert.equal(callbackResponse.status, 303);
+      assert.equal(callbackResponse.headers.get('location'), '/apps/my-tool/?x=1&auth_error=oauth_denied#top');
+    });
+  });
+});
+
+test('web app OAuth callback returns to the original app when profile has no configured email claim', async () => {
+  await withEnv({
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    OAUTH_SESSION_SECRET: 'session-secret',
+  }, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://oauth.example.test/token') {
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://oauth.example.test/profile') {
+        return new Response(JSON.stringify({ name: 'User Without Email' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      await withOAuthCallbackServer(async (baseUrl) => {
+        const redirect = createWebAppOAuthAuthorizationRedirect(
+          createMockRequest({ host: '127.0.0.1', 'x-forwarded-proto': 'http' }) as any,
+          '/apps/my-tool',
+        );
+        const state = new URL(redirect.location).searchParams.get('state');
+        assert.ok(state);
+        const stateCookie = getCookieValue(redirect.cookies.join('; '), 'rivet_web_app_oauth_state');
+
+        const callbackResponse = await originalFetch(`${baseUrl}/auth/callback?code=abc&state=${encodeURIComponent(state)}`, {
+          headers: { cookie: `rivet_web_app_oauth_state=${stateCookie}` },
+          redirect: 'manual',
+        });
+
+        assert.equal(callbackResponse.status, 303);
+        assert.equal(callbackResponse.headers.get('location'), '/apps/my-tool?auth_error=oauth_profile');
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('web app OAuth callback can log the raw profile response for claim discovery', async () => {
+  await withEnv({
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    OAUTH_SESSION_SECRET: 'session-secret',
+    OAUTH_DEBUG_LOG_PROFILE: 'true',
+  }, async () => {
+    const originalFetch = globalThis.fetch;
+    const originalWarn = console.warn;
+    const warnings: unknown[][] = [];
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://oauth.example.test/token') {
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://oauth.example.test/profile') {
+        return new Response(JSON.stringify({ data: { email: 'USER@example.com' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      await withOAuthCallbackServer(async (baseUrl) => {
+        const redirect = createWebAppOAuthAuthorizationRedirect(
+          createMockRequest({ host: '127.0.0.1', 'x-forwarded-proto': 'http' }) as any,
+          '/apps/profile-debug-tool',
+        );
+        const state = new URL(redirect.location).searchParams.get('state');
+        assert.ok(state);
+        const stateCookie = getCookieValue(redirect.cookies.join('; '), 'rivet_web_app_oauth_state');
+
+        await originalFetch(`${baseUrl}/auth/callback?code=abc&state=${encodeURIComponent(state)}`, {
+          headers: { cookie: `rivet_web_app_oauth_state=${stateCookie}` },
+          redirect: 'manual',
+        });
+
+        assert.deepEqual(warnings, [[
+          '[web-app-oauth] OAuth profile response:',
+          JSON.stringify({ data: { email: 'USER@example.com' } }),
+        ]]);
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      console.warn = originalWarn;
     }
   });
 });
