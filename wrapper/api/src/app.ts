@@ -15,6 +15,7 @@ import {
 } from './routes/workflows/index.js';
 import { configRouter } from './routes/config.js';
 import { uiAuthRouter } from './routes/ui-auth.js';
+import { webAppOAuthRouter } from './web-app-oauth.js';
 import { runtimeLibrariesRouter } from './routes/runtime-libraries.js';
 import {
   LATEST_WORKFLOWS_BASE_PATH,
@@ -43,6 +44,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
   if (isControlPlaneApiProfile(profile)) {
     surfaces.push(
       '/ui-auth',
+      `${RIVET_WEB_APPS_BASE_PATH}/auth/callback`,
       `${LATEST_WORKFLOWS_BASE_PATH}/:endpointName`,
       `${RIVET_LATEST_WEB_APPS_BASE_PATH}/:slug`,
       '/api/native/*',
@@ -57,13 +59,14 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
 
   if (profile === 'combined' || profile === 'execution') {
     surfaces.push(
+      `${RIVET_WEB_APPS_BASE_PATH}/auth/callback`,
       `${PUBLISHED_WORKFLOWS_BASE_PATH}/:endpointName`,
       `${RIVET_WEB_APPS_BASE_PATH}/:slug`,
       '/internal/workflows/:endpointName',
     );
   }
 
-  return surfaces;
+  return [...new Set(surfaces)];
 }
 
 export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRuntimeProfile()): void {
@@ -102,6 +105,10 @@ export function createApiApp(profile = getApiRuntimeProfile()): Express {
   app.get('/healthz', (_req, res) => {
     res.status(200).json({ ok: true });
   });
+
+  if (isControlPlaneApiProfile(profile) || profile === 'execution') {
+    app.use(RIVET_WEB_APPS_BASE_PATH, webAppOAuthRouter);
+  }
 
   if (isControlPlaneApiProfile(profile)) {
     mountControlPlaneRoutes(app);

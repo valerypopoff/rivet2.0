@@ -5,6 +5,7 @@ export type ManagedEndpointPointerCacheEntry = {
   relativePath: string;
   revisionId: string;
   webAppUiGraphId?: string;
+  webAppAllowedEmails?: string[];
 };
 
 export type ManagedRevisionMaterializationCacheEntry = {

@@ -13,7 +13,7 @@ type ProjectSettingsRouteTrackers = {
   projectLoadRequests: Array<{ path: string }>;
   webAppPublishRequests: Array<{
     relativePath: string;
-    publications: Array<{ uiGraphId: string; slug: string }>;
+    publications: Array<{ uiGraphId: string; slug: string; allowedEmails?: string[] }>;
   }>;
   webAppUnpublishRequests: Array<{ relativePath: string; uiGraphId: string }>;
   publishedVersionCommentRequests: Array<{ relativePath: string; versionId: string; comment: string }>;
@@ -31,6 +31,7 @@ const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
   latestWorkflowsBasePath: '/workflows-latest',
   publishedAppsBasePath: '/apps',
   latestAppsBasePath: '/apps-latest',
+  webAppsAuthMode: 'ui-gate',
 };
 
 function isRouteRequest(routeRequest: { method: () => string; url: () => string }, method: string, pathname: string): boolean {
@@ -249,6 +250,7 @@ async function installProjectSettingsRoutes(
         publishedSlug: publication.slug,
         publishedAt,
         status: 'published',
+        allowedEmails: publication.allowedEmails ?? [],
       };
     });
     targetProject.settings = {
@@ -707,7 +709,7 @@ test.describe('Project settings modal', () => {
     expect(routeTrackers.webAppPublishRequests[0]).toEqual({
       relativePath: project.relativePath,
       publications: [
-        { uiGraphId: 'ui-graph-gamma', slug: 'gamma-reporter' },
+        { uiGraphId: 'ui-graph-gamma', slug: 'gamma-reporter', allowedEmails: [] },
       ],
     });
     await expect(gammaRow.locator('.project-settings-web-app-state.published')).toHaveText('Published');
@@ -723,7 +725,7 @@ test.describe('Project settings modal', () => {
     expect(routeTrackers.webAppPublishRequests[1]).toEqual({
       relativePath: project.relativePath,
       publications: [
-        { uiGraphId: 'ui-graph-alpha', slug: 'alpha-helper' },
+        { uiGraphId: 'ui-graph-alpha', slug: 'alpha-helper', allowedEmails: [] },
       ],
     });
     await betaRow.getByRole('button', { name: 'Publish', exact: true }).click();
@@ -750,7 +752,7 @@ test.describe('Project settings modal', () => {
     expect(routeTrackers.webAppPublishRequests[2]).toEqual({
       relativePath: project.relativePath,
       publications: [
-        { uiGraphId: 'ui-graph-beta', slug: 'beta-console' },
+        { uiGraphId: 'ui-graph-beta', slug: 'beta-console', allowedEmails: [] },
       ],
     });
     await expect(staleRow.getByRole('button', { name: 'Publish', exact: true })).toHaveCount(0);

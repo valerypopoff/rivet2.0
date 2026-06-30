@@ -8,6 +8,7 @@ export type {
   WorkflowProjectSettingsDraft,
   WorkflowProjectStats,
   WorkflowProjectStatus,
+  WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedWebAppSummary,
@@ -29,6 +30,7 @@ export type StoredWorkflowPublishedWebApp = {
   slug: string;
   publishedSnapshotId: string;
   publishedAt: string;
+  allowedEmails: string[];
 };
 
 export type PublishedWorkflowMatch = {
@@ -40,6 +42,7 @@ export type PublishedWorkflowMatch = {
 export type PublishedWorkflowWebAppMatch = {
   slug: string;
   uiGraphId: string;
+  allowedEmails: string[];
   projectPath: string;
   publishedProjectPath: string;
 };

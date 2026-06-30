@@ -16,6 +16,7 @@ export type ManagedExecutionProjectResult = {
   projectVirtualPath: string;
   revisionKey: string;
   webAppUiGraphId?: string;
+  webAppAllowedEmails?: string[];
   debug: ManagedExecutionDebugInfo;
 };
 

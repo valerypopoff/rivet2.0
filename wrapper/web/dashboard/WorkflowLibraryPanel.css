@@ -1346,6 +1346,12 @@
   color: var(--grey-lightest);
 }
 
+.project-settings-field-label {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+}
+
 .project-settings-input {
   flex: 1 1 auto;
   width: 100%;
@@ -1371,6 +1377,26 @@
 }
 
 .project-settings-input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.project-settings-textarea {
+  flex: 1 1 auto;
+  min-height: 74px;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--grey-lightest);
+  font: inherit;
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.4;
+  padding: 8px 10px;
+}
+
+.project-settings-textarea:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
@@ -1444,6 +1470,21 @@
 
 .project-settings-web-app-state.unpublished_changes {
   color: var(--workflow-status-unpublished-changes-color);
+}
+
+.project-settings-web-app-access-field {
+  margin-top: 2px;
+}
+
+.project-settings-web-app-access-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.project-settings-web-app-access-row .project-settings-primary-button {
+  align-self: stretch;
+  flex: 0 0 auto;
 }
 
 .project-settings-web-app-code {

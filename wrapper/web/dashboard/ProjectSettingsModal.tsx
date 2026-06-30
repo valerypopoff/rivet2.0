@@ -87,6 +87,22 @@ function getWebAppStatusLabel(status: WorkflowProjectStatus): string {
   return getWorkflowProjectStatusLabel(status);
 }
 
+function normalizeAllowedEmailDraft(value: string): string[] {
+  const seen = new Set<string>();
+  const emails: string[] = [];
+  for (const rawEmail of value.split(/[\n,;]/)) {
+    const email = rawEmail.trim().toLowerCase();
+    if (!email || seen.has(email)) {
+      continue;
+    }
+
+    seen.add(email);
+    emails.push(email);
+  }
+
+  return emails;
+}
+
 type ProjectSettingsTab = 'workflow' | 'web-apps';
 
 type ProjectSettingsModalProps = {
@@ -121,16 +137,20 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     savingSettings,
     webApps,
     webAppSlugDrafts,
+    webAppAllowedEmailDrafts,
     webAppSlugValidationErrors,
+    webAppAccessValidationErrors,
     loadingWebApps,
     savingWebApps,
     deletingProject,
     handleSettingsDraftChange,
     handleWebAppSlugDraftChange,
+    handleWebAppAllowedEmailsDraftChange,
     handlePublishProject,
     handleUnpublishProject,
     handlePublishWebApps,
     handleUnpublishWebApp,
+    handleSaveWebAppAccess,
     handleDeleteActiveProject,
     endpointValidationError,
   } = useProjectSettingsActions({
@@ -165,6 +185,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   const disableDeleteProjectAction = savingSettings || savingWebApps || deletingProject || !canDeleteProject;
   const disableWebAppActions = savingSettings || savingWebApps || deletingProject || loadingWebApps;
   const workflowPublishButtonLabel = isUnpublishedProject ? 'Publish' : 'Update';
+  const showWebAppOauthSettings = routeConfig.webAppsAuthMode === 'oauth';
   const renderTabs = () => (
     <div className="project-settings-tabs" role="tablist" aria-label="Project settings sections">
       <button
@@ -291,9 +312,15 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         <div className="project-settings-web-app-list">
           {webApps.map((webApp) => {
             const slugDraft = webAppSlugDrafts[webApp.uiGraphId] ?? '';
+            const allowedEmailDraft = webAppAllowedEmailDrafts[webApp.uiGraphId] ?? '';
+            const allowedEmails = webApp.allowedEmails ?? [];
             const validationError = webAppSlugValidationErrors[webApp.uiGraphId] ?? null;
+            const accessValidationError = webAppAccessValidationErrors[webApp.uiGraphId] ?? null;
             const isPublished = webApp.publishedSlug != null;
             const hasWebAppSlugDraftChange = isPublished && slugDraft.trim() !== webApp.publishedSlug;
+            const parsedAllowedEmails = normalizeAllowedEmailDraft(allowedEmailDraft);
+            const hasWebAppAccessDraftChange = isPublished &&
+              parsedAllowedEmails.join('\n') !== allowedEmails.join('\n');
             const hasWebAppChangesToPublish = webApp.status === 'unpublished_changes' && !webApp.isMissingFromProject;
             const showLatestWebAppLink = hasWebAppChangesToPublish;
             const displaySlug = isPublished ? webApp.publishedSlug! : slugDraft.trim() || 'slug';
@@ -350,6 +377,44 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                   </div>
                   {validationError ? <div className="project-settings-error">{validationError}</div> : null}
                 </div>
+                {showWebAppOauthSettings ? (
+                  <div className="project-settings-field project-settings-web-app-access-field">
+                    <label
+                      className="project-settings-field-label"
+                      htmlFor={`workflow-project-web-app-access-${webApp.uiGraphId}`}
+                    >
+                      Allowed emails
+                    </label>
+                    <div className="project-settings-web-app-access-row">
+                      <textarea
+                        id={`workflow-project-web-app-access-${webApp.uiGraphId}`}
+                        className="project-settings-textarea"
+                        value={allowedEmailDraft}
+                        onChange={handleWebAppAllowedEmailsDraftChange(webApp.uiGraphId)}
+                        disabled={disableWebAppActions || webApp.isMissingFromProject}
+                        aria-invalid={accessValidationError != null}
+                        placeholder="user@example.com"
+                        rows={3}
+                        spellCheck={false}
+                      />
+                      {isPublished && !webApp.isMissingFromProject ? (
+                        <LoadingButton
+                          appearance="primary"
+                          className="project-settings-primary-button button-size-l"
+                          onClick={() => void handleSaveWebAppAccess(webApp)}
+                          isDisabled={disableWebAppActions || accessValidationError != null || !hasWebAppAccessDraftChange}
+                          isLoading={savingWebApps}
+                        >
+                          Save access
+                        </LoadingButton>
+                      ) : null}
+                    </div>
+                    {accessValidationError ? <div className="project-settings-error">{accessValidationError}</div> : null}
+                    <div className="project-settings-help">
+                      Leave empty to allow any signed-in OAuth user.
+                    </div>
+                  </div>
+                ) : null}
                 {isPublished ? (
                   <div className="project-settings-help project-settings-web-app-access-help">
                     The web app is accessible via the endpoint on

@@ -56,6 +56,7 @@ export type WebAppPublicationRow = {
   ui_graph_id: string;
   slug: string;
   slug_lookup_name: string;
+  allowed_emails?: string[] | null;
   published_at: TimestampValue;
 };
 
@@ -179,6 +180,7 @@ export type ImportManagedWorkflowOptions = {
 export type ImportManagedWorkflowPublishedWebAppOptions = {
   uiGraphId: string;
   slug: string;
+  allowedEmails?: string[];
   publishedAt: string;
   contents: string;
   datasetsContents: string | null;

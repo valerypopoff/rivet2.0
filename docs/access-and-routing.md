@@ -82,6 +82,8 @@ The wrapper API currently exposes these groups behind `/api`:
   - `GET /api/workflows/projects/web-apps?relativePath=...`
     - returns current and still-published-missing web apps with per-row `Not published`, `Published`, or `Unpublished changes` status derived from the web app's own pinned `/apps` snapshot/revision versus the latest saved `/apps-latest` draft
   - `POST /api/workflows/projects/web-apps/publish`
+  - `PATCH /api/workflows/projects/web-apps/access`
+    - updates wrapper-owned allowed-email access lists for already-published web apps without republishing or changing the app's pinned snapshot/revision
   - `POST /api/workflows/projects/web-apps/unpublish`
   - `GET /api/workflows/recordings/workflows`
   - `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed`
@@ -188,7 +190,7 @@ Current download-route behavior:
 
 ## UI gate
 
-The browser/editor surface and Rivet web apps can be protected at the nginx layer:
+The browser/editor surface can be protected at the nginx layer:
 
 - `RIVET_REQUIRE_UI_GATE_KEY=true` enables the gate.
 - `RIVET_KEY` is the shared secret used for the gate.
@@ -203,11 +205,27 @@ When the gate is enabled for a host that is not exempt:
 - the prompt submits a sanitized local `return_to` path for the URL the browser originally tried to open
 - on success the response sets an HTTP-only `rivet_ui_token` cookie and redirects back to that local path, such as `/` or `/apps/my-tool/`
 - form failures redirect back to the same local path with `auth_error` added so the prompt can show the error without losing the original destination
-- the cookie then gates `/`, `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/*`, `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/*`, `/api/*`, `/ws/executor*`, and `/ws/latest-debugger`
+- the cookie then gates `/`, `/api/*`, `/ws/executor*`, and `/ws/latest-debugger`
 
 The Compose stacks mount the prompt source at `/tmp/ui-gate-prompt.html` and copy it before nginx starts. nginx never serves the host-mounted file directly, so a long-running Windows bind mount cannot turn gated requests into runtime `stat()` failures.
 
 If the gate is enabled but `RIVET_KEY` is empty, nginx/API do not fall back to open access for non-exempt hosts; they deny the gated requests.
+
+## Web app auth
+
+Rivet web apps are browser surfaces, but their route family has its own mode selector:
+
+- `RIVET_WEB_APPS_AUTH_MODE=ui-gate` is the default. It reuses the UI gate for `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/*` and `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/*`, including the same return-to behavior and `rivet_ui_token` cookie when `RIVET_REQUIRE_UI_GATE_KEY=true`.
+- `RIVET_WEB_APPS_AUTH_MODE=oauth` disables nginx's UI-key prompt for app routes and lets the API redirect app page requests through the configured OAuth provider. The default callback path is `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/callback`, so the app slug `auth` is reserved.
+- `RIVET_WEB_APPS_AUTH_MODE=none` leaves web-app route auth open at the API layer and should only be used behind an external access-control layer.
+
+The API and proxy both normalize this value case-insensitively. Unknown values fall back to `ui-gate`.
+
+`RIVET_UI_TOKEN_FREE_HOSTS` bypasses web-app auth in all three modes because nginx forwards the same trusted token-free-host hint to the API. This is useful for internal health checks or trusted hostnames, but it is still a proxy-trust feature; direct access to the API container does not get that hint.
+
+OAuth mode is intentionally vendor-neutral. The API needs `OAUTH_AUTHORIZE_URL`, `OAUTH_TOKEN_URL`, `OAUTH_USER_URL`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, and a stable `OAUTH_SESSION_SECRET` or fallback secret. Optional knobs include `OAUTH_CALLBACK_URL`, `OAUTH_SCOPES`, `OAUTH_EMAIL_CLAIM`, `OAUTH_SESSION_TTL_SECONDS`, and `OAUTH_CLIENT_AUTH_METHOD`. The default token exchange sends `client_id` and `client_secret` in the form body; `OAUTH_CLIENT_AUTH_METHOD=basic` sends them through the HTTP Basic `Authorization` header instead. After callback, the API stores only a signed HTTP-only web-app session cookie and uses the email claim for per-web-app allowlists. Empty allowlists mean any signed-in OAuth user can open that published app; non-empty allowlists are exact email matches, case-insensitive.
+
+Because `ui-gate` and `oauth` modes use browser cookies, app JSON and action requests also enforce a same-origin browser request check before session lookup. This keeps the global API CORS policy from turning a user's web-app session into cross-site action credentials. Normal direct navigation to the app HTML still works, and hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth entirely as before.
 
 ## Trusted proxy boundary
 
@@ -233,7 +251,7 @@ Operationally, that means `RIVET_KEY` is still mandatory anywhere nginx fronts t
 
 Those two flags disable optional browser/public-workflow checks. They do not disable the proxy-to-API trust channel.
 
-The public workflow execution routes are mounted outside `/api`, so they do not use the `requireAuth` middleware. They still rely on nginx to mediate access and, for token-free hosts, inject the token-free-host hint. Web-app routes are also mounted outside `/api`, but they are browser surfaces and use the UI gate policy rather than `RIVET_REQUIRE_WORKFLOW_KEY`.
+The public workflow execution routes are mounted outside `/api`, so they do not use the `requireAuth` middleware. They still rely on nginx to mediate access and, for token-free hosts, inject the token-free-host hint. Web-app routes are also mounted outside `/api`, but they are browser surfaces and use `RIVET_WEB_APPS_AUTH_MODE` rather than `RIVET_REQUIRE_WORKFLOW_KEY`.
 
 ## Published Rivet web app contract
 
@@ -265,13 +283,15 @@ The slug segment resolves through published web-app state, not workflow endpoint
 
 The HTML embeds an opaque published `revisionKey`. Action requests include that key and are rejected with `409` plus `code: "revision_mismatch"` when that slug is republished between page load and button click. The embedded Rivet web-app client uses that coded response to show a blocking reload modal, so stale open pages recover without an automatic refresh or action rerun.
 
-Auth follows the browser UI gate policy:
+Auth follows `RIVET_WEB_APPS_AUTH_MODE`:
 
-- `RIVET_REQUIRE_UI_GATE_KEY=true` gates the HTML, `app.json`, and action routes with the same key prompt used by the main Rivet server UI
-- hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass that UI gate for both web-app route families too
-- after the user enters `RIVET_KEY`, nginx forwards the request with the HTTP-only `rivet_ui_token` cookie and the trusted proxy header, returning the browser to the original web-app URL instead of always sending it to `/`
-- workflow endpoint routes remain bearer/token-free-host routes and do not accept the UI session cookie as a substitute for `Authorization`
-- web-app action routes do not attach the Remote Debugger in this first server integration
+- `ui-gate` reuses the main UI key prompt and `rivet_ui_token` cookie for the HTML, `app.json`, and action routes.
+- `oauth` redirects page requests to the configured provider, returns to the originally requested web-app URL after callback, and enforces each app's allowed-email list after the project is resolved.
+- `none` leaves web-app route auth open at the API layer.
+- hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth for both web-app route families too
+- workflow endpoint routes remain bearer/token-free-host routes and do not accept UI or OAuth web-app session cookies as a substitute for `Authorization`
+- published web-app action routes do not attach the Remote Debugger; latest web-app action routes can attach it when latest debugging is enabled
+- The proxy preserves incoming `X-Forwarded-Proto` and `X-Forwarded-Host` values, falling back to its own scheme/host when they are absent. OAuth callback generation, web-app same-origin checks, token-free-host matching, UI-gate cookie security, and `/api/config` public URLs use those browser-facing values behind an ingress or load balancer.
 
 ## Workflow execution contract
 

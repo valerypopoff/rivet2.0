@@ -28,6 +28,24 @@ const {
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
 
+async function withEnvOverrides(
+  values: Record<string, string | undefined>,
+  run: () => Promise<void>,
+): Promise<void> {
+  const entries = Object.entries(values);
+  const apply = async (index: number): Promise<void> => {
+    if (index >= entries.length) {
+      await run();
+      return;
+    }
+
+    const [name, value] = entries[index]!;
+    await withEnvOverride(name, value, () => apply(index + 1));
+  };
+
+  await apply(0);
+}
+
 async function writeWebAppProject(projectPath: string, projectName: string, appName: string): Promise<void> {
   const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
   const project = createWebAppProject(rivetNode, blankProjectContents, appName);
@@ -126,6 +144,60 @@ test('workflow web app publication routes publish multiple project web apps inde
     assert.equal(firstResponse.status, 404);
     assert.equal(secondResponse.status, 200);
     assert.match(await secondResponse.text(), /Second Web App/);
+  });
+});
+
+test('workflow web app publication stores and updates OAuth allowed emails without republishing', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'WebAppAllowedEmails');
+  await writeWebAppProject(created.absolutePath, 'WebAppAllowedEmails', 'Allowed Emails Web App');
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        publications: [
+          {
+            uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+            slug: 'allowed-emails-web-app',
+            allowedEmails: ['USER@example.com', 'admin@example.com', 'user@example.com'],
+          },
+        ],
+      }),
+    }));
+
+    const publishedList = await readJson<{
+      webApps: Array<{ uiGraphId: string; publishedSlug: string | null; allowedEmails: string[] }>;
+    }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
+    assert.deepEqual(publishedList.webApps.map((webApp) => [
+      webApp.uiGraphId,
+      webApp.publishedSlug,
+      webApp.allowedEmails,
+    ]), [[WEB_APP_TEST_UI_GRAPH_ID, 'allowed-emails-web-app', ['user@example.com', 'admin@example.com']]]);
+
+    await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/access`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        accessUpdates: [
+          {
+            uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+            allowedEmails: ['owner@example.com'],
+          },
+        ],
+      }),
+    }));
+
+    const updatedList = await readJson<{
+      webApps: Array<{ uiGraphId: string; publishedSlug: string | null; allowedEmails: string[] }>;
+    }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
+    assert.deepEqual(updatedList.webApps.map((webApp) => [
+      webApp.uiGraphId,
+      webApp.publishedSlug,
+      webApp.allowedEmails,
+    ]), [[WEB_APP_TEST_UI_GRAPH_ID, 'allowed-emails-web-app', ['owner@example.com']]]);
   });
 });
 
@@ -454,11 +526,24 @@ test('published filesystem web apps use the UI gate instead of workflow bearer a
           });
           assert.equal(appJsonResponse.status, 200);
 
+          const crossOriginAppJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+            headers: {
+              ...uiSessionHeaders,
+              Origin: 'https://evil.example.test',
+            },
+            signal: AbortSignal.timeout(5000),
+          });
+          assert.equal(crossOriginAppJsonResponse.status, 403);
+          const crossOriginAppJsonBody = await crossOriginAppJsonResponse.json() as { error?: string; code?: string };
+          assert.equal(crossOriginAppJsonBody.error, 'Cross-origin web app request denied');
+          assert.equal(crossOriginAppJsonBody.code, 'origin_forbidden');
+
           const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/actions/run`, {
             method: 'POST',
             headers: {
               ...uiSessionHeaders,
               'Content-Type': 'application/json',
+              Origin: new URL(webAppsBaseUrl).origin,
             },
             body: JSON.stringify({
               componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
@@ -506,6 +591,94 @@ test('published filesystem web apps use the UI gate instead of workflow bearer a
         });
       });
     });
+  });
+});
+
+test('published filesystem web apps can use OAuth instead of the UI key gate', async () => {
+  await withEnvOverrides({
+    RIVET_WEB_APPS_AUTH_MODE: 'oauth',
+    RIVET_REQUIRE_UI_GATE_KEY: 'true',
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'https://rivet.example.test/apps/auth/callback',
+  }, async () => {
+    const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppOAuth');
+    await writeWebAppProject(created.absolutePath, 'PublishedWebAppOAuth', 'Published OAuth App');
+    await workflowStorageBackend.publishWorkflowProjectWebAppsWithBackend(created.relativePath, [{
+      uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+      slug: 'published-web-app-oauth',
+      allowedEmails: ['user@example.com'],
+    }]);
+
+    await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+      const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth`, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(htmlResponse.status, 302);
+      assert.match(htmlResponse.headers.get('location') ?? '', /^https:\/\/oauth\.example\.test\/authorize\?/);
+      assert.match(htmlResponse.headers.get('set-cookie') ?? '', /rivet_web_app_oauth_state=/);
+
+      const crossOriginActionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth/actions/run`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://evil.example.test',
+        },
+        body: JSON.stringify({
+          componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+          state: {},
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(crossOriginActionResponse.status, 403);
+      const crossOriginActionBody = await crossOriginActionResponse.json() as { error?: string; code?: string };
+      assert.equal(crossOriginActionBody.error, 'Cross-origin web app request denied');
+      assert.equal(crossOriginActionBody.code, 'origin_forbidden');
+
+      const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth/actions/run`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://rivet.example.test',
+          'X-Forwarded-Host': 'rivet.example.test',
+          'X-Forwarded-Proto': 'HTTPS',
+        },
+        body: JSON.stringify({
+          componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+          state: {},
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(actionResponse.status, 401);
+      const actionBody = await actionResponse.json() as { error?: string; code?: string };
+      assert.equal(actionBody.error, 'OAuth login required');
+      assert.equal(actionBody.code, 'oauth_required');
+    });
+  });
+});
+
+test('workflow web app publication rejects the reserved OAuth auth slug', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'ReservedAuthWebApp');
+  await writeWebAppProject(created.absolutePath, 'ReservedAuthWebApp', 'Reserved Auth Web App');
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/projects/web-apps/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        publications: [
+          { uiGraphId: WEB_APP_TEST_UI_GRAPH_ID, slug: 'auth' },
+        ],
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json() as { error?: string };
+    assert.match(body.error ?? '', /reserved/);
   });
 });
 

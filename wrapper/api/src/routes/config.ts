@@ -8,17 +8,18 @@ import {
   RIVET_LATEST_WEB_APPS_BASE_PATH,
   RIVET_WEB_APPS_BASE_PATH,
 } from '../workflowEndpointPaths.js';
+import { getWebAppAuthMode } from '../web-app-oauth.js';
 
 export const configRouter = Router();
 
 function getPublicOrigin(req: Request): string {
-  const host = req.get('host');
+  const host = req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host');
   if (!host) {
     return 'http://localhost';
   }
 
   const forwardedProto = req.get('x-forwarded-proto');
-  const protocol = forwardedProto?.split(',')[0]?.trim() || req.protocol || 'http';
+  const protocol = forwardedProto?.split(',')[0]?.trim().toLowerCase() || req.protocol || 'http';
   return `${protocol}://${host}`;
 }
 
@@ -42,6 +43,7 @@ configRouter.get('/config', (req, res) => {
     latestWorkflowsBasePath: LATEST_WORKFLOWS_BASE_PATH,
     publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
     latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
+    webAppsAuthMode: getWebAppAuthMode(),
   });
 });
 

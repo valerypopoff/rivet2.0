@@ -82,11 +82,14 @@ CREATE TABLE IF NOT EXISTS workflow_web_apps (
   ui_graph_id TEXT NOT NULL,
   slug TEXT NOT NULL,
   slug_lookup_name TEXT NOT NULL UNIQUE,
+  allowed_emails TEXT[] NOT NULL DEFAULT '{}',
   published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE,
   FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE,
   UNIQUE (workflow_id, ui_graph_id)
 );
+
+ALTER TABLE workflow_web_apps ADD COLUMN IF NOT EXISTS allowed_emails TEXT[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS workflow_web_apps_workflow_id_idx ON workflow_web_apps(workflow_id);
 CREATE INDEX IF NOT EXISTS workflow_web_apps_revision_id_idx ON workflow_web_apps(revision_id);

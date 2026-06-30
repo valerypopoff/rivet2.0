@@ -106,7 +106,13 @@ export function mapWorkflowRowToProjectItem(
       ),
       endpointName: row.endpoint_name,
       lastPublishedAt: toIsoString(row.last_published_at),
-      publishedWebApps: [],
+      publishedWebApps: (options.webAppRows ?? []).map((webApp) => ({
+        uiGraphId: webApp.ui_graph_id,
+        uiGraphName: webApp.slug || webApp.ui_graph_id,
+        slug: webApp.slug,
+        publishedAt: toIsoString(webApp.published_at) ?? new Date().toISOString(),
+        allowedEmails: webApp.allowed_emails ?? [],
+      })),
     },
   };
 }

@@ -7,6 +7,7 @@ import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../shared/workflow-types
 import { conflict, createHttpError } from '../../../utils/httpError.js';
 import { normalizeHostedProjectTitle } from '../hosted-project-contents.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
+import { normalizeEmailList } from '../publication.js';
 import {
   getManagedWorkflowProjectVirtualPath,
   normalizeManagedWorkflowRelativePath,
@@ -348,6 +349,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
           slug: string;
           publishedAt: string;
           revisionId: string;
+          allowedEmails: string[];
         }> = [];
         for (const webApp of importedWebApps) {
           const revisionContentsKey = getManagedRevisionContentsKey(webApp.contents, webApp.datasetsContents);
@@ -370,6 +372,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
             slug,
             publishedAt: webApp.publishedAt.trim() || updatedAt,
             revisionId,
+            allowedEmails: normalizeEmailList(webApp.allowedEmails),
           });
         }
 
@@ -417,9 +420,9 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
             await client.query(
               `
                 INSERT INTO workflow_web_apps (
-                  app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, published_at
+                  app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, allowed_emails, published_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8::timestamptz)
               `,
               [
                 randomUUID(),
@@ -428,6 +431,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
                 webApp.uiGraphId,
                 webApp.slug,
                 normalizeWorkflowEndpointLookupName(webApp.slug),
+                webApp.allowedEmails,
                 webApp.publishedAt,
               ],
             );

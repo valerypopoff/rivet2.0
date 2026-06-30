@@ -7,6 +7,7 @@ import type {
   WorkflowProjectSettings,
   WorkflowProjectSettingsDraft,
   WorkflowProjectStatus,
+  WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppSummary,
   WorkflowProjectWebAppsResponse,
@@ -39,6 +40,7 @@ export type {
   WorkflowProjectSettings,
   WorkflowProjectSettingsDraft,
   WorkflowProjectStatus,
+  WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppSummary,
   WorkflowProjectWebAppsResponse,
@@ -76,6 +78,7 @@ export type HostedRouteConfig = {
   latestWorkflowsBasePath: string;
   publishedAppsBasePath: string;
   latestAppsBasePath: string;
+  webAppsAuthMode: 'ui-gate' | 'oauth' | 'none';
 };
 
 export type WorkflowProjectOpenOptions = {

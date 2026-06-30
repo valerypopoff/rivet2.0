@@ -26,6 +26,7 @@ const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
   latestWorkflowsBasePath: RIVET_LATEST_WORKFLOWS_BASE_PATH,
   publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
   latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
+  webAppsAuthMode: 'ui-gate',
 };
 
 function resolveHostedRouteConfig(config: Partial<HostedRouteConfig>): HostedRouteConfig {
@@ -34,6 +35,7 @@ function resolveHostedRouteConfig(config: Partial<HostedRouteConfig>): HostedRou
     latestWorkflowsBasePath: config.latestWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestWorkflowsBasePath,
     publishedAppsBasePath: config.publishedAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedAppsBasePath,
     latestAppsBasePath: config.latestAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestAppsBasePath,
+    webAppsAuthMode: config.webAppsAuthMode || DEFAULT_HOSTED_ROUTE_CONFIG.webAppsAuthMode,
   };
 }
 

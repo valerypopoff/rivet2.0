@@ -96,6 +96,7 @@ function trustedProxyHeaders(): Record<string, string> {
 test('Phase 4 route exposure matrix stays stable across API runtime profiles', () => {
   assert.deepEqual(getApiRouteExposureMatrix('control'), [
     '/ui-auth',
+    '/apps/auth/callback',
     '/workflows-latest/:endpointName',
     '/apps-latest/:slug',
     '/api/native/*',
@@ -108,6 +109,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
   ]);
 
   assert.deepEqual(getApiRouteExposureMatrix('execution'), [
+    '/apps/auth/callback',
     '/workflows/:endpointName',
     '/apps/:slug',
     '/internal/workflows/:endpointName',
@@ -115,6 +117,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
 
   assert.deepEqual(getApiRouteExposureMatrix('combined'), [
     '/ui-auth',
+    '/apps/auth/callback',
     '/workflows-latest/:endpointName',
     '/apps-latest/:slug',
     '/api/native/*',
@@ -197,9 +200,21 @@ test('control profile exposes control-plane routes and does not expose published
       assert.equal(uiAuthResponse.status, 204);
 
       const configResponse = await fetch(`${server.baseUrl}/api/config`, {
-        headers: trustedProxyHeaders(),
+        headers: {
+          ...trustedProxyHeaders(),
+          'X-Forwarded-Host': 'rivet.example.test',
+          'X-Forwarded-Proto': 'HTTPS',
+        },
       });
       assert.equal(configResponse.status, 200);
+      const configPayload = await configResponse.json() as {
+        executorWsUrl: string;
+        publishedAppsBasePath: string;
+        latestAppsBasePath: string;
+      };
+      assert.equal(configPayload.executorWsUrl, 'wss://rivet.example.test/ws/executor/internal');
+      assert.equal(configPayload.publishedAppsBasePath, '/apps');
+      assert.equal(configPayload.latestAppsBasePath, '/apps-latest');
 
       const publishedResponse = await fetch(`${server.baseUrl}/workflows/phase4-missing`, {
         method: 'POST',

@@ -500,7 +500,17 @@ curl -i -c rivet-cookies.txt \
 curl -i -b rivet-cookies.txt http://127.0.0.1:8080/api/config
 ```
 
-Public workflow execution routes also require `Authorization: Bearer <RIVET_KEY>` when `RIVET_REQUIRE_WORKFLOW_KEY=true`. Web-app routes under `/apps/*` and `/apps-latest/*` follow the UI gate instead: they show the same key prompt when `RIVET_REQUIRE_UI_GATE_KEY=true`, return the browser to the originally requested web-app URL after login, reuse the `rivet_ui_token` cookie after login, and are bypassed for hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS`.
+Public workflow execution routes also require `Authorization: Bearer <RIVET_KEY>` when `RIVET_REQUIRE_WORKFLOW_KEY=true`.
+
+Web-app routes under `/apps/*` and `/apps-latest/*` follow `RIVET_WEB_APPS_AUTH_MODE`:
+
+- `ui-gate` is the default and reuses the main Rivet server key prompt when `RIVET_REQUIRE_UI_GATE_KEY=true`.
+- `oauth` redirects web-app page visitors through the configured OAuth provider, returns them to the originally requested app URL after callback, and then checks the per-web-app allowed-email list stored in Project Settings.
+- `none` leaves web-app routes open at the API layer and should only be used behind an external access-control layer.
+
+Hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth in every mode. In OAuth mode, configure the provider callback as `https://<public-host>/apps/auth/callback` unless `RIVET_PUBLISHED_APPS_BASE_PATH` or `OAUTH_CALLBACK_URL` intentionally changes it. The OAuth provider settings are vendor-neutral: `OAUTH_AUTHORIZE_URL`, `OAUTH_TOKEN_URL`, `OAUTH_USER_URL`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_SESSION_SECRET`, and optional `OAUTH_SCOPES`, `OAUTH_EMAIL_CLAIM`, `OAUTH_SESSION_TTL_SECONDS`, and `OAUTH_CLIENT_AUTH_METHOD`. `OAUTH_CLIENT_AUTH_METHOD` defaults to body credentials and can be set to `basic` for providers that reject duplicate body credentials when HTTP Basic auth is used. In production, put OAuth secrets in Vault `/vault/dotenv` or Kubernetes secrets consumed by the API workloads rather than plain committed values. The proxy only needs `RIVET_WEB_APPS_AUTH_MODE` so it can skip the UI-key prompt for web-app routes when OAuth owns those routes.
+
+If an ingress or gateway rewrites the upstream `Host` or terminates TLS before the Rivet proxy, it should forward `X-Forwarded-Host` and `X-Forwarded-Proto`. The Rivet proxy preserves those headers and the API uses them for OAuth callback construction, same-origin web-app action checks, token-free-host matching, UI-gate cookie security, and `/api/config` browser URLs.
 
 If `fullnameOverride` is not set, replace `rivet-*` with the rendered object names from `kubectl get`.
 
@@ -529,6 +539,7 @@ The production contract today is:
 - `env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
 - `env.RIVET_PUBLISHED_APPS_BASE_PATH=/apps`
 - `env.RIVET_LATEST_APPS_BASE_PATH=/apps-latest`
+- `env.RIVET_WEB_APPS_AUTH_MODE=ui-gate` by default, or `oauth` when web-app visitors should authenticate through the OAuth provider
 - `clusterDomain=cluster.local` unless the cluster DNS suffix is different
 - `env.RIVET_PROXY_RESOLVER` must be set for in-cluster nginx DNS resolution
 - control-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=none` with the job worker enabled there
