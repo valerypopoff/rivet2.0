@@ -7,7 +7,17 @@ map $http_upgrade $connection_upgrade {
     '' close;
 }
 
-map $host $rivet_ui_host_is_token_free {
+map $http_x_forwarded_host $rivet_forwarded_host {
+    default $http_x_forwarded_host;
+    '' $host;
+}
+
+map $http_x_forwarded_proto $rivet_forwarded_proto {
+    default $http_x_forwarded_proto;
+    '' $scheme;
+}
+
+map $rivet_forwarded_host $rivet_ui_host_is_token_free {
     default 0;
     ~${RIVET_UI_TOKEN_FREE_HOSTS_REGEX} 1;
 }
@@ -17,9 +27,9 @@ map $cookie_rivet_ui_token $rivet_ui_has_valid_cookie_token {
     "${RIVET_UI_SESSION_TOKEN}" 1;
 }
 
-map $scheme $rivet_ui_cookie_secure_suffix {
+map $rivet_forwarded_proto $rivet_ui_cookie_secure_suffix {
     default "";
-    https "; Secure";
+    ~*^https$ "; Secure";
 }
 
 map "${RIVET_REQUIRE_UI_GATE_KEY}" $rivet_ui_gate_enabled {
@@ -42,6 +52,17 @@ map "$rivet_ui_gate_enabled:$rivet_ui_gate_has_key:$rivet_ui_host_is_token_free:
     "1:1:0:1" allow;
     "1:1:1:0" allow;
     "1:1:1:1" allow;
+}
+
+map "${RIVET_WEB_APPS_AUTH_MODE}" $rivet_web_apps_use_ui_gate {
+    default 1;
+    "oauth" 0;
+    "none" 0;
+}
+
+map "$rivet_web_apps_use_ui_gate:$rivet_ui_gate_result" $rivet_web_apps_gate_result {
+    default allow;
+    "1:deny" deny;
 }
 
 server {
@@ -70,7 +91,8 @@ server {
         proxy_pass $web_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
     }
 
     location @web_with_token_cookie {
@@ -78,7 +100,8 @@ server {
         proxy_pass $web_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
     }
 
     location @web_with_ui_gate_prompt {
@@ -96,7 +119,8 @@ server {
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout 30s;
     }
 
@@ -110,7 +134,8 @@ server {
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
         proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
     }
@@ -122,13 +147,14 @@ server {
         proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
         proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
     }
 
     location ${RIVET_WEB_APPS_BASE_PATH}/ {
-        if ($rivet_ui_gate_result = deny) {
+        if ($rivet_web_apps_gate_result = deny) {
             return 401;
         }
 
@@ -138,7 +164,8 @@ server {
         proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
         proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
     }
@@ -150,13 +177,14 @@ server {
         proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
         proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
     }
 
     location ${RIVET_LATEST_WEB_APPS_BASE_PATH}/ {
-        if ($rivet_ui_gate_result = deny) {
+        if ($rivet_web_apps_gate_result = deny) {
             return 401;
         }
 
@@ -166,7 +194,8 @@ server {
         proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
         proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
     }
@@ -182,7 +211,8 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout 86400s;
     }
 
@@ -196,7 +226,8 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout 86400s;
     }
 
@@ -210,7 +241,8 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout 86400s;
     }
 

@@ -55,7 +55,7 @@ The settings sidecar stores endpoint publication fields plus any web-app publica
   - ISO timestamp of the last successful publish operation
 - `publishedWebApps`
   - array of published web-app entries keyed by `uiGraphId`
-  - each entry stores the web app display name, public slug, published snapshot id, and publish timestamp
+  - each entry stores the web app display name, public slug, published snapshot id, publish timestamp, and optional OAuth allowed-email list
 
 Important current behavior:
 
@@ -94,7 +94,7 @@ In Project Settings:
 - `Unpublish` sits next to the workflow endpoint row whenever the workflow is currently published or has unpublished changes
 - `Delete project` is in a separated lower section that remains visible regardless of the selected Project Settings tab; it is enabled only when the workflow endpoint is unpublished and no web apps remain published. On the `Endpoint` tab only, that same lower section also shows the `Published version history` secondary action as a visible button.
 - endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
-- Project Settings is split into `Endpoint` and `Web apps` tabs. The `Endpoint` tab owns normal endpoint publication and published-version history. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`.
+- Project Settings is split into `Endpoint` and `Web apps` tabs. The `Endpoint` tab owns normal endpoint publication and published-version history. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`. When web-app OAuth mode is enabled, each row also exposes an allowed-email list. Saving that access list is an access-control update only; it does not republish the app or change its publication status.
 
 ## Publish flow
 
@@ -117,12 +117,14 @@ Rivet web apps are stored in project YAML under `Project.uiGraphs`. They are pub
 
 1. Project Settings loads the project's web-app list from `GET /api/workflows/projects/web-apps?relativePath=...`.
 2. The user assigns a slug for one or more web apps. Slugs use the same public-name rule as workflow endpoints: letters, numbers, and hyphens only.
-3. The dashboard posts `{ relativePath, publications: [{ uiGraphId, slug }] }` to `POST /api/workflows/projects/web-apps/publish`.
-4. The server validates that every `uiGraphId` exists in the current saved project and that every slug is globally unique across published web apps, case-insensitively.
+3. The dashboard posts `{ relativePath, publications: [{ uiGraphId, slug, allowedEmails? }] }` to `POST /api/workflows/projects/web-apps/publish`.
+4. The server validates that every `uiGraphId` exists in the current saved project, that every slug is globally unique across published web apps case-insensitively, and that `auth` is not used as an app slug because `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/callback` belongs to OAuth.
 5. The server pins the selected web apps to the current saved project snapshot/revision and exposes each as `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>`.
 6. The same published app slug also opens `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>`, which serves the latest saved draft/current server-side project for that app's UI graph.
 
 Multiple web apps from the same project may be published at the same time as long as their slugs differ. Republish replaces only the selected UI graph publications; other web apps from that project keep serving their previous pinned snapshots. Unpublishing one web app removes only that `uiGraphId` publication and leaves any workflow endpoint publication plus other web apps intact. If a published UI graph is later removed from the draft project, the pinned app still serves from its old snapshot/revision; Project Settings lists it as missing from the current project so it can be explicitly unpublished, but it cannot be republished until the UI graph exists again.
+
+When `RIVET_WEB_APPS_AUTH_MODE=oauth`, Project Settings stores an optional allowed-email list on each published web app. An empty list means any successfully signed-in OAuth user may use that app. A non-empty list is matched case-insensitively against the email returned by the OAuth user-info response. The access list is stored with the web-app publication entry in the filesystem sidecar or managed `workflow_web_apps.allowed_emails` column. It is not written into `.rivet-project` YAML, and changing it through `PATCH /api/workflows/projects/web-apps/access` does not create a new published snapshot or revision.
 
 Each web app row has its own publication status, independent from the workflow endpoint status:
 
@@ -409,7 +411,13 @@ The action routes use the same project resolver family, dataset provider, projec
 
 Published web app action runs do not attach Remote Debugger. Latest web app action runs attach the same `/ws/latest-debugger` remote debugger as latest workflow endpoint runs when `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true`, because they execute against the latest saved draft on the control-plane backend. Web app action runs are not yet persisted into Run recordings. Add recording support only through an upstream/action seam that can attach `ExecutionRecorder` without reimplementing Rivet's web-app action runner.
 
-Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by `RIVET_REQUIRE_UI_GATE_KEY`, not `RIVET_REQUIRE_WORKFLOW_KEY`. When the UI gate is enabled, nginx shows the same key prompt used by the main Rivet server UI, submits the originally requested local URL as a sanitized `return_to` path, and sets the same HTTP-only `rivet_ui_token` cookie after the user enters `RIVET_KEY`. Successful form login returns the browser to the original web-app URL, such as `/apps/my-tool/` or `/apps-latest/my-tool/`, instead of always redirecting to `/`. Hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass that UI gate for web apps too. Workflow endpoint routes remain bearer/token-free-host routes and do not accept the UI session cookie as a substitute for `Authorization`.
+Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by `RIVET_WEB_APPS_AUTH_MODE`, not by `RIVET_REQUIRE_WORKFLOW_KEY`:
+
+- `ui-gate` is the default and preserves the original behavior: when `RIVET_REQUIRE_UI_GATE_KEY=true`, nginx shows the same key prompt used by the main Rivet server UI, submits the originally requested local URL as a sanitized `return_to` path, and sets the same HTTP-only `rivet_ui_token` cookie after the user enters `RIVET_KEY`.
+- `oauth` redirects HTML page requests to the configured OAuth provider and stores a signed HTTP-only web-app session cookie after the callback succeeds. Action and `app.json` requests without a valid session return JSON `401` with `code: "oauth_required"` instead of showing the key prompt.
+- `none` leaves web-app route auth open at the API layer. Use this only behind an external access-control layer.
+
+Successful UI-gate or OAuth login returns the browser to the original web-app URL, such as `/apps/my-tool/` or `/apps-latest/my-tool/`, instead of always redirecting to `/`. Hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth in every mode. Workflow endpoint routes remain bearer/token-free-host routes and do not accept either the UI session cookie or the OAuth web-app session cookie as a substitute for `Authorization`.
 
 Endpoint resolution is backend-specific:
 

@@ -23,6 +23,12 @@ import {
 } from '../../runtime-libraries/managed-code-runner.js';
 import { getRootPath } from '../../runtime-libraries/manifest.js';
 import { isTrustedTokenFreeHostRequest, isTrustedUiSessionRequest } from '../../auth.js';
+import {
+  createWebAppOAuthAuthorizationRedirect,
+  getWebAppAuthMode,
+  isWebAppOAuthSessionAllowed,
+  readWebAppOAuthSession,
+} from '../../web-app-oauth.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import {
   createExecutionProjectReferenceLoader,
@@ -341,13 +347,133 @@ function requirePublishedWebAppUiGate(req: Request): void {
   throw createHttpError(401, 'Unauthorized');
 }
 
+type WebAppRequestKind = 'html' | 'json' | 'action';
+
+function getWebAppRequestReturnTo(req: Request): string {
+  return req.originalUrl || req.url || '/';
+}
+
+function sendWebAppAuthJsonError(
+  res: Response,
+  requestStartedAt: number,
+  statusCode: number,
+  message: string,
+  code: string,
+): void {
+  sendJsonWithDuration(res, statusCode, { error: message, code }, requestStartedAt);
+}
+
+function startWebAppOAuthLogin(req: Request, res: Response): void {
+  const redirect = createWebAppOAuthAuthorizationRedirect(req, getWebAppRequestReturnTo(req));
+  res.setHeader('Set-Cookie', redirect.cookies);
+  res.redirect(302, redirect.location);
+}
+
+function isWebAppBrowserRequestOriginAllowed(req: Request, requestKind: WebAppRequestKind): boolean {
+  const originHeader = req.get('origin')?.trim();
+  if (originHeader) {
+    try {
+      const requestHost = getForwardedRequestHost(req);
+      if (!requestHost) {
+        return false;
+      }
+
+      const requestOrigin = new URL(`${getForwardedRequestProtocol(req)}://${requestHost}`);
+      const providedOrigin = new URL(originHeader);
+      return providedOrigin.origin === requestOrigin.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  const fetchSite = req.get('sec-fetch-site')?.trim().toLowerCase();
+  return requestKind === 'html' || fetchSite !== 'cross-site';
+}
+
+function authorizeWebAppRequestBeforeResolve(
+  req: Request,
+  res: Response,
+  requestStartedAt: number,
+  requestKind: WebAppRequestKind,
+): boolean {
+  const mode = getWebAppAuthMode();
+  if (mode === 'none' || isTrustedTokenFreeHostRequest(req)) {
+    return true;
+  }
+
+  if (!isWebAppBrowserRequestOriginAllowed(req, requestKind)) {
+    if (requestKind === 'html') {
+      sendHtmlWithDuration(
+        res,
+        403,
+        '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Forbidden</body>',
+        requestStartedAt,
+      );
+    } else {
+      sendWebAppAuthJsonError(res, requestStartedAt, 403, 'Cross-origin web app request denied', 'origin_forbidden');
+    }
+    return false;
+  }
+
+  if (mode === 'ui-gate') {
+    requirePublishedWebAppUiGate(req);
+    return true;
+  }
+
+  const session = readWebAppOAuthSession(req);
+  if (session) {
+    return true;
+  }
+
+  if (requestKind === 'html') {
+    startWebAppOAuthLogin(req, res);
+    return false;
+  }
+
+  sendWebAppAuthJsonError(res, requestStartedAt, 401, 'OAuth login required', 'oauth_required');
+  return false;
+}
+
+function authorizeResolvedWebAppRequest(
+  req: Request,
+  res: Response,
+  requestStartedAt: number,
+  executionProject: WorkflowExecutionProject,
+  requestKind: WebAppRequestKind,
+): boolean {
+  if (getWebAppAuthMode() !== 'oauth' || isTrustedTokenFreeHostRequest(req)) {
+    return true;
+  }
+
+  if (isWebAppOAuthSessionAllowed(readWebAppOAuthSession(req), executionProject.webAppAllowedEmails ?? [])) {
+    return true;
+  }
+
+  if (requestKind === 'html') {
+    sendHtmlWithDuration(
+      res,
+      403,
+      '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Forbidden</body>',
+      requestStartedAt,
+    );
+    return false;
+  }
+
+  sendWebAppAuthJsonError(res, requestStartedAt, 403, 'Forbidden', 'oauth_forbidden');
+  return false;
+}
+
 function getForwardedRequestProtocol(req: Request): string {
   const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
-  return forwardedProto || req.protocol || 'http';
+  return forwardedProto?.toLowerCase() || req.protocol || 'http';
+}
+
+function getForwardedRequestHost(req: Request): string {
+  return req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || '';
 }
 
 function createFetchRequestFromExpress(req: Request): globalThis.Request {
-  const host = req.get('host') || 'localhost';
+  const host = getForwardedRequestHost(req) || 'localhost';
   const url = `${getForwardedRequestProtocol(req)}://${host}${req.originalUrl || req.url}`;
   const headers = new Headers();
 
@@ -447,8 +573,11 @@ async function resolveWebAppExecutionProject(
   requestStartedAt: number,
   res: Response,
   routeKind: WebAppRouteKind,
+  requestKind: WebAppRequestKind,
 ): Promise<{ slug: string; executionProject: WorkflowExecutionProject } | null> {
-  requirePublishedWebAppUiGate(req);
+  if (!authorizeWebAppRequestBeforeResolve(req, res, requestStartedAt, requestKind)) {
+    return null;
+  }
 
   const slug = normalizeStoredEndpointName(String(req.params.slug ?? ''));
   if (!slug) {
@@ -465,6 +594,10 @@ async function resolveWebAppExecutionProject(
       { error: routeKind === 'published' ? 'Published Rivet web app not found' : 'Latest Rivet web app not found' },
       requestStartedAt,
     );
+    return null;
+  }
+
+  if (!authorizeResolvedWebAppRequest(req, res, requestStartedAt, executionProject, requestKind)) {
     return null;
   }
 
@@ -668,7 +801,7 @@ async function handleWebAppHtmlRequest(req: Request, res: Response, routeKind: W
   const requestStartedAt = performance.now();
 
   try {
-    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind);
+    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind, 'html');
     if (!resolved) {
       return;
     }
@@ -702,7 +835,7 @@ async function handleWebAppJsonRequest(req: Request, res: Response, routeKind: W
   const requestStartedAt = performance.now();
 
   try {
-    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind);
+    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind, 'json');
     if (!resolved) {
       return;
     }
@@ -724,7 +857,7 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
   let codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null = null;
 
   try {
-    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind);
+    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind, 'action');
     if (!resolved) {
       return;
     }

@@ -5,6 +5,7 @@ import type {
   WorkflowProjectDownloadVersion,
   WorkflowMoveResponse,
   WorkflowProjectItem,
+  WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowProjectSettingsDraft,
@@ -401,6 +402,20 @@ export async function publishWorkflowProjectWebApps(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ relativePath, publications }),
+  });
+
+  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
+  return data.project;
+}
+
+export async function updateWorkflowProjectWebAppAccess(
+  relativePath: string,
+  accessUpdates: WorkflowProjectWebAppAccessDraft[],
+): Promise<WorkflowProjectItem> {
+  const response = await fetch(`${API}/workflows/projects/web-apps/access`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relativePath, accessUpdates }),
   });
 
   const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);

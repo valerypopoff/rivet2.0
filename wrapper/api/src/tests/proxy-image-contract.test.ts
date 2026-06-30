@@ -85,15 +85,29 @@ test('proxy UI gate prompt is served from container-local staged storage', () =>
   assert.doesNotMatch(prodCompose, /image\/proxy\/ui-gate-prompt\.html:/);
 });
 
-test('proxy templates gate hosted web apps through the browser UI gate', () => {
+test('proxy templates gate hosted web apps through the configured web app auth mode', () => {
+  const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
+  assert.match(proxyBootstrap, /normalize_web_apps_auth_mode\(\)/);
+  assert.match(proxyBootstrap, /export RIVET_WEB_APPS_AUTH_MODE="\$\(normalize_web_apps_auth_mode "\$\{RIVET_WEB_APPS_AUTH_MODE:-\}"\)"/);
+
   for (const template of readProxyTemplates()) {
+    assert.match(template, /map \$http_x_forwarded_host \$rivet_forwarded_host/);
+    assert.match(template, /map \$http_x_forwarded_proto \$rivet_forwarded_proto/);
+    assert.match(template, /map \$rivet_forwarded_host \$rivet_ui_host_is_token_free/);
+    assert.match(template, /map \$rivet_forwarded_proto \$rivet_ui_cookie_secure_suffix/);
+    assert.match(template, /~\*\^https\$ "; Secure";/);
+    assert.match(template, /map "\$\{RIVET_WEB_APPS_AUTH_MODE\}" \$rivet_web_apps_use_ui_gate/);
+    assert.match(template, /map "\$rivet_web_apps_use_ui_gate:\$rivet_ui_gate_result" \$rivet_web_apps_gate_result/);
+    assert.doesNotMatch(template, /proxy_set_header X-Forwarded-Proto \$scheme;/);
     for (const locationPattern of [
       /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/\s*\{/,
       /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\s*\{/,
     ]) {
       const webAppsLocation = proxyLocation(template, locationPattern);
-      assert.match(webAppsLocation, /if \(\$rivet_ui_gate_result = deny\) \{\s*return 401;\s*\}/);
+      assert.match(webAppsLocation, /if \(\$rivet_web_apps_gate_result = deny\) \{\s*return 401;\s*\}/);
       assert.match(webAppsLocation, /proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;/);
+      assert.match(webAppsLocation, /proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;/);
+      assert.match(webAppsLocation, /proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;/);
     }
   }
 });

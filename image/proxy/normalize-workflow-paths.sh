@@ -40,6 +40,16 @@ normalize_bool() {
   esac
 }
 
+normalize_web_apps_auth_mode() {
+  value="$1"
+  trimmed=$(printf '%s' "${value}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+
+  case "$trimmed" in
+    oauth|none) printf '%s' "$trimmed" ;;
+    *) printf 'ui-gate' ;;
+  esac
+}
+
 has_nonempty_value() {
   value="$1"
   trimmed=$(printf '%s' "${value}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
@@ -210,6 +220,7 @@ export RIVET_LATEST_WEB_APPS_BASE_PATH="$(normalize_path "${RIVET_LATEST_APPS_BA
 export RIVET_PUBLISHED_APPS_BASE_PATH="$RIVET_WEB_APPS_BASE_PATH"
 export RIVET_LATEST_APPS_BASE_PATH="$RIVET_LATEST_WEB_APPS_BASE_PATH"
 export RIVET_REQUIRE_UI_GATE_KEY="$(normalize_bool "${RIVET_REQUIRE_UI_GATE_KEY:-}" "0")"
+export RIVET_WEB_APPS_AUTH_MODE="$(normalize_web_apps_auth_mode "${RIVET_WEB_APPS_AUTH_MODE:-}")"
 export RIVET_UI_GATE_KEY_PRESENT="$(has_nonempty_value "${RIVET_KEY:-}")"
 export RIVET_UI_TOKEN_FREE_HOSTS_REGEX="$(build_host_regex "${RIVET_UI_TOKEN_FREE_HOSTS:-}" "${RIVET_KEY:-}")"
 export RIVET_PROXY_RESOLVER="$(resolve_proxy_resolver "${RIVET_PROXY_RESOLVER:-}")"

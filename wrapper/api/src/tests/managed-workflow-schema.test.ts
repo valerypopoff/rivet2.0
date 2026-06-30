@@ -28,6 +28,7 @@ function createExecutionLookupRow() {
     stats_web_app_count: 1,
     revision_created_at: new Date().toISOString(),
     ui_graph_id: 'ui-graph-a',
+    allowed_emails: ['user@example.com'],
   };
 }
 
@@ -95,6 +96,8 @@ test('managed schema keeps web app publications tied to immutable workflow revis
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS workflow_web_apps'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ui_graph_id TEXT NOT NULL'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('slug_lookup_name TEXT NOT NULL UNIQUE'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes("allowed_emails TEXT[] NOT NULL DEFAULT '{}'"));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes("ALTER TABLE workflow_web_apps ADD COLUMN IF NOT EXISTS allowed_emails TEXT[] NOT NULL DEFAULT '{}';"));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('UNIQUE (workflow_id, ui_graph_id)'));
@@ -146,12 +149,14 @@ test('managed web app execution lookup uses the published web app slug and pinne
   assert.equal(result.pointer.relativePath, 'Main.rivet-project');
   assert.equal(result.pointer.revisionId, 'resolved-revision');
   assert.equal(result.pointer.webAppUiGraphId, 'ui-graph-a');
+  assert.deepEqual(result.pointer.webAppAllowedEmails, ['user@example.com']);
   assert.equal(queries.length, 1);
   assert.deepEqual(queries[0]?.params, ['app-slug']);
 
   const normalizedSql = queries[0]!.text.replace(/\s+/g, ' ').trim();
   assert.match(normalizedSql, /FROM workflow_web_apps app/);
   assert.match(normalizedSql, /JOIN workflow_revisions r ON r\.revision_id = app\.revision_id/);
+  assert.match(normalizedSql, /app\.allowed_emails/);
   assert.match(normalizedSql, /WHERE app\.slug_lookup_name = \$1$/);
 });
 
@@ -165,11 +170,13 @@ test('managed latest web app execution lookup uses the published web app slug an
   assert.equal(result.pointer.relativePath, 'Main.rivet-project');
   assert.equal(result.pointer.revisionId, 'resolved-revision');
   assert.equal(result.pointer.webAppUiGraphId, 'ui-graph-a');
+  assert.deepEqual(result.pointer.webAppAllowedEmails, ['user@example.com']);
   assert.equal(queries.length, 1);
   assert.deepEqual(queries[0]?.params, ['app-slug']);
 
   const normalizedSql = queries[0]!.text.replace(/\s+/g, ' ').trim();
   assert.match(normalizedSql, /FROM workflow_web_apps app/);
   assert.match(normalizedSql, /JOIN workflow_revisions r ON r\.revision_id = w\.current_draft_revision_id/);
+  assert.match(normalizedSql, /app\.allowed_emails/);
   assert.match(normalizedSql, /WHERE app\.slug_lookup_name = \$1$/);
 });

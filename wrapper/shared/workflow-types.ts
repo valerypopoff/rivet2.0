@@ -117,6 +117,7 @@ export type WorkflowPublishedWebAppSummary = {
   uiGraphName: string;
   slug: string;
   publishedAt: string;
+  allowedEmails: string[];
 };
 
 export type WorkflowProjectWebAppSummary = {
@@ -126,6 +127,7 @@ export type WorkflowProjectWebAppSummary = {
   publishedAt: string | null;
   status: WorkflowProjectStatus;
   isMissingFromProject: boolean;
+  allowedEmails: string[];
 };
 
 export type WorkflowProjectWebAppsResponse = {
@@ -135,6 +137,12 @@ export type WorkflowProjectWebAppsResponse = {
 export type WorkflowProjectWebAppPublicationDraft = {
   uiGraphId: string;
   slug: string;
+  allowedEmails?: string[];
+};
+
+export type WorkflowProjectWebAppAccessDraft = {
+  uiGraphId: string;
+  allowedEmails: string[];
 };
 
 export type WorkflowProjectStats = {

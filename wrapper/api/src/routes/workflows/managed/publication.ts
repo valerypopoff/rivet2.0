@@ -4,6 +4,7 @@ import { loadProjectFromString } from '@valerypopoff/rivet2-node';
 import type {
   WorkflowProjectItem,
   WorkflowProjectSettingsDraft,
+  WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionPreviewResponse,
@@ -14,6 +15,7 @@ import type {
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../../shared/workflow-types.js';
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
+import { normalizeEmailList } from '../publication.js';
 import { normalizeManagedWorkflowRelativePath } from '../virtual-paths.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { ManagedWorkflowDbClient } from './db.js';
@@ -104,9 +106,16 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
 
     const normalized = value.map((item) => {
       const raw = (item ?? {}) as Record<string, unknown>;
+      const allowedEmails = Object.prototype.hasOwnProperty.call(raw, 'allowedEmails')
+        ? normalizeEmailList(raw.allowedEmails)
+        : undefined;
+      if (allowedEmails) {
+        validateAllowedEmailList(allowedEmails);
+      }
       return {
         uiGraphId: typeof raw.uiGraphId === 'string' ? raw.uiGraphId.trim() : '',
         slug: normalizeStoredEndpointName(typeof raw.slug === 'string' ? raw.slug : ''),
+        allowedEmails,
       };
     });
 
@@ -124,6 +133,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       if (!publication.slug) {
         throw badRequest('Web app URL slug is required');
       }
+      assertUsableWebAppSlug(publication.slug);
 
       const slugLookupName = normalizeWorkflowEndpointLookupName(publication.slug);
       if (seenUiGraphIds.has(publication.uiGraphId)) {
@@ -141,13 +151,62 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     return normalized;
   };
 
+  const validateAllowedEmailList = (allowedEmails: readonly string[]): void => {
+    for (const email of allowedEmails) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        throw badRequest(`Invalid allowed email: ${email}`);
+      }
+    }
+  };
+
+  const assertUsableWebAppSlug = (slug: string): void => {
+    if (slug.toLowerCase() === 'auth') {
+      throw badRequest('Web app URL slug "auth" is reserved');
+    }
+  };
+
+  const normalizeWebAppAccessDrafts = (value: unknown): WorkflowProjectWebAppAccessDraft[] => {
+    if (!Array.isArray(value)) {
+      throw badRequest('Web app access updates must be an array');
+    }
+
+    const normalized = value.map((item) => {
+      const raw = (item ?? {}) as Record<string, unknown>;
+      const allowedEmails = normalizeEmailList(raw.allowedEmails);
+      validateAllowedEmailList(allowedEmails);
+      return {
+        uiGraphId: typeof raw.uiGraphId === 'string' ? raw.uiGraphId.trim() : '',
+        allowedEmails,
+      };
+    });
+
+    if (normalized.length === 0) {
+      throw badRequest('At least one web app access update is required');
+    }
+
+    const seenUiGraphIds = new Set<string>();
+    for (const access of normalized) {
+      if (!access.uiGraphId) {
+        throw badRequest('Web app selection is required');
+      }
+
+      if (seenUiGraphIds.has(access.uiGraphId)) {
+        throw badRequest('Each web app access policy can only be updated once per request');
+      }
+
+      seenUiGraphIds.add(access.uiGraphId);
+    }
+
+    return normalized;
+  };
+
   const listWebAppPublicationRows = async (
     client: ManagedWorkflowDbClient,
     workflowId: string,
   ): Promise<WebAppPublicationRow[]> => deps.queryRows<WebAppPublicationRow>(
     client,
     `
-      SELECT app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, published_at
+      SELECT app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, allowed_emails, published_at
       FROM workflow_web_apps
       WHERE workflow_id = $1
       ORDER BY published_at DESC, app_id DESC
@@ -594,6 +653,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
               name: uiGraph.name,
               publishedSlug: published?.slug ?? null,
               publishedAt: toIsoString(published?.published_at) ?? null,
+              allowedEmails: published?.allowed_emails ?? [],
               status,
               isMissingFromProject: false,
             };
@@ -605,6 +665,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
               name: webApp.slug || webApp.ui_graph_id,
               publishedSlug: webApp.slug,
               publishedAt: toIsoString(webApp.published_at) ?? null,
+              allowedEmails: webApp.allowed_emails ?? [],
               status: 'unpublished_changes' as const,
               isMissingFromProject: true,
             })),
@@ -640,6 +701,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         }
 
         const uiGraphIds = normalizedPublications.map((publication) => publication.uiGraphId);
+        const previousRows = await listWebAppPublicationRows(client, workflow.workflow_id);
+        const previousByUiGraphId = new Map(previousRows.map((row) => [row.ui_graph_id, row]));
         await client.query(
           'DELETE FROM workflow_web_apps WHERE workflow_id = $1 AND ui_graph_id = ANY($2::text[])',
           [workflow.workflow_id, uiGraphIds],
@@ -650,9 +713,9 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
             await client.query(
               `
                 INSERT INTO workflow_web_apps (
-                  app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, published_at
+                  app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, allowed_emails, published_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7::text[], NOW())
               `,
               [
                 randomUUID(),
@@ -661,6 +724,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
                 publication.uiGraphId,
                 publication.slug,
                 normalizeWorkflowEndpointLookupName(publication.slug),
+                publication.allowedEmails ?? previousByUiGraphId.get(publication.uiGraphId)?.allowed_emails ?? [],
               ],
             );
           } catch (error) {
@@ -669,6 +733,40 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
             }
 
             throw error;
+          }
+        }
+
+        await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
+        return deps.mapWorkflowRowToProjectItem(workflow, {
+          webAppRows: await listWebAppPublicationRows(client, workflow.workflow_id),
+        });
+      });
+    },
+
+    async updateWorkflowProjectWebAppAccess(
+      relativePath: unknown,
+      accessUpdates: unknown,
+    ): Promise<WorkflowProjectItem> {
+      const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
+      const normalizedAccessUpdates = normalizeWebAppAccessDrafts(accessUpdates);
+
+      return deps.withTransaction(async (client, hooks) => {
+        const workflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        if (!workflow) {
+          throw createHttpError(404, 'Project not found');
+        }
+
+        for (const access of normalizedAccessUpdates) {
+          const updateResult = await client.query(
+            `
+              UPDATE workflow_web_apps
+              SET allowed_emails = $3::text[]
+              WHERE workflow_id = $1 AND ui_graph_id = $2
+            `,
+            [workflow.workflow_id, access.uiGraphId, access.allowedEmails],
+          );
+          if (updateResult.rowCount === 0) {
+            throw createHttpError(404, 'Published web app not found');
           }
         }
 

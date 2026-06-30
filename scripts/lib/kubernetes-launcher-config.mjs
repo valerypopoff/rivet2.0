@@ -192,6 +192,7 @@ export function buildKubernetesLauncherConfig(env) {
       enableLatestRemoteDebugger: parseBoolean(readEnv(env, 'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER'), true),
       requireWorkflowKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_WORKFLOW_KEY'), false),
       requireUiGateKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
+      webAppsAuthMode: readEnv(env, 'RIVET_WEB_APPS_AUTH_MODE') ?? 'ui-gate',
     },
   };
 }
@@ -258,6 +259,7 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: ${yamlString(String(config.routeConfig.enableLatestRemoteDebugger))}`,
     `  RIVET_REQUIRE_WORKFLOW_KEY: ${yamlString(String(config.routeConfig.requireWorkflowKey))}`,
     `  RIVET_REQUIRE_UI_GATE_KEY: ${yamlString(String(config.routeConfig.requireUiGateKey))}`,
+    `  RIVET_WEB_APPS_AUTH_MODE: ${yamlString(config.routeConfig.webAppsAuthMode)}`,
     '',
   ].join('\n');
 }

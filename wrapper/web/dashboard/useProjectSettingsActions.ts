@@ -7,11 +7,13 @@ import {
   publishWorkflowProjectWebApps,
   unpublishWorkflowProject,
   unpublishWorkflowProjectWebApp,
+  updateWorkflowProjectWebAppAccess,
 } from './workflowApi';
 import { ENDPOINT_NAME_PATTERN, validateEndpointName } from './projectSettingsForm';
 import type {
   WorkflowProjectItem,
   WorkflowProjectSettingsDraft,
+  WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppSummary,
 } from './types';
@@ -63,6 +65,34 @@ function createInitialWebAppSlugDrafts(webApps: WorkflowProjectWebAppSummary[]):
   return drafts;
 }
 
+function createInitialWebAppAllowedEmailDrafts(webApps: WorkflowProjectWebAppSummary[]): Record<string, string> {
+  return Object.fromEntries(webApps.map((webApp) => [
+    webApp.uiGraphId,
+    (webApp.allowedEmails ?? []).join('\n'),
+  ]));
+}
+
+function parseAllowedEmailDraft(value: string): string[] {
+  const seen = new Set<string>();
+  const emails: string[] = [];
+  for (const rawEmail of value.split(/[\n,;]/)) {
+    const email = rawEmail.trim().toLowerCase();
+    if (!email || seen.has(email)) {
+      continue;
+    }
+
+    seen.add(email);
+    emails.push(email);
+  }
+
+  return emails;
+}
+
+function validateAllowedEmails(emails: readonly string[]): string | null {
+  const invalidEmail = emails.find((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+  return invalidEmail ? `Invalid email: ${invalidEmail}` : null;
+}
+
 export function useProjectSettingsActions(options: UseProjectSettingsActionsOptions) {
   const {
     activeProject,
@@ -76,6 +106,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   const [savingSettings, setSavingSettings] = useState(false);
   const [webApps, setWebApps] = useState<WorkflowProjectWebAppSummary[]>([]);
   const [webAppSlugDrafts, setWebAppSlugDrafts] = useState<Record<string, string>>({});
+  const [webAppAllowedEmailDrafts, setWebAppAllowedEmailDrafts] = useState<Record<string, string>>({});
   const [loadingWebApps, setLoadingWebApps] = useState(false);
   const [savingWebApps, setSavingWebApps] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -91,10 +122,12 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       const response = await fetchWorkflowProjectWebApps(activeProject.relativePath);
       setWebApps(response.webApps);
       setWebAppSlugDrafts(createInitialWebAppSlugDrafts(response.webApps));
+      setWebAppAllowedEmailDrafts(createInitialWebAppAllowedEmailDrafts(response.webApps));
     } catch (err: any) {
       toast.error(err.message || 'Failed to load project web apps');
       setWebApps([]);
       setWebAppSlugDrafts({});
+      setWebAppAllowedEmailDrafts({});
     } finally {
       setLoadingWebApps(false);
     }
@@ -103,6 +136,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   useEffect(() => {
     setWebApps([]);
     setWebAppSlugDrafts({});
+    setWebAppAllowedEmailDrafts({});
 
     if (!isOpen) {
       setLoadingWebApps(false);
@@ -120,6 +154,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
 
         setWebApps(response.webApps);
         setWebAppSlugDrafts(createInitialWebAppSlugDrafts(response.webApps));
+        setWebAppAllowedEmailDrafts(createInitialWebAppAllowedEmailDrafts(response.webApps));
       })
       .catch((err: any) => {
         if (!cancelled) {
@@ -199,6 +234,18 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     return errors;
   }, [webApps, webAppSlugDrafts]);
 
+  const webAppAccessValidationErrors = useMemo(() => {
+    const errors: Record<string, string> = {};
+    for (const webApp of webApps) {
+      const error = validateAllowedEmails(parseAllowedEmailDraft(webAppAllowedEmailDrafts[webApp.uiGraphId] ?? ''));
+      if (error) {
+        errors[webApp.uiGraphId] = error;
+      }
+    }
+
+    return errors;
+  }, [webAppAllowedEmailDrafts, webApps]);
+
   const handleSettingsDraftChange =
     <K extends keyof WorkflowProjectSettingsDraft>(key: K) =>
     (event: ChangeEvent<HTMLInputElement>) => {
@@ -213,6 +260,15 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     (uiGraphId: string) =>
     (event: ChangeEvent<HTMLInputElement>) => {
       setWebAppSlugDrafts((prev) => ({
+        ...prev,
+        [uiGraphId]: event.target.value,
+      }));
+    };
+
+  const handleWebAppAllowedEmailsDraftChange =
+    (uiGraphId: string) =>
+    (event: ChangeEvent<HTMLTextAreaElement>) => {
+      setWebAppAllowedEmailDrafts((prev) => ({
         ...prev,
         [uiGraphId]: event.target.value,
       }));
@@ -293,6 +349,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       drafts.push({
         uiGraphId: webApp.uiGraphId,
         slug,
+        allowedEmails: parseAllowedEmailDraft(webAppAllowedEmailDrafts[webApp.uiGraphId] ?? ''),
       });
       return drafts;
     }, []);
@@ -304,6 +361,14 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       : Object.values(webAppSlugValidationErrors)[0];
     if (validationError) {
       toast.error(validationError);
+      return;
+    }
+
+    const accessValidationError = uiGraphId
+      ? webAppAccessValidationErrors[uiGraphId]
+      : Object.values(webAppAccessValidationErrors)[0];
+    if (accessValidationError) {
+      toast.error(accessValidationError);
       return;
     }
 
@@ -321,6 +386,31 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       await onRefresh();
     } catch (err: any) {
       toast.error(err.message || 'Failed to publish web app');
+    } finally {
+      setSavingWebApps(false);
+    }
+  };
+
+  const createWebAppAccessDraft = (webApp: WorkflowProjectWebAppSummary): WorkflowProjectWebAppAccessDraft => ({
+    uiGraphId: webApp.uiGraphId,
+    allowedEmails: parseAllowedEmailDraft(webAppAllowedEmailDrafts[webApp.uiGraphId] ?? ''),
+  });
+
+  const handleSaveWebAppAccess = async (webApp: WorkflowProjectWebAppSummary) => {
+    const validationError = webAppAccessValidationErrors[webApp.uiGraphId];
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+
+    setSavingWebApps(true);
+
+    try {
+      await updateWorkflowProjectWebAppAccess(activeProject.relativePath, [createWebAppAccessDraft(webApp)]);
+      await reloadWebApps();
+      await onRefresh();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update web app access');
     } finally {
       setSavingWebApps(false);
     }
@@ -350,7 +440,9 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     savingSettings,
     webApps,
     webAppSlugDrafts,
+    webAppAllowedEmailDrafts,
     webAppSlugValidationErrors,
+    webAppAccessValidationErrors,
     loadingWebApps,
     savingWebApps,
     deletingProject,
@@ -358,10 +450,12 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     endpointValidationError,
     handleSettingsDraftChange,
     handleWebAppSlugDraftChange,
+    handleWebAppAllowedEmailsDraftChange,
     handlePublishProject,
     handleUnpublishProject,
     handlePublishWebApps,
     handleUnpublishWebApp,
+    handleSaveWebAppAccess,
     handleDeleteActiveProject,
   };
 }

@@ -276,7 +276,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
       lookupName: string,
     ): Promise<ManagedExecutionPointerLookupResult | null> {
       if (runKind === 'web-app' || runKind === 'latest-web-app') {
-        const row = await queryOne<CurrentDraftRevisionRow & { ui_graph_id: string }>(
+        const row = await queryOne<CurrentDraftRevisionRow & { ui_graph_id: string; allowed_emails: string[] | null }>(
           client,
           `
             SELECT
@@ -300,7 +300,8 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
               r.stats_total_node_count,
               r.stats_web_app_count,
               r.created_at AS revision_created_at,
-              app.ui_graph_id
+              app.ui_graph_id,
+              app.allowed_emails
             FROM workflow_web_apps app
             JOIN workflows w ON w.workflow_id = app.workflow_id
             JOIN workflow_revisions r ON r.revision_id = ${
@@ -321,6 +322,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
             relativePath: split.workflow.relative_path,
             revisionId: split.revision.revision_id,
             webAppUiGraphId: row.ui_graph_id,
+            webAppAllowedEmails: row.allowed_emails ?? [],
           },
           revision: split.revision,
         };

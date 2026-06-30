@@ -9,6 +9,7 @@ import type {
   WorkflowProjectItem,
   WorkflowProjectPathMove,
   WorkflowProjectSettingsDraft,
+  WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionRestoreResponse,
@@ -50,6 +51,7 @@ import {
   listWorkflowProjectWebApps,
   publishWorkflowProjectWebApps,
   unpublishWorkflowProjectWebApp,
+  updateWorkflowProjectWebAppAccess,
 } from './web-app-publication.js';
 import { readWorkflowProjectDownload } from './workflow-download.js';
 import {
@@ -115,6 +117,7 @@ type ExecutionProjectResult = {
   projectVirtualPath: string;
   revisionKey: string;
   webAppUiGraphId?: string;
+  webAppAllowedEmails?: string[];
   debug?: {
     cacheStatus: 'hit' | 'miss' | 'bypass';
     resolveMs: number;
@@ -230,6 +233,7 @@ async function loadFilesystemPublishedWebAppExecutionProject(root: string, slug:
       match.uiGraphId,
     ),
     webAppUiGraphId: match.uiGraphId,
+    webAppAllowedEmails: match.allowedEmails,
   };
 }
 
@@ -258,6 +262,7 @@ async function loadFilesystemLatestWebAppExecutionProject(root: string, slug: st
       match.uiGraphId,
     ),
     webAppUiGraphId: match.uiGraphId,
+    webAppAllowedEmails: match.allowedEmails,
   };
 }
 
@@ -656,6 +661,20 @@ export async function publishWorkflowProjectWebAppsWithBackend(
     async (backend) => backend.publishWorkflowProjectWebApps(relativePath, publications),
     async () => {
       const project = await publishWorkflowProjectWebApps(relativePath, publications);
+      markFilesystemExecutionStructureDirty([project.absolutePath]);
+      return project;
+    },
+  );
+}
+
+export async function updateWorkflowProjectWebAppAccessWithBackend(
+  relativePath: unknown,
+  accessUpdates: WorkflowProjectWebAppAccessDraft[] | unknown,
+) {
+  return delegate(
+    async (backend) => backend.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates),
+    async () => {
+      const project = await updateWorkflowProjectWebAppAccess(relativePath, accessUpdates);
       markFilesystemExecutionStructureDirty([project.absolutePath]);
       return project;
     },

@@ -3,6 +3,7 @@ import type {
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
   WorkflowProjectPathMove,
+  WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionRestoreResponse,
@@ -195,6 +196,13 @@ export class ManagedWorkflowBackend {
     publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
   ): Promise<WorkflowProjectItem> {
     return this.#publication.publishWorkflowProjectWebApps(relativePath, publications);
+  }
+
+  async updateWorkflowProjectWebAppAccess(
+    relativePath: unknown,
+    accessUpdates: WorkflowProjectWebAppAccessDraft[] | unknown,
+  ): Promise<WorkflowProjectItem> {
+    return this.#publication.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates);
   }
 
   async unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown): Promise<WorkflowProjectItem> {

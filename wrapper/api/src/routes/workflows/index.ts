@@ -44,6 +44,7 @@ import {
   setWorkflowPublishedVersionStarWithBackend,
   unpublishWorkflowProjectWebAppWithBackend,
   unpublishWorkflowProjectItemWithBackend,
+  updateWorkflowProjectWebAppAccessWithBackend,
   uploadWorkflowProjectItemWithBackend,
 } from './storage-backend.js';
 import { createWorkflowDownloadContentDisposition } from './workflow-download.js';
@@ -125,6 +126,15 @@ const publishProjectWebAppsSchema = z.object({
   publications: z.array(z.object({
     uiGraphId: z.string(),
     slug: z.string(),
+    allowedEmails: z.array(z.string()).optional(),
+  })),
+});
+
+const updateProjectWebAppAccessSchema = z.object({
+  relativePath: z.unknown(),
+  accessUpdates: z.array(z.object({
+    uiGraphId: z.string(),
+    allowedEmails: z.array(z.string()),
   })),
 });
 
@@ -350,6 +360,11 @@ workflowsRouter.get('/projects/web-apps', asyncHandler(async (req, res) => {
 workflowsRouter.post('/projects/web-apps/publish', validateBody(publishProjectWebAppsSchema), asyncHandler(async (req, res) => {
   const { relativePath, publications } = req.body as z.infer<typeof publishProjectWebAppsSchema>;
   res.json({ project: await publishWorkflowProjectWebAppsWithBackend(relativePath, publications) });
+}));
+
+workflowsRouter.patch('/projects/web-apps/access', validateBody(updateProjectWebAppAccessSchema), asyncHandler(async (req, res) => {
+  const { relativePath, accessUpdates } = req.body as z.infer<typeof updateProjectWebAppAccessSchema>;
+  res.json({ project: await updateWorkflowProjectWebAppAccessWithBackend(relativePath, accessUpdates) });
 }));
 
 workflowsRouter.post('/projects/web-apps/unpublish', validateBody(unpublishProjectWebAppSchema), asyncHandler(async (req, res) => {

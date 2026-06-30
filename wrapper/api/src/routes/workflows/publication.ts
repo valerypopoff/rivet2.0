@@ -69,6 +69,7 @@ export async function getWorkflowProjectSettings(
       uiGraphName: webApp.uiGraphName,
       slug: webApp.slug,
       publishedAt: webApp.publishedAt,
+      allowedEmails: webApp.allowedEmails,
     })),
   };
 }
@@ -215,10 +216,37 @@ function normalizeStoredWorkflowPublishedWebApps(value: unknown): StoredWorkflow
       slug,
       publishedSnapshotId,
       publishedAt,
+      allowedEmails: normalizeEmailList(raw.allowedEmails),
     });
   }
 
   return normalized;
+}
+
+export function normalizeEmailList(value: unknown): string[] {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[\n,;]/)
+      : [];
+  const seen = new Set<string>();
+  const emails: string[] = [];
+
+  for (const item of rawItems) {
+    if (typeof item !== 'string') {
+      continue;
+    }
+
+    const email = item.trim().toLowerCase();
+    if (!email || seen.has(email)) {
+      continue;
+    }
+
+    seen.add(email);
+    emails.push(email);
+  }
+
+  return emails;
 }
 
 export function getDerivedWorkflowProjectStatus(
@@ -475,6 +503,7 @@ export async function findPublishedWorkflowWebAppBySlug(root: string, slug: stri
     return {
       slug: webApp.slug,
       uiGraphId: webApp.uiGraphId,
+      allowedEmails: webApp.allowedEmails,
       projectPath,
       publishedProjectPath,
     };

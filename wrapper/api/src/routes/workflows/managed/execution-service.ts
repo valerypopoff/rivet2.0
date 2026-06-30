@@ -274,6 +274,7 @@ export class ManagedWorkflowExecutionService {
         projectVirtualPath: getManagedWorkflowProjectVirtualPath(pointer.relativePath),
         revisionKey: `managed:${pointer.revisionId}`,
         webAppUiGraphId: pointer.webAppUiGraphId,
+        webAppAllowedEmails: pointer.webAppAllowedEmails,
         debug: {
           cacheStatus,
           resolveMs,
