@@ -622,6 +622,16 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
       assert.match(htmlResponse.headers.get('location') ?? '', /^https:\/\/oauth\.example\.test\/authorize\?/);
       assert.match(htmlResponse.headers.get('set-cookie') ?? '', /rivet_web_app_oauth_state=/);
 
+      const authErrorResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth?auth_error=oauth_profile`, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(authErrorResponse.status, 401);
+      const authErrorHtml = await authErrorResponse.text();
+      assert.match(authErrorHtml, /Web app sign-in failed/);
+      assert.match(authErrorHtml, /profile response did not include the configured email claim/);
+      assert.match(authErrorHtml, /href="\/apps\/published-web-app-oauth"/);
+
       const crossOriginActionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth/actions/run`, {
         method: 'POST',
         headers: {

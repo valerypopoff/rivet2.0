@@ -353,6 +353,67 @@ function getWebAppRequestReturnTo(req: Request): string {
   return req.originalUrl || req.url || '/';
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function getWebAppAuthError(req: Request): string {
+  return typeof req.query.auth_error === 'string' ? req.query.auth_error : '';
+}
+
+function getWebAppAuthRetryPath(req: Request): string {
+  const parsed = new URL(getWebAppRequestReturnTo(req), 'http://rivet.local');
+  parsed.searchParams.delete('auth_error');
+  return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
+}
+
+function getWebAppAuthErrorMessage(errorCode: string): string {
+  if (errorCode === 'oauth_profile') {
+    return 'OAuth sign-in succeeded, but the profile response did not include the configured email claim.';
+  }
+
+  if (errorCode === 'oauth_token') {
+    return 'OAuth sign-in could not exchange the authorization code for an access token.';
+  }
+
+  if (errorCode === 'oauth_state') {
+    return 'The OAuth sign-in session expired. Try signing in again.';
+  }
+
+  if (errorCode === 'oauth_denied') {
+    return 'The OAuth provider rejected the sign-in request.';
+  }
+
+  return 'OAuth sign-in failed. Try signing in again.';
+}
+
+function renderWebAppAuthErrorHtml(errorCode: string, retryPath: string): string {
+  return `<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web app sign-in failed</title>
+<style>
+  :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101114; color: #f4f4f5; }
+  main { width: min(440px, calc(100vw - 32px)); border: 1px solid #333741; border-radius: 8px; background: #1d1f24; padding: 24px; box-shadow: 0 24px 80px rgb(0 0 0 / 0.38); }
+  h1 { margin: 0 0 10px; font-size: 20px; line-height: 1.2; }
+  p { margin: 0 0 18px; color: #c8c8cf; line-height: 1.5; }
+  a { display: inline-flex; align-items: center; min-height: 34px; padding: 0 13px; border-radius: 6px; background: #2f6fed; color: white; font-weight: 650; text-decoration: none; }
+  code { color: #d6d8df; }
+</style>
+<main>
+  <h1>Web app sign-in failed</h1>
+  <p>${escapeHtml(getWebAppAuthErrorMessage(errorCode))}</p>
+  <p>Error code: <code>${escapeHtml(errorCode || 'oauth_failed')}</code></p>
+  <a href="${escapeHtml(retryPath)}">Try again</a>
+</main>`;
+}
+
 function sendWebAppAuthJsonError(
   res: Response,
   requestStartedAt: number,
@@ -423,6 +484,17 @@ function authorizeWebAppRequestBeforeResolve(
   const session = readWebAppOAuthSession(req);
   if (session) {
     return true;
+  }
+
+  const authError = getWebAppAuthError(req);
+  if (requestKind === 'html' && authError) {
+    sendHtmlWithDuration(
+      res,
+      401,
+      renderWebAppAuthErrorHtml(authError, getWebAppAuthRetryPath(req)),
+      requestStartedAt,
+    );
+    return false;
   }
 
   if (requestKind === 'html') {

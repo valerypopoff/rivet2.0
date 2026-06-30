@@ -417,7 +417,9 @@ Published and latest web apps are browser surfaces, so their HTML, `app.json`, a
 - `oauth` redirects HTML page requests to the configured OAuth provider and stores a signed HTTP-only web-app session cookie after the callback succeeds. Action and `app.json` requests without a valid session return JSON `401` with `code: "oauth_required"` instead of showing the key prompt.
 - `none` leaves web-app route auth open at the API layer. Use this only behind an external access-control layer.
 
-Successful UI-gate or OAuth login returns the browser to the original web-app URL, such as `/apps/my-tool/` or `/apps-latest/my-tool/`, instead of always redirecting to `/`. Hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth in every mode. Workflow endpoint routes remain bearer/token-free-host routes and do not accept either the UI session cookie or the OAuth web-app session cookie as a substitute for `Authorization`.
+Successful UI-gate or OAuth login returns the browser to the original web-app URL, such as `/apps/my-tool/` or `/apps-latest/my-tool/`, instead of always redirecting to `/`. OAuth also signs that original path into the short-lived state cookie so provider-side errors that omit the OAuth `state` parameter, token exchange failures, or missing-email profile responses can still return to the app path with `auth_error=...`. App HTML requests with an OAuth `auth_error` render a sign-in failure page with a retry link instead of immediately starting another OAuth loop. Hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth in every mode. Workflow endpoint routes remain bearer/token-free-host routes and do not accept either the UI session cookie or the OAuth web-app session cookie as a substitute for `Authorization`.
+
+For OAuth provider integration, `OAUTH_EMAIL_CLAIM` accepts dot paths such as `data.email`. If the provider's profile shape is unknown, set `OAUTH_DEBUG_LOG_PROFILE=true` only temporarily; the API logs the raw profile JSON after the user-info request so operators can choose the claim path, and the flag should be disabled again because the payload can contain profile data.
 
 Endpoint resolution is backend-specific:
 
