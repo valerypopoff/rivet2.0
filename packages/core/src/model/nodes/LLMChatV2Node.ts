@@ -271,6 +271,11 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
           title: 'Response Error',
           dataType: this.data.retryOnNon200 ? 'string[]' : 'string',
         },
+        {
+          id: 'requestBody' as PortId,
+          title: 'LLM request body',
+          dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'] as const,
+        },
       );
     }
 

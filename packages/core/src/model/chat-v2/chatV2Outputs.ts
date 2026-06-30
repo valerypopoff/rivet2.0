@@ -10,6 +10,7 @@ import type { ChatV2NormalizedUsage, ChatV2ReasoningOutput, RunChatV2PipelineOpt
 
 const CHAT_V2_REQUEST_STATUS_PORT_ID = 'requestStatus' as PortId;
 const CHAT_V2_REQUEST_ERROR_PORT_ID = 'requestError' as PortId;
+const CHAT_V2_REQUEST_BODY_PORT_ID = 'requestBody' as PortId;
 
 type ControlFlowExcludedOutput = { type: 'control-flow-excluded'; value: undefined };
 
@@ -35,6 +36,7 @@ type CreateChatV2CommonOutputsOptions = ChatV2CommonOutputOptions & {
   responseError: string | undefined;
   requestStatuses: number[];
   requestErrors: string[];
+  requestBodies?: unknown[] | undefined;
 };
 
 type CreateChatV2ProviderFailureOutputsOptions = Pick<
@@ -46,6 +48,7 @@ type CreateChatV2ProviderFailureOutputsOptions = Pick<
   responseError: string;
   requestStatuses: number[];
   requestErrors: string[];
+  requestBodies?: unknown[] | undefined;
 };
 
 function toFunctionCallOutputValue(functionCall: StreamedFunctionCall) {
@@ -142,6 +145,14 @@ function createChatV2ReasoningOutput(reasoning: ChatV2ReasoningOutput | undefine
     : createControlFlowExcludedOutput();
 }
 
+function createChatV2RequestBodyOutput(requestBodies: unknown[] | undefined): Outputs[PortId] {
+  if (requestBodies == null || requestBodies.length === 0) {
+    return createControlFlowExcludedOutput();
+  }
+
+  return inferType(requestBodies.length === 1 ? requestBodies[0] : requestBodies);
+}
+
 function createChatV2RetryAttemptOutput(
   type: 'number[]',
   values: number[],
@@ -170,6 +181,7 @@ export function createChatV2CommonOutputs({
   responseError,
   requestStatuses,
   requestErrors,
+  requestBodies,
   outputUsage,
   outputReasoning,
   outputRequestStatus,
@@ -234,6 +246,8 @@ export function createChatV2CommonOutputs({
             }
           : createControlFlowExcludedOutput();
     }
+
+    outputs[CHAT_V2_REQUEST_BODY_PORT_ID] = createChatV2RequestBodyOutput(requestBodies);
   }
 
   return outputs;
@@ -245,6 +259,7 @@ export function createChatV2ProviderFailureOutputs({
   responseError,
   requestStatuses,
   requestErrors,
+  requestBodies,
   outputUsage,
   outputReasoning,
   includeFunctionCalls,
@@ -279,6 +294,8 @@ export function createChatV2ProviderFailureOutputs({
     },
     ['responseTokens' as PortId]: createControlFlowExcludedOutput(),
   };
+
+  outputs[CHAT_V2_REQUEST_BODY_PORT_ID] = createChatV2RequestBodyOutput(requestBodies);
 
   if (includeFunctionCalls) {
     outputs['function-calls' as PortId] = createControlFlowExcludedOutput();

@@ -314,6 +314,7 @@ void describe('streamChatV2', () => {
     assert.equal('output' in capturedArgs, false);
     assert.equal('providerOptions' in capturedArgs, false);
     assert.equal('maxOutputTokens' in capturedArgs, false);
+    assert.equal('topP' in capturedArgs, false);
     assert.equal(capturedArgs.maxRetries, 0);
   });
 });
@@ -356,6 +357,7 @@ void describe('runChatV2Pipeline', () => {
       outputRequestStatus: true,
       retryOnNon200: true,
       retryOnNon200RepeatTimes: 1,
+      requestBodies: [{ attempt: 1 }, { attempt: 2 }],
       context: {
         signal: new AbortController().signal,
       },
@@ -376,6 +378,10 @@ void describe('runChatV2Pipeline', () => {
     assert.equal(requestErrors.value.length, 1);
     assert.match(requestErrors.value[0]!, /503 HTTP error/);
     assert.equal('requestErrors' in result.commonOutputs, false);
+    assert.deepEqual(result.commonOutputs['requestBody' as PortId], {
+      type: 'object[]',
+      value: [{ attempt: 1 }, { attempt: 2 }],
+    });
   });
 
   void it('normalizes the final Vercel status error after retry attempts are exhausted', async () => {
@@ -472,6 +478,7 @@ void describe('runChatV2Pipeline', () => {
       outputRequestStatus: true,
       retryOnNon200: true,
       retryOnNon200RepeatTimes: 1,
+      requestBodies: [{ attempt: 1 }, { attempt: 2 }],
       context: {
         signal: new AbortController().signal,
       },
@@ -495,6 +502,10 @@ void describe('runChatV2Pipeline', () => {
     assert.deepEqual(result.commonOutputs['response' as PortId], {
       type: 'control-flow-excluded',
       value: undefined,
+    });
+    assert.deepEqual(result.commonOutputs['requestBody' as PortId], {
+      type: 'object[]',
+      value: [{ attempt: 1 }, { attempt: 2 }],
     });
   });
 

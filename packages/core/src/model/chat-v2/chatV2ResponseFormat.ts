@@ -142,6 +142,7 @@ export function resolveChatV2ResponseFormatParameters(
 
 export function createChatV2ResponseOutput(
   parameters: ChatV2ResponseFormatParameters,
+  provider?: ChatV2Provider,
 ): ChatV2ResponseOutput | undefined {
   if (parameters == null) {
     return undefined;
@@ -152,6 +153,10 @@ export function createChatV2ResponseOutput(
   }
 
   if (parameters.responseFormat === 'json') {
+    if (provider === 'custom') {
+      return undefined;
+    }
+
     return Output.json({
       name: parameters.schemaName,
       description: parameters.schemaDescription,

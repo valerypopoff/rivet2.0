@@ -115,6 +115,7 @@ export type RunChatV2PipelineOptions = {
   providerOptions?: ChatV2ProviderOptions | undefined;
   toolChoice?: ChatV2ToolChoice | undefined;
   anthropicCacheControlTtl?: '5m' | '1h' | undefined;
+  requestBodies?: unknown[] | undefined;
   outputUsage?: boolean | undefined;
   outputReasoning?: boolean | undefined;
   outputRequestStatus?: boolean | undefined;

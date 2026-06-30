@@ -346,7 +346,7 @@ function getResponseFormatEditors(): LLMChatV2EditorDefinition {
       options: [
         { value: '', label: 'Default' },
         { value: 'text', label: 'Text' },
-        { value: 'json', label: 'JSON' },
+        { value: 'json', label: 'JSON object' },
         { value: 'json_schema', label: 'JSON schema' },
       ],
       defaultValue: '',
@@ -359,7 +359,7 @@ function getResponseFormatEditors(): LLMChatV2EditorDefinition {
       dataKey: 'responseSchemaName',
       useInputToggleDataKey: 'useResponseSchemaNameInput',
       placeholder: 'response_schema',
-      helperMessage: 'Optional name passed to the provider for JSON or JSON schema responses.',
+      helperMessage: 'Optional name passed to the provider for JSON object or JSON schema responses.',
       hideIf: (data) => data.responseFormat !== 'json' && data.responseFormat !== 'json_schema',
     },
     {
@@ -367,7 +367,7 @@ function getResponseFormatEditors(): LLMChatV2EditorDefinition {
       label: 'Schema description',
       dataKey: 'responseSchemaDescription',
       useInputToggleDataKey: 'useResponseSchemaDescriptionInput',
-      helperMessage: 'Optional description passed to the provider for JSON or JSON schema responses.',
+      helperMessage: 'Optional description passed to the provider for JSON object or JSON schema responses.',
       hideIf: (data) => data.responseFormat !== 'json' && data.responseFormat !== 'json_schema',
     },
   ]);
@@ -515,9 +515,10 @@ function getTechnicalDetailsEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
-      label: 'Output request status',
+      label: 'Output request details',
       dataKey: 'outputRequestStatus',
-      helperMessage: 'Adds Response Status and Response Error outputs. Retry mode changes them to per-attempt arrays.',
+      helperMessage:
+        'Adds Response Status, Response Error, and LLM request body outputs. Retry mode changes status/error to per-attempt arrays, and LLM request body becomes an array when multiple provider calls are made.',
     },
   ]);
 }

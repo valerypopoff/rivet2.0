@@ -44,6 +44,8 @@ paths and should not be used as the primary target for new provider refactors.
   custom-provider env lookup.
 - Undefined SDK request fields should be omitted rather than serialized as
   explicit `undefined` provider options.
+- New LLM Chat nodes leave optional generation fields such as `topP` unset
+  unless the user configures them or enables the matching input port.
 - Custom-provider model creation must keep AI SDK structured-output support enabled,
   and the raw `response_format` override behavior must remain intact.
 - Tool calling and structured output stay mutually exclusive where the current
@@ -51,7 +53,7 @@ paths and should not be used as the primary target for new provider refactors.
 - Structured-output fallback, deduping, and schema validation must stay covered
   by tests before moving normalization code.
 - Streaming output must preserve response text, all messages, request status,
-  usage, reasoning, and response-error ports.
+  request body, usage, reasoning, and response-error ports.
 - Provider errors must stay normalized and secret-safe; do not log raw provider
   payloads or credentials.
 - Editor cache keys must keep secret fingerprints and provider/model identity
@@ -75,7 +77,7 @@ focused owner-level test before extracting that behavior.
 | Structured-output dedupe, schema validation, and response typing                                                           | `chatV2ResponseFormat.ts`, `chatV2Pipeline.ts`, `chatV2Outputs.ts`                | `packages/core/test/model/chat-v2/chatV2ResponseFormat.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`, `packages/core/test/model/chat-v2/chatV2Outputs.test.ts` | focused                                                      |
 | Message normalization and provider-neutral message conversion                                                              | `messageConverter.ts`, `chatV2Pipeline.ts`                                        | `packages/core/test/model/chat-v2/messageConverter.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                               | focused                                                      |
 | Tool conversion, `Tool Calls` output label / `function-calls` output id, output shape, and auto-continuation               | `toolConverter.ts`, `toolContinuation.ts`, `chatV2Pipeline.ts`                    | `packages/core/test/model/chat-v2/toolContinuation.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                               | focused                                                      |
-| Output contracts for response, messages, tokens, usage, reasoning, status/error, retry arrays, and control-flow exclusions | `chatV2Outputs.ts`, `chatV2Pipeline.ts`                                           | `packages/core/test/model/chat-v2/chatV2Outputs.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                  | focused                                                      |
+| Output contracts for response, messages, tokens, usage, reasoning, status/error/request-body details, retry arrays, and control-flow exclusions | `chatV2Outputs.ts`, `chatV2Pipeline.ts`                                           | `packages/core/test/model/chat-v2/chatV2Outputs.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                  | focused                                                      |
 | Provider/API/fetch error normalization, status extraction, retry classification, and secret-safe messages                  | `chatV2Errors.ts`, `chatV2Retry.ts`, `chatV2Pipeline.ts`                          | `packages/core/test/model/chat-v2/chatV2Errors.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                   | focused                                                      |
 | Editor cache identity, secret fingerprinting, clone-on-read/write, and project/node scoping                                | `chatV2EditorCache.ts`, `llmChatV2NodeRuntime.ts`                                 | `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                               | integration; add focused editor-cache tests before moving    |
 | Legacy Chat compatibility boundary                                                                                         | `ChatNodeBase.ts`, `ChatNode.ts`, `ChatLoopNode.ts`                               | legacy node tests and compile checks                                                                                                                                                 | compatibility-only; do not refactor for polish               |

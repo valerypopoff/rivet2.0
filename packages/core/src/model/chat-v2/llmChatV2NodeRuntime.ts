@@ -71,11 +71,16 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
   const baseURL = resolveLLMChatV2BaseURL(data, inputs);
   const nodeHeaders = resolveLLMChatV2Headers(data, inputs);
   const apiKey = resolveLLMChatV2ApiKey(data, inputs, context);
+  const requestBodies: unknown[] | undefined = data.outputRequestStatus ? [] : undefined;
   const providerConfig = await resolveChatV2ProviderConfig(provider, modelId, context, {
     baseURL,
     headers: nodeHeaders,
   });
-  const model = createChatV2Model(provider, modelId, context, { ...providerConfig, apiKey });
+  const model = createChatV2Model(provider, modelId, context, {
+    ...providerConfig,
+    apiKey,
+    onRequestBody: requestBodies == null ? undefined : (body) => requestBodies.push(body),
+  });
   const prompt = inputs['prompt' as PortId];
   const systemPrompt = inputs['systemPrompt' as PortId];
   const functions =
@@ -99,7 +104,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     functions,
     additionalTools: resolveLLMChatV2BuiltInTools(data, context, providerConfig, apiKey),
     ...generationParameters,
-    responseOutput: createChatV2ResponseOutput(responseFormatParameters),
+    responseOutput: createChatV2ResponseOutput(responseFormatParameters, provider),
     responseFormat: responseFormatParameters?.responseFormat,
     outputUsage: data.outputUsage,
     outputReasoning: data.outputReasoning,
@@ -109,6 +114,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     providerOptions,
     toolChoice,
     anthropicCacheControlTtl: provider === 'anthropic' ? data.anthropicCacheControlTtl || undefined : undefined,
+    requestBodies,
     retryOnNon200: data.retryOnNon200,
     retryOnNon200RepeatTimes: data.retryOnNon200RepeatTimes,
     retryOnNon200CooldownMs: data.retryOnNon200CooldownMs,

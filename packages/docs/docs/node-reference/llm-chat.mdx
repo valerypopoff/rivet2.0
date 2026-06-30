@@ -17,7 +17,7 @@ Use LLM Chat when you want to:
 - use OpenAI reasoning models, Anthropic thinking, or Google thinking controls
 - provide the API key from settings or from an input port
 - call custom OpenAI-compatible providers by setting `Provider base URL`
-- expose response status/error outputs for provider debugging
+- expose response status/error/request-body outputs for provider debugging
 - retry non-200 provider responses and inspect per-attempt status/error arrays
 
 The older [Chat Node](./chat.mdx) remains available for existing graphs, but new work should prefer LLM Chat.
@@ -55,15 +55,16 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 | Title           | Data Type                                                                 | Description                                                                                                                                                                                                                                                              |
 | --------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Response        | `string`, `number`, `boolean`, `object`, `any`, or arrays of those values | Final model response. Default/Text formats output text. JSON and JSON schema formats output the parsed structured value when parsing succeeds, or the raw string when parsing fails. It may stream visually in the editor, but downstream nodes receive the final value. |
+| Response        | `string`, `number`, `boolean`, `object`, `any`, or arrays of those values | Final model response. Default/Text formats output text. JSON object and JSON schema formats output the parsed structured value when parsing succeeds, or the raw string when parsing fails. It may stream visually in the editor, but downstream nodes receive the final value. |
 | Messages Sent   | `chat-message[]`                                                          | Messages sent to the provider.                                                                                                                                                                                                                                           |
 | All Messages    | `chat-message[]`                                                          | Conversation messages including the response.                                                                                                                                                                                                                            |
 | Response Tokens | `number`                                                                  | Response token count when available.                                                                                                                                                                                                                                     |
 | Tool Calls      | `object[]`                                                                | Available when tool use or provider built-in tools are enabled.                                                                                                                                                                                                          |
 | Usage           | `object`                                                                  | Available when Output usage details is enabled. Includes provider usage metadata when available.                                                                                                                                                                         |
 | Reasoning       | `string` or `string[]`                                                    | Available when Output reasoning is enabled and the provider exposes reasoning/thinking output.                                                                                                                                                                           |
-| Response Status | `number` or `number[]`                                                    | Available when Output request status is enabled. When Retry on non-200 is enabled, this is a per-attempt array.                                                                                                                                                          |
-| Response Error  | `string` or `string[]`                                                    | Available when Output request status is enabled. When Retry on non-200 is enabled, this is a per-attempt array.                                                                                                                                                          |
+| Response Status | `number` or `number[]`                                                    | Available when Output request details is enabled. When Retry on non-200 is enabled, this is a per-attempt array.                                                                                                                                                         |
+| Response Error  | `string` or `string[]`                                                    | Available when Output request details is enabled. When Retry on non-200 is enabled, this is a per-attempt array.                                                                                                                                                         |
+| LLM request body | `object`, `object[]`, `string`, `string[]`, `any`, or `any[]`             | Available when Output request details is enabled. Shows the provider request body captured at the HTTP boundary and parsed for inspection. Multiple provider calls, such as retries or auto-continued tool rounds, are returned in call order as an array. Request headers and Rivet-managed API key headers are not included. |
 
 </TabItem>
 
@@ -83,7 +84,7 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ### Parameters
 
-LLM Chat supports common generation parameters such as Temperature, Max output tokens, Top P, Top K, presence penalty, frequency penalty, stop sequences, and seed. Provider support varies; unsupported settings may be ignored by the provider or model.
+LLM Chat supports common generation parameters such as Temperature, Max output tokens, Top P, Top K, presence penalty, frequency penalty, stop sequences, and seed. New nodes leave Top P unset unless you fill it in or drive it from an input port. Provider support varies; unsupported settings may be ignored by the provider or model.
 
 ### Reasoning
 
@@ -97,7 +98,7 @@ The node body shows the selected reasoning effort for built-in providers.
 
 ### Response Format
 
-Response format supports Default, Text, JSON, and JSON schema. JSON and JSON schema make the Response output emit the parsed structured value instead of a JSON string when parsing succeeds. If the provider returns text that cannot be parsed into the requested structure, Rivet falls back to the raw string Response output instead of failing the node. JSON schema adds a Response Schema input port and optional schema name/description settings. For Custom provider, Rivet sends the same plain JSON-compatible schema as an OpenAI-compatible `response_format` request field so compatible endpoints receive the schema instead of only JSON mode.
+Response format supports Default, Text, JSON object, and JSON schema. JSON object and JSON schema make the Response output emit the parsed structured value instead of a JSON string when parsing succeeds. If the provider returns text that cannot be parsed into the requested structure, Rivet falls back to the raw string Response output instead of failing the node. JSON object asks OpenAI-compatible Custom providers for `response_format: { type: "json_object" }`. JSON schema adds a Response Schema input port and optional schema name/description settings. For Custom provider, JSON schema sends the same plain JSON-compatible schema as an OpenAI-compatible `response_format` request field so compatible endpoints receive the schema instead of only JSON object mode.
 
 ### Tools
 
@@ -115,7 +116,7 @@ Provider Advanced contains optional Base URL, Headers, and Extra provider option
 | Retry on non-200      | Retries provider requests when the Vercel AI SDK reports a non-200 HTTP status. When this is off, Rivet disables the SDK's built-in retry layer and makes one provider attempt.                                                                                                                                                                                                                                                                                                                           |
 | Repeat times          | Number of repeats after the initial request.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Cooldown, ms          | Delay between retry attempts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Output request status | Adds Response Status and Response Error outputs. Retry mode changes both outputs to per-attempt arrays.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Output request details | Adds Response Status, Response Error, and LLM request body outputs. Retry mode changes status/error to per-attempt arrays, and LLM request body becomes an array when multiple provider calls are made.                                                                                                                                                                                                                                                                                                      |
 
 </TabItem>
 
@@ -144,7 +145,7 @@ The custom provider API key can come from either:
 
 LLM Chat normalizes common provider failures into readable errors. For example, an invalid API key should produce a provider request error that includes the HTTP status, provider, model, endpoint, and a hint to check the API key source.
 
-Enable Output request status when you want machine-readable response status/error outputs. With Retry on non-200 enabled, Response Status and Response Error become arrays so you can see what happened on each Rivet retry attempt. Rivet disables the Vercel AI SDK's hidden default retries, so the Retry on non-200 switch is the only retry policy for LLM Chat provider requests.
+Enable Output request details when you want machine-readable response status/error outputs or need to inspect the provider request body Rivet sent. With Retry on non-200 enabled, Response Status and Response Error become arrays so you can see what happened on each Rivet retry attempt. LLM request body captures the provider HTTP body at the fetch boundary and parses it for inspection; request headers and Rivet-managed API key headers are not included, but prompts and request options in the actual provider body are visible. Rivet disables the Vercel AI SDK's hidden default retries, so the Retry on non-200 switch is the only retry policy for LLM Chat provider requests.
 
 ## See Also
 
