@@ -59,7 +59,7 @@ export function createChatV2CommonNodeData(
     useModelInput: false,
     temperature: 0.5,
     useTemperatureInput: false,
-    topP: 1,
+    topP: undefined,
     useTopPInput: false,
     topK: undefined,
     useTopKInput: false,

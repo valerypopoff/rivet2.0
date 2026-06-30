@@ -251,6 +251,10 @@ test('inline node output actions reserve flow space without moving their hit tar
   );
   assert.match(outputSectionHeaderSource, /content="Copy value"/);
   assert.match(outputSectionHeaderSource, /className="output-section-copy-button"/);
+  assert.match(
+    renderDataValueStylesSource,
+    /export const outputSectionCopyButtonStyles = css`[\s\S]*?transform: translateY\(calc\(4px \* var\(--ui-font-scale\)\)\);/,
+  );
   assert.match(renderDataOutputsSource, /<OutputSectionHeader[\s\S]*?isLarge=\{section\.headerMode === 'large'\}/);
   assert.match(renderedDataOutputsStylesBlock, /\.output-section-header \{[\s\S]*?align-items: baseline;/);
   assert.match(structuredNodeOutputStylesBlock.trimStart(), /^display: block;/);

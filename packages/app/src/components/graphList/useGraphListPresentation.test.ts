@@ -277,7 +277,7 @@ describe('graph list presentation helpers', () => {
       referencingSelectedGraphIds: new Set(),
       renamingItemFullPath: undefined,
       runningGraphs: [],
-      showUnreachableBadges: true,
+      showUnreachableIndicators: true,
     });
 
     assert.equal(presentation.isCollapsedOpenGraphFolder, true);
@@ -306,7 +306,7 @@ describe('graph list presentation helpers', () => {
       referencingSelectedGraphIds: new Set(),
       renamingItemFullPath: undefined,
       runningGraphs: [],
-      showUnreachableBadges: true,
+      showUnreachableIndicators: true,
     });
 
     assert.equal(presentation.isSelected, false);
@@ -338,7 +338,7 @@ describe('graph list presentation helpers', () => {
       referencingSelectedGraphIds: new Set(['caller' as GraphId]),
       renamingItemFullPath: undefined,
       runningGraphs: [],
-      showUnreachableBadges: true,
+      showUnreachableIndicators: true,
     };
 
     const collapsedPresentation = getFolderItemPresentation({
@@ -376,7 +376,7 @@ describe('graph list presentation helpers', () => {
       referencingSelectedGraphIds: new Set(),
       renamingItemFullPath: undefined,
       runningGraphs: [],
-      showUnreachableBadges: true,
+      showUnreachableIndicators: true,
     });
 
     assert.equal(presentation.containsReferencingSelectedGraph, false);
@@ -401,7 +401,7 @@ describe('graph list presentation helpers', () => {
       referencingSelectedGraphIds: new Set(['target' as GraphId]),
       renamingItemFullPath: undefined,
       runningGraphs: ['target' as GraphId],
-      showUnreachableBadges: true,
+      showUnreachableIndicators: true,
     });
 
     assert.equal(presentation.fullPath, 'Folder/Target');
@@ -410,10 +410,10 @@ describe('graph list presentation helpers', () => {
     assert.equal(presentation.referencesSelectedGraph, true);
     assert.equal(presentation.containsReferencingSelectedGraph, false);
     assert.equal(presentation.graphIsRunning, true);
-    assert.equal(presentation.shouldShowUnreachableBadge, true);
+    assert.equal(presentation.shouldShowUnreachableIndicator, true);
   });
 
-  it('suppresses unreachable badges while renaming or when hidden by settings', () => {
+  it('suppresses unreachable indicators while renaming or when hidden by settings', () => {
     const item: NodeGraphFolderItem = {
       type: 'graph',
       name: 'Target',
@@ -437,16 +437,16 @@ describe('graph list presentation helpers', () => {
       getFolderItemPresentation({
         ...baseOptions,
         renamingItemFullPath: fullPath,
-        showUnreachableBadges: true,
-      }).shouldShowUnreachableBadge,
+        showUnreachableIndicators: true,
+      }).shouldShowUnreachableIndicator,
       false,
     );
     assert.equal(
       getFolderItemPresentation({
         ...baseOptions,
         renamingItemFullPath: undefined,
-        showUnreachableBadges: false,
-      }).shouldShowUnreachableBadge,
+        showUnreachableIndicators: false,
+      }).shouldShowUnreachableIndicator,
       false,
     );
   });
@@ -469,7 +469,7 @@ describe('graph list presentation helpers', () => {
       referencingSelectedGraphIds: new Set<GraphId>(),
       renamingItemFullPath: undefined,
       runningGraphs: [],
-      showUnreachableBadges: true,
+      showUnreachableIndicators: true,
     };
 
     assert.equal(

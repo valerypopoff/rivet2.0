@@ -114,6 +114,10 @@ describe('chat v2 response format helpers', () => {
     );
   });
 
+  it('omits the SDK output descriptor for custom-provider JSON object mode', () => {
+    assert.equal(createChatV2ResponseOutput({ responseFormat: 'json' }, 'custom'), undefined);
+  });
+
   it('rejects non-JSON-compatible response schemas before creating Vercel output descriptors', () => {
     assert.throws(
       () =>

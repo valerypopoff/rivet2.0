@@ -102,6 +102,8 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.useExtraProviderOptionsInput, false);
     assert.equal(node.data.useToolCalling, false);
     assert.equal(node.data.outputReasoning, false);
+    assert.equal(node.data.topP, undefined);
+    assert.equal(node.data.useTopPInput, false);
     assert.equal(node.data.presencePenalty, undefined);
     assert.equal(node.data.usePresencePenaltyInput, false);
     assert.equal(node.data.frequencyPenalty, undefined);
@@ -222,7 +224,6 @@ describe('LLMChatV2NodeImpl', () => {
         '<span style="opacity: 0.55">Model:</span> llama\\-custom',
         '<span style="opacity: 0.55">Temperature:</span> 0\\.5',
         '<span style="opacity: 0.55">Max output tokens:</span> 1024',
-        '<span style="opacity: 0.55">Top P:</span> 1',
       ].join('\n'),
     );
   });
@@ -371,6 +372,7 @@ describe('LLMChatV2NodeImpl', () => {
 
     assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestStatus'));
     assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestError'));
+    assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestBody'));
     assert.deepEqual(
       statusNode.getOutputDefinitions().find((output) => output.id === 'requestStatus'),
       {
@@ -403,6 +405,14 @@ describe('LLMChatV2NodeImpl', () => {
         dataType: 'string[]',
       },
     );
+    assert.deepEqual(
+      statusNode.getOutputDefinitions().find((output) => output.id === 'requestBody'),
+      {
+        id: 'requestBody',
+        title: 'LLM request body',
+        dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'],
+      },
+    );
     assert.equal(
       retryStatusNode.getOutputDefinitions().some((output) => output.id === 'requestStatuses'),
       false,
@@ -413,7 +423,7 @@ describe('LLMChatV2NodeImpl', () => {
     );
   });
 
-  it('marks the response output as structured when JSON response format is enabled', () => {
+  it('marks the response output as structured when JSON object response format is enabled', () => {
     const defaultNode = createNode();
     const jsonNode = createNode({
       responseFormat: 'json',
@@ -954,7 +964,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.deepEqual(responseFormatGroup.editors.find((editor: any) => editor.dataKey === 'responseFormat')?.options, [
       { value: '', label: 'Default' },
       { value: 'text', label: 'Text' },
-      { value: 'json', label: 'JSON' },
+      { value: 'json', label: 'JSON object' },
       { value: 'json_schema', label: 'JSON schema' },
     ]);
     assert.ok(!defaultNode.getInputDefinitions().some((input) => input.id === 'responseSchema'));
@@ -1019,6 +1029,38 @@ describe('LLMChatV2NodeImpl', () => {
     });
   });
 
+  it('uses raw Custom provider JSON object mode without an AI SDK output descriptor', async () => {
+    const node = createNode({
+      provider: 'custom',
+      model: 'deepseek-ai/DeepSeek-V4-Flash',
+      customProviderBaseURL: 'https://inference.makora.com/v1',
+      customProviderApiKeyEnvVarName: 'MAKORA_API_KEY',
+      responseFormat: 'json',
+      responseSchemaName: 'answer_json',
+      responseSchemaDescription: 'Answer payload',
+      extraProviderOptions: '{ "customFlag": true, "response_format": { "type": "text" } }',
+    });
+    const context = createRuntimeContextWithPluginEnv({
+      MAKORA_API_KEY: 'sk-makora-secret',
+    });
+
+    const runtime = await resolveLLMChatV2RuntimeConfig({
+      data: node.data,
+      nodeId: node.chartNode.id,
+      inputs: createPromptInputs(),
+      context,
+    });
+
+    assert.equal(runtime.runOptions.responseFormat, 'json');
+    assert.equal(runtime.runOptions.responseOutput, undefined);
+    assert.deepEqual(runtime.runOptions.providerOptions, {
+      custom: {
+        customFlag: true,
+        response_format: { type: 'json_object' },
+      },
+    });
+  });
+
   it('treats Tool use and structured response formats as mutually exclusive', () => {
     assert.equal(hasLLMChatV2ToolResponseFormatConflict({ useToolCalling: true, responseFormat: '' }), false);
     assert.equal(hasLLMChatV2ToolResponseFormatConflict({ useToolCalling: true, responseFormat: 'text' }), false);
@@ -1032,7 +1074,7 @@ describe('LLMChatV2NodeImpl', () => {
       title: '"Tool use" conflicts with "Structured outputs"',
       paragraphs: [
         '"Tool use" and "Structured outputs" cannot be used at the same time.',
-        'Use "Tool use" with Default/Text response format, or turn "Tool use" off before choosing JSON/JSON schema.',
+        'Use "Tool use" with Default/Text response format, or turn "Tool use" off before choosing JSON object/JSON schema.',
       ],
     });
   });

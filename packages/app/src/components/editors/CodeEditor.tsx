@@ -25,6 +25,7 @@ import { getSelectedProcessData } from '../../state/selectors/executionSelectors
 import { getCodeNodeErrorLineHighlight, type CodeNodeErrorLineHighlight } from '../nodes/codeNodeOutputUtils.js';
 import { type EditorInterpolationSyntax } from '../../utils/monaco/interpolationDiagnostics.js';
 import { buildCodeEditorModelCacheKey } from '../../utils/monaco/codeEditorModelCacheKey.js';
+import { shouldEnableMarkdownFolding } from '../../utils/monaco/markdownFoldingRanges.js';
 
 type CodeEditorDefinitionWithInterpolationSyntax = CodeEditorDefinition<ChartNode> & {
   interpolationSyntax?: EditorInterpolationSyntax;
@@ -150,6 +151,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const project = useAtomValue(projectState);
   const resolvedTheme = resolveMonacoDisplayTheme(theme, appTheme);
   const isResizable = language != null && RESIZABLE_LANGUAGES.has(language);
+  const effectiveEnableFolding = enableFolding || shouldEnableMarkdownFolding(language);
   const editorIdentityKey = name?.trim() || label;
   const modelCacheKey = buildCodeEditorModelCacheKey({
     projectId: project.metadata.id,
@@ -161,7 +163,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   });
   const editorMountKey = `${id ?? 'node-editor'}::${editorIdentityKey}::${language ?? 'language'}::${resolvedTheme ?? 'theme'}::${
     interpolationSyntax ?? 'no-interpolation'
-  }::${enableFolding ? 'folding-on' : 'folding-off'}::${modelCacheKey ?? 'uncached-model'}`;
+  }::${effectiveEnableFolding ? 'folding-on' : 'folding-off'}::${modelCacheKey ?? 'uncached-model'}`;
   const errorLineHighlightKey = getErrorLineHighlightKey(errorLineHighlight);
   const activeErrorLineHighlight =
     errorLineHighlightKey &&
@@ -235,7 +237,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           isReadonly={isEditorReadOnly}
           onKeyDown={handleKeyDown}
           autoFocus={autoFocus}
-          enableFolding={enableFolding}
+          enableFolding={effectiveEnableFolding}
           modelCacheKey={modelCacheKey}
           editorKey={editorIdentityKey}
           nodeType={nodeType}
@@ -254,7 +256,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           isReadonly={isEditorReadOnly}
           onKeyDown={handleKeyDown}
           autoFocus={autoFocus}
-          enableFolding={enableFolding}
+          enableFolding={effectiveEnableFolding}
           modelCacheKey={modelCacheKey}
           editorKey={editorIdentityKey}
           defaultHeight={defaultHeight}

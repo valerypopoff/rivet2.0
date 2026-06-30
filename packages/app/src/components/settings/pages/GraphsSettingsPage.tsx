@@ -44,7 +44,7 @@ export const GraphsSettingsPage: FC = () => {
             id="show-unreachable-graph-tags"
             isChecked={showUnreachableGraphTags}
             onChange={setShowUnreachableGraphTags}
-            label="Show unreachable graph tags"
+            label="Show unreachable graph indicators"
             helperMessage="Marks graphs that are not reachable from the project's Main Graph."
             className="settings-toggle-field"
           />

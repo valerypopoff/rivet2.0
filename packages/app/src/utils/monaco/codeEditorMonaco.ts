@@ -5,6 +5,7 @@ import {
   conf as markdownConf,
   language as markdownLanguage,
 } from 'monaco-editor/esm/vs/basic-languages/markdown/markdown';
+import { getMarkdownFoldingRanges, MARKDOWN_FOLDING_LANGUAGES } from './markdownFoldingRanges.js';
 
 export { monaco };
 
@@ -65,8 +66,31 @@ function definePromptInterpolationThemes(): void {
   }
 }
 
+let markdownFoldingProvidersRegistered = false;
+
+function registerMarkdownFoldingProviders(): void {
+  if (markdownFoldingProvidersRegistered) {
+    return;
+  }
+
+  markdownFoldingProvidersRegistered = true;
+
+  for (const languageId of MARKDOWN_FOLDING_LANGUAGES) {
+    monaco.languages.registerFoldingRangeProvider(languageId, {
+      provideFoldingRanges(model) {
+        return getMarkdownFoldingRanges(model.getValue()).map(({ start, end }) => ({
+          start,
+          end,
+          kind: monaco.languages.FoldingRangeKind.Region,
+        }));
+      },
+    });
+  }
+}
+
 export function ensureCodeEditorMonacoLanguages(): void {
   registerPromptInterpolationLanguage();
   registerPromptInterpolationMarkdownLanguage();
+  registerMarkdownFoldingProviders();
   definePromptInterpolationThemes();
 }

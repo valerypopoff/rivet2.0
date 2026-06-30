@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createChatV2Model, resolveChatV2ProviderConfig } from '../../../src/model/chat-v2/providerOptions.js';
 
@@ -84,5 +84,70 @@ describe('createChatV2Model', () => {
         description: 'Answer payload',
       },
     });
+  });
+
+  it('does not request OpenAI stream usage options from custom-compatible providers', () => {
+    const model = createChatV2Model(
+      'custom',
+      'gpt-oss-120b',
+      {
+        settings: {},
+        getPluginConfig: () => undefined,
+      } as any,
+      {
+        apiKey: 'test-key',
+        baseURL: 'https://api.example.test/v1',
+      },
+    ) as { config?: { includeUsage?: boolean } };
+
+    assert.equal(model.config?.includeUsage, false);
+  });
+
+  it('captures JSON provider request bodies without recording request headers', async () => {
+    const capturedBodies: unknown[] = [];
+    const fetchMock = mock.method(
+      globalThis,
+      'fetch',
+      async () =>
+        new Response('{}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+
+    try {
+      const model = createChatV2Model(
+        'custom',
+        'gpt-oss-120b',
+        {
+          settings: {},
+          getPluginConfig: () => undefined,
+        } as any,
+        {
+          apiKey: 'secret-key',
+          baseURL: 'https://api.example.test/v1',
+          onRequestBody: (body) => capturedBodies.push(body),
+        },
+      ) as { config?: { fetch?: typeof fetch } };
+      const requestBody = {
+        model: 'gpt-oss-120b',
+        messages: [{ role: 'user', content: 'Hello' }],
+      };
+
+      assert.ok(model.config?.fetch);
+      await model.config.fetch('https://api.example.test/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer secret-key',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      assert.deepEqual(capturedBodies, [requestBody]);
+      assert.equal(JSON.stringify(capturedBodies).includes('secret-key'), false);
+      assert.equal(fetchMock.mock.callCount(), 1);
+    } finally {
+      fetchMock.mock.restore();
+    }
   });
 });

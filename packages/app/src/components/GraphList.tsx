@@ -437,6 +437,7 @@ const styles = css`
     height: 14px;
     flex-shrink: 0;
     color: currentColor;
+    transform: translateY(-1px);
   }
 
   .graph-main-icon {
@@ -459,6 +460,7 @@ const styles = css`
     font-weight: 700;
     line-height: 1.2;
     text-align: center;
+    transform: translateY(-1px);
   }
 
   .graph-folder-count > span {
@@ -467,6 +469,11 @@ const styles = css`
 
   .selected .graph-folder-count > span {
     color: inherit;
+  }
+
+  .graph-list-action.selected .graph-folder-count {
+    background: var(--foreground-on-primary);
+    color: var(--primary);
   }
 
   .contains-open-graph .graph-item-select {
@@ -575,28 +582,31 @@ const styles = css`
     line-height: 1.4;
   }
 
-  .unreachable-badge {
-    margin-right: 6px;
-    padding: 4px 6px;
-    border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
-    border-radius: 40px;
-    corner-shape: superellipse(1.15);
-    @supports not (corner-shape: squircle) {
-      border-radius: 20px;
-    }
-    background: color-mix(in srgb, currentColor 10%, transparent);
-    color: color-mix(in srgb, currentColor 72%, transparent);
-    font-size: var(--ui-font-size-2xs);
-    font-weight: 600;
-    line-height: 1;
-    white-space: nowrap;
+  .unreachable-indicator-tooltip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 2px;
     flex-shrink: 0;
   }
 
-  .selected .unreachable-badge {
-    border-color: color-mix(in srgb, currentColor 42%, transparent);
-    background: color-mix(in srgb, currentColor 10%, transparent);
-    color: color-mix(in srgb, currentColor 72%, transparent);
+  .unreachable-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(17px * var(--ui-font-scale));
+    height: calc(17px * var(--ui-font-scale));
+    color: color-mix(in srgb, currentColor 74%, transparent);
+  }
+
+  .unreachable-indicator svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .selected .unreachable-indicator {
+    color: color-mix(in srgb, currentColor 76%, transparent);
   }
 
   .graph-compare-badge {
@@ -721,6 +731,7 @@ export const GraphList: FC = memo(() => {
 
   const runningGraphs = useAtomValue(runningGraphsState);
   const project = useAtomValue(projectState);
+  const nodeLibraryItemCount = Object.keys(project.nodePrefabs ?? {}).length;
   const plugins = useAtomValue(pluginsState);
   const projectNodeRegistry = useProjectNodeRegistry();
   const [graphPendingDelete, setGraphPendingDelete] = useState<NodeGraph | null>(null);
@@ -1086,6 +1097,11 @@ export const GraphList: FC = memo(() => {
               <SubgraphLinkIcon />
             </span>
             <span>Node library</span>
+            {nodeLibraryItemCount > 0 && (
+              <span className="graph-folder-count">
+                <span>{nodeLibraryItemCount}</span>
+              </span>
+            )}
           </button>
           <div className="graph-list-filter">
             <label className="graph-list-filter-label">
@@ -1172,7 +1188,7 @@ export const GraphList: FC = memo(() => {
                 onGraphSelected={selectGraph}
                 onRenameItem={renameFolderItem}
                 onCancelRename={cancelRename}
-                showUnreachableBadges={graphListReachability.showUnreachableBadges}
+                showUnreachableIndicators={graphListReachability.showUnreachableIndicators}
               />
             ))}
             <GraphListSpacer />

@@ -77,6 +77,7 @@ describe('chatV2Outputs', () => {
       responseError: undefined,
       requestStatuses: [503, 200],
       requestErrors: ['503 HTTP error'],
+      requestBodies: [{ model: 'gpt-4o', messages: [{ role: 'user', content: 'Hello' }] }],
       outputUsage: true,
       outputReasoning: true,
       outputRequestStatus: true,
@@ -106,6 +107,10 @@ describe('chatV2Outputs', () => {
       type: 'string[]',
       value: ['503 HTTP error'],
     });
+    assert.deepEqual(outputs['requestBody' as PortId], {
+      type: 'object',
+      value: { model: 'gpt-4o', messages: [{ role: 'user', content: 'Hello' }] },
+    });
   });
 
   it('keeps optional successful outputs excluded when the provider returns no value for them', () => {
@@ -120,6 +125,7 @@ describe('chatV2Outputs', () => {
       responseError: undefined,
       requestStatuses: [],
       requestErrors: [],
+      requestBodies: [],
       outputUsage: true,
       outputReasoning: true,
       outputRequestStatus: true,
@@ -148,6 +154,10 @@ describe('chatV2Outputs', () => {
       type: 'control-flow-excluded',
       value: undefined,
     });
+    assert.deepEqual(outputs['requestBody' as PortId], {
+      type: 'control-flow-excluded',
+      value: undefined,
+    });
   });
 
   it('builds provider failure outputs without successful response side effects', () => {
@@ -157,6 +167,7 @@ describe('chatV2Outputs', () => {
       responseError: '429 Rate Limited',
       requestStatuses: [429, 429],
       requestErrors: ['first 429', 'second 429'],
+      requestBodies: [{ attempt: 1 }, { attempt: 2 }],
       outputUsage: true,
       outputReasoning: true,
       includeFunctionCalls: true,
@@ -170,6 +181,10 @@ describe('chatV2Outputs', () => {
     assert.deepEqual(outputs['requestError' as PortId], {
       type: 'string[]',
       value: ['first 429', 'second 429'],
+    });
+    assert.deepEqual(outputs['requestBody' as PortId], {
+      type: 'object[]',
+      value: [{ attempt: 1 }, { attempt: 2 }],
     });
     assert.deepEqual(outputs['response' as PortId], {
       type: 'control-flow-excluded',

@@ -9,6 +9,7 @@ const componentsDir = dirname(fileURLToPath(import.meta.url));
 test('graph tree panel keeps the compact text-list layout source contract', () => {
   const graphListSource = readFileSync(join(componentsDir, 'GraphList.tsx'), 'utf8');
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
+  const nodeLibraryBuilderSource = readFileSync(join(componentsDir, 'NodeLibraryBuilder.tsx'), 'utf8');
   const folderItemSource = readFileSync(join(componentsDir, 'graphList', 'FolderItem.tsx'), 'utf8');
   const graphFilterFocusSource = readFileSync(join(componentsDir, 'graphList', 'graphFilterFocus.ts'), 'utf8');
   const graphListContextMenuSource = readFileSync(join(componentsDir, 'graphList', 'graphListContextMenu.ts'), 'utf8');
@@ -49,6 +50,15 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
   assert.match(graphListSource, /\.graph-list-action\.selected \{[\s\S]*color: var\(--foreground-on-primary\);/);
   assert.match(graphListSource, /\.graph-list-action\.selected::before \{[\s\S]*background-color: var\(--primary\);/);
   assert.match(graphListSource, /aria-current=\{nodeLibraryOpen \? 'page' : undefined\}/);
+  assert.match(graphListSource, /const nodeLibraryItemCount = Object\.keys\(project\.nodePrefabs \?\? \{\}\)\.length;/);
+  assert.match(
+    graphListSource,
+    /nodeLibraryItemCount > 0 && \([\s\S]*<span className="graph-folder-count">[\s\S]*<span>\{nodeLibraryItemCount\}<\/span>/,
+  );
+  assert.match(graphListSource, /\.graph-folder-count \{[\s\S]*transform: translateY\(-1px\);/);
+  assert.match(graphListSource, /\.graph-list-action\.selected \.graph-folder-count \{[\s\S]*background: var\(--foreground-on-primary\);/);
+  assert.match(graphListSource, /\.graph-list-action\.selected \.graph-folder-count \{[\s\S]*color: var\(--primary\);/);
+  assert.match(graphListSource, /\.graph-folder-icon \{[\s\S]*transform: translateY\(-1px\);/);
   assert.match(graphListSource, /\.graph-list-toolbar \{[\s\S]*gap: 16px;/);
   assert.match(graphListSource, /className="graph-list-heading">Graphs<\/div>/);
   assert.match(
@@ -180,8 +190,24 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
     folderItemSource,
     /position: 'relative'[\s\S]*transform: `translate3d\(0, \$\{transform\.y\}px, 0\)`[\s\S]*zIndex: 100/,
   );
-  assert.doesNotMatch(folderItemSource, /<Tooltip|GraphItemTooltipContent|title\.split\('\\n'\)\.map/);
+  assert.doesNotMatch(folderItemSource, /GraphItemTooltipContent|title\.split\('\\n'\)\.map/);
   assert.doesNotMatch(folderItemSource, /<div[^>]*title={title}/);
-  assert.doesNotMatch(folderItemSource, /className="unreachable-badge" title=/);
+  assert.match(folderItemSource, /content="This graph is unreachable from the Main Graph\."/);
+  assert.match(folderItemSource, /className="unreachable-indicator-tooltip"/);
+  assert.match(folderItemSource, /className="unreachable-indicator" role="img" aria-label="Unreachable graph"/);
+  assert.match(folderItemSource, /<UnreachableGraphIcon aria-hidden="true" \/>/);
+  assert.doesNotMatch(folderItemSource, />unreachable<\/span>/);
   assert.doesNotMatch(folderItemSource, /depthSpacer|range\(/);
+
+  assert.match(nodeLibraryBuilderSource, /leftSidebarLiveWidthState/);
+  assert.match(nodeLibraryBuilderSource, /'--node-library-sidebar-offset': sidebarOpen \? `\$\{liveSidebarWidth\}px` : '0px'/);
+  assert.match(
+    nodeLibraryBuilderSource,
+    /left: calc\(var\(--node-library-sidebar-offset\) \+ \(100% - var\(--node-library-sidebar-offset\)\) \/ 2\);/,
+  );
+  assert.match(nodeLibraryBuilderSource, /Right-click to add library nodes\./);
+  assert.match(
+    nodeLibraryBuilderSource,
+    /Library nodes are reusable sources\. Add them to graphs as linked nodes; edits here update every link\./,
+  );
 });
