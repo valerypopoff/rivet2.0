@@ -2,7 +2,7 @@
   "name": "@valerypopoff/rivet2-cli",
   "license": "MIT",
   "repository": "https://github.com/valerypopoff/rivet2.0",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "src": "src/cli.ts",
   "bin": {
     "rivet": "bin/cli.js"
