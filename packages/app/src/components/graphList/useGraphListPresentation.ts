@@ -87,7 +87,7 @@ export function useGraphListPresentation(options: {
     if (!options.showUnreachableGraphTags) {
       return {
         bucketByGraphId: {},
-        showUnreachableBadges: false,
+        showUnreachableIndicators: false,
       };
     }
 
@@ -238,7 +238,7 @@ export type FolderItemPresentation = {
   isSelected: boolean;
   referencesSelectedGraph: boolean;
   savedGraph: NodeGraph | undefined;
-  shouldShowUnreachableBadge: boolean;
+  shouldShowUnreachableIndicator: boolean;
 };
 
 export function getFolderItemPresentation(options: {
@@ -253,7 +253,7 @@ export function getFolderItemPresentation(options: {
   referencingSelectedGraphIds: ReadonlySet<GraphId>;
   renamingItemFullPath: string | undefined;
   runningGraphs: GraphId[];
-  showUnreachableBadges: boolean;
+  showUnreachableIndicators: boolean;
 }): FolderItemPresentation {
   const {
     currentGraph,
@@ -267,7 +267,7 @@ export function getFolderItemPresentation(options: {
     referencingSelectedGraphIds,
     renamingItemFullPath,
     runningGraphs,
-    showUnreachableBadges,
+    showUnreachableIndicators,
   } = options;
 
   const savedGraph = item.type === 'graph' ? item.graph : undefined;
@@ -288,8 +288,8 @@ export function getFolderItemPresentation(options: {
     item.type === 'folder' && dragOverFolderName === fullPath && draggingItemFolder !== dragOverFolderName;
   const graphReachability = item.type === 'graph' && graphId ? graphReachabilityByGraphId[graphId] : undefined;
   const folderGraphCount = item.type === 'folder' ? countGraphsInFolder(item) : undefined;
-  const shouldShowUnreachableBadge =
-    item.type === 'graph' && !isRenaming && showUnreachableBadges && graphReachability === 'unreachable';
+  const shouldShowUnreachableIndicator =
+    item.type === 'graph' && !isRenaming && showUnreachableIndicators && graphReachability === 'unreachable';
   const graphIsRunning = graphId != null && runningGraphs.includes(graphId);
   return {
     containsReferencingSelectedGraph,
@@ -304,7 +304,7 @@ export function getFolderItemPresentation(options: {
     isSelected,
     referencesSelectedGraph,
     savedGraph,
-    shouldShowUnreachableBadge,
+    shouldShowUnreachableIndicator,
   };
 }
 

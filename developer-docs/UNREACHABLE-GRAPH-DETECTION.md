@@ -162,7 +162,7 @@ When the graph-list feature is implemented, use:
 
 - `definitely reachable`: normal graph styling
 - `dynamically reachable`: ambiguous styling / badge / tooltip, not "unreachable"
-- `unreachable`: the only bucket that should be visually marked with the muted lowercase `unreachable` badge
+- `unreachable`: the only bucket that should be visually marked with the muted uniform-stroke single broken-thread icon, whose tooltip explains that the graph is unreachable from the Main Graph
 
 That preserves the three-bucket model without collapsing dynamic `Call Graph` dispatch into a false negative.
 `Delegate Tool Call` auto-delegate name matching is the exception: graph-list reachability intentionally ignores it because
@@ -178,6 +178,6 @@ auto-delegate can theoretically route to any named graph and would make one dele
 every graph in the sidebar.
 
 Both graph-list indicators are user-facing presentation preferences. The Settings modal's `Graphs` page can hide the
-`unreachable` badge feature and the reverse-reference dot feature independently, and both settings default to enabled.
-When `unreachable` badges are hidden, the sidebar also skips reachability analysis and does not show reachability
+unreachable graph indicator feature and the reverse-reference dot feature independently, and both settings default to enabled.
+When unreachable graph indicators are hidden, the sidebar also skips reachability analysis and does not show reachability
 notices.

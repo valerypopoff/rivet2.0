@@ -575,28 +575,31 @@ const styles = css`
     line-height: 1.4;
   }
 
-  .unreachable-badge {
-    margin-right: 6px;
-    padding: 4px 6px;
-    border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
-    border-radius: 40px;
-    corner-shape: superellipse(1.15);
-    @supports not (corner-shape: squircle) {
-      border-radius: 20px;
-    }
-    background: color-mix(in srgb, currentColor 10%, transparent);
-    color: color-mix(in srgb, currentColor 72%, transparent);
-    font-size: var(--ui-font-size-2xs);
-    font-weight: 600;
-    line-height: 1;
-    white-space: nowrap;
+  .unreachable-indicator-tooltip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 2px;
     flex-shrink: 0;
   }
 
-  .selected .unreachable-badge {
-    border-color: color-mix(in srgb, currentColor 42%, transparent);
-    background: color-mix(in srgb, currentColor 10%, transparent);
-    color: color-mix(in srgb, currentColor 72%, transparent);
+  .unreachable-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(17px * var(--ui-font-scale));
+    height: calc(17px * var(--ui-font-scale));
+    color: color-mix(in srgb, currentColor 74%, transparent);
+  }
+
+  .unreachable-indicator svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .selected .unreachable-indicator {
+    color: color-mix(in srgb, currentColor 76%, transparent);
   }
 
   .graph-compare-badge {
@@ -1172,7 +1175,7 @@ export const GraphList: FC = memo(() => {
                 onGraphSelected={selectGraph}
                 onRenameItem={renameFolderItem}
                 onCancelRename={cancelRename}
-                showUnreachableBadges={graphListReachability.showUnreachableBadges}
+                showUnreachableIndicators={graphListReachability.showUnreachableIndicators}
               />
             ))}
             <GraphListSpacer />

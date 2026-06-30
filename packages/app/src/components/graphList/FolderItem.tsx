@@ -24,6 +24,7 @@ import { type GraphReachabilityBucket } from '../../utils/graphReachability.js';
 import { MainGraphIcon } from './MainGraphIcon';
 import { NodeRunningIndicator } from '../visualNode/NodeRunningIndicator.js';
 import { getFolderItemPresentation, getGraphListItemPath } from './useGraphListPresentation.js';
+import { Tooltip } from '../Tooltip.js';
 
 export const FolderItem: FC<{
   item: NodeGraphFolderItem;
@@ -39,7 +40,7 @@ export const FolderItem: FC<{
   onGraphSelected?: (savedGraph: NodeGraph) => void;
   onRenameItem: (fullPath: string, newFullPath: string) => void;
   onCancelRename: () => void;
-  showUnreachableBadges: boolean;
+  showUnreachableIndicators: boolean;
 }> = memo(
   ({
     item,
@@ -55,7 +56,7 @@ export const FolderItem: FC<{
     onCancelRename,
     depth,
     dragOverFolderName,
-    showUnreachableBadges,
+    showUnreachableIndicators,
   }) => {
     const projectMetadata = useAtomValue(projectMetadataState);
     const [expandedFolders, setExpandedFolders] = useAtom(expandedFoldersState);
@@ -75,7 +76,7 @@ export const FolderItem: FC<{
       isSelected,
       referencesSelectedGraph,
       savedGraph,
-      shouldShowUnreachableBadge,
+      shouldShowUnreachableIndicator,
     } = getFolderItemPresentation({
       currentGraph: graph,
       dragOverFolderName,
@@ -88,7 +89,7 @@ export const FolderItem: FC<{
       referencingSelectedGraphIds,
       renamingItemFullPath,
       runningGraphs,
-      showUnreachableBadges,
+      showUnreachableIndicators,
     });
 
     const handleRenameSaved = useStableCallback((newName: string) => {
@@ -221,7 +222,18 @@ export const FolderItem: FC<{
                   </span>
                 </>
               )}
-              {shouldShowUnreachableBadge && <span className="unreachable-badge">unreachable</span>}
+              {shouldShowUnreachableIndicator && (
+                <Tooltip
+                  content="This graph is unreachable from the Main Graph."
+                  placement="right"
+                  tag="span"
+                  className="unreachable-indicator-tooltip"
+                >
+                  <span className="unreachable-indicator" role="img" aria-label="Unreachable graph">
+                    <UnreachableGraphIcon aria-hidden="true" />
+                  </span>
+                </Tooltip>
+              )}
               {visibleCompareKind && (
                 <span className={`graph-compare-badge compare-${visibleCompareKind}`}>{visibleCompareKind}</span>
               )}
@@ -250,7 +262,7 @@ export const FolderItem: FC<{
                   dragOverFolderName={dragOverFolderName}
                   depth={virtualDepth + 1}
                   draggingItemFolder={draggingItemFolder}
-                  showUnreachableBadges={showUnreachableBadges}
+                  showUnreachableIndicators={showUnreachableIndicators}
                 />
               ))}
             </div>
@@ -310,6 +322,73 @@ const OpenFolderIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const UnreachableGraphIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
+  <svg viewBox="0 0 28 22" fill="none" {...props}>
+    <path
+      d="M.8 16Q5.6 12.4 11 11.5"
+      stroke="currentColor"
+      strokeLinecap="square"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      vectorEffect="non-scaling-stroke"
+    />
+    <path
+      d="M17 9Q22.2 8.2 28.5 4"
+      stroke="currentColor"
+      strokeLinecap="square"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      vectorEffect="non-scaling-stroke"
+    />
+
+    <line
+      x1="10.5"
+      y1="6.6"
+      x2="8.5"
+      y2="2"
+      transform="rotate(-36 10.5 6.6)"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="1.45"
+      vectorEffect="non-scaling-stroke"
+    />
+
+    <line
+      x1="13.5"
+      y1="5.4"
+      x2="11.5"
+      y2="0"
+      transform="rotate(30 13.5 5.4)"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="1.45"
+      vectorEffect="non-scaling-stroke"
+    />
+
+    <line
+      x1="14.3"
+      y1="15.2"
+      x2="13.2"
+      y2="20.1"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="1.45"
+      vectorEffect="non-scaling-stroke"
+    />
+
+    <line
+      x1="17.2"
+      y1="13.8"
+      x2="22"
+      y2="16.9"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeWidth="1.45"
+      vectorEffect="non-scaling-stroke"
     />
   </svg>
 );

@@ -4,7 +4,7 @@ import { type GraphReachabilityBucket, type GraphReachabilityReport } from '../.
 
 export type GraphListReachabilityPresentation = {
   bucketByGraphId: Record<GraphId, GraphReachabilityBucket>;
-  showUnreachableBadges: boolean;
+  showUnreachableIndicators: boolean;
   notice?: string;
 };
 
@@ -26,7 +26,7 @@ export function buildGraphListReachabilityPresentation(options: {
   if (waitingForPlugins) {
     return {
       bucketByGraphId,
-      showUnreachableBadges: false,
+      showUnreachableIndicators: false,
       notice: 'Unreachable graph analysis is waiting for app plugins to load.',
     };
   }
@@ -34,7 +34,7 @@ export function buildGraphListReachabilityPresentation(options: {
   if (report.status === 'blocked') {
     return {
       bucketByGraphId,
-      showUnreachableBadges: false,
+      showUnreachableIndicators: false,
       notice: getBlockedAnalysisNotice(report),
     };
   }
@@ -42,14 +42,14 @@ export function buildGraphListReachabilityPresentation(options: {
   if (report.status === 'partial') {
     return {
       bucketByGraphId,
-      showUnreachableBadges: true,
+      showUnreachableIndicators: true,
       notice: getPartialAnalysisNotice(report),
     };
   }
 
   return {
     bucketByGraphId,
-    showUnreachableBadges: true,
+    showUnreachableIndicators: true,
   };
 }
 

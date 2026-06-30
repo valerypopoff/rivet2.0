@@ -180,8 +180,12 @@ test('graph tree panel keeps the compact text-list layout source contract', () =
     folderItemSource,
     /position: 'relative'[\s\S]*transform: `translate3d\(0, \$\{transform\.y\}px, 0\)`[\s\S]*zIndex: 100/,
   );
-  assert.doesNotMatch(folderItemSource, /<Tooltip|GraphItemTooltipContent|title\.split\('\\n'\)\.map/);
+  assert.doesNotMatch(folderItemSource, /GraphItemTooltipContent|title\.split\('\\n'\)\.map/);
   assert.doesNotMatch(folderItemSource, /<div[^>]*title={title}/);
-  assert.doesNotMatch(folderItemSource, /className="unreachable-badge" title=/);
+  assert.match(folderItemSource, /content="This graph is unreachable from the Main Graph\."/);
+  assert.match(folderItemSource, /className="unreachable-indicator-tooltip"/);
+  assert.match(folderItemSource, /className="unreachable-indicator" role="img" aria-label="Unreachable graph"/);
+  assert.match(folderItemSource, /<UnreachableGraphIcon aria-hidden="true" \/>/);
+  assert.doesNotMatch(folderItemSource, />unreachable<\/span>/);
   assert.doesNotMatch(folderItemSource, /depthSpacer|range\(/);
 });
