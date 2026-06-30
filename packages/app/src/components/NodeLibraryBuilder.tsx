@@ -1,4 +1,4 @@
-import { type FC, useEffect, useMemo, useRef } from 'react';
+import { type CSSProperties, type FC, useEffect, useMemo, useRef } from 'react';
 import styled from '@emotion/styled';
 import { produce } from 'immer';
 import { toast } from 'react-toastify';
@@ -23,6 +23,7 @@ import { canvasPositionState, lastMousePositionState, selectedNodesState, sideba
 import { editingNodePrefabIdState } from '../state/nodeLibrary.js';
 import { projectState, referencedProjectsState } from '../state/savedGraphs.js';
 import { settingsState, resolveEditorPreferences } from '../state/settings.js';
+import { leftSidebarLiveWidthState } from '../state/ui.js';
 import { createAddedNode, duplicateNodesWithConnections } from '../domain/graphEditing/nodeActions.js';
 import {
   buildNodePrefab,
@@ -44,11 +45,12 @@ import { clipboardState } from '../state/clipboard.js';
 
 const Container = styled.div`
   position: relative;
+  --node-library-sidebar-offset: 0px;
 
   .node-library-empty {
     position: absolute;
     top: calc(var(--project-selector-height) + 28px);
-    left: 50%;
+    left: calc(var(--node-library-sidebar-offset) + (100% - var(--node-library-sidebar-offset)) / 2);
     z-index: 10;
     max-width: 420px;
     padding: 12px 16px;
@@ -60,6 +62,16 @@ const Container = styled.div`
     line-height: 1.35;
     pointer-events: none;
     transform: translateX(-50%);
+  }
+
+  .node-library-empty-title {
+    margin: 0 0 6px;
+    color: var(--foreground);
+    font-weight: 700;
+  }
+
+  .node-library-empty-copy {
+    margin: 0;
   }
 `;
 
@@ -76,6 +88,7 @@ export const NodeLibraryBuilder: FC = () => {
   const [editingPrefabId, setEditingPrefabId] = useAtom(editingNodePrefabIdState);
   const settings = useAtomValue(settingsState);
   const sidebarOpen = useAtomValue(sidebarOpenState);
+  const liveSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const clipboard = useAtomValue(clipboardState);
   const lastMousePosition = useAtomValue(lastMousePositionState);
   const setCanvasPosition = useSetAtom(canvasPositionState);
@@ -97,6 +110,9 @@ export const NodeLibraryBuilder: FC = () => {
     [prefabsBySourceNodeId, selectedNodeIds],
   );
   const editingPrefab = editingPrefabId ? project.nodePrefabs?.[editingPrefabId] : undefined;
+  const containerStyle = {
+    '--node-library-sidebar-offset': sidebarOpen ? `${liveSidebarWidth}px` : '0px',
+  } as CSSProperties;
 
   useEffect(() => {
     if (!centeredOnOpenRef.current) {
@@ -415,9 +431,14 @@ export const NodeLibraryBuilder: FC = () => {
   });
 
   return (
-    <Container>
+    <Container style={containerStyle}>
       {nodes.length === 0 && (
-        <div className="node-library-empty">Right-click to add library nodes.</div>
+        <div className="node-library-empty">
+          <p className="node-library-empty-title">Right-click to add library nodes.</p>
+          <p className="node-library-empty-copy">
+            Library nodes are reusable sources. Add them to graphs as linked nodes; edits here update every link.
+          </p>
+        </div>
       )}
       <EditNodeCommandOverrideContext.Provider value={editPrefabSourceNode}>
         <NodeCanvas

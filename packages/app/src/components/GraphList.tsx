@@ -437,6 +437,7 @@ const styles = css`
     height: 14px;
     flex-shrink: 0;
     color: currentColor;
+    transform: translateY(-1px);
   }
 
   .graph-main-icon {
@@ -459,6 +460,7 @@ const styles = css`
     font-weight: 700;
     line-height: 1.2;
     text-align: center;
+    transform: translateY(-1px);
   }
 
   .graph-folder-count > span {
@@ -467,6 +469,11 @@ const styles = css`
 
   .selected .graph-folder-count > span {
     color: inherit;
+  }
+
+  .graph-list-action.selected .graph-folder-count {
+    background: var(--foreground-on-primary);
+    color: var(--primary);
   }
 
   .contains-open-graph .graph-item-select {
@@ -724,6 +731,7 @@ export const GraphList: FC = memo(() => {
 
   const runningGraphs = useAtomValue(runningGraphsState);
   const project = useAtomValue(projectState);
+  const nodeLibraryItemCount = Object.keys(project.nodePrefabs ?? {}).length;
   const plugins = useAtomValue(pluginsState);
   const projectNodeRegistry = useProjectNodeRegistry();
   const [graphPendingDelete, setGraphPendingDelete] = useState<NodeGraph | null>(null);
@@ -1089,6 +1097,11 @@ export const GraphList: FC = memo(() => {
               <SubgraphLinkIcon />
             </span>
             <span>Node library</span>
+            {nodeLibraryItemCount > 0 && (
+              <span className="graph-folder-count">
+                <span>{nodeLibraryItemCount}</span>
+              </span>
+            )}
           </button>
           <div className="graph-list-filter">
             <label className="graph-list-filter-label">

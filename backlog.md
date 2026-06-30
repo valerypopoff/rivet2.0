@@ -1,6 +1,4 @@
 
-- "Node library" item should have the node counter just like the folders in the graph tree. If zero, don't show teh counter at all
-- In the empty node library, there's "Right-click to add library nodes". Include a short explanation on how the linked nodes work. And make this block in the horizontal center of the canvas. Now it's in the middle of the whole rivet window which is not the same
 
 - While the workflow is running, send some kind of a number of run nodes that can be a progress indicator
 
