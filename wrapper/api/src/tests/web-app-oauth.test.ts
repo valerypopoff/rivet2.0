@@ -372,6 +372,34 @@ test('web app OAuth callback can log the raw profile response for claim discover
   });
 });
 
+test('web app OAuth logout clears OAuth cookies and returns to the requested app', async () => {
+  await withEnv({
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_SESSION_SECRET: 'session-secret',
+  }, async () => {
+    await withOAuthCallbackServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/auth/logout?return_to=${encodeURIComponent('/apps/my-tool?x=1')}`, {
+        redirect: 'manual',
+      });
+
+      assert.equal(response.status, 303);
+      assert.equal(response.headers.get('location'), '/apps/my-tool?x=1');
+      const setCookie = response.headers.get('set-cookie') ?? '';
+      assert.match(setCookie, /rivet_web_app_oauth_state=;/);
+      assert.match(setCookie, /rivet_web_app_oauth_session=;/);
+      assert.match(setCookie, /Max-Age=0/);
+
+      const externalReturnResponse = await fetch(
+        `${baseUrl}/auth/logout?return_to=${encodeURIComponent('https://evil.example.test/apps/my-tool')}`,
+        { redirect: 'manual' },
+      );
+
+      assert.equal(externalReturnResponse.status, 303);
+      assert.equal(externalReturnResponse.headers.get('location'), '/');
+    });
+  });
+});
+
 test('web app OAuth callback supports basic client authentication for strict providers', async () => {
   await withEnv({
     OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',

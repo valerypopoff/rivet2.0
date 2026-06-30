@@ -227,6 +227,8 @@ OAuth mode is intentionally vendor-neutral. The API needs `OAUTH_AUTHORIZE_URL`,
 
 Because `ui-gate` and `oauth` modes use browser cookies, app JSON and action requests also enforce a same-origin browser request check before session lookup. This keeps the global API CORS policy from turning a user's web-app session into cross-site action credentials. Normal direct navigation to the app HTML still works, and hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth entirely as before.
 
+OAuth app HTML pages include a small wrapper-owned `Sign out` link that calls `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout` and returns to the app path so users can switch accounts. If a signed-in user is not in a web app's allowed-email list, the HTML route returns a styled `Web app access denied` page with that same sign-out action; JSON and action routes continue to return `403` with `code: "oauth_forbidden"`.
+
 ## Trusted proxy boundary
 
 The intended access path is:

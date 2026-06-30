@@ -372,6 +372,15 @@ function getWebAppAuthRetryPath(req: Request): string {
   return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
 }
 
+function getWebAppOAuthLogoutPath(returnTo: string): string {
+  const params = new URLSearchParams({ return_to: returnTo });
+  return `${RIVET_WEB_APPS_BASE_PATH}/auth/logout?${params.toString()}`;
+}
+
+function getWebAppCurrentLogoutPath(req: Request): string {
+  return getWebAppOAuthLogoutPath(getWebAppAuthRetryPath(req));
+}
+
 function getWebAppAuthErrorMessage(errorCode: string): string {
   if (errorCode === 'oauth_profile') {
     return 'OAuth sign-in succeeded, but the profile response did not include the configured email claim.';
@@ -392,26 +401,75 @@ function getWebAppAuthErrorMessage(errorCode: string): string {
   return 'OAuth sign-in failed. Try signing in again.';
 }
 
-function renderWebAppAuthErrorHtml(errorCode: string, retryPath: string): string {
+function renderWebAppAuthStatusHtml(options: {
+  title: string;
+  message: string;
+  code?: string;
+  primaryHref: string;
+  primaryLabel: string;
+  secondaryHref?: string;
+  secondaryLabel?: string;
+}): string {
+  const secondaryLink = options.secondaryHref && options.secondaryLabel
+    ? `<a class="secondary" href="${escapeHtml(options.secondaryHref)}">${escapeHtml(options.secondaryLabel)}</a>`
+    : '';
   return `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Web app sign-in failed</title>
+<title>${escapeHtml(options.title)}</title>
 <style>
   :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101114; color: #f4f4f5; }
   main { width: min(440px, calc(100vw - 32px)); border: 1px solid #333741; border-radius: 8px; background: #1d1f24; padding: 24px; box-shadow: 0 24px 80px rgb(0 0 0 / 0.38); }
   h1 { margin: 0 0 10px; font-size: 20px; line-height: 1.2; }
   p { margin: 0 0 18px; color: #c8c8cf; line-height: 1.5; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   a { display: inline-flex; align-items: center; min-height: 34px; padding: 0 13px; border-radius: 6px; background: #2f6fed; color: white; font-weight: 650; text-decoration: none; }
+  a.secondary { background: transparent; color: #d6d8df; border: 1px solid #3d414b; }
   code { color: #d6d8df; }
 </style>
 <main>
-  <h1>Web app sign-in failed</h1>
-  <p>${escapeHtml(getWebAppAuthErrorMessage(errorCode))}</p>
-  <p>Error code: <code>${escapeHtml(errorCode || 'oauth_failed')}</code></p>
-  <a href="${escapeHtml(retryPath)}">Try again</a>
+  <h1>${escapeHtml(options.title)}</h1>
+  <p>${escapeHtml(options.message)}</p>
+  ${options.code ? `<p>Error code: <code>${escapeHtml(options.code)}</code></p>` : ''}
+  <div class="actions">
+    <a href="${escapeHtml(options.primaryHref)}">${escapeHtml(options.primaryLabel)}</a>
+    ${secondaryLink}
+  </div>
 </main>`;
+}
+
+function renderWebAppAuthErrorHtml(errorCode: string, retryPath: string, logoutPath: string): string {
+  return renderWebAppAuthStatusHtml({
+    title: 'Web app sign-in failed',
+    message: getWebAppAuthErrorMessage(errorCode),
+    code: errorCode || 'oauth_failed',
+    primaryHref: retryPath,
+    primaryLabel: 'Try again',
+    secondaryHref: logoutPath,
+    secondaryLabel: 'Sign out',
+  });
+}
+
+function renderWebAppAccessDeniedHtml(email: string, logoutPath: string): string {
+  return renderWebAppAuthStatusHtml({
+    title: 'Web app access denied',
+    message: `You are signed in as ${email}, but this web app does not allow that email.`,
+    code: 'oauth_forbidden',
+    primaryHref: logoutPath,
+    primaryLabel: 'Sign out and choose another account',
+  });
+}
+
+function addWebAppOAuthLogoutLink(html: string, logoutPath: string): string {
+  const logoutHtml = `<style>
+  .rivet-web-app-auth-logout { position: fixed; top: 12px; right: 12px; z-index: 2147483647; display: inline-flex; align-items: center; min-height: 28px; padding: 0 10px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 6px; background: rgb(20 20 24 / 0.82); color: #f4f4f5; font: 600 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; text-decoration: none; box-shadow: 0 8px 30px rgb(0 0 0 / 0.25); backdrop-filter: blur(8px); }
+  .rivet-web-app-auth-logout:hover { background: rgb(40 42 48 / 0.94); }
+</style>
+<a class="rivet-web-app-auth-logout" href="${escapeHtml(logoutPath)}">Sign out</a>`;
+  return /<\/body>/i.test(html)
+    ? html.replace(/<\/body>/i, `${logoutHtml}</body>`)
+    : `${html}${logoutHtml}`;
 }
 
 function sendWebAppAuthJsonError(
@@ -491,7 +549,7 @@ function authorizeWebAppRequestBeforeResolve(
     sendHtmlWithDuration(
       res,
       401,
-      renderWebAppAuthErrorHtml(authError, getWebAppAuthRetryPath(req)),
+      renderWebAppAuthErrorHtml(authError, getWebAppAuthRetryPath(req), getWebAppCurrentLogoutPath(req)),
       requestStartedAt,
     );
     return false;
@@ -517,7 +575,8 @@ function authorizeResolvedWebAppRequest(
     return true;
   }
 
-  if (isWebAppOAuthSessionAllowed(readWebAppOAuthSession(req), executionProject.webAppAllowedEmails ?? [])) {
+  const session = readWebAppOAuthSession(req);
+  if (isWebAppOAuthSessionAllowed(session, executionProject.webAppAllowedEmails ?? [])) {
     return true;
   }
 
@@ -525,7 +584,7 @@ function authorizeResolvedWebAppRequest(
     sendHtmlWithDuration(
       res,
       403,
-      '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Forbidden</body>',
+      renderWebAppAccessDeniedHtml(session?.email ?? 'this account', getWebAppCurrentLogoutPath(req)),
       requestStartedAt,
     );
     return false;
@@ -889,13 +948,16 @@ async function handleWebAppHtmlRequest(req: Request, res: Response, routeKind: W
       return;
     }
 
+    const html = renderRivetWebAppHtml(uiGraph, {
+      actionPath: `${getWebAppBasePath(routeKind, resolved.slug)}/actions/run`,
+      revisionKey: resolved.executionProject.revisionKey,
+    });
     sendHtmlWithDuration(
       res,
       200,
-      renderRivetWebAppHtml(uiGraph, {
-        actionPath: `${getWebAppBasePath(routeKind, resolved.slug)}/actions/run`,
-        revisionKey: resolved.executionProject.revisionKey,
-      }),
+      getWebAppAuthMode() === 'oauth' && readWebAppOAuthSession(req)
+        ? addWebAppOAuthLogoutLink(html, getWebAppCurrentLogoutPath(req))
+        : html,
       requestStartedAt,
     );
   } catch (error) {
