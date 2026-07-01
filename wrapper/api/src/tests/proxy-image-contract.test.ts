@@ -27,22 +27,12 @@ test('proxy templates route public workflow traffic to the right API plane', () 
 
   assert.match(proxyLocation(imageProxyTemplate, /location = \/__rivet_auth\s*\{/), /proxy_pass \$api_ui_auth_upstream;/);
   assert.match(proxyLocation(imageProxyTemplate, /location \/api\/\s*\{/), /proxy_pass \$api_upstream;/);
-  assert.match(
-    proxyLocation(imageProxyTemplate, /location \$\{RIVET_PUBLISHED_WORKFLOWS_BASE_PATH\}\/\s*\{/),
-    /proxy_pass \$execution_upstream;/,
-  );
-  assert.match(
-    proxyLocation(imageProxyTemplate, /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/\s*\{/),
-    /proxy_pass \$execution_upstream;/,
-  );
-  assert.match(
-    proxyLocation(imageProxyTemplate, /location \$\{RIVET_LATEST_WORKFLOWS_BASE_PATH\}\/\s*\{/),
-    /proxy_pass \$api_upstream;/,
-  );
-  assert.match(
-    proxyLocation(imageProxyTemplate, /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\s*\{/),
-    /proxy_pass \$api_upstream;/,
-  );
+  assert.match(imageProxyTemplate, /include \$\{RIVET_PUBLIC_ROUTES_INCLUDE_FILE\};/);
+  assert.match(proxyBootstrap, /location \$\{RIVET_PUBLISHED_WORKFLOWS_BASE_PATH\}\/ \{/);
+  assert.match(proxyBootstrap, /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/ \{/);
+  assert.match(proxyBootstrap, /location \$\{RIVET_LATEST_WORKFLOWS_BASE_PATH\}\/ \{/);
+  assert.match(proxyBootstrap, /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/ \{/);
+  assert.match(proxyBootstrap, /proxy_pass \\\$execution_upstream;[\s\S]*proxy_pass \\\$execution_upstream;[\s\S]*proxy_pass \\\$api_upstream;[\s\S]*proxy_pass \\\$api_upstream;/);
 
   const latestDebuggerLocation = proxyLocation(imageProxyTemplate, /location \/ws\/latest-debugger\s*\{/);
   assert.match(imageProxyTemplate, /set \$api_latest_debugger_upstream http:\/\/\$\{RIVET_API_UPSTREAM_HOST\}:\$\{RIVET_API_UPSTREAM_PORT\}\/ws\/latest-debugger;/);
@@ -53,8 +43,25 @@ test('proxy templates route public workflow traffic to the right API plane', () 
 
   assert.ok(!imageProxyTemplate.includes('location /internal/workflows'));
   assert.match(proxyBootstrap, /resolve_proxy_resolver\(\)/);
+  assert.match(proxyBootstrap, /public_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json"/);
+  assert.match(proxyBootstrap, /legacy_web_app_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/web-app-routes\.json"/);
+  assert.match(proxyBootstrap, /normalize_public_route_setting\(\) \{/);
+  assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "publishedWorkflowsBasePath"/);
+  assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "latestWorkflowsBasePath"/);
+  assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "publishedAppsBasePath"/);
+  assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "latestAppsBasePath"/);
+  assert.match(proxyBootstrap, /__rivet_auth\|api\|assets\|internal\|node_modules\|ui-auth\|ws/);
+  assert.match(proxyBootstrap, /invalid public route settings file/);
+  assert.match(proxyBootstrap, /RIVET_PUBLIC_ROUTES_SETTINGS_VALID=0/);
+  assert.match(proxyBootstrap, /if \[ "\$\{RIVET_PUBLIC_ROUTES_SETTINGS_VALID:-1\}" != "1" \]; then[\s\S]*continue/);
   assert.match(proxyBootstrap, /RIVET_PUBLISHED_APPS_BASE_PATH:-\$\{RIVET_WEB_APPS_BASE_PATH:-\}/);
   assert.match(proxyBootstrap, /RIVET_LATEST_APPS_BASE_PATH:-\$\{RIVET_LATEST_WEB_APPS_BASE_PATH:-\}/);
+  assert.match(proxyBootstrap, /write_public_routes_include\(\)/);
+  assert.match(proxyBootstrap, /mkdir -p "\$output_dir"/);
+  assert.match(proxyBootstrap, /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\/tmp\/nginx\/rivet-public-routes\.inc/);
+  assert.doesNotMatch(proxyBootstrap, /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\$NGINX_ENVSUBST_OUTPUT_DIR\/rivet-public-routes\.conf/);
+  assert.match(proxyBootstrap, /nginx -t/);
+  assert.match(proxyBootstrap, /nginx -s reload/);
   assert.match(proxyBootstrap, /export RIVET_PROXY_RESOLVER="\$\(resolve_proxy_resolver "\$\{RIVET_PROXY_RESOLVER:-\}"\)"/);
 });
 
@@ -97,6 +104,8 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   assert.match(devCompose, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/);
   assert.match(prodCompose, /RIVET_CORS_ALLOWED_ORIGINS=\$\{RIVET_CORS_ALLOWED_ORIGINS:-\}/);
   assert.match(devCompose, /RIVET_CORS_ALLOWED_ORIGINS=\$\{RIVET_CORS_ALLOWED_ORIGINS:-\}/);
+  assert.match(prodCompose, /RIVET_APP_DATA_ROOT=\/data\/rivet-app[\s\S]*rivet_data:\/data\/rivet-app:ro/);
+  assert.match(devCompose, /RIVET_APP_DATA_ROOT=\/data\/rivet-app[\s\S]*rivet_data:\/data\/rivet-app:ro/);
   assert.match(devCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_API_PORT:-3100\}:80"/);
   assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_POSTGRES_PORT:-54329\}:5432"/);
   assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_PORT:-9000\}:9000"/);
@@ -118,16 +127,27 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
     assert.match(template, /~\*\^https\$ "; Secure";/);
     assert.doesNotMatch(template, /RIVET_WEB_APPS_AUTH_MODE|rivet_web_apps_gate_result|rivet_web_apps_use_ui_gate/);
     assert.doesNotMatch(template, /proxy_set_header X-Forwarded-Proto \$scheme;/);
-    for (const locationPattern of [
-      /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/\s*\{/,
-      /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\s*\{/,
-    ]) {
-      const webAppsLocation = proxyLocation(template, locationPattern);
-      assert.doesNotMatch(webAppsLocation, /return 401;|rivet_web_apps_gate_result/);
-      assert.match(webAppsLocation, /proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;/);
-      assert.match(webAppsLocation, /proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;/);
-      assert.match(webAppsLocation, /proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;/);
-    }
+    assert.match(template, /include \$\{RIVET_PUBLIC_ROUTES_INCLUDE_FILE\};/);
+  }
+
+  assert.match(proxyBootstrap, /proxy_set_header X-Rivet-Token-Free-Host \\\$rivet_ui_host_is_token_free;/);
+  assert.match(proxyBootstrap, /proxy_set_header X-Forwarded-Host \\\$rivet_forwarded_host;/);
+  assert.match(proxyBootstrap, /proxy_set_header X-Forwarded-Proto \\\$rivet_forwarded_proto;/);
+});
+
+test('compose fallback artifact mounts stay isolated under app data', () => {
+  const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
+  const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
+
+  for (const compose of [prodCompose, devCompose]) {
+    assert.match(compose, /\$\{RIVET_WORKFLOWS_HOST_PATH:-\.\.\/\.\.\/\.data\/workflows\}:\/workflows/);
+    assert.match(
+      compose,
+      /\$\{RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-\.\.\/\.\.\/\.data\/workflow-recordings\}:\/workflow-recordings/,
+    );
+    assert.match(compose, /\$\{RIVET_RUNTIME_LIBS_HOST_PATH:-\.\.\/\.\.\/\.data\/runtime-libraries\}:\/data\/runtime-libraries/);
+    assert.doesNotMatch(compose, /\$\{RIVET_WORKFLOWS_HOST_PATH:-\.\.\/\.\.\/workflows\}:\/workflows/);
+    assert.doesNotMatch(compose, /\$\{RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-\.\.\/\.\.\/workflow-recordings\}:\/workflow-recordings/);
   }
 });
 
@@ -135,13 +155,7 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   const proxyDockerfile = readRepoFile('image/proxy/Dockerfile');
 
   for (const template of readProxyTemplates()) {
-    for (const locationPattern of [
-      /location \/api\/\s*\{/,
-      /location \$\{RIVET_PUBLISHED_WORKFLOWS_BASE_PATH\}\/\s*\{/,
-      /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/\s*\{/,
-      /location \$\{RIVET_LATEST_WORKFLOWS_BASE_PATH\}\/\s*\{/,
-      /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\s*\{/,
-    ]) {
+    for (const locationPattern of [/location \/api\/\s*\{/]) {
       const location = proxyLocation(template, locationPattern);
       assert.match(location, /proxy_read_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
       assert.match(location, /proxy_send_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
@@ -151,6 +165,9 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
     assert.match(proxyLocation(template, /location \/ws\/executor\/internal\s*\{/), /proxy_read_timeout 86400s;/);
   }
 
+  const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
+  assert.match(proxyBootstrap, /proxy_read_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
+  assert.match(proxyBootstrap, /proxy_send_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
   assert.match(proxyDockerfile, /ENV RIVET_PROXY_READ_TIMEOUT=180s/);
 });
 

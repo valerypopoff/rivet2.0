@@ -30,6 +30,32 @@ export interface RunRecordingsSettingsDraft {
   retentionDays?: unknown;
 }
 
+export interface PublicRouteSettings {
+  publishedWorkflowsBasePath: string;
+  latestWorkflowsBasePath: string;
+  publishedAppsBasePath: string;
+  latestAppsBasePath: string;
+  updatedAt: string | null;
+  source: AppSettingsSource;
+}
+
+export interface PublicRouteSettingsDraft {
+  publishedWorkflowsBasePath?: unknown;
+  latestWorkflowsBasePath?: unknown;
+  publishedAppsBasePath?: unknown;
+  latestAppsBasePath?: unknown;
+}
+
+export type WebAppRouteSettings = Pick<
+  PublicRouteSettings,
+  'publishedAppsBasePath' | 'latestAppsBasePath' | 'updatedAt' | 'source'
+>;
+
+export type WebAppRouteSettingsDraft = Pick<
+  PublicRouteSettingsDraft,
+  'publishedAppsBasePath' | 'latestAppsBasePath'
+>;
+
 export type WebAppAuthMode = 'ui-gate' | 'oauth' | 'none';
 export type WebAppOAuthProvider = 'external' | 'dummy';
 export type WebAppOAuthClientAuthMethod = 'body' | 'basic';

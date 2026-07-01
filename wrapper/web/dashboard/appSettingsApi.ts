@@ -2,6 +2,8 @@ import { RIVET_API_BASE_URL } from '../../shared/hosted-env';
 import type {
   NodeExecutorProxySettings,
   NodeExecutorProxySettingsDraft,
+  PublicRouteSettings,
+  PublicRouteSettingsDraft,
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
   WebAppAuthSettings,
@@ -50,6 +52,24 @@ export async function saveRunRecordingsSettings(
     body: JSON.stringify(settings),
   });
   return appSettingsJsonResponse<RunRecordingsSettings>(response);
+}
+
+export async function fetchPublicRouteSettings(): Promise<PublicRouteSettings> {
+  const response = await fetch(`${API}/public-routes`, {
+    cache: 'no-store',
+  });
+  return appSettingsJsonResponse<PublicRouteSettings>(response);
+}
+
+export async function savePublicRouteSettings(
+  settings: PublicRouteSettingsDraft,
+): Promise<PublicRouteSettings> {
+  const response = await fetch(`${API}/public-routes`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return appSettingsJsonResponse<PublicRouteSettings>(response);
 }
 
 export async function fetchWebAppAuthSettings(): Promise<WebAppAuthSettings> {

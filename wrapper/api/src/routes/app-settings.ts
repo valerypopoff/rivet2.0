@@ -15,6 +15,12 @@ import {
   normalizeWorkflowRecordingLimitSettings,
 } from './workflows/recordings-config.js';
 import { readWebAppAuthSettings, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
+import {
+  readPublicRouteSettings,
+  readWebAppRouteSettings,
+  writePublicRouteSettings,
+  writeWebAppRouteSettings,
+} from '../public-route-settings.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
 
 export const appSettingsRouter = Router();
@@ -271,6 +277,38 @@ appSettingsRouter.get('/run-recordings', async (_req, res, next) => {
 appSettingsRouter.put('/run-recordings', async (req, res, next) => {
   try {
     res.json(await writeRunRecordingsSettings(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/web-app-routes', async (_req, res, next) => {
+  try {
+    res.json(await readWebAppRouteSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/web-app-routes', async (req, res, next) => {
+  try {
+    res.json(await writeWebAppRouteSettings(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/public-routes', async (_req, res, next) => {
+  try {
+    res.json(await readPublicRouteSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/public-routes', async (req, res, next) => {
+  try {
+    res.json(await writePublicRouteSettings(req.body));
   } catch (error) {
     next(error);
   }

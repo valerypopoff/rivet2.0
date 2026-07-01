@@ -12,7 +12,7 @@ import {
 import { getLatestWorkflowRemoteDebugger, isLatestWorkflowRemoteDebuggerEnabled } from '../../latestWorkflowRemoteDebugger.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
-import { RIVET_LATEST_WEB_APPS_BASE_PATH, RIVET_WEB_APPS_BASE_PATH } from '../../workflowEndpointPaths.js';
+import { getLatestWebAppsBasePath, getPublishedWebAppsBasePath } from '../../workflowEndpointPaths.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
 import {
   createManagedCodeRunnerTelemetry,
@@ -409,7 +409,7 @@ function getWebAppOAuthLoginPath(req: Request): string {
 
 function getWebAppOAuthLogoutPath(returnTo: string): string {
   const params = new URLSearchParams({ return_to: returnTo });
-  return `${RIVET_WEB_APPS_BASE_PATH}/auth/logout?${params.toString()}`;
+  return `${getPublishedWebAppsBasePath()}/auth/logout?${params.toString()}`;
 }
 
 function getWebAppCurrentLogoutPath(req: Request): string {
@@ -778,8 +778,8 @@ type WebAppRouteKind = 'published' | 'latest';
 
 function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
   const basePath = routeKind === 'published'
-    ? RIVET_WEB_APPS_BASE_PATH
-    : RIVET_LATEST_WEB_APPS_BASE_PATH;
+    ? getPublishedWebAppsBasePath()
+    : getLatestWebAppsBasePath();
 
   return `${basePath}/${encodeUrlPathSegment(slug)}`;
 }

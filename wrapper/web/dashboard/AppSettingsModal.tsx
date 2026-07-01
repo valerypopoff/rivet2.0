@@ -6,13 +6,17 @@ import { type FC, useEffect, useMemo, useState } from 'react';
 import type { HostedRouteConfig } from './types';
 import {
   fetchNodeExecutorProxySettings,
+  fetchPublicRouteSettings,
   fetchRunRecordingsSettings,
   fetchWebAppAuthSettings,
   saveNodeExecutorProxySettings,
+  savePublicRouteSettings,
   saveRunRecordingsSettings,
   saveWebAppAuthSettings,
 } from './appSettingsApi';
+import { fetchHostedConfig } from './workflowApi';
 import type {
+  PublicRouteSettings,
   WebAppAuthMode,
   WebAppAuthSettings,
   WebAppOAuthClientAuthMethod,
@@ -29,9 +33,16 @@ interface AppSettingsModalProps {
 const appVersion = import.meta.env.VITE_APP_VERSION || 'unknown';
 const appName = 'Rivet Studio Server';
 
-type AppSettingsTab = 'general' | 'node-executor-proxy' | 'run-recordings' | 'web-app-auth';
+type AppSettingsTab = 'general' | 'node-executor-proxy' | 'run-recordings' | 'web-apps' | 'workflow-endpoints';
 type RunsKeptMode = 'latest' | 'all';
 type RecordingRetentionMode = 'limited' | 'forever';
+type PublicRouteSettingsScope = 'web-apps' | 'workflow-endpoints';
+type PublicRouteSettingsFormSnapshot = {
+  publishedWorkflowsSlug: string;
+  latestWorkflowsSlug: string;
+  publishedAppsSlug: string;
+  latestAppsSlug: string;
+};
 type WebAppAuthSettingsFormSnapshot = {
   mode: WebAppAuthMode;
   provider: WebAppOAuthProvider;
@@ -84,6 +95,50 @@ function createWebAppAuthSnapshot(settings: WebAppAuthSettings): WebAppAuthSetti
   };
 }
 
+function basePathToRouteSlug(basePath: string): string {
+  return basePath.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+function createPublicRouteSnapshot(settings: PublicRouteSettings): PublicRouteSettingsFormSnapshot {
+  return {
+    publishedWorkflowsSlug: basePathToRouteSlug(settings.publishedWorkflowsBasePath),
+    latestWorkflowsSlug: basePathToRouteSlug(settings.latestWorkflowsBasePath),
+    publishedAppsSlug: basePathToRouteSlug(settings.publishedAppsBasePath),
+    latestAppsSlug: basePathToRouteSlug(settings.latestAppsBasePath),
+  };
+}
+
+function publicRouteSettingsMatchConfig(
+  settings: Pick<
+    PublicRouteSettings,
+    | 'publishedWorkflowsBasePath'
+    | 'latestWorkflowsBasePath'
+    | 'publishedAppsBasePath'
+    | 'latestAppsBasePath'
+  >,
+  config: Partial<HostedRouteConfig>,
+): boolean {
+  return (
+    config.publishedWorkflowsBasePath === settings.publishedWorkflowsBasePath &&
+    config.latestWorkflowsBasePath === settings.latestWorkflowsBasePath &&
+    config.publishedAppsBasePath === settings.publishedAppsBasePath &&
+    config.latestAppsBasePath === settings.latestAppsBasePath
+  );
+}
+
+async function waitForHostedRouteConfig(settings: PublicRouteSettings): Promise<Partial<HostedRouteConfig>> {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const config = await fetchHostedConfig();
+    if (publicRouteSettingsMatchConfig(settings, config)) {
+      return config;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error('Route settings were saved, but the active route config has not updated yet.');
+}
+
 export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   isOpen,
   onClose,
@@ -116,6 +171,22 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     maxPendingWrites: '100',
     maxRunsPerEndpoint: '100',
     retentionDays: '14',
+  });
+  const [loadingPublicRouteSettings, setLoadingPublicRouteSettings] = useState(false);
+  const [savingPublicRouteSettings, setSavingPublicRouteSettings] = useState(false);
+  const [applyingPublicRouteSettings, setApplyingPublicRouteSettings] = useState(false);
+  const [publicRouteSettingsError, setPublicRouteSettingsError] = useState<string | null>(null);
+  const [publicRouteSettingsSaved, setPublicRouteSettingsSaved] = useState(false);
+  const [publicRouteSettingsStatusScope, setPublicRouteSettingsStatusScope] = useState<PublicRouteSettingsScope | null>(null);
+  const [publishedWorkflowsSlug, setPublishedWorkflowsSlug] = useState(basePathToRouteSlug(routeConfig.publishedWorkflowsBasePath));
+  const [latestWorkflowsSlug, setLatestWorkflowsSlug] = useState(basePathToRouteSlug(routeConfig.latestWorkflowsBasePath));
+  const [publishedAppsSlug, setPublishedAppsSlug] = useState(basePathToRouteSlug(routeConfig.publishedAppsBasePath));
+  const [latestAppsSlug, setLatestAppsSlug] = useState(basePathToRouteSlug(routeConfig.latestAppsBasePath));
+  const [initialPublicRouteSettings, setInitialPublicRouteSettings] = useState<PublicRouteSettingsFormSnapshot>({
+    publishedWorkflowsSlug: basePathToRouteSlug(routeConfig.publishedWorkflowsBasePath),
+    latestWorkflowsSlug: basePathToRouteSlug(routeConfig.latestWorkflowsBasePath),
+    publishedAppsSlug: basePathToRouteSlug(routeConfig.publishedAppsBasePath),
+    latestAppsSlug: basePathToRouteSlug(routeConfig.latestAppsBasePath),
   });
   const [loadingWebAppAuthSettings, setLoadingWebAppAuthSettings] = useState(false);
   const [savingWebAppAuthSettings, setSavingWebAppAuthSettings] = useState(false);
@@ -180,6 +251,23 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     currentRunRecordingsSettings.retentionDays !== initialRunRecordingsSettings.retentionDays
   ), [currentRunRecordingsSettings, initialRunRecordingsSettings]);
 
+  const currentPublicRouteSettings = useMemo(() => ({
+    publishedWorkflowsSlug: publishedWorkflowsSlug.trim(),
+    latestWorkflowsSlug: latestWorkflowsSlug.trim(),
+    publishedAppsSlug: publishedAppsSlug.trim(),
+    latestAppsSlug: latestAppsSlug.trim(),
+  }), [latestAppsSlug, latestWorkflowsSlug, publishedAppsSlug, publishedWorkflowsSlug]);
+
+  const workflowRouteSettingsChanged = useMemo(() => (
+    currentPublicRouteSettings.publishedWorkflowsSlug !== initialPublicRouteSettings.publishedWorkflowsSlug ||
+    currentPublicRouteSettings.latestWorkflowsSlug !== initialPublicRouteSettings.latestWorkflowsSlug
+  ), [currentPublicRouteSettings, initialPublicRouteSettings]);
+
+  const webAppRouteSettingsChanged = useMemo(() => (
+    currentPublicRouteSettings.publishedAppsSlug !== initialPublicRouteSettings.publishedAppsSlug ||
+    currentPublicRouteSettings.latestAppsSlug !== initialPublicRouteSettings.latestAppsSlug
+  ), [currentPublicRouteSettings, initialPublicRouteSettings]);
+
   const currentWebAppAuthSettings = useMemo(() => ({
     mode: webAppAuthMode,
     provider: webAppOAuthProvider,
@@ -243,6 +331,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     setActiveTab('general');
     setProxySettingsSaved(false);
     setRunRecordingsSettingsSaved(false);
+    setPublicRouteSettingsSaved(false);
     setWebAppAuthSettingsSaved(false);
   }, [isOpen]);
 
@@ -335,7 +424,47 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   }, [activeTab, isOpen]);
 
   useEffect(() => {
-    if (!isOpen || activeTab !== 'web-app-auth') {
+    if (!isOpen || activeTab !== 'web-apps') {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingPublicRouteSettings(true);
+      setPublicRouteSettingsError(null);
+      setPublicRouteSettingsSaved(false);
+      setPublicRouteSettingsStatusScope(null);
+
+    fetchPublicRouteSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+
+        const snapshot = createPublicRouteSnapshot(settings);
+        setPublishedWorkflowsSlug(snapshot.publishedWorkflowsSlug);
+        setLatestWorkflowsSlug(snapshot.latestWorkflowsSlug);
+        setPublishedAppsSlug(snapshot.publishedAppsSlug);
+        setLatestAppsSlug(snapshot.latestAppsSlug);
+        setInitialPublicRouteSettings(snapshot);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPublicRouteSettingsError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingPublicRouteSettings(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'web-apps') {
       return;
     }
 
@@ -449,6 +578,53 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     }
   };
 
+  const handleSavePublicRouteSettings = async (scope: PublicRouteSettingsScope) => {
+    setSavingPublicRouteSettings(true);
+    setApplyingPublicRouteSettings(false);
+    setPublicRouteSettingsError(null);
+    setPublicRouteSettingsSaved(false);
+    setPublicRouteSettingsStatusScope(scope);
+
+    try {
+      const savedSettings = await savePublicRouteSettings({
+        publishedWorkflowsBasePath: scope === 'workflow-endpoints'
+          ? currentPublicRouteSettings.publishedWorkflowsSlug
+          : initialPublicRouteSettings.publishedWorkflowsSlug,
+        latestWorkflowsBasePath: scope === 'workflow-endpoints'
+          ? currentPublicRouteSettings.latestWorkflowsSlug
+          : initialPublicRouteSettings.latestWorkflowsSlug,
+        publishedAppsBasePath: scope === 'web-apps'
+          ? currentPublicRouteSettings.publishedAppsSlug
+          : initialPublicRouteSettings.publishedAppsSlug,
+        latestAppsBasePath: scope === 'web-apps'
+          ? currentPublicRouteSettings.latestAppsSlug
+          : initialPublicRouteSettings.latestAppsSlug,
+      });
+      const snapshot = createPublicRouteSnapshot(savedSettings);
+      if (scope === 'workflow-endpoints') {
+        setPublishedWorkflowsSlug(snapshot.publishedWorkflowsSlug);
+        setLatestWorkflowsSlug(snapshot.latestWorkflowsSlug);
+      } else {
+        setPublishedAppsSlug(snapshot.publishedAppsSlug);
+        setLatestAppsSlug(snapshot.latestAppsSlug);
+      }
+      setInitialPublicRouteSettings(snapshot);
+      setSavingPublicRouteSettings(false);
+      setApplyingPublicRouteSettings(true);
+      const activeConfig = await waitForHostedRouteConfig(savedSettings);
+      onRouteConfigChange?.({
+        ...routeConfig,
+        ...activeConfig,
+      });
+      setPublicRouteSettingsSaved(true);
+    } catch (error) {
+      setPublicRouteSettingsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingPublicRouteSettings(false);
+      setApplyingPublicRouteSettings(false);
+    }
+  };
+
   const handleSaveWebAppAuthSettings = async () => {
     setSavingWebAppAuthSettings(true);
     setWebAppAuthSettingsError(null);
@@ -488,6 +664,19 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     }
   };
 
+  const handleRevertPublicRouteSettings = () => {
+    if (activeTab === 'workflow-endpoints') {
+      setPublishedWorkflowsSlug(initialPublicRouteSettings.publishedWorkflowsSlug);
+      setLatestWorkflowsSlug(initialPublicRouteSettings.latestWorkflowsSlug);
+    } else {
+      setPublishedAppsSlug(initialPublicRouteSettings.publishedAppsSlug);
+      setLatestAppsSlug(initialPublicRouteSettings.latestAppsSlug);
+    }
+    setPublicRouteSettingsSaved(false);
+    setPublicRouteSettingsError(null);
+    setPublicRouteSettingsStatusScope(null);
+  };
+
   const handleRevertWebAppAuthSettings = () => {
     setWebAppAuthMode(initialWebAppAuthSettings.mode);
     setWebAppOAuthProvider(initialWebAppAuthSettings.provider);
@@ -521,9 +710,13 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     </button>
   );
 
-  const renderActionStatus = (error: string | null, saved: boolean) => {
+  const renderActionStatus = (error: string | null, saved: boolean, pending?: string) => {
     if (error) {
       return <div className="project-settings-error app-settings-action-status">{error}</div>;
+    }
+
+    if (pending) {
+      return <div className="project-settings-muted app-settings-action-status">{pending}</div>;
     }
 
     if (saved) {
@@ -601,9 +794,10 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
             <div className="project-settings-modal-content app-settings-modal-content">
               <div className="project-settings-tabs" role="tablist" aria-label="App settings sections">
                 {renderTabButton('general', 'General')}
+                {renderTabButton('workflow-endpoints', 'Workflow endpoints')}
                 {renderTabButton('run-recordings', 'Run recordings')}
                 {renderTabButton('node-executor-proxy', 'Node executor proxy')}
-                {renderTabButton('web-app-auth', 'Web app auth')}
+                {renderTabButton('web-apps', 'Web apps')}
               </div>
 
               {activeTab === 'general' ? (
@@ -808,9 +1002,192 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                 </div>
               ) : null}
 
-              {activeTab === 'web-app-auth' ? (
-                <div className="project-settings-tab-panel app-settings-web-app-auth-panel" role="tabpanel">
+              {activeTab === 'workflow-endpoints' ? (
+                <div className="project-settings-tab-panel app-settings-workflow-endpoints-panel" role="tabpanel">
+                  <section className="app-settings-section" aria-label="Workflow endpoint routes">
+                    <div className="app-settings-section-title">Routes</div>
+                    <div
+                      className="app-settings-field-grid"
+                      aria-busy={loadingPublicRouteSettings || savingPublicRouteSettings || applyingPublicRouteSettings}
+                    >
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Published workflow endpoint URL slug</span>
+                        <div className="project-settings-input-row project-settings-prefixed-input-row app-settings-prefixed-input-row">
+                          <span className="project-settings-url-prefix">/</span>
+                          <TextField
+                            aria-label="Published workflow endpoint URL slug"
+                            className="project-settings-input text-field-size-l"
+                            value={publishedWorkflowsSlug}
+                            isDisabled={loadingPublicRouteSettings || savingPublicRouteSettings || applyingPublicRouteSettings}
+                            placeholder="workflows"
+                            onChange={(event) => {
+                              setPublishedWorkflowsSlug(event.currentTarget.value);
+                              setPublicRouteSettingsSaved(false);
+                              setPublicRouteSettingsStatusScope(null);
+                            }}
+                          />
+                        </div>
+                        <span className="app-settings-field-help">
+                          Published workflow endpoints open from this top-level URL slug.
+                        </span>
+                      </label>
+
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Latest saved workflow endpoint URL slug</span>
+                        <div className="project-settings-input-row project-settings-prefixed-input-row app-settings-prefixed-input-row">
+                          <span className="project-settings-url-prefix">/</span>
+                          <TextField
+                            aria-label="Latest saved workflow endpoint URL slug"
+                            className="project-settings-input text-field-size-l"
+                            value={latestWorkflowsSlug}
+                            isDisabled={loadingPublicRouteSettings || savingPublicRouteSettings || applyingPublicRouteSettings}
+                            placeholder="workflows-latest"
+                            onChange={(event) => {
+                              setLatestWorkflowsSlug(event.currentTarget.value);
+                              setPublicRouteSettingsSaved(false);
+                              setPublicRouteSettingsStatusScope(null);
+                            }}
+                          />
+                        </div>
+                        <span className="app-settings-field-help">
+                          Latest saved draft workflow endpoints open from this top-level URL slug.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingPublicRouteSettings || applyingPublicRouteSettings}
+                        isDisabled={
+                          loadingPublicRouteSettings ||
+                          savingPublicRouteSettings ||
+                          applyingPublicRouteSettings ||
+                          !workflowRouteSettingsChanged
+                        }
+                        onClick={() => handleSavePublicRouteSettings('workflow-endpoints')}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={
+                          loadingPublicRouteSettings ||
+                          savingPublicRouteSettings ||
+                          applyingPublicRouteSettings ||
+                          !workflowRouteSettingsChanged
+                        }
+                        onClick={handleRevertPublicRouteSettings}
+                      >
+                        Revert
+                      </Button>
+                      {renderActionStatus(
+                        publicRouteSettingsStatusScope === 'workflow-endpoints' ? publicRouteSettingsError : null,
+                        publicRouteSettingsStatusScope === 'workflow-endpoints' && publicRouteSettingsSaved,
+                        publicRouteSettingsStatusScope === 'workflow-endpoints' && applyingPublicRouteSettings
+                          ? 'Applying routes...'
+                          : undefined,
+                      )}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+
+              {activeTab === 'web-apps' ? (
+                <div className="project-settings-tab-panel app-settings-web-apps-panel" role="tabpanel">
+                  <section className="app-settings-section" aria-label="Web app routes">
+                    <div className="app-settings-section-title">Routes</div>
+                    <div
+                      className="app-settings-field-grid"
+                      aria-busy={loadingPublicRouteSettings || savingPublicRouteSettings || applyingPublicRouteSettings}
+                    >
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Published web app URL slug</span>
+                        <div className="project-settings-input-row project-settings-prefixed-input-row app-settings-prefixed-input-row">
+                          <span className="project-settings-url-prefix">/</span>
+                          <TextField
+                            aria-label="Published web app URL slug"
+                            className="project-settings-input text-field-size-l"
+                            value={publishedAppsSlug}
+                            isDisabled={loadingPublicRouteSettings || savingPublicRouteSettings || applyingPublicRouteSettings}
+                            placeholder="apps"
+                            onChange={(event) => {
+                              setPublishedAppsSlug(event.currentTarget.value);
+                              setPublicRouteSettingsSaved(false);
+                              setPublicRouteSettingsStatusScope(null);
+                            }}
+                          />
+                        </div>
+                        <span className="app-settings-field-help">
+                          Published web apps open from this top-level URL slug.
+                        </span>
+                      </label>
+
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Latest saved changes URL slug</span>
+                        <div className="project-settings-input-row project-settings-prefixed-input-row app-settings-prefixed-input-row">
+                          <span className="project-settings-url-prefix">/</span>
+                          <TextField
+                            aria-label="Latest saved changes URL slug"
+                            className="project-settings-input text-field-size-l"
+                            value={latestAppsSlug}
+                            isDisabled={loadingPublicRouteSettings || savingPublicRouteSettings || applyingPublicRouteSettings}
+                            placeholder="apps-latest"
+                            onChange={(event) => {
+                              setLatestAppsSlug(event.currentTarget.value);
+                              setPublicRouteSettingsSaved(false);
+                              setPublicRouteSettingsStatusScope(null);
+                            }}
+                          />
+                        </div>
+                        <span className="app-settings-field-help">
+                          Latest saved draft web apps open from this top-level URL slug.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingPublicRouteSettings || applyingPublicRouteSettings}
+                        isDisabled={
+                          loadingPublicRouteSettings ||
+                          savingPublicRouteSettings ||
+                          applyingPublicRouteSettings ||
+                          !webAppRouteSettingsChanged
+                        }
+                        onClick={() => handleSavePublicRouteSettings('web-apps')}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={
+                          loadingPublicRouteSettings ||
+                          savingPublicRouteSettings ||
+                          applyingPublicRouteSettings ||
+                          !webAppRouteSettingsChanged
+                        }
+                        onClick={handleRevertPublicRouteSettings}
+                      >
+                        Revert
+                      </Button>
+                      {renderActionStatus(
+                        publicRouteSettingsStatusScope === 'web-apps' ? publicRouteSettingsError : null,
+                        publicRouteSettingsStatusScope === 'web-apps' && publicRouteSettingsSaved,
+                        publicRouteSettingsStatusScope === 'web-apps' && applyingPublicRouteSettings
+                          ? 'Applying routes...'
+                          : undefined,
+                      )}
+                    </div>
+                  </section>
+
                   <section className="app-settings-section" aria-label="Web app auth">
+                    <div className="app-settings-section-title">Auth</div>
                     <div className="app-settings-field-grid" aria-busy={webAppAuthBusy}>
                       <div className="app-settings-field">
                         <span className="app-settings-field-label">How visitors access web apps</span>

@@ -74,6 +74,32 @@ async function installProjectWebAppsRoute(
 }
 
 async function installAppSettingsRoute(page: Page): Promise<void> {
+  let publicRouteSettings = {
+    publishedWorkflowsBasePath: '/workflows',
+    latestWorkflowsBasePath: '/workflows-latest',
+    publishedAppsBasePath: '/apps',
+    latestAppsBasePath: '/apps-latest',
+    updatedAt: null as string | null,
+    source: 'default',
+  };
+
+  await page.route('**/api/config', async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() !== 'GET' || url.pathname !== '/api/config') {
+      await route.fallback();
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...publicRouteSettings,
+        webAppsAuthMode: 'ui-gate',
+      }),
+    });
+  });
+
   await page.route('**/api/app-settings/**', async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
@@ -154,6 +180,47 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
           updatedAt: '2026-06-30T12:00:00.000Z',
           source: 'app-settings',
         }),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/public-routes') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          publishedWorkflowsBasePath?: string;
+          latestWorkflowsBasePath?: string;
+          publishedAppsBasePath?: string;
+          latestAppsBasePath?: string;
+        };
+        const normalizeSlug = (value: unknown, fallback: string) => {
+          const normalized = String(value || fallback).trim().replace(/^\/+/, '').replace(/\/+$/, '');
+          return `/${normalized}`;
+        };
+        publicRouteSettings = {
+          publishedWorkflowsBasePath: normalizeSlug(body.publishedWorkflowsBasePath, 'workflows'),
+          latestWorkflowsBasePath: normalizeSlug(body.latestWorkflowsBasePath, 'workflows-latest'),
+          publishedAppsBasePath: normalizeSlug(body.publishedAppsBasePath, 'apps'),
+          latestAppsBasePath: normalizeSlug(body.latestAppsBasePath, 'apps-latest'),
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(publicRouteSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(publicRouteSettings),
       });
       return;
     }
@@ -278,6 +345,26 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal).toContainText('/workflows');
     await expect(appSettingsModal).toContainText('Published web apps');
     await expect(appSettingsModal).toContainText('/apps');
+
+    await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title')).toContainText(['Routes']);
+    await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('workflows');
+    await expect(appSettingsModal.getByLabel('Latest saved workflow endpoint URL slug')).toHaveValue('workflows-latest');
+    await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveCount(0);
+    await appSettingsModal.getByLabel('Published workflow endpoint URL slug').fill('public-workflows');
+    await appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    const workflowRouteActions = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row');
+    await expect(workflowRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('public-workflows');
+    await expect.poll(async () => {
+      const [contentBox, sectionBox] = await Promise.all([
+        appSettingsModal.locator('.app-settings-modal-content').boundingBox(),
+        appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section').boundingBox(),
+      ]);
+      return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
+    }).toBeGreaterThan(0.9);
+
     await appSettingsModal.getByRole('tab', { name: 'Run recordings' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Run recordings' })).toHaveAttribute('aria-selected', 'true');
     await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section-title')).toHaveCount(0);
@@ -337,9 +424,29 @@ test.describe('Workflow library layout', () => {
     await expect(proxyActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
 
-    await appSettingsModal.getByRole('tab', { name: 'Web app auth' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Web app auth' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-web-app-auth-panel .app-settings-section-title')).toHaveCount(0);
+    await appSettingsModal.getByRole('tab', { name: 'Web apps' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-section-title')).toContainText(['Routes', 'Auth']);
+    await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveCount(0);
+    await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('apps');
+    await expect(appSettingsModal.getByLabel('Latest saved changes URL slug')).toHaveValue('apps-latest');
+    const appRouteRow = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-prefixed-input-row').first();
+    await expect(appRouteRow).toHaveCSS('display', 'flex');
+    await expect.poll(async () => {
+      const [prefixBox, inputBox] = await Promise.all([
+        appRouteRow.locator('.project-settings-url-prefix').boundingBox(),
+        appRouteRow.locator('.project-settings-input').boundingBox(),
+      ]);
+      return prefixBox && inputBox
+        ? Math.max(Math.abs(prefixBox.y - inputBox.y), Math.abs(prefixBox.height - inputBox.height))
+        : Number.POSITIVE_INFINITY;
+    }).toBeLessThanOrEqual(1);
+    await appSettingsModal.getByLabel('Published web app URL slug').fill('public-apps');
+    await appSettingsModal.getByRole('button', { name: 'Save' }).first().click();
+    const webRouteActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').first();
+    await expect(webRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('public-apps');
+    await expect(appSettingsModal.getByText(/restart/i)).toHaveCount(0);
     await expect(appSettingsModal.getByRole('button', { name: 'Rivet key' })).toHaveAttribute('aria-pressed', 'true');
     await expect(appSettingsModal.getByText('Visitors use the same Rivet key prompt as the server UI.')).toBeVisible();
     await appSettingsModal.getByRole('button', { name: 'OAuth' }).click();
@@ -349,8 +456,8 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByText('Default test email')).toBeVisible();
     await expect(appSettingsModal.getByLabel('Default test email')).toHaveValue('local@example.test');
     await appSettingsModal.getByLabel('Session signing secret').fill('local-session-secret');
-    await appSettingsModal.getByRole('button', { name: 'Save' }).click();
-    const webAuthActions = appSettingsModal.locator('.app-settings-web-app-auth-panel .app-settings-actions-row');
+    await appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
+    const webAuthActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last();
     await expect(webAuthActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toBeVisible();
     await appSettingsModal.getByRole('tab', { name: 'General' }).click();

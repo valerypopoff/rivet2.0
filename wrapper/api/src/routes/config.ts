@@ -3,10 +3,10 @@ import path from 'node:path';
 import { LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH, isLatestWorkflowRemoteDebuggerEnabled } from '../latestWorkflowRemoteDebugger.js';
 import { getAppDataRoot, isEnvAllowed } from '../security.js';
 import {
-  LATEST_WORKFLOWS_BASE_PATH,
-  PUBLISHED_WORKFLOWS_BASE_PATH,
-  RIVET_LATEST_WEB_APPS_BASE_PATH,
-  RIVET_WEB_APPS_BASE_PATH,
+  getLatestWebAppsBasePath,
+  getLatestWorkflowsBasePath,
+  getPublishedWebAppsBasePath,
+  getPublishedWorkflowsBasePath,
 } from '../workflowEndpointPaths.js';
 import { getWebAppAuthMode } from '../web-app-oauth.js';
 
@@ -39,10 +39,10 @@ configRouter.get('/config', (req, res) => {
       ? (process.env.RIVET_REMOTE_DEBUGGER_DEFAULT_WS ?? `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`)
       : '',
     apiBaseUrl: '/api',
-    publishedWorkflowsBasePath: PUBLISHED_WORKFLOWS_BASE_PATH,
-    latestWorkflowsBasePath: LATEST_WORKFLOWS_BASE_PATH,
-    publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
-    latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
+    publishedWorkflowsBasePath: getPublishedWorkflowsBasePath(),
+    latestWorkflowsBasePath: getLatestWorkflowsBasePath(),
+    publishedAppsBasePath: getPublishedWebAppsBasePath(),
+    latestAppsBasePath: getLatestWebAppsBasePath(),
     webAppsAuthMode: getWebAppAuthMode(),
   });
 });

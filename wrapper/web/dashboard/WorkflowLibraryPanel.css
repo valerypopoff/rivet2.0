@@ -1344,7 +1344,8 @@
 .app-settings-general-panel,
 .app-settings-proxy-panel,
 .app-settings-recordings-panel,
-.app-settings-web-app-auth-panel {
+.app-settings-workflow-endpoints-panel,
+.app-settings-web-apps-panel {
   width: 100%;
   max-width: none;
 }
@@ -1387,6 +1388,17 @@
   color: var(--grey-light);
   font-size: var(--workflow-library-font-size-s);
   line-height: 1.35;
+}
+
+.app-settings-inline-note {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 215, 106, 0.08);
+  color: #ffe08a;
+}
+
+.app-settings-prefixed-input-row .project-settings-input {
+  margin-right: 0;
 }
 
 .app-settings-mode-tabs {
@@ -1468,6 +1480,10 @@
 .app-settings-action-status {
   flex: 1 1 220px;
   min-width: 180px;
+}
+
+.project-settings-muted {
+  color: var(--grey-light);
 }
 
 .project-settings-field {

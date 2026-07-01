@@ -18,6 +18,10 @@ async function resolveHelmBin(): Promise<string> {
 }
 
 async function renderLocalKubernetesChart(): Promise<string> {
+  return renderLocalKubernetesChartWithOverrides([]);
+}
+
+async function renderLocalKubernetesChartWithOverrides(overrides: string[]): Promise<string> {
   return execFileSync(
     await resolveHelmBin(),
     [
@@ -28,6 +32,7 @@ async function renderLocalKubernetesChart(): Promise<string> {
       'charts/overlays/local-kubernetes.yaml',
       '--set',
       'objectStorage.bucket=test-bucket',
+      ...overrides.flatMap((override) => ['--set', override]),
     ],
     {
       cwd: repoRoot,
@@ -137,30 +142,24 @@ test('executor app-data path remains intentionally separate from API app-data mo
   assert.match(podPartials, /mountPath: \/home\/rivet\/\.local\/share\/com\.valerypopoff\.rivet2/);
 });
 
-test('chart validation rejects placeholder images, route-prefix drift, and unsupported filesystem topology', async () => {
+test('chart renders custom public route env defaults as bootstrap values', async () => {
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/custom-workflows',
+    'env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/custom-workflows-latest',
+    'env.RIVET_PUBLISHED_APPS_BASE_PATH=/custom-apps',
+    'env.RIVET_LATEST_APPS_BASE_PATH=/custom-apps-latest',
+  ]);
+
+  assert.match(renderedChart, /name: RIVET_PUBLISHED_WORKFLOWS_BASE_PATH\s*\n\s*value: "\/custom-workflows"/);
+  assert.match(renderedChart, /name: RIVET_LATEST_WORKFLOWS_BASE_PATH\s*\n\s*value: "\/custom-workflows-latest"/);
+  assert.match(renderedChart, /name: RIVET_PUBLISHED_APPS_BASE_PATH\s*\n\s*value: "\/custom-apps"/);
+  assert.match(renderedChart, /name: RIVET_LATEST_APPS_BASE_PATH\s*\n\s*value: "\/custom-apps-latest"/);
+});
+
+test('chart validation rejects placeholder images and unsupported filesystem topology', async () => {
   await assertHelmTemplateFails(
     ['images.api.repository=example.invalid/api'],
     /replace the example\.invalid image repositories with real image repositories before install/,
-  );
-  await assertHelmTemplateFails(
-    ['env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/custom-workflows'],
-    /RIVET_PUBLISHED_WORKFLOWS_BASE_PATH fixed at \/workflows/,
-  );
-  await assertHelmTemplateFails(
-    ['env.RIVET_PUBLISHED_APPS_BASE_PATH=/custom-apps'],
-    /RIVET_PUBLISHED_APPS_BASE_PATH fixed at \/apps/,
-  );
-  await assertHelmTemplateFails(
-    ['env.RIVET_LATEST_APPS_BASE_PATH=/custom-apps-latest'],
-    /RIVET_LATEST_APPS_BASE_PATH fixed at \/apps-latest/,
-  );
-  await assertHelmTemplateFails(
-    ['env.RIVET_WEB_APPS_BASE_PATH=/custom-apps'],
-    /RIVET_WEB_APPS_BASE_PATH fixed at \/apps/,
-  );
-  await assertHelmTemplateFails(
-    ['env.RIVET_LATEST_WEB_APPS_BASE_PATH=/custom-apps-latest'],
-    /RIVET_LATEST_WEB_APPS_BASE_PATH fixed at \/apps-latest/,
   );
   await assertHelmTemplateFails(
     [

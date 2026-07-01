@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 
-import { RIVET_WEB_APPS_BASE_PATH } from './workflowEndpointPaths.js';
+import { getPublishedWebAppsBasePath } from './workflowEndpointPaths.js';
 import { createHttpError } from './utils/httpError.js';
 import { addUiAuthErrorToReturnTo, sanitizeUiAuthReturnTo } from './routes/ui-auth.js';
 import { isTrustedProxyRequest } from './auth.js';
@@ -265,7 +265,7 @@ function getCallbackUrl(req: Request): string {
     return configuredCallbackUrl;
   }
 
-  return `${getRequestOrigin(req)}${RIVET_WEB_APPS_BASE_PATH}/auth/callback`;
+  return `${getRequestOrigin(req)}${getPublishedWebAppsBasePath()}/auth/callback`;
 }
 
 export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: string): {
@@ -295,7 +295,7 @@ export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: s
       throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
     }
 
-    const authorizeUrl = new URL(`${getRequestOrigin(req)}${RIVET_WEB_APPS_BASE_PATH}/auth/dummy`);
+    const authorizeUrl = new URL(`${getRequestOrigin(req)}${getPublishedWebAppsBasePath()}/auth/dummy`);
     authorizeUrl.searchParams.set('state', state);
 
     return {
@@ -506,7 +506,7 @@ function createDummyOAuthCode(email: string): string {
 function renderDummyOAuthPage(state: string): string {
   const config = getRequiredOauthConfig();
   const email = config.provider === 'dummy' ? config.email : 'local@example.test';
-  const action = `${RIVET_WEB_APPS_BASE_PATH}/auth/dummy`;
+  const action = `${getPublishedWebAppsBasePath()}/auth/dummy`;
   return `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -556,7 +556,7 @@ webAppOAuthRouter.post('/auth/dummy', (req, res) => {
 
   const state = typeof req.body?.state === 'string' ? req.body.state : '';
   const email = typeof req.body?.email === 'string' ? req.body.email : '';
-  const callbackUrl = new URL(`${RIVET_WEB_APPS_BASE_PATH}/auth/callback`, getRequestOrigin(req));
+  const callbackUrl = new URL(`${getPublishedWebAppsBasePath()}/auth/callback`, getRequestOrigin(req));
   callbackUrl.searchParams.set('code', createDummyOAuthCode(email));
   callbackUrl.searchParams.set('state', state);
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -639,7 +639,7 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
 webAppOAuthRouter.get('/auth/logout', (req, res) => {
   const returnTo = typeof req.query.return_to === 'string'
     ? req.query.return_to
-    : RIVET_WEB_APPS_BASE_PATH;
+    : getPublishedWebAppsBasePath();
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Set-Cookie', [

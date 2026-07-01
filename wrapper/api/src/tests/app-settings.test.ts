@@ -24,6 +24,13 @@ import {
   readWebAppAuthSettings,
   writeWebAppAuthSettings,
 } from '../web-app-auth-settings.js';
+import {
+  getPublicRouteSettingsPath,
+  readPublicRouteSettings,
+  readWebAppRouteSettings,
+  writePublicRouteSettings,
+  writeWebAppRouteSettings,
+} from '../public-route-settings.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
 
 const relevantEnvKeys = [
@@ -37,6 +44,12 @@ const relevantEnvKeys = [
   'RIVET_RECORDINGS_MAX_PENDING_WRITES',
   'RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT',
   'RIVET_RECORDINGS_RETENTION_DAYS',
+  'RIVET_PUBLISHED_WORKFLOWS_BASE_PATH',
+  'RIVET_LATEST_WORKFLOWS_BASE_PATH',
+  'RIVET_PUBLISHED_APPS_BASE_PATH',
+  'RIVET_LATEST_APPS_BASE_PATH',
+  'RIVET_WEB_APPS_BASE_PATH',
+  'RIVET_LATEST_WEB_APPS_BASE_PATH',
   'RIVET_WEB_APPS_AUTH_MODE',
   'OAUTH_AUTHORIZE_URL',
   'OAUTH_TOKEN_URL',
@@ -79,8 +92,8 @@ async function withAppSettingsEnv(run: (tempRoot: string) => Promise<void> | voi
   }
 }
 
-async function startServer() {
-  const app = createApiApp('control');
+async function startServer(profile: Parameters<typeof createApiApp>[0] = 'control') {
+  const app = createApiApp(profile);
   const server = http.createServer(app);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -397,6 +410,264 @@ test('Run recordings settings reject invalid numbers', async () => {
         retentionDays: 0,
       }),
       /Queued recording writes must be a non-negative whole number/,
+    );
+  });
+});
+
+test('Public route settings use deployment defaults until saved', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH = '/env-workflows';
+    process.env.RIVET_LATEST_WORKFLOWS_BASE_PATH = '/env-workflows-latest';
+    process.env.RIVET_PUBLISHED_APPS_BASE_PATH = '/env-apps';
+    process.env.RIVET_LATEST_APPS_BASE_PATH = '/env-apps-latest';
+
+    const defaultSettings = await readPublicRouteSettings();
+    assert.equal(defaultSettings.source, 'default');
+    assert.equal(defaultSettings.publishedWorkflowsBasePath, '/env-workflows');
+    assert.equal(defaultSettings.latestWorkflowsBasePath, '/env-workflows-latest');
+    assert.equal(defaultSettings.publishedAppsBasePath, '/env-apps');
+    assert.equal(defaultSettings.latestAppsBasePath, '/env-apps-latest');
+
+    const savedSettings = await writePublicRouteSettings({
+      publishedWorkflowsBasePath: 'public-workflows',
+      latestWorkflowsBasePath: '/draft-workflows/',
+      publishedAppsBasePath: 'public-tools',
+      latestAppsBasePath: '/draft-tools/',
+    });
+    assert.equal(savedSettings.source, 'app-settings');
+    assert.equal(savedSettings.publishedWorkflowsBasePath, '/public-workflows');
+    assert.equal(savedSettings.latestWorkflowsBasePath, '/draft-workflows');
+    assert.equal(savedSettings.publishedAppsBasePath, '/public-tools');
+    assert.equal(savedSettings.latestAppsBasePath, '/draft-tools');
+
+    process.env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH = '/ignored-workflows';
+    process.env.RIVET_LATEST_WORKFLOWS_BASE_PATH = '/ignored-latest-workflows';
+    process.env.RIVET_PUBLISHED_APPS_BASE_PATH = '/ignored-apps';
+    process.env.RIVET_LATEST_APPS_BASE_PATH = '/ignored-latest-apps';
+
+    const nextSettings = await readPublicRouteSettings();
+    assert.equal(nextSettings.source, 'app-settings');
+    assert.equal(nextSettings.publishedWorkflowsBasePath, '/public-workflows');
+    assert.equal(nextSettings.latestWorkflowsBasePath, '/draft-workflows');
+    assert.equal(nextSettings.publishedAppsBasePath, '/public-tools');
+    assert.equal(nextSettings.latestAppsBasePath, '/draft-tools');
+  });
+});
+
+test('Public route settings API saves and returns persisted values', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/public-routes`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          publishedWorkflowsBasePath: 'published-workflows',
+          latestWorkflowsBasePath: 'latest-workflows',
+          publishedAppsBasePath: 'published-apps',
+          latestAppsBasePath: 'latest-apps',
+        }),
+      });
+
+      assert.equal(saveResponse.status, 200);
+      const saved = await saveResponse.json() as Record<string, unknown>;
+      assert.equal(saved.source, 'app-settings');
+      assert.equal(saved.publishedWorkflowsBasePath, '/published-workflows');
+      assert.equal(saved.latestWorkflowsBasePath, '/latest-workflows');
+      assert.equal(saved.publishedAppsBasePath, '/published-apps');
+      assert.equal(saved.latestAppsBasePath, '/latest-apps');
+
+      const configResponse = await fetch(`${server.baseUrl}/api/config`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(configResponse.status, 200);
+      const config = await configResponse.json() as Record<string, unknown>;
+      assert.equal(config.publishedWorkflowsBasePath, '/published-workflows');
+      assert.equal(config.latestWorkflowsBasePath, '/latest-workflows');
+      assert.equal(config.publishedAppsBasePath, '/published-apps');
+      assert.equal(config.latestAppsBasePath, '/latest-apps');
+
+      const settingsPath = getPublicRouteSettingsPath();
+      const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+      assert.equal(raw.publishedWorkflowsBasePath, '/published-workflows');
+      assert.equal(raw.latestWorkflowsBasePath, '/latest-workflows');
+      assert.equal(raw.publishedAppsBasePath, '/published-apps');
+      assert.equal(raw.latestAppsBasePath, '/latest-apps');
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Public route settings move workflow and web-app dispatch without recreating the API app', async () => {
+  await withAppSettingsEnv(async () => {
+    await writeWebAppAuthSettings({ mode: 'none' });
+
+    const readError = async (response: Response): Promise<string> => {
+      const body = await response.json() as { error?: unknown };
+      return String(body.error ?? '');
+    };
+
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer('combined');
+
+      const defaultWorkflowResponse = await fetch(`${server.baseUrl}/workflows/missing-endpoint`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(defaultWorkflowResponse.status, 404);
+      assert.notEqual(await readError(defaultWorkflowResponse), 'Not found');
+
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/public-routes`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          publishedWorkflowsBasePath: 'published-workflows',
+          latestWorkflowsBasePath: 'draft-workflows',
+          publishedAppsBasePath: 'published-apps',
+          latestAppsBasePath: 'draft-apps',
+        }),
+      });
+      assert.equal(saveResponse.status, 200);
+
+      const staleWorkflowResponse = await fetch(`${server.baseUrl}/workflows/missing-endpoint`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(staleWorkflowResponse.status, 404);
+      assert.equal(await readError(staleWorkflowResponse), 'Not found');
+
+      const movedWorkflowResponse = await fetch(`${server.baseUrl}/published-workflows/missing-endpoint`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(movedWorkflowResponse.status, 404);
+      assert.notEqual(await readError(movedWorkflowResponse), 'Not found');
+
+      const movedLatestWorkflowResponse = await fetch(`${server.baseUrl}/draft-workflows/missing-endpoint`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(movedLatestWorkflowResponse.status, 404);
+      assert.notEqual(await readError(movedLatestWorkflowResponse), 'Not found');
+
+      const staleWebAppResponse = await fetch(`${server.baseUrl}/apps/missing-app`);
+      assert.equal(staleWebAppResponse.status, 404);
+      assert.equal(await readError(staleWebAppResponse), 'Not found');
+
+      const movedWebAppResponse = await fetch(`${server.baseUrl}/published-apps/missing-app`);
+      assert.equal(movedWebAppResponse.status, 404);
+      assert.notEqual(await readError(movedWebAppResponse), 'Not found');
+
+      const movedLatestWebAppResponse = await fetch(`${server.baseUrl}/draft-apps/missing-app`);
+      assert.equal(movedLatestWebAppResponse.status, 404);
+      assert.notEqual(await readError(movedLatestWebAppResponse), 'Not found');
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Public route settings keep the legacy web-app route endpoint compatible', async () => {
+  await withAppSettingsEnv(async () => {
+    await writePublicRouteSettings({
+      publishedWorkflowsBasePath: 'workflows',
+      latestWorkflowsBasePath: 'workflows-latest',
+      publishedAppsBasePath: 'apps',
+      latestAppsBasePath: 'apps-latest',
+    });
+
+    const settings = await writeWebAppRouteSettings({
+      publishedAppsBasePath: 'tools',
+      latestAppsBasePath: 'tools-latest',
+    });
+    assert.equal(settings.publishedAppsBasePath, '/tools');
+    assert.equal(settings.latestAppsBasePath, '/tools-latest');
+
+    const publicSettings = await readPublicRouteSettings();
+    assert.equal(publicSettings.publishedWorkflowsBasePath, '/workflows');
+    assert.equal(publicSettings.latestWorkflowsBasePath, '/workflows-latest');
+    assert.equal(publicSettings.publishedAppsBasePath, '/tools');
+    assert.equal(publicSettings.latestAppsBasePath, '/tools-latest');
+
+    const legacyRead = await readWebAppRouteSettings();
+    assert.equal(legacyRead.publishedAppsBasePath, '/tools');
+    assert.equal(legacyRead.latestAppsBasePath, '/tools-latest');
+  });
+});
+
+test('Public route settings reject invalid or conflicting slugs', async () => {
+  await withAppSettingsEnv(async () => {
+    await assert.rejects(
+      () => writePublicRouteSettings({
+        publishedWorkflowsBasePath: 'api',
+        latestWorkflowsBasePath: 'latest-workflows',
+        publishedAppsBasePath: 'apps',
+        latestAppsBasePath: 'latest-apps',
+      }),
+      /reserved "api" route/,
+    );
+
+    await assert.rejects(
+      () => writePublicRouteSettings({
+        publishedWorkflowsBasePath: 'workflows',
+        latestWorkflowsBasePath: 'workflows-latest',
+        publishedAppsBasePath: 'workflows',
+        latestAppsBasePath: 'latest-apps',
+      }),
+      /must be different/,
+    );
+
+    await assert.rejects(
+      () => writePublicRouteSettings({
+        publishedWorkflowsBasePath: 'workflows',
+        latestWorkflowsBasePath: 'ui-auth',
+        publishedAppsBasePath: 'apps',
+        latestAppsBasePath: 'latest-apps',
+      }),
+      /reserved "ui-auth" route/,
+    );
+
+    await assert.rejects(
+      () => writePublicRouteSettings({
+        publishedWorkflowsBasePath: 'workflows',
+        latestWorkflowsBasePath: 'workflows-latest',
+        publishedAppsBasePath: 'assets',
+        latestAppsBasePath: 'latest-apps',
+      }),
+      /reserved "assets" route/,
+    );
+
+    await assert.rejects(
+      () => writePublicRouteSettings({
+        publishedWorkflowsBasePath: 'workflows',
+        latestWorkflowsBasePath: 'workflows-latest',
+        publishedAppsBasePath: 'nested/apps',
+        latestAppsBasePath: 'latest-apps',
+      }),
+      /single URL path segment/,
+    );
+
+    await assert.rejects(
+      () => writePublicRouteSettings({
+        publishedWorkflowsBasePath: 'workflows',
+        latestWorkflowsBasePath: 'workflows-latest',
+        publishedAppsBasePath: 'apps',
+        latestAppsBasePath: 'apps',
+      }),
+      /must be different/,
     );
   });
 });

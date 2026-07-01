@@ -8,6 +8,7 @@ services:
     environment:
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
+      - RIVET_APP_DATA_ROOT=/data/rivet-app
       - RIVET_PUBLISHED_APPS_BASE_PATH=${RIVET_PUBLISHED_APPS_BASE_PATH:-}
       - RIVET_LATEST_APPS_BASE_PATH=${RIVET_LATEST_APPS_BASE_PATH:-}
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
@@ -21,6 +22,7 @@ services:
       - ../nginx/default.dev.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ../../image/proxy/normalize-workflow-paths.sh:/normalize-workflow-paths.sh:ro
       - ../../image/proxy/ui-gate-prompt.html:/tmp/ui-gate-prompt.html:ro
+      - rivet_data:/data/rivet-app:ro
     entrypoint: ["/bin/sh", "/normalize-workflow-paths.sh"]
     depends_on:
       web:
@@ -176,10 +178,10 @@ services:
       - wrapper_api_node_modules:/app/node_modules
       - proxy_bootstrap_node_modules:/opt/proxy-bootstrap/node_modules
       - npm_cache:/home/rivet/.npm
-      - ${RIVET_WORKFLOWS_HOST_PATH:-../../workflows}:/workflows
-      - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../workflow-recordings}:/workflow-recordings
+      - ${RIVET_WORKFLOWS_HOST_PATH:-../../.data/workflows}:/workflows
+      - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../.data/workflow-recordings}:/workflow-recordings
       - rivet_data:/data/rivet-app
-      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-rivet_runtime_libs}:/data/runtime-libraries
+      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../.data/runtime-libraries}:/data/runtime-libraries
     command: >
       sh -lc "
         cd /app &&
@@ -269,7 +271,7 @@ services:
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
       - rivet_data:/home/rivet/.local/share/com.valerypopoff.rivet2
-      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-rivet_runtime_libs}:/data/runtime-libraries
+      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../.data/runtime-libraries}:/data/runtime-libraries
     restart: unless-stopped
 
 volumes:

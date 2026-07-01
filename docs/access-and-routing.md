@@ -217,15 +217,19 @@ The Compose stacks mount the prompt source at `/tmp/ui-gate-prompt.html` and cop
 
 If the gate is enabled but `RIVET_KEY` is empty, nginx/API do not fall back to open access for non-exempt hosts; they deny the gated requests.
 
-## Web app auth
+## Web apps
 
-Rivet web apps are browser surfaces, but their route family has its own API-owned auth mode stored in `Settings` -> `Web app auth`, not in `.env`:
+Rivet web apps are browser surfaces with wrapper-owned route and auth policy. Web-app routes and auth live in `Settings` -> `Web apps`; workflow endpoint route families live in `Settings` -> `Workflow endpoints`.
+
+The `Workflow endpoints` tab's `Routes` section controls the published/latest workflow endpoint URL slugs. The `Web apps` tab's `Routes` section controls the published/latest web-app URL slugs. Both sections write `settings/public-routes.json` under `RIVET_APP_DATA_ROOT`. The API reads that file dynamically, and the proxy watches it, regenerates the nginx public-route include, validates it with `nginx -t`, and reloads nginx. Changing these slugs from Settings therefore does not require recreating/restarting the stack. If the settings file is missing or invalid, the deployment env defaults are used as first-run/bootstrap values: `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, then the legacy web-app aliases, then `/workflows`, `/workflows-latest`, `/apps`, and `/apps-latest`. The saved slugs must be single top-level URL segments, unique across all four route families, and cannot use reserved top-level routes such as `api`, `ws`, `internal`, `ui-auth`, `assets`, `node_modules`, or `__rivet_auth`.
+
+The `Auth` section controls the API-owned web-app auth mode, not `.env`:
 
 - `Rivet key` is the default. It reuses the UI gate for `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/*` and `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/*`, including the same return-to behavior and `rivet_ui_token` cookie when `RIVET_REQUIRE_UI_GATE_KEY=true`.
 - `OAuth` lets the API show a hosted sign-in page for app visitors before they leave for the configured OAuth provider. The default callback path is `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/callback`, and logout is served from `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout`, so the app slug `auth` is reserved.
 - `No app gate` leaves web-app route auth open at the API layer and should only be used behind an external access-control layer.
 
-The proxy no longer reads a web-app auth mode env var or serves the web-app key prompt itself. It forwards the web-app route families to the API with the same trusted proxy metadata used elsewhere. Legacy `RIVET_WEB_APPS_AUTH_MODE` and `OAUTH_*` env values are ignored; changing web-app auth settings is done through the app settings modal and does not require recreating containers.
+The proxy no longer reads a web-app auth mode env var or serves the web-app key prompt itself. It forwards the web-app route families to the API with the same trusted proxy metadata used elsewhere. Legacy `RIVET_WEB_APPS_AUTH_MODE` and `OAUTH_*` env values are ignored; changing web-app auth settings is done through the `Auth` section and does not require recreating containers.
 
 `RIVET_UI_TOKEN_FREE_HOSTS` bypasses web-app auth in all three modes because nginx forwards the same trusted token-free-host hint to the API. This is useful for internal health checks or trusted hostnames, but it is still a proxy-trust feature; direct access to the API container does not get that hint.
 
@@ -287,7 +291,7 @@ Each published web-app slug also exposes a latest-saved-draft route under `${RIV
 - `POST ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
   - runs the button action's target graph against the current saved server-side project
 
-`RIVET_PUBLISHED_APPS_BASE_PATH` and `RIVET_LATEST_APPS_BASE_PATH` are the preferred env names for those prefixes. `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` remain supported aliases for older deployments, with the preferred names taking precedence.
+The route prefixes are owned by `Settings` -> `Workflow endpoints` -> `Routes` for workflow endpoints and `Settings` -> `Web apps` -> `Routes` for web apps after an operator saves them. The env names `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, and `RIVET_LATEST_APPS_BASE_PATH` remain first-run/deployment defaults, and `RIVET_WEB_APPS_BASE_PATH` / `RIVET_LATEST_WEB_APPS_BASE_PATH` remain supported aliases for older deployments until `settings/public-routes.json` exists.
 
 The wrapper intentionally uses the lower-level upstream web-app helpers instead of the single Fetch-style handler so route ownership, browser/session auth, timing headers, code-runner setup, dataset providers, project-reference loading, and response envelopes stay consistent with the existing endpoint execution stack.
 
@@ -297,7 +301,7 @@ The slug segment resolves through published web-app state, not workflow endpoint
 
 The HTML embeds an opaque published `revisionKey`. Action requests include that key and are rejected with `409` plus `code: "revision_mismatch"` when that slug is republished between page load and button click. The embedded Rivet web-app client uses that coded response to show a blocking reload modal, so stale open pages recover without an automatic refresh or action rerun.
 
-Auth follows the persisted `Settings` -> `Web app auth` mode:
+Auth follows the persisted `Settings` -> `Web apps` -> `Auth` mode:
 
 - `ui-gate` reuses the main UI key prompt and `rivet_ui_token` cookie for the HTML, `app.json`, and action routes.
 - `oauth` redirects page requests to the configured provider, returns to the originally requested web-app URL after callback, and enforces each app's allowed-email list after the project is resolved.

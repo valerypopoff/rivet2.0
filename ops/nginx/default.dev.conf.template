@@ -64,6 +64,9 @@ server {
 
     client_max_body_size 100m;
 
+    set $api_upstream http://api;
+    set $execution_upstream http://api;
+
     location / {
         if ($rivet_ui_gate_result = deny) {
             return 401;
@@ -133,57 +136,7 @@ server {
         proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
     }
 
-    location ${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}/ {
-        proxy_pass http://api;
-        proxy_http_version 1.1;
-        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
-        proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
-        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
-        proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
-        proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
-    }
-
-    location ${RIVET_WEB_APPS_BASE_PATH}/ {
-        proxy_pass http://api;
-        proxy_http_version 1.1;
-        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
-        proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
-        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
-        proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
-        proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
-    }
-
-    location ${RIVET_LATEST_WORKFLOWS_BASE_PATH}/ {
-        proxy_pass http://api;
-        proxy_http_version 1.1;
-        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
-        proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
-        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
-        proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
-        proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
-    }
-
-    location ${RIVET_LATEST_WEB_APPS_BASE_PATH}/ {
-        proxy_pass http://api;
-        proxy_http_version 1.1;
-        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
-        proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
-        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
-        proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
-        proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
-    }
+    include ${RIVET_PUBLIC_ROUTES_INCLUDE_FILE};
 
     location /ws/latest-debugger {
         if ($rivet_ui_gate_result = deny) {
