@@ -22,7 +22,7 @@ import {
   type ManagedCodeRunnerTelemetry,
 } from '../../runtime-libraries/managed-code-runner.js';
 import { getRootPath } from '../../runtime-libraries/manifest.js';
-import { isTrustedTokenFreeHostRequest, isTrustedUiSessionRequest } from '../../auth.js';
+import { isTrustedProxyRequest, isTrustedTokenFreeHostRequest, isTrustedUiSessionRequest } from '../../auth.js';
 import {
   createWebAppOAuthAuthorizationRedirect,
   getWebAppAuthMode,
@@ -349,6 +349,9 @@ function requirePublishedWebAppUiGate(req: Request): void {
 
 type WebAppRequestKind = 'html' | 'json' | 'action';
 
+const WEB_APP_OAUTH_AUTH_ACTION_QUERY = 'auth_action';
+const WEB_APP_OAUTH_LOGIN_ACTION = 'login';
+
 function getWebAppRequestReturnTo(req: Request): string {
   return req.originalUrl || req.url || '/';
 }
@@ -369,6 +372,13 @@ function getWebAppAuthError(req: Request): string {
 function getWebAppAuthRetryPath(req: Request): string {
   const parsed = new URL(getWebAppRequestReturnTo(req), 'http://rivet.local');
   parsed.searchParams.delete('auth_error');
+  parsed.searchParams.delete(WEB_APP_OAUTH_AUTH_ACTION_QUERY);
+  return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
+}
+
+function getWebAppOAuthLoginPath(req: Request): string {
+  const parsed = new URL(getWebAppAuthRetryPath(req), 'http://rivet.local');
+  parsed.searchParams.set(WEB_APP_OAUTH_AUTH_ACTION_QUERY, WEB_APP_OAUTH_LOGIN_ACTION);
   return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
 }
 
@@ -451,6 +461,15 @@ function renderWebAppAuthErrorHtml(errorCode: string, retryPath: string, logoutP
   });
 }
 
+function renderWebAppLoginRequiredHtml(req: Request): string {
+  return renderWebAppAuthStatusHtml({
+    title: 'Sign in required',
+    message: 'Sign in to open this Rivet web app.',
+    primaryHref: getWebAppOAuthLoginPath(req),
+    primaryLabel: 'Sign in',
+  });
+}
+
 function renderWebAppAccessDeniedHtml(email: string, logoutPath: string): string {
   return renderWebAppAuthStatusHtml({
     title: 'Web app access denied',
@@ -459,6 +478,24 @@ function renderWebAppAccessDeniedHtml(email: string, logoutPath: string): string
     primaryHref: logoutPath,
     primaryLabel: 'Sign out and choose another account',
   });
+}
+
+function renderWebAppOriginDeniedHtml(req: Request): string {
+  const options = {
+    title: 'Web app request blocked',
+    message: 'The request did not come from the expected Rivet server origin.',
+    code: 'origin_forbidden',
+    primaryHref: getWebAppAuthRetryPath(req),
+    primaryLabel: 'Try again',
+  };
+
+  return getWebAppAuthMode() === 'oauth'
+    ? renderWebAppAuthStatusHtml({
+      ...options,
+      secondaryHref: getWebAppCurrentLogoutPath(req),
+      secondaryLabel: 'Sign out',
+    })
+    : renderWebAppAuthStatusHtml(options);
 }
 
 function addWebAppOAuthLogoutLink(html: string, logoutPath: string): string {
@@ -483,9 +520,15 @@ function sendWebAppAuthJsonError(
 }
 
 function startWebAppOAuthLogin(req: Request, res: Response): void {
-  const redirect = createWebAppOAuthAuthorizationRedirect(req, getWebAppRequestReturnTo(req));
+  const redirect = createWebAppOAuthAuthorizationRedirect(req, getWebAppAuthRetryPath(req));
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
   res.setHeader('Set-Cookie', redirect.cookies);
   res.redirect(302, redirect.location);
+}
+
+function isWebAppOAuthLoginRequest(req: Request): boolean {
+  return req.query[WEB_APP_OAUTH_AUTH_ACTION_QUERY] === WEB_APP_OAUTH_LOGIN_ACTION;
 }
 
 function isWebAppBrowserRequestOriginAllowed(req: Request, requestKind: WebAppRequestKind): boolean {
@@ -525,7 +568,7 @@ function authorizeWebAppRequestBeforeResolve(
       sendHtmlWithDuration(
         res,
         403,
-        '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Forbidden</body>',
+        renderWebAppOriginDeniedHtml(req),
         requestStartedAt,
       );
     } else {
@@ -555,8 +598,18 @@ function authorizeWebAppRequestBeforeResolve(
     return false;
   }
 
-  if (requestKind === 'html') {
+  if (requestKind === 'html' && isWebAppOAuthLoginRequest(req)) {
     startWebAppOAuthLogin(req, res);
+    return false;
+  }
+
+  if (requestKind === 'html') {
+    sendHtmlWithDuration(
+      res,
+      401,
+      renderWebAppLoginRequiredHtml(req),
+      requestStartedAt,
+    );
     return false;
   }
 
@@ -595,11 +648,19 @@ function authorizeResolvedWebAppRequest(
 }
 
 function getForwardedRequestProtocol(req: Request): string {
+  if (!isTrustedProxyRequest(req)) {
+    return req.protocol || 'http';
+  }
+
   const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
   return forwardedProto?.toLowerCase() || req.protocol || 'http';
 }
 
 function getForwardedRequestHost(req: Request): string {
+  if (!isTrustedProxyRequest(req)) {
+    return req.get('host') || '';
+  }
+
   return req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || '';
 }
 
@@ -656,6 +717,8 @@ function sendHtmlWithDuration(
   requestStartedAt: number,
 ): void {
   const durationMs = Math.max(0, Math.round(performance.now() - requestStartedAt));
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.set('Pragma', 'no-cache');
   res.set('x-duration-ms', String(durationMs));
   res.status(statusCode).type('html').send(html);
 }

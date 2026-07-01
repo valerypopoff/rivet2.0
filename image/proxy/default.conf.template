@@ -7,17 +7,23 @@ map $http_upgrade $connection_upgrade {
     '' close;
 }
 
-map $http_x_forwarded_host $rivet_forwarded_host {
-    default $http_x_forwarded_host;
-    '' $host;
+map "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS}:$http_x_forwarded_host" $rivet_forwarded_host {
+    default $http_host;
+    ~^1:(.+)$ $1;
 }
 
-map $http_x_forwarded_proto $rivet_forwarded_proto {
-    default $http_x_forwarded_proto;
-    '' $scheme;
+map $rivet_forwarded_host $rivet_forwarded_hostname {
+    default $rivet_forwarded_host;
+    ~^\[(?<ipv6_host>[^\]]+)\](?::\d+)?$ $ipv6_host;
+    ~^(?<plain_host>[^:]+):\d+$ $plain_host;
 }
 
-map $rivet_forwarded_host $rivet_ui_host_is_token_free {
+map "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS}:$http_x_forwarded_proto" $rivet_forwarded_proto {
+    default $scheme;
+    ~^1:(.+)$ $1;
+}
+
+map $rivet_forwarded_hostname $rivet_ui_host_is_token_free {
     default 0;
     ~${RIVET_UI_TOKEN_FREE_HOSTS_REGEX} 1;
 }
