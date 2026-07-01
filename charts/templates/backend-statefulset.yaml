@@ -100,14 +100,9 @@ spec:
         - name: workflows
           emptyDir: {}
         {{- end }}
-        {{- if .Values.storage.appData.existingClaimName }}
         - name: app-data
           persistentVolumeClaim:
             claimName: {{ .Values.storage.appData.existingClaimName }}
-        {{- else if not .Values.storage.appData.enabled }}
-        - name: app-data
-          emptyDir: {}
-        {{- end }}
         {{- if eq .Values.runtimeLibraries.backend "filesystem" }}
         - name: runtime-libraries
           persistentVolumeClaim:
@@ -121,24 +116,8 @@ spec:
           emptyDir: {}
         {{- end }}
 {{ include "rivet.pod.tmpVolume" . | nindent 8 }}
-  {{- if or (and .Values.storage.appData.enabled (not .Values.storage.appData.existingClaimName)) (and (eq .Values.runtimeLibraries.backend "managed") .Values.runtimeLibraries.cache.enabled (not .Values.runtimeLibraries.cache.existingClaimName)) }}
+  {{- if and (eq .Values.runtimeLibraries.backend "managed") .Values.runtimeLibraries.cache.enabled (not .Values.runtimeLibraries.cache.existingClaimName) }}
   volumeClaimTemplates:
-    {{- if and .Values.storage.appData.enabled (not .Values.storage.appData.existingClaimName) }}
-    - metadata:
-        name: app-data
-        labels:
-          {{- include "rivet.labels" . | nindent 10 }}
-          app.kubernetes.io/component: backend
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: {{ .Values.storage.appData.size }}
-        {{- if .Values.storage.appData.storageClassName }}
-        storageClassName: {{ .Values.storage.appData.storageClassName }}
-        {{- end }}
-    {{- end }}
-    {{- if and (eq .Values.runtimeLibraries.backend "managed") .Values.runtimeLibraries.cache.enabled (not .Values.runtimeLibraries.cache.existingClaimName) }}
     - metadata:
         name: runtime-libraries
         labels:
@@ -152,5 +131,4 @@ spec:
         {{- if .Values.runtimeLibraries.cache.storageClassName }}
         storageClassName: {{ .Values.runtimeLibraries.cache.storageClassName }}
         {{- end }}
-    {{- end }}
   {{- end }}

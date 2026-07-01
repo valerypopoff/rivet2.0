@@ -94,6 +94,14 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     updatedAt: null as string | null,
     source: 'default',
   };
+  let runtimeLimitSettings = {
+    commandTimeoutSeconds: 30,
+    maxOutputBytes: 10 * 1024 * 1024,
+    proxyReadTimeoutSeconds: 180,
+    dockerWaitTimeoutSeconds: 1200,
+    updatedAt: null as string | null,
+    source: 'default',
+  };
 
   await page.route('**/api/config', async (route) => {
     const url = new URL(route.request().url());
@@ -148,9 +156,9 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          httpProxy: 'http://172.17.0.1:3128',
-          httpsProxy: 'http://172.17.0.1:3128',
-          noProxy: 'localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1',
+          httpProxy: 'http://proxy.example.internal:3128',
+          httpsProxy: 'http://proxy.example.internal:3128',
+          noProxy: 'localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local',
           updatedAt: '2026-06-30T12:00:00.000Z',
           source: 'app-settings',
         }),
@@ -235,6 +243,38 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify(publicRouteSettings),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/runtime-limits') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        runtimeLimitSettings = {
+          commandTimeoutSeconds: Number(body.commandTimeoutSeconds ?? runtimeLimitSettings.commandTimeoutSeconds),
+          maxOutputBytes: Number(body.maxOutputBytes ?? runtimeLimitSettings.maxOutputBytes),
+          proxyReadTimeoutSeconds: Number(body.proxyReadTimeoutSeconds ?? runtimeLimitSettings.proxyReadTimeoutSeconds),
+          dockerWaitTimeoutSeconds: Number(body.dockerWaitTimeoutSeconds ?? runtimeLimitSettings.dockerWaitTimeoutSeconds),
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(runtimeLimitSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(runtimeLimitSettings),
       });
       return;
     }
@@ -395,22 +435,33 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal).toContainText('/workflows');
     await expect(appSettingsModal).toContainText('Published web apps');
     await expect(appSettingsModal).toContainText('/apps');
+    await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
+    await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('10');
+    await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
+    await appSettingsModal.locator('.app-settings-general-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    const generalActions = appSettingsModal.locator('.app-settings-general-panel .app-settings-actions-row');
+    await expect(generalActions.locator('.project-settings-success')).toHaveText('Saved.');
 
     await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title')).toContainText(['Routes']);
+    await expect(appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title')).toContainText(['Routes', 'HTTP request timeout']);
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('workflows');
     await expect(appSettingsModal.getByLabel('Latest saved workflow endpoint URL slug')).toHaveValue('workflows-latest');
+    await expect(appSettingsModal.getByLabel('Proxy read timeout in seconds')).toHaveValue('180');
     await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveCount(0);
     await appSettingsModal.getByLabel('Published workflow endpoint URL slug').fill('public-workflows');
-    await appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
-    const workflowRouteActions = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row');
+    await appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').first().getByRole('button', { name: 'Save' }).click();
+    const workflowRouteActions = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').first();
     await expect(workflowRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('public-workflows');
+    await appSettingsModal.getByLabel('Proxy read timeout in seconds').fill('240');
+    await appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
+    const workflowTimeoutActions = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').last();
+    await expect(workflowTimeoutActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect.poll(async () => {
       const [contentBox, sectionBox] = await Promise.all([
         appSettingsModal.locator('.app-settings-modal-content').boundingBox(),
-        appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section').boundingBox(),
+        appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section').first().boundingBox(),
       ]);
       return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
     }).toBeGreaterThan(0.9);
@@ -439,7 +490,7 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
     await appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
     const storageActions = appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row');
-    await expect(storageActions.locator('.project-settings-success')).toHaveText('Saved. Restart or recreate the stack to apply storage changes.');
+    await expect(storageActions.locator('.project-settings-success')).toHaveText('Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.');
     await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
 
     await appSettingsModal.getByRole('tab', { name: 'Run recordings' }).click();
@@ -492,10 +543,11 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
     await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('margin-top', '8px');
     await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('padding-top', '14px');
-    await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue('http://172.17.0.1:3128');
+    await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue('http://proxy.example.internal:3128');
     await expect(appSettingsModal.getByText('NO_PROXY')).toBeVisible();
-    await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue('localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1');
-    await appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' }).fill('http://172.17.0.1:3129');
+    await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue('localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local');
+    await expect(appSettingsModal.getByText('In Kubernetes, include cluster-local suffixes such as .svc and .cluster.local')).toBeVisible();
+    await appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' }).fill('http://proxy.example.internal:3129');
     await appSettingsModal.getByRole('button', { name: 'Save' }).click();
     const proxyActions = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row');
     await expect(proxyActions.locator('.project-settings-success')).toHaveText('Saved.');
@@ -536,8 +588,30 @@ test.describe('Workflow library layout', () => {
     await appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
     const webAuthActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last();
     await expect(webAuthActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    const maxOutputInput = appSettingsModal.getByLabel('Maximum captured output in MiB');
+    await maxOutputInput.fill('11');
+    await expect(maxOutputInput).toHaveValue('11');
+
+    await appSettingsModal.getByRole('tab', { name: 'Docker' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Docker' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-section-title')).toHaveCount(0);
+    const dockerTimeoutInput = appSettingsModal.getByRole('spinbutton', { name: 'Docker startup wait timeout in seconds' });
+    await expect(dockerTimeoutInput).toHaveValue('1200');
+    await expect(appSettingsModal.getByText('Kubernetes ignores this setting.')).toBeVisible();
+    await dockerTimeoutInput.fill('1500');
+    await expect(dockerTimeoutInput).toHaveValue('1500');
+    await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    const dockerActions = appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row');
+    await expect(dockerActions.locator('.project-settings-success')).toHaveText('Saved.');
+
     await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toBeVisible();
     await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('11');
+    await expect(appSettingsModal.locator('.app-settings-general-panel .app-settings-actions-row').getByRole('button', { name: 'Save' })).toBeEnabled();
     await expect(appSettingsModal).toContainText('OAuth');
     await page.getByRole('button', { name: 'Close app settings' }).click();
     await expect(appSettingsModal).toHaveCount(0);

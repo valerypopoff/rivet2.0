@@ -5,6 +5,7 @@ import {
   ensurePortAvailable,
   isComposeServiceRunning,
   printFailureDiagnostics,
+  readDockerWaitTimeoutSeconds,
   run,
 } from './lib/docker-launcher.mjs';
 import {
@@ -39,7 +40,12 @@ async function main() {
     prepareRivetDockerContext(rootDir, mergedEnv);
   }
 
-  const waitTimeoutSeconds = parseInt(mergedEnv.RIVET_DOCKER_WAIT_TIMEOUT ?? '900', 10);
+  const waitTimeoutSeconds = await readDockerWaitTimeoutSeconds({
+    composeBase,
+    cwd: rootDir,
+    env: mergedEnv,
+    label: 'dev-docker',
+  });
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
   let refreshRunningProxy = false;
 

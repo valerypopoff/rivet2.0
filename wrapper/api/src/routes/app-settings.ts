@@ -6,6 +6,7 @@ import type {
   NodeExecutorProxySettingsDraft,
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
+  RuntimeLimitSettingsDraft,
 } from '../../../shared/app-settings-types.js';
 import { readDeploymentStorageSettings, writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
 import { getAppDataRoot } from '../security.js';
@@ -17,6 +18,7 @@ import {
   writeWebAppRouteSettings,
 } from '../public-route-settings.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
+import { readRuntimeLimitSettings, writeRuntimeLimitSettings } from '../runtime-limit-settings.js';
 import { readWebAppAuthSettings, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 import {
   DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS,
@@ -143,6 +145,26 @@ function normalizeRunRecordingsSettingsDraft(value: unknown): Omit<RunRecordings
     maxRunsPerEndpoint: normalizeNonNegativeInteger(raw.maxRunsPerEndpoint, 'Runs kept per workflow endpoint'),
     retentionDays: normalizeNonNegativeInteger(raw.retentionDays, 'Days to keep recordings'),
   };
+}
+
+function normalizeRuntimeLimitSettingsDraft(value: unknown): RuntimeLimitSettingsDraft {
+  const raw = value && typeof value === 'object'
+    ? value as RuntimeLimitSettingsDraft
+    : {};
+  const draft: RuntimeLimitSettingsDraft = {};
+
+  for (const key of [
+    'commandTimeoutSeconds',
+    'maxOutputBytes',
+    'proxyReadTimeoutSeconds',
+    'dockerWaitTimeoutSeconds',
+  ] as const) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) {
+      draft[key] = raw[key];
+    }
+  }
+
+  return draft;
 }
 
 function getNodeExecutorProxySettingsPath(): string {
@@ -290,6 +312,22 @@ appSettingsRouter.get('/run-recordings', async (_req, res, next) => {
 appSettingsRouter.put('/run-recordings', async (req, res, next) => {
   try {
     res.json(await writeRunRecordingsSettings(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/runtime-limits', async (_req, res, next) => {
+  try {
+    res.json(await readRuntimeLimitSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/runtime-limits', async (req, res, next) => {
+  try {
+    res.json(await writeRuntimeLimitSettings(normalizeRuntimeLimitSettingsDraft(req.body)));
   } catch (error) {
     next(error);
   }

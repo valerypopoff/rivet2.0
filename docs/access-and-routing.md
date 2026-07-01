@@ -40,9 +40,9 @@ The nginx configs also set `client_max_body_size 100m`, so large API/editor payl
 
 Current proxy timeout behavior:
 
-- `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` now use `RIVET_PROXY_READ_TIMEOUT`, which defaults to `180s` in the tracked Docker images and Compose stacks
-- websocket routes stay long-lived at `86400s`; `RIVET_PROXY_READ_TIMEOUT` is only for the standard HTTP upstream routes
-- this proxy timeout is separate from `RIVET_COMMAND_TIMEOUT`, which only limits hosted shell commands under `/api/shell/exec`
+- `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` use the App Settings -> `Workflow endpoints` HTTP timeout, saved in seconds under `settings/runtime-limits.json` and defaulting to `180`; the proxy watches that file and rewrites a generated timeout include before reloading nginx
+- websocket routes stay long-lived at `86400s`; the workflow-endpoint timeout is only for the standard HTTP upstream routes
+- this proxy timeout is separate from App Settings -> `General` shell command limits, which only apply to hosted shell execution under `/api/shell/exec`
 
 Important local-Docker wiring note:
 
@@ -434,15 +434,14 @@ The current runtime split does not make `RIVET_APP_DATA_ROOT` authoritative for 
 
 - workflow truth remains Postgres plus object storage
 - `Code` node package resolution comes from the managed runtime-library cache under `RIVET_RUNTIME_LIBRARIES_ROOT`
-- execution-plane `app-data` may remain ephemeral when endpoint pods do not need UI-managed app settings
+- execution-plane `app-data` is required settings state in Kubernetes, not workflow blob storage; execution pods must mount the same app-data claim as the control plane so UI-managed storage, recording, web-app auth, runtime-limit, and outbound proxy settings are visible
 
 Important limitation:
 
 - API-hosted published/latest execution does not currently register package plugins from local app-data
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
-- if App Settings -> `Storage` should provide managed storage/database settings to split `execution` pods, those pods must see the same `settings/deployment-storage.json` app-data file at startup; otherwise they fall back to their deployment env defaults
-- if App Settings -> `Node executor proxy` should affect split `execution` pods, those pods must see the same `settings/node-executor-proxy.json` app-data file through a shared RWX claim; runtime endpoint proxy values are not read from `.env` or deployment proxy environment variables
+- App Settings -> `Storage`, `Run recordings`, `Web apps`, `Workflow endpoints`, and `Node executor proxy` write settings files under shared app data; those values are not read from `.env`, Vault dotenv, or legacy deployment variables in split execution pods
 
 ## Latest Debugger Model
 

@@ -51,7 +51,7 @@ Canonical managed config lives in App Settings -> `Storage`:
 - managed PostgreSQL connection string and SSL mode
 - S3-compatible object-storage URL, access key ID, and secret access key
 
-The API, executor, and Docker runtime do not read storage/database choices from `.env`. If `settings/deployment-storage.json` is missing, the runtime uses the built-in `Local folders` + `Local Docker Postgres` defaults. After the Storage tab is saved, the app-data settings file is the source of truth and storage changes require a process/container restart. In Kubernetes, the chart bootstraps that same settings file from Helm/Vault values only when the file is absent, and runtime pods still read the app-settings file. The runtime-library object key prefix stays fixed at `runtime-libraries/`.
+The API, executor, and Docker runtime do not read storage/database choices from `.env`. If `settings/deployment-storage.json` is missing, the runtime uses the built-in `Local folders` + `Local Docker Postgres` defaults. After the Storage tab is saved, the app-data settings file is the source of truth and storage changes require a process/container restart. In Kubernetes, the chart bootstraps that same settings file from Helm/Vault values only when the file is absent, runtime pods still read the app-settings file, and storage/database changes require rolling out the API/executor pods that own singleton backend state or endpoint execution. The runtime-library object key prefix stays fixed at `runtime-libraries/`.
 
 Still-env-owned runtime-library process tuning:
 

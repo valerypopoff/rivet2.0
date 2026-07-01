@@ -92,12 +92,8 @@ spec:
 {{ toYaml .Values.resources.proxy | nindent 12 }}
       volumes:
         - name: app-data
-          {{- if .Values.storage.appData.existingClaimName }}
           persistentVolumeClaim:
             claimName: {{ .Values.storage.appData.existingClaimName | quote }}
-          {{- else }}
-          emptyDir: {}
-          {{- end }}
         {{- if .Values.tmpVolume.enabled }}
         - name: {{ .Values.tmpVolume.name }}
           emptyDir:

@@ -87,6 +87,10 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_MODE\s*\n\s*value: "managed"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID/);
+  assert.ok(
+    (renderedChart.match(/\s+name: app-data\s*\n\s*persistentVolumeClaim:\s*\n\s*claimName: "?rivet-local-app-data"?/g) ?? []).length >= 3,
+    'backend, proxy, and execution workloads should all mount the shared app-data claim',
+  );
   assert.doesNotMatch(renderedChart, /name: RIVET_STORAGE_MODE\b|name: RIVET_DATABASE_MODE\b|name: RIVET_DATABASE_CONNECTION_STRING\b|name: RIVET_STORAGE_ACCESS_KEY_ID\b/);
   assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
@@ -97,6 +101,7 @@ test('chart validation keeps the supported managed singleton control-plane bound
   assert.match(validateValuesTemplate, /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/);
   assert.match(validateValuesTemplate, /replicaCount\.backend=1 because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
   assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
+  assert.match(validateValuesTemplate, /storage\.appData\.existingClaimName is required so backend, execution, executor, and proxy pods share UI-managed app settings/);
 });
 
 test('production overlay keeps the supported ingress, Vault, and scale boundaries for the real cluster topology', () => {
@@ -107,6 +112,7 @@ test('production overlay keeps the supported ingress, Vault, and scale boundarie
   assert.match(prodOverlay, /backend:\s*1/);
   assert.match(prodOverlay, /web:\s*1/);
   assert.match(prodOverlay, /execution:\s*[2-9]\d*/);
+  assert.match(prodOverlay, /existingClaimName:\s*rivet-prod-app-data/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*proxy:\s*\n\s*enabled:\s*true/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*web:\s*\n\s*enabled:\s*false/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*backend:\s*\n\s*enabled:\s*false/);
@@ -122,6 +128,7 @@ test('local Kubernetes overlay keeps the backend singleton while scaling endpoin
   assert.match(localOverlay, /backend:\s*1/);
   assert.match(localOverlay, /web:\s*1/);
   assert.match(localOverlay, /execution:\s*2/);
+  assert.match(localOverlay, /existingClaimName:\s*rivet-local-app-data/);
   assert.match(localOverlay, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:\s*"true"/);
   assert.match(localOverlay, /RIVET_REQUIRE_WORKFLOW_KEY:\s*"false"/);
   assert.match(localOverlay, /RIVET_REQUIRE_UI_GATE_KEY:\s*"false"/);
@@ -175,5 +182,9 @@ test('chart validation rejects placeholder images and unsupported filesystem top
       'filesystem.runtimeLibraries.existingClaimName=runtime-libraries-pvc',
     ],
     /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/,
+  );
+  await assertHelmTemplateFails(
+    ['storage.appData.existingClaimName='],
+    /storage\.appData\.existingClaimName is required so backend, execution, executor, and proxy pods share UI-managed app settings/,
   );
 });

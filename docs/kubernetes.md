@@ -99,6 +99,8 @@ The launcher expects:
 - external S3 or S3-compatible storage
 - local renderer inputs named `RIVET_K8S_DATABASE_*` and `RIVET_K8S_STORAGE_*`
 
+For local rehearsal, the launcher also creates a namespace-scoped app-data PVC and wires the chart to it with `storage.appData.existingClaimName`. The defaults are `RIVET_K8S_APP_DATA_CLAIM_NAME=rivet-local-app-data` and `RIVET_K8S_APP_DATA_SIZE=10Gi`; override them only when you need a different local claim name or storage request.
+
 The local overlay at [charts/overlays/local-kubernetes.yaml](../charts/overlays/local-kubernetes.yaml) is not a standalone values file. It is meant to be merged with the generated values file from `scripts/dev-kubernetes.mjs`.
 
 Managed runtime-library startup now serializes its shared Postgres schema initialization behind a PostgreSQL advisory lock. That avoids first-boot deadlocks when the control-plane API and execution/editor processes start against the same managed database at the same time.
@@ -167,7 +169,7 @@ Have these ready before the first `helm upgrade --install`:
 - a `linux/amd64` node pool, unless the API and executor images are rebuilt for another platform
 - an ingress controller that supports websocket upgrades and long-lived websocket connections
 - DNS for the public Rivet hostname and a TLS secret or certificate-manager integration
-- a default `StorageClass`, or explicit `storage.appData.storageClassName` / `storage.appData.existingClaimName`
+- a pre-created app-data PVC set as `storage.appData.existingClaimName`; use RWX-capable storage for multi-node or scaled proxy/execution deployments
 - managed Postgres reachable from the cluster
 - S3 or S3-compatible object storage reachable from the cluster
 - Vault Injector installed when `vault.enabled=true`
@@ -343,11 +345,11 @@ In Kubernetes, production should stay on managed storage:
 - workflow metadata, publication state, recording metadata, and runtime-library state live in managed Postgres
 - workflow blobs, recording/replay blobs, and runtime-library artifacts live in object storage
 
-The backend StatefulSet still has an `app-data` volume. By default, the chart creates a `volumeClaimTemplate` from `storage.appData.*`; if the cluster has no default storage class, set `storage.appData.storageClassName` or `storage.appData.existingClaimName`. Leaving `storage.appData.enabled=false` makes that volume ephemeral and is not the recommended production shape.
+The chart requires `storage.appData.existingClaimName`. This PVC is the shared app-settings volume for the backend, proxy, execution, and executor pods. Use RWX-capable storage for multi-node or scaled proxy/execution deployments; a generated backend-only StatefulSet claim is not enough because Deployments cannot mount that private claim.
 
-The API and executor containers deliberately mount that same `app-data` volume at different paths: `/data/rivet-app` for the API and `/home/rivet/.local/share/com.valerypopoff.rivet2` for the executor. App Settings -> `Storage` writes `settings/deployment-storage.json` from the API; App Settings -> `Run recordings` writes `settings/run-recordings.json` from the API; App Settings -> `Node executor proxy` writes `settings/node-executor-proxy.json` from the API; App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` both write `settings/public-routes.json` from the API; App Settings -> `Web apps` -> `Auth` writes `settings/web-app-auth.json` from the API. API and executor startup read deployment storage settings from app data; runtime storage/database env values are ignored, and Kubernetes uses only the init container's `RIVET_DEPLOYMENT_*` bootstrap values when the settings file is absent. API bootstrap also clears process proxy env first and then reads the proxy settings file through `RIVET_APP_DATA_ROOT` for latest/headless execution paths that run in that process, while the editor executor bootstrap reads the same relative file from the desktop-style app-data mount. Keep the backend StatefulSet's app-data volume persistent if operators use UI-managed storage, recording limits, public route slugs, web-app auth, or executor proxy settings.
+The API and executor containers deliberately mount that same `app-data` volume at different paths: `/data/rivet-app` for the API and `/home/rivet/.local/share/com.valerypopoff.rivet2` for the executor. The proxy mounts the same claim read-only at `/data/rivet-app` so it can hot-reload public route and timeout settings. App Settings -> `Storage` writes `settings/deployment-storage.json` from the API; App Settings -> `Run recordings` writes `settings/run-recordings.json` from the API; App Settings -> `Node executor proxy` writes `settings/node-executor-proxy.json` from the API; App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` both write `settings/public-routes.json` from the API; App Settings -> `Web apps` -> `Auth` writes `settings/web-app-auth.json` from the API; App Settings -> `Workflow endpoints` writes `settings/runtime-limits.json`. API and executor startup read deployment storage settings from app data; runtime storage/database env values are ignored, and Kubernetes uses only the init container's `RIVET_DEPLOYMENT_*` bootstrap values when the settings file is absent. API bootstrap also clears process proxy env first and then reads the proxy settings file through `RIVET_APP_DATA_ROOT` for latest/headless execution paths that run in that process, while the editor executor bootstrap reads the same relative file from the desktop-style app-data mount. Keep this claim persistent if operators use UI-managed storage, recording limits, public route slugs, web-app auth, runtime limits, or executor proxy settings.
 
-Published workflow endpoints and published web apps in the split `execution` deployment also need this settings volume to be visible if they should consume UI-managed storage credentials, recording limits, web-app auth, or proxy values. Use a shared RWX `storage.appData.existingClaimName` for execution pods; storage/database settings are read from `settings/deployment-storage.json` at process startup, while recording queue/retention limits, web-app auth/OAuth settings, and runtime endpoint proxy values are not read from `.env`, Vault dotenv, or deployment `RIVET_RECORDINGS_MAX_*` / `RIVET_WEB_APPS_AUTH_MODE` / `OAUTH_*` / `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` variables. Storage/database changes require pod restart or rollout so process singleton backends are rebuilt. Public route slugs are read by the API dynamically from `settings/public-routes.json`; the proxy hot-reloads its nginx include only when the same app-data claim is mounted into it. If a Kubernetes deployment does not share app-data with the proxy, route-family changes from Settings are not guaranteed until the proxy is recreated with a config it can read.
+Published workflow endpoints and published web apps in the split `execution` deployment also consume this settings volume for UI-managed storage credentials, recording limits, web-app auth, runtime limits, and proxy values. Storage/database settings are read from `settings/deployment-storage.json` at process startup, while recording queue/retention limits, web-app auth/OAuth settings, runtime endpoint proxy values, and workflow HTTP timeout settings are not read from `.env`, Vault dotenv, or deployment `RIVET_RECORDINGS_MAX_*` / `RIVET_WEB_APPS_AUTH_MODE` / `OAUTH_*` / `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` / timeout variables. Storage/database changes require pod restart or rollout so process singleton backends are rebuilt. Public route slugs are read by the API dynamically from `settings/public-routes.json`; the proxy hot-reloads its nginx include from the same app-data claim. The Docker startup wait timeout stored in the same runtime-limits settings file is intentionally ignored by Kubernetes; it only affects npm Docker launcher commands.
 
 Runtime-library local files are caches/workspaces, not the source of truth in managed mode. The default is `emptyDir` for execution replicas. Only set `runtimeLibraries.cache.existingClaimName` if the PVC can be mounted by every pod that needs it; with more than one `execution` replica, that usually means an RWX-capable volume. A single RWO claim reused by multiple execution pods can leave pods stuck waiting for volume attachment.
 
@@ -444,6 +446,32 @@ objectStorage:
 
 Use `postgres.connectionStringSecretName` instead of the host/database/username/password tuple only if your operations standard prefers a single connection-string secret.
 
+Create or reference the shared app-data PVC before installing the chart. The claim name must match `storage.appData.existingClaimName` and must be mountable by backend, proxy, execution, and executor pods:
+
+```bash
+kubectl -n your-namespace apply -f - <<'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rivet-app-data
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: <rwx-storage-class>
+EOF
+```
+
+Then set:
+
+```yaml
+storage:
+  appData:
+    existingClaimName: rivet-app-data
+```
+
 ### Direct Helm commands
 
 Use these commands as the raw Helm equivalent of a CI deploy step:
@@ -520,7 +548,7 @@ If `fullnameOverride` is not set, replace `rivet-*` with the rendered object nam
 Common first-deploy failure patterns:
 
 - `ImagePullBackOff`: check GHCR visibility, tag names, and `imagePullSecrets`
-- `Pending`: check `storage.appData.storageClassName`, default `StorageClass`, and any RWX/RWO cache PVC choices
+- `Pending`: check that `storage.appData.existingClaimName` exists in the namespace, can be mounted by backend/proxy/execution/executor pods, and uses access modes/storage class compatible with the replica topology; also check any runtime-library cache PVC choices
 - Vault injector never creates `/vault/dotenv`: check `vault.role`, `vault.authPath`, `vault.secretPath`, Vault auth policy, and Vault Injector installation
 - API pods crash during startup: check Postgres connection values, object-storage credentials, and whether the secret keys match the names in `postgres.*`, `objectStorage.*`, or `/vault/dotenv`
 - HPA shows missing metrics: install/fix `metrics-server` and set CPU requests for `resources.proxy` and `resources.execution`
@@ -542,7 +570,8 @@ The production contract today is:
 - `env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
 - `env.RIVET_PUBLISHED_APPS_BASE_PATH=/apps`
 - `env.RIVET_LATEST_APPS_BASE_PATH=/apps-latest`
-- storage/database settings are configured after deploy in `Settings` -> `Storage`; public route slugs are configured in `Settings` -> `Workflow endpoints` and `Settings` -> `Web apps`; web-app auth is configured in `Settings` -> `Web apps`; the resulting `settings/deployment-storage.json`, `settings/public-routes.json`, and `settings/web-app-auth.json` must be on persistent/shared app data for any API pod that serves workflow or web-app routes, storage changes require pod restart/rollout, and dynamic route-family changes require the proxy to mount that same app-data claim so it can hot-reload nginx
+- `storage.appData.existingClaimName=<shared-app-data-pvc>` is required; use an RWX-capable claim for multi-node or scaled proxy/execution deployments
+- storage/database settings are configured after deploy in `Settings` -> `Storage`; public route slugs are configured in `Settings` -> `Workflow endpoints` and `Settings` -> `Web apps`; web-app auth is configured in `Settings` -> `Web apps`; Kubernetes-relevant runtime limits are configured in `Settings` -> `General` and `Workflow endpoints`; the `Docker` settings tab is harmless but Docker-launcher-only. The resulting app-settings files must be on persistent/shared app data for any API pod that serves workflow or web-app routes, storage changes require pod restart/rollout, and dynamic route-family/timeout changes require the proxy to mount that same app-data claim so it can hot-reload nginx
 - `clusterDomain=cluster.local` unless the cluster DNS suffix is different
 - `env.RIVET_PROXY_RESOLVER` must be set for in-cluster nginx DNS resolution
 - control-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=none` with the job worker enabled there

@@ -8,6 +8,7 @@ import test from 'node:test';
 
 import { getExpectedProxyAuthToken } from '../auth.js';
 import { createApiApp } from '../app.js';
+import { getCommandTimeout, getMaxOutputBytes } from '../security.js';
 import {
   readNodeExecutorProxySettings,
   readRunRecordingsSettings,
@@ -36,6 +37,11 @@ import {
   readDeploymentStorageSettings,
   writeDeploymentStorageSettings,
 } from '../deployment-storage-settings.js';
+import {
+  getRuntimeLimitSettingsPath,
+  readRuntimeLimitSettings,
+  writeRuntimeLimitSettings,
+} from '../runtime-limit-settings.js';
 import {
   getManagedWorkflowStorageConfig,
   getWorkflowStorageBackendMode,
@@ -83,6 +89,10 @@ const relevantEnvKeys = [
   'OAUTH_SESSION_TTL_SECONDS',
   'OAUTH_CLIENT_AUTH_METHOD',
   'OAUTH_DEBUG_LOG_PROFILE',
+  'RIVET_PROXY_READ_TIMEOUT',
+  'RIVET_COMMAND_TIMEOUT',
+  'RIVET_MAX_OUTPUT',
+  'RIVET_DOCKER_WAIT_TIMEOUT',
   'RIVET_KEY',
 ] as const;
 
@@ -475,6 +485,126 @@ test('Run recordings runtime settings fail loudly when the saved settings file i
     fs.writeFileSync(settingsPath, JSON.stringify({ version: 1, maxPendingWrites: 'not-a-number' }), 'utf8');
     await assert.rejects(readRunRecordingsSettings(), /Queued recording writes/);
     assert.throws(() => getWorkflowRecordingConfig(), /Queued recording writes/);
+  });
+});
+
+test('Runtime limit settings ignore environment values until saved', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_PROXY_READ_TIMEOUT = '1s';
+    process.env.RIVET_COMMAND_TIMEOUT = '1000';
+    process.env.RIVET_MAX_OUTPUT = '1024';
+    process.env.RIVET_DOCKER_WAIT_TIMEOUT = '3';
+
+    const defaultSettings = await readRuntimeLimitSettings();
+    assert.equal(defaultSettings.source, 'default');
+    assert.equal(defaultSettings.commandTimeoutSeconds, 30);
+    assert.equal(defaultSettings.maxOutputBytes, 10 * 1024 * 1024);
+    assert.equal(defaultSettings.proxyReadTimeoutSeconds, 180);
+    assert.equal(defaultSettings.dockerWaitTimeoutSeconds, 1200);
+    assert.equal(getCommandTimeout(), 30_000);
+    assert.equal(getMaxOutputBytes(), 10 * 1024 * 1024);
+
+    await writeRuntimeLimitSettings({
+      commandTimeoutSeconds: 45,
+      maxOutputBytes: 12 * 1024 * 1024,
+      proxyReadTimeoutSeconds: 240,
+      dockerWaitTimeoutSeconds: 1500,
+    });
+
+    const nextSettings = await readRuntimeLimitSettings();
+    assert.equal(nextSettings.source, 'app-settings');
+    assert.equal(nextSettings.commandTimeoutSeconds, 45);
+    assert.equal(nextSettings.maxOutputBytes, 12 * 1024 * 1024);
+    assert.equal(nextSettings.proxyReadTimeoutSeconds, 240);
+    assert.equal(nextSettings.dockerWaitTimeoutSeconds, 1500);
+    assert.equal(getCommandTimeout(), 45_000);
+    assert.equal(getMaxOutputBytes(), 12 * 1024 * 1024);
+  });
+});
+
+test('Runtime limit settings API saves and returns persisted values', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/runtime-limits`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          commandTimeoutSeconds: '60',
+          maxOutputBytes: String(20 * 1024 * 1024),
+          proxyReadTimeoutSeconds: '300',
+          dockerWaitTimeoutSeconds: '1800',
+        }),
+      });
+
+      assert.equal(saveResponse.status, 200);
+      const saved = await saveResponse.json() as Record<string, unknown>;
+      assert.equal(saved.source, 'app-settings');
+      assert.equal(saved.commandTimeoutSeconds, 60);
+      assert.equal(saved.maxOutputBytes, 20 * 1024 * 1024);
+      assert.equal(saved.proxyReadTimeoutSeconds, 300);
+      assert.equal(saved.dockerWaitTimeoutSeconds, 1800);
+
+      const readResponse = await fetch(`${server.baseUrl}/api/app-settings/runtime-limits`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(readResponse.status, 200);
+      const settings = await readResponse.json() as Record<string, unknown>;
+      assert.equal(settings.commandTimeoutSeconds, 60);
+      assert.equal(settings.maxOutputBytes, 20 * 1024 * 1024);
+      assert.equal(settings.proxyReadTimeoutSeconds, 300);
+      assert.equal(settings.dockerWaitTimeoutSeconds, 1800);
+
+      const partialSaveResponse = await fetch(`${server.baseUrl}/api/app-settings/runtime-limits`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          proxyReadTimeoutSeconds: '360',
+        }),
+      });
+      assert.equal(partialSaveResponse.status, 200);
+      const partiallySaved = await partialSaveResponse.json() as Record<string, unknown>;
+      assert.equal(partiallySaved.commandTimeoutSeconds, 60);
+      assert.equal(partiallySaved.maxOutputBytes, 20 * 1024 * 1024);
+      assert.equal(partiallySaved.proxyReadTimeoutSeconds, 360);
+      assert.equal(partiallySaved.dockerWaitTimeoutSeconds, 1800);
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Runtime limit settings reject invalid values and fail loudly when saved file is invalid', async () => {
+  await withAppSettingsEnv(async () => {
+    await assert.rejects(
+      writeRuntimeLimitSettings({
+        commandTimeoutSeconds: 0,
+      }),
+      /Command timeout must be a positive whole number/,
+    );
+
+    const settingsPath = getRuntimeLimitSettingsPath();
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, '{bad json', 'utf8');
+
+    await assert.rejects(readRuntimeLimitSettings(), /JSON|Unexpected|Expected|position/);
+    assert.throws(() => getCommandTimeout(), /JSON|Unexpected|Expected|position/);
+
+    fs.writeFileSync(settingsPath, JSON.stringify({ version: 1, proxyReadTimeoutSeconds: 'not-a-number' }), 'utf8');
+    await assert.rejects(readRuntimeLimitSettings(), /Proxy read timeout/);
+
+    fs.writeFileSync(settingsPath, JSON.stringify({ version: 1, proxyReadTimeoutSeconds: null }), 'utf8');
+    await assert.rejects(readRuntimeLimitSettings(), /Proxy read timeout/);
+
+    fs.writeFileSync(settingsPath, JSON.stringify([]), 'utf8');
+    await assert.rejects(readRuntimeLimitSettings(), /Runtime limit settings must be an object/);
   });
 });
 

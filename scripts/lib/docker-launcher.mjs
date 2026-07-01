@@ -1,6 +1,8 @@
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 
+export const DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS = 1200;
+
 export function run(command, env, options = {}) {
   const allowFailure = options.allowFailure === true;
   const stdio = options.stdio ?? 'inherit';
@@ -111,6 +113,52 @@ export async function isComposeServiceRunning(service, options) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .includes(service);
+}
+
+export async function readDockerWaitTimeoutSeconds(options) {
+  const { composeBase, cwd, env, label = 'docker-launcher' } = options;
+
+  for (const service of ['api', 'proxy']) {
+    const psResult = await runCapture(`${composeBase} ps -q ${service}`, env, {
+      allowFailure: true,
+      cwd,
+    });
+    const containerId = psResult.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+
+    if (!containerId) {
+      continue;
+    }
+
+    const settingsResult = await runCapture(
+      `docker exec ${containerId} cat /data/rivet-app/settings/runtime-limits.json`,
+      env,
+      {
+        allowFailure: true,
+        cwd,
+      },
+    );
+
+    if (settingsResult.exitCode !== 0 || !settingsResult.stdout.trim()) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(settingsResult.stdout);
+      const timeout = Number(parsed?.dockerWaitTimeoutSeconds);
+      if (Number.isInteger(timeout) && timeout > 0) {
+        return timeout;
+      }
+
+      console.warn(`[${label}] Ignoring invalid saved Docker startup wait timeout; using ${DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS}s.`);
+    } catch {
+      console.warn(`[${label}] Could not parse saved runtime limit settings; using ${DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS}s.`);
+    }
+  }
+
+  return DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS;
 }
 
 export async function printFailureDiagnostics(options) {

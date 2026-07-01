@@ -215,6 +215,72 @@ read_json_string_property() {
   sed -n "s/.*\"${property_name}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$file_path" | head -n 1
 }
 
+has_json_property() {
+  file_path="$1"
+  property_name="$2"
+
+  if [ -z "$file_path" ] || [ ! -f "$file_path" ]; then
+    return 1
+  fi
+
+  grep -q "\"${property_name}\"[[:space:]]*:" "$file_path"
+}
+
+read_json_scalar_property() {
+  file_path="$1"
+  property_name="$2"
+
+  if [ -z "$file_path" ] || [ ! -f "$file_path" ]; then
+    printf ''
+    return
+  fi
+
+  sed -n "s/.*\"${property_name}\"[[:space:]]*:[[:space:]]*\\([^,}]*\\).*/\\1/p" "$file_path" | head -n 1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+normalize_positive_integer_seconds() {
+  value="$1"
+
+  case "$value" in
+    ''|0|*[!0123456789]*)
+      return 1
+      ;;
+  esac
+
+  printf '%s' "$value"
+}
+
+set_default_runtime_limits() {
+  RIVET_PROXY_READ_TIMEOUT="180s"
+}
+
+read_runtime_limit_settings() {
+  RIVET_RUNTIME_LIMIT_SETTINGS_VALID=1
+  set_default_runtime_limits
+
+  runtime_limit_settings_file="${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/runtime-limits.json"
+  if [ ! -f "$runtime_limit_settings_file" ]; then
+    return
+  fi
+
+  raw_proxy_read_timeout_seconds="$(read_json_scalar_property "$runtime_limit_settings_file" "proxyReadTimeoutSeconds")"
+  if has_json_property "$runtime_limit_settings_file" "proxyReadTimeoutSeconds" && [ -z "$raw_proxy_read_timeout_seconds" ]; then
+    >&2 printf 'Warning: invalid runtime limit settings file "%s"; keeping previous nginx public routes.\n' "$runtime_limit_settings_file"
+    RIVET_RUNTIME_LIMIT_SETTINGS_VALID=0
+    return
+  fi
+
+  if [ -n "$raw_proxy_read_timeout_seconds" ]; then
+    if ! proxy_read_timeout_seconds="$(normalize_positive_integer_seconds "$raw_proxy_read_timeout_seconds")"; then
+      >&2 printf 'Warning: invalid proxyReadTimeoutSeconds in "%s"; keeping previous nginx public routes.\n' "$runtime_limit_settings_file"
+      RIVET_RUNTIME_LIMIT_SETTINGS_VALID=0
+      return
+    fi
+
+    RIVET_PROXY_READ_TIMEOUT="${proxy_read_timeout_seconds}s"
+  fi
+}
+
 normalize_public_route_setting() {
   value="$1"
   slug=$(printf '%s' "${value}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s:^/*::; s:/*$::' | tr '[:upper:]' '[:lower:]')
@@ -341,8 +407,7 @@ write_public_routes_include() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;
-        proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
-        proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
+        include ${RIVET_PROXY_TIMEOUT_INCLUDE_FILE};
     }
 
     location ${RIVET_WEB_APPS_BASE_PATH}/ {
@@ -354,8 +419,7 @@ write_public_routes_include() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;
-        proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
-        proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
+        include ${RIVET_PROXY_TIMEOUT_INCLUDE_FILE};
     }
 
     location ${RIVET_LATEST_WORKFLOWS_BASE_PATH}/ {
@@ -367,8 +431,7 @@ write_public_routes_include() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;
-        proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
-        proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
+        include ${RIVET_PROXY_TIMEOUT_INCLUDE_FILE};
     }
 
     location ${RIVET_LATEST_WEB_APPS_BASE_PATH}/ {
@@ -380,9 +443,23 @@ write_public_routes_include() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;
+        include ${RIVET_PROXY_TIMEOUT_INCLUDE_FILE};
+    }
+EOF
+
+  mv "$temp_file" "$output_file"
+}
+
+write_proxy_timeout_include() {
+  output_file="${1:-$RIVET_PROXY_TIMEOUT_INCLUDE_FILE}"
+  temp_file="${output_file}.tmp"
+  output_dir="$(dirname "$output_file")"
+
+  mkdir -p "$output_dir"
+
+  cat > "$temp_file" <<EOF
         proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
         proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
-    }
 EOF
 
   mv "$temp_file" "$output_file"
@@ -409,6 +486,11 @@ start_public_routes_reload_watcher() {
     esac
 
     while sleep "$interval"; do
+      read_runtime_limit_settings
+      if [ "${RIVET_RUNTIME_LIMIT_SETTINGS_VALID:-1}" != "1" ]; then
+        continue
+      fi
+
       read_public_route_settings
       if [ "${RIVET_PUBLIC_ROUTES_SETTINGS_VALID:-1}" != "1" ]; then
         continue
@@ -419,8 +501,9 @@ start_public_routes_reload_watcher() {
         continue
       fi
 
-      previous_include="$(cat "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE" 2>/dev/null || true)"
-      if write_public_routes_include "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE" && nginx -t >/tmp/nginx/public-routes-test.log 2>&1; then
+      previous_public_routes_include="$(cat "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE" 2>/dev/null || true)"
+      previous_proxy_timeout_include="$(cat "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE" 2>/dev/null || true)"
+      if write_proxy_timeout_include "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE" && write_public_routes_include "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE" && nginx -t >/tmp/nginx/public-routes-test.log 2>&1; then
         if nginx -s reload >/tmp/nginx/public-routes-reload.log 2>&1; then
           >&2 printf 'Reloaded nginx public routes: workflows=%s latest-workflows=%s apps=%s latest-apps=%s\n' \
             "$RIVET_PUBLISHED_WORKFLOWS_BASE_PATH" \
@@ -435,7 +518,8 @@ start_public_routes_reload_watcher() {
       else
         >&2 printf 'Warning: generated nginx public routes failed validation; keeping previous routes.\n'
         cat /tmp/nginx/public-routes-test.log >&2 2>/dev/null || true
-        printf '%s' "$previous_include" > "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE"
+        printf '%s' "$previous_public_routes_include" > "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE"
+        printf '%s' "$previous_proxy_timeout_include" > "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE"
       fi
     done
   ) &
@@ -443,8 +527,16 @@ start_public_routes_reload_watcher() {
 
 export NGINX_ENVSUBST_OUTPUT_DIR="${NGINX_ENVSUBST_OUTPUT_DIR:-/etc/nginx/conf.d}"
 export RIVET_PUBLIC_ROUTES_INCLUDE_FILE="${RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-/tmp/nginx/rivet-public-routes.inc}"
+export RIVET_PROXY_TIMEOUT_INCLUDE_FILE="${RIVET_PROXY_TIMEOUT_INCLUDE_FILE:-/tmp/nginx/rivet-proxy-timeout.inc}"
+
+read_runtime_limit_settings
+if [ "${RIVET_RUNTIME_LIMIT_SETTINGS_VALID:-1}" != "1" ]; then
+  >&2 printf 'Error: invalid runtime limit settings; refusing to start nginx with unsafe route timeouts.\n'
+  exit 1
+fi
 
 read_public_route_settings
+export RIVET_PROXY_READ_TIMEOUT
 export RIVET_PUBLISHED_WORKFLOWS_BASE_PATH
 export RIVET_LATEST_WORKFLOWS_BASE_PATH
 export RIVET_WEB_APPS_BASE_PATH
@@ -459,6 +551,7 @@ export RIVET_PROXY_RESOLVER="$(resolve_proxy_resolver "${RIVET_PROXY_RESOLVER:-}
 export RIVET_PROXY_AUTH_TOKEN="$(sha256_hex "${RIVET_KEY:-}:proxy-auth")"
 export RIVET_UI_SESSION_TOKEN="$(sha256_hex "${RIVET_KEY:-}:ui-session")"
 
+write_proxy_timeout_include "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE"
 write_public_routes_include "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE"
 stage_ui_gate_prompt
 start_public_routes_reload_watcher

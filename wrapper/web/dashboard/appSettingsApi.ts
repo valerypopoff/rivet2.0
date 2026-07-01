@@ -8,6 +8,8 @@ import type {
   PublicRouteSettingsDraft,
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
+  RuntimeLimitSettings,
+  RuntimeLimitSettingsDraft,
   WebAppAuthSettings,
   WebAppAuthSettingsDraft,
 } from '../../shared/app-settings-types';
@@ -54,6 +56,24 @@ export async function saveRunRecordingsSettings(
     body: JSON.stringify(settings),
   });
   return appSettingsJsonResponse<RunRecordingsSettings>(response);
+}
+
+export async function fetchRuntimeLimitSettings(): Promise<RuntimeLimitSettings> {
+  const response = await fetch(`${API}/runtime-limits`, {
+    cache: 'no-store',
+  });
+  return appSettingsJsonResponse<RuntimeLimitSettings>(response);
+}
+
+export async function saveRuntimeLimitSettings(
+  settings: RuntimeLimitSettingsDraft,
+): Promise<RuntimeLimitSettings> {
+  const response = await fetch(`${API}/runtime-limits`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return appSettingsJsonResponse<RuntimeLimitSettings>(response);
 }
 
 export async function fetchDeploymentStorageSettings(): Promise<DeploymentStorageSettings> {

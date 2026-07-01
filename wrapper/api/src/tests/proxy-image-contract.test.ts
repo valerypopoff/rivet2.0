@@ -153,12 +153,13 @@ test('compose fallback artifact mounts stay isolated under app data', () => {
 
 test('proxy templates keep HTTP workflow routes bounded and websocket routes long-lived', () => {
   const proxyDockerfile = readRepoFile('image/proxy/Dockerfile');
+  const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
+  const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
 
   for (const template of readProxyTemplates()) {
     for (const locationPattern of [/location \/api\/\s*\{/]) {
       const location = proxyLocation(template, locationPattern);
-      assert.match(location, /proxy_read_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
-      assert.match(location, /proxy_send_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
+      assert.match(location, /include \$\{RIVET_PROXY_TIMEOUT_INCLUDE_FILE\};/);
     }
 
     assert.match(proxyLocation(template, /location \/ws\/latest-debugger\s*\{/), /proxy_read_timeout 86400s;/);
@@ -166,9 +167,21 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   }
 
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
+  assert.match(proxyBootstrap, /runtime_limit_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json"/);
+  assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "proxyReadTimeoutSeconds"/);
+  assert.match(proxyBootstrap, /\*\[!0123456789\]\*/);
+  assert.match(proxyBootstrap, /RIVET_PROXY_READ_TIMEOUT="\$\{proxy_read_timeout_seconds\}s"/);
+  assert.match(proxyBootstrap, /read_runtime_limit_settings/);
+  assert.match(proxyBootstrap, /RIVET_PROXY_TIMEOUT_INCLUDE_FILE:-\/tmp\/nginx\/rivet-proxy-timeout\.inc/);
+  assert.match(proxyBootstrap, /write_proxy_timeout_include\(\)/);
+  assert.match(proxyBootstrap, /write_proxy_timeout_include "\$RIVET_PROXY_TIMEOUT_INCLUDE_FILE"/);
   assert.match(proxyBootstrap, /proxy_read_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
   assert.match(proxyBootstrap, /proxy_send_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
+  assert.match(proxyBootstrap, /include \$\{RIVET_PROXY_TIMEOUT_INCLUDE_FILE\};/);
+  assert.match(proxyBootstrap, /previous_proxy_timeout_include/);
   assert.match(proxyDockerfile, /ENV RIVET_PROXY_READ_TIMEOUT=180s/);
+  assert.doesNotMatch(prodCompose, /RIVET_PROXY_READ_TIMEOUT/);
+  assert.doesNotMatch(devCompose, /RIVET_PROXY_READ_TIMEOUT/);
 });
 
 test('executor image and compose contracts keep the websocket service independent from API PORT', () => {
@@ -209,6 +222,7 @@ test('API images and launchers use the filtered Rivet source context and symlink
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
   const devDockerLauncher = readRepoFile('scripts/dev-docker.mjs');
   const prodDockerLauncher = readRepoFile('scripts/prod-docker.mjs');
+  const dockerLauncherHelper = readRepoFile('scripts/lib/docker-launcher.mjs');
   const rivetContextHelper = readRepoFile('scripts/lib/rivet-source-context.mjs');
   const ensureRivetRuntimeBuild = readRepoFile('scripts/ensure-rivet-runtime-build.mjs');
   const linkScript = readRepoFile('scripts/link-rivet-node-package.mjs');
@@ -263,6 +277,12 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(ensureRivetRuntimeBuild, /webAppHandler\.js/);
   assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);
   assert.match(devDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
+  assert.match(devDockerLauncher, /readDockerWaitTimeoutSeconds/);
+  assert.match(prodDockerLauncher, /readDockerWaitTimeoutSeconds/);
+  assert.doesNotMatch(devDockerLauncher, /RIVET_DOCKER_WAIT_TIMEOUT/);
+  assert.doesNotMatch(prodDockerLauncher, /RIVET_DOCKER_WAIT_TIMEOUT/);
+  assert.match(dockerLauncherHelper, /settings\/runtime-limits\.json/);
+  assert.match(dockerLauncherHelper, /dockerWaitTimeoutSeconds/);
   assert.match(devDockerLauncher, /refreshRunningProxy = action === 'dev' && proxyAlreadyRunning/);
   assert.match(devDockerLauncher, /up -d --no-deps --force-recreate --wait --wait-timeout \$\{waitTimeoutSeconds\} proxy/);
   assert.match(prodDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);

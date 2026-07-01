@@ -44,9 +44,7 @@ auth:
 
 storage:
   appData:
-    enabled: true
-    size: 10Gi
-    storageClassName: standard
+    existingClaimName: rivet-test-app-data
 
 replicaCount:
   proxy: 1

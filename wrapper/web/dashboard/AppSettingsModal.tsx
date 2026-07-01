@@ -9,11 +9,13 @@ import {
   fetchNodeExecutorProxySettings,
   fetchPublicRouteSettings,
   fetchRunRecordingsSettings,
+  fetchRuntimeLimitSettings,
   fetchWebAppAuthSettings,
   saveDeploymentStorageSettings,
   saveNodeExecutorProxySettings,
   savePublicRouteSettings,
   saveRunRecordingsSettings,
+  saveRuntimeLimitSettings,
   saveWebAppAuthSettings,
 } from './appSettingsApi';
 import { fetchHostedConfig } from './workflowApi';
@@ -23,6 +25,8 @@ import type {
   DeploymentStorageMode,
   DeploymentStorageSettings,
   PublicRouteSettings,
+  RuntimeLimitSettings,
+  RuntimeLimitSettingsDraft,
   WebAppAuthMode,
   WebAppAuthSettings,
   WebAppOAuthClientAuthMethod,
@@ -39,15 +43,29 @@ interface AppSettingsModalProps {
 const appVersion = import.meta.env.VITE_APP_VERSION || 'unknown';
 const appName = 'Rivet Studio Server';
 
-type AppSettingsTab = 'general' | 'storage' | 'node-executor-proxy' | 'run-recordings' | 'web-apps' | 'workflow-endpoints';
+type AppSettingsTab =
+  | 'general'
+  | 'storage'
+  | 'node-executor-proxy'
+  | 'run-recordings'
+  | 'web-apps'
+  | 'workflow-endpoints'
+  | 'docker';
 type RunsKeptMode = 'latest' | 'all';
 type RecordingRetentionMode = 'limited' | 'forever';
 type PublicRouteSettingsScope = 'web-apps' | 'workflow-endpoints';
+type RuntimeLimitSettingsScope = 'shell' | 'proxy-timeout' | 'docker';
 type PublicRouteSettingsFormSnapshot = {
   publishedWorkflowsSlug: string;
   latestWorkflowsSlug: string;
   publishedAppsSlug: string;
   latestAppsSlug: string;
+};
+type RuntimeLimitSettingsFormSnapshot = {
+  commandTimeoutSeconds: string;
+  maxOutputMiB: string;
+  proxyReadTimeoutSeconds: string;
+  dockerWaitTimeoutSeconds: string;
 };
 type WebAppAuthSettingsFormSnapshot = {
   mode: WebAppAuthMode;
@@ -138,6 +156,28 @@ function createPublicRouteSnapshot(settings: PublicRouteSettings): PublicRouteSe
   };
 }
 
+function bytesToMiBString(value: number): string {
+  return String(Math.max(1, Math.round(value / (1024 * 1024))));
+}
+
+function miBStringToBytesString(value: string): string {
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed)) {
+    return value.trim();
+  }
+
+  return String(Math.round(parsed * 1024 * 1024));
+}
+
+function createRuntimeLimitSnapshot(settings: RuntimeLimitSettings): RuntimeLimitSettingsFormSnapshot {
+  return {
+    commandTimeoutSeconds: String(settings.commandTimeoutSeconds),
+    maxOutputMiB: bytesToMiBString(settings.maxOutputBytes),
+    proxyReadTimeoutSeconds: String(settings.proxyReadTimeoutSeconds),
+    dockerWaitTimeoutSeconds: String(settings.dockerWaitTimeoutSeconds),
+  };
+}
+
 function publicRouteSettingsMatchConfig(
   settings: Pick<
     PublicRouteSettings,
@@ -225,6 +265,22 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     maxPendingWrites: '100',
     maxRunsPerEndpoint: '100',
     retentionDays: '14',
+  });
+  const [loadingRuntimeLimitSettings, setLoadingRuntimeLimitSettings] = useState(false);
+  const [runtimeLimitSettingsLoaded, setRuntimeLimitSettingsLoaded] = useState(false);
+  const [savingRuntimeLimitSettings, setSavingRuntimeLimitSettings] = useState(false);
+  const [runtimeLimitSettingsError, setRuntimeLimitSettingsError] = useState<string | null>(null);
+  const [runtimeLimitSettingsSaved, setRuntimeLimitSettingsSaved] = useState(false);
+  const [runtimeLimitSettingsStatusScope, setRuntimeLimitSettingsStatusScope] = useState<RuntimeLimitSettingsScope | null>(null);
+  const [commandTimeoutSeconds, setCommandTimeoutSeconds] = useState('30');
+  const [maxOutputMiB, setMaxOutputMiB] = useState('10');
+  const [proxyReadTimeoutSeconds, setProxyReadTimeoutSeconds] = useState('180');
+  const [dockerWaitTimeoutSeconds, setDockerWaitTimeoutSeconds] = useState('1200');
+  const [initialRuntimeLimitSettings, setInitialRuntimeLimitSettings] = useState<RuntimeLimitSettingsFormSnapshot>({
+    commandTimeoutSeconds: '30',
+    maxOutputMiB: '10',
+    proxyReadTimeoutSeconds: '180',
+    dockerWaitTimeoutSeconds: '1200',
   });
   const [loadingPublicRouteSettings, setLoadingPublicRouteSettings] = useState(false);
   const [savingPublicRouteSettings, setSavingPublicRouteSettings] = useState(false);
@@ -336,6 +392,32 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     currentRunRecordingsSettings.retentionDays !== initialRunRecordingsSettings.retentionDays
   ), [currentRunRecordingsSettings, initialRunRecordingsSettings]);
 
+  const currentRuntimeLimitSettings = useMemo(() => ({
+    commandTimeoutSeconds: commandTimeoutSeconds.trim(),
+    maxOutputMiB: maxOutputMiB.trim(),
+    proxyReadTimeoutSeconds: proxyReadTimeoutSeconds.trim(),
+    dockerWaitTimeoutSeconds: dockerWaitTimeoutSeconds.trim(),
+  }), [commandTimeoutSeconds, dockerWaitTimeoutSeconds, maxOutputMiB, proxyReadTimeoutSeconds]);
+
+  const shellLimitSettingsChanged = useMemo(() => (
+    currentRuntimeLimitSettings.commandTimeoutSeconds !== initialRuntimeLimitSettings.commandTimeoutSeconds ||
+    currentRuntimeLimitSettings.maxOutputMiB !== initialRuntimeLimitSettings.maxOutputMiB
+  ), [currentRuntimeLimitSettings, initialRuntimeLimitSettings]);
+
+  const proxyTimeoutSettingsChanged = useMemo(() => (
+    currentRuntimeLimitSettings.proxyReadTimeoutSeconds !== initialRuntimeLimitSettings.proxyReadTimeoutSeconds
+  ), [currentRuntimeLimitSettings, initialRuntimeLimitSettings]);
+
+  const dockerLimitSettingsChanged = useMemo(() => (
+    currentRuntimeLimitSettings.dockerWaitTimeoutSeconds !== initialRuntimeLimitSettings.dockerWaitTimeoutSeconds
+  ), [currentRuntimeLimitSettings, initialRuntimeLimitSettings]);
+
+  const runtimeLimitControlsDisabled = (
+    !runtimeLimitSettingsLoaded ||
+    loadingRuntimeLimitSettings ||
+    savingRuntimeLimitSettings
+  );
+
   const currentPublicRouteSettings = useMemo(() => ({
     publishedWorkflowsSlug: publishedWorkflowsSlug.trim(),
     latestWorkflowsSlug: latestWorkflowsSlug.trim(),
@@ -417,6 +499,8 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     setProxySettingsSaved(false);
     setDeploymentStorageSettingsSaved(false);
     setRunRecordingsSettingsSaved(false);
+    setRuntimeLimitSettingsLoaded(false);
+    setRuntimeLimitSettingsSaved(false);
     setPublicRouteSettingsSaved(false);
     setWebAppAuthSettingsSaved(false);
   }, [isOpen]);
@@ -553,6 +637,51 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
       cancelled = true;
     };
   }, [activeTab, isOpen]);
+
+  useEffect(() => {
+    if (
+      !isOpen ||
+      runtimeLimitSettingsLoaded ||
+      (activeTab !== 'general' && activeTab !== 'workflow-endpoints' && activeTab !== 'docker')
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingRuntimeLimitSettings(true);
+    setRuntimeLimitSettingsError(null);
+    setRuntimeLimitSettingsSaved(false);
+    setRuntimeLimitSettingsStatusScope(null);
+
+    fetchRuntimeLimitSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+
+        const snapshot = createRuntimeLimitSnapshot(settings);
+        setCommandTimeoutSeconds(snapshot.commandTimeoutSeconds);
+        setMaxOutputMiB(snapshot.maxOutputMiB);
+        setProxyReadTimeoutSeconds(snapshot.proxyReadTimeoutSeconds);
+        setDockerWaitTimeoutSeconds(snapshot.dockerWaitTimeoutSeconds);
+        setInitialRuntimeLimitSettings(snapshot);
+        setRuntimeLimitSettingsLoaded(true);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setRuntimeLimitSettingsError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingRuntimeLimitSettings(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isOpen, runtimeLimitSettingsLoaded]);
 
   useEffect(() => {
     if (!isOpen || (activeTab !== 'workflow-endpoints' && activeTab !== 'web-apps')) {
@@ -751,6 +880,47 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     }
   };
 
+  const handleSaveRuntimeLimitSettings = async (scope: RuntimeLimitSettingsScope) => {
+    setSavingRuntimeLimitSettings(true);
+    setRuntimeLimitSettingsError(null);
+    setRuntimeLimitSettingsSaved(false);
+    setRuntimeLimitSettingsStatusScope(scope);
+
+    const draft: RuntimeLimitSettingsDraft = {
+      commandTimeoutSeconds: scope === 'shell'
+        ? currentRuntimeLimitSettings.commandTimeoutSeconds
+        : initialRuntimeLimitSettings.commandTimeoutSeconds,
+      maxOutputBytes: scope === 'shell'
+        ? miBStringToBytesString(currentRuntimeLimitSettings.maxOutputMiB)
+        : miBStringToBytesString(initialRuntimeLimitSettings.maxOutputMiB),
+      proxyReadTimeoutSeconds: scope === 'proxy-timeout'
+        ? currentRuntimeLimitSettings.proxyReadTimeoutSeconds
+        : initialRuntimeLimitSettings.proxyReadTimeoutSeconds,
+      dockerWaitTimeoutSeconds: scope === 'docker'
+        ? currentRuntimeLimitSettings.dockerWaitTimeoutSeconds
+        : initialRuntimeLimitSettings.dockerWaitTimeoutSeconds,
+    };
+
+    try {
+      const savedSettings = await saveRuntimeLimitSettings(draft);
+      const snapshot = createRuntimeLimitSnapshot(savedSettings);
+      if (scope === 'shell') {
+        setCommandTimeoutSeconds(snapshot.commandTimeoutSeconds);
+        setMaxOutputMiB(snapshot.maxOutputMiB);
+      } else if (scope === 'proxy-timeout') {
+        setProxyReadTimeoutSeconds(snapshot.proxyReadTimeoutSeconds);
+      } else {
+        setDockerWaitTimeoutSeconds(snapshot.dockerWaitTimeoutSeconds);
+      }
+      setInitialRuntimeLimitSettings(snapshot);
+      setRuntimeLimitSettingsSaved(true);
+    } catch (error) {
+      setRuntimeLimitSettingsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingRuntimeLimitSettings(false);
+    }
+  };
+
   const handleSavePublicRouteSettings = async (scope: PublicRouteSettingsScope) => {
     setSavingPublicRouteSettings(true);
     setApplyingPublicRouteSettings(false);
@@ -848,6 +1018,20 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     setPublicRouteSettingsSaved(false);
     setPublicRouteSettingsError(null);
     setPublicRouteSettingsStatusScope(null);
+  };
+
+  const handleRevertRuntimeLimitSettings = (scope: RuntimeLimitSettingsScope) => {
+    if (scope === 'shell') {
+      setCommandTimeoutSeconds(initialRuntimeLimitSettings.commandTimeoutSeconds);
+      setMaxOutputMiB(initialRuntimeLimitSettings.maxOutputMiB);
+    } else if (scope === 'proxy-timeout') {
+      setProxyReadTimeoutSeconds(initialRuntimeLimitSettings.proxyReadTimeoutSeconds);
+    } else {
+      setDockerWaitTimeoutSeconds(initialRuntimeLimitSettings.dockerWaitTimeoutSeconds);
+    }
+    setRuntimeLimitSettingsSaved(false);
+    setRuntimeLimitSettingsError(null);
+    setRuntimeLimitSettingsStatusScope(null);
   };
 
   const handleRevertWebAppAuthSettings = () => {
@@ -972,6 +1156,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                 {renderTabButton('run-recordings', 'Run recordings')}
                 {renderTabButton('node-executor-proxy', 'Node executor proxy')}
                 {renderTabButton('web-apps', 'Web apps')}
+                {renderTabButton('docker', 'Docker')}
               </div>
 
               {activeTab === 'general' ? (
@@ -1013,6 +1198,72 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                     <div className="about-detail-row">
                       <span className="about-detail-label">Web app auth</span>
                       <span className="about-detail-value">{formatWebAppsAuthMode(routeConfig.webAppsAuthMode)}</span>
+                    </div>
+                  </section>
+
+                  <section className="app-settings-section" aria-label="Shell execution">
+                    <div className="app-settings-section-title">Shell execution</div>
+                    <div className="app-settings-field-grid" aria-busy={!runtimeLimitSettingsLoaded || loadingRuntimeLimitSettings || savingRuntimeLimitSettings}>
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Command timeout</span>
+                        <TextField
+                          aria-label="Command timeout in seconds"
+                          type="number"
+                          min={1}
+                          value={commandTimeoutSeconds}
+                          isDisabled={runtimeLimitControlsDisabled}
+                          elemAfterInput={<span className="app-settings-input-suffix">seconds</span>}
+                          onChange={(event) => {
+                            setCommandTimeoutSeconds(event.currentTarget.value);
+                            setRuntimeLimitSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          How long hosted shell commands may run before the API stops them.
+                        </span>
+                      </label>
+
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Maximum captured output</span>
+                        <TextField
+                          aria-label="Maximum captured output in MiB"
+                          type="number"
+                          min={1}
+                          value={maxOutputMiB}
+                          isDisabled={runtimeLimitControlsDisabled}
+                          elemAfterInput={<span className="app-settings-input-suffix">MiB</span>}
+                          onChange={(event) => {
+                            setMaxOutputMiB(event.currentTarget.value);
+                            setRuntimeLimitSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          How much command output the API keeps before truncating it.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingRuntimeLimitSettings && runtimeLimitSettingsStatusScope === 'shell'}
+                        isDisabled={runtimeLimitControlsDisabled || !shellLimitSettingsChanged}
+                        onClick={() => handleSaveRuntimeLimitSettings('shell')}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={runtimeLimitControlsDisabled || !shellLimitSettingsChanged}
+                        onClick={() => handleRevertRuntimeLimitSettings('shell')}
+                      >
+                        Revert
+                      </Button>
+                      {runtimeLimitSettingsStatusScope === 'shell' || runtimeLimitSettingsStatusScope === null
+                        ? renderActionStatus(runtimeLimitSettingsError, runtimeLimitSettingsSaved)
+                        : null}
                     </div>
                   </section>
                 </div>
@@ -1241,7 +1492,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                       deploymentStorageSettingsError,
                       deploymentStorageSettingsSaved,
                       undefined,
-                      'Saved. Restart or recreate the stack to apply storage changes.',
+                      'Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.',
                     )}
                   </div>
                 </div>
@@ -1493,6 +1744,53 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                           ? 'Applying routes...'
                           : undefined,
                       )}
+                    </div>
+                  </section>
+
+                  <section className="app-settings-section" aria-label="HTTP request timeout">
+                    <div className="app-settings-section-title">HTTP request timeout</div>
+                    <div className="app-settings-field-grid" aria-busy={!runtimeLimitSettingsLoaded || loadingRuntimeLimitSettings || savingRuntimeLimitSettings}>
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Proxy read timeout</span>
+                        <TextField
+                          aria-label="Proxy read timeout in seconds"
+                          type="number"
+                          min={1}
+                          value={proxyReadTimeoutSeconds}
+                          isDisabled={runtimeLimitControlsDisabled}
+                          elemAfterInput={<span className="app-settings-input-suffix">seconds</span>}
+                          onChange={(event) => {
+                            setProxyReadTimeoutSeconds(event.currentTarget.value);
+                            setRuntimeLimitSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          How long standard API, workflow endpoint, and web-app action requests may stay open through nginx. Websocket routes stay long-lived separately.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingRuntimeLimitSettings && runtimeLimitSettingsStatusScope === 'proxy-timeout'}
+                        isDisabled={runtimeLimitControlsDisabled || !proxyTimeoutSettingsChanged}
+                        onClick={() => handleSaveRuntimeLimitSettings('proxy-timeout')}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={runtimeLimitControlsDisabled || !proxyTimeoutSettingsChanged}
+                        onClick={() => handleRevertRuntimeLimitSettings('proxy-timeout')}
+                      >
+                        Revert
+                      </Button>
+                      {runtimeLimitSettingsStatusScope === 'proxy-timeout' || runtimeLimitSettingsStatusScope === null
+                        ? renderActionStatus(runtimeLimitSettingsError, runtimeLimitSettingsSaved)
+                        : null}
                     </div>
                   </section>
                 </div>
@@ -1926,6 +2224,56 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                 </div>
               ) : null}
 
+              {activeTab === 'docker' ? (
+                <div className="project-settings-tab-panel app-settings-docker-panel" role="tabpanel">
+                  <section className="app-settings-section" aria-label="Docker launcher">
+                    <div className="app-settings-field-grid" aria-busy={!runtimeLimitSettingsLoaded || loadingRuntimeLimitSettings || savingRuntimeLimitSettings}>
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Startup wait timeout</span>
+                        <TextField
+                          aria-label="Docker startup wait timeout in seconds"
+                          type="number"
+                          min={1}
+                          value={dockerWaitTimeoutSeconds}
+                          isDisabled={runtimeLimitControlsDisabled}
+                          elemAfterInput={<span className="app-settings-input-suffix">seconds</span>}
+                          onChange={(event) => {
+                            setDockerWaitTimeoutSeconds(event.currentTarget.value);
+                            setRuntimeLimitSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          How long npm Docker launchers wait for Compose services to become healthy. Kubernetes ignores this setting.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingRuntimeLimitSettings && runtimeLimitSettingsStatusScope === 'docker'}
+                        isDisabled={runtimeLimitControlsDisabled || !dockerLimitSettingsChanged}
+                        onClick={() => handleSaveRuntimeLimitSettings('docker')}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={runtimeLimitControlsDisabled || !dockerLimitSettingsChanged}
+                        onClick={() => handleRevertRuntimeLimitSettings('docker')}
+                      >
+                        Revert
+                      </Button>
+                      {runtimeLimitSettingsStatusScope === 'docker' || runtimeLimitSettingsStatusScope === null
+                        ? renderActionStatus(runtimeLimitSettingsError, runtimeLimitSettingsSaved)
+                        : null}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+
               {activeTab === 'node-executor-proxy' ? (
                 <div className="project-settings-tab-panel app-settings-proxy-panel" role="tabpanel">
                   <section className="app-settings-section" aria-label="Node executor proxy">
@@ -1936,7 +2284,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                           aria-label="HTTP_PROXY"
                           value={httpProxy}
                           isDisabled={loadingProxySettings || savingProxySettings}
-                          placeholder="http://172.17.0.1:3128"
+                          placeholder="http://proxy.example.internal:3128"
                           onChange={(event) => {
                             setHttpProxy(event.currentTarget.value);
                             setProxySettingsSaved(false);
@@ -1950,7 +2298,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                           aria-label="HTTPS_PROXY"
                           value={httpsProxy}
                           isDisabled={loadingProxySettings || savingProxySettings}
-                          placeholder="http://172.17.0.1:3128"
+                          placeholder="http://proxy.example.internal:3128"
                           onChange={(event) => {
                             setHttpsProxy(event.currentTarget.value);
                             setProxySettingsSaved(false);
@@ -1965,12 +2313,15 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                           className="project-settings-textarea app-settings-proxy-no-proxy"
                           value={noProxy}
                           disabled={loadingProxySettings || savingProxySettings}
-                          placeholder="localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1"
+                          placeholder="localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local"
                           onChange={(event) => {
                             setNoProxy(event.currentTarget.value);
                             setProxySettingsSaved(false);
                           }}
                         />
+                        <span className="app-settings-field-help">
+                          Include internal service names that should bypass the proxy. In Kubernetes, include cluster-local suffixes such as .svc and .cluster.local when your proxy should not handle in-cluster calls.
+                        </span>
                       </label>
                     </div>
 

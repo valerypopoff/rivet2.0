@@ -48,9 +48,7 @@ objectStorage:
 
 storage:
   appData:
-    enabled: true
-    size: 20Gi
-    storageClassName: gp3
+    existingClaimName: rivet-prod-app-data
 
 auth:
   keySecretName: rivet-shared-key

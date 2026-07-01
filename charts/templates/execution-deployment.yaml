@@ -69,14 +69,9 @@ spec:
           emptyDir: {}
         - name: workflows
           emptyDir: {}
-        {{- if .Values.storage.appData.existingClaimName }}
         - name: app-data
           persistentVolumeClaim:
             claimName: {{ .Values.storage.appData.existingClaimName }}
-        {{- else }}
-        - name: app-data
-          emptyDir: {}
-        {{- end }}
         {{- if .Values.runtimeLibraries.cache.existingClaimName }}
         - name: runtime-libraries
           persistentVolumeClaim:

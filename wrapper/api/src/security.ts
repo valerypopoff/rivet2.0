@@ -1,5 +1,6 @@
 import path from 'node:path';
 
+import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { badRequest } from './utils/httpError.js';
 
 const repoRoot = path.resolve(process.cwd(), '..', '..');
@@ -16,9 +17,6 @@ const SHELL_ALLOWLIST = new Set([
   'pnpm',
   ...(process.env.RIVET_SHELL_ALLOWLIST?.split(',').map((v) => v.trim()) ?? []),
 ]);
-
-const COMMAND_TIMEOUT_MS = parseInt(process.env.RIVET_COMMAND_TIMEOUT ?? '30000', 10);
-const MAX_OUTPUT_BYTES = parseInt(process.env.RIVET_MAX_OUTPUT ?? String(10 * 1024 * 1024), 10);
 
 function configuredRoot(envName: string, fallback: string): string {
   return path.resolve(process.env[envName]?.trim() || fallback);
@@ -87,9 +85,9 @@ export function getWorkflowRecordingsRoot(): string {
 }
 
 export function getCommandTimeout(): number {
-  return COMMAND_TIMEOUT_MS;
+  return readRuntimeLimitSettingsSync().commandTimeoutSeconds * 1000;
 }
 
 export function getMaxOutputBytes(): number {
-  return MAX_OUTPUT_BYTES;
+  return readRuntimeLimitSettingsSync().maxOutputBytes;
 }

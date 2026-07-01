@@ -30,6 +30,22 @@ export interface RunRecordingsSettingsDraft {
   retentionDays?: unknown;
 }
 
+export interface RuntimeLimitSettings {
+  commandTimeoutSeconds: number;
+  maxOutputBytes: number;
+  proxyReadTimeoutSeconds: number;
+  dockerWaitTimeoutSeconds: number;
+  updatedAt: string | null;
+  source: AppSettingsSource;
+}
+
+export interface RuntimeLimitSettingsDraft {
+  commandTimeoutSeconds?: unknown;
+  maxOutputBytes?: unknown;
+  proxyReadTimeoutSeconds?: unknown;
+  dockerWaitTimeoutSeconds?: unknown;
+}
+
 export interface PublicRouteSettings {
   publishedWorkflowsBasePath: string;
   latestWorkflowsBasePath: string;

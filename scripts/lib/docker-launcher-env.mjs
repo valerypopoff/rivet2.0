@@ -23,6 +23,10 @@ export const retiredEnvReplacements = {
   RIVET_WORKFLOWS_STORAGE_ACCESS_KEY: 'Settings -> Storage',
   RIVET_WORKFLOWS_STORAGE_PREFIX: 'Settings -> Storage',
   RIVET_WORKFLOWS_STORAGE_FORCE_PATH_STYLE: 'Settings -> Storage',
+  RIVET_PROXY_READ_TIMEOUT: 'Settings -> Workflow endpoints',
+  RIVET_COMMAND_TIMEOUT: 'Settings -> General',
+  RIVET_MAX_OUTPUT: 'Settings -> General',
+  RIVET_DOCKER_WAIT_TIMEOUT: 'Settings -> Docker',
   RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS: 'RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS',
 };
 
@@ -44,7 +48,7 @@ export function assertNoRetiredEnv(env, options = {}) {
 
   throw new Error(
     `[${launcherName}] Retired environment variable(s) detected in ${envFileLabel}: ${activeRetired.join(', ')}. ` +
-    'Remove storage/database runtime values from the env file and configure them in Settings -> Storage.',
+    'Remove retired runtime values from the env file and configure them in the App Settings UI.',
   );
 }
 

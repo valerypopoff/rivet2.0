@@ -129,9 +129,8 @@ objectStorage:
 
 storage:
   appData:
-    enabled: true
-    size: 10Gi
-    storageClassName: ""
+    # Required: provide a PVC that backend, proxy, execution, and executor pods can all mount.
+    # Use RWX-capable storage for multi-node or scaled proxy/execution deployments.
     existingClaimName: ""
 
 tmpVolume:
@@ -158,8 +157,6 @@ env:
   RIVET_REQUIRE_UI_GATE_KEY: "true"
   RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
   RIVET_UI_TOKEN_FREE_HOSTS: ""
-  RIVET_COMMAND_TIMEOUT: "30000"
-  RIVET_MAX_OUTPUT: "10485760"
   RIVET_RECORDINGS_ENABLED: "true"
 
 podAnnotations:

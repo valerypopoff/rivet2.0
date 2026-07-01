@@ -133,8 +133,7 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
-        proxy_read_timeout ${RIVET_PROXY_READ_TIMEOUT};
-        proxy_send_timeout ${RIVET_PROXY_READ_TIMEOUT};
+        include ${RIVET_PROXY_TIMEOUT_INCLUDE_FILE};
     }
 
     include ${RIVET_PUBLIC_ROUTES_INCLUDE_FILE};
