@@ -21,14 +21,12 @@ function loadKubernetesLauncherModule(): Promise<KubernetesLauncherModule> {
 test('kubernetes launcher config uses managed canonical envs and local rehearsal defaults', async () => {
   const { buildKubernetesLauncherConfig } = await loadKubernetesLauncherModule();
   const config = buildKubernetesLauncherConfig({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
-    RIVET_DATABASE_SSL_MODE: 'verify-full',
-    RIVET_STORAGE_BUCKET: 'rivet-prod',
-    RIVET_STORAGE_REGION: 'us-east-1',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-key',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret',
+    RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
+    RIVET_K8S_DATABASE_SSL_MODE: 'verify-full',
+    RIVET_K8S_STORAGE_BUCKET: 'rivet-prod',
+    RIVET_K8S_STORAGE_REGION: 'us-east-1',
+    RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
+    RIVET_K8S_STORAGE_ACCESS_KEY: 'spaces-secret',
     RIVET_KEY: 'shared-key',
     RIVET_K8S_NAMESPACE: 'rivet-dev',
     RIVET_K8S_RELEASE: 'rivet-dev',
@@ -59,15 +57,13 @@ test('kubernetes launcher config uses managed canonical envs and local rehearsal
   assert.equal(config.routeConfig.requireUiGateKey, false);
 });
 
-test('kubernetes launcher config can derive object storage settings from RIVET_STORAGE_URL', async () => {
+test('kubernetes launcher config can derive object storage settings from RIVET_K8S_STORAGE_URL', async () => {
   const { buildKubernetesLauncherConfig } = await loadKubernetesLauncherModule();
   const config = buildKubernetesLauncherConfig({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
-    RIVET_STORAGE_URL: 'https://my-bucket.s3.us-east-1.amazonaws.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-key',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret',
+    RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
+    RIVET_K8S_STORAGE_URL: 'https://my-bucket.s3.us-east-1.amazonaws.com',
+    RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
+    RIVET_K8S_STORAGE_ACCESS_KEY: 'spaces-secret',
     RIVET_KEY: 'shared-key',
   });
 
@@ -85,13 +81,11 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
     renderKubernetesLauncherValuesYaml,
   } = await loadKubernetesLauncherModule();
   const config = buildKubernetesLauncherConfig({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
-    RIVET_STORAGE_BUCKET: 'rivet-prod',
-    RIVET_STORAGE_REGION: 'us-east-1',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-key',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret',
+    RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
+    RIVET_K8S_STORAGE_BUCKET: 'rivet-prod',
+    RIVET_K8S_STORAGE_REGION: 'us-east-1',
+    RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
+    RIVET_K8S_STORAGE_ACCESS_KEY: 'spaces-secret',
     RIVET_KEY: 'shared-key',
   });
 
@@ -117,49 +111,41 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
   assert.match(secretManifest, /connectionString: "postgresql:\/\/db-user:db-pass@example-db:5432\/rivet\?sslmode=require"/);
 });
 
-test('kubernetes launcher config rejects non-managed local modes', async () => {
+test('kubernetes launcher config requires managed-service inputs', async () => {
   const { buildKubernetesLauncherConfig } = await loadKubernetesLauncherModule();
   assert.throws(
     () =>
       buildKubernetesLauncherConfig({
-        RIVET_STORAGE_MODE: 'filesystem',
-        RIVET_DATABASE_MODE: 'managed',
-        RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
-        RIVET_STORAGE_BUCKET: 'rivet-prod',
-        RIVET_STORAGE_REGION: 'us-east-1',
-        RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-key',
-        RIVET_STORAGE_ACCESS_KEY: 'spaces-secret',
+        RIVET_K8S_STORAGE_BUCKET: 'rivet-prod',
+        RIVET_K8S_STORAGE_REGION: 'us-east-1',
+        RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
+        RIVET_K8S_STORAGE_ACCESS_KEY: 'spaces-secret',
         RIVET_KEY: 'shared-key',
       }),
-    /RIVET_STORAGE_MODE must be "managed"/,
+    /Missing required environment variable: RIVET_K8S_DATABASE_CONNECTION_STRING/,
   );
 
   assert.throws(
     () =>
       buildKubernetesLauncherConfig({
-        RIVET_STORAGE_MODE: 'managed',
-        RIVET_DATABASE_MODE: 'local-docker',
-        RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
-        RIVET_STORAGE_BUCKET: 'rivet-prod',
-        RIVET_STORAGE_REGION: 'us-east-1',
-        RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-key',
-        RIVET_STORAGE_ACCESS_KEY: 'spaces-secret',
+        RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
+        RIVET_K8S_STORAGE_BUCKET: 'rivet-prod',
+        RIVET_K8S_STORAGE_REGION: 'us-east-1',
+        RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
         RIVET_KEY: 'shared-key',
       }),
-    /RIVET_DATABASE_MODE must be "managed"/,
+    /Missing required environment variable: RIVET_K8S_STORAGE_ACCESS_KEY/,
   );
 });
 
 test('kubernetes launcher config can disable local image loading explicitly', async () => {
   const { buildKubernetesLauncherConfig } = await loadKubernetesLauncherModule();
   const config = buildKubernetesLauncherConfig({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
-    RIVET_STORAGE_BUCKET: 'rivet-prod',
-    RIVET_STORAGE_REGION: 'us-east-1',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-key',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret',
+    RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
+    RIVET_K8S_STORAGE_BUCKET: 'rivet-prod',
+    RIVET_K8S_STORAGE_REGION: 'us-east-1',
+    RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
+    RIVET_K8S_STORAGE_ACCESS_KEY: 'spaces-secret',
     RIVET_KEY: 'shared-key',
     RIVET_K8S_CONTEXT: 'custom-cluster',
     RIVET_K8S_CLUSTER_DOMAIN: 'corp.internal',
@@ -176,13 +162,11 @@ test('kubernetes launcher config can disable local image loading explicitly', as
 test('kubernetes launcher config treats minikube as a first-class local cluster provider', async () => {
   const { buildKubernetesLauncherConfig } = await loadKubernetesLauncherModule();
   const config = buildKubernetesLauncherConfig({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
-    RIVET_STORAGE_BUCKET: 'rivet-prod',
-    RIVET_STORAGE_REGION: 'us-east-1',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-key',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret',
+    RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
+    RIVET_K8S_STORAGE_BUCKET: 'rivet-prod',
+    RIVET_K8S_STORAGE_REGION: 'us-east-1',
+    RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
+    RIVET_K8S_STORAGE_ACCESS_KEY: 'spaces-secret',
     RIVET_KEY: 'shared-key',
     RIVET_K8S_CONTEXT: 'minikube',
   });

@@ -119,20 +119,7 @@ function yamlBoolean(value) {
 
 export function buildKubernetesLauncherConfig(env) {
   const launcherName = 'dev-kubernetes';
-  const storageMode = readEnv(env, 'RIVET_STORAGE_MODE') ?? 'filesystem';
-  if (storageMode !== 'managed') {
-    throw new Error(`[${launcherName}] RIVET_STORAGE_MODE must be "managed" for local Kubernetes rehearsal.`);
-  }
-
-  const databaseMode = readEnv(env, 'RIVET_DATABASE_MODE') ?? 'managed';
-  if (databaseMode !== 'managed') {
-    throw new Error(
-      `[${launcherName}] RIVET_DATABASE_MODE must be "managed" for local Kubernetes rehearsal. ` +
-      'Use external managed Postgres instead of the local-docker dependency mode.',
-    );
-  }
-
-  const storageUrl = readEnv(env, 'RIVET_STORAGE_URL');
+  const storageUrl = readEnv(env, 'RIVET_K8S_STORAGE_URL');
   const parsedStorageUrl = storageUrl ? parseManagedStorageUrl(storageUrl) : null;
   const imageTag = readEnv(env, 'RIVET_K8S_IMAGE_TAG') ?? 'dev';
   const context = readEnv(env, 'RIVET_K8S_CONTEXT') ?? 'docker-desktop';
@@ -169,17 +156,17 @@ export function buildKubernetesLauncherConfig(env) {
       objectStorageName: readEnv(env, 'RIVET_K8S_OBJECT_STORAGE_SECRET_NAME') ?? 'rivet-object-storage',
     },
     sharedKey: requireEnv(env, 'RIVET_KEY', launcherName),
-    databaseConnectionString: requireEnv(env, 'RIVET_DATABASE_CONNECTION_STRING', launcherName),
-    databaseSslMode: readEnv(env, 'RIVET_DATABASE_SSL_MODE') ?? 'require',
+    databaseConnectionString: requireEnv(env, 'RIVET_K8S_DATABASE_CONNECTION_STRING', launcherName),
+    databaseSslMode: readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') ?? 'require',
     objectStorage: {
-      bucket: readEnv(env, 'RIVET_STORAGE_BUCKET') ?? parsedStorageUrl?.bucket ?? requireEnv(env, 'RIVET_STORAGE_BUCKET', launcherName),
-      region: readEnv(env, 'RIVET_STORAGE_REGION') ?? parsedStorageUrl?.region ?? 'us-east-1',
-      endpoint: readEnv(env, 'RIVET_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint ?? '',
-      accessKeyId: requireEnv(env, 'RIVET_STORAGE_ACCESS_KEY_ID', launcherName),
-      secretAccessKey: requireEnv(env, 'RIVET_STORAGE_ACCESS_KEY', launcherName),
-      prefix: (readEnv(env, 'RIVET_STORAGE_PREFIX') ?? 'workflows/').replace(/^\/+/, ''),
+      bucket: readEnv(env, 'RIVET_K8S_STORAGE_BUCKET') ?? parsedStorageUrl?.bucket ?? requireEnv(env, 'RIVET_K8S_STORAGE_BUCKET', launcherName),
+      region: readEnv(env, 'RIVET_K8S_STORAGE_REGION') ?? parsedStorageUrl?.region ?? 'us-east-1',
+      endpoint: readEnv(env, 'RIVET_K8S_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint ?? '',
+      accessKeyId: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY_ID', launcherName),
+      secretAccessKey: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY', launcherName),
+      prefix: (readEnv(env, 'RIVET_K8S_STORAGE_PREFIX') ?? 'workflows/').replace(/^\/+/, ''),
       forcePathStyle: parseBoolean(
-        readEnv(env, 'RIVET_STORAGE_FORCE_PATH_STYLE'),
+        readEnv(env, 'RIVET_K8S_STORAGE_FORCE_PATH_STYLE'),
         parsedStorageUrl?.forcePathStyle ?? false,
       ),
     },

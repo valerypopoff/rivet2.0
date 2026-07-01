@@ -7,14 +7,9 @@ import type {
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
 } from '../../../shared/app-settings-types.js';
+import { readDeploymentStorageSettings, writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
 import { getAppDataRoot } from '../security.js';
 import { badRequest } from '../utils/httpError.js';
-import {
-  DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS,
-  getRunRecordingsSettingsPath,
-  normalizeWorkflowRecordingLimitSettings,
-} from './workflows/recordings-config.js';
-import { readWebAppAuthSettings, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 import {
   readPublicRouteSettings,
   readWebAppRouteSettings,
@@ -22,6 +17,12 @@ import {
   writeWebAppRouteSettings,
 } from '../public-route-settings.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
+import { readWebAppAuthSettings, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
+import {
+  DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS,
+  getRunRecordingsSettingsPath,
+  normalizeWorkflowRecordingLimitSettings,
+} from './workflows/recordings-config.js';
 
 export const appSettingsRouter = Router();
 
@@ -40,13 +41,21 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function isPresent(value: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function rejectControlCharacters(value: string, fieldLabel: string): void {
   if (/[\r\n\0]/.test(value)) {
     throw badRequest(`${fieldLabel} must be a single-line value`);
   }
 }
 
-function normalizeProxyUrl(value: unknown, fieldLabel: string): string {
+function normalizeProxyUrl(value: unknown, fieldLabel: string, present = true): string {
+  if (present && typeof value !== 'undefined' && typeof value !== 'string') {
+    throw badRequest(`${fieldLabel} must be a string`);
+  }
+
   const normalized = normalizeString(value);
   if (!normalized) {
     return '';
@@ -72,7 +81,11 @@ function normalizeProxyUrl(value: unknown, fieldLabel: string): string {
   return normalized;
 }
 
-function normalizeNoProxy(value: unknown): string {
+function normalizeNoProxy(value: unknown, present = true): string {
+  if (present && typeof value !== 'undefined' && typeof value !== 'string') {
+    throw badRequest('NO_PROXY must be a string');
+  }
+
   const normalized = normalizeString(value);
   if (!normalized) {
     return '';
@@ -92,9 +105,9 @@ function normalizeNodeExecutorProxySettingsDraft(value: unknown): Omit<NodeExecu
     : {};
 
   return {
-    httpProxy: normalizeProxyUrl(raw.httpProxy, 'HTTP_PROXY'),
-    httpsProxy: normalizeProxyUrl(raw.httpsProxy, 'HTTPS_PROXY'),
-    noProxy: normalizeNoProxy(raw.noProxy),
+    httpProxy: normalizeProxyUrl(raw.httpProxy, 'HTTP_PROXY', isPresent(raw, 'httpProxy')),
+    httpsProxy: normalizeProxyUrl(raw.httpsProxy, 'HTTPS_PROXY', isPresent(raw, 'httpsProxy')),
+    noProxy: normalizeNoProxy(raw.noProxy, isPresent(raw, 'noProxy')),
   };
 }
 
@@ -277,6 +290,22 @@ appSettingsRouter.get('/run-recordings', async (_req, res, next) => {
 appSettingsRouter.put('/run-recordings', async (req, res, next) => {
   try {
     res.json(await writeRunRecordingsSettings(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/deployment-storage', async (_req, res, next) => {
+  try {
+    res.json(await readDeploymentStorageSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/deployment-storage', async (req, res, next) => {
+  try {
+    res.json(await writeDeploymentStorageSettings(req.body));
   } catch (error) {
     next(error);
   }

@@ -31,6 +31,7 @@ import {
   getPublishedWebAppsBasePath,
   getPublishedWorkflowsBasePath,
 } from './workflowEndpointPaths.js';
+import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config.js';
 import { requireAuth } from './middleware/auth.js';
 import { isTrustedProxyRequest } from './auth.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
@@ -153,8 +154,8 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
 }
 
 export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRuntimeProfile()): void {
-  if (isExecutionOnlyApiProfile(profile) && process.env.RIVET_STORAGE_MODE?.trim().toLowerCase() !== 'managed') {
-    throw new Error('RIVET_API_PROFILE=execution requires RIVET_STORAGE_MODE=managed');
+  if (isExecutionOnlyApiProfile(profile) && getWorkflowStorageBackendMode() !== 'managed') {
+    throw new Error('RIVET_API_PROFILE=execution requires Settings -> Storage to use Object storage');
   }
 }
 

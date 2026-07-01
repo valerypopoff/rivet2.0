@@ -5,10 +5,12 @@ import { type FC, useEffect, useMemo, useState } from 'react';
 
 import type { HostedRouteConfig } from './types';
 import {
+  fetchDeploymentStorageSettings,
   fetchNodeExecutorProxySettings,
   fetchPublicRouteSettings,
   fetchRunRecordingsSettings,
   fetchWebAppAuthSettings,
+  saveDeploymentStorageSettings,
   saveNodeExecutorProxySettings,
   savePublicRouteSettings,
   saveRunRecordingsSettings,
@@ -16,6 +18,10 @@ import {
 } from './appSettingsApi';
 import { fetchHostedConfig } from './workflowApi';
 import type {
+  DeploymentDatabaseMode,
+  DeploymentDatabaseSslMode,
+  DeploymentStorageMode,
+  DeploymentStorageSettings,
   PublicRouteSettings,
   WebAppAuthMode,
   WebAppAuthSettings,
@@ -33,7 +39,7 @@ interface AppSettingsModalProps {
 const appVersion = import.meta.env.VITE_APP_VERSION || 'unknown';
 const appName = 'Rivet Studio Server';
 
-type AppSettingsTab = 'general' | 'node-executor-proxy' | 'run-recordings' | 'web-apps' | 'workflow-endpoints';
+type AppSettingsTab = 'general' | 'storage' | 'node-executor-proxy' | 'run-recordings' | 'web-apps' | 'workflow-endpoints';
 type RunsKeptMode = 'latest' | 'all';
 type RecordingRetentionMode = 'limited' | 'forever';
 type PublicRouteSettingsScope = 'web-apps' | 'workflow-endpoints';
@@ -59,11 +65,20 @@ type WebAppAuthSettingsFormSnapshot = {
   clientAuthMethod: WebAppOAuthClientAuthMethod;
   debugLogProfile: boolean;
 };
+type DeploymentStorageSettingsFormSnapshot = {
+  storageMode: DeploymentStorageMode;
+  artifactsHostPath: string;
+  databaseMode: DeploymentDatabaseMode;
+  databaseSslMode: DeploymentDatabaseSslMode;
+  databaseConnectionStringConfigured: boolean;
+  storageUrl: string;
+  storageAccessKeyId: string;
+  storageAccessKeyConfigured: boolean;
+};
 
 const defaultMaxRunsPerEndpoint = '100';
 const defaultRetentionDays = '14';
 const defaultSessionTtlHours = '24';
-
 function formatWebAppsAuthMode(value: HostedRouteConfig['webAppsAuthMode']): string {
   if (value === 'ui-gate') {
     return 'Rivet key gate';
@@ -92,6 +107,21 @@ function createWebAppAuthSnapshot(settings: WebAppAuthSettings): WebAppAuthSetti
     sessionTtlHours: getWebAppAuthSessionTtlHours(settings),
     clientAuthMethod: settings.clientAuthMethod,
     debugLogProfile: settings.debugLogProfile,
+  };
+}
+
+function createDeploymentStorageSnapshot(
+  settings: DeploymentStorageSettings,
+): DeploymentStorageSettingsFormSnapshot {
+  return {
+    storageMode: settings.storageMode,
+    artifactsHostPath: settings.artifactsHostPath,
+    databaseMode: settings.databaseMode,
+    databaseSslMode: settings.databaseSslMode,
+    databaseConnectionStringConfigured: settings.databaseConnectionStringConfigured,
+    storageUrl: settings.storageUrl,
+    storageAccessKeyId: settings.storageAccessKeyId,
+    storageAccessKeyConfigured: settings.storageAccessKeyConfigured,
   };
 }
 
@@ -146,6 +176,30 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   onRouteConfigChange,
 }) => {
   const [activeTab, setActiveTab] = useState<AppSettingsTab>('general');
+  const [loadingDeploymentStorageSettings, setLoadingDeploymentStorageSettings] = useState(false);
+  const [savingDeploymentStorageSettings, setSavingDeploymentStorageSettings] = useState(false);
+  const [deploymentStorageSettingsError, setDeploymentStorageSettingsError] = useState<string | null>(null);
+  const [deploymentStorageSettingsSaved, setDeploymentStorageSettingsSaved] = useState(false);
+  const [storageMode, setStorageMode] = useState<DeploymentStorageMode>('filesystem');
+  const [artifactsHostPath, setArtifactsHostPath] = useState('../');
+  const [databaseMode, setDatabaseMode] = useState<DeploymentDatabaseMode>('local-docker');
+  const [databaseSslMode, setDatabaseSslMode] = useState<DeploymentDatabaseSslMode>('disable');
+  const [databaseConnectionString, setDatabaseConnectionString] = useState('');
+  const [databaseConnectionStringConfigured, setDatabaseConnectionStringConfigured] = useState(false);
+  const [storageUrl, setStorageUrl] = useState('');
+  const [storageAccessKeyId, setStorageAccessKeyId] = useState('');
+  const [storageAccessKey, setStorageAccessKey] = useState('');
+  const [storageAccessKeyConfigured, setStorageAccessKeyConfigured] = useState(false);
+  const [initialDeploymentStorageSettings, setInitialDeploymentStorageSettings] = useState<DeploymentStorageSettingsFormSnapshot>({
+    storageMode: 'filesystem',
+    artifactsHostPath: '../',
+    databaseMode: 'local-docker',
+    databaseSslMode: 'disable',
+    databaseConnectionStringConfigured: false,
+    storageUrl: '',
+    storageAccessKeyId: '',
+    storageAccessKeyConfigured: false,
+  });
   const [loadingProxySettings, setLoadingProxySettings] = useState(false);
   const [savingProxySettings, setSavingProxySettings] = useState(false);
   const [proxySettingsError, setProxySettingsError] = useState<string | null>(null);
@@ -226,6 +280,37 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     clientAuthMethod: 'body',
     debugLogProfile: false,
   });
+
+  const currentDeploymentStorageSettings = useMemo(() => ({
+    storageMode,
+    artifactsHostPath: artifactsHostPath.trim(),
+    databaseMode,
+    databaseSslMode,
+    databaseConnectionString: databaseConnectionString.trim(),
+    storageUrl: storageUrl.trim(),
+    storageAccessKeyId: storageAccessKeyId.trim(),
+    storageAccessKey: storageAccessKey.trim(),
+  }), [
+    artifactsHostPath,
+    databaseConnectionString,
+    databaseMode,
+    databaseSslMode,
+    storageAccessKey,
+    storageAccessKeyId,
+    storageMode,
+    storageUrl,
+  ]);
+
+  const deploymentStorageSettingsChanged = useMemo(() => (
+    currentDeploymentStorageSettings.storageMode !== initialDeploymentStorageSettings.storageMode ||
+    currentDeploymentStorageSettings.artifactsHostPath !== initialDeploymentStorageSettings.artifactsHostPath ||
+    currentDeploymentStorageSettings.databaseMode !== initialDeploymentStorageSettings.databaseMode ||
+    currentDeploymentStorageSettings.databaseSslMode !== initialDeploymentStorageSettings.databaseSslMode ||
+    currentDeploymentStorageSettings.databaseConnectionString !== '' ||
+    currentDeploymentStorageSettings.storageUrl !== initialDeploymentStorageSettings.storageUrl ||
+    currentDeploymentStorageSettings.storageAccessKeyId !== initialDeploymentStorageSettings.storageAccessKeyId ||
+    currentDeploymentStorageSettings.storageAccessKey !== ''
+  ), [currentDeploymentStorageSettings, initialDeploymentStorageSettings]);
 
   const proxySettingsChanged = useMemo(() => (
     httpProxy.trim() !== initialProxySettings.httpProxy ||
@@ -330,10 +415,56 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
 
     setActiveTab('general');
     setProxySettingsSaved(false);
+    setDeploymentStorageSettingsSaved(false);
     setRunRecordingsSettingsSaved(false);
     setPublicRouteSettingsSaved(false);
     setWebAppAuthSettingsSaved(false);
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'storage') {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingDeploymentStorageSettings(true);
+    setDeploymentStorageSettingsError(null);
+    setDeploymentStorageSettingsSaved(false);
+
+    fetchDeploymentStorageSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+
+        const snapshot = createDeploymentStorageSnapshot(settings);
+        setStorageMode(snapshot.storageMode);
+        setArtifactsHostPath(snapshot.artifactsHostPath);
+        setDatabaseMode(snapshot.databaseMode);
+        setDatabaseSslMode(snapshot.databaseSslMode);
+        setDatabaseConnectionString('');
+        setDatabaseConnectionStringConfigured(snapshot.databaseConnectionStringConfigured);
+        setStorageUrl(snapshot.storageUrl);
+        setStorageAccessKeyId(snapshot.storageAccessKeyId);
+        setStorageAccessKey('');
+        setStorageAccessKeyConfigured(snapshot.storageAccessKeyConfigured);
+        setInitialDeploymentStorageSettings(snapshot);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDeploymentStorageSettingsError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingDeploymentStorageSettings(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isOpen]);
 
   useEffect(() => {
     if (!isOpen || activeTab !== 'node-executor-proxy') {
@@ -424,15 +555,15 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   }, [activeTab, isOpen]);
 
   useEffect(() => {
-    if (!isOpen || activeTab !== 'web-apps') {
+    if (!isOpen || (activeTab !== 'workflow-endpoints' && activeTab !== 'web-apps')) {
       return;
     }
 
     let cancelled = false;
     setLoadingPublicRouteSettings(true);
-      setPublicRouteSettingsError(null);
-      setPublicRouteSettingsSaved(false);
-      setPublicRouteSettingsStatusScope(null);
+    setPublicRouteSettingsError(null);
+    setPublicRouteSettingsSaved(false);
+    setPublicRouteSettingsStatusScope(null);
 
     fetchPublicRouteSettings()
       .then((settings) => {
@@ -519,6 +650,48 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   if (!isOpen) {
     return null;
   }
+
+  const handleSaveDeploymentStorageSettings = async () => {
+    setSavingDeploymentStorageSettings(true);
+    setDeploymentStorageSettingsError(null);
+    setDeploymentStorageSettingsSaved(false);
+
+    try {
+      const saved = await saveDeploymentStorageSettings(currentDeploymentStorageSettings);
+      const snapshot = createDeploymentStorageSnapshot(saved);
+      setStorageMode(snapshot.storageMode);
+      setArtifactsHostPath(snapshot.artifactsHostPath);
+      setDatabaseMode(snapshot.databaseMode);
+      setDatabaseSslMode(snapshot.databaseSslMode);
+      setDatabaseConnectionString('');
+      setDatabaseConnectionStringConfigured(snapshot.databaseConnectionStringConfigured);
+      setStorageUrl(snapshot.storageUrl);
+      setStorageAccessKeyId(snapshot.storageAccessKeyId);
+      setStorageAccessKey('');
+      setStorageAccessKeyConfigured(snapshot.storageAccessKeyConfigured);
+      setInitialDeploymentStorageSettings(snapshot);
+      setDeploymentStorageSettingsSaved(true);
+    } catch (error) {
+      setDeploymentStorageSettingsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingDeploymentStorageSettings(false);
+    }
+  };
+
+  const handleRevertDeploymentStorageSettings = () => {
+    setStorageMode(initialDeploymentStorageSettings.storageMode);
+    setArtifactsHostPath(initialDeploymentStorageSettings.artifactsHostPath);
+    setDatabaseMode(initialDeploymentStorageSettings.databaseMode);
+    setDatabaseSslMode(initialDeploymentStorageSettings.databaseSslMode);
+    setDatabaseConnectionString('');
+    setDatabaseConnectionStringConfigured(initialDeploymentStorageSettings.databaseConnectionStringConfigured);
+    setStorageUrl(initialDeploymentStorageSettings.storageUrl);
+    setStorageAccessKeyId(initialDeploymentStorageSettings.storageAccessKeyId);
+    setStorageAccessKey('');
+    setStorageAccessKeyConfigured(initialDeploymentStorageSettings.storageAccessKeyConfigured);
+    setDeploymentStorageSettingsSaved(false);
+    setDeploymentStorageSettingsError(null);
+  };
 
   const handleSaveProxySettings = async () => {
     setSavingProxySettings(true);
@@ -710,7 +883,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     </button>
   );
 
-  const renderActionStatus = (error: string | null, saved: boolean, pending?: string) => {
+  const renderActionStatus = (error: string | null, saved: boolean, pending?: string, savedMessage = 'Saved.') => {
     if (error) {
       return <div className="project-settings-error app-settings-action-status">{error}</div>;
     }
@@ -720,7 +893,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     }
 
     if (saved) {
-      return <div className="project-settings-success app-settings-action-status">Saved.</div>;
+      return <div className="project-settings-success app-settings-action-status">{savedMessage}</div>;
     }
 
     return null;
@@ -794,6 +967,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
             <div className="project-settings-modal-content app-settings-modal-content">
               <div className="project-settings-tabs" role="tablist" aria-label="App settings sections">
                 {renderTabButton('general', 'General')}
+                {renderTabButton('storage', 'Storage')}
                 {renderTabButton('workflow-endpoints', 'Workflow endpoints')}
                 {renderTabButton('run-recordings', 'Run recordings')}
                 {renderTabButton('node-executor-proxy', 'Node executor proxy')}
@@ -841,6 +1015,235 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                       <span className="about-detail-value">{formatWebAppsAuthMode(routeConfig.webAppsAuthMode)}</span>
                     </div>
                   </section>
+                </div>
+              ) : null}
+
+              {activeTab === 'storage' ? (
+                <div className="project-settings-tab-panel app-settings-storage-panel" role="tabpanel">
+                  <section className="app-settings-section" aria-label="Project artifact storage">
+                    <div className="app-settings-field-grid" aria-busy={loadingDeploymentStorageSettings || savingDeploymentStorageSettings}>
+                      <div className="app-settings-field">
+                        <span className="app-settings-field-label">Project artifact storage</span>
+                        <div className="project-settings-tabs app-settings-mode-tabs app-settings-wide-mode-tabs" role="group" aria-label="Storage backend">
+                          {renderModeButton(
+                            storageMode === 'filesystem',
+                            'Local folders',
+                            () => {
+                              setStorageMode('filesystem');
+                              setDeploymentStorageSettingsSaved(false);
+                            },
+                            loadingDeploymentStorageSettings || savingDeploymentStorageSettings,
+                          )}
+                          {renderModeButton(
+                            storageMode === 'managed',
+                            'Object storage',
+                            () => {
+                              setStorageMode('managed');
+                              setDeploymentStorageSettingsSaved(false);
+                            },
+                            loadingDeploymentStorageSettings || savingDeploymentStorageSettings,
+                          )}
+                        </div>
+                        <span className="app-settings-field-help">
+                          {storageMode === 'filesystem'
+                            ? 'Saved projects, recordings, published snapshots, and runtime libraries use the mounted local folders.'
+                            : 'Saved projects, recordings, published snapshots, and runtime-library artifacts use S3-compatible object storage. Metadata is controlled by the database section below.'}
+                        </span>
+                      </div>
+
+                      {storageMode === 'filesystem' ? (
+                        <label className="app-settings-field">
+                          <span className="app-settings-field-label">Host artifacts folder</span>
+                          <TextField
+                            aria-label="Host artifacts folder"
+                            value={artifactsHostPath}
+                            isDisabled={loadingDeploymentStorageSettings || savingDeploymentStorageSettings}
+                            placeholder="../"
+                            onChange={(event) => {
+                              setArtifactsHostPath(event.currentTarget.value);
+                              setDeploymentStorageSettingsSaved(false);
+                            }}
+                          />
+                          <span className="app-settings-field-help">
+                            This records the intended host root for filesystem storage. Docker and Kubernetes mounts must still point at that host root before the app starts.
+                          </span>
+                        </label>
+                      ) : null}
+
+                      {storageMode === 'managed' ? (
+                        <>
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Object storage URL</span>
+                            <TextField
+                              aria-label="Object storage URL"
+                              value={storageUrl}
+                              isDisabled={loadingDeploymentStorageSettings || savingDeploymentStorageSettings}
+                              placeholder="https://bucket.region.example.com"
+                              onChange={(event) => {
+                                setStorageUrl(event.currentTarget.value);
+                                setDeploymentStorageSettingsSaved(false);
+                              }}
+                            />
+                            <span className="app-settings-field-help">
+                              Use an S3-compatible bucket URL. For local MinIO rehearsals, enter the MinIO URL and credentials from the optional Compose service.
+                            </span>
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Object storage access key ID</span>
+                            <TextField
+                              aria-label="Object storage access key ID"
+                              value={storageAccessKeyId}
+                              isDisabled={loadingDeploymentStorageSettings || savingDeploymentStorageSettings}
+                              placeholder="access-key-id"
+                              onChange={(event) => {
+                                setStorageAccessKeyId(event.currentTarget.value);
+                                setDeploymentStorageSettingsSaved(false);
+                              }}
+                            />
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Object storage secret access key</span>
+                            <TextField
+                              aria-label="Object storage secret access key"
+                              type="password"
+                              value={storageAccessKey}
+                              isDisabled={loadingDeploymentStorageSettings || savingDeploymentStorageSettings}
+                              placeholder={storageAccessKeyConfigured ? 'Already saved; leave blank to keep it' : 'secret-access-key'}
+                              onChange={(event) => {
+                                setStorageAccessKey(event.currentTarget.value);
+                                setDeploymentStorageSettingsSaved(false);
+                              }}
+                            />
+                            <span className="app-settings-field-help">
+                              {storageAccessKeyConfigured
+                                ? 'A secret access key is saved. Enter a new value only when rotating it.'
+                                : 'Required before managed object storage can be enabled.'}
+                            </span>
+                          </label>
+                        </>
+                      ) : null}
+                    </div>
+                  </section>
+
+                  <section className="app-settings-section" aria-label="Metadata database">
+                    <div className="app-settings-field-grid" aria-busy={loadingDeploymentStorageSettings || savingDeploymentStorageSettings}>
+                      <div className="app-settings-field">
+                        <span className="app-settings-field-label">Metadata database</span>
+                        <div className="project-settings-tabs app-settings-mode-tabs app-settings-wide-mode-tabs" role="group" aria-label="Database backend">
+                          {renderModeButton(
+                            databaseMode === 'local-docker',
+                            'Local Docker Postgres',
+                            () => {
+                              setDatabaseMode('local-docker');
+                              setDatabaseSslMode('disable');
+                              setDeploymentStorageSettingsSaved(false);
+                            },
+                            loadingDeploymentStorageSettings || savingDeploymentStorageSettings,
+                          )}
+                          {renderModeButton(
+                            databaseMode === 'managed',
+                            'Managed Postgres',
+                            () => {
+                              setDatabaseMode('managed');
+                              setDatabaseSslMode('require');
+                              setDeploymentStorageSettingsSaved(false);
+                            },
+                            loadingDeploymentStorageSettings || savingDeploymentStorageSettings,
+                          )}
+                        </div>
+                        <span className="app-settings-field-help">
+                          {databaseMode === 'local-docker'
+                            ? 'Use the optional Compose Postgres service for local managed-storage rehearsals. It must already be running before object storage mode can apply.'
+                            : 'Use an external PostgreSQL cluster for managed metadata. These fields can be prepared before switching project artifact storage to object storage.'}
+                        </span>
+                      </div>
+
+                      {databaseMode === 'managed' ? (
+                        <>
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">PostgreSQL connection string</span>
+                            <TextField
+                              aria-label="PostgreSQL connection string"
+                              type="password"
+                              value={databaseConnectionString}
+                              isDisabled={loadingDeploymentStorageSettings || savingDeploymentStorageSettings}
+                              placeholder={databaseConnectionStringConfigured ? 'Already saved; leave blank to keep it' : 'postgresql://user:password@host:5432/database'}
+                              onChange={(event) => {
+                                setDatabaseConnectionString(event.currentTarget.value);
+                                setDeploymentStorageSettingsSaved(false);
+                              }}
+                            />
+                            <span className="app-settings-field-help">
+                              {databaseConnectionStringConfigured
+                                ? 'A connection string is saved. Enter a new value only when rotating it.'
+                                : 'Required before object storage mode can use a managed PostgreSQL cluster.'}
+                            </span>
+                          </label>
+
+                          <div className="app-settings-field">
+                            <span className="app-settings-field-label">PostgreSQL SSL</span>
+                            <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="PostgreSQL SSL mode">
+                              {renderModeButton(
+                                databaseSslMode === 'require',
+                                'Require',
+                                () => {
+                                  setDatabaseSslMode('require');
+                                  setDeploymentStorageSettingsSaved(false);
+                                },
+                                loadingDeploymentStorageSettings || savingDeploymentStorageSettings,
+                              )}
+                              {renderModeButton(
+                                databaseSslMode === 'verify-full',
+                                'Verify full',
+                                () => {
+                                  setDatabaseSslMode('verify-full');
+                                  setDeploymentStorageSettingsSaved(false);
+                                },
+                                loadingDeploymentStorageSettings || savingDeploymentStorageSettings,
+                              )}
+                              {renderModeButton(
+                                databaseSslMode === 'disable',
+                                'Disable',
+                                () => {
+                                  setDatabaseSslMode('disable');
+                                  setDeploymentStorageSettingsSaved(false);
+                                },
+                                loadingDeploymentStorageSettings || savingDeploymentStorageSettings,
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  </section>
+
+                  <div className="app-settings-actions-row">
+                    <LoadingButton
+                      appearance="primary"
+                      className="app-settings-action-button button-size-l"
+                      isLoading={savingDeploymentStorageSettings}
+                      isDisabled={loadingDeploymentStorageSettings || savingDeploymentStorageSettings || !deploymentStorageSettingsChanged}
+                      onClick={handleSaveDeploymentStorageSettings}
+                    >
+                      Save
+                    </LoadingButton>
+                    <Button
+                      appearance="subtle"
+                      className="app-settings-action-button button-size-l"
+                      isDisabled={loadingDeploymentStorageSettings || savingDeploymentStorageSettings || !deploymentStorageSettingsChanged}
+                      onClick={handleRevertDeploymentStorageSettings}
+                    >
+                      Revert
+                    </Button>
+                    {renderActionStatus(
+                      deploymentStorageSettingsError,
+                      deploymentStorageSettingsSaved,
+                      undefined,
+                      'Saved. Restart or recreate the stack to apply storage changes.',
+                    )}
+                  </div>
                 </div>
               ) : null}
 

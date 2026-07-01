@@ -67,7 +67,6 @@ WORKDIR /app
 COPY --from=builder --chown=10001:10001 /opt/proxy-bootstrap /opt/proxy-bootstrap
 COPY --from=builder --chown=10001:10001 /app/rivet/packages/app-executor/bin/executor-bundle.cjs /app/executor-bundle.cjs
 COPY --chown=10001:10001 image/lib/load-env.sh /opt/rivet/lib/load-env.sh
-COPY --chown=10001:10001 image/lib/build-db-connection.mjs /opt/rivet/lib/build-db-connection.mjs
 COPY --chown=10001:10001 image/executor/entrypoint.sh /opt/rivet/executor-entrypoint.sh
 
 RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/executor-entrypoint.sh

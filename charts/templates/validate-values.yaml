@@ -53,7 +53,7 @@
 {{- end -}}
 
 {{- if and (eq .Values.workflowStorage.backend "managed") (not .Values.vault.enabled) (or (empty .Values.objectStorage.accessKeySecretName) (empty .Values.objectStorage.secretKeySecretName)) -}}
-{{- fail "managed storage requires objectStorage.accessKeySecretName and objectStorage.secretKeySecretName unless Vault provides RIVET_STORAGE_ACCESS_KEY_ID and RIVET_STORAGE_ACCESS_KEY" -}}
+{{- fail "managed storage requires objectStorage.accessKeySecretName and objectStorage.secretKeySecretName unless Vault provides RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID and RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY" -}}
 {{- end -}}
 
 {{- if or (empty .Values.images.proxy.repository) (empty .Values.images.web.repository) (empty .Values.images.api.repository) (empty .Values.images.executor.repository) -}}

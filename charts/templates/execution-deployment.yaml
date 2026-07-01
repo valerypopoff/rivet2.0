@@ -22,6 +22,22 @@ spec:
     spec:
       {{- include "rivet.pod.imagePullSecrets" . | nindent 6 }}
       {{- include "rivet.pod.workloadSecurityContext" . | nindent 6 }}
+      initContainers:
+        - name: deployment-storage-settings
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
+          env:
+{{ include "rivet.env.deploymentStorageBootstrap" . | nindent 12 }}
+          volumeMounts:
+            - name: app-data
+              mountPath: /data/rivet-app
+{{ include "rivet.pod.tmpVolumeMount" . | nindent 12 }}
       containers:
         - name: api
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}

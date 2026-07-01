@@ -9,6 +9,7 @@ import {
   getPublishedWorkflowsBasePath,
 } from '../workflowEndpointPaths.js';
 import { getWebAppAuthMode } from '../web-app-oauth.js';
+import { readDeploymentStorageRuntimeSettingsSync } from '../deployment-storage-settings.js';
 
 export const configRouter = Router();
 
@@ -31,6 +32,7 @@ function toWebSocketOrigin(origin: string): string {
 configRouter.get('/config', (req, res) => {
   const publicOrigin = getPublicOrigin(req);
   const publicWsOrigin = toWebSocketOrigin(publicOrigin);
+  const deploymentStorageSettings = readDeploymentStorageRuntimeSettingsSync();
 
   res.json({
     hostedMode: true,
@@ -44,6 +46,8 @@ configRouter.get('/config', (req, res) => {
     publishedAppsBasePath: getPublishedWebAppsBasePath(),
     latestAppsBasePath: getLatestWebAppsBasePath(),
     webAppsAuthMode: getWebAppAuthMode(),
+    storageMode: deploymentStorageSettings.storageMode,
+    databaseMode: deploymentStorageSettings.databaseMode,
   });
 });
 

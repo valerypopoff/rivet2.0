@@ -5,7 +5,6 @@ import { spawn } from 'node:child_process';
 import { loadDevEnv } from './lib/dev-env.mjs';
 import {
   assertNoRetiredEnv,
-  enableManagedWorkflowProfileIfNeeded,
 } from './lib/docker-launcher-env.mjs';
 
 const rootDir = process.cwd();
@@ -247,20 +246,11 @@ function createScenarioEnvFile(mode) {
 
   if (mode === 'filesystem') {
     lines.push(
-      'RIVET_STORAGE_MODE=filesystem',
       `RIVET_ARTIFACTS_HOST_PATH=${filesystemFixture.artifactsRoot}`,
     );
   } else if (mode === 'local-docker') {
     lines.push(
-      'RIVET_STORAGE_MODE=managed',
-      'RIVET_DATABASE_MODE=local-docker',
-      'RIVET_DATABASE_CONNECTION_STRING=postgres://rivet:rivet@workflow-postgres:5432/rivet',
-      'RIVET_DATABASE_SSL_MODE=disable',
-      'RIVET_STORAGE_URL=http://workflow-minio:9000/rivet-workflows',
-      'RIVET_STORAGE_ACCESS_KEY_ID=minioadmin',
-      'RIVET_STORAGE_ACCESS_KEY=minioadmin',
-      'RIVET_STORAGE_PREFIX=workflows/',
-      'RIVET_STORAGE_FORCE_PATH_STYLE=true',
+      'COMPOSE_PROFILES=workflow-managed',
       `RIVET_WORKFLOWS_MIGRATION_SOURCE_ROOT=${migrationFixture.workflowsRoot}`,
     );
   } else {
@@ -301,7 +291,6 @@ function assertFilesystemLauncherContract(loadedEnv, fixture) {
   };
 
   assertNoRetiredEnv(launcherEnv, { launcherName: 'compatibility', envFileLabel: path.basename(loadedEnv.envPath) });
-  enableManagedWorkflowProfileIfNeeded(launcherEnv);
 
   if (launcherEnv.COMPOSE_PROFILES?.includes('workflow-managed')) {
     throw new Error('filesystem mode unexpectedly enabled the workflow-managed compose profile');
@@ -322,14 +311,9 @@ function assertLocalDockerLauncherContract(loadedEnv) {
   };
 
   assertNoRetiredEnv(launcherEnv, { launcherName: 'compatibility', envFileLabel: path.basename(loadedEnv.envPath) });
-  enableManagedWorkflowProfileIfNeeded(launcherEnv);
 
   if (!launcherEnv.COMPOSE_PROFILES?.split(',').map((value) => value.trim()).includes('workflow-managed')) {
-    throw new Error('managed local-docker mode did not enable the workflow-managed compose profile');
-  }
-
-  if (String(launcherEnv.RIVET_DATABASE_MODE).trim().toLowerCase() !== 'local-docker') {
-    throw new Error('managed local-docker scenario did not preserve RIVET_DATABASE_MODE=local-docker');
+    throw new Error('local-docker scenario did not explicitly enable the workflow-managed compose profile');
   }
 }
 

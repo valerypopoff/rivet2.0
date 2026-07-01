@@ -189,8 +189,7 @@ export function readPublicRouteSettingsSync(): RuntimePublicRouteSettings {
     return normalizeStoredPublicRouteSettings(JSON.parse(fs.readFileSync(settingsPath, 'utf8')));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[public-routes] Failed to read public route app settings; using deployment defaults:', error);
-      return getDefaultPublicRouteSettings();
+      throw error;
     }
   }
 
@@ -199,7 +198,7 @@ export function readPublicRouteSettingsSync(): RuntimePublicRouteSettings {
     return normalizeLegacyWebAppRouteSettings(JSON.parse(fs.readFileSync(legacySettingsPath, 'utf8')));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[public-routes] Failed to read legacy web-app route app settings; using deployment defaults:', error);
+      throw error;
     }
 
     return getDefaultPublicRouteSettings();

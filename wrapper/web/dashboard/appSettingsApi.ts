@@ -2,6 +2,8 @@ import { RIVET_API_BASE_URL } from '../../shared/hosted-env';
 import type {
   NodeExecutorProxySettings,
   NodeExecutorProxySettingsDraft,
+  DeploymentStorageSettings,
+  DeploymentStorageSettingsDraft,
   PublicRouteSettings,
   PublicRouteSettingsDraft,
   RunRecordingsSettings,
@@ -52,6 +54,24 @@ export async function saveRunRecordingsSettings(
     body: JSON.stringify(settings),
   });
   return appSettingsJsonResponse<RunRecordingsSettings>(response);
+}
+
+export async function fetchDeploymentStorageSettings(): Promise<DeploymentStorageSettings> {
+  const response = await fetch(`${API}/deployment-storage`, {
+    cache: 'no-store',
+  });
+  return appSettingsJsonResponse<DeploymentStorageSettings>(response);
+}
+
+export async function saveDeploymentStorageSettings(
+  settings: DeploymentStorageSettingsDraft,
+): Promise<DeploymentStorageSettings> {
+  const response = await fetch(`${API}/deployment-storage`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return appSettingsJsonResponse<DeploymentStorageSettings>(response);
 }
 
 export async function fetchPublicRouteSettings(): Promise<PublicRouteSettings> {

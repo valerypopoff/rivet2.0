@@ -6,8 +6,6 @@ services:
       dockerfile: image/proxy/Dockerfile
     ports:
       - "${RIVET_PORT:-8080}:8080"
-    env_file:
-      - ../../.env
     environment:
       - RIVET_WEB_UPSTREAM_HOST=web
       - RIVET_WEB_UPSTREAM_PORT=3000
@@ -66,8 +64,6 @@ services:
         RIVET_WEB_APPS_BASE_PATH: ${RIVET_WEB_APPS_BASE_PATH:-/apps}
         RIVET_LATEST_WEB_APPS_BASE_PATH: ${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
         RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE: ${RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE:-4096}
-    env_file:
-      - ../../.env
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -105,8 +101,6 @@ services:
         https_proxy: ${https_proxy:-${HTTPS_PROXY:-}}
         all_proxy: ${all_proxy:-${ALL_PROXY:-}}
         no_proxy: ${no_proxy:-${NO_PROXY:-}}
-    env_file:
-      - ../../.env
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -131,18 +125,6 @@ services:
       - RIVET_LATEST_APPS_BASE_PATH=${RIVET_LATEST_APPS_BASE_PATH:-}
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
       - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
-      - RIVET_STORAGE_MODE
-      - RIVET_DATABASE_MODE
-      - RIVET_DATABASE_CONNECTION_STRING
-      - RIVET_DATABASE_SSL_MODE
-      - RIVET_STORAGE_URL
-      - RIVET_STORAGE_BUCKET
-      - RIVET_STORAGE_REGION
-      - RIVET_STORAGE_ENDPOINT
-      - RIVET_STORAGE_ACCESS_KEY_ID
-      - RIVET_STORAGE_ACCESS_KEY
-      - RIVET_STORAGE_PREFIX
-      - RIVET_STORAGE_FORCE_PATH_STYLE
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
       - RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=${RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:-false}
       - RIVET_KEY=${RIVET_KEY:-}
@@ -176,8 +158,6 @@ services:
       additional_contexts:
         rivet_source: ${RIVET_SOURCE_BUILD_CONTEXT_PATH:-../../rivet}
         rivet_dependency_metadata: ${RIVET_DEPENDENCY_BUILD_CONTEXT_PATH:-../../rivet}
-    env_file:
-      - ../../.env
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -193,19 +173,9 @@ services:
       - PORT=21889
       - RIVET_EXECUTOR_PORT=21889
       - RIVET_EXECUTOR_HOST=0.0.0.0
+      - RIVET_APP_DATA_ROOT=/home/rivet/.local/share/com.valerypopoff.rivet2
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=executor
-      - RIVET_STORAGE_MODE
-      - RIVET_DATABASE_MODE
-      - RIVET_DATABASE_CONNECTION_STRING
-      - RIVET_DATABASE_SSL_MODE
-      - RIVET_STORAGE_URL
-      - RIVET_STORAGE_BUCKET
-      - RIVET_STORAGE_REGION
-      - RIVET_STORAGE_ENDPOINT
-      - RIVET_STORAGE_ACCESS_KEY_ID
-      - RIVET_STORAGE_ACCESS_KEY
-      - RIVET_STORAGE_FORCE_PATH_STYLE
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
       - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
     volumes:

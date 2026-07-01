@@ -184,7 +184,7 @@ async function main(): Promise<void> {
   const apply = process.argv.includes('--apply');
 
   if (getRuntimeLibrariesBackendMode() !== 'managed') {
-    throw new Error('This command only works when RIVET_STORAGE_MODE=managed.');
+    throw new Error('This command only works when Settings -> Storage uses Object storage.');
   }
 
   if (!['audit', 'prune'].includes(command)) {

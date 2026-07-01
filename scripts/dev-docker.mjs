@@ -10,7 +10,6 @@ import {
 import {
   assertNoRetiredEnv,
   dropAmbientNodeOptionsForDocker,
-  enableManagedWorkflowProfileIfNeeded,
 } from './lib/docker-launcher-env.mjs';
 import { prepareRivetDockerContext } from './lib/rivet-source-context.mjs';
 
@@ -35,7 +34,6 @@ async function main() {
   }
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'dev-docker', envFileLabel });
-  enableManagedWorkflowProfileIfNeeded(mergedEnv);
 
   if (['build', 'up', 'dev', 'recreate'].includes(action)) {
     prepareRivetDockerContext(rootDir, mergedEnv);

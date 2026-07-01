@@ -1,5 +1,5 @@
 import { badRequest } from '../../utils/httpError.js';
-import { parseBoolean, parseEnum } from '../../utils/env-parsing.js';
+import { readDeploymentStorageRuntimeSettingsSync } from '../../deployment-storage-settings.js';
 
 export type WorkflowStorageBackendMode = 'filesystem' | 'managed';
 export type ManagedWorkflowDatabaseMode = 'local-docker' | 'managed';
@@ -25,46 +25,6 @@ type ParsedStorageUrl = {
   forcePathStyle: boolean;
 };
 
-const STORAGE_MODE_ENV_NAME = 'RIVET_STORAGE_MODE';
-const DATABASE_MODE_ENV_NAME = 'RIVET_DATABASE_MODE';
-const DATABASE_CONNECTION_STRING_ENV_NAME = 'RIVET_DATABASE_CONNECTION_STRING';
-const DATABASE_SSL_MODE_ENV_NAME = 'RIVET_DATABASE_SSL_MODE';
-const STORAGE_URL_ENV_NAME = 'RIVET_STORAGE_URL';
-const OBJECT_STORAGE_BUCKET_ENV_NAME = 'RIVET_STORAGE_BUCKET';
-const OBJECT_STORAGE_REGION_ENV_NAME = 'RIVET_STORAGE_REGION';
-const OBJECT_STORAGE_ENDPOINT_ENV_NAME = 'RIVET_STORAGE_ENDPOINT';
-const OBJECT_STORAGE_ACCESS_KEY_ID_ENV_NAME = 'RIVET_STORAGE_ACCESS_KEY_ID';
-const OBJECT_STORAGE_ACCESS_KEY_ENV_NAME = 'RIVET_STORAGE_ACCESS_KEY';
-const OBJECT_STORAGE_PREFIX_ENV_NAME = 'RIVET_STORAGE_PREFIX';
-const OBJECT_STORAGE_FORCE_PATH_STYLE_ENV_NAME = 'RIVET_STORAGE_FORCE_PATH_STYLE';
-
-const RETIRED_ENV_REPLACEMENTS = {
-  RIVET_STORAGE_BACKEND: STORAGE_MODE_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_BACKEND: STORAGE_MODE_ENV_NAME,
-  RIVET_DATABASE_URL: DATABASE_CONNECTION_STRING_ENV_NAME,
-  RIVET_WORKFLOWS_DATABASE_MODE: DATABASE_MODE_ENV_NAME,
-  RIVET_WORKFLOWS_DATABASE_URL: DATABASE_CONNECTION_STRING_ENV_NAME,
-  RIVET_WORKFLOWS_DATABASE_CONNECTION_STRING: DATABASE_CONNECTION_STRING_ENV_NAME,
-  RIVET_WORKFLOWS_DATABASE_SSL_MODE: DATABASE_SSL_MODE_ENV_NAME,
-  RIVET_OBJECT_STORAGE_BUCKET: OBJECT_STORAGE_BUCKET_ENV_NAME,
-  RIVET_OBJECT_STORAGE_REGION: OBJECT_STORAGE_REGION_ENV_NAME,
-  RIVET_OBJECT_STORAGE_ENDPOINT: OBJECT_STORAGE_ENDPOINT_ENV_NAME,
-  RIVET_OBJECT_STORAGE_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY_ID_ENV_NAME,
-  RIVET_OBJECT_STORAGE_SECRET_ACCESS_KEY: OBJECT_STORAGE_ACCESS_KEY_ENV_NAME,
-  RIVET_OBJECT_STORAGE_PREFIX: OBJECT_STORAGE_PREFIX_ENV_NAME,
-  RIVET_OBJECT_STORAGE_FORCE_PATH_STYLE: OBJECT_STORAGE_FORCE_PATH_STYLE_ENV_NAME,
-  RIVET_STORAGE_SECRET_ACCESS_KEY: OBJECT_STORAGE_ACCESS_KEY_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_URL: STORAGE_URL_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_BUCKET: OBJECT_STORAGE_BUCKET_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_REGION: OBJECT_STORAGE_REGION_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_ENDPOINT: OBJECT_STORAGE_ENDPOINT_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY_ID_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_SECRET_ACCESS_KEY: OBJECT_STORAGE_ACCESS_KEY_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_ACCESS_KEY: OBJECT_STORAGE_ACCESS_KEY_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_PREFIX: OBJECT_STORAGE_PREFIX_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_FORCE_PATH_STYLE: OBJECT_STORAGE_FORCE_PATH_STYLE_ENV_NAME,
-} as const;
-
 function stripDatabaseSslQueryOptions(rawConnectionString: string): string {
   try {
     const url = new URL(rawConnectionString);
@@ -73,35 +33,6 @@ function stripDatabaseSslQueryOptions(rawConnectionString: string): string {
   } catch {
     return rawConnectionString;
   }
-}
-
-function readEnv(name: string): string | undefined {
-  const value = process.env[name]?.trim();
-  return value ? value : undefined;
-}
-
-function requireEnv(name: string): string {
-  const value = readEnv(name);
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-
-  return value;
-}
-
-function assertNoRetiredEnv(): void {
-  const activeRetired = Object.entries(RETIRED_ENV_REPLACEMENTS)
-    .filter(([name]) => Boolean(process.env[name]?.trim()))
-    .map(([name, replacement]) => `${name} -> ${replacement}`);
-
-  if (activeRetired.length === 0) {
-    return;
-  }
-
-  throw badRequest(
-    `Retired environment variable(s) detected: ${activeRetired.join(', ')}. ` +
-    'Update your configuration to the canonical RIVET_STORAGE_* / RIVET_DATABASE_* names.',
-  );
 }
 
 function parseManagedStorageUrl(rawUrl: string): ParsedStorageUrl {
@@ -153,8 +84,8 @@ function parseManagedStorageUrl(rawUrl: string): ParsedStorageUrl {
 }
 
 export function getWorkflowStorageBackendMode(): WorkflowStorageBackendMode {
-  assertNoRetiredEnv();
-  return parseEnum(readEnv(STORAGE_MODE_ENV_NAME), ['filesystem', 'managed'], 'filesystem', { strict: true });
+  const deploymentSettings = readDeploymentStorageRuntimeSettingsSync();
+  return deploymentSettings.storageMode;
 }
 
 export function isManagedWorkflowStorageEnabled(): boolean {
@@ -162,34 +93,24 @@ export function isManagedWorkflowStorageEnabled(): boolean {
 }
 
 export function getManagedWorkflowStorageConfig(): ManagedWorkflowStorageConfig {
-  assertNoRetiredEnv();
-  const databaseMode = parseEnum(readEnv(DATABASE_MODE_ENV_NAME), ['local-docker', 'managed'], 'managed', { strict: true });
-  const databaseUrl = stripDatabaseSslQueryOptions(
-    requireEnv(DATABASE_CONNECTION_STRING_ENV_NAME),
-  );
-  const storageUrl = readEnv(STORAGE_URL_ENV_NAME);
-  const parsedStorageUrl = storageUrl ? parseManagedStorageUrl(storageUrl) : null;
-  const explicitRegion = readEnv(OBJECT_STORAGE_REGION_ENV_NAME);
-  const explicitEndpoint = readEnv(OBJECT_STORAGE_ENDPOINT_ENV_NAME);
+  const deploymentSettings = readDeploymentStorageRuntimeSettingsSync();
+
+  if (deploymentSettings.storageMode !== 'managed') {
+    throw badRequest('Managed workflow storage is not enabled. Configure Object storage in Settings -> Storage and restart the API/executor processes.');
+  }
+
+  const parsedStorageUrl = parseManagedStorageUrl(deploymentSettings.storageUrl);
 
   return {
-    databaseMode,
-    databaseUrl,
-    databaseSslMode: parseEnum(
-      readEnv(DATABASE_SSL_MODE_ENV_NAME),
-      ['disable', 'require', 'verify-full'],
-      databaseMode === 'local-docker' ? 'disable' : 'require',
-      { strict: true },
-    ),
-    objectStorageBucket: readEnv(OBJECT_STORAGE_BUCKET_ENV_NAME) || parsedStorageUrl?.bucket || requireEnv(OBJECT_STORAGE_BUCKET_ENV_NAME),
-    objectStorageRegion: explicitRegion || parsedStorageUrl?.region || 'us-east-1',
-    objectStorageEndpoint: explicitEndpoint || parsedStorageUrl?.endpoint || null,
-    objectStorageAccessKeyId: requireEnv(OBJECT_STORAGE_ACCESS_KEY_ID_ENV_NAME),
-    objectStorageSecretAccessKey: requireEnv(OBJECT_STORAGE_ACCESS_KEY_ENV_NAME),
-    objectStoragePrefix: (readEnv(OBJECT_STORAGE_PREFIX_ENV_NAME) || 'workflows/').replace(/^\/+/, ''),
-    objectStorageForcePathStyle: parseBoolean(
-      readEnv(OBJECT_STORAGE_FORCE_PATH_STYLE_ENV_NAME),
-      parsedStorageUrl?.forcePathStyle ?? false,
-    ),
+    databaseMode: deploymentSettings.databaseMode,
+    databaseUrl: stripDatabaseSslQueryOptions(deploymentSettings.databaseConnectionString),
+    databaseSslMode: deploymentSettings.databaseSslMode,
+    objectStorageBucket: parsedStorageUrl.bucket,
+    objectStorageRegion: parsedStorageUrl.region || 'us-east-1',
+    objectStorageEndpoint: parsedStorageUrl.endpoint,
+    objectStorageAccessKeyId: deploymentSettings.storageAccessKeyId,
+    objectStorageSecretAccessKey: deploymentSettings.storageAccessKey,
+    objectStoragePrefix: 'workflows/',
+    objectStorageForcePathStyle: parsedStorageUrl.forcePathStyle,
   };
 }

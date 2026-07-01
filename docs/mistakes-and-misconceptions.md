@@ -171,7 +171,7 @@ Browser automation against a managed stack is automatically a disposable test fi
 
 ### Reality
 
-- `RIVET_STORAGE_MODE=managed` means workflow state is authoritative in Postgres plus object storage
+- Storage-tab `Object storage` mode means workflow state is authoritative in Postgres plus object storage
 - a Playwright spec that hits the real workflow routes is mutating that authoritative state unless it explicitly mocks the API
 - cleanup done through ad hoc browser-page `fetch()` calls is brittle because it depends on page state and can fail without going through the same trusted proxy path as the normal browser shell
 - UI/controller coverage for modals and tree state often does not need real managed mutations at all

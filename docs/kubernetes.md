@@ -95,10 +95,9 @@ Current behavior:
 
 The launcher expects:
 
-- `RIVET_STORAGE_MODE=managed`
-- `RIVET_DATABASE_MODE=managed`
 - external managed Postgres
 - external S3 or S3-compatible storage
+- local renderer inputs named `RIVET_K8S_DATABASE_*` and `RIVET_K8S_STORAGE_*`
 
 The local overlay at [charts/overlays/local-kubernetes.yaml](../charts/overlays/local-kubernetes.yaml) is not a standalone values file. It is meant to be merged with the generated values file from `scripts/dev-kubernetes.mjs`.
 
@@ -346,9 +345,9 @@ In Kubernetes, production should stay on managed storage:
 
 The backend StatefulSet still has an `app-data` volume. By default, the chart creates a `volumeClaimTemplate` from `storage.appData.*`; if the cluster has no default storage class, set `storage.appData.storageClassName` or `storage.appData.existingClaimName`. Leaving `storage.appData.enabled=false` makes that volume ephemeral and is not the recommended production shape.
 
-The API and executor containers deliberately mount that same `app-data` volume at different paths: `/data/rivet-app` for the API and `/home/rivet/.local/share/com.valerypopoff.rivet2` for the executor. App Settings -> `Run recordings` writes `settings/run-recordings.json` from the API; App Settings -> `Node executor proxy` writes `settings/node-executor-proxy.json` from the API; App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` both write `settings/public-routes.json` from the API; App Settings -> `Web apps` -> `Auth` writes `settings/web-app-auth.json` from the API. API bootstrap clears process proxy env first and then reads the proxy settings file through `RIVET_APP_DATA_ROOT` for latest/headless execution paths that run in that process, while the editor executor bootstrap reads the same relative file from the desktop-style app-data mount. Keep the backend StatefulSet's app-data volume persistent if operators use UI-managed recording limits, public route slugs, web-app auth, or executor proxy settings.
+The API and executor containers deliberately mount that same `app-data` volume at different paths: `/data/rivet-app` for the API and `/home/rivet/.local/share/com.valerypopoff.rivet2` for the executor. App Settings -> `Storage` writes `settings/deployment-storage.json` from the API; App Settings -> `Run recordings` writes `settings/run-recordings.json` from the API; App Settings -> `Node executor proxy` writes `settings/node-executor-proxy.json` from the API; App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` both write `settings/public-routes.json` from the API; App Settings -> `Web apps` -> `Auth` writes `settings/web-app-auth.json` from the API. API and executor startup read deployment storage settings from app data; runtime storage/database env values are ignored, and Kubernetes uses only the init container's `RIVET_DEPLOYMENT_*` bootstrap values when the settings file is absent. API bootstrap also clears process proxy env first and then reads the proxy settings file through `RIVET_APP_DATA_ROOT` for latest/headless execution paths that run in that process, while the editor executor bootstrap reads the same relative file from the desktop-style app-data mount. Keep the backend StatefulSet's app-data volume persistent if operators use UI-managed storage, recording limits, public route slugs, web-app auth, or executor proxy settings.
 
-Published workflow endpoints and published web apps in the split `execution` deployment also need this settings volume to be visible if they should consume UI-managed recording limits, web-app auth, or proxy values. Use a shared RWX `storage.appData.existingClaimName` for execution pods; recording queue/retention limits, web-app auth/OAuth settings, and runtime endpoint proxy values are not read from `.env`, Vault dotenv, or deployment `RIVET_RECORDINGS_MAX_*` / `RIVET_WEB_APPS_AUTH_MODE` / `OAUTH_*` / `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` variables. Public route slugs are read by the API dynamically from `settings/public-routes.json`; the proxy hot-reloads its nginx include only when the same app-data claim is mounted into it. If a Kubernetes deployment does not share app-data with the proxy, route-family changes from Settings are not guaranteed until the proxy is recreated with a config it can read.
+Published workflow endpoints and published web apps in the split `execution` deployment also need this settings volume to be visible if they should consume UI-managed storage credentials, recording limits, web-app auth, or proxy values. Use a shared RWX `storage.appData.existingClaimName` for execution pods; storage/database settings are read from `settings/deployment-storage.json` at process startup, while recording queue/retention limits, web-app auth/OAuth settings, and runtime endpoint proxy values are not read from `.env`, Vault dotenv, or deployment `RIVET_RECORDINGS_MAX_*` / `RIVET_WEB_APPS_AUTH_MODE` / `OAUTH_*` / `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` variables. Storage/database changes require pod restart or rollout so process singleton backends are rebuilt. Public route slugs are read by the API dynamically from `settings/public-routes.json`; the proxy hot-reloads its nginx include only when the same app-data claim is mounted into it. If a Kubernetes deployment does not share app-data with the proxy, route-family changes from Settings are not guaranteed until the proxy is recreated with a config it can read.
 
 Runtime-library local files are caches/workspaces, not the source of truth in managed mode. The default is `emptyDir` for execution replicas. Only set `runtimeLibraries.cache.existingClaimName` if the PVC can be mounted by every pod that needs it; with more than one `execution` replica, that usually means an RWX-capable volume. A single RWO claim reused by multiple execution pods can leave pods stuck waiting for volume attachment.
 
@@ -399,12 +398,12 @@ When Vault is enabled, the dotenv file should provide the sensitive values that 
 
 ```dotenv
 RIVET_KEY=<shared-random-secret>
-RIVET_DATABASE_PASSWORD=<postgres-password>
-RIVET_STORAGE_ACCESS_KEY_ID=<object-storage-access-key-id>
-RIVET_STORAGE_ACCESS_KEY=<object-storage-secret-access-key>
+RIVET_DEPLOYMENT_DATABASE_PASSWORD=<postgres-password>
+RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID=<object-storage-access-key-id>
+RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=<object-storage-secret-access-key>
 ```
 
-You may provide `RIVET_DATABASE_CONNECTION_STRING` instead of `RIVET_DATABASE_PASSWORD`, but keep the non-secret `postgres.host`, `postgres.database`, and `postgres.username` values in the Helm values because chart validation uses them to catch incomplete managed-storage configuration.
+You may provide `RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING` instead of `RIVET_DEPLOYMENT_DATABASE_PASSWORD`, but keep the non-secret `postgres.host`, `postgres.database`, and `postgres.username` values in the Helm values because chart validation uses them to catch incomplete managed-storage configuration. The chart bootstrap writes these values into `settings/deployment-storage.json` when that file is absent; API and executor runtime containers read the settings file rather than the dotenv variables.
 
 `RIVET_KEY` must be available to both the proxy and API workloads. It is used for trusted proxy-to-API identity and for optional public route/UI access checks.
 
@@ -543,7 +542,7 @@ The production contract today is:
 - `env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
 - `env.RIVET_PUBLISHED_APPS_BASE_PATH=/apps`
 - `env.RIVET_LATEST_APPS_BASE_PATH=/apps-latest`
-- public route slugs are configured after deploy in `Settings` -> `Workflow endpoints` and `Settings` -> `Web apps`; web-app auth is configured in `Settings` -> `Web apps`; the resulting `settings/public-routes.json` and `settings/web-app-auth.json` must be on persistent/shared app data for any API pod that serves workflow or web-app routes, and dynamic route-family changes require the proxy to mount that same app-data claim so it can hot-reload nginx
+- storage/database settings are configured after deploy in `Settings` -> `Storage`; public route slugs are configured in `Settings` -> `Workflow endpoints` and `Settings` -> `Web apps`; web-app auth is configured in `Settings` -> `Web apps`; the resulting `settings/deployment-storage.json`, `settings/public-routes.json`, and `settings/web-app-auth.json` must be on persistent/shared app data for any API pod that serves workflow or web-app routes, storage changes require pod restart/rollout, and dynamic route-family changes require the proxy to mount that same app-data claim so it can hot-reload nginx
 - `clusterDomain=cluster.local` unless the cluster DNS suffix is different
 - `env.RIVET_PROXY_RESOLVER` must be set for in-cluster nginx DNS resolution
 - control-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=none` with the job worker enabled there

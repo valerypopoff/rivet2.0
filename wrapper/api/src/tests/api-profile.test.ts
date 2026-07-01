@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { getExpectedProxyAuthToken } from '../auth.js';
+import { writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
 import {
   assertApiRuntimeProfileStartupPreconditions,
   createApiApp,
@@ -20,7 +21,6 @@ const relevantEnvKeys = [
   'RIVET_KEY',
   'RIVET_CORS_ALLOWED_ORIGINS',
   'RIVET_REQUIRE_WORKFLOW_KEY',
-  'RIVET_STORAGE_MODE',
   'RIVET_WORKFLOWS_ROOT',
   'RIVET_APP_DATA_ROOT',
   'RIVET_RUNTIME_LIBRARIES_ROOT',
@@ -41,7 +41,6 @@ async function withApiEnv(
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-api-profile-'));
   process.env.RIVET_KEY = 'phase4-shared-key';
   process.env.RIVET_REQUIRE_WORKFLOW_KEY = 'false';
-  process.env.RIVET_STORAGE_MODE = 'filesystem';
   process.env.RIVET_WORKSPACE_ROOT = tempRoot;
   process.env.RIVET_WORKFLOWS_ROOT = path.join(tempRoot, 'workflows');
   process.env.RIVET_APP_DATA_ROOT = path.join(tempRoot, 'app-data');
@@ -66,6 +65,17 @@ async function withApiEnv(
       }
     }
   }
+}
+
+async function writeManagedDeploymentStorageSettings(): Promise<void> {
+  await writeDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
+    storageUrl: 'https://test-bucket.s3.us-east-1.amazonaws.com',
+    storageAccessKeyId: 'spaces-key',
+    storageAccessKey: 'spaces-secret',
+  });
 }
 
 async function startServer(profile: 'combined' | 'control' | 'execution') {
@@ -143,26 +153,21 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
 });
 
 test('execution profile startup preconditions require managed storage mode', async () => {
-  await withApiEnv({
-    RIVET_STORAGE_MODE: 'filesystem',
-  }, () => {
+  await withApiEnv({}, () => {
     assert.throws(
       () => assertApiRuntimeProfileStartupPreconditions('execution'),
-      /RIVET_API_PROFILE=execution requires RIVET_STORAGE_MODE=managed/,
+      /RIVET_API_PROFILE=execution requires Settings -> Storage to use Object storage/,
     );
   });
 
-  await withApiEnv({
-    RIVET_STORAGE_MODE: 'managed',
-  }, () => {
+  await withApiEnv({}, async () => {
+    await writeManagedDeploymentStorageSettings();
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('execution'));
   });
 });
 
 test('combined and control profiles keep filesystem mode as a supported startup contract', async () => {
-  await withApiEnv({
-    RIVET_STORAGE_MODE: 'filesystem',
-  }, () => {
+  await withApiEnv({}, () => {
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('combined'));
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('control'));
   });

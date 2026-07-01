@@ -31,6 +31,15 @@ import {
   writePublicRouteSettings,
   writeWebAppRouteSettings,
 } from '../public-route-settings.js';
+import {
+  getDeploymentStorageSettingsPath,
+  readDeploymentStorageSettings,
+  writeDeploymentStorageSettings,
+} from '../deployment-storage-settings.js';
+import {
+  getManagedWorkflowStorageConfig,
+  getWorkflowStorageBackendMode,
+} from '../routes/workflows/storage-config.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
 
 const relevantEnvKeys = [
@@ -44,6 +53,17 @@ const relevantEnvKeys = [
   'RIVET_RECORDINGS_MAX_PENDING_WRITES',
   'RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT',
   'RIVET_RECORDINGS_RETENTION_DAYS',
+  'RIVET_STORAGE_MODE',
+  'RIVET_ARTIFACTS_HOST_PATH',
+  'RIVET_DATABASE_MODE',
+  'RIVET_DATABASE_CONNECTION_STRING',
+  'RIVET_DATABASE_SSL_MODE',
+  'RIVET_STORAGE_URL',
+  'RIVET_STORAGE_ACCESS_KEY_ID',
+  'RIVET_STORAGE_ACCESS_KEY',
+  'RIVET_STORAGE_BACKEND',
+  'RIVET_WORKFLOWS_STORAGE_BACKEND',
+  'RIVET_DATABASE_URL',
   'RIVET_PUBLISHED_WORKFLOWS_BASE_PATH',
   'RIVET_LATEST_WORKFLOWS_BASE_PATH',
   'RIVET_PUBLISHED_APPS_BASE_PATH',
@@ -214,6 +234,14 @@ test('App settings files are written with owner-only permissions', async () => {
       maxRunsPerEndpoint: 2000,
       retentionDays: 0,
     });
+    await writeDeploymentStorageSettings({
+      storageMode: 'managed',
+      databaseMode: 'managed',
+      databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
+      storageUrl: 'https://bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'storage-key-id',
+      storageAccessKey: 'storage-secret',
+    });
     await writeWebAppAuthSettings({
       mode: 'oauth',
       provider: 'external',
@@ -229,6 +257,7 @@ test('App settings files are written with owner-only permissions', async () => {
     assert.ok(appDataRoot);
     assertPrivateSettingsFile(path.join(appDataRoot, 'settings', 'node-executor-proxy.json'));
     assertPrivateSettingsFile(getRunRecordingsSettingsPath());
+    assertPrivateSettingsFile(getDeploymentStorageSettingsPath());
     assertPrivateSettingsFile(getWebAppAuthSettingsPath());
   });
 });
@@ -260,6 +289,14 @@ test('App settings concurrent saves use unique temporary files', async () => {
           maxRunsPerEndpoint: 200,
           retentionDays: 0,
         }),
+        writeDeploymentStorageSettings({
+          storageMode: 'filesystem',
+          artifactsHostPath: '../one',
+        }),
+        writeDeploymentStorageSettings({
+          storageMode: 'filesystem',
+          artifactsHostPath: '../two',
+        }),
         writeWebAppAuthSettings({ mode: 'ui-gate' }),
         writeWebAppAuthSettings({ mode: 'none' }),
       ]);
@@ -276,6 +313,8 @@ test('App settings concurrent saves use unique temporary files', async () => {
     assert.match(proxySettings.httpProxy, /^http:\/\/proxy-(one|two)\.local:3128$/);
     const recordingsSettings = await readRunRecordingsSettings();
     assert.ok(recordingsSettings.maxPendingWrites === 100 || recordingsSettings.maxPendingWrites === 200);
+    const deploymentStorageSettings = await readDeploymentStorageSettings();
+    assert.match(deploymentStorageSettings.artifactsHostPath, /^\.\.\/(one|two)$/);
     const webAppAuthSettings = await readWebAppAuthSettings();
     assert.ok(webAppAuthSettings.mode === 'ui-gate' || webAppAuthSettings.mode === 'none');
   });
@@ -327,6 +366,16 @@ test('Node executor proxy settings reject unsafe proxy values', async () => {
       }),
       /HTTP_PROXY must use http or https/,
     );
+  });
+});
+
+test('Node executor proxy settings fail loudly when saved fields have invalid types', async () => {
+  await withAppSettingsEnv(async () => {
+    const settingsPath = path.join(process.env.RIVET_APP_DATA_ROOT!, 'settings', 'node-executor-proxy.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({ version: 1, httpProxy: 123 }), 'utf8');
+
+    await assert.rejects(readNodeExecutorProxySettings(), /HTTP_PROXY must be a string/);
   });
 });
 
@@ -410,6 +459,277 @@ test('Run recordings settings reject invalid numbers', async () => {
         retentionDays: 0,
       }),
       /Queued recording writes must be a non-negative whole number/,
+    );
+  });
+});
+
+test('Run recordings runtime settings fail loudly when the saved settings file is invalid', async () => {
+  await withAppSettingsEnv(async () => {
+    const settingsPath = getRunRecordingsSettingsPath();
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, '{bad json', 'utf8');
+
+    await assert.rejects(readRunRecordingsSettings(), /JSON|Unexpected|Expected|position/);
+    assert.throws(() => getWorkflowRecordingConfig(), /JSON|Unexpected|Expected|position/);
+
+    fs.writeFileSync(settingsPath, JSON.stringify({ version: 1, maxPendingWrites: 'not-a-number' }), 'utf8');
+    await assert.rejects(readRunRecordingsSettings(), /Queued recording writes/);
+    assert.throws(() => getWorkflowRecordingConfig(), /Queued recording writes/);
+  });
+});
+
+test('Deployment storage settings ignore storage and database environment variables', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_STORAGE_MODE = 'managed';
+    process.env.RIVET_ARTIFACTS_HOST_PATH = '../env-artifacts';
+    process.env.RIVET_DATABASE_MODE = 'managed';
+    process.env.RIVET_DATABASE_CONNECTION_STRING = 'postgresql://env-user:env-pass@example-db:5432/rivet?sslmode=disable';
+    process.env.RIVET_DATABASE_SSL_MODE = 'require';
+    process.env.RIVET_STORAGE_URL = 'https://env-bucket.sfo3.digitaloceanspaces.com';
+    process.env.RIVET_STORAGE_ACCESS_KEY_ID = 'env-key-id';
+    process.env.RIVET_STORAGE_ACCESS_KEY = 'env-secret';
+
+    const defaultSettings = await readDeploymentStorageSettings();
+    assert.equal(defaultSettings.source, 'default');
+    assert.equal(defaultSettings.storageMode, 'filesystem');
+    assert.equal(defaultSettings.artifactsHostPath, '../');
+    assert.equal(defaultSettings.databaseMode, 'local-docker');
+    assert.equal(defaultSettings.databaseConnectionStringConfigured, false);
+    assert.equal(defaultSettings.storageAccessKeyConfigured, false);
+    assert.equal(defaultSettings.storageUrl, '');
+    assert.equal(getWorkflowStorageBackendMode(), 'filesystem');
+
+    const savedSettings = await writeDeploymentStorageSettings({
+      storageMode: 'managed',
+      artifactsHostPath: '../saved-artifacts',
+      databaseMode: 'managed',
+      databaseSslMode: 'verify-full',
+      databaseConnectionString: 'postgresql://saved-user:saved-pass@example-db:5432/rivet',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id',
+      storageAccessKey: 'saved-secret',
+    });
+    assert.equal(savedSettings.source, 'app-settings');
+
+    process.env.RIVET_STORAGE_MODE = 'filesystem';
+    process.env.RIVET_ARTIFACTS_HOST_PATH = '../ignored-artifacts';
+    process.env.RIVET_STORAGE_URL = 'https://ignored-bucket.sfo3.digitaloceanspaces.com';
+
+    const nextSettings = await readDeploymentStorageSettings();
+    assert.equal(nextSettings.source, 'app-settings');
+    assert.equal(nextSettings.storageMode, 'managed');
+    assert.equal(nextSettings.artifactsHostPath, '../saved-artifacts');
+    assert.equal(nextSettings.storageUrl, 'https://saved-bucket.sfo3.digitaloceanspaces.com');
+    assert.equal(getWorkflowStorageBackendMode(), 'managed');
+  });
+});
+
+test('Deployment storage settings ignore retired storage aliases after they are saved', async () => {
+  await withAppSettingsEnv(async () => {
+    await writeDeploymentStorageSettings({
+      storageMode: 'managed',
+      databaseMode: 'managed',
+      databaseSslMode: 'verify-full',
+      databaseConnectionString: 'postgresql://saved-user:saved-pass@example-db:5432/rivet',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id',
+      storageAccessKey: 'saved-secret',
+    });
+
+    process.env.RIVET_STORAGE_BACKEND = 'filesystem';
+    process.env.RIVET_DATABASE_URL = 'postgresql://legacy-user:legacy-pass@example-db:5432/legacy';
+    process.env.RIVET_WORKFLOWS_STORAGE_BACKEND = 'filesystem';
+
+    assert.equal(getWorkflowStorageBackendMode(), 'managed');
+    const config = getManagedWorkflowStorageConfig();
+    assert.equal(config.databaseUrl, 'postgresql://saved-user:saved-pass@example-db:5432/rivet');
+    assert.equal(config.databaseSslMode, 'verify-full');
+    assert.equal(config.objectStorageBucket, 'saved-bucket');
+    assert.equal(config.objectStorageAccessKeyId, 'saved-key-id');
+  });
+});
+
+test('Deployment storage settings API saves managed config and hides secrets', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/deployment-storage`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          storageMode: 'managed',
+          artifactsHostPath: '../artifacts',
+          databaseMode: 'managed',
+          databaseSslMode: 'verify-full',
+          databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
+          storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+          storageAccessKeyId: 'saved-key-id',
+          storageAccessKey: 'saved-secret',
+        }),
+      });
+
+      assert.equal(saveResponse.status, 200);
+      const saved = await saveResponse.json() as Record<string, unknown>;
+      assert.equal(saved.source, 'app-settings');
+      assert.equal(saved.storageMode, 'managed');
+      assert.equal(saved.databaseConnectionStringConfigured, true);
+      assert.equal(saved.storageAccessKeyConfigured, true);
+      assert.equal(saved.databaseConnectionString, undefined);
+      assert.equal(saved.storageAccessKey, undefined);
+
+      const config = getManagedWorkflowStorageConfig();
+      assert.equal(config.databaseMode, 'managed');
+      assert.equal(config.databaseSslMode, 'verify-full');
+      assert.equal(config.objectStorageBucket, 'saved-bucket');
+      assert.equal(config.objectStorageRegion, 'sfo3');
+      assert.equal(config.objectStorageAccessKeyId, 'saved-key-id');
+      assert.equal(config.objectStorageSecretAccessKey, 'saved-secret');
+
+      const rotateResponse = await fetch(`${server.baseUrl}/api/app-settings/deployment-storage`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          storageMode: 'managed',
+          artifactsHostPath: '../artifacts',
+          databaseMode: 'managed',
+          databaseSslMode: 'require',
+          databaseConnectionString: '',
+          storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+          storageAccessKeyId: 'saved-key-id-2',
+          storageAccessKey: '',
+        }),
+      });
+
+      assert.equal(rotateResponse.status, 200);
+      const rotated = await rotateResponse.json() as Record<string, unknown>;
+      assert.equal(rotated.databaseConnectionStringConfigured, true);
+      assert.equal(rotated.storageAccessKeyConfigured, true);
+      assert.equal(getManagedWorkflowStorageConfig().objectStorageAccessKeyId, 'saved-key-id-2');
+      assert.equal(getManagedWorkflowStorageConfig().objectStorageSecretAccessKey, 'saved-secret');
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Deployment storage settings preserve managed SSL mode on partial saves', async () => {
+  await withAppSettingsEnv(async () => {
+    await writeDeploymentStorageSettings({
+      storageMode: 'managed',
+      artifactsHostPath: '../artifacts',
+      databaseMode: 'managed',
+      databaseSslMode: 'verify-full',
+      databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id',
+      storageAccessKey: 'saved-secret',
+    });
+
+    await writeDeploymentStorageSettings({
+      storageMode: 'managed',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id-2',
+      storageAccessKey: '',
+    });
+
+    const settings = await readDeploymentStorageSettings();
+    assert.equal(settings.databaseMode, 'managed');
+    assert.equal(settings.databaseSslMode, 'verify-full');
+    assert.equal(getManagedWorkflowStorageConfig().databaseSslMode, 'verify-full');
+  });
+});
+
+test('Deployment storage settings preserve prepared managed secrets across storage mode switches', async () => {
+  await withAppSettingsEnv(async () => {
+    await writeDeploymentStorageSettings({
+      storageMode: 'managed',
+      artifactsHostPath: '../artifacts',
+      databaseMode: 'managed',
+      databaseSslMode: 'verify-full',
+      databaseConnectionString: 'postgresql://saved-user:saved-pass@example-db:5432/rivet',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id',
+      storageAccessKey: 'saved-secret',
+    });
+
+    await writeDeploymentStorageSettings({
+      storageMode: 'filesystem',
+      artifactsHostPath: '../artifacts',
+      databaseMode: 'managed',
+      databaseConnectionString: '',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id',
+      storageAccessKey: '',
+    });
+
+    await writeDeploymentStorageSettings({
+      storageMode: 'managed',
+      artifactsHostPath: '../artifacts',
+      databaseMode: 'managed',
+      databaseConnectionString: '',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id',
+      storageAccessKey: '',
+    });
+
+    const config = getManagedWorkflowStorageConfig();
+    assert.equal(config.databaseUrl, 'postgresql://saved-user:saved-pass@example-db:5432/rivet');
+    assert.equal(config.objectStorageSecretAccessKey, 'saved-secret');
+  });
+});
+
+test('Deployment storage settings keep database and object storage sections independent', async () => {
+  await withAppSettingsEnv(async () => {
+    const preparedDatabase = await writeDeploymentStorageSettings({
+      storageMode: 'filesystem',
+      databaseMode: 'local-docker',
+    });
+
+    assert.equal(preparedDatabase.databaseMode, 'local-docker');
+    assert.equal(preparedDatabase.databaseConnectionStringConfigured, true);
+    assert.equal(preparedDatabase.storageUrl, '');
+    assert.equal(preparedDatabase.storageAccessKeyId, '');
+    assert.equal(preparedDatabase.storageAccessKeyConfigured, false);
+
+    await assert.rejects(
+      writeDeploymentStorageSettings({
+        storageMode: 'managed',
+        databaseMode: 'local-docker',
+      }),
+      /object storage URL/,
+    );
+  });
+});
+
+test('Deployment storage settings fail loudly when the saved settings file is invalid', async () => {
+  await withAppSettingsEnv(async () => {
+    const settingsPath = getDeploymentStorageSettingsPath();
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, '{bad json', 'utf8');
+
+    await assert.rejects(readDeploymentStorageSettings(), /JSON|Unexpected|Expected|position/);
+    assert.throws(() => getWorkflowStorageBackendMode(), /JSON|Unexpected|Expected|position/);
+  });
+});
+
+test('Deployment storage settings reject incomplete managed config', async () => {
+  await withAppSettingsEnv(async () => {
+    await assert.rejects(
+      writeDeploymentStorageSettings({
+        storageMode: 'managed',
+        databaseMode: 'managed',
+        storageUrl: 'https://bucket.example.test',
+        storageAccessKeyId: 'storage-key-id',
+        storageAccessKey: 'storage-secret',
+      }),
+      /PostgreSQL connection string/,
     );
   });
 });
@@ -669,6 +989,16 @@ test('Public route settings reject invalid or conflicting slugs', async () => {
       }),
       /must be different/,
     );
+  });
+});
+
+test('Public route settings fail loudly when the saved settings file is invalid', async () => {
+  await withAppSettingsEnv(async () => {
+    const settingsPath = getPublicRouteSettingsPath();
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, '{bad json', 'utf8');
+
+    await assert.rejects(readPublicRouteSettings(), /JSON|Unexpected|Expected|position/);
   });
 });
 

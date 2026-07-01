@@ -54,7 +54,7 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 | `npm run test` | Runs the root repo-local automated test gate after the standard dependency bootstrap: API build, API tests, pure web tests, test-style guardrails, repo-structure guardrails, and Kubernetes chart/launcher contracts | One-command pre-commit or branch verification |
 | `npm run verify:filesystem` | Runs the repo-local compatibility baseline for single-host filesystem mode | Check that filesystem mode still has build/test and launcher-contract coverage |
 | `npm run verify:filesystem:docker` | Verifies the filesystem Docker launcher shape with a disposable env/fixture root | Check that Docker launcher config still supports filesystem mode without managed services |
-| `npm run verify:local-docker` | Verifies managed-storage local-Docker launcher shape with a disposable env/fixture root | Check that `managed + local-docker` still enables the expected Postgres/MinIO rehearsal path |
+| `npm run verify:local-docker` | Verifies managed-storage local-Docker launcher shape with a disposable env/fixture root | Check that the managed rehearsal still enables local Postgres plus explicit object-storage wiring |
 | `npm run verify:local-docker:split` | Runs split-topology repo-local checks plus local-Docker launcher validation | Check that split-era control/execution contracts still fit the local-Docker managed rehearsal model |
 | `npm run verify:repo-structure` | Verifies the intended authored repo layout and blocks legacy path drift | Catch misplaced runtime/deployment/tooling files before they spread |
 | `npm run verify:test-style` | Verifies test command manifests and test-suite style guardrails | Catch accidental focused tests, missing command entries, broad suite reintroduction, and upstream-source assertions |
@@ -96,14 +96,15 @@ Current behavior:
 
 Operational note:
 
-- `RIVET_ARTIFACTS_HOST_PATH` is the primary public filesystem-mode contract
+- `Settings` -> `Storage` is the operator surface for choosing filesystem versus managed storage and for saving managed database/object-storage credentials. It writes `settings/deployment-storage.json` under app data; API and executor processes read that file at startup. If the file is absent, Docker/API runtime uses built-in `Local folders` plus `Local Docker Postgres` defaults. Restart or recreate the stack after saving storage settings.
+- `RIVET_ARTIFACTS_HOST_PATH` remains the launcher bootstrap/default for filesystem-mode host mounts
 - `RIVET_WORKFLOWS_HOST_PATH`, `RIVET_WORKFLOW_RECORDINGS_HOST_PATH`, and `RIVET_RUNTIME_LIBS_HOST_PATH` remain compatibility overrides for the launcher
 - use the repo launchers (`npm run dev`, `npm run prod`, `npm run dev:docker:*`, or the Docker launcher scripts) for Docker runs; a raw `docker compose --env-file .env ...` invocation only reads the variables already present in the env file and does not derive absolute workflow, recording, or runtime-library host paths from `RIVET_ARTIFACTS_HOST_PATH`. When those per-path host variables are omitted, Compose falls back to isolated `.data/workflows`, `.data/workflow-recordings`, and `.data/runtime-libraries` directories under the repo rather than the external artifact root.
 - Docker launchers intentionally drop ambient host `NODE_OPTIONS` unless `.env` defines `NODE_OPTIONS` explicitly. This keeps Yarn 4/PnP host preloads such as `--require F:\...\.pnp.cjs` from being interpolated into Linux container startup commands while leaving non-Docker local runners alone.
 - Docker dev mode bind-mounts the live upstream Rivet checkout into the web and API containers. Because the API links `@valerypopoff/rivet2-node` through built `dist` files, API startup runs `scripts/ensure-rivet-runtime-build.mjs` against the mounted Rivet source before linking packages. If upstream `packages/core` or `packages/node` source is newer than the required runtime outputs, it runs upstream `yarn build:runtime`; otherwise it logs that the runtime dist is fresh. This prevents fixed upstream source, such as published web-app renderer changes, from being hidden by stale local `dist` files.
 - `RIVET_PROXY_READ_TIMEOUT` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` in the Docker stacks; the default tracked value is `180s`
 - `RIVET_COMMAND_TIMEOUT` is unrelated to workflow HTTP lifetime; it only bounds hosted shell execution under `/api/shell/exec`
-- `RIVET_STORAGE_MODE=managed` switches both workflows and runtime libraries to managed Postgres plus object storage; in that mode `RIVET_RUNTIME_LIBRARIES_ROOT` remains only a local cache/workspace
+- Storage/database `.env` values are ignored by the Docker API/executor runtime. Use the Storage tab for workflow/runtime-library storage and database settings; in object-storage mode `RIVET_RUNTIME_LIBRARIES_ROOT` remains only a local cache/workspace
 - optional managed runtime-library readiness tuning uses:
   - `RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS`
   - `RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_MS`
@@ -122,13 +123,13 @@ The non-cluster compatibility modes that should keep working are:
 | `filesystem + combined` | Supported | Primary backward-compatible single-host operation | Local workflow tree and runtime-library root remain authoritative |
 | `filesystem + control` | Supported | Secondary control-plane-only debugging and admin validation | Control-plane/admin/latest routes still boot without managed services |
 | `filesystem + execution` | Unsupported by design | None | `RIVET_API_PROFILE=execution` must fail fast unless storage mode is `managed` |
-| `managed + local-docker + combined` | Supported | Existing Postgres/MinIO rehearsal path through Docker dev or production-style Docker | Docker launchers must auto-enable `workflow-managed` |
-| `managed + local-docker + control/execution` | Supported through repo-local split validation and local dependency rehearsal | Split-era compatibility checks without Kubernetes | Split route/profile contracts must stay valid while storage still uses local Docker Postgres/MinIO |
+| `managed + local-docker + combined` | Supported | Existing Postgres plus explicit object-storage rehearsal path through Docker dev or production-style Docker | Start the `workflow-managed` Compose profile and enter the MinIO URL/keys in Settings before restarting into object-storage mode |
+| `managed + local-docker + control/execution` | Supported through repo-local split validation and local dependency rehearsal | Split-era compatibility checks without Kubernetes | Split route/profile contracts must stay valid while storage still uses local Docker Postgres plus explicitly configured object storage |
 
 Compatibility rules:
 
 - `filesystem` compatibility is single-host only
-- `local-docker` means `RIVET_STORAGE_MODE=managed` with `RIVET_DATABASE_MODE=local-docker`
+- `local-docker` means the Storage tab uses the optional local Docker Postgres metadata database; object storage is still configured separately
 - Docker combined-mode rehearsal is necessary but not sufficient to prove the real split runtime shape
 - the repo-local split verification command proves the control-plane versus execution-plane contract; live Kubernetes validation is still required for real in-cluster routing and scaling behavior
 
@@ -159,12 +160,12 @@ Current behavior:
 - it scales the legitimate local rehearsal targets:
   - `proxy`
   - `execution`
-- it creates Kubernetes secrets from the canonical managed-service envs already used by the app:
+- it creates Kubernetes secrets from the local Kubernetes renderer inputs:
   - `RIVET_KEY`
-  - `RIVET_DATABASE_CONNECTION_STRING`
-  - `RIVET_STORAGE_URL` or the explicit `RIVET_STORAGE_*` tuple
-  - `RIVET_STORAGE_ACCESS_KEY_ID`
-  - `RIVET_STORAGE_ACCESS_KEY`
+  - `RIVET_K8S_DATABASE_CONNECTION_STRING`
+  - `RIVET_K8S_STORAGE_URL` or the explicit `RIVET_K8S_STORAGE_*` tuple
+  - `RIVET_K8S_STORAGE_ACCESS_KEY_ID`
+  - `RIVET_K8S_STORAGE_ACCESS_KEY`
 - it starts a local `kubectl port-forward` for the proxy service so the app is available on `http://127.0.0.1:${RIVET_K8S_PROXY_PORT:-RIVET_PORT:-8080}`
 - the proxy startup normalizes `RIVET_PROXY_RESOLVER` so Kubernetes DNS service hostnames resolve to the IPs nginx expects
 
@@ -225,7 +226,7 @@ Managed-state safety:
 
 - most browser-visible specs should stay non-mutating and prefer mocked API responses when the behavior under test is modal/controller/UI wiring rather than storage persistence
 - hosted-editor shortcut/focus coverage should also prefer mocked workflow/project routes when the behavior only needs an open project shape, not durable workflow storage
-- mutating workflow specs are blocked against `RIVET_STORAGE_MODE=managed` unless `PLAYWRIGHT_ALLOW_MANAGED_MUTATIONS=1` is set explicitly
+- mutating workflow specs are blocked against Storage-tab `Object storage` mode unless `PLAYWRIGHT_ALLOW_MANAGED_MUTATIONS=1` is set explicitly
 - specs that assert managed virtual workflow paths should call the managed-mode guard and skip under filesystem stacks; filesystem runs should not be expected to produce `/managed/workflows/...` save paths
 - shared Playwright workflow helpers use Playwright's request context for setup and cleanup, not `page.evaluate(fetch(...))`, so they go through the same proxy-auth path as the real browser shell
 - if a mutating spec creates real workflow state in managed mode, it is responsible for explicit cleanup before the run finishes
@@ -272,7 +273,7 @@ The Docker launchers now render layered Compose files:
 
 - `npm run dev` / `npm run dev:docker:*` use `ops/compose/docker-compose.managed-services.yml` plus `ops/compose/docker-compose.dev.yml`
 - `npm run prod`, `npm run prod:prebuilt`, `npm run prod:restart`, and `npm run prod:custom` use `ops/compose/docker-compose.managed-services.yml` plus `ops/compose/docker-compose.yml`
-- the shared file only contributes the managed Postgres/MinIO services, and the launcher auto-enables the `workflow-managed` profile only when `RIVET_STORAGE_MODE=managed`
+- the shared file only contributes the optional managed Postgres/MinIO services; enable them explicitly with `COMPOSE_PROFILES=workflow-managed` when rehearsing object-storage mode locally
 
 Current behavior:
 
@@ -283,9 +284,11 @@ Current behavior:
 - App Settings -> `Run recordings` writes recording history limits to the shared app-data volume at `settings/run-recordings.json`. `Queued recording writes` controls how many background recording-save jobs can wait in memory before new recordings are skipped. `Runs kept per workflow endpoint` lets operators choose between keeping every run for each endpoint or keeping only the newest N runs. `Days to keep recordings` lets operators choose between keeping recordings forever or deleting them after N days. The legacy `RIVET_RECORDINGS_MAX_PENDING_WRITES`, `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT`, and `RIVET_RECORDINGS_RETENTION_DAYS` env vars are ignored so operators do not have two competing sources for the same policy. App Settings tabs should use the shared field-grid pattern; it applies the standard row gap so labels, controls, and helper text do not visually merge. Save/Revert actions use the same large button tier as Project Settings publish actions and sit in a separated action row.
 - App Settings -> `Web apps` -> `Auth` writes web-app auth mode and OAuth provider settings to the shared app-data volume at `settings/web-app-auth.json`. `Rivet key` reuses the UI gate, `OAuth` uses the configured provider plus each app's allowed-email list, and `No app gate` leaves app routes open at the API layer. Legacy `RIVET_WEB_APPS_AUTH_MODE` and `OAUTH_*` env vars are ignored so a local shell or `.env` cannot silently override the UI setting. Because this file can contain OAuth client and session secrets, settings saves write it with owner-only permissions on filesystems that support POSIX modes. OAuth state and session cookies are bound to the saved auth settings version; after an operator changes provider, mode, client credentials, scope, email claim, or session policy settings, in-flight sign-ins fail closed and existing web-app visitors may need to sign in again.
 - App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` write non-secret route slugs to `settings/public-routes.json`. The legacy `settings/web-app-routes.json` file remains a read-only fallback for older deployments until the new public-route file is saved. Slugs are single URL path segments such as `workflows`, `workflows-latest`, `apps`, and `apps-latest`; all four route families must be unique and cannot collide with reserved top-level routes like `api`, `ws`, `internal`, `ui-auth`, `assets`, `node_modules`, or `__rivet_auth`.
+- App Settings -> `Storage` writes workflow/runtime-library storage choices to the shared app-data volume at `settings/deployment-storage.json`. The tab keeps project artifact storage and metadata database settings as separate sections. `Local folders` keeps filesystem-mode projects, recordings, published snapshots, and runtime libraries on the mounted host paths. `Object storage` moves those artifacts to S3-compatible storage, while the database section controls whether managed metadata uses the optional local Docker Postgres service or an external managed PostgreSQL cluster. `Local Docker Postgres` does not edit or fill object-storage fields; if you want to use the optional local MinIO service, enter its object-storage URL and credentials in the project artifact storage section. Use `Managed Postgres` plus object-storage credentials for production-style managed storage. The settings API hides the managed PostgreSQL connection string and object-storage secret access key from the browser, preserving them when the corresponding password fields are left blank. Storage/database `.env` values are ignored by the Docker API/executor runtime; after changing saved storage settings, use `npm run prod:restart` for a production-style Docker stack when you want the current images to reread the settings file without pulling newer images.
 - Web-app action graph context strips browser/session headers such as `cookie`, `authorization`, proxy auth, and token-free-host hints. Keep public web-app actions on that narrower context contract; workflow endpoint routes may still expose request headers because they are API-style execution surfaces with their own bearer/token-free-host contract.
 - App Settings -> `Node executor proxy` writes runtime `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values to the shared app-data volume at `settings/node-executor-proxy.json`. The proxy bootstrap clears any `.env`/process proxy variables first, reads only that app-settings file, installs the Undici proxy dispatcher from the saved values, and polls the file while running. In API processes it reads from `RIVET_APP_DATA_ROOT` for headless endpoint execution, and saving through the settings API immediately reloads the dispatcher in that same API process. In the internal editor executor it falls back to the Rivet desktop app-data path under `HOME` and picks up changes through the poller. If the file is missing or cleared, runtime Node execution runs without a proxy. The saved proxy file is also written owner-only where supported because proxy URLs may include credentials.
-- App Settings saves use unique temporary files followed by rename for `settings/node-executor-proxy.json`, `settings/run-recordings.json`, and `settings/web-app-auth.json`, so overlapping saves do not share the same temporary path.
+- App Settings saves use unique temporary files followed by rename for `settings/node-executor-proxy.json`, `settings/run-recordings.json`, `settings/deployment-storage.json`, and `settings/web-app-auth.json`, so overlapping saves do not share the same temporary path.
+- Missing App Settings files mean first-run defaults. Malformed or invalid saved settings files should fail loudly instead of silently falling back to `.env` or defaults, because a present app-settings file is operator intent. Web-app auth is the deliberate exception: if `settings/web-app-auth.json` cannot be read, public app routes fail closed until the operator fixes or removes the file.
 - For local web-app OAuth testing without a real provider, open App Settings -> `Web apps` -> `Auth`, choose `OAuth`, choose `Local dummy`, provide a session signing secret, and optionally set the default dummy email. The Sign in flow then opens `/apps/auth/dummy` unless the active published-app route prefix has changed, accepts a test email, and returns through the same callback/session-cookie path as real OAuth. Dummy OAuth is localhost-only by default; do not use it for shared or production deployments. OAuth web-app allowlists are fail-closed, so add the dummy email to the app's allowed-email list before testing access.
 - `npm run prod:custom` rebuilds the stack from the current wrapper repo and the current `rivet/` source folder, using the filtered `rivet_source` and `rivet_dependency_metadata` Docker build contexts
 - dev Docker exposes the API directly on `http://localhost:3100` for diagnostics, but it binds that port to `127.0.0.1` by default through `RIVET_LOCAL_BIND_HOST`; keep it private/firewalled on shared or public machines because the hosted auth model expects browser traffic to enter through nginx
@@ -312,10 +315,10 @@ Current behavior:
 - the Docker Compose stacks set `HOME=/home/rivet` and keep npm/Yarn caches there so pulled non-root images and locally built images use the same runtime cache contract
 - the launcher waits for healthy services; `RIVET_DOCKER_WAIT_TIMEOUT` controls the overall wait window, while the Docker dev API healthcheck has a longer startup grace period because cold starts may need to refresh npm dependencies, copy Rivet package sources, and relink local package overlays before `/healthz` is available
 - on Windows/Docker Desktop, if Compose fails before containers start with `error while creating mount source path '/run/desktop/mnt/host/<drive>/...'` and `file exists`, first verify the host folder exists, then run `wsl --shutdown` from PowerShell to reset Docker Desktop's WSL file-sharing bridge before retrying `npm run dev:docker`
-- in `RIVET_STORAGE_MODE=managed`, both workflow state and runtime-library releases come from managed services, while `/data/runtime-libraries` remains only an extracted local cache/workspace inside each container
-- in `RIVET_STORAGE_MODE=managed`, published/latest endpoint execution also keeps API-local warm caches for endpoint pointers and immutable revision contents; the first hit after startup or after a workflow mutation can still be slower, but repeated hits for the same unchanged trivial workflow should settle onto the warm local path
+- in Storage-tab `Object storage` mode, both workflow state and runtime-library releases come from managed services, while `/data/runtime-libraries` remains only an extracted local cache/workspace inside each container
+- in Storage-tab `Object storage` mode, published/latest endpoint execution also keeps API-local warm caches for endpoint pointers and immutable revision contents; the first hit after startup or after a workflow mutation can still be slower, but repeated hits for the same unchanged trivial workflow should settle onto the warm local path
 - a later cleanup pass did not change that behavior; it extracted the managed execution invalidation/service code, replaced brittle source assertions with behavioral tests, added a measurement tool, and hardened listener startup/shutdown plus same-process self-notify handling without changing the public execution contract
-- if `RIVET_DATABASE_MODE=managed`, runtime-library replica-status rows also live in the shared Postgres database, so stale rows from older containers can survive a Docker recreate until retention cleanup runs or you clear them explicitly
+- if the Storage tab uses `Managed Postgres`, runtime-library replica-status rows also live in the shared Postgres database, so stale rows from older containers can survive a Docker recreate until retention cleanup runs or you clear them explicitly
 - when the Runtime Libraries modal shows stale rows that are only historical dev noise, use the `Clear stale replicas` action or call `POST /api/runtime-libraries/replicas/cleanup`
 - set `RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true` when you want additive execution timing headers for local diagnosis of endpoint resolve/materialize/execute stages
 - set `RIVET_CODE_RUNNER_TELEMETRY=true` alongside workflow debug headers when you also want ManagedCodeRunner call counts, prepare/compile/execute timing, and cache hit/miss headers
@@ -511,7 +514,7 @@ For wrapper/web changes:
 1. `npm --prefix wrapper/web run build`
 2. if the change adds or changes pure helper logic under `wrapper/web/dashboard/` or `wrapper/web/overrides/hooks/`, run `npm run verify:web-pure`
 3. if the change affects browser-visible behavior, run `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0`, then `node scripts/playwright-observe.mjs test`
-4. if the Playwright coverage needs real workflow mutations in `RIVET_STORAGE_MODE=managed`, set `PLAYWRIGHT_ALLOW_MANAGED_MUTATIONS=1` deliberately and keep cleanup explicit; prefer mocked API/browser tests for modal and controller coverage when storage mutation is not the point
+4. if the Playwright coverage needs real workflow mutations in Storage-tab `Object storage` mode, set `PLAYWRIGHT_ALLOW_MANAGED_MUTATIONS=1` deliberately and keep cleanup explicit; prefer mocked API/browser tests for modal and controller coverage when storage mutation is not the point
 5. if the change lives under `wrapper/web/overrides/` or affects hosted editor save/hotkey behavior, also verify with `npm run prod:custom`; `npm run prod` deliberately pulls already-published images instead of using your local workspace changes
 
 For workflow-library mutations that change on-disk project state:
@@ -699,7 +702,7 @@ For the current Helm chart and images:
 
 For managed endpoint latency and cache behavior:
 
-1. run in `RIVET_STORAGE_MODE=managed`
+1. run with Settings -> `Storage` set to `Object storage`
 2. call the same trivial published or latest endpoint twice
 3. expect the first request after startup or after a publish/save/rename/move to be the cold path
 4. expect the second request for the same unchanged workflow to drop onto the warm local path
@@ -707,7 +710,7 @@ For managed endpoint latency and cache behavior:
 
 For endpoint measurement with the dedicated script:
 
-1. run the app in either `RIVET_STORAGE_MODE=filesystem` or `RIVET_STORAGE_MODE=managed`
+1. run the app with either `Local folders` or `Object storage` selected in Settings -> `Storage`
 2. optionally set `RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS=true` so the route emits stage timings; also set `RIVET_CODE_RUNNER_TELEMETRY=true` when diagnosing Code/Expression overhead
 3. run `npm --prefix wrapper/api run workflow-execution:measure -- --base-url http://localhost:8080 --endpoint hello-world --kind published --runs 5 --warmups 1`
 4. expect one output line per request with HTTP status, client duration, `x-duration-ms`, `x-workflow-resolve-ms`, `x-workflow-materialize-ms`, `x-workflow-execute-ms`, `x-workflow-cache`, and any enabled `x-code-runner-*` headers
@@ -790,7 +793,7 @@ Current follow-up expectations:
 
 Use the current compatibility commands intentionally:
 
-- the repo-local test portions scrub ambient runtime-root, managed-storage, execution-route, runtime-library, recording, and legacy web-app OAuth env such as `RIVET_WORKFLOWS_ROOT`, `RIVET_ARTIFACTS_HOST_PATH`, `RIVET_DATABASE_CONNECTION_STRING`, `RIVET_STORAGE_URL`, `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, `RIVET_WEB_APPS_BASE_PATH`, `RIVET_LATEST_WEB_APPS_BASE_PATH`, `RIVET_CORS_ALLOWED_ORIGINS`, `RIVET_TRUST_INCOMING_FORWARDED_HEADERS`, `RIVET_WEB_APPS_AUTH_MODE`, `OAUTH_PROVIDER`, `OAUTH_DUMMY_EMAIL`, `OAUTH_DUMMY_ALLOW_NON_LOCALHOST`, `OAUTH_AUTHORIZE_URL`, `OAUTH_TOKEN_URL`, `OAUTH_USER_URL`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_CALLBACK_URL`, `OAUTH_SCOPES`, `OAUTH_EMAIL_CLAIM`, `OAUTH_SESSION_SECRET`, `OAUTH_SESSION_TTL_SECONDS`, `OAUTH_CLIENT_AUTH_METHOD`, `OAUTH_DEBUG_LOG_PROFILE`, and `RIVET_ENV_FILE` before spawning API tests, so local `.env` or shell state cannot redirect those tests into a real workflow folder, database, object store, route prefix, auth provider, CORS policy, forwarded-header trust policy, runtime-library role, recording policy, or prove the wrong web-app auth source
+- the repo-local test portions scrub ambient runtime-root, retired storage/database, execution-route, runtime-library, recording, and legacy web-app OAuth env such as `RIVET_WORKFLOWS_ROOT`, `RIVET_ARTIFACTS_HOST_PATH`, old storage/database runtime names, `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, `RIVET_WEB_APPS_BASE_PATH`, `RIVET_LATEST_WEB_APPS_BASE_PATH`, `RIVET_CORS_ALLOWED_ORIGINS`, `RIVET_TRUST_INCOMING_FORWARDED_HEADERS`, `RIVET_WEB_APPS_AUTH_MODE`, `OAUTH_PROVIDER`, `OAUTH_DUMMY_EMAIL`, `OAUTH_DUMMY_ALLOW_NON_LOCALHOST`, `OAUTH_AUTHORIZE_URL`, `OAUTH_TOKEN_URL`, `OAUTH_USER_URL`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_CALLBACK_URL`, `OAUTH_SCOPES`, `OAUTH_EMAIL_CLAIM`, `OAUTH_SESSION_SECRET`, `OAUTH_SESSION_TTL_SECONDS`, `OAUTH_CLIENT_AUTH_METHOD`, `OAUTH_DEBUG_LOG_PROFILE`, and `RIVET_ENV_FILE` before spawning API tests, so local `.env` or shell state cannot redirect those tests into a real workflow folder, route prefix, auth provider, CORS policy, forwarded-header trust policy, runtime-library role, recording policy, or prove the wrong web-app auth source
 - `npm run verify:filesystem`
   - runs the repo-local baseline for filesystem compatibility:
     - `wrapper/api` build

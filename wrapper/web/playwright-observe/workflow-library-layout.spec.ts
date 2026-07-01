@@ -82,6 +82,18 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     updatedAt: null as string | null,
     source: 'default',
   };
+  let deploymentStorageSettings = {
+    storageMode: 'filesystem',
+    artifactsHostPath: '../',
+    databaseMode: 'local-docker',
+    databaseSslMode: 'disable',
+    databaseConnectionStringConfigured: false,
+    storageUrl: '',
+    storageAccessKeyId: '',
+    storageAccessKeyConfigured: false,
+    updatedAt: null as string | null,
+    source: 'default',
+  };
 
   await page.route('**/api/config', async (route) => {
     const url = new URL(route.request().url());
@@ -96,6 +108,8 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
       body: JSON.stringify({
         ...publicRouteSettings,
         webAppsAuthMode: 'ui-gate',
+        storageMode: deploymentStorageSettings.storageMode,
+        databaseMode: deploymentStorageSettings.databaseMode,
       }),
     });
   });
@@ -221,6 +235,42 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify(publicRouteSettings),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/deployment-storage') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        deploymentStorageSettings = {
+          storageMode: String(body.storageMode ?? deploymentStorageSettings.storageMode),
+          artifactsHostPath: String(body.artifactsHostPath ?? deploymentStorageSettings.artifactsHostPath),
+          databaseMode: String(body.databaseMode ?? deploymentStorageSettings.databaseMode),
+          databaseSslMode: String(body.databaseSslMode ?? deploymentStorageSettings.databaseSslMode),
+          databaseConnectionStringConfigured: Boolean(body.databaseConnectionString) || deploymentStorageSettings.databaseConnectionStringConfigured,
+          storageUrl: String(body.storageUrl ?? deploymentStorageSettings.storageUrl),
+          storageAccessKeyId: String(body.storageAccessKeyId ?? deploymentStorageSettings.storageAccessKeyId),
+          storageAccessKeyConfigured: Boolean(body.storageAccessKey) || deploymentStorageSettings.storageAccessKeyConfigured,
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(deploymentStorageSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(deploymentStorageSettings),
       });
       return;
     }
@@ -364,6 +414,33 @@ test.describe('Workflow library layout', () => {
       ]);
       return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
     }).toBeGreaterThan(0.9);
+
+    await appSettingsModal.getByRole('tab', { name: 'Storage' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Storage' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section-title')).toHaveCount(0);
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section')).toHaveCount(2);
+    await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByRole('button', { name: 'Object storage' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveValue('../');
+    const storageFieldGrids = appSettingsModal.locator('.app-settings-storage-panel .app-settings-field-grid');
+    await expect(storageFieldGrids.first()).toHaveCSS('gap', '18px');
+    await expect(storageFieldGrids.nth(1)).toHaveCSS('gap', '18px');
+    await appSettingsModal.getByLabel('Host artifacts folder').fill('../storage-artifacts');
+    await appSettingsModal.getByRole('button', { name: 'Object storage' }).click();
+    await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByText('It must already be running before object storage mode can apply.')).toBeVisible();
+    await expect(appSettingsModal.getByLabel('Object storage URL')).toHaveValue('');
+    await expect(appSettingsModal.getByLabel('Object storage access key ID')).toHaveValue('');
+    await appSettingsModal.getByLabel('Object storage URL').fill('http://workflow-minio:9000/rivet-workflows');
+    await appSettingsModal.getByLabel('Object storage access key ID').fill('minioadmin');
+    await appSettingsModal.getByLabel('Object storage secret access key').fill('minioadmin');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    const storageActions = appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row');
+    await expect(storageActions.locator('.project-settings-success')).toHaveText('Saved. Restart or recreate the stack to apply storage changes.');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
 
     await appSettingsModal.getByRole('tab', { name: 'Run recordings' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Run recordings' })).toHaveAttribute('aria-selected', 'true');

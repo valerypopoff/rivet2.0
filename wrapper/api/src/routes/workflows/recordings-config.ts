@@ -36,17 +36,31 @@ export type WorkflowRecordingConfig = {
   maxTotalBytes: number;
 };
 
-function normalizeNumber(value: unknown, fallback: number): number {
+function hasOwn(value: object, key: keyof RunRecordingsSettingsDraft): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function normalizeNumber(value: unknown, fallback: number, fieldLabel: string): number {
+  if (typeof value === 'undefined' || value === null || value === '') {
+    return fallback;
+  }
+
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.max(0, Math.trunc(value));
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`${fieldLabel} must be a non-negative whole number`);
+    }
+
+    return value;
   }
 
   if (typeof value === 'string' && value.trim()) {
     const parsed = Number(value.trim());
-    return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : fallback;
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
   }
 
-  return fallback;
+  throw new Error(`${fieldLabel} must be a non-negative whole number`);
 }
 
 export function normalizeWorkflowRecordingLimitSettings(value: unknown): WorkflowRecordingLimitSettings {
@@ -56,16 +70,19 @@ export function normalizeWorkflowRecordingLimitSettings(value: unknown): Workflo
 
   return {
     maxPendingWrites: normalizeNumber(
-      raw.maxPendingWrites,
+      hasOwn(raw, 'maxPendingWrites') ? raw.maxPendingWrites : undefined,
       DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS.maxPendingWrites,
+      'Queued recording writes',
     ),
     retentionDays: normalizeNumber(
-      raw.retentionDays,
+      hasOwn(raw, 'retentionDays') ? raw.retentionDays : undefined,
       DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS.retentionDays,
+      'Days to keep recordings',
     ),
     maxRunsPerEndpoint: normalizeNumber(
-      raw.maxRunsPerEndpoint,
+      hasOwn(raw, 'maxRunsPerEndpoint') ? raw.maxRunsPerEndpoint : undefined,
       DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS.maxRunsPerEndpoint,
+      'Runs kept per workflow endpoint',
     ),
   };
 }
@@ -82,11 +99,11 @@ export function readWorkflowRecordingLimitSettings(): WorkflowRecordingLimitSett
     const settingsText = fs.readFileSync(getRunRecordingsSettingsPath(), 'utf8');
     return normalizeWorkflowRecordingLimitSettings(JSON.parse(settingsText));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[workflow-recordings] Failed to read run-recordings app settings:', error);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS;
     }
 
-    return DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS;
+    throw error;
   }
 }
 

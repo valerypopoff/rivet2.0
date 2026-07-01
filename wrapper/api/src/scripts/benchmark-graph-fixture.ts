@@ -372,7 +372,6 @@ async function main(): Promise<void> {
   const runtimeLibrariesRoot = path.join(tempRoot, 'runtime-libraries');
   const totalBenchmarkRequests = (args.runs + args.warmups) * 2;
 
-  process.env.RIVET_STORAGE_MODE = 'filesystem';
   process.env.RIVET_WORKFLOWS_ROOT = workflowsRoot;
   process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = recordingsRoot;
   process.env.RIVET_APP_DATA_ROOT = appDataRoot;

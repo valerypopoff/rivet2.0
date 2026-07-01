@@ -59,6 +59,9 @@ export type WebAppRouteSettingsDraft = Pick<
 export type WebAppAuthMode = 'ui-gate' | 'oauth' | 'none';
 export type WebAppOAuthProvider = 'external' | 'dummy';
 export type WebAppOAuthClientAuthMethod = 'body' | 'basic';
+export type DeploymentStorageMode = 'filesystem' | 'managed';
+export type DeploymentDatabaseMode = 'local-docker' | 'managed';
+export type DeploymentDatabaseSslMode = 'disable' | 'require' | 'verify-full';
 
 export interface WebAppAuthSettings {
   mode: WebAppAuthMode;
@@ -98,4 +101,28 @@ export interface WebAppAuthSettingsDraft {
   sessionTtlSeconds?: unknown;
   clientAuthMethod?: unknown;
   debugLogProfile?: unknown;
+}
+
+export interface DeploymentStorageSettings {
+  storageMode: DeploymentStorageMode;
+  artifactsHostPath: string;
+  databaseMode: DeploymentDatabaseMode;
+  databaseSslMode: DeploymentDatabaseSslMode;
+  databaseConnectionStringConfigured: boolean;
+  storageUrl: string;
+  storageAccessKeyId: string;
+  storageAccessKeyConfigured: boolean;
+  updatedAt: string | null;
+  source: AppSettingsSource;
+}
+
+export interface DeploymentStorageSettingsDraft {
+  storageMode?: unknown;
+  artifactsHostPath?: unknown;
+  databaseMode?: unknown;
+  databaseSslMode?: unknown;
+  databaseConnectionString?: unknown;
+  storageUrl?: unknown;
+  storageAccessKeyId?: unknown;
+  storageAccessKey?: unknown;
 }

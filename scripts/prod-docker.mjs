@@ -10,7 +10,6 @@ import {
 import {
   assertNoRetiredEnv,
   dropAmbientNodeOptionsForDocker,
-  enableManagedWorkflowProfileIfNeeded,
 } from './lib/docker-launcher-env.mjs';
 import { prepareRivetDockerContext } from './lib/rivet-source-context.mjs';
 
@@ -31,7 +30,6 @@ async function main() {
   }
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'prod-docker', envFileLabel });
-  enableManagedWorkflowProfileIfNeeded(mergedEnv);
 
   if (action === 'custom') {
     if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'COMPOSE_PARALLEL_LIMIT')) {

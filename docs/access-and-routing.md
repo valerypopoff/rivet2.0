@@ -122,6 +122,8 @@ The wrapper API currently exposes these groups behind `/api`:
   - guarded app-settings helper for persisted internal Node executor `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values
 - `/api/app-settings/run-recordings`
   - guarded app-settings helper for recording queue depth, per-endpoint history length, and age-retention limits
+- `/api/app-settings/deployment-storage`
+  - guarded app-settings helper for workflow/runtime-library storage mode, filesystem artifact root, managed PostgreSQL settings, and managed object-storage settings; secret values are write-only from the browser
 - `/api/app-settings/web-app-auth`
   - guarded app-settings helper for web-app browser auth mode, OAuth provider settings, local dummy-login settings, and web-app OAuth session lifetime
 
@@ -221,7 +223,7 @@ If the gate is enabled but `RIVET_KEY` is empty, nginx/API do not fall back to o
 
 Rivet web apps are browser surfaces with wrapper-owned route and auth policy. Web-app routes and auth live in `Settings` -> `Web apps`; workflow endpoint route families live in `Settings` -> `Workflow endpoints`.
 
-The `Workflow endpoints` tab's `Routes` section controls the published/latest workflow endpoint URL slugs. The `Web apps` tab's `Routes` section controls the published/latest web-app URL slugs. Both sections write `settings/public-routes.json` under `RIVET_APP_DATA_ROOT`. The API reads that file dynamically, and the proxy watches it, regenerates the nginx public-route include, validates it with `nginx -t`, and reloads nginx. Changing these slugs from Settings therefore does not require recreating/restarting the stack. If the settings file is missing or invalid, the deployment env defaults are used as first-run/bootstrap values: `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, then the legacy web-app aliases, then `/workflows`, `/workflows-latest`, `/apps`, and `/apps-latest`. The saved slugs must be single top-level URL segments, unique across all four route families, and cannot use reserved top-level routes such as `api`, `ws`, `internal`, `ui-auth`, `assets`, `node_modules`, or `__rivet_auth`.
+The `Workflow endpoints` tab's `Routes` section controls the published/latest workflow endpoint URL slugs. The `Web apps` tab's `Routes` section controls the published/latest web-app URL slugs. Both sections write `settings/public-routes.json` under `RIVET_APP_DATA_ROOT`. The API reads that file dynamically, and the proxy watches it, regenerates the nginx public-route include, validates it with `nginx -t`, and reloads nginx. Changing these slugs from Settings therefore does not require recreating/restarting the stack. If the settings file is missing, the deployment env defaults are used as first-run/bootstrap values: `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, then the legacy web-app aliases, then `/workflows`, `/workflows-latest`, `/apps`, and `/apps-latest`. If the saved file exists but is malformed or invalid, route reads fail loudly rather than silently switching top-level route families. The saved slugs must be single top-level URL segments, unique across all four route families, and cannot use reserved top-level routes such as `api`, `ws`, `internal`, `ui-auth`, `assets`, `node_modules`, or `__rivet_auth`.
 
 The `Auth` section controls the API-owned web-app auth mode, not `.env`:
 
@@ -357,7 +359,7 @@ Current request/response behavior:
 
 ## Filesystem execution hot path
 
-In `RIVET_STORAGE_MODE=filesystem`, the published/latest routes now keep a local derived warm path on the API process:
+When `Settings` -> `Storage` uses `Local folders`, the published/latest routes keep a local derived warm path on the API process:
 
 - a startup-warmed endpoint index for published/latest endpoint pointers
 - an authoritative uncached filesystem execution source behind that cache, so degraded requests can still resolve through the real publication rules
@@ -393,7 +395,7 @@ In local Docker, those reads still happen against `/workflows`, which is normall
 
 ## Managed execution hot path
 
-In `RIVET_STORAGE_MODE=managed`, workflow execution stays authoritative through Postgres plus object storage, but each API replica keeps local derived execution caches for the warm path:
+When `Settings` -> `Storage` uses `Object storage`, workflow execution stays authoritative through Postgres plus object storage, but each API replica keeps local derived execution caches for the warm path:
 
 - endpoint-pointer cache entries map `runKind + endpointName` to workflow identity, relative path, and revision id
 - revision-materialization cache entries store immutable raw project and dataset contents by revision id
@@ -439,6 +441,7 @@ Important limitation:
 - API-hosted published/latest execution does not currently register package plugins from local app-data
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
+- if App Settings -> `Storage` should provide managed storage/database settings to split `execution` pods, those pods must see the same `settings/deployment-storage.json` app-data file at startup; otherwise they fall back to their deployment env defaults
 - if App Settings -> `Node executor proxy` should affect split `execution` pods, those pods must see the same `settings/node-executor-proxy.json` app-data file through a shared RWX claim; runtime endpoint proxy values are not read from `.env` or deployment proxy environment variables
 
 ## Latest Debugger Model
