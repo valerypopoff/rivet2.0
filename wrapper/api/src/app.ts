@@ -14,6 +14,7 @@ import {
   workflowsRouter,
 } from './routes/workflows/index.js';
 import { configRouter } from './routes/config.js';
+import { appSettingsRouter } from './routes/app-settings.js';
 import { uiAuthRouter } from './routes/ui-auth.js';
 import { webAppOAuthRouter } from './web-app-oauth.js';
 import { runtimeLibrariesRouter } from './routes/runtime-libraries.js';
@@ -117,6 +118,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
       '/api/projects/*',
       '/api/workflows/*',
       '/api/runtime-libraries/*',
+      '/api/app-settings/*',
       '/api/config*',
     );
   }
@@ -152,6 +154,7 @@ function mountControlPlaneRoutes(app: Express): void {
   app.use('/api/projects', projectsRouter);
   app.use('/api/workflows', workflowsRouter);
   app.use('/api/runtime-libraries', runtimeLibrariesRouter);
+  app.use('/api/app-settings', appSettingsRouter);
   app.use('/api', configRouter);
 }
 

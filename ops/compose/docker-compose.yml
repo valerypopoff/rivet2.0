@@ -221,6 +221,7 @@ services:
       - RIVET_STORAGE_ACCESS_KEY
       - RIVET_STORAGE_FORCE_PATH_STYLE
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
+      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
     volumes:
       - rivet_data:/home/rivet/.local/share/com.valerypopoff.rivet2
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-rivet_runtime_libs}:/data/runtime-libraries

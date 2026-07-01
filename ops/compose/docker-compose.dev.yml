@@ -281,6 +281,7 @@ services:
       - RIVET_STORAGE_ACCESS_KEY
       - RIVET_STORAGE_FORCE_PATH_STYLE
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
+      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
     volumes:
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn

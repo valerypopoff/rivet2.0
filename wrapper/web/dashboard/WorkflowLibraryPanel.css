@@ -108,6 +108,7 @@
 [data-testid='run-recordings-modal--blanket'],
 [data-testid='workflow-project-version-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
+[data-testid='app-settings-modal--blanket'],
 [data-testid='about-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
   backdrop-filter: blur(2px);
@@ -118,6 +119,7 @@
 [data-testid='run-recordings-modal'],
 [data-testid='workflow-project-version-modal'],
 [data-testid='workflow-published-version-history-modal'],
+[data-testid='app-settings-modal'],
 [data-testid='about-modal'] {
   background: #1f1f22 !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
@@ -130,6 +132,7 @@
 [data-testid='run-recordings-modal--header'],
 [data-testid='workflow-project-version-modal--header'],
 [data-testid='workflow-published-version-history-modal--header'],
+[data-testid='app-settings-modal--header'],
 [data-testid='about-modal--header'] {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -139,6 +142,7 @@
 [data-testid='run-recordings-modal--body'],
 [data-testid='workflow-project-version-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
+[data-testid='app-settings-modal--body'],
 [data-testid='about-modal--body'] {
   padding: 0 !important;
 }
@@ -1326,6 +1330,68 @@
 .about-detail-value {
   color: var(--grey-lightest);
   font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.app-settings-modal-content {
+  min-height: 360px;
+}
+
+.app-settings-general-panel {
+  max-width: 660px;
+}
+
+.app-settings-proxy-panel {
+  max-width: 760px;
+}
+
+.app-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.app-settings-section-title {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.app-settings-field-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.app-settings-field {
+  display: grid;
+  gap: 6px;
+}
+
+.app-settings-field-label {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+}
+
+.app-settings-proxy-no-proxy {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.app-settings-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 2px;
 }
 
 .project-settings-field {
@@ -1838,6 +1904,11 @@
 .project-settings-error {
   font-size: var(--workflow-library-font-size-s);
   color: #ff9ba5;
+}
+
+.project-settings-success {
+  font-size: var(--workflow-library-font-size-s);
+  color: #9de6ad;
 }
 
 .published-version-history-button {

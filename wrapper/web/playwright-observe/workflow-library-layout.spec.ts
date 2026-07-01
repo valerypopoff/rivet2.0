@@ -73,6 +73,27 @@ async function installProjectWebAppsRoute(
   });
 }
 
+async function installAppSettingsRoute(page: Page): Promise<void> {
+  await page.route('**/api/app-settings/node-executor-proxy', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        httpProxy: 'http://172.17.0.1:3128',
+        httpsProxy: 'http://172.17.0.1:3128',
+        noProxy: 'localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1',
+        updatedAt: '2026-06-30T12:00:00.000Z',
+        source: 'app-settings',
+      }),
+    });
+  });
+}
+
 async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): Promise<void> {
   await page.evaluate((projectPath) => {
     const editorFrame = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame');
@@ -87,6 +108,8 @@ async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): P
 
 test.describe('Workflow library layout', () => {
   test('collapses from the full header row into a clickable narrow rail', async ({ page }) => {
+    await installAppSettingsRoute(page);
+
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
@@ -114,6 +137,25 @@ test.describe('Workflow library layout', () => {
 
     const bottomActions = page.locator('.workflow-library-panel .panel-bottom-actions');
     await expect(bottomActions).toHaveCSS('padding-bottom', '24px');
+
+    await expect(page.getByRole('button', { name: 'App settings' })).toBeVisible();
+    await page.getByRole('button', { name: 'App settings' }).click();
+    const appSettingsModal = page.locator('[data-testid="app-settings-modal"]');
+    await expect(appSettingsModal).toBeVisible();
+    await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal).toContainText('Rivet Studio Server');
+    await expect(appSettingsModal).toContainText('Published workflows');
+    await expect(appSettingsModal).toContainText('/workflows');
+    await expect(appSettingsModal).toContainText('Published web apps');
+    await expect(appSettingsModal).toContainText('/apps');
+    await appSettingsModal.getByRole('tab', { name: 'Node executor proxy' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Node executor proxy' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.getByText('HTTP_PROXY')).toBeVisible();
+    await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue('http://172.17.0.1:3128');
+    await expect(appSettingsModal.getByText('NO_PROXY')).toBeVisible();
+    await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue('localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1');
+    await page.getByRole('button', { name: 'Close app settings' }).click();
+    await expect(appSettingsModal).toHaveCount(0);
 
     await page.getByRole('button', { name: 'About' }).click();
     const aboutModal = page.locator('[data-testid="about-modal"]');

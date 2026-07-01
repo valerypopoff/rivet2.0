@@ -346,6 +346,10 @@ In Kubernetes, production should stay on managed storage:
 
 The backend StatefulSet still has an `app-data` volume. By default, the chart creates a `volumeClaimTemplate` from `storage.appData.*`; if the cluster has no default storage class, set `storage.appData.storageClassName` or `storage.appData.existingClaimName`. Leaving `storage.appData.enabled=false` makes that volume ephemeral and is not the recommended production shape.
 
+The API and executor containers deliberately mount that same `app-data` volume at different paths: `/data/rivet-app` for the API and `/home/rivet/.local/share/com.valerypopoff.rivet2` for the executor. App Settings -> `Node executor proxy` relies on that shared volume by writing `settings/node-executor-proxy.json` from the API. API bootstrap clears process proxy env first and then reads this file through `RIVET_APP_DATA_ROOT` for latest/headless execution paths that run in that process, while the editor executor bootstrap reads the same relative file from the desktop-style app-data mount. Keep the backend StatefulSet's app-data volume persistent if operators use UI-managed executor proxy settings.
+
+Published workflow endpoints in the split `execution` deployment also need this settings file to be visible if they should consume the UI-managed proxy. Use a shared RWX `storage.appData.existingClaimName` for execution pods; runtime endpoint proxy values are not read from `.env`, Vault dotenv, or deployment `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` variables.
+
 Runtime-library local files are caches/workspaces, not the source of truth in managed mode. The default is `emptyDir` for execution replicas. Only set `runtimeLibraries.cache.existingClaimName` if the PVC can be mounted by every pod that needs it; with more than one `execution` replica, that usually means an RWX-capable volume. A single RWO claim reused by multiple execution pods can leave pods stuck waiting for volume attachment.
 
 `tmpVolume` is an `emptyDir` mounted at `/var/tmp` with a default `2Gi` size limit. Increase `tmpVolume.sizeLimit` if workflows write larger temporary files; do not use the unsupported generic `writableDirs` overlay key.

@@ -411,7 +411,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                     </div>
                     {accessValidationError ? <div className="project-settings-error">{accessValidationError}</div> : null}
                     <div className="project-settings-help">
-                      Leave empty to allow any signed-in OAuth user.
+                      Leave empty to deny all signed-in OAuth users.
                     </div>
                   </div>
                 ) : null}

@@ -108,6 +108,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/projects/*',
     '/api/workflows/*',
     '/api/runtime-libraries/*',
+    '/api/app-settings/*',
     '/api/config*',
   ]);
 
@@ -133,6 +134,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/projects/*',
     '/api/workflows/*',
     '/api/runtime-libraries/*',
+    '/api/app-settings/*',
     '/api/config*',
     '/workflows/:endpointName',
     '/apps/:slug',

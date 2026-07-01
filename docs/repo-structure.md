@@ -42,7 +42,7 @@ Non-authored local/generated roots include:
 - `wrapper/bootstrap/`
   - runtime/bootstrap code used by containerized API and executor processes
 
-Runtime/bootstrap code belongs under `wrapper/bootstrap/`, not under `ops/`.
+Runtime/bootstrap code, including executor proxy/runtime-library bootstrap helpers, belongs under `wrapper/bootstrap/`, not under `ops/`.
 
 ## What belongs in `image/`
 

@@ -129,6 +129,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     openRunRecordingsModal,
     runRecordingsRetained,
     runRecordingsFoundCount,
+    setAppSettingsOpen,
   } = controller;
 
   let bodyContent: JSX.Element | null = null;
@@ -247,6 +248,15 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
               <div className="panel-bottom-action-summary">Found: {runRecordingsFoundCount}</div>
             ) : null}
           </div>
+          <Button
+            appearance="subtle"
+            className="panel-bottom-button project-settings-secondary-button button-size-m"
+            onClick={() => setAppSettingsOpen(true)}
+            title="Open app settings"
+            aria-label="App settings"
+          >
+            Settings
+          </Button>
           <Button
             appearance="subtle"
             className="panel-bottom-button project-settings-secondary-button button-size-m"

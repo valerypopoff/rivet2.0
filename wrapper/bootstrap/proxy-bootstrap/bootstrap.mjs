@@ -1,22 +1,26 @@
-import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 import { shouldBootstrapManagedRuntimeLibrariesInCurrentProcess } from './config.mjs';
+import {
+  loadAndApplyNodeExecutorProxySettings,
+  setupNodeExecutorProxySettingsPolling,
+} from './node-executor-proxy-settings.mjs';
 import {
   disposeManagedRuntimeLibrariesSync,
   setupManagedRuntimeLibrariesSync,
 } from './runtime-libraries-sync.mjs';
 
-const proxyEnvKeys = [
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'ALL_PROXY',
-  'http_proxy',
-  'https_proxy',
-  'all_proxy',
-];
-
-if (proxyEnvKeys.some((key) => Boolean(process.env[key]?.trim()))) {
-  setGlobalDispatcher(new EnvHttpProxyAgent());
-}
+await loadAndApplyNodeExecutorProxySettings({
+  clearBeforeLoad: true,
+  clearWhenMissing: true,
+  quiet: true,
+});
+const disposeNodeExecutorProxySettingsPolling = setupNodeExecutorProxySettingsPolling();
+globalThis.__rivetReloadNodeExecutorProxySettings = () => (
+  loadAndApplyNodeExecutorProxySettings({
+    clearBeforeLoad: true,
+    clearWhenMissing: true,
+    quiet: true,
+  })
+);
 
 const shouldBootstrapManagedRuntimeLibraries = shouldBootstrapManagedRuntimeLibrariesInCurrentProcess();
 
@@ -42,9 +46,11 @@ async function disposeRuntimeLibrariesSyncSafely() {
 }
 
 process.once('SIGINT', () => {
+  disposeNodeExecutorProxySettingsPolling();
   void disposeRuntimeLibrariesSyncSafely();
 });
 
 process.once('SIGTERM', () => {
+  disposeNodeExecutorProxySettingsPolling();
   void disposeRuntimeLibrariesSyncSafely();
 });

@@ -1,5 +1,6 @@
 import type { FC } from 'react';
 import { AboutModal } from './AboutModal';
+import { AppSettingsModal } from './AppSettingsModal';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
 import { RuntimeLibrariesModal } from './RuntimeLibrariesModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
@@ -44,6 +45,8 @@ export const WorkflowLibraryModals: FC<{
     hideRunRecordingsModal,
     closeRunRecordingsModal,
     handleRunRecordingsFoundCountChange,
+    appSettingsOpen,
+    setAppSettingsOpen,
     aboutOpen,
     setAboutOpen,
     onOpenRecording,
@@ -88,6 +91,11 @@ export const WorkflowLibraryModals: FC<{
         onClose={closeRunRecordingsModal}
         onOpenRecording={onOpenRecording}
         onFoundCountChange={handleRunRecordingsFoundCountChange}
+      />
+      <AppSettingsModal
+        isOpen={appSettingsOpen}
+        onClose={() => setAppSettingsOpen(false)}
+        routeConfig={routeConfig}
       />
       <AboutModal
         isOpen={aboutOpen}

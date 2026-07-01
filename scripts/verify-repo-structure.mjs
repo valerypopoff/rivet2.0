@@ -43,6 +43,7 @@ const requiredPaths = [
   'wrapper/bootstrap/proxy-bootstrap',
   'wrapper/bootstrap/proxy-bootstrap/bootstrap.mjs',
   'wrapper/bootstrap/proxy-bootstrap/config.mjs',
+  'wrapper/bootstrap/proxy-bootstrap/node-executor-proxy-settings.mjs',
   'wrapper/bootstrap/proxy-bootstrap/package-lock.json',
   'wrapper/bootstrap/proxy-bootstrap/package.json',
   'wrapper/bootstrap/proxy-bootstrap/runtime-libraries-sync.mjs',

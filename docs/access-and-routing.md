@@ -118,6 +118,8 @@ The wrapper API currently exposes these groups behind `/api`:
   - allowlisted shell execution
 - `/api/config`, `/api/path/app-local-data-dir`, `/api/path/app-log-dir`, `/api/config/env/:name`
   - hosted env/config helpers
+- `/api/app-settings/node-executor-proxy`
+  - guarded app-settings helper for persisted internal Node executor `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values
 
 Current tree-response note:
 
@@ -418,17 +420,18 @@ is mounted on the execution-plane API service, is not exposed through nginx, and
 
 ## Execution-plane storage note
 
-The current runtime split does not make `RIVET_APP_DATA_ROOT` authoritative for published execution:
+The current runtime split does not make `RIVET_APP_DATA_ROOT` authoritative for workflow contents during published execution:
 
 - workflow truth remains Postgres plus object storage
 - `Code` node package resolution comes from the managed runtime-library cache under `RIVET_RUNTIME_LIBRARIES_ROOT`
-- execution-plane `app-data` may remain ephemeral in the current supported topology
+- execution-plane `app-data` may remain ephemeral when endpoint pods do not need UI-managed app settings
 
 Important limitation:
 
 - API-hosted published/latest execution does not currently register package plugins from local app-data
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
+- if App Settings -> `Node executor proxy` should affect split `execution` pods, those pods must see the same `settings/node-executor-proxy.json` app-data file through a shared RWX claim; runtime endpoint proxy values are not read from `.env` or deployment proxy environment variables
 
 ## Latest Debugger Model
 
