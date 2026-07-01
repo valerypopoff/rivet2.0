@@ -4,15 +4,23 @@ import path from 'node:path';
 import type {
   NodeExecutorProxySettings,
   NodeExecutorProxySettingsDraft,
+  RunRecordingsSettings,
+  RunRecordingsSettingsDraft,
 } from '../../../shared/app-settings-types.js';
 import { getAppDataRoot } from '../security.js';
 import { badRequest } from '../utils/httpError.js';
+import {
+  DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS,
+  getRunRecordingsSettingsPath,
+  normalizeWorkflowRecordingLimitSettings,
+} from './workflows/recordings-config.js';
 
 export const appSettingsRouter = Router();
 
 const NODE_EXECUTOR_PROXY_SETTINGS_RELATIVE_PATH = path.join('settings', 'node-executor-proxy.json');
 const MAX_PROXY_URL_LENGTH = 2048;
 const MAX_NO_PROXY_LENGTH = 4096;
+const MAX_RECORDING_SETTING_VALUE = 1_000_000;
 
 type NodeExecutorProxySettingsReloader = () => Promise<unknown> | unknown;
 
@@ -82,6 +90,40 @@ function normalizeNodeExecutorProxySettingsDraft(value: unknown): Omit<NodeExecu
   };
 }
 
+function normalizeNonNegativeInteger(value: unknown, fieldLabel: string): number {
+  if (value === '') {
+    throw badRequest(`${fieldLabel} is required`);
+  }
+
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number(value.trim())
+      : Number.NaN;
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw badRequest(`${fieldLabel} must be a non-negative whole number`);
+  }
+
+  if (parsed > MAX_RECORDING_SETTING_VALUE) {
+    throw badRequest(`${fieldLabel} is too large`);
+  }
+
+  return parsed;
+}
+
+function normalizeRunRecordingsSettingsDraft(value: unknown): Omit<RunRecordingsSettings, 'source' | 'updatedAt'> {
+  const raw = value && typeof value === 'object'
+    ? value as RunRecordingsSettingsDraft
+    : {};
+
+  return {
+    maxPendingWrites: normalizeNonNegativeInteger(raw.maxPendingWrites, 'Queued recording writes'),
+    maxRunsPerEndpoint: normalizeNonNegativeInteger(raw.maxRunsPerEndpoint, 'Runs kept per workflow endpoint'),
+    retentionDays: normalizeNonNegativeInteger(raw.retentionDays, 'Days to keep recordings'),
+  };
+}
+
 function getNodeExecutorProxySettingsPath(): string {
   return path.join(
     path.resolve(process.env.RIVET_APP_DATA_ROOT?.trim() || getAppDataRoot()),
@@ -142,6 +184,57 @@ export async function writeNodeExecutorProxySettings(draft: unknown): Promise<No
   return saved;
 }
 
+export async function readRunRecordingsSettings(): Promise<RunRecordingsSettings> {
+  const settingsPath = getRunRecordingsSettingsPath();
+
+  try {
+    const settingsText = await fs.readFile(settingsPath, 'utf8');
+    const parsed = JSON.parse(settingsText) as unknown;
+    const settings = normalizeWorkflowRecordingLimitSettings(parsed);
+    const raw = parsed && typeof parsed === 'object' ? parsed as { updatedAt?: unknown } : {};
+
+    return {
+      ...settings,
+      updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+      source: 'app-settings',
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {
+        ...DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS,
+        updatedAt: null,
+        source: 'default',
+      };
+    }
+
+    throw error;
+  }
+}
+
+export async function writeRunRecordingsSettings(draft: unknown): Promise<RunRecordingsSettings> {
+  const settings = normalizeRunRecordingsSettingsDraft(draft);
+  const saved: RunRecordingsSettings = {
+    ...settings,
+    updatedAt: new Date().toISOString(),
+    source: 'app-settings',
+  };
+
+  const settingsPath = getRunRecordingsSettingsPath();
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+
+  const tempPath = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify({
+    version: 1,
+    maxPendingWrites: saved.maxPendingWrites,
+    maxRunsPerEndpoint: saved.maxRunsPerEndpoint,
+    retentionDays: saved.retentionDays,
+    updatedAt: saved.updatedAt,
+  }, null, 2)}\n`, 'utf8');
+  await fs.rename(tempPath, settingsPath);
+
+  return saved;
+}
+
 async function reloadNodeExecutorProxySettingsInCurrentProcess(): Promise<void> {
   const reloader = (globalThis as NodeExecutorProxySettingsGlobal).__rivetReloadNodeExecutorProxySettings;
   if (!reloader) {
@@ -168,6 +261,22 @@ appSettingsRouter.put('/node-executor-proxy', async (req, res, next) => {
     const settings = await writeNodeExecutorProxySettings(req.body);
     await reloadNodeExecutorProxySettingsInCurrentProcess();
     res.json(settings);
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/run-recordings', async (_req, res, next) => {
+  try {
+    res.json(await readRunRecordingsSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/run-recordings', async (req, res, next) => {
+  try {
+    res.json(await writeRunRecordingsSettings(req.body));
   } catch (error) {
     next(error);
   }

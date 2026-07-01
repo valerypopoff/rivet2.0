@@ -1,15 +1,46 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { createWorkflowRecordingStore } from '../routes/workflows/recordings-store.js';
+import { RUN_RECORDINGS_SETTINGS_RELATIVE_PATH } from '../routes/workflows/recordings-config.js';
 import { withScopedEnv } from './helpers/runtime-library-harness.js';
 
 const recordingEnvKeys = [
   'RIVET_RECORDINGS_ENABLED',
   'RIVET_RECORDINGS_MAX_PENDING_WRITES',
+  'RIVET_APP_DATA_ROOT',
 ] as const;
 
 function waitForImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function withRunRecordingsAppSettings(
+  settings: { maxPendingWrites: number },
+  run: () => Promise<void> | void,
+) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-recording-settings-'));
+  const settingsPath = path.join(tempRoot, RUN_RECORDINGS_SETTINGS_RELATIVE_PATH);
+
+  try {
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.writeFile(settingsPath, JSON.stringify({
+      version: 1,
+      maxPendingWrites: settings.maxPendingWrites,
+      maxRunsPerEndpoint: 100,
+      retentionDays: 14,
+    }));
+
+    await withScopedEnv(recordingEnvKeys, {
+      RIVET_RECORDINGS_ENABLED: 'true',
+      RIVET_RECORDINGS_MAX_PENDING_WRITES: '1',
+      RIVET_APP_DATA_ROOT: tempRoot,
+    }, run);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
 }
 
 test('recordings store reuses storage initialization for the same root and resets on root changes', async () => {
@@ -70,10 +101,7 @@ test('recordings store reruns cleanup when a second cleanup request arrives mid-
 });
 
 test('recordings store runs persistence tasks asynchronously and drains them in FIFO order', async () => {
-  await withScopedEnv(recordingEnvKeys, {
-    RIVET_RECORDINGS_ENABLED: 'true',
-    RIVET_RECORDINGS_MAX_PENDING_WRITES: '0',
-  }, async () => {
+  await withRunRecordingsAppSettings({ maxPendingWrites: 0 }, async () => {
     const persisted: string[] = [];
     const store = createWorkflowRecordingStore({
       async rebuildIndex() {},
@@ -100,10 +128,7 @@ test('recordings store runs persistence tasks asynchronously and drains them in 
 });
 
 test('recordings store drops persistence tasks once the configured queue limit is exceeded', async () => {
-  await withScopedEnv(recordingEnvKeys, {
-    RIVET_RECORDINGS_ENABLED: 'true',
-    RIVET_RECORDINGS_MAX_PENDING_WRITES: '1',
-  }, async () => {
+  await withRunRecordingsAppSettings({ maxPendingWrites: 1 }, async () => {
     let releaseFirstTask: () => void = () => {};
     const firstTask = new Promise<void>((resolve) => {
       releaseFirstTask = resolve;
@@ -141,10 +166,7 @@ test('recordings store drops persistence tasks once the configured queue limit i
 });
 
 test('recordings store enforces pending write limits while a persistence task is active', async () => {
-  await withScopedEnv(recordingEnvKeys, {
-    RIVET_RECORDINGS_ENABLED: 'true',
-    RIVET_RECORDINGS_MAX_PENDING_WRITES: '1',
-  }, async () => {
+  await withRunRecordingsAppSettings({ maxPendingWrites: 1 }, async () => {
     let releaseFirstTask: () => void = () => {};
     const firstTask = new Promise<void>((resolve) => {
       releaseFirstTask = resolve;
@@ -182,10 +204,7 @@ test('recordings store enforces pending write limits while a persistence task is
 });
 
 test('recordings store reset cancels a pending persistence worker start', async () => {
-  await withScopedEnv(recordingEnvKeys, {
-    RIVET_RECORDINGS_ENABLED: 'true',
-    RIVET_RECORDINGS_MAX_PENDING_WRITES: '0',
-  }, async () => {
+  await withRunRecordingsAppSettings({ maxPendingWrites: 0 }, async () => {
     let taskRan = false;
     let resetCount = 0;
     const store = createWorkflowRecordingStore({

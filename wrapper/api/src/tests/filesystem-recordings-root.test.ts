@@ -5,6 +5,8 @@ import test from 'node:test';
 
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
 
+const RUN_RECORDINGS_SETTINGS_RELATIVE_PATH = path.join('settings', 'run-recordings.json');
+
 const envKeys = [
   'RIVET_WORKSPACE_ROOT',
   'RIVET_WORKFLOWS_ROOT',
@@ -309,15 +311,14 @@ test('recordings cleanup tolerates a permission failure deleting one stale bundl
   const run = runs[runs.length - 1];
   assert.ok(run);
 
-  const previousMaxRunsPerEndpoint = process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT;
-  process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT = '1';
-  t.after(() => {
-    if (previousMaxRunsPerEndpoint == null) {
-      delete process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT;
-    } else {
-      process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT = previousMaxRunsPerEndpoint;
-    }
-  });
+  const settingsPath = path.join(appDataRoot, RUN_RECORDINGS_SETTINGS_RELATIVE_PATH);
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify({
+    version: 1,
+    maxPendingWrites: 100,
+    maxRunsPerEndpoint: 1,
+    retentionDays: 14,
+  }), 'utf8');
 
   const originalRm = fs.rm;
   const errors: unknown[] = [];

@@ -1336,15 +1336,16 @@
 }
 
 .app-settings-modal-content {
+  --app-settings-field-row-gap: 18px;
+
   min-height: 360px;
 }
 
-.app-settings-general-panel {
-  max-width: 660px;
-}
-
-.app-settings-proxy-panel {
-  max-width: 760px;
+.app-settings-general-panel,
+.app-settings-proxy-panel,
+.app-settings-recordings-panel {
+  width: 100%;
+  max-width: none;
 }
 
 .app-settings-section {
@@ -1367,7 +1368,7 @@
 
 .app-settings-field-grid {
   display: grid;
-  gap: 12px;
+  gap: var(--app-settings-field-row-gap);
 }
 
 .app-settings-field {
@@ -1381,6 +1382,28 @@
   font-weight: 700;
 }
 
+.app-settings-field-help {
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.35;
+}
+
+.app-settings-mode-tabs {
+  width: min(100%, 420px);
+  max-width: 100%;
+}
+
+.app-settings-mode-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.app-settings-mode-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .app-settings-proxy-no-proxy {
   min-height: 74px;
   resize: vertical;
@@ -1391,7 +1414,18 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  padding-top: 2px;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.app-settings-action-button {
+  min-width: 84px !important;
+}
+
+.app-settings-action-status {
+  flex: 1 1 220px;
+  min-width: 180px;
 }
 
 .project-settings-field {

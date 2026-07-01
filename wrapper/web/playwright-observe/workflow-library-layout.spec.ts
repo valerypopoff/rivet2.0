@@ -74,23 +74,91 @@ async function installProjectWebAppsRoute(
 }
 
 async function installAppSettingsRoute(page: Page): Promise<void> {
-  await page.route('**/api/app-settings/node-executor-proxy', async (route) => {
-    if (route.request().method() !== 'GET') {
-      await route.fallback();
+  await page.route('**/api/app-settings/**', async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+
+    if (url.pathname === '/api/app-settings/node-executor-proxy') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          httpProxy?: string;
+          httpsProxy?: string;
+          noProxy?: string;
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            httpProxy: body.httpProxy ?? '',
+            httpsProxy: body.httpsProxy ?? '',
+            noProxy: body.noProxy ?? '',
+            updatedAt: '2026-06-30T12:01:00.000Z',
+            source: 'app-settings',
+          }),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          httpProxy: 'http://172.17.0.1:3128',
+          httpsProxy: 'http://172.17.0.1:3128',
+          noProxy: 'localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1',
+          updatedAt: '2026-06-30T12:00:00.000Z',
+          source: 'app-settings',
+        }),
+      });
       return;
     }
 
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        httpProxy: 'http://172.17.0.1:3128',
-        httpsProxy: 'http://172.17.0.1:3128',
-        noProxy: 'localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1',
-        updatedAt: '2026-06-30T12:00:00.000Z',
-        source: 'app-settings',
-      }),
-    });
+    if (url.pathname === '/api/app-settings/run-recordings') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          maxPendingWrites?: string | number;
+          maxRunsPerEndpoint?: string | number;
+          retentionDays?: string | number;
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            maxPendingWrites: Number(body.maxPendingWrites ?? 100),
+            maxRunsPerEndpoint: Number(body.maxRunsPerEndpoint ?? 2000),
+            retentionDays: Number(body.retentionDays ?? 0),
+            updatedAt: '2026-06-30T12:01:00.000Z',
+            source: 'app-settings',
+          }),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          maxPendingWrites: 100,
+          maxRunsPerEndpoint: 2000,
+          retentionDays: 0,
+          updatedAt: '2026-06-30T12:00:00.000Z',
+          source: 'app-settings',
+        }),
+      });
+      return;
+    }
+
+    await route.fallback();
   });
 }
 
@@ -148,12 +216,64 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal).toContainText('/workflows');
     await expect(appSettingsModal).toContainText('Published web apps');
     await expect(appSettingsModal).toContainText('/apps');
+    await appSettingsModal.getByRole('tab', { name: 'Run recordings' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Run recordings' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section-title')).toHaveCount(0);
+    await expect(appSettingsModal.getByLabel('Queued recording writes')).toHaveValue('100');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep latest runs' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep all runs' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveValue('2000');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep forever' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep for some time' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveCount(0);
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-field-grid')).toHaveCSS('gap', '18px');
+    await expect(appSettingsModal.getByText('Keeping only the newest runs for each endpoint. Older runs are removed during cleanup.')).toBeVisible();
+    await expect(appSettingsModal.getByText('Recordings are kept indefinitely unless another saved limit removes them.')).toBeVisible();
+    await appSettingsModal.getByRole('button', { name: 'Keep all runs' }).click();
+    await expect(appSettingsModal.getByText('Keeping every recorded run for each endpoint.')).toBeVisible();
+    await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveCount(0);
+    await appSettingsModal.getByRole('button', { name: 'Keep latest runs' }).click();
+    await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveValue('2000');
+    await appSettingsModal.getByRole('button', { name: 'Keep for some time' }).click();
+    await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveValue('14');
+    await expect(appSettingsModal.getByText('Recordings older than the selected number of days are removed during cleanup.')).toBeVisible();
+    await appSettingsModal.getByRole('button', { name: 'Keep forever' }).click();
+    await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveCount(0);
+    await expect.poll(async () => {
+      const [contentBox, sectionBox] = await Promise.all([
+        appSettingsModal.locator('.app-settings-modal-content').boundingBox(),
+        appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section').boundingBox(),
+      ]);
+      return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
+    }).toBeGreaterThan(0.9);
+    await appSettingsModal.getByLabel('Queued recording writes').fill('101');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('margin-top', '8px');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('padding-top', '14px');
+    await appSettingsModal.getByRole('button', { name: 'Save' }).click();
+    const recordingsActions = appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row');
+    await expect(recordingsActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
     await appSettingsModal.getByRole('tab', { name: 'Node executor proxy' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Node executor proxy' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section-title')).toHaveCount(0);
     await expect(appSettingsModal.getByText('HTTP_PROXY')).toBeVisible();
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-field-grid')).toHaveCSS('gap', '18px');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('margin-top', '8px');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('padding-top', '14px');
     await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue('http://172.17.0.1:3128');
     await expect(appSettingsModal.getByText('NO_PROXY')).toBeVisible();
     await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue('localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1');
+    await appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' }).fill('http://172.17.0.1:3129');
+    await appSettingsModal.getByRole('button', { name: 'Save' }).click();
+    const proxyActions = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row');
+    await expect(proxyActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
     await page.getByRole('button', { name: 'Close app settings' }).click();
     await expect(appSettingsModal).toHaveCount(0);
 

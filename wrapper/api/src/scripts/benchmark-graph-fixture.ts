@@ -9,6 +9,8 @@ import express from 'express';
 
 type BenchmarkMode = 'legacy-compatible' | 'optimized';
 
+const RUN_RECORDINGS_SETTINGS_RELATIVE_PATH = path.join('settings', 'run-recordings.json');
+
 type ParsedArgs = {
   fixture: string;
   endpoint: string;
@@ -375,12 +377,19 @@ async function main(): Promise<void> {
   process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = recordingsRoot;
   process.env.RIVET_APP_DATA_ROOT = appDataRoot;
   process.env.RIVET_RUNTIME_LIBRARIES_ROOT = runtimeLibrariesRoot;
-  process.env.RIVET_RECORDINGS_MAX_PENDING_WRITES ??= String(Math.max(1000, totalBenchmarkRequests + 10));
 
   await fs.mkdir(workflowsRoot, { recursive: true });
   await fs.mkdir(recordingsRoot, { recursive: true });
   await fs.mkdir(appDataRoot, { recursive: true });
   await fs.mkdir(runtimeLibrariesRoot, { recursive: true });
+  const recordingsSettingsPath = path.join(appDataRoot, RUN_RECORDINGS_SETTINGS_RELATIVE_PATH);
+  await fs.mkdir(path.dirname(recordingsSettingsPath), { recursive: true });
+  await fs.writeFile(recordingsSettingsPath, JSON.stringify({
+    version: 1,
+    maxPendingWrites: Math.max(1000, totalBenchmarkRequests + 10),
+    maxRunsPerEndpoint: Math.max(100, totalBenchmarkRequests + 10),
+    retentionDays: 14,
+  }), 'utf8');
 
   const fixtureContents = await fs.readFile(args.fixture, 'utf8');
   const benchmarkBody = args.body == null

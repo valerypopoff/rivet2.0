@@ -654,19 +654,26 @@ Legacy uncompressed bundles are still readable in `filesystem` mode. Startup rec
 
 ## Recording defaults and retention
 
-Recording behavior is controlled by env vars:
+Recording history limits are wrapper-owned app settings, not deployment env. The dashboard exposes them under `Settings` -> `Run recordings`, and the API stores them as `settings/run-recordings.json` under `RIVET_APP_DATA_ROOT`. The saved settings are:
+
+| Setting | Purpose | Default |
+|---|---|---|
+| `Queued recording writes` | How many recording save jobs can wait in memory before new recordings are skipped | `100` |
+| `Runs kept per workflow endpoint` | Choose whether to keep every run for each endpoint or keep only the newest N runs | `Keep latest runs: 100` |
+| `Days to keep recordings` | Choose whether to keep recordings forever or delete them after N days | `Keep for some time: 14 days` |
+
+The legacy `RIVET_RECORDINGS_MAX_PENDING_WRITES`, `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT`, and `RIVET_RECORDINGS_RETENTION_DAYS` env vars are ignored so runtime retention policy comes only from the App Settings UI.
+
+The remaining recording behavior is controlled by env vars:
 
 | Variable | Purpose | Default |
 |---|---|---|
 | `RIVET_RECORDINGS_ENABLED` | Enable workflow recording persistence | `true` |
 | `RIVET_RECORDINGS_COMPRESS` | Blob encoding (`gzip` or `identity`) | `gzip` |
 | `RIVET_RECORDINGS_GZIP_LEVEL` | Gzip compression level | `4` |
-| `RIVET_RECORDINGS_MAX_PENDING_WRITES` | Background queue size before new recordings are dropped | `100` |
 | `RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS` | Include partial outputs in recorder payloads | `false` |
 | `RIVET_RECORDINGS_INCLUDE_TRACE` | Include trace data in recorder payloads | `false` |
 | `RIVET_RECORDINGS_DATASET_MODE` | Dataset snapshot mode (`none` or `all`) | `none` |
-| `RIVET_RECORDINGS_RETENTION_DAYS` | Delete runs older than this many days (`0` disables) | `14` |
-| `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT` | Keep only the newest N runs per endpoint (`0` disables) | `100` |
 | `RIVET_RECORDINGS_MAX_TOTAL_BYTES` | Global compressed-byte cap across recordings (`0` disables) | `0` |
 
 Operational defaults are intentionally conservative:
@@ -829,7 +836,7 @@ The workflow-publication UI now follows the same controller-versus-view split as
 - `wrapper/api/src/routes/workflows/recordings-metadata.ts` - filesystem recording metadata normalization and legacy metadata reads
 - `wrapper/api/src/routes/workflows/recordings-maintenance.ts` - filesystem retention cleanup, index rebuild, and run deletion helpers
 - `wrapper/api/src/routes/workflows/recordings-store.ts` - filesystem recording queue/readiness/cleanup state owner
-- `wrapper/api/src/routes/workflows/recordings-config.ts` - recording env parsing and defaults
+- `wrapper/api/src/routes/workflows/recordings-config.ts` - recording env/app-settings parsing and defaults
 - `wrapper/api/src/routes/workflows/recordings-db.ts` - SQLite recording index
 - `wrapper/api/src/routes/workflows/workflow-mutations.ts` - duplicate, upload, publish, unpublish, rename, move, and delete orchestration
 - `wrapper/api/src/routes/workflows/workflow-download.ts` - project-download resolution and attachment filename generation

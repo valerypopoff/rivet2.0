@@ -10,8 +10,11 @@ import { getExpectedProxyAuthToken } from '../auth.js';
 import { createApiApp } from '../app.js';
 import {
   readNodeExecutorProxySettings,
+  readRunRecordingsSettings,
+  writeRunRecordingsSettings,
   writeNodeExecutorProxySettings,
 } from '../routes/app-settings.js';
+import { getWorkflowRecordingConfig } from '../routes/workflows/recordings-config.js';
 
 const relevantEnvKeys = [
   'HTTP_PROXY',
@@ -21,6 +24,9 @@ const relevantEnvKeys = [
   'https_proxy',
   'no_proxy',
   'RIVET_APP_DATA_ROOT',
+  'RIVET_RECORDINGS_MAX_PENDING_WRITES',
+  'RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT',
+  'RIVET_RECORDINGS_RETENTION_DAYS',
   'RIVET_KEY',
 ] as const;
 
@@ -182,6 +188,90 @@ test('Node executor proxy settings reject unsafe proxy values', async () => {
         noProxy: '',
       }),
       /HTTP_PROXY must use http or https/,
+    );
+  });
+});
+
+test('Run recordings settings ignore environment values until saved', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_RECORDINGS_MAX_PENDING_WRITES = '1';
+    process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT = '2000';
+    process.env.RIVET_RECORDINGS_RETENTION_DAYS = '0';
+
+    const defaultSettings = await readRunRecordingsSettings();
+    assert.equal(defaultSettings.source, 'default');
+    assert.equal(defaultSettings.maxPendingWrites, 100);
+    assert.equal(defaultSettings.maxRunsPerEndpoint, 100);
+    assert.equal(defaultSettings.retentionDays, 14);
+    assert.equal(getWorkflowRecordingConfig().maxPendingWrites, 100);
+    assert.equal(getWorkflowRecordingConfig().maxRunsPerEndpoint, 100);
+    assert.equal(getWorkflowRecordingConfig().retentionDays, 14);
+
+    await writeRunRecordingsSettings({
+      maxPendingWrites: 42,
+      maxRunsPerEndpoint: 2000,
+      retentionDays: 0,
+    });
+
+    const nextSettings = await readRunRecordingsSettings();
+    assert.equal(nextSettings.source, 'app-settings');
+    assert.equal(nextSettings.maxPendingWrites, 42);
+    assert.equal(nextSettings.maxRunsPerEndpoint, 2000);
+    assert.equal(nextSettings.retentionDays, 0);
+    assert.equal(getWorkflowRecordingConfig().maxPendingWrites, 42);
+    assert.equal(getWorkflowRecordingConfig().maxRunsPerEndpoint, 2000);
+    assert.equal(getWorkflowRecordingConfig().retentionDays, 0);
+  });
+});
+
+test('Run recordings settings API saves and returns persisted values', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/run-recordings`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          maxPendingWrites: '80',
+          maxRunsPerEndpoint: '2000',
+          retentionDays: '0',
+        }),
+      });
+
+      assert.equal(saveResponse.status, 200);
+      const saved = await saveResponse.json() as Record<string, unknown>;
+      assert.equal(saved.source, 'app-settings');
+      assert.equal(saved.maxPendingWrites, 80);
+      assert.equal(saved.maxRunsPerEndpoint, 2000);
+      assert.equal(saved.retentionDays, 0);
+
+      const readResponse = await fetch(`${server.baseUrl}/api/app-settings/run-recordings`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(readResponse.status, 200);
+      const settings = await readResponse.json() as Record<string, unknown>;
+      assert.equal(settings.maxPendingWrites, 80);
+      assert.equal(settings.maxRunsPerEndpoint, 2000);
+      assert.equal(settings.retentionDays, 0);
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Run recordings settings reject invalid numbers', async () => {
+  await withAppSettingsEnv(async () => {
+    await assert.rejects(
+      writeRunRecordingsSettings({
+        maxPendingWrites: -1,
+        maxRunsPerEndpoint: 100,
+        retentionDays: 0,
+      }),
+      /Queued recording writes must be a non-negative whole number/,
     );
   });
 });

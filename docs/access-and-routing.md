@@ -120,6 +120,8 @@ The wrapper API currently exposes these groups behind `/api`:
   - hosted env/config helpers
 - `/api/app-settings/node-executor-proxy`
   - guarded app-settings helper for persisted internal Node executor `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values
+- `/api/app-settings/run-recordings`
+  - guarded app-settings helper for recording queue depth, per-endpoint history length, and age-retention limits
 
 Current tree-response note:
 

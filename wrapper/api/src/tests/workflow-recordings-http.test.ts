@@ -9,8 +9,11 @@ import {
 } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 
+const RUN_RECORDINGS_SETTINGS_RELATIVE_PATH = path.join('settings', 'run-recordings.json');
+
 const {
   workflowsRoot,
+  appDataRoot,
   workflowMutations,
   workflowFs,
   workflowRecordings,
@@ -547,65 +550,63 @@ test('workflow recording persistence snapshots the executed in-memory project st
 });
 
 test('workflow recording cleanup keeps only the newest configured runs per endpoint', async () => {
-  const previousMaxRunsPerEndpoint = process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT;
-  process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT = '2';
+  const settingsPath = path.join(appDataRoot, RUN_RECORDINGS_SETTINGS_RELATIVE_PATH);
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify({
+    version: 1,
+    maxPendingWrites: 100,
+    maxRunsPerEndpoint: 2,
+    retentionDays: 14,
+  }));
 
-  try {
-    const created = await workflowMutations.createWorkflowProjectItem('', 'EndpointLimited');
-    const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
-    const workflowId = loadedProject.metadata.id!;
+  const created = await workflowMutations.createWorkflowProjectItem('', 'EndpointLimited');
+  const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  const workflowId = loadedProject.metadata.id!;
 
-    for (const index of [1, 2, 3]) {
-      await workflowRecordings.persistWorkflowExecutionRecording({
-        workflowsRoot,
-        sourceProject: loadedProject,
-        sourceProjectPath: created.absolutePath,
-        executedProject: loadedProject,
-        executedAttachedData: attachedData,
-        executedDatasets: [],
-        endpointName: 'endpoint-limited',
-        recordingSerialized: JSON.stringify({
-          version: 1,
-          recording: {
-            recordingId: `recording-${index}`,
-            events: [],
-            startTs: index,
-            finishTs: index,
-          },
-          assets: {},
-          strings: {},
-        }),
-        runKind: 'published',
-        status: 'succeeded',
-        durationMs: index,
-      });
-    }
-
-    const runsPage = await waitForWorkflowRecordingRunCount(
-      workflowRecordings.listWorkflowRecordingRunsPage,
+  for (const index of [1, 2, 3]) {
+    await workflowRecordings.persistWorkflowExecutionRecording({
       workflowsRoot,
-      workflowId,
-      2,
-    );
-
-    assert.equal(runsPage.runs.length, 2);
-    assert.deepEqual(
-      runsPage.runs.map((run) => run.durationMs),
-      [3, 2],
-    );
-
-    const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), workflowId);
-    const bundles = (await fs.readdir(recordingsRoot, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
-
-    assert.equal(bundles.length, 2);
-  } finally {
-    if (previousMaxRunsPerEndpoint == null) {
-      delete process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT;
-    } else {
-      process.env.RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT = previousMaxRunsPerEndpoint;
-    }
+      sourceProject: loadedProject,
+      sourceProjectPath: created.absolutePath,
+      executedProject: loadedProject,
+      executedAttachedData: attachedData,
+      executedDatasets: [],
+      endpointName: 'endpoint-limited',
+      recordingSerialized: JSON.stringify({
+        version: 1,
+        recording: {
+          recordingId: `recording-${index}`,
+          events: [],
+          startTs: index,
+          finishTs: index,
+        },
+        assets: {},
+        strings: {},
+      }),
+      runKind: 'published',
+      status: 'succeeded',
+      durationMs: index,
+    });
   }
+
+  const runsPage = await waitForWorkflowRecordingRunCount(
+    workflowRecordings.listWorkflowRecordingRunsPage,
+    workflowsRoot,
+    workflowId,
+    2,
+  );
+
+  assert.equal(runsPage.runs.length, 2);
+  assert.deepEqual(
+    runsPage.runs.map((run) => run.durationMs),
+    [3, 2],
+  );
+
+  const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), workflowId);
+  const bundles = (await fs.readdir(recordingsRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+
+  assert.equal(bundles.length, 2);
 });

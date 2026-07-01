@@ -6,7 +6,9 @@ import { type FC, useEffect, useMemo, useState } from 'react';
 import type { HostedRouteConfig } from './types';
 import {
   fetchNodeExecutorProxySettings,
+  fetchRunRecordingsSettings,
   saveNodeExecutorProxySettings,
+  saveRunRecordingsSettings,
 } from './appSettingsApi';
 
 interface AppSettingsModalProps {
@@ -18,7 +20,12 @@ interface AppSettingsModalProps {
 const appVersion = import.meta.env.VITE_APP_VERSION || 'unknown';
 const appName = 'Rivet Studio Server';
 
-type AppSettingsTab = 'general' | 'node-executor-proxy';
+type AppSettingsTab = 'general' | 'node-executor-proxy' | 'run-recordings';
+type RunsKeptMode = 'latest' | 'all';
+type RecordingRetentionMode = 'limited' | 'forever';
+
+const defaultMaxRunsPerEndpoint = '100';
+const defaultRetentionDays = '14';
 
 function formatWebAppsAuthMode(value: HostedRouteConfig['webAppsAuthMode']): string {
   if (value === 'ui-gate') {
@@ -46,12 +53,44 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     httpsProxy: '',
     noProxy: '',
   });
+  const [loadingRunRecordingsSettings, setLoadingRunRecordingsSettings] = useState(false);
+  const [savingRunRecordingsSettings, setSavingRunRecordingsSettings] = useState(false);
+  const [runRecordingsSettingsError, setRunRecordingsSettingsError] = useState<string | null>(null);
+  const [runRecordingsSettingsSaved, setRunRecordingsSettingsSaved] = useState(false);
+  const [maxPendingWrites, setMaxPendingWrites] = useState('100');
+  const [maxRunsPerEndpoint, setMaxRunsPerEndpoint] = useState('100');
+  const [maxRunsPerEndpointMode, setMaxRunsPerEndpointMode] = useState<RunsKeptMode>('latest');
+  const [retentionDays, setRetentionDays] = useState('14');
+  const [recordingRetentionMode, setRecordingRetentionMode] = useState<RecordingRetentionMode>('limited');
+  const [initialRunRecordingsSettings, setInitialRunRecordingsSettings] = useState({
+    maxPendingWrites: '100',
+    maxRunsPerEndpoint: '100',
+    retentionDays: '14',
+  });
 
   const proxySettingsChanged = useMemo(() => (
     httpProxy.trim() !== initialProxySettings.httpProxy ||
     httpsProxy.trim() !== initialProxySettings.httpsProxy ||
     noProxy.trim() !== initialProxySettings.noProxy
   ), [httpProxy, httpsProxy, initialProxySettings, noProxy]);
+
+  const currentRunRecordingsSettings = useMemo(() => ({
+    maxPendingWrites: maxPendingWrites.trim(),
+    maxRunsPerEndpoint: maxRunsPerEndpointMode === 'all' ? '0' : maxRunsPerEndpoint.trim(),
+    retentionDays: recordingRetentionMode === 'forever' ? '0' : retentionDays.trim(),
+  }), [
+    maxPendingWrites,
+    maxRunsPerEndpoint,
+    maxRunsPerEndpointMode,
+    recordingRetentionMode,
+    retentionDays,
+  ]);
+
+  const runRecordingsSettingsChanged = useMemo(() => (
+    currentRunRecordingsSettings.maxPendingWrites !== initialRunRecordingsSettings.maxPendingWrites ||
+    currentRunRecordingsSettings.maxRunsPerEndpoint !== initialRunRecordingsSettings.maxRunsPerEndpoint ||
+    currentRunRecordingsSettings.retentionDays !== initialRunRecordingsSettings.retentionDays
+  ), [currentRunRecordingsSettings, initialRunRecordingsSettings]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -60,6 +99,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
 
     setActiveTab('general');
     setProxySettingsSaved(false);
+    setRunRecordingsSettingsSaved(false);
   }, [isOpen]);
 
   useEffect(() => {
@@ -104,6 +144,52 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     };
   }, [activeTab, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'run-recordings') {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingRunRecordingsSettings(true);
+    setRunRecordingsSettingsError(null);
+    setRunRecordingsSettingsSaved(false);
+
+    fetchRunRecordingsSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextSettings = {
+          maxPendingWrites: String(settings.maxPendingWrites),
+          maxRunsPerEndpoint: String(settings.maxRunsPerEndpoint),
+          retentionDays: String(settings.retentionDays),
+        };
+        const nextMaxRunsMode = settings.maxRunsPerEndpoint === 0 ? 'all' : 'latest';
+        const nextRetentionMode = settings.retentionDays === 0 ? 'forever' : 'limited';
+        setMaxPendingWrites(nextSettings.maxPendingWrites);
+        setMaxRunsPerEndpoint(nextMaxRunsMode === 'all' ? defaultMaxRunsPerEndpoint : nextSettings.maxRunsPerEndpoint);
+        setMaxRunsPerEndpointMode(nextMaxRunsMode);
+        setRetentionDays(nextRetentionMode === 'forever' ? defaultRetentionDays : nextSettings.retentionDays);
+        setRecordingRetentionMode(nextRetentionMode);
+        setInitialRunRecordingsSettings(nextSettings);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setRunRecordingsSettingsError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingRunRecordingsSettings(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isOpen]);
+
   if (!isOpen) {
     return null;
   }
@@ -136,6 +222,36 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     }
   };
 
+  const handleSaveRunRecordingsSettings = async () => {
+    setSavingRunRecordingsSettings(true);
+    setRunRecordingsSettingsError(null);
+    setRunRecordingsSettingsSaved(false);
+
+    try {
+      const savedSettings = await saveRunRecordingsSettings({
+        ...currentRunRecordingsSettings,
+      });
+      const nextSettings = {
+        maxPendingWrites: String(savedSettings.maxPendingWrites),
+        maxRunsPerEndpoint: String(savedSettings.maxRunsPerEndpoint),
+        retentionDays: String(savedSettings.retentionDays),
+      };
+      const nextMaxRunsMode = savedSettings.maxRunsPerEndpoint === 0 ? 'all' : 'latest';
+      const nextRetentionMode = savedSettings.retentionDays === 0 ? 'forever' : 'limited';
+      setMaxPendingWrites(nextSettings.maxPendingWrites);
+      setMaxRunsPerEndpoint(nextMaxRunsMode === 'all' ? defaultMaxRunsPerEndpoint : nextSettings.maxRunsPerEndpoint);
+      setMaxRunsPerEndpointMode(nextMaxRunsMode);
+      setRetentionDays(nextRetentionMode === 'forever' ? defaultRetentionDays : nextSettings.retentionDays);
+      setRecordingRetentionMode(nextRetentionMode);
+      setInitialRunRecordingsSettings(nextSettings);
+      setRunRecordingsSettingsSaved(true);
+    } catch (error) {
+      setRunRecordingsSettingsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingRunRecordingsSettings(false);
+    }
+  };
+
   const renderTabButton = (tab: AppSettingsTab, label: string) => (
     <button
       type="button"
@@ -143,6 +259,34 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
       role="tab"
       aria-selected={activeTab === tab}
       onClick={() => setActiveTab(tab)}
+    >
+      {label}
+    </button>
+  );
+
+  const renderActionStatus = (error: string | null, saved: boolean) => {
+    if (error) {
+      return <div className="project-settings-error app-settings-action-status">{error}</div>;
+    }
+
+    if (saved) {
+      return <div className="project-settings-success app-settings-action-status">Saved.</div>;
+    }
+
+    return null;
+  };
+
+  const renderModeButton = (
+    active: boolean,
+    label: string,
+    onClick: () => void,
+  ) => (
+    <button
+      type="button"
+      className={`project-settings-tab app-settings-mode-tab${active ? ' active' : ''}`}
+      aria-pressed={active}
+      disabled={loadingRunRecordingsSettings || savingRunRecordingsSettings}
+      onClick={onClick}
     >
       {label}
     </button>
@@ -175,6 +319,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
             <div className="project-settings-modal-content app-settings-modal-content">
               <div className="project-settings-tabs" role="tablist" aria-label="App settings sections">
                 {renderTabButton('general', 'General')}
+                {renderTabButton('run-recordings', 'Run recordings')}
                 {renderTabButton('node-executor-proxy', 'Node executor proxy')}
               </div>
 
@@ -222,18 +367,167 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                 </div>
               ) : null}
 
+              {activeTab === 'run-recordings' ? (
+                <div className="project-settings-tab-panel app-settings-recordings-panel" role="tabpanel">
+                  <section className="app-settings-section" aria-label="Run recordings">
+                    <div className="app-settings-field-grid" aria-busy={loadingRunRecordingsSettings || savingRunRecordingsSettings}>
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Queued recording writes</span>
+                        <TextField
+                          aria-label="Queued recording writes"
+                          type="number"
+                          min={0}
+                          value={maxPendingWrites}
+                          isDisabled={loadingRunRecordingsSettings || savingRunRecordingsSettings}
+                          placeholder="100"
+                          onChange={(event) => {
+                            setMaxPendingWrites(event.currentTarget.value);
+                            setRunRecordingsSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          How many recording save jobs can wait in memory before new recordings are skipped.
+                        </span>
+                      </label>
+
+                      <div className="app-settings-field">
+                        <span className="app-settings-field-label">Runs kept per workflow endpoint</span>
+                        <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="Runs kept per workflow endpoint mode">
+                          {renderModeButton(
+                            maxRunsPerEndpointMode === 'latest',
+                            'Keep latest runs',
+                            () => {
+                              setMaxRunsPerEndpointMode('latest');
+                              setRunRecordingsSettingsSaved(false);
+                            },
+                          )}
+                          {renderModeButton(
+                            maxRunsPerEndpointMode === 'all',
+                            'Keep all runs',
+                            () => {
+                              setMaxRunsPerEndpointMode('all');
+                              setRunRecordingsSettingsSaved(false);
+                            },
+                          )}
+                        </div>
+                        {maxRunsPerEndpointMode === 'latest' ? (
+                          <TextField
+                            aria-label="Newest runs to keep per workflow endpoint"
+                            type="number"
+                            min={1}
+                            value={maxRunsPerEndpoint}
+                            isDisabled={loadingRunRecordingsSettings || savingRunRecordingsSettings}
+                            placeholder={defaultMaxRunsPerEndpoint}
+                            onChange={(event) => {
+                              setMaxRunsPerEndpoint(event.currentTarget.value);
+                              setRunRecordingsSettingsSaved(false);
+                            }}
+                          />
+                        ) : null}
+                        <span className="app-settings-field-help">
+                          {maxRunsPerEndpointMode === 'latest'
+                            ? 'Keeping only the newest runs for each endpoint. Older runs are removed during cleanup.'
+                            : 'Keeping every recorded run for each endpoint.'}
+                        </span>
+                      </div>
+
+                      <div className="app-settings-field">
+                        <span className="app-settings-field-label">Days to keep recordings</span>
+                        <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="Recording retention mode">
+                          {renderModeButton(
+                            recordingRetentionMode === 'forever',
+                            'Keep forever',
+                            () => {
+                              setRecordingRetentionMode('forever');
+                              setRunRecordingsSettingsSaved(false);
+                            },
+                          )}
+                          {renderModeButton(
+                            recordingRetentionMode === 'limited',
+                            'Keep for some time',
+                            () => {
+                              setRecordingRetentionMode('limited');
+                              setRunRecordingsSettingsSaved(false);
+                            },
+                          )}
+                        </div>
+                        {recordingRetentionMode === 'limited' ? (
+                          <TextField
+                            aria-label="Days to keep recordings"
+                            type="number"
+                            min={1}
+                            value={retentionDays}
+                            isDisabled={loadingRunRecordingsSettings || savingRunRecordingsSettings}
+                            placeholder={defaultRetentionDays}
+                            onChange={(event) => {
+                              setRetentionDays(event.currentTarget.value);
+                              setRunRecordingsSettingsSaved(false);
+                            }}
+                          />
+                        ) : null}
+                        <span className="app-settings-field-help">
+                          {recordingRetentionMode === 'forever'
+                            ? 'Recordings are kept indefinitely unless another saved limit removes them.'
+                            : 'Recordings older than the selected number of days are removed during cleanup.'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingRunRecordingsSettings}
+                        isDisabled={
+                          loadingRunRecordingsSettings ||
+                          savingRunRecordingsSettings ||
+                          !runRecordingsSettingsChanged
+                        }
+                        onClick={handleSaveRunRecordingsSettings}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={
+                          loadingRunRecordingsSettings ||
+                          savingRunRecordingsSettings ||
+                          !runRecordingsSettingsChanged
+                        }
+                        onClick={() => {
+                          setMaxPendingWrites(initialRunRecordingsSettings.maxPendingWrites);
+                          setMaxRunsPerEndpoint(
+                            initialRunRecordingsSettings.maxRunsPerEndpoint === '0'
+                              ? defaultMaxRunsPerEndpoint
+                              : initialRunRecordingsSettings.maxRunsPerEndpoint,
+                          );
+                          setMaxRunsPerEndpointMode(
+                            initialRunRecordingsSettings.maxRunsPerEndpoint === '0' ? 'all' : 'latest',
+                          );
+                          setRetentionDays(
+                            initialRunRecordingsSettings.retentionDays === '0'
+                              ? defaultRetentionDays
+                              : initialRunRecordingsSettings.retentionDays,
+                          );
+                          setRecordingRetentionMode(
+                            initialRunRecordingsSettings.retentionDays === '0' ? 'forever' : 'limited',
+                          );
+                          setRunRecordingsSettingsSaved(false);
+                          setRunRecordingsSettingsError(null);
+                        }}
+                      >
+                        Revert
+                      </Button>
+                      {renderActionStatus(runRecordingsSettingsError, runRecordingsSettingsSaved)}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+
               {activeTab === 'node-executor-proxy' ? (
                 <div className="project-settings-tab-panel app-settings-proxy-panel" role="tabpanel">
                   <section className="app-settings-section" aria-label="Node executor proxy">
-                    <div className="app-settings-section-title">Node executor proxy</div>
-
-                    {proxySettingsError ? (
-                      <div className="project-settings-error">{proxySettingsError}</div>
-                    ) : null}
-                    {proxySettingsSaved ? (
-                      <div className="project-settings-success">Saved.</div>
-                    ) : null}
-
                     <div className="app-settings-field-grid" aria-busy={loadingProxySettings || savingProxySettings}>
                       <label className="app-settings-field">
                         <span className="app-settings-field-label">HTTP_PROXY</span>
@@ -282,6 +576,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                     <div className="app-settings-actions-row">
                       <LoadingButton
                         appearance="primary"
+                        className="app-settings-action-button button-size-l"
                         isLoading={savingProxySettings}
                         isDisabled={loadingProxySettings || savingProxySettings || !proxySettingsChanged}
                         onClick={handleSaveProxySettings}
@@ -290,6 +585,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                       </LoadingButton>
                       <Button
                         appearance="subtle"
+                        className="app-settings-action-button button-size-l"
                         isDisabled={loadingProxySettings || savingProxySettings || !proxySettingsChanged}
                         onClick={() => {
                           setHttpProxy(initialProxySettings.httpProxy);
@@ -301,6 +597,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                       >
                         Revert
                       </Button>
+                      {renderActionStatus(proxySettingsError, proxySettingsSaved)}
                     </div>
                   </section>
                 </div>
