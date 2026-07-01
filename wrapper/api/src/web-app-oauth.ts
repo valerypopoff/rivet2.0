@@ -4,11 +4,13 @@ import { Router, type Request, type Response } from 'express';
 import { RIVET_WEB_APPS_BASE_PATH } from './workflowEndpointPaths.js';
 import { createHttpError } from './utils/httpError.js';
 import { addUiAuthErrorToReturnTo, sanitizeUiAuthReturnTo } from './routes/ui-auth.js';
+import { isTrustedProxyRequest } from './auth.js';
 
 const OAUTH_STATE_COOKIE_NAME = 'rivet_web_app_oauth_state';
 const OAUTH_SESSION_COOKIE_NAME = 'rivet_web_app_oauth_session';
 const DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60;
 const STATE_TTL_SECONDS = 10 * 60;
+const DUMMY_OAUTH_CODE_PREFIX = 'dummy:';
 
 export type WebAppAuthMode = 'ui-gate' | 'oauth' | 'none';
 
@@ -32,6 +34,21 @@ type OAuthStateCookiePayload = SignedPayload & {
   returnTo?: string;
 };
 
+type OAuthConfig = {
+  provider: 'dummy';
+  email: string;
+} | {
+  provider: 'external';
+  authorizeUrl: string;
+  tokenUrl: string;
+  userUrl: string;
+  clientId: string;
+  clientSecret: string;
+  clientAuthMethod: 'basic' | 'body';
+  emailClaim: string;
+  scopes: string;
+};
+
 function getEnvString(name: string): string {
   return process.env[name]?.trim() ?? '';
 }
@@ -39,6 +56,29 @@ function getEnvString(name: string): string {
 function isEnvFlagEnabled(name: string): boolean {
   const value = getEnvString(name).toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
+}
+
+function isDummyOAuthProvider(): boolean {
+  return getEnvString('OAUTH_PROVIDER').toLowerCase() === 'dummy';
+}
+
+function isLocalhostUrl(url: URL): boolean {
+  return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
+}
+
+function requireSecureOAuthUrl(name: string, value: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw createHttpError(500, `${name} must be a valid URL`);
+  }
+
+  if (url.protocol === 'https:' || (url.protocol === 'http:' && isLocalhostUrl(url))) {
+    return;
+  }
+
+  throw createHttpError(500, `${name} must use https unless it targets localhost`);
 }
 
 export function getWebAppAuthMode(): WebAppAuthMode {
@@ -50,7 +90,14 @@ export function getWebAppAuthMode(): WebAppAuthMode {
   return 'ui-gate';
 }
 
-function getRequiredOauthConfig() {
+function getRequiredOauthConfig(): OAuthConfig {
+  if (isDummyOAuthProvider()) {
+    return {
+      provider: 'dummy',
+      email: getEnvString('OAUTH_DUMMY_EMAIL') || 'local@example.test',
+    };
+  }
+
   const authorizeUrl = getEnvString('OAUTH_AUTHORIZE_URL');
   const tokenUrl = getEnvString('OAUTH_TOKEN_URL');
   const userUrl = getEnvString('OAUTH_USER_URL');
@@ -60,6 +107,9 @@ function getRequiredOauthConfig() {
   if (!authorizeUrl || !tokenUrl || !userUrl || !clientId || !clientSecret) {
     throw createHttpError(500, 'OAuth is enabled but OAuth provider settings are incomplete');
   }
+  requireSecureOAuthUrl('OAUTH_AUTHORIZE_URL', authorizeUrl);
+  requireSecureOAuthUrl('OAUTH_TOKEN_URL', tokenUrl);
+  requireSecureOAuthUrl('OAUTH_USER_URL', userUrl);
 
   return {
     authorizeUrl,
@@ -67,6 +117,7 @@ function getRequiredOauthConfig() {
     userUrl,
     clientId,
     clientSecret,
+    provider: 'external',
     clientAuthMethod: getEnvString('OAUTH_CLIENT_AUTH_METHOD').toLowerCase() === 'basic' ? 'basic' : 'body',
     emailClaim: getEnvString('OAUTH_EMAIL_CLAIM') || 'email',
     scopes: getEnvString('OAUTH_SCOPES') || 'profile email',
@@ -140,10 +191,18 @@ function readCookie(req: Request, name: string): string | null {
 }
 
 function getForwardedProtocol(req: Request): string {
+  if (!isTrustedProxyRequest(req)) {
+    return req.protocol || 'http';
+  }
+
   return req.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase() || req.protocol || 'http';
 }
 
 function getForwardedHost(req: Request): string {
+  if (!isTrustedProxyRequest(req)) {
+    return req.get('host') || 'localhost';
+  }
+
   return req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || 'localhost';
 }
 
@@ -153,6 +212,15 @@ function getRequestOrigin(req: Request): string {
 
 function getCookieSecuritySuffix(req: Request): string {
   return getForwardedProtocol(req) === 'https' ? '; Secure' : '';
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function createCookie(name: string, value: string, req: Request, maxAgeSeconds: number): string {
@@ -178,7 +246,13 @@ function clearCookie(name: string, req: Request): string {
 }
 
 function getCallbackUrl(req: Request): string {
-  return getEnvString('OAUTH_CALLBACK_URL') || `${getRequestOrigin(req)}${RIVET_WEB_APPS_BASE_PATH}/auth/callback`;
+  const configuredCallbackUrl = getEnvString('OAUTH_CALLBACK_URL');
+  if (configuredCallbackUrl) {
+    requireSecureOAuthUrl('OAUTH_CALLBACK_URL', configuredCallbackUrl);
+    return configuredCallbackUrl;
+  }
+
+  return `${getRequestOrigin(req)}${RIVET_WEB_APPS_BASE_PATH}/auth/callback`;
 }
 
 export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: string): {
@@ -200,10 +274,25 @@ export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: s
     expiresAt,
   } satisfies OAuthStateCookiePayload);
 
+  if (config.provider === 'dummy') {
+    if (!isDummyOAuthAllowedForRequest(req)) {
+      throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
+    }
+
+    const authorizeUrl = new URL(`${getRequestOrigin(req)}${RIVET_WEB_APPS_BASE_PATH}/auth/dummy`);
+    authorizeUrl.searchParams.set('state', state);
+
+    return {
+      location: authorizeUrl.toString(),
+      cookies: [createCookie(OAUTH_STATE_COOKIE_NAME, stateCookie, req, STATE_TTL_SECONDS)],
+    };
+  }
+
   const authorizeUrl = new URL(config.authorizeUrl);
   authorizeUrl.searchParams.set('response_type', 'code');
   authorizeUrl.searchParams.set('client_id', config.clientId);
   authorizeUrl.searchParams.set('redirect_uri', getCallbackUrl(req));
+
   authorizeUrl.searchParams.set('state', state);
   if (config.scopes) {
     authorizeUrl.searchParams.set('scope', config.scopes);
@@ -233,12 +322,8 @@ export function isWebAppOAuthSessionAllowed(
     return false;
   }
 
-  if (allowedEmails.length === 0) {
-    return true;
-  }
-
   const allowed = new Set(allowedEmails.map((email) => email.trim().toLowerCase()).filter(Boolean));
-  return allowed.has(session.email);
+  return allowed.size > 0 && allowed.has(session.email);
 }
 
 function getClaimFromObject(value: unknown, claimPath: string): unknown {
@@ -262,6 +347,18 @@ async function readJsonResponse(response: globalThis.Response, description: stri
 
 async function exchangeCodeForToken(req: Request, code: string): Promise<string> {
   const config = getRequiredOauthConfig();
+  if (config.provider === 'dummy') {
+    if (!isDummyOAuthAllowedForRequest(req)) {
+      throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
+    }
+
+    if (!code.startsWith(DUMMY_OAUTH_CODE_PREFIX)) {
+      throw createHttpError(401, 'OAuth dummy code is invalid');
+    }
+
+    return code;
+  }
+
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
@@ -295,6 +392,16 @@ async function exchangeCodeForToken(req: Request, code: string): Promise<string>
 
 async function fetchOAuthUserEmail(accessToken: string): Promise<string> {
   const config = getRequiredOauthConfig();
+  if (config.provider === 'dummy') {
+    const encodedEmail = accessToken.slice(DUMMY_OAUTH_CODE_PREFIX.length);
+    const email = Buffer.from(encodedEmail, 'base64url').toString('utf8').trim().toLowerCase();
+    if (!email) {
+      throw createHttpError(401, 'OAuth dummy profile did not include email');
+    }
+
+    return email;
+  }
+
   const response = await fetch(config.userUrl, {
     headers: {
       accept: 'application/json',
@@ -332,6 +439,99 @@ function shouldRedirectOAuthCallbackFailure(error: unknown): boolean {
 }
 
 export const webAppOAuthRouter = Router();
+
+function getLocalRequestHostName(req: Request): string {
+  const host = getForwardedHost(req).split(',')[0]?.trim() ?? '';
+  if (host.startsWith('[')) {
+    const closingBracketIndex = host.indexOf(']');
+    return closingBracketIndex > 1 ? host.slice(1, closingBracketIndex) : host;
+  }
+
+  const colonCount = host.split(':').length - 1;
+  if (colonCount === 1) {
+    return host.split(':')[0]!;
+  }
+
+  return host;
+}
+
+function isDummyOAuthAllowedForRequest(req: Request): boolean {
+  if (!isDummyOAuthProvider()) {
+    return false;
+  }
+
+  if (isEnvFlagEnabled('OAUTH_DUMMY_ALLOW_NON_LOCALHOST')) {
+    return true;
+  }
+
+  const host = getLocalRequestHostName(req).toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+function createDummyOAuthCode(email: string): string {
+  return `${DUMMY_OAUTH_CODE_PREFIX}${Buffer.from(email.trim().toLowerCase(), 'utf8').toString('base64url')}`;
+}
+
+function renderDummyOAuthPage(state: string): string {
+  const config = getRequiredOauthConfig();
+  const email = config.provider === 'dummy' ? config.email : 'local@example.test';
+  const action = `${RIVET_WEB_APPS_BASE_PATH}/auth/dummy`;
+  return `<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dummy OAuth sign in</title>
+<style>
+  :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101114; color: #f4f4f5; }
+  main { width: min(440px, calc(100vw - 32px)); border: 1px solid #333741; border-radius: 8px; background: #1d1f24; padding: 24px; box-shadow: 0 24px 80px rgb(0 0 0 / 0.38); }
+  h1 { margin: 0 0 10px; font-size: 20px; line-height: 1.2; }
+  p { margin: 0 0 18px; color: #c8c8cf; line-height: 1.5; }
+  label { display: grid; gap: 8px; color: #d6d8df; font-size: 13px; font-weight: 650; }
+  input { box-sizing: border-box; width: 100%; min-height: 38px; border: 1px solid #3d414b; border-radius: 6px; background: #272a31; color: #f4f4f5; padding: 0 11px; font: inherit; }
+  button { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; margin-top: 14px; padding: 0 13px; border: 0; border-radius: 6px; background: #2f6fed; color: white; font: 650 14px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+  code { color: #d6d8df; }
+</style>
+<main>
+  <h1>Dummy OAuth sign in</h1>
+  <p>This local-only provider creates a normal Rivet web-app OAuth session for testing allowlists.</p>
+  <form method="post" action="${escapeHtml(action)}">
+    <input type="hidden" name="state" value="${escapeHtml(state)}">
+    <label>
+      Email
+      <input name="email" type="email" value="${escapeHtml(email)}" autocomplete="email" required autofocus>
+    </label>
+    <button type="submit">Continue</button>
+  </form>
+</main>`;
+}
+
+webAppOAuthRouter.get('/auth/dummy', (req, res) => {
+  if (!isDummyOAuthAllowedForRequest(req)) {
+    res.status(403).type('html').send('<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth is only available for localhost requests.</body>');
+    return;
+  }
+
+  const state = typeof req.query.state === 'string' ? req.query.state : '';
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.status(200).type('html').send(renderDummyOAuthPage(state));
+});
+
+webAppOAuthRouter.post('/auth/dummy', (req, res) => {
+  if (!isDummyOAuthAllowedForRequest(req)) {
+    res.status(403).type('html').send('<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth is only available for localhost requests.</body>');
+    return;
+  }
+
+  const state = typeof req.body?.state === 'string' ? req.body.state : '';
+  const email = typeof req.body?.email === 'string' ? req.body.email : '';
+  const callbackUrl = new URL(`${RIVET_WEB_APPS_BASE_PATH}/auth/callback`, getRequestOrigin(req));
+  callbackUrl.searchParams.set('code', createDummyOAuthCode(email));
+  callbackUrl.searchParams.set('state', state);
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.redirect(303, `${callbackUrl.pathname}${callbackUrl.search}`);
+});
 
 webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
   try {

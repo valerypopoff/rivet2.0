@@ -190,8 +190,10 @@ export function buildKubernetesLauncherConfig(env) {
       latestWebAppsBasePath: readEnv(env, 'RIVET_LATEST_APPS_BASE_PATH') ?? readEnv(env, 'RIVET_LATEST_WEB_APPS_BASE_PATH') ?? '/apps-latest',
       proxyResolver: readEnv(env, 'RIVET_PROXY_RESOLVER') ?? 'kube-dns.kube-system.svc.cluster.local',
       enableLatestRemoteDebugger: parseBoolean(readEnv(env, 'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER'), true),
+      corsAllowedOrigins: readEnv(env, 'RIVET_CORS_ALLOWED_ORIGINS') ?? '',
       requireWorkflowKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_WORKFLOW_KEY'), false),
       requireUiGateKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
+      trustIncomingForwardedHeaders: parseBoolean(readEnv(env, 'RIVET_TRUST_INCOMING_FORWARDED_HEADERS'), false),
       webAppsAuthMode: readEnv(env, 'RIVET_WEB_APPS_AUTH_MODE') ?? 'ui-gate',
     },
   };
@@ -257,8 +259,10 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  RIVET_LATEST_WEB_APPS_BASE_PATH: ${yamlString(config.routeConfig.latestWebAppsBasePath)}`,
     `  RIVET_PROXY_RESOLVER: ${yamlString(config.routeConfig.proxyResolver)}`,
     `  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: ${yamlString(String(config.routeConfig.enableLatestRemoteDebugger))}`,
+    `  RIVET_CORS_ALLOWED_ORIGINS: ${yamlString(config.routeConfig.corsAllowedOrigins)}`,
     `  RIVET_REQUIRE_WORKFLOW_KEY: ${yamlString(String(config.routeConfig.requireWorkflowKey))}`,
     `  RIVET_REQUIRE_UI_GATE_KEY: ${yamlString(String(config.routeConfig.requireUiGateKey))}`,
+    `  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: ${yamlString(String(config.routeConfig.trustIncomingForwardedHeaders))}`,
     `  RIVET_WEB_APPS_AUTH_MODE: ${yamlString(config.routeConfig.webAppsAuthMode)}`,
     '',
   ].join('\n');

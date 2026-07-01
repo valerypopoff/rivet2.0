@@ -18,6 +18,7 @@ import { createHttpError } from '../utils/httpError.js';
 
 const relevantEnvKeys = [
   'RIVET_KEY',
+  'RIVET_CORS_ALLOWED_ORIGINS',
   'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_STORAGE_MODE',
   'RIVET_WORKFLOWS_ROOT',
@@ -97,6 +98,8 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
   assert.deepEqual(getApiRouteExposureMatrix('control'), [
     '/ui-auth',
     '/apps/auth/callback',
+    '/apps/auth/dummy',
+    '/apps/auth/logout',
     '/workflows-latest/:endpointName',
     '/apps-latest/:slug',
     '/api/native/*',
@@ -110,6 +113,8 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
 
   assert.deepEqual(getApiRouteExposureMatrix('execution'), [
     '/apps/auth/callback',
+    '/apps/auth/dummy',
+    '/apps/auth/logout',
     '/workflows/:endpointName',
     '/apps/:slug',
     '/internal/workflows/:endpointName',
@@ -118,6 +123,8 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
   assert.deepEqual(getApiRouteExposureMatrix('combined'), [
     '/ui-auth',
     '/apps/auth/callback',
+    '/apps/auth/dummy',
+    '/apps/auth/logout',
     '/workflows-latest/:endpointName',
     '/apps-latest/:slug',
     '/api/native/*',
@@ -183,6 +190,69 @@ test('API error responses expose only explicitly marked 500 messages', () => {
       body: { error: 'Forbidden' },
     },
   );
+});
+
+test('API CORS defaults to same-origin browser access and explicit allowlist origins', async () => {
+  await withApiEnv({}, async () => {
+    const server = await startServer('combined');
+    try {
+      const sameOriginResponse = await fetch(`${server.baseUrl}/healthz`, {
+        headers: {
+          ...trustedProxyHeaders(),
+          Origin: 'https://rivet.example.test',
+          'X-Forwarded-Host': 'rivet.example.test',
+          'X-Forwarded-Proto': 'https',
+        },
+      });
+      assert.equal(sameOriginResponse.status, 200);
+      assert.equal(sameOriginResponse.headers.get('access-control-allow-origin'), 'https://rivet.example.test');
+      assert.equal(sameOriginResponse.headers.get('access-control-allow-credentials'), 'true');
+
+      const crossOriginResponse = await fetch(`${server.baseUrl}/healthz`, {
+        headers: {
+          Origin: 'https://evil.example.test',
+          'X-Forwarded-Host': 'rivet.example.test',
+          'X-Forwarded-Proto': 'https',
+        },
+      });
+      assert.equal(crossOriginResponse.status, 200);
+      assert.equal(crossOriginResponse.headers.get('access-control-allow-origin'), null);
+      assert.equal(crossOriginResponse.headers.get('access-control-allow-credentials'), null);
+
+      const spoofedForwardedOriginResponse = await fetch(`${server.baseUrl}/healthz`, {
+        headers: {
+          Origin: 'https://evil.example.test',
+          'X-Forwarded-Host': 'evil.example.test',
+          'X-Forwarded-Proto': 'https',
+        },
+      });
+      assert.equal(spoofedForwardedOriginResponse.status, 200);
+      assert.equal(spoofedForwardedOriginResponse.headers.get('access-control-allow-origin'), null);
+      assert.equal(spoofedForwardedOriginResponse.headers.get('access-control-allow-credentials'), null);
+    } finally {
+      await server.close();
+    }
+  });
+
+  await withApiEnv({
+    RIVET_CORS_ALLOWED_ORIGINS: 'https://client.example.test,not-a-url',
+  }, async () => {
+    const server = await startServer('combined');
+    try {
+      const allowlistedResponse = await fetch(`${server.baseUrl}/healthz`, {
+        headers: {
+          Origin: 'https://client.example.test',
+          'X-Forwarded-Host': 'rivet.example.test',
+          'X-Forwarded-Proto': 'https',
+        },
+      });
+      assert.equal(allowlistedResponse.status, 200);
+      assert.equal(allowlistedResponse.headers.get('access-control-allow-origin'), 'https://client.example.test');
+      assert.equal(allowlistedResponse.headers.get('access-control-allow-credentials'), 'true');
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 test('control profile exposes control-plane routes and does not expose published execution routes', async () => {

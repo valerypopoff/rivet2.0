@@ -24,6 +24,7 @@ import {
   RIVET_WEB_APPS_BASE_PATH,
 } from './workflowEndpointPaths.js';
 import { requireAuth } from './middleware/auth.js';
+import { isTrustedProxyRequest } from './auth.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
 
 export function getApiErrorResponse(err: Error): { status: number; body: { error: string } } {
@@ -38,6 +39,67 @@ export function getApiErrorResponse(err: Error): { status: number; body: { error
   };
 }
 
+function normalizeOrigin(value: string | undefined | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+function getFirstHeaderValue(value: string | undefined): string {
+  return value?.split(',')[0]?.trim() ?? '';
+}
+
+function getPublicRequestOrigin(req: Request): string | null {
+  const shouldTrustForwardedHeaders = isTrustedProxyRequest(req);
+  const protocol = shouldTrustForwardedHeaders
+    ? getFirstHeaderValue(req.get('x-forwarded-proto')).toLowerCase() || req.protocol || 'http'
+    : req.protocol || 'http';
+  const host = shouldTrustForwardedHeaders
+    ? getFirstHeaderValue(req.get('x-forwarded-host')) || req.get('host') || ''
+    : req.get('host') || '';
+  return normalizeOrigin(host ? `${protocol}://${host}` : null);
+}
+
+function getConfiguredCorsAllowedOrigins(): Set<string> {
+  const origins = new Set<string>();
+  for (const value of (process.env.RIVET_CORS_ALLOWED_ORIGINS ?? '').split(',')) {
+    const origin = normalizeOrigin(value.trim());
+    if (origin) {
+      origins.add(origin);
+    }
+  }
+
+  return origins;
+}
+
+export function isCorsOriginAllowed(req: Request, origin: string | undefined): boolean {
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) {
+    return false;
+  }
+
+  if (normalizedOrigin === getPublicRequestOrigin(req)) {
+    return true;
+  }
+
+  return getConfiguredCorsAllowedOrigins().has(normalizedOrigin);
+}
+
+function createCorsOptions(req: Request) {
+  const origin = req.get('origin');
+  return {
+    credentials: true,
+    origin: origin && isCorsOriginAllowed(req, origin) ? origin : false,
+    optionsSuccessStatus: 204,
+  };
+}
+
 export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): string[] {
   const surfaces: string[] = [];
 
@@ -45,6 +107,8 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
     surfaces.push(
       '/ui-auth',
       `${RIVET_WEB_APPS_BASE_PATH}/auth/callback`,
+      `${RIVET_WEB_APPS_BASE_PATH}/auth/dummy`,
+      `${RIVET_WEB_APPS_BASE_PATH}/auth/logout`,
       `${LATEST_WORKFLOWS_BASE_PATH}/:endpointName`,
       `${RIVET_LATEST_WEB_APPS_BASE_PATH}/:slug`,
       '/api/native/*',
@@ -60,6 +124,8 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
   if (profile === 'combined' || profile === 'execution') {
     surfaces.push(
       `${RIVET_WEB_APPS_BASE_PATH}/auth/callback`,
+      `${RIVET_WEB_APPS_BASE_PATH}/auth/dummy`,
+      `${RIVET_WEB_APPS_BASE_PATH}/auth/logout`,
       `${PUBLISHED_WORKFLOWS_BASE_PATH}/:endpointName`,
       `${RIVET_WEB_APPS_BASE_PATH}/:slug`,
       '/internal/workflows/:endpointName',
@@ -98,7 +164,9 @@ function mountPublishedExecutionRoutes(app: Express): void {
 export function createApiApp(profile = getApiRuntimeProfile()): Express {
   const app = express();
 
-  app.use(cors({ origin: true, credentials: true }));
+  app.use(cors((req, callback) => {
+    callback(null, createCorsOptions(req));
+  }));
   app.use(express.json({ limit: '100mb', strict: false }));
   app.use(express.urlencoded({ extended: false }));
 
