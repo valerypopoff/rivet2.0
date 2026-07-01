@@ -14,6 +14,8 @@ import {
   getRunRecordingsSettingsPath,
   normalizeWorkflowRecordingLimitSettings,
 } from './workflows/recordings-config.js';
+import { readWebAppAuthSettings, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
+import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
 
 export const appSettingsRouter = Router();
 
@@ -169,17 +171,13 @@ export async function writeNodeExecutorProxySettings(draft: unknown): Promise<No
   };
 
   const settingsPath = getNodeExecutorProxySettingsPath();
-  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-
-  const tempPath = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify({
+  await writePrivateJsonSettingsFile(settingsPath, {
     version: 1,
     httpProxy: saved.httpProxy,
     httpsProxy: saved.httpsProxy,
     noProxy: saved.noProxy,
     updatedAt: saved.updatedAt,
-  }, null, 2)}\n`, 'utf8');
-  await fs.rename(tempPath, settingsPath);
+  });
 
   return saved;
 }
@@ -220,17 +218,13 @@ export async function writeRunRecordingsSettings(draft: unknown): Promise<RunRec
   };
 
   const settingsPath = getRunRecordingsSettingsPath();
-  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-
-  const tempPath = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify({
+  await writePrivateJsonSettingsFile(settingsPath, {
     version: 1,
     maxPendingWrites: saved.maxPendingWrites,
     maxRunsPerEndpoint: saved.maxRunsPerEndpoint,
     retentionDays: saved.retentionDays,
     updatedAt: saved.updatedAt,
-  }, null, 2)}\n`, 'utf8');
-  await fs.rename(tempPath, settingsPath);
+  });
 
   return saved;
 }
@@ -277,6 +271,22 @@ appSettingsRouter.get('/run-recordings', async (_req, res, next) => {
 appSettingsRouter.put('/run-recordings', async (req, res, next) => {
   try {
     res.json(await writeRunRecordingsSettings(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/web-app-auth', async (_req, res, next) => {
+  try {
+    res.json(await readWebAppAuthSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/web-app-auth', async (req, res, next) => {
+  try {
+    res.json(await writeWebAppAuthSettings(req.body));
   } catch (error) {
     next(error);
   }

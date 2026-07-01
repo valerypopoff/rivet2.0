@@ -14,7 +14,17 @@ import {
   writeRunRecordingsSettings,
   writeNodeExecutorProxySettings,
 } from '../routes/app-settings.js';
-import { getWorkflowRecordingConfig } from '../routes/workflows/recordings-config.js';
+import {
+  getRunRecordingsSettingsPath,
+  getWorkflowRecordingConfig,
+} from '../routes/workflows/recordings-config.js';
+import { getWebAppAuthMode } from '../web-app-oauth.js';
+import {
+  getWebAppAuthSettingsPath,
+  readWebAppAuthSettings,
+  writeWebAppAuthSettings,
+} from '../web-app-auth-settings.js';
+import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
 
 const relevantEnvKeys = [
   'HTTP_PROXY',
@@ -27,6 +37,19 @@ const relevantEnvKeys = [
   'RIVET_RECORDINGS_MAX_PENDING_WRITES',
   'RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT',
   'RIVET_RECORDINGS_RETENTION_DAYS',
+  'RIVET_WEB_APPS_AUTH_MODE',
+  'OAUTH_AUTHORIZE_URL',
+  'OAUTH_TOKEN_URL',
+  'OAUTH_USER_URL',
+  'OAUTH_CLIENT_ID',
+  'OAUTH_CLIENT_SECRET',
+  'OAUTH_CALLBACK_URL',
+  'OAUTH_SCOPES',
+  'OAUTH_EMAIL_CLAIM',
+  'OAUTH_SESSION_SECRET',
+  'OAUTH_SESSION_TTL_SECONDS',
+  'OAUTH_CLIENT_AUTH_METHOD',
+  'OAUTH_DEBUG_LOG_PROFILE',
   'RIVET_KEY',
 ] as const;
 
@@ -85,6 +108,14 @@ function setNodeExecutorProxySettingsReloaderForTest(reloader: (() => Promise<un
   (globalThis as typeof globalThis & {
     __rivetReloadNodeExecutorProxySettings?: () => Promise<unknown> | unknown;
   }).__rivetReloadNodeExecutorProxySettings = reloader;
+}
+
+function assertPrivateSettingsFile(filePath: string): void {
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
 }
 
 test('Node executor proxy settings ignore environment values until saved', async () => {
@@ -155,6 +186,100 @@ test('Node executor proxy settings API saves and returns persisted values', asyn
       setNodeExecutorProxySettingsReloaderForTest(undefined);
       await server?.close();
     }
+  });
+});
+
+test('App settings files are written with owner-only permissions', async () => {
+  await withAppSettingsEnv(async () => {
+    await writeNodeExecutorProxySettings({
+      httpProxy: 'http://proxy-user:proxy-pass@proxy.local:3128',
+      httpsProxy: '',
+      noProxy: 'localhost,api',
+    });
+    await writeRunRecordingsSettings({
+      maxPendingWrites: 100,
+      maxRunsPerEndpoint: 2000,
+      retentionDays: 0,
+    });
+    await writeWebAppAuthSettings({
+      mode: 'oauth',
+      provider: 'external',
+      authorizeUrl: 'https://oauth.example.test/authorize',
+      tokenUrl: 'https://oauth.example.test/token',
+      userUrl: 'https://oauth.example.test/profile',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      sessionSecret: 'session-secret',
+    });
+
+    const appDataRoot = process.env.RIVET_APP_DATA_ROOT;
+    assert.ok(appDataRoot);
+    assertPrivateSettingsFile(path.join(appDataRoot, 'settings', 'node-executor-proxy.json'));
+    assertPrivateSettingsFile(getRunRecordingsSettingsPath());
+    assertPrivateSettingsFile(getWebAppAuthSettingsPath());
+  });
+});
+
+test('App settings concurrent saves use unique temporary files', async () => {
+  await withAppSettingsEnv(async () => {
+    const originalDateNow = Date.now;
+    Date.now = () => 1234567890;
+
+    try {
+      await Promise.all([
+        writeNodeExecutorProxySettings({
+          httpProxy: 'http://proxy-one.local:3128',
+          httpsProxy: '',
+          noProxy: 'localhost,api',
+        }),
+        writeNodeExecutorProxySettings({
+          httpProxy: 'http://proxy-two.local:3128',
+          httpsProxy: '',
+          noProxy: 'localhost,executor',
+        }),
+        writeRunRecordingsSettings({
+          maxPendingWrites: 100,
+          maxRunsPerEndpoint: 100,
+          retentionDays: 14,
+        }),
+        writeRunRecordingsSettings({
+          maxPendingWrites: 200,
+          maxRunsPerEndpoint: 200,
+          retentionDays: 0,
+        }),
+        writeWebAppAuthSettings({ mode: 'ui-gate' }),
+        writeWebAppAuthSettings({ mode: 'none' }),
+      ]);
+    } finally {
+      Date.now = originalDateNow;
+    }
+
+    const appDataRoot = process.env.RIVET_APP_DATA_ROOT;
+    assert.ok(appDataRoot);
+    const leftoverTempFiles = fs.readdirSync(path.join(appDataRoot, 'settings')).filter((fileName) => fileName.endsWith('.tmp'));
+    assert.deepEqual(leftoverTempFiles, []);
+
+    const proxySettings = await readNodeExecutorProxySettings();
+    assert.match(proxySettings.httpProxy, /^http:\/\/proxy-(one|two)\.local:3128$/);
+    const recordingsSettings = await readRunRecordingsSettings();
+    assert.ok(recordingsSettings.maxPendingWrites === 100 || recordingsSettings.maxPendingWrites === 200);
+    const webAppAuthSettings = await readWebAppAuthSettings();
+    assert.ok(webAppAuthSettings.mode === 'ui-gate' || webAppAuthSettings.mode === 'none');
+  });
+});
+
+test('App settings failed writes clean up temporary files', async () => {
+  await withAppSettingsEnv(async (tempRoot) => {
+    const directoryTarget = path.join(tempRoot, 'settings-target-directory');
+    fs.mkdirSync(directoryTarget);
+
+    await assert.rejects(
+      writePrivateJsonSettingsFile(directoryTarget, { secret: 'temporary-secret' }),
+      /EEXIST|EPERM|EISDIR|ENOTEMPTY/,
+    );
+
+    const leftoverTempFiles = fs.readdirSync(tempRoot).filter((fileName) => fileName.includes('.tmp'));
+    assert.deepEqual(leftoverTempFiles, []);
   });
 });
 
@@ -272,6 +397,151 @@ test('Run recordings settings reject invalid numbers', async () => {
         retentionDays: 0,
       }),
       /Queued recording writes must be a non-negative whole number/,
+    );
+  });
+});
+
+test('Web app auth settings ignore environment values until saved', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_WEB_APPS_AUTH_MODE = 'oauth';
+    process.env.OAUTH_AUTHORIZE_URL = 'https://env.example.test/authorize';
+    process.env.OAUTH_TOKEN_URL = 'https://env.example.test/token';
+    process.env.OAUTH_USER_URL = 'https://env.example.test/profile';
+    process.env.OAUTH_CLIENT_ID = 'env-client';
+    process.env.OAUTH_CLIENT_SECRET = 'env-secret';
+
+    const defaultSettings = await readWebAppAuthSettings();
+    assert.equal(defaultSettings.source, 'default');
+    assert.equal(defaultSettings.mode, 'ui-gate');
+    assert.equal(defaultSettings.authorizeUrl, '');
+    assert.equal(defaultSettings.clientSecretConfigured, false);
+    assert.equal(getWebAppAuthMode(), 'ui-gate');
+
+    await writeWebAppAuthSettings({
+      mode: 'none',
+    });
+
+    const nextSettings = await readWebAppAuthSettings();
+    assert.equal(nextSettings.source, 'app-settings');
+    assert.equal(nextSettings.mode, 'none');
+    assert.equal(getWebAppAuthMode(), 'none');
+  });
+});
+
+test('Web app auth settings fail closed when the saved file is invalid', async () => {
+  await withAppSettingsEnv(async () => {
+    const settingsPath = getWebAppAuthSettingsPath();
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      if (String(args[0]).includes('[web-app-auth] Failed to read web-app auth app settings')) {
+        return;
+      }
+      originalConsoleError(...args);
+    };
+
+    try {
+      fs.writeFileSync(settingsPath, '{not json', 'utf8');
+
+      const settings = await readWebAppAuthSettings();
+      assert.equal(settings.source, 'default');
+      assert.equal(settings.mode, 'oauth');
+      assert.equal(getWebAppAuthMode(), 'oauth');
+
+      fs.writeFileSync(settingsPath, JSON.stringify({ version: 1, mode: 'surprise' }), 'utf8');
+      assert.equal(getWebAppAuthMode(), 'oauth');
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+});
+
+test('Web app auth settings API saves and hides secrets', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/web-app-auth`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'oauth',
+          provider: 'external',
+          authorizeUrl: 'https://oauth.example.test/authorize',
+          tokenUrl: 'https://oauth.example.test/token',
+          userUrl: 'https://oauth.example.test/profile',
+          clientId: 'client-id',
+          clientSecret: 'client-secret',
+          callbackUrl: 'https://rivet.example.test/apps/auth/callback',
+          scopes: 'email',
+          emailClaim: 'data.email',
+          sessionSecret: 'session-secret',
+          sessionTtlSeconds: '7200',
+          clientAuthMethod: 'basic',
+          debugLogProfile: true,
+        }),
+      });
+
+      assert.equal(saveResponse.status, 200);
+      const saved = await saveResponse.json() as Record<string, unknown>;
+      assert.equal(saved.source, 'app-settings');
+      assert.equal(saved.mode, 'oauth');
+      assert.equal(saved.clientSecretConfigured, true);
+      assert.equal(saved.sessionSecretConfigured, true);
+      assert.equal(saved.clientSecret, undefined);
+      assert.equal(saved.sessionSecret, undefined);
+      assert.equal(saved.emailClaim, 'data.email');
+      assert.equal(saved.clientAuthMethod, 'basic');
+
+      const rotateResponse = await fetch(`${server.baseUrl}/api/app-settings/web-app-auth`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'oauth',
+          provider: 'external',
+          authorizeUrl: 'https://oauth.example.test/authorize',
+          tokenUrl: 'https://oauth.example.test/token',
+          userUrl: 'https://oauth.example.test/profile',
+          clientId: 'client-id',
+          clientSecret: '',
+          callbackUrl: 'https://rivet.example.test/apps/auth/callback',
+          scopes: 'profile email',
+          emailClaim: 'data.email',
+          sessionSecret: '',
+          sessionTtlSeconds: '3600',
+          clientAuthMethod: 'body',
+          debugLogProfile: false,
+        }),
+      });
+
+      assert.equal(rotateResponse.status, 200);
+      const rotated = await rotateResponse.json() as Record<string, unknown>;
+      assert.equal(rotated.clientSecretConfigured, true);
+      assert.equal(rotated.sessionSecretConfigured, true);
+      assert.equal(rotated.scopes, 'profile email');
+      assert.equal(rotated.clientAuthMethod, 'body');
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Web app auth settings reject incomplete OAuth config', async () => {
+  await withAppSettingsEnv(async () => {
+    await assert.rejects(
+      writeWebAppAuthSettings({
+        mode: 'oauth',
+        provider: 'external',
+        authorizeUrl: 'https://oauth.example.test/authorize',
+        tokenUrl: 'https://oauth.example.test/token',
+      }),
+      /Profile URL is required when OAuth web-app auth is enabled/,
     );
   });
 });

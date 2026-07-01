@@ -240,7 +240,6 @@ function createScenarioEnvFile(mode) {
     'RIVET_KEY=compat-shared-key',
     'RIVET_REQUIRE_WORKFLOW_KEY=false',
     'RIVET_REQUIRE_UI_GATE_KEY=false',
-    'RIVET_WEB_APPS_AUTH_MODE=ui-gate',
     'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false',
     `RIVET_APP_DATA_ROOT=${filesystemFixture.appDataRoot}`,
     `RIVET_RUNTIME_LIBRARIES_ROOT=${filesystemFixture.runtimeLibrariesRoot}`,

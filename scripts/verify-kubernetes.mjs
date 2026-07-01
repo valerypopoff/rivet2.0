@@ -58,7 +58,6 @@ function writeLocalVerificationEnv() {
     'RIVET_KEY=test-shared-key',
     'RIVET_REQUIRE_WORKFLOW_KEY=false',
     'RIVET_REQUIRE_UI_GATE_KEY=false',
-    'RIVET_WEB_APPS_AUTH_MODE=ui-gate',
     'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true',
     '',
   ].join('\n');

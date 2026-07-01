@@ -43,6 +43,7 @@ import {
   isWorkflowRecordingEnabled,
   shouldSnapshotWorkflowRecordingDatasets,
 } from './recordings-config.js';
+import { sanitizeUiAuthReturnTo } from '../ui-auth.js';
 
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
@@ -64,6 +65,14 @@ type WorkflowExecutionProject = Awaited<ReturnType<typeof resolvePublishedExecut
 
 const WORKFLOW_CONTEXT_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const UNSAFE_WORKFLOW_CONTEXT_HEADER_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+const SENSITIVE_WEB_APP_ACTION_HEADER_NAMES = new Set([
+  'authorization',
+  'cookie',
+  'proxy-authorization',
+  'x-forwarded-authorization',
+  'x-rivet-proxy-auth',
+  'x-rivet-token-free-host',
+]);
 
 function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value);
@@ -120,6 +129,7 @@ function normalizeWorkflowContextHeaderValue(value: unknown): string | null {
 
 export function normalizeWorkflowRequestHeadersForContext(
   rawHeaders: Record<string, unknown> | null | undefined,
+  options?: { excludeHeaderNames?: ReadonlySet<string> },
 ): WorkflowRequestHeadersContext {
   const headers: WorkflowRequestHeadersContext = {};
   if (!isJsonObjectRecord(rawHeaders)) {
@@ -129,6 +139,10 @@ export function normalizeWorkflowRequestHeadersForContext(
   for (const [rawName, rawValue] of Object.entries(rawHeaders)) {
     const name = normalizeWorkflowContextHeaderName(rawName);
     if (!name) {
+      continue;
+    }
+
+    if (options?.excludeHeaderNames?.has(name)) {
       continue;
     }
 
@@ -263,6 +277,17 @@ function getWorkflowExecutionContext(
     headers: {
       type: 'any',
       value: getWorkflowRequestHeaders(req),
+    },
+  };
+}
+
+function getWebAppWorkflowExecutionContext(req: Request): WorkflowExecutionContext {
+  return {
+    headers: {
+      type: 'any',
+      value: normalizeWorkflowRequestHeadersForContext(req.headers, {
+        excludeHeaderNames: SENSITIVE_WEB_APP_ACTION_HEADER_NAMES,
+      }),
     },
   };
 }
@@ -470,6 +495,50 @@ function renderWebAppLoginRequiredHtml(req: Request): string {
   });
 }
 
+function renderWebAppUiGatePromptHtml(req: Request): string {
+  const returnTo = escapeHtml(sanitizeUiAuthReturnTo(getWebAppRequestReturnTo(req)));
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rivet Access</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at top, rgba(96, 165, 250, 0.18), transparent 34%), linear-gradient(180deg, #121419 0%, #0b0d11 100%); font-family: Georgia, "Times New Roman", serif; color: #f3f4f6; }
+      .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(10px); }
+      .modal { position: relative; width: min(440px, calc(100vw - 32px)); padding: 28px; border-radius: 18px; background: rgba(18, 20, 25, 0.94); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42); }
+      h1 { margin: 0 0 10px; font-size: 31px; line-height: 1.05; }
+      p { margin: 0 0 18px; font-size: 16px; line-height: 1.55; color: rgba(243, 244, 246, 0.78); }
+      form { display: grid; gap: 12px; }
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+      label { font-size: 14px; color: rgba(243, 244, 246, 0.84); }
+      input { width: 100%; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; background: rgba(255, 255, 255, 0.04); color: inherit; padding: 12px 14px; font: inherit; }
+      input:focus { outline: 2px solid rgba(96, 165, 250, 0.75); outline-offset: 2px; }
+      button { border: none; border-radius: 12px; background: #f3f4f6; color: #111827; padding: 12px 16px; font: inherit; font-weight: 700; cursor: pointer; }
+      .hint { margin-top: 12px; font-size: 13px; color: rgba(243, 244, 246, 0.52); }
+    </style>
+  </head>
+  <body>
+    <div class="overlay" aria-hidden="true"></div>
+    <main class="modal" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+      <h1 id="gate-title">Enter Access Key</h1>
+      <p>Provide the Rivet key to open this web app.</p>
+      <form method="post" action="/__rivet_auth">
+        <label for="gate-username" class="sr-only">Username</label>
+        <input id="gate-username" class="sr-only" name="username" type="text" value="Rivet" autocomplete="username" required>
+        <label for="gate-key">Access key</label>
+        <input id="gate-key" name="key" type="password" autocomplete="current-password" autofocus required>
+        <input name="return_to" type="hidden" value="${returnTo}">
+        <button type="submit">Continue</button>
+      </form>
+      <div class="hint">Token-free hosts still bypass this prompt automatically.</div>
+    </main>
+  </body>
+</html>`;
+}
+
 function renderWebAppAccessDeniedHtml(email: string, logoutPath: string): string {
   return renderWebAppAuthStatusHtml({
     title: 'Web app access denied',
@@ -578,8 +647,19 @@ function authorizeWebAppRequestBeforeResolve(
   }
 
   if (mode === 'ui-gate') {
-    requirePublishedWebAppUiGate(req);
-    return true;
+    try {
+      requirePublishedWebAppUiGate(req);
+      return true;
+    } catch (error) {
+      if (requestKind === 'html' && (error as { status?: unknown }).status === 401) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        sendHtmlWithDuration(res, 401, renderWebAppUiGatePromptHtml(req), requestStartedAt);
+        return false;
+      }
+
+      throw error;
+    }
   }
 
   const session = readWebAppOAuthSession(req);
@@ -664,15 +744,23 @@ function getForwardedRequestHost(req: Request): string {
   return req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || '';
 }
 
-function createFetchRequestFromExpress(req: Request): globalThis.Request {
+function createFetchRequestFromExpress(
+  req: Request,
+  options?: { excludeHeaderNames?: ReadonlySet<string> },
+): globalThis.Request {
   const host = getForwardedRequestHost(req) || 'localhost';
   const url = `${getForwardedRequestProtocol(req)}://${host}${req.originalUrl || req.url}`;
   const headers = new Headers();
 
   for (const [name, rawValue] of Object.entries(req.headers)) {
+    const normalizedName = normalizeWorkflowContextHeaderName(name);
+    if (!normalizedName || options?.excludeHeaderNames?.has(normalizedName)) {
+      continue;
+    }
+
     const value = normalizeWorkflowContextHeaderValue(rawValue);
     if (value != null) {
-      headers.set(name, value);
+      headers.set(normalizedName, value);
     }
   }
 
@@ -732,7 +820,9 @@ function sendWebAppActionErrorWithDuration(
   if (status >= 500) {
     console.error('Rivet web app action failed:', error);
   }
-  const message = getWorkflowErrorMessage(error);
+  const message = status >= 500 && !(error instanceof RivetWebAppActionHttpError)
+    ? 'Internal server error'
+    : getWorkflowErrorMessage(error);
   const code = error instanceof RivetWebAppActionHttpError ? error.code : undefined;
   sendJsonWithDuration(res, status, {
     error: message,
@@ -813,7 +903,7 @@ async function createWebAppProcessorOptions(
       getRootPath(),
       codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {},
     ) as any,
-    context: getWorkflowExecutionContext(req),
+    context: getWebAppWorkflowExecutionContext(req),
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
     projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
@@ -1082,7 +1172,9 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
         codeRunnerTelemetry,
         { enableRemoteDebugger: routeKind === 'latest' },
       ),
-      request: createFetchRequestFromExpress(req),
+      request: createFetchRequestFromExpress(req, {
+        excludeHeaderNames: SENSITIVE_WEB_APP_ACTION_HEADER_NAMES,
+      }),
       requestRevisionKey: getOptionalWebAppActionRevisionKey(req.body),
       revisionKey: resolved.executionProject.revisionKey,
       state: req.body.state as Record<string, unknown> | undefined,

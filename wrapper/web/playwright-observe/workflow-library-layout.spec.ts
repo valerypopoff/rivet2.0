@@ -158,6 +158,68 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
       return;
     }
 
+    if (url.pathname === '/api/app-settings/web-app-auth') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            mode: body.mode ?? 'ui-gate',
+            provider: body.provider ?? 'external',
+            dummyEmail: body.dummyEmail ?? 'local@example.test',
+            dummyAllowNonLocalhost: body.dummyAllowNonLocalhost ?? false,
+            authorizeUrl: body.authorizeUrl ?? '',
+            tokenUrl: body.tokenUrl ?? '',
+            userUrl: body.userUrl ?? '',
+            clientId: body.clientId ?? '',
+            clientSecretConfigured: Boolean(body.clientSecret) || false,
+            callbackUrl: body.callbackUrl ?? '',
+            scopes: body.scopes ?? 'email',
+            emailClaim: body.emailClaim ?? 'email',
+            sessionSecretConfigured: Boolean(body.sessionSecret) || false,
+            sessionTtlSeconds: Number(body.sessionTtlSeconds ?? 86400),
+            clientAuthMethod: body.clientAuthMethod ?? 'body',
+            debugLogProfile: body.debugLogProfile ?? false,
+            updatedAt: '2026-06-30T12:01:00.000Z',
+            source: 'app-settings',
+          }),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          mode: 'ui-gate',
+          provider: 'external',
+          dummyEmail: 'local@example.test',
+          dummyAllowNonLocalhost: false,
+          authorizeUrl: '',
+          tokenUrl: '',
+          userUrl: '',
+          clientId: '',
+          clientSecretConfigured: false,
+          callbackUrl: '',
+          scopes: 'email',
+          emailClaim: 'email',
+          sessionSecretConfigured: false,
+          sessionTtlSeconds: 86400,
+          clientAuthMethod: 'body',
+          debugLogProfile: false,
+          updatedAt: null,
+          source: 'default',
+        }),
+      });
+      return;
+    }
+
     await route.fallback();
   });
 }
@@ -274,6 +336,25 @@ test.describe('Workflow library layout', () => {
     const proxyActions = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row');
     await expect(proxyActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
+
+    await appSettingsModal.getByRole('tab', { name: 'Web app auth' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Web app auth' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-web-app-auth-panel .app-settings-section-title')).toHaveCount(0);
+    await expect(appSettingsModal.getByRole('button', { name: 'Rivet key' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByText('Visitors use the same Rivet key prompt as the server UI.')).toBeVisible();
+    await appSettingsModal.getByRole('button', { name: 'OAuth' }).click();
+    await expect(appSettingsModal.getByText("Visitors sign in with OAuth and are checked against each web app's allowed-email list.")).toBeVisible();
+    await expect(appSettingsModal.getByRole('button', { name: 'External provider' })).toHaveAttribute('aria-pressed', 'true');
+    await appSettingsModal.getByRole('button', { name: 'Local dummy' }).click();
+    await expect(appSettingsModal.getByText('Default test email')).toBeVisible();
+    await expect(appSettingsModal.getByLabel('Default test email')).toHaveValue('local@example.test');
+    await appSettingsModal.getByLabel('Session signing secret').fill('local-session-secret');
+    await appSettingsModal.getByRole('button', { name: 'Save' }).click();
+    const webAuthActions = appSettingsModal.locator('.app-settings-web-app-auth-panel .app-settings-actions-row');
+    await expect(webAuthActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toBeVisible();
+    await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    await expect(appSettingsModal).toContainText('OAuth');
     await page.getByRole('button', { name: 'Close app settings' }).click();
     await expect(appSettingsModal).toHaveCount(0);
 

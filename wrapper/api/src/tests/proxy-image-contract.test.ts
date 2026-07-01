@@ -85,14 +85,14 @@ test('proxy UI gate prompt is served from container-local staged storage', () =>
   assert.doesNotMatch(prodCompose, /image\/proxy\/ui-gate-prompt\.html:/);
 });
 
-test('proxy templates gate hosted web apps through the configured web app auth mode', () => {
+test('proxy templates forward hosted web apps to the API-owned auth layer', () => {
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
   const managedCompose = readRepoFile('ops/compose/docker-compose.managed-services.yml');
-  assert.match(proxyBootstrap, /normalize_web_apps_auth_mode\(\)/);
+  assert.doesNotMatch(proxyBootstrap, /normalize_web_apps_auth_mode\(\)/);
   assert.match(proxyBootstrap, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS="\$\(normalize_bool "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-\}" "0"\)"/);
-  assert.match(proxyBootstrap, /export RIVET_WEB_APPS_AUTH_MODE="\$\(normalize_web_apps_auth_mode "\$\{RIVET_WEB_APPS_AUTH_MODE:-\}"\)"/);
+  assert.doesNotMatch(proxyBootstrap, /RIVET_WEB_APPS_AUTH_MODE/);
   assert.match(prodCompose, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/);
   assert.match(devCompose, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/);
   assert.match(prodCompose, /RIVET_CORS_ALLOWED_ORIGINS=\$\{RIVET_CORS_ALLOWED_ORIGINS:-\}/);
@@ -101,14 +101,8 @@ test('proxy templates gate hosted web apps through the configured web app auth m
   assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_POSTGRES_PORT:-54329\}:5432"/);
   assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_PORT:-9000\}:9000"/);
   assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_CONSOLE_PORT:-9001\}:9001"/);
-  assert.match(prodCompose, /OAUTH_PROVIDER=\$\{OAUTH_PROVIDER:-\}/);
-  assert.match(devCompose, /OAUTH_PROVIDER=\$\{OAUTH_PROVIDER:-\}/);
-  assert.match(prodCompose, /OAUTH_DUMMY_EMAIL=\$\{OAUTH_DUMMY_EMAIL:-\}/);
-  assert.match(devCompose, /OAUTH_DUMMY_EMAIL=\$\{OAUTH_DUMMY_EMAIL:-\}/);
-  assert.match(prodCompose, /OAUTH_DUMMY_ALLOW_NON_LOCALHOST=\$\{OAUTH_DUMMY_ALLOW_NON_LOCALHOST:-\}/);
-  assert.match(devCompose, /OAUTH_DUMMY_ALLOW_NON_LOCALHOST=\$\{OAUTH_DUMMY_ALLOW_NON_LOCALHOST:-\}/);
-  assert.match(prodCompose, /OAUTH_DEBUG_LOG_PROFILE=\$\{OAUTH_DEBUG_LOG_PROFILE:-\}/);
-  assert.match(devCompose, /OAUTH_DEBUG_LOG_PROFILE=\$\{OAUTH_DEBUG_LOG_PROFILE:-\}/);
+  assert.doesNotMatch(prodCompose, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_PROVIDER|OAUTH_CLIENT_SECRET|OAUTH_DEBUG_LOG_PROFILE/);
+  assert.doesNotMatch(devCompose, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_PROVIDER|OAUTH_CLIENT_SECRET|OAUTH_DEBUG_LOG_PROFILE/);
 
   for (const template of readProxyTemplates()) {
     assert.match(template, /map "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS\}:\$http_x_forwarded_host" \$rivet_forwarded_host/);
@@ -122,15 +116,14 @@ test('proxy templates gate hosted web apps through the configured web app auth m
     assert.match(template, /map \$rivet_forwarded_hostname \$rivet_ui_host_is_token_free/);
     assert.match(template, /map \$rivet_forwarded_proto \$rivet_ui_cookie_secure_suffix/);
     assert.match(template, /~\*\^https\$ "; Secure";/);
-    assert.match(template, /map "\$\{RIVET_WEB_APPS_AUTH_MODE\}" \$rivet_web_apps_use_ui_gate/);
-    assert.match(template, /map "\$rivet_web_apps_use_ui_gate:\$rivet_ui_gate_result" \$rivet_web_apps_gate_result/);
+    assert.doesNotMatch(template, /RIVET_WEB_APPS_AUTH_MODE|rivet_web_apps_gate_result|rivet_web_apps_use_ui_gate/);
     assert.doesNotMatch(template, /proxy_set_header X-Forwarded-Proto \$scheme;/);
     for (const locationPattern of [
       /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/\s*\{/,
       /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\s*\{/,
     ]) {
       const webAppsLocation = proxyLocation(template, locationPattern);
-      assert.match(webAppsLocation, /if \(\$rivet_web_apps_gate_result = deny\) \{\s*return 401;\s*\}/);
+      assert.doesNotMatch(webAppsLocation, /return 401;|rivet_web_apps_gate_result/);
       assert.match(webAppsLocation, /proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;/);
       assert.match(webAppsLocation, /proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;/);
       assert.match(webAppsLocation, /proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;/);

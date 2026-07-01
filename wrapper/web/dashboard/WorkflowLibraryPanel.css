@@ -1343,7 +1343,8 @@
 
 .app-settings-general-panel,
 .app-settings-proxy-panel,
-.app-settings-recordings-panel {
+.app-settings-recordings-panel,
+.app-settings-web-app-auth-panel {
   width: 100%;
   max-width: none;
 }
@@ -1393,6 +1394,10 @@
   max-width: 100%;
 }
 
+.app-settings-wide-mode-tabs {
+  width: min(100%, 560px);
+}
+
 .app-settings-mode-tab {
   flex: 1 1 0;
   min-width: 0;
@@ -1407,6 +1412,43 @@
 .app-settings-proxy-no-proxy {
   min-height: 74px;
   resize: vertical;
+}
+
+.app-settings-checkbox-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--grey-lightest);
+  cursor: pointer;
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.app-settings-checkbox-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--grey-lightest);
+}
+
+.app-settings-checkbox-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.app-settings-checkbox-label {
+  min-width: 0;
+}
+
+.app-settings-input-suffix {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 10px;
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1;
 }
 
 .app-settings-actions-row {

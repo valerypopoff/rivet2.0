@@ -1,5 +1,9 @@
 import http from 'node:http';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import express from 'express';
 import test from 'node:test';
 
@@ -12,6 +16,7 @@ import {
   webAppOAuthRouter,
   type WebAppOAuthSession,
 } from '../web-app-oauth.js';
+import { writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 
 type MockRequest = {
   protocol?: string;
@@ -23,6 +28,7 @@ type MockRequest = {
 
 const OAUTH_ENV_KEYS = [
   'RIVET_KEY',
+  'RIVET_APP_DATA_ROOT',
   'RIVET_WEB_APPS_AUTH_MODE',
   'OAUTH_PROVIDER',
   'OAUTH_DUMMY_EMAIL',
@@ -41,6 +47,8 @@ const OAUTH_ENV_KEYS = [
   'OAUTH_DEBUG_LOG_PROFILE',
 ] as const;
 
+type LegacyOAuthEnvValues = Partial<Record<typeof OAUTH_ENV_KEYS[number], string | undefined>>;
+
 function createMockRequest(headers: Record<string, string> = {}): MockRequest {
   const normalizedHeaders = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
@@ -54,27 +62,59 @@ function createMockRequest(headers: Record<string, string> = {}): MockRequest {
   };
 }
 
-async function withEnv(values: Record<string, string | undefined>, run: () => Promise<void> | void): Promise<void> {
+async function withEnv(values: LegacyOAuthEnvValues, run: () => Promise<void> | void): Promise<void> {
   const previous = new Map<string, string | undefined>();
   for (const key of OAUTH_ENV_KEYS) {
     previous.set(key, process.env[key]);
   }
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-web-app-oauth-'));
 
   try {
     for (const key of OAUTH_ENV_KEYS) {
       delete process.env[key];
     }
     process.env.RIVET_KEY = 'web-app-oauth-test-key';
-    for (const [key, value] of Object.entries(values)) {
-      if (value == null) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+    process.env.RIVET_APP_DATA_ROOT = path.join(tempRoot, 'app-data');
+
+    const hasOAuthValues = Object.keys(values).some((key) => key.startsWith('OAUTH_'));
+    const hasExternalProviderValues = Boolean(
+      values.OAUTH_AUTHORIZE_URL ||
+      values.OAUTH_TOKEN_URL ||
+      values.OAUTH_USER_URL ||
+      values.OAUTH_CLIENT_ID ||
+      values.OAUTH_CALLBACK_URL ||
+      values.OAUTH_SCOPES ||
+      values.OAUTH_EMAIL_CLAIM ||
+      values.OAUTH_CLIENT_AUTH_METHOD ||
+      values.OAUTH_DEBUG_LOG_PROFILE,
+    );
+    const mode = values.RIVET_WEB_APPS_AUTH_MODE ??
+      (values.OAUTH_PROVIDER === 'dummy' || hasExternalProviderValues ? 'oauth' : 'ui-gate');
+
+    if (values.RIVET_WEB_APPS_AUTH_MODE != null || hasOAuthValues) {
+      await writeWebAppAuthSettings({
+        mode,
+        provider: values.OAUTH_PROVIDER === 'dummy' || (mode === 'oauth' && !hasExternalProviderValues) ? 'dummy' : 'external',
+        dummyEmail: values.OAUTH_DUMMY_EMAIL,
+        dummyAllowNonLocalhost: values.OAUTH_DUMMY_ALLOW_NON_LOCALHOST,
+        authorizeUrl: values.OAUTH_AUTHORIZE_URL,
+        tokenUrl: values.OAUTH_TOKEN_URL,
+        userUrl: values.OAUTH_USER_URL,
+        clientId: values.OAUTH_CLIENT_ID,
+        clientSecret: values.OAUTH_CLIENT_SECRET,
+        callbackUrl: values.OAUTH_CALLBACK_URL,
+        scopes: values.OAUTH_SCOPES,
+        emailClaim: values.OAUTH_EMAIL_CLAIM,
+        sessionSecret: values.OAUTH_SESSION_SECRET ?? (mode === 'oauth' && !hasExternalProviderValues ? 'session-secret' : undefined),
+        sessionTtlSeconds: values.OAUTH_SESSION_TTL_SECONDS,
+        clientAuthMethod: values.OAUTH_CLIENT_AUTH_METHOD,
+        debugLogProfile: values.OAUTH_DEBUG_LOG_PROFILE,
+      });
     }
 
     await run();
   } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
     for (const [key, value] of previous) {
       if (value == null) {
         delete process.env[key];
@@ -165,22 +205,17 @@ test('web app OAuth redirect stores state and sanitizes return targets', async (
 });
 
 test('web app OAuth provider URLs must be HTTPS unless they target localhost', async () => {
-  await withEnv({
-    OAUTH_AUTHORIZE_URL: 'http://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_SESSION_SECRET: 'session-secret',
-  }, () => {
-    assert.throws(
-      () => createWebAppOAuthAuthorizationRedirect(
-        createMockRequest({ host: 'rivet.example.test' }) as any,
-        '/apps/my-tool',
-      ),
-      /OAUTH_AUTHORIZE_URL must use https unless it targets localhost/,
-    );
-  });
+  await assert.rejects(
+    withEnv({
+      OAUTH_AUTHORIZE_URL: 'http://oauth.example.test/authorize',
+      OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+      OAUTH_USER_URL: 'https://oauth.example.test/profile',
+      OAUTH_CLIENT_ID: 'client-id',
+      OAUTH_CLIENT_SECRET: 'client-secret',
+      OAUTH_SESSION_SECRET: 'session-secret',
+    }, () => {}),
+    /Authorization URL must use https unless it targets localhost/,
+  );
 
   await withEnv({
     OAUTH_AUTHORIZE_URL: 'http://localhost:9080/authorize',
@@ -391,6 +426,172 @@ test('web app OAuth callback exchanges code, sets session cookie, and supports a
   });
 });
 
+test('web app OAuth sessions are rejected after OAuth settings change', async () => {
+  await withEnv({
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    OAUTH_SESSION_SECRET: 'session-secret',
+  }, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://oauth.example.test/token') {
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://oauth.example.test/profile') {
+        return new Response(JSON.stringify({ email: 'USER@example.com' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      await withOAuthCallbackServer(async (baseUrl) => {
+        const redirect = createWebAppOAuthAuthorizationRedirect(
+          createMockRequest({ host: '127.0.0.1', 'x-forwarded-proto': 'http' }) as any,
+          '/apps/my-tool',
+        );
+        const state = new URL(redirect.location).searchParams.get('state');
+        assert.ok(state);
+        const stateCookie = getCookieValue(redirect.cookies.join('; '), 'rivet_web_app_oauth_state');
+
+        const callbackResponse = await originalFetch(`${baseUrl}/auth/callback?code=abc&state=${encodeURIComponent(state)}`, {
+          headers: { cookie: `rivet_web_app_oauth_state=${stateCookie}` },
+          redirect: 'manual',
+        });
+        const sessionCookie = getCookieValue(
+          callbackResponse.headers.get('set-cookie') ?? '',
+          'rivet_web_app_oauth_session',
+        );
+        const sessionRequest = createMockRequest({
+          cookie: `rivet_web_app_oauth_session=${sessionCookie}`,
+        }) as any;
+
+        assert.equal(readWebAppOAuthSession(sessionRequest)?.email, 'user@example.com');
+
+        await writeWebAppAuthSettings({
+          mode: 'oauth',
+          provider: 'external',
+          authorizeUrl: 'https://oauth.example.test/authorize',
+          tokenUrl: 'https://oauth.example.test/token',
+          userUrl: 'https://oauth.example.test/profile',
+          clientId: 'client-id',
+          clientSecret: 'client-secret',
+          callbackUrl: 'http://127.0.0.1/apps/auth/callback',
+          scopes: 'email profile',
+          sessionSecret: 'session-secret',
+        });
+
+        assert.equal(readWebAppOAuthSession(sessionRequest), null);
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('web app OAuth sessions are rejected after client secret rotation', async () => {
+  await withEnv({
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    OAUTH_SESSION_SECRET: 'stable-session-secret',
+  }, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://oauth.example.test/token') {
+        return new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://oauth.example.test/profile') {
+        return new Response(JSON.stringify({ email: 'USER@example.com' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      await withOAuthCallbackServer(async (baseUrl) => {
+        const redirect = createWebAppOAuthAuthorizationRedirect(
+          createMockRequest({ host: '127.0.0.1', 'x-forwarded-proto': 'http' }) as any,
+          '/apps/my-tool',
+        );
+        const state = new URL(redirect.location).searchParams.get('state');
+        assert.ok(state);
+        const stateCookie = getCookieValue(redirect.cookies.join('; '), 'rivet_web_app_oauth_state');
+
+        const callbackResponse = await originalFetch(`${baseUrl}/auth/callback?code=abc&state=${encodeURIComponent(state)}`, {
+          headers: { cookie: `rivet_web_app_oauth_state=${stateCookie}` },
+          redirect: 'manual',
+        });
+        const sessionCookie = getCookieValue(
+          callbackResponse.headers.get('set-cookie') ?? '',
+          'rivet_web_app_oauth_session',
+        );
+        const sessionRequest = createMockRequest({
+          cookie: `rivet_web_app_oauth_session=${sessionCookie}`,
+        }) as any;
+
+        assert.equal(readWebAppOAuthSession(sessionRequest)?.email, 'user@example.com');
+
+        await writeWebAppAuthSettings({
+          mode: 'oauth',
+          provider: 'external',
+          authorizeUrl: 'https://oauth.example.test/authorize',
+          tokenUrl: 'https://oauth.example.test/token',
+          userUrl: 'https://oauth.example.test/profile',
+          clientId: 'client-id',
+          clientSecret: 'rotated-client-secret',
+          callbackUrl: 'http://127.0.0.1/apps/auth/callback',
+          sessionSecret: 'stable-session-secret',
+        });
+
+        assert.equal(readWebAppOAuthSession(sessionRequest), null);
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('web app OAuth sessions without a settings version are rejected', async () => {
+  await withEnv({
+    OAUTH_PROVIDER: 'dummy',
+    OAUTH_SESSION_SECRET: 'session-secret',
+  }, () => {
+    const payload = Buffer.from(JSON.stringify({
+      email: 'user@example.com',
+      expiresAt: Date.now() + 60_000,
+    }), 'utf8').toString('base64url');
+    const signature = createHmac('sha256', 'session-secret').update(payload).digest('base64url');
+
+    assert.equal(readWebAppOAuthSession(createMockRequest({
+      cookie: `rivet_web_app_oauth_session=${payload}.${signature}`,
+    }) as any), null);
+  });
+});
+
 test('web app OAuth callback returns to the original app when provider errors without state', async () => {
   await withEnv({
     OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
@@ -416,6 +617,114 @@ test('web app OAuth callback returns to the original app when provider errors wi
       assert.equal(callbackResponse.status, 303);
       assert.equal(callbackResponse.headers.get('location'), '/apps/my-tool/?x=1&auth_error=oauth_denied#top');
     });
+  });
+});
+
+test('web app OAuth callback treats stale state as invalid when OAuth settings were cleared', async () => {
+  await withEnv({}, async () => {
+    await withOAuthCallbackServer(async (baseUrl) => {
+      const callbackResponse = await fetch(`${baseUrl}/auth/callback?code=abc&state=stale.payload`, {
+        headers: { cookie: 'rivet_web_app_oauth_state=stale.cookie' },
+        redirect: 'manual',
+      });
+
+      assert.equal(callbackResponse.status, 303);
+      assert.equal(callbackResponse.headers.get('location'), '/?auth_error=oauth_state');
+      assert.match(callbackResponse.headers.get('set-cookie') ?? '', /rivet_web_app_oauth_state=;/);
+    });
+  });
+});
+
+test('web app OAuth callback does not create a session after OAuth is disabled', async () => {
+  await withEnv({
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    OAUTH_SESSION_SECRET: 'session-secret',
+  }, async () => {
+    await withOAuthCallbackServer(async (baseUrl) => {
+      const redirect = createWebAppOAuthAuthorizationRedirect(
+        createMockRequest({ host: '127.0.0.1', 'x-forwarded-proto': 'http' }) as any,
+        '/apps/my-tool',
+      );
+      const state = new URL(redirect.location).searchParams.get('state');
+      assert.ok(state);
+      const stateCookie = getCookieValue(redirect.cookies.join('; '), 'rivet_web_app_oauth_state');
+
+      await writeWebAppAuthSettings({ mode: 'ui-gate' });
+
+      const callbackResponse = await fetch(`${baseUrl}/auth/callback?code=abc&state=${encodeURIComponent(state)}`, {
+        headers: { cookie: `rivet_web_app_oauth_state=${stateCookie}` },
+        redirect: 'manual',
+      });
+
+      assert.equal(callbackResponse.status, 303);
+      assert.equal(callbackResponse.headers.get('location'), '/apps/my-tool?auth_error=oauth_state');
+      const setCookie = callbackResponse.headers.get('set-cookie') ?? '';
+      assert.match(setCookie, /rivet_web_app_oauth_state=;/);
+      assert.doesNotMatch(setCookie, /rivet_web_app_oauth_session=/);
+    });
+  });
+});
+
+test('web app OAuth callback does not create a session after OAuth settings change during sign-in', async () => {
+  await withEnv({
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    OAUTH_SESSION_SECRET: 'session-secret',
+  }, async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchWasCalled = false;
+    globalThis.fetch = (async () => {
+      fetchWasCalled = true;
+      return new Response('{}', { status: 500 });
+    }) as typeof fetch;
+
+    try {
+      await withOAuthCallbackServer(async (baseUrl) => {
+        const redirect = createWebAppOAuthAuthorizationRedirect(
+          createMockRequest({ host: '127.0.0.1', 'x-forwarded-proto': 'http' }) as any,
+          '/apps/my-tool',
+        );
+        const state = new URL(redirect.location).searchParams.get('state');
+        assert.ok(state);
+        const stateCookie = getCookieValue(redirect.cookies.join('; '), 'rivet_web_app_oauth_state');
+
+        await writeWebAppAuthSettings({
+          mode: 'oauth',
+          provider: 'external',
+          authorizeUrl: 'https://oauth.example.test/authorize',
+          tokenUrl: 'https://oauth.example.test/token',
+          userUrl: 'https://oauth.example.test/profile',
+          clientId: 'client-id',
+          clientSecret: 'client-secret',
+          callbackUrl: 'http://127.0.0.1/apps/auth/callback',
+          scopes: 'email profile',
+          sessionSecret: 'session-secret',
+        });
+
+        const callbackResponse = await originalFetch(`${baseUrl}/auth/callback?code=abc&state=${encodeURIComponent(state)}`, {
+          headers: { cookie: `rivet_web_app_oauth_state=${stateCookie}` },
+          redirect: 'manual',
+        });
+
+        assert.equal(callbackResponse.status, 303);
+        assert.equal(callbackResponse.headers.get('location'), '/apps/my-tool?auth_error=oauth_state');
+        const setCookie = callbackResponse.headers.get('set-cookie') ?? '';
+        assert.match(setCookie, /rivet_web_app_oauth_state=;/);
+        assert.doesNotMatch(setCookie, /rivet_web_app_oauth_session=/);
+        assert.equal(fetchWasCalled, false);
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

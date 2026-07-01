@@ -7,9 +7,13 @@ import { createWorkflowTestRoots, resetWorkflowTestRoots } from './workflow-fixt
 
 export async function createFilesystemWorkflowSuiteHarness() {
   const roots = await createWorkflowTestRoots('rivet-workflows-');
-  process.env.RIVET_WORKFLOWS_ROOT = roots.workflowsRoot;
-  process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = roots.recordingsRoot;
-  process.env.RIVET_APP_DATA_ROOT = roots.appDataRoot;
+  function applyRootEnv() {
+    process.env.RIVET_WORKFLOWS_ROOT = roots.workflowsRoot;
+    process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = roots.recordingsRoot;
+    process.env.RIVET_APP_DATA_ROOT = roots.appDataRoot;
+  }
+
+  applyRootEnv();
 
   const workflowMutations = await import('../../routes/workflows/workflow-mutations.js');
   const workflowQuery = await import('../../routes/workflows/workflow-query.js');
@@ -38,6 +42,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
   });
 
   async function resetWorkflowsRoot() {
+    applyRootEnv();
     filesystemExecutionCache.resetFilesystemExecutionCacheForTests();
     await workflowRecordings.resetWorkflowRecordingStorageForTests();
     await resetWorkflowTestRoots({

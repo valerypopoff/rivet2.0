@@ -34,6 +34,7 @@ interface WorkflowLibraryPanelProps {
   contentVisible: boolean;
   onToggleCollapse: () => void;
   routeConfig: HostedRouteConfig;
+  onRouteConfigChange?: (config: HostedRouteConfig) => void;
 }
 
 const SidebarOpenIcon: FC = () => (
@@ -68,6 +69,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   contentVisible,
   onToggleCollapse,
   routeConfig,
+  onRouteConfigChange,
 }) => {
   const controller = useWorkflowLibraryController({
     onOpenProject,
@@ -268,7 +270,11 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <WorkflowLibraryContextMenus controller={controller} />
-        <WorkflowLibraryModals controller={controller} routeConfig={routeConfig} />
+        <WorkflowLibraryModals
+          controller={controller}
+          routeConfig={routeConfig}
+          onRouteConfigChange={onRouteConfigChange}
+        />
       </div>
 
       {collapsed ? (

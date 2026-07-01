@@ -4,6 +4,8 @@ import type {
   NodeExecutorProxySettingsDraft,
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
+  WebAppAuthSettings,
+  WebAppAuthSettingsDraft,
 } from '../../shared/app-settings-types';
 import { parseJsonResponse } from './apiRequest';
 
@@ -48,4 +50,22 @@ export async function saveRunRecordingsSettings(
     body: JSON.stringify(settings),
   });
   return appSettingsJsonResponse<RunRecordingsSettings>(response);
+}
+
+export async function fetchWebAppAuthSettings(): Promise<WebAppAuthSettings> {
+  const response = await fetch(`${API}/web-app-auth`, {
+    cache: 'no-store',
+  });
+  return appSettingsJsonResponse<WebAppAuthSettings>(response);
+}
+
+export async function saveWebAppAuthSettings(
+  settings: WebAppAuthSettingsDraft,
+): Promise<WebAppAuthSettings> {
+  const response = await fetch(`${API}/web-app-auth`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return appSettingsJsonResponse<WebAppAuthSettings>(response);
 }

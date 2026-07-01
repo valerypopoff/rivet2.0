@@ -385,6 +385,7 @@ export const DashboardPage: FC = () => {
           contentVisible={sidebarContentVisible}
           onToggleCollapse={handleToggleSidebar}
           routeConfig={routeConfig}
+          onRouteConfigChange={setRouteConfig}
         />
       </aside>
       {!sidebarCollapsed || sidebarResizing ? (

@@ -77,7 +77,7 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.match(renderedChart, /name: RIVET_API_UPSTREAM_HOST[\s\S]*svc\.cluster\.local/);
   assert.match(renderedChart, /name: RIVET_EXECUTION_UPSTREAM_HOST[\s\S]*svc\.cluster\.local/);
   assert.match(renderedChart, /name: RIVET_EXECUTOR_UPSTREAM_HOST[\s\S]*svc\.cluster\.local/);
-  assert.match(renderedChart, /name: RIVET_WEB_APPS_AUTH_MODE\s*\n\s*value: "ui-gate"/);
+  assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
 
 test('chart validation keeps the supported managed singleton control-plane boundaries', () => {
@@ -114,7 +114,7 @@ test('local Kubernetes overlay keeps the backend singleton while scaling endpoin
   assert.match(localOverlay, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:\s*"true"/);
   assert.match(localOverlay, /RIVET_REQUIRE_WORKFLOW_KEY:\s*"false"/);
   assert.match(localOverlay, /RIVET_REQUIRE_UI_GATE_KEY:\s*"false"/);
-  assert.match(localOverlay, /RIVET_WEB_APPS_AUTH_MODE:\s*ui-gate/);
+  assert.doesNotMatch(localOverlay, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
 
 test('local Kubernetes launcher builds Rivet-dependent images from the filtered Rivet source context', () => {

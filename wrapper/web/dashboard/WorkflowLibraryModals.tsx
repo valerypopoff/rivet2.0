@@ -26,7 +26,8 @@ function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectMo
 export const WorkflowLibraryModals: FC<{
   controller: WorkflowLibraryController;
   routeConfig: HostedRouteConfig;
-}> = ({ controller, routeConfig }) => {
+  onRouteConfigChange?: (config: HostedRouteConfig) => void;
+}> = ({ controller, routeConfig, onRouteConfigChange }) => {
   const {
     settingsModalOpen,
     settingsModalProject,
@@ -96,6 +97,7 @@ export const WorkflowLibraryModals: FC<{
         isOpen={appSettingsOpen}
         onClose={() => setAppSettingsOpen(false)}
         routeConfig={routeConfig}
+        onRouteConfigChange={onRouteConfigChange}
       />
       <AboutModal
         isOpen={aboutOpen}

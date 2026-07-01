@@ -108,7 +108,7 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
   assert.match(valuesYaml, /RIVET_LATEST_WEB_APPS_BASE_PATH: "\/apps-latest"/);
   assert.match(valuesYaml, /RIVET_REQUIRE_WORKFLOW_KEY: "false"/);
   assert.match(valuesYaml, /RIVET_REQUIRE_UI_GATE_KEY: "false"/);
-  assert.match(valuesYaml, /RIVET_WEB_APPS_AUTH_MODE: "ui-gate"/);
+  assert.doesNotMatch(valuesYaml, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 
   assert.match(secretManifest, /kind: Secret/);
   assert.match(secretManifest, /name: rivet-auth/);

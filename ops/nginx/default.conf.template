@@ -60,17 +60,6 @@ map "$rivet_ui_gate_enabled:$rivet_ui_gate_has_key:$rivet_ui_host_is_token_free:
     "1:1:1:1" allow;
 }
 
-map "${RIVET_WEB_APPS_AUTH_MODE}" $rivet_web_apps_use_ui_gate {
-    default 1;
-    "oauth" 0;
-    "none" 0;
-}
-
-map "$rivet_web_apps_use_ui_gate:$rivet_ui_gate_result" $rivet_web_apps_gate_result {
-    default allow;
-    "1:deny" deny;
-}
-
 server {
     listen 80;
     server_name _;
@@ -162,10 +151,6 @@ server {
     }
 
     location ${RIVET_WEB_APPS_BASE_PATH}/ {
-        if ($rivet_web_apps_gate_result = deny) {
-            return 401;
-        }
-
         proxy_pass $api_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
@@ -192,10 +177,6 @@ server {
     }
 
     location ${RIVET_LATEST_WEB_APPS_BASE_PATH}/ {
-        if ($rivet_web_apps_gate_result = deny) {
-            return 401;
-        }
-
         proxy_pass $api_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};

@@ -194,7 +194,6 @@ export function buildKubernetesLauncherConfig(env) {
       requireWorkflowKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_WORKFLOW_KEY'), false),
       requireUiGateKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
       trustIncomingForwardedHeaders: parseBoolean(readEnv(env, 'RIVET_TRUST_INCOMING_FORWARDED_HEADERS'), false),
-      webAppsAuthMode: readEnv(env, 'RIVET_WEB_APPS_AUTH_MODE') ?? 'ui-gate',
     },
   };
 }
@@ -263,7 +262,6 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  RIVET_REQUIRE_WORKFLOW_KEY: ${yamlString(String(config.routeConfig.requireWorkflowKey))}`,
     `  RIVET_REQUIRE_UI_GATE_KEY: ${yamlString(String(config.routeConfig.requireUiGateKey))}`,
     `  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: ${yamlString(String(config.routeConfig.trustIncomingForwardedHeaders))}`,
-    `  RIVET_WEB_APPS_AUTH_MODE: ${yamlString(config.routeConfig.webAppsAuthMode)}`,
     '',
   ].join('\n');
 }

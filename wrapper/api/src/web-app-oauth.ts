@@ -5,6 +5,11 @@ import { RIVET_WEB_APPS_BASE_PATH } from './workflowEndpointPaths.js';
 import { createHttpError } from './utils/httpError.js';
 import { addUiAuthErrorToReturnTo, sanitizeUiAuthReturnTo } from './routes/ui-auth.js';
 import { isTrustedProxyRequest } from './auth.js';
+import {
+  readWebAppAuthSettingsSync,
+  requireSecureOAuthUrl,
+} from './web-app-auth-settings.js';
+import type { WebAppAuthMode } from '../../shared/app-settings-types.js';
 
 const OAUTH_STATE_COOKIE_NAME = 'rivet_web_app_oauth_state';
 const OAUTH_SESSION_COOKIE_NAME = 'rivet_web_app_oauth_session';
@@ -12,11 +17,10 @@ const DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60;
 const STATE_TTL_SECONDS = 10 * 60;
 const DUMMY_OAUTH_CODE_PREFIX = 'dummy:';
 
-export type WebAppAuthMode = 'ui-gate' | 'oauth' | 'none';
-
 export type WebAppOAuthSession = {
   email: string;
   expiresAt: number;
+  settingsVersion: string;
 };
 
 type SignedPayload = {
@@ -27,11 +31,13 @@ type SignedPayload = {
 type OAuthStatePayload = SignedPayload & {
   nonce: string;
   returnTo: string;
+  settingsVersion: string;
 };
 
 type OAuthStateCookiePayload = SignedPayload & {
   nonce: string;
   returnTo?: string;
+  settingsVersion: string;
 };
 
 type OAuthConfig = {
@@ -49,67 +55,40 @@ type OAuthConfig = {
   scopes: string;
 };
 
-function getEnvString(name: string): string {
-  return process.env[name]?.trim() ?? '';
-}
-
-function isEnvFlagEnabled(name: string): boolean {
-  const value = getEnvString(name).toLowerCase();
-  return value === '1' || value === 'true' || value === 'yes';
-}
-
 function isDummyOAuthProvider(): boolean {
-  return getEnvString('OAUTH_PROVIDER').toLowerCase() === 'dummy';
-}
-
-function isLocalhostUrl(url: URL): boolean {
-  return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
-}
-
-function requireSecureOAuthUrl(name: string, value: string): void {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw createHttpError(500, `${name} must be a valid URL`);
-  }
-
-  if (url.protocol === 'https:' || (url.protocol === 'http:' && isLocalhostUrl(url))) {
-    return;
-  }
-
-  throw createHttpError(500, `${name} must use https unless it targets localhost`);
+  const settings = readWebAppAuthSettingsSync();
+  return settings.mode === 'oauth' && settings.provider === 'dummy';
 }
 
 export function getWebAppAuthMode(): WebAppAuthMode {
-  const value = getEnvString('RIVET_WEB_APPS_AUTH_MODE').toLowerCase();
-  if (value === 'oauth' || value === 'none') {
-    return value;
-  }
-
-  return 'ui-gate';
+  return readWebAppAuthSettingsSync().mode;
 }
 
 function getRequiredOauthConfig(): OAuthConfig {
-  if (isDummyOAuthProvider()) {
+  const settings = readWebAppAuthSettingsSync();
+  if (settings.mode !== 'oauth') {
+    throw createHttpError(401, 'OAuth web-app auth is not enabled');
+  }
+
+  if (settings.provider === 'dummy') {
     return {
       provider: 'dummy',
-      email: getEnvString('OAUTH_DUMMY_EMAIL') || 'local@example.test',
+      email: settings.dummyEmail || 'local@example.test',
     };
   }
 
-  const authorizeUrl = getEnvString('OAUTH_AUTHORIZE_URL');
-  const tokenUrl = getEnvString('OAUTH_TOKEN_URL');
-  const userUrl = getEnvString('OAUTH_USER_URL');
-  const clientId = getEnvString('OAUTH_CLIENT_ID');
-  const clientSecret = getEnvString('OAUTH_CLIENT_SECRET');
+  const authorizeUrl = settings.authorizeUrl;
+  const tokenUrl = settings.tokenUrl;
+  const userUrl = settings.userUrl;
+  const clientId = settings.clientId;
+  const clientSecret = settings.clientSecret;
 
   if (!authorizeUrl || !tokenUrl || !userUrl || !clientId || !clientSecret) {
     throw createHttpError(500, 'OAuth is enabled but OAuth provider settings are incomplete');
   }
-  requireSecureOAuthUrl('OAUTH_AUTHORIZE_URL', authorizeUrl);
-  requireSecureOAuthUrl('OAUTH_TOKEN_URL', tokenUrl);
-  requireSecureOAuthUrl('OAUTH_USER_URL', userUrl);
+  requireSecureOAuthUrl('Authorization URL', authorizeUrl);
+  requireSecureOAuthUrl('Token URL', tokenUrl);
+  requireSecureOAuthUrl('Profile URL', userUrl);
 
   return {
     authorizeUrl,
@@ -118,14 +97,15 @@ function getRequiredOauthConfig(): OAuthConfig {
     clientId,
     clientSecret,
     provider: 'external',
-    clientAuthMethod: getEnvString('OAUTH_CLIENT_AUTH_METHOD').toLowerCase() === 'basic' ? 'basic' : 'body',
-    emailClaim: getEnvString('OAUTH_EMAIL_CLAIM') || 'email',
-    scopes: getEnvString('OAUTH_SCOPES') || 'profile email',
+    clientAuthMethod: settings.clientAuthMethod,
+    emailClaim: settings.emailClaim || 'email',
+    scopes: settings.scopes || 'email',
   };
 }
 
 function getSigningSecret(): string {
-  const secret = getEnvString('OAUTH_SESSION_SECRET') || getEnvString('OAUTH_CLIENT_SECRET') || getEnvString('RIVET_KEY');
+  const settings = readWebAppAuthSettingsSync();
+  const secret = settings.sessionSecret || settings.clientSecret;
   if (!secret) {
     throw createHttpError(500, 'OAuth is enabled but no OAuth session signing secret is configured');
   }
@@ -161,7 +141,13 @@ function readSignedPayload<T extends SignedPayload>(value: string | null): T | n
 
   const payload = value.slice(0, separatorIndex);
   const signature = value.slice(separatorIndex + 1);
-  const expectedSignature = createHmac('sha256', getSigningSecret()).update(payload).digest('base64url');
+  let expectedSignature: string;
+  try {
+    expectedSignature = createHmac('sha256', getSigningSecret()).update(payload).digest('base64url');
+  } catch {
+    return null;
+  }
+
   if (!safeEqual(signature, expectedSignature)) {
     return null;
   }
@@ -172,6 +158,33 @@ function readSignedPayload<T extends SignedPayload>(value: string | null): T | n
   } catch {
     return null;
   }
+}
+
+function getOAuthSettingsSessionVersion(): string {
+  const settings = readWebAppAuthSettingsSync();
+  const signingSecret = getSigningSecret();
+  const clientSecretFingerprint = settings.clientSecret
+    ? createHmac('sha256', signingSecret).update(settings.clientSecret).digest('base64url')
+    : '';
+
+  return createHmac('sha256', signingSecret)
+    .update(JSON.stringify({
+      mode: settings.mode,
+      provider: settings.provider,
+      dummyEmail: settings.dummyEmail,
+      dummyAllowNonLocalhost: settings.dummyAllowNonLocalhost,
+      authorizeUrl: settings.authorizeUrl,
+      tokenUrl: settings.tokenUrl,
+      userUrl: settings.userUrl,
+      clientId: settings.clientId,
+      clientSecretFingerprint,
+      callbackUrl: settings.callbackUrl,
+      scopes: settings.scopes,
+      emailClaim: settings.emailClaim,
+      sessionTtlSeconds: settings.sessionTtlSeconds,
+      clientAuthMethod: settings.clientAuthMethod,
+    }))
+    .digest('base64url');
 }
 
 function readCookie(req: Request, name: string): string | null {
@@ -246,9 +259,9 @@ function clearCookie(name: string, req: Request): string {
 }
 
 function getCallbackUrl(req: Request): string {
-  const configuredCallbackUrl = getEnvString('OAUTH_CALLBACK_URL');
+  const configuredCallbackUrl = readWebAppAuthSettingsSync().callbackUrl;
   if (configuredCallbackUrl) {
-    requireSecureOAuthUrl('OAUTH_CALLBACK_URL', configuredCallbackUrl);
+    requireSecureOAuthUrl('Callback URL', configuredCallbackUrl);
     return configuredCallbackUrl;
   }
 
@@ -263,14 +276,17 @@ export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: s
   const nonce = randomBytes(24).toString('base64url');
   const sanitizedReturnTo = sanitizeUiAuthReturnTo(returnTo);
   const expiresAt = Date.now() + STATE_TTL_SECONDS * 1000;
+  const settingsVersion = getOAuthSettingsSessionVersion();
   const state = signPayload({
     nonce,
     returnTo: sanitizedReturnTo,
+    settingsVersion,
     expiresAt,
   } satisfies OAuthStatePayload);
   const stateCookie = signPayload({
     nonce,
     returnTo: sanitizedReturnTo,
+    settingsVersion,
     expiresAt,
   } satisfies OAuthStateCookiePayload);
 
@@ -310,8 +326,19 @@ export function readWebAppOAuthSession(req: Request): WebAppOAuthSession | null 
     return null;
   }
 
+  let expectedSettingsVersion: string;
+  try {
+    expectedSettingsVersion = getOAuthSettingsSessionVersion();
+  } catch {
+    return null;
+  }
+
+  if (payload.settingsVersion !== expectedSettingsVersion) {
+    return null;
+  }
+
   const email = payload.email.trim().toLowerCase();
-  return email ? { email, expiresAt: payload.expiresAt } : null;
+  return email ? { email, expiresAt: payload.expiresAt, settingsVersion: payload.settingsVersion } : null;
 }
 
 export function isWebAppOAuthSessionAllowed(
@@ -409,7 +436,7 @@ async function fetchOAuthUserEmail(accessToken: string): Promise<string> {
     },
   });
   const profile = await readJsonResponse(response, 'profile request');
-  if (isEnvFlagEnabled('OAUTH_DEBUG_LOG_PROFILE')) {
+  if (readWebAppAuthSettingsSync().debugLogProfile) {
     console.warn('[web-app-oauth] OAuth profile response:', JSON.stringify(profile));
   }
 
@@ -422,6 +449,10 @@ async function fetchOAuthUserEmail(accessToken: string): Promise<string> {
 }
 
 function getOAuthCallbackFailureCode(error: unknown): string {
+  if (error instanceof Error && error.message.includes('not enabled')) {
+    return 'oauth_state';
+  }
+
   if (error instanceof Error && error.message.includes('profile did not include')) {
     return 'oauth_profile';
   }
@@ -460,7 +491,7 @@ function isDummyOAuthAllowedForRequest(req: Request): boolean {
     return false;
   }
 
-  if (isEnvFlagEnabled('OAUTH_DUMMY_ALLOW_NON_LOCALHOST')) {
+  if (readWebAppAuthSettingsSync().dummyAllowNonLocalhost) {
     return true;
   }
 
@@ -551,7 +582,22 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
       return;
     }
 
-    if (!code || !statePayload || !stateCookie || statePayload.nonce !== stateCookie.nonce) {
+    let currentSettingsVersion: string;
+    try {
+      currentSettingsVersion = getOAuthSettingsSessionVersion();
+    } catch {
+      res.redirect(303, addUiAuthErrorToReturnTo(fallbackReturnTo, 'oauth_state'));
+      return;
+    }
+
+    if (
+      !code
+      || !statePayload
+      || !stateCookie
+      || statePayload.nonce !== stateCookie.nonce
+      || statePayload.settingsVersion !== stateCookie.settingsVersion
+      || statePayload.settingsVersion !== currentSettingsVersion
+    ) {
       res.redirect(303, addUiAuthErrorToReturnTo(fallbackReturnTo, 'oauth_state'));
       return;
     }
@@ -569,12 +615,13 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
       return;
     }
 
-    const ttlSeconds = Math.max(60, Number.parseInt(getEnvString('OAUTH_SESSION_TTL_SECONDS'), 10) || DEFAULT_SESSION_TTL_SECONDS);
+    const ttlSeconds = Math.max(60, readWebAppAuthSettingsSync().sessionTtlSeconds || DEFAULT_SESSION_TTL_SECONDS);
     const sessionCookie = createCookie(
       OAUTH_SESSION_COOKIE_NAME,
       signPayload({
         email,
         expiresAt: Date.now() + ttlSeconds * 1000,
+        settingsVersion: getOAuthSettingsSessionVersion(),
       }),
       req,
       ttlSeconds,
