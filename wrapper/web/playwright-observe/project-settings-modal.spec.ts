@@ -27,6 +27,8 @@ type ProjectSettingsFixtureProject = WorkflowProjectItem & {
 };
 
 const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
+  executorWsUrl: 'ws://127.0.0.1:8081/ws/executor/internal',
+  remoteDebuggerDefaultWs: 'ws://127.0.0.1:8081/ws/latest-debugger',
   publishedWorkflowsBasePath: '/workflows',
   latestWorkflowsBasePath: '/workflows-latest',
   publishedAppsBasePath: '/apps',

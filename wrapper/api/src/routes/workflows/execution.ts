@@ -9,7 +9,7 @@ import {
   type UiGraph,
 } from '@valerypopoff/rivet2-node';
 
-import { getLatestWorkflowRemoteDebugger, isLatestWorkflowRemoteDebuggerEnabled } from '../../latestWorkflowRemoteDebugger.js';
+import { isLatestWorkflowRemoteDebuggerEnabled, maybeGetLatestWorkflowRemoteDebugger } from '../../latestWorkflowRemoteDebugger.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
 import { getLatestWebAppsBasePath, getPublishedWebAppsBasePath } from '../../workflowEndpointPaths.js';
@@ -786,7 +786,7 @@ function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
 
 function getLatestRemoteDebuggerForExecution(options?: { enableRemoteDebugger?: boolean }) {
   return options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
-    ? getLatestWorkflowRemoteDebugger()
+    ? maybeGetLatestWorkflowRemoteDebugger()
     : undefined;
 }
 

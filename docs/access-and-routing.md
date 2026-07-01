@@ -57,8 +57,8 @@ Important local-Docker wiring note:
 The browser transport seams now match the backend route split more explicitly:
 
 - `/?editor` prefers `/ws/executor/internal` for the hosted executor websocket and keeps `/ws/executor` only for upstream-compatible clients
-- the editor mounts through Rivet 2.0's `RivetAppHost` and passes `/ws/executor/internal` as `executor.internalExecutorUrl`
-- upstream Rivet owns the executor session, upload, run, abort, pause/resume, internal-executor UI classification, and request-scoped websocket event handling; the wrapper only passes `/ws/executor/internal` through `executor.internalExecutorUrl`
+- the editor loads `/api/config`, mounts through Rivet 2.0's `RivetAppHost`, and passes the runtime-configured executor websocket as `executor.internalExecutorUrl`
+- upstream Rivet owns the executor session, upload, run, abort, pause/resume, internal-executor UI classification, and request-scoped websocket event handling; the wrapper only passes the configured executor websocket URL through `executor.internalExecutorUrl`
 - wrapper code still owns dashboard/editor `window.postMessage` commands and hosted project IO
 
 Those executor websocket responsibilities are separate from the dashboard/editor `window.postMessage` bridge. The bridge coordinates project-open/save/delete/path-move behavior between browsing contexts; the executor session talks to executor routes.
@@ -441,13 +441,13 @@ Important limitation:
 - API-hosted published/latest execution does not currently register package plugins from local app-data
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
-- App Settings -> `Storage`, `Run recordings`, `Web apps`, `Workflow endpoints`, and `Node executor proxy` write settings files under shared app data; those values are not read from `.env`, Vault dotenv, or legacy deployment variables in split execution pods
+- App Settings -> `Storage`, `Run recordings`, `Web apps`, `Workflow endpoints`, and `Node executor proxy` write settings files under shared app data; those values are not read from `.env`, Vault dotenv, or legacy deployment variables in split execution pods. Optional hosted executor/default-debugger websocket URL overrides also live under app data and are blank by default, which keeps the normal request-host-derived websocket URLs.
 
 ## Latest Debugger Model
 
-Latest remote debugging is opt-in and separate from the executor websocket:
+Latest remote debugging is enabled by default and separate from the executor websocket:
 
-- it is enabled only when `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true`
+- it is enabled unless `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER` is explicitly set to `false`, `0`, `no`, or `off`
 - it applies to latest workflow endpoint runs and latest web-app action runs under `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
 - published workflow endpoint runs and published web-app action runs never attach the remote debugger
 - the browser-facing websocket path is `/ws/latest-debugger`

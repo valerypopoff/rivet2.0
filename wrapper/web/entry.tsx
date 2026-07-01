@@ -5,6 +5,11 @@ await import('../../rivet/packages/app/src/host.css');
 await import('./hosted-editor.css');
 await initializeFeatureGates();
 
+const { loadHostedRuntimeConfig } = await import('../shared/hosted-env');
+await loadHostedRuntimeConfig().catch((error) => {
+  console.warn('Failed to load hosted runtime config; using bundled defaults.', error);
+});
+
 const isEditorFrame = new URLSearchParams(window.location.search).has('editor');
 
 const { default: ReactDOM } = await import('react-dom/client');

@@ -4,6 +4,8 @@ import type {
   NodeExecutorProxySettingsDraft,
   DeploymentStorageSettings,
   DeploymentStorageSettingsDraft,
+  ExecutorUrlOverrideSettings,
+  ExecutorUrlOverrideSettingsDraft,
   PublicRouteSettings,
   PublicRouteSettingsDraft,
   RunRecordingsSettings,
@@ -38,6 +40,24 @@ export async function saveNodeExecutorProxySettings(
     body: JSON.stringify(settings),
   });
   return appSettingsJsonResponse<NodeExecutorProxySettings>(response);
+}
+
+export async function fetchExecutorUrlOverrideSettings(): Promise<ExecutorUrlOverrideSettings> {
+  const response = await fetch(`${API}/executor-url-overrides`, {
+    cache: 'no-store',
+  });
+  return appSettingsJsonResponse<ExecutorUrlOverrideSettings>(response);
+}
+
+export async function saveExecutorUrlOverrideSettings(
+  settings: ExecutorUrlOverrideSettingsDraft,
+): Promise<ExecutorUrlOverrideSettings> {
+  const response = await fetch(`${API}/executor-url-overrides`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return appSettingsJsonResponse<ExecutorUrlOverrideSettings>(response);
 }
 
 export async function fetchRunRecordingsSettings(): Promise<RunRecordingsSettings> {

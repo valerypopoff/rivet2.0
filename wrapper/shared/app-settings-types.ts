@@ -16,6 +16,18 @@ export interface NodeExecutorProxySettingsDraft {
   noProxy?: unknown;
 }
 
+export interface ExecutorUrlOverrideSettings {
+  executorWsUrl: string;
+  remoteDebuggerDefaultWs: string;
+  updatedAt: string | null;
+  source: AppSettingsSource;
+}
+
+export interface ExecutorUrlOverrideSettingsDraft {
+  executorWsUrl?: unknown;
+  remoteDebuggerDefaultWs?: unknown;
+}
+
 export interface RunRecordingsSettings {
   maxPendingWrites: number;
   maxRunsPerEndpoint: number;

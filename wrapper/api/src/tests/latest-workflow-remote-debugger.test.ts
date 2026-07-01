@@ -54,7 +54,7 @@ process.env.RIVET_STORAGE_MODE = 'filesystem';
 process.env.RIVET_KEY = 'latest-debugger-test-key';
 process.env.RIVET_REQUIRE_WORKFLOW_KEY = 'false';
 process.env.RIVET_REQUIRE_UI_GATE_KEY = 'false';
-process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = 'false';
+delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
 process.env.RIVET_RECORDINGS_ENABLED = 'false';
 process.env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH = '/workflows';
 process.env.RIVET_LATEST_WORKFLOWS_BASE_PATH = '/workflows-latest';
@@ -67,6 +67,7 @@ const { getExpectedProxyAuthToken } = await import('../auth.js');
 const { createApiApp } = await import('../app.js');
 const {
   initializeLatestWorkflowRemoteDebugger,
+  isLatestWorkflowRemoteDebuggerEnabled,
   resetLatestWorkflowRemoteDebuggerForTests,
 } = await import('../latestWorkflowRemoteDebugger.js');
 const workflowFs = await import('../routes/workflows/fs-helpers.js');
@@ -90,7 +91,7 @@ function toWebSocketUrl(baseUrl: string): string {
 async function resetFilesystemState(): Promise<void> {
   filesystemExecutionCache.resetFilesystemExecutionCacheForTests();
   await resetLatestWorkflowRemoteDebuggerForTests();
-  process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = 'false';
+  delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
   await resetWorkflowTestRoots({ workflowsRoot, appDataRoot, runtimeLibrariesRoot });
   await workflowFs.ensureWorkflowsRoot();
 }
@@ -118,12 +119,18 @@ async function createPublishedWebApp(projectName: string, slug: string, appName:
 
 async function startApiServer(
   profile: ApiProfile,
-  options: { debuggerEnabled?: boolean } = {},
+  options: { debuggerEnabled?: boolean; debuggerEnvValue?: string } = {},
 ): Promise<{
   baseUrl: string;
   close: () => Promise<void>;
 }> {
-  process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = options.debuggerEnabled ? 'true' : 'false';
+  if (typeof options.debuggerEnvValue === 'string') {
+    process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = options.debuggerEnvValue;
+  } else if (typeof options.debuggerEnabled === 'boolean') {
+    process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = options.debuggerEnabled ? 'true' : 'false';
+  } else {
+    delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
+  }
 
   const app = createApiApp(profile);
   const server = http.createServer(app);
@@ -253,9 +260,24 @@ test.after(async () => {
   }
 });
 
+test('latest debugger defaults on unless explicitly disabled', () => {
+  delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
+  assert.equal(isLatestWorkflowRemoteDebuggerEnabled(), true);
+
+  for (const value of ['false', 'FALSE', '0', 'no', 'off']) {
+    process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = value;
+    assert.equal(isLatestWorkflowRemoteDebuggerEnabled(), false);
+  }
+
+  for (const value of ['', 'true', '1', 'yes', 'surprise']) {
+    process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER = value;
+    assert.equal(isLatestWorkflowRemoteDebuggerEnabled(), true);
+  }
+});
+
 test('latest debugger receives events for latest endpoint execution', async () => {
   await createPublishedWorkflow('Latest Debugger Fixture', 'latest-debugger-endpoint');
-  const server = await startApiServer('control', { debuggerEnabled: true });
+  const server = await startApiServer('control');
   let socket: WebSocket | null = null;
 
   try {
@@ -409,8 +431,21 @@ test('latest debugger websocket is unavailable when disabled', async () => {
   }
 });
 
+for (const disabledValue of ['false', '0', 'no', 'off']) {
+  test(`latest debugger websocket is unavailable when env is ${disabledValue}`, async () => {
+    const server = await startApiServer('control', { debuggerEnvValue: disabledValue });
+
+    try {
+      const failure = await expectDebuggerConnectionFailure(server.baseUrl);
+      assert.equal(failure.statusCode, 404);
+    } finally {
+      await server.close();
+    }
+  });
+}
+
 test('execution-only profile does not provide latest debugger', async () => {
-  const server = await startApiServer('execution', { debuggerEnabled: true });
+  const server = await startApiServer('execution');
 
   try {
     const failure = await expectDebuggerConnectionFailure(server.baseUrl);
@@ -421,7 +456,7 @@ test('execution-only profile does not provide latest debugger', async () => {
 });
 
 test('api config advertises latest debugger websocket only when supported', async () => {
-  const controlEnabled = await startApiServer('control', { debuggerEnabled: true });
+  const controlEnabled = await startApiServer('control');
   try {
     const response = await fetch(`${controlEnabled.baseUrl}/api/config`, {
       headers: trustedProxyHeaders(),
@@ -453,7 +488,7 @@ test('api config advertises latest debugger websocket only when supported', asyn
     await combinedDisabled.close();
   }
 
-  const execution = await startApiServer('execution', { debuggerEnabled: true });
+  const execution = await startApiServer('execution');
   try {
     const response = await fetch(`${execution.baseUrl}/api/config`, {
       headers: trustedProxyHeaders(),

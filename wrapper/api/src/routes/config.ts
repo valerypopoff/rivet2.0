@@ -10,6 +10,7 @@ import {
 } from '../workflowEndpointPaths.js';
 import { getWebAppAuthMode } from '../web-app-oauth.js';
 import { readDeploymentStorageRuntimeSettingsSync } from '../deployment-storage-settings.js';
+import { readExecutorUrlOverrideSettingsSync } from '../executor-url-override-settings.js';
 
 export const configRouter = Router();
 
@@ -33,12 +34,13 @@ configRouter.get('/config', (req, res) => {
   const publicOrigin = getPublicOrigin(req);
   const publicWsOrigin = toWebSocketOrigin(publicOrigin);
   const deploymentStorageSettings = readDeploymentStorageRuntimeSettingsSync();
+  const executorUrlOverrides = readExecutorUrlOverrideSettingsSync();
 
   res.json({
     hostedMode: true,
-    executorWsUrl: process.env.RIVET_EXECUTOR_WS_URL ?? `${publicWsOrigin}/ws/executor/internal`,
+    executorWsUrl: executorUrlOverrides.executorWsUrl || `${publicWsOrigin}/ws/executor/internal`,
     remoteDebuggerDefaultWs: isLatestWorkflowRemoteDebuggerEnabled()
-      ? (process.env.RIVET_REMOTE_DEBUGGER_DEFAULT_WS ?? `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`)
+      ? (executorUrlOverrides.remoteDebuggerDefaultWs || `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`)
       : '',
     apiBaseUrl: '/api',
     publishedWorkflowsBasePath: getPublishedWorkflowsBasePath(),

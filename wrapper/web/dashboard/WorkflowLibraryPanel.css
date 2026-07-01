@@ -1341,6 +1341,41 @@
   min-height: 360px;
 }
 
+.app-settings-layout {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  min-height: 360px;
+}
+
+.app-settings-sidebar {
+  min-width: 0;
+}
+
+.app-settings-tab-list {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  width: 100%;
+  gap: 4px;
+  padding: 5px;
+}
+
+.app-settings-nav-tab {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  text-align: left;
+}
+
+.app-settings-panel-region {
+  min-width: 0;
+}
+
 .app-settings-general-panel,
 .app-settings-storage-panel,
 .app-settings-proxy-panel,
@@ -1481,6 +1516,16 @@
 .app-settings-action-status {
   flex: 1 1 220px;
   min-width: 180px;
+}
+
+@media (max-width: 760px) {
+  .app-settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .app-settings-tab-list {
+    width: min(100%, 260px);
+  }
 }
 
 .project-settings-muted {

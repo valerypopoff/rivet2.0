@@ -9,6 +9,10 @@ import type {
   RuntimeLimitSettingsDraft,
 } from '../../../shared/app-settings-types.js';
 import { readDeploymentStorageSettings, writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
+import {
+  readExecutorUrlOverrideSettings,
+  writeExecutorUrlOverrideSettings,
+} from '../executor-url-override-settings.js';
 import { getAppDataRoot } from '../security.js';
 import { badRequest } from '../utils/httpError.js';
 import {
@@ -296,6 +300,22 @@ appSettingsRouter.put('/node-executor-proxy', async (req, res, next) => {
     const settings = await writeNodeExecutorProxySettings(req.body);
     await reloadNodeExecutorProxySettingsInCurrentProcess();
     res.json(settings);
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/executor-url-overrides', async (_req, res, next) => {
+  try {
+    res.json(await readExecutorUrlOverrideSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/executor-url-overrides', async (req, res, next) => {
+  try {
+    res.json(await writeExecutorUrlOverrideSettings(req.body));
   } catch (error) {
     next(error);
   }

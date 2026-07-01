@@ -74,6 +74,8 @@ export type WorkflowTreeResponse = {
 };
 
 export type HostedRouteConfig = {
+  executorWsUrl: string;
+  remoteDebuggerDefaultWs: string;
   publishedWorkflowsBasePath: string;
   latestWorkflowsBasePath: string;
   publishedAppsBasePath: string;

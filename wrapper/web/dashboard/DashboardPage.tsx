@@ -11,9 +11,11 @@ import { fetchHostedConfig } from './workflowApi';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import type { ProjectCompareSideLabels } from '../../shared/editor-bridge';
 import {
+  RIVET_EXECUTOR_WS_URL,
   RIVET_LATEST_WEB_APPS_BASE_PATH,
   RIVET_LATEST_WORKFLOWS_BASE_PATH,
   RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
+  RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
   RIVET_WEB_APPS_BASE_PATH,
 } from '../../shared/hosted-env';
 import './DashboardPage.css';
@@ -22,6 +24,8 @@ const WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH = 30;
 const MIN_SIDEBAR_WIDTH = 240;
 const MAX_SIDEBAR_WIDTH = 560;
 const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
+  executorWsUrl: RIVET_EXECUTOR_WS_URL,
+  remoteDebuggerDefaultWs: RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
   publishedWorkflowsBasePath: RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
   latestWorkflowsBasePath: RIVET_LATEST_WORKFLOWS_BASE_PATH,
   publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
@@ -31,6 +35,8 @@ const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
 
 function resolveHostedRouteConfig(config: Partial<HostedRouteConfig>): HostedRouteConfig {
   return {
+    executorWsUrl: config.executorWsUrl ?? DEFAULT_HOSTED_ROUTE_CONFIG.executorWsUrl,
+    remoteDebuggerDefaultWs: config.remoteDebuggerDefaultWs ?? DEFAULT_HOSTED_ROUTE_CONFIG.remoteDebuggerDefaultWs,
     publishedWorkflowsBasePath: config.publishedWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedWorkflowsBasePath,
     latestWorkflowsBasePath: config.latestWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestWorkflowsBasePath,
     publishedAppsBasePath: config.publishedAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedAppsBasePath,

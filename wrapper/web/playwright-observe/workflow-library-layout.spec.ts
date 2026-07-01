@@ -102,6 +102,12 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     updatedAt: null as string | null,
     source: 'default',
   };
+  let executorUrlOverrideSettings = {
+    executorWsUrl: '',
+    remoteDebuggerDefaultWs: '',
+    updatedAt: null as string | null,
+    source: 'default',
+  };
 
   await page.route('**/api/config', async (route) => {
     const url = new URL(route.request().url());
@@ -114,6 +120,8 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
+        executorWsUrl: executorUrlOverrideSettings.executorWsUrl || 'ws://127.0.0.1:8081/ws/executor/internal',
+        remoteDebuggerDefaultWs: executorUrlOverrideSettings.remoteDebuggerDefaultWs || 'ws://127.0.0.1:8081/ws/latest-debugger',
         ...publicRouteSettings,
         webAppsAuthMode: 'ui-gate',
         storageMode: deploymentStorageSettings.storageMode,
@@ -162,6 +170,39 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
           updatedAt: '2026-06-30T12:00:00.000Z',
           source: 'app-settings',
         }),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/executor-url-overrides') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          executorWsUrl?: string;
+          remoteDebuggerDefaultWs?: string;
+        };
+        executorUrlOverrideSettings = {
+          executorWsUrl: body.executorWsUrl ?? '',
+          remoteDebuggerDefaultWs: body.remoteDebuggerDefaultWs ?? '',
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(executorUrlOverrideSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(executorUrlOverrideSettings),
       });
       return;
     }
@@ -430,6 +471,18 @@ test.describe('Workflow library layout', () => {
     const appSettingsModal = page.locator('[data-testid="app-settings-modal"]');
     await expect(appSettingsModal).toBeVisible();
     await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+    const appSettingsTabList = appSettingsModal.getByRole('tablist', { name: 'App settings sections' });
+    await expect(appSettingsTabList).toHaveAttribute('aria-orientation', 'vertical');
+    const [generalTabBox, storageTabBox, panelRegionBox] = await Promise.all([
+      appSettingsModal.getByRole('tab', { name: 'General' }).boundingBox(),
+      appSettingsModal.getByRole('tab', { name: 'Storage' }).boundingBox(),
+      appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
+    ]);
+    expect(generalTabBox).not.toBeNull();
+    expect(storageTabBox).not.toBeNull();
+    expect(panelRegionBox).not.toBeNull();
+    expect(storageTabBox!.y).toBeGreaterThan(generalTabBox!.y + generalTabBox!.height - 2);
+    expect(generalTabBox!.x + generalTabBox!.width).toBeLessThan(panelRegionBox!.x);
     await expect(appSettingsModal).toContainText('Rivet Studio Server');
     await expect(appSettingsModal).toContainText('Published workflows');
     await expect(appSettingsModal).toContainText('/workflows');
@@ -460,7 +513,7 @@ test.describe('Workflow library layout', () => {
     await expect(workflowTimeoutActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect.poll(async () => {
       const [contentBox, sectionBox] = await Promise.all([
-        appSettingsModal.locator('.app-settings-modal-content').boundingBox(),
+        appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
         appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section').first().boundingBox(),
       ]);
       return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
@@ -518,7 +571,7 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveCount(0);
     await expect.poll(async () => {
       const [contentBox, sectionBox] = await Promise.all([
-        appSettingsModal.locator('.app-settings-modal-content').boundingBox(),
+        appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
         appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section').boundingBox(),
       ]);
       return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
@@ -535,23 +588,36 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
     await appSettingsModal.getByRole('tab', { name: 'Node executor proxy' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Node executor proxy' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section-title')).toHaveCount(0);
+    const nodeProxySection = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section', { hasText: 'HTTP_PROXY' });
+    const websocketOverrideSection = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section', { hasText: 'Websocket URL overrides' });
+    await expect(websocketOverrideSection.locator('.app-settings-section-title')).toHaveText('Websocket URL overrides');
     await expect(appSettingsModal.getByText('HTTP_PROXY')).toBeVisible();
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-field-grid')).toHaveCSS('gap', '18px');
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-action-button').first()).toHaveCSS('min-width', '84px');
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('margin-top', '8px');
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row')).toHaveCSS('padding-top', '14px');
+    await expect(nodeProxySection.locator('.app-settings-field-grid')).toHaveCSS('gap', '18px');
+    await expect(nodeProxySection.locator('.app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(nodeProxySection.locator('.app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('margin-top', '8px');
+    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('padding-top', '14px');
     await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue('http://proxy.example.internal:3128');
     await expect(appSettingsModal.getByText('NO_PROXY')).toBeVisible();
     await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue('localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local');
     await expect(appSettingsModal.getByText('In Kubernetes, include cluster-local suffixes such as .svc and .cluster.local')).toBeVisible();
+    await expect(appSettingsModal.getByText('Websocket URL overrides')).toBeVisible();
+    await expect(appSettingsModal.getByRole('textbox', { name: 'Node executor websocket URL override' })).toHaveValue('');
+    await expect(appSettingsModal.getByRole('textbox', { name: 'Remote Debugger websocket URL override' })).toHaveValue('');
+    await expect(appSettingsModal.getByText('Active URL: ws://127.0.0.1:8081/ws/executor/internal.')).toBeVisible();
     await appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' }).fill('http://proxy.example.internal:3129');
-    await appSettingsModal.getByRole('button', { name: 'Save' }).click();
-    const proxyActions = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-actions-row');
+    await nodeProxySection.getByRole('button', { name: 'Save' }).click();
+    const proxyActions = nodeProxySection.locator('.app-settings-actions-row');
     await expect(proxyActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
+    await appSettingsModal
+      .getByRole('textbox', { name: 'Remote Debugger websocket URL override' })
+      .fill('wss://debugger.example.test/ws/latest-debugger');
+    await websocketOverrideSection.getByRole('button', { name: 'Save' }).click();
+    const executorUrlActions = websocketOverrideSection.locator('.app-settings-actions-row');
+    await expect(executorUrlActions.locator('.project-settings-success')).toHaveText('Saved. Reload the editor to apply websocket URL overrides to active sessions.');
+    await expect(appSettingsModal.getByText('Active URL: wss://debugger.example.test/ws/latest-debugger.')).toBeVisible();
 
     await appSettingsModal.getByRole('tab', { name: 'Web apps' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');

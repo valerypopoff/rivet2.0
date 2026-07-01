@@ -38,6 +38,11 @@ import {
   writeDeploymentStorageSettings,
 } from '../deployment-storage-settings.js';
 import {
+  getExecutorUrlOverrideSettingsPath,
+  readExecutorUrlOverrideSettings,
+  writeExecutorUrlOverrideSettings,
+} from '../executor-url-override-settings.js';
+import {
   getRuntimeLimitSettingsPath,
   readRuntimeLimitSettings,
   writeRuntimeLimitSettings,
@@ -93,6 +98,8 @@ const relevantEnvKeys = [
   'RIVET_COMMAND_TIMEOUT',
   'RIVET_MAX_OUTPUT',
   'RIVET_DOCKER_WAIT_TIMEOUT',
+  'RIVET_EXECUTOR_WS_URL',
+  'RIVET_REMOTE_DEBUGGER_DEFAULT_WS',
   'RIVET_KEY',
 ] as const;
 
@@ -232,6 +239,120 @@ test('Node executor proxy settings API saves and returns persisted values', asyn
   });
 });
 
+test('Executor URL override settings ignore environment values until saved', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_EXECUTOR_WS_URL = 'wss://env.example.test/ws/executor';
+    process.env.RIVET_REMOTE_DEBUGGER_DEFAULT_WS = 'wss://env.example.test/ws/debugger';
+
+    const defaultSettings = await readExecutorUrlOverrideSettings();
+    assert.equal(defaultSettings.source, 'default');
+    assert.equal(defaultSettings.executorWsUrl, '');
+    assert.equal(defaultSettings.remoteDebuggerDefaultWs, '');
+
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const configResponse = await fetch(`${server.baseUrl}/api/config`, {
+        headers: {
+          ...trustedProxyHeaders(),
+          'x-forwarded-host': 'derived.example.test',
+          'x-forwarded-proto': 'https',
+        },
+      });
+      assert.equal(configResponse.status, 200);
+      const config = await configResponse.json() as Record<string, unknown>;
+      assert.equal(config.executorWsUrl, 'wss://derived.example.test/ws/executor/internal');
+      assert.equal(config.remoteDebuggerDefaultWs, 'wss://derived.example.test/ws/latest-debugger');
+    } finally {
+      await server?.close();
+    }
+
+    const savedSettings = await writeExecutorUrlOverrideSettings({
+      executorWsUrl: ' wss://saved.example.test/ws/executor ',
+      remoteDebuggerDefaultWs: 'wss://saved.example.test/ws/latest-debugger',
+    });
+    assert.equal(savedSettings.source, 'app-settings');
+    assert.equal(savedSettings.executorWsUrl, 'wss://saved.example.test/ws/executor');
+    assert.equal(savedSettings.remoteDebuggerDefaultWs, 'wss://saved.example.test/ws/latest-debugger');
+
+    const nextSettings = await readExecutorUrlOverrideSettings();
+    assert.equal(nextSettings.executorWsUrl, 'wss://saved.example.test/ws/executor');
+    assert.equal(nextSettings.remoteDebuggerDefaultWs, 'wss://saved.example.test/ws/latest-debugger');
+  });
+});
+
+test('Executor URL override settings API saves and config returns persisted overrides', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/executor-url-overrides`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          executorWsUrl: 'wss://override.example.test/ws/executor/internal',
+          remoteDebuggerDefaultWs: 'wss://override.example.test/ws/latest-debugger',
+        }),
+      });
+
+      assert.equal(saveResponse.status, 200);
+      const saved = await saveResponse.json() as Record<string, unknown>;
+      assert.equal(saved.source, 'app-settings');
+      assert.equal(saved.executorWsUrl, 'wss://override.example.test/ws/executor/internal');
+
+      const readResponse = await fetch(`${server.baseUrl}/api/app-settings/executor-url-overrides`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(readResponse.status, 200);
+      const settings = await readResponse.json() as Record<string, unknown>;
+      assert.equal(settings.executorWsUrl, 'wss://override.example.test/ws/executor/internal');
+      assert.equal(settings.remoteDebuggerDefaultWs, 'wss://override.example.test/ws/latest-debugger');
+
+      const configResponse = await fetch(`${server.baseUrl}/api/config`, {
+        headers: {
+          ...trustedProxyHeaders(),
+          'x-forwarded-host': 'derived.example.test',
+          'x-forwarded-proto': 'https',
+        },
+      });
+      assert.equal(configResponse.status, 200);
+      const config = await configResponse.json() as Record<string, unknown>;
+      assert.equal(config.executorWsUrl, 'wss://override.example.test/ws/executor/internal');
+      assert.equal(config.remoteDebuggerDefaultWs, 'wss://override.example.test/ws/latest-debugger');
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Executor URL override settings reject non-websocket URLs', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/executor-url-overrides`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          executorWsUrl: 'https://not-websocket.example.test/ws/executor',
+          remoteDebuggerDefaultWs: '',
+        }),
+      });
+
+      assert.equal(saveResponse.status, 400);
+      assert.match((await saveResponse.json() as { error: string }).error, /must use ws or wss/);
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
 test('App settings files are written with owner-only permissions', async () => {
   await withAppSettingsEnv(async () => {
     await writeNodeExecutorProxySettings({
@@ -243,6 +364,10 @@ test('App settings files are written with owner-only permissions', async () => {
       maxPendingWrites: 100,
       maxRunsPerEndpoint: 2000,
       retentionDays: 0,
+    });
+    await writeExecutorUrlOverrideSettings({
+      executorWsUrl: 'wss://executor.example.test/ws/executor/internal',
+      remoteDebuggerDefaultWs: 'wss://debugger.example.test/ws/latest-debugger',
     });
     await writeDeploymentStorageSettings({
       storageMode: 'managed',
@@ -267,6 +392,7 @@ test('App settings files are written with owner-only permissions', async () => {
     assert.ok(appDataRoot);
     assertPrivateSettingsFile(path.join(appDataRoot, 'settings', 'node-executor-proxy.json'));
     assertPrivateSettingsFile(getRunRecordingsSettingsPath());
+    assertPrivateSettingsFile(getExecutorUrlOverrideSettingsPath());
     assertPrivateSettingsFile(getDeploymentStorageSettingsPath());
     assertPrivateSettingsFile(getWebAppAuthSettingsPath());
   });

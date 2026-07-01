@@ -25,6 +25,8 @@ const relevantEnvKeys = [
   'RIVET_APP_DATA_ROOT',
   'RIVET_RUNTIME_LIBRARIES_ROOT',
   'RIVET_WORKSPACE_ROOT',
+  'RIVET_EXECUTOR_WS_URL',
+  'RIVET_REMOTE_DEBUGGER_DEFAULT_WS',
 ] as const;
 
 async function withApiEnv(

@@ -6,12 +6,14 @@ import { type FC, useEffect, useMemo, useState } from 'react';
 import type { HostedRouteConfig } from './types';
 import {
   fetchDeploymentStorageSettings,
+  fetchExecutorUrlOverrideSettings,
   fetchNodeExecutorProxySettings,
   fetchPublicRouteSettings,
   fetchRunRecordingsSettings,
   fetchRuntimeLimitSettings,
   fetchWebAppAuthSettings,
   saveDeploymentStorageSettings,
+  saveExecutorUrlOverrideSettings,
   saveNodeExecutorProxySettings,
   savePublicRouteSettings,
   saveRunRecordingsSettings,
@@ -24,6 +26,7 @@ import type {
   DeploymentDatabaseSslMode,
   DeploymentStorageMode,
   DeploymentStorageSettings,
+  ExecutorUrlOverrideSettings,
   PublicRouteSettings,
   RuntimeLimitSettings,
   RuntimeLimitSettingsDraft,
@@ -67,6 +70,10 @@ type RuntimeLimitSettingsFormSnapshot = {
   proxyReadTimeoutSeconds: string;
   dockerWaitTimeoutSeconds: string;
 };
+type ExecutorUrlOverrideSettingsFormSnapshot = Pick<
+  ExecutorUrlOverrideSettings,
+  'executorWsUrl' | 'remoteDebuggerDefaultWs'
+>;
 type WebAppAuthSettingsFormSnapshot = {
   mode: WebAppAuthMode;
   provider: WebAppOAuthProvider;
@@ -252,6 +259,16 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     httpsProxy: '',
     noProxy: '',
   });
+  const [loadingExecutorUrlOverrideSettings, setLoadingExecutorUrlOverrideSettings] = useState(false);
+  const [savingExecutorUrlOverrideSettings, setSavingExecutorUrlOverrideSettings] = useState(false);
+  const [executorUrlOverrideSettingsError, setExecutorUrlOverrideSettingsError] = useState<string | null>(null);
+  const [executorUrlOverrideSettingsSaved, setExecutorUrlOverrideSettingsSaved] = useState(false);
+  const [executorWsUrlOverride, setExecutorWsUrlOverride] = useState('');
+  const [remoteDebuggerWsUrlOverride, setRemoteDebuggerWsUrlOverride] = useState('');
+  const [initialExecutorUrlOverrideSettings, setInitialExecutorUrlOverrideSettings] = useState<ExecutorUrlOverrideSettingsFormSnapshot>({
+    executorWsUrl: '',
+    remoteDebuggerDefaultWs: '',
+  });
   const [loadingRunRecordingsSettings, setLoadingRunRecordingsSettings] = useState(false);
   const [savingRunRecordingsSettings, setSavingRunRecordingsSettings] = useState(false);
   const [runRecordingsSettingsError, setRunRecordingsSettingsError] = useState<string | null>(null);
@@ -373,6 +390,16 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     httpsProxy.trim() !== initialProxySettings.httpsProxy ||
     noProxy.trim() !== initialProxySettings.noProxy
   ), [httpProxy, httpsProxy, initialProxySettings, noProxy]);
+
+  const currentExecutorUrlOverrideSettings = useMemo(() => ({
+    executorWsUrl: executorWsUrlOverride.trim(),
+    remoteDebuggerDefaultWs: remoteDebuggerWsUrlOverride.trim(),
+  }), [executorWsUrlOverride, remoteDebuggerWsUrlOverride]);
+
+  const executorUrlOverrideSettingsChanged = useMemo(() => (
+    currentExecutorUrlOverrideSettings.executorWsUrl !== initialExecutorUrlOverrideSettings.executorWsUrl ||
+    currentExecutorUrlOverrideSettings.remoteDebuggerDefaultWs !== initialExecutorUrlOverrideSettings.remoteDebuggerDefaultWs
+  ), [currentExecutorUrlOverrideSettings, initialExecutorUrlOverrideSettings]);
 
   const currentRunRecordingsSettings = useMemo(() => ({
     maxPendingWrites: maxPendingWrites.trim(),
@@ -497,6 +524,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
 
     setActiveTab('general');
     setProxySettingsSaved(false);
+    setExecutorUrlOverrideSettingsSaved(false);
     setDeploymentStorageSettingsSaved(false);
     setRunRecordingsSettingsSaved(false);
     setRuntimeLimitSettingsLoaded(false);
@@ -584,6 +612,46 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
       .finally(() => {
         if (!cancelled) {
           setLoadingProxySettings(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'node-executor-proxy') {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingExecutorUrlOverrideSettings(true);
+    setExecutorUrlOverrideSettingsError(null);
+    setExecutorUrlOverrideSettingsSaved(false);
+
+    fetchExecutorUrlOverrideSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextSettings = {
+          executorWsUrl: settings.executorWsUrl,
+          remoteDebuggerDefaultWs: settings.remoteDebuggerDefaultWs,
+        };
+        setExecutorWsUrlOverride(nextSettings.executorWsUrl);
+        setRemoteDebuggerWsUrlOverride(nextSettings.remoteDebuggerDefaultWs);
+        setInitialExecutorUrlOverrideSettings(nextSettings);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setExecutorUrlOverrideSettingsError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingExecutorUrlOverrideSettings(false);
         }
       });
 
@@ -850,6 +918,33 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     }
   };
 
+  const handleSaveExecutorUrlOverrideSettings = async () => {
+    setSavingExecutorUrlOverrideSettings(true);
+    setExecutorUrlOverrideSettingsError(null);
+    setExecutorUrlOverrideSettingsSaved(false);
+
+    try {
+      const savedSettings = await saveExecutorUrlOverrideSettings(currentExecutorUrlOverrideSettings);
+      const nextSettings = {
+        executorWsUrl: savedSettings.executorWsUrl,
+        remoteDebuggerDefaultWs: savedSettings.remoteDebuggerDefaultWs,
+      };
+      setExecutorWsUrlOverride(nextSettings.executorWsUrl);
+      setRemoteDebuggerWsUrlOverride(nextSettings.remoteDebuggerDefaultWs);
+      setInitialExecutorUrlOverrideSettings(nextSettings);
+      const activeConfig = await fetchHostedConfig();
+      onRouteConfigChange?.({
+        ...routeConfig,
+        ...activeConfig,
+      });
+      setExecutorUrlOverrideSettingsSaved(true);
+    } catch (error) {
+      setExecutorUrlOverrideSettingsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingExecutorUrlOverrideSettings(false);
+    }
+  };
+
   const handleSaveRunRecordingsSettings = async () => {
     setSavingRunRecordingsSettings(true);
     setRunRecordingsSettingsError(null);
@@ -1058,7 +1153,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   const renderTabButton = (tab: AppSettingsTab, label: string) => (
     <button
       type="button"
-      className={`project-settings-tab${activeTab === tab ? ' active' : ''}`}
+      className={`project-settings-tab app-settings-nav-tab${activeTab === tab ? ' active' : ''}`}
       role="tab"
       aria-selected={activeTab === tab}
       onClick={() => setActiveTab(tab)}
@@ -1149,15 +1244,25 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
             </div>
 
             <div className="project-settings-modal-content app-settings-modal-content">
-              <div className="project-settings-tabs" role="tablist" aria-label="App settings sections">
-                {renderTabButton('general', 'General')}
-                {renderTabButton('storage', 'Storage')}
-                {renderTabButton('workflow-endpoints', 'Workflow endpoints')}
-                {renderTabButton('run-recordings', 'Run recordings')}
-                {renderTabButton('node-executor-proxy', 'Node executor proxy')}
-                {renderTabButton('web-apps', 'Web apps')}
-                {renderTabButton('docker', 'Docker')}
-              </div>
+              <div className="app-settings-layout">
+                <aside className="app-settings-sidebar" aria-label="Settings navigation">
+                  <div
+                    className="project-settings-tabs app-settings-tab-list"
+                    role="tablist"
+                    aria-label="App settings sections"
+                    aria-orientation="vertical"
+                  >
+                    {renderTabButton('general', 'General')}
+                    {renderTabButton('storage', 'Storage')}
+                    {renderTabButton('workflow-endpoints', 'Workflow endpoints')}
+                    {renderTabButton('run-recordings', 'Run recordings')}
+                    {renderTabButton('node-executor-proxy', 'Node executor proxy')}
+                    {renderTabButton('web-apps', 'Web apps')}
+                    {renderTabButton('docker', 'Docker')}
+                  </div>
+                </aside>
+
+                <div className="app-settings-panel-region">
 
               {activeTab === 'general' ? (
                 <div className="project-settings-tab-panel app-settings-general-panel" role="tabpanel">
@@ -2352,8 +2457,91 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                       {renderActionStatus(proxySettingsError, proxySettingsSaved)}
                     </div>
                   </section>
+
+                  <section className="app-settings-section" aria-label="Websocket URL overrides">
+                    <div className="app-settings-section-title">Websocket URL overrides</div>
+                    <div
+                      className="app-settings-field-grid"
+                      aria-busy={loadingExecutorUrlOverrideSettings || savingExecutorUrlOverrideSettings}
+                    >
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Node executor websocket URL override</span>
+                        <TextField
+                          aria-label="Node executor websocket URL override"
+                          value={executorWsUrlOverride}
+                          isDisabled={loadingExecutorUrlOverrideSettings || savingExecutorUrlOverrideSettings}
+                          placeholder={routeConfig.executorWsUrl}
+                          onChange={(event) => {
+                            setExecutorWsUrlOverride(event.currentTarget.value);
+                            setExecutorUrlOverrideSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          Optional override for the hosted editor's Node executor websocket. Leave blank to derive it from the current host. Active URL: {routeConfig.executorWsUrl || 'none'}.
+                        </span>
+                      </label>
+
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Remote Debugger websocket URL override</span>
+                        <TextField
+                          aria-label="Remote Debugger websocket URL override"
+                          value={remoteDebuggerWsUrlOverride}
+                          isDisabled={loadingExecutorUrlOverrideSettings || savingExecutorUrlOverrideSettings}
+                          placeholder={routeConfig.remoteDebuggerDefaultWs || 'No default Remote Debugger URL'}
+                          onChange={(event) => {
+                            setRemoteDebuggerWsUrlOverride(event.currentTarget.value);
+                            setExecutorUrlOverrideSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          Optional override for the editor's default Remote Debugger URL. Leave blank to use the hosted latest-debugger websocket when available. Active URL: {routeConfig.remoteDebuggerDefaultWs || 'none'}.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingExecutorUrlOverrideSettings}
+                        isDisabled={
+                          loadingExecutorUrlOverrideSettings ||
+                          savingExecutorUrlOverrideSettings ||
+                          !executorUrlOverrideSettingsChanged
+                        }
+                        onClick={handleSaveExecutorUrlOverrideSettings}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={
+                          loadingExecutorUrlOverrideSettings ||
+                          savingExecutorUrlOverrideSettings ||
+                          !executorUrlOverrideSettingsChanged
+                        }
+                        onClick={() => {
+                          setExecutorWsUrlOverride(initialExecutorUrlOverrideSettings.executorWsUrl);
+                          setRemoteDebuggerWsUrlOverride(initialExecutorUrlOverrideSettings.remoteDebuggerDefaultWs);
+                          setExecutorUrlOverrideSettingsSaved(false);
+                          setExecutorUrlOverrideSettingsError(null);
+                        }}
+                      >
+                        Revert
+                      </Button>
+                      {renderActionStatus(
+                        executorUrlOverrideSettingsError,
+                        executorUrlOverrideSettingsSaved,
+                        undefined,
+                        'Saved. Reload the editor to apply websocket URL overrides to active sessions.',
+                      )}
+                    </div>
+                  </section>
                 </div>
               ) : null}
+                </div>
+              </div>
             </div>
           </div>
         </ModalBody>
