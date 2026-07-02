@@ -98,15 +98,17 @@ test('launcher env helpers report retired aliases with launcher-specific context
   const env: NodeJS.ProcessEnv = {
     RIVET_STORAGE_BACKEND: 'managed',
     RIVET_DOCKER_WAIT_TIMEOUT: '1200',
+    RIVET_REQUIRE_WORKFLOW_KEY: 'false',
   };
 
   assert.deepEqual(launcherEnv.listActiveRetiredEnv(env), [
     'RIVET_STORAGE_BACKEND -> Settings -> Storage',
+    'RIVET_REQUIRE_WORKFLOW_KEY -> Settings -> Workflow endpoints',
     'RIVET_DOCKER_WAIT_TIMEOUT -> Settings -> Docker',
   ]);
   assert.throws(
     () => launcherEnv.assertNoRetiredEnv(env, { launcherName: 'dev-docker', envFileLabel: '.env.compat' }),
-    /\[dev-docker\] Retired environment variable\(s\) detected in \.env\.compat: RIVET_STORAGE_BACKEND -> Settings -> Storage, RIVET_DOCKER_WAIT_TIMEOUT -> Settings -> Docker/,
+    /\[dev-docker\] Retired environment variable\(s\) detected in \.env\.compat: RIVET_STORAGE_BACKEND -> Settings -> Storage, RIVET_REQUIRE_WORKFLOW_KEY -> Settings -> Workflow endpoints, RIVET_DOCKER_WAIT_TIMEOUT -> Settings -> Docker/,
   );
 });
 

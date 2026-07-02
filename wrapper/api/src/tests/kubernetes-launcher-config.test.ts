@@ -55,7 +55,6 @@ test('kubernetes launcher config uses managed canonical envs and local rehearsal
   assert.equal(config.routeConfig.webAppsBasePath, '/apps');
   assert.equal(config.routeConfig.latestWebAppsBasePath, '/apps-latest');
   assert.equal(config.routeConfig.enableLatestRemoteDebugger, true);
-  assert.equal(config.routeConfig.requireWorkflowKey, false);
   assert.equal(config.routeConfig.requireUiGateKey, false);
 });
 
@@ -103,7 +102,7 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
   assert.match(valuesYaml, /RIVET_LATEST_APPS_BASE_PATH: "\/apps-latest"/);
   assert.match(valuesYaml, /RIVET_WEB_APPS_BASE_PATH: "\/apps"/);
   assert.match(valuesYaml, /RIVET_LATEST_WEB_APPS_BASE_PATH: "\/apps-latest"/);
-  assert.match(valuesYaml, /RIVET_REQUIRE_WORKFLOW_KEY: "false"/);
+  assert.doesNotMatch(valuesYaml, /RIVET_REQUIRE_WORKFLOW_KEY/);
   assert.match(valuesYaml, /RIVET_REQUIRE_UI_GATE_KEY: "false"/);
   assert.doesNotMatch(valuesYaml, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 

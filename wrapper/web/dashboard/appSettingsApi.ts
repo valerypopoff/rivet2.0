@@ -14,6 +14,8 @@ import type {
   RuntimeLimitSettingsDraft,
   WebAppAuthSettings,
   WebAppAuthSettingsDraft,
+  WorkflowEndpointAuthSettings,
+  WorkflowEndpointAuthSettingsDraft,
 } from '../../shared/app-settings-types';
 import { parseJsonResponse } from './apiRequest';
 
@@ -130,6 +132,24 @@ export async function savePublicRouteSettings(
     body: JSON.stringify(settings),
   });
   return appSettingsJsonResponse<PublicRouteSettings>(response);
+}
+
+export async function fetchWorkflowEndpointAuthSettings(): Promise<WorkflowEndpointAuthSettings> {
+  const response = await fetch(`${API}/workflow-endpoint-auth`, {
+    cache: 'no-store',
+  });
+  return appSettingsJsonResponse<WorkflowEndpointAuthSettings>(response);
+}
+
+export async function saveWorkflowEndpointAuthSettings(
+  settings: WorkflowEndpointAuthSettingsDraft,
+): Promise<WorkflowEndpointAuthSettings> {
+  const response = await fetch(`${API}/workflow-endpoint-auth`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return appSettingsJsonResponse<WorkflowEndpointAuthSettings>(response);
 }
 
 export async function fetchWebAppAuthSettings(): Promise<WebAppAuthSettings> {

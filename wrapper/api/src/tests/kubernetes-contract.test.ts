@@ -130,7 +130,7 @@ test('local Kubernetes overlay keeps the backend singleton while scaling endpoin
   assert.match(localOverlay, /execution:\s*2/);
   assert.match(localOverlay, /existingClaimName:\s*rivet-local-app-data/);
   assert.match(localOverlay, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:\s*"true"/);
-  assert.match(localOverlay, /RIVET_REQUIRE_WORKFLOW_KEY:\s*"false"/);
+  assert.doesNotMatch(localOverlay, /RIVET_REQUIRE_WORKFLOW_KEY/);
   assert.match(localOverlay, /RIVET_REQUIRE_UI_GATE_KEY:\s*"false"/);
   assert.doesNotMatch(localOverlay, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });

@@ -411,7 +411,7 @@ The action routes use the same project resolver family, dataset provider, projec
 
 Published web app action runs do not attach Remote Debugger. Latest web app action runs attach the same default-on `/ws/latest-debugger` remote debugger as latest workflow endpoint runs because they execute against the latest saved draft on the control-plane backend. Hardened deployments can explicitly disable that websocket with `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false`. Web app action runs are not yet persisted into Run recordings. Add recording support only through an upstream/action seam that can attach `ExecutionRecorder` without reimplementing Rivet's web-app action runner.
 
-Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by the persisted `Settings` -> `Web apps` -> `Auth` mode, not by `RIVET_REQUIRE_WORKFLOW_KEY`:
+Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by the persisted `Settings` -> `Web apps` -> `Auth` mode, not by the workflow endpoint bearer-token setting:
 
 - `ui-gate` is the default and preserves the original behavior: when `RIVET_REQUIRE_UI_GATE_KEY=true`, nginx shows the same key prompt used by the main Rivet server UI, submits the originally requested local URL as a sanitized `return_to` path, and sets the same HTTP-only `rivet_ui_token` cookie after the user enters `RIVET_KEY`.
 - `oauth` shows unauthenticated HTML page requests a hosted `Sign in required` page; its `Sign in` button redirects to the configured OAuth provider and stores a signed HTTP-only web-app session cookie after the callback succeeds. Action and `app.json` requests without a valid session return JSON `401` with `code: "oauth_required"` instead of showing the key prompt.
@@ -588,7 +588,7 @@ Do not replace this path with `runGraph(...)` unless upstream exposes an equival
 
 Public execution auth is separate from the browser UI gate:
 
-- when `RIVET_REQUIRE_WORKFLOW_KEY=true`, workflow endpoint routes require `Authorization: Bearer <RIVET_KEY>`
+- `Settings` -> `Workflow endpoints` -> `Access control` controls whether workflow endpoint routes require `Authorization: Bearer <RIVET_KEY>`; it is enabled by default and stored in app data
 - hosts allowlisted in `RIVET_UI_TOKEN_FREE_HOSTS` bypass public-route bearer auth because nginx forwards a trusted internal-host signal
 - if public auth is enabled but `RIVET_KEY` is empty, the public execution routes fail with `500`
 

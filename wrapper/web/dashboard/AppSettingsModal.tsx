@@ -12,6 +12,7 @@ import {
   fetchRunRecordingsSettings,
   fetchRuntimeLimitSettings,
   fetchWebAppAuthSettings,
+  fetchWorkflowEndpointAuthSettings,
   saveDeploymentStorageSettings,
   saveExecutorUrlOverrideSettings,
   saveNodeExecutorProxySettings,
@@ -19,6 +20,7 @@ import {
   saveRunRecordingsSettings,
   saveRuntimeLimitSettings,
   saveWebAppAuthSettings,
+  saveWorkflowEndpointAuthSettings,
 } from './appSettingsApi';
 import { fetchHostedConfig } from './workflowApi';
 import type {
@@ -34,6 +36,7 @@ import type {
   WebAppAuthSettings,
   WebAppOAuthClientAuthMethod,
   WebAppOAuthProvider,
+  WorkflowEndpointAuthSettings,
 } from '../../shared/app-settings-types';
 
 interface AppSettingsModalProps {
@@ -70,6 +73,10 @@ type RuntimeLimitSettingsFormSnapshot = {
   proxyReadTimeoutSeconds: string;
   dockerWaitTimeoutSeconds: string;
 };
+type WorkflowEndpointAuthSettingsFormSnapshot = Pick<
+  WorkflowEndpointAuthSettings,
+  'requireBearerAuth'
+>;
 type ExecutorUrlOverrideSettingsFormSnapshot = Pick<
   ExecutorUrlOverrideSettings,
   'executorWsUrl' | 'remoteDebuggerDefaultWs'
@@ -315,6 +322,14 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     publishedAppsSlug: basePathToRouteSlug(routeConfig.publishedAppsBasePath),
     latestAppsSlug: basePathToRouteSlug(routeConfig.latestAppsBasePath),
   });
+  const [loadingWorkflowEndpointAuthSettings, setLoadingWorkflowEndpointAuthSettings] = useState(false);
+  const [savingWorkflowEndpointAuthSettings, setSavingWorkflowEndpointAuthSettings] = useState(false);
+  const [workflowEndpointAuthSettingsError, setWorkflowEndpointAuthSettingsError] = useState<string | null>(null);
+  const [workflowEndpointAuthSettingsSaved, setWorkflowEndpointAuthSettingsSaved] = useState(false);
+  const [requireWorkflowBearerAuth, setRequireWorkflowBearerAuth] = useState(true);
+  const [initialWorkflowEndpointAuthSettings, setInitialWorkflowEndpointAuthSettings] = useState<WorkflowEndpointAuthSettingsFormSnapshot>({
+    requireBearerAuth: true,
+  });
   const [loadingWebAppAuthSettings, setLoadingWebAppAuthSettings] = useState(false);
   const [savingWebAppAuthSettings, setSavingWebAppAuthSettings] = useState(false);
   const [webAppAuthSettingsError, setWebAppAuthSettingsError] = useState<string | null>(null);
@@ -462,6 +477,14 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     currentPublicRouteSettings.latestAppsSlug !== initialPublicRouteSettings.latestAppsSlug
   ), [currentPublicRouteSettings, initialPublicRouteSettings]);
 
+  const currentWorkflowEndpointAuthSettings = useMemo(() => ({
+    requireBearerAuth: requireWorkflowBearerAuth,
+  }), [requireWorkflowBearerAuth]);
+
+  const workflowEndpointAuthSettingsChanged = useMemo(() => (
+    currentWorkflowEndpointAuthSettings.requireBearerAuth !== initialWorkflowEndpointAuthSettings.requireBearerAuth
+  ), [currentWorkflowEndpointAuthSettings, initialWorkflowEndpointAuthSettings]);
+
   const currentWebAppAuthSettings = useMemo(() => ({
     mode: webAppAuthMode,
     provider: webAppOAuthProvider,
@@ -530,6 +553,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     setRuntimeLimitSettingsLoaded(false);
     setRuntimeLimitSettingsSaved(false);
     setPublicRouteSettingsSaved(false);
+    setWorkflowEndpointAuthSettingsSaved(false);
     setWebAppAuthSettingsSaved(false);
   }, [isOpen]);
 
@@ -783,6 +807,44 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
       .finally(() => {
         if (!cancelled) {
           setLoadingPublicRouteSettings(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'workflow-endpoints') {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingWorkflowEndpointAuthSettings(true);
+    setWorkflowEndpointAuthSettingsError(null);
+    setWorkflowEndpointAuthSettingsSaved(false);
+
+    fetchWorkflowEndpointAuthSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+
+        const snapshot = {
+          requireBearerAuth: settings.requireBearerAuth,
+        };
+        setRequireWorkflowBearerAuth(snapshot.requireBearerAuth);
+        setInitialWorkflowEndpointAuthSettings(snapshot);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setWorkflowEndpointAuthSettingsError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingWorkflowEndpointAuthSettings(false);
         }
       });
 
@@ -1060,6 +1122,26 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     } finally {
       setSavingPublicRouteSettings(false);
       setApplyingPublicRouteSettings(false);
+    }
+  };
+
+  const handleSaveWorkflowEndpointAuthSettings = async () => {
+    setSavingWorkflowEndpointAuthSettings(true);
+    setWorkflowEndpointAuthSettingsError(null);
+    setWorkflowEndpointAuthSettingsSaved(false);
+
+    try {
+      const savedSettings = await saveWorkflowEndpointAuthSettings(currentWorkflowEndpointAuthSettings);
+      const snapshot = {
+        requireBearerAuth: savedSettings.requireBearerAuth,
+      };
+      setRequireWorkflowBearerAuth(snapshot.requireBearerAuth);
+      setInitialWorkflowEndpointAuthSettings(snapshot);
+      setWorkflowEndpointAuthSettingsSaved(true);
+    } catch (error) {
+      setWorkflowEndpointAuthSettingsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingWorkflowEndpointAuthSettings(false);
     }
   };
 
@@ -1849,6 +1931,63 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                           ? 'Applying routes...'
                           : undefined,
                       )}
+                    </div>
+                  </section>
+
+                  <section className="app-settings-section" aria-label="Workflow endpoint access control">
+                    <div className="app-settings-section-title">Access control</div>
+                    <div
+                      className="app-settings-field-grid"
+                      aria-busy={loadingWorkflowEndpointAuthSettings || savingWorkflowEndpointAuthSettings}
+                    >
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Bearer token requirement</span>
+                        {renderBooleanSetting(
+                          'Require Authorization: Bearer <Rivet key> for workflow endpoint calls',
+                          requireWorkflowBearerAuth,
+                          (checked) => {
+                            setRequireWorkflowBearerAuth(checked);
+                            setWorkflowEndpointAuthSettingsSaved(false);
+                          },
+                          loadingWorkflowEndpointAuthSettings || savingWorkflowEndpointAuthSettings,
+                        )}
+                        <span className="app-settings-field-help">
+                          Keep this enabled unless workflow endpoints are protected by another trusted access layer.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingWorkflowEndpointAuthSettings}
+                        isDisabled={
+                          loadingWorkflowEndpointAuthSettings ||
+                          savingWorkflowEndpointAuthSettings ||
+                          !workflowEndpointAuthSettingsChanged
+                        }
+                        onClick={handleSaveWorkflowEndpointAuthSettings}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={
+                          loadingWorkflowEndpointAuthSettings ||
+                          savingWorkflowEndpointAuthSettings ||
+                          !workflowEndpointAuthSettingsChanged
+                        }
+                        onClick={() => {
+                          setRequireWorkflowBearerAuth(initialWorkflowEndpointAuthSettings.requireBearerAuth);
+                          setWorkflowEndpointAuthSettingsSaved(false);
+                          setWorkflowEndpointAuthSettingsError(null);
+                        }}
+                      >
+                        Revert
+                      </Button>
+                      {renderActionStatus(workflowEndpointAuthSettingsError, workflowEndpointAuthSettingsSaved)}
                     </div>
                   </section>
 

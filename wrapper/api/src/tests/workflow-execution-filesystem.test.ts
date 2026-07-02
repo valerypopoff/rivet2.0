@@ -8,6 +8,7 @@ import {
   withEnvOverride,
 } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
+import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 
 const {
   workflowsRoot,
@@ -226,6 +227,61 @@ test('filesystem execution emits per-stage debug headers only when explicitly en
         assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-cache-misses') ?? '', /^\d+$/);
         assert.match(codeRunnerDebugResponse.headers.get('x-code-runner-cache') ?? '', /^enabled;size=\d+$/);
       });
+    });
+  });
+});
+
+test('filesystem workflow endpoint bearer auth follows app settings without restarting the API', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'BearerAuthSettings');
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+    endpointName: 'bearer-auth-settings',
+  });
+
+  await withEnvOverride('RIVET_KEY', 'workflow-auth-key', async () => {
+    await writeWorkflowEndpointAuthSettings({ requireBearerAuth: true });
+
+    await withWorkflowExecutionServer(async ({ publishedBaseUrl, latestBaseUrl }) => {
+      const unauthenticatedPublishedResponse = await fetch(`${publishedBaseUrl}/bearer-auth-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(unauthenticatedPublishedResponse.status, 401);
+
+      const wrongTokenResponse = await fetch(`${publishedBaseUrl}/bearer-auth-settings`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer wrong-key',
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+      });
+      assert.equal(wrongTokenResponse.status, 401);
+
+      const authenticatedPublishedResponse = await fetch(`${publishedBaseUrl}/bearer-auth-settings`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer workflow-auth-key',
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+      });
+      assert.equal(authenticatedPublishedResponse.ok, true);
+
+      const unauthenticatedLatestResponse = await fetch(`${latestBaseUrl}/bearer-auth-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(unauthenticatedLatestResponse.status, 401);
+
+      await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
+      const disabledAuthResponse = await fetch(`${publishedBaseUrl}/bearer-auth-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(disabledAuthResponse.ok, true);
     });
   });
 });

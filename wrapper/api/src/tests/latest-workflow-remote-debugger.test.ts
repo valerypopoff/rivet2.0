@@ -27,7 +27,6 @@ const envKeys = [
   'RIVET_RUNTIME_LIBRARIES_ROOT',
   'RIVET_STORAGE_MODE',
   'RIVET_KEY',
-  'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_REQUIRE_UI_GATE_KEY',
   'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER',
   'RIVET_RECORDINGS_ENABLED',
@@ -52,7 +51,6 @@ process.env.RIVET_APP_DATA_ROOT = appDataRoot;
 process.env.RIVET_RUNTIME_LIBRARIES_ROOT = runtimeLibrariesRoot;
 process.env.RIVET_STORAGE_MODE = 'filesystem';
 process.env.RIVET_KEY = 'latest-debugger-test-key';
-process.env.RIVET_REQUIRE_WORKFLOW_KEY = 'false';
 process.env.RIVET_REQUIRE_UI_GATE_KEY = 'false';
 delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
 process.env.RIVET_RECORDINGS_ENABLED = 'false';
@@ -74,6 +72,7 @@ const workflowFs = await import('../routes/workflows/fs-helpers.js');
 const workflowMutations = await import('../routes/workflows/workflow-mutations.js');
 const workflowStorageBackend = await import('../routes/workflows/storage-backend.js');
 const filesystemExecutionCache = await import('../routes/workflows/filesystem-execution-cache.js');
+const workflowEndpointAuthSettings = await import('../workflow-endpoint-auth-settings.js');
 const rivetNode = await import('@valerypopoff/rivet2-node');
 
 type ApiProfile = 'combined' | 'control' | 'execution';
@@ -93,6 +92,9 @@ async function resetFilesystemState(): Promise<void> {
   await resetLatestWorkflowRemoteDebuggerForTests();
   delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
   await resetWorkflowTestRoots({ workflowsRoot, appDataRoot, runtimeLibrariesRoot });
+  await workflowEndpointAuthSettings.writeWorkflowEndpointAuthSettings({
+    requireBearerAuth: false,
+  });
   await workflowFs.ensureWorkflowsRoot();
 }
 

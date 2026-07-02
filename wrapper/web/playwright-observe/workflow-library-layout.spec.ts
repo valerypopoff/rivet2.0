@@ -108,6 +108,11 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     updatedAt: null as string | null,
     source: 'default',
   };
+  let workflowEndpointAuthSettings = {
+    requireBearerAuth: true,
+    updatedAt: null as string | null,
+    source: 'default',
+  };
 
   await page.route('**/api/config', async (route) => {
     const url = new URL(route.request().url());
@@ -320,6 +325,37 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
       return;
     }
 
+    if (url.pathname === '/api/app-settings/workflow-endpoint-auth') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          requireBearerAuth?: boolean;
+        };
+        workflowEndpointAuthSettings = {
+          requireBearerAuth: body.requireBearerAuth ?? true,
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(workflowEndpointAuthSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(workflowEndpointAuthSettings),
+      });
+      return;
+    }
+
     if (url.pathname === '/api/app-settings/deployment-storage') {
       if (method === 'PUT') {
         const body = route.request().postDataJSON() as Record<string, unknown>;
@@ -497,9 +533,11 @@ test.describe('Workflow library layout', () => {
 
     await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title')).toContainText(['Routes', 'HTTP request timeout']);
+    await expect(appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title')).toContainText(['Routes', 'Access control', 'HTTP request timeout']);
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('workflows');
     await expect(appSettingsModal.getByLabel('Latest saved workflow endpoint URL slug')).toHaveValue('workflows-latest');
+    const workflowEndpointAuthSection = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section', { hasText: 'Access control' });
+    await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).toBeChecked();
     await expect(appSettingsModal.getByLabel('Proxy read timeout in seconds')).toHaveValue('180');
     await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveCount(0);
     await appSettingsModal.getByLabel('Published workflow endpoint URL slug').fill('public-workflows');
@@ -507,9 +545,14 @@ test.describe('Workflow library layout', () => {
     const workflowRouteActions = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').first();
     await expect(workflowRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('public-workflows');
+    await appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls').uncheck();
+    await workflowEndpointAuthSection.getByRole('button', { name: 'Save' }).click();
+    await expect(workflowEndpointAuthSection.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).not.toBeChecked();
     await appSettingsModal.getByLabel('Proxy read timeout in seconds').fill('240');
-    await appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
-    const workflowTimeoutActions = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').last();
+    const workflowTimeoutSection = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section', { hasText: 'HTTP request timeout' });
+    await workflowTimeoutSection.getByRole('button', { name: 'Save' }).click();
+    const workflowTimeoutActions = workflowTimeoutSection.locator('.app-settings-actions-row');
     await expect(workflowTimeoutActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect.poll(async () => {
       const [contentBox, sectionBox] = await Promise.all([

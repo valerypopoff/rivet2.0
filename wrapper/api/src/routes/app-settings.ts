@@ -7,6 +7,7 @@ import type {
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
   RuntimeLimitSettingsDraft,
+  WorkflowEndpointAuthSettingsDraft,
 } from '../../../shared/app-settings-types.js';
 import { readDeploymentStorageSettings, writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
 import {
@@ -24,6 +25,10 @@ import {
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
 import { readRuntimeLimitSettings, writeRuntimeLimitSettings } from '../runtime-limit-settings.js';
 import { readWebAppAuthSettings, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
+import {
+  readWorkflowEndpointAuthSettings,
+  writeWorkflowEndpointAuthSettings,
+} from '../workflow-endpoint-auth-settings.js';
 import {
   DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS,
   getRunRecordingsSettingsPath,
@@ -396,6 +401,22 @@ appSettingsRouter.get('/public-routes', async (_req, res, next) => {
 appSettingsRouter.put('/public-routes', async (req, res, next) => {
   try {
     res.json(await writePublicRouteSettings(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/workflow-endpoint-auth', async (_req, res, next) => {
+  try {
+    res.json(await readWorkflowEndpointAuthSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/workflow-endpoint-auth', async (req, res, next) => {
+  try {
+    res.json(await writeWorkflowEndpointAuthSettings(req.body as WorkflowEndpointAuthSettingsDraft));
   } catch (error) {
     next(error);
   }

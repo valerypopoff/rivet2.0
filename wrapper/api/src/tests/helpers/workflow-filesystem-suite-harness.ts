@@ -25,6 +25,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
   const workflowRoutes = await import('../../routes/workflows/index.js');
   const workflowStorageBackend = await import('../../routes/workflows/storage-backend.js');
   const filesystemExecutionCache = await import('../../routes/workflows/filesystem-execution-cache.js');
+  const workflowEndpointAuthSettings = await import('../../workflow-endpoint-auth-settings.js');
   const rivetNode = await import('@valerypopoff/rivet2-node');
 
   const withWorkflowApiServer = createWorkflowApiServerHarness({
@@ -49,6 +50,9 @@ export async function createFilesystemWorkflowSuiteHarness() {
       workflowsRoot: roots.workflowsRoot,
       recordingsRoot: roots.recordingsRoot,
       appDataRoot: roots.appDataRoot,
+    });
+    await workflowEndpointAuthSettings.writeWorkflowEndpointAuthSettings({
+      requireBearerAuth: false,
     });
   }
 

@@ -28,6 +28,16 @@ export interface ExecutorUrlOverrideSettingsDraft {
   remoteDebuggerDefaultWs?: unknown;
 }
 
+export interface WorkflowEndpointAuthSettings {
+  requireBearerAuth: boolean;
+  updatedAt: string | null;
+  source: AppSettingsSource;
+}
+
+export interface WorkflowEndpointAuthSettingsDraft {
+  requireBearerAuth?: unknown;
+}
+
 export interface RunRecordingsSettings {
   maxPendingWrites: number;
   maxRunsPerEndpoint: number;

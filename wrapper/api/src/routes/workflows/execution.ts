@@ -29,6 +29,7 @@ import {
   isWebAppOAuthSessionAllowed,
   readWebAppOAuthSession,
 } from '../../web-app-oauth.js';
+import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import {
   createExecutionProjectReferenceLoader,
@@ -330,7 +331,7 @@ function setCodeRunnerTelemetryHeaders(
 }
 
 function requirePublishedWorkflowApiKey(req: Request): void {
-  const isWorkflowKeyRequired = isEnvFlagEnabled(process.env.RIVET_REQUIRE_WORKFLOW_KEY, false);
+  const isWorkflowKeyRequired = readWorkflowEndpointAuthSettingsSync().requireBearerAuth;
   if (!isWorkflowKeyRequired) {
     return;
   }

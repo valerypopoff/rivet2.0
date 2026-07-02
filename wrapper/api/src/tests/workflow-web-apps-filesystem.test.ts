@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
 import { readWebAppAuthSettingsSync, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
+import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 import { readJson, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import {
@@ -594,107 +595,106 @@ test('latest filesystem web app actions reject stale saved-draft revisions', asy
 });
 
 test('published filesystem web apps use the UI gate instead of workflow bearer auth', async () => {
-  await withEnvOverride('RIVET_REQUIRE_WORKFLOW_KEY', 'false', async () => {
-    await withEnvOverride('RIVET_REQUIRE_UI_GATE_KEY', 'true', async () => {
-      await withEnvOverride('RIVET_KEY', 'web-app-ui-session-key', async () => {
-        const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppUiSession');
-        await writeWebAppProject(created.absolutePath, 'PublishedWebAppUiSession', 'Published UI Session App');
-        await publishWebApp(created.relativePath, 'published-web-app-ui-session');
+  await withEnvOverride('RIVET_REQUIRE_UI_GATE_KEY', 'true', async () => {
+    await withEnvOverride('RIVET_KEY', 'web-app-ui-session-key', async () => {
+      const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppUiSession');
+      await writeWebAppProject(created.absolutePath, 'PublishedWebAppUiSession', 'Published UI Session App');
+      await publishWebApp(created.relativePath, 'published-web-app-ui-session');
 
-        await withWorkflowExecutionServer(async ({ publishedBaseUrl, webAppsBaseUrl, latestWebAppsBaseUrl }) => {
-          const unauthenticatedResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session`, {
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(unauthenticatedResponse.status, 401);
-
-          const latestUnauthenticatedResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session`, {
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(latestUnauthenticatedResponse.status, 401);
-
-          const uiSessionHeaders = {
-            Cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
-            'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
-          };
-          const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session`, {
-            headers: uiSessionHeaders,
-            signal: AbortSignal.timeout(5000),
-          });
-          const html = await htmlResponse.text();
-
-          assert.equal(htmlResponse.status, 200);
-          assert.match(html, /Published UI Session App/);
-          const revisionKey = extractWebAppRevisionKey(html);
-
-          const appJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
-            headers: uiSessionHeaders,
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(appJsonResponse.status, 200);
-
-          const crossOriginAppJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
-            headers: {
-              ...uiSessionHeaders,
-              Origin: 'https://evil.example.test',
-            },
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(crossOriginAppJsonResponse.status, 403);
-          const crossOriginAppJsonBody = await crossOriginAppJsonResponse.json() as { error?: string; code?: string };
-          assert.equal(crossOriginAppJsonBody.error, 'Cross-origin web app request denied');
-          assert.equal(crossOriginAppJsonBody.code, 'origin_forbidden');
-
-          const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/actions/run`, {
-            method: 'POST',
-            headers: {
-              ...uiSessionHeaders,
-              'Content-Type': 'application/json',
-              Origin: new URL(webAppsBaseUrl).origin,
-            },
-            body: JSON.stringify({
-              componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
-              revisionKey,
-              state: {
-                prompt: 'hello with ui session',
-              },
-            }),
-            signal: AbortSignal.timeout(5000),
-          });
-          const actionBody = await actionResponse.json() as {
-            statePatch?: Record<string, unknown>;
-          };
-
-          assert.equal(actionResponse.status, 200);
-          assert.deepEqual(actionBody.statePatch, { result: 'hello with ui session' });
-
-          const tokenFreeResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
-            headers: {
-              'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
-              'X-Rivet-Token-Free-Host': '1',
-            },
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(tokenFreeResponse.status, 200);
-
-          const latestTokenFreeResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session/app.json`, {
-            headers: {
-              'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
-              'X-Rivet-Token-Free-Host': '1',
-            },
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(latestTokenFreeResponse.status, 200);
-
-          await withEnvOverride('RIVET_REQUIRE_WORKFLOW_KEY', 'true', async () => {
-            const workflowResponse = await fetch(`${publishedBaseUrl}/missing-workflow`, {
-              method: 'POST',
-              headers: uiSessionHeaders,
-              body: '{}',
-              signal: AbortSignal.timeout(5000),
-            });
-            assert.equal(workflowResponse.status, 401);
-          });
+      await withWorkflowExecutionServer(async ({ publishedBaseUrl, webAppsBaseUrl, latestWebAppsBaseUrl }) => {
+        const unauthenticatedResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session`, {
+          signal: AbortSignal.timeout(5000),
         });
+        assert.equal(unauthenticatedResponse.status, 401);
+
+        const latestUnauthenticatedResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(latestUnauthenticatedResponse.status, 401);
+
+        const uiSessionHeaders = {
+          Cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+          'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+        };
+        const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session`, {
+          headers: uiSessionHeaders,
+          signal: AbortSignal.timeout(5000),
+        });
+        const html = await htmlResponse.text();
+
+        assert.equal(htmlResponse.status, 200);
+        assert.match(html, /Published UI Session App/);
+        const revisionKey = extractWebAppRevisionKey(html);
+
+        const appJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+          headers: uiSessionHeaders,
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(appJsonResponse.status, 200);
+
+        const crossOriginAppJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+          headers: {
+            ...uiSessionHeaders,
+            Origin: 'https://evil.example.test',
+          },
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(crossOriginAppJsonResponse.status, 403);
+        const crossOriginAppJsonBody = await crossOriginAppJsonResponse.json() as { error?: string; code?: string };
+        assert.equal(crossOriginAppJsonBody.error, 'Cross-origin web app request denied');
+        assert.equal(crossOriginAppJsonBody.code, 'origin_forbidden');
+
+        const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/actions/run`, {
+          method: 'POST',
+          headers: {
+            ...uiSessionHeaders,
+            'Content-Type': 'application/json',
+            Origin: new URL(webAppsBaseUrl).origin,
+          },
+          body: JSON.stringify({
+            componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+            revisionKey,
+            state: {
+              prompt: 'hello with ui session',
+            },
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+        const actionBody = await actionResponse.json() as {
+          statePatch?: Record<string, unknown>;
+        };
+
+        assert.equal(actionResponse.status, 200);
+        assert.deepEqual(actionBody.statePatch, { result: 'hello with ui session' });
+
+        const tokenFreeResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+          headers: {
+            'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+            'X-Rivet-Token-Free-Host': '1',
+          },
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(tokenFreeResponse.status, 200);
+
+        const latestTokenFreeResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+          headers: {
+            'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+            'X-Rivet-Token-Free-Host': '1',
+          },
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(latestTokenFreeResponse.status, 200);
+
+        await writeWorkflowEndpointAuthSettings({
+          requireBearerAuth: true,
+        });
+        const workflowResponse = await fetch(`${publishedBaseUrl}/missing-workflow`, {
+          method: 'POST',
+          headers: uiSessionHeaders,
+          body: '{}',
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(workflowResponse.status, 401);
       });
     });
   });

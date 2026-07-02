@@ -54,7 +54,6 @@ function writeLocalVerificationEnv() {
     'RIVET_K8S_STORAGE_ACCESS_KEY_ID=test-access-key',
     'RIVET_K8S_STORAGE_ACCESS_KEY=test-secret-key',
     'RIVET_KEY=test-shared-key',
-    'RIVET_REQUIRE_WORKFLOW_KEY=false',
     'RIVET_REQUIRE_UI_GATE_KEY=false',
     'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true',
     '',

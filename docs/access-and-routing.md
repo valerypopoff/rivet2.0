@@ -124,6 +124,8 @@ The wrapper API currently exposes these groups behind `/api`:
   - guarded app-settings helper for recording queue depth, per-endpoint history length, and age-retention limits
 - `/api/app-settings/deployment-storage`
   - guarded app-settings helper for workflow/runtime-library storage mode, filesystem artifact root, managed PostgreSQL settings, and managed object-storage settings; secret values are write-only from the browser
+- `/api/app-settings/workflow-endpoint-auth`
+  - guarded app-settings helper for the default-on workflow endpoint bearer-token requirement
 - `/api/app-settings/web-app-auth`
   - guarded app-settings helper for web-app browser auth mode, OAuth provider settings, local dummy-login settings, and web-app OAuth session lifetime
 
@@ -260,14 +262,9 @@ Direct access to the API container for `/api/*`, `/ui-auth`, or `/ws/latest-debu
 Keep any diagnostic API port, such as the Compose `http://localhost:3100` binding, private to the host or trusted operators. Public browser traffic should enter through the Rivet proxy so route auth, token-free-host hints, forwarded host/protocol normalization, UI cookies, and web-app OAuth behavior all share one boundary.
 Docker dev and local-docker managed-service diagnostic ports bind to `127.0.0.1` by default through `RIVET_LOCAL_BIND_HOST`; set it to `0.0.0.0` only on a trusted/firewalled network.
 
-Operationally, that means `RIVET_KEY` is still mandatory anywhere nginx fronts the API, even if:
+Operationally, that means `RIVET_KEY` is still mandatory anywhere nginx fronts the API, even if the UI gate is disabled or `Settings` -> `Workflow endpoints` -> `Access control` disables bearer checks on public workflow routes. Those optional browser/public-workflow checks do not disable the proxy-to-API trust channel.
 
-- `RIVET_REQUIRE_WORKFLOW_KEY=false`
-- `RIVET_REQUIRE_UI_GATE_KEY=false`
-
-Those two flags disable optional browser/public-workflow checks. They do not disable the proxy-to-API trust channel.
-
-The public workflow execution routes are mounted outside `/api`, so they do not use the `requireAuth` middleware. They still rely on nginx to mediate access and, for token-free hosts, inject the token-free-host hint. Web-app routes are also mounted outside `/api`, but they are browser surfaces and use the persisted web-app auth setting rather than `RIVET_REQUIRE_WORKFLOW_KEY`.
+The public workflow execution routes are mounted outside `/api`, so they do not use the `requireAuth` middleware. They still rely on nginx to mediate access and, for token-free hosts, inject the token-free-host hint. Web-app routes are also mounted outside `/api`, but they are browser surfaces and use the persisted web-app auth setting rather than the workflow endpoint bearer-token setting.
 
 Forwarded host/protocol headers are part of the same trust boundary. The proxy ignores incoming `X-Forwarded-Host` and `X-Forwarded-Proto` by default and derives its own effective values from the browser request. Only set `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true` when the proxy is behind a trusted load balancer or ingress that overwrites those headers. Do not enable it for a directly internet-facing proxy, because spoofed forwarded headers can affect OAuth callback construction, same-origin checks, cookie-security decisions, and token-free-host matching.
 
@@ -417,9 +414,9 @@ Managed runtime-library sync is part of that execution path too:
 
 Workflow execution auth is separate from the UI gate:
 
-- `RIVET_REQUIRE_WORKFLOW_KEY=true` enables bearer-token checks on the public workflow routes
+- `Settings` -> `Workflow endpoints` -> `Access control` enables or disables bearer-token checks on the public workflow routes; it is enabled by default
 - `Authorization: Bearer <RIVET_KEY>` is required on `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` when enabled
-- if the flag is enabled but `RIVET_KEY` is empty, public execution fails with `500`
+- if bearer-token checks are enabled but `RIVET_KEY` is empty, public execution fails with `500`
 - hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass public workflow bearer auth because nginx forwards `X-Rivet-Token-Free-Host: 1`
 
 The internal published-only route:
@@ -434,7 +431,7 @@ The current runtime split does not make `RIVET_APP_DATA_ROOT` authoritative for 
 
 - workflow truth remains Postgres plus object storage
 - `Code` node package resolution comes from the managed runtime-library cache under `RIVET_RUNTIME_LIBRARIES_ROOT`
-- execution-plane `app-data` is required settings state in Kubernetes, not workflow blob storage; execution pods must mount the same app-data claim as the control plane so UI-managed storage, recording, web-app auth, runtime-limit, and outbound proxy settings are visible
+- execution-plane `app-data` is required settings state in Kubernetes, not workflow blob storage; execution pods must mount the same app-data claim as the control plane so UI-managed storage, recording, workflow endpoint auth, web-app auth, runtime-limit, and outbound proxy settings are visible
 
 Important limitation:
 

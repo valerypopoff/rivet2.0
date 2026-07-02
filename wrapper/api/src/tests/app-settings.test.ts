@@ -48,6 +48,11 @@ import {
   writeRuntimeLimitSettings,
 } from '../runtime-limit-settings.js';
 import {
+  getWorkflowEndpointAuthSettingsPath,
+  readWorkflowEndpointAuthSettings,
+  writeWorkflowEndpointAuthSettings,
+} from '../workflow-endpoint-auth-settings.js';
+import {
   getManagedWorkflowStorageConfig,
   getWorkflowStorageBackendMode,
 } from '../routes/workflows/storage-config.js';
@@ -100,6 +105,7 @@ const relevantEnvKeys = [
   'RIVET_DOCKER_WAIT_TIMEOUT',
   'RIVET_EXECUTOR_WS_URL',
   'RIVET_REMOTE_DEBUGGER_DEFAULT_WS',
+  'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_KEY',
 ] as const;
 
@@ -353,6 +359,90 @@ test('Executor URL override settings reject non-websocket URLs', async () => {
   });
 });
 
+test('Workflow endpoint auth settings default to requiring bearer auth and ignore environment values', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_REQUIRE_WORKFLOW_KEY = 'false';
+
+    const defaultSettings = await readWorkflowEndpointAuthSettings();
+    assert.equal(defaultSettings.source, 'default');
+    assert.equal(defaultSettings.requireBearerAuth, true);
+
+    const savedSettings = await writeWorkflowEndpointAuthSettings({
+      requireBearerAuth: false,
+    });
+    assert.equal(savedSettings.source, 'app-settings');
+    assert.equal(savedSettings.requireBearerAuth, false);
+
+    process.env.RIVET_REQUIRE_WORKFLOW_KEY = 'true';
+    const nextSettings = await readWorkflowEndpointAuthSettings();
+    assert.equal(nextSettings.requireBearerAuth, false);
+  });
+});
+
+test('Workflow endpoint auth settings API saves and returns persisted values', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const defaultResponse = await fetch(`${server.baseUrl}/api/app-settings/workflow-endpoint-auth`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(defaultResponse.status, 200);
+      const defaultSettings = await defaultResponse.json() as Record<string, unknown>;
+      assert.equal(defaultSettings.source, 'default');
+      assert.equal(defaultSettings.requireBearerAuth, true);
+
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/workflow-endpoint-auth`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          requireBearerAuth: false,
+        }),
+      });
+      assert.equal(saveResponse.status, 200);
+      const savedSettings = await saveResponse.json() as Record<string, unknown>;
+      assert.equal(savedSettings.source, 'app-settings');
+      assert.equal(savedSettings.requireBearerAuth, false);
+
+      const readResponse = await fetch(`${server.baseUrl}/api/app-settings/workflow-endpoint-auth`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(readResponse.status, 200);
+      const readSettings = await readResponse.json() as Record<string, unknown>;
+      assert.equal(readSettings.requireBearerAuth, false);
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Workflow endpoint auth settings reject non-boolean values', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/workflow-endpoint-auth`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          requireBearerAuth: 'false',
+        }),
+      });
+
+      assert.equal(saveResponse.status, 400);
+      assert.match((await saveResponse.json() as { error: string }).error, /must be true or false/);
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
 test('App settings files are written with owner-only permissions', async () => {
   await withAppSettingsEnv(async () => {
     await writeNodeExecutorProxySettings({
@@ -368,6 +458,9 @@ test('App settings files are written with owner-only permissions', async () => {
     await writeExecutorUrlOverrideSettings({
       executorWsUrl: 'wss://executor.example.test/ws/executor/internal',
       remoteDebuggerDefaultWs: 'wss://debugger.example.test/ws/latest-debugger',
+    });
+    await writeWorkflowEndpointAuthSettings({
+      requireBearerAuth: true,
     });
     await writeDeploymentStorageSettings({
       storageMode: 'managed',
@@ -393,6 +486,7 @@ test('App settings files are written with owner-only permissions', async () => {
     assertPrivateSettingsFile(path.join(appDataRoot, 'settings', 'node-executor-proxy.json'));
     assertPrivateSettingsFile(getRunRecordingsSettingsPath());
     assertPrivateSettingsFile(getExecutorUrlOverrideSettingsPath());
+    assertPrivateSettingsFile(getWorkflowEndpointAuthSettingsPath());
     assertPrivateSettingsFile(getDeploymentStorageSettingsPath());
     assertPrivateSettingsFile(getWebAppAuthSettingsPath());
   });
@@ -1081,6 +1175,7 @@ test('Public route settings API saves and returns persisted values', async () =>
 
 test('Public route settings move workflow and web-app dispatch without recreating the API app', async () => {
   await withAppSettingsEnv(async () => {
+    await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
     await writeWebAppAuthSettings({ mode: 'none' });
 
     const readError = async (response: Response): Promise<string> => {

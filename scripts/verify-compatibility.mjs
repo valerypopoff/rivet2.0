@@ -16,7 +16,6 @@ const repoLocalEnvKeysToScrub = [
   'RIVET_STORAGE_MODE',
   'RIVET_KEY',
   'RIVET_CORS_ALLOWED_ORIGINS',
-  'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER',
   'RIVET_UI_TOKEN_FREE_HOSTS',
   'RIVET_TRUST_INCOMING_FORWARDED_HEADERS',
@@ -239,7 +238,6 @@ function createScenarioEnvFile(mode) {
 
   const lines = [
     'RIVET_KEY=compat-shared-key',
-    'RIVET_REQUIRE_WORKFLOW_KEY=false',
     'RIVET_REQUIRE_UI_GATE_KEY=false',
     'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false',
     `RIVET_APP_DATA_ROOT=${filesystemFixture.appDataRoot}`,

@@ -16,11 +16,11 @@ import {
 } from '../app.js';
 import { disposeRuntimeLibrariesBackend } from '../runtime-libraries/backend.js';
 import { createHttpError } from '../utils/httpError.js';
+import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 
 const relevantEnvKeys = [
   'RIVET_KEY',
   'RIVET_CORS_ALLOWED_ORIGINS',
-  'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_WORKFLOWS_ROOT',
   'RIVET_APP_DATA_ROOT',
   'RIVET_RUNTIME_LIBRARIES_ROOT',
@@ -42,7 +42,6 @@ async function withApiEnv(
 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-api-profile-'));
   process.env.RIVET_KEY = 'phase4-shared-key';
-  process.env.RIVET_REQUIRE_WORKFLOW_KEY = 'false';
   process.env.RIVET_WORKSPACE_ROOT = tempRoot;
   process.env.RIVET_WORKFLOWS_ROOT = path.join(tempRoot, 'workflows');
   process.env.RIVET_APP_DATA_ROOT = path.join(tempRoot, 'app-data');
@@ -330,6 +329,7 @@ test('control profile exposes control-plane routes and does not expose published
 
 test('execution profile exposes published execution routes and hides control-plane routes', async () => {
   await withApiEnv({}, async () => {
+    await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
     const server = await startServer('execution');
     try {
       const configResponse = await fetch(`${server.baseUrl}/api/config`, {
@@ -399,6 +399,7 @@ test('execution profile exposes published execution routes and hides control-pla
 
 test('combined profile preserves both control-plane and published/latest execution routes', async () => {
   await withApiEnv({}, async () => {
+    await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
     const server = await startServer('combined');
     try {
       const configResponse = await fetch(`${server.baseUrl}/api/config`, {
