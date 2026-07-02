@@ -96,6 +96,7 @@ Current behavior:
 
 Operational note:
 
+- `.env.example` intentionally lists only launcher/bootstrap/deployment-owned environment knobs. Settings that operators can change from the App Settings modal should stay out of `.env.example` as concrete variables; document their owning Settings tab instead, so new installs do not learn two competing configuration paths.
 - `Settings` -> `Storage` is the operator surface for choosing filesystem versus managed storage and for saving managed database/object-storage credentials. It writes `settings/deployment-storage.json` under app data; API and executor processes read that file at startup. If the file is absent, Docker/API runtime uses built-in `Local folders` plus `Local Docker Postgres` defaults. Restart or recreate Docker services, or roll out Kubernetes API/executor pods, after saving storage settings.
 - `RIVET_ARTIFACTS_HOST_PATH` remains the launcher bootstrap/default for filesystem-mode host mounts
 - `RIVET_WORKFLOWS_HOST_PATH`, `RIVET_WORKFLOW_RECORDINGS_HOST_PATH`, and `RIVET_RUNTIME_LIBS_HOST_PATH` remain compatibility overrides for the launcher
