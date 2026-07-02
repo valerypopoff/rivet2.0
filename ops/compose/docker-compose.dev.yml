@@ -14,7 +14,6 @@ services:
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
       - RIVET_TRUST_INCOMING_FORWARDED_HEADERS=${RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false}
-      - RIVET_UI_TOKEN_FREE_HOSTS=${RIVET_UI_TOKEN_FREE_HOSTS:-}
     volumes:
       - ../nginx/default.dev.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ../../image/proxy/normalize-workflow-paths.sh:/normalize-workflow-paths.sh:ro

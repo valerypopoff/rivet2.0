@@ -7,6 +7,7 @@ import type {
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
   RuntimeLimitSettingsDraft,
+  TrustedHostSettingsDraft,
   WorkflowEndpointAuthSettingsDraft,
 } from '../../../shared/app-settings-types.js';
 import { readDeploymentStorageSettings, writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
@@ -24,6 +25,7 @@ import {
 } from '../public-route-settings.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
 import { readRuntimeLimitSettings, writeRuntimeLimitSettings } from '../runtime-limit-settings.js';
+import { readTrustedHostSettings, writeTrustedHostSettings } from '../trusted-host-settings.js';
 import { readWebAppAuthSettings, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 import {
   readWorkflowEndpointAuthSettings,
@@ -353,6 +355,22 @@ appSettingsRouter.get('/runtime-limits', async (_req, res, next) => {
 appSettingsRouter.put('/runtime-limits', async (req, res, next) => {
   try {
     res.json(await writeRuntimeLimitSettings(normalizeRuntimeLimitSettingsDraft(req.body)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.get('/trusted-hosts', async (_req, res, next) => {
+  try {
+    res.json(await readTrustedHostSettings());
+  } catch (error) {
+    next(error);
+  }
+});
+
+appSettingsRouter.put('/trusted-hosts', async (req, res, next) => {
+  try {
+    res.json(await writeTrustedHostSettings(req.body as TrustedHostSettingsDraft));
   } catch (error) {
     next(error);
   }

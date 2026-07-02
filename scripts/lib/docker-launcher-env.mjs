@@ -25,6 +25,7 @@ export const retiredEnvReplacements = {
   RIVET_WORKFLOWS_STORAGE_FORCE_PATH_STYLE: 'Settings -> Storage',
   RIVET_PROXY_READ_TIMEOUT: 'Settings -> Workflow endpoints',
   RIVET_REQUIRE_WORKFLOW_KEY: 'Settings -> Workflow endpoints',
+  RIVET_UI_TOKEN_FREE_HOSTS: 'Settings -> General',
   RIVET_COMMAND_TIMEOUT: 'Settings -> General',
   RIVET_MAX_OUTPUT: 'Settings -> General',
   RIVET_DOCKER_WAIT_TIMEOUT: 'Settings -> Docker',

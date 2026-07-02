@@ -113,6 +113,11 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     updatedAt: null as string | null,
     source: 'default',
   };
+  let trustedHostSettings = {
+    trustedHosts: ['internal.example.test'],
+    updatedAt: null as string | null,
+    source: 'default',
+  };
 
   await page.route('**/api/config', async (route) => {
     const url = new URL(route.request().url());
@@ -356,6 +361,37 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
       return;
     }
 
+    if (url.pathname === '/api/app-settings/trusted-hosts') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          trustedHosts?: string[];
+        };
+        trustedHostSettings = {
+          trustedHosts: body.trustedHosts ?? [],
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(trustedHostSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(trustedHostSettings),
+      });
+      return;
+    }
+
     if (url.pathname === '/api/app-settings/deployment-storage') {
       if (method === 'PUT') {
         const body = route.request().postDataJSON() as Record<string, unknown>;
@@ -524,11 +560,18 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal).toContainText('/workflows');
     await expect(appSettingsModal).toContainText('Published web apps');
     await expect(appSettingsModal).toContainText('/apps');
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
+    const trustedHostsSection = appSettingsModal.locator('section[aria-label="Trusted host settings"]');
+    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await trustedHostsSection.locator('.app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    await expect(trustedHostsSection.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('10');
     await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
-    await appSettingsModal.locator('.app-settings-general-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
-    const generalActions = appSettingsModal.locator('.app-settings-general-panel .app-settings-actions-row');
+    const shellExecutionSection = appSettingsModal.locator('section[aria-label="Shell execution"]');
+    await shellExecutionSection.locator('.app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    const generalActions = shellExecutionSection.locator('.app-settings-actions-row');
     await expect(generalActions.locator('.project-settings-success')).toHaveText('Saved.');
 
     await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
@@ -720,7 +763,11 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toBeVisible();
     await appSettingsModal.getByRole('tab', { name: 'General' }).click();
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('11');
-    await expect(appSettingsModal.locator('.app-settings-general-panel .app-settings-actions-row').getByRole('button', { name: 'Save' })).toBeEnabled();
+    await expect(
+      appSettingsModal
+        .locator('section[aria-label="Shell execution"] .app-settings-actions-row')
+        .getByRole('button', { name: 'Save' }),
+    ).toBeEnabled();
     await expect(appSettingsModal).toContainText('OAuth');
     await page.getByRole('button', { name: 'Close app settings' }).click();
     await expect(appSettingsModal).toHaveCount(0);

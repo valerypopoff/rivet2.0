@@ -25,7 +25,7 @@ map "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS}:$http_x_forwarded_proto" $rivet_f
 
 map $rivet_forwarded_hostname $rivet_ui_host_is_token_free {
     default 0;
-    ~${RIVET_UI_TOKEN_FREE_HOSTS_REGEX} 1;
+    include ${RIVET_TRUSTED_HOSTS_INCLUDE_FILE};
 }
 
 map $cookie_rivet_ui_token $rivet_ui_has_valid_cookie_token {

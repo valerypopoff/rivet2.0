@@ -11,6 +11,7 @@ import {
   fetchPublicRouteSettings,
   fetchRunRecordingsSettings,
   fetchRuntimeLimitSettings,
+  fetchTrustedHostSettings,
   fetchWebAppAuthSettings,
   fetchWorkflowEndpointAuthSettings,
   saveDeploymentStorageSettings,
@@ -19,6 +20,7 @@ import {
   savePublicRouteSettings,
   saveRunRecordingsSettings,
   saveRuntimeLimitSettings,
+  saveTrustedHostSettings,
   saveWebAppAuthSettings,
   saveWorkflowEndpointAuthSettings,
 } from './appSettingsApi';
@@ -32,6 +34,7 @@ import type {
   PublicRouteSettings,
   RuntimeLimitSettings,
   RuntimeLimitSettingsDraft,
+  TrustedHostSettings,
   WebAppAuthMode,
   WebAppAuthSettings,
   WebAppOAuthClientAuthMethod,
@@ -72,6 +75,9 @@ type RuntimeLimitSettingsFormSnapshot = {
   maxOutputMiB: string;
   proxyReadTimeoutSeconds: string;
   dockerWaitTimeoutSeconds: string;
+};
+type TrustedHostSettingsFormSnapshot = {
+  trustedHostsText: string;
 };
 type WorkflowEndpointAuthSettingsFormSnapshot = Pick<
   WorkflowEndpointAuthSettings,
@@ -192,6 +198,17 @@ function createRuntimeLimitSnapshot(settings: RuntimeLimitSettings): RuntimeLimi
   };
 }
 
+function formatTrustedHostsText(settings: Pick<TrustedHostSettings, 'trustedHosts'>): string {
+  return settings.trustedHosts.join('\n');
+}
+
+function parseTrustedHostsText(value: string): string[] {
+  return value
+    .split(/[\n,]+/)
+    .map((host) => host.trim())
+    .filter(Boolean);
+}
+
 function publicRouteSettingsMatchConfig(
   settings: Pick<
     PublicRouteSettings,
@@ -305,6 +322,14 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     maxOutputMiB: '10',
     proxyReadTimeoutSeconds: '180',
     dockerWaitTimeoutSeconds: '1200',
+  });
+  const [loadingTrustedHostSettings, setLoadingTrustedHostSettings] = useState(false);
+  const [savingTrustedHostSettings, setSavingTrustedHostSettings] = useState(false);
+  const [trustedHostSettingsError, setTrustedHostSettingsError] = useState<string | null>(null);
+  const [trustedHostSettingsSaved, setTrustedHostSettingsSaved] = useState(false);
+  const [trustedHostsText, setTrustedHostsText] = useState('');
+  const [initialTrustedHostSettings, setInitialTrustedHostSettings] = useState<TrustedHostSettingsFormSnapshot>({
+    trustedHostsText: '',
   });
   const [loadingPublicRouteSettings, setLoadingPublicRouteSettings] = useState(false);
   const [savingPublicRouteSettings, setSavingPublicRouteSettings] = useState(false);
@@ -459,6 +484,16 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     loadingRuntimeLimitSettings ||
     savingRuntimeLimitSettings
   );
+
+  const currentTrustedHostSettings = useMemo(() => ({
+    trustedHostsText: parseTrustedHostsText(trustedHostsText).join('\n'),
+  }), [trustedHostsText]);
+
+  const trustedHostSettingsChanged = useMemo(() => (
+    currentTrustedHostSettings.trustedHostsText !== initialTrustedHostSettings.trustedHostsText
+  ), [currentTrustedHostSettings, initialTrustedHostSettings]);
+
+  const trustedHostControlsDisabled = loadingTrustedHostSettings || savingTrustedHostSettings;
 
   const currentPublicRouteSettings = useMemo(() => ({
     publishedWorkflowsSlug: publishedWorkflowsSlug.trim(),
@@ -776,6 +811,44 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   }, [activeTab, isOpen, runtimeLimitSettingsLoaded]);
 
   useEffect(() => {
+    if (!isOpen || activeTab !== 'general') {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingTrustedHostSettings(true);
+    setTrustedHostSettingsError(null);
+    setTrustedHostSettingsSaved(false);
+
+    fetchTrustedHostSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+
+        const snapshot = {
+          trustedHostsText: formatTrustedHostsText(settings),
+        };
+        setTrustedHostsText(snapshot.trustedHostsText);
+        setInitialTrustedHostSettings(snapshot);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setTrustedHostSettingsError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingTrustedHostSettings(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isOpen]);
+
+  useEffect(() => {
     if (!isOpen || (activeTab !== 'workflow-endpoints' && activeTab !== 'web-apps')) {
       return;
     }
@@ -1078,6 +1151,28 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     }
   };
 
+  const handleSaveTrustedHostSettings = async () => {
+    setSavingTrustedHostSettings(true);
+    setTrustedHostSettingsError(null);
+    setTrustedHostSettingsSaved(false);
+
+    try {
+      const savedSettings = await saveTrustedHostSettings({
+        trustedHosts: parseTrustedHostsText(trustedHostsText),
+      });
+      const snapshot = {
+        trustedHostsText: formatTrustedHostsText(savedSettings),
+      };
+      setTrustedHostsText(snapshot.trustedHostsText);
+      setInitialTrustedHostSettings(snapshot);
+      setTrustedHostSettingsSaved(true);
+    } catch (error) {
+      setTrustedHostSettingsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingTrustedHostSettings(false);
+    }
+  };
+
   const handleSavePublicRouteSettings = async (scope: PublicRouteSettingsScope) => {
     setSavingPublicRouteSettings(true);
     setApplyingPublicRouteSettings(false);
@@ -1209,6 +1304,12 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     setRuntimeLimitSettingsSaved(false);
     setRuntimeLimitSettingsError(null);
     setRuntimeLimitSettingsStatusScope(null);
+  };
+
+  const handleRevertTrustedHostSettings = () => {
+    setTrustedHostsText(initialTrustedHostSettings.trustedHostsText);
+    setTrustedHostSettingsSaved(false);
+    setTrustedHostSettingsError(null);
   };
 
   const handleRevertWebAppAuthSettings = () => {
@@ -1385,6 +1486,58 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                     <div className="about-detail-row">
                       <span className="about-detail-label">Web app auth</span>
                       <span className="about-detail-value">{formatWebAppsAuthMode(routeConfig.webAppsAuthMode)}</span>
+                    </div>
+                    <div className="about-detail-row">
+                      <span className="about-detail-label">Trusted hosts</span>
+                      <span className="about-detail-value">
+                        {currentTrustedHostSettings.trustedHostsText
+                          ? `${parseTrustedHostsText(currentTrustedHostSettings.trustedHostsText).length} configured`
+                          : 'None'}
+                      </span>
+                    </div>
+                  </section>
+
+                  <section className="app-settings-section" aria-label="Trusted host settings">
+                    <div className="app-settings-section-title">Trusted hosts</div>
+                    <div className="app-settings-field-grid" aria-busy={trustedHostControlsDisabled}>
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Hosts that bypass built-in gates</span>
+                        <textarea
+                          aria-label="Trusted hosts"
+                          className="project-settings-textarea app-settings-trusted-hosts"
+                          value={trustedHostsText}
+                          disabled={trustedHostControlsDisabled}
+                          placeholder={'storyteller-rivet-1.internal.yc.prod.litnet.com\nlocalhost'}
+                          onChange={(event) => {
+                            setTrustedHostsText(event.currentTarget.value);
+                            setTrustedHostSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          Exact hostnames or IP addresses, one per line or comma-separated. These hosts bypass the Rivet key gate, web-app auth, and workflow endpoint bearer checks. Do not include protocol, path, wildcard, or port.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingTrustedHostSettings}
+                        isDisabled={trustedHostControlsDisabled || !trustedHostSettingsChanged}
+                        onClick={handleSaveTrustedHostSettings}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={trustedHostControlsDisabled || !trustedHostSettingsChanged}
+                        onClick={handleRevertTrustedHostSettings}
+                      >
+                        Revert
+                      </Button>
+                      {renderActionStatus(trustedHostSettingsError, trustedHostSettingsSaved)}
                     </div>
                   </section>
 

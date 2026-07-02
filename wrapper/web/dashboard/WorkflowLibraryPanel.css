@@ -1462,6 +1462,11 @@
   resize: vertical;
 }
 
+.app-settings-trusted-hosts {
+  min-height: 92px;
+  resize: vertical;
+}
+
 .app-settings-checkbox-field {
   display: inline-flex;
   align-items: center;

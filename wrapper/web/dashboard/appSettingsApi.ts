@@ -12,6 +12,8 @@ import type {
   RunRecordingsSettingsDraft,
   RuntimeLimitSettings,
   RuntimeLimitSettingsDraft,
+  TrustedHostSettings,
+  TrustedHostSettingsDraft,
   WebAppAuthSettings,
   WebAppAuthSettingsDraft,
   WorkflowEndpointAuthSettings,
@@ -96,6 +98,24 @@ export async function saveRuntimeLimitSettings(
     body: JSON.stringify(settings),
   });
   return appSettingsJsonResponse<RuntimeLimitSettings>(response);
+}
+
+export async function fetchTrustedHostSettings(): Promise<TrustedHostSettings> {
+  const response = await fetch(`${API}/trusted-hosts`, {
+    cache: 'no-store',
+  });
+  return appSettingsJsonResponse<TrustedHostSettings>(response);
+}
+
+export async function saveTrustedHostSettings(
+  settings: TrustedHostSettingsDraft,
+): Promise<TrustedHostSettings> {
+  const response = await fetch(`${API}/trusted-hosts`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return appSettingsJsonResponse<TrustedHostSettings>(response);
 }
 
 export async function fetchDeploymentStorageSettings(): Promise<DeploymentStorageSettings> {

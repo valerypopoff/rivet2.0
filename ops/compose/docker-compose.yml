@@ -26,7 +26,6 @@ services:
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
       - RIVET_TRUST_INCOMING_FORWARDED_HEADERS=${RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false}
-      - RIVET_UI_TOKEN_FREE_HOSTS=${RIVET_UI_TOKEN_FREE_HOSTS:-}
     depends_on:
       web:
         condition: service_healthy

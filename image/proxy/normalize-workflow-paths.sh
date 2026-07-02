@@ -390,6 +390,26 @@ read_public_route_settings() {
   RIVET_LATEST_APPS_BASE_PATH="$RIVET_LATEST_WEB_APPS_BASE_PATH"
 }
 
+set_default_trusted_hosts() {
+  RIVET_TRUSTED_HOSTS_REGEX='a^'
+}
+
+read_trusted_host_settings() {
+  set_default_trusted_hosts
+
+  trusted_host_settings_file="${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/trusted-hosts.json"
+  if [ ! -f "$trusted_host_settings_file" ]; then
+    return
+  fi
+
+  raw_trusted_hosts="$(read_json_string_property "$trusted_host_settings_file" "trustedHostsCsv")"
+  if [ -z "$raw_trusted_hosts" ]; then
+    return
+  fi
+
+  RIVET_TRUSTED_HOSTS_REGEX="$(build_host_regex "$raw_trusted_hosts" "${RIVET_KEY:-}")"
+}
+
 write_public_routes_include() {
   output_file="${1:-$RIVET_PUBLIC_ROUTES_INCLUDE_FILE}"
   temp_file="${output_file}.tmp"
@@ -450,6 +470,20 @@ EOF
   mv "$temp_file" "$output_file"
 }
 
+write_trusted_hosts_include() {
+  output_file="${1:-$RIVET_TRUSTED_HOSTS_INCLUDE_FILE}"
+  temp_file="${output_file}.tmp"
+  output_dir="$(dirname "$output_file")"
+
+  mkdir -p "$output_dir"
+
+  cat > "$temp_file" <<EOF
+    ~*${RIVET_TRUSTED_HOSTS_REGEX} 1;
+EOF
+
+  mv "$temp_file" "$output_file"
+}
+
 write_proxy_timeout_include() {
   output_file="${1:-$RIVET_PROXY_TIMEOUT_INCLUDE_FILE}"
   temp_file="${output_file}.tmp"
@@ -466,13 +500,14 @@ EOF
 }
 
 get_public_routes_signature() {
-  printf '%s|%s|%s|%s|%s|%s' \
+  printf '%s|%s|%s|%s|%s|%s|%s' \
     "$RIVET_PUBLISHED_WORKFLOWS_BASE_PATH" \
     "$RIVET_LATEST_WORKFLOWS_BASE_PATH" \
     "$RIVET_WEB_APPS_BASE_PATH" \
     "$RIVET_LATEST_WEB_APPS_BASE_PATH" \
     "${RIVET_PROXY_AUTH_TOKEN:-}" \
-    "${RIVET_PROXY_READ_TIMEOUT:-}"
+    "${RIVET_PROXY_READ_TIMEOUT:-}" \
+    "${RIVET_TRUSTED_HOSTS_REGEX:-}"
 }
 
 start_public_routes_reload_watcher() {
@@ -491,6 +526,7 @@ start_public_routes_reload_watcher() {
         continue
       fi
 
+      read_trusted_host_settings
       read_public_route_settings
       if [ "${RIVET_PUBLIC_ROUTES_SETTINGS_VALID:-1}" != "1" ]; then
         continue
@@ -503,7 +539,8 @@ start_public_routes_reload_watcher() {
 
       previous_public_routes_include="$(cat "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE" 2>/dev/null || true)"
       previous_proxy_timeout_include="$(cat "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE" 2>/dev/null || true)"
-      if write_proxy_timeout_include "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE" && write_public_routes_include "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE" && nginx -t >/tmp/nginx/public-routes-test.log 2>&1; then
+      previous_trusted_hosts_include="$(cat "$RIVET_TRUSTED_HOSTS_INCLUDE_FILE" 2>/dev/null || true)"
+      if write_proxy_timeout_include "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE" && write_public_routes_include "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE" && write_trusted_hosts_include "$RIVET_TRUSTED_HOSTS_INCLUDE_FILE" && nginx -t >/tmp/nginx/public-routes-test.log 2>&1; then
         if nginx -s reload >/tmp/nginx/public-routes-reload.log 2>&1; then
           >&2 printf 'Reloaded nginx public routes: workflows=%s latest-workflows=%s apps=%s latest-apps=%s\n' \
             "$RIVET_PUBLISHED_WORKFLOWS_BASE_PATH" \
@@ -520,6 +557,7 @@ start_public_routes_reload_watcher() {
         cat /tmp/nginx/public-routes-test.log >&2 2>/dev/null || true
         printf '%s' "$previous_public_routes_include" > "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE"
         printf '%s' "$previous_proxy_timeout_include" > "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE"
+        printf '%s' "$previous_trusted_hosts_include" > "$RIVET_TRUSTED_HOSTS_INCLUDE_FILE"
       fi
     done
   ) &
@@ -528,6 +566,7 @@ start_public_routes_reload_watcher() {
 export NGINX_ENVSUBST_OUTPUT_DIR="${NGINX_ENVSUBST_OUTPUT_DIR:-/etc/nginx/conf.d}"
 export RIVET_PUBLIC_ROUTES_INCLUDE_FILE="${RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-/tmp/nginx/rivet-public-routes.inc}"
 export RIVET_PROXY_TIMEOUT_INCLUDE_FILE="${RIVET_PROXY_TIMEOUT_INCLUDE_FILE:-/tmp/nginx/rivet-proxy-timeout.inc}"
+export RIVET_TRUSTED_HOSTS_INCLUDE_FILE="${RIVET_TRUSTED_HOSTS_INCLUDE_FILE:-/tmp/nginx/rivet-trusted-hosts.inc}"
 
 read_runtime_limit_settings
 if [ "${RIVET_RUNTIME_LIMIT_SETTINGS_VALID:-1}" != "1" ]; then
@@ -535,6 +574,7 @@ if [ "${RIVET_RUNTIME_LIMIT_SETTINGS_VALID:-1}" != "1" ]; then
   exit 1
 fi
 
+read_trusted_host_settings
 read_public_route_settings
 export RIVET_PROXY_READ_TIMEOUT
 export RIVET_PUBLISHED_WORKFLOWS_BASE_PATH
@@ -546,13 +586,13 @@ export RIVET_LATEST_APPS_BASE_PATH="$RIVET_LATEST_WEB_APPS_BASE_PATH"
 export RIVET_REQUIRE_UI_GATE_KEY="$(normalize_bool "${RIVET_REQUIRE_UI_GATE_KEY:-}" "0")"
 export RIVET_TRUST_INCOMING_FORWARDED_HEADERS="$(normalize_bool "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-}" "0")"
 export RIVET_UI_GATE_KEY_PRESENT="$(has_nonempty_value "${RIVET_KEY:-}")"
-export RIVET_UI_TOKEN_FREE_HOSTS_REGEX="$(build_host_regex "${RIVET_UI_TOKEN_FREE_HOSTS:-}" "${RIVET_KEY:-}")"
 export RIVET_PROXY_RESOLVER="$(resolve_proxy_resolver "${RIVET_PROXY_RESOLVER:-}")"
 export RIVET_PROXY_AUTH_TOKEN="$(sha256_hex "${RIVET_KEY:-}:proxy-auth")"
 export RIVET_UI_SESSION_TOKEN="$(sha256_hex "${RIVET_KEY:-}:ui-session")"
 
 write_proxy_timeout_include "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE"
 write_public_routes_include "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE"
+write_trusted_hosts_include "$RIVET_TRUSTED_HOSTS_INCLUDE_FILE"
 stage_ui_gate_prompt
 start_public_routes_reload_watcher
 

@@ -48,6 +48,11 @@ import {
   writeRuntimeLimitSettings,
 } from '../runtime-limit-settings.js';
 import {
+  getTrustedHostSettingsPath,
+  readTrustedHostSettings,
+  writeTrustedHostSettings,
+} from '../trusted-host-settings.js';
+import {
   getWorkflowEndpointAuthSettingsPath,
   readWorkflowEndpointAuthSettings,
   writeWorkflowEndpointAuthSettings,
@@ -106,6 +111,7 @@ const relevantEnvKeys = [
   'RIVET_EXECUTOR_WS_URL',
   'RIVET_REMOTE_DEBUGGER_DEFAULT_WS',
   'RIVET_REQUIRE_WORKFLOW_KEY',
+  'RIVET_UI_TOKEN_FREE_HOSTS',
   'RIVET_KEY',
 ] as const;
 
@@ -440,6 +446,106 @@ test('Workflow endpoint auth settings reject non-boolean values', async () => {
     } finally {
       await server?.close();
     }
+  });
+});
+
+test('Trusted host settings default empty and ignore environment values', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_UI_TOKEN_FREE_HOSTS = 'env-trusted.example.test';
+
+    const defaultSettings = await readTrustedHostSettings();
+    assert.equal(defaultSettings.source, 'default');
+    assert.deepEqual(defaultSettings.trustedHosts, []);
+
+    const savedSettings = await writeTrustedHostSettings({
+      trustedHosts: [
+        ' Storyteller-Rivet-1.Internal.Yc.Prod.Litnet.Com ',
+        'storyteller-rivet-1.internal.yc.prod.litnet.com',
+        'localhost',
+      ],
+    });
+    assert.equal(savedSettings.source, 'app-settings');
+    assert.deepEqual(savedSettings.trustedHosts, [
+      'storyteller-rivet-1.internal.yc.prod.litnet.com',
+      'localhost',
+    ]);
+
+    process.env.RIVET_UI_TOKEN_FREE_HOSTS = 'ignored.example.test';
+    const nextSettings = await readTrustedHostSettings();
+    assert.deepEqual(nextSettings.trustedHosts, [
+      'storyteller-rivet-1.internal.yc.prod.litnet.com',
+      'localhost',
+    ]);
+  });
+});
+
+test('Trusted host settings API saves and returns persisted hosts', async () => {
+  await withAppSettingsEnv(async () => {
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      server = await startServer();
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/trusted-hosts`, {
+        method: 'PUT',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          trustedHosts: ['storyteller-rivet-1.internal.yc.prod.litnet.com', '127.0.0.1', '::1'],
+        }),
+      });
+      assert.equal(saveResponse.status, 200);
+      const savedSettings = await saveResponse.json() as Record<string, unknown>;
+      assert.equal(savedSettings.source, 'app-settings');
+      assert.deepEqual(savedSettings.trustedHosts, [
+        'storyteller-rivet-1.internal.yc.prod.litnet.com',
+        '127.0.0.1',
+        '::1',
+      ]);
+
+      const readResponse = await fetch(`${server.baseUrl}/api/app-settings/trusted-hosts`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(readResponse.status, 200);
+      const readSettings = await readResponse.json() as Record<string, unknown>;
+      assert.deepEqual(readSettings.trustedHosts, savedSettings.trustedHosts);
+
+      const settingsPath = getTrustedHostSettingsPath();
+      const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+      assert.equal(raw.trustedHostsCsv, 'storyteller-rivet-1.internal.yc.prod.litnet.com,127.0.0.1,::1');
+      if (process.platform !== 'win32') {
+        assert.equal(fs.statSync(settingsPath).mode & 0o777, 0o644);
+      }
+    } finally {
+      await server?.close();
+    }
+  });
+});
+
+test('Trusted host settings reject unsafe host values', async () => {
+  await withAppSettingsEnv(async () => {
+    await assert.rejects(
+      writeTrustedHostSettings({ trustedHosts: ['https://trusted.example.test'] }),
+      /without protocol/,
+    );
+    await assert.rejects(
+      writeTrustedHostSettings({ trustedHosts: ['trusted.example.test:8080'] }),
+      /must not include ports/,
+    );
+    await assert.rejects(
+      writeTrustedHostSettings({ trustedHosts: ['*.example.test'] }),
+      /without protocol, path, or wildcard/,
+    );
+    await assert.rejects(
+      writeTrustedHostSettings({ trustedHosts: 'trusted.example.test' }),
+      /must be a list/,
+    );
+    await assert.rejects(
+      writeTrustedHostSettings({
+        trustedHosts: Array.from({ length: 101 }, (_, index) => `trusted-${index}.example.test`),
+      }),
+      /cannot contain more than 100 entries/,
+    );
   });
 });
 

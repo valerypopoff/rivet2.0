@@ -38,6 +38,16 @@ export interface WorkflowEndpointAuthSettingsDraft {
   requireBearerAuth?: unknown;
 }
 
+export interface TrustedHostSettings {
+  trustedHosts: string[];
+  updatedAt: string | null;
+  source: AppSettingsSource;
+}
+
+export interface TrustedHostSettingsDraft {
+  trustedHosts?: unknown;
+}
+
 export interface RunRecordingsSettings {
   maxPendingWrites: number;
   maxRunsPerEndpoint: number;

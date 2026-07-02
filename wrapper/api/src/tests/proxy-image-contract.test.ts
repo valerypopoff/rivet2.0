@@ -44,6 +44,7 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.ok(!imageProxyTemplate.includes('location /internal/workflows'));
   assert.match(proxyBootstrap, /resolve_proxy_resolver\(\)/);
   assert.match(proxyBootstrap, /public_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json"/);
+  assert.match(proxyBootstrap, /trusted_host_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/trusted-hosts\.json"/);
   assert.match(proxyBootstrap, /legacy_web_app_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/web-app-routes\.json"/);
   assert.match(proxyBootstrap, /normalize_public_route_setting\(\) \{/);
   assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "publishedWorkflowsBasePath"/);
@@ -59,7 +60,10 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.match(proxyBootstrap, /write_public_routes_include\(\)/);
   assert.match(proxyBootstrap, /mkdir -p "\$output_dir"/);
   assert.match(proxyBootstrap, /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\/tmp\/nginx\/rivet-public-routes\.inc/);
+  assert.match(proxyBootstrap, /RIVET_TRUSTED_HOSTS_INCLUDE_FILE:-\/tmp\/nginx\/rivet-trusted-hosts\.inc/);
   assert.doesNotMatch(proxyBootstrap, /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\$NGINX_ENVSUBST_OUTPUT_DIR\/rivet-public-routes\.conf/);
+  assert.match(proxyBootstrap, /write_trusted_hosts_include\(\)/);
+  assert.match(proxyBootstrap, /trustedHostsCsv/);
   assert.match(proxyBootstrap, /nginx -t/);
   assert.match(proxyBootstrap, /nginx -s reload/);
   assert.match(proxyBootstrap, /export RIVET_PROXY_RESOLVER="\$\(resolve_proxy_resolver "\$\{RIVET_PROXY_RESOLVER:-\}"\)"/);
@@ -102,6 +106,8 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   assert.doesNotMatch(proxyBootstrap, /RIVET_WEB_APPS_AUTH_MODE/);
   assert.match(prodCompose, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/);
   assert.match(devCompose, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/);
+  assert.doesNotMatch(prodCompose, /RIVET_UI_TOKEN_FREE_HOSTS/);
+  assert.doesNotMatch(devCompose, /RIVET_UI_TOKEN_FREE_HOSTS/);
   assert.match(prodCompose, /RIVET_CORS_ALLOWED_ORIGINS=\$\{RIVET_CORS_ALLOWED_ORIGINS:-\}/);
   assert.match(devCompose, /RIVET_CORS_ALLOWED_ORIGINS=\$\{RIVET_CORS_ALLOWED_ORIGINS:-\}/);
   assert.match(prodCompose, /RIVET_APP_DATA_ROOT=\/data\/rivet-app[\s\S]*rivet_data:\/data\/rivet-app:ro/);
@@ -123,6 +129,8 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
     assert.match(template, /map "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS\}:\$http_x_forwarded_proto" \$rivet_forwarded_proto/);
     assert.match(template, /default \$scheme;/);
     assert.match(template, /map \$rivet_forwarded_hostname \$rivet_ui_host_is_token_free/);
+    assert.match(template, /include \$\{RIVET_TRUSTED_HOSTS_INCLUDE_FILE\};/);
+    assert.doesNotMatch(template, /RIVET_UI_TOKEN_FREE_HOSTS_REGEX/);
     assert.match(template, /map \$rivet_forwarded_proto \$rivet_ui_cookie_secure_suffix/);
     assert.match(template, /~\*\^https\$ "; Secure";/);
     assert.doesNotMatch(template, /RIVET_WEB_APPS_AUTH_MODE|rivet_web_apps_gate_result|rivet_web_apps_use_ui_gate/);
