@@ -43,6 +43,7 @@ const requiredPaths = [
   'wrapper/bootstrap/proxy-bootstrap',
   'wrapper/bootstrap/proxy-bootstrap/bootstrap.mjs',
   'wrapper/bootstrap/proxy-bootstrap/config.mjs',
+  'wrapper/bootstrap/proxy-bootstrap/node-executor-proxy-settings.mjs',
   'wrapper/bootstrap/proxy-bootstrap/package-lock.json',
   'wrapper/bootstrap/proxy-bootstrap/package.json',
   'wrapper/bootstrap/proxy-bootstrap/runtime-libraries-sync.mjs',
@@ -50,7 +51,6 @@ const requiredPaths = [
   'wrapper/bootstrap/proxy-bootstrap/sync.mjs',
   'wrapper/executor/build/bundle-executor.cjs',
   'image/proxy/normalize-workflow-paths.sh',
-  'image/proxy/ui-gate-prompt.html',
 ];
 
 const expectedOpsEntries = {
@@ -73,6 +73,7 @@ const expectedOpsEntries = {
 const forbiddenExistingPaths = [
   'ops/update-check.sh',
   'ops/ui-gate-prompt.html',
+  'image/proxy/ui-gate-prompt.html',
   'ops/proxy-bootstrap',
   'ops/bundle-executor.cjs',
   'ops/docker-compose.yml',

@@ -73,6 +73,429 @@ async function installProjectWebAppsRoute(
   });
 }
 
+async function installAppSettingsRoute(page: Page): Promise<void> {
+  let publicRouteSettings = {
+    publishedWorkflowsBasePath: '/workflows',
+    latestWorkflowsBasePath: '/workflows-latest',
+    publishedAppsBasePath: '/apps',
+    latestAppsBasePath: '/apps-latest',
+    updatedAt: null as string | null,
+    source: 'default',
+  };
+  let deploymentStorageSettings = {
+    storageMode: 'filesystem',
+    artifactsHostPath: '../',
+    databaseMode: 'local-docker',
+    databaseSslMode: 'disable',
+    databaseConnectionStringConfigured: false,
+    storageUrl: '',
+    storageAccessKeyId: '',
+    storageAccessKeyConfigured: false,
+    updatedAt: null as string | null,
+    source: 'default',
+  };
+  let runtimeLimitSettings = {
+    commandTimeoutSeconds: 30,
+    maxOutputBytes: 10 * 1024 * 1024,
+    proxyReadTimeoutSeconds: 180,
+    dockerWaitTimeoutSeconds: 1200,
+    updatedAt: null as string | null,
+    source: 'default',
+  };
+  let executorUrlOverrideSettings = {
+    executorWsUrl: '',
+    remoteDebuggerDefaultWs: '',
+    updatedAt: null as string | null,
+    source: 'default',
+  };
+  let workflowEndpointAuthSettings = {
+    requireBearerAuth: true,
+    updatedAt: null as string | null,
+    source: 'default',
+  };
+  let trustedHostSettings = {
+    trustedHosts: ['internal.example.test'],
+    updatedAt: null as string | null,
+    source: 'default',
+  };
+
+  await page.route('**/api/config', async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() !== 'GET' || url.pathname !== '/api/config') {
+      await route.fallback();
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        executorWsUrl: executorUrlOverrideSettings.executorWsUrl || 'ws://127.0.0.1:8081/ws/executor/internal',
+        remoteDebuggerDefaultWs: executorUrlOverrideSettings.remoteDebuggerDefaultWs || 'ws://127.0.0.1:8081/ws/latest-debugger',
+        ...publicRouteSettings,
+        webAppsAuthMode: 'ui-gate',
+        storageMode: deploymentStorageSettings.storageMode,
+        databaseMode: deploymentStorageSettings.databaseMode,
+      }),
+    });
+  });
+
+  await page.route('**/api/app-settings/**', async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+
+    if (url.pathname === '/api/app-settings/node-executor-proxy') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          httpProxy?: string;
+          httpsProxy?: string;
+          noProxy?: string;
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            httpProxy: body.httpProxy ?? '',
+            httpsProxy: body.httpsProxy ?? '',
+            noProxy: body.noProxy ?? '',
+            updatedAt: '2026-06-30T12:01:00.000Z',
+            source: 'app-settings',
+          }),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          httpProxy: 'http://proxy.example.internal:3128',
+          httpsProxy: 'http://proxy.example.internal:3128',
+          noProxy: 'localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local',
+          updatedAt: '2026-06-30T12:00:00.000Z',
+          source: 'app-settings',
+        }),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/executor-url-overrides') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          executorWsUrl?: string;
+          remoteDebuggerDefaultWs?: string;
+        };
+        executorUrlOverrideSettings = {
+          executorWsUrl: body.executorWsUrl ?? '',
+          remoteDebuggerDefaultWs: body.remoteDebuggerDefaultWs ?? '',
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(executorUrlOverrideSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(executorUrlOverrideSettings),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/run-recordings') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          maxPendingWrites?: string | number;
+          maxRunsPerEndpoint?: string | number;
+          retentionDays?: string | number;
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            maxPendingWrites: Number(body.maxPendingWrites ?? 100),
+            maxRunsPerEndpoint: Number(body.maxRunsPerEndpoint ?? 2000),
+            retentionDays: Number(body.retentionDays ?? 0),
+            updatedAt: '2026-06-30T12:01:00.000Z',
+            source: 'app-settings',
+          }),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          maxPendingWrites: 100,
+          maxRunsPerEndpoint: 2000,
+          retentionDays: 0,
+          updatedAt: '2026-06-30T12:00:00.000Z',
+          source: 'app-settings',
+        }),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/public-routes') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          publishedWorkflowsBasePath?: string;
+          latestWorkflowsBasePath?: string;
+          publishedAppsBasePath?: string;
+          latestAppsBasePath?: string;
+        };
+        const normalizeSlug = (value: unknown, fallback: string) => {
+          const normalized = String(value || fallback).trim().replace(/^\/+/, '').replace(/\/+$/, '');
+          return `/${normalized}`;
+        };
+        publicRouteSettings = {
+          publishedWorkflowsBasePath: normalizeSlug(body.publishedWorkflowsBasePath, 'workflows'),
+          latestWorkflowsBasePath: normalizeSlug(body.latestWorkflowsBasePath, 'workflows-latest'),
+          publishedAppsBasePath: normalizeSlug(body.publishedAppsBasePath, 'apps'),
+          latestAppsBasePath: normalizeSlug(body.latestAppsBasePath, 'apps-latest'),
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(publicRouteSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(publicRouteSettings),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/runtime-limits') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        runtimeLimitSettings = {
+          commandTimeoutSeconds: Number(body.commandTimeoutSeconds ?? runtimeLimitSettings.commandTimeoutSeconds),
+          maxOutputBytes: Number(body.maxOutputBytes ?? runtimeLimitSettings.maxOutputBytes),
+          proxyReadTimeoutSeconds: Number(body.proxyReadTimeoutSeconds ?? runtimeLimitSettings.proxyReadTimeoutSeconds),
+          dockerWaitTimeoutSeconds: Number(body.dockerWaitTimeoutSeconds ?? runtimeLimitSettings.dockerWaitTimeoutSeconds),
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(runtimeLimitSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(runtimeLimitSettings),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/workflow-endpoint-auth') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          requireBearerAuth?: boolean;
+        };
+        workflowEndpointAuthSettings = {
+          requireBearerAuth: body.requireBearerAuth ?? true,
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(workflowEndpointAuthSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(workflowEndpointAuthSettings),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/trusted-hosts') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as {
+          trustedHosts?: string[];
+        };
+        trustedHostSettings = {
+          trustedHosts: body.trustedHosts ?? [],
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(trustedHostSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(trustedHostSettings),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/deployment-storage') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        deploymentStorageSettings = {
+          storageMode: String(body.storageMode ?? deploymentStorageSettings.storageMode),
+          artifactsHostPath: String(body.artifactsHostPath ?? deploymentStorageSettings.artifactsHostPath),
+          databaseMode: String(body.databaseMode ?? deploymentStorageSettings.databaseMode),
+          databaseSslMode: String(body.databaseSslMode ?? deploymentStorageSettings.databaseSslMode),
+          databaseConnectionStringConfigured: Boolean(body.databaseConnectionString) || deploymentStorageSettings.databaseConnectionStringConfigured,
+          storageUrl: String(body.storageUrl ?? deploymentStorageSettings.storageUrl),
+          storageAccessKeyId: String(body.storageAccessKeyId ?? deploymentStorageSettings.storageAccessKeyId),
+          storageAccessKeyConfigured: Boolean(body.storageAccessKey) || deploymentStorageSettings.storageAccessKeyConfigured,
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(deploymentStorageSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(deploymentStorageSettings),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/web-app-auth') {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            mode: body.mode ?? 'ui-gate',
+            provider: body.provider ?? 'external',
+            dummyEmail: body.dummyEmail ?? 'local@example.test',
+            dummyAllowNonLocalhost: body.dummyAllowNonLocalhost ?? false,
+            authorizeUrl: body.authorizeUrl ?? '',
+            tokenUrl: body.tokenUrl ?? '',
+            userUrl: body.userUrl ?? '',
+            clientId: body.clientId ?? '',
+            clientSecretConfigured: Boolean(body.clientSecret) || false,
+            callbackUrl: body.callbackUrl ?? '',
+            scopes: body.scopes ?? 'email',
+            emailClaim: body.emailClaim ?? 'email',
+            sessionSecretConfigured: Boolean(body.sessionSecret) || false,
+            sessionTtlSeconds: Number(body.sessionTtlSeconds ?? 86400),
+            clientAuthMethod: body.clientAuthMethod ?? 'body',
+            debugLogProfile: body.debugLogProfile ?? false,
+            serverUiAdminEmails: body.serverUiAdminEmails ?? [],
+            updatedAt: '2026-06-30T12:01:00.000Z',
+            source: 'app-settings',
+          }),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          mode: 'ui-gate',
+          provider: 'external',
+          dummyEmail: 'local@example.test',
+          dummyAllowNonLocalhost: false,
+          authorizeUrl: '',
+          tokenUrl: '',
+          userUrl: '',
+          clientId: '',
+          clientSecretConfigured: false,
+          callbackUrl: '',
+          scopes: 'email',
+          emailClaim: 'email',
+          sessionSecretConfigured: false,
+          sessionTtlSeconds: 86400,
+          clientAuthMethod: 'body',
+          debugLogProfile: false,
+          serverUiAdminEmails: [],
+          updatedAt: null,
+          source: 'default',
+        }),
+      });
+      return;
+    }
+
+    await route.fallback();
+  });
+}
+
 async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): Promise<void> {
   await page.evaluate((projectPath) => {
     const editorFrame = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame');
@@ -87,6 +510,8 @@ async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): P
 
 test.describe('Workflow library layout', () => {
   test('collapses from the full header row into a clickable narrow rail', async ({ page }) => {
+    await installAppSettingsRoute(page);
+
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
@@ -114,6 +539,278 @@ test.describe('Workflow library layout', () => {
 
     const bottomActions = page.locator('.workflow-library-panel .panel-bottom-actions');
     await expect(bottomActions).toHaveCSS('padding-bottom', '24px');
+
+    await expect(page.getByRole('button', { name: 'App settings' })).toBeVisible();
+    await page.getByRole('button', { name: 'App settings' }).click();
+    const appSettingsModal = page.locator('[data-testid="app-settings-modal"]');
+    await expect(appSettingsModal).toBeVisible();
+    await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+    const appSettingsTabList = appSettingsModal.getByRole('tablist', { name: 'App settings sections' });
+    await expect(appSettingsTabList).toHaveAttribute('aria-orientation', 'vertical');
+    const [generalTabBox, storageTabBox, panelRegionBox] = await Promise.all([
+      appSettingsModal.getByRole('tab', { name: 'General' }).boundingBox(),
+      appSettingsModal.getByRole('tab', { name: 'Storage' }).boundingBox(),
+      appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
+    ]);
+    expect(generalTabBox).not.toBeNull();
+    expect(storageTabBox).not.toBeNull();
+    expect(panelRegionBox).not.toBeNull();
+    expect(storageTabBox!.y).toBeGreaterThan(generalTabBox!.y + generalTabBox!.height - 2);
+    expect(generalTabBox!.x + generalTabBox!.width).toBeLessThan(panelRegionBox!.x);
+    await expect(appSettingsModal).toContainText('Rivet Studio Server');
+    await expect(appSettingsModal).toContainText('Published workflows');
+    await expect(appSettingsModal).toContainText('/workflows');
+    await expect(appSettingsModal).toContainText('Published web apps');
+    await expect(appSettingsModal).toContainText('/apps');
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
+    const trustedHostsSection = appSettingsModal.locator('section[aria-label="Trusted host settings"]');
+    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await trustedHostsSection.locator('.app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    await expect(trustedHostsSection.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
+    await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
+    await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('10');
+    await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
+    const shellExecutionSection = appSettingsModal.locator('section[aria-label="Shell execution"]');
+    await shellExecutionSection.locator('.app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    const generalActions = shellExecutionSection.locator('.app-settings-actions-row');
+    await expect(generalActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title')).toContainText(['Routes', 'Access control', 'HTTP request timeout']);
+    await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('workflows');
+    await expect(appSettingsModal.getByLabel('Latest saved workflow endpoint URL slug')).toHaveValue('workflows-latest');
+    const workflowEndpointAuthSection = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section', { hasText: 'Access control' });
+    await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).toBeChecked();
+    await expect(appSettingsModal.getByLabel('Proxy read timeout in seconds')).toHaveValue('180');
+    await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveCount(0);
+    await appSettingsModal.getByLabel('Published workflow endpoint URL slug').fill('public-workflows');
+    await appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').first().getByRole('button', { name: 'Save' }).click();
+    const workflowRouteActions = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').first();
+    await expect(workflowRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('public-workflows');
+    await appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls').uncheck();
+    await workflowEndpointAuthSection.getByRole('button', { name: 'Save' }).click();
+    await expect(workflowEndpointAuthSection.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).not.toBeChecked();
+    await appSettingsModal.getByLabel('Proxy read timeout in seconds').fill('240');
+    const workflowTimeoutSection = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section', { hasText: 'HTTP request timeout' });
+    await workflowTimeoutSection.getByRole('button', { name: 'Save' }).click();
+    const workflowTimeoutActions = workflowTimeoutSection.locator('.app-settings-actions-row');
+    await expect(workflowTimeoutActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect.poll(async () => {
+      const [contentBox, sectionBox] = await Promise.all([
+        appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
+        appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section').first().boundingBox(),
+      ]);
+      return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
+    }).toBeGreaterThan(0.9);
+
+    await appSettingsModal.getByRole('tab', { name: 'Storage' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Storage' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section-title')).toHaveCount(0);
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section')).toHaveCount(2);
+    await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByRole('button', { name: 'Object storage' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveValue('../');
+    await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveAttribute('readonly', '');
+    await expect(appSettingsModal.getByText('The running app shows it for reference only because changing it here cannot remount host folders.')).toBeVisible();
+    const storageFieldGrids = appSettingsModal.locator('.app-settings-storage-panel .app-settings-field-grid');
+    await expect(storageFieldGrids.first()).toHaveCSS('gap', '18px');
+    await expect(storageFieldGrids.nth(1)).toHaveCSS('gap', '18px');
+    await appSettingsModal.getByRole('button', { name: 'Object storage' }).click();
+    await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByText('It must already be running before object storage mode can apply.')).toBeVisible();
+    await expect(appSettingsModal.getByLabel('Object storage URL')).toHaveValue('');
+    await expect(appSettingsModal.getByLabel('Object storage access key ID')).toHaveValue('');
+    await appSettingsModal.getByLabel('Object storage URL').fill('http://workflow-minio:9000/rivet-workflows');
+    await appSettingsModal.getByLabel('Object storage access key ID').fill('minioadmin');
+    await appSettingsModal.getByLabel('Object storage secret access key').fill('minioadmin');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    const storageActions = appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row');
+    await expect(storageActions.locator('.project-settings-success')).toHaveText('Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.');
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
+
+    await appSettingsModal.getByRole('tab', { name: 'Run recordings' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Run recordings' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section-title')).toHaveCount(0);
+    await expect(appSettingsModal.getByLabel('Queued recording writes')).toHaveValue('100');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep latest runs' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep all runs' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveValue('2000');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep forever' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep for some time' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveCount(0);
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-field-grid')).toHaveCSS('gap', '18px');
+    await expect(appSettingsModal.getByText('Keeping only the newest runs for each endpoint. Older runs are removed during cleanup.')).toBeVisible();
+    await expect(appSettingsModal.getByText('Recordings are kept indefinitely unless another saved limit removes them.')).toBeVisible();
+    await appSettingsModal.getByRole('button', { name: 'Keep all runs' }).click();
+    await expect(appSettingsModal.getByText('Keeping every recorded run for each endpoint.')).toBeVisible();
+    await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveCount(0);
+    await appSettingsModal.getByRole('button', { name: 'Keep latest runs' }).click();
+    await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveValue('2000');
+    await appSettingsModal.getByRole('button', { name: 'Keep for some time' }).click();
+    await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveValue('14');
+    await expect(appSettingsModal.getByText('Recordings older than the selected number of days are removed during cleanup.')).toBeVisible();
+    await appSettingsModal.getByRole('button', { name: 'Keep forever' }).click();
+    await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveCount(0);
+    await expect.poll(async () => {
+      const [contentBox, sectionBox] = await Promise.all([
+        appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
+        appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section').boundingBox(),
+      ]);
+      return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
+    }).toBeGreaterThan(0.9);
+    await appSettingsModal.getByLabel('Queued recording writes').fill('101');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('margin-top', '8px');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('padding-top', '14px');
+    await appSettingsModal.getByRole('button', { name: 'Save' }).click();
+    const recordingsActions = appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row');
+    await expect(recordingsActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
+    await appSettingsModal.getByRole('tab', { name: 'Node executor proxy' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Node executor proxy' })).toHaveAttribute('aria-selected', 'true');
+    const nodeProxySection = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section', { hasText: 'HTTP_PROXY' });
+    const websocketOverrideSection = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section', { hasText: 'Websocket URL overrides' });
+    await expect(websocketOverrideSection.locator('.app-settings-section-title')).toHaveText('Websocket URL overrides');
+    await expect(appSettingsModal.getByText('HTTP_PROXY')).toBeVisible();
+    await expect(nodeProxySection.locator('.app-settings-field-grid')).toHaveCSS('gap', '18px');
+    await expect(nodeProxySection.locator('.app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(nodeProxySection.locator('.app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('margin-top', '8px');
+    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('padding-top', '14px');
+    await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue('http://proxy.example.internal:3128');
+    await expect(appSettingsModal.getByText('NO_PROXY')).toBeVisible();
+    await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue('localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local');
+    await expect(appSettingsModal.getByText('In Kubernetes, include cluster-local suffixes such as .svc and .cluster.local')).toBeVisible();
+    await expect(appSettingsModal.getByText('Websocket URL overrides')).toBeVisible();
+    await expect(appSettingsModal.getByRole('textbox', { name: 'Node executor websocket URL override' })).toHaveValue('');
+    await expect(appSettingsModal.getByRole('textbox', { name: 'Remote Debugger websocket URL override' })).toHaveValue('');
+    await expect(appSettingsModal.getByText('Active URL: ws://127.0.0.1:8081/ws/executor/internal.')).toBeVisible();
+    await appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' }).fill('http://proxy.example.internal:3129');
+    await nodeProxySection.getByRole('button', { name: 'Save' }).click();
+    const proxyActions = nodeProxySection.locator('.app-settings-actions-row');
+    await expect(proxyActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
+    await appSettingsModal
+      .getByRole('textbox', { name: 'Remote Debugger websocket URL override' })
+      .fill('wss://debugger.example.test/ws/latest-debugger');
+    await websocketOverrideSection.getByRole('button', { name: 'Save' }).click();
+    const executorUrlActions = websocketOverrideSection.locator('.app-settings-actions-row');
+    await expect(executorUrlActions.locator('.project-settings-success')).toHaveText('Saved. Reload the editor to apply websocket URL overrides to active sessions.');
+    await expect(appSettingsModal.getByText('Active URL: wss://debugger.example.test/ws/latest-debugger.')).toBeVisible();
+
+    await appSettingsModal.getByRole('tab', { name: 'Web apps' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-section-title')).toContainText(['Routes', 'Auth']);
+    await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveCount(0);
+    await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('apps');
+    await expect(appSettingsModal.getByLabel('Latest saved changes URL slug')).toHaveValue('apps-latest');
+    const appRouteRow = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-prefixed-input-row').first();
+    await expect(appRouteRow).toHaveCSS('display', 'flex');
+    await expect.poll(async () => {
+      const [prefixBox, inputBox] = await Promise.all([
+        appRouteRow.locator('.project-settings-url-prefix').boundingBox(),
+        appRouteRow.locator('.project-settings-input').boundingBox(),
+      ]);
+      return prefixBox && inputBox
+        ? Math.max(Math.abs(prefixBox.y - inputBox.y), Math.abs(prefixBox.height - inputBox.height))
+        : Number.POSITIVE_INFINITY;
+    }).toBeLessThanOrEqual(1);
+    await appSettingsModal.getByLabel('Published web app URL slug').fill('public-apps');
+    await appSettingsModal.getByRole('button', { name: 'Save' }).first().click();
+    const webRouteActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').first();
+    await expect(webRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('public-apps');
+    await expect(appSettingsModal.getByText(/restart/i)).toHaveCount(0);
+    await expect(appSettingsModal.getByRole('button', { name: 'Key' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByText('Visitors enter the Rivet key before opening web apps.')).toBeVisible();
+    await appSettingsModal.getByRole('button', { name: 'OAuth' }).click();
+    await expect(appSettingsModal.getByText("Visitors sign in with the provider configured in the OAuth tab and are checked against each web app's allowed-email list.")).toBeVisible();
+    await appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
+    const webAuthModeActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last();
+    await expect(webAuthModeActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    await appSettingsModal.getByRole('tab', { name: 'OAuth' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'OAuth' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-oauth-panel .app-settings-section-title')).toHaveText('Provider');
+    await expect(appSettingsModal.getByText('These settings are used by web apps in OAuth mode')).toBeVisible();
+    await expect(appSettingsModal.getByLabel('Server UI admin emails')).toHaveCount(0);
+    await expect(appSettingsModal).toHaveCSS('overflow-y', 'hidden');
+    await expect(page.locator('[data-testid="app-settings-modal--body"]')).toHaveCSS('overflow-y', 'hidden');
+    const settingsTabList = appSettingsModal.locator('.app-settings-tab-list');
+    const settingsPanelRegion = appSettingsModal.locator('.app-settings-panel-region');
+    const tabsBeforePanelScroll = await settingsTabList.boundingBox();
+    await settingsPanelRegion.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(async () => {
+      const tabsAfterPanelScroll = await settingsTabList.boundingBox();
+      return tabsBeforePanelScroll && tabsAfterPanelScroll
+        ? Math.abs(tabsAfterPanelScroll.y - tabsBeforePanelScroll.y)
+        : Number.POSITIVE_INFINITY;
+    }).toBeLessThanOrEqual(1);
+    await settingsPanelRegion.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect(appSettingsModal.getByRole('button', { name: 'External provider' })).toHaveAttribute('aria-pressed', 'true');
+    await appSettingsModal.getByRole('button', { name: 'Local dummy' }).click();
+    await expect(appSettingsModal.getByText('Default test email')).toBeVisible();
+    await expect(appSettingsModal.getByLabel('Default test email')).toHaveValue('local@example.test');
+    await appSettingsModal.getByLabel('Session signing secret').fill('local-session-secret');
+    await appSettingsModal.locator('.app-settings-oauth-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
+    const oauthActions = appSettingsModal.locator('.app-settings-oauth-panel .app-settings-actions-row').last();
+    await expect(oauthActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    await appSettingsModal.getByRole('tab', { name: 'Server UI access' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Server UI access' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.getByText('RIVET_SERVER_UI_AUTH_MODE', { exact: true })).toBeVisible();
+    await appSettingsModal.getByLabel('Server UI admin emails').fill('admin@example.test');
+    await appSettingsModal
+      .locator('.app-settings-server-ui-access-panel .app-settings-actions-row')
+      .getByRole('button', { name: 'Save' })
+      .click();
+    const serverUiAccessActions = appSettingsModal.locator('.app-settings-server-ui-access-panel .app-settings-actions-row');
+    await expect(serverUiAccessActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    const maxOutputInput = appSettingsModal.getByLabel('Maximum captured output in MiB');
+    await maxOutputInput.fill('11');
+    await expect(maxOutputInput).toHaveValue('11');
+
+    await appSettingsModal.getByRole('tab', { name: 'Docker' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Docker' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-section-title')).toHaveCount(0);
+    const dockerTimeoutInput = appSettingsModal.getByRole('spinbutton', { name: 'Docker startup wait timeout in seconds' });
+    await expect(dockerTimeoutInput).toHaveValue('1200');
+    await expect(appSettingsModal.getByText('Kubernetes ignores this setting.')).toBeVisible();
+    await dockerTimeoutInput.fill('1500');
+    await expect(dockerTimeoutInput).toHaveValue('1500');
+    await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
+    await appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
+    const dockerActions = appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row');
+    await expect(dockerActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toBeVisible();
+    await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('11');
+    await expect(
+      appSettingsModal
+        .locator('section[aria-label="Shell execution"] .app-settings-actions-row')
+        .getByRole('button', { name: 'Save' }),
+    ).toBeEnabled();
+    await expect(appSettingsModal).toContainText('OAuth');
+    await page.getByRole('button', { name: 'Close app settings' }).click();
+    await expect(appSettingsModal).toHaveCount(0);
 
     await page.getByRole('button', { name: 'About' }).click();
     const aboutModal = page.locator('[data-testid="about-modal"]');

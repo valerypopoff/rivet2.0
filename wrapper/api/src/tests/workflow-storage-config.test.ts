@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { withScopedEnv } from './helpers/runtime-library-harness.js';
 
 const storageConfig = await import('../routes/workflows/storage-config.js');
 const blobStore = await import('../routes/workflows/managed/blob-store.js');
 const envParsing = await import('../utils/env-parsing.js');
+const deploymentStorageSettings = await import('../deployment-storage-settings.js');
 
 const managedEnvKeys = [
+  'RIVET_APP_DATA_ROOT',
   'RIVET_STORAGE_MODE',
   'RIVET_DATABASE_MODE',
   'RIVET_DATABASE_CONNECTION_STRING',
@@ -58,13 +63,48 @@ async function withManagedEnv(
   await withScopedEnv(managedEnvKeys, overrides, run);
 }
 
-test('managed storage config accepts simplified alias envs for DigitalOcean-style storage URLs', async () => {
-  await withManagedEnv({
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:25060/defaultdb?sslmode=disable',
-    RIVET_STORAGE_URL: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-access-key-id',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret-access-key',
+async function withDeploymentStorageSettings(
+  settings: Parameters<typeof deploymentStorageSettings.writeDeploymentStorageSettings>[0],
+  run: () => Promise<void> | void,
+) {
+  const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-workflow-storage-config-'));
+  const previousAppDataRoot = process.env.RIVET_APP_DATA_ROOT;
+  process.env.RIVET_APP_DATA_ROOT = appDataRoot;
+
+  try {
+    await deploymentStorageSettings.writeDeploymentStorageSettings(settings);
+    await run();
+  } finally {
+    if (previousAppDataRoot == null) {
+      delete process.env.RIVET_APP_DATA_ROOT;
+    } else {
+      process.env.RIVET_APP_DATA_ROOT = previousAppDataRoot;
+    }
+    fs.rmSync(appDataRoot, { recursive: true, force: true });
+  }
+}
+
+async function withEmptyDeploymentStorageEnv(
+  overrides: Partial<Record<(typeof managedEnvKeys)[number], string | undefined>>,
+  run: () => Promise<void> | void,
+) {
+  const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-workflow-storage-empty-'));
+
+  try {
+    await withManagedEnv({ ...overrides, RIVET_APP_DATA_ROOT: appDataRoot }, run);
+  } finally {
+    fs.rmSync(appDataRoot, { recursive: true, force: true });
+  }
+}
+
+test('managed storage config accepts saved DigitalOcean-style storage URLs', async () => {
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:25060/defaultdb?sslmode=disable',
+    storageUrl: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'spaces-access-key-id',
+    storageAccessKey: 'spaces-secret-access-key',
   }, () => {
     const config = storageConfig.getManagedWorkflowStorageConfig();
 
@@ -81,23 +121,23 @@ test('managed storage config accepts simplified alias envs for DigitalOcean-styl
   });
 });
 
-test('storage backend selection prefers the generic storage-mode env name', async () => {
-  await withManagedEnv({
+test('storage backend selection ignores storage-mode environment variables', async () => {
+  await withEmptyDeploymentStorageEnv({
     RIVET_STORAGE_MODE: 'managed',
+    RIVET_DATABASE_MODE: 'managed',
   }, () => {
-    assert.equal(storageConfig.getWorkflowStorageBackendMode(), 'managed');
-    assert.equal(storageConfig.isManagedWorkflowStorageEnabled(), true);
+    assert.equal(storageConfig.getWorkflowStorageBackendMode(), 'filesystem');
+    assert.equal(storageConfig.isManagedWorkflowStorageEnabled(), false);
   });
 });
 
-test('managed storage config accepts path-style storage URLs for local Docker rehearsal', async () => {
-  await withManagedEnv({
-    RIVET_DATABASE_MODE: 'local-docker',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgres://rivet:rivet@workflow-postgres:5432/rivet?sslmode=require',
-    RIVET_STORAGE_URL: 'http://workflow-minio:9000/rivet-workflows',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-    RIVET_STORAGE_ACCESS_KEY: 'minioadmin',
-    RIVET_STORAGE_PREFIX: 'managed-workflows/',
+test('managed storage config accepts saved path-style storage URLs for local Docker rehearsal', async () => {
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'local-docker',
+    storageUrl: 'http://workflow-minio:9000/rivet-workflows',
+    storageAccessKeyId: 'minioadmin',
+    storageAccessKey: 'minioadmin',
   }, () => {
     const config = storageConfig.getManagedWorkflowStorageConfig();
 
@@ -109,34 +149,40 @@ test('managed storage config accepts path-style storage URLs for local Docker re
     assert.equal(config.objectStorageEndpoint, 'http://workflow-minio:9000');
     assert.equal(config.objectStorageAccessKeyId, 'minioadmin');
     assert.equal(config.objectStorageSecretAccessKey, 'minioadmin');
-    assert.equal(config.objectStoragePrefix, 'managed-workflows/');
+    assert.equal(config.objectStoragePrefix, 'workflows/');
     assert.equal(config.objectStorageForcePathStyle, true);
   });
 });
 
-test('managed storage config rejects retired alias env names', async () => {
-  await withManagedEnv({
+test('managed storage config ignores retired alias env names', async () => {
+  await withEmptyDeploymentStorageEnv({
     RIVET_WORKFLOWS_STORAGE_BACKEND: 'managed',
   }, () => {
-    assert.throws(
-      () => storageConfig.getWorkflowStorageBackendMode(),
-      /Retired environment variable/,
-    );
+    assert.equal(storageConfig.getWorkflowStorageBackendMode(), 'filesystem');
   });
 });
 
-test('managed storage config rejects retired legacy workflow-prefixed env names', async () => {
+test('managed storage config ignores retired legacy workflow-prefixed env names when settings are saved', async () => {
   await withManagedEnv({
     RIVET_WORKFLOWS_DATABASE_MODE: 'managed',
     RIVET_WORKFLOWS_DATABASE_CONNECTION_STRING: 'postgresql://legacy-user:legacy-pass@example-db:25060/defaultdb',
     RIVET_WORKFLOWS_STORAGE_URL: 'https://legacy-bucket.lon1.digitaloceanspaces.com',
     RIVET_WORKFLOWS_STORAGE_ACCESS_KEY_ID: 'legacy-access-key-id',
     RIVET_WORKFLOWS_STORAGE_ACCESS_KEY: 'legacy-secret-access-key',
-  }, () => {
-    assert.throws(
-      () => storageConfig.getManagedWorkflowStorageConfig(),
-      /Retired environment variable/,
-    );
+  }, async () => {
+    await withDeploymentStorageSettings({
+      storageMode: 'managed',
+      databaseMode: 'managed',
+      databaseConnectionString: 'postgresql://saved-user:saved-pass@example-db:25060/defaultdb',
+      storageUrl: 'https://saved-bucket.lon1.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-access-key-id',
+      storageAccessKey: 'saved-secret-access-key',
+    }, () => {
+      const config = storageConfig.getManagedWorkflowStorageConfig();
+      assert.equal(config.databaseUrl, 'postgresql://saved-user:saved-pass@example-db:25060/defaultdb');
+      assert.equal(config.objectStorageBucket, 'saved-bucket');
+      assert.equal(config.objectStorageAccessKeyId, 'saved-access-key-id');
+    });
   });
 });
 

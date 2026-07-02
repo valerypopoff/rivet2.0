@@ -1,8 +1,12 @@
+﻿
+- In the recordings filter, the "$" should be searchable for text
 
 - Feature to move from local mode to managed (transfer all files (including libs) and metadata)
 
 
 - Убедиться, что RIVET_RECORDINGS_MAX_PENDING_WRITES работает правильно — на каждую реплику
+
+
 
 
 

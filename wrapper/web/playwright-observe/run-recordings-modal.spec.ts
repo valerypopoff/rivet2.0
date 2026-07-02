@@ -440,6 +440,21 @@ test.describe('Run recordings modal', () => {
     await modal.getByRole('button', { name: 'Clear' }).click();
     await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 2');
 
+    await modal.getByLabel('Input JSON path').fill('$');
+    await operatorControl.click();
+    await page.locator('.run-recordings-select__option').filter({ hasText: /^contains$/ }).click();
+    await modal.getByLabel('Value').fill("'bar'");
+    await modal.getByRole('button', { name: 'Apply' }).click();
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
+    const rootContainsRequest = new URL(runFetches.at(-1)!);
+    expect(rootContainsRequest.searchParams.get('inputPath')).toBe('$');
+    expect(rootContainsRequest.searchParams.get('inputOperator')).toBe('contains');
+    expect(rootContainsRequest.searchParams.get('inputValue')).toBe("'bar'");
+
+    await modal.getByRole('button', { name: 'Clear' }).click();
+    await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 2');
+
     await modal.getByLabel('Input JSON path').fill('$.missing');
     await operatorControl.click();
     await page.locator('.run-recordings-select__option').filter({ hasText: /^!=$/ }).click();

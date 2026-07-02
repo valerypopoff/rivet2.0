@@ -1,4 +1,4 @@
-import { RIVET_API_BASE_URL } from '../../shared/hosted-env';
+import { applyHostedRuntimeConfig, RIVET_API_BASE_URL } from '../../shared/hosted-env';
 import type {
   WorkflowFolderItem,
   WorkflowProjectDeleteResponse,
@@ -114,7 +114,9 @@ export async function fetchHostedConfig(): Promise<Partial<HostedRouteConfig>> {
   const response = await fetch(`${API}/config`, {
     cache: 'no-store',
   });
-  return hostedConfigJsonResponse<Partial<HostedRouteConfig>>(response);
+  const config = await hostedConfigJsonResponse<Partial<HostedRouteConfig>>(response);
+  applyHostedRuntimeConfig(config);
+  return config;
 }
 
 export async function fetchWorkflowRecordingWorkflows(options: { signal?: AbortSignal } = {}): Promise<WorkflowRecordingWorkflowListResponse> {

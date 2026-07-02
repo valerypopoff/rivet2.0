@@ -10,30 +10,6 @@
 {{- fail "vault.roleIdSecretName is retired; use vault.role with the Vault Injector dotenv contract" -}}
 {{- end -}}
 
-{{- if ne (index .Values.env "RIVET_PUBLISHED_WORKFLOWS_BASE_PATH") "/workflows" -}}
-{{- fail "Phase 3 and the first Phase 4 split keep RIVET_PUBLISHED_WORKFLOWS_BASE_PATH fixed at /workflows because the web image is still build-time configured" -}}
-{{- end -}}
-
-{{- if ne (index .Values.env "RIVET_LATEST_WORKFLOWS_BASE_PATH") "/workflows-latest" -}}
-{{- fail "Phase 3 and the first Phase 4 split keep RIVET_LATEST_WORKFLOWS_BASE_PATH fixed at /workflows-latest because the web image is still build-time configured" -}}
-{{- end -}}
-
-{{- if ne (index .Values.env "RIVET_PUBLISHED_APPS_BASE_PATH") "/apps" -}}
-{{- fail "RIVET_PUBLISHED_APPS_BASE_PATH fixed at /apps because the published web app route is part of the execution-plane contract" -}}
-{{- end -}}
-
-{{- if ne (index .Values.env "RIVET_LATEST_APPS_BASE_PATH") "/apps-latest" -}}
-{{- fail "RIVET_LATEST_APPS_BASE_PATH fixed at /apps-latest because the latest web app route is part of the control-plane contract" -}}
-{{- end -}}
-
-{{- if ne (index .Values.env "RIVET_WEB_APPS_BASE_PATH") "/apps" -}}
-{{- fail "RIVET_WEB_APPS_BASE_PATH fixed at /apps because the published web app route is part of the execution-plane contract" -}}
-{{- end -}}
-
-{{- if ne (index .Values.env "RIVET_LATEST_WEB_APPS_BASE_PATH") "/apps-latest" -}}
-{{- fail "RIVET_LATEST_WEB_APPS_BASE_PATH fixed at /apps-latest because the latest web app route is part of the control-plane contract" -}}
-{{- end -}}
-
 {{- if ne .Values.runtimeLibraries.objectStoragePrefix "runtime-libraries/" -}}
 {{- fail "runtimeLibraries.objectStoragePrefix must remain runtime-libraries/ in phase 3 because the current managed runtime-library backend uses a fixed object-storage prefix" -}}
 {{- end -}}
@@ -77,7 +53,7 @@
 {{- end -}}
 
 {{- if and (eq .Values.workflowStorage.backend "managed") (not .Values.vault.enabled) (or (empty .Values.objectStorage.accessKeySecretName) (empty .Values.objectStorage.secretKeySecretName)) -}}
-{{- fail "managed storage requires objectStorage.accessKeySecretName and objectStorage.secretKeySecretName unless Vault provides RIVET_STORAGE_ACCESS_KEY_ID and RIVET_STORAGE_ACCESS_KEY" -}}
+{{- fail "managed storage requires objectStorage.accessKeySecretName and objectStorage.secretKeySecretName unless Vault provides RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID and RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY" -}}
 {{- end -}}
 
 {{- if or (empty .Values.images.proxy.repository) (empty .Values.images.web.repository) (empty .Values.images.api.repository) (empty .Values.images.executor.repository) -}}
@@ -90,6 +66,10 @@
 
 {{- if and (eq .Values.workflowStorage.backend "managed") (empty .Values.postgres.connectionStringSecretName) (or (empty .Values.postgres.host) (empty .Values.postgres.database) (empty .Values.postgres.username) (and (empty .Values.postgres.passwordSecretName) (not .Values.vault.enabled))) -}}
 {{- fail "managed storage requires either postgres.connectionStringSecretName, a postgres host/database/username tuple plus passwordSecretName, or Vault-provided database envs" -}}
+{{- end -}}
+
+{{- if empty .Values.storage.appData.existingClaimName -}}
+{{- fail "storage.appData.existingClaimName is required so backend, execution, executor, and proxy pods share UI-managed app settings; use an RWX-capable PVC for scaled proxy/execution deployments" -}}
 {{- end -}}
 
 {{- if and (not .Values.vault.enabled) (empty .Values.auth.keySecretName) -}}

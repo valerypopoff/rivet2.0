@@ -9,6 +9,18 @@ import {
 } from '../routes/workflows/recording-input-filter.js';
 
 function createSerializedRecording(input: unknown, strings: Record<string, string> = {}): string {
+  return createSerializedRecordingWithInputs({
+    input: {
+      type: 'any',
+      value: input,
+    },
+  }, strings);
+}
+
+function createSerializedRecordingWithInputs(
+  inputs: Record<string, unknown>,
+  strings: Record<string, string> = {},
+): string {
   return JSON.stringify({
     version: 1,
     recording: {
@@ -17,12 +29,7 @@ function createSerializedRecording(input: unknown, strings: Record<string, strin
         {
           type: 'start',
           data: {
-            inputs: {
-              input: {
-                type: 'any',
-                value: input,
-              },
-            },
+            inputs,
           },
           ts: 1,
         },
@@ -123,6 +130,13 @@ test('recording input contains stringifies the left operand when filtering with 
   assert.equal(
     matchesWorkflowRecordingSerializedInputFilter(
       serializedRecording,
+      { path: '$', operator: 'contains', value: "'foobar'" },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
       { path: '$', operator: 'contains', value: '"items"' },
     ),
     true,
@@ -138,6 +152,41 @@ test('recording input contains stringifies the left operand when filtering with 
     matchesWorkflowRecordingSerializedInputFilter(
       serializedRecording,
       { path: '$.score', operator: 'contains', value: '"12"' },
+    ),
+    true,
+  );
+});
+
+test('recording input filters fall back to named graph inputs when no input port exists', () => {
+  const serializedRecording = createSerializedRecordingWithInputs({
+    prompt: {
+      type: 'any',
+      value: 'hello from web app',
+    },
+    score: {
+      type: 'number',
+      value: 42,
+    },
+  });
+
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$.prompt', operator: '==', value: 'hello from web app' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$.score', operator: '>', value: '40' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$', operator: 'contains', value: 'web app' },
     ),
     true,
   );

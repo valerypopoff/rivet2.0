@@ -32,7 +32,6 @@ import {
   fetchWorkflowPublishedVersionPreview,
   fetchWorkflowRecordingArtifactText,
 } from '../dashboard/workflowApi';
-import { getEnvVar } from '../overrides/utils/tauri';
 import { deserializeHostedProjectPayloadAsync } from '../overrides/utils/deserializeProject';
 
 const API = RIVET_API_BASE_URL;
@@ -130,7 +129,13 @@ async function apiSaveProject(options: {
 async function getWorkflowStorageBackend(): Promise<'filesystem' | 'managed'> {
   if (!workflowStorageBackendPromise) {
     workflowStorageBackendPromise = (async () => {
-      const value = (await getEnvVar('RIVET_STORAGE_MODE'))?.trim().toLowerCase();
+      const response = await fetch(`${API}/config`, { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error(`Failed to load hosted config: ${response.status}`);
+      }
+
+      const config = await response.json().catch(() => ({})) as { storageMode?: unknown };
+      const value = typeof config.storageMode === 'string' ? config.storageMode.trim().toLowerCase() : '';
       return value === 'managed' ? 'managed' : 'filesystem';
     })().catch((error) => {
       workflowStorageBackendPromise = null;

@@ -5,7 +5,6 @@ import { spawn } from 'node:child_process';
 import { loadDevEnv } from './lib/dev-env.mjs';
 import {
   assertNoRetiredEnv,
-  enableManagedWorkflowProfileIfNeeded,
 } from './lib/docker-launcher-env.mjs';
 
 const rootDir = process.cwd();
@@ -17,7 +16,6 @@ const repoLocalEnvKeysToScrub = [
   'RIVET_STORAGE_MODE',
   'RIVET_KEY',
   'RIVET_CORS_ALLOWED_ORIGINS',
-  'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER',
   'RIVET_UI_TOKEN_FREE_HOSTS',
   'RIVET_TRUST_INCOMING_FORWARDED_HEADERS',
@@ -51,8 +49,10 @@ const repoLocalEnvKeysToScrub = [
   'RIVET_EXTRA_ROOTS',
   'RIVET_ENV_ALLOWLIST',
   'RIVET_SHELL_ALLOWLIST',
+  'RIVET_PROXY_READ_TIMEOUT',
   'RIVET_COMMAND_TIMEOUT',
   'RIVET_MAX_OUTPUT',
+  'RIVET_DOCKER_WAIT_TIMEOUT',
   'RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS',
   'RIVET_ARTIFACTS_HOST_PATH',
   'RIVET_WORKFLOWS_HOST_PATH',
@@ -238,9 +238,7 @@ function createScenarioEnvFile(mode) {
 
   const lines = [
     'RIVET_KEY=compat-shared-key',
-    'RIVET_REQUIRE_WORKFLOW_KEY=false',
     'RIVET_REQUIRE_UI_GATE_KEY=false',
-    'RIVET_WEB_APPS_AUTH_MODE=ui-gate',
     'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false',
     `RIVET_APP_DATA_ROOT=${filesystemFixture.appDataRoot}`,
     `RIVET_RUNTIME_LIBRARIES_ROOT=${filesystemFixture.runtimeLibrariesRoot}`,
@@ -248,20 +246,11 @@ function createScenarioEnvFile(mode) {
 
   if (mode === 'filesystem') {
     lines.push(
-      'RIVET_STORAGE_MODE=filesystem',
       `RIVET_ARTIFACTS_HOST_PATH=${filesystemFixture.artifactsRoot}`,
     );
   } else if (mode === 'local-docker') {
     lines.push(
-      'RIVET_STORAGE_MODE=managed',
-      'RIVET_DATABASE_MODE=local-docker',
-      'RIVET_DATABASE_CONNECTION_STRING=postgres://rivet:rivet@workflow-postgres:5432/rivet',
-      'RIVET_DATABASE_SSL_MODE=disable',
-      'RIVET_STORAGE_URL=http://workflow-minio:9000/rivet-workflows',
-      'RIVET_STORAGE_ACCESS_KEY_ID=minioadmin',
-      'RIVET_STORAGE_ACCESS_KEY=minioadmin',
-      'RIVET_STORAGE_PREFIX=workflows/',
-      'RIVET_STORAGE_FORCE_PATH_STYLE=true',
+      'COMPOSE_PROFILES=workflow-managed',
       `RIVET_WORKFLOWS_MIGRATION_SOURCE_ROOT=${migrationFixture.workflowsRoot}`,
     );
   } else {
@@ -302,7 +291,6 @@ function assertFilesystemLauncherContract(loadedEnv, fixture) {
   };
 
   assertNoRetiredEnv(launcherEnv, { launcherName: 'compatibility', envFileLabel: path.basename(loadedEnv.envPath) });
-  enableManagedWorkflowProfileIfNeeded(launcherEnv);
 
   if (launcherEnv.COMPOSE_PROFILES?.includes('workflow-managed')) {
     throw new Error('filesystem mode unexpectedly enabled the workflow-managed compose profile');
@@ -323,14 +311,9 @@ function assertLocalDockerLauncherContract(loadedEnv) {
   };
 
   assertNoRetiredEnv(launcherEnv, { launcherName: 'compatibility', envFileLabel: path.basename(loadedEnv.envPath) });
-  enableManagedWorkflowProfileIfNeeded(launcherEnv);
 
   if (!launcherEnv.COMPOSE_PROFILES?.split(',').map((value) => value.trim()).includes('workflow-managed')) {
-    throw new Error('managed local-docker mode did not enable the workflow-managed compose profile');
-  }
-
-  if (String(launcherEnv.RIVET_DATABASE_MODE).trim().toLowerCase() !== 'local-docker') {
-    throw new Error('managed local-docker scenario did not preserve RIVET_DATABASE_MODE=local-docker');
+    throw new Error('local-docker scenario did not explicitly enable the workflow-managed compose profile');
   }
 }
 

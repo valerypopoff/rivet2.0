@@ -204,6 +204,7 @@ export function useWorkflowLibraryController(options: {
   const [runRecordingsRetained, setRunRecordingsRetained] = useState(false);
   const [runRecordingsFoundCount, setRunRecordingsFoundCount] = useState(0);
   const [runRecordingsResetToken, setRunRecordingsResetToken] = useState(0);
+  const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
@@ -1504,6 +1505,7 @@ export function useWorkflowLibraryController(options: {
     runRecordingsRetained,
     runRecordingsFoundCount,
     runRecordingsResetToken,
+    appSettingsOpen,
     aboutOpen,
     folderContextMenuState,
     projectContextMenuState,
@@ -1558,6 +1560,7 @@ export function useWorkflowLibraryController(options: {
     hideRunRecordingsModal,
     closeRunRecordingsModal,
     handleRunRecordingsFoundCountChange,
+    setAppSettingsOpen,
     setAboutOpen,
     onOpenRecording: (recordingId: string) => {
       setRunRecordingsOpen(false);

@@ -108,6 +108,7 @@
 [data-testid='run-recordings-modal--blanket'],
 [data-testid='workflow-project-version-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
+[data-testid='app-settings-modal--blanket'],
 [data-testid='about-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
   backdrop-filter: blur(2px);
@@ -118,6 +119,7 @@
 [data-testid='run-recordings-modal'],
 [data-testid='workflow-project-version-modal'],
 [data-testid='workflow-published-version-history-modal'],
+[data-testid='app-settings-modal'],
 [data-testid='about-modal'] {
   background: #1f1f22 !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
@@ -125,11 +127,16 @@
   color: var(--grey-lightest) !important;
 }
 
+[data-testid='app-settings-modal'] {
+  overflow: hidden !important;
+}
+
 [data-testid='workflow-project-settings-modal--header'],
 [data-testid='runtime-libraries-modal--header'],
 [data-testid='run-recordings-modal--header'],
 [data-testid='workflow-project-version-modal--header'],
 [data-testid='workflow-published-version-history-modal--header'],
+[data-testid='app-settings-modal--header'],
 [data-testid='about-modal--header'] {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -139,8 +146,13 @@
 [data-testid='run-recordings-modal--body'],
 [data-testid='workflow-project-version-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
+[data-testid='app-settings-modal--body'],
 [data-testid='about-modal--body'] {
   padding: 0 !important;
+}
+
+[data-testid='app-settings-modal--body'] {
+  overflow: hidden !important;
 }
 
 .workflow-library-panel .active-project-slot {
@@ -1326,6 +1338,225 @@
 .about-detail-value {
   color: var(--grey-lightest);
   font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.app-settings-modal-content {
+  --app-settings-field-row-gap: 18px;
+
+  min-height: 360px;
+  max-height: calc(100vh - 164px);
+  overflow: hidden;
+}
+
+.app-settings-layout {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+  min-height: 0;
+  max-height: inherit;
+}
+
+.app-settings-sidebar {
+  min-width: 0;
+  align-self: start;
+}
+
+.app-settings-tab-list {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  width: 100%;
+  gap: 4px;
+  padding: 5px;
+}
+
+.app-settings-nav-tab {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  text-align: left;
+}
+
+.app-settings-panel-region {
+  min-width: 0;
+  min-height: 0;
+  max-height: inherit;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.app-settings-general-panel,
+.app-settings-storage-panel,
+.app-settings-proxy-panel,
+.app-settings-recordings-panel,
+.app-settings-workflow-endpoints-panel,
+.app-settings-web-apps-panel {
+  width: 100%;
+  max-width: none;
+}
+
+.app-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.app-settings-section-title {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.app-settings-field-grid {
+  display: grid;
+  gap: var(--app-settings-field-row-gap);
+}
+
+.app-settings-field {
+  display: grid;
+  gap: 6px;
+}
+
+.app-settings-field-label {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+}
+
+.app-settings-field-help {
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.35;
+}
+
+.app-settings-inline-note {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 215, 106, 0.08);
+  color: #ffe08a;
+}
+
+.app-settings-prefixed-input-row .project-settings-input {
+  margin-right: 0;
+}
+
+.app-settings-mode-tabs {
+  width: min(100%, 420px);
+  max-width: 100%;
+}
+
+.app-settings-wide-mode-tabs {
+  width: min(100%, 560px);
+}
+
+.app-settings-mode-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.app-settings-mode-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.app-settings-proxy-no-proxy {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.app-settings-trusted-hosts {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.app-settings-checkbox-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--grey-lightest);
+  cursor: pointer;
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.app-settings-checkbox-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--grey-lightest);
+}
+
+.app-settings-checkbox-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.app-settings-checkbox-label {
+  min-width: 0;
+}
+
+.app-settings-input-suffix {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 10px;
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1;
+}
+
+.app-settings-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.app-settings-action-button {
+  min-width: 84px !important;
+}
+
+.app-settings-action-status {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+@media (max-width: 760px) {
+  .app-settings-layout {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .app-settings-tab-list {
+    width: min(100%, 260px);
+  }
+
+  .app-settings-panel-region {
+    overflow: visible;
+    padding-right: 0;
+  }
+}
+
+.project-settings-muted {
+  color: var(--grey-light);
 }
 
 .project-settings-field {
@@ -1838,6 +2069,11 @@
 .project-settings-error {
   font-size: var(--workflow-library-font-size-s);
   color: #ff9ba5;
+}
+
+.project-settings-success {
+  font-size: var(--workflow-library-font-size-s);
+  color: #9de6ad;
 }
 
 .published-version-history-button {

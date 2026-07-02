@@ -7,9 +7,13 @@ import { createWorkflowTestRoots, resetWorkflowTestRoots } from './workflow-fixt
 
 export async function createFilesystemWorkflowSuiteHarness() {
   const roots = await createWorkflowTestRoots('rivet-workflows-');
-  process.env.RIVET_WORKFLOWS_ROOT = roots.workflowsRoot;
-  process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = roots.recordingsRoot;
-  process.env.RIVET_APP_DATA_ROOT = roots.appDataRoot;
+  function applyRootEnv() {
+    process.env.RIVET_WORKFLOWS_ROOT = roots.workflowsRoot;
+    process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = roots.recordingsRoot;
+    process.env.RIVET_APP_DATA_ROOT = roots.appDataRoot;
+  }
+
+  applyRootEnv();
 
   const workflowMutations = await import('../../routes/workflows/workflow-mutations.js');
   const workflowQuery = await import('../../routes/workflows/workflow-query.js');
@@ -21,6 +25,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
   const workflowRoutes = await import('../../routes/workflows/index.js');
   const workflowStorageBackend = await import('../../routes/workflows/storage-backend.js');
   const filesystemExecutionCache = await import('../../routes/workflows/filesystem-execution-cache.js');
+  const workflowEndpointAuthSettings = await import('../../workflow-endpoint-auth-settings.js');
   const rivetNode = await import('@valerypopoff/rivet2-node');
 
   const withWorkflowApiServer = createWorkflowApiServerHarness({
@@ -38,12 +43,16 @@ export async function createFilesystemWorkflowSuiteHarness() {
   });
 
   async function resetWorkflowsRoot() {
+    applyRootEnv();
     filesystemExecutionCache.resetFilesystemExecutionCacheForTests();
     await workflowRecordings.resetWorkflowRecordingStorageForTests();
     await resetWorkflowTestRoots({
       workflowsRoot: roots.workflowsRoot,
       recordingsRoot: roots.recordingsRoot,
       appDataRoot: roots.appDataRoot,
+    });
+    await workflowEndpointAuthSettings.writeWorkflowEndpointAuthSettings({
+      requireBearerAuth: false,
     });
   }
 

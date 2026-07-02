@@ -6,17 +6,22 @@ import path from 'node:path';
 import test from 'node:test';
 
 const runtimeLibrariesRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-runtime-libraries-'));
+const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-runtime-libraries-app-data-'));
 process.env.RIVET_RUNTIME_LIBRARIES_ROOT = runtimeLibrariesRoot;
+process.env.RIVET_APP_DATA_ROOT = appDataRoot;
 
 const manifest = await import('../runtime-libraries/manifest.js');
 const startup = await import('../runtime-libraries/startup.js');
 const filesystemBackend = await import('../runtime-libraries/filesystem-backend.js');
 const runtimeLibrariesConfig = await import('../runtime-libraries/config.js');
+const deploymentStorageSettings = await import('../deployment-storage-settings.js');
 const { jobRunner } = await import('../runtime-libraries/job-runner.js');
 
 async function resetRuntimeLibrariesRoot() {
   await fs.rm(runtimeLibrariesRoot, { recursive: true, force: true });
   await fs.mkdir(runtimeLibrariesRoot, { recursive: true });
+  await fs.rm(appDataRoot, { recursive: true, force: true });
+  await fs.mkdir(appDataRoot, { recursive: true });
 }
 
 test.beforeEach(async () => {
@@ -242,15 +247,25 @@ test('filesystem backend hides finished jobs from modal state but keeps them add
   assert.ok(job.logEntries.length > 0);
 });
 
-test('runtime-library mode follows the shared storage mode env', () => {
+test('runtime-library mode follows deployment storage app settings', async () => {
   const originalStorageMode = process.env.RIVET_STORAGE_MODE;
 
   try {
     process.env.RIVET_STORAGE_MODE = 'managed';
+    assert.equal(runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(), 'filesystem');
+
+    await deploymentStorageSettings.writeDeploymentStorageSettings({
+      storageMode: 'managed',
+      databaseMode: 'managed',
+      databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id',
+      storageAccessKey: 'saved-secret',
+    });
     assert.equal(runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(), 'managed');
 
     delete process.env.RIVET_STORAGE_MODE;
-    assert.equal(runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(), 'filesystem');
+    assert.equal(runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(), 'managed');
   } finally {
     if (originalStorageMode === undefined) {
       delete process.env.RIVET_STORAGE_MODE;
@@ -260,20 +275,20 @@ test('runtime-library mode follows the shared storage mode env', () => {
   }
 });
 
-test('runtime-library config rejects retired alias env names', () => {
-  const originalStorageBackend = process.env.RIVET_STORAGE_BACKEND;
+test('runtime-library config rejects retired runtime-library alias env names', () => {
+  const originalSyncPollInterval = process.env.RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS;
 
   try {
-    process.env.RIVET_STORAGE_BACKEND = 'managed';
+    process.env.RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS = '1000';
     assert.throws(
       () => runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(),
       /Retired environment variable/,
     );
   } finally {
-    if (originalStorageBackend === undefined) {
-      delete process.env.RIVET_STORAGE_BACKEND;
+    if (originalSyncPollInterval === undefined) {
+      delete process.env.RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS;
     } else {
-      process.env.RIVET_STORAGE_BACKEND = originalStorageBackend;
+      process.env.RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS = originalSyncPollInterval;
     }
   }
 });

@@ -3,16 +3,23 @@ import { Router, type Request, type Response } from 'express';
 import {
   createProcessor,
   ExecutionRecorder,
+  getUiGraphActionComponent,
+  jsonValueToDataValue,
   renderRivetWebAppHtml,
+  resolveUiGraphActionInputs,
+  resolveUiGraphActionOutputStatePatch,
   RivetWebAppActionHttpError,
-  runRivetWebAppAction,
+  type DataValue,
+  type RivetWebAppActionResult,
+  type RivetWebAppProcessorOptions,
+  type UiComponentId,
   type UiGraph,
 } from '@valerypopoff/rivet2-node';
 
-import { getLatestWorkflowRemoteDebugger, isLatestWorkflowRemoteDebuggerEnabled } from '../../latestWorkflowRemoteDebugger.js';
+import { isLatestWorkflowRemoteDebuggerEnabled, maybeGetLatestWorkflowRemoteDebugger } from '../../latestWorkflowRemoteDebugger.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
-import { RIVET_LATEST_WEB_APPS_BASE_PATH, RIVET_WEB_APPS_BASE_PATH } from '../../workflowEndpointPaths.js';
+import { getLatestWebAppsBasePath, getPublishedWebAppsBasePath } from '../../workflowEndpointPaths.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
 import {
   createManagedCodeRunnerTelemetry,
@@ -22,13 +29,15 @@ import {
   type ManagedCodeRunnerTelemetry,
 } from '../../runtime-libraries/managed-code-runner.js';
 import { getRootPath } from '../../runtime-libraries/manifest.js';
-import { isTrustedProxyRequest, isTrustedTokenFreeHostRequest, isTrustedUiSessionRequest } from '../../auth.js';
+import { isTrustedProxyRequest, isTrustedTokenFreeHostRequest } from '../../auth.js';
+import { isServerUiAuthRequestAllowed } from '../../server-ui-auth.js';
 import {
   createWebAppOAuthAuthorizationRedirect,
   getWebAppAuthMode,
   isWebAppOAuthSessionAllowed,
   readWebAppOAuthSession,
 } from '../../web-app-oauth.js';
+import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import {
   createExecutionProjectReferenceLoader,
@@ -43,6 +52,7 @@ import {
   isWorkflowRecordingEnabled,
   shouldSnapshotWorkflowRecordingDatasets,
 } from './recordings-config.js';
+import { sanitizeUiAuthReturnTo } from '../../ui-auth-utils.js';
 
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
@@ -64,6 +74,14 @@ type WorkflowExecutionProject = Awaited<ReturnType<typeof resolvePublishedExecut
 
 const WORKFLOW_CONTEXT_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const UNSAFE_WORKFLOW_CONTEXT_HEADER_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+const SENSITIVE_WEB_APP_ACTION_HEADER_NAMES = new Set([
+  'authorization',
+  'cookie',
+  'proxy-authorization',
+  'x-forwarded-authorization',
+  'x-rivet-proxy-auth',
+  'x-rivet-token-free-host',
+]);
 
 function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value);
@@ -120,6 +138,7 @@ function normalizeWorkflowContextHeaderValue(value: unknown): string | null {
 
 export function normalizeWorkflowRequestHeadersForContext(
   rawHeaders: Record<string, unknown> | null | undefined,
+  options?: { excludeHeaderNames?: ReadonlySet<string> },
 ): WorkflowRequestHeadersContext {
   const headers: WorkflowRequestHeadersContext = {};
   if (!isJsonObjectRecord(rawHeaders)) {
@@ -129,6 +148,10 @@ export function normalizeWorkflowRequestHeadersForContext(
   for (const [rawName, rawValue] of Object.entries(rawHeaders)) {
     const name = normalizeWorkflowContextHeaderName(rawName);
     if (!name) {
+      continue;
+    }
+
+    if (options?.excludeHeaderNames?.has(name)) {
       continue;
     }
 
@@ -267,6 +290,17 @@ function getWorkflowExecutionContext(
   };
 }
 
+function getWebAppWorkflowExecutionContext(req: Request): WorkflowExecutionContext {
+  return {
+    headers: {
+      type: 'any',
+      value: normalizeWorkflowRequestHeadersForContext(req.headers, {
+        excludeHeaderNames: SENSITIVE_WEB_APP_ACTION_HEADER_NAMES,
+      }),
+    },
+  };
+}
+
 function setWorkflowExecutionDebugHeaders(
   res: Response,
   executionProject: WorkflowExecutionProject,
@@ -305,7 +339,7 @@ function setCodeRunnerTelemetryHeaders(
 }
 
 function requirePublishedWorkflowApiKey(req: Request): void {
-  const isWorkflowKeyRequired = isEnvFlagEnabled(process.env.RIVET_REQUIRE_WORKFLOW_KEY, false);
+  const isWorkflowKeyRequired = readWorkflowEndpointAuthSettingsSync().requireBearerAuth;
   if (!isWorkflowKeyRequired) {
     return;
   }
@@ -326,22 +360,8 @@ function requirePublishedWorkflowApiKey(req: Request): void {
 }
 
 function requirePublishedWebAppUiGate(req: Request): void {
-  const isUiGateRequired = isEnvFlagEnabled(process.env.RIVET_REQUIRE_UI_GATE_KEY, false);
-  if (!isUiGateRequired) {
+  if (isServerUiAuthRequestAllowed(req)) {
     return;
-  }
-
-  if (isTrustedTokenFreeHostRequest(req)) {
-    return;
-  }
-
-  if (isTrustedUiSessionRequest(req)) {
-    return;
-  }
-
-  const expectedSharedKey = process.env.RIVET_KEY?.trim();
-  if (!expectedSharedKey) {
-    throw createHttpError(500, 'UI gate key is required but RIVET_KEY is not configured');
   }
 
   throw createHttpError(401, 'Unauthorized');
@@ -384,7 +404,7 @@ function getWebAppOAuthLoginPath(req: Request): string {
 
 function getWebAppOAuthLogoutPath(returnTo: string): string {
   const params = new URLSearchParams({ return_to: returnTo });
-  return `${RIVET_WEB_APPS_BASE_PATH}/auth/logout?${params.toString()}`;
+  return `${getPublishedWebAppsBasePath()}/auth/logout?${params.toString()}`;
 }
 
 function getWebAppCurrentLogoutPath(req: Request): string {
@@ -470,6 +490,50 @@ function renderWebAppLoginRequiredHtml(req: Request): string {
   });
 }
 
+function renderWebAppUiGatePromptHtml(req: Request): string {
+  const returnTo = escapeHtml(sanitizeUiAuthReturnTo(getWebAppRequestReturnTo(req)));
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rivet Access</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at top, rgba(96, 165, 250, 0.18), transparent 34%), linear-gradient(180deg, #121419 0%, #0b0d11 100%); font-family: Georgia, "Times New Roman", serif; color: #f3f4f6; }
+      .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(10px); }
+      .modal { position: relative; width: min(440px, calc(100vw - 32px)); padding: 28px; border-radius: 18px; background: rgba(18, 20, 25, 0.94); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42); }
+      h1 { margin: 0 0 10px; font-size: 31px; line-height: 1.05; }
+      p { margin: 0 0 18px; font-size: 16px; line-height: 1.55; color: rgba(243, 244, 246, 0.78); }
+      form { display: grid; gap: 12px; }
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+      label { font-size: 14px; color: rgba(243, 244, 246, 0.84); }
+      input { width: 100%; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; background: rgba(255, 255, 255, 0.04); color: inherit; padding: 12px 14px; font: inherit; }
+      input:focus { outline: 2px solid rgba(96, 165, 250, 0.75); outline-offset: 2px; }
+      button { border: none; border-radius: 12px; background: #f3f4f6; color: #111827; padding: 12px 16px; font: inherit; font-weight: 700; cursor: pointer; }
+      .hint { margin-top: 12px; font-size: 13px; color: rgba(243, 244, 246, 0.52); }
+    </style>
+  </head>
+  <body>
+    <div class="overlay" aria-hidden="true"></div>
+    <main class="modal" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+      <h1 id="gate-title">Enter Access Key</h1>
+      <p>Provide the Rivet key to open this web app.</p>
+      <form method="post" action="/__rivet_auth">
+        <label for="gate-username" class="sr-only">Username</label>
+        <input id="gate-username" class="sr-only" name="username" type="text" value="Rivet" autocomplete="username" required>
+        <label for="gate-key">Access key</label>
+        <input id="gate-key" name="key" type="password" autocomplete="current-password" autofocus required>
+        <input name="return_to" type="hidden" value="${returnTo}">
+        <button type="submit">Continue</button>
+      </form>
+      <div class="hint">Token-free hosts still bypass this prompt automatically.</div>
+    </main>
+  </body>
+</html>`;
+}
+
 function renderWebAppAccessDeniedHtml(email: string, logoutPath: string): string {
   return renderWebAppAuthStatusHtml({
     title: 'Web app access denied',
@@ -531,6 +595,23 @@ function isWebAppOAuthLoginRequest(req: Request): boolean {
   return req.query[WEB_APP_OAUTH_AUTH_ACTION_QUERY] === WEB_APP_OAUTH_LOGIN_ACTION;
 }
 
+function getForwardedRequestProtocol(req: Request): string {
+  if (!isTrustedProxyRequest(req)) {
+    return req.protocol || 'http';
+  }
+
+  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  return forwardedProto?.toLowerCase() || req.protocol || 'http';
+}
+
+function getForwardedRequestHost(req: Request): string {
+  if (!isTrustedProxyRequest(req)) {
+    return req.get('host') || '';
+  }
+
+  return req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || '';
+}
+
 function isWebAppBrowserRequestOriginAllowed(req: Request, requestKind: WebAppRequestKind): boolean {
   const originHeader = req.get('origin')?.trim();
   if (originHeader) {
@@ -578,8 +659,19 @@ function authorizeWebAppRequestBeforeResolve(
   }
 
   if (mode === 'ui-gate') {
-    requirePublishedWebAppUiGate(req);
-    return true;
+    try {
+      requirePublishedWebAppUiGate(req);
+      return true;
+    } catch (error) {
+      if (requestKind === 'html' && (error as { status?: unknown }).status === 401) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        sendHtmlWithDuration(res, 401, renderWebAppUiGatePromptHtml(req), requestStartedAt);
+        return false;
+      }
+
+      throw error;
+    }
   }
 
   const session = readWebAppOAuthSession(req);
@@ -647,41 +739,6 @@ function authorizeResolvedWebAppRequest(
   return false;
 }
 
-function getForwardedRequestProtocol(req: Request): string {
-  if (!isTrustedProxyRequest(req)) {
-    return req.protocol || 'http';
-  }
-
-  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
-  return forwardedProto?.toLowerCase() || req.protocol || 'http';
-}
-
-function getForwardedRequestHost(req: Request): string {
-  if (!isTrustedProxyRequest(req)) {
-    return req.get('host') || '';
-  }
-
-  return req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || '';
-}
-
-function createFetchRequestFromExpress(req: Request): globalThis.Request {
-  const host = getForwardedRequestHost(req) || 'localhost';
-  const url = `${getForwardedRequestProtocol(req)}://${host}${req.originalUrl || req.url}`;
-  const headers = new Headers();
-
-  for (const [name, rawValue] of Object.entries(req.headers)) {
-    const value = normalizeWorkflowContextHeaderValue(rawValue);
-    if (value != null) {
-      headers.set(name, value);
-    }
-  }
-
-  return new Request(url, {
-    headers,
-    method: req.method,
-  });
-}
-
 function encodeUrlPathSegment(value: string): string {
   return encodeURIComponent(value).replace(/%2F/gi, '%252F');
 }
@@ -690,15 +747,15 @@ type WebAppRouteKind = 'published' | 'latest';
 
 function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
   const basePath = routeKind === 'published'
-    ? RIVET_WEB_APPS_BASE_PATH
-    : RIVET_LATEST_WEB_APPS_BASE_PATH;
+    ? getPublishedWebAppsBasePath()
+    : getLatestWebAppsBasePath();
 
   return `${basePath}/${encodeUrlPathSegment(slug)}`;
 }
 
 function getLatestRemoteDebuggerForExecution(options?: { enableRemoteDebugger?: boolean }) {
   return options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
-    ? getLatestWorkflowRemoteDebugger()
+    ? maybeGetLatestWorkflowRemoteDebugger()
     : undefined;
 }
 
@@ -732,7 +789,9 @@ function sendWebAppActionErrorWithDuration(
   if (status >= 500) {
     console.error('Rivet web app action failed:', error);
   }
-  const message = getWorkflowErrorMessage(error);
+  const message = status >= 500 && !(error instanceof RivetWebAppActionHttpError)
+    ? 'Internal server error'
+    : getWorkflowErrorMessage(error);
   const code = error instanceof RivetWebAppActionHttpError ? error.code : undefined;
   sendJsonWithDuration(res, status, {
     error: message,
@@ -760,6 +819,115 @@ function getOptionalWebAppActionRevisionKey(body: Record<string, unknown>): stri
   }
 
   return revisionKey;
+}
+
+type WorkflowExecutionRecordingSnapshot = {
+  recorder: ExecutionRecorder | null;
+  status: 'succeeded' | 'failed' | 'suspicious';
+  durationMs: number;
+  errorMessage?: string;
+};
+
+type WebAppActionExecutionSnapshot = WorkflowExecutionRecordingSnapshot & {
+  result?: RivetWebAppActionResult;
+  executionError?: unknown;
+};
+
+function getWebAppActionState(body: Record<string, unknown>): Record<string, unknown> {
+  const state = body.state;
+  if (state == null) {
+    return {};
+  }
+
+  if (isJsonObjectRecord(state)) {
+    return state;
+  }
+
+  throw new RivetWebAppActionHttpError('Invalid action state.', 400);
+}
+
+function validateWebAppActionRevisionKey(requestRevisionKey: string | undefined, revisionKey: string | undefined): void {
+  if (revisionKey != null && requestRevisionKey !== revisionKey) {
+    throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
+  }
+}
+
+async function runRecordedWebAppAction(
+  executionProject: WorkflowExecutionProject,
+  uiGraph: UiGraph,
+  req: Request,
+  codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
+  options: {
+    enableRemoteDebugger?: boolean;
+  },
+): Promise<WebAppActionExecutionSnapshot> {
+  const componentId = getWebAppActionComponentId(req.body);
+  const requestRevisionKey = getOptionalWebAppActionRevisionKey(req.body);
+  const actionState = getWebAppActionState(req.body);
+  validateWebAppActionRevisionKey(requestRevisionKey, executionProject.revisionKey);
+
+  const resolvedComponentId = componentId as UiComponentId;
+  const component = getUiGraphActionComponent(uiGraph, resolvedComponentId);
+  if (!component) {
+    throw new Error('UI action component not found.');
+  }
+
+  if (component.action.type !== 'runGraph') {
+    throw new Error(`Unsupported UI action type: ${component.action.type}`);
+  }
+
+  if (!component.action.graphId) {
+    throw new Error('This UI action is not connected to a graph.');
+  }
+
+  const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
+  const processorOptions = await createWebAppProcessorOptions(
+    executionProject,
+    req,
+    codeRunnerTelemetry,
+    options,
+  );
+  const processor = createProcessor(executionProject.project, {
+    ...processorOptions,
+    graph: component.action.graphId,
+    inputs: processorOptions.inputs ??
+      Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)])),
+  });
+  const recorder = isWorkflowRecordingEnabled()
+    ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
+    : null;
+  recorder?.record(processor.processor);
+
+  let result: RivetWebAppActionResult | undefined;
+  let executionError: unknown;
+  let status: WebAppActionExecutionSnapshot['status'] = 'succeeded';
+  let errorMessage: string | undefined;
+  let durationMs = 0;
+  const executionStartedAt = performance.now();
+
+  try {
+    const outputs = await processor.run() as Record<string, DataValue>;
+    status = getWorkflowRecordingStatusFromOutputs(outputs);
+    result = {
+      outputs,
+      statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
+    };
+  } catch (error) {
+    status = 'failed';
+    errorMessage = getWorkflowErrorMessage(error);
+    executionError = error;
+  } finally {
+    durationMs = performance.now() - executionStartedAt;
+  }
+
+  return {
+    recorder,
+    status,
+    durationMs,
+    errorMessage,
+    result,
+    executionError,
+  };
 }
 
 async function resolveWebAppExecutionProject(
@@ -805,7 +973,7 @@ async function createWebAppProcessorOptions(
   options?: {
     enableRemoteDebugger?: boolean;
   },
-) {
+): Promise<RivetWebAppProcessorOptions> {
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
 
   return {
@@ -813,12 +981,51 @@ async function createWebAppProcessorOptions(
       getRootPath(),
       codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {},
     ) as any,
-    context: getWorkflowExecutionContext(req),
+    context: getWebAppWorkflowExecutionContext(req),
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
     projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
     remoteDebugger,
   };
+}
+
+function enqueueExecutionRecording(
+  executionProject: WorkflowExecutionProject,
+  recording: WorkflowExecutionRecordingSnapshot,
+  options: {
+    endpointName: string;
+    runKind: 'published' | 'latest';
+  },
+): void {
+  const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
+  const recorder = recording.recorder;
+
+  if (!recorder) {
+    return;
+  }
+
+  enqueueWorkflowExecutionRecordingPersistence(async () => {
+    const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
+      ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
+          console.error('Failed to export workflow datasets for recording:', error);
+          return [];
+        })
+      : [];
+
+    await persistWorkflowExecutionRecordingWithBackend({
+      sourceProject: project,
+      sourceProjectPath: projectVirtualPath,
+      executedProject: project,
+      executedAttachedData: attachedData,
+      executedDatasets,
+      endpointName: options.endpointName,
+      recordingSerialized: recorder.serialize(),
+      runKind: options.runKind,
+      status: recording.status,
+      durationMs: recording.durationMs,
+      errorMessage: recording.errorMessage,
+    });
+  });
 }
 
 async function executeWorkflowEndpoint(
@@ -832,7 +1039,7 @@ async function executeWorkflowEndpoint(
     runKind: 'published' | 'latest';
   },
 ): Promise<void> {
-  const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
+  const { project, datasetProvider, projectVirtualPath } = executionProject;
   const projectReferenceLoader = await createExecutionProjectReferenceLoader(projectVirtualPath);
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
   const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
@@ -875,30 +1082,18 @@ async function executeWorkflowEndpoint(
     executionDurationMs = performance.now() - executionStartedAt;
   }
 
-  if (recorder) {
-    enqueueWorkflowExecutionRecordingPersistence(async () => {
-      const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
-        ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
-            console.error('Failed to export workflow datasets for recording:', error);
-            return [];
-          })
-        : [];
-
-      await persistWorkflowExecutionRecordingWithBackend({
-        sourceProject: project,
-        sourceProjectPath: projectVirtualPath,
-        executedProject: project,
-        executedAttachedData: attachedData,
-        executedDatasets,
-        endpointName: options.endpointName,
-        recordingSerialized: recorder.serialize(),
-        runKind: options.runKind,
-        status: recordingStatus,
-        durationMs: executionDurationMs,
-        errorMessage: recordingErrorMessage,
-      });
+  enqueueExecutionRecording(
+    executionProject,
+    {
+      recorder,
+      status: recordingStatus,
+      durationMs: executionDurationMs,
+      errorMessage: recordingErrorMessage,
+    },
+    {
+      endpointName: options.endpointName,
+      runKind: options.runKind,
     });
-  }
 
   if (executionError) {
     setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
@@ -1073,26 +1268,22 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
       ? createManagedCodeRunnerTelemetry()
       : null;
 
-    const executionStartedAt = performance.now();
-    const result = await runRivetWebAppAction(resolved.executionProject.project, {
-      componentId: getWebAppActionComponentId(req.body),
-      createProcessorOptions: () => createWebAppProcessorOptions(
-        resolved.executionProject,
-        req,
-        codeRunnerTelemetry,
-        { enableRemoteDebugger: routeKind === 'latest' },
-      ),
-      request: createFetchRequestFromExpress(req),
-      requestRevisionKey: getOptionalWebAppActionRevisionKey(req.body),
-      revisionKey: resolved.executionProject.revisionKey,
-      state: req.body.state as Record<string, unknown> | undefined,
-      uiGraph,
+    const execution = await runRecordedWebAppAction(resolved.executionProject, uiGraph, req, codeRunnerTelemetry, {
+      enableRemoteDebugger: routeKind === 'latest',
     });
-    const executionDurationMs = performance.now() - executionStartedAt;
+    enqueueExecutionRecording(resolved.executionProject, execution, {
+      endpointName: getWebAppBasePath(routeKind, resolved.slug),
+      runKind: routeKind,
+    });
 
-    setWorkflowExecutionDebugHeaders(res, resolved.executionProject, executionDurationMs);
+    setWorkflowExecutionDebugHeaders(res, resolved.executionProject, execution.durationMs);
     setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
-    sendJsonWithDuration(res, 200, result, requestStartedAt);
+    if (execution.executionError) {
+      sendWebAppActionErrorWithDuration(res, execution.executionError, requestStartedAt);
+      return;
+    }
+
+    sendJsonWithDuration(res, 200, execution.result, requestStartedAt);
   } catch (error) {
     setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
     sendWebAppActionErrorWithDuration(res, error, requestStartedAt);

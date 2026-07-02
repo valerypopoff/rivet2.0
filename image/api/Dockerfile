@@ -89,7 +89,7 @@ COPY --from=builder --chown=10001:10001 /app/rivet/node_modules /app/rivet/node_
 COPY --from=builder --chown=10001:10001 /app/rivet/packages/core /app/rivet/packages/core
 COPY --from=builder --chown=10001:10001 /app/rivet/packages/node /app/rivet/packages/node
 COPY --chown=10001:10001 image/lib/load-env.sh /opt/rivet/lib/load-env.sh
-COPY --chown=10001:10001 image/lib/build-db-connection.mjs /opt/rivet/lib/build-db-connection.mjs
+COPY --chown=10001:10001 image/lib/bootstrap-deployment-storage-settings.mjs /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
 COPY --chown=10001:10001 image/api/entrypoint.sh /opt/rivet/api-entrypoint.sh
 
 RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/api-entrypoint.sh

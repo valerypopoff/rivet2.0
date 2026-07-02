@@ -214,6 +214,6 @@ Internally, the wrapper now keeps the major ownership seams explicit:
 ### Optional external UI gate
 
 - set `RIVET_KEY` to the shared secret
-- set `RIVET_REQUIRE_WORKFLOW_KEY=true` to require `Authorization: Bearer <RIVET_KEY>` on workflow execution routes
+- use `Settings` -> `Workflow endpoints` -> `Access control` to require `Authorization: Bearer <RIVET_KEY>` on workflow execution routes; it is enabled by default
 - set `RIVET_REQUIRE_UI_GATE_KEY=true` to gate the browser UI and related websockets
-- set `RIVET_UI_TOKEN_FREE_HOSTS` for hosts that should bypass the UI gate
+- use `Settings` -> `General` -> `Trusted hosts` for exact hostnames that should bypass the UI gate, web-app auth, and workflow endpoint bearer checks

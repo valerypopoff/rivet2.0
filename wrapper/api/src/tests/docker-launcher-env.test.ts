@@ -10,7 +10,6 @@ const launcherEnv = await import(new URL('../../../../scripts/lib/docker-launche
     env: NodeJS.ProcessEnv,
     fileEnv?: Record<string, string>,
   ) => NodeJS.ProcessEnv;
-  enableManagedWorkflowProfileIfNeeded: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   listActiveRetiredEnv: (env: NodeJS.ProcessEnv) => string[];
 };
 const devEnv = await import(new URL('../../../../scripts/lib/dev-env.mjs', import.meta.url).href) as {
@@ -85,56 +84,31 @@ function setProcessEnvForTest(name: string, value: string) {
   };
 }
 
-test('filesystem launcher env does not activate the managed workflow compose profile', () => {
-  const env: NodeJS.ProcessEnv = {
-    RIVET_STORAGE_MODE: 'filesystem',
-    RIVET_DATABASE_MODE: 'managed',
-  };
-
-  launcherEnv.enableManagedWorkflowProfileIfNeeded(env);
-  assert.equal(env.COMPOSE_PROFILES, undefined);
-});
-
-test('managed local-docker launcher env activates the managed workflow compose profile once', () => {
+test('storage launcher env does not activate the managed workflow compose profile', () => {
   const env: NodeJS.ProcessEnv = {
     RIVET_STORAGE_MODE: 'managed',
     RIVET_DATABASE_MODE: 'local-docker',
-    COMPOSE_PROFILES: 'alpha,workflow-managed,beta',
-  };
-
-  launcherEnv.enableManagedWorkflowProfileIfNeeded(env);
-  assert.equal(env.COMPOSE_PROFILES, 'alpha,workflow-managed,beta');
-
-  const withoutExistingProfile: NodeJS.ProcessEnv = {
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'local-docker',
-    COMPOSE_PROFILES: 'alpha,beta',
-  };
-
-  launcherEnv.enableManagedWorkflowProfileIfNeeded(withoutExistingProfile);
-  assert.equal(withoutExistingProfile.COMPOSE_PROFILES, 'alpha,beta,workflow-managed');
-});
-
-test('managed cloud launcher env does not activate the managed workflow compose profile', () => {
-  const env: NodeJS.ProcessEnv = {
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
     COMPOSE_PROFILES: 'alpha',
   };
 
-  launcherEnv.enableManagedWorkflowProfileIfNeeded(env);
   assert.equal(env.COMPOSE_PROFILES, 'alpha');
 });
 
 test('launcher env helpers report retired aliases with launcher-specific context', () => {
   const env: NodeJS.ProcessEnv = {
     RIVET_STORAGE_BACKEND: 'managed',
+    RIVET_DOCKER_WAIT_TIMEOUT: '1200',
+    RIVET_REQUIRE_WORKFLOW_KEY: 'false',
   };
 
-  assert.deepEqual(launcherEnv.listActiveRetiredEnv(env), ['RIVET_STORAGE_BACKEND -> RIVET_STORAGE_MODE']);
+  assert.deepEqual(launcherEnv.listActiveRetiredEnv(env), [
+    'RIVET_STORAGE_BACKEND -> Settings -> Storage',
+    'RIVET_REQUIRE_WORKFLOW_KEY -> Settings -> Workflow endpoints',
+    'RIVET_DOCKER_WAIT_TIMEOUT -> Settings -> Docker',
+  ]);
   assert.throws(
     () => launcherEnv.assertNoRetiredEnv(env, { launcherName: 'dev-docker', envFileLabel: '.env.compat' }),
-    /\[dev-docker\] Retired environment variable\(s\) detected in \.env\.compat: RIVET_STORAGE_BACKEND -> RIVET_STORAGE_MODE/,
+    /\[dev-docker\] Retired environment variable\(s\) detected in \.env\.compat: RIVET_STORAGE_BACKEND -> Settings -> Storage, RIVET_REQUIRE_WORKFLOW_KEY -> Settings -> Workflow endpoints, RIVET_DOCKER_WAIT_TIMEOUT -> Settings -> Docker/,
   );
 });
 
@@ -142,7 +116,6 @@ test('loadDevEnv honors explicit RIVET_ENV_FILE overrides and still derives file
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-dev-env-'));
   const envPath = path.join(tempRoot, 'compat.env');
   fs.writeFileSync(envPath, [
-    'RIVET_STORAGE_MODE=filesystem',
     'RIVET_ARTIFACTS_HOST_PATH=./artifacts',
   ].join('\n'));
 
@@ -153,7 +126,6 @@ test('loadDevEnv honors explicit RIVET_ENV_FILE overrides and still derives file
 
     assert.equal(loaded.envPath, envPath);
     assert.equal(loaded.hasEnvFile, true);
-    assert.equal(loaded.fileEnv.RIVET_STORAGE_MODE, 'filesystem');
     assert.equal(
       loaded.mergedEnv.RIVET_SOURCE_BUILD_CONTEXT_PATH,
       path.join(tempRoot, '.data', 'docker-contexts', 'rivet-source'),
@@ -175,7 +147,6 @@ test('loadDevEnv preserves an explicit workflow recordings host path override', 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-dev-env-recordings-'));
   const envPath = path.join(tempRoot, 'compat.env');
   fs.writeFileSync(envPath, [
-    'RIVET_STORAGE_MODE=filesystem',
     'RIVET_ARTIFACTS_HOST_PATH=./artifacts',
     'RIVET_WORKFLOW_RECORDINGS_HOST_PATH=./custom-recordings',
   ].join('\n'));

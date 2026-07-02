@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { getExpectedProxyAuthToken } from '../auth.js';
+import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
+import { writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
 import {
   assertApiRuntimeProfileStartupPreconditions,
   createApiApp,
@@ -15,16 +16,19 @@ import {
 } from '../app.js';
 import { disposeRuntimeLibrariesBackend } from '../runtime-libraries/backend.js';
 import { createHttpError } from '../utils/httpError.js';
+import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 
 const relevantEnvKeys = [
   'RIVET_KEY',
   'RIVET_CORS_ALLOWED_ORIGINS',
-  'RIVET_REQUIRE_WORKFLOW_KEY',
-  'RIVET_STORAGE_MODE',
   'RIVET_WORKFLOWS_ROOT',
   'RIVET_APP_DATA_ROOT',
   'RIVET_RUNTIME_LIBRARIES_ROOT',
   'RIVET_WORKSPACE_ROOT',
+  'RIVET_EXECUTOR_WS_URL',
+  'RIVET_REMOTE_DEBUGGER_DEFAULT_WS',
+  'RIVET_REQUIRE_UI_GATE_KEY',
+  'RIVET_SERVER_UI_AUTH_MODE',
 ] as const;
 
 async function withApiEnv(
@@ -40,8 +44,6 @@ async function withApiEnv(
 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-api-profile-'));
   process.env.RIVET_KEY = 'phase4-shared-key';
-  process.env.RIVET_REQUIRE_WORKFLOW_KEY = 'false';
-  process.env.RIVET_STORAGE_MODE = 'filesystem';
   process.env.RIVET_WORKSPACE_ROOT = tempRoot;
   process.env.RIVET_WORKFLOWS_ROOT = path.join(tempRoot, 'workflows');
   process.env.RIVET_APP_DATA_ROOT = path.join(tempRoot, 'app-data');
@@ -66,6 +68,17 @@ async function withApiEnv(
       }
     }
   }
+}
+
+async function writeManagedDeploymentStorageSettings(): Promise<void> {
+  await writeDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
+    storageUrl: 'https://test-bucket.s3.us-east-1.amazonaws.com',
+    storageAccessKeyId: 'spaces-key',
+    storageAccessKey: 'spaces-secret',
+  });
 }
 
 async function startServer(profile: 'combined' | 'control' | 'execution') {
@@ -97,6 +110,9 @@ function trustedProxyHeaders(): Record<string, string> {
 test('Phase 4 route exposure matrix stays stable across API runtime profiles', () => {
   assert.deepEqual(getApiRouteExposureMatrix('control'), [
     '/ui-auth',
+    '/ui-auth/check',
+    '/ui-auth/prompt',
+    '/ui-auth/oauth/*',
     '/apps/auth/callback',
     '/apps/auth/dummy',
     '/apps/auth/logout',
@@ -108,6 +124,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/projects/*',
     '/api/workflows/*',
     '/api/runtime-libraries/*',
+    '/api/app-settings/*',
     '/api/config*',
   ]);
 
@@ -122,6 +139,9 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
 
   assert.deepEqual(getApiRouteExposureMatrix('combined'), [
     '/ui-auth',
+    '/ui-auth/check',
+    '/ui-auth/prompt',
+    '/ui-auth/oauth/*',
     '/apps/auth/callback',
     '/apps/auth/dummy',
     '/apps/auth/logout',
@@ -133,6 +153,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/projects/*',
     '/api/workflows/*',
     '/api/runtime-libraries/*',
+    '/api/app-settings/*',
     '/api/config*',
     '/workflows/:endpointName',
     '/apps/:slug',
@@ -141,26 +162,21 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
 });
 
 test('execution profile startup preconditions require managed storage mode', async () => {
-  await withApiEnv({
-    RIVET_STORAGE_MODE: 'filesystem',
-  }, () => {
+  await withApiEnv({}, () => {
     assert.throws(
       () => assertApiRuntimeProfileStartupPreconditions('execution'),
-      /RIVET_API_PROFILE=execution requires RIVET_STORAGE_MODE=managed/,
+      /RIVET_API_PROFILE=execution requires Settings -> Storage to use Object storage/,
     );
   });
 
-  await withApiEnv({
-    RIVET_STORAGE_MODE: 'managed',
-  }, () => {
+  await withApiEnv({}, async () => {
+    await writeManagedDeploymentStorageSettings();
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('execution'));
   });
 });
 
 test('combined and control profiles keep filesystem mode as a supported startup contract', async () => {
-  await withApiEnv({
-    RIVET_STORAGE_MODE: 'filesystem',
-  }, () => {
+  await withApiEnv({}, () => {
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('combined'));
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('control'));
   });
@@ -256,7 +272,7 @@ test('API CORS defaults to same-origin browser access and explicit allowlist ori
 });
 
 test('control profile exposes control-plane routes and does not expose published execution routes', async () => {
-  await withApiEnv({}, async () => {
+  await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
     const server = await startServer('control');
     try {
       const uiAuthResponse = await fetch(`${server.baseUrl}/ui-auth`, {
@@ -300,7 +316,12 @@ test('control profile exposes control-plane routes and does not expose published
       assert.equal(webAppResponse.headers.get('x-duration-ms'), null);
       assert.deepEqual(await webAppResponse.json(), { error: 'Not found' });
 
-      const latestWebAppResponse = await fetch(`${server.baseUrl}/apps-latest/phase4-missing`);
+      const latestWebAppResponse = await fetch(`${server.baseUrl}/apps-latest/phase4-missing`, {
+        headers: {
+          ...trustedProxyHeaders(),
+          cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+        },
+      });
       assert.equal(latestWebAppResponse.status, 404);
       assert.match(latestWebAppResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
       assert.equal((await latestWebAppResponse.json()).error, 'Latest Rivet web app not found');
@@ -321,6 +342,7 @@ test('control profile exposes control-plane routes and does not expose published
 
 test('execution profile exposes published execution routes and hides control-plane routes', async () => {
   await withApiEnv({}, async () => {
+    await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
     const server = await startServer('execution');
     try {
       const configResponse = await fetch(`${server.baseUrl}/api/config`, {
@@ -390,6 +412,7 @@ test('execution profile exposes published execution routes and hides control-pla
 
 test('combined profile preserves both control-plane and published/latest execution routes', async () => {
   await withApiEnv({}, async () => {
+    await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
     const server = await startServer('combined');
     try {
       const configResponse = await fetch(`${server.baseUrl}/api/config`, {

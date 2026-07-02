@@ -34,6 +34,7 @@ interface WorkflowLibraryPanelProps {
   contentVisible: boolean;
   onToggleCollapse: () => void;
   routeConfig: HostedRouteConfig;
+  onRouteConfigChange?: (config: HostedRouteConfig) => void;
 }
 
 const SidebarOpenIcon: FC = () => (
@@ -68,6 +69,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   contentVisible,
   onToggleCollapse,
   routeConfig,
+  onRouteConfigChange,
 }) => {
   const controller = useWorkflowLibraryController({
     onOpenProject,
@@ -129,6 +131,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     openRunRecordingsModal,
     runRecordingsRetained,
     runRecordingsFoundCount,
+    setAppSettingsOpen,
   } = controller;
 
   let bodyContent: JSX.Element | null = null;
@@ -250,6 +253,15 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           <Button
             appearance="subtle"
             className="panel-bottom-button project-settings-secondary-button button-size-m"
+            onClick={() => setAppSettingsOpen(true)}
+            title="Open app settings"
+            aria-label="App settings"
+          >
+            Settings
+          </Button>
+          <Button
+            appearance="subtle"
+            className="panel-bottom-button project-settings-secondary-button button-size-m"
             onClick={() => setAboutOpen(true)}
             title="Show version information"
           >
@@ -258,7 +270,11 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <WorkflowLibraryContextMenus controller={controller} />
-        <WorkflowLibraryModals controller={controller} routeConfig={routeConfig} />
+        <WorkflowLibraryModals
+          controller={controller}
+          routeConfig={routeConfig}
+          onRouteConfigChange={onRouteConfigChange}
+        />
       </div>
 
       {collapsed ? (

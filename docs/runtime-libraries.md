@@ -6,7 +6,7 @@ The dashboard exposes this through the `Runtime libraries` button in the left pa
 
 ## Backend modes
 
-Runtime libraries now follow `RIVET_STORAGE_MODE`:
+Runtime libraries now follow the same storage mode as workflow storage. Operators should set it in `Settings` -> `Storage`, which writes `settings/deployment-storage.json` under app data. API and executor processes read that file at startup and prefer it over storage/database env defaults.
 
 - `filesystem`
 - `managed`
@@ -22,8 +22,7 @@ backend is not scaled beyond one replica.
 
 Managed mode reuses the same database and object-storage connection settings as
 managed workflow storage and uses the fixed object key prefix `runtime-libraries/`.
-That means `RIVET_STORAGE_MODE=managed` switches both workflows and runtime libraries
-to the managed backend together.
+That means choosing managed storage switches both workflows and runtime libraries to the managed backend together.
 
 ## Backend wiring
 
@@ -45,24 +44,17 @@ That managed facade keeps the supported runtime modes visible instead of hiding 
 - `managed/replica-status.ts` owns stale-replica cleanup helpers
 - `managed/cleanup.ts` remains the separate audit/prune orchestrator for historical releases, jobs, and orphaned artifacts
 
-Canonical managed config:
+Canonical managed config lives in App Settings -> `Storage`:
 
-- `RIVET_STORAGE_MODE=managed`
-- `RIVET_DATABASE_MODE=local-docker|managed`
-- `RIVET_DATABASE_CONNECTION_STRING`
-- `RIVET_DATABASE_SSL_MODE=disable|require|verify-full`
-- recommended object-storage URL form:
-  - `RIVET_STORAGE_URL`
-  - `RIVET_STORAGE_ACCESS_KEY_ID`
-  - `RIVET_STORAGE_ACCESS_KEY`
-- optional explicit S3 tuple form:
-  - `RIVET_STORAGE_BUCKET`
-  - `RIVET_STORAGE_REGION`
-  - `RIVET_STORAGE_ENDPOINT`
-  - `RIVET_STORAGE_ACCESS_KEY_ID`
-  - `RIVET_STORAGE_ACCESS_KEY`
-  - `RIVET_STORAGE_PREFIX`
-  - `RIVET_STORAGE_FORCE_PATH_STYLE`
+- project artifact storage: `Local folders` or `Object storage` in the UI (`filesystem` or `managed` in the saved settings file)
+- metadata database: `Local Docker Postgres` or `Managed Postgres` in the UI (`local-docker` or `managed` in the saved settings file)
+- managed PostgreSQL connection string and SSL mode
+- S3-compatible object-storage URL, access key ID, and secret access key
+
+The API, executor, and Docker runtime do not read storage/database choices from `.env`. If `settings/deployment-storage.json` is missing, the runtime uses the built-in `Local folders` + `Local Docker Postgres` defaults. After the Storage tab is saved, the app-data settings file is the source of truth and storage changes require a process/container restart. In Kubernetes, the chart bootstraps that same settings file from Helm/Vault values only when the file is absent, runtime pods still read the app-settings file, and storage/database changes require rolling out the API/executor pods that own singleton backend state or endpoint execution. The runtime-library object key prefix stays fixed at `runtime-libraries/`.
+
+Still-env-owned runtime-library process tuning:
+
 - optional runtime-library sync tuning:
   - `RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS`
 - optional replica-status retention tuning:
@@ -76,7 +68,7 @@ Canonical managed config:
   - `RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED=true|false`
 
 The official API and executor images set `RIVET_RUNTIME_PROCESS_ROLE` automatically.
-Custom launches should set it explicitly when `RIVET_STORAGE_MODE=managed` so replica-readiness
+Custom launches should set it explicitly in managed storage so replica-readiness
 reporting lands in the correct tier.
 
 Default inference rules when you do not override the topology envs:
@@ -103,15 +95,19 @@ The current chart split uses the runtime-library topology envs like this:
 
 Default replica-status retention policy:
 
-- `RIVET_DATABASE_MODE=local-docker`
+- `Local Docker Postgres`
   - retain stale replica rows for `24h`
   - run background stale-row cleanup every `15m`
-- `RIVET_DATABASE_MODE=managed`
+- `Managed Postgres`
   - retain stale replica rows for `15m`
   - run background stale-row cleanup every `5m`
 
-Retired aliases such as `RIVET_WORKFLOWS_STORAGE_*`, `RIVET_OBJECT_STORAGE_*`,
-`RIVET_STORAGE_BACKEND`, and `RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS` now fail fast.
+Retired storage aliases such as `RIVET_WORKFLOWS_STORAGE_*`, `RIVET_OBJECT_STORAGE_*`,
+and `RIVET_STORAGE_BACKEND` fail fast in Docker launcher env files and point operators
+to `Settings` -> `Storage`. The retired runtime-library alias
+`RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS` always fails fast; use
+`RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS` if that low-level interval must
+be overridden.
 
 ## On-disk layout
 
@@ -285,6 +281,7 @@ Both execution paths resolve managed libraries from `current/node_modules`:
 
 - the API uses `ManagedCodeRunner`
 - the executor image sets `RIVET_CODE_RUNNER_REQUIRE_ROOT` to the same runtime-library root and relies on Rivet 2.0's app-executor `CodeRunner` seam instead of patching Rivet source
+- the shared proxy bootstrap also applies UI-managed Node executor proxy settings before installing Undici's proxy dispatcher: it clears process proxy env first, API processes read `settings/node-executor-proxy.json` under `RIVET_APP_DATA_ROOT` for headless endpoint execution, and the editor executor reads the same relative file from its desktop-style app-data mount
 - the API image links `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-core`, and Rivet 2's `@rivet2/*` runtime aliases to the built embedded `rivet/` packages before compiling the API, so hosted endpoint execution and editor-side execution use the same Rivet 2.0 runtime behavior
 
 That means newly activated libraries take effect on the next workflow execution without restarting the API container.
@@ -370,7 +367,7 @@ The underlying API accepts arrays for install/remove requests, so bulk operation
 
 ## Related feature
 
-The adjacent `Run recordings` action is separate. It browses stored workflow execution recordings, can filter runs by recorded request input, opens replay bundles back into the editor by `recordingId`, and can delete individual runs; see [workflow-publication.md](workflow-publication.md).
+The adjacent `Run recordings` action is separate. It browses stored workflow execution recordings, can filter runs by recorded workflow request or graph action input, opens replay bundles back into the editor by `recordingId`, and can delete individual runs; see [workflow-publication.md](workflow-publication.md).
 
 ## Key files
 

@@ -6,8 +6,6 @@ services:
       dockerfile: image/proxy/Dockerfile
     ports:
       - "${RIVET_PORT:-8080}:8080"
-    env_file:
-      - ../../.env
     environment:
       - RIVET_WEB_UPSTREAM_HOST=web
       - RIVET_WEB_UPSTREAM_PORT=3000
@@ -18,18 +16,15 @@ services:
       - RIVET_EXECUTOR_UPSTREAM_HOST=executor
       - RIVET_EXECUTOR_UPSTREAM_PORT=21889
       - RIVET_PROXY_RESOLVER=${RIVET_PROXY_RESOLVER:-127.0.0.11}
+      - RIVET_APP_DATA_ROOT=/data/rivet-app
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
       - RIVET_PUBLISHED_APPS_BASE_PATH=${RIVET_PUBLISHED_APPS_BASE_PATH:-}
       - RIVET_LATEST_APPS_BASE_PATH=${RIVET_LATEST_APPS_BASE_PATH:-}
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
       - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
-      - RIVET_PROXY_READ_TIMEOUT=${RIVET_PROXY_READ_TIMEOUT:-180s}
       - RIVET_KEY=${RIVET_KEY:-}
-      - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
       - RIVET_TRUST_INCOMING_FORWARDED_HEADERS=${RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false}
-      - RIVET_UI_TOKEN_FREE_HOSTS=${RIVET_UI_TOKEN_FREE_HOSTS:-}
-      - RIVET_WEB_APPS_AUTH_MODE=${RIVET_WEB_APPS_AUTH_MODE:-ui-gate}
     depends_on:
       web:
         condition: service_healthy
@@ -37,6 +32,8 @@ services:
         condition: service_healthy
       executor:
         condition: service_started
+    volumes:
+      - rivet_data:/data/rivet-app:ro
     restart: unless-stopped
 
   web:
@@ -64,8 +61,6 @@ services:
         RIVET_WEB_APPS_BASE_PATH: ${RIVET_WEB_APPS_BASE_PATH:-/apps}
         RIVET_LATEST_WEB_APPS_BASE_PATH: ${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
         RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE: ${RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE:-4096}
-    env_file:
-      - ../../.env
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -103,8 +98,6 @@ services:
         https_proxy: ${https_proxy:-${HTTPS_PROXY:-}}
         all_proxy: ${all_proxy:-${ALL_PROXY:-}}
         no_proxy: ${no_proxy:-${NO_PROXY:-}}
-    env_file:
-      - ../../.env
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -129,39 +122,12 @@ services:
       - RIVET_LATEST_APPS_BASE_PATH=${RIVET_LATEST_APPS_BASE_PATH:-}
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
       - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
-      - RIVET_WEB_APPS_AUTH_MODE=${RIVET_WEB_APPS_AUTH_MODE:-ui-gate}
-      - OAUTH_PROVIDER=${OAUTH_PROVIDER:-}
-      - OAUTH_DUMMY_EMAIL=${OAUTH_DUMMY_EMAIL:-}
-      - OAUTH_DUMMY_ALLOW_NON_LOCALHOST=${OAUTH_DUMMY_ALLOW_NON_LOCALHOST:-}
-      - OAUTH_AUTHORIZE_URL=${OAUTH_AUTHORIZE_URL:-}
-      - OAUTH_TOKEN_URL=${OAUTH_TOKEN_URL:-}
-      - OAUTH_USER_URL=${OAUTH_USER_URL:-}
-      - OAUTH_CLIENT_ID=${OAUTH_CLIENT_ID:-}
-      - OAUTH_CLIENT_SECRET=${OAUTH_CLIENT_SECRET:-}
-      - OAUTH_CALLBACK_URL=${OAUTH_CALLBACK_URL:-}
-      - OAUTH_SCOPES=${OAUTH_SCOPES:-}
-      - OAUTH_EMAIL_CLAIM=${OAUTH_EMAIL_CLAIM:-}
-      - OAUTH_SESSION_SECRET=${OAUTH_SESSION_SECRET:-}
-      - OAUTH_SESSION_TTL_SECONDS=${OAUTH_SESSION_TTL_SECONDS:-}
-      - OAUTH_CLIENT_AUTH_METHOD=${OAUTH_CLIENT_AUTH_METHOD:-}
-      - OAUTH_DEBUG_LOG_PROFILE=${OAUTH_DEBUG_LOG_PROFILE:-}
-      - RIVET_STORAGE_MODE
-      - RIVET_DATABASE_MODE
-      - RIVET_DATABASE_CONNECTION_STRING
-      - RIVET_DATABASE_SSL_MODE
-      - RIVET_STORAGE_URL
-      - RIVET_STORAGE_BUCKET
-      - RIVET_STORAGE_REGION
-      - RIVET_STORAGE_ENDPOINT
-      - RIVET_STORAGE_ACCESS_KEY_ID
-      - RIVET_STORAGE_ACCESS_KEY
-      - RIVET_STORAGE_PREFIX
-      - RIVET_STORAGE_FORCE_PATH_STYLE
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
-      - RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=${RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:-false}
+      - RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=${RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:-true}
       - RIVET_KEY=${RIVET_KEY:-}
+      - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
+      - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
       - RIVET_CORS_ALLOWED_ORIGINS=${RIVET_CORS_ALLOWED_ORIGINS:-}
-      - RIVET_REQUIRE_WORKFLOW_KEY=${RIVET_REQUIRE_WORKFLOW_KEY:-false}
       - RIVET_ENV_ALLOWLIST=${RIVET_ENV_ALLOWLIST:-}
       - RIVET_SHELL_ALLOWLIST=${RIVET_SHELL_ALLOWLIST:-}
       - RIVET_EXTRA_ROOTS=${RIVET_EXTRA_ROOTS:-}
@@ -170,10 +136,10 @@ services:
       - OPENAI_ENDPOINT=${OPENAI_ENDPOINT:-}
     volumes:
       - rivet_workspace:/workspace
-      - ${RIVET_WORKFLOWS_HOST_PATH:-../../workflows}:/workflows
-      - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../workflow-recordings}:/workflow-recordings
+      - ${RIVET_WORKFLOWS_HOST_PATH:-../../.data/workflows}:/workflows
+      - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../.data/workflow-recordings}:/workflow-recordings
       - rivet_data:/data/rivet-app
-      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-rivet_runtime_libs}:/data/runtime-libraries
+      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../.data/runtime-libraries}:/data/runtime-libraries
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:80/healthz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 10s
@@ -190,8 +156,6 @@ services:
       additional_contexts:
         rivet_source: ${RIVET_SOURCE_BUILD_CONTEXT_PATH:-../../rivet}
         rivet_dependency_metadata: ${RIVET_DEPENDENCY_BUILD_CONTEXT_PATH:-../../rivet}
-    env_file:
-      - ../../.env
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -207,23 +171,14 @@ services:
       - PORT=21889
       - RIVET_EXECUTOR_PORT=21889
       - RIVET_EXECUTOR_HOST=0.0.0.0
+      - RIVET_APP_DATA_ROOT=/home/rivet/.local/share/com.valerypopoff.rivet2
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=executor
-      - RIVET_STORAGE_MODE
-      - RIVET_DATABASE_MODE
-      - RIVET_DATABASE_CONNECTION_STRING
-      - RIVET_DATABASE_SSL_MODE
-      - RIVET_STORAGE_URL
-      - RIVET_STORAGE_BUCKET
-      - RIVET_STORAGE_REGION
-      - RIVET_STORAGE_ENDPOINT
-      - RIVET_STORAGE_ACCESS_KEY_ID
-      - RIVET_STORAGE_ACCESS_KEY
-      - RIVET_STORAGE_FORCE_PATH_STYLE
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
+      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
     volumes:
       - rivet_data:/home/rivet/.local/share/com.valerypopoff.rivet2
-      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-rivet_runtime_libs}:/data/runtime-libraries
+      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../.data/runtime-libraries}:/data/runtime-libraries
     restart: unless-stopped
 
 volumes:

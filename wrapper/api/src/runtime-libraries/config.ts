@@ -1,9 +1,10 @@
 import {
   getManagedWorkflowStorageConfig,
+  getWorkflowStorageBackendMode,
   type ManagedWorkflowStorageConfig,
 } from '../routes/workflows/storage-config.js';
 import { badRequest } from '../utils/httpError.js';
-import { parseBoolean, parseEnum, parsePositiveInt } from '../utils/env-parsing.js';
+import { parseBoolean, parsePositiveInt } from '../utils/env-parsing.js';
 import type {
   RuntimeLibrariesBackendMode,
   RuntimeLibraryProcessRole,
@@ -22,7 +23,6 @@ export type ManagedRuntimeLibrariesConfig = Omit<ManagedWorkflowStorageConfig, '
 
 export const MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX = 'runtime-libraries/';
 
-const STORAGE_MODE_ENV_NAME = 'RIVET_STORAGE_MODE';
 const RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS';
 const RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_MS';
 const RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_MS';
@@ -30,8 +30,6 @@ const RUNTIME_PROCESS_ROLE_ENV_NAME = 'RIVET_RUNTIME_PROCESS_ROLE';
 const RUNTIME_REPLICA_TIER_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_TIER';
 const RUNTIME_LIBRARIES_JOB_WORKER_ENABLED_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED';
 const RETIRED_ENV_REPLACEMENTS = {
-  RIVET_STORAGE_BACKEND: STORAGE_MODE_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_BACKEND: STORAGE_MODE_ENV_NAME,
   RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS: RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_ENV_NAME,
 } as const;
 
@@ -102,18 +100,13 @@ function assertNoRetiredEnv(): void {
 
   throw badRequest(
     `Retired environment variable(s) detected: ${activeRetired.join(', ')}. ` +
-    'Use the canonical runtime-library storage env names.',
+    'Use the canonical runtime-library tuning env names.',
   );
 }
 
 export function getRuntimeLibrariesBackendMode(): RuntimeLibrariesBackendMode {
   assertNoRetiredEnv();
-  return parseEnum(
-    readEnv(STORAGE_MODE_ENV_NAME),
-    ['filesystem', 'managed'],
-    'filesystem',
-    { strict: true },
-  );
+  return getWorkflowStorageBackendMode();
 }
 
 export function isManagedRuntimeLibrariesEnabled(): boolean {

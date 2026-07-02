@@ -5,12 +5,12 @@ import {
   ensurePortAvailable,
   isComposeServiceRunning,
   printFailureDiagnostics,
+  readDockerWaitTimeoutSeconds,
   run,
 } from './lib/docker-launcher.mjs';
 import {
   assertNoRetiredEnv,
   dropAmbientNodeOptionsForDocker,
-  enableManagedWorkflowProfileIfNeeded,
 } from './lib/docker-launcher-env.mjs';
 import { prepareRivetDockerContext } from './lib/rivet-source-context.mjs';
 
@@ -31,7 +31,6 @@ async function main() {
   }
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'prod-docker', envFileLabel });
-  enableManagedWorkflowProfileIfNeeded(mergedEnv);
 
   if (action === 'custom') {
     if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'COMPOSE_PARALLEL_LIMIT')) {
@@ -40,7 +39,12 @@ async function main() {
     prepareRivetDockerContext(rootDir, mergedEnv);
   }
 
-  const waitTimeoutSeconds = parseInt(mergedEnv.RIVET_DOCKER_WAIT_TIMEOUT ?? '900', 10);
+  const waitTimeoutSeconds = await readDockerWaitTimeoutSeconds({
+    composeBase,
+    cwd: rootDir,
+    env: mergedEnv,
+    label: 'prod-docker',
+  });
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
   const commandsByAction = {
     prebuilt: [

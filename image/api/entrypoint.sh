@@ -4,7 +4,6 @@ set -eu
 . /opt/rivet/lib/load-env.sh
 
 load_optional_dotenv /vault/dotenv
-maybe_export_database_connection_string
 append_proxy_bootstrap_node_options
 
 export PORT="${PORT:-8080}"

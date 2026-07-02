@@ -19,20 +19,6 @@ load_optional_dotenv() {
   set +a
 }
 
-maybe_export_database_connection_string() {
-  if [ -n "${RIVET_DATABASE_CONNECTION_STRING:-}" ]; then
-    return
-  fi
-
-  if ! output="$(node /opt/rivet/lib/build-db-connection.mjs)"; then
-    exit 1
-  fi
-
-  if [ -n "$output" ]; then
-    export RIVET_DATABASE_CONNECTION_STRING="$output"
-  fi
-}
-
 append_proxy_bootstrap_node_options() {
   bootstrap_flag="--import=/opt/proxy-bootstrap/bootstrap.mjs"
 

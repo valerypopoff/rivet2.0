@@ -119,20 +119,7 @@ function yamlBoolean(value) {
 
 export function buildKubernetesLauncherConfig(env) {
   const launcherName = 'dev-kubernetes';
-  const storageMode = readEnv(env, 'RIVET_STORAGE_MODE') ?? 'filesystem';
-  if (storageMode !== 'managed') {
-    throw new Error(`[${launcherName}] RIVET_STORAGE_MODE must be "managed" for local Kubernetes rehearsal.`);
-  }
-
-  const databaseMode = readEnv(env, 'RIVET_DATABASE_MODE') ?? 'managed';
-  if (databaseMode !== 'managed') {
-    throw new Error(
-      `[${launcherName}] RIVET_DATABASE_MODE must be "managed" for local Kubernetes rehearsal. ` +
-      'Use external managed Postgres instead of the local-docker dependency mode.',
-    );
-  }
-
-  const storageUrl = readEnv(env, 'RIVET_STORAGE_URL');
+  const storageUrl = readEnv(env, 'RIVET_K8S_STORAGE_URL');
   const parsedStorageUrl = storageUrl ? parseManagedStorageUrl(storageUrl) : null;
   const imageTag = readEnv(env, 'RIVET_K8S_IMAGE_TAG') ?? 'dev';
   const context = readEnv(env, 'RIVET_K8S_CONTEXT') ?? 'docker-desktop';
@@ -168,18 +155,22 @@ export function buildKubernetesLauncherConfig(env) {
       postgresName: readEnv(env, 'RIVET_K8S_POSTGRES_SECRET_NAME') ?? 'rivet-postgres-conn',
       objectStorageName: readEnv(env, 'RIVET_K8S_OBJECT_STORAGE_SECRET_NAME') ?? 'rivet-object-storage',
     },
+    appData: {
+      claimName: readEnv(env, 'RIVET_K8S_APP_DATA_CLAIM_NAME') ?? 'rivet-local-app-data',
+      size: readEnv(env, 'RIVET_K8S_APP_DATA_SIZE') ?? '10Gi',
+    },
     sharedKey: requireEnv(env, 'RIVET_KEY', launcherName),
-    databaseConnectionString: requireEnv(env, 'RIVET_DATABASE_CONNECTION_STRING', launcherName),
-    databaseSslMode: readEnv(env, 'RIVET_DATABASE_SSL_MODE') ?? 'require',
+    databaseConnectionString: requireEnv(env, 'RIVET_K8S_DATABASE_CONNECTION_STRING', launcherName),
+    databaseSslMode: readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') ?? 'require',
     objectStorage: {
-      bucket: readEnv(env, 'RIVET_STORAGE_BUCKET') ?? parsedStorageUrl?.bucket ?? requireEnv(env, 'RIVET_STORAGE_BUCKET', launcherName),
-      region: readEnv(env, 'RIVET_STORAGE_REGION') ?? parsedStorageUrl?.region ?? 'us-east-1',
-      endpoint: readEnv(env, 'RIVET_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint ?? '',
-      accessKeyId: requireEnv(env, 'RIVET_STORAGE_ACCESS_KEY_ID', launcherName),
-      secretAccessKey: requireEnv(env, 'RIVET_STORAGE_ACCESS_KEY', launcherName),
-      prefix: (readEnv(env, 'RIVET_STORAGE_PREFIX') ?? 'workflows/').replace(/^\/+/, ''),
+      bucket: readEnv(env, 'RIVET_K8S_STORAGE_BUCKET') ?? parsedStorageUrl?.bucket ?? requireEnv(env, 'RIVET_K8S_STORAGE_BUCKET', launcherName),
+      region: readEnv(env, 'RIVET_K8S_STORAGE_REGION') ?? parsedStorageUrl?.region ?? 'us-east-1',
+      endpoint: readEnv(env, 'RIVET_K8S_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint ?? '',
+      accessKeyId: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY_ID', launcherName),
+      secretAccessKey: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY', launcherName),
+      prefix: (readEnv(env, 'RIVET_K8S_STORAGE_PREFIX') ?? 'workflows/').replace(/^\/+/, ''),
       forcePathStyle: parseBoolean(
-        readEnv(env, 'RIVET_STORAGE_FORCE_PATH_STYLE'),
+        readEnv(env, 'RIVET_K8S_STORAGE_FORCE_PATH_STYLE'),
         parsedStorageUrl?.forcePathStyle ?? false,
       ),
     },
@@ -191,10 +182,10 @@ export function buildKubernetesLauncherConfig(env) {
       proxyResolver: readEnv(env, 'RIVET_PROXY_RESOLVER') ?? 'kube-dns.kube-system.svc.cluster.local',
       enableLatestRemoteDebugger: parseBoolean(readEnv(env, 'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER'), true),
       corsAllowedOrigins: readEnv(env, 'RIVET_CORS_ALLOWED_ORIGINS') ?? '',
-      requireWorkflowKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_WORKFLOW_KEY'), false),
+      serverUiAuthMode: readEnv(env, 'RIVET_SERVER_UI_AUTH_MODE') ??
+        (parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false) ? 'key' : 'none'),
       requireUiGateKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
       trustIncomingForwardedHeaders: parseBoolean(readEnv(env, 'RIVET_TRUST_INCOMING_FORWARDED_HEADERS'), false),
-      webAppsAuthMode: readEnv(env, 'RIVET_WEB_APPS_AUTH_MODE') ?? 'ui-gate',
     },
   };
 }
@@ -233,6 +224,9 @@ export function renderKubernetesLauncherValuesYaml(config) {
     '  enabled: false',
     'auth:',
     `  keySecretName: ${yamlString(config.secrets.authName)}`,
+    'storage:',
+    '  appData:',
+    `    existingClaimName: ${yamlString(config.appData.claimName)}`,
     'workflowStorage:',
     '  backend: managed',
     'runtimeLibraries:',
@@ -260,10 +254,9 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  RIVET_PROXY_RESOLVER: ${yamlString(config.routeConfig.proxyResolver)}`,
     `  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: ${yamlString(String(config.routeConfig.enableLatestRemoteDebugger))}`,
     `  RIVET_CORS_ALLOWED_ORIGINS: ${yamlString(config.routeConfig.corsAllowedOrigins)}`,
-    `  RIVET_REQUIRE_WORKFLOW_KEY: ${yamlString(String(config.routeConfig.requireWorkflowKey))}`,
+    `  RIVET_SERVER_UI_AUTH_MODE: ${yamlString(config.routeConfig.serverUiAuthMode)}`,
     `  RIVET_REQUIRE_UI_GATE_KEY: ${yamlString(String(config.routeConfig.requireUiGateKey))}`,
     `  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: ${yamlString(String(config.routeConfig.trustIncomingForwardedHeaders))}`,
-    `  RIVET_WEB_APPS_AUTH_MODE: ${yamlString(config.routeConfig.webAppsAuthMode)}`,
     '',
   ].join('\n');
 }
@@ -302,6 +295,18 @@ export function renderKubernetesLauncherSecretManifest(config) {
     'stringData:',
     `  accessKeyId: ${yamlString(config.objectStorage.accessKeyId)}`,
     `  secretAccessKey: ${yamlString(config.objectStorage.secretAccessKey)}`,
+    '---',
+    'apiVersion: v1',
+    'kind: PersistentVolumeClaim',
+    'metadata:',
+    `  name: ${config.appData.claimName}`,
+    `  namespace: ${config.namespace}`,
+    'spec:',
+    '  accessModes:',
+    '    - ReadWriteOnce',
+    '  resources:',
+    '    requests:',
+    `      storage: ${config.appData.size}`,
     '',
   ].join('\n');
 }

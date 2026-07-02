@@ -26,7 +26,7 @@ The Docker dev and production stacks expose these route families through nginx:
 |---|---|---|
 | `/` | `web` | Wrapper dashboard shell |
 | `/?editor` | `web` | Hosted Rivet editor iframe |
-| `POST /__rivet_auth` | control-plane `api` (`/ui-auth`) | UI gate form exchange |
+| `POST /__rivet_auth` and `/__rivet_auth/oauth/*` | control-plane `api` (`/ui-auth`) | Server UI key/OAuth exchange |
 | `/api/*` | control-plane `api` | Wrapper API surface |
 | `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}/:endpointName` | execution-plane `api` | Execute frozen published workflow snapshot |
 | `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug` | execution-plane `api` | Serve one published declarative Rivet web app from its frozen project snapshot |
@@ -40,9 +40,9 @@ The nginx configs also set `client_max_body_size 100m`, so large API/editor payl
 
 Current proxy timeout behavior:
 
-- `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` now use `RIVET_PROXY_READ_TIMEOUT`, which defaults to `180s` in the tracked Docker images and Compose stacks
-- websocket routes stay long-lived at `86400s`; `RIVET_PROXY_READ_TIMEOUT` is only for the standard HTTP upstream routes
-- this proxy timeout is separate from `RIVET_COMMAND_TIMEOUT`, which only limits hosted shell commands under `/api/shell/exec`
+- `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` use the App Settings -> `Workflow endpoints` HTTP timeout, saved in seconds under `settings/runtime-limits.json` and defaulting to `180`; the proxy watches that file and rewrites a generated timeout include before reloading nginx
+- websocket routes stay long-lived at `86400s`; the workflow-endpoint timeout is only for the standard HTTP upstream routes
+- this proxy timeout is separate from App Settings -> `General` shell command limits, which only apply to hosted shell execution under `/api/shell/exec`
 
 Important local-Docker wiring note:
 
@@ -57,8 +57,8 @@ Important local-Docker wiring note:
 The browser transport seams now match the backend route split more explicitly:
 
 - `/?editor` prefers `/ws/executor/internal` for the hosted executor websocket and keeps `/ws/executor` only for upstream-compatible clients
-- the editor mounts through Rivet 2.0's `RivetAppHost` and passes `/ws/executor/internal` as `executor.internalExecutorUrl`
-- upstream Rivet owns the executor session, upload, run, abort, pause/resume, internal-executor UI classification, and request-scoped websocket event handling; the wrapper only passes `/ws/executor/internal` through `executor.internalExecutorUrl`
+- the editor loads `/api/config`, mounts through Rivet 2.0's `RivetAppHost`, and passes the runtime-configured executor websocket as `executor.internalExecutorUrl`
+- upstream Rivet owns the executor session, upload, run, abort, pause/resume, internal-executor UI classification, and request-scoped websocket event handling; the wrapper only passes the configured executor websocket URL through `executor.internalExecutorUrl`
 - wrapper code still owns dashboard/editor `window.postMessage` commands and hosted project IO
 
 Those executor websocket responsibilities are separate from the dashboard/editor `window.postMessage` bridge. The bridge coordinates project-open/save/delete/path-move behavior between browsing contexts; the executor session talks to executor routes.
@@ -88,7 +88,7 @@ The wrapper API currently exposes these groups behind `/api`:
   - `GET /api/workflows/recordings/workflows`
   - `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed`
     - optional input filter query: `inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar&inputCursor=0`
-    - `$` is the captured workflow request input root from Rivet's `inputs.input.value`
+    - `$` is the captured graph input root from Rivet's `inputs.input.value`; recordings whose graph inputs do not include an `input` port fall back to an object of all captured graph input values keyed by port name
     - input-filtered responses scan newest-first and may return `totalRunsExact: false`, `hasMore: true`, and `nextInputCursor` so the dashboard can show recent matches quickly, request the next cursor automatically, and append later matches as they are found; a non-exhaustive cursor response may contain zero matches when the current scan window did not match
     - if the client aborts the request, the API stops the input-filter artifact scan after the current small read batch
   - `GET /api/workflows/recordings/:recordingId/recording`
@@ -118,6 +118,16 @@ The wrapper API currently exposes these groups behind `/api`:
   - allowlisted shell execution
 - `/api/config`, `/api/path/app-local-data-dir`, `/api/path/app-log-dir`, `/api/config/env/:name`
   - hosted env/config helpers
+- `/api/app-settings/node-executor-proxy`
+  - guarded app-settings helper for persisted internal Node executor `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values
+- `/api/app-settings/run-recordings`
+  - guarded app-settings helper for recording queue depth, per-endpoint history length, and age-retention limits
+- `/api/app-settings/deployment-storage`
+  - guarded app-settings helper for workflow/runtime-library storage mode, filesystem artifact root, managed PostgreSQL settings, and managed object-storage settings; secret values are write-only from the browser
+- `/api/app-settings/workflow-endpoint-auth`
+  - guarded app-settings helper for the default-on workflow endpoint bearer-token requirement
+- `/api/app-settings/web-app-auth`
+  - guarded app-settings helper behind `Settings` -> `Web apps` auth mode, `Settings` -> `OAuth` provider/session settings, and `Settings` -> `Server UI access` admin settings
 
 Current tree-response note:
 
@@ -188,44 +198,51 @@ Current download-route behavior:
 - the dashboard calls this route directly from the project-row context menu: `unpublished` downloads `live`, `published` downloads `published`, and `unpublished_changes` opens a chooser for the user to pick which saved version to download
 - downloads intentionally ignore unsaved editor changes and never include sidecars or recordings
 
-## UI gate
+## Server UI auth
 
-The browser/editor surface can be protected at the nginx layer:
+The browser/editor surface is protected by the proxy asking the API whether the current request is allowed. The bootstrap mode is intentionally deployment-owned and comes from `.env` or Kubernetes/Vault-provided env:
 
-- `RIVET_REQUIRE_UI_GATE_KEY=true` enables the gate.
-- `RIVET_KEY` is the shared secret used for the gate.
-- `RIVET_UI_TOKEN_FREE_HOSTS` lists hosts that bypass the gate.
+- `RIVET_SERVER_UI_AUTH_MODE=none` leaves the dashboard/editor ungated.
+- `RIVET_SERVER_UI_AUTH_MODE=key` asks for `RIVET_KEY` in the browser and stores the signed `rivet_ui_token` cookie.
+- `RIVET_SERVER_UI_AUTH_MODE=oauth` redirects users through the OAuth provider saved in `Settings` -> `OAuth` and allows only emails listed in `Settings` -> `Server UI access` -> `Server UI admin emails`.
+- If `RIVET_SERVER_UI_AUTH_MODE` is unset, the legacy `RIVET_REQUIRE_UI_GATE_KEY=true` behaves like `key`; explicit `RIVET_SERVER_UI_AUTH_MODE` always wins.
+- `Settings` -> `General` -> `Trusted hosts` lists exact hosts that bypass the server UI gate, web-app auth, and public workflow bearer checks.
 
-When the gate is enabled for a host that is not exempt:
+When a request is not allowed, nginx uses `auth_request /__rivet_ui_auth_check` and then proxies to the API-rendered `/ui-auth/prompt` page. The prompt preserves the sanitized original local path in `return_to`, so successful key or OAuth sign-in returns to `/`, `/apps/my-tool/`, or whatever route the browser originally tried to open. Form or OAuth failures redirect back to the same local path with `auth_error` added so the prompt can explain the failure without losing the destination.
 
-- proxy startup stages `image/proxy/ui-gate-prompt.html` into container-local `/tmp/nginx/html/ui-gate-prompt.html`
-- `GET /` serves that staged prompt page
-- `POST /__rivet_auth` forwards to the API's internal `/ui-auth` route
-- the API validates the submitted `key` or `token` form field
-- the prompt submits a sanitized local `return_to` path for the URL the browser originally tried to open
-- on success the response sets an HTTP-only `rivet_ui_token` cookie and redirects back to that local path, such as `/` or `/apps/my-tool/`
-- form failures redirect back to the same local path with `auth_error` added so the prompt can show the error without losing the original destination
-- the cookie then gates `/`, `/api/*`, `/ws/executor*`, and `/ws/latest-debugger`
+Server UI OAuth is a two-step bootstrap:
 
-The Compose stacks mount the prompt source at `/tmp/ui-gate-prompt.html` and copy it before nginx starts. nginx never serves the host-mounted file directly, so a long-running Windows bind mount cannot turn gated requests into runtime `stat()` failures.
+1. Start the server with `RIVET_SERVER_UI_AUTH_MODE=none` or `key`.
+2. Open `Settings` -> `OAuth` and save the shared OAuth provider settings and session policy.
+3. Open `Settings` -> `Server UI access` and save `Server UI admin emails`.
+4. Register the server UI callback URL with the provider: `https://your-host/__rivet_auth/oauth/callback`.
+5. Change `.env` / deployment env to `RIVET_SERVER_UI_AUTH_MODE=oauth` and recreate the API container or rollout the API pod so the mode env is re-read.
 
-If the gate is enabled but `RIVET_KEY` is empty, nginx/API do not fall back to open access for non-exempt hosts; they deny the gated requests.
+The saved web-app callback URL remains the visitor-web-app callback, usually `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/callback`. It is separate from the server UI callback above. Retired `RIVET_SERVER_UI_OAUTH_*` env values are ignored; the OAuth provider details and server UI admin allowlist live in `settings/web-app-auth.json` under `RIVET_APP_DATA_ROOT`, but the UI shows them in separate `OAuth` and `Server UI access` tabs.
 
-## Web app auth
+Server UI OAuth sessions are fail-closed. Empty admin email lists deny all OAuth users. State cookies and session cookies are bound to the active saved OAuth settings version, so changing provider URL, client credentials, scopes, email claim, admin emails, or session policy invalidates stale sign-ins without needing to rotate `RIVET_KEY`.
 
-Rivet web apps are browser surfaces, but their route family has its own mode selector:
+`RIVET_KEY` is still required in proxy-fronted deployments even when `RIVET_SERVER_UI_AUTH_MODE=none` or `oauth`, because the proxy-to-API trust header is derived from that key.
 
-- `RIVET_WEB_APPS_AUTH_MODE=ui-gate` is the default. It reuses the UI gate for `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/*` and `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/*`, including the same return-to behavior and `rivet_ui_token` cookie when `RIVET_REQUIRE_UI_GATE_KEY=true`.
-- `RIVET_WEB_APPS_AUTH_MODE=oauth` disables nginx's UI-key prompt for app routes and lets the API show a hosted sign-in page for app visitors before they leave for the configured OAuth provider. The default callback path is `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/callback`, and logout is served from `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout`, so the app slug `auth` is reserved.
-- `RIVET_WEB_APPS_AUTH_MODE=none` leaves web-app route auth open at the API layer and should only be used behind an external access-control layer.
+## Web apps
 
-The API and proxy both normalize this value case-insensitively. Unknown values fall back to `ui-gate`.
+Rivet web apps are browser surfaces with wrapper-owned route and auth policy. Web-app routes and auth live in `Settings` -> `Web apps`; workflow endpoint route families live in `Settings` -> `Workflow endpoints`.
 
-`RIVET_UI_TOKEN_FREE_HOSTS` bypasses web-app auth in all three modes because nginx forwards the same trusted token-free-host hint to the API. This is useful for internal health checks or trusted hostnames, but it is still a proxy-trust feature; direct access to the API container does not get that hint.
+The `Workflow endpoints` tab's `Routes` section controls the published/latest workflow endpoint URL slugs. The `Web apps` tab's `Routes` section controls the published/latest web-app URL slugs. Both sections write `settings/public-routes.json` under `RIVET_APP_DATA_ROOT`. The API reads that file dynamically, and the proxy watches it, regenerates the nginx public-route include, validates it with `nginx -t`, and reloads nginx. Changing these slugs from Settings therefore does not require recreating/restarting the stack. If the settings file is missing, the deployment env defaults are used as first-run/bootstrap values: `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, then the legacy web-app aliases, then `/workflows`, `/workflows-latest`, `/apps`, and `/apps-latest`. If the saved file exists but is malformed or invalid, route reads fail loudly rather than silently switching top-level route families. The saved slugs must be single top-level URL segments, unique across all four route families, and cannot use reserved top-level routes such as `api`, `ws`, `internal`, `ui-auth`, `assets`, `node_modules`, or `__rivet_auth`.
 
-OAuth mode is intentionally vendor-neutral. The API needs `OAUTH_AUTHORIZE_URL`, `OAUTH_TOKEN_URL`, `OAUTH_USER_URL`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, and a stable `OAUTH_SESSION_SECRET` or fallback secret. Optional knobs include `OAUTH_CALLBACK_URL`, `OAUTH_SCOPES`, `OAUTH_EMAIL_CLAIM`, `OAUTH_SESSION_TTL_SECONDS`, and `OAUTH_CLIENT_AUTH_METHOD`. The default token exchange sends `client_id` and `client_secret` in the form body; `OAUTH_CLIENT_AUTH_METHOD=basic` sends them through the HTTP Basic `Authorization` header instead. External OAuth provider URLs must use `https`; plain `http` is accepted only for localhost development endpoints. `OAUTH_EMAIL_CLAIM` supports dot paths such as `data.email` when the provider nests the email in its profile response. For local testing only, `OAUTH_PROVIDER=dummy` replaces the external provider with a local page at `/apps/auth/dummy`; it lets the tester submit an email, then completes the normal callback/session-cookie flow. Dummy OAuth is accepted only for `localhost`, `127.0.0.1`, or `[::1]` requests unless `OAUTH_DUMMY_ALLOW_NON_LOCALHOST=true` is explicitly set. Temporarily set `OAUTH_DEBUG_LOG_PROFILE=true` to write the raw OAuth profile JSON into API container logs while discovering the correct claim path, then turn it back off because the payload can contain user profile data. Unauthenticated HTML app requests render a `Sign in required` page; its `Sign in` button starts the OAuth redirect. Web-app HTML and OAuth redirect responses are sent with `Cache-Control: no-store` because they can carry auth prompts, sign-out links, revision keys, or short-lived state cookies. The temporary OAuth state cookie carries the sanitized original web-app path, so provider-side errors that return without echoing the OAuth `state` parameter, token exchange failures, or missing-email profile responses can still redirect the browser back to the app with an `auth_error` query. HTML app requests that already have an OAuth `auth_error` render a sign-in failure page with a retry link instead of immediately starting another OAuth loop, even if a stale login trigger is also present. After callback, the API stores only a signed HTTP-only web-app session cookie and uses the email claim for per-web-app allowlists. Each OAuth-protected web app must explicitly list allowed emails; an empty allowlist denies all signed-in users. Non-empty allowlists are exact email matches, case-insensitive.
+The `Auth` section controls the API-owned web-app auth mode, not `.env`:
 
-Because `ui-gate` and `oauth` modes use browser cookies, app JSON and action requests also enforce a same-origin browser request check before session lookup. This keeps the global API CORS policy from turning a user's web-app session into cross-site action credentials. HTML requests that fail this early origin check render a styled `Web app request blocked` page with `code: "origin_forbidden"` instead of raw browser boilerplate, which usually points to a proxy origin/host mismatch. By default, the Rivet proxy derives the browser-facing host from the request `Host` header, including its port, and passes that sanitized value to the API in `X-Forwarded-Host`; OAuth redirects, dummy-provider URLs, and `/api/config` browser URLs therefore stay on `localhost:8081` or whatever public host the user opened. The API only trusts `X-Forwarded-Host` and `X-Forwarded-Proto` from requests that carry the internal proxy-auth header, so directly exposed API ports cannot make spoofed forwarded headers look same-origin. Set `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true` only when a trusted ingress sits immediately in front of the Rivet proxy and strips/replaces client-supplied `X-Forwarded-Host` and `X-Forwarded-Proto`. Token-free-host matching strips the effective port before checking `RIVET_UI_TOKEN_FREE_HOSTS`, preserving the hostname-only allowlist contract. Normal direct navigation to the app HTML still works, and hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth entirely as before.
+- `Key` is the default. Visitors enter the Rivet key before opening web apps.
+- `OAuth` lets the API show a hosted sign-in page for app visitors before they leave for the configured OAuth provider. The default callback path is `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/callback`, and logout is served from `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout`, so the app slug `auth` is reserved.
+- `No gate` leaves web-app route auth open at the API layer and should only be used behind an external access-control layer.
+
+The proxy no longer reads a web-app auth mode env var or serves the web-app key prompt itself. It forwards the web-app route families to the API with the same trusted proxy metadata used elsewhere. Legacy `RIVET_WEB_APPS_AUTH_MODE` and `OAUTH_*` env values are ignored; changing the web-app auth mode is done through the `Auth` section, and changing shared provider/session settings is done through `Settings` -> `OAuth`. Neither change requires recreating containers.
+
+`Settings` -> `General` -> `Trusted hosts` bypasses web-app auth in all three modes because nginx forwards an internal trusted-host hint to the API. This is useful for internal health checks or trusted hostnames, but it is still a proxy-trust feature; direct access to the API container does not get that hint. The saved list lives in `settings/trusted-hosts.json`; the legacy `RIVET_UI_TOKEN_FREE_HOSTS` env var is ignored/rejected so `.env` cannot silently change this bypass policy.
+
+OAuth mode is intentionally vendor-neutral. The `OAuth` tab stores the provider authorize, token, and profile URLs; client ID; write-only client secret; optional callback URL; scopes; email claim path such as `data.email`; session lifetime; token endpoint client-auth method; write-only session signing secret; provider choice; local dummy-login options; and temporary profile debug logging. The `Server UI access` tab stores the server UI admin emails because that allowlist belongs to the editor/dashboard gate, while the gate mode itself remains controlled by `RIVET_SERVER_UI_AUTH_MODE` in deployment env. The default token exchange sends `client_id` and `client_secret` in the form body; `HTTP Basic` sends them through the `Authorization` header instead. External OAuth provider URLs must use `https`; plain `http` is accepted only for localhost development endpoints. For local testing only, `Local dummy` replaces the external provider with a local page at `/apps/auth/dummy`; it lets the tester submit an email, then completes the normal callback/session-cookie flow. Dummy OAuth is accepted only for `localhost`, `127.0.0.1`, or `[::1]` requests unless the `OAuth` tab explicitly allows non-localhost dummy sign-in. Enable profile debug logging only temporarily while discovering the correct claim path, then turn it back off because the payload can contain user profile data. Unauthenticated HTML app requests render a `Sign in required` page; its `Sign in` button starts the OAuth redirect. Web-app HTML and OAuth redirect responses are sent with `Cache-Control: no-store` because they can carry auth prompts, sign-out links, revision keys, or short-lived state cookies. The temporary OAuth state cookie carries the sanitized original web-app path and the saved OAuth settings version, so provider-side errors that return without echoing the OAuth `state` parameter, token exchange failures, or missing-email profile responses can still redirect the browser back to the app with an `auth_error` query, but callbacks from an older OAuth policy cannot mint a session after settings change. If OAuth settings are cleared, disabled, rotated, or otherwise changed while an old provider callback is in flight, stale signed state is treated as an invalid sign-in state and does not mint a fresh OAuth session. Existing web-app OAuth session cookies are also bound to the saved OAuth auth settings version, so changing provider, mode, client credentials, scopes, email claim, admin emails, or session policy invalidates old app sessions even when the session signing secret itself did not change. HTML app requests that already have an OAuth `auth_error` render a sign-in failure page with a retry link instead of immediately starting another OAuth loop, even if a stale login trigger is also present. After callback, the API stores only a signed HTTP-only web-app session cookie and uses the email claim for per-web-app allowlists. Each OAuth-protected web app must explicitly list allowed emails; an empty allowlist denies all signed-in users. Non-empty allowlists are exact email matches, case-insensitive.
+
+Because `ui-gate` and `oauth` modes use browser cookies, app JSON and action requests also enforce a same-origin browser request check before session lookup. This keeps the global API CORS policy from turning a user's web-app session into cross-site action credentials. HTML requests that fail this early origin check render a styled `Web app request blocked` page with `code: "origin_forbidden"` instead of raw browser boilerplate, which usually points to a proxy origin/host mismatch. By default, the Rivet proxy derives the browser-facing host from the request `Host` header, including its port, and passes that sanitized value to the API in `X-Forwarded-Host`; OAuth redirects, dummy-provider URLs, and `/api/config` browser URLs therefore stay on `localhost:8081` or whatever public host the user opened. The API only trusts `X-Forwarded-Host` and `X-Forwarded-Proto` from requests that carry the internal proxy-auth header, so directly exposed API ports cannot make spoofed forwarded headers look same-origin. Set `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true` only when a trusted ingress sits immediately in front of the Rivet proxy and strips/replaces client-supplied `X-Forwarded-Host` and `X-Forwarded-Proto`. Trusted-host matching strips the effective port before checking the saved exact-host list. Normal direct navigation to the app HTML still works, and hosts listed in Settings bypass web-app auth entirely as before.
 
 OAuth app HTML pages include a small wrapper-owned `Sign out` link that calls `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout` and returns to the app path so users can switch accounts. If a signed-in user is not in a web app's allowed-email list, the HTML route returns a styled `Web app access denied` page with that same sign-out action; JSON and action routes continue to return `403` with `code: "oauth_forbidden"`.
 
@@ -245,21 +262,16 @@ The API independently enforces that boundary:
 
 nginx injects `X-Rivet-Proxy-Auth`, derived from `RIVET_KEY`, for those requests.
 Direct access to the API container for `/api/*`, `/ui-auth`, or `/ws/latest-debugger` bypasses that header and is rejected.
-Keep any diagnostic API port, such as the Compose `http://localhost:3100` binding, private to the host or trusted operators. Public browser traffic should enter through the Rivet proxy so route auth, token-free-host hints, forwarded host/protocol normalization, UI cookies, and web-app OAuth behavior all share one boundary.
+Keep any diagnostic API port, such as the Compose `http://localhost:3100` binding, private to the host or trusted operators. Public browser traffic should enter through the Rivet proxy so route auth, trusted-host hints, forwarded host/protocol normalization, UI cookies, and web-app OAuth behavior all share one boundary.
 Docker dev and local-docker managed-service diagnostic ports bind to `127.0.0.1` by default through `RIVET_LOCAL_BIND_HOST`; set it to `0.0.0.0` only on a trusted/firewalled network.
 
-Operationally, that means `RIVET_KEY` is still mandatory anywhere nginx fronts the API, even if:
+Operationally, that means `RIVET_KEY` is still mandatory anywhere nginx fronts the API, even if server UI auth is disabled or `Settings` -> `Workflow endpoints` -> `Access control` disables bearer checks on public workflow routes. Those optional browser/public-workflow checks do not disable the proxy-to-API trust channel.
 
-- `RIVET_REQUIRE_WORKFLOW_KEY=false`
-- `RIVET_REQUIRE_UI_GATE_KEY=false`
+The public workflow execution routes are mounted outside `/api`, so they do not use the `requireAuth` middleware. They still rely on nginx to mediate access and, for trusted hosts, inject the internal trusted-host hint. Web-app routes are also mounted outside `/api`, but they are browser surfaces and use the persisted web-app auth setting rather than the workflow endpoint bearer-token setting.
 
-Those two flags disable optional browser/public-workflow checks. They do not disable the proxy-to-API trust channel.
+Forwarded host/protocol headers are part of the same trust boundary. The proxy ignores incoming `X-Forwarded-Host` and `X-Forwarded-Proto` by default and derives its own effective values from the browser request. Only set `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true` when the proxy is behind a trusted load balancer or ingress that overwrites those headers. Do not enable it for a directly internet-facing proxy, because spoofed forwarded headers can affect OAuth callback construction, same-origin checks, cookie-security decisions, and trusted-host matching.
 
-The public workflow execution routes are mounted outside `/api`, so they do not use the `requireAuth` middleware. They still rely on nginx to mediate access and, for token-free hosts, inject the token-free-host hint. Web-app routes are also mounted outside `/api`, but they are browser surfaces and use `RIVET_WEB_APPS_AUTH_MODE` rather than `RIVET_REQUIRE_WORKFLOW_KEY`.
-
-Forwarded host/protocol headers are part of the same trust boundary. The proxy ignores incoming `X-Forwarded-Host` and `X-Forwarded-Proto` by default and derives its own effective values from the browser request. Only set `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true` when the proxy is behind a trusted load balancer or ingress that overwrites those headers. Do not enable it for a directly internet-facing proxy, because spoofed forwarded headers can affect OAuth callback construction, same-origin checks, cookie-security decisions, and token-free-host matching.
-
-The API CORS policy is closed by default for cross-origin browser credentials. Same-origin browser requests are allowed automatically, and non-browser clients such as Postman or server-side callers do not need CORS. If an external browser application must call workflow or API routes directly, add only that exact origin to `RIVET_CORS_ALLOWED_ORIGINS`; do not use CORS as a substitute for bearer tokens, the UI gate, OAuth, or the proxy boundary.
+The API CORS policy is closed by default for cross-origin browser credentials. Same-origin browser requests are allowed automatically, and non-browser clients such as Postman or server-side callers do not need CORS. If an external browser application must call workflow or API routes directly, add only that exact origin to `RIVET_CORS_ALLOWED_ORIGINS`; do not use CORS as a substitute for bearer tokens, server UI auth, OAuth, or the proxy boundary.
 
 ## Published Rivet web app contract
 
@@ -281,25 +293,25 @@ Each published web-app slug also exposes a latest-saved-draft route under `${RIV
 - `POST ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
   - runs the button action's target graph against the current saved server-side project
 
-`RIVET_PUBLISHED_APPS_BASE_PATH` and `RIVET_LATEST_APPS_BASE_PATH` are the preferred env names for those prefixes. `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` remain supported aliases for older deployments, with the preferred names taking precedence.
+The route prefixes are owned by `Settings` -> `Workflow endpoints` -> `Routes` for workflow endpoints and `Settings` -> `Web apps` -> `Routes` for web apps after an operator saves them. The env names `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, and `RIVET_LATEST_APPS_BASE_PATH` remain first-run/deployment defaults, and `RIVET_WEB_APPS_BASE_PATH` / `RIVET_LATEST_WEB_APPS_BASE_PATH` remain supported aliases for older deployments until `settings/public-routes.json` exists.
 
 The wrapper intentionally uses the lower-level upstream web-app helpers instead of the single Fetch-style handler so route ownership, browser/session auth, timing headers, code-runner setup, dataset providers, project-reference loading, and response envelopes stay consistent with the existing endpoint execution stack.
 
-Web-app action requests use the same `ManagedCodeRunner`, dataset provider, project path, project-reference loader, and `context.headers` injection as published workflow execution. The wrapper does not pass `inputs` for web-app actions; Rivet maps the declarative UI state into graph inputs according to the clicked button's action definition.
+Web-app action requests use the same `ManagedCodeRunner`, dataset provider, project path, project-reference loader, and browser request `context.headers` shape as published workflow execution, but the wrapper strips sensitive browser/session headers before graph execution. In particular, `cookie`, `authorization`, `proxy-authorization`, `x-forwarded-authorization`, `x-rivet-proxy-auth`, and `x-rivet-token-free-host` are not exposed to web-app action graphs or the Fetch-style action request. The wrapper does not pass `inputs` for web-app actions; Rivet maps the declarative UI state into graph inputs according to the clicked button's action definition.
 
 The slug segment resolves through published web-app state, not workflow endpoint state, so a project does not need to be published as a workflow endpoint before its web apps can be published. Saved project edits affect `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}` immediately, but do not affect `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` until that web-app slug is republished. Unsaved in-browser editor edits are not visible to either server route until the project is saved. If the draft project later deletes a published UI graph, the old slug still serves the pinned snapshot/revision until the user explicitly unpublishes that app from Project Settings.
 
 The HTML embeds an opaque published `revisionKey`. Action requests include that key and are rejected with `409` plus `code: "revision_mismatch"` when that slug is republished between page load and button click. The embedded Rivet web-app client uses that coded response to show a blocking reload modal, so stale open pages recover without an automatic refresh or action rerun.
 
-Auth follows `RIVET_WEB_APPS_AUTH_MODE`:
+Auth follows the persisted `Settings` -> `Web apps` -> `Auth` mode:
 
-- `ui-gate` reuses the main UI key prompt and `rivet_ui_token` cookie for the HTML, `app.json`, and action routes.
+- `ui-gate` is shown as `Key` in Settings and protects the HTML, `app.json`, and action routes with the same signed key cookie machinery as the server UI key gate.
 - `oauth` redirects page requests to the configured provider, returns to the originally requested web-app URL after callback, and enforces each app's allowed-email list after the project is resolved.
 - `none` leaves web-app route auth open at the API layer.
-- hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth for both web-app route families too
-- workflow endpoint routes remain bearer/token-free-host routes and do not accept UI or OAuth web-app session cookies as a substitute for `Authorization`
+- hosts listed in `Settings` -> `General` -> `Trusted hosts` bypass web-app auth for both web-app route families too
+- workflow endpoint routes remain bearer/trusted-host routes and do not accept UI or OAuth web-app session cookies as a substitute for `Authorization`
 - published web-app action routes do not attach the Remote Debugger; latest web-app action routes can attach it when latest debugging is enabled
-- The proxy derives browser-facing host/protocol values itself unless `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true` is explicitly set for a trusted ingress that overwrites client-supplied forwarded headers. OAuth callback generation, web-app same-origin checks, token-free-host matching, UI-gate cookie security, and `/api/config` public URLs all use those effective browser-facing values.
+- The proxy derives browser-facing host/protocol values itself unless `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true` is explicitly set for a trusted ingress that overwrites client-supplied forwarded headers. OAuth callback generation, web-app same-origin checks, trusted-host matching, UI-gate cookie security, and `/api/config` public URLs all use those effective browser-facing values.
 
 ## Workflow execution contract
 
@@ -347,7 +359,7 @@ Current request/response behavior:
 
 ## Filesystem execution hot path
 
-In `RIVET_STORAGE_MODE=filesystem`, the published/latest routes now keep a local derived warm path on the API process:
+When `Settings` -> `Storage` uses `Local folders`, the published/latest routes keep a local derived warm path on the API process:
 
 - a startup-warmed endpoint index for published/latest endpoint pointers
 - an authoritative uncached filesystem execution source behind that cache, so degraded requests can still resolve through the real publication rules
@@ -383,7 +395,7 @@ In local Docker, those reads still happen against `/workflows`, which is normall
 
 ## Managed execution hot path
 
-In `RIVET_STORAGE_MODE=managed`, workflow execution stays authoritative through Postgres plus object storage, but each API replica keeps local derived execution caches for the warm path:
+When `Settings` -> `Storage` uses `Object storage`, workflow execution stays authoritative through Postgres plus object storage, but each API replica keeps local derived execution caches for the warm path:
 
 - endpoint-pointer cache entries map `runKind + endpointName` to workflow identity, relative path, and revision id
 - revision-materialization cache entries store immutable raw project and dataset contents by revision id
@@ -403,12 +415,12 @@ Managed runtime-library sync is part of that execution path too:
 
 ## Workflow execution auth
 
-Workflow execution auth is separate from the UI gate:
+Workflow execution auth is separate from server UI auth:
 
-- `RIVET_REQUIRE_WORKFLOW_KEY=true` enables bearer-token checks on the public workflow routes
+- `Settings` -> `Workflow endpoints` -> `Access control` enables or disables bearer-token checks on the public workflow routes; it is enabled by default
 - `Authorization: Bearer <RIVET_KEY>` is required on `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_LATEST_WORKFLOWS_BASE_PATH}` when enabled
-- if the flag is enabled but `RIVET_KEY` is empty, public execution fails with `500`
-- hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass public workflow bearer auth because nginx forwards `X-Rivet-Token-Free-Host: 1`
+- if bearer-token checks are enabled but `RIVET_KEY` is empty, public execution fails with `500`
+- hosts listed in `Settings` -> `General` -> `Trusted hosts` bypass public workflow bearer auth because nginx forwards `X-Rivet-Token-Free-Host: 1`
 
 The internal published-only route:
 
@@ -418,23 +430,24 @@ is mounted on the execution-plane API service, is not exposed through nginx, and
 
 ## Execution-plane storage note
 
-The current runtime split does not make `RIVET_APP_DATA_ROOT` authoritative for published execution:
+The current runtime split does not make `RIVET_APP_DATA_ROOT` authoritative for workflow contents during published execution:
 
 - workflow truth remains Postgres plus object storage
 - `Code` node package resolution comes from the managed runtime-library cache under `RIVET_RUNTIME_LIBRARIES_ROOT`
-- execution-plane `app-data` may remain ephemeral in the current supported topology
+- execution-plane `app-data` is required settings state in Kubernetes, not workflow blob storage; execution pods must mount the same app-data claim as the control plane so UI-managed storage, recording, workflow endpoint auth, web-app auth, runtime-limit, and outbound proxy settings are visible
 
 Important limitation:
 
 - API-hosted published/latest execution does not currently register package plugins from local app-data
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
+- App Settings -> `Storage`, `Run recordings`, `Web apps`, `Workflow endpoints`, and `Node executor proxy` write settings files under shared app data; those values are not read from `.env`, Vault dotenv, or legacy deployment variables in split execution pods. Optional hosted executor/default-debugger websocket URL overrides also live under app data and are blank by default, which keeps the normal request-host-derived websocket URLs.
 
 ## Latest Debugger Model
 
-Latest remote debugging is opt-in and separate from the executor websocket:
+Latest remote debugging is enabled by default and separate from the executor websocket:
 
-- it is enabled only when `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true`
+- it is enabled unless `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER` is explicitly set to `false`, `0`, `no`, or `off`
 - it applies to latest workflow endpoint runs and latest web-app action runs under `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
 - published workflow endpoint runs and published web-app action runs never attach the remote debugger
 - the browser-facing websocket path is `/ws/latest-debugger`

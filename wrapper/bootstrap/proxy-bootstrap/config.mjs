@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 function parseEnv(rawValue, parser, fallback) {
   const normalized = rawValue?.trim();
   if (!normalized) {
@@ -84,48 +88,17 @@ function parseManagedStorageUrl(rawUrl) {
   throw new Error(`Storage URL "${rawUrl}" does not include a bucket name`);
 }
 
-const DATABASE_CONNECTION_STRING_ENV_NAME = 'RIVET_DATABASE_CONNECTION_STRING';
-const DATABASE_SSL_MODE_ENV_NAME = 'RIVET_DATABASE_SSL_MODE';
-const DATABASE_MODE_ENV_NAME = 'RIVET_DATABASE_MODE';
-const OBJECT_STORAGE_BUCKET_ENV_NAME = 'RIVET_STORAGE_BUCKET';
-const STORAGE_URL_ENV_NAME = 'RIVET_STORAGE_URL';
-const OBJECT_STORAGE_REGION_ENV_NAME = 'RIVET_STORAGE_REGION';
-const OBJECT_STORAGE_ENDPOINT_ENV_NAME = 'RIVET_STORAGE_ENDPOINT';
-const OBJECT_STORAGE_ACCESS_KEY_ID_ENV_NAME = 'RIVET_STORAGE_ACCESS_KEY_ID';
-const OBJECT_STORAGE_ACCESS_KEY_ENV_NAME = 'RIVET_STORAGE_ACCESS_KEY';
-const OBJECT_STORAGE_FORCE_PATH_STYLE_ENV_NAME = 'RIVET_STORAGE_FORCE_PATH_STYLE';
-const STORAGE_MODE_ENV_NAME = 'RIVET_STORAGE_MODE';
 const RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS';
 const RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_MS';
 const RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_MS';
 const RUNTIME_PROCESS_ROLE_ENV_NAME = 'RIVET_RUNTIME_PROCESS_ROLE';
 const RUNTIME_REPLICA_TIER_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_TIER';
 const RUNTIME_LIBRARIES_JOB_WORKER_ENABLED_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED';
+const DEPLOYMENT_STORAGE_SETTINGS_RELATIVE_PATH = path.join('settings', 'deployment-storage.json');
 
 export const MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX = 'runtime-libraries/';
 
-const RETIRED_ENV_REPLACEMENTS = {
-  RIVET_STORAGE_BACKEND: STORAGE_MODE_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_BACKEND: STORAGE_MODE_ENV_NAME,
-  RIVET_DATABASE_URL: DATABASE_CONNECTION_STRING_ENV_NAME,
-  RIVET_WORKFLOWS_DATABASE_MODE: DATABASE_MODE_ENV_NAME,
-  RIVET_WORKFLOWS_DATABASE_URL: DATABASE_CONNECTION_STRING_ENV_NAME,
-  RIVET_WORKFLOWS_DATABASE_CONNECTION_STRING: DATABASE_CONNECTION_STRING_ENV_NAME,
-  RIVET_WORKFLOWS_DATABASE_SSL_MODE: DATABASE_SSL_MODE_ENV_NAME,
-  RIVET_OBJECT_STORAGE_BUCKET: OBJECT_STORAGE_BUCKET_ENV_NAME,
-  RIVET_OBJECT_STORAGE_REGION: OBJECT_STORAGE_REGION_ENV_NAME,
-  RIVET_OBJECT_STORAGE_ENDPOINT: OBJECT_STORAGE_ENDPOINT_ENV_NAME,
-  RIVET_OBJECT_STORAGE_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY_ID_ENV_NAME,
-  RIVET_OBJECT_STORAGE_SECRET_ACCESS_KEY: OBJECT_STORAGE_ACCESS_KEY_ENV_NAME,
-  RIVET_STORAGE_SECRET_ACCESS_KEY: OBJECT_STORAGE_ACCESS_KEY_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_URL: STORAGE_URL_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_BUCKET: OBJECT_STORAGE_BUCKET_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_REGION: OBJECT_STORAGE_REGION_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_ENDPOINT: OBJECT_STORAGE_ENDPOINT_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY_ID_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_SECRET_ACCESS_KEY: OBJECT_STORAGE_ACCESS_KEY_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_ACCESS_KEY: OBJECT_STORAGE_ACCESS_KEY_ENV_NAME,
-  RIVET_WORKFLOWS_STORAGE_FORCE_PATH_STYLE: OBJECT_STORAGE_FORCE_PATH_STYLE_ENV_NAME,
+const RETIRED_RUNTIME_ENV_REPLACEMENTS = {
   RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS: RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_ENV_NAME,
 };
 
@@ -134,8 +107,8 @@ function readEnv(name) {
   return value ? value : undefined;
 }
 
-function assertNoRetiredEnv() {
-  const activeRetired = Object.entries(RETIRED_ENV_REPLACEMENTS)
+function assertNoRetiredEnv(replacements) {
+  const activeRetired = Object.entries(replacements)
     .filter(([name]) => Boolean(process.env[name]?.trim()))
     .map(([name, replacement]) => `${name} -> ${replacement}`);
 
@@ -145,8 +118,90 @@ function assertNoRetiredEnv() {
 
   throw new Error(
     `Retired environment variable(s) detected: ${activeRetired.join(', ')}. ` +
-    'Update the configuration to the canonical RIVET_STORAGE_* / RIVET_DATABASE_* names.',
+    'Update the configuration to the canonical runtime-library tuning env names.',
   );
+}
+
+function getAppDataRoot() {
+  return path.resolve(
+    readEnv('RIVET_APP_DATA_ROOT') ||
+    path.join(os.homedir(), '.local', 'share', 'com.valerypopoff.rivet2'),
+  );
+}
+
+function readDeploymentStorageSettingsFile() {
+  const settingsPath = path.join(getAppDataRoot(), DEPLOYMENT_STORAGE_SETTINGS_RELATIVE_PATH);
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    if (!raw || typeof raw !== 'object') {
+      throw new Error('Deployment storage settings must be an object');
+    }
+
+    const storageMode = raw.storageMode === 'managed' ? 'managed' : 'filesystem';
+    const databaseMode = raw.databaseMode === 'managed' ? 'managed' : 'local-docker';
+    const fallbackDatabaseSslMode = databaseMode === 'local-docker' ? 'disable' : 'require';
+    const databaseSslMode = ['disable', 'require', 'verify-full'].includes(raw.databaseSslMode)
+      ? raw.databaseSslMode
+      : fallbackDatabaseSslMode;
+
+    return {
+      source: 'app-settings',
+      storageMode,
+      databaseMode,
+      databaseSslMode,
+      databaseConnectionString: typeof raw.databaseConnectionString === 'string'
+        ? raw.databaseConnectionString.trim()
+        : '',
+      storageUrl: typeof raw.storageUrl === 'string' ? raw.storageUrl.trim() : '',
+      storageAccessKeyId: typeof raw.storageAccessKeyId === 'string' ? raw.storageAccessKeyId.trim() : '',
+      storageAccessKey: typeof raw.storageAccessKey === 'string' ? raw.storageAccessKey.trim() : '',
+    };
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+function getStorageMode() {
+  const deploymentSettings = readDeploymentStorageSettingsFile();
+  if (deploymentSettings?.source === 'app-settings') {
+    assertNoRetiredEnv(RETIRED_RUNTIME_ENV_REPLACEMENTS);
+    return deploymentSettings.storageMode;
+  }
+
+  assertNoRetiredEnv(RETIRED_RUNTIME_ENV_REPLACEMENTS);
+  return 'filesystem';
+}
+
+function getManagedStorageConfig() {
+  const deploymentSettings = readDeploymentStorageSettingsFile();
+  if (deploymentSettings?.source === 'app-settings') {
+    assertNoRetiredEnv(RETIRED_RUNTIME_ENV_REPLACEMENTS);
+
+    return {
+      source: 'app-settings',
+      databaseMode: deploymentSettings.databaseMode,
+      databaseUrl: stripDatabaseSslQueryOptions(deploymentSettings.databaseConnectionString),
+      databaseSslMode: deploymentSettings.databaseSslMode,
+      storageUrl: deploymentSettings.storageUrl,
+      objectStorageAccessKeyId: deploymentSettings.storageAccessKeyId,
+      objectStorageSecretAccessKey: deploymentSettings.storageAccessKey,
+    };
+  }
+
+  return {
+    source: 'default',
+    databaseMode: 'local-docker',
+    databaseUrl: '',
+    databaseSslMode: 'disable',
+    storageUrl: '',
+    objectStorageAccessKeyId: '',
+    objectStorageSecretAccessKey: '',
+  };
 }
 
 function inferRuntimeProcessRole() {
@@ -216,9 +271,7 @@ function isExecutorRuntimeEntryArg(arg) {
 }
 
 export function isManagedRuntimeLibrariesEnabled() {
-  assertNoRetiredEnv();
-  const storageMode = readEnv(STORAGE_MODE_ENV_NAME)?.toLowerCase();
-  return storageMode === 'managed';
+  return getStorageMode() === 'managed';
 }
 
 export function shouldBootstrapManagedRuntimeLibrariesInCurrentProcess() {
@@ -241,35 +294,37 @@ export function shouldBootstrapManagedRuntimeLibrariesInCurrentProcess() {
 }
 
 export function getManagedRuntimeLibrariesConfig() {
-  assertNoRetiredEnv();
-  const databaseUrl = stripDatabaseSslQueryOptions(readEnv(DATABASE_CONNECTION_STRING_ENV_NAME) || '');
+  const storageConfig = getManagedStorageConfig();
+  const databaseUrl = storageConfig.databaseUrl;
   if (!databaseUrl) {
-    throw new Error(`Managed runtime-library sync requires ${DATABASE_CONNECTION_STRING_ENV_NAME}`);
+    throw new Error('Managed runtime-library sync requires a PostgreSQL connection string in Settings -> Storage');
   }
 
-  const databaseMode = readEnv(DATABASE_MODE_ENV_NAME)?.toLowerCase() || 'managed';
-  const databaseSslMode = readEnv(DATABASE_SSL_MODE_ENV_NAME)?.toLowerCase() || (databaseMode === 'local-docker' ? 'disable' : 'require');
-  const storageUrl = readEnv(STORAGE_URL_ENV_NAME);
-  const parsedStorageUrl = storageUrl ? parseManagedStorageUrl(storageUrl) : null;
+  const parsedStorageUrl = storageConfig.storageUrl ? parseManagedStorageUrl(storageConfig.storageUrl) : null;
+  if (!parsedStorageUrl) {
+    throw new Error('Managed runtime-library sync requires an object storage URL in deployment storage app settings');
+  }
+
+  const objectStorageBucket = parsedStorageUrl?.bucket;
+  const objectStorageRegion = parsedStorageUrl?.region || 'us-east-1';
+  const objectStorageEndpoint = parsedStorageUrl?.endpoint || undefined;
+  const objectStorageForcePathStyle = parsedStorageUrl?.forcePathStyle ?? false;
   const replicaStatusRetentionMs = normalizePositiveInt(
     readEnv(RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_ENV_NAME),
-    getDefaultReplicaStatusRetentionMs(databaseMode),
+    getDefaultReplicaStatusRetentionMs(storageConfig.databaseMode),
   );
   const runtimeProcessRole = inferRuntimeProcessRole();
 
   return {
-    databaseMode,
+    databaseMode: storageConfig.databaseMode,
     databaseUrl,
-    databaseSslMode,
-    objectStorageBucket: readEnv(OBJECT_STORAGE_BUCKET_ENV_NAME) || parsedStorageUrl?.bucket,
-    objectStorageRegion: readEnv(OBJECT_STORAGE_REGION_ENV_NAME) || parsedStorageUrl?.region || 'us-east-1',
-    objectStorageEndpoint: readEnv(OBJECT_STORAGE_ENDPOINT_ENV_NAME) || parsedStorageUrl?.endpoint || undefined,
-    objectStorageAccessKeyId: readEnv(OBJECT_STORAGE_ACCESS_KEY_ID_ENV_NAME),
-    objectStorageSecretAccessKey: readEnv(OBJECT_STORAGE_ACCESS_KEY_ENV_NAME),
-    objectStorageForcePathStyle: normalizeBoolean(
-      readEnv(OBJECT_STORAGE_FORCE_PATH_STYLE_ENV_NAME),
-      parsedStorageUrl?.forcePathStyle ?? false,
-    ),
+    databaseSslMode: storageConfig.databaseSslMode,
+    objectStorageBucket,
+    objectStorageRegion,
+    objectStorageEndpoint,
+    objectStorageAccessKeyId: storageConfig.objectStorageAccessKeyId,
+    objectStorageSecretAccessKey: storageConfig.objectStorageSecretAccessKey,
+    objectStorageForcePathStyle,
     objectStoragePrefix: MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX,
     syncPollIntervalMs: normalizePositiveInt(readEnv(RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_ENV_NAME), 5_000),
     runtimeProcessRole,
@@ -277,7 +332,7 @@ export function getManagedRuntimeLibrariesConfig() {
     replicaStatusRetentionMs,
     replicaStatusCleanupIntervalMs: normalizePositiveInt(
       readEnv(RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_ENV_NAME),
-      getDefaultReplicaStatusCleanupIntervalMs(databaseMode),
+      getDefaultReplicaStatusCleanupIntervalMs(storageConfig.databaseMode),
     ),
     jobWorkerEnabled: normalizeBoolean(
       readEnv(RUNTIME_LIBRARIES_JOB_WORKER_ENABLED_ENV_NAME),

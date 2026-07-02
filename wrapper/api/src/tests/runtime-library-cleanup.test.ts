@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import type { Pool } from 'pg';
 import { withArgv, withScopedEnv } from './helpers/runtime-library-harness.js';
@@ -12,6 +15,7 @@ const bootstrapConfig = await import(new URL('../../../../wrapper/bootstrap/prox
   shouldBootstrapManagedRuntimeLibrariesInCurrentProcess: () => boolean;
   getManagedRuntimeLibrariesConfig: () => Record<string, unknown>;
 };
+const deploymentStorageSettings = await import('../deployment-storage-settings.js');
 
 const managedEnvKeys = [
   'RIVET_STORAGE_MODE',
@@ -28,6 +32,7 @@ const managedEnvKeys = [
   'RIVET_STORAGE_FORCE_PATH_STYLE',
   'RIVET_STORAGE_BACKEND',
   'RIVET_WORKFLOWS_STORAGE_BACKEND',
+  'RIVET_APP_DATA_ROOT',
   'RIVET_DATABASE_URL',
   'RIVET_WORKFLOWS_DATABASE_MODE',
   'RIVET_WORKFLOWS_DATABASE_URL',
@@ -63,6 +68,29 @@ async function withManagedEnv(
   await withScopedEnv(managedEnvKeys, overrides, run);
 }
 
+type DeploymentSettingsDraft = Parameters<typeof deploymentStorageSettings.writeDeploymentStorageSettings>[0];
+
+async function withDeploymentStorageSettings(
+  settings: DeploymentSettingsDraft,
+  overrides: Partial<Record<(typeof managedEnvKeys)[number], string | undefined>>,
+  run: () => Promise<void> | void,
+) {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-runtime-settings-'));
+  const appDataRoot = path.join(tempRoot, 'app-data');
+
+  try {
+    await withManagedEnv({
+      ...overrides,
+      RIVET_APP_DATA_ROOT: appDataRoot,
+    }, async () => {
+      await deploymentStorageSettings.writeDeploymentStorageSettings(settings);
+      await run();
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 function isoDaysBefore(now: Date, days: number): string {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1_000).toISOString();
 }
@@ -71,14 +99,16 @@ function isoHoursBefore(now: Date, hours: number): string {
   return new Date(now.getTime() - hours * 60 * 60 * 1_000).toISOString();
 }
 
-test('API and bootstrap runtime-library config stay in parity for storage URL form', async () => {
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:25060/defaultdb?sslmode=disable',
-    RIVET_STORAGE_URL: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-access-key-id',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret-access-key',
+test('API and bootstrap runtime-library config stay in parity for saved storage URL settings', async () => {
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseSslMode: 'disable',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:25060/defaultdb?sslmode=disable',
+    storageUrl: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'spaces-access-key-id',
+    storageAccessKey: 'spaces-secret-access-key',
+  }, {
     RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS: '7000',
     RIVET_RUNTIME_PROCESS_ROLE: 'api',
   }, () => {
@@ -91,18 +121,14 @@ test('API and bootstrap runtime-library config stay in parity for storage URL fo
   });
 });
 
-test('API and bootstrap runtime-library config stay in parity for explicit S3 tuple form', async () => {
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'local-docker',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgres://rivet:rivet@workflow-postgres:5432/rivet?sslmode=require',
-    RIVET_DATABASE_SSL_MODE: 'disable',
-    RIVET_STORAGE_BUCKET: 'rivet-artifacts',
-    RIVET_STORAGE_REGION: 'us-east-1',
-    RIVET_STORAGE_ENDPOINT: 'http://workflow-minio:9000',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-    RIVET_STORAGE_ACCESS_KEY: 'minioadmin',
-    RIVET_STORAGE_FORCE_PATH_STYLE: 'true',
+test('API and bootstrap runtime-library config stay in parity for saved local-docker settings', async () => {
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'local-docker',
+    storageUrl: 'http://workflow-minio:9000/rivet-artifacts',
+    storageAccessKeyId: 'minioadmin',
+    storageAccessKey: 'minioadmin',
+  }, {
     RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS: '5000',
     RIVET_RUNTIME_PROCESS_ROLE: 'executor',
   }, () => {
@@ -111,6 +137,54 @@ test('API and bootstrap runtime-library config stay in parity for explicit S3 tu
       runtimeLibrariesConfig.getManagedRuntimeLibrariesConfig(),
     );
   });
+});
+
+test('API and bootstrap runtime-library config stay in parity for saved deployment storage settings', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-runtime-settings-'));
+
+  try {
+    const appDataRoot = path.join(tempRoot, 'app-data');
+    const settingsDir = path.join(appDataRoot, 'settings');
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(settingsDir, 'deployment-storage.json'),
+      JSON.stringify({
+        version: 1,
+        storageMode: 'managed',
+        databaseMode: 'managed',
+        databaseSslMode: 'verify-full',
+        databaseConnectionString: 'postgresql://saved-user:saved-pass@example-db:25060/defaultdb?sslmode=disable',
+        storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+        storageAccessKeyId: 'saved-access-key-id',
+        storageAccessKey: 'saved-secret-access-key',
+      }),
+      'utf8',
+    );
+
+    await withManagedEnv({
+      RIVET_APP_DATA_ROOT: appDataRoot,
+      RIVET_STORAGE_MODE: 'filesystem',
+      RIVET_STORAGE_BUCKET: 'env-bucket',
+      RIVET_STORAGE_ENDPOINT: 'https://env-storage.example.test',
+      RIVET_STORAGE_ACCESS_KEY_ID: 'env-access-key-id',
+      RIVET_STORAGE_ACCESS_KEY: 'env-secret-access-key',
+      RIVET_STORAGE_BACKEND: 'filesystem',
+      RIVET_DATABASE_CONNECTION_STRING: 'postgresql://env-user:env-pass@example-db:25060/defaultdb',
+      RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS: '7000',
+      RIVET_RUNTIME_PROCESS_ROLE: 'api',
+    }, () => {
+      assert.equal(runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(), 'managed');
+      assert.equal(bootstrapConfig.isManagedRuntimeLibrariesEnabled(), true);
+      assert.deepEqual(
+        bootstrapConfig.getManagedRuntimeLibrariesConfig(),
+        runtimeLibrariesConfig.getManagedRuntimeLibrariesConfig(),
+      );
+      assert.equal(runtimeLibrariesConfig.getManagedRuntimeLibrariesConfig().objectStorageBucket, 'saved-bucket');
+      assert.equal(runtimeLibrariesConfig.getManagedRuntimeLibrariesConfig().objectStorageAccessKeyId, 'saved-access-key-id');
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('API and bootstrap runtime-library config stay aligned when storage mode is filesystem', async () => {
@@ -124,13 +198,14 @@ test('API and bootstrap runtime-library config stay aligned when storage mode is
 });
 
 test('runtime-library config rejects invalid explicit process roles', async () => {
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
-    RIVET_STORAGE_URL: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-access-key-id',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret-access-key',
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
+    storageUrl: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'spaces-access-key-id',
+    storageAccessKey: 'spaces-secret-access-key',
+  }, {
     RIVET_RUNTIME_PROCESS_ROLE: 'worker',
   }, () => {
     assert.throws(
@@ -145,13 +220,14 @@ test('runtime-library config rejects invalid explicit process roles', async () =
 });
 
 test('API and bootstrap runtime-library config keep explicit replica-tier and job-worker flags in parity', async () => {
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
-    RIVET_STORAGE_URL: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-access-key-id',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret-access-key',
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
+    storageUrl: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'spaces-access-key-id',
+    storageAccessKey: 'spaces-secret-access-key',
+  }, {
     RIVET_RUNTIME_PROCESS_ROLE: 'api',
     RIVET_RUNTIME_LIBRARIES_REPLICA_TIER: 'none',
     RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED: 'false',
@@ -238,15 +314,13 @@ test('managed runtime-library schema init preserves the schema error and still r
 });
 
 test('managed runtime-library config keeps long replica-status retention for local-docker and shortens it for managed environments', async () => {
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'local-docker',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgres://rivet:rivet@workflow-postgres:5432/rivet',
-    RIVET_STORAGE_BUCKET: 'rivet-artifacts',
-    RIVET_STORAGE_REGION: 'us-east-1',
-    RIVET_STORAGE_ENDPOINT: 'http://workflow-minio:9000',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'minioadmin',
-    RIVET_STORAGE_ACCESS_KEY: 'minioadmin',
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'local-docker',
+    storageUrl: 'http://workflow-minio:9000/rivet-artifacts',
+    storageAccessKeyId: 'minioadmin',
+    storageAccessKey: 'minioadmin',
+  }, {
     RIVET_RUNTIME_PROCESS_ROLE: 'api',
   }, () => {
     const config = runtimeLibrariesConfig.getManagedRuntimeLibrariesConfig();
@@ -254,13 +328,14 @@ test('managed runtime-library config keeps long replica-status retention for loc
     assert.equal(config.replicaStatusCleanupIntervalMs, 15 * 60 * 1_000);
   });
 
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
-    RIVET_STORAGE_URL: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-access-key-id',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret-access-key',
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
+    storageUrl: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'spaces-access-key-id',
+    storageAccessKey: 'spaces-secret-access-key',
+  }, {
     RIVET_RUNTIME_PROCESS_ROLE: 'api',
   }, () => {
     const config = runtimeLibrariesConfig.getManagedRuntimeLibrariesConfig();
@@ -270,13 +345,14 @@ test('managed runtime-library config keeps long replica-status retention for loc
 });
 
 test('runtime-library config falls back on non-positive interval overrides and stays in parity with bootstrap', async () => {
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
-    RIVET_STORAGE_URL: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-access-key-id',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret-access-key',
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
+    storageUrl: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'spaces-access-key-id',
+    storageAccessKey: 'spaces-secret-access-key',
+  }, {
     RIVET_RUNTIME_PROCESS_ROLE: 'api',
     RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS: '0',
     RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_MS: '-1',
@@ -293,13 +369,14 @@ test('runtime-library config falls back on non-positive interval overrides and s
 });
 
 test('bootstrap runtime-library sync skips dev supervisor processes and keeps the real runtime process', async () => {
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
-    RIVET_STORAGE_URL: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-access-key-id',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret-access-key',
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
+    storageUrl: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'spaces-access-key-id',
+    storageAccessKey: 'spaces-secret-access-key',
+  }, {
     RIVET_RUNTIME_PROCESS_ROLE: 'api',
   }, async () => {
     await withArgv(['npm', 'run', 'dev'], () => {
@@ -324,13 +401,14 @@ test('bootstrap runtime-library sync skips dev supervisor processes and keeps th
 });
 
 test('bootstrap runtime-library sync keeps executor runtime processes', async () => {
-  await withManagedEnv({
-    RIVET_STORAGE_MODE: 'managed',
-    RIVET_DATABASE_MODE: 'managed',
-    RIVET_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
-    RIVET_STORAGE_URL: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    RIVET_STORAGE_ACCESS_KEY_ID: 'spaces-access-key-id',
-    RIVET_STORAGE_ACCESS_KEY: 'spaces-secret-access-key',
+  await withDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://db-user:db-pass@example-db:25060/defaultdb',
+    storageUrl: 'https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'spaces-access-key-id',
+    storageAccessKey: 'spaces-secret-access-key',
+  }, {
     RIVET_RUNTIME_PROCESS_ROLE: 'executor',
   }, async () => {
     await withArgv(['/usr/local/bin/node', 'executor-bundle.cjs', '--port', '21889'], () => {

@@ -4,7 +4,9 @@ import fs from 'node:fs/promises';
 import test from 'node:test';
 
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
-import { readJson, withEnvOverride } from './helpers/workflow-api-harness.js';
+import { readWebAppAuthSettingsSync, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
+import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
+import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import {
   createWebAppProject,
@@ -47,9 +49,126 @@ async function withEnvOverrides(
   await apply(0);
 }
 
+async function withWebAppAuthSettings(
+  settings: Parameters<typeof writeWebAppAuthSettings>[0],
+  run: () => Promise<void>,
+): Promise<void> {
+  await writeWebAppAuthSettings(settings);
+  try {
+    await run();
+  } finally {
+    await writeWebAppAuthSettings({ mode: 'ui-gate' });
+  }
+}
+
 async function writeWebAppProject(projectPath: string, projectName: string, appName: string): Promise<void> {
   const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
   const project = createWebAppProject(rivetNode, blankProjectContents, appName);
+  const serializedProject = serializeWebAppProject(rivetNode, project);
+
+  await fs.writeFile(projectPath, serializedProject, 'utf8');
+}
+
+async function writeThrowingActionWebAppProject(projectPath: string, projectName: string, appName: string): Promise<void> {
+  const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
+  const project = createWebAppProject(rivetNode, blankProjectContents, appName);
+  const graph = project.graphs[project.metadata.mainGraphId!];
+
+  graph.nodes = [
+    {
+      type: 'graphInput',
+      title: 'Input',
+      id: 'input-node',
+      visualData: { x: 0, y: 0, width: 300 },
+      data: {
+        id: 'input',
+        dataType: 'string',
+      },
+    } as never,
+    {
+      type: 'code',
+      title: 'Throw',
+      id: 'throw-node',
+      visualData: { x: 360, y: 0, width: 300 },
+      data: {
+        allowConsole: false,
+        allowFetch: false,
+        allowProcess: false,
+        allowRequire: false,
+        allowRivet: false,
+        code: "throw new Error('web app action failure');",
+        inputNames: 'input',
+        outputNames: 'value',
+      },
+    } as never,
+    {
+      type: 'graphOutput',
+      title: 'Output',
+      id: 'output-node',
+      visualData: { x: 720, y: 0, width: 300 },
+      data: {
+        id: 'value',
+        dataType: 'string',
+      },
+    } as never,
+  ];
+  graph.connections = [
+    {
+      outputNodeId: 'input-node',
+      outputId: 'data',
+      inputNodeId: 'throw-node',
+      inputId: 'input',
+    } as never,
+    {
+      outputNodeId: 'throw-node',
+      outputId: 'value',
+      inputNodeId: 'output-node',
+      inputId: 'value',
+    } as never,
+  ];
+  const serializedProject = serializeWebAppProject(rivetNode, project);
+
+  await fs.writeFile(projectPath, serializedProject, 'utf8');
+}
+
+async function writeWebAppHeadersContextProject(projectPath: string, projectName: string, appName: string): Promise<void> {
+  const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
+  const project = createWebAppProject(rivetNode, blankProjectContents, appName);
+  const graph = project.graphs[project.metadata.mainGraphId!];
+
+  graph.nodes = [
+    {
+      type: 'context',
+      title: 'Context',
+      id: 'context-headers',
+      visualData: { x: 0, y: 0, width: 300 },
+      data: {
+        id: 'headers',
+        dataType: 'any',
+        defaultValue: undefined,
+        useDefaultValueInput: false,
+      },
+    } as never,
+    {
+      type: 'graphOutput',
+      title: 'Graph Output',
+      id: 'graph-output',
+      visualData: { x: 360, y: 0, width: 300 },
+      data: {
+        id: 'value',
+        dataType: 'any',
+      },
+    } as never,
+  ];
+  graph.connections = [
+    {
+      outputNodeId: 'context-headers',
+      outputId: 'data',
+      inputNodeId: 'graph-output',
+      inputId: 'value',
+    } as never,
+  ];
+
   const serializedProject = serializeWebAppProject(rivetNode, project);
 
   await fs.writeFile(projectPath, serializedProject, 'utf8');
@@ -71,9 +190,32 @@ async function publishWebApp(relativePath: string, slug: string): Promise<void> 
 }
 
 function createSignedOAuthSessionCookie(email: string, secret: string): string {
+  const settings = readWebAppAuthSettingsSync();
+  const clientSecretFingerprint = settings.clientSecret
+    ? createHmac('sha256', secret).update(settings.clientSecret).digest('base64url')
+    : '';
+  const settingsVersion = createHmac('sha256', secret)
+    .update(JSON.stringify({
+      mode: settings.mode,
+      provider: settings.provider,
+      dummyEmail: settings.dummyEmail,
+      dummyAllowNonLocalhost: settings.dummyAllowNonLocalhost,
+      authorizeUrl: settings.authorizeUrl,
+      tokenUrl: settings.tokenUrl,
+      userUrl: settings.userUrl,
+      clientId: settings.clientId,
+      clientSecretFingerprint,
+      callbackUrl: settings.callbackUrl,
+      scopes: settings.scopes,
+      emailClaim: settings.emailClaim,
+      sessionTtlSeconds: settings.sessionTtlSeconds,
+      clientAuthMethod: settings.clientAuthMethod,
+    }))
+    .digest('base64url');
   const payload = Buffer.from(JSON.stringify({
     email,
     expiresAt: Date.now() + 60_000,
+    settingsVersion,
   }), 'utf8').toString('base64url');
   const signature = createHmac('sha256', secret).update(payload).digest('base64url');
   return `rivet_web_app_oauth_session=${payload}.${signature}`;
@@ -226,12 +368,12 @@ test('workflow web app publication routes allow batch slug swaps for selected ap
   await withWorkflowApiServer(async (baseUrl) => {
     for (const publications of [
       [
-        { uiGraphId: 'ui-one', slug: 'first-app' },
-        { uiGraphId: 'ui-two', slug: 'second-app' },
+        { uiGraphId: 'ui-one', slug: 'swap-first-app' },
+        { uiGraphId: 'ui-two', slug: 'swap-second-app' },
       ],
       [
-        { uiGraphId: 'ui-one', slug: 'second-app' },
-        { uiGraphId: 'ui-two', slug: 'first-app' },
+        { uiGraphId: 'ui-one', slug: 'swap-second-app' },
+        { uiGraphId: 'ui-two', slug: 'swap-first-app' },
       ],
     ]) {
       await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/publish`, {
@@ -250,8 +392,8 @@ test('workflow web app publication routes allow batch slug swaps for selected ap
     assert.deepEqual(
       publishedList.webApps.map((webApp) => [webApp.uiGraphId, webApp.publishedSlug, webApp.status]),
       [
-        ['ui-one', 'second-app', 'published'],
-        ['ui-two', 'first-app', 'published'],
+        ['ui-one', 'swap-second-app', 'published'],
+        ['ui-two', 'swap-first-app', 'published'],
       ],
     );
   });
@@ -503,124 +645,159 @@ test('latest filesystem web app actions reject stale saved-draft revisions', asy
 });
 
 test('published filesystem web apps use the UI gate instead of workflow bearer auth', async () => {
-  await withEnvOverride('RIVET_REQUIRE_WORKFLOW_KEY', 'false', async () => {
-    await withEnvOverride('RIVET_REQUIRE_UI_GATE_KEY', 'true', async () => {
-      await withEnvOverride('RIVET_KEY', 'web-app-ui-session-key', async () => {
-        const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppUiSession');
-        await writeWebAppProject(created.absolutePath, 'PublishedWebAppUiSession', 'Published UI Session App');
-        await publishWebApp(created.relativePath, 'published-web-app-ui-session');
+  await withEnvOverride('RIVET_REQUIRE_UI_GATE_KEY', 'true', async () => {
+    await withEnvOverride('RIVET_KEY', 'web-app-ui-session-key', async () => {
+      const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppUiSession');
+      await writeWebAppProject(created.absolutePath, 'PublishedWebAppUiSession', 'Published UI Session App');
+      await publishWebApp(created.relativePath, 'published-web-app-ui-session');
 
-        await withWorkflowExecutionServer(async ({ publishedBaseUrl, webAppsBaseUrl, latestWebAppsBaseUrl }) => {
-          const unauthenticatedResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session`, {
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(unauthenticatedResponse.status, 401);
-
-          const latestUnauthenticatedResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session`, {
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(latestUnauthenticatedResponse.status, 401);
-
-          const uiSessionHeaders = {
-            Cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
-            'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
-          };
-          const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session`, {
-            headers: uiSessionHeaders,
-            signal: AbortSignal.timeout(5000),
-          });
-          const html = await htmlResponse.text();
-
-          assert.equal(htmlResponse.status, 200);
-          assert.match(html, /Published UI Session App/);
-          const revisionKey = extractWebAppRevisionKey(html);
-
-          const appJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
-            headers: uiSessionHeaders,
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(appJsonResponse.status, 200);
-
-          const crossOriginAppJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
-            headers: {
-              ...uiSessionHeaders,
-              Origin: 'https://evil.example.test',
-            },
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(crossOriginAppJsonResponse.status, 403);
-          const crossOriginAppJsonBody = await crossOriginAppJsonResponse.json() as { error?: string; code?: string };
-          assert.equal(crossOriginAppJsonBody.error, 'Cross-origin web app request denied');
-          assert.equal(crossOriginAppJsonBody.code, 'origin_forbidden');
-
-          const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/actions/run`, {
-            method: 'POST',
-            headers: {
-              ...uiSessionHeaders,
-              'Content-Type': 'application/json',
-              Origin: new URL(webAppsBaseUrl).origin,
-            },
-            body: JSON.stringify({
-              componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
-              revisionKey,
-              state: {
-                prompt: 'hello with ui session',
-              },
-            }),
-            signal: AbortSignal.timeout(5000),
-          });
-          const actionBody = await actionResponse.json() as {
-            statePatch?: Record<string, unknown>;
-          };
-
-          assert.equal(actionResponse.status, 200);
-          assert.deepEqual(actionBody.statePatch, { result: 'hello with ui session' });
-
-          const tokenFreeResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
-            headers: {
-              'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
-              'X-Rivet-Token-Free-Host': '1',
-            },
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(tokenFreeResponse.status, 200);
-
-          const latestTokenFreeResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session/app.json`, {
-            headers: {
-              'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
-              'X-Rivet-Token-Free-Host': '1',
-            },
-            signal: AbortSignal.timeout(5000),
-          });
-          assert.equal(latestTokenFreeResponse.status, 200);
-
-          await withEnvOverride('RIVET_REQUIRE_WORKFLOW_KEY', 'true', async () => {
-            const workflowResponse = await fetch(`${publishedBaseUrl}/missing-workflow`, {
-              method: 'POST',
-              headers: uiSessionHeaders,
-              body: '{}',
-              signal: AbortSignal.timeout(5000),
-            });
-            assert.equal(workflowResponse.status, 401);
-          });
+      await withWorkflowExecutionServer(async ({ publishedBaseUrl, webAppsBaseUrl, latestWebAppsBaseUrl }) => {
+        const unauthenticatedResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session`, {
+          signal: AbortSignal.timeout(5000),
         });
+        assert.equal(unauthenticatedResponse.status, 401);
+
+        const latestUnauthenticatedResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(latestUnauthenticatedResponse.status, 401);
+
+        const uiSessionHeaders = {
+          Cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+          'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+        };
+        const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session`, {
+          headers: uiSessionHeaders,
+          signal: AbortSignal.timeout(5000),
+        });
+        const html = await htmlResponse.text();
+
+        assert.equal(htmlResponse.status, 200);
+        assert.match(html, /Published UI Session App/);
+        const revisionKey = extractWebAppRevisionKey(html);
+
+        const appJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+          headers: uiSessionHeaders,
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(appJsonResponse.status, 200);
+
+        const crossOriginAppJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+          headers: {
+            ...uiSessionHeaders,
+            Origin: 'https://evil.example.test',
+          },
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(crossOriginAppJsonResponse.status, 403);
+        const crossOriginAppJsonBody = await crossOriginAppJsonResponse.json() as { error?: string; code?: string };
+        assert.equal(crossOriginAppJsonBody.error, 'Cross-origin web app request denied');
+        assert.equal(crossOriginAppJsonBody.code, 'origin_forbidden');
+
+        const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/actions/run`, {
+          method: 'POST',
+          headers: {
+            ...uiSessionHeaders,
+            'Content-Type': 'application/json',
+            Origin: new URL(webAppsBaseUrl).origin,
+          },
+          body: JSON.stringify({
+            componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+            revisionKey,
+            state: {
+              prompt: 'hello with ui session',
+            },
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+        const actionBody = await actionResponse.json() as {
+          statePatch?: Record<string, unknown>;
+        };
+
+        assert.equal(actionResponse.status, 200);
+        assert.deepEqual(actionBody.statePatch, { result: 'hello with ui session' });
+
+        const tokenFreeResponse = await fetch(`${webAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+          headers: {
+            'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+            'X-Rivet-Token-Free-Host': '1',
+          },
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(tokenFreeResponse.status, 200);
+
+        const latestTokenFreeResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session/app.json`, {
+          headers: {
+            'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+            'X-Rivet-Token-Free-Host': '1',
+          },
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(latestTokenFreeResponse.status, 200);
+
+        await writeWorkflowEndpointAuthSettings({
+          requireBearerAuth: true,
+        });
+        const workflowResponse = await fetch(`${publishedBaseUrl}/missing-workflow`, {
+          method: 'POST',
+          headers: uiSessionHeaders,
+          body: '{}',
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(workflowResponse.status, 401);
       });
     });
   });
 });
 
+test('published filesystem web apps honor the selected server UI gate mode', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppServerUiMode');
+  await writeWebAppProject(created.absolutePath, 'PublishedWebAppServerUiMode', 'Published Server UI Mode App');
+  await publishWebApp(created.relativePath, 'published-web-app-server-ui-mode');
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    await withEnvOverrides({
+      RIVET_KEY: 'web-app-server-ui-mode-key',
+      RIVET_REQUIRE_UI_GATE_KEY: 'true',
+      RIVET_SERVER_UI_AUTH_MODE: 'none',
+    }, async () => {
+      const explicitNoneResponse = await fetch(`${webAppsBaseUrl}/published-web-app-server-ui-mode`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(explicitNoneResponse.status, 200);
+    });
+
+    await withEnvOverrides({
+      RIVET_KEY: 'web-app-server-ui-mode-key',
+      RIVET_SERVER_UI_AUTH_MODE: 'oauth',
+    }, async () => {
+      const keyCookieResponse = await fetch(`${webAppsBaseUrl}/published-web-app-server-ui-mode`, {
+        headers: {
+          Cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+          'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+        },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(keyCookieResponse.status, 401);
+    });
+  });
+});
+
 test('published filesystem web apps can use OAuth instead of the UI key gate', async () => {
-  await withEnvOverrides({
-    RIVET_WEB_APPS_AUTH_MODE: 'oauth',
-    RIVET_REQUIRE_UI_GATE_KEY: 'true',
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'https://rivet.example.test/apps/auth/callback',
-    OAUTH_SESSION_SECRET: 'session-secret',
+  await withWebAppAuthSettings({
+    mode: 'oauth',
+    provider: 'external',
+    authorizeUrl: 'https://oauth.example.test/authorize',
+    tokenUrl: 'https://oauth.example.test/token',
+    userUrl: 'https://oauth.example.test/profile',
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    callbackUrl: 'https://rivet.example.test/apps/auth/callback',
+    sessionSecret: 'session-secret',
   }, async () => {
+    await withEnvOverrides({
+      RIVET_REQUIRE_UI_GATE_KEY: 'true',
+    }, async () => {
     const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppOAuth');
     await writeWebAppProject(created.absolutePath, 'PublishedWebAppOAuth', 'Published OAuth App');
     await workflowStorageBackend.publishWorkflowProjectWebAppsWithBackend(created.relativePath, [{
@@ -741,6 +918,7 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
       assert.equal(actionBody.error, 'OAuth login required');
       assert.equal(actionBody.code, 'oauth_required');
     });
+    });
   });
 });
 
@@ -798,6 +976,142 @@ test('published filesystem web app actions run through the wrapper execution dep
   });
 });
 
+test('filesystem web app actions appear in run recordings for published and latest routes', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'RecordedWebAppAction');
+  await writeWebAppProject(created.absolutePath, 'RecordedWebAppAction', 'Recorded Web App');
+  await publishWebApp(created.relativePath, 'recorded-web-app-action');
+
+  async function runWebAppAction(baseUrl: string, prompt: string): Promise<void> {
+    const html = await (await fetch(`${baseUrl}/recorded-web-app-action`, {
+      signal: AbortSignal.timeout(5000),
+    })).text();
+    const revisionKey = extractWebAppRevisionKey(html);
+    const actionResponse = await fetch(`${baseUrl}/recorded-web-app-action/actions/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+        revisionKey,
+        state: { prompt },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    assert.equal(actionResponse.status, 200);
+  }
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl, webAppsBaseUrl, latestWebAppsBaseUrl }) => {
+    await runWebAppAction(webAppsBaseUrl, 'published web app recording');
+    await runWebAppAction(latestWebAppsBaseUrl, 'latest web app recording');
+
+    const workflowsResponse = await waitForRecordingWorkflows(
+      apiBaseUrl,
+      (workflows) => workflows[0]?.totalRuns === 2,
+    ) as {
+      workflows: Array<{
+        workflowId: string;
+        project: { absolutePath: string };
+        totalRuns: number;
+      }>;
+    };
+
+    assert.equal(workflowsResponse.workflows.length, 1);
+    assert.equal(workflowsResponse.workflows[0]?.project.absolutePath, created.absolutePath);
+    assert.equal(workflowsResponse.workflows[0]?.totalRuns, 2);
+
+    const workflowId = workflowsResponse.workflows[0]!.workflowId;
+    const runsResponse = await readJson<{
+      totalRuns: number;
+      runs: Array<{
+        endpointNameAtExecution: string;
+        runKind: string;
+        status: string;
+      }>;
+    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
+
+    assert.equal(runsResponse.totalRuns, 2);
+    assert.deepEqual(
+      runsResponse.runs.map((recording) => recording.endpointNameAtExecution).sort(),
+      ['/apps-latest/recorded-web-app-action', '/apps/recorded-web-app-action'],
+    );
+    assert.deepEqual(
+      runsResponse.runs.map((recording) => recording.runKind).sort(),
+      ['latest', 'published'],
+    );
+    assert.deepEqual(
+      runsResponse.runs.map((recording) => recording.status),
+      ['succeeded', 'succeeded'],
+    );
+
+    const filteredRunsResponse = await readJson<{
+      totalRuns: number;
+      runs: Array<{
+        endpointNameAtExecution: string;
+      }>;
+    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?${new URLSearchParams({
+      page: '1',
+      pageSize: '20',
+      status: 'all',
+      inputPath: '$',
+      inputOperator: 'contains',
+      inputValue: 'latest web app recording',
+    })}`));
+
+    assert.equal(filteredRunsResponse.totalRuns, 1);
+    assert.equal(filteredRunsResponse.runs[0]?.endpointNameAtExecution, '/apps-latest/recorded-web-app-action');
+  });
+});
+
+test('published filesystem web app actions do not expose browser auth headers to graph context', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppHeaderContext');
+  await writeWebAppHeadersContextProject(
+    created.absolutePath,
+    'PublishedWebAppHeaderContext',
+    'Published Header Context App',
+  );
+  await publishWebApp(created.relativePath, 'published-web-app-header-context');
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    const html = await (await fetch(`${webAppsBaseUrl}/published-web-app-header-context`, {
+      signal: AbortSignal.timeout(5000),
+    })).text();
+    const revisionKey = extractWebAppRevisionKey(html);
+    const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-header-context/actions/run`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer browser-secret',
+        Cookie: 'rivet_web_app_oauth_session=session-secret; rivet_ui_token=ui-secret',
+        'Content-Type': 'application/json',
+        'X-Rivet-Proxy-Auth': 'proxy-secret',
+        'X-Rivet-Token-Free-Host': '1',
+        'X-Storyteller-Header': 'safe-request-header',
+      },
+      body: JSON.stringify({
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+        revisionKey,
+        state: {},
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const actionBody = await actionResponse.json() as {
+      outputs?: {
+        value?: {
+          value?: Record<string, unknown>;
+        };
+      };
+    };
+
+    assert.equal(actionResponse.status, 200);
+    const contextHeaders = actionBody.outputs?.value?.value ?? {};
+    assert.equal(contextHeaders['x-storyteller-header'], 'safe-request-header');
+    assert.equal(contextHeaders['content-type'], 'application/json');
+    assert.equal(Object.prototype.hasOwnProperty.call(contextHeaders, 'authorization'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(contextHeaders, 'cookie'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(contextHeaders, 'x-rivet-proxy-auth'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(contextHeaders, 'x-rivet-token-free-host'), false);
+  });
+});
+
 test('published filesystem web app actions reject malformed action metadata', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppBadAction');
   await writeWebAppProject(created.absolutePath, 'PublishedWebAppBadAction', 'Published Bad Action App');
@@ -819,6 +1133,62 @@ test('published filesystem web app actions reject malformed action metadata', as
     assert.equal(body.error, 'Invalid componentId.');
     assert.equal(body.code, undefined);
   });
+});
+
+test('published filesystem web app actions hide unexpected internal errors', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppInternalError');
+  await writeThrowingActionWebAppProject(created.absolutePath, 'PublishedWebAppInternalError', 'Published Internal Error App');
+  await publishWebApp(created.relativePath, 'published-web-app-internal-error');
+
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  try {
+    await withWorkflowExecutionServer(async ({ apiBaseUrl, webAppsBaseUrl }) => {
+      const html = await (await fetch(`${webAppsBaseUrl}/published-web-app-internal-error`, {
+        signal: AbortSignal.timeout(5000),
+      })).text();
+      const revisionKey = extractWebAppRevisionKey(html);
+      const response = await fetch(`${webAppsBaseUrl}/published-web-app-internal-error/actions/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+          revisionKey,
+          state: { prompt: 'do not leak details' },
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = await response.json() as { code?: string; error?: string };
+
+      assert.equal(response.status, 500);
+      assert.equal(body.error, 'Internal server error');
+      assert.equal(body.code, undefined);
+
+      const workflowsResponse = await waitForRecordingWorkflows(
+        apiBaseUrl,
+        (workflows) => workflows[0]?.totalRuns === 1,
+      ) as {
+        workflows: Array<{
+          workflowId: string;
+          totalRuns: number;
+        }>;
+      };
+      const workflowId = workflowsResponse.workflows[0]!.workflowId;
+      const runsResponse = await readJson<{
+        totalRuns: number;
+        runs: Array<{
+          endpointNameAtExecution: string;
+          status: string;
+        }>;
+      }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
+
+      assert.equal(runsResponse.totalRuns, 1);
+      assert.equal(runsResponse.runs[0]?.endpointNameAtExecution, '/apps/published-web-app-internal-error');
+      assert.equal(runsResponse.runs[0]?.status, 'failed');
+    });
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 test('published filesystem web app actions reject stale published revisions', async () => {

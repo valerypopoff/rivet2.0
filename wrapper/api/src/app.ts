@@ -1,4 +1,11 @@
-import express, { type Express, type Request, type Response, type NextFunction } from 'express';
+import express, {
+  type Express,
+  type NextFunction,
+  type Request,
+  type RequestHandler,
+  type Response,
+  type Router as ExpressRouter,
+} from 'express';
 import cors from 'cors';
 
 import { nativeRouter } from './routes/native.js';
@@ -14,18 +21,24 @@ import {
   workflowsRouter,
 } from './routes/workflows/index.js';
 import { configRouter } from './routes/config.js';
+import { appSettingsRouter } from './routes/app-settings.js';
 import { uiAuthRouter } from './routes/ui-auth.js';
 import { webAppOAuthRouter } from './web-app-oauth.js';
 import { runtimeLibrariesRouter } from './routes/runtime-libraries.js';
 import {
-  LATEST_WORKFLOWS_BASE_PATH,
-  PUBLISHED_WORKFLOWS_BASE_PATH,
-  RIVET_LATEST_WEB_APPS_BASE_PATH,
-  RIVET_WEB_APPS_BASE_PATH,
+  getLatestWebAppsBasePath,
+  getLatestWorkflowsBasePath,
+  getPublishedWebAppsBasePath,
+  getPublishedWorkflowsBasePath,
 } from './workflowEndpointPaths.js';
+import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config.js';
 import { requireAuth } from './middleware/auth.js';
 import { isTrustedProxyRequest } from './auth.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
+
+type RuntimeExpressRouter = {
+  handle: (req: Request, res: Response, next: NextFunction) => void;
+};
 
 export function getApiErrorResponse(err: Error): { status: number; body: { error: string } } {
   const status = (err as { status?: number }).status ?? 500;
@@ -102,32 +115,40 @@ function createCorsOptions(req: Request) {
 
 export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): string[] {
   const surfaces: string[] = [];
+  const publishedAppsBasePath = getPublishedWebAppsBasePath();
+  const latestAppsBasePath = getLatestWebAppsBasePath();
+  const publishedWorkflowsBasePath = getPublishedWorkflowsBasePath();
+  const latestWorkflowsBasePath = getLatestWorkflowsBasePath();
 
   if (isControlPlaneApiProfile(profile)) {
     surfaces.push(
       '/ui-auth',
-      `${RIVET_WEB_APPS_BASE_PATH}/auth/callback`,
-      `${RIVET_WEB_APPS_BASE_PATH}/auth/dummy`,
-      `${RIVET_WEB_APPS_BASE_PATH}/auth/logout`,
-      `${LATEST_WORKFLOWS_BASE_PATH}/:endpointName`,
-      `${RIVET_LATEST_WEB_APPS_BASE_PATH}/:slug`,
+      '/ui-auth/check',
+      '/ui-auth/prompt',
+      '/ui-auth/oauth/*',
+      `${publishedAppsBasePath}/auth/callback`,
+      `${publishedAppsBasePath}/auth/dummy`,
+      `${publishedAppsBasePath}/auth/logout`,
+      `${latestWorkflowsBasePath}/:endpointName`,
+      `${latestAppsBasePath}/:slug`,
       '/api/native/*',
       '/api/shell/*',
       '/api/plugins/*',
       '/api/projects/*',
       '/api/workflows/*',
       '/api/runtime-libraries/*',
+      '/api/app-settings/*',
       '/api/config*',
     );
   }
 
   if (profile === 'combined' || profile === 'execution') {
     surfaces.push(
-      `${RIVET_WEB_APPS_BASE_PATH}/auth/callback`,
-      `${RIVET_WEB_APPS_BASE_PATH}/auth/dummy`,
-      `${RIVET_WEB_APPS_BASE_PATH}/auth/logout`,
-      `${PUBLISHED_WORKFLOWS_BASE_PATH}/:endpointName`,
-      `${RIVET_WEB_APPS_BASE_PATH}/:slug`,
+      `${publishedAppsBasePath}/auth/callback`,
+      `${publishedAppsBasePath}/auth/dummy`,
+      `${publishedAppsBasePath}/auth/logout`,
+      `${publishedWorkflowsBasePath}/:endpointName`,
+      `${publishedAppsBasePath}/:slug`,
       '/internal/workflows/:endpointName',
     );
   }
@@ -136,15 +157,44 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
 }
 
 export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRuntimeProfile()): void {
-  if (isExecutionOnlyApiProfile(profile) && process.env.RIVET_STORAGE_MODE?.trim().toLowerCase() !== 'managed') {
-    throw new Error('RIVET_API_PROFILE=execution requires RIVET_STORAGE_MODE=managed');
+  if (isExecutionOnlyApiProfile(profile) && getWorkflowStorageBackendMode() !== 'managed') {
+    throw new Error('RIVET_API_PROFILE=execution requires Settings -> Storage to use Object storage');
   }
+}
+
+function dispatchDynamicBasePath(
+  getBasePath: () => string,
+  router: ExpressRouter,
+): RequestHandler {
+  const runtimeRouter = router as unknown as RuntimeExpressRouter;
+
+  return (req, res, next) => {
+    const basePath = getBasePath();
+    const requestPath = req.path;
+
+    if (requestPath !== basePath && !requestPath.startsWith(`${basePath}/`)) {
+      next();
+      return;
+    }
+
+    const originalUrl = req.url;
+    const queryIndex = originalUrl.indexOf('?');
+    const pathOnly = queryIndex >= 0 ? originalUrl.slice(0, queryIndex) : originalUrl;
+    const query = queryIndex >= 0 ? originalUrl.slice(queryIndex) : '';
+    const trimmedPath = pathOnly.slice(basePath.length) || '/';
+    req.url = `${trimmedPath}${query}`;
+
+    runtimeRouter.handle(req, res, (error?: unknown) => {
+      req.url = originalUrl;
+      next(error);
+    });
+  };
 }
 
 function mountControlPlaneRoutes(app: Express): void {
   app.use('/', uiAuthRouter);
-  app.use(LATEST_WORKFLOWS_BASE_PATH, latestWorkflowsRouter);
-  app.use(RIVET_LATEST_WEB_APPS_BASE_PATH, latestWebAppsRouter);
+  app.use(dispatchDynamicBasePath(getLatestWorkflowsBasePath, latestWorkflowsRouter));
+  app.use(dispatchDynamicBasePath(getLatestWebAppsBasePath, latestWebAppsRouter));
   app.use('/api', requireAuth);
   app.use('/api/native', nativeRouter);
   app.use('/api/shell', shellRouter);
@@ -152,12 +202,13 @@ function mountControlPlaneRoutes(app: Express): void {
   app.use('/api/projects', projectsRouter);
   app.use('/api/workflows', workflowsRouter);
   app.use('/api/runtime-libraries', runtimeLibrariesRouter);
+  app.use('/api/app-settings', appSettingsRouter);
   app.use('/api', configRouter);
 }
 
 function mountPublishedExecutionRoutes(app: Express): void {
-  app.use(PUBLISHED_WORKFLOWS_BASE_PATH, publishedWorkflowsRouter);
-  app.use(RIVET_WEB_APPS_BASE_PATH, publishedWebAppsRouter);
+  app.use(dispatchDynamicBasePath(getPublishedWorkflowsBasePath, publishedWorkflowsRouter));
+  app.use(dispatchDynamicBasePath(getPublishedWebAppsBasePath, publishedWebAppsRouter));
   app.use('/internal/workflows', internalPublishedWorkflowsRouter);
 }
 
@@ -175,7 +226,7 @@ export function createApiApp(profile = getApiRuntimeProfile()): Express {
   });
 
   if (isControlPlaneApiProfile(profile) || profile === 'execution') {
-    app.use(RIVET_WEB_APPS_BASE_PATH, webAppOAuthRouter);
+    app.use(dispatchDynamicBasePath(getPublishedWebAppsBasePath, webAppOAuthRouter));
   }
 
   if (isControlPlaneApiProfile(profile)) {

@@ -204,10 +204,11 @@ paths, disable them in the fixture, or use a smaller synthetic fixture for the
 CodeRunner-specific benchmark.
 
 In filesystem storage mode, the workflow root is controlled by
-`RIVET_WORKFLOWS_ROOT`, and the storage mode by `RIVET_STORAGE_MODE=filesystem`.
+`RIVET_WORKFLOWS_ROOT`, and the Storage tab should remain on `Local folders`.
 In managed storage mode, import/publish the fixture through the managed project
-path used in production. Do not edit the fixture itself just to add endpoint
-metadata; use the wrapper's normal publication metadata.
+path used in production with the Storage tab set to `Object storage`. Do not
+edit the fixture itself just to add endpoint metadata; use the wrapper's normal
+publication metadata.
 
 Run the measurement script from the wrapper checkout:
 

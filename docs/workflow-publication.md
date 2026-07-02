@@ -124,7 +124,7 @@ Rivet web apps are stored in project YAML under `Project.uiGraphs`. They are pub
 
 Multiple web apps from the same project may be published at the same time as long as their slugs differ. Republish replaces only the selected UI graph publications; other web apps from that project keep serving their previous pinned snapshots. Unpublishing one web app removes only that `uiGraphId` publication and leaves any workflow endpoint publication plus other web apps intact. If a published UI graph is later removed from the draft project, the pinned app still serves from its old snapshot/revision; Project Settings lists it as missing from the current project so it can be explicitly unpublished, but it cannot be republished until the UI graph exists again.
 
-When `RIVET_WEB_APPS_AUTH_MODE=oauth`, Project Settings stores an allowed-email list on each published web app. OAuth web apps are fail-closed: an empty list denies all signed-in users, and a non-empty list is matched case-insensitively against the email returned by the OAuth user-info response. The access list is stored with the web-app publication entry in the filesystem sidecar or managed `workflow_web_apps.allowed_emails` column. It is not written into `.rivet-project` YAML, and changing it through `PATCH /api/workflows/projects/web-apps/access` does not create a new published snapshot or revision.
+When `Settings` -> `Web apps` -> `Auth` is set to OAuth, Project Settings stores an allowed-email list on each published web app. OAuth web apps are fail-closed: an empty list denies all signed-in users, and a non-empty list is matched case-insensitively against the email returned by the OAuth user-info response. The access list is stored with the web-app publication entry in the filesystem sidecar or managed `workflow_web_apps.allowed_emails` column. It is not written into `.rivet-project` YAML, and changing it through `PATCH /api/workflows/projects/web-apps/access` does not create a new published snapshot or revision.
 
 Each web app row has its own publication status, independent from the workflow endpoint status:
 
@@ -403,27 +403,27 @@ Published web app routes match app slugs case-insensitively, but preserve the st
 - `POST ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
   - runs the clicked button's same-project graph action against the latest saved draft
 
-`RIVET_PUBLISHED_APPS_BASE_PATH` and `RIVET_LATEST_APPS_BASE_PATH` are the preferred route-prefix env names for web apps. The older `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` names still work as aliases, but the preferred names win when both are set.
+Top-level workflow and web-app route prefixes are wrapper app settings once saved. `Settings` -> `Workflow endpoints` -> `Routes` stores the published/latest workflow slugs, and `Settings` -> `Web apps` -> `Routes` stores the published/latest app slugs, in `settings/public-routes.json` under `RIVET_APP_DATA_ROOT`; the API reads that file dynamically, and the proxy watches it, regenerates its nginx route include, validates it with `nginx -t`, and reloads nginx when the settings change. The legacy `settings/web-app-routes.json` file is still accepted as a migration fallback for the two web-app route families. `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, and `RIVET_LATEST_APPS_BASE_PATH` are first-run/deployment defaults when no saved public-route settings file exists. The older `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` names still work as aliases for the web-app defaults.
 
-Project Settings displays workflow and web-app endpoint prefixes from the runtime `/api/config` response instead of hardcoding bundled Vite env values. After changing these prefixes in `.env` for a prebuilt `npm run prod` deployment, run `npm run prod:restart` and reload the browser so both nginx/API routing and the dashboard UI use the new values.
+Project Settings displays workflow and web-app endpoint prefixes from the runtime `/api/config` response instead of hardcoding bundled Vite env values. After changing workflow route slugs in `Settings` -> `Workflow endpoints` -> `Routes` or web-app route slugs in `Settings` -> `Web apps` -> `Routes`, the settings modal waits until `/api/config` reflects the new paths before reporting success, so dashboard links and prefixed slug inputs update without a manual Docker/Compose/Kubernetes restart. In proxy-fronted deployments, the new public paths are served after the proxy's internal nginx reload completes; no image rebuild is required.
 
-The action routes use the same project resolver family, dataset provider, project-reference loader, `ManagedCodeRunner`, and request-header context injection as workflow execution. The wrapper deliberately does not pass endpoint `inputs` to `runRivetWebAppAction`; Rivet maps the declarative UI state into graph inputs from the button action. HTML embeds an opaque `revisionKey`, and action posts with an older key fail with `409` plus `code: "revision_mismatch"` after that app slug is republished or the latest saved draft changes. The wrapper preserves `RivetWebAppActionHttpError.code` in its Express response envelope, and the embedded upstream Rivet web-app client treats that coded response as a stale open page. It shows a blocking modal with `This app was updated. Reload to continue.` and a `Reload` button instead of auto-refreshing or rerunning the action.
+The action routes use the same project resolver family, dataset provider, project-reference loader, `ManagedCodeRunner`, and request-header context injection as workflow execution. The wrapper uses upstream Rivet's web-app action primitives to resolve the clicked component, map declarative UI state into graph inputs, and apply output state patches, but it creates the processor itself so `ExecutionRecorder` can attach before `processor.run()`. HTML embeds an opaque `revisionKey`, and action posts with an older key fail with `409` plus `code: "revision_mismatch"` after that app slug is republished or the latest saved draft changes. The wrapper preserves `RivetWebAppActionHttpError.code` in its Express response envelope, and the embedded upstream Rivet web-app client treats that coded response as a stale open page. It shows a blocking modal with `This app was updated. Reload to continue.` and a `Reload` button instead of auto-refreshing or rerunning the action.
 
-Published web app action runs do not attach Remote Debugger. Latest web app action runs attach the same `/ws/latest-debugger` remote debugger as latest workflow endpoint runs when `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true`, because they execute against the latest saved draft on the control-plane backend. Web app action runs are not yet persisted into Run recordings. Add recording support only through an upstream/action seam that can attach `ExecutionRecorder` without reimplementing Rivet's web-app action runner.
+Published web app action runs do not attach Remote Debugger. Latest web app action runs attach the same default-on `/ws/latest-debugger` remote debugger as latest workflow endpoint runs because they execute against the latest saved draft on the control-plane backend. Hardened deployments can explicitly disable that websocket with `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false`. Published and latest web app action graph runs are persisted into the same Run recordings history as workflow endpoint runs. Their `endpointNameAtExecution` value is the route path that executed the action, such as `/apps/my-tool` or `/apps-latest/my-tool`, so the Run recordings modal can show whether a saved run came from a workflow endpoint or a web-app action.
 
-Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by `RIVET_WEB_APPS_AUTH_MODE`, not by `RIVET_REQUIRE_WORKFLOW_KEY`:
+Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by the persisted `Settings` -> `Web apps` -> `Auth` mode, not by the workflow endpoint bearer-token setting:
 
-- `ui-gate` is the default and preserves the original behavior: when `RIVET_REQUIRE_UI_GATE_KEY=true`, nginx shows the same key prompt used by the main Rivet server UI, submits the originally requested local URL as a sanitized `return_to` path, and sets the same HTTP-only `rivet_ui_token` cookie after the user enters `RIVET_KEY`.
+- `Key` is the default. Visitors enter the Rivet key before opening web apps.
 - `oauth` shows unauthenticated HTML page requests a hosted `Sign in required` page; its `Sign in` button redirects to the configured OAuth provider and stores a signed HTTP-only web-app session cookie after the callback succeeds. Action and `app.json` requests without a valid session return JSON `401` with `code: "oauth_required"` instead of showing the key prompt.
-- `none` leaves web-app route auth open at the API layer. Use this only behind an external access-control layer.
+- `No gate` leaves web-app route auth open at the API layer. Use this only behind an external access-control layer.
 
-Successful UI-gate or OAuth login returns the browser to the original web-app URL, such as `/apps/my-tool/` or `/apps-latest/my-tool/`, instead of always redirecting to `/`. OAuth also signs that original path into the short-lived state cookie so provider-side errors that omit the OAuth `state` parameter, token exchange failures, or missing-email profile responses can still return to the app path with `auth_error=...`. App HTML requests with an OAuth `auth_error` render a sign-in failure page with a retry link instead of immediately starting another OAuth loop, even if a stale login trigger is also present. App HTML requests without a session and without an auth error render a sign-in page first, so users are not unexpectedly thrown to the provider. Web-app HTML and OAuth redirect responses use `Cache-Control: no-store` because they may include auth UI, sign-out links, revision keys, or short-lived state cookies. Hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth in every mode, so use that list only for trusted hostnames and keep `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=false` unless a trusted ingress strips and rewrites forwarded headers. Workflow endpoint routes remain bearer/token-free-host routes and do not accept either the UI session cookie or the OAuth web-app session cookie as a substitute for `Authorization`.
+Successful UI-gate or OAuth login returns the browser to the original web-app URL, such as `/apps/my-tool/` or `/apps-latest/my-tool/`, instead of always redirecting to `/`. OAuth also signs that original path into the short-lived state cookie so provider-side errors that omit the OAuth `state` parameter, token exchange failures, or missing-email profile responses can still return to the app path with `auth_error=...`. App HTML requests with an OAuth `auth_error` render a sign-in failure page with a retry link instead of immediately starting another OAuth loop, even if a stale login trigger is also present. App HTML requests without a session and without an auth error render a sign-in page first, so users are not unexpectedly thrown to the provider. Web-app HTML and OAuth redirect responses use `Cache-Control: no-store` because they may include auth UI, sign-out links, revision keys, or short-lived state cookies. Hosts listed in `Settings` -> `General` -> `Trusted hosts` bypass web-app auth in every mode, so use that list only for trusted hostnames and keep `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=false` unless a trusted ingress strips and rewrites forwarded headers. Workflow endpoint routes remain bearer/trusted-host routes and do not accept either the UI session cookie or the OAuth web-app session cookie as a substitute for `Authorization`.
 
 Browser CORS is same-origin by default. If a separate browser application must call published workflow routes or other API routes directly, add that exact origin to `RIVET_CORS_ALLOWED_ORIGINS`; do not rely on CORS as an auth boundary and do not add broad public origins for OAuth-protected web apps.
 
-For OAuth provider integration, `OAUTH_EMAIL_CLAIM` accepts dot paths such as `data.email`. External OAuth provider URLs must use `https`; plain `http` is accepted only for localhost development endpoints so client secrets and access tokens are not sent over an unencrypted provider connection. If the provider's profile shape is unknown, set `OAUTH_DEBUG_LOG_PROFILE=true` only temporarily; the API logs the raw profile JSON after the user-info request so operators can choose the claim path, and the flag should be disabled again because the payload can contain profile data.
+For OAuth provider integration, the `Settings` -> `OAuth` email-claim field accepts dot paths such as `data.email`. External OAuth provider URLs must use `https`; plain `http` is accepted only for localhost development endpoints so client secrets and access tokens are not sent over an unencrypted provider connection. If the provider's profile shape is unknown, enable profile debug logging only temporarily; the API logs the raw profile JSON after the user-info request so operators can choose the claim path, and the flag should be disabled again because the payload can contain profile data.
 
-For local OAuth testing, set `OAUTH_PROVIDER=dummy` with `RIVET_WEB_APPS_AUTH_MODE=oauth`. The wrapper then sends the Sign in flow to `/apps/auth/dummy`, where the tester can enter any email. Submitting the form still returns through `/apps/auth/callback` and creates the same signed `rivet_web_app_oauth_session` cookie that real OAuth creates, so allowed-email lists are tested without a real provider. Dummy OAuth is localhost-only by default and should not be used for production deployments.
+For local OAuth testing, set the web-app auth mode to OAuth in `Settings` -> `Web apps` -> `Auth`, then choose `Local dummy` as the provider in `Settings` -> `OAuth`. The wrapper then sends the Sign in flow to the active published-app auth route, usually `/apps/auth/dummy`, where the tester can enter any email. Submitting the form still returns through the same callback/session-cookie path that real OAuth creates, so allowed-email lists are tested without a real provider. Dummy OAuth is localhost-only by default and should not be used for production deployments.
 
 OAuth-authenticated web app HTML gets a small wrapper-owned sign-out link so users can switch accounts without clearing browser cookies manually. If the signed-in email is not allowed for that specific published app, the HTML route shows `Web app access denied` with a sign-out-and-retry action instead of a raw `Forbidden` page. If the request fails the earlier same-origin browser check, the HTML route shows `Web app request blocked` with `code: "origin_forbidden"`, which usually means the proxy forwarded an unexpected origin/host combination. Non-HTML action and `app.json` requests keep machine-readable `403` JSON responses.
 
@@ -586,21 +586,23 @@ Do not replace this path with `runGraph(...)` unless upstream exposes an equival
 
 ## Workflow execution auth
 
-Public execution auth is separate from the browser UI gate:
+Public execution auth is separate from server UI auth:
 
-- when `RIVET_REQUIRE_WORKFLOW_KEY=true`, workflow endpoint routes require `Authorization: Bearer <RIVET_KEY>`
-- hosts allowlisted in `RIVET_UI_TOKEN_FREE_HOSTS` bypass public-route bearer auth because nginx forwards a trusted internal-host signal
+- `Settings` -> `Workflow endpoints` -> `Access control` controls whether workflow endpoint routes require `Authorization: Bearer <RIVET_KEY>`; it is enabled by default and stored in app data
+- hosts allowlisted in `Settings` -> `General` -> `Trusted hosts` bypass public-route bearer auth because nginx forwards a trusted internal-host signal
 - if public auth is enabled but `RIVET_KEY` is empty, the public execution routes fail with `500`
 
 See [access-and-routing.md](access-and-routing.md) for the nginx-side details.
 
 ## Execution recordings
 
-Every endpoint execution is eligible to persist a recording bundle that the hosted editor can later load and replay:
+Every workflow endpoint execution and web-app action graph execution is eligible to persist a recording bundle that the hosted editor can later load and replay:
 
 - published endpoint runs
 - latest endpoint runs
 - internal published-only runs
+- published web-app action runs
+- latest web-app action runs
 
 Recording capture is intentionally best-effort observability:
 
@@ -654,19 +656,26 @@ Legacy uncompressed bundles are still readable in `filesystem` mode. Startup rec
 
 ## Recording defaults and retention
 
-Recording behavior is controlled by env vars:
+Recording history limits are wrapper-owned app settings, not deployment env. The dashboard exposes them under `Settings` -> `Run recordings`, and the API stores them as `settings/run-recordings.json` under `RIVET_APP_DATA_ROOT`. The saved settings are:
+
+| Setting | Purpose | Default |
+|---|---|---|
+| `Queued recording writes` | How many recording save jobs can wait in memory before new recordings are skipped | `100` |
+| `Runs kept per workflow endpoint` | Choose whether to keep every run for each endpoint or keep only the newest N runs | `Keep latest runs: 100` |
+| `Days to keep recordings` | Choose whether to keep recordings forever or delete them after N days | `Keep for some time: 14 days` |
+
+The legacy `RIVET_RECORDINGS_MAX_PENDING_WRITES`, `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT`, and `RIVET_RECORDINGS_RETENTION_DAYS` env vars are ignored so runtime retention policy comes only from the App Settings UI.
+
+The remaining recording behavior is controlled by env vars:
 
 | Variable | Purpose | Default |
 |---|---|---|
 | `RIVET_RECORDINGS_ENABLED` | Enable workflow recording persistence | `true` |
 | `RIVET_RECORDINGS_COMPRESS` | Blob encoding (`gzip` or `identity`) | `gzip` |
 | `RIVET_RECORDINGS_GZIP_LEVEL` | Gzip compression level | `4` |
-| `RIVET_RECORDINGS_MAX_PENDING_WRITES` | Background queue size before new recordings are dropped | `100` |
 | `RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS` | Include partial outputs in recorder payloads | `false` |
 | `RIVET_RECORDINGS_INCLUDE_TRACE` | Include trace data in recorder payloads | `false` |
 | `RIVET_RECORDINGS_DATASET_MODE` | Dataset snapshot mode (`none` or `all`) | `none` |
-| `RIVET_RECORDINGS_RETENTION_DAYS` | Delete runs older than this many days (`0` disables) | `14` |
-| `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT` | Keep only the newest N runs per endpoint (`0` disables) | `100` |
 | `RIVET_RECORDINGS_MAX_TOTAL_BYTES` | Global compressed-byte cap across recordings (`0` disables) | `0` |
 
 Operational defaults are intentionally conservative:
@@ -692,7 +701,7 @@ That backend data serves:
 - workflow summaries ordered by most recent run
 - per-workflow run pagination
 - bad-only filtering, where `status=failed` includes both `failed` and `suspicious`
-- optional input filtering against each recording's captured workflow request input
+- optional input filtering against each recording's captured workflow request or graph action input
 - artifact lookup by `recordingId`
 - single-run deletion by `recordingId`
 
@@ -720,14 +729,14 @@ Current browser behavior:
 - sorts runs by newest first with a recording-ID tie-breaker, so same-millisecond runs keep a stable order across pages and filters
 - shows each run's historical endpoint name from `endpointNameAtExecution`, so recordings remain understandable after endpoint renames or republishing under a new endpoint
 - supports `All` and `Bad only`, where `Bad only` includes both `failed` and `suspicious`
-- supports an optional input filter. The filter uses a JSON path where `$` is the workflow request input object recorded under Rivet's `inputs.input.value`; for example, request input `{ "foo": "bar" }` matches `$.foo == bar`. Filtered searches scan newest-first, append matches to the visible list as each cursor response returns, and keep searching automatically until the history is exhausted or the user clicks `Stop search`. Clearing or hiding the filter uses the same stop path and aborts the in-flight request.
+- supports an optional input filter. The filter uses a JSON path where `$` is the root graph input value recorded under Rivet's `inputs.input.value`; for workflow endpoint runs that value is the HTTP request body, and for web-app action runs with an `input` graph port it is the UI state mapped to that port. If a recorded run has graph inputs but no `input` port, `$` falls back to an object of all captured graph input values keyed by port name. For example, request input `{ "foo": "bar" }` matches `$.foo == bar`. Filtered searches scan newest-first, append matches to the visible list as each cursor response returns, and keep searching automatically until the history is exhausted or the user clicks `Stop search`. Clearing or hiding the filter uses the same stop path and aborts the in-flight request.
 - hides without resetting when the user opens a recording from the list. The left panel then shows a compact `Found: N` indicator on the `Run recordings` row, and reopening the modal restores the same workflow, filter, page, and found list so the user can inspect multiple recordings. The modal state is flushed only by the explicit close button.
 - lets the user delete individual stored runs
 - opens a run by `recordingId`, not by raw filesystem path
 - `useRunRecordingsController.ts` owns workflow loading, run paging/filtering, and delete flow
 - `RecordingWorkflowSelect.tsx` and `RecordingRunsTable.tsx` render the focused UI slices instead of leaving all of that state and rendering in `RunRecordingsModal.tsx`
 
-Input filtering does not change how recordings are created. When `inputPath` is present, the API reads existing serialized recording artifacts after the workflow/status filter, newest first, restores Rivet string-table references from each serialized recording payload, extracts the recorded root request input from the `start` or `graphStart` event, and applies the JSON-path/operator/value predicate. The response may return before the full history has been exhausted, even when the current scan window has no matches; in that case `totalRunsExact` is `false`, `hasMore` is `true`, and `nextInputCursor` can be passed back as `inputCursor` to continue searching older recordings. The dashboard uses that cursor automatically, appending each newly found run to the same filtered list and showing a searching/completed/stopped status. This keeps old recordings readable, avoids adding wrapper-specific fields to the recording write path, and makes recent-request lookups responsive even when historical artifacts live in object storage. The browser request is abortable, and the API stops the artifact scan after the current small read batch when the client explicitly closes the modal, stops the search, clears or hides the filter, or navigates away. Supported operators are `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `exists`, and `not_exists`. When `contains` receives a filter value that parses as a string, the resolved left operand is treated as a string too; objects and arrays are JSON-stringified, so `$ contains "request_id"` searches the whole recorded input object. A missing JSON path matches `not_exists`, does not match `exists`, and resolves to actual `undefined` for the other operators; the filter value literal `undefined` also parses as `undefined`. Ordering comparisons with `undefined` do not match.
+Input filtering does not change how recordings are created. When `inputPath` is present, the API reads existing serialized recording artifacts after the workflow/status filter, newest first, restores Rivet string-table references from each serialized recording payload, extracts the recorded root graph input value from the `start` or `graphStart` event, and applies the JSON-path/operator/value predicate. The extractor keeps endpoint compatibility by preferring `inputs.input.value`; when a web-app action or other graph run records only named input ports, it searches an object of all captured input values instead. The response may return before the full history has been exhausted, even when the current scan window has no matches; in that case `totalRunsExact` is `false`, `hasMore` is `true`, and `nextInputCursor` can be passed back as `inputCursor` to continue searching older recordings. The dashboard uses that cursor automatically, appending each newly found run to the same filtered list and showing a searching/completed/stopped status. This keeps old recordings readable, avoids adding wrapper-specific fields to the recording write path, and makes recent-request lookups responsive even when historical artifacts live in object storage. The browser request is abortable, and the API stops the artifact scan after the current small read batch when the client explicitly closes the modal, stops the search, clears or hides the filter, or navigates away. Supported operators are `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `exists`, and `not_exists`. When `contains` receives a filter value that parses as a string, including single-quoted text such as `'request_id'`, the resolved left operand is treated as a string too; objects and arrays are JSON-stringified, so `$ contains 'request_id'` searches the whole recorded input object. A missing JSON path matches `not_exists`, does not match `exists`, and resolves to actual `undefined` for the other operators; the filter value literal `undefined` also parses as `undefined`. Ordering comparisons with `undefined` do not match.
 
 Deleting a run removes both:
 
@@ -829,7 +838,7 @@ The workflow-publication UI now follows the same controller-versus-view split as
 - `wrapper/api/src/routes/workflows/recordings-metadata.ts` - filesystem recording metadata normalization and legacy metadata reads
 - `wrapper/api/src/routes/workflows/recordings-maintenance.ts` - filesystem retention cleanup, index rebuild, and run deletion helpers
 - `wrapper/api/src/routes/workflows/recordings-store.ts` - filesystem recording queue/readiness/cleanup state owner
-- `wrapper/api/src/routes/workflows/recordings-config.ts` - recording env parsing and defaults
+- `wrapper/api/src/routes/workflows/recordings-config.ts` - recording env/app-settings parsing and defaults
 - `wrapper/api/src/routes/workflows/recordings-db.ts` - SQLite recording index
 - `wrapper/api/src/routes/workflows/workflow-mutations.ts` - duplicate, upload, publish, unpublish, rename, move, and delete orchestration
 - `wrapper/api/src/routes/workflows/workflow-download.ts` - project-download resolution and attachment filename generation

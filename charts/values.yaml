@@ -129,9 +129,8 @@ objectStorage:
 
 storage:
   appData:
-    enabled: true
-    size: 10Gi
-    storageClassName: ""
+    # Required: provide a PVC that backend, proxy, execution, and executor pods can all mount.
+    # Use RWX-capable storage for multi-node or scaled proxy/execution deployments.
     existingClaimName: ""
 
 tmpVolume:
@@ -152,15 +151,11 @@ env:
   RIVET_WEB_APPS_BASE_PATH: /apps
   RIVET_LATEST_WEB_APPS_BASE_PATH: /apps-latest
   RIVET_PROXY_RESOLVER: kube-dns.kube-system.svc.cluster.local
-  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "false"
+  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "true"
   RIVET_CORS_ALLOWED_ORIGINS: ""
-  RIVET_REQUIRE_WORKFLOW_KEY: "true"
+  RIVET_SERVER_UI_AUTH_MODE: key
   RIVET_REQUIRE_UI_GATE_KEY: "true"
   RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
-  RIVET_WEB_APPS_AUTH_MODE: ui-gate
-  RIVET_UI_TOKEN_FREE_HOSTS: ""
-  RIVET_COMMAND_TIMEOUT: "30000"
-  RIVET_MAX_OUTPUT: "10485760"
   RIVET_RECORDINGS_ENABLED: "true"
 
 podAnnotations:

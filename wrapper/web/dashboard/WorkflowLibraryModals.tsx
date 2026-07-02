@@ -1,5 +1,6 @@
 import type { FC } from 'react';
 import { AboutModal } from './AboutModal';
+import { AppSettingsModal } from './AppSettingsModal';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
 import { RuntimeLibrariesModal } from './RuntimeLibrariesModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
@@ -25,7 +26,8 @@ function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectMo
 export const WorkflowLibraryModals: FC<{
   controller: WorkflowLibraryController;
   routeConfig: HostedRouteConfig;
-}> = ({ controller, routeConfig }) => {
+  onRouteConfigChange?: (config: HostedRouteConfig) => void;
+}> = ({ controller, routeConfig, onRouteConfigChange }) => {
   const {
     settingsModalOpen,
     settingsModalProject,
@@ -44,6 +46,8 @@ export const WorkflowLibraryModals: FC<{
     hideRunRecordingsModal,
     closeRunRecordingsModal,
     handleRunRecordingsFoundCountChange,
+    appSettingsOpen,
+    setAppSettingsOpen,
     aboutOpen,
     setAboutOpen,
     onOpenRecording,
@@ -88,6 +92,12 @@ export const WorkflowLibraryModals: FC<{
         onClose={closeRunRecordingsModal}
         onOpenRecording={onOpenRecording}
         onFoundCountChange={handleRunRecordingsFoundCountChange}
+      />
+      <AppSettingsModal
+        isOpen={appSettingsOpen}
+        onClose={() => setAppSettingsOpen(false)}
+        routeConfig={routeConfig}
+        onRouteConfigChange={onRouteConfigChange}
       />
       <AboutModal
         isOpen={aboutOpen}

@@ -176,7 +176,7 @@ async function main() {
   }
 
   if (getWorkflowStorageBackendMode() !== 'managed') {
-    throw new Error('This command only works when RIVET_STORAGE_MODE=managed.');
+    throw new Error('This command only works when Settings -> Storage uses Object storage.');
   }
 
   const deletedObjects = await deleteManagedObjects();

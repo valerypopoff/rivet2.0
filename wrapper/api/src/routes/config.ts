@@ -3,12 +3,14 @@ import path from 'node:path';
 import { LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH, isLatestWorkflowRemoteDebuggerEnabled } from '../latestWorkflowRemoteDebugger.js';
 import { getAppDataRoot, isEnvAllowed } from '../security.js';
 import {
-  LATEST_WORKFLOWS_BASE_PATH,
-  PUBLISHED_WORKFLOWS_BASE_PATH,
-  RIVET_LATEST_WEB_APPS_BASE_PATH,
-  RIVET_WEB_APPS_BASE_PATH,
+  getLatestWebAppsBasePath,
+  getLatestWorkflowsBasePath,
+  getPublishedWebAppsBasePath,
+  getPublishedWorkflowsBasePath,
 } from '../workflowEndpointPaths.js';
 import { getWebAppAuthMode } from '../web-app-oauth.js';
+import { readDeploymentStorageRuntimeSettingsSync } from '../deployment-storage-settings.js';
+import { readExecutorUrlOverrideSettingsSync } from '../executor-url-override-settings.js';
 
 export const configRouter = Router();
 
@@ -31,19 +33,23 @@ function toWebSocketOrigin(origin: string): string {
 configRouter.get('/config', (req, res) => {
   const publicOrigin = getPublicOrigin(req);
   const publicWsOrigin = toWebSocketOrigin(publicOrigin);
+  const deploymentStorageSettings = readDeploymentStorageRuntimeSettingsSync();
+  const executorUrlOverrides = readExecutorUrlOverrideSettingsSync();
 
   res.json({
     hostedMode: true,
-    executorWsUrl: process.env.RIVET_EXECUTOR_WS_URL ?? `${publicWsOrigin}/ws/executor/internal`,
+    executorWsUrl: executorUrlOverrides.executorWsUrl || `${publicWsOrigin}/ws/executor/internal`,
     remoteDebuggerDefaultWs: isLatestWorkflowRemoteDebuggerEnabled()
-      ? (process.env.RIVET_REMOTE_DEBUGGER_DEFAULT_WS ?? `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`)
+      ? (executorUrlOverrides.remoteDebuggerDefaultWs || `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`)
       : '',
     apiBaseUrl: '/api',
-    publishedWorkflowsBasePath: PUBLISHED_WORKFLOWS_BASE_PATH,
-    latestWorkflowsBasePath: LATEST_WORKFLOWS_BASE_PATH,
-    publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
-    latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
+    publishedWorkflowsBasePath: getPublishedWorkflowsBasePath(),
+    latestWorkflowsBasePath: getLatestWorkflowsBasePath(),
+    publishedAppsBasePath: getPublishedWebAppsBasePath(),
+    latestAppsBasePath: getLatestWebAppsBasePath(),
     webAppsAuthMode: getWebAppAuthMode(),
+    storageMode: deploymentStorageSettings.storageMode,
+    databaseMode: deploymentStorageSettings.databaseMode,
   });
 });
 

@@ -95,10 +95,11 @@ Current behavior:
 
 The launcher expects:
 
-- `RIVET_STORAGE_MODE=managed`
-- `RIVET_DATABASE_MODE=managed`
 - external managed Postgres
 - external S3 or S3-compatible storage
+- local renderer inputs named `RIVET_K8S_DATABASE_*` and `RIVET_K8S_STORAGE_*`
+
+For local rehearsal, the launcher also creates a namespace-scoped app-data PVC and wires the chart to it with `storage.appData.existingClaimName`. The defaults are `RIVET_K8S_APP_DATA_CLAIM_NAME=rivet-local-app-data` and `RIVET_K8S_APP_DATA_SIZE=10Gi`; override them only when you need a different local claim name or storage request.
 
 The local overlay at [charts/overlays/local-kubernetes.yaml](../charts/overlays/local-kubernetes.yaml) is not a standalone values file. It is meant to be merged with the generated values file from `scripts/dev-kubernetes.mjs`.
 
@@ -168,7 +169,7 @@ Have these ready before the first `helm upgrade --install`:
 - a `linux/amd64` node pool, unless the API and executor images are rebuilt for another platform
 - an ingress controller that supports websocket upgrades and long-lived websocket connections
 - DNS for the public Rivet hostname and a TLS secret or certificate-manager integration
-- a default `StorageClass`, or explicit `storage.appData.storageClassName` / `storage.appData.existingClaimName`
+- a pre-created app-data PVC set as `storage.appData.existingClaimName`; use RWX-capable storage for multi-node or scaled proxy/execution deployments
 - managed Postgres reachable from the cluster
 - S3 or S3-compatible object storage reachable from the cluster
 - Vault Injector installed when `vault.enabled=true`
@@ -344,7 +345,11 @@ In Kubernetes, production should stay on managed storage:
 - workflow metadata, publication state, recording metadata, and runtime-library state live in managed Postgres
 - workflow blobs, recording/replay blobs, and runtime-library artifacts live in object storage
 
-The backend StatefulSet still has an `app-data` volume. By default, the chart creates a `volumeClaimTemplate` from `storage.appData.*`; if the cluster has no default storage class, set `storage.appData.storageClassName` or `storage.appData.existingClaimName`. Leaving `storage.appData.enabled=false` makes that volume ephemeral and is not the recommended production shape.
+The chart requires `storage.appData.existingClaimName`. This PVC is the shared app-settings volume for the backend, proxy, execution, and executor pods. Use RWX-capable storage for multi-node or scaled proxy/execution deployments; a generated backend-only StatefulSet claim is not enough because Deployments cannot mount that private claim.
+
+The API and executor containers deliberately mount that same `app-data` volume at different paths: `/data/rivet-app` for the API and `/home/rivet/.local/share/com.valerypopoff.rivet2` for the executor. The proxy mounts the same claim read-only at `/data/rivet-app` so it can hot-reload public route, timeout, and trusted-host settings. App Settings -> `Storage` writes `settings/deployment-storage.json` from the API; App Settings -> `Run recordings` writes `settings/run-recordings.json` from the API; App Settings -> `General` -> `Trusted hosts` writes `settings/trusted-hosts.json` from the API; App Settings -> `Node executor proxy` writes `settings/node-executor-proxy.json` and `settings/executor-url-overrides.json` from the API; App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` both write `settings/public-routes.json` from the API; App Settings -> `Workflow endpoints` -> `Access control` writes `settings/workflow-endpoint-auth.json` from the API; App Settings -> `Web apps` -> `Auth`, App Settings -> `OAuth`, and App Settings -> `Server UI access` write `settings/web-app-auth.json` from the API; App Settings -> `Workflow endpoints` writes `settings/runtime-limits.json`. API and executor startup read deployment storage settings from app data; runtime storage/database env values are ignored, and Kubernetes uses only the init container's `RIVET_DEPLOYMENT_*` bootstrap values when the settings file is absent. API bootstrap also clears process proxy env first and then reads the proxy settings file through `RIVET_APP_DATA_ROOT` for latest/headless execution paths that run in that process, while the editor executor bootstrap reads the same relative file from the desktop-style app-data mount. Hosted executor/default-debugger websocket URL overrides are read through `/api/config`; blank override settings keep the normal public-host-derived websocket URLs. Keep this claim persistent if operators use UI-managed storage, recording limits, public route slugs, trusted hosts, workflow endpoint auth, web-app auth, runtime limits, websocket overrides, or executor proxy settings.
+
+Published workflow endpoints and published web apps in the split `execution` deployment also consume this settings volume for UI-managed storage credentials, recording limits, workflow endpoint auth, web-app auth, runtime limits, and proxy values. Storage/database settings are read from `settings/deployment-storage.json` at process startup, while recording queue/retention limits, workflow endpoint bearer-token auth, trusted host bypasses, web-app auth/OAuth settings, runtime endpoint proxy values, and workflow HTTP timeout settings are not read from `.env`, Vault dotenv, or deployment `RIVET_RECORDINGS_MAX_*` / `RIVET_REQUIRE_WORKFLOW_KEY` / `RIVET_UI_TOKEN_FREE_HOSTS` / `RIVET_WEB_APPS_AUTH_MODE` / `OAUTH_*` / `RIVET_SERVER_UI_OAUTH_*` / `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` / timeout variables. Server UI auth has one bootstrap env knob: `RIVET_SERVER_UI_AUTH_MODE` selects `none`, `key`, or `oauth`; OAuth provider settings and server UI admin emails still come from `settings/web-app-auth.json` on the shared app-data claim, but the UI shows provider/session controls in `Settings` -> `OAuth` and admin emails in `Settings` -> `Server UI access`. Bootstrap a fresh deployment with `none` or `key`, save the shared OAuth settings and admin allowlist from the UI, then switch `RIVET_SERVER_UI_AUTH_MODE=oauth` and roll out the API. Storage/database changes require pod restart or rollout so process singleton backends are rebuilt. Public route slugs are read by the API dynamically from `settings/public-routes.json`; the proxy hot-reloads its nginx public-route and trusted-host includes from the same app-data claim. The Docker startup wait timeout stored in the same runtime-limits settings file is intentionally ignored by Kubernetes; it only affects npm Docker launcher commands.
 
 Runtime-library local files are caches/workspaces, not the source of truth in managed mode. The default is `emptyDir` for execution replicas. Only set `runtimeLibraries.cache.existingClaimName` if the PVC can be mounted by every pod that needs it; with more than one `execution` replica, that usually means an RWX-capable volume. A single RWO claim reused by multiple execution pods can leave pods stuck waiting for volume attachment.
 
@@ -395,12 +400,12 @@ When Vault is enabled, the dotenv file should provide the sensitive values that 
 
 ```dotenv
 RIVET_KEY=<shared-random-secret>
-RIVET_DATABASE_PASSWORD=<postgres-password>
-RIVET_STORAGE_ACCESS_KEY_ID=<object-storage-access-key-id>
-RIVET_STORAGE_ACCESS_KEY=<object-storage-secret-access-key>
+RIVET_DEPLOYMENT_DATABASE_PASSWORD=<postgres-password>
+RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID=<object-storage-access-key-id>
+RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=<object-storage-secret-access-key>
 ```
 
-You may provide `RIVET_DATABASE_CONNECTION_STRING` instead of `RIVET_DATABASE_PASSWORD`, but keep the non-secret `postgres.host`, `postgres.database`, and `postgres.username` values in the Helm values because chart validation uses them to catch incomplete managed-storage configuration.
+You may provide `RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING` instead of `RIVET_DEPLOYMENT_DATABASE_PASSWORD`, but keep the non-secret `postgres.host`, `postgres.database`, and `postgres.username` values in the Helm values because chart validation uses them to catch incomplete managed-storage configuration. The chart bootstrap writes these values into `settings/deployment-storage.json` when that file is absent; API and executor runtime containers read the settings file rather than the dotenv variables.
 
 `RIVET_KEY` must be available to both the proxy and API workloads. It is used for trusted proxy-to-API identity and for optional public route/UI access checks.
 
@@ -440,6 +445,32 @@ objectStorage:
 ```
 
 Use `postgres.connectionStringSecretName` instead of the host/database/username/password tuple only if your operations standard prefers a single connection-string secret.
+
+Create or reference the shared app-data PVC before installing the chart. The claim name must match `storage.appData.existingClaimName` and must be mountable by backend, proxy, execution, and executor pods:
+
+```bash
+kubectl -n your-namespace apply -f - <<'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rivet-app-data
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: <rwx-storage-class>
+EOF
+```
+
+Then set:
+
+```yaml
+storage:
+  appData:
+    existingClaimName: rivet-app-data
+```
 
 ### Direct Helm commands
 
@@ -483,13 +514,13 @@ kubectl -n your-namespace port-forward svc/rivet-proxy 8080:80
 curl -i http://127.0.0.1:8080/
 ```
 
-If the UI gate is disabled or the forwarded host is listed in `RIVET_UI_TOKEN_FREE_HOSTS`, `/api/config` should be reachable through the proxy directly:
+If server UI auth is disabled with `env.RIVET_SERVER_UI_AUTH_MODE: "none"` or the forwarded host is listed in `Settings` -> `General` -> `Trusted hosts`, `/api/config` should be reachable through the proxy directly:
 
 ```bash
 curl -i http://127.0.0.1:8080/api/config
 ```
 
-If the UI gate is enabled for the forwarded host, authenticate first and reuse the cookie:
+If server UI auth is in key mode for the forwarded host, authenticate first and reuse the cookie:
 
 ```bash
 curl -i -c rivet-cookies.txt \
@@ -500,24 +531,34 @@ curl -i -c rivet-cookies.txt \
 curl -i -b rivet-cookies.txt http://127.0.0.1:8080/api/config
 ```
 
-Public workflow execution routes also require `Authorization: Bearer <RIVET_KEY>` when `RIVET_REQUIRE_WORKFLOW_KEY=true`.
+If server UI auth should use OAuth, do not provide retired `RIVET_SERVER_UI_OAUTH_*` env values. Instead:
 
-Web-app routes under `/apps/*` and `/apps-latest/*` follow `RIVET_WEB_APPS_AUTH_MODE`:
+1. First deploy with `RIVET_SERVER_UI_AUTH_MODE=none` or `key`.
+2. Open `Settings` -> `OAuth` and save the shared OAuth provider settings and session policy.
+3. Open `Settings` -> `Server UI access` and save `Server UI admin emails`.
+4. Register `https://<public-host>/__rivet_auth/oauth/callback` with the provider for the server UI callback. If web-app OAuth is also enabled, register the app callback path configured in the same OAuth tab, usually `https://<public-host>/apps/auth/callback`.
+5. Change deployment env to `RIVET_SERVER_UI_AUTH_MODE=oauth` and roll out the backend API so the mode env is re-read.
 
-- `ui-gate` is the default and reuses the main Rivet server key prompt when `RIVET_REQUIRE_UI_GATE_KEY=true`.
-- `oauth` redirects web-app page visitors through the configured OAuth provider, returns them to the originally requested app URL after callback, and then checks the per-web-app allowed-email list stored in Project Settings. The allowlist is fail-closed: leave it empty only when nobody should be able to open that app yet.
-- `none` leaves web-app routes open at the API layer and should only be used behind an external access-control layer.
+For GitOps-only installs, pre-seed `settings/web-app-auth.json` on the shared app-data claim before switching the mode to `oauth`; treat that file as secret-bearing app data because it can contain client and session secrets. Keep the server UI OAuth admin list separate from per-web-app allowed-email lists. The server UI list controls who can administer the Rivet editor/dashboard; web-app allowlists are saved per published web app in Project Settings.
 
-Hosts listed in `RIVET_UI_TOKEN_FREE_HOSTS` bypass web-app auth in every mode. In OAuth mode, configure the provider callback as `https://<public-host>/apps/auth/callback` unless `RIVET_PUBLISHED_APPS_BASE_PATH` or `OAUTH_CALLBACK_URL` intentionally changes it; `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout` is also reserved by the API for local sign-out. The OAuth provider settings are vendor-neutral: `OAUTH_AUTHORIZE_URL`, `OAUTH_TOKEN_URL`, `OAUTH_USER_URL`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_SESSION_SECRET`, and optional `OAUTH_SCOPES`, `OAUTH_EMAIL_CLAIM`, `OAUTH_SESSION_TTL_SECONDS`, and `OAUTH_CLIENT_AUTH_METHOD`. External OAuth provider URLs must use `https`; `http` is accepted only for localhost development endpoints. `OAUTH_CLIENT_AUTH_METHOD` defaults to body credentials and can be set to `basic` for providers that reject duplicate body credentials when HTTP Basic auth is used. `OAUTH_PROVIDER=dummy` is only for local testing and must not be used in Kubernetes or production; it lets a localhost tester type an email at `/apps/auth/dummy`. `OAUTH_DEBUG_LOG_PROFILE=true` can be used briefly during integration to log the raw provider profile JSON, but should stay off in normal production because it can expose user profile data in pod logs. `RIVET_CORS_ALLOWED_ORIGINS` should stay empty unless a known external browser origin must call API or workflow routes directly. In production, put OAuth secrets in Vault `/vault/dotenv` or Kubernetes secrets consumed by the API workloads rather than plain committed values. The proxy needs `RIVET_WEB_APPS_AUTH_MODE` so it can skip the UI-key prompt for web-app routes when OAuth owns those routes, and it keeps `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=false` by default so browser-supplied forwarded headers cannot influence OAuth redirects or token-free-host matching.
+Public workflow execution routes require `Authorization: Bearer <RIVET_KEY>` when `Settings` -> `Workflow endpoints` -> `Access control` is enabled. It is enabled by default and persisted in `settings/workflow-endpoint-auth.json` on the shared app-data claim.
 
-If an ingress or gateway rewrites the upstream `Host` or terminates TLS before the Rivet proxy and the API must see the original public host/scheme, configure that ingress to strip any client-supplied `X-Forwarded-Host` / `X-Forwarded-Proto` headers and write its own trusted values, then set `env.RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "true"`. Leave it false for directly internet-facing proxies or untrusted ingress chains. The effective host/proto feed OAuth callback construction, same-origin web-app action checks, token-free-host matching, UI-gate cookie security, and `/api/config` browser URLs.
+Web-app routes under `/apps/*` and `/apps-latest/*` follow the persisted `Settings` -> `Web apps` -> `Auth` mode:
+
+- `Key` is the default. Visitors enter the Rivet key before opening web apps.
+- `OAuth` redirects web-app page visitors through the configured OAuth provider, returns them to the originally requested app URL after callback, and then checks the per-web-app allowed-email list stored in Project Settings. The allowlist is fail-closed: leave it empty only when nobody should be able to open that app yet.
+- `No gate` leaves web-app routes open at the API layer and should only be used behind an external access-control layer.
+
+Hosts listed in `Settings` -> `General` -> `Trusted hosts` bypass web-app auth in every mode. In OAuth mode, configure the provider callback as `https://<public-host>/apps/auth/callback` unless `Settings` -> `Web apps` -> `Routes` changes the published app slug or the `OAuth` tab's callback URL intentionally changes it; the active published-app auth logout route, usually `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout`, is also reserved by the API for local sign-out. OAuth provider settings are vendor-neutral and are stored through the `OAuth` tab, including provider URLs, client credentials, scopes, email claim path, session lifetime, client-auth method, and profile debug logging. Server UI admin emails are stored through the `Server UI access` tab because they apply to the editor/dashboard gate, not to individual web-app visitors. External OAuth provider URLs must use `https`; `http` is accepted only for localhost development endpoints. `Local dummy` is only for local testing and must not be used in Kubernetes or production; it lets a localhost tester type an email at the active published-app dummy route, usually `/apps/auth/dummy`. Profile debug logging can be used briefly during integration to log the raw provider profile JSON, but should stay off in normal production because it can expose user profile data in pod logs. `RIVET_CORS_ALLOWED_ORIGINS` should stay empty unless a known external browser origin must call API or workflow routes directly. In production, treat `settings/web-app-auth.json` as secret-bearing app data, `settings/trusted-hosts.json` as the explicit gate-bypass policy, and `settings/public-routes.json` as the proxy/API route contract: persist them, back them up according to the app-data policy, and restrict pod/volume access appropriately. The proxy no longer needs web-app auth mode or trusted-host env vars; it forwards app routes to the API and keeps `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=false` by default so browser-supplied forwarded headers cannot influence OAuth redirects or trusted-host matching.
+
+If an ingress or gateway rewrites the upstream `Host` or terminates TLS before the Rivet proxy and the API must see the original public host/scheme, configure that ingress to strip any client-supplied `X-Forwarded-Host` / `X-Forwarded-Proto` headers and write its own trusted values, then set `env.RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "true"`. Leave it false for directly internet-facing proxies or untrusted ingress chains. The effective host/proto feed OAuth callback construction, same-origin web-app action checks, trusted-host matching, server UI cookie security, and `/api/config` browser URLs.
 
 If `fullnameOverride` is not set, replace `rivet-*` with the rendered object names from `kubectl get`.
 
 Common first-deploy failure patterns:
 
 - `ImagePullBackOff`: check GHCR visibility, tag names, and `imagePullSecrets`
-- `Pending`: check `storage.appData.storageClassName`, default `StorageClass`, and any RWX/RWO cache PVC choices
+- `Pending`: check that `storage.appData.existingClaimName` exists in the namespace, can be mounted by backend/proxy/execution/executor pods, and uses access modes/storage class compatible with the replica topology; also check any runtime-library cache PVC choices
 - Vault injector never creates `/vault/dotenv`: check `vault.role`, `vault.authPath`, `vault.secretPath`, Vault auth policy, and Vault Injector installation
 - API pods crash during startup: check Postgres connection values, object-storage credentials, and whether the secret keys match the names in `postgres.*`, `objectStorage.*`, or `/vault/dotenv`
 - HPA shows missing metrics: install/fix `metrics-server` and set CPU requests for `resources.proxy` and `resources.execution`
@@ -539,7 +580,9 @@ The production contract today is:
 - `env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
 - `env.RIVET_PUBLISHED_APPS_BASE_PATH=/apps`
 - `env.RIVET_LATEST_APPS_BASE_PATH=/apps-latest`
-- `env.RIVET_WEB_APPS_AUTH_MODE=ui-gate` by default, or `oauth` when web-app visitors should authenticate through the OAuth provider
+- `/ws/latest-debugger` is enabled by default for latest workflow and latest web-app action debugging; set `env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false` only for deployments that intentionally forbid this hosted debugger websocket
+- `storage.appData.existingClaimName=<shared-app-data-pvc>` is required; use an RWX-capable claim for multi-node or scaled proxy/execution deployments
+- storage/database settings are configured after deploy in `Settings` -> `Storage`; public route slugs are configured in `Settings` -> `Workflow endpoints` and `Settings` -> `Web apps`; trusted hosts are configured in `Settings` -> `General`; web-app auth mode is configured in `Settings` -> `Web apps`; shared OAuth provider/session settings are configured in `Settings` -> `OAuth`; server UI admin emails are configured in `Settings` -> `Server UI access`; Kubernetes-relevant runtime limits are configured in `Settings` -> `General` and `Workflow endpoints`; the `Docker` settings tab is harmless but Docker-launcher-only. The resulting app-settings files must be on persistent/shared app data for any API pod that serves workflow or web-app routes, storage changes require pod restart/rollout, and dynamic route-family/timeout/trusted-host changes require the proxy to mount that same app-data claim so it can hot-reload nginx
 - `clusterDomain=cluster.local` unless the cluster DNS suffix is different
 - `env.RIVET_PROXY_RESOLVER` must be set for in-cluster nginx DNS resolution
 - control-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=none` with the job worker enabled there

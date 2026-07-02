@@ -294,9 +294,14 @@ function extractInputPortValue(inputs: unknown): { exists: boolean; value: unkno
     return { exists: false, value: undefined };
   }
 
-  const inputPort = (inputs as Record<string, unknown>).input;
+  const inputPorts = inputs as Record<string, unknown>;
+  const inputPort = inputPorts.input;
   if (inputPort == null || typeof inputPort !== 'object' || Array.isArray(inputPort)) {
-    return { exists: Object.prototype.hasOwnProperty.call(inputs, 'input'), value: inputPort };
+    if (Object.prototype.hasOwnProperty.call(inputPorts, 'input')) {
+      return { exists: true, value: inputPort };
+    }
+
+    return extractNamedInputPortValues(inputPorts);
   }
 
   if (Object.prototype.hasOwnProperty.call(inputPort, 'value')) {
@@ -304,6 +309,31 @@ function extractInputPortValue(inputs: unknown): { exists: boolean; value: unkno
   }
 
   return { exists: true, value: inputPort };
+}
+
+function extractNamedInputPortValues(inputs: Record<string, unknown>): { exists: boolean; value: unknown } {
+  const entries = Object.entries(inputs);
+  if (entries.length === 0) {
+    return { exists: false, value: undefined };
+  }
+
+  return {
+    exists: true,
+    value: Object.fromEntries(entries.map(([key, value]) => [key, extractRecordedInputPortValue(value)])),
+  };
+}
+
+function extractRecordedInputPortValue(inputPort: unknown): unknown {
+  if (
+    inputPort != null &&
+    typeof inputPort === 'object' &&
+    !Array.isArray(inputPort) &&
+    Object.prototype.hasOwnProperty.call(inputPort, 'value')
+  ) {
+    return (inputPort as Record<string, unknown>).value;
+  }
+
+  return inputPort;
 }
 
 function parseJsonPath(path: string): PathToken[] {
@@ -391,6 +421,14 @@ function parseFilterValue(value: string): unknown {
 
   if (trimmed === 'undefined') {
     return undefined;
+  }
+
+  if (
+    trimmed.length >= 2 &&
+    trimmed.startsWith("'") &&
+    trimmed.endsWith("'")
+  ) {
+    return trimmed.slice(1, -1);
   }
 
   try {

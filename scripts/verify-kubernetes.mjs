@@ -48,17 +48,13 @@ function writeLocalVerificationEnv() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-k8s-verify-'));
   const envPath = path.join(tempDir, 'local-kubernetes.env');
   const contents = [
-    'RIVET_STORAGE_MODE=managed',
-    'RIVET_DATABASE_MODE=managed',
-    'RIVET_DATABASE_CONNECTION_STRING=postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
-    'RIVET_DATABASE_SSL_MODE=require',
-    'RIVET_STORAGE_URL=https://test-bucket-111.sfo3.digitaloceanspaces.com',
-    'RIVET_STORAGE_ACCESS_KEY_ID=test-access-key',
-    'RIVET_STORAGE_ACCESS_KEY=test-secret-key',
+    'RIVET_K8S_DATABASE_CONNECTION_STRING=postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
+    'RIVET_K8S_DATABASE_SSL_MODE=require',
+    'RIVET_K8S_STORAGE_URL=https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    'RIVET_K8S_STORAGE_ACCESS_KEY_ID=test-access-key',
+    'RIVET_K8S_STORAGE_ACCESS_KEY=test-secret-key',
     'RIVET_KEY=test-shared-key',
-    'RIVET_REQUIRE_WORKFLOW_KEY=false',
     'RIVET_REQUIRE_UI_GATE_KEY=false',
-    'RIVET_WEB_APPS_AUTH_MODE=ui-gate',
     'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=true',
     '',
   ].join('\n');

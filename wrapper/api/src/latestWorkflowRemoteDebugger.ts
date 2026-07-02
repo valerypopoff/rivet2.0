@@ -12,7 +12,8 @@ let latestWorkflowRemoteDebugger: RivetDebuggerServer | null = null;
 let latestWorkflowRemoteDebuggerUpgradeHandlerInitialized = false;
 
 export function isLatestWorkflowRemoteDebuggerEnabled(): boolean {
-  return process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER?.trim().toLowerCase() === 'true';
+  const configuredValue = process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER?.trim().toLowerCase();
+  return !['false', '0', 'no', 'off'].includes(configuredValue ?? '');
 }
 
 function rejectWebSocketUpgrade(socket: Duplex, statusCode: 401 | 404, statusText: string): void {
@@ -78,6 +79,10 @@ export function getLatestWorkflowRemoteDebugger(): RivetDebuggerServer {
   }
 
   return latestWorkflowRemoteDebugger;
+}
+
+export function maybeGetLatestWorkflowRemoteDebugger(): RivetDebuggerServer | undefined {
+  return latestWorkflowRemoteDebugger ?? undefined;
 }
 
 async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
