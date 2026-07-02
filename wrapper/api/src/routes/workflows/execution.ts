@@ -3,9 +3,16 @@ import { Router, type Request, type Response } from 'express';
 import {
   createProcessor,
   ExecutionRecorder,
+  getUiGraphActionComponent,
+  jsonValueToDataValue,
   renderRivetWebAppHtml,
+  resolveUiGraphActionInputs,
+  resolveUiGraphActionOutputStatePatch,
   RivetWebAppActionHttpError,
-  runRivetWebAppAction,
+  type DataValue,
+  type RivetWebAppActionResult,
+  type RivetWebAppProcessorOptions,
+  type UiComponentId,
   type UiGraph,
 } from '@valerypopoff/rivet2-node';
 
@@ -588,6 +595,23 @@ function isWebAppOAuthLoginRequest(req: Request): boolean {
   return req.query[WEB_APP_OAUTH_AUTH_ACTION_QUERY] === WEB_APP_OAUTH_LOGIN_ACTION;
 }
 
+function getForwardedRequestProtocol(req: Request): string {
+  if (!isTrustedProxyRequest(req)) {
+    return req.protocol || 'http';
+  }
+
+  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  return forwardedProto?.toLowerCase() || req.protocol || 'http';
+}
+
+function getForwardedRequestHost(req: Request): string {
+  if (!isTrustedProxyRequest(req)) {
+    return req.get('host') || '';
+  }
+
+  return req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || '';
+}
+
 function isWebAppBrowserRequestOriginAllowed(req: Request, requestKind: WebAppRequestKind): boolean {
   const originHeader = req.get('origin')?.trim();
   if (originHeader) {
@@ -715,49 +739,6 @@ function authorizeResolvedWebAppRequest(
   return false;
 }
 
-function getForwardedRequestProtocol(req: Request): string {
-  if (!isTrustedProxyRequest(req)) {
-    return req.protocol || 'http';
-  }
-
-  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
-  return forwardedProto?.toLowerCase() || req.protocol || 'http';
-}
-
-function getForwardedRequestHost(req: Request): string {
-  if (!isTrustedProxyRequest(req)) {
-    return req.get('host') || '';
-  }
-
-  return req.get('x-forwarded-host')?.split(',')[0]?.trim() || req.get('host') || '';
-}
-
-function createFetchRequestFromExpress(
-  req: Request,
-  options?: { excludeHeaderNames?: ReadonlySet<string> },
-): globalThis.Request {
-  const host = getForwardedRequestHost(req) || 'localhost';
-  const url = `${getForwardedRequestProtocol(req)}://${host}${req.originalUrl || req.url}`;
-  const headers = new Headers();
-
-  for (const [name, rawValue] of Object.entries(req.headers)) {
-    const normalizedName = normalizeWorkflowContextHeaderName(name);
-    if (!normalizedName || options?.excludeHeaderNames?.has(normalizedName)) {
-      continue;
-    }
-
-    const value = normalizeWorkflowContextHeaderValue(rawValue);
-    if (value != null) {
-      headers.set(normalizedName, value);
-    }
-  }
-
-  return new Request(url, {
-    headers,
-    method: req.method,
-  });
-}
-
 function encodeUrlPathSegment(value: string): string {
   return encodeURIComponent(value).replace(/%2F/gi, '%252F');
 }
@@ -840,6 +821,115 @@ function getOptionalWebAppActionRevisionKey(body: Record<string, unknown>): stri
   return revisionKey;
 }
 
+type WorkflowExecutionRecordingSnapshot = {
+  recorder: ExecutionRecorder | null;
+  status: 'succeeded' | 'failed' | 'suspicious';
+  durationMs: number;
+  errorMessage?: string;
+};
+
+type WebAppActionExecutionSnapshot = WorkflowExecutionRecordingSnapshot & {
+  result?: RivetWebAppActionResult;
+  executionError?: unknown;
+};
+
+function getWebAppActionState(body: Record<string, unknown>): Record<string, unknown> {
+  const state = body.state;
+  if (state == null) {
+    return {};
+  }
+
+  if (isJsonObjectRecord(state)) {
+    return state;
+  }
+
+  throw new RivetWebAppActionHttpError('Invalid action state.', 400);
+}
+
+function validateWebAppActionRevisionKey(requestRevisionKey: string | undefined, revisionKey: string | undefined): void {
+  if (revisionKey != null && requestRevisionKey !== revisionKey) {
+    throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
+  }
+}
+
+async function runRecordedWebAppAction(
+  executionProject: WorkflowExecutionProject,
+  uiGraph: UiGraph,
+  req: Request,
+  codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
+  options: {
+    enableRemoteDebugger?: boolean;
+  },
+): Promise<WebAppActionExecutionSnapshot> {
+  const componentId = getWebAppActionComponentId(req.body);
+  const requestRevisionKey = getOptionalWebAppActionRevisionKey(req.body);
+  const actionState = getWebAppActionState(req.body);
+  validateWebAppActionRevisionKey(requestRevisionKey, executionProject.revisionKey);
+
+  const resolvedComponentId = componentId as UiComponentId;
+  const component = getUiGraphActionComponent(uiGraph, resolvedComponentId);
+  if (!component) {
+    throw new Error('UI action component not found.');
+  }
+
+  if (component.action.type !== 'runGraph') {
+    throw new Error(`Unsupported UI action type: ${component.action.type}`);
+  }
+
+  if (!component.action.graphId) {
+    throw new Error('This UI action is not connected to a graph.');
+  }
+
+  const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
+  const processorOptions = await createWebAppProcessorOptions(
+    executionProject,
+    req,
+    codeRunnerTelemetry,
+    options,
+  );
+  const processor = createProcessor(executionProject.project, {
+    ...processorOptions,
+    graph: component.action.graphId,
+    inputs: processorOptions.inputs ??
+      Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)])),
+  });
+  const recorder = isWorkflowRecordingEnabled()
+    ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
+    : null;
+  recorder?.record(processor.processor);
+
+  let result: RivetWebAppActionResult | undefined;
+  let executionError: unknown;
+  let status: WebAppActionExecutionSnapshot['status'] = 'succeeded';
+  let errorMessage: string | undefined;
+  let durationMs = 0;
+  const executionStartedAt = performance.now();
+
+  try {
+    const outputs = await processor.run() as Record<string, DataValue>;
+    status = getWorkflowRecordingStatusFromOutputs(outputs);
+    result = {
+      outputs,
+      statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
+    };
+  } catch (error) {
+    status = 'failed';
+    errorMessage = getWorkflowErrorMessage(error);
+    executionError = error;
+  } finally {
+    durationMs = performance.now() - executionStartedAt;
+  }
+
+  return {
+    recorder,
+    status,
+    durationMs,
+    errorMessage,
+    result,
+    executionError,
+  };
+}
+
 async function resolveWebAppExecutionProject(
   req: Request,
   requestStartedAt: number,
@@ -883,7 +973,7 @@ async function createWebAppProcessorOptions(
   options?: {
     enableRemoteDebugger?: boolean;
   },
-) {
+): Promise<RivetWebAppProcessorOptions> {
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
 
   return {
@@ -899,6 +989,45 @@ async function createWebAppProcessorOptions(
   };
 }
 
+function enqueueExecutionRecording(
+  executionProject: WorkflowExecutionProject,
+  recording: WorkflowExecutionRecordingSnapshot,
+  options: {
+    endpointName: string;
+    runKind: 'published' | 'latest';
+  },
+): void {
+  const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
+  const recorder = recording.recorder;
+
+  if (!recorder) {
+    return;
+  }
+
+  enqueueWorkflowExecutionRecordingPersistence(async () => {
+    const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
+      ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
+          console.error('Failed to export workflow datasets for recording:', error);
+          return [];
+        })
+      : [];
+
+    await persistWorkflowExecutionRecordingWithBackend({
+      sourceProject: project,
+      sourceProjectPath: projectVirtualPath,
+      executedProject: project,
+      executedAttachedData: attachedData,
+      executedDatasets,
+      endpointName: options.endpointName,
+      recordingSerialized: recorder.serialize(),
+      runKind: options.runKind,
+      status: recording.status,
+      durationMs: recording.durationMs,
+      errorMessage: recording.errorMessage,
+    });
+  });
+}
+
 async function executeWorkflowEndpoint(
   executionProject: WorkflowExecutionProject,
   requestStartedAt: number,
@@ -910,7 +1039,7 @@ async function executeWorkflowEndpoint(
     runKind: 'published' | 'latest';
   },
 ): Promise<void> {
-  const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
+  const { project, datasetProvider, projectVirtualPath } = executionProject;
   const projectReferenceLoader = await createExecutionProjectReferenceLoader(projectVirtualPath);
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
   const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
@@ -953,30 +1082,18 @@ async function executeWorkflowEndpoint(
     executionDurationMs = performance.now() - executionStartedAt;
   }
 
-  if (recorder) {
-    enqueueWorkflowExecutionRecordingPersistence(async () => {
-      const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
-        ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
-            console.error('Failed to export workflow datasets for recording:', error);
-            return [];
-          })
-        : [];
-
-      await persistWorkflowExecutionRecordingWithBackend({
-        sourceProject: project,
-        sourceProjectPath: projectVirtualPath,
-        executedProject: project,
-        executedAttachedData: attachedData,
-        executedDatasets,
-        endpointName: options.endpointName,
-        recordingSerialized: recorder.serialize(),
-        runKind: options.runKind,
-        status: recordingStatus,
-        durationMs: executionDurationMs,
-        errorMessage: recordingErrorMessage,
-      });
+  enqueueExecutionRecording(
+    executionProject,
+    {
+      recorder,
+      status: recordingStatus,
+      durationMs: executionDurationMs,
+      errorMessage: recordingErrorMessage,
+    },
+    {
+      endpointName: options.endpointName,
+      runKind: options.runKind,
     });
-  }
 
   if (executionError) {
     setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
@@ -1151,28 +1268,22 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
       ? createManagedCodeRunnerTelemetry()
       : null;
 
-    const executionStartedAt = performance.now();
-    const result = await runRivetWebAppAction(resolved.executionProject.project, {
-      componentId: getWebAppActionComponentId(req.body),
-      createProcessorOptions: () => createWebAppProcessorOptions(
-        resolved.executionProject,
-        req,
-        codeRunnerTelemetry,
-        { enableRemoteDebugger: routeKind === 'latest' },
-      ),
-      request: createFetchRequestFromExpress(req, {
-        excludeHeaderNames: SENSITIVE_WEB_APP_ACTION_HEADER_NAMES,
-      }),
-      requestRevisionKey: getOptionalWebAppActionRevisionKey(req.body),
-      revisionKey: resolved.executionProject.revisionKey,
-      state: req.body.state as Record<string, unknown> | undefined,
-      uiGraph,
+    const execution = await runRecordedWebAppAction(resolved.executionProject, uiGraph, req, codeRunnerTelemetry, {
+      enableRemoteDebugger: routeKind === 'latest',
     });
-    const executionDurationMs = performance.now() - executionStartedAt;
+    enqueueExecutionRecording(resolved.executionProject, execution, {
+      endpointName: getWebAppBasePath(routeKind, resolved.slug),
+      runKind: routeKind,
+    });
 
-    setWorkflowExecutionDebugHeaders(res, resolved.executionProject, executionDurationMs);
+    setWorkflowExecutionDebugHeaders(res, resolved.executionProject, execution.durationMs);
     setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
-    sendJsonWithDuration(res, 200, result, requestStartedAt);
+    if (execution.executionError) {
+      sendWebAppActionErrorWithDuration(res, execution.executionError, requestStartedAt);
+      return;
+    }
+
+    sendJsonWithDuration(res, 200, execution.result, requestStartedAt);
   } catch (error) {
     setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
     sendWebAppActionErrorWithDuration(res, error, requestStartedAt);

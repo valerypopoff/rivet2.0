@@ -6,7 +6,7 @@ import test from 'node:test';
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
 import { readWebAppAuthSettingsSync, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
-import { readJson, withEnvOverride } from './helpers/workflow-api-harness.js';
+import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import {
   createWebAppProject,
@@ -69,13 +69,63 @@ async function writeWebAppProject(projectPath: string, projectName: string, appN
   await fs.writeFile(projectPath, serializedProject, 'utf8');
 }
 
-async function writeBrokenActionWebAppProject(projectPath: string, projectName: string, appName: string): Promise<void> {
+async function writeThrowingActionWebAppProject(projectPath: string, projectName: string, appName: string): Promise<void> {
   const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
   const project = createWebAppProject(rivetNode, blankProjectContents, appName);
-  const button = project.uiGraphs?.[WEB_APP_TEST_UI_GRAPH_ID]?.components[0] as { action?: { graphId?: unknown } } | undefined;
-  if (button?.action) {
-    button.action.graphId = 'missing-action-graph';
-  }
+  const graph = project.graphs[project.metadata.mainGraphId!];
+
+  graph.nodes = [
+    {
+      type: 'graphInput',
+      title: 'Input',
+      id: 'input-node',
+      visualData: { x: 0, y: 0, width: 300 },
+      data: {
+        id: 'input',
+        dataType: 'string',
+      },
+    } as never,
+    {
+      type: 'code',
+      title: 'Throw',
+      id: 'throw-node',
+      visualData: { x: 360, y: 0, width: 300 },
+      data: {
+        allowConsole: false,
+        allowFetch: false,
+        allowProcess: false,
+        allowRequire: false,
+        allowRivet: false,
+        code: "throw new Error('web app action failure');",
+        inputNames: 'input',
+        outputNames: 'value',
+      },
+    } as never,
+    {
+      type: 'graphOutput',
+      title: 'Output',
+      id: 'output-node',
+      visualData: { x: 720, y: 0, width: 300 },
+      data: {
+        id: 'value',
+        dataType: 'string',
+      },
+    } as never,
+  ];
+  graph.connections = [
+    {
+      outputNodeId: 'input-node',
+      outputId: 'data',
+      inputNodeId: 'throw-node',
+      inputId: 'input',
+    } as never,
+    {
+      outputNodeId: 'throw-node',
+      outputId: 'value',
+      inputNodeId: 'output-node',
+      inputId: 'value',
+    } as never,
+  ];
   const serializedProject = serializeWebAppProject(rivetNode, project);
 
   await fs.writeFile(projectPath, serializedProject, 'utf8');
@@ -926,6 +976,92 @@ test('published filesystem web app actions run through the wrapper execution dep
   });
 });
 
+test('filesystem web app actions appear in run recordings for published and latest routes', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'RecordedWebAppAction');
+  await writeWebAppProject(created.absolutePath, 'RecordedWebAppAction', 'Recorded Web App');
+  await publishWebApp(created.relativePath, 'recorded-web-app-action');
+
+  async function runWebAppAction(baseUrl: string, prompt: string): Promise<void> {
+    const html = await (await fetch(`${baseUrl}/recorded-web-app-action`, {
+      signal: AbortSignal.timeout(5000),
+    })).text();
+    const revisionKey = extractWebAppRevisionKey(html);
+    const actionResponse = await fetch(`${baseUrl}/recorded-web-app-action/actions/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+        revisionKey,
+        state: { prompt },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    assert.equal(actionResponse.status, 200);
+  }
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl, webAppsBaseUrl, latestWebAppsBaseUrl }) => {
+    await runWebAppAction(webAppsBaseUrl, 'published web app recording');
+    await runWebAppAction(latestWebAppsBaseUrl, 'latest web app recording');
+
+    const workflowsResponse = await waitForRecordingWorkflows(
+      apiBaseUrl,
+      (workflows) => workflows[0]?.totalRuns === 2,
+    ) as {
+      workflows: Array<{
+        workflowId: string;
+        project: { absolutePath: string };
+        totalRuns: number;
+      }>;
+    };
+
+    assert.equal(workflowsResponse.workflows.length, 1);
+    assert.equal(workflowsResponse.workflows[0]?.project.absolutePath, created.absolutePath);
+    assert.equal(workflowsResponse.workflows[0]?.totalRuns, 2);
+
+    const workflowId = workflowsResponse.workflows[0]!.workflowId;
+    const runsResponse = await readJson<{
+      totalRuns: number;
+      runs: Array<{
+        endpointNameAtExecution: string;
+        runKind: string;
+        status: string;
+      }>;
+    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
+
+    assert.equal(runsResponse.totalRuns, 2);
+    assert.deepEqual(
+      runsResponse.runs.map((recording) => recording.endpointNameAtExecution).sort(),
+      ['/apps-latest/recorded-web-app-action', '/apps/recorded-web-app-action'],
+    );
+    assert.deepEqual(
+      runsResponse.runs.map((recording) => recording.runKind).sort(),
+      ['latest', 'published'],
+    );
+    assert.deepEqual(
+      runsResponse.runs.map((recording) => recording.status),
+      ['succeeded', 'succeeded'],
+    );
+
+    const filteredRunsResponse = await readJson<{
+      totalRuns: number;
+      runs: Array<{
+        endpointNameAtExecution: string;
+      }>;
+    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?${new URLSearchParams({
+      page: '1',
+      pageSize: '20',
+      status: 'all',
+      inputPath: '$',
+      inputOperator: 'contains',
+      inputValue: 'latest web app recording',
+    })}`));
+
+    assert.equal(filteredRunsResponse.totalRuns, 1);
+    assert.equal(filteredRunsResponse.runs[0]?.endpointNameAtExecution, '/apps-latest/recorded-web-app-action');
+  });
+});
+
 test('published filesystem web app actions do not expose browser auth headers to graph context', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppHeaderContext');
   await writeWebAppHeadersContextProject(
@@ -1001,13 +1137,13 @@ test('published filesystem web app actions reject malformed action metadata', as
 
 test('published filesystem web app actions hide unexpected internal errors', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppInternalError');
-  await writeBrokenActionWebAppProject(created.absolutePath, 'PublishedWebAppInternalError', 'Published Internal Error App');
+  await writeThrowingActionWebAppProject(created.absolutePath, 'PublishedWebAppInternalError', 'Published Internal Error App');
   await publishWebApp(created.relativePath, 'published-web-app-internal-error');
 
   const originalConsoleError = console.error;
   console.error = () => undefined;
   try {
-    await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    await withWorkflowExecutionServer(async ({ apiBaseUrl, webAppsBaseUrl }) => {
       const html = await (await fetch(`${webAppsBaseUrl}/published-web-app-internal-error`, {
         signal: AbortSignal.timeout(5000),
       })).text();
@@ -1027,6 +1163,28 @@ test('published filesystem web app actions hide unexpected internal errors', asy
       assert.equal(response.status, 500);
       assert.equal(body.error, 'Internal server error');
       assert.equal(body.code, undefined);
+
+      const workflowsResponse = await waitForRecordingWorkflows(
+        apiBaseUrl,
+        (workflows) => workflows[0]?.totalRuns === 1,
+      ) as {
+        workflows: Array<{
+          workflowId: string;
+          totalRuns: number;
+        }>;
+      };
+      const workflowId = workflowsResponse.workflows[0]!.workflowId;
+      const runsResponse = await readJson<{
+        totalRuns: number;
+        runs: Array<{
+          endpointNameAtExecution: string;
+          status: string;
+        }>;
+      }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
+
+      assert.equal(runsResponse.totalRuns, 1);
+      assert.equal(runsResponse.runs[0]?.endpointNameAtExecution, '/apps/published-web-app-internal-error');
+      assert.equal(runsResponse.runs[0]?.status, 'failed');
     });
   } finally {
     console.error = originalConsoleError;

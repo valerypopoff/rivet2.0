@@ -88,7 +88,7 @@ The wrapper API currently exposes these groups behind `/api`:
   - `GET /api/workflows/recordings/workflows`
   - `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed`
     - optional input filter query: `inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar&inputCursor=0`
-    - `$` is the captured workflow request input root from Rivet's `inputs.input.value`
+    - `$` is the captured graph input root from Rivet's `inputs.input.value`; recordings whose graph inputs do not include an `input` port fall back to an object of all captured graph input values keyed by port name
     - input-filtered responses scan newest-first and may return `totalRunsExact: false`, `hasMore: true`, and `nextInputCursor` so the dashboard can show recent matches quickly, request the next cursor automatically, and append later matches as they are found; a non-exhaustive cursor response may contain zero matches when the current scan window did not match
     - if the client aborts the request, the API stops the input-filter artifact scan after the current small read batch
   - `GET /api/workflows/recordings/:recordingId/recording`

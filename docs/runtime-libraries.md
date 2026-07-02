@@ -367,7 +367,7 @@ The underlying API accepts arrays for install/remove requests, so bulk operation
 
 ## Related feature
 
-The adjacent `Run recordings` action is separate. It browses stored workflow execution recordings, can filter runs by recorded request input, opens replay bundles back into the editor by `recordingId`, and can delete individual runs; see [workflow-publication.md](workflow-publication.md).
+The adjacent `Run recordings` action is separate. It browses stored workflow execution recordings, can filter runs by recorded workflow request or graph action input, opens replay bundles back into the editor by `recordingId`, and can delete individual runs; see [workflow-publication.md](workflow-publication.md).
 
 ## Key files
 
