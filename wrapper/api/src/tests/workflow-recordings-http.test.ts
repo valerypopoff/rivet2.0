@@ -376,6 +376,25 @@ test('workflow recording input filter evaluates JSON paths against the request i
     await workflowRecordings.readWorkflowRecordingArtifact(workflowsRoot, greaterThanTen.runs[0]!.id, 'recording'),
     /input-filter-baz/,
   );
+
+  const rootContainsSingleQuotedText = await workflowRecordings.listWorkflowRecordingRunsPage(
+    workflowsRoot,
+    workflowId,
+    1,
+    20,
+    'all',
+    { path: '$', operator: 'contains', value: "'bar'" },
+  );
+
+  assert.equal(rootContainsSingleQuotedText.totalRuns, 1);
+  assert.match(
+    await workflowRecordings.readWorkflowRecordingArtifact(
+      workflowsRoot,
+      rootContainsSingleQuotedText.runs[0]!.id,
+      'recording',
+    ),
+    /input-filter-bar/,
+  );
 });
 
 test('workflow recording delete route removes a single recording and updates totals', async () => {

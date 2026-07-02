@@ -123,6 +123,13 @@ test('recording input contains stringifies the left operand when filtering with 
   assert.equal(
     matchesWorkflowRecordingSerializedInputFilter(
       serializedRecording,
+      { path: '$', operator: 'contains', value: "'foobar'" },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
       { path: '$', operator: 'contains', value: '"items"' },
     ),
     true,

@@ -393,6 +393,14 @@ function parseFilterValue(value: string): unknown {
     return undefined;
   }
 
+  if (
+    trimmed.length >= 2 &&
+    trimmed.startsWith("'") &&
+    trimmed.endsWith("'")
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
   try {
     return JSON.parse(trimmed);
   } catch {
