@@ -18,6 +18,7 @@ export const WEB_APP_AUTH_SETTINGS_RELATIVE_PATH = path.join('settings', 'web-ap
 const MAX_URL_LENGTH = 2048;
 const MAX_SHORT_TEXT_LENGTH = 1024;
 const MAX_SECRET_LENGTH = 4096;
+const MAX_EMAIL_LIST_ITEMS = 500;
 const DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60;
 const MIN_SESSION_TTL_SECONDS = 60;
 const MAX_SESSION_TTL_SECONDS = 366 * 24 * 60 * 60;
@@ -39,6 +40,7 @@ export type WebAppAuthRuntimeSettings = {
   sessionTtlSeconds: number;
   clientAuthMethod: WebAppOAuthClientAuthMethod;
   debugLogProfile: boolean;
+  serverUiAdminEmails: string[];
   updatedAt: string | null;
   source: AppSettingsSource;
 };
@@ -60,6 +62,7 @@ const DEFAULT_WEB_APP_AUTH_SETTINGS: WebAppAuthRuntimeSettings = {
   sessionTtlSeconds: DEFAULT_SESSION_TTL_SECONDS,
   clientAuthMethod: 'body',
   debugLogProfile: false,
+  serverUiAdminEmails: [],
   updatedAt: null,
   source: 'default',
 };
@@ -91,6 +94,33 @@ function normalizeLimitedString(value: unknown, fieldLabel: string, maxLength = 
 
   rejectControlCharacters(normalized, fieldLabel);
   return normalized;
+}
+
+function normalizeEmailList(value: unknown, fieldLabel: string): string[] {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[\s,;]+/)
+      : [];
+  const seen = new Set<string>();
+
+  for (const rawValue of rawValues) {
+    const normalized = normalizeLimitedString(rawValue, fieldLabel).toLowerCase();
+    if (!normalized) {
+      continue;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+      throw badRequest(`${fieldLabel} must contain valid email addresses`);
+    }
+
+    seen.add(normalized);
+    if (seen.size > MAX_EMAIL_LIST_ITEMS) {
+      throw badRequest(`${fieldLabel} has too many entries`);
+    }
+  }
+
+  return [...seen].sort();
 }
 
 function normalizeSecret(value: unknown, fallback: string): string {
@@ -187,27 +217,31 @@ function validateOAuthUrlForSave(fieldLabel: string, value: string): void {
   }
 }
 
-function requireSavedValue(value: string, fieldLabel: string): void {
+function requireSavedValue(value: string, fieldLabel: string, reason = 'OAuth web-app auth is enabled'): void {
   if (!value) {
-    throw badRequest(`${fieldLabel} is required when OAuth web-app auth is enabled`);
+    throw badRequest(`${fieldLabel} is required when ${reason}`);
   }
 }
 
 function validateActiveOAuthSettings(settings: WebAppAuthRuntimeSettings): void {
-  if (settings.mode !== 'oauth') {
+  const needsOAuthProvider = settings.mode === 'oauth' || settings.serverUiAdminEmails.length > 0;
+  if (!needsOAuthProvider) {
     return;
   }
+  const reason = settings.mode === 'oauth'
+    ? 'OAuth web-app auth is enabled'
+    : 'server UI admin emails are configured';
 
   if (settings.provider === 'dummy') {
-    requireSavedValue(settings.sessionSecret, 'Session signing secret');
+    requireSavedValue(settings.sessionSecret, 'Session signing secret', reason);
     return;
   }
 
-  requireSavedValue(settings.authorizeUrl, 'Authorization URL');
-  requireSavedValue(settings.tokenUrl, 'Token URL');
-  requireSavedValue(settings.userUrl, 'Profile URL');
-  requireSavedValue(settings.clientId, 'Client ID');
-  requireSavedValue(settings.clientSecret, 'Client secret');
+  requireSavedValue(settings.authorizeUrl, 'Authorization URL', reason);
+  requireSavedValue(settings.tokenUrl, 'Token URL', reason);
+  requireSavedValue(settings.userUrl, 'Profile URL', reason);
+  requireSavedValue(settings.clientId, 'Client ID', reason);
+  requireSavedValue(settings.clientSecret, 'Client secret', reason);
   validateOAuthUrlForSave('Authorization URL', settings.authorizeUrl);
   validateOAuthUrlForSave('Token URL', settings.tokenUrl);
   validateOAuthUrlForSave('Profile URL', settings.userUrl);
@@ -241,6 +275,7 @@ function normalizeStoredSettings(value: unknown, source: AppSettingsSource): Web
     sessionTtlSeconds: normalizeSessionTtlSeconds(raw.sessionTtlSeconds, DEFAULT_WEB_APP_AUTH_SETTINGS.sessionTtlSeconds),
     clientAuthMethod: normalizeClientAuthMethod(raw.clientAuthMethod, DEFAULT_WEB_APP_AUTH_SETTINGS.clientAuthMethod),
     debugLogProfile: normalizeBoolean(raw.debugLogProfile, DEFAULT_WEB_APP_AUTH_SETTINGS.debugLogProfile),
+    serverUiAdminEmails: normalizeEmailList(raw.serverUiAdminEmails, 'Server UI admin emails'),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
     source,
   };
@@ -268,6 +303,7 @@ function normalizeDraftSettings(value: unknown, previous: WebAppAuthRuntimeSetti
     sessionTtlSeconds: normalizeSessionTtlSeconds(raw.sessionTtlSeconds, DEFAULT_WEB_APP_AUTH_SETTINGS.sessionTtlSeconds),
     clientAuthMethod: normalizeClientAuthMethod(raw.clientAuthMethod, DEFAULT_WEB_APP_AUTH_SETTINGS.clientAuthMethod),
     debugLogProfile: normalizeBoolean(raw.debugLogProfile, DEFAULT_WEB_APP_AUTH_SETTINGS.debugLogProfile),
+    serverUiAdminEmails: normalizeEmailList(raw.serverUiAdminEmails, 'Server UI admin emails'),
     updatedAt: new Date().toISOString(),
     source: 'app-settings',
   };
@@ -294,6 +330,7 @@ function toPublicSettings(settings: WebAppAuthRuntimeSettings): WebAppAuthSettin
     sessionTtlSeconds: settings.sessionTtlSeconds,
     clientAuthMethod: settings.clientAuthMethod,
     debugLogProfile: settings.debugLogProfile,
+    serverUiAdminEmails: settings.serverUiAdminEmails,
     updatedAt: settings.updatedAt,
     source: settings.source,
   };
@@ -352,6 +389,7 @@ export async function writeWebAppAuthSettings(draft: unknown): Promise<WebAppAut
     sessionTtlSeconds: saved.sessionTtlSeconds,
     clientAuthMethod: saved.clientAuthMethod,
     debugLogProfile: saved.debugLogProfile,
+    serverUiAdminEmails: saved.serverUiAdminEmails,
     updatedAt: saved.updatedAt,
   });
 

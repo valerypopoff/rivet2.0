@@ -56,7 +56,6 @@ Examples:
 - `image/proxy/Dockerfile`
 - shared proxy-image assets such as:
   - `image/proxy/default.conf.template`
-  - `image/proxy/ui-gate-prompt.html`
   - `image/proxy/normalize-workflow-paths.sh`
 
 Compose-only proxy templates do not belong here if they are specific to the local Docker topology.

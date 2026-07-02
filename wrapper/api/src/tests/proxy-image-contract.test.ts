@@ -69,30 +69,33 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.match(proxyBootstrap, /export RIVET_PROXY_RESOLVER="\$\(resolve_proxy_resolver "\$\{RIVET_PROXY_RESOLVER:-\}"\)"/);
 });
 
-test('proxy UI gate prompt is served from container-local staged storage', () => {
+test('proxy UI gate prompt is API-rendered and receives the original route', () => {
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
   const proxyDockerfile = readRepoFile('image/proxy/Dockerfile');
-  const promptHtml = readRepoFile('image/proxy/ui-gate-prompt.html');
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
 
   for (const template of readProxyTemplates()) {
+    const rootLocation = proxyLocation(template, /location \/\s*\{/);
+    const apiLocation = proxyLocation(template, /location \/api\/\s*\{/);
+    const authCheckLocation = proxyLocation(template, /location = \/__rivet_ui_auth_check\s*\{/);
     const promptLocation = proxyLocation(template, /location @web_with_ui_gate_prompt\s*\{/);
-    assert.match(promptLocation, /root \/tmp\/nginx\/html;/);
-    assert.match(promptLocation, /try_files \/ui-gate-prompt\.html =500;/);
-    assert.doesNotMatch(promptLocation, /root \/usr\/share\/nginx\/html;/);
+    assert.match(template, /ui-auth\/check/);
+    assert.match(template, /ui-auth\/prompt/);
+    assert.match(rootLocation, /auth_request \/__rivet_ui_auth_check;/);
+    assert.match(apiLocation, /auth_request \/__rivet_ui_auth_check;/);
+    assert.match(authCheckLocation, /proxy_pass .*api_ui_auth_check_upstream|proxy_pass http:\/\/api\/ui-auth\/check/);
+    assert.match(authCheckLocation, /proxy_pass_request_body off;/);
+    assert.match(authCheckLocation, /proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;/);
+    assert.match(promptLocation, /proxy_pass .*api_ui_auth_prompt_upstream|proxy_pass http:\/\/api\/ui-auth\/prompt/);
+    assert.match(promptLocation, /proxy_set_header X-Rivet-Ui-Return-To \$request_uri;/);
+    assert.doesNotMatch(promptLocation, /try_files \/ui-gate-prompt\.html =500;/);
   }
 
-  assert.match(proxyBootstrap, /stage_ui_gate_prompt\(\) \{/);
-  assert.match(proxyBootstrap, /destination_dir="\/tmp\/nginx\/html"/);
-  assert.match(proxyBootstrap, /for candidate in \/tmp\/ui-gate-prompt\.html \/usr\/share\/nginx\/html\/ui-gate-prompt\.html; do/);
-  assert.match(proxyDockerfile, /COPY --chown=10001:10001 image\/proxy\/ui-gate-prompt\.html \/usr\/share\/nginx\/html\/ui-gate-prompt\.html/);
-  assert.match(promptHtml, /id="gate-return-to" name="return_to" type="hidden" value="\/"/);
-  assert.match(promptHtml, /const currentUrl = new URL\(window\.location\.href\);/);
-  assert.match(promptHtml, /currentUrl\.searchParams\.delete\("auth_error"\);/);
-  assert.match(promptHtml, /returnTo\.value = returnPath \|\| "\/";/);
-  assert.match(devCompose, /image\/proxy\/ui-gate-prompt\.html:\/tmp\/ui-gate-prompt\.html:ro/);
-  assert.doesNotMatch(devCompose, /ui-gate-prompt\.html:\/usr\/share\/nginx\/html\/ui-gate-prompt\.html:ro/);
+  assert.doesNotMatch(proxyBootstrap, /stage_ui_gate_prompt\(\)/);
+  assert.doesNotMatch(proxyBootstrap, /ui-gate-prompt\.html/);
+  assert.doesNotMatch(proxyDockerfile, /ui-gate-prompt\.html/);
+  assert.doesNotMatch(devCompose, /ui-gate-prompt\.html:/);
   assert.doesNotMatch(prodCompose, /image\/proxy\/ui-gate-prompt\.html:/);
 });
 
@@ -116,8 +119,10 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_POSTGRES_PORT:-54329\}:5432"/);
   assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_PORT:-9000\}:9000"/);
   assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_CONSOLE_PORT:-9001\}:9001"/);
-  assert.doesNotMatch(prodCompose, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_PROVIDER|OAUTH_CLIENT_SECRET|OAUTH_DEBUG_LOG_PROFILE/);
-  assert.doesNotMatch(devCompose, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_PROVIDER|OAUTH_CLIENT_SECRET|OAUTH_DEBUG_LOG_PROFILE/);
+  const retiredAuthEnvPattern =
+    /RIVET_WEB_APPS_AUTH_MODE|RIVET_SERVER_UI_OAUTH_|(^|\W)OAUTH_PROVIDER|(^|\W)OAUTH_CLIENT_SECRET|(^|\W)OAUTH_DEBUG_LOG_PROFILE/;
+  assert.doesNotMatch(prodCompose, retiredAuthEnvPattern);
+  assert.doesNotMatch(devCompose, retiredAuthEnvPattern);
 
   for (const template of readProxyTemplates()) {
     assert.match(template, /map "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS\}:\$http_x_forwarded_host" \$rivet_forwarded_host/);
@@ -131,8 +136,7 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
     assert.match(template, /map \$rivet_forwarded_hostname \$rivet_ui_host_is_token_free/);
     assert.match(template, /include \$\{RIVET_TRUSTED_HOSTS_INCLUDE_FILE\};/);
     assert.doesNotMatch(template, /RIVET_UI_TOKEN_FREE_HOSTS_REGEX/);
-    assert.match(template, /map \$rivet_forwarded_proto \$rivet_ui_cookie_secure_suffix/);
-    assert.match(template, /~\*\^https\$ "; Secure";/);
+    assert.doesNotMatch(template, /rivet_ui_cookie_secure_suffix|rivet_ui_gate_result|RIVET_UI_SESSION_TOKEN/);
     assert.doesNotMatch(template, /RIVET_WEB_APPS_AUTH_MODE|rivet_web_apps_gate_result|rivet_web_apps_use_ui_gate/);
     assert.doesNotMatch(template, /proxy_set_header X-Forwarded-Proto \$scheme;/);
     assert.match(template, /include \$\{RIVET_PUBLIC_ROUTES_INCLUDE_FILE\};/);

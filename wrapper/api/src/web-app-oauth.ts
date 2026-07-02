@@ -3,7 +3,7 @@ import { Router, type Request, type Response } from 'express';
 
 import { getPublishedWebAppsBasePath } from './workflowEndpointPaths.js';
 import { createHttpError } from './utils/httpError.js';
-import { addUiAuthErrorToReturnTo, sanitizeUiAuthReturnTo } from './routes/ui-auth.js';
+import { addUiAuthErrorToReturnTo, sanitizeUiAuthReturnTo } from './ui-auth-utils.js';
 import { isTrustedProxyRequest } from './auth.js';
 import {
   readWebAppAuthSettingsSync,

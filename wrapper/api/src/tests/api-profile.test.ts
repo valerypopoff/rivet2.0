@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { getExpectedProxyAuthToken } from '../auth.js';
+import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
 import { writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
 import {
   assertApiRuntimeProfileStartupPreconditions,
@@ -27,6 +27,8 @@ const relevantEnvKeys = [
   'RIVET_WORKSPACE_ROOT',
   'RIVET_EXECUTOR_WS_URL',
   'RIVET_REMOTE_DEBUGGER_DEFAULT_WS',
+  'RIVET_REQUIRE_UI_GATE_KEY',
+  'RIVET_SERVER_UI_AUTH_MODE',
 ] as const;
 
 async function withApiEnv(
@@ -108,6 +110,9 @@ function trustedProxyHeaders(): Record<string, string> {
 test('Phase 4 route exposure matrix stays stable across API runtime profiles', () => {
   assert.deepEqual(getApiRouteExposureMatrix('control'), [
     '/ui-auth',
+    '/ui-auth/check',
+    '/ui-auth/prompt',
+    '/ui-auth/oauth/*',
     '/apps/auth/callback',
     '/apps/auth/dummy',
     '/apps/auth/logout',
@@ -134,6 +139,9 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
 
   assert.deepEqual(getApiRouteExposureMatrix('combined'), [
     '/ui-auth',
+    '/ui-auth/check',
+    '/ui-auth/prompt',
+    '/ui-auth/oauth/*',
     '/apps/auth/callback',
     '/apps/auth/dummy',
     '/apps/auth/logout',
@@ -264,7 +272,7 @@ test('API CORS defaults to same-origin browser access and explicit allowlist ori
 });
 
 test('control profile exposes control-plane routes and does not expose published execution routes', async () => {
-  await withApiEnv({}, async () => {
+  await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
     const server = await startServer('control');
     try {
       const uiAuthResponse = await fetch(`${server.baseUrl}/ui-auth`, {
@@ -308,7 +316,12 @@ test('control profile exposes control-plane routes and does not expose published
       assert.equal(webAppResponse.headers.get('x-duration-ms'), null);
       assert.deepEqual(await webAppResponse.json(), { error: 'Not found' });
 
-      const latestWebAppResponse = await fetch(`${server.baseUrl}/apps-latest/phase4-missing`);
+      const latestWebAppResponse = await fetch(`${server.baseUrl}/apps-latest/phase4-missing`, {
+        headers: {
+          ...trustedProxyHeaders(),
+          cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+        },
+      });
       assert.equal(latestWebAppResponse.status, 404);
       assert.match(latestWebAppResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
       assert.equal((await latestWebAppResponse.json()).error, 'Latest Rivet web app not found');

@@ -40,17 +40,6 @@ normalize_bool() {
   esac
 }
 
-has_nonempty_value() {
-  value="$1"
-  trimmed=$(printf '%s' "${value}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-
-  if [ -n "$trimmed" ]; then
-    printf '1'
-  else
-    printf '0'
-  fi
-}
-
 append_space_separated() {
   list="$1"
   value="$2"
@@ -64,36 +53,6 @@ append_space_separated() {
     printf '%s' "$value"
   else
     printf '%s %s' "$list" "$value"
-  fi
-}
-
-stage_ui_gate_prompt() {
-  destination_dir="/tmp/nginx/html"
-  destination="$destination_dir/ui-gate-prompt.html"
-  source="${RIVET_UI_GATE_PROMPT_SOURCE:-}"
-
-  if [ -z "$source" ]; then
-    for candidate in /tmp/ui-gate-prompt.html /usr/share/nginx/html/ui-gate-prompt.html; do
-      if [ -f "$candidate" ]; then
-        source="$candidate"
-        break
-      fi
-    done
-  fi
-
-  if [ -z "$source" ] || [ ! -f "$source" ]; then
-    >&2 printf 'Error: could not find ui-gate-prompt.html for nginx UI gate.\n'
-    exit 1
-  fi
-
-  if ! mkdir -p "$destination_dir"; then
-    >&2 printf 'Error: could not create nginx UI gate directory "%s".\n' "$destination_dir"
-    exit 1
-  fi
-
-  if ! cp "$source" "$destination"; then
-    >&2 printf 'Error: could not stage ui-gate-prompt.html from "%s" to "%s".\n' "$source" "$destination"
-    exit 1
   fi
 }
 
@@ -583,17 +542,13 @@ export RIVET_WEB_APPS_BASE_PATH
 export RIVET_LATEST_WEB_APPS_BASE_PATH
 export RIVET_PUBLISHED_APPS_BASE_PATH="$RIVET_WEB_APPS_BASE_PATH"
 export RIVET_LATEST_APPS_BASE_PATH="$RIVET_LATEST_WEB_APPS_BASE_PATH"
-export RIVET_REQUIRE_UI_GATE_KEY="$(normalize_bool "${RIVET_REQUIRE_UI_GATE_KEY:-}" "0")"
 export RIVET_TRUST_INCOMING_FORWARDED_HEADERS="$(normalize_bool "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-}" "0")"
-export RIVET_UI_GATE_KEY_PRESENT="$(has_nonempty_value "${RIVET_KEY:-}")"
 export RIVET_PROXY_RESOLVER="$(resolve_proxy_resolver "${RIVET_PROXY_RESOLVER:-}")"
 export RIVET_PROXY_AUTH_TOKEN="$(sha256_hex "${RIVET_KEY:-}:proxy-auth")"
-export RIVET_UI_SESSION_TOKEN="$(sha256_hex "${RIVET_KEY:-}:ui-session")"
 
 write_proxy_timeout_include "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE"
 write_public_routes_include "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE"
 write_trusted_hosts_include "$RIVET_TRUSTED_HOSTS_INCLUDE_FILE"
-stage_ui_gate_prompt
 start_public_routes_reload_watcher
 
 exec /docker-entrypoint.sh nginx -g 'daemon off;'

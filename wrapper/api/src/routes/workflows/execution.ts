@@ -22,7 +22,8 @@ import {
   type ManagedCodeRunnerTelemetry,
 } from '../../runtime-libraries/managed-code-runner.js';
 import { getRootPath } from '../../runtime-libraries/manifest.js';
-import { isTrustedProxyRequest, isTrustedTokenFreeHostRequest, isTrustedUiSessionRequest } from '../../auth.js';
+import { isTrustedProxyRequest, isTrustedTokenFreeHostRequest } from '../../auth.js';
+import { isServerUiAuthRequestAllowed } from '../../server-ui-auth.js';
 import {
   createWebAppOAuthAuthorizationRedirect,
   getWebAppAuthMode,
@@ -44,7 +45,7 @@ import {
   isWorkflowRecordingEnabled,
   shouldSnapshotWorkflowRecordingDatasets,
 } from './recordings-config.js';
-import { sanitizeUiAuthReturnTo } from '../ui-auth.js';
+import { sanitizeUiAuthReturnTo } from '../../ui-auth-utils.js';
 
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
@@ -352,22 +353,8 @@ function requirePublishedWorkflowApiKey(req: Request): void {
 }
 
 function requirePublishedWebAppUiGate(req: Request): void {
-  const isUiGateRequired = isEnvFlagEnabled(process.env.RIVET_REQUIRE_UI_GATE_KEY, false);
-  if (!isUiGateRequired) {
+  if (isServerUiAuthRequestAllowed(req)) {
     return;
-  }
-
-  if (isTrustedTokenFreeHostRequest(req)) {
-    return;
-  }
-
-  if (isTrustedUiSessionRequest(req)) {
-    return;
-  }
-
-  const expectedSharedKey = process.env.RIVET_KEY?.trim();
-  if (!expectedSharedKey) {
-    throw createHttpError(500, 'UI gate key is required but RIVET_KEY is not configured');
   }
 
   throw createHttpError(401, 'Unauthorized');

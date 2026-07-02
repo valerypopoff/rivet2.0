@@ -700,6 +700,39 @@ test('published filesystem web apps use the UI gate instead of workflow bearer a
   });
 });
 
+test('published filesystem web apps honor the selected server UI gate mode', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppServerUiMode');
+  await writeWebAppProject(created.absolutePath, 'PublishedWebAppServerUiMode', 'Published Server UI Mode App');
+  await publishWebApp(created.relativePath, 'published-web-app-server-ui-mode');
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    await withEnvOverrides({
+      RIVET_KEY: 'web-app-server-ui-mode-key',
+      RIVET_REQUIRE_UI_GATE_KEY: 'true',
+      RIVET_SERVER_UI_AUTH_MODE: 'none',
+    }, async () => {
+      const explicitNoneResponse = await fetch(`${webAppsBaseUrl}/published-web-app-server-ui-mode`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(explicitNoneResponse.status, 200);
+    });
+
+    await withEnvOverrides({
+      RIVET_KEY: 'web-app-server-ui-mode-key',
+      RIVET_SERVER_UI_AUTH_MODE: 'oauth',
+    }, async () => {
+      const keyCookieResponse = await fetch(`${webAppsBaseUrl}/published-web-app-server-ui-mode`, {
+        headers: {
+          Cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+          'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+        },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(keyCookieResponse.status, 401);
+    });
+  });
+});
+
 test('published filesystem web apps can use OAuth instead of the UI key gate', async () => {
   await withWebAppAuthSettings({
     mode: 'oauth',

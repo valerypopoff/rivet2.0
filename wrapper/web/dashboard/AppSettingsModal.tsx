@@ -58,12 +58,15 @@ type AppSettingsTab =
   | 'node-executor-proxy'
   | 'run-recordings'
   | 'web-apps'
+  | 'oauth'
+  | 'server-ui-access'
   | 'workflow-endpoints'
   | 'docker';
 type RunsKeptMode = 'latest' | 'all';
 type RecordingRetentionMode = 'limited' | 'forever';
 type PublicRouteSettingsScope = 'web-apps' | 'workflow-endpoints';
 type RuntimeLimitSettingsScope = 'shell' | 'proxy-timeout' | 'docker';
+type WebAppAuthSettingsScope = 'web-apps' | 'oauth' | 'server-ui-access';
 type PublicRouteSettingsFormSnapshot = {
   publishedWorkflowsSlug: string;
   latestWorkflowsSlug: string;
@@ -102,6 +105,7 @@ type WebAppAuthSettingsFormSnapshot = {
   sessionTtlHours: string;
   clientAuthMethod: WebAppOAuthClientAuthMethod;
   debugLogProfile: boolean;
+  serverUiAdminEmailsText: string;
 };
 type DeploymentStorageSettingsFormSnapshot = {
   storageMode: DeploymentStorageMode;
@@ -119,10 +123,10 @@ const defaultRetentionDays = '14';
 const defaultSessionTtlHours = '24';
 function formatWebAppsAuthMode(value: HostedRouteConfig['webAppsAuthMode']): string {
   if (value === 'ui-gate') {
-    return 'Rivet key gate';
+    return 'Key';
   }
 
-  return value === 'oauth' ? 'OAuth' : 'None';
+  return value === 'oauth' ? 'OAuth' : 'No gate';
 }
 
 function getWebAppAuthSessionTtlHours(settings: Pick<WebAppAuthSettings, 'sessionTtlSeconds'>): string {
@@ -145,6 +149,7 @@ function createWebAppAuthSnapshot(settings: WebAppAuthSettings): WebAppAuthSetti
     sessionTtlHours: getWebAppAuthSessionTtlHours(settings),
     clientAuthMethod: settings.clientAuthMethod,
     debugLogProfile: settings.debugLogProfile,
+    serverUiAdminEmailsText: settings.serverUiAdminEmails.join('\n'),
   };
 }
 
@@ -202,11 +207,15 @@ function formatTrustedHostsText(settings: Pick<TrustedHostSettings, 'trustedHost
   return settings.trustedHosts.join('\n');
 }
 
-function parseTrustedHostsText(value: string): string[] {
+function parseDelimitedListText(value: string): string[] {
   return value
-    .split(/[\n,]+/)
-    .map((host) => host.trim())
+    .split(/[\s,;]+/)
+    .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseTrustedHostsText(value: string): string[] {
+  return parseDelimitedListText(value);
 }
 
 function publicRouteSettingsMatchConfig(
@@ -359,6 +368,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   const [savingWebAppAuthSettings, setSavingWebAppAuthSettings] = useState(false);
   const [webAppAuthSettingsError, setWebAppAuthSettingsError] = useState<string | null>(null);
   const [webAppAuthSettingsSaved, setWebAppAuthSettingsSaved] = useState(false);
+  const [webAppAuthSettingsStatusScope, setWebAppAuthSettingsStatusScope] = useState<WebAppAuthSettingsScope | null>(null);
   const [webAppAuthMode, setWebAppAuthMode] = useState<WebAppAuthMode>('ui-gate');
   const [webAppOAuthProvider, setWebAppOAuthProvider] = useState<WebAppOAuthProvider>('external');
   const [webAppDummyEmail, setWebAppDummyEmail] = useState('local@example.test');
@@ -377,6 +387,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   const [webAppSessionTtlHours, setWebAppSessionTtlHours] = useState(defaultSessionTtlHours);
   const [webAppClientAuthMethod, setWebAppClientAuthMethod] = useState<WebAppOAuthClientAuthMethod>('body');
   const [webAppDebugLogProfile, setWebAppDebugLogProfile] = useState(false);
+  const [webAppServerUiAdminEmailsText, setWebAppServerUiAdminEmailsText] = useState('');
   const [initialWebAppAuthSettings, setInitialWebAppAuthSettings] = useState<WebAppAuthSettingsFormSnapshot>({
     mode: 'ui-gate',
     provider: 'external',
@@ -392,6 +403,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     sessionTtlHours: defaultSessionTtlHours,
     clientAuthMethod: 'body',
     debugLogProfile: false,
+    serverUiAdminEmailsText: '',
   });
 
   const currentDeploymentStorageSettings = useMemo(() => ({
@@ -537,6 +549,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     sessionTtlSeconds: String(Math.max(1, Number(webAppSessionTtlHours.trim()) || 1) * 3600),
     clientAuthMethod: webAppClientAuthMethod,
     debugLogProfile: webAppDebugLogProfile,
+    serverUiAdminEmails: parseDelimitedListText(webAppServerUiAdminEmailsText),
   }), [
     webAppAuthMode,
     webAppAuthorizeUrl,
@@ -550,14 +563,18 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     webAppEmailClaim,
     webAppOAuthProvider,
     webAppScopes,
+    webAppServerUiAdminEmailsText,
     webAppSessionSecret,
     webAppSessionTtlHours,
     webAppTokenUrl,
     webAppUserUrl,
   ]);
 
-  const webAppAuthSettingsChanged = useMemo(() => (
-    currentWebAppAuthSettings.mode !== initialWebAppAuthSettings.mode ||
+  const webAppAuthModeSettingsChanged = useMemo(() => (
+    currentWebAppAuthSettings.mode !== initialWebAppAuthSettings.mode
+  ), [currentWebAppAuthSettings, initialWebAppAuthSettings]);
+
+  const oauthSettingsChanged = useMemo(() => (
     currentWebAppAuthSettings.provider !== initialWebAppAuthSettings.provider ||
     currentWebAppAuthSettings.dummyEmail !== initialWebAppAuthSettings.dummyEmail ||
     currentWebAppAuthSettings.dummyAllowNonLocalhost !== initialWebAppAuthSettings.dummyAllowNonLocalhost ||
@@ -575,6 +592,10 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     currentWebAppAuthSettings.debugLogProfile !== initialWebAppAuthSettings.debugLogProfile
   ), [currentWebAppAuthSettings, initialWebAppAuthSettings, webAppSessionTtlHours]);
 
+  const serverUiAccessSettingsChanged = useMemo(() => (
+    currentWebAppAuthSettings.serverUiAdminEmails.join('\n') !== initialWebAppAuthSettings.serverUiAdminEmailsText
+  ), [currentWebAppAuthSettings, initialWebAppAuthSettings]);
+
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -590,6 +611,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     setPublicRouteSettingsSaved(false);
     setWorkflowEndpointAuthSettingsSaved(false);
     setWebAppAuthSettingsSaved(false);
+    setWebAppAuthSettingsStatusScope(null);
   }, [isOpen]);
 
   useEffect(() => {
@@ -927,7 +949,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   }, [activeTab, isOpen]);
 
   useEffect(() => {
-    if (!isOpen || activeTab !== 'web-apps') {
+    if (!isOpen || (activeTab !== 'web-apps' && activeTab !== 'oauth' && activeTab !== 'server-ui-access')) {
       return;
     }
 
@@ -961,6 +983,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
         setWebAppSessionTtlHours(snapshot.sessionTtlHours);
         setWebAppClientAuthMethod(settings.clientAuthMethod);
         setWebAppDebugLogProfile(settings.debugLogProfile);
+        setWebAppServerUiAdminEmailsText(snapshot.serverUiAdminEmailsText);
         setInitialWebAppAuthSettings(snapshot);
       })
       .catch((error) => {
@@ -1240,10 +1263,11 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     }
   };
 
-  const handleSaveWebAppAuthSettings = async () => {
+  const handleSaveWebAppAuthSettings = async (scope: WebAppAuthSettingsScope) => {
     setSavingWebAppAuthSettings(true);
     setWebAppAuthSettingsError(null);
     setWebAppAuthSettingsSaved(false);
+    setWebAppAuthSettingsStatusScope(scope);
 
     try {
       const savedSettings = await saveWebAppAuthSettings(currentWebAppAuthSettings);
@@ -1266,6 +1290,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
       setWebAppSessionTtlHours(snapshot.sessionTtlHours);
       setWebAppClientAuthMethod(savedSettings.clientAuthMethod);
       setWebAppDebugLogProfile(savedSettings.debugLogProfile);
+      setWebAppServerUiAdminEmailsText(snapshot.serverUiAdminEmailsText);
       setInitialWebAppAuthSettings(snapshot);
       setWebAppAuthSettingsSaved(true);
       onRouteConfigChange?.({
@@ -1329,6 +1354,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     setWebAppSessionTtlHours(initialWebAppAuthSettings.sessionTtlHours);
     setWebAppClientAuthMethod(initialWebAppAuthSettings.clientAuthMethod);
     setWebAppDebugLogProfile(initialWebAppAuthSettings.debugLogProfile);
+    setWebAppServerUiAdminEmailsText(initialWebAppAuthSettings.serverUiAdminEmailsText);
     setWebAppAuthSettingsSaved(false);
     setWebAppAuthSettingsError(null);
   };
@@ -1397,10 +1423,10 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
 
   const webAppAuthBusy = loadingWebAppAuthSettings || savingWebAppAuthSettings;
   const webAppAuthModeHelp = webAppAuthMode === 'oauth'
-    ? 'Visitors sign in with OAuth and are checked against each web app\'s allowed-email list.'
+    ? 'Visitors sign in with the provider configured in the OAuth tab and are checked against each web app\'s allowed-email list.'
     : webAppAuthMode === 'none'
       ? 'Web app routes are open at the API layer. Use this only behind another access-control layer.'
-      : 'Visitors use the same Rivet key prompt as the server UI.';
+      : 'Visitors enter the Rivet key before opening web apps.';
 
   return (
     <ModalTransition>
@@ -1436,11 +1462,13 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                     aria-orientation="vertical"
                   >
                     {renderTabButton('general', 'General')}
+                    {renderTabButton('server-ui-access', 'Server UI access')}
                     {renderTabButton('storage', 'Storage')}
                     {renderTabButton('workflow-endpoints', 'Workflow endpoints')}
                     {renderTabButton('run-recordings', 'Run recordings')}
                     {renderTabButton('node-executor-proxy', 'Node executor proxy')}
                     {renderTabButton('web-apps', 'Web apps')}
+                    {renderTabButton('oauth', 'OAuth')}
                     {renderTabButton('docker', 'Docker')}
                   </div>
                 </aside>
@@ -1514,7 +1542,9 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                           }}
                         />
                         <span className="app-settings-field-help">
-                          Exact hostnames or IP addresses, one per line or comma-separated. These hosts bypass the Rivet key gate, web-app auth, and workflow endpoint bearer checks. Do not include protocol, path, wildcard, or port.
+                          Exact hostnames or IP addresses, one per line or comma-separated. These hosts bypass the
+                          server UI gate, web-app auth, and workflow endpoint bearer checks. Do not include protocol,
+                          path, wildcard, or port.
                         </span>
                       </label>
                     </div>
@@ -1604,6 +1634,67 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                       {runtimeLimitSettingsStatusScope === 'shell' || runtimeLimitSettingsStatusScope === null
                         ? renderActionStatus(runtimeLimitSettingsError, runtimeLimitSettingsSaved)
                         : null}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+
+              {activeTab === 'server-ui-access' ? (
+                <div className="project-settings-tab-panel app-settings-server-ui-access-panel" role="tabpanel">
+                  <section className="app-settings-section" aria-label="Server UI access">
+                    <div className="app-settings-field-grid" aria-busy={webAppAuthBusy}>
+                      <div className="app-settings-field">
+                        <span className="app-settings-field-label">Access mode</span>
+                        <span className="app-settings-field-help">
+                          The editor and dashboard gate is selected by{' '}
+                          <code>RIVET_SERVER_UI_AUTH_MODE</code> in <code>.env</code> or deployment env. Use{' '}
+                          <code>none</code>, <code>key</code>, or <code>oauth</code>, then restart or roll out the API
+                          so it reads the new mode.
+                        </span>
+                      </div>
+
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Server UI admin emails</span>
+                        <textarea
+                          aria-label="Server UI admin emails"
+                          className="project-settings-textarea app-settings-trusted-hosts"
+                          value={webAppServerUiAdminEmailsText}
+                          disabled={webAppAuthBusy}
+                          placeholder="admin@example.com"
+                          onChange={(event) => {
+                            setWebAppServerUiAdminEmailsText(event.currentTarget.value);
+                            setWebAppAuthSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          One email per line. When <code>RIVET_SERVER_UI_AUTH_MODE=oauth</code>, only these users can
+                          open the editor and dashboard. OAuth provider and session settings live in the OAuth tab.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingWebAppAuthSettings}
+                        isDisabled={webAppAuthBusy || !serverUiAccessSettingsChanged}
+                        onClick={() => handleSaveWebAppAuthSettings('server-ui-access')}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={webAppAuthBusy || !serverUiAccessSettingsChanged}
+                        onClick={handleRevertWebAppAuthSettings}
+                      >
+                        Revert
+                      </Button>
+                      {renderActionStatus(
+                        webAppAuthSettingsStatusScope === 'server-ui-access' ? webAppAuthSettingsError : null,
+                        webAppAuthSettingsStatusScope === 'server-ui-access' && webAppAuthSettingsSaved,
+                      )}
                     </div>
                   </section>
                 </div>
@@ -2292,7 +2383,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                         <div className="project-settings-tabs app-settings-mode-tabs app-settings-wide-mode-tabs" role="group" aria-label="Web app auth mode">
                           {renderModeButton(
                             webAppAuthMode === 'ui-gate',
-                            'Rivet key',
+                            'Key',
                             () => {
                               setWebAppAuthMode('ui-gate');
                               setWebAppAuthSettingsSaved(false);
@@ -2310,7 +2401,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                           )}
                           {renderModeButton(
                             webAppAuthMode === 'none',
-                            'No app gate',
+                            'No gate',
                             () => {
                               setWebAppAuthMode('none');
                               setWebAppAuthSettingsSaved(false);
@@ -2321,280 +2412,6 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                         <span className="app-settings-field-help">{webAppAuthModeHelp}</span>
                       </div>
 
-                      {webAppAuthMode === 'oauth' ? (
-                        <>
-                          <div className="app-settings-field">
-                            <span className="app-settings-field-label">OAuth provider</span>
-                            <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="OAuth provider">
-                              {renderModeButton(
-                                webAppOAuthProvider === 'external',
-                                'External provider',
-                                () => {
-                                  setWebAppOAuthProvider('external');
-                                  setWebAppAuthSettingsSaved(false);
-                                },
-                                webAppAuthBusy,
-                              )}
-                              {renderModeButton(
-                                webAppOAuthProvider === 'dummy',
-                                'Local dummy',
-                                () => {
-                                  setWebAppOAuthProvider('dummy');
-                                  setWebAppAuthSettingsSaved(false);
-                                },
-                                webAppAuthBusy,
-                              )}
-                            </div>
-                            <span className="app-settings-field-help">
-                              {webAppOAuthProvider === 'dummy'
-                                ? 'Use a local test sign-in page instead of leaving localhost for a real provider.'
-                                : 'Use a real OAuth provider for public or shared deployments.'}
-                            </span>
-                          </div>
-
-                          {webAppOAuthProvider === 'dummy' ? (
-                            <>
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Default test email</span>
-                                <TextField
-                                  aria-label="Default test email"
-                                  value={webAppDummyEmail}
-                                  isDisabled={webAppAuthBusy}
-                                  placeholder="local@example.test"
-                                  onChange={(event) => {
-                                    setWebAppDummyEmail(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                                <span className="app-settings-field-help">
-                                  The dummy sign-in form is prefilled with this email for local testing.
-                                </span>
-                              </label>
-
-                              <div className="app-settings-field">
-                                {renderBooleanSetting(
-                                  'Allow dummy sign-in outside localhost',
-                                  webAppDummyAllowNonLocalhost,
-                                  (checked) => {
-                                    setWebAppDummyAllowNonLocalhost(checked);
-                                    setWebAppAuthSettingsSaved(false);
-                                  },
-                                  webAppAuthBusy,
-                                )}
-                                <span className="app-settings-field-help">
-                                  Keep this off for shared environments. It exists only for local integration testing.
-                                </span>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Authorization URL</span>
-                                <TextField
-                                  aria-label="Authorization URL"
-                                  value={webAppAuthorizeUrl}
-                                  isDisabled={webAppAuthBusy}
-                                  placeholder="https://identity.example.com/oauth/authorize"
-                                  onChange={(event) => {
-                                    setWebAppAuthorizeUrl(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                              </label>
-
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Token URL</span>
-                                <TextField
-                                  aria-label="Token URL"
-                                  value={webAppTokenUrl}
-                                  isDisabled={webAppAuthBusy}
-                                  placeholder="https://identity.example.com/oauth/token"
-                                  onChange={(event) => {
-                                    setWebAppTokenUrl(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                              </label>
-
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Profile URL</span>
-                                <TextField
-                                  aria-label="Profile URL"
-                                  value={webAppUserUrl}
-                                  isDisabled={webAppAuthBusy}
-                                  placeholder="https://identity.example.com/api/profile"
-                                  onChange={(event) => {
-                                    setWebAppUserUrl(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                                <span className="app-settings-field-help">
-                                  The profile response must contain the visitor email.
-                                </span>
-                              </label>
-
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Client ID</span>
-                                <TextField
-                                  aria-label="Client ID"
-                                  value={webAppClientId}
-                                  isDisabled={webAppAuthBusy}
-                                  onChange={(event) => {
-                                    setWebAppClientId(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                              </label>
-
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Client secret</span>
-                                <TextField
-                                  aria-label="Client secret"
-                                  type="password"
-                                  value={webAppClientSecret}
-                                  isDisabled={webAppAuthBusy}
-                                  placeholder={webAppClientSecretConfigured ? 'Already saved; leave blank to keep it' : ''}
-                                  onChange={(event) => {
-                                    setWebAppClientSecret(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                                <span className="app-settings-field-help">
-                                  {webAppClientSecretConfigured
-                                    ? 'A client secret is saved. Enter a new value only when rotating it.'
-                                    : 'Required before OAuth web app auth can be enabled.'}
-                                </span>
-                              </label>
-
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Callback URL</span>
-                                <TextField
-                                  aria-label="Callback URL"
-                                  value={webAppCallbackUrl}
-                                  isDisabled={webAppAuthBusy}
-                                  placeholder={`${window.location.origin}${routeConfig.publishedAppsBasePath}/auth/callback`}
-                                  onChange={(event) => {
-                                    setWebAppCallbackUrl(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                                <span className="app-settings-field-help">
-                                  Leave blank to derive it from the current host and published web app route.
-                                </span>
-                              </label>
-
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Scopes</span>
-                                <TextField
-                                  aria-label="OAuth scopes"
-                                  value={webAppScopes}
-                                  isDisabled={webAppAuthBusy}
-                                  placeholder="email"
-                                  onChange={(event) => {
-                                    setWebAppScopes(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                              </label>
-
-                              <label className="app-settings-field">
-                                <span className="app-settings-field-label">Email claim path</span>
-                                <TextField
-                                  aria-label="Email claim path"
-                                  value={webAppEmailClaim}
-                                  isDisabled={webAppAuthBusy}
-                                  placeholder="email"
-                                  onChange={(event) => {
-                                    setWebAppEmailClaim(event.currentTarget.value);
-                                    setWebAppAuthSettingsSaved(false);
-                                  }}
-                                />
-                                <span className="app-settings-field-help">
-                                  Use dot paths like data.email when the provider nests the email.
-                                </span>
-                              </label>
-
-                              <div className="app-settings-field">
-                                <span className="app-settings-field-label">Token request credentials</span>
-                                <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="Token request credentials">
-                                  {renderModeButton(
-                                    webAppClientAuthMethod === 'body',
-                                    'Request body',
-                                    () => {
-                                      setWebAppClientAuthMethod('body');
-                                      setWebAppAuthSettingsSaved(false);
-                                    },
-                                    webAppAuthBusy,
-                                  )}
-                                  {renderModeButton(
-                                    webAppClientAuthMethod === 'basic',
-                                    'HTTP Basic',
-                                    () => {
-                                      setWebAppClientAuthMethod('basic');
-                                      setWebAppAuthSettingsSaved(false);
-                                    },
-                                    webAppAuthBusy,
-                                  )}
-                                </div>
-                              </div>
-                            </>
-                          )}
-
-                          <label className="app-settings-field">
-                            <span className="app-settings-field-label">Session signing secret</span>
-                            <TextField
-                              aria-label="Session signing secret"
-                              type="password"
-                              value={webAppSessionSecret}
-                              isDisabled={webAppAuthBusy}
-                              placeholder={webAppSessionSecretConfigured ? 'Already saved; leave blank to keep it' : ''}
-                              onChange={(event) => {
-                                setWebAppSessionSecret(event.currentTarget.value);
-                                setWebAppAuthSettingsSaved(false);
-                              }}
-                            />
-                            <span className="app-settings-field-help">
-                              {webAppSessionSecretConfigured
-                                ? 'A signing secret is saved. Enter a new value only when rotating it.'
-                                : webAppOAuthProvider === 'dummy'
-                                  ? 'Required for the local dummy provider.'
-                                  : 'Recommended. When blank, the OAuth client secret signs sessions.'}
-                            </span>
-                          </label>
-
-                          <label className="app-settings-field">
-                            <span className="app-settings-field-label">Keep users signed in for</span>
-                            <TextField
-                              aria-label="OAuth session duration in hours"
-                              type="number"
-                              min={1}
-                              value={webAppSessionTtlHours}
-                              isDisabled={webAppAuthBusy}
-                              placeholder={defaultSessionTtlHours}
-                              elemAfterInput={<span className="app-settings-input-suffix">hours</span>}
-                              onChange={(event) => {
-                                setWebAppSessionTtlHours(event.currentTarget.value);
-                                setWebAppAuthSettingsSaved(false);
-                              }}
-                            />
-                          </label>
-
-                          <div className="app-settings-field">
-                            {renderBooleanSetting(
-                              'Log provider profile response for troubleshooting',
-                              webAppDebugLogProfile,
-                              (checked) => {
-                                setWebAppDebugLogProfile(checked);
-                                setWebAppAuthSettingsSaved(false);
-                              },
-                              webAppAuthBusy,
-                            )}
-                            <span className="app-settings-field-help">
-                              Turn this off after finding the email claim path because profile logs can contain user data.
-                            </span>
-                          </div>
-                        </>
-                      ) : null}
                     </div>
 
                     <div className="app-settings-actions-row">
@@ -2602,20 +2419,337 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                         appearance="primary"
                         className="app-settings-action-button button-size-l"
                         isLoading={savingWebAppAuthSettings}
-                        isDisabled={webAppAuthBusy || !webAppAuthSettingsChanged}
-                        onClick={handleSaveWebAppAuthSettings}
+                        isDisabled={webAppAuthBusy || !webAppAuthModeSettingsChanged}
+                        onClick={() => handleSaveWebAppAuthSettings('web-apps')}
                       >
                         Save
                       </LoadingButton>
                       <Button
                         appearance="subtle"
                         className="app-settings-action-button button-size-l"
-                        isDisabled={webAppAuthBusy || !webAppAuthSettingsChanged}
+                        isDisabled={webAppAuthBusy || !webAppAuthModeSettingsChanged}
                         onClick={handleRevertWebAppAuthSettings}
                       >
                         Revert
                       </Button>
-                      {renderActionStatus(webAppAuthSettingsError, webAppAuthSettingsSaved)}
+                      {renderActionStatus(
+                        webAppAuthSettingsStatusScope === 'web-apps' ? webAppAuthSettingsError : null,
+                        webAppAuthSettingsStatusScope === 'web-apps' && webAppAuthSettingsSaved,
+                      )}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+
+              {activeTab === 'oauth' ? (
+                <div className="project-settings-tab-panel app-settings-oauth-panel" role="tabpanel">
+                  <section className="app-settings-section" aria-label="OAuth provider settings">
+                    <div className="app-settings-section-title">Provider</div>
+                    <div className="app-settings-field-grid" aria-busy={webAppAuthBusy}>
+                      <div className="app-settings-field">
+                        <span className="app-settings-field-label">Shared setup</span>
+                        <span className="app-settings-field-help">
+                          These settings are used by web apps in OAuth mode and by the server UI when
+                          RIVET_SERVER_UI_AUTH_MODE is set to oauth.
+                        </span>
+                      </div>
+
+                      <div className="app-settings-field">
+                        <span className="app-settings-field-label">Provider type</span>
+                        <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="OAuth provider">
+                          {renderModeButton(
+                            webAppOAuthProvider === 'external',
+                            'External provider',
+                            () => {
+                              setWebAppOAuthProvider('external');
+                              setWebAppAuthSettingsSaved(false);
+                            },
+                            webAppAuthBusy,
+                          )}
+                          {renderModeButton(
+                            webAppOAuthProvider === 'dummy',
+                            'Local dummy',
+                            () => {
+                              setWebAppOAuthProvider('dummy');
+                              setWebAppAuthSettingsSaved(false);
+                            },
+                            webAppAuthBusy,
+                          )}
+                        </div>
+                        <span className="app-settings-field-help">
+                          {webAppOAuthProvider === 'dummy'
+                            ? 'Use a local test sign-in page instead of leaving localhost for a real provider.'
+                            : 'Use a real OAuth provider for public or shared deployments.'}
+                        </span>
+                      </div>
+
+                      {webAppOAuthProvider === 'dummy' ? (
+                        <>
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Default test email</span>
+                            <TextField
+                              aria-label="Default test email"
+                              value={webAppDummyEmail}
+                              isDisabled={webAppAuthBusy}
+                              placeholder="local@example.test"
+                              onChange={(event) => {
+                                setWebAppDummyEmail(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                            <span className="app-settings-field-help">
+                              The dummy sign-in form is prefilled with this email for local testing.
+                            </span>
+                          </label>
+
+                          <div className="app-settings-field">
+                            {renderBooleanSetting(
+                              'Allow dummy sign-in outside localhost',
+                              webAppDummyAllowNonLocalhost,
+                              (checked) => {
+                                setWebAppDummyAllowNonLocalhost(checked);
+                                setWebAppAuthSettingsSaved(false);
+                              },
+                              webAppAuthBusy,
+                            )}
+                            <span className="app-settings-field-help">
+                              Keep this off for shared environments. It exists only for local integration testing.
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Authorization URL</span>
+                            <TextField
+                              aria-label="Authorization URL"
+                              value={webAppAuthorizeUrl}
+                              isDisabled={webAppAuthBusy}
+                              placeholder="https://identity.example.com/oauth/authorize"
+                              onChange={(event) => {
+                                setWebAppAuthorizeUrl(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Token URL</span>
+                            <TextField
+                              aria-label="Token URL"
+                              value={webAppTokenUrl}
+                              isDisabled={webAppAuthBusy}
+                              placeholder="https://identity.example.com/oauth/token"
+                              onChange={(event) => {
+                                setWebAppTokenUrl(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Profile URL</span>
+                            <TextField
+                              aria-label="Profile URL"
+                              value={webAppUserUrl}
+                              isDisabled={webAppAuthBusy}
+                              placeholder="https://identity.example.com/api/profile"
+                              onChange={(event) => {
+                                setWebAppUserUrl(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                            <span className="app-settings-field-help">
+                              The profile response must contain the visitor email.
+                            </span>
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Client ID</span>
+                            <TextField
+                              aria-label="Client ID"
+                              value={webAppClientId}
+                              isDisabled={webAppAuthBusy}
+                              onChange={(event) => {
+                                setWebAppClientId(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Client secret</span>
+                            <TextField
+                              aria-label="Client secret"
+                              type="password"
+                              value={webAppClientSecret}
+                              isDisabled={webAppAuthBusy}
+                              placeholder={webAppClientSecretConfigured ? 'Already saved; leave blank to keep it' : ''}
+                              onChange={(event) => {
+                                setWebAppClientSecret(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                            <span className="app-settings-field-help">
+                              {webAppClientSecretConfigured
+                                ? 'A client secret is saved. Enter a new value only when rotating it.'
+                                : 'Required before OAuth web app auth can be enabled.'}
+                            </span>
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Callback URL</span>
+                            <TextField
+                              aria-label="Callback URL"
+                              value={webAppCallbackUrl}
+                              isDisabled={webAppAuthBusy}
+                              placeholder={`${window.location.origin}${routeConfig.publishedAppsBasePath}/auth/callback`}
+                              onChange={(event) => {
+                                setWebAppCallbackUrl(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                            <span className="app-settings-field-help">
+                              Leave blank to derive the web-app callback from the current host and published web app route.
+                              The server UI uses {`${window.location.origin}/__rivet_auth/oauth/callback`}.
+                            </span>
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Scopes</span>
+                            <TextField
+                              aria-label="OAuth scopes"
+                              value={webAppScopes}
+                              isDisabled={webAppAuthBusy}
+                              placeholder="email"
+                              onChange={(event) => {
+                                setWebAppScopes(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                          </label>
+
+                          <label className="app-settings-field">
+                            <span className="app-settings-field-label">Email claim path</span>
+                            <TextField
+                              aria-label="Email claim path"
+                              value={webAppEmailClaim}
+                              isDisabled={webAppAuthBusy}
+                              placeholder="email"
+                              onChange={(event) => {
+                                setWebAppEmailClaim(event.currentTarget.value);
+                                setWebAppAuthSettingsSaved(false);
+                              }}
+                            />
+                            <span className="app-settings-field-help">
+                              Use dot paths like data.email when the provider nests the email.
+                            </span>
+                          </label>
+
+                          <div className="app-settings-field">
+                            <span className="app-settings-field-label">Token request credentials</span>
+                            <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="Token request credentials">
+                              {renderModeButton(
+                                webAppClientAuthMethod === 'body',
+                                'Request body',
+                                () => {
+                                  setWebAppClientAuthMethod('body');
+                                  setWebAppAuthSettingsSaved(false);
+                                },
+                                webAppAuthBusy,
+                              )}
+                              {renderModeButton(
+                                webAppClientAuthMethod === 'basic',
+                                'HTTP Basic',
+                                () => {
+                                  setWebAppClientAuthMethod('basic');
+                                  setWebAppAuthSettingsSaved(false);
+                                },
+                                webAppAuthBusy,
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Session signing secret</span>
+                        <TextField
+                          aria-label="Session signing secret"
+                          type="password"
+                          value={webAppSessionSecret}
+                          isDisabled={webAppAuthBusy}
+                          placeholder={webAppSessionSecretConfigured ? 'Already saved; leave blank to keep it' : ''}
+                          onChange={(event) => {
+                            setWebAppSessionSecret(event.currentTarget.value);
+                            setWebAppAuthSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          {webAppSessionSecretConfigured
+                            ? 'A signing secret is saved. Enter a new value only when rotating it.'
+                            : webAppOAuthProvider === 'dummy'
+                              ? 'Required for the local dummy provider.'
+                              : 'Recommended. When blank, the OAuth client secret signs sessions.'}
+                        </span>
+                      </label>
+
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Keep users signed in for</span>
+                        <TextField
+                          aria-label="OAuth session duration in hours"
+                          type="number"
+                          min={1}
+                          value={webAppSessionTtlHours}
+                          isDisabled={webAppAuthBusy}
+                          placeholder={defaultSessionTtlHours}
+                          elemAfterInput={<span className="app-settings-input-suffix">hours</span>}
+                          onChange={(event) => {
+                            setWebAppSessionTtlHours(event.currentTarget.value);
+                            setWebAppAuthSettingsSaved(false);
+                          }}
+                        />
+                      </label>
+
+                      <div className="app-settings-field">
+                        {renderBooleanSetting(
+                          'Log provider profile response for troubleshooting',
+                          webAppDebugLogProfile,
+                          (checked) => {
+                            setWebAppDebugLogProfile(checked);
+                            setWebAppAuthSettingsSaved(false);
+                          },
+                          webAppAuthBusy,
+                        )}
+                        <span className="app-settings-field-help">
+                          Turn this off after finding the email claim path because profile logs can contain user data.
+                        </span>
+                      </div>
+
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingWebAppAuthSettings}
+                        isDisabled={webAppAuthBusy || !oauthSettingsChanged}
+                        onClick={() => handleSaveWebAppAuthSettings('oauth')}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={webAppAuthBusy || !oauthSettingsChanged}
+                        onClick={handleRevertWebAppAuthSettings}
+                      >
+                        Revert
+                      </Button>
+                      {renderActionStatus(
+                        webAppAuthSettingsStatusScope === 'oauth' ? webAppAuthSettingsError : null,
+                        webAppAuthSettingsStatusScope === 'oauth' && webAppAuthSettingsSaved,
+                      )}
                     </div>
                   </section>
                 </div>

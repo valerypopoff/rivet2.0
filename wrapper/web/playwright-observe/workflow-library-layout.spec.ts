@@ -451,6 +451,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
             sessionTtlSeconds: Number(body.sessionTtlSeconds ?? 86400),
             clientAuthMethod: body.clientAuthMethod ?? 'body',
             debugLogProfile: body.debugLogProfile ?? false,
+            serverUiAdminEmails: body.serverUiAdminEmails ?? [],
             updatedAt: '2026-06-30T12:01:00.000Z',
             source: 'app-settings',
           }),
@@ -483,6 +484,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
           sessionTtlSeconds: 86400,
           clientAuthMethod: 'body',
           debugLogProfile: false,
+          serverUiAdminEmails: [],
           updatedAt: null,
           source: 'default',
         }),
@@ -728,18 +730,55 @@ test.describe('Workflow library layout', () => {
     await expect(webRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('public-apps');
     await expect(appSettingsModal.getByText(/restart/i)).toHaveCount(0);
-    await expect(appSettingsModal.getByRole('button', { name: 'Rivet key' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(appSettingsModal.getByText('Visitors use the same Rivet key prompt as the server UI.')).toBeVisible();
+    await expect(appSettingsModal.getByRole('button', { name: 'Key' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByText('Visitors enter the Rivet key before opening web apps.')).toBeVisible();
     await appSettingsModal.getByRole('button', { name: 'OAuth' }).click();
-    await expect(appSettingsModal.getByText("Visitors sign in with OAuth and are checked against each web app's allowed-email list.")).toBeVisible();
+    await expect(appSettingsModal.getByText("Visitors sign in with the provider configured in the OAuth tab and are checked against each web app's allowed-email list.")).toBeVisible();
+    await appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
+    const webAuthModeActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last();
+    await expect(webAuthModeActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    await appSettingsModal.getByRole('tab', { name: 'OAuth' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'OAuth' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.locator('.app-settings-oauth-panel .app-settings-section-title')).toHaveText('Provider');
+    await expect(appSettingsModal.getByText('These settings are used by web apps in OAuth mode')).toBeVisible();
+    await expect(appSettingsModal.getByLabel('Server UI admin emails')).toHaveCount(0);
+    await expect(appSettingsModal).toHaveCSS('overflow-y', 'hidden');
+    await expect(page.locator('[data-testid="app-settings-modal--body"]')).toHaveCSS('overflow-y', 'hidden');
+    const settingsTabList = appSettingsModal.locator('.app-settings-tab-list');
+    const settingsPanelRegion = appSettingsModal.locator('.app-settings-panel-region');
+    const tabsBeforePanelScroll = await settingsTabList.boundingBox();
+    await settingsPanelRegion.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(async () => {
+      const tabsAfterPanelScroll = await settingsTabList.boundingBox();
+      return tabsBeforePanelScroll && tabsAfterPanelScroll
+        ? Math.abs(tabsAfterPanelScroll.y - tabsBeforePanelScroll.y)
+        : Number.POSITIVE_INFINITY;
+    }).toBeLessThanOrEqual(1);
+    await settingsPanelRegion.evaluate((element) => {
+      element.scrollTop = 0;
+    });
     await expect(appSettingsModal.getByRole('button', { name: 'External provider' })).toHaveAttribute('aria-pressed', 'true');
     await appSettingsModal.getByRole('button', { name: 'Local dummy' }).click();
     await expect(appSettingsModal.getByText('Default test email')).toBeVisible();
     await expect(appSettingsModal.getByLabel('Default test email')).toHaveValue('local@example.test');
     await appSettingsModal.getByLabel('Session signing secret').fill('local-session-secret');
-    await appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
-    const webAuthActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last();
-    await expect(webAuthActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await appSettingsModal.locator('.app-settings-oauth-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
+    const oauthActions = appSettingsModal.locator('.app-settings-oauth-panel .app-settings-actions-row').last();
+    await expect(oauthActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    await appSettingsModal.getByRole('tab', { name: 'Server UI access' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Server UI access' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.getByText('RIVET_SERVER_UI_AUTH_MODE', { exact: true })).toBeVisible();
+    await appSettingsModal.getByLabel('Server UI admin emails').fill('admin@example.test');
+    await appSettingsModal
+      .locator('.app-settings-server-ui-access-panel .app-settings-actions-row')
+      .getByRole('button', { name: 'Save' })
+      .click();
+    const serverUiAccessActions = appSettingsModal.locator('.app-settings-server-ui-access-panel .app-settings-actions-row');
+    await expect(serverUiAccessActions.locator('.project-settings-success')).toHaveText('Saved.');
 
     await appSettingsModal.getByRole('tab', { name: 'General' }).click();
     const maxOutputInput = appSettingsModal.getByLabel('Maximum captured output in MiB');

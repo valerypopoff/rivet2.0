@@ -128,6 +128,7 @@ export interface WebAppAuthSettings {
   sessionTtlSeconds: number;
   clientAuthMethod: WebAppOAuthClientAuthMethod;
   debugLogProfile: boolean;
+  serverUiAdminEmails: string[];
   updatedAt: string | null;
   source: AppSettingsSource;
 }
@@ -149,6 +150,7 @@ export interface WebAppAuthSettingsDraft {
   sessionTtlSeconds?: unknown;
   clientAuthMethod?: unknown;
   debugLogProfile?: unknown;
+  serverUiAdminEmails?: unknown;
 }
 
 export interface DeploymentStorageSettings {

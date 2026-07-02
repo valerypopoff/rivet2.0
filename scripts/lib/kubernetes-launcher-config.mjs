@@ -182,6 +182,8 @@ export function buildKubernetesLauncherConfig(env) {
       proxyResolver: readEnv(env, 'RIVET_PROXY_RESOLVER') ?? 'kube-dns.kube-system.svc.cluster.local',
       enableLatestRemoteDebugger: parseBoolean(readEnv(env, 'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER'), true),
       corsAllowedOrigins: readEnv(env, 'RIVET_CORS_ALLOWED_ORIGINS') ?? '',
+      serverUiAuthMode: readEnv(env, 'RIVET_SERVER_UI_AUTH_MODE') ??
+        (parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false) ? 'key' : 'none'),
       requireUiGateKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
       trustIncomingForwardedHeaders: parseBoolean(readEnv(env, 'RIVET_TRUST_INCOMING_FORWARDED_HEADERS'), false),
     },
@@ -252,6 +254,7 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  RIVET_PROXY_RESOLVER: ${yamlString(config.routeConfig.proxyResolver)}`,
     `  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: ${yamlString(String(config.routeConfig.enableLatestRemoteDebugger))}`,
     `  RIVET_CORS_ALLOWED_ORIGINS: ${yamlString(config.routeConfig.corsAllowedOrigins)}`,
+    `  RIVET_SERVER_UI_AUTH_MODE: ${yamlString(config.routeConfig.serverUiAuthMode)}`,
     `  RIVET_REQUIRE_UI_GATE_KEY: ${yamlString(String(config.routeConfig.requireUiGateKey))}`,
     `  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: ${yamlString(String(config.routeConfig.trustIncomingForwardedHeaders))}`,
     '',

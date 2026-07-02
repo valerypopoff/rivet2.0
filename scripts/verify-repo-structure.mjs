@@ -51,7 +51,6 @@ const requiredPaths = [
   'wrapper/bootstrap/proxy-bootstrap/sync.mjs',
   'wrapper/executor/build/bundle-executor.cjs',
   'image/proxy/normalize-workflow-paths.sh',
-  'image/proxy/ui-gate-prompt.html',
 ];
 
 const expectedOpsEntries = {
@@ -74,6 +73,7 @@ const expectedOpsEntries = {
 const forbiddenExistingPaths = [
   'ops/update-check.sh',
   'ops/ui-gate-prompt.html',
+  'image/proxy/ui-gate-prompt.html',
   'ops/proxy-bootstrap',
   'ops/bundle-executor.cjs',
   'ops/docker-compose.yml',

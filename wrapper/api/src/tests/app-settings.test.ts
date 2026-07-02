@@ -1540,6 +1540,7 @@ test('Web app auth settings API saves and hides secrets', async () => {
           sessionTtlSeconds: '7200',
           clientAuthMethod: 'basic',
           debugLogProfile: true,
+          serverUiAdminEmails: ['Admin@Example.test', 'editor@example.test', 'admin@example.test'],
         }),
       });
 
@@ -1553,6 +1554,7 @@ test('Web app auth settings API saves and hides secrets', async () => {
       assert.equal(saved.sessionSecret, undefined);
       assert.equal(saved.emailClaim, 'data.email');
       assert.equal(saved.clientAuthMethod, 'basic');
+      assert.deepEqual(saved.serverUiAdminEmails, ['admin@example.test', 'editor@example.test']);
 
       const rotateResponse = await fetch(`${server.baseUrl}/api/app-settings/web-app-auth`, {
         method: 'PUT',
@@ -1575,6 +1577,7 @@ test('Web app auth settings API saves and hides secrets', async () => {
           sessionTtlSeconds: '3600',
           clientAuthMethod: 'body',
           debugLogProfile: false,
+          serverUiAdminEmails: ['editor@example.test'],
         }),
       });
 
@@ -1584,6 +1587,7 @@ test('Web app auth settings API saves and hides secrets', async () => {
       assert.equal(rotated.sessionSecretConfigured, true);
       assert.equal(rotated.scopes, 'profile email');
       assert.equal(rotated.clientAuthMethod, 'body');
+      assert.deepEqual(rotated.serverUiAdminEmails, ['editor@example.test']);
     } finally {
       await server?.close();
     }
@@ -1600,6 +1604,29 @@ test('Web app auth settings reject incomplete OAuth config', async () => {
         tokenUrl: 'https://oauth.example.test/token',
       }),
       /Profile URL is required when OAuth web-app auth is enabled/,
+    );
+  });
+});
+
+test('Web app auth settings reject incomplete server UI OAuth preparation', async () => {
+  await withAppSettingsEnv(async () => {
+    await assert.rejects(
+      writeWebAppAuthSettings({
+        mode: 'ui-gate',
+        provider: 'external',
+        authorizeUrl: 'https://oauth.example.test/authorize',
+        serverUiAdminEmails: ['admin@example.test'],
+      }),
+      /Token URL is required when server UI admin emails are configured/,
+    );
+
+    await assert.rejects(
+      writeWebAppAuthSettings({
+        mode: 'ui-gate',
+        provider: 'dummy',
+        serverUiAdminEmails: ['not-an-email'],
+      }),
+      /Server UI admin emails must contain valid email addresses/,
     );
   });
 });

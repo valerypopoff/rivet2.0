@@ -28,38 +28,6 @@ map $rivet_forwarded_hostname $rivet_ui_host_is_token_free {
     include ${RIVET_TRUSTED_HOSTS_INCLUDE_FILE};
 }
 
-map $cookie_rivet_ui_token $rivet_ui_has_valid_cookie_token {
-    default 0;
-    "${RIVET_UI_SESSION_TOKEN}" 1;
-}
-
-map $rivet_forwarded_proto $rivet_ui_cookie_secure_suffix {
-    default "";
-    ~*^https$ "; Secure";
-}
-
-map "${RIVET_REQUIRE_UI_GATE_KEY}" $rivet_ui_gate_enabled {
-    default 0;
-    "1" 1;
-}
-
-map "${RIVET_UI_GATE_KEY_PRESENT}" $rivet_ui_gate_has_key {
-    default 0;
-    "1" 1;
-}
-
-map "$rivet_ui_gate_enabled:$rivet_ui_gate_has_key:$rivet_ui_host_is_token_free:$rivet_ui_has_valid_cookie_token" $rivet_ui_gate_result {
-    default allow;
-    "1:0:0:0" deny;
-    "1:0:0:1" deny;
-    "1:0:1:0" allow;
-    "1:0:1:1" allow;
-    "1:1:0:0" deny;
-    "1:1:0:1" allow;
-    "1:1:1:0" allow;
-    "1:1:1:1" allow;
-}
-
 server {
     listen 8080;
     server_name _;
@@ -70,28 +38,15 @@ server {
     set $api_upstream http://${RIVET_API_UPSTREAM_HOST}:${RIVET_API_UPSTREAM_PORT};
     set $execution_upstream http://${RIVET_EXECUTION_UPSTREAM_HOST}:${RIVET_EXECUTION_UPSTREAM_PORT};
     set $api_ui_auth_upstream http://${RIVET_API_UPSTREAM_HOST}:${RIVET_API_UPSTREAM_PORT}/ui-auth;
+    set $api_ui_auth_check_upstream http://${RIVET_API_UPSTREAM_HOST}:${RIVET_API_UPSTREAM_PORT}/ui-auth/check;
+    set $api_ui_auth_prompt_upstream http://${RIVET_API_UPSTREAM_HOST}:${RIVET_API_UPSTREAM_PORT}/ui-auth/prompt;
     set $api_latest_debugger_upstream http://${RIVET_API_UPSTREAM_HOST}:${RIVET_API_UPSTREAM_PORT}/ws/latest-debugger;
     set $executor_internal_upstream http://${RIVET_EXECUTOR_UPSTREAM_HOST}:${RIVET_EXECUTOR_UPSTREAM_PORT}/internal;
     set $executor_upstream http://${RIVET_EXECUTOR_UPSTREAM_HOST}:${RIVET_EXECUTOR_UPSTREAM_PORT}/;
 
     location / {
-        if ($rivet_ui_gate_result = deny) {
-            return 401;
-        }
+        auth_request /__rivet_ui_auth_check;
 
-        if ($rivet_ui_gate_result = allow_with_cookie) {
-            return 418;
-        }
-
-        proxy_pass $web_upstream;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
-        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
-    }
-
-    location @web_with_token_cookie {
-        add_header Set-Cookie "rivet_ui_token=${RIVET_UI_SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Lax$rivet_ui_cookie_secure_suffix" always;
         proxy_pass $web_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -100,12 +55,32 @@ server {
     }
 
     location @web_with_ui_gate_prompt {
-        internal;
-        default_type text/html;
+        proxy_pass $api_ui_auth_prompt_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
+        proxy_set_header X-Rivet-Ui-Return-To $request_uri;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         add_header Cache-Control "no-store, no-cache, must-revalidate" always;
         add_header Pragma "no-cache" always;
-        root /tmp/nginx/html;
-        try_files /ui-gate-prompt.html =500;
+        proxy_read_timeout 30s;
+    }
+
+    location = /__rivet_ui_auth_check {
+        internal;
+        proxy_pass $api_ui_auth_check_upstream;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
+        proxy_read_timeout 30s;
     }
 
     location = /__rivet_auth {
@@ -119,10 +94,19 @@ server {
         proxy_read_timeout 30s;
     }
 
+    location /__rivet_auth/ {
+        proxy_pass http://${RIVET_API_UPSTREAM_HOST}:${RIVET_API_UPSTREAM_PORT}/ui-auth/;
+        proxy_http_version 1.1;
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
+        proxy_read_timeout 30s;
+    }
+
     location /api/ {
-        if ($rivet_ui_gate_result = deny) {
-            return 403;
-        }
+        auth_request /__rivet_ui_auth_check;
 
         proxy_pass $api_upstream;
         proxy_http_version 1.1;
@@ -137,9 +121,7 @@ server {
     include ${RIVET_PUBLIC_ROUTES_INCLUDE_FILE};
 
     location /ws/latest-debugger {
-        if ($rivet_ui_gate_result = deny) {
-            return 403;
-        }
+        auth_request /__rivet_ui_auth_check;
 
         proxy_pass $api_latest_debugger_upstream;
         proxy_http_version 1.1;
@@ -153,9 +135,7 @@ server {
     }
 
     location /ws/executor/internal {
-        if ($rivet_ui_gate_result = deny) {
-            return 403;
-        }
+        auth_request /__rivet_ui_auth_check;
 
         proxy_pass $executor_internal_upstream;
         proxy_http_version 1.1;
@@ -168,9 +148,7 @@ server {
     }
 
     location /ws/executor {
-        if ($rivet_ui_gate_result = deny) {
-            return 403;
-        }
+        auth_request /__rivet_ui_auth_check;
 
         proxy_pass $executor_upstream;
         proxy_http_version 1.1;
@@ -182,6 +160,5 @@ server {
         proxy_read_timeout 86400s;
     }
 
-    error_page 401 = @web_with_ui_gate_prompt;
-    error_page 418 = @web_with_token_cookie;
+    error_page 401 403 = @web_with_ui_gate_prompt;
 }

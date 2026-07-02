@@ -127,6 +127,10 @@
   color: var(--grey-lightest) !important;
 }
 
+[data-testid='app-settings-modal'] {
+  overflow: hidden !important;
+}
+
 [data-testid='workflow-project-settings-modal--header'],
 [data-testid='runtime-libraries-modal--header'],
 [data-testid='run-recordings-modal--header'],
@@ -145,6 +149,10 @@
 [data-testid='app-settings-modal--body'],
 [data-testid='about-modal--body'] {
   padding: 0 !important;
+}
+
+[data-testid='app-settings-modal--body'] {
+  overflow: hidden !important;
 }
 
 .workflow-library-panel .active-project-slot {
@@ -1339,18 +1347,22 @@
   --app-settings-field-row-gap: 18px;
 
   min-height: 360px;
+  max-height: calc(100vh - 164px);
+  overflow: hidden;
 }
 
 .app-settings-layout {
   display: grid;
   grid-template-columns: 188px minmax(0, 1fr);
   gap: 18px;
-  align-items: start;
-  min-height: 360px;
+  align-items: stretch;
+  min-height: 0;
+  max-height: inherit;
 }
 
 .app-settings-sidebar {
   min-width: 0;
+  align-self: start;
 }
 
 .app-settings-tab-list {
@@ -1374,6 +1386,10 @@
 
 .app-settings-panel-region {
   min-width: 0;
+  min-height: 0;
+  max-height: inherit;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .app-settings-general-panel,
@@ -1526,10 +1542,16 @@
 @media (max-width: 760px) {
   .app-settings-layout {
     grid-template-columns: 1fr;
+    overflow-y: auto;
   }
 
   .app-settings-tab-list {
     width: min(100%, 260px);
+  }
+
+  .app-settings-panel-region {
+    overflow: visible;
+    padding-right: 0;
   }
 }
 

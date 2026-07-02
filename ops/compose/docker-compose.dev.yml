@@ -12,12 +12,10 @@ services:
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
       - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
       - RIVET_KEY=${RIVET_KEY:-}
-      - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
       - RIVET_TRUST_INCOMING_FORWARDED_HEADERS=${RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false}
     volumes:
       - ../nginx/default.dev.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ../../image/proxy/normalize-workflow-paths.sh:/normalize-workflow-paths.sh:ro
-      - ../../image/proxy/ui-gate-prompt.html:/tmp/ui-gate-prompt.html:ro
       - rivet_data:/data/rivet-app:ro
     entrypoint: ["/bin/sh", "/normalize-workflow-paths.sh"]
     depends_on:
@@ -131,6 +129,9 @@ services:
       - RIVET_APP_DATA_ROOT=/data/rivet-app
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=api
+      - RIVET_KEY=${RIVET_KEY:-}
+      - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
+      - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
       - RIVET_PUBLISHED_APPS_BASE_PATH=${RIVET_PUBLISHED_APPS_BASE_PATH:-}

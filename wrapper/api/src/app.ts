@@ -123,6 +123,9 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
   if (isControlPlaneApiProfile(profile)) {
     surfaces.push(
       '/ui-auth',
+      '/ui-auth/check',
+      '/ui-auth/prompt',
+      '/ui-auth/oauth/*',
       `${publishedAppsBasePath}/auth/callback`,
       `${publishedAppsBasePath}/auth/dummy`,
       `${publishedAppsBasePath}/auth/logout`,
