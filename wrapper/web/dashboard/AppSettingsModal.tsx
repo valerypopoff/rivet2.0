@@ -428,7 +428,6 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
 
   const deploymentStorageSettingsChanged = useMemo(() => (
     currentDeploymentStorageSettings.storageMode !== initialDeploymentStorageSettings.storageMode ||
-    currentDeploymentStorageSettings.artifactsHostPath !== initialDeploymentStorageSettings.artifactsHostPath ||
     currentDeploymentStorageSettings.databaseMode !== initialDeploymentStorageSettings.databaseMode ||
     currentDeploymentStorageSettings.databaseSslMode !== initialDeploymentStorageSettings.databaseSslMode ||
     currentDeploymentStorageSettings.databaseConnectionString !== '' ||
@@ -1739,15 +1738,11 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                           <TextField
                             aria-label="Host artifacts folder"
                             value={artifactsHostPath}
-                            isDisabled={loadingDeploymentStorageSettings || savingDeploymentStorageSettings}
+                            isReadOnly
                             placeholder="../"
-                            onChange={(event) => {
-                              setArtifactsHostPath(event.currentTarget.value);
-                              setDeploymentStorageSettingsSaved(false);
-                            }}
                           />
                           <span className="app-settings-field-help">
-                            This records the intended host root for filesystem storage. Docker and Kubernetes mounts must still point at that host root before the app starts.
+                            This is set before startup by the Docker/Kubernetes launcher, for example with RIVET_ARTIFACTS_HOST_PATH. The running app shows it for reference only because changing it here cannot remount host folders.
                           </span>
                         </label>
                       ) : null}

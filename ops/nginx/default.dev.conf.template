@@ -1,5 +1,7 @@
 map_hash_bucket_size 128;
 
+resolver 127.0.0.11 valid=30s ipv6=off;
+
 map $http_upgrade $connection_upgrade {
     default upgrade;
     '' close;
@@ -32,8 +34,14 @@ server {
 
     client_max_body_size 100m;
 
-    set $api_upstream http://api;
-    set $execution_upstream http://api;
+    set $api_upstream http://api:80;
+    set $execution_upstream http://api:80;
+    set $api_ui_auth_upstream http://api:80/ui-auth;
+    set $api_ui_auth_check_upstream http://api:80/ui-auth/check;
+    set $api_ui_auth_prompt_upstream http://api:80/ui-auth/prompt;
+    set $api_latest_debugger_upstream http://api:80/ws/latest-debugger;
+    set $executor_internal_upstream http://executor:21889/internal;
+    set $executor_upstream http://executor:21889/;
 
     location / {
         auth_request /__rivet_ui_auth_check;
@@ -50,7 +58,7 @@ server {
     }
 
     location @web_with_ui_gate_prompt {
-        proxy_pass http://api/ui-auth/prompt;
+        proxy_pass $api_ui_auth_prompt_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
@@ -66,7 +74,7 @@ server {
 
     location = /__rivet_ui_auth_check {
         internal;
-        proxy_pass http://api/ui-auth/check;
+        proxy_pass $api_ui_auth_check_upstream;
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
@@ -79,7 +87,7 @@ server {
     }
 
     location = /__rivet_auth {
-        proxy_pass http://api/ui-auth;
+        proxy_pass $api_ui_auth_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header Host $host;
@@ -118,7 +126,7 @@ server {
     location /ws/latest-debugger {
         auth_request /__rivet_ui_auth_check;
 
-        proxy_pass http://api/ws/latest-debugger;
+        proxy_pass $api_latest_debugger_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header Upgrade $http_upgrade;
@@ -132,7 +140,7 @@ server {
     location /ws/executor/internal {
         auth_request /__rivet_ui_auth_check;
 
-        proxy_pass http://executor:21889/internal;
+        proxy_pass $executor_internal_upstream;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -145,7 +153,7 @@ server {
     location /ws/executor {
         auth_request /__rivet_ui_auth_check;
 
-        proxy_pass http://executor:21889/;
+        proxy_pass $executor_upstream;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;

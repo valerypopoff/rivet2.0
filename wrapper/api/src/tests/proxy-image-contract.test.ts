@@ -80,14 +80,16 @@ test('proxy UI gate prompt is API-rendered and receives the original route', () 
     const apiLocation = proxyLocation(template, /location \/api\/\s*\{/);
     const authCheckLocation = proxyLocation(template, /location = \/__rivet_ui_auth_check\s*\{/);
     const promptLocation = proxyLocation(template, /location @web_with_ui_gate_prompt\s*\{/);
+    assert.match(template, /set \$api_ui_auth_check_upstream .*\/ui-auth\/check;/);
+    assert.match(template, /set \$api_ui_auth_prompt_upstream .*\/ui-auth\/prompt;/);
     assert.match(template, /ui-auth\/check/);
     assert.match(template, /ui-auth\/prompt/);
     assert.match(rootLocation, /auth_request \/__rivet_ui_auth_check;/);
     assert.match(apiLocation, /auth_request \/__rivet_ui_auth_check;/);
-    assert.match(authCheckLocation, /proxy_pass .*api_ui_auth_check_upstream|proxy_pass http:\/\/api\/ui-auth\/check/);
+    assert.match(authCheckLocation, /proxy_pass \$api_ui_auth_check_upstream;/);
     assert.match(authCheckLocation, /proxy_pass_request_body off;/);
     assert.match(authCheckLocation, /proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;/);
-    assert.match(promptLocation, /proxy_pass .*api_ui_auth_prompt_upstream|proxy_pass http:\/\/api\/ui-auth\/prompt/);
+    assert.match(promptLocation, /proxy_pass \$api_ui_auth_prompt_upstream;/);
     assert.match(promptLocation, /proxy_set_header X-Rivet-Ui-Return-To \$request_uri;/);
     assert.doesNotMatch(promptLocation, /try_files \/ui-gate-prompt\.html =500;/);
   }

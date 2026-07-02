@@ -614,10 +614,11 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveAttribute('aria-pressed', 'true');
     await expect(appSettingsModal.getByRole('button', { name: 'Object storage' })).toHaveAttribute('aria-pressed', 'false');
     await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveValue('../');
+    await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveAttribute('readonly', '');
+    await expect(appSettingsModal.getByText('The running app shows it for reference only because changing it here cannot remount host folders.')).toBeVisible();
     const storageFieldGrids = appSettingsModal.locator('.app-settings-storage-panel .app-settings-field-grid');
     await expect(storageFieldGrids.first()).toHaveCSS('gap', '18px');
     await expect(storageFieldGrids.nth(1)).toHaveCSS('gap', '18px');
-    await appSettingsModal.getByLabel('Host artifacts folder').fill('../storage-artifacts');
     await appSettingsModal.getByRole('button', { name: 'Object storage' }).click();
     await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute('aria-pressed', 'true');
     await expect(appSettingsModal.getByText('It must already be running before object storage mode can apply.')).toBeVisible();
