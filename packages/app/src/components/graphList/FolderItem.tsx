@@ -329,66 +329,24 @@ const OpenFolderIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
 const UnreachableGraphIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
   <svg viewBox="0 0 28 22" fill="none" {...props}>
     <path
-      d="M.8 16Q5.6 12.4 11 11.5"
+      d="M6.8 15.2 L14.2 8.8"
       stroke="currentColor"
-      strokeLinecap="square"
-      strokeLinejoin="round"
       strokeWidth="2"
-      vectorEffect="non-scaling-stroke"
-    />
-    <path
-      d="M17 9Q22.2 8.2 28.5 4"
-      stroke="currentColor"
-      strokeLinecap="square"
-      strokeLinejoin="round"
-      strokeWidth="2"
-      vectorEffect="non-scaling-stroke"
+      strokeLinecap="round"
     />
 
-    <line
-      x1="10.5"
-      y1="6.6"
-      x2="8.5"
-      y2="2"
-      transform="rotate(-36 10.5 6.6)"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeWidth="1.45"
-      vectorEffect="non-scaling-stroke"
+    <circle
+      cx="5"
+      cy="17"
+      r="3.3"
+      fill="currentColor"
     />
 
-    <line
-      x1="13.5"
-      y1="5.4"
-      x2="11.5"
-      y2="0"
-      transform="rotate(30 13.5 5.4)"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeWidth="1.45"
-      vectorEffect="non-scaling-stroke"
-    />
-
-    <line
-      x1="14.3"
-      y1="15.2"
-      x2="13.2"
-      y2="20.1"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeWidth="1.45"
-      vectorEffect="non-scaling-stroke"
-    />
-
-    <line
-      x1="17.2"
-      y1="13.8"
-      x2="22"
-      y2="16.9"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeWidth="1.45"
-      vectorEffect="non-scaling-stroke"
+    <circle
+      cx="20"
+      cy="17"
+      r="3.3"
+      fill="currentColor"
     />
   </svg>
 );

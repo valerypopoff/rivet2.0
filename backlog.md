@@ -1,4 +1,7 @@
 
+- When sekecting multiline text in output modal, it visually selects -1 and +1 character but when I copyб it only copies what I actually selected
+
+- In settings-updates, do not show the skipped version if the currently installed version is newer than the skipped one
 
 - While the workflow is running, send some kind of a number of run nodes that can be a progress indicator
 
