@@ -36,7 +36,7 @@ jobs:
         uses: ./.github/actions/setup-yarn
 
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.6.0.cjs install --immutable
+        run: node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache --check-cache
 
       - name: Build publishable packages
         run: node .yarn/releases/yarn-4.6.0.cjs build:npm-public
@@ -45,9 +45,6 @@ jobs:
         run: |
           status="$(git status --porcelain=v1 --untracked-files=all -- \
             . \
-            ':!.pnp.cjs' \
-            ':!.pnp.loader.mjs' \
-            ':!.yarn/cache/**' \
             ':!.yarn/install-state.gz' \
             ':!packages/core/dist/**' \
             ':!packages/node/dist/**' \

@@ -289,6 +289,7 @@ are the repo root, a parent of the repo root, inside this checkout outside
 Current dev/build detail:
 
 - `packages/app/scripts/dev.mjs` does a Windows-only cleanup pass for stale `src-tauri/target/*/app-executor.exe` processes before launching `tauri dev`, because Tauri's sidecar-copy step fails if a previous dev session left that copied sidecar binary locked
+- The root Yarn setup uses Plug'n'Play. Keep the root `.pnp.cjs` and `.pnp.loader.mjs` files tracked even though they are generated, because `yarn dev` and other Yarn commands refuse to run scripts when `.pnp.cjs` is missing. `.yarn/install-state.gz` remains ignored/cacheable because Yarn can regenerate it from the tracked PnP loader and lock/cache state.
 - `packages/app/scripts/dev.mjs` and `packages/app/scripts/prepare-tauri.mjs` use the shared `packages/app/scripts/pnp-env.mjs` child-process environment helper. It strips stale `NODE_OPTIONS` preloads for missing `.pnp.cjs` / `.pnp.loader.mjs` files, because some local checkouts can temporarily have Yarn PnP config plus a `node_modules` install layout; nested Tauri, Node, and Yarn sidecar commands must be allowed to start the pinned Yarn file instead of failing before Yarn runs.
 - `packages/app/src-tauri/tauri.conf.json` runs `node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri` before both dev and build commands, then uses that same pinned Yarn file for `start`/`build`. Keep those Tauri commands on the explicit root Yarn path instead of bare `yarn`: Tauri runs them from `packages/app`, and the explicit path avoids workspace package-manager drift and missing `.pnp.cjs` loader failures while still rebuilding the sidecar when app/core code has changed.
 - `packages/app/src-tauri/vendor/` now carries the small vendored Tauri v1 plugin crates (`tauri-plugin-persisted-scope` and `tauri-plugin-window-state`) so Cargo no longer has to parse the upstream `plugins-workspace` template manifest during metadata/check/dev runs
@@ -370,6 +371,8 @@ For cache-safe dependency install layers, copy only dependency metadata before
 - root `package.json`
 - `yarn.lock`
 - `.yarnrc.yml`
+- `.pnp.cjs`
+- `.pnp.loader.mjs`
 - `.yarn/releases/**`
 - `.yarn/patches/**`
 - `.yarn/plugins/**`, if present
@@ -419,9 +422,28 @@ Workflows live under [`.github/workflows/`](../.github/workflows/).
 Node/Yarn CI jobs should use
 [`.github/actions/setup-yarn`](../.github/actions/setup-yarn/action.yml)
 after checkout. The composite action installs Node `20.4.x` by default and
-restores the local Yarn PnP cache (`.yarn/cache` plus
-`.yarn/install-state.gz`) with a key based on the OS, Node version, `yarn.lock`,
-and `.yarnrc.yml`.
+restores only Yarn's generated `.yarn/install-state.gz` file with a key based
+on the OS, Node version, `yarn.lock`, and `.yarnrc.yml`.
+
+The generated root PnP loader files (`.pnp.cjs` and `.pnp.loader.mjs`) are
+tracked source inputs, not cache outputs. Do not exclude them from clean-tree
+checks: if Yarn changes either file after dependency installation, commit the
+updated loader with the lock/cache changes so fresh checkouts can run `yarn dev`
+without regenerating install state first.
+
+The `.yarn/cache` package archives are also tracked repository inputs. Do not
+restore that directory from `actions/cache`; doing so can reintroduce stale
+archives from old cache keys and duplicates Git checkout work. `--immutable-cache`
+validates the checked-in archive set quickly, and the npm publish workflow adds
+the slower `--check-cache` checksum pass before publication.
+
+Use the pinned Yarn file for CI installs so workflow behavior follows the
+repository toolchain instead of the runner's package-manager shim. Regular
+release jobs should use `install --immutable --immutable-cache` so missing or
+extra cache archives fail fast without rechecking every package over the
+network. Keep `--check-cache` only on the npm publish workflow, where one
+checksum-verification pass catches stale tracked archives before publication
+without adding the same cost to regular build/test and desktop release jobs.
 
 Desktop/Tauri jobs should also use `Swatinem/rust-cache@v2` after the Rust
 toolchain is installed, scoped to `packages/app/src-tauri -> target`. Keep that
@@ -462,8 +484,8 @@ This general build workflow is also develop-only for now. It should not be widen
 Runs on `ubuntu-latest` and performs:
 
 1. checkout
-2. shared Node/Yarn setup and Yarn cache restore
-3. `yarn --immutable`
+2. shared Node/Yarn setup and install-state cache restore
+3. `node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache`
 4. `yarn build`
 5. `yarn test`
 6. `yarn test:docs`
@@ -496,12 +518,12 @@ Runs on `ubuntu-latest` and performs:
 Per matrix entry, the workflow:
 
 1. checks out the repo
-2. runs the shared Node/Yarn setup and restores the Yarn cache
+2. runs the shared Node/Yarn setup and restores Yarn install state
 3. configures and restores the `pkg` base-binary cache
 4. sets up Rust toolchains
 5. restores the Tauri/Rust cache
 6. installs Linux system dependencies where needed
-7. runs `yarn --immutable`
+7. runs `node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache`
 8. runs `yarn build:hosted-web-deps`
 9. invokes `tauri-apps/tauri-action`
 
@@ -588,9 +610,9 @@ The release workflows share the `rivet-docs-pages` concurrency group with `cance
 
 The workflow has five jobs:
 
-1. `build-windows` runs on `windows-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs `yarn --immutable`, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
-2. `build-macos` runs on `macos-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs `yarn --immutable`, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
-3. `build-docs` runs on `ubuntu-latest`, installs dependencies with the shared Yarn cache, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
+1. `build-windows` runs on `windows-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
+2. `build-macos` runs on `macos-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
+3. `build-docs` runs on `ubuntu-latest`, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
 4. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, preserves the current developer release feed from Pages if it exists, writes stable release metadata and installer files into `packages/docs/build`, and uploads that complete docs-site artifact.
 5. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`.
 
@@ -609,9 +631,9 @@ This workflow is intentionally develop-only. It does not run for `main`.
 
 The workflow has five jobs:
 
-1. `build-windows` runs on `windows-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs `yarn --immutable`, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
-2. `build-macos` runs on `macos-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs `yarn --immutable`, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
-3. `build-docs` runs on `ubuntu-latest`, installs dependencies with the shared Yarn cache, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
+1. `build-windows` runs on `windows-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
+2. `build-macos` runs on `macos-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
+3. `build-docs` runs on `ubuntu-latest`, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
 4. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, preserves the current stable release feed from Pages if it exists, writes developer release metadata and installer files into `packages/docs/build`, and uploads that complete docs-site artifact.
 5. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`.
 
@@ -678,8 +700,8 @@ The workflow:
 
 1. checks out the repo
 2. verifies the checkout starts clean
-3. runs the shared Node/Yarn setup for the build, matching the repo development toolchain and restoring the Yarn cache
-4. installs dependencies with the checked-in Yarn release and `--immutable`
+3. runs the shared Node/Yarn setup for the build, matching the repo development toolchain and restoring Yarn install state
+4. installs dependencies with the checked-in Yarn release and `--immutable --immutable-cache --check-cache`
 5. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and `@valerypopoff/rivet2-cli`
 6. verifies that dependency install and package build touched only generated artifacts
 7. switches to Node `22.14.x` and npm `11.5.1` for npm trusted-publishing compatibility

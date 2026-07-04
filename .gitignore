@@ -6,6 +6,9 @@
 .pnp.js
 .pnp.cjs
 .pnp.loader.mjs
+# Root Yarn PnP loaders are required for fresh zero-install checkouts.
+!/.pnp.cjs
+!/.pnp.loader.mjs
 
 # testing
 /coverage
