@@ -846,6 +846,8 @@ The Pages release metadata includes an explicit `version` field from `packages/a
 
 Startup checks stay quiet when the stable feed is missing or temporarily unavailable. Manual checks from Settings > Updates show a friendly status such as "No stable release has been published yet" instead of surfacing the stale Tauri `latest.json` error.
 
+The skipped-version notice in Settings > Updates is display-only and uses semantic-version comparison against the installed desktop app version. Keep the stored `skippedMaxVersion` preference intact, but hide the notice when the current installed version is the same as or newer than the skipped version so upgraded apps do not keep showing obsolete skip text.
+
 ## Publish Scripts
 
 ## `scripts/publish-npm-packages.mjs`
