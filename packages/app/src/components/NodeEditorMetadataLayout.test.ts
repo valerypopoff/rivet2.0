@@ -391,6 +391,34 @@ test('node code editor spellcheck is Monaco context-menu driven', () => {
   assert.doesNotMatch(nodeEditorCodeEditorSource, /import\('nspell'\)|import\('dictionary-en'\)/);
 });
 
+test('shared Monaco code editor exposes local text tools through context menu actions', () => {
+  const lazyCodeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
+  const textTransformsSource = readFileSync(
+    join(componentsDir, '..', 'utils', 'monaco', 'editorTextTransforms.ts'),
+    'utf8',
+  );
+
+  assert.match(lazyCodeEditorSource, /registerEditorTextToolActions/);
+  assert.match(lazyCodeEditorSource, /id: 'rivet\.prettify'/);
+  assert.match(lazyCodeEditorSource, /label: 'Prettify'/);
+  assert.match(lazyCodeEditorSource, /editor\.action\.formatSelection/);
+  assert.match(lazyCodeEditorSource, /editor\.action\.formatDocument/);
+  assert.doesNotMatch(lazyCodeEditorSource, /from ['"]prettier['"]/);
+  assert.match(lazyCodeEditorSource, /id: 'rivet\.jsonEscapeSelection'/);
+  assert.match(lazyCodeEditorSource, /label: 'JSON escape'/);
+  assert.match(lazyCodeEditorSource, /id: 'rivet\.jsonUnescapeSelection'/);
+  assert.match(lazyCodeEditorSource, /label: 'JSON unescape'/);
+  assert.match(lazyCodeEditorSource, /jsonEscapeText/);
+  assert.match(lazyCodeEditorSource, /jsonUnescapeText/);
+  assert.match(lazyCodeEditorSource, /editor\.executeEdits\('rivet\.textTools'/);
+  assert.match(lazyCodeEditorSource, /editor\.pushUndoStop\(\);[\s\S]*editor\.executeEdits/);
+  assert.doesNotMatch(lazyCodeEditorSource, /document\.execCommand|navigator\.clipboard/);
+  assert.match(textTransformsSource, /normalizeEditorLineEndings/);
+  assert.match(textTransformsSource, /text\.replace\(\/\\r\\n\?\/g, '\\n'\)/);
+  assert.match(textTransformsSource, /JSON\.stringify\(normalizeEditorLineEndings\(text\)\)\.slice\(1, -1\)/);
+  assert.match(textTransformsSource, /JSON\.parse\(`"\$\{text\}"`\)/);
+});
+
 test('node settings code editors use the active app display theme', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
 

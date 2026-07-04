@@ -92,7 +92,7 @@ Text and code editors have their own font-size control, separate from the main a
 
 Markdown editors in node settings can fold heading sections and fenced code blocks, similar to code and JSON editors that show fold controls for structured content.
 
-Monaco text and code editors include **Check spelling** in the editor right-click menu. It runs a local English spellcheck only when triggered, highlights possible misspellings in the editor, and does not send text anywhere.
+Monaco text and code editors include editor tools in the right-click menu. **Check spelling** runs a local English spellcheck only when triggered, highlights possible misspellings in the editor, and does not send text anywhere. **Prettify** uses the editor's built-in formatter when one is available, and **JSON escape** / **JSON unescape** work on the selected text.
 
 When the **Bright** theme is active, node text and code editors use Monaco's light editor theme so Comment, Code, Expression, JS Filter, and LLM Chat technical-option editors match the rest of the light interface.
 

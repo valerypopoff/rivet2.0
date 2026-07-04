@@ -5,6 +5,7 @@ import { installEditorInterpolationSupport } from '../utils/monaco/interpolation
 import { type EditorInterpolationSyntax } from '../utils/monaco/interpolationDiagnostics.js';
 import { installJsStyleCommentHighlighting } from '../utils/monaco/commentHighlighting.js';
 import { shouldHighlightJsStyleComments } from '../utils/monaco/commentRangeScanner.js';
+import { jsonEscapeText, jsonUnescapeText } from '../utils/monaco/editorTextTransforms.js';
 import {
   clearCodeEditorSpellcheckMarkers,
   runCodeEditorSpellcheck,
@@ -32,6 +33,108 @@ type MultilineEditorFontSizeWheelEvent = Pick<WheelEvent, 'deltaY' | 'ctrlKey' |
   preventDefault(): void;
   stopPropagation(): void;
 };
+
+type SelectedEditorText = {
+  selection: monaco.Selection;
+  text: string;
+};
+
+function getSelectedEditorText(editor: monaco.editor.IStandaloneCodeEditor): SelectedEditorText | undefined {
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+
+  if (!model || !selection || selection.isEmpty()) {
+    return undefined;
+  }
+
+  return {
+    selection,
+    text: model.getValueInRange(selection),
+  };
+}
+
+function isCodeEditorReadonly(editor: monaco.editor.IStandaloneCodeEditor): boolean {
+  return editor.getOption(monaco.editor.EditorOption.readOnly);
+}
+
+function replaceSelectedEditorText(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  getReplacement: (selectedText: string) => string | undefined,
+): void {
+  if (isCodeEditorReadonly(editor)) {
+    return;
+  }
+
+  const selected = getSelectedEditorText(editor);
+
+  if (!selected) {
+    return;
+  }
+
+  const replacement = getReplacement(selected.text);
+
+  if (replacement == null || replacement === selected.text) {
+    return;
+  }
+
+  editor.pushUndoStop();
+  editor.executeEdits('rivet.textTools', [
+    {
+      range: selected.selection,
+      text: replacement,
+      forceMoveMarkers: true,
+    },
+  ]);
+  editor.pushUndoStop();
+}
+
+async function runMonacoPrettify(editor: monaco.editor.IStandaloneCodeEditor): Promise<void> {
+  if (isCodeEditorReadonly(editor)) {
+    return;
+  }
+
+  const selection = editor.getSelection();
+  const actionId = selection && !selection.isEmpty() ? 'editor.action.formatSelection' : 'editor.action.formatDocument';
+  const action = editor.getAction(actionId);
+
+  if (!action?.isSupported()) {
+    return;
+  }
+
+  await action.run();
+}
+
+function registerEditorTextToolActions(editor: monaco.editor.IStandaloneCodeEditor): monaco.IDisposable[] {
+  return [
+    editor.addAction({
+      id: 'rivet.prettify',
+      label: 'Prettify',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.6,
+      run: async () => {
+        await runMonacoPrettify(editor);
+      },
+    }),
+    editor.addAction({
+      id: 'rivet.jsonEscapeSelection',
+      label: 'JSON escape',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.7,
+      run: () => {
+        replaceSelectedEditorText(editor, jsonEscapeText);
+      },
+    }),
+    editor.addAction({
+      id: 'rivet.jsonUnescapeSelection',
+      label: 'JSON unescape',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.8,
+      run: () => {
+        replaceSelectedEditorText(editor, jsonUnescapeText);
+      },
+    }),
+  ];
+}
 
 export type CodeEditorDisplayOptions = Pick<
   monaco.editor.IStandaloneEditorConstructionOptions,
@@ -176,6 +279,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     const commentHighlightingSupport = shouldHighlightJsStyleComments(language)
       ? installJsStyleCommentHighlighting(editor)
       : undefined;
+    const textToolActionDisposables = registerEditorTextToolActions(editor);
 
     const onResize = () => {
       // Resizing the node settings panel can emit a dense stream of ResizeObserver
@@ -228,6 +332,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       }
       resizeObserver?.disconnect();
       contentSizeChangeDisposable.dispose();
+      textToolActionDisposables.forEach((disposable) => disposable.dispose());
       interpolationSupport?.dispose();
       commentHighlightingSupport?.dispose();
       clearCodeEditorSpellcheckMarkers(editor);
