@@ -11,6 +11,7 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
     join(componentsDir, 'nodeOutput', 'NodeFullscreenOutput.tsx'),
     'utf8',
   );
+  const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
   const scalarRenderersSource = readFileSync(
     join(componentsDir, 'renderDataValue', 'createScalarRenderers.tsx'),
     'utf8',
@@ -69,7 +70,21 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   assert.match(foldingCodeBlockSource, /registerProvider/);
   assert.match(foldingCodeBlockSource, /findMatchRanges\(text, query\)/);
   assert.match(foldingCodeBlockSource, /editor\.revealRangeInCenterIfOutsideViewport\(range\)/);
+  assert.match(foldingCodeBlockSource, /const OUTPUT_CODE_LINE_HEIGHT = 20;/);
+  assert.match(foldingCodeBlockSource, /lineCount \* OUTPUT_CODE_LINE_HEIGHT/);
   assert.match(foldingCodeBlockSource, /wordWrap=\{wrapLines \? 'on' : 'off'\}/);
+  assert.match(foldingCodeBlockSource, /const OUTPUT_CODE_EDITOR_DISPLAY_OPTIONS: CodeEditorDisplayOptions = \{/);
+  assert.match(foldingCodeBlockSource, /fontFamily: 'var\(--font-family-monospace\)'/);
+  assert.match(foldingCodeBlockSource, /lineHeight: OUTPUT_CODE_LINE_HEIGHT/);
+  assert.match(foldingCodeBlockSource, /padding: \{ top: 0, bottom: 0 \}/);
+  assert.match(foldingCodeBlockSource, /roundedSelection: false/);
+  assert.match(foldingCodeBlockSource, /selectionHighlight: false/);
+  assert.match(foldingCodeBlockSource, /occurrencesHighlight: false/);
+  assert.match(foldingCodeBlockSource, /renderLineHighlight: 'none'/);
+  assert.match(foldingCodeBlockSource, /displayOptions=\{OUTPUT_CODE_EDITOR_DISPLAY_OPTIONS\}/);
+  assert.match(codeEditorSource, /export type CodeEditorDisplayOptions = Pick</);
+  assert.match(codeEditorSource, /displayOptions\?: CodeEditorDisplayOptions;/);
+  assert.match(codeEditorSource, /\.\.\.displayOptions,\s*fontSize,/);
   assert.match(foldingCodeBlockSource, /onContentHeightChange=\{handleContentHeightChange\}/);
   assert.match(foldingCodeBlockSource, /vertical: 'hidden'/);
   assert.match(foldingCodeBlockSource, /handleMouseWheel: false/);
@@ -100,10 +115,7 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
     structuredNodeOutputSource,
     /<FoldingCodeBlock text=\{source\} language=\{language\} wrapLines=\{wrapLines\} \/>/,
   );
-  assert.match(
-    structuredNodeOutputSource,
-    /<ColorizedPreformattedText text=\{source\} language=\{language\} \/>/,
-  );
+  assert.match(structuredNodeOutputSource, /<ColorizedPreformattedText text=\{source\} language=\{language\} \/>/);
   assert.match(codeNewNodeSource, /parsedSourceLabel="Parsed code"/);
   assert.match(codeNewNodeSource, /wrapLines=\{wrapLines\}/);
   assert.match(expressionNodeSource, /parsedSourceLanguage="javascript"/);

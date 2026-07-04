@@ -4,6 +4,7 @@ import { Suspense, useCallback, useId, useLayoutEffect, useMemo, useRef, useStat
 import { monaco } from '../../utils/monaco.js';
 import { themeState } from '../../state/settings.js';
 import { LazyCodeEditor } from '../LazyComponents.js';
+import type { CodeEditorDisplayOptions } from '../CodeEditor.js';
 import { resolveMonacoDisplayTheme } from '../codeEditorTheme.js';
 import { useFullscreenOutputSearchContext } from '../nodeOutput/FullscreenOutputSearchContext.js';
 import {
@@ -14,9 +15,21 @@ import {
   type SearchMatchRange,
 } from '../nodeOutput/fullscreenOutputSearch.js';
 
+const OUTPUT_CODE_LINE_HEIGHT = 20;
+const OUTPUT_CODE_MIN_HEIGHT = 28;
+const OUTPUT_CODE_EDITOR_DISPLAY_OPTIONS: CodeEditorDisplayOptions = {
+  fontFamily: 'var(--font-family-monospace)',
+  lineHeight: OUTPUT_CODE_LINE_HEIGHT,
+  padding: { top: 0, bottom: 0 },
+  roundedSelection: false,
+  selectionHighlight: false,
+  occurrencesHighlight: false,
+  renderLineHighlight: 'none',
+};
+
 const foldingCodeBlockStyles = css`
-  --fullscreen-output-folding-line-height: 20px;
-  --fullscreen-output-folding-min-height: 28px;
+  --fullscreen-output-folding-line-height: ${OUTPUT_CODE_LINE_HEIGHT}px;
+  --fullscreen-output-folding-min-height: ${OUTPUT_CODE_MIN_HEIGHT}px;
 
   min-width: 0;
 
@@ -94,12 +107,15 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
   const appTheme = useAtomValue(themeState);
   const resolvedTheme = resolveMonacoDisplayTheme(undefined, appTheme);
   const lineCount = useMemo(() => Math.max(1, text.split(/\r\n|\r|\n/).length), [text]);
-  const estimatedHeight = useMemo(() => Math.max(28, lineCount * 20), [lineCount]);
+  const estimatedHeight = useMemo(
+    () => Math.max(OUTPUT_CODE_MIN_HEIGHT, lineCount * OUTPUT_CODE_LINE_HEIGHT),
+    [lineCount],
+  );
   const [editorHeight, setEditorHeight] = useState(estimatedHeight);
-  const shellHeight = `${Math.max(28, editorHeight)}px`;
+  const shellHeight = `${Math.max(OUTPUT_CODE_MIN_HEIGHT, editorHeight)}px`;
 
   const handleContentHeightChange = useCallback((height: number) => {
-    const nextHeight = Math.max(28, Math.ceil(height));
+    const nextHeight = Math.max(OUTPUT_CODE_MIN_HEIGHT, Math.ceil(height));
     setEditorHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
   }, []);
 
@@ -174,15 +190,18 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
     );
   }, []);
 
-  const activateMatch = useCallback((localMatchIndex: number) => {
-    activeMatchIndexRef.current = localMatchIndex;
-    updateSearchDecorations(localMatchIndex);
+  const activateMatch = useCallback(
+    (localMatchIndex: number) => {
+      activeMatchIndexRef.current = localMatchIndex;
+      updateSearchDecorations(localMatchIndex);
 
-    const matchRange = matchRangesRef.current[localMatchIndex];
-    if (matchRange) {
-      revealMatchRange(matchRange);
-    }
-  }, [revealMatchRange, updateSearchDecorations]);
+      const matchRange = matchRangesRef.current[localMatchIndex];
+      if (matchRange) {
+        revealMatchRange(matchRange);
+      }
+    },
+    [revealMatchRange, updateSearchDecorations],
+  );
 
   const clearActiveMatch = useCallback(() => {
     activeMatchIndexRef.current = null;
@@ -195,12 +214,15 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
     clearSearchDecorations();
   }, [clearSearchDecorations]);
 
-  const activateExternalMatchRange = useCallback((matchRange: SearchMatchRange) => {
-    matchRangesRef.current = [matchRange];
-    activeMatchIndexRef.current = 0;
-    updateSearchDecorations(0);
-    revealMatchRange(matchRange);
-  }, [revealMatchRange, updateSearchDecorations]);
+  const activateExternalMatchRange = useCallback(
+    (matchRange: SearchMatchRange) => {
+      matchRangesRef.current = [matchRange];
+      activeMatchIndexRef.current = 0;
+      updateSearchDecorations(0);
+      revealMatchRange(matchRange);
+    },
+    [revealMatchRange, updateSearchDecorations],
+  );
 
   const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
     editorRef.current = editor;
@@ -282,6 +304,7 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
             isReadonly
             enableFolding
             wordWrap={wrapLines ? 'on' : 'off'}
+            displayOptions={OUTPUT_CODE_EDITOR_DISPLAY_OPTIONS}
             scrollBeyondLastLine={false}
             scrollbar={scrollbar}
             editorRef={editorRef}

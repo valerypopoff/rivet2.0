@@ -27,6 +27,17 @@ type MultilineEditorFontSizeWheelEvent = Pick<WheelEvent, 'deltaY' | 'ctrlKey' |
   stopPropagation(): void;
 };
 
+export type CodeEditorDisplayOptions = Pick<
+  monaco.editor.IStandaloneEditorConstructionOptions,
+  | 'fontFamily'
+  | 'lineHeight'
+  | 'padding'
+  | 'roundedSelection'
+  | 'selectionHighlight'
+  | 'occurrencesHighlight'
+  | 'renderLineHighlight'
+>;
+
 export type CodeEditorProps = {
   text: string;
   isReadonly?: boolean;
@@ -43,6 +54,7 @@ export type CodeEditorProps = {
   enableFolding?: boolean;
   wordWrap?: 'on' | 'off';
   scrollbar?: monaco.editor.IEditorScrollbarOptions;
+  displayOptions?: CodeEditorDisplayOptions;
   onContentHeightChange?: (height: number) => void;
   errorLineHighlight?: {
     line: number;
@@ -71,6 +83,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   enableFolding,
   wordWrap = 'on',
   scrollbar,
+  displayOptions,
   onContentHeightChange,
   errorLineHighlight,
   fontSize = DEFAULT_MULTILINE_EDITOR_FONT_SIZE,
@@ -118,6 +131,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       minimap: {
         enabled: false,
       },
+      ...displayOptions,
       fontSize,
       wordWrap,
       readOnly: isReadonly,
