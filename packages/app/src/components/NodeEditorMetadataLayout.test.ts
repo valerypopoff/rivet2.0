@@ -311,6 +311,8 @@ test('node code editor uses project-scoped Monaco model caching', () => {
   assert.match(codeEditorSource, /editorMountKey[\s\S]*modelCacheKey \?\? 'uncached-model'/);
   assert.match(codeEditorSource, /modelCacheKey=\{modelCacheKey\}/);
   assert.match(lazyCodeEditorSource, /getOrCreateCodeEditorModel/);
+  assert.match(lazyCodeEditorSource, /getCodeEditorViewState/);
+  assert.match(lazyCodeEditorSource, /saveCodeEditorViewState/);
   assert.match(
     lazyCodeEditorSource,
     /const modelUri = modelCacheKey \? monaco\.Uri\.parse\(getCodeEditorModelUri\(modelCacheKey\)\) : undefined/,
@@ -323,6 +325,8 @@ test('node code editor uses project-scoped Monaco model caching', () => {
     lazyCodeEditorSource,
     /if \(model\.getValue\(\) !== text\) \{\s+currentOnChange\?\.\(model\.getValue\(\)\);/,
   );
+  assert.match(lazyCodeEditorSource, /editor\.restoreViewState\(cachedViewState\);/);
+  assert.match(lazyCodeEditorSource, /saveCodeEditorViewState\(modelCacheKey, editor\.saveViewState\(\)\);/);
   assert.match(lazyCodeEditorSource, /if \(!isCached\) \{\s+model\.dispose\(\);/);
   assert.match(workspaceHostCleanupSource, /function clearCodeEditorModelCacheForClosedProject/);
   assert.match(workspaceHostOpenSource, /cleanupClosedProject\(replacedProjectId\);/);

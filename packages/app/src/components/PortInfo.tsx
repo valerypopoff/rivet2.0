@@ -9,11 +9,12 @@ import {
 import { type CSSProperties, forwardRef, useMemo } from 'react';
 import { useAtomValue } from 'jotai';
 import { draggingWireState } from '../state/graphBuilder';
-import { lastRunDataState, resolvedGraphSelectionState, selectedProcessPageState } from '../state/dataFlow';
+import { lastRunDataState, resolvedGraphSelectionState, selectedProcessPageNodesState } from '../state/dataFlow';
 import {
   filterProcessDataForSelection,
   getSelectedProcessData,
   getSelectedProcessPageIndex,
+  resolveCanvasExecutionProcessPage,
 } from '../state/selectors/executionSelectors.js';
 import clsx from 'clsx';
 import { RenderDataValue } from './RenderDataValue';
@@ -150,7 +151,8 @@ const PortInfoContent = forwardRef<
   const { dataType, title, description, id } = definition;
 
   const lastRun = useAtomValue(lastRunDataState(port.nodeId));
-  const selectedPage = useAtomValue(selectedProcessPageState(port.nodeId));
+  const selectedProcessPageNodes = useAtomValue(selectedProcessPageNodesState);
+  const selectedPage = resolveCanvasExecutionProcessPage(selectedProcessPageNodes[port.nodeId]);
   const graphSelectionOptions = useAtomValue(resolvedGraphSelectionState);
 
   const filteredLastRun = useMemo(

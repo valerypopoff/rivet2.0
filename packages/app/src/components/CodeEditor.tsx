@@ -5,7 +5,12 @@ import { installEditorInterpolationSupport } from '../utils/monaco/interpolation
 import { type EditorInterpolationSyntax } from '../utils/monaco/interpolationDiagnostics.js';
 import { installJsStyleCommentHighlighting } from '../utils/monaco/commentHighlighting.js';
 import { shouldHighlightJsStyleComments } from '../utils/monaco/commentRangeScanner.js';
-import { getCodeEditorModelUri, getOrCreateCodeEditorModel } from '../utils/monaco/codeEditorModelCache.js';
+import {
+  getCodeEditorModelUri,
+  getCodeEditorViewState,
+  getOrCreateCodeEditorModel,
+  saveCodeEditorViewState,
+} from '../utils/monaco/codeEditorModelCache.js';
 
 const DEFAULT_MONACO_THEME = 'vs-dark';
 const DEFAULT_MULTILINE_EDITOR_FONT_SIZE = 14;
@@ -124,6 +129,11 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       },
     });
 
+    const cachedViewState = getCodeEditorViewState(modelCacheKey);
+    if (cachedViewState) {
+      editor.restoreViewState(cachedViewState);
+    }
+
     editor.layout();
     onContentHeightChangeLatest.current?.(editor.getContentHeight());
     const interpolationSupport =
@@ -173,6 +183,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
 
     return () => {
       currentOnChange?.(editor.getValue());
+      saveCodeEditorViewState(modelCacheKey, editor.saveViewState());
       editorInstance.current = undefined;
       if (editorRef) {
         editorRef.current = undefined;

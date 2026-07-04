@@ -22,3 +22,11 @@ test('port info tooltip does not steal hover from the port', () => {
 
   assert.match(portInfoSource, /pointer-events:\s*none;/);
 });
+
+test('port info tooltip uses the shared canvas process-page default', () => {
+  const portInfoSource = readFileSync(join(componentsDir, 'PortInfo.tsx'), 'utf8');
+
+  assert.match(portInfoSource, /selectedProcessPageNodesState/);
+  assert.match(portInfoSource, /resolveCanvasExecutionProcessPage\(selectedProcessPageNodes\[port\.nodeId\]\)/);
+  assert.doesNotMatch(portInfoSource, /selectedProcessPageState\(port\.nodeId\)/);
+});

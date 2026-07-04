@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { GraphId, GraphRunId, NodeId, ProcessId, RootRunId } from '@valerypopoff/rivet2-core';
-import type { ProcessDataForNode } from '../dataFlow.js';
+import type { PageValue, ProcessDataForNode } from '../dataFlow.js';
 import {
   canRunGraphFromEditor,
   filterProcessDataForSelection,
@@ -13,6 +13,7 @@ import {
   getSelectedProcessData,
   getSelectedProcessPageIndex,
   getSelectedProcessRun,
+  resolveCanvasExecutionProcessPage,
   shouldUseRemoteExecutor,
 } from './executionSelectors.js';
 
@@ -49,6 +50,30 @@ describe('executionSelectors', () => {
     assert.equal(getSelectedProcessRun(processData, 'latest')?.status?.type, 'running');
     assert.equal(getSelectedProcessPageIndex(processData, 'latest'), 1);
     assert.equal(getSelectedProcessPageIndex(processData, 50), 1);
+  });
+
+  test('canvas execution chrome treats missing process pages as latest without overriding explicit pages', () => {
+    const processData = [
+      { processId: 'p-old', graphRunId: 'graph-run-a' as GraphRunId, data: { status: { type: 'ok' } } },
+      { processId: 'p-running', graphRunId: 'graph-run-b' as GraphRunId, data: { status: { type: 'running' } } },
+    ] as ProcessDataForNode[];
+    const graphRuns = [
+      { graphRunId: 'graph-run-a' as GraphRunId, rootRunId: 'root-1' as RootRunId, graphId: 'g-1' as GraphId },
+      { graphRunId: 'graph-run-b' as GraphRunId, rootRunId: 'root-1' as RootRunId, graphId: 'g-1' as GraphId },
+    ];
+    const select = (selectedPage?: PageValue, options?: Parameters<typeof getSelectedProcessData>[2]) =>
+      getSelectedProcessData(processData, resolveCanvasExecutionProcessPage(selectedPage), options)?.processId;
+
+    assert.equal(select(undefined), 'p-running');
+    assert.equal(select(0), 'p-old');
+    assert.equal(select('latest'), 'p-running');
+    assert.equal(
+      select(undefined, {
+        graphRuns,
+        selectedGraphRun: 'graph-run-a' as GraphRunId,
+      }),
+      'p-old',
+    );
   });
 
   test('graph-run-aware selection filters node history by selected graph run', () => {
