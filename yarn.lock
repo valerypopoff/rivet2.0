@@ -2643,6 +2643,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@cspell/dict-companies@npm:^3.2.11":
+  version: 3.2.11
+  resolution: "@cspell/dict-companies@npm:3.2.11"
+  checksum: 10/7ebaa0a31c9d8c20645083b925bda258bbf36e8c139151c59883f426a84883adcca0ca990d9a8b343e8be8e8fbc3c841e8566c69759db9c074aa2e5917fa05d8
+  languageName: node
+  linkType: hard
+
+"@cspell/dict-software-terms@npm:^5.2.2":
+  version: 5.2.2
+  resolution: "@cspell/dict-software-terms@npm:5.2.2"
+  checksum: 10/b931d22ff3088f7f3bac7ad36492925f1ddc4d1c9eb9e237aa5d2ce0e5792054d6f7218cddee43bc56a6507424706f586745635f0d8db798e1c3440dd0ff2991
+  languageName: node
+  linkType: hard
+
 "@cspotcode/source-map-support@npm:^0.8.0":
   version: 0.8.1
   resolution: "@cspotcode/source-map-support@npm:0.8.1"
@@ -5524,6 +5538,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/nspell@npm:^2":
+  version: 2.1.6
+  resolution: "@types/nspell@npm:2.1.6"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10/3da3eb7511232b72f432f3031b873dd39269238d1de032a59f76f1ebc2726a9bfdc8d47883ebb3eb1a5a798037ba110ccebb29bf8202772728ac5badb914e3de
+  languageName: node
+  linkType: hard
+
 "@types/parse-json@npm:^4.0.0":
   version: 4.0.0
   resolution: "@types/parse-json@npm:4.0.0"
@@ -6226,6 +6249,8 @@ __metadata:
     "@atlaskit/theme": "npm:^12.6.2"
     "@atlaskit/toggle": "npm:^12.6.11"
     "@atlaskit/tokens": "npm:^1.28.0"
+    "@cspell/dict-companies": "npm:^3.2.11"
+    "@cspell/dict-software-terms": "npm:^5.2.2"
     "@dnd-kit/core": "npm:^6.0.8"
     "@dnd-kit/sortable": "npm:^7.0.2"
     "@emotion/eslint-plugin": "npm:^11.11.0"
@@ -6243,6 +6268,7 @@ __metadata:
     "@types/lodash-es": "npm:^4.17.10"
     "@types/marked": "npm:^6.0.0"
     "@types/node": "npm:^20.8.7"
+    "@types/nspell": "npm:^2"
     "@types/react": "npm:^18.2.31"
     "@types/react-color": "npm:^3.0.9"
     "@types/react-dom": "npm:^18.2.14"
@@ -6262,6 +6288,7 @@ __metadata:
     core-js: "npm:^3.33.1"
     csv-parse: "npm:^5.5.2"
     csv-stringify: "npm:^6.4.4"
+    dictionary-en: "npm:^4.0.0"
     emittery: "npm:^1.0.3"
     enquirer: "npm:^2.4.1"
     esbuild: "npm:^0.19.5"
@@ -6289,6 +6316,7 @@ __metadata:
     minimatch: "npm:^9.0.3"
     monaco-editor: "npm:^0.44.0"
     nanoid: "npm:^3.3.6"
+    nspell: "npm:^2.1.5"
     openai: "npm:^4.28.4"
     p-queue: "npm:^7.4.1"
     p-retry: "npm:^6.1.0"
@@ -9080,6 +9108,13 @@ __metadata:
   dependencies:
     dequal: "npm:^2.0.0"
   checksum: 10/3cc5f903d02d279d6dc4aa71ab6ed9898b9f4d1f861cc5421ce7357893c21b9520de78afb203c92bd650a6977ad0ca98195453a0707a39958cf5fea3b0a8ddd8
+  languageName: node
+  linkType: hard
+
+"dictionary-en@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "dictionary-en@npm:4.0.0"
+  checksum: 10/98166d2d9ae783f4dc5170e6e50c71fc9ae69935f209af96dca1bd3d782bfeba2b3b872a10502a1dd9635b225d1e0109b16265d54cfd74460ee355829d78a9cf
   languageName: node
   linkType: hard
 
@@ -14311,6 +14346,15 @@ __metadata:
   version: 0.2.0
   resolution: "nprogress@npm:0.2.0"
   checksum: 10/1870a74c054c01899f89e85122d7548832d083b5fa5d3cc6aafc2d4f92901e15face402ef557be5b103aed7b6e1406c656b842dec32b553b4b052031ea1b0935
+  languageName: node
+  linkType: hard
+
+"nspell@npm:^2.1.5":
+  version: 2.1.5
+  resolution: "nspell@npm:2.1.5"
+  dependencies:
+    is-buffer: "npm:^2.0.0"
+  checksum: 10/f5ec8fa46925e526ac22d0c0a16571ee773504461d481ef757c466a969cebd5e1e5c3b848f553a01c1186520d8ae95958e2e13b2a2587e2340258c64d42222ec
   languageName: node
   linkType: hard
 

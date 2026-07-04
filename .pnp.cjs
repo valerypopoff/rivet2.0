@@ -4694,6 +4694,24 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["@cspell/dict-companies", [\
+      ["npm:3.2.11", {\
+        "packageLocation": "./.yarn/cache/@cspell-dict-companies-npm-3.2.11-d8c86df608-7ebaa0a31c.zip/node_modules/@cspell/dict-companies/",\
+        "packageDependencies": [\
+          ["@cspell/dict-companies", "npm:3.2.11"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["@cspell/dict-software-terms", [\
+      ["npm:5.2.2", {\
+        "packageLocation": "./.yarn/cache/@cspell-dict-software-terms-npm-5.2.2-cb733b50ac-b931d22ff3.zip/node_modules/@cspell/dict-software-terms/",\
+        "packageDependencies": [\
+          ["@cspell/dict-software-terms", "npm:5.2.2"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@cspotcode/source-map-support", [\
       ["npm:0.8.1", {\
         "packageLocation": "./.yarn/cache/@cspotcode-source-map-support-npm-0.8.1-964f2de99d-b6e38a1712.zip/node_modules/@cspotcode/source-map-support/",\
@@ -8920,6 +8938,16 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["@types/nspell", [\
+      ["npm:2.1.6", {\
+        "packageLocation": "./.yarn/cache/@types-nspell-npm-2.1.6-e810adfd28-3da3eb7511.zip/node_modules/@types/nspell/",\
+        "packageDependencies": [\
+          ["@types/nspell", "npm:2.1.6"],\
+          ["@types/node", "npm:20.8.10"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@types/parse-json", [\
       ["npm:4.0.0", {\
         "packageLocation": "./.yarn/cache/@types-parse-json-npm-4.0.0-298522afa6-4df9de9815.zip/node_modules/@types/parse-json/",\
@@ -10045,6 +10073,8 @@ const RAW_RUNTIME_STATE =
           ["@atlaskit/theme", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.6.2"],\
           ["@atlaskit/toggle", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.6.11"],\
           ["@atlaskit/tokens", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:1.28.0"],\
+          ["@cspell/dict-companies", "npm:3.2.11"],\
+          ["@cspell/dict-software-terms", "npm:5.2.2"],\
           ["@dnd-kit/core", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:6.0.8"],\
           ["@dnd-kit/sortable", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:7.0.2"],\
           ["@emotion/eslint-plugin", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:11.11.0"],\
@@ -10062,6 +10092,7 @@ const RAW_RUNTIME_STATE =
           ["@types/lodash-es", "npm:4.17.10"],\
           ["@types/marked", "npm:6.0.0"],\
           ["@types/node", "npm:20.8.10"],\
+          ["@types/nspell", "npm:2.1.6"],\
           ["@types/react", "npm:18.2.31"],\
           ["@types/react-color", "npm:3.0.9"],\
           ["@types/react-dom", "npm:18.2.14"],\
@@ -10081,6 +10112,7 @@ const RAW_RUNTIME_STATE =
           ["core-js", "npm:3.33.1"],\
           ["csv-parse", "npm:5.5.2"],\
           ["csv-stringify", "npm:6.4.4"],\
+          ["dictionary-en", "npm:4.0.0"],\
           ["emittery", "npm:1.0.3"],\
           ["enquirer", "npm:2.4.1"],\
           ["esbuild", "npm:0.19.5"],\
@@ -10108,6 +10140,7 @@ const RAW_RUNTIME_STATE =
           ["minimatch", "npm:9.0.5"],\
           ["monaco-editor", "npm:0.44.0"],\
           ["nanoid", "npm:3.3.7"],\
+          ["nspell", "npm:2.1.5"],\
           ["openai", "npm:4.28.4"],\
           ["p-queue", "npm:7.4.1"],\
           ["p-retry", "npm:6.1.0"],\
@@ -13486,6 +13519,15 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["devlop", "npm:1.1.0"],\
           ["dequal", "npm:2.0.3"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["dictionary-en", [\
+      ["npm:4.0.0", {\
+        "packageLocation": "./.yarn/cache/dictionary-en-npm-4.0.0-5e8927ecdf-98166d2d9a.zip/node_modules/dictionary-en/",\
+        "packageDependencies": [\
+          ["dictionary-en", "npm:4.0.0"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -20155,6 +20197,16 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/nprogress-npm-0.2.0-c1c0973624-1870a74c05.zip/node_modules/nprogress/",\
         "packageDependencies": [\
           ["nprogress", "npm:0.2.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["nspell", [\
+      ["npm:2.1.5", {\
+        "packageLocation": "./.yarn/cache/nspell-npm-2.1.5-3d3a2548e2-f5ec8fa469.zip/node_modules/nspell/",\
+        "packageDependencies": [\
+          ["nspell", "npm:2.1.5"],\
+          ["is-buffer", "npm:2.0.5"]\
         ],\
         "linkType": "HARD"\
       }]\

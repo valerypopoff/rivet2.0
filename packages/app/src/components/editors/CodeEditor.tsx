@@ -26,6 +26,11 @@ import { getCodeNodeErrorLineHighlight, type CodeNodeErrorLineHighlight } from '
 import { type EditorInterpolationSyntax } from '../../utils/monaco/interpolationDiagnostics.js';
 import { buildCodeEditorModelCacheKey } from '../../utils/monaco/codeEditorModelCacheKey.js';
 import { shouldEnableMarkdownFolding } from '../../utils/monaco/markdownFoldingRanges.js';
+import {
+  clearCodeEditorSpellcheckMarkers,
+  runCodeEditorSpellcheck,
+  type SpellcheckResult,
+} from '../../utils/monaco/spellcheck.js';
 
 type CodeEditorDefinitionWithInterpolationSyntax = CodeEditorDefinition<ChartNode> & {
   interpolationSyntax?: EditorInterpolationSyntax;
@@ -33,6 +38,39 @@ type CodeEditorDefinitionWithInterpolationSyntax = CodeEditorDefinition<ChartNod
 
 function getErrorLineHighlightKey(highlight: CodeNodeErrorLineHighlight | undefined): string | undefined {
   return highlight ? `${highlight.runKey}:${highlight.line}` : undefined;
+}
+
+type SpellcheckStatus =
+  | { type: 'checking' }
+  | { type: 'done'; result: SpellcheckResult }
+  | { type: 'error'; message: string };
+
+function getSpellcheckStatusMessage(status: SpellcheckStatus | undefined): string | undefined {
+  if (!status) {
+    return undefined;
+  }
+
+  if (status.type === 'checking') {
+    return 'Checking spelling...';
+  }
+
+  if (status.type === 'error') {
+    return status.message;
+  }
+
+  const { issueCount, markerCount, reachedLimit } = status.result;
+
+  if (issueCount === 0) {
+    return 'No spelling issues found';
+  }
+
+  if (reachedLimit) {
+    return `${markerCount.toLocaleString()}+ possible spelling issues`;
+  }
+
+  const issueLabel = issueCount === 1 ? 'possible spelling issue' : 'possible spelling issues';
+
+  return `${issueCount.toLocaleString()} ${issueLabel}`;
 }
 
 export const DefaultCodeEditor: FC<
@@ -141,8 +179,10 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   errorLineHighlight,
 }) => {
   const editorInstance = useRef<monaco.editor.IStandaloneCodeEditor>();
+  const spellcheckRunId = useRef(0);
   const [displayValue, setDisplayValue] = useState(value ?? '');
   const [dismissedErrorLineHighlightKey, setDismissedErrorLineHighlightKey] = useState<string>();
+  const [spellcheckStatus, setSpellcheckStatus] = useState<SpellcheckStatus>();
 
   const onChangeLatest = useLatest(onChange);
   const isEditorReadOnly = isReadonly || isDisabled;
@@ -172,6 +212,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       ? errorLineHighlight
       : undefined;
   const textStats = showTextStats ? getTextEditorStats(displayValue) : undefined;
+  const spellcheckStatusMessage = getSpellcheckStatusMessage(spellcheckStatus);
 
   useEffect(() => {
     if (editorInstance.current) {
@@ -195,6 +236,9 @@ export const CodeEditor: FC<CodeEditorProps> = ({
 
   const handleEditorChange = (newText: string) => {
     setDisplayValue(newText);
+    spellcheckRunId.current += 1;
+    clearCodeEditorSpellcheckMarkers(editorInstance.current);
+    setSpellcheckStatus(undefined);
 
     if (errorLineHighlightKey && newText !== errorLineHighlight?.source) {
       setDismissedErrorLineHighlightKey(errorLineHighlightKey);
@@ -216,6 +260,40 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       }
     }
   };
+
+  const handleCheckSpelling = async () => {
+    const editor = editorInstance.current;
+
+    if (!editor) {
+      return;
+    }
+
+    const runId = spellcheckRunId.current + 1;
+    spellcheckRunId.current = runId;
+    setSpellcheckStatus({ type: 'checking' });
+
+    try {
+      const result = await runCodeEditorSpellcheck(editor);
+
+      if (spellcheckRunId.current === runId) {
+        setSpellcheckStatus({ type: 'done', result });
+      } else {
+        clearCodeEditorSpellcheckMarkers(editor);
+      }
+    } catch {
+      if (spellcheckRunId.current === runId) {
+        setSpellcheckStatus({ type: 'error', message: 'Spellcheck failed to load' });
+      }
+    }
+  };
+
+  useEffect(
+    () => () => {
+      spellcheckRunId.current += 1;
+      clearCodeEditorSpellcheckMarkers(editorInstance.current);
+    },
+    [],
+  );
 
   return (
     <div className="editor-wrapper-wrapper">
@@ -239,6 +317,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           autoFocus={autoFocus}
           enableFolding={effectiveEnableFolding}
           modelCacheKey={modelCacheKey}
+          onSpellcheckAction={handleCheckSpelling}
           editorKey={editorIdentityKey}
           nodeType={nodeType}
           defaultHeight={defaultHeight}
@@ -258,6 +337,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           autoFocus={autoFocus}
           enableFolding={effectiveEnableFolding}
           modelCacheKey={modelCacheKey}
+          onSpellcheckAction={handleCheckSpelling}
           editorKey={editorIdentityKey}
           defaultHeight={defaultHeight}
           errorLineHighlight={activeErrorLineHighlight}
@@ -268,10 +348,15 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           <HelperMessage>{postEditorHelperMessage}</HelperMessage>
         </div>
       )}
-      {textStats && (
+      {(textStats || spellcheckStatusMessage) && (
         <div className="editor-status-line">
-          <span>Words: {textStats.wordCount.toLocaleString()}</span>
-          <span>Characters: {textStats.characterCount.toLocaleString()}</span>
+          {textStats && (
+            <>
+              <span>Words: {textStats.wordCount.toLocaleString()}</span>
+              <span>Characters: {textStats.characterCount.toLocaleString()}</span>
+            </>
+          )}
+          {spellcheckStatusMessage && <span className="editor-spellcheck-status">{spellcheckStatusMessage}</span>}
         </div>
       )}
     </div>
@@ -291,6 +376,7 @@ type ViewportProps = {
   autoFocus: boolean | undefined;
   enableFolding: boolean | undefined;
   modelCacheKey: string | undefined;
+  onSpellcheckAction: () => void | Promise<void>;
   editorKey: string | undefined;
   errorLineHighlight?: CodeNodeErrorLineHighlight;
 };
@@ -314,6 +400,7 @@ const SuspendedCodeEditor: FC<ViewportProps> = ({
   autoFocus,
   enableFolding,
   modelCacheKey,
+  onSpellcheckAction,
   errorLineHighlight,
 }) => (
   <Suspense fallback={<CodeEditorLoadingFallback />}>
@@ -330,6 +417,7 @@ const SuspendedCodeEditor: FC<ViewportProps> = ({
       autoFocus={autoFocus}
       enableFolding={enableFolding}
       modelCacheKey={modelCacheKey}
+      onSpellcheckAction={onSpellcheckAction}
       errorLineHighlight={errorLineHighlight}
     />
   </Suspense>

@@ -45,3 +45,31 @@ test('Vite excludes lazy Tauri API imports from dependency optimization', () => 
     );
   }
 });
+
+test('Vite resolves dictionary-en through a browser-safe virtual module', () => {
+  const viteConfigSource = readFileSync(join(appRoot, 'vite.config.ts'), 'utf8');
+
+  assert.match(viteConfigSource, /include: \[[^\]]*'nspell'/);
+  assert.match(viteConfigSource, /const dictionaryEnBrowserPlugin = \(\): PluginOption =>/);
+  assert.match(viteConfigSource, /exclude: \[[^\]]*'dictionary-en'/);
+  assert.match(viteConfigSource, /enforce: 'pre'/);
+  assert.match(viteConfigSource, /if \(id === 'dictionary-en'\)/);
+  assert.match(viteConfigSource, /require\.resolve\('dictionary-en'\)/);
+  assert.match(viteConfigSource, /readFileSync\(join\(dictionaryDir, 'index\.aff'\), 'utf8'\)/);
+  assert.match(viteConfigSource, /readFileSync\(join\(dictionaryDir, 'index\.dic'\), 'utf8'\)/);
+  assert.match(viteConfigSource, /JSON\.stringify\(dictionary\)/);
+  assert.match(viteConfigSource, /dictionaryEnBrowserPlugin\(\),/);
+});
+
+test('Vite resolves CSpell dictionaries through a browser-safe word-list module', () => {
+  const viteConfigSource = readFileSync(join(appRoot, 'vite.config.ts'), 'utf8');
+
+  assert.match(viteConfigSource, /const cspellWordsBrowserPlugin = \(\): PluginOption =>/);
+  assert.match(viteConfigSource, /if \(id === 'rivet-cspell-words'\)/);
+  assert.match(viteConfigSource, /exclude: \[[\s\S]*'rivet-cspell-words'/);
+  assert.match(viteConfigSource, /require\.resolve\('@cspell\/dict-software-terms\/cspell-ext\.json'\)/);
+  assert.match(viteConfigSource, /require\.resolve\('@cspell\/dict-companies\/cspell-ext\.json'\)/);
+  assert.match(viteConfigSource, /gunzipSync\(file\)\.toString\('utf8'\)/);
+  assert.match(viteConfigSource, /parseCspellDictionaryWords/);
+  assert.match(viteConfigSource, /cspellWordsBrowserPlugin\(\),/);
+});

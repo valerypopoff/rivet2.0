@@ -272,6 +272,10 @@ export const defaultEditorContainerStyles = css`
     line-height: 1.4;
   }
 
+  .editor-spellcheck-status {
+    color: var(--foreground-muted);
+  }
+
   .node-editor-code-resize-handle {
     position: absolute;
     left: 0;

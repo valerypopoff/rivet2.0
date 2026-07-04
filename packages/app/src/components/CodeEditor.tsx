@@ -6,6 +6,12 @@ import { type EditorInterpolationSyntax } from '../utils/monaco/interpolationDia
 import { installJsStyleCommentHighlighting } from '../utils/monaco/commentHighlighting.js';
 import { shouldHighlightJsStyleComments } from '../utils/monaco/commentRangeScanner.js';
 import {
+  clearCodeEditorSpellcheckMarkers,
+  runCodeEditorSpellcheck,
+  SPELLCHECK_MARKER_OWNER,
+  type SpellcheckCapableCodeEditor,
+} from '../utils/monaco/spellcheck.js';
+import {
   getCodeEditorModelUri,
   getCodeEditorViewState,
   getOrCreateCodeEditorModel,
@@ -65,6 +71,8 @@ export type CodeEditorProps = {
   onFontSizeWheel?: (event: MultilineEditorFontSizeWheelEvent) => boolean;
   isNodeEditorResizing?: boolean;
   modelCacheKey?: string;
+  enableSpellcheckAction?: boolean;
+  onSpellcheckAction?: () => void | Promise<void>;
 };
 
 export const CodeEditor: FC<CodeEditorProps> = ({
@@ -91,14 +99,18 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   onFontSizeWheel,
   isNodeEditorResizing = false,
   modelCacheKey,
+  enableSpellcheckAction = true,
+  onSpellcheckAction,
 }) => {
   const editorContainer = useRef<HTMLDivElement>(null);
   const editorInstance = useRef<monaco.editor.IStandaloneCodeEditor>();
   const errorLineDecorationIds = useRef<string[]>([]);
   const pendingResizeLayoutRef = useRef(false);
+  const spellcheckActionDisposable = useRef<monaco.IDisposable>();
 
   const onChangeLatest = useLatest(onChange);
   const onContentHeightChangeLatest = useLatest(onContentHeightChange);
+  const onSpellcheckActionLatest = useLatest(onSpellcheckAction);
   const isNodeEditorResizingRef = useRef(isNodeEditorResizing);
 
   isNodeEditorResizingRef.current = isNodeEditorResizing;
@@ -141,7 +153,16 @@ export const CodeEditor: FC<CodeEditorProps> = ({
         ...scrollbar,
         alwaysConsumeMouseWheel: false,
       },
-    });
+    }) as SpellcheckCapableCodeEditor & monaco.editor.IStandaloneCodeEditor;
+
+    editor.__rivetSpellcheckMarkers = {
+      clear: () => {
+        monaco.editor.setModelMarkers(model, SPELLCHECK_MARKER_OWNER, []);
+      },
+      setMarkers: (markers) => {
+        monaco.editor.setModelMarkers(model, SPELLCHECK_MARKER_OWNER, [...markers]);
+      },
+    };
 
     const cachedViewState = getCodeEditorViewState(modelCacheKey);
     if (cachedViewState) {
@@ -176,6 +197,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     });
 
     editor.onDidChangeModelContent(() => {
+      clearCodeEditorSpellcheckMarkers(editor);
       onChangeLatest.current?.(editor.getValue());
     });
 
@@ -198,6 +220,8 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     return () => {
       currentOnChange?.(editor.getValue());
       saveCodeEditorViewState(modelCacheKey, editor.saveViewState());
+      spellcheckActionDisposable.current?.dispose();
+      spellcheckActionDisposable.current = undefined;
       editorInstance.current = undefined;
       if (editorRef) {
         editorRef.current = undefined;
@@ -206,6 +230,8 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       contentSizeChangeDisposable.dispose();
       interpolationSupport?.dispose();
       commentHighlightingSupport?.dispose();
+      clearCodeEditorSpellcheckMarkers(editor);
+      delete editor.__rivetSpellcheckMarkers;
       editor.dispose();
       if (!isCached) {
         model.dispose();
@@ -213,6 +239,46 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const editor = editorInstance.current as
+      | (SpellcheckCapableCodeEditor & monaco.editor.IStandaloneCodeEditor)
+      | undefined;
+
+    spellcheckActionDisposable.current?.dispose();
+    spellcheckActionDisposable.current = undefined;
+
+    if (!editor || !enableSpellcheckAction) {
+      return undefined;
+    }
+
+    spellcheckActionDisposable.current = editor.addAction({
+      id: 'rivet.checkSpelling',
+      label: 'Check spelling',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.5,
+      run: async () => {
+        try {
+          const customSpellcheckAction = onSpellcheckActionLatest.current;
+
+          if (customSpellcheckAction) {
+            await customSpellcheckAction();
+          } else {
+            await runCodeEditorSpellcheck(editor);
+          }
+        } catch {
+          // Some wrappers report spellcheck failures in their own status line.
+          // Keep the native Monaco action quiet so a dictionary load problem
+          // cannot break the context-menu flow.
+        }
+      },
+    });
+
+    return () => {
+      spellcheckActionDisposable.current?.dispose();
+      spellcheckActionDisposable.current = undefined;
+    };
+  }, [enableSpellcheckAction, onSpellcheckActionLatest]);
 
   useEffect(() => {
     const editor = editorInstance.current;

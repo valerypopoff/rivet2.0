@@ -1,5 +1,3 @@
-- Simple grammar check in the text editor (for prompts)
-
 - A way to escape and unescape text for JSON
 
 - When zoom out the canvas, the main buttons in teh output area should scale down slower than the nod eitself. Like, when the node zoomed out 2x, the buttons in the output area should only zoom out 1.5x. Or should work when the scale is lower than some threshold. Choose the threshold wisely.

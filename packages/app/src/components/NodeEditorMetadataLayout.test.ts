@@ -352,6 +352,45 @@ test('node code editor text stats are editor-definition driven', () => {
   assert.doesNotMatch(codeEditorSource, /node\.type === 'text' && editorDef\.dataKey === 'text'/);
 });
 
+test('node code editor spellcheck is Monaco context-menu driven', () => {
+  const nodeEditorCodeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
+  const lazyCodeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
+  const defaultNodeEditorSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditor.tsx'), 'utf8');
+  const spellcheckSource = readFileSync(join(componentsDir, '..', 'utils', 'monaco', 'spellcheck.ts'), 'utf8');
+
+  assert.doesNotMatch(nodeEditorCodeEditorSource, /shouldEnableSpellcheck/);
+  assert.match(nodeEditorCodeEditorSource, /runCodeEditorSpellcheck\(editor\)/);
+  assert.doesNotMatch(nodeEditorCodeEditorSource, /enableSpellcheckAction=\{/);
+  assert.match(nodeEditorCodeEditorSource, /onSpellcheckAction=\{handleCheckSpelling\}/);
+  assert.match(
+    nodeEditorCodeEditorSource,
+    /if \(spellcheckRunId\.current === runId\) \{[\s\S]*setSpellcheckStatus\(\{ type: 'done', result \}\);[\s\S]*\} else \{[\s\S]*clearCodeEditorSpellcheckMarkers\(editor\);/,
+  );
+  assert.doesNotMatch(nodeEditorCodeEditorSource, />\s+Check spelling\s+<\/button>/);
+  assert.match(nodeEditorCodeEditorSource, /className="editor-spellcheck-status"/);
+  assert.match(lazyCodeEditorSource, /enableSpellcheckAction\?: boolean;/);
+  assert.match(lazyCodeEditorSource, /onSpellcheckAction\?: \(\) => void \| Promise<void>;/);
+  assert.match(lazyCodeEditorSource, /enableSpellcheckAction = true/);
+  assert.doesNotMatch(lazyCodeEditorSource, /hasSpellcheckAction/);
+  assert.match(lazyCodeEditorSource, /!editor \|\| !enableSpellcheckAction/);
+  assert.match(lazyCodeEditorSource, /editor\.addAction\(\{[\s\S]*id: 'rivet\.checkSpelling'/);
+  assert.match(lazyCodeEditorSource, /label: 'Check spelling'/);
+  assert.match(lazyCodeEditorSource, /contextMenuGroupId: 'navigation'/);
+  assert.match(lazyCodeEditorSource, /const customSpellcheckAction = onSpellcheckActionLatest\.current/);
+  assert.match(lazyCodeEditorSource, /await runCodeEditorSpellcheck\(editor\);/);
+  assert.match(lazyCodeEditorSource, /clearCodeEditorSpellcheckMarkers\(editor\);[\s\S]*onChangeLatest\.current/);
+  assert.match(lazyCodeEditorSource, /clearCodeEditorSpellcheckMarkers\(editor\);[\s\S]*editor\.dispose\(\);/);
+  assert.doesNotMatch(defaultNodeEditorSource, /\.node-editor-spellcheck-button/);
+  assert.doesNotMatch(defaultNodeEditorSource, /\.node-editor-code-header-label-empty/);
+  assert.doesNotMatch(spellcheckSource, /SPELLCHECK_LANGUAGES/);
+  assert.doesNotMatch(spellcheckSource, /getLanguageId\(\)/);
+  assert.match(
+    spellcheckSource,
+    /import\('nspell'\)[\s\S]*import\('dictionary-en'\)[\s\S]*import\('rivet-cspell-words'\)/,
+  );
+  assert.doesNotMatch(nodeEditorCodeEditorSource, /import\('nspell'\)|import\('dictionary-en'\)/);
+});
+
 test('node settings code editors use the active app display theme', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
 
