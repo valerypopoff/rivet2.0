@@ -822,7 +822,7 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
     onDeselect();
   });
 
-  useHotkeys('esc', handleEscape, [handleEscape]);
+  useHotkeys('esc', handleEscape, { ignoreEventWhen: (event) => event.defaultPrevented }, [handleEscape]);
 
   const nodeDescriptionChanged = useStableCallback((description: string) => {
     updateNode({ ...selectedNode, description });

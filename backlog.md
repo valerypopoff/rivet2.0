@@ -1,10 +1,12 @@
+- Simple grammar check in the text editor (for prompts)
 
-- When sekecting multiline text in output modal, it visually selects -1 and +1 character but when I copyб it only copies what I actually selected
+- A way to escape and unescape text for JSON
+
+- When zoom out the canvas, the main buttons in teh output area should scale down slower than the nod eitself. Like, when the node zoomed out 2x, the buttons in the output area should only zoom out 1.5x. Or should work when the scale is lower than some threshold. Choose the threshold wisely.
 
 - In settings-updates, do not show the skipped version if the currently installed version is newer than the skipped one
 
 - While the workflow is running, send some kind of a number of run nodes that can be a progress indicator
-
 
 - Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
 

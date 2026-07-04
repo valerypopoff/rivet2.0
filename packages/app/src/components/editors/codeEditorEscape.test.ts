@@ -6,8 +6,37 @@ import { handleCodeEditorEscape } from './codeEditorEscape.js';
 function createEditorWithSuggestController(suggestController?: unknown): monaco.editor.IStandaloneCodeEditor {
   return {
     getContribution: (id: string) => {
-      assert.equal(id, 'editor.contrib.suggestController');
-      return suggestController;
+      if (id === 'editor.contrib.suggestController') {
+        return suggestController;
+      }
+
+      if (id === 'editor.contrib.findController') {
+        return undefined;
+      }
+
+      assert.fail(`Unexpected editor contribution id: ${id}`);
+    },
+  } as monaco.editor.IStandaloneCodeEditor;
+}
+
+function createEditorWithControllers({
+  findController,
+  suggestController,
+}: {
+  findController?: unknown;
+  suggestController?: unknown;
+}): monaco.editor.IStandaloneCodeEditor {
+  return {
+    getContribution: (id: string) => {
+      if (id === 'editor.contrib.suggestController') {
+        return suggestController;
+      }
+
+      if (id === 'editor.contrib.findController') {
+        return findController;
+      }
+
+      return undefined;
     },
   } as monaco.editor.IStandaloneCodeEditor;
 }
@@ -59,6 +88,64 @@ describe('codeEditorEscape', () => {
     assert.equal(result, 'closed-panel');
     assert.equal(didCancelSuggestWidget, false);
     assert.equal(didClosePanel, true);
+  });
+
+  test('closes the find widget before closing the panel', () => {
+    let didCloseFindWidget = false;
+    let didClosePanel = false;
+
+    const result = handleCodeEditorEscape({
+      editor: createEditorWithControllers({
+        findController: {
+          closeFindWidget: () => {
+            didCloseFindWidget = true;
+          },
+          getState: () => ({ isRevealed: true }),
+        },
+        suggestController: {
+          widget: {
+            isInitialized: true,
+            value: { _state: 0 },
+          },
+        },
+      }),
+      onClose: () => {
+        didClosePanel = true;
+      },
+    });
+
+    assert.equal(result, 'closed-find');
+    assert.equal(didCloseFindWidget, true);
+    assert.equal(didClosePanel, false);
+  });
+
+  test('dismisses suggest before closing the find widget', () => {
+    let didCancelSuggestWidget = false;
+    let didCloseFindWidget = false;
+
+    const result = handleCodeEditorEscape({
+      editor: createEditorWithControllers({
+        findController: {
+          closeFindWidget: () => {
+            didCloseFindWidget = true;
+          },
+          getState: () => ({ isRevealed: true }),
+        },
+        suggestController: {
+          cancelSuggestWidget: () => {
+            didCancelSuggestWidget = true;
+          },
+          widget: {
+            isInitialized: true,
+            value: { _state: 1 },
+          },
+        },
+      }),
+    });
+
+    assert.equal(result, 'dismissed-suggest');
+    assert.equal(didCancelSuggestWidget, true);
+    assert.equal(didCloseFindWidget, false);
   });
 
   test('closes the panel when the suggest widget is uninitialized', () => {

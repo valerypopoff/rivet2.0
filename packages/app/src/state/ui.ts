@@ -88,6 +88,16 @@ export const fullscreenOutputModalBoundsState = atomWithStorage<HorizontalModalB
   storage,
 );
 
+export const DEFAULT_JSON_STRING_PREVIEW_POPOVER_WIDTH = 420;
+export const MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH = 260;
+export const MAX_JSON_STRING_PREVIEW_POPOVER_WIDTH = 800;
+
+export const jsonStringPreviewPopoverWidthState = atomWithStorage<number>(
+  'jsonStringPreviewPopoverWidthState',
+  DEFAULT_JSON_STRING_PREVIEW_POPOVER_WIDTH,
+  storage,
+);
+
 export const graphSearchPanelHeightState = atomWithStorage<number>('graphSearchPanelHeightState', 420, storage);
 
 export const leftSidebarWidthState = atomWithStorage<number>(

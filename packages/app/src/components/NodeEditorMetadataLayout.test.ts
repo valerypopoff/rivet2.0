@@ -97,6 +97,15 @@ test('node editor keeps selected-node editor identity stable across panel rerend
   assert.match(nodeEditorSource, /: selectedNode,\s+\[isVariant, selectedNode, selectedVariantData\]/);
 });
 
+test('node settings Escape hotkey lets editor-local popups close first', () => {
+  const nodeEditorSource = readFileSync(join(componentsDir, 'NodeEditor.tsx'), 'utf8');
+
+  assert.match(
+    nodeEditorSource,
+    /useHotkeys\('esc', handleEscape, \{ ignoreEventWhen: \(event\) => event\.defaultPrevented \}, \[handleEscape\]\)/,
+  );
+});
+
 test('node code editor lazy loading keeps the field shell visible', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
   const defaultNodeEditorSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditor.tsx'), 'utf8');
@@ -145,7 +154,10 @@ test('linked node settings entry points open the source library node', () => {
     /\.with\('node-open-prefab-source'[\s\S]*openLinkedNodeLibraryNode\(nodesById\[nodeId\]\)/,
   );
   assert.doesNotMatch(nodeEditorSource, /NodePrefabInstanceEditor/);
-  assert.match(nodeEditorSource, /if \(selectedNode && isNodePrefabInstanceNode\(selectedNode\)\) \{[\s\S]*deselect\(\);/);
+  assert.match(
+    nodeEditorSource,
+    /if \(selectedNode && isNodePrefabInstanceNode\(selectedNode\)\) \{[\s\S]*deselect\(\);/,
+  );
   assert.match(nodeLibraryBuilderSource, /EditNodeCommandOverrideContext/);
   assert.match(nodeLibraryBuilderSource, /const editPrefabSourceNode: EditNodeCommand = useStableCallback/);
   assert.match(nodeLibraryBuilderSource, /prefabsBySourceNodeId\.get\(params\.nodeId\)/);
