@@ -27,7 +27,7 @@ import {
   jsonStringPreviewPopoverWidthState,
 } from '../../state/ui.js';
 import {
-  findJsonStringPreviewRangeAtOffset,
+  findJsonStringPreviewRangeAtPosition,
   getJsonStringPreviewRanges,
   type JsonStringPreviewRange,
 } from './jsonStringPreviewRanges.js';
@@ -35,7 +35,12 @@ import {
 const POPOVER_HEADER_ESTIMATED_HEIGHT = 43;
 const POPOVER_GAP = 8;
 const VIEWPORT_PADDING = 12;
+const MIN_VISIBLE_POPOVER_BODY_HEIGHT = 48;
 const POPOVER_RESIZE_KEYBOARD_STEP = 20;
+const BUTTON_VIEWPORT_WIDTH = 30;
+const BUTTON_VIEWPORT_HEIGHT = 20;
+const BUTTON_ANCHOR_OFFSET_X = 4;
+const BUTTON_ANCHOR_OFFSET_Y = 1;
 
 const jsonStringPreviewAffordanceStyles = css`
   .json-string-preview-button {
@@ -56,7 +61,6 @@ const jsonStringPreviewAffordanceStyles = css`
     pointer-events: auto;
     position: fixed;
     touch-action: none;
-    transform: translate(4px, 1px);
     z-index: 4000;
   }
 
@@ -205,6 +209,11 @@ type ButtonState = {
   top: number;
 };
 
+type ButtonViewportRect = {
+  bottom: number;
+  left: number;
+};
+
 export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> = ({
   buttonCoordinateMode = 'viewport',
   editor,
@@ -229,6 +238,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const buttonKeepsPreviewRef = useRef(false);
   const popoverOpenRef = useRef(false);
+  const popoverStateRef = useRef<PopoverState | null>(null);
   const [livePopoverWidth, setLivePopoverWidth] = useState<number | null>(null);
   const [livePopoverMaxHeight, setLivePopoverMaxHeight] = useState<number | null>(null);
   const [buttonState, setButtonState] = useState<ButtonState | null>(null);
@@ -250,6 +260,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   rangesRef.current = ranges;
   buttonStateRef.current = buttonState;
   popoverOpenRef.current = popover != null;
+  popoverStateRef.current = popover;
 
   const getButtonStateForRange = useCallback(
     (range: JsonStringPreviewRange): ButtonState | undefined => {
@@ -268,6 +279,10 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
         return undefined;
       }
 
+      if (!doesScrolledPositionFitPreviewButton(visiblePosition, editor)) {
+        return undefined;
+      }
+
       const editorRect = editorElement.getBoundingClientRect();
       const coordinateMode = buttonCoordinateMode;
 
@@ -278,9 +293,9 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       const rootRect = coordinateMode === 'root' ? rootElement?.getBoundingClientRect() : undefined;
 
       return {
-        left: editorRect.left + visiblePosition.left - (rootRect?.left ?? 0),
+        left: editorRect.left + visiblePosition.left - (rootRect?.left ?? 0) + BUTTON_ANCHOR_OFFSET_X,
         range,
-        top: editorRect.top + visiblePosition.top - (rootRect?.top ?? 0),
+        top: editorRect.top + visiblePosition.top - (rootRect?.top ?? 0) + BUTTON_ANCHOR_OFFSET_Y,
       };
     },
     [buttonCoordinateMode, editor, rootRef],
@@ -300,27 +315,41 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     });
   }, []);
 
+  const clearPreviewAffordance = useCallback(() => {
+    popoverOpenRef.current = false;
+    activeRangeRef.current = null;
+    buttonRangeRef.current = null;
+    setVisibleButtonState(null);
+    setPopover(null);
+  }, [setVisibleButtonState]);
+
   const hideButton = useCallback(() => {
     if (popoverOpenRef.current || buttonKeepsPreviewRef.current) {
       return;
     }
 
-    activeRangeRef.current = null;
-    buttonRangeRef.current = null;
-    setVisibleButtonState(null);
-  }, [setVisibleButtonState]);
+    clearPreviewAffordance();
+  }, [clearPreviewAffordance]);
 
   const showButtonForRange = useCallback(
-    (range: JsonStringPreviewRange | undefined) => {
+    (range: JsonStringPreviewRange | undefined, options: { clearUnavailable?: boolean } = {}) => {
       if (!range) {
-        hideButton();
+        if (options.clearUnavailable === true) {
+          clearPreviewAffordance();
+        } else {
+          hideButton();
+        }
         return;
       }
 
       const nextButtonState = getButtonStateForRange(range);
 
       if (!nextButtonState) {
-        hideButton();
+        if (options.clearUnavailable === true) {
+          clearPreviewAffordance();
+        } else {
+          hideButton();
+        }
         return;
       }
 
@@ -328,7 +357,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       buttonRangeRef.current = range;
       setVisibleButtonState(nextButtonState);
     },
-    [getButtonStateForRange, hideButton, setVisibleButtonState],
+    [clearPreviewAffordance, getButtonStateForRange, hideButton, setVisibleButtonState],
   );
 
   const getRangeAtPosition = useCallback(
@@ -339,7 +368,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
         return undefined;
       }
 
-      return findJsonStringPreviewRangeAtOffset(rangesRef.current, model.getOffsetAt(position));
+      return findJsonStringPreviewRangeAtPosition(rangesRef.current, model.getOffsetAt(position), position.lineNumber);
     },
     [editor],
   );
@@ -361,35 +390,99 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     [editor],
   );
 
-  const calculatePopoverPosition = useCallback(() => {
-    const buttonRect = buttonRef.current?.getBoundingClientRect();
+  const getButtonViewportRect = useCallback(
+    (button: ButtonState) => {
+      const rootElement = rootRef.current;
+      const rootRect = buttonCoordinateMode === 'root' ? rootElement?.getBoundingClientRect() : undefined;
 
-    if (!buttonRect) {
-      return undefined;
-    }
+      if (buttonCoordinateMode === 'root' && !rootRect) {
+        return undefined;
+      }
 
-    const ownerWindow = buttonRef.current?.ownerDocument.defaultView ?? window;
-    const viewportWidth = ownerWindow.innerWidth;
-    const viewportHeight = ownerWindow.innerHeight;
-    const effectiveWidth = Math.min(popoverWidth, Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH, viewportWidth - 24));
-    const effectiveHeight = Math.min(
-      popoverMaxHeight + POPOVER_HEADER_ESTIMATED_HEIGHT,
-      Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT, viewportHeight - VIEWPORT_PADDING * 2),
-    );
-    const maxLeft = Math.max(VIEWPORT_PADDING, viewportWidth - effectiveWidth - VIEWPORT_PADDING);
-    const left = Math.min(Math.max(buttonRect.left, VIEWPORT_PADDING), maxLeft);
-    const belowTop = buttonRect.bottom + POPOVER_GAP;
-    const aboveTop = buttonRect.top - effectiveHeight - POPOVER_GAP;
-    const top =
-      belowTop + effectiveHeight > viewportHeight - VIEWPORT_PADDING && aboveTop > VIEWPORT_PADDING
-        ? aboveTop
-        : belowTop;
+      const left = (rootRect?.left ?? 0) + button.left;
+      const top = (rootRect?.top ?? 0) + button.top;
 
-    return {
-      left,
-      top: Math.max(VIEWPORT_PADDING, top),
-    };
-  }, [popoverMaxHeight, popoverWidth]);
+      return {
+        bottom: top + BUTTON_VIEWPORT_HEIGHT,
+        left,
+      };
+    },
+    [buttonCoordinateMode, rootRef],
+  );
+
+  const calculatePopoverPosition = useCallback(
+    (buttonRect: ButtonViewportRect) => {
+      const ownerWindow =
+        buttonRef.current?.ownerDocument.defaultView ??
+        rootRef.current?.ownerDocument.defaultView ??
+        editor?.getDomNode()?.ownerDocument.defaultView ??
+        window;
+      const viewportWidth = ownerWindow.innerWidth;
+      const viewportHeight = ownerWindow.innerHeight;
+      const effectiveWidth = Math.min(
+        popoverWidth,
+        Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH, viewportWidth - 24),
+      );
+      const maxLeft = Math.max(VIEWPORT_PADDING, viewportWidth - effectiveWidth - VIEWPORT_PADDING);
+      const left = Math.min(Math.max(buttonRect.left, VIEWPORT_PADDING), maxLeft);
+      const top = buttonRect.bottom + POPOVER_GAP;
+      const maxTop = Math.max(
+        VIEWPORT_PADDING,
+        viewportHeight - VIEWPORT_PADDING - POPOVER_HEADER_ESTIMATED_HEIGHT - MIN_VISIBLE_POPOVER_BODY_HEIGHT,
+      );
+
+      return {
+        left,
+        top: Math.max(VIEWPORT_PADDING, Math.min(top, maxTop)),
+      };
+    },
+    [editor, popoverWidth, rootRef],
+  );
+
+  const showResolvedButtonState = useCallback(
+    (nextButtonState: ButtonState) => {
+      activeRangeRef.current = nextButtonState.range;
+      buttonRangeRef.current = nextButtonState.range;
+      setVisibleButtonState(nextButtonState);
+    },
+    [setVisibleButtonState],
+  );
+
+  const repositionPopoverForRange = useCallback(
+    (range: JsonStringPreviewRange) => {
+      const nextButtonState = getButtonStateForRange(range);
+
+      if (!nextButtonState) {
+        clearPreviewAffordance();
+        return undefined;
+      }
+
+      const nextButtonRect = getButtonViewportRect(nextButtonState);
+
+      if (!nextButtonRect) {
+        clearPreviewAffordance();
+        return undefined;
+      }
+
+      const nextPosition = calculatePopoverPosition(nextButtonRect);
+
+      if (!nextPosition) {
+        clearPreviewAffordance();
+        return undefined;
+      }
+
+      showResolvedButtonState(nextButtonState);
+      setPopover((currentPopover) => (currentPopover ? { ...currentPopover, ...nextPosition } : currentPopover));
+      return nextPosition;
+    },
+    [
+      calculatePopoverPosition,
+      clearPreviewAffordance,
+      getButtonStateForRange,
+      getButtonViewportRect,
+      showResolvedButtonState,
+    ],
+  );
 
   const closePopover = useCallback(
     (restoreButtonFocus = false) => {
@@ -408,16 +501,39 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   );
 
   const openPopover = useCallback(() => {
-    const range = buttonStateRef.current?.range ?? activeRangeRef.current ?? buttonRangeRef.current;
-    const position = calculatePopoverPosition();
-
-    if (!range || !position) {
+    if (popoverOpenRef.current) {
       return;
     }
 
+    const range = buttonStateRef.current?.range ?? activeRangeRef.current ?? buttonRangeRef.current;
+
+    if (!range) {
+      return;
+    }
+
+    const nextButtonState = getButtonStateForRange(range);
+
+    if (!nextButtonState) {
+      return;
+    }
+
+    const buttonRect = getButtonViewportRect(nextButtonState);
+
+    if (!buttonRect) {
+      return;
+    }
+
+    const position = calculatePopoverPosition(buttonRect);
+
+    if (!position) {
+      return;
+    }
+
+    showResolvedButtonState(nextButtonState);
+
     popoverOpenRef.current = true;
     setPopover({ range, ...position });
-  }, [calculatePopoverPosition]);
+  }, [calculatePopoverPosition, getButtonStateForRange, getButtonViewportRect, showResolvedButtonState]);
 
   const setPopoverWidth = useCallback(
     (width: number) => {
@@ -554,10 +670,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 
   useLayoutEffect(() => {
     if (!enabled || !editor || ranges.length === 0) {
-      activeRangeRef.current = null;
-      buttonRangeRef.current = null;
-      setVisibleButtonState(null);
-      setPopover(null);
+      clearPreviewAffordance();
       return;
     }
 
@@ -585,7 +698,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       const activeRange = activeRangeRef.current;
 
       if (activeRange) {
-        showButtonForRange(activeRange);
+        showButtonForRange(activeRange, { clearUnavailable: true });
       }
     };
 
@@ -630,12 +743,11 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       focusDisposable.dispose();
       scrollDisposable.dispose();
       layoutDisposable.dispose();
-      activeRangeRef.current = null;
-      buttonRangeRef.current = null;
+      clearPreviewAffordance();
       buttonKeepsPreviewRef.current = false;
-      setVisibleButtonState(null);
     };
   }, [
+    clearPreviewAffordance,
     editor,
     enabled,
     getCursorRange,
@@ -649,11 +761,8 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   ]);
 
   useEffect(() => {
-    activeRangeRef.current = null;
-    buttonRangeRef.current = null;
-    setVisibleButtonState(null);
-    setPopover(null);
-  }, [setVisibleButtonState, text]);
+    clearPreviewAffordance();
+  }, [clearPreviewAffordance, text]);
 
   useEffect(() => cleanupResizeListeners, [cleanupResizeListeners]);
 
@@ -664,14 +773,13 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 
     const popoverWindow = buttonRef.current?.ownerDocument.defaultView ?? window;
     const repositionPopover = () => {
-      const nextPosition = calculatePopoverPosition();
+      const currentPopover = popoverStateRef.current;
 
-      if (!nextPosition) {
-        closePopover();
+      if (!currentPopover) {
         return;
       }
 
-      setPopover((currentPopover) => (currentPopover ? { ...currentPopover, ...nextPosition } : currentPopover));
+      repositionPopoverForRange(currentPopover.range);
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -714,7 +822,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       scrollDisposable?.dispose();
       layoutDisposable?.dispose();
     };
-  }, [calculatePopoverPosition, closePopover, editor, popoverRangeId]);
+  }, [closePopover, editor, popoverRangeId, repositionPopoverForRange]);
 
   if (!buttonState && !popover) {
     return null;
@@ -885,6 +993,24 @@ function getPopoverResizeStartMaxHeight(textElement: HTMLElement | null, fallbac
   );
 }
 
+function doesScrolledPositionFitPreviewButton(
+  visiblePosition: { left: number; top: number; height: number },
+  editor: monaco.editor.IStandaloneCodeEditor,
+): boolean {
+  const layoutInfo = editor.getLayoutInfo();
+  const visibleBottom = visiblePosition.top + Math.max(1, visiblePosition.height);
+  const buttonBottom = visiblePosition.top + BUTTON_VIEWPORT_HEIGHT;
+  const buttonRight = visiblePosition.left + BUTTON_VIEWPORT_WIDTH;
+
+  return (
+    visibleBottom > 0 &&
+    visiblePosition.top >= 0 &&
+    buttonBottom <= layoutInfo.height &&
+    visiblePosition.left >= 0 &&
+    buttonRight <= layoutInfo.width
+  );
+}
+
 function getVisibleJsonStringPreviewPopoverWidth(width: number, left?: number, ownerWindow?: Window | null): number {
   const clampedWidth = clampJsonStringPreviewPopoverWidth(width);
   const targetWindow = ownerWindow ?? window;
@@ -911,11 +1037,7 @@ function getVisibleJsonStringPreviewPopoverMaxHeight(
     return clampedMaxHeight;
   }
 
-  return Math.min(
-    clampedMaxHeight,
-    Math.max(
-      MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
-      targetWindow.innerHeight - top - POPOVER_HEADER_ESTIMATED_HEIGHT - VIEWPORT_PADDING,
-    ),
-  );
+  const availableHeight = targetWindow.innerHeight - top - POPOVER_HEADER_ESTIMATED_HEIGHT - VIEWPORT_PADDING;
+
+  return Math.min(clampedMaxHeight, Math.max(MIN_VISIBLE_POPOVER_BODY_HEIGHT, availableHeight));
 }

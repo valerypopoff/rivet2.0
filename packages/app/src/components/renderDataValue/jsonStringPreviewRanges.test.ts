@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findJsonStringPreviewRangeAtOffset, getJsonStringPreviewRanges } from './jsonStringPreviewRanges.js';
+import {
+  findJsonStringPreviewRangeAtOffset,
+  findJsonStringPreviewRangeAtPosition,
+  getJsonStringPreviewRanges,
+} from './jsonStringPreviewRanges.js';
 
 test('detects escaped object string values and ignores object keys', () => {
   const text = '{\n  "plain": "short",\n  "escaped": "line\\nnext"\n}';
@@ -43,12 +47,12 @@ test('does not mark plain short strings', () => {
 });
 
 test('marks long decoded strings by threshold', () => {
-  const text = JSON.stringify({ value: 'x'.repeat(121) }, null, 2);
+  const text = JSON.stringify({ value: 'x'.repeat(50) }, null, 2);
 
   const ranges = getJsonStringPreviewRanges(text);
 
   assert.equal(ranges.length, 1);
-  assert.equal(ranges[0]?.decodedValue, 'x'.repeat(121));
+  assert.equal(ranges[0]?.decodedValue, 'x'.repeat(50));
 });
 
 test('supports custom length thresholds', () => {
@@ -115,4 +119,35 @@ test('finds preview ranges by displayed text offset', () => {
   assert.equal(findJsonStringPreviewRangeAtOffset(ranges, range.startOffset), range);
   assert.equal(findJsonStringPreviewRangeAtOffset(ranges, range.endOffset), range);
   assert.equal(findJsonStringPreviewRangeAtOffset(ranges, range.endOffset + 1), undefined);
+});
+
+test('finds preview ranges from any position on the same field line', () => {
+  const text = '{\n  "value": "line\\nnext"\n}';
+  const ranges = getJsonStringPreviewRanges(text);
+  const range = ranges[0]!;
+  const keyOffset = text.indexOf('"value"');
+
+  assert.equal(findJsonStringPreviewRangeAtPosition(ranges, keyOffset, 2), range);
+  assert.equal(findJsonStringPreviewRangeAtPosition(ranges, text.indexOf('  '), 2), range);
+  assert.equal(findJsonStringPreviewRangeAtPosition(ranges, 0, 1), undefined);
+});
+
+test('exact string hits win before same-line fallback', () => {
+  const text = '{"first":"line\\nnext","second":"tab\\tvalue"}';
+  const ranges = getJsonStringPreviewRanges(text);
+  const firstRange = ranges[0]!;
+  const secondRange = ranges[1]!;
+
+  assert.equal(findJsonStringPreviewRangeAtPosition(ranges, firstRange.startOffset + 1, 1), firstRange);
+  assert.equal(findJsonStringPreviewRangeAtPosition(ranges, secondRange.startOffset + 1, 1), secondRange);
+});
+
+test('same-line fallback chooses the nearest string value', () => {
+  const text = '{"first":"line\\nnext","second":"tab\\tvalue"}';
+  const ranges = getJsonStringPreviewRanges(text);
+  const firstRange = ranges[0]!;
+  const secondRange = ranges[1]!;
+
+  assert.equal(findJsonStringPreviewRangeAtPosition(ranges, firstRange.endOffset + 1, 1), firstRange);
+  assert.equal(findJsonStringPreviewRangeAtPosition(ranges, secondRange.startOffset - 1, 1), secondRange);
 });
