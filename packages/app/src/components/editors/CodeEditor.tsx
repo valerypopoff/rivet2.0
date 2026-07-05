@@ -108,12 +108,14 @@ const FONT_SIZE_COMMANDS = [
 ];
 
 const CodeEditorFooter: FC<{
+  center: ReactNode;
   left: ReactNode;
   fontSize: number;
   onAdjustFontSize: (command: MultilineEditorFontSizeCommand) => void;
-}> = ({ left, fontSize, onAdjustFontSize }) => (
+}> = ({ center, left, fontSize, onAdjustFontSize }) => (
   <div className="node-editor-code-footer">
     <div className="node-editor-code-footer-left">{left}</div>
+    <div className="node-editor-code-footer-center">{center}</div>
     <div className="node-editor-code-font-controls" aria-label="Editor font size controls">
       <span className="node-editor-code-font-size">Font size: {fontSize}px</span>
       {FONT_SIZE_COMMANDS.map(({ command, label, icon, getDisabled }) => (
@@ -281,7 +283,20 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const textStats = showTextStats ? getTextEditorStats(displayValue) : undefined;
   const spellcheckStatusMessage = getSpellcheckStatusMessage(spellcheckStatus);
   const mountedEditor = mountedEditorState?.editorMountKey === editorMountKey ? mountedEditorState.editor : undefined;
-  const footer = <CodeEditorFooter left={footerLeft} fontSize={fontSize} onAdjustFontSize={adjustFontSize} />;
+  const footerCenter = (textStats || spellcheckStatusMessage) && (
+    <div className="editor-status-line">
+      {textStats && (
+        <>
+          <span>Words: {textStats.wordCount.toLocaleString()}</span>
+          <span>Characters: {textStats.characterCount.toLocaleString()}</span>
+        </>
+      )}
+      {spellcheckStatusMessage && <span className="editor-spellcheck-status">{spellcheckStatusMessage}</span>}
+    </div>
+  );
+  const footer = (
+    <CodeEditorFooter center={footerCenter} left={footerLeft} fontSize={fontSize} onAdjustFontSize={adjustFontSize} />
+  );
   const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
     setMountedEditorState({ editor, editorMountKey });
   };
@@ -424,17 +439,6 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       {postEditorHelperMessage && (
         <div className="node-editor-code-helper node-editor-code-helper-after">
           <HelperMessage>{postEditorHelperMessage}</HelperMessage>
-        </div>
-      )}
-      {(textStats || spellcheckStatusMessage) && (
-        <div className="editor-status-line">
-          {textStats && (
-            <>
-              <span>Words: {textStats.wordCount.toLocaleString()}</span>
-              <span>Characters: {textStats.characterCount.toLocaleString()}</span>
-            </>
-          )}
-          {spellcheckStatusMessage && <span className="editor-spellcheck-status">{spellcheckStatusMessage}</span>}
         </div>
       )}
     </div>

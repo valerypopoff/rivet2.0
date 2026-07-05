@@ -506,7 +506,10 @@ test('node settings JSON code editors expose unescaped string previews', () => {
 
 test('node settings code editors own footer font controls and AI assist trigger placement', () => {
   const defaultNodeEditorSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditor.tsx'), 'utf8');
-  const defaultNodeEditorFieldSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditorField.tsx'), 'utf8');
+  const defaultNodeEditorFieldSource = readFileSync(
+    join(componentsDir, 'editors', 'DefaultNodeEditorField.tsx'),
+    'utf8',
+  );
   const nodeEditorCodeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
   const aiAssistEditorSource = readFileSync(join(componentsDir, 'editors', 'custom', 'AiAssistEditorBase.tsx'), 'utf8');
   const fontSizeHookSource = readFileSync(join(componentsDir, '..', 'hooks', 'useMultilineEditorFontSize.ts'), 'utf8');
@@ -518,25 +521,34 @@ test('node settings code editors own footer font controls and AI assist trigger 
   assert.match(defaultNodeEditorSource, /NodeCodeEditorFooterActionContext\.Provider/);
   assert.match(defaultNodeEditorSource, /codeEditorFooterLeft=\{footerLeftAction\}/);
   assert.match(defaultNodeEditorSource, /\.node-editor-code-footer \{/);
+  assert.match(defaultNodeEditorSource, /grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\);/);
+  assert.match(defaultNodeEditorSource, /\.node-editor-code-footer-center \{/);
   assert.match(defaultNodeEditorSource, /\.node-editor-code-font-button \{/);
   assert.match(defaultNodeEditorSource, /\.node-editor-code-ai-footer-button \{/);
+  assert.match(defaultNodeEditorSource, /\.node-editor-code-ai-footer-button svg \{/);
   assert.match(defaultNodeEditorSource, /\.node-editor-code-ai-pair > \.row:empty \{/);
 
   assert.match(defaultNodeEditorFieldSource, /codeEditorFooterLeft\?: ReactNode;/);
   assert.match(defaultNodeEditorFieldSource, /footerLeft=\{codeEditorFooterLeft\}/);
 
   assert.match(nodeEditorCodeEditorSource, /useMultilineEditorFontSize/);
+  assert.match(nodeEditorCodeEditorSource, /const footerCenter = \(textStats \|\| spellcheckStatusMessage\) && \(/);
+  assert.match(nodeEditorCodeEditorSource, /center=\{footerCenter\}/);
   assert.match(nodeEditorCodeEditorSource, /Font size: \{fontSize\}px/);
   assert.match(nodeEditorCodeEditorSource, /onAdjustFontSize\('increase'\)|onAdjustFontSize\(command\)/);
   assert.match(nodeEditorCodeEditorSource, /onAdjustFontSize\('decrease'\)|onAdjustFontSize\(command\)/);
   assert.match(nodeEditorCodeEditorSource, /\{editorProps\.footer\}/);
-  assert.match(
-    nodeEditorCodeEditorSource,
-    /className="editor-viewport-shell node-editor-static-code-editor"/,
-  );
+  assert.match(nodeEditorCodeEditorSource, /className="editor-viewport-shell node-editor-static-code-editor"/);
 
   assert.match(aiAssistEditorSource, /NodeCodeEditorFooterActionContext/);
-  assert.match(aiAssistEditorSource, /const footerLabel = label === 'Generate Using AI' \? 'Generate using AI' : label;/);
+  assert.match(aiAssistEditorSource, /ai-sparks-solid\.svg\?react/);
+  assert.match(aiAssistEditorSource, /<Tooltip content=\{footerLabel\} tag="span">/);
+  assert.match(aiAssistEditorSource, /aria-label=\{footerLabel\}/);
+  assert.match(aiAssistEditorSource, /<SparklesIcon \/>/);
+  assert.match(
+    aiAssistEditorSource,
+    /const footerLabel = label === 'Generate Using AI' \? 'Generate using AI' : label;/,
+  );
   assert.match(aiAssistEditorSource, /setFooterPanelOpen\(\(isOpen\) => !isOpen\)/);
   assert.match(aiAssistEditorSource, /return footerPanelOpen \?/);
 

@@ -226,9 +226,9 @@ export const defaultEditorContainerStyles = css`
   }
 
   .node-editor-code-footer {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
     min-height: 34px;
     gap: 12px;
     padding: 8px 2px 0;
@@ -240,25 +240,41 @@ export const defaultEditorContainerStyles = css`
   .node-editor-code-footer-left {
     display: flex;
     align-items: center;
+    justify-self: start;
+    min-width: 0;
+  }
+
+  .node-editor-code-footer-center {
+    justify-self: center;
     min-width: 0;
   }
 
   .node-editor-code-ai-footer-button {
     display: inline-flex;
     align-items: center;
-    min-height: 24px;
-    padding: 0 2px;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
     border: 0;
+    border-radius: 5px;
     background: transparent;
     color: var(--foreground-muted);
-    font: inherit;
     cursor: pointer;
-    transition: color 120ms ease;
+    transition:
+      background 120ms ease,
+      color 120ms ease;
   }
 
   .node-editor-code-ai-footer-button:hover,
   .node-editor-code-ai-footer-button[aria-expanded='true'] {
+    background: var(--grey-darkerish);
     color: var(--primary);
+  }
+
+  .node-editor-code-ai-footer-button svg {
+    width: 16px;
+    height: 16px;
   }
 
   .node-editor-code-font-controls {
@@ -266,7 +282,7 @@ export const defaultEditorContainerStyles = css`
     align-items: center;
     justify-content: flex-end;
     gap: 6px;
-    margin-left: auto;
+    justify-self: end;
     white-space: nowrap;
   }
 
@@ -367,12 +383,14 @@ export const defaultEditorContainerStyles = css`
   .editor-status-line {
     display: flex;
     flex-wrap: wrap;
+    justify-content: center;
     column-gap: 24px;
     row-gap: 2px;
-    margin-top: 6px;
     color: var(--foreground-muted);
     font-size: var(--ui-font-size-compact);
     line-height: 1.4;
+    text-align: center;
+    white-space: nowrap;
   }
 
   .editor-spellcheck-status {
@@ -492,7 +510,17 @@ const NodeCodeEditorWithAiAssist: FC<
     onClose?: () => void;
     onRefreshEditors: () => void;
   }
-> = ({ node, onChange, isReadonly, onClose, onRefreshEditors, aiAssistEditor, aiAssistIndex, codeEditor, codeEditorIndex }) => {
+> = ({
+  node,
+  onChange,
+  isReadonly,
+  onClose,
+  onRefreshEditors,
+  aiAssistEditor,
+  aiAssistIndex,
+  codeEditor,
+  codeEditorIndex,
+}) => {
   const [footerLeftAction, setFooterLeftAction] = useState<ReactNode | null>(null);
   const footerActionBridge = useMemo(() => ({ setFooterLeftAction }), []);
 

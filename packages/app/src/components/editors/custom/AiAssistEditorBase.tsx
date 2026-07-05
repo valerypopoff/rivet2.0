@@ -33,6 +33,8 @@ import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
 import { useEnvironmentProvider } from '../../../providers/ProvidersContext.js';
 import { NodeCodeEditorFooterActionContext } from '../NodeCodeEditorFooterActionContext.js';
+import SparklesIcon from '../../../assets/icons/ai-sparks-solid.svg?react';
+import { Tooltip } from '../../Tooltip.js';
 
 const styles = css`
   --ai-assist-radius: calc(16px * var(--ui-font-scale));
@@ -193,15 +195,18 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
     }
 
     footerActionBridge.setFooterLeftAction(
-      <button
-        type="button"
-        className="node-editor-code-ai-footer-button"
-        aria-expanded={footerPanelOpen}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => setFooterPanelOpen((isOpen) => !isOpen)}
-      >
-        {footerLabel}
-      </button>,
+      <Tooltip content={footerLabel} tag="span">
+        <button
+          type="button"
+          className="node-editor-code-ai-footer-button"
+          aria-label={footerLabel}
+          aria-expanded={footerPanelOpen}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setFooterPanelOpen((isOpen) => !isOpen)}
+        >
+          <SparklesIcon />
+        </button>
+      </Tooltip>,
     );
 
     return () => {
