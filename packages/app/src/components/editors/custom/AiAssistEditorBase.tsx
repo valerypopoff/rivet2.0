@@ -1,4 +1,4 @@
-import { useState, type FC, ReactNode } from 'react';
+import { useContext, useEffect, useState, type FC, ReactNode } from 'react';
 import { type SharedEditorProps } from '../SharedEditorProps';
 import {
   getError,
@@ -32,6 +32,7 @@ import Collapsible from 'react-collapsible';
 import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
 import { useEnvironmentProvider } from '../../../providers/ProvidersContext.js';
+import { NodeCodeEditorFooterActionContext } from '../NodeCodeEditorFooterActionContext.js';
 
 const styles = css`
   --ai-assist-radius: calc(16px * var(--ui-font-scale));
@@ -168,6 +169,7 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
 }: AiAssistEditorBaseProps<TNodeData, TOutputs>) => {
   const [prompt, setPrompt] = useState('');
   const [working, setWorking] = useState(false);
+  const [footerPanelOpen, setFooterPanelOpen] = useState(defaultOpen);
 
   const settings = useAtomValue(settingsState);
   const plugins = useDependsOnPlugins();
@@ -181,6 +183,31 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
     handleKeyDown: handleMultilineEditorFontSizeKeyDown,
     handleWheel: handleMultilineEditorFontSizeWheel,
   } = useMultilineEditorFontSize();
+  const footerActionBridge = useContext(NodeCodeEditorFooterActionContext);
+  const useFooterTrigger = collapsible && footerActionBridge != null;
+  const footerLabel = label === 'Generate Using AI' ? 'Generate using AI' : label;
+
+  useEffect(() => {
+    if (!useFooterTrigger) {
+      return undefined;
+    }
+
+    footerActionBridge.setFooterLeftAction(
+      <button
+        type="button"
+        className="node-editor-code-ai-footer-button"
+        aria-expanded={footerPanelOpen}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => setFooterPanelOpen((isOpen) => !isOpen)}
+      >
+        {footerLabel}
+      </button>,
+    );
+
+    return () => {
+      footerActionBridge.setFooterLeftAction(null);
+    };
+  }, [footerActionBridge, footerLabel, footerPanelOpen, useFooterTrigger]);
 
   const generate = async () => {
     try {
@@ -324,6 +351,14 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
         {() => <div css={styles}>{editorBody}</div>}
       </Field>
     );
+  }
+
+  if (useFooterTrigger) {
+    return footerPanelOpen ? (
+      <div css={styles} className="ai-assist-footer-panel">
+        {editorBody}
+      </div>
+    ) : null;
   }
 
   const toggle = (isOpen?: boolean) => (

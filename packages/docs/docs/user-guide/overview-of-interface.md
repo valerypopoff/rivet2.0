@@ -88,7 +88,9 @@ Variants allow you to save slight differences to a node, and test them without l
 
 This area contains the editors for the currently selected node. The editor will change depending on the type of node you are editing. For example, the shown [Text Node](../node-reference/text) has a text editor, and the [LLM Chat Node](../node-reference/llm-chat) has provider, model, reasoning, response-format, tools, and technical-details sections.
 
-Text and code editors have their own font-size control, separate from the main app UI font size. When focus is inside one of these editors, press **Ctrl + +** or **Cmd + +** to make the editor text larger, **Ctrl + -** or **Cmd + -** to make it smaller, and **Ctrl + 0** or **Cmd + 0** to reset it. You can also hold **Ctrl** or **Cmd** and use the mouse wheel or trackpad scroll while the pointer is over the editor to scale the editor font.
+Text and code editors have their own font-size control, separate from the main app UI font size. Use the **+** and **-** buttons in the editor footer to change the editor font size, or press **Ctrl + +** / **Cmd + +** and **Ctrl + -** / **Cmd + -** while focus is inside the editor. **Ctrl + 0** / **Cmd + 0** resets the size. You can also hold **Ctrl** or **Cmd** and use the mouse wheel or trackpad scroll while the pointer is over the editor to scale the editor font.
+
+When a node supports AI drafting for a text or code field, the editor footer shows **Generate using AI** on the left. Use it to open the node's AI generation panel without leaving the editor.
 
 Markdown editors in node settings can fold heading sections and fenced code blocks, similar to code and JSON editors that show fold controls for structured content.
 

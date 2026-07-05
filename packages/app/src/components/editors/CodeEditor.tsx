@@ -2,7 +2,9 @@ import { HelperMessage, Label } from '@atlaskit/form';
 import { type CodeEditorDefinition, type ChartNode } from '@valerypopoff/rivet2-core';
 import { useLatest, useDebounceFn } from 'ahooks';
 import { useAtomValue } from 'jotai';
-import { type FC, type MutableRefObject, useRef, useEffect, Suspense, useMemo, useState } from 'react';
+import { type FC, type MutableRefObject, type ReactNode, useRef, useEffect, Suspense, useMemo, useState } from 'react';
+import PlusIcon from 'majesticons/line/plus-line.svg?react';
+import MinusIcon from 'majesticons/line/minus-line.svg?react';
 import { type monaco } from '../../utils/monaco';
 import { themeState } from '../../state/settings.js';
 import { graphMetadataState } from '../../state/graph.js';
@@ -32,6 +34,13 @@ import {
   type SpellcheckResult,
 } from '../../utils/monaco/spellcheck.js';
 import { JsonStringPreviewAffordance } from '../renderDataValue/JsonStringPreviewAffordance.js';
+import { useMultilineEditorFontSize } from '../../hooks/useMultilineEditorFontSize.js';
+import {
+  MAX_MULTILINE_EDITOR_FONT_SIZE,
+  MIN_MULTILINE_EDITOR_FONT_SIZE,
+  type MultilineEditorFontSizeCommand,
+} from '../../utils/multilineEditorFontSize.js';
+import { Tooltip } from '../Tooltip.js';
 
 type CodeEditorDefinitionWithInterpolationSyntax = CodeEditorDefinition<ChartNode> & {
   interpolationSyntax?: EditorInterpolationSyntax;
@@ -83,11 +92,54 @@ function shouldEnableJsonStringPreview(language: string | undefined): boolean {
   return language === 'json';
 }
 
+const FONT_SIZE_COMMANDS = [
+  {
+    command: 'decrease' as const,
+    label: 'Decrease editor font size',
+    icon: <MinusIcon />,
+    getDisabled: (fontSize: number) => fontSize <= MIN_MULTILINE_EDITOR_FONT_SIZE,
+  },
+  {
+    command: 'increase' as const,
+    label: 'Increase editor font size',
+    icon: <PlusIcon />,
+    getDisabled: (fontSize: number) => fontSize >= MAX_MULTILINE_EDITOR_FONT_SIZE,
+  },
+];
+
+const CodeEditorFooter: FC<{
+  left: ReactNode;
+  fontSize: number;
+  onAdjustFontSize: (command: MultilineEditorFontSizeCommand) => void;
+}> = ({ left, fontSize, onAdjustFontSize }) => (
+  <div className="node-editor-code-footer">
+    <div className="node-editor-code-footer-left">{left}</div>
+    <div className="node-editor-code-font-controls" aria-label="Editor font size controls">
+      <span className="node-editor-code-font-size">Font size: {fontSize}px</span>
+      {FONT_SIZE_COMMANDS.map(({ command, label, icon, getDisabled }) => (
+        <Tooltip key={command} content={label}>
+          <button
+            type="button"
+            className="node-editor-code-font-button"
+            aria-label={label}
+            disabled={getDisabled(fontSize)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onAdjustFontSize(command)}
+          >
+            {icon}
+          </button>
+        </Tooltip>
+      ))}
+    </div>
+  </div>
+);
+
 export const DefaultCodeEditor: FC<
   SharedEditorProps & {
     editor: CodeEditorDefinition<ChartNode>;
+    footerLeft?: ReactNode;
   }
-> = ({ node, isReadonly, isDisabled, onChange, editor: editorDef, onClose }) => {
+> = ({ node, isReadonly, isDisabled, onChange, editor: editorDef, onClose, footerLeft }) => {
   const helperMessage = getHelperMessage(editorDef, node.data);
   const postEditorHelperMessage = getPostEditorHelperMessage(editorDef, node.data);
   const nodeLatest = useLatest(node);
@@ -123,6 +175,7 @@ export const DefaultCodeEditor: FC<
     nodeType: node.type,
     defaultHeight: editorDef.height,
     showTextStats: 'showTextStats' in editorDef && editorDef.showTextStats === true,
+    footerLeft,
   };
 
   if ((node.type === 'code' || node.type === 'codeNew') && editorDef.dataKey === 'code') {
@@ -165,6 +218,7 @@ type CodeEditorProps = {
   defaultHeight?: number;
   showTextStats?: boolean;
   errorLineHighlight?: CodeNodeErrorLineHighlight;
+  footerLeft?: ReactNode;
 };
 
 export const CodeEditor: FC<CodeEditorProps> = ({
@@ -187,6 +241,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   defaultHeight,
   showTextStats = false,
   errorLineHighlight,
+  footerLeft = null,
 }) => {
   const editorInstance = useRef<monaco.editor.IStandaloneCodeEditor>();
   const spellcheckRunId = useRef(0);
@@ -194,6 +249,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const [dismissedErrorLineHighlightKey, setDismissedErrorLineHighlightKey] = useState<string>();
   const [mountedEditorState, setMountedEditorState] = useState<MountedEditorState>();
   const [spellcheckStatus, setSpellcheckStatus] = useState<SpellcheckStatus>();
+  const { fontSize, adjustFontSize } = useMultilineEditorFontSize();
 
   const onChangeLatest = useLatest(onChange);
   const isEditorReadOnly = isReadonly || isDisabled;
@@ -225,6 +281,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const textStats = showTextStats ? getTextEditorStats(displayValue) : undefined;
   const spellcheckStatusMessage = getSpellcheckStatusMessage(spellcheckStatus);
   const mountedEditor = mountedEditorState?.editorMountKey === editorMountKey ? mountedEditorState.editor : undefined;
+  const footer = <CodeEditorFooter left={footerLeft} fontSize={fontSize} onAdjustFontSize={adjustFontSize} />;
   const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
     setMountedEditorState({ editor, editorMountKey });
   };
@@ -339,6 +396,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           nodeType={nodeType}
           defaultHeight={defaultHeight}
           errorLineHighlight={activeErrorLineHighlight}
+          footer={footer}
         />
       ) : (
         <NonResizableCodeEditorViewport
@@ -360,6 +418,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           editorKey={editorIdentityKey}
           defaultHeight={defaultHeight}
           errorLineHighlight={activeErrorLineHighlight}
+          footer={footer}
         />
       )}
       {postEditorHelperMessage && (
@@ -400,6 +459,7 @@ type ViewportProps = {
   onEditorMount: (editor: monaco.editor.IStandaloneCodeEditor) => void;
   editorKey: string | undefined;
   errorLineHighlight?: CodeNodeErrorLineHighlight;
+  footer: ReactNode;
 };
 
 const CodeEditorLoadingFallback: FC = () => (
@@ -465,6 +525,7 @@ const ResizableCodeEditorViewport: FC<
       <div className="editor-wrapper">
         <SuspendedCodeEditor {...editorProps} />
       </div>
+      {editorProps.footer}
       <ResizeHandle
         className="node-editor-code-resize-handle"
         dragCursor={resizeCursorStyles.vertical}
@@ -492,8 +553,11 @@ const NonResizableCodeEditorViewport: FC<
   const staticViewportStyle = isValidHeight(defaultHeight) ? { minHeight: Math.round(defaultHeight) } : undefined;
 
   return (
-    <div ref={rootRef} className="editor-wrapper node-editor-static-code-editor" style={staticViewportStyle}>
-      <SuspendedCodeEditor {...editorProps} />
+    <div ref={rootRef} className="editor-viewport-shell node-editor-static-code-editor" style={staticViewportStyle}>
+      <div className="editor-wrapper">
+        <SuspendedCodeEditor {...editorProps} />
+      </div>
+      {editorProps.footer}
       <JsonStringPreviewAffordance
         buttonCoordinateMode="root"
         editor={editorProps.mountedEditor}

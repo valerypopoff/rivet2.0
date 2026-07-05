@@ -504,6 +504,46 @@ test('node settings JSON code editors expose unescaped string previews', () => {
   assert.doesNotMatch(nodeEditorCodeEditorSource, /node-settings-json-string-preview|widgetId|data-widget-id/);
 });
 
+test('node settings code editors own footer font controls and AI assist trigger placement', () => {
+  const defaultNodeEditorSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditor.tsx'), 'utf8');
+  const defaultNodeEditorFieldSource = readFileSync(join(componentsDir, 'editors', 'DefaultNodeEditorField.tsx'), 'utf8');
+  const nodeEditorCodeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
+  const aiAssistEditorSource = readFileSync(join(componentsDir, 'editors', 'custom', 'AiAssistEditorBase.tsx'), 'utf8');
+  const fontSizeHookSource = readFileSync(join(componentsDir, '..', 'hooks', 'useMultilineEditorFontSize.ts'), 'utf8');
+
+  assert.match(defaultNodeEditorSource, /const AI_ASSIST_TARGET_DATA_KEYS: Record<string, string> = \{/);
+  assert.match(defaultNodeEditorSource, /PromptNodeAiAssist: 'promptText'/);
+  assert.match(defaultNodeEditorSource, /GptFunctionNodeJsonSchemaAiAssist: 'schema'/);
+  assert.match(defaultNodeEditorSource, /NodeCodeEditorWithAiAssist/);
+  assert.match(defaultNodeEditorSource, /NodeCodeEditorFooterActionContext\.Provider/);
+  assert.match(defaultNodeEditorSource, /codeEditorFooterLeft=\{footerLeftAction\}/);
+  assert.match(defaultNodeEditorSource, /\.node-editor-code-footer \{/);
+  assert.match(defaultNodeEditorSource, /\.node-editor-code-font-button \{/);
+  assert.match(defaultNodeEditorSource, /\.node-editor-code-ai-footer-button \{/);
+  assert.match(defaultNodeEditorSource, /\.node-editor-code-ai-pair > \.row:empty \{/);
+
+  assert.match(defaultNodeEditorFieldSource, /codeEditorFooterLeft\?: ReactNode;/);
+  assert.match(defaultNodeEditorFieldSource, /footerLeft=\{codeEditorFooterLeft\}/);
+
+  assert.match(nodeEditorCodeEditorSource, /useMultilineEditorFontSize/);
+  assert.match(nodeEditorCodeEditorSource, /Font size: \{fontSize\}px/);
+  assert.match(nodeEditorCodeEditorSource, /onAdjustFontSize\('increase'\)|onAdjustFontSize\(command\)/);
+  assert.match(nodeEditorCodeEditorSource, /onAdjustFontSize\('decrease'\)|onAdjustFontSize\(command\)/);
+  assert.match(nodeEditorCodeEditorSource, /\{editorProps\.footer\}/);
+  assert.match(
+    nodeEditorCodeEditorSource,
+    /className="editor-viewport-shell node-editor-static-code-editor"/,
+  );
+
+  assert.match(aiAssistEditorSource, /NodeCodeEditorFooterActionContext/);
+  assert.match(aiAssistEditorSource, /const footerLabel = label === 'Generate Using AI' \? 'Generate using AI' : label;/);
+  assert.match(aiAssistEditorSource, /setFooterPanelOpen\(\(isOpen\) => !isOpen\)/);
+  assert.match(aiAssistEditorSource, /return footerPanelOpen \?/);
+
+  assert.match(fontSizeHookSource, /adjustFontSize/);
+  assert.match(fontSizeHookSource, /return \{\s+fontSize: normalizedFontSize,\s+adjustFontSize,/);
+});
+
 test('lazy Monaco editor chunk stays independent from app UI state', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
   const lazyComponentsSource = readFileSync(join(componentsDir, 'LazyComponents.tsx'), 'utf8');
