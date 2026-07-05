@@ -134,6 +134,7 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   assert.match(jsonStringPreviewAffordanceSource, /getTargetAtClientPoint\(clientX, clientY\)/);
   assert.match(jsonStringPreviewAffordanceSource, /editor\.onMouseDown/);
   assert.match(jsonStringPreviewAffordanceSource, /editor\.onDidFocusEditorText/);
+  assert.match(jsonStringPreviewAffordanceSource, /relatedTarget instanceof ownerWindow\.Node/);
   assert.match(jsonStringPreviewAffordanceSource, /onPointerDownCapture=\{\(event\) =>/);
   assert.match(jsonStringPreviewAffordanceSource, /onPointerDown=\{\(event\) =>/);
   assert.match(jsonStringPreviewAffordanceSource, /event\.key === 'Enter' \|\| event\.key === ' '/);
@@ -145,22 +146,47 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
     /popoverWindow\.addEventListener\('pointerdown', handlePointerDown, true\)/,
   );
   assert.match(jsonStringPreviewAffordanceSource, /useAtom\(jsonStringPreviewPopoverWidthState\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /useAtom\(jsonStringPreviewPopoverMaxHeightState\)/);
   assert.match(jsonStringPreviewAffordanceSource, /clampJsonStringPreviewPopoverWidth/);
+  assert.match(jsonStringPreviewAffordanceSource, /clampJsonStringPreviewPopoverMaxHeight/);
   assert.match(jsonStringPreviewAffordanceSource, /getVisibleJsonStringPreviewPopoverWidth/);
+  assert.match(jsonStringPreviewAffordanceSource, /getVisibleJsonStringPreviewPopoverMaxHeight/);
+  assert.match(jsonStringPreviewAffordanceSource, /decodedTextRef = useRef<HTMLPreElement \| null>\(null\)/);
   assert.match(
     jsonStringPreviewAffordanceSource,
     /style=\{\{ left: popover\.left, top: popover\.top, width: visiblePopoverWidth \}\}/,
   );
-  assert.match(jsonStringPreviewAffordanceSource, /createPortal\(popoverElement, popoverPortalElement\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /ref=\{decodedTextRef\}/);
+  assert.match(jsonStringPreviewAffordanceSource, /style=\{\{ maxHeight: visiblePopoverMaxHeight \}\}/);
+  assert.match(jsonStringPreviewAffordanceSource, /buttonCoordinateMode === 'viewport'/);
+  assert.match(jsonStringPreviewAffordanceSource, /createPortal\(buttonElement, portalElement\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /createPortal\(popoverElement, portalElement\)/);
   assert.match(jsonStringPreviewAffordanceSource, /onPointerDown=\{handleResizePointerDown\}/);
-  assert.match(jsonStringPreviewAffordanceSource, /aria-label="Resize preview width"/);
+  assert.match(jsonStringPreviewAffordanceSource, /cursor: nesw-resize/);
+  assert.match(jsonStringPreviewAffordanceSource, /left: 0/);
+  assert.match(jsonStringPreviewAffordanceSource, /startMaxHeight \+ pointerEvent\.clientY - startY/);
+  assert.match(
+    jsonStringPreviewAffordanceSource,
+    /getPopoverResizeStartMaxHeight\(decodedTextRef\.current, popoverMaxHeight\)/,
+  );
+  assert.match(jsonStringPreviewAffordanceSource, /const currentResizeMaxHeight = getPopoverResizeStartMaxHeight/);
+  assert.match(
+    jsonStringPreviewAffordanceSource,
+    /renderedContentHeight = textElement\.getBoundingClientRect\(\)\.height - verticalPadding/,
+  );
+  assert.match(jsonStringPreviewAffordanceSource, /startWidth - \(pointerEvent\.clientX - startX\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /rightEdge - nextWidth/);
+  assert.match(jsonStringPreviewAffordanceSource, /case 'ArrowDown':/);
+  assert.match(jsonStringPreviewAffordanceSource, /aria-label="Resize preview"/);
   assert.doesNotMatch(jsonStringPreviewAffordanceSource, /json-string-preview-close-button/);
   assert.doesNotMatch(jsonStringPreviewRangesSource, /JSON\.parse\(text\)/);
   assert.match(jsonStringPreviewRangesSource, /JSON\.parse\(rawLiteral\)/);
   assert.match(jsonStringPreviewRangesSource, /isObjectKeyLiteral/);
   assert.match(jsonStringPreviewRangesSource, /DEFAULT_JSON_STRING_PREVIEW_MIN_LENGTH = 120/);
   assert.match(uiStateSource, /jsonStringPreviewPopoverWidthState = atomWithStorage<number>/);
+  assert.match(uiStateSource, /jsonStringPreviewPopoverMaxHeightState = atomWithStorage<number>/);
   assert.match(uiStateSource, /DEFAULT_JSON_STRING_PREVIEW_POPOVER_WIDTH = 420/);
+  assert.match(uiStateSource, /DEFAULT_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT = 280/);
   assert.match(useFullscreenOutputSearchSource, /function clearProviderMatches\(provider: SearchProvider\): void/);
   assert.match(useFullscreenOutputSearchSource, /provider\.clearMatches/);
   assert.match(

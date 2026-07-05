@@ -17,9 +17,13 @@ import { createPortal } from 'react-dom';
 import type { monaco } from '../../utils/monaco.js';
 import { copyToClipboard } from '../../utils/copyToClipboard.js';
 import {
+  DEFAULT_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
   DEFAULT_JSON_STRING_PREVIEW_POPOVER_WIDTH,
+  MAX_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
   MAX_JSON_STRING_PREVIEW_POPOVER_WIDTH,
+  MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
   MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH,
+  jsonStringPreviewPopoverMaxHeightState,
   jsonStringPreviewPopoverWidthState,
 } from '../../state/ui.js';
 import {
@@ -28,10 +32,10 @@ import {
   type JsonStringPreviewRange,
 } from './jsonStringPreviewRanges.js';
 
-const POPOVER_MAX_HEIGHT = 280;
+const POPOVER_HEADER_ESTIMATED_HEIGHT = 43;
 const POPOVER_GAP = 8;
 const VIEWPORT_PADDING = 12;
-const POPOVER_WIDTH_KEYBOARD_STEP = 20;
+const POPOVER_RESIZE_KEYBOARD_STEP = 20;
 
 const jsonStringPreviewAffordanceStyles = css`
   .json-string-preview-button {
@@ -86,7 +90,7 @@ const jsonStringPreviewAffordanceStyles = css`
     display: flex;
     gap: 8px;
     min-width: 0;
-    padding: 8px 10px;
+    padding: 10px 14px;
   }
 
   .json-string-preview-popover-header > span {
@@ -126,9 +130,8 @@ const jsonStringPreviewAffordanceStyles = css`
     font-size: var(--ui-font-size-sm);
     line-height: 1.45;
     margin: 0;
-    max-height: ${POPOVER_MAX_HEIGHT}px;
     overflow: auto;
-    padding: 10px;
+    padding: 14px 16px 20px;
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -137,30 +140,43 @@ const jsonStringPreviewAffordanceStyles = css`
     background: transparent;
     border: 0;
     bottom: 0;
-    cursor: ew-resize;
+    cursor: nesw-resize;
+    height: 18px;
+    left: 0;
     padding: 0;
     position: absolute;
-    right: -4px;
-    top: 0;
-    width: 10px;
+    width: 18px;
+  }
+
+  .json-string-preview-resize-handle::before,
+  .json-string-preview-resize-handle::after {
+    border-bottom: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+    border-left: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+    content: '';
+    opacity: 0.42;
+    position: absolute;
+    transition: opacity 120ms ease-out;
+  }
+
+  .json-string-preview-resize-handle::before {
+    bottom: 4px;
+    height: 8px;
+    left: 4px;
+    width: 8px;
   }
 
   .json-string-preview-resize-handle::after {
-    background: color-mix(in srgb, var(--primary) 70%, transparent);
-    border-radius: 999px;
-    bottom: 12px;
-    content: '';
-    opacity: 0;
-    position: absolute;
-    right: 4px;
-    top: 12px;
-    transition: opacity 120ms ease-out;
-    width: 2px;
+    bottom: 8px;
+    height: 4px;
+    left: 8px;
+    width: 4px;
   }
 
+  .json-string-preview-resize-handle:hover::before,
   .json-string-preview-resize-handle:hover::after,
+  .json-string-preview-resize-handle:focus-visible::before,
   .json-string-preview-resize-handle:focus-visible::after {
-    opacity: 1;
+    opacity: 0.9;
   }
 
   .json-string-preview-resize-handle:focus-visible {
@@ -198,6 +214,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   text,
 }) => {
   const [savedPopoverWidth, setSavedPopoverWidth] = useAtom(jsonStringPreviewPopoverWidthState);
+  const [savedPopoverMaxHeight, setSavedPopoverMaxHeight] = useAtom(jsonStringPreviewPopoverMaxHeightState);
   const ranges = useMemo(
     () => (enabled ? getJsonStringPreviewRanges(text, { minDecodedLength }) : []),
     [enabled, minDecodedLength, text],
@@ -207,18 +224,26 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   const buttonRangeRef = useRef<JsonStringPreviewRange | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const buttonStateRef = useRef<ButtonState | null>(null);
+  const decodedTextRef = useRef<HTMLPreElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const buttonKeepsPreviewRef = useRef(false);
   const popoverOpenRef = useRef(false);
   const [livePopoverWidth, setLivePopoverWidth] = useState<number | null>(null);
+  const [livePopoverMaxHeight, setLivePopoverMaxHeight] = useState<number | null>(null);
   const [buttonState, setButtonState] = useState<ButtonState | null>(null);
   const [popover, setPopover] = useState<PopoverState | null>(null);
   const popoverRangeId = popover?.range.id;
   const popoverWidth = livePopoverWidth ?? clampJsonStringPreviewPopoverWidth(savedPopoverWidth);
+  const popoverMaxHeight = livePopoverMaxHeight ?? clampJsonStringPreviewPopoverMaxHeight(savedPopoverMaxHeight);
   const visiblePopoverWidth = getVisibleJsonStringPreviewPopoverWidth(
     popoverWidth,
     popover?.left,
+    buttonRef.current?.ownerDocument.defaultView,
+  );
+  const visiblePopoverMaxHeight = getVisibleJsonStringPreviewPopoverMaxHeight(
+    popoverMaxHeight,
+    popover?.top,
     buttonRef.current?.ownerDocument.defaultView,
   );
 
@@ -345,13 +370,18 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 
     const ownerWindow = buttonRef.current?.ownerDocument.defaultView ?? window;
     const viewportWidth = ownerWindow.innerWidth;
+    const viewportHeight = ownerWindow.innerHeight;
     const effectiveWidth = Math.min(popoverWidth, Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH, viewportWidth - 24));
+    const effectiveHeight = Math.min(
+      popoverMaxHeight + POPOVER_HEADER_ESTIMATED_HEIGHT,
+      Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT, viewportHeight - VIEWPORT_PADDING * 2),
+    );
     const maxLeft = Math.max(VIEWPORT_PADDING, viewportWidth - effectiveWidth - VIEWPORT_PADDING);
     const left = Math.min(Math.max(buttonRect.left, VIEWPORT_PADDING), maxLeft);
     const belowTop = buttonRect.bottom + POPOVER_GAP;
-    const aboveTop = buttonRect.top - POPOVER_MAX_HEIGHT - POPOVER_GAP;
+    const aboveTop = buttonRect.top - effectiveHeight - POPOVER_GAP;
     const top =
-      belowTop + POPOVER_MAX_HEIGHT > ownerWindow.innerHeight - VIEWPORT_PADDING && aboveTop > VIEWPORT_PADDING
+      belowTop + effectiveHeight > viewportHeight - VIEWPORT_PADDING && aboveTop > VIEWPORT_PADDING
         ? aboveTop
         : belowTop;
 
@@ -359,7 +389,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       left,
       top: Math.max(VIEWPORT_PADDING, top),
     };
-  }, [popoverWidth]);
+  }, [popoverMaxHeight, popoverWidth]);
 
   const closePopover = useCallback(
     (restoreButtonFocus = false) => {
@@ -398,6 +428,23 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     [setSavedPopoverWidth],
   );
 
+  const keepRightEdgeWhileResizingWidth = useCallback((requestedWidth: number, rightEdge: number) => {
+    const nextWidth = getLeftResizePopoverWidth(requestedWidth, rightEdge);
+    setPopover((currentPopover) =>
+      currentPopover ? { ...currentPopover, left: rightEdge - nextWidth } : currentPopover,
+    );
+    return nextWidth;
+  }, []);
+
+  const setPopoverMaxHeight = useCallback(
+    (maxHeight: number) => {
+      const nextMaxHeight = clampJsonStringPreviewPopoverMaxHeight(maxHeight);
+      setLivePopoverMaxHeight(null);
+      setSavedPopoverMaxHeight(nextMaxHeight);
+    },
+    [setSavedPopoverMaxHeight],
+  );
+
   const cleanupResizeListeners = useCallback(() => {
     resizeCleanupRef.current?.();
     resizeCleanupRef.current = null;
@@ -412,17 +459,24 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 
       const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window;
       const startX = event.clientX;
-      const startWidth = popoverWidth;
+      const startY = event.clientY;
+      const startWidth = visiblePopoverWidth;
+      const startMaxHeight = getPopoverResizeStartMaxHeight(decodedTextRef.current, popoverMaxHeight);
+      const rightEdge = (popover?.left ?? 0) + startWidth;
 
       const handlePointerMove = (pointerEvent: PointerEvent) => {
         pointerEvent.preventDefault();
-        setLivePopoverWidth(clampJsonStringPreviewPopoverWidth(startWidth + pointerEvent.clientX - startX));
+        setLivePopoverWidth(keepRightEdgeWhileResizingWidth(startWidth - (pointerEvent.clientX - startX), rightEdge));
+        setLivePopoverMaxHeight(clampJsonStringPreviewPopoverMaxHeight(startMaxHeight + pointerEvent.clientY - startY));
       };
 
       const handlePointerUp = (pointerEvent: PointerEvent) => {
-        const finalWidth = clampJsonStringPreviewPopoverWidth(startWidth + pointerEvent.clientX - startX);
+        const finalWidth = keepRightEdgeWhileResizingWidth(startWidth - (pointerEvent.clientX - startX), rightEdge);
+        const finalMaxHeight = clampJsonStringPreviewPopoverMaxHeight(startMaxHeight + pointerEvent.clientY - startY);
         setLivePopoverWidth(null);
+        setLivePopoverMaxHeight(null);
         setSavedPopoverWidth(finalWidth);
+        setSavedPopoverMaxHeight(finalMaxHeight);
         cleanupResizeListeners();
       };
 
@@ -435,25 +489,43 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       ownerWindow.addEventListener('pointerup', handlePointerUp, true);
       ownerWindow.addEventListener('pointercancel', handlePointerUp, true);
     },
-    [cleanupResizeListeners, popoverWidth, setSavedPopoverWidth],
+    [
+      cleanupResizeListeners,
+      keepRightEdgeWhileResizingWidth,
+      popover?.left,
+      popoverMaxHeight,
+      setSavedPopoverMaxHeight,
+      setSavedPopoverWidth,
+      visiblePopoverWidth,
+    ],
   );
 
   const handleResizeKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-      let nextWidth: number;
+      const currentResizeMaxHeight = getPopoverResizeStartMaxHeight(decodedTextRef.current, popoverMaxHeight);
+      let nextMaxHeight: number | undefined;
+      let nextWidth: number | undefined;
 
       switch (event.key) {
         case 'ArrowLeft':
-          nextWidth = popoverWidth - POPOVER_WIDTH_KEYBOARD_STEP;
+          nextWidth = popoverWidth + POPOVER_RESIZE_KEYBOARD_STEP;
           break;
         case 'ArrowRight':
-          nextWidth = popoverWidth + POPOVER_WIDTH_KEYBOARD_STEP;
+          nextWidth = popoverWidth - POPOVER_RESIZE_KEYBOARD_STEP;
+          break;
+        case 'ArrowUp':
+          nextMaxHeight = currentResizeMaxHeight - POPOVER_RESIZE_KEYBOARD_STEP;
+          break;
+        case 'ArrowDown':
+          nextMaxHeight = currentResizeMaxHeight + POPOVER_RESIZE_KEYBOARD_STEP;
           break;
         case 'Home':
           nextWidth = MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH;
+          nextMaxHeight = MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT;
           break;
         case 'End':
           nextWidth = MAX_JSON_STRING_PREVIEW_POPOVER_WIDTH;
+          nextMaxHeight = MAX_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT;
           break;
         default:
           return;
@@ -461,9 +533,23 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 
       event.preventDefault();
       event.stopPropagation();
-      setPopoverWidth(nextWidth);
+      if (nextWidth != null) {
+        const rightEdge = (popover?.left ?? 0) + visiblePopoverWidth;
+        setPopoverWidth(keepRightEdgeWhileResizingWidth(nextWidth, rightEdge));
+      }
+      if (nextMaxHeight != null) {
+        setPopoverMaxHeight(nextMaxHeight);
+      }
     },
-    [popoverWidth, setPopoverWidth],
+    [
+      keepRightEdgeWhileResizingWidth,
+      popover?.left,
+      popoverMaxHeight,
+      popoverWidth,
+      setPopoverMaxHeight,
+      setPopoverWidth,
+      visiblePopoverWidth,
+    ],
   );
 
   useLayoutEffect(() => {
@@ -475,7 +561,17 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       return;
     }
 
-    const handleRootMouseLeave = () => {
+    const handleRootMouseLeave = (event: MouseEvent) => {
+      const relatedTarget = event.relatedTarget;
+      const ownerWindow = rootRef.current?.ownerDocument.defaultView ?? window;
+
+      if (
+        relatedTarget instanceof ownerWindow.Node &&
+        (buttonRef.current?.contains(relatedTarget) || popoverRef.current?.contains(relatedTarget))
+      ) {
+        return;
+      }
+
       const cursorRange = editor.hasTextFocus() ? getCursorRange() : undefined;
 
       if (cursorRange) {
@@ -624,6 +720,74 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     return null;
   }
 
+  const buttonElement = buttonState ? (
+    <button
+      type="button"
+      ref={buttonRef}
+      className={`json-string-preview-button ${
+        buttonCoordinateMode === 'root' ? 'json-string-preview-button-local' : ''
+      }`}
+      title="Preview unescaped string"
+      aria-label="Preview unescaped string"
+      style={{ left: buttonState.left, top: buttonState.top }}
+      onPointerDownCapture={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openPopover();
+      }}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openPopover();
+      }}
+      onMouseDownCapture={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openPopover();
+      }}
+      onMouseEnter={() => {
+        buttonKeepsPreviewRef.current = true;
+      }}
+      onPointerEnter={() => {
+        buttonKeepsPreviewRef.current = true;
+      }}
+      onMouseLeave={() => {
+        buttonKeepsPreviewRef.current = false;
+        hideButton();
+      }}
+      onFocus={() => {
+        buttonKeepsPreviewRef.current = true;
+      }}
+      onBlur={() => {
+        buttonKeepsPreviewRef.current = false;
+        hideButton();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && popoverOpenRef.current) {
+          event.preventDefault();
+          event.stopPropagation();
+          closePopover(true);
+          return;
+        }
+
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          event.stopPropagation();
+          openPopover();
+        }
+      }}
+    >
+      Aa
+    </button>
+  ) : null;
   const popoverElement = popover ? (
     <div
       ref={popoverRef}
@@ -645,91 +809,31 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
           Copy value
         </button>
       </div>
-      <pre>{popover.range.decodedValue}</pre>
+      <pre ref={decodedTextRef} style={{ maxHeight: visiblePopoverMaxHeight }}>
+        {popover.range.decodedValue}
+      </pre>
       <button
         type="button"
         className="json-string-preview-resize-handle"
-        aria-label="Resize preview width"
-        title="Resize preview width"
+        aria-label="Resize preview"
+        title="Resize preview"
         onPointerDown={handleResizePointerDown}
         onKeyDown={handleResizeKeyDown}
       />
     </div>
   ) : null;
-  const popoverPortalElement = buttonRef.current?.ownerDocument.body;
+  const portalElement =
+    buttonRef.current?.ownerDocument.body ??
+    rootRef.current?.ownerDocument.body ??
+    editor?.getDomNode()?.ownerDocument.body;
 
   return (
     <>
       <Global styles={jsonStringPreviewAffordanceStyles} />
-      {buttonState && (
-        <button
-          type="button"
-          ref={buttonRef}
-          className={`json-string-preview-button ${
-            buttonCoordinateMode === 'root' ? 'json-string-preview-button-local' : ''
-          }`}
-          title="Preview unescaped string"
-          aria-label="Preview unescaped string"
-          style={{ left: buttonState.left, top: buttonState.top }}
-          onPointerDownCapture={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            openPopover();
-          }}
-          onPointerDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            openPopover();
-          }}
-          onMouseDownCapture={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            openPopover();
-          }}
-          onMouseEnter={() => {
-            buttonKeepsPreviewRef.current = true;
-          }}
-          onPointerEnter={() => {
-            buttonKeepsPreviewRef.current = true;
-          }}
-          onMouseLeave={() => {
-            buttonKeepsPreviewRef.current = false;
-            hideButton();
-          }}
-          onFocus={() => {
-            buttonKeepsPreviewRef.current = true;
-          }}
-          onBlur={() => {
-            buttonKeepsPreviewRef.current = false;
-            hideButton();
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape' && popoverOpenRef.current) {
-              event.preventDefault();
-              event.stopPropagation();
-              closePopover(true);
-              return;
-            }
-
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              event.stopPropagation();
-              openPopover();
-            }
-          }}
-        >
-          Aa
-        </button>
-      )}
-      {popoverElement && popoverPortalElement ? createPortal(popoverElement, popoverPortalElement) : null}
+      {buttonElement && buttonCoordinateMode === 'viewport' && portalElement
+        ? createPortal(buttonElement, portalElement)
+        : buttonElement}
+      {popoverElement && portalElement ? createPortal(popoverElement, portalElement) : null}
     </>
   );
 };
@@ -745,6 +849,42 @@ function clampJsonStringPreviewPopoverWidth(value: unknown): number {
   );
 }
 
+function getLeftResizePopoverWidth(width: number, rightEdge: number): number {
+  return Math.min(
+    clampJsonStringPreviewPopoverWidth(width),
+    Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH, rightEdge - VIEWPORT_PADDING),
+  );
+}
+
+function clampJsonStringPreviewPopoverMaxHeight(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT;
+  }
+
+  return Math.min(
+    MAX_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
+    Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT, Math.round(value)),
+  );
+}
+
+function getPopoverResizeStartMaxHeight(textElement: HTMLElement | null, fallbackMaxHeight: number): number {
+  if (!textElement) {
+    return fallbackMaxHeight;
+  }
+
+  const style = textElement.ownerDocument.defaultView?.getComputedStyle(textElement);
+  const verticalPadding = Number.parseFloat(style?.paddingTop ?? '0') + Number.parseFloat(style?.paddingBottom ?? '0');
+  const renderedContentHeight = textElement.getBoundingClientRect().height - verticalPadding;
+
+  if (!Number.isFinite(renderedContentHeight) || renderedContentHeight <= 0) {
+    return fallbackMaxHeight;
+  }
+
+  return clampJsonStringPreviewPopoverMaxHeight(
+    Math.min(fallbackMaxHeight, Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT, renderedContentHeight)),
+  );
+}
+
 function getVisibleJsonStringPreviewPopoverWidth(width: number, left?: number, ownerWindow?: Window | null): number {
   const clampedWidth = clampJsonStringPreviewPopoverWidth(width);
   const targetWindow = ownerWindow ?? window;
@@ -756,5 +896,26 @@ function getVisibleJsonStringPreviewPopoverWidth(width: number, left?: number, o
   return Math.min(
     clampedWidth,
     Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH, targetWindow.innerWidth - left - VIEWPORT_PADDING),
+  );
+}
+
+function getVisibleJsonStringPreviewPopoverMaxHeight(
+  maxHeight: number,
+  top?: number,
+  ownerWindow?: Window | null,
+): number {
+  const clampedMaxHeight = clampJsonStringPreviewPopoverMaxHeight(maxHeight);
+  const targetWindow = ownerWindow ?? window;
+
+  if (top == null) {
+    return clampedMaxHeight;
+  }
+
+  return Math.min(
+    clampedMaxHeight,
+    Math.max(
+      MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
+      targetWindow.innerHeight - top - POPOVER_HEADER_ESTIMATED_HEIGHT - VIEWPORT_PADDING,
+    ),
   );
 }
