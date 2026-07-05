@@ -94,6 +94,8 @@ Markdown editors in node settings can fold heading sections and fenced code bloc
 
 Monaco text and code editors include editor tools in the right-click menu. **Check spelling** runs a local English spellcheck only when triggered, highlights possible misspellings in the editor, and does not send text anywhere. **Prettify** uses the editor's built-in formatter when one is available, and **JSON escape** / **JSON unescape** work on the selected text.
 
+In JSON editors, hover or place the cursor on a string value and use the inline preview button at the end of that string to view and copy the decoded, unescaped text without changing the editor content. This works on complete string values even while the surrounding JSON is still being edited. In the full output modal, the same preview is shown only for escaped or long string values.
+
 When the **Bright** theme is active, node text and code editors use Monaco's light editor theme so Comment, Code, Expression, JS Filter, and LLM Chat technical-option editors match the rest of the light interface.
 
 ## Workspaces

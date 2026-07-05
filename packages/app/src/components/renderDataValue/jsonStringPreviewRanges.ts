@@ -15,12 +15,6 @@ export function getJsonStringPreviewRanges(
   text: string,
   options: JsonStringPreviewRangeOptions = {},
 ): JsonStringPreviewRange[] {
-  try {
-    JSON.parse(text);
-  } catch {
-    return [];
-  }
-
   const minDecodedLength = options.minDecodedLength ?? DEFAULT_JSON_STRING_PREVIEW_MIN_LENGTH;
   const ranges: JsonStringPreviewRange[] = [];
   let index = 0;

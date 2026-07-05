@@ -478,6 +478,32 @@ test('node code editor popup widgets are allowed outside the rounded editor shel
   );
 });
 
+test('node settings JSON code editors expose unescaped string previews', () => {
+  const nodeEditorCodeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
+
+  assert.match(nodeEditorCodeEditorSource, /JsonStringPreviewAffordance/);
+  assert.match(nodeEditorCodeEditorSource, /function shouldEnableJsonStringPreview/);
+  assert.match(nodeEditorCodeEditorSource, /return language === 'json';/);
+  assert.match(nodeEditorCodeEditorSource, /type MountedEditorState = \{/);
+  assert.match(nodeEditorCodeEditorSource, /const \[mountedEditorState, setMountedEditorState\] = useState/);
+  assert.match(
+    nodeEditorCodeEditorSource,
+    /mountedEditorState\?\.editorMountKey === editorMountKey \? mountedEditorState\.editor : undefined/,
+  );
+  assert.match(nodeEditorCodeEditorSource, /setMountedEditorState\(\{ editor, editorMountKey \}\)/);
+  assert.match(nodeEditorCodeEditorSource, /onEditorMount=\{handleEditorMount\}/);
+  assert.doesNotMatch(nodeEditorCodeEditorSource, /setMountedEditor\(undefined\)/);
+  assert.match(nodeEditorCodeEditorSource, /onEditorMount=\{onEditorMount\}/);
+  assert.match(nodeEditorCodeEditorSource, /buttonCoordinateMode="root"/);
+  assert.doesNotMatch(nodeEditorCodeEditorSource, /buttonAnchor="visible-position"/);
+  assert.match(nodeEditorCodeEditorSource, /editor=\{editorProps\.mountedEditor\}/);
+  assert.match(nodeEditorCodeEditorSource, /enabled=\{jsonPreviewEnabled\}/);
+  assert.match(nodeEditorCodeEditorSource, /minDecodedLength=\{0\}/);
+  assert.match(nodeEditorCodeEditorSource, /rootRef=\{rootRef\}/);
+  assert.match(nodeEditorCodeEditorSource, /text=\{editorProps\.text\}/);
+  assert.doesNotMatch(nodeEditorCodeEditorSource, /node-settings-json-string-preview|widgetId|data-widget-id/);
+});
+
 test('lazy Monaco editor chunk stays independent from app UI state', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
   const lazyComponentsSource = readFileSync(join(componentsDir, 'LazyComponents.tsx'), 'utf8');

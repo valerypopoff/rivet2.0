@@ -58,8 +58,51 @@ test('supports custom length thresholds', () => {
   assert.equal(ranges[0]?.decodedValue, '123456');
 });
 
-test('returns no ranges for malformed JSON', () => {
-  const ranges = getJsonStringPreviewRanges('{"value":"line\\nnext"');
+test('can opt into previewing short string values', () => {
+  const ranges = getJsonStringPreviewRanges('{"value":"short"}', { minDecodedLength: 0 });
+
+  assert.equal(ranges.length, 1);
+  assert.equal(ranges[0]?.decodedValue, 'short');
+});
+
+test('detects string values even when the surrounding JSON document is malformed', () => {
+  const ranges = getJsonStringPreviewRanges('{"value":"line\\nnext",}');
+
+  assert.deepEqual(
+    ranges.map((range) => range.decodedValue),
+    ['line\nnext'],
+  );
+});
+
+test('detects string values in JSON-template-like editor text', () => {
+  const ranges = getJsonStringPreviewRanges('{"value":"line\\nnext","other":{{input}}}');
+
+  assert.deepEqual(
+    ranges.map((range) => range.decodedValue),
+    ['line\nnext'],
+  );
+});
+
+test('detects short JSON-template string values when the caller opts into all strings', () => {
+  const ranges = getJsonStringPreviewRanges('{"value":"{{input}}","other":{{input}}}', { minDecodedLength: 0 });
+
+  assert.deepEqual(
+    ranges.map((range) => range.decodedValue),
+    ['{{input}}'],
+  );
+});
+
+test('ignores malformed individual string literals', () => {
+  const ranges = getJsonStringPreviewRanges('{"bad":"line\\q","good":"line\\nnext"}');
+
+  assert.deepEqual(
+    ranges.map((range) => range.decodedValue),
+    ['line\nnext'],
+  );
+});
+
+test('returns no ranges for incomplete string literals', () => {
+  const ranges = getJsonStringPreviewRanges('{"value":"line\\nnext');
 
   assert.deepEqual(ranges, []);
 });

@@ -31,6 +31,7 @@ import {
   runCodeEditorSpellcheck,
   type SpellcheckResult,
 } from '../../utils/monaco/spellcheck.js';
+import { JsonStringPreviewAffordance } from '../renderDataValue/JsonStringPreviewAffordance.js';
 
 type CodeEditorDefinitionWithInterpolationSyntax = CodeEditorDefinition<ChartNode> & {
   interpolationSyntax?: EditorInterpolationSyntax;
@@ -44,6 +45,11 @@ type SpellcheckStatus =
   | { type: 'checking' }
   | { type: 'done'; result: SpellcheckResult }
   | { type: 'error'; message: string };
+
+type MountedEditorState = {
+  editor: monaco.editor.IStandaloneCodeEditor;
+  editorMountKey: string;
+};
 
 function getSpellcheckStatusMessage(status: SpellcheckStatus | undefined): string | undefined {
   if (!status) {
@@ -71,6 +77,10 @@ function getSpellcheckStatusMessage(status: SpellcheckStatus | undefined): strin
   const issueLabel = issueCount === 1 ? 'possible spelling issue' : 'possible spelling issues';
 
   return `${issueCount.toLocaleString()} ${issueLabel}`;
+}
+
+function shouldEnableJsonStringPreview(language: string | undefined): boolean {
+  return language === 'json';
 }
 
 export const DefaultCodeEditor: FC<
@@ -182,6 +192,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const spellcheckRunId = useRef(0);
   const [displayValue, setDisplayValue] = useState(value ?? '');
   const [dismissedErrorLineHighlightKey, setDismissedErrorLineHighlightKey] = useState<string>();
+  const [mountedEditorState, setMountedEditorState] = useState<MountedEditorState>();
   const [spellcheckStatus, setSpellcheckStatus] = useState<SpellcheckStatus>();
 
   const onChangeLatest = useLatest(onChange);
@@ -213,6 +224,10 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       : undefined;
   const textStats = showTextStats ? getTextEditorStats(displayValue) : undefined;
   const spellcheckStatusMessage = getSpellcheckStatusMessage(spellcheckStatus);
+  const mountedEditor = mountedEditorState?.editorMountKey === editorMountKey ? mountedEditorState.editor : undefined;
+  const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
+    setMountedEditorState({ editor, editorMountKey });
+  };
 
   useEffect(() => {
     if (editorInstance.current) {
@@ -318,6 +333,8 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           enableFolding={effectiveEnableFolding}
           modelCacheKey={modelCacheKey}
           onSpellcheckAction={handleCheckSpelling}
+          mountedEditor={mountedEditor}
+          onEditorMount={handleEditorMount}
           editorKey={editorIdentityKey}
           nodeType={nodeType}
           defaultHeight={defaultHeight}
@@ -338,6 +355,8 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           enableFolding={effectiveEnableFolding}
           modelCacheKey={modelCacheKey}
           onSpellcheckAction={handleCheckSpelling}
+          mountedEditor={mountedEditor}
+          onEditorMount={handleEditorMount}
           editorKey={editorIdentityKey}
           defaultHeight={defaultHeight}
           errorLineHighlight={activeErrorLineHighlight}
@@ -377,6 +396,8 @@ type ViewportProps = {
   enableFolding: boolean | undefined;
   modelCacheKey: string | undefined;
   onSpellcheckAction: () => void | Promise<void>;
+  mountedEditor: monaco.editor.IStandaloneCodeEditor | undefined;
+  onEditorMount: (editor: monaco.editor.IStandaloneCodeEditor) => void;
   editorKey: string | undefined;
   errorLineHighlight?: CodeNodeErrorLineHighlight;
 };
@@ -401,6 +422,7 @@ const SuspendedCodeEditor: FC<ViewportProps> = ({
   enableFolding,
   modelCacheKey,
   onSpellcheckAction,
+  onEditorMount,
   errorLineHighlight,
 }) => (
   <Suspense fallback={<CodeEditorLoadingFallback />}>
@@ -418,6 +440,7 @@ const SuspendedCodeEditor: FC<ViewportProps> = ({
       enableFolding={enableFolding}
       modelCacheKey={modelCacheKey}
       onSpellcheckAction={onSpellcheckAction}
+      onEditorMount={onEditorMount}
       errorLineHighlight={errorLineHighlight}
     />
   </Suspense>
@@ -429,6 +452,8 @@ const ResizableCodeEditorViewport: FC<
     defaultHeight: number | undefined;
   }
 > = ({ nodeType, defaultHeight, ...editorProps }) => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const jsonPreviewEnabled = shouldEnableJsonStringPreview(editorProps.language);
   const { viewportHeight, resizeHandleProps } = useNodeEditorCodeViewportHeight({
     nodeType,
     editorKey: editorProps.editorKey,
@@ -436,7 +461,7 @@ const ResizableCodeEditorViewport: FC<
   });
 
   return (
-    <div className="editor-viewport-shell" style={{ height: viewportHeight }}>
+    <div ref={rootRef} className="editor-viewport-shell" style={{ height: viewportHeight }}>
       <div className="editor-wrapper">
         <SuspendedCodeEditor {...editorProps} />
       </div>
@@ -444,6 +469,14 @@ const ResizableCodeEditorViewport: FC<
         className="node-editor-code-resize-handle"
         dragCursor={resizeCursorStyles.vertical}
         {...resizeHandleProps}
+      />
+      <JsonStringPreviewAffordance
+        buttonCoordinateMode="root"
+        editor={editorProps.mountedEditor}
+        enabled={jsonPreviewEnabled}
+        minDecodedLength={0}
+        rootRef={rootRef}
+        text={editorProps.text}
       />
     </div>
   );
@@ -454,11 +487,21 @@ const NonResizableCodeEditorViewport: FC<
     defaultHeight: number | undefined;
   }
 > = ({ defaultHeight, ...editorProps }) => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const jsonPreviewEnabled = shouldEnableJsonStringPreview(editorProps.language);
   const staticViewportStyle = isValidHeight(defaultHeight) ? { minHeight: Math.round(defaultHeight) } : undefined;
 
   return (
-    <div className="editor-wrapper node-editor-static-code-editor" style={staticViewportStyle}>
+    <div ref={rootRef} className="editor-wrapper node-editor-static-code-editor" style={staticViewportStyle}>
       <SuspendedCodeEditor {...editorProps} />
+      <JsonStringPreviewAffordance
+        buttonCoordinateMode="root"
+        editor={editorProps.mountedEditor}
+        enabled={jsonPreviewEnabled}
+        minDecodedLength={0}
+        rootRef={rootRef}
+        text={editorProps.text}
+      />
     </div>
   );
 };

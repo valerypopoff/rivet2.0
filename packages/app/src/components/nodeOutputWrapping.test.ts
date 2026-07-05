@@ -106,11 +106,37 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   assert.match(foldingCodeBlockSource, /querySelector<HTMLElement>\(`\.\$\{MATCH_ACTIVE_CLASS\}`\)/);
   assert.match(foldingCodeBlockSource, /JsonStringPreviewAffordance/);
   assert.match(foldingCodeBlockSource, /enabled=\{language === 'json'\}/);
-  assert.match(foldingCodeBlockSource, /max-width: calc\(100vw - 24px\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /const jsonStringPreviewAffordanceStyles = css/);
+  assert.match(jsonStringPreviewAffordanceSource, /<Global styles=\{jsonStringPreviewAffordanceStyles\} \/>/);
+  assert.match(jsonStringPreviewAffordanceSource, /max-width: calc\(100vw - 24px\)/);
   assert.doesNotMatch(foldingCodeBlockSource, /width: min\(420px/);
-  assert.match(jsonStringPreviewAffordanceSource, /getJsonStringPreviewRanges\(text\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /buttonCoordinateMode\?: 'root' \| 'viewport'/);
+  assert.match(jsonStringPreviewAffordanceSource, /buttonCoordinateMode = 'viewport'/);
+  assert.match(jsonStringPreviewAffordanceSource, /getJsonStringPreviewRanges\(text, \{ minDecodedLength \}\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /coordinateMode = buttonCoordinateMode/);
+  assert.match(jsonStringPreviewAffordanceSource, /json-string-preview-button-local/);
+  assert.doesNotMatch(jsonStringPreviewAffordanceSource, /buttonAnchor|visible-position|buttonPositionRef/);
   assert.match(jsonStringPreviewAffordanceSource, /findJsonStringPreviewRangeAtOffset/);
-  assert.match(jsonStringPreviewAffordanceSource, /editor\.addContentWidget\(widget\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /getScrolledVisiblePosition/);
+  assert.match(jsonStringPreviewAffordanceSource, /type ButtonState = \{/);
+  assert.match(jsonStringPreviewAffordanceSource, /position: fixed;/);
+  assert.match(jsonStringPreviewAffordanceSource, /z-index: 4000;/);
+  assert.match(jsonStringPreviewAffordanceSource, /style=\{\{ left: buttonState\.left, top: buttonState\.top \}\}/);
+  assert.doesNotMatch(jsonStringPreviewAffordanceSource, /editor\.addContentWidget|IContentWidget/);
+  assert.doesNotMatch(jsonStringPreviewAffordanceSource, /widgetId|data-widget-id/);
+  assert.match(jsonStringPreviewAffordanceSource, /buttonRangeRef/);
+  assert.match(jsonStringPreviewAffordanceSource, /getButtonStateForRange\(range\)/);
+  assert.match(
+    jsonStringPreviewAffordanceSource,
+    /buttonStateRef\.current\?\.range \?\? activeRangeRef\.current \?\? buttonRangeRef\.current/,
+  );
+  assert.match(jsonStringPreviewAffordanceSource, /buttonRef\.current\?\.contains\(target\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /getTargetAtClientPoint\(clientX, clientY\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /editor\.onMouseDown/);
+  assert.match(jsonStringPreviewAffordanceSource, /editor\.onDidFocusEditorText/);
+  assert.match(jsonStringPreviewAffordanceSource, /onPointerDownCapture=\{\(event\) =>/);
+  assert.match(jsonStringPreviewAffordanceSource, /onPointerDown=\{\(event\) =>/);
+  assert.match(jsonStringPreviewAffordanceSource, /event\.key === 'Enter' \|\| event\.key === ' '/);
   assert.match(jsonStringPreviewAffordanceSource, /copyToClipboard\(popover\.range\.decodedValue\)/);
   assert.match(jsonStringPreviewAffordanceSource, /event\.stopImmediatePropagation\(\)/);
   assert.match(jsonStringPreviewAffordanceSource, /ownerDocument\.defaultView/);
@@ -125,10 +151,12 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
     jsonStringPreviewAffordanceSource,
     /style=\{\{ left: popover\.left, top: popover\.top, width: visiblePopoverWidth \}\}/,
   );
+  assert.match(jsonStringPreviewAffordanceSource, /createPortal\(popoverElement, popoverPortalElement\)/);
   assert.match(jsonStringPreviewAffordanceSource, /onPointerDown=\{handleResizePointerDown\}/);
   assert.match(jsonStringPreviewAffordanceSource, /aria-label="Resize preview width"/);
   assert.doesNotMatch(jsonStringPreviewAffordanceSource, /json-string-preview-close-button/);
-  assert.match(jsonStringPreviewRangesSource, /JSON\.parse\(text\)/);
+  assert.doesNotMatch(jsonStringPreviewRangesSource, /JSON\.parse\(text\)/);
+  assert.match(jsonStringPreviewRangesSource, /JSON\.parse\(rawLiteral\)/);
   assert.match(jsonStringPreviewRangesSource, /isObjectKeyLiteral/);
   assert.match(jsonStringPreviewRangesSource, /DEFAULT_JSON_STRING_PREVIEW_MIN_LENGTH = 120/);
   assert.match(uiStateSource, /jsonStringPreviewPopoverWidthState = atomWithStorage<number>/);

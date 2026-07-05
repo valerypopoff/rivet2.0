@@ -1,4 +1,5 @@
 import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
+import { Global, css } from '@emotion/react';
 import { useAtom } from 'jotai';
 import {
   useCallback,
@@ -12,7 +13,8 @@ import {
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { monaco } from '../../utils/monaco.js';
+import { createPortal } from 'react-dom';
+import type { monaco } from '../../utils/monaco.js';
 import { copyToClipboard } from '../../utils/copyToClipboard.js';
 import {
   DEFAULT_JSON_STRING_PREVIEW_POPOVER_WIDTH,
@@ -31,12 +33,148 @@ const POPOVER_GAP = 8;
 const VIEWPORT_PADDING = 12;
 const POPOVER_WIDTH_KEYBOARD_STEP = 20;
 
+const jsonStringPreviewAffordanceStyles = css`
+  .json-string-preview-button {
+    align-items: center;
+    background: color-mix(in srgb, var(--modal-surface-bg) 86%, var(--primary) 14%);
+    border: 1px solid var(--foldable-section-border);
+    border-radius: 4px;
+    color: var(--grey-lightest);
+    cursor: pointer;
+    display: inline-flex;
+    font-family: var(--font-family);
+    font-size: 10px;
+    font-weight: 700;
+    height: 18px;
+    justify-content: center;
+    opacity: 0.78;
+    padding: 0 4px;
+    pointer-events: auto;
+    position: fixed;
+    touch-action: none;
+    transform: translate(4px, 1px);
+    z-index: 4000;
+  }
+
+  .json-string-preview-button-local {
+    position: absolute;
+  }
+
+  .json-string-preview-button:hover,
+  .json-string-preview-button:focus-visible {
+    border-color: var(--primary);
+    color: var(--primary);
+    opacity: 1;
+    outline: none;
+  }
+
+  .json-string-preview-popover {
+    background: var(--modal-surface-bg);
+    border: 1px solid var(--foldable-section-border);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+    color: var(--grey-lightest);
+    max-width: calc(100vw - 24px);
+    min-width: 260px;
+    position: fixed;
+    z-index: 4000;
+  }
+
+  .json-string-preview-popover-header {
+    align-items: center;
+    border-bottom: 1px solid var(--foldable-section-border);
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 10px;
+  }
+
+  .json-string-preview-popover-header > span {
+    color: var(--grey-light);
+    flex: 1;
+    font-size: var(--ui-font-size-sm);
+    font-weight: 700;
+    min-width: 0;
+  }
+
+  .json-string-preview-copy-button {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: var(--grey-light);
+    cursor: pointer;
+    display: inline-flex;
+    font-size: var(--ui-font-size-sm);
+    gap: 4px;
+    padding: 2px 4px;
+  }
+
+  .json-string-preview-copy-button:hover,
+  .json-string-preview-copy-button:focus-visible {
+    color: var(--primary);
+    outline: none;
+  }
+
+  .json-string-preview-copy-button svg {
+    height: 14px;
+    width: 14px;
+  }
+
+  .json-string-preview-popover pre {
+    color: var(--grey-lightest);
+    font-family: var(--font-family-monospace);
+    font-size: var(--ui-font-size-sm);
+    line-height: 1.45;
+    margin: 0;
+    max-height: ${POPOVER_MAX_HEIGHT}px;
+    overflow: auto;
+    padding: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .json-string-preview-resize-handle {
+    background: transparent;
+    border: 0;
+    bottom: 0;
+    cursor: ew-resize;
+    padding: 0;
+    position: absolute;
+    right: -4px;
+    top: 0;
+    width: 10px;
+  }
+
+  .json-string-preview-resize-handle::after {
+    background: color-mix(in srgb, var(--primary) 70%, transparent);
+    border-radius: 999px;
+    bottom: 12px;
+    content: '';
+    opacity: 0;
+    position: absolute;
+    right: 4px;
+    top: 12px;
+    transition: opacity 120ms ease-out;
+    width: 2px;
+  }
+
+  .json-string-preview-resize-handle:hover::after,
+  .json-string-preview-resize-handle:focus-visible::after {
+    opacity: 1;
+  }
+
+  .json-string-preview-resize-handle:focus-visible {
+    outline: none;
+  }
+`;
+
 type JsonStringPreviewAffordanceProps = {
+  buttonCoordinateMode?: 'root' | 'viewport';
   editor?: monaco.editor.IStandaloneCodeEditor;
   enabled: boolean;
+  minDecodedLength?: number;
   rootRef: MutableRefObject<HTMLDivElement | null>;
   text: string;
-  widgetId: string;
 };
 
 type PopoverState = {
@@ -45,24 +183,36 @@ type PopoverState = {
   top: number;
 };
 
+type ButtonState = {
+  left: number;
+  range: JsonStringPreviewRange;
+  top: number;
+};
+
 export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> = ({
+  buttonCoordinateMode = 'viewport',
   editor,
   enabled,
+  minDecodedLength,
   rootRef,
   text,
-  widgetId,
 }) => {
   const [savedPopoverWidth, setSavedPopoverWidth] = useAtom(jsonStringPreviewPopoverWidthState);
-  const ranges = useMemo(() => (enabled ? getJsonStringPreviewRanges(text) : []), [enabled, text]);
+  const ranges = useMemo(
+    () => (enabled ? getJsonStringPreviewRanges(text, { minDecodedLength }) : []),
+    [enabled, minDecodedLength, text],
+  );
   const rangesRef = useRef(ranges);
   const activeRangeRef = useRef<JsonStringPreviewRange | null>(null);
+  const buttonRangeRef = useRef<JsonStringPreviewRange | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const buttonStateRef = useRef<ButtonState | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
-  const widgetRef = useRef<monaco.editor.IContentWidget | null>(null);
   const buttonKeepsPreviewRef = useRef(false);
   const popoverOpenRef = useRef(false);
   const [livePopoverWidth, setLivePopoverWidth] = useState<number | null>(null);
+  const [buttonState, setButtonState] = useState<ButtonState | null>(null);
   const [popover, setPopover] = useState<PopoverState | null>(null);
   const popoverRangeId = popover?.range.id;
   const popoverWidth = livePopoverWidth ?? clampJsonStringPreviewPopoverWidth(savedPopoverWidth);
@@ -73,13 +223,57 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   );
 
   rangesRef.current = ranges;
+  buttonStateRef.current = buttonState;
   popoverOpenRef.current = popover != null;
 
-  const layoutWidget = useCallback(() => {
-    if (editor && widgetRef.current) {
-      editor.layoutContentWidget(widgetRef.current);
-    }
-  }, [editor]);
+  const getButtonStateForRange = useCallback(
+    (range: JsonStringPreviewRange): ButtonState | undefined => {
+      const model = editor?.getModel();
+      const editorElement = editor?.getDomNode();
+      const rootElement = rootRef.current;
+
+      if (!model || !editor || !editorElement) {
+        return undefined;
+      }
+
+      const anchorPosition = model.getPositionAt(range.endOffset);
+      const visiblePosition = editor.getScrolledVisiblePosition(anchorPosition);
+
+      if (!visiblePosition) {
+        return undefined;
+      }
+
+      const editorRect = editorElement.getBoundingClientRect();
+      const coordinateMode = buttonCoordinateMode;
+
+      if (coordinateMode === 'root' && !rootElement) {
+        return undefined;
+      }
+
+      const rootRect = coordinateMode === 'root' ? rootElement?.getBoundingClientRect() : undefined;
+
+      return {
+        left: editorRect.left + visiblePosition.left - (rootRect?.left ?? 0),
+        range,
+        top: editorRect.top + visiblePosition.top - (rootRect?.top ?? 0),
+      };
+    },
+    [buttonCoordinateMode, editor, rootRef],
+  );
+
+  const setVisibleButtonState = useCallback((nextButtonState: ButtonState | null) => {
+    setButtonState((currentButtonState) => {
+      if (
+        currentButtonState?.range.id === nextButtonState?.range.id &&
+        currentButtonState?.left === nextButtonState?.left &&
+        currentButtonState?.top === nextButtonState?.top
+      ) {
+        return currentButtonState;
+      }
+
+      return nextButtonState;
+    });
+  }, []);
 
   const hideButton = useCallback(() => {
     if (popoverOpenRef.current || buttonKeepsPreviewRef.current) {
@@ -87,8 +281,9 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     }
 
     activeRangeRef.current = null;
-    layoutWidget();
-  }, [layoutWidget]);
+    buttonRangeRef.current = null;
+    setVisibleButtonState(null);
+  }, [setVisibleButtonState]);
 
   const showButtonForRange = useCallback(
     (range: JsonStringPreviewRange | undefined) => {
@@ -97,14 +292,18 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
         return;
       }
 
-      if (activeRangeRef.current?.id === range.id) {
+      const nextButtonState = getButtonStateForRange(range);
+
+      if (!nextButtonState) {
+        hideButton();
         return;
       }
 
       activeRangeRef.current = range;
-      layoutWidget();
+      buttonRangeRef.current = range;
+      setVisibleButtonState(nextButtonState);
     },
-    [hideButton, layoutWidget],
+    [getButtonStateForRange, hideButton, setVisibleButtonState],
   );
 
   const getRangeAtPosition = useCallback(
@@ -124,6 +323,18 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     const position = editor?.getPosition();
     return getRangeAtPosition(position);
   }, [editor, getRangeAtPosition]);
+
+  const getMouseEventPosition = useCallback(
+    (event: monaco.editor.IEditorMouseEvent) => {
+      if (event.target.position) {
+        return event.target.position;
+      }
+
+      const { clientX, clientY } = event.event.browserEvent;
+      return editor?.getTargetAtClientPoint(clientX, clientY)?.position ?? null;
+    },
+    [editor],
+  );
 
   const calculatePopoverPosition = useCallback(() => {
     const buttonRect = buttonRef.current?.getBoundingClientRect();
@@ -157,18 +368,17 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 
       if (restoreButtonFocus) {
         buttonKeepsPreviewRef.current = true;
-        layoutWidget();
         requestAnimationFrame(() => buttonRef.current?.focus());
         return;
       }
 
       hideButton();
     },
-    [hideButton, layoutWidget],
+    [hideButton],
   );
 
   const openPopover = useCallback(() => {
-    const range = activeRangeRef.current;
+    const range = buttonStateRef.current?.range ?? activeRangeRef.current ?? buttonRangeRef.current;
     const position = calculatePopoverPosition();
 
     if (!range || !position) {
@@ -259,66 +469,11 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   useLayoutEffect(() => {
     if (!enabled || !editor || ranges.length === 0) {
       activeRangeRef.current = null;
+      buttonRangeRef.current = null;
+      setVisibleButtonState(null);
       setPopover(null);
-      layoutWidget();
       return;
     }
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'json-string-preview-button';
-    button.textContent = 'Aa';
-    button.title = 'Preview unescaped string';
-    button.setAttribute('aria-label', 'Preview unescaped string');
-
-    button.addEventListener('mousedown', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-    });
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      openPopover();
-    });
-    button.addEventListener('mouseenter', () => {
-      buttonKeepsPreviewRef.current = true;
-    });
-    button.addEventListener('mouseleave', () => {
-      buttonKeepsPreviewRef.current = false;
-      hideButton();
-    });
-    button.addEventListener('focus', () => {
-      buttonKeepsPreviewRef.current = true;
-    });
-    button.addEventListener('blur', () => {
-      buttonKeepsPreviewRef.current = false;
-      hideButton();
-    });
-    button.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && popoverOpenRef.current) {
-        event.preventDefault();
-        event.stopPropagation();
-        closePopover(true);
-      }
-    });
-
-    const widget: monaco.editor.IContentWidget = {
-      getDomNode: () => button,
-      getId: () => widgetId,
-      getPosition: () => {
-        const model = editor.getModel();
-        const activeRange = activeRangeRef.current;
-
-        if (!model || !activeRange) {
-          return null;
-        }
-
-        return {
-          position: model.getPositionAt(activeRange.endOffset),
-          preference: [monaco.editor.ContentWidgetPositionPreference.EXACT],
-        };
-      },
-    };
 
     const handleRootMouseLeave = () => {
       const cursorRange = editor.hasTextFocus() ? getCursorRange() : undefined;
@@ -330,55 +485,79 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 
       hideButton();
     };
+    const repositionActiveButton = () => {
+      const activeRange = activeRangeRef.current;
 
-    buttonRef.current = button;
-    widgetRef.current = widget;
-    editor.addContentWidget(widget);
+      if (activeRange) {
+        showButtonForRange(activeRange);
+      }
+    };
 
     const mouseMoveDisposable = editor.onMouseMove((event) => {
-      showButtonForRange(getRangeAtPosition(event.target.position));
+      const target = event.event.browserEvent.target;
+      const ownerWindow = buttonRef.current?.ownerDocument.defaultView ?? window;
+
+      if (target instanceof ownerWindow.Node && buttonRef.current?.contains(target)) {
+        return;
+      }
+
+      const position = getMouseEventPosition(event);
+      showButtonForRange(getRangeAtPosition(position));
+    });
+    const mouseDownDisposable = editor.onMouseDown((event) => {
+      const position = getMouseEventPosition(event);
+      showButtonForRange(getRangeAtPosition(position));
     });
     const cursorDisposable = editor.onDidChangeCursorPosition((event) => {
       showButtonForRange(getRangeAtPosition(event.position));
     });
-    const scrollDisposable = editor.onDidScrollChange(() => {
-      layoutWidget();
+    const focusDisposable = editor.onDidFocusEditorText(() => {
+      const position = editor.getPosition();
+      showButtonForRange(getRangeAtPosition(position));
     });
+    const scrollDisposable = editor.onDidScrollChange(repositionActiveButton);
+    const layoutDisposable = editor.onDidLayoutChange(repositionActiveButton);
     const rootElement = rootRef.current;
+    const ownerWindow = editor.getDomNode()?.ownerDocument.defaultView ?? window;
     rootElement?.addEventListener('mouseleave', handleRootMouseLeave);
+    ownerWindow.addEventListener('resize', repositionActiveButton);
+    ownerWindow.addEventListener('scroll', repositionActiveButton, true);
     showButtonForRange(getCursorRange());
 
     return () => {
       rootElement?.removeEventListener('mouseleave', handleRootMouseLeave);
+      ownerWindow.removeEventListener('resize', repositionActiveButton);
+      ownerWindow.removeEventListener('scroll', repositionActiveButton, true);
       mouseMoveDisposable.dispose();
+      mouseDownDisposable.dispose();
       cursorDisposable.dispose();
+      focusDisposable.dispose();
       scrollDisposable.dispose();
-      editor.removeContentWidget(widget);
-      buttonRef.current = null;
-      widgetRef.current = null;
+      layoutDisposable.dispose();
       activeRangeRef.current = null;
+      buttonRangeRef.current = null;
       buttonKeepsPreviewRef.current = false;
+      setVisibleButtonState(null);
     };
   }, [
-    closePopover,
     editor,
     enabled,
     getCursorRange,
+    getMouseEventPosition,
     getRangeAtPosition,
     hideButton,
-    layoutWidget,
-    openPopover,
     ranges.length,
     rootRef,
+    setVisibleButtonState,
     showButtonForRange,
-    widgetId,
   ]);
 
   useEffect(() => {
     activeRangeRef.current = null;
+    buttonRangeRef.current = null;
+    setVisibleButtonState(null);
     setPopover(null);
-    layoutWidget();
-  }, [layoutWidget, text]);
+  }, [setVisibleButtonState, text]);
 
   useEffect(() => cleanupResizeListeners, [cleanupResizeListeners]);
 
@@ -441,11 +620,11 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     };
   }, [calculatePopoverPosition, closePopover, editor, popoverRangeId]);
 
-  if (!popover) {
+  if (!buttonState && !popover) {
     return null;
   }
 
-  return (
+  const popoverElement = popover ? (
     <div
       ref={popoverRef}
       className="json-string-preview-popover"
@@ -476,6 +655,82 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
         onKeyDown={handleResizeKeyDown}
       />
     </div>
+  ) : null;
+  const popoverPortalElement = buttonRef.current?.ownerDocument.body;
+
+  return (
+    <>
+      <Global styles={jsonStringPreviewAffordanceStyles} />
+      {buttonState && (
+        <button
+          type="button"
+          ref={buttonRef}
+          className={`json-string-preview-button ${
+            buttonCoordinateMode === 'root' ? 'json-string-preview-button-local' : ''
+          }`}
+          title="Preview unescaped string"
+          aria-label="Preview unescaped string"
+          style={{ left: buttonState.left, top: buttonState.top }}
+          onPointerDownCapture={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openPopover();
+          }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openPopover();
+          }}
+          onMouseDownCapture={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openPopover();
+          }}
+          onMouseEnter={() => {
+            buttonKeepsPreviewRef.current = true;
+          }}
+          onPointerEnter={() => {
+            buttonKeepsPreviewRef.current = true;
+          }}
+          onMouseLeave={() => {
+            buttonKeepsPreviewRef.current = false;
+            hideButton();
+          }}
+          onFocus={() => {
+            buttonKeepsPreviewRef.current = true;
+          }}
+          onBlur={() => {
+            buttonKeepsPreviewRef.current = false;
+            hideButton();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && popoverOpenRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+              closePopover(true);
+              return;
+            }
+
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              event.stopPropagation();
+              openPopover();
+            }
+          }}
+        >
+          Aa
+        </button>
+      )}
+      {popoverElement && popoverPortalElement ? createPortal(popoverElement, popoverPortalElement) : null}
+    </>
   );
 };
 

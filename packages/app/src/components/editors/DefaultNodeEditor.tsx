@@ -240,6 +240,7 @@ export const defaultEditorContainerStyles = css`
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
+    position: relative;
     gap: 0;
     padding: 10px;
     background-color: var(--grey-dark);
