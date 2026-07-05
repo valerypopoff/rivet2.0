@@ -77,8 +77,8 @@ const Container = styled.div`
   bottom: 0;
   z-index: 210;
   width: var(--node-editor-panel-width);
-  max-width: 1000px;
-  min-width: 500px;
+  max-width: 50vw;
+  min-width: min(500px, 50vw);
 
   .node-editor-width-resize-handle {
     position: absolute;
