@@ -439,10 +439,11 @@ the slower `--check-cache` checksum pass before publication.
 
 The root `.yarnrc.yml` `supportedArchitectures` list must include every native
 package axis expected by CI runners, not just the operating systems. Keep Linux
-CI covered with `os: linux`, `cpu: x64`, and `libc: glibc`; otherwise a Windows
-developer install can leave Linux GNU native archives such as Rollup, SWC, or
-Tauri CLI out of the tracked cache, and the next Ubuntu `--immutable-cache`
-install will fail before tests start.
+CI and desktop bundle jobs covered with `os: linux`, `darwin`, and `win32`,
+`cpu: x64` and `arm64`, and `libc: glibc`; otherwise a Windows developer
+install can leave native archives such as Rollup, SWC, esbuild, or Tauri CLI out
+of the tracked cache, and the next `--immutable-cache` install will fail before
+tests start.
 
 Use the pinned Yarn file for CI installs so workflow behavior follows the
 repository toolchain instead of the runner's package-manager shim. Regular
