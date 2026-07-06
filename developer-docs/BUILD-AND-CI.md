@@ -437,6 +437,13 @@ archives from old cache keys and duplicates Git checkout work. `--immutable-cach
 validates the checked-in archive set quickly, and the npm publish workflow adds
 the slower `--check-cache` checksum pass before publication.
 
+The root `.yarnrc.yml` `supportedArchitectures` list must include every native
+package axis expected by CI runners, not just the operating systems. Keep Linux
+CI covered with `os: linux`, `cpu: x64`, and `libc: glibc`; otherwise a Windows
+developer install can leave Linux GNU native archives such as Rollup, SWC, or
+Tauri CLI out of the tracked cache, and the next Ubuntu `--immutable-cache`
+install will fail before tests start.
+
 Use the pinned Yarn file for CI installs so workflow behavior follows the
 repository toolchain instead of the runner's package-manager shim. Regular
 release jobs should use `install --immutable --immutable-cache` so missing or
