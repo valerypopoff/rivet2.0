@@ -33,15 +33,18 @@ docker run \
   valerypopoff/rivet-server:latest
 ```
 
-### With OpenAI Configuration
+### With LLM Configuration
 
-To use OpenAI features, provide your API key as an environment variable:
+To use configured-key LLM features, provide the needed API keys as environment variables:
 
 ```bash
 docker run \
   -p 3000:3000 \
   -v /path/to/project:/project \
   -e OPENAI_API_KEY=your-api-key \
+  -e ANTHROPIC_API_KEY=your-anthropic-key \
+  -e GOOGLE_GENERATIVE_AI_API_KEY=your-google-key \
+  -e CUSTOM_AI_API_KEY=your-custom-provider-key \
   valerypopoff/rivet-server:latest
 ```
 
@@ -177,6 +180,9 @@ services:
       - ./my-project:/project
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY}
+      - CUSTOM_AI_API_KEY=${CUSTOM_AI_API_KEY}
 ```
 
 ### Using Kubernetes

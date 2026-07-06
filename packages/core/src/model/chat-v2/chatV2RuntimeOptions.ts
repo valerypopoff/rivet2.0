@@ -16,23 +16,13 @@ import type { LLMChatV2NodeData } from './llmChatV2NodeData.js';
 
 export type LLMChatV2GenerationParameters = Pick<
   RunChatV2PipelineOptions,
-  | 'maxTokens'
-  | 'temperature'
-  | 'topP'
-  | 'topK'
-  | 'presencePenalty'
-  | 'frequencyPenalty'
-  | 'stopSequences'
-  | 'seed'
+  'maxTokens' | 'temperature' | 'topP' | 'topK' | 'presencePenalty' | 'frequencyPenalty' | 'stopSequences' | 'seed'
 >;
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined };
 type JsonObject = { [key: string]: JsonValue | undefined };
 
-export function resolveLLMChatV2Headers(
-  data: LLMChatV2NodeData,
-  inputs: Inputs,
-): Record<string, string> | undefined {
+export function resolveLLMChatV2Headers(data: LLMChatV2NodeData, inputs: Inputs): Record<string, string> | undefined {
   const resolvedHeaders =
     data.useHeadersInput && inputs['headers' as PortId] != null
       ? (coerceTypeOptional(inputs['headers' as PortId], 'object') as Record<string, string> | undefined)
@@ -48,30 +38,36 @@ function resolveConfiguredProviderApiKey(
 ): string | undefined {
   switch (data.provider) {
     case 'openai':
-      return context.settings.openAiKey || undefined;
+      return context.settings.openAiApiKey || context.settings.openAiKey || undefined;
     case 'anthropic':
-      return context.getPluginConfig('anthropicApiKey') || undefined;
+      return context.settings.anthropicApiKey || context.getPluginConfig('anthropicApiKey') || undefined;
     case 'google':
-      return context.getPluginConfig('googleApiKey') || undefined;
+      return context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined;
     case 'custom': {
       const envVarName = data.customProviderApiKeyEnvVarName?.trim();
 
-      if (!envVarName) {
-        return undefined;
+      if (envVarName) {
+        const pluginEnvValue = context.settings.pluginEnv?.[envVarName];
+        const processEnv = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } })
+          .process?.env;
+        const apiKey = pluginEnvValue || processEnv?.[envVarName];
+
+        if (apiKey) {
+          return apiKey;
+        }
       }
 
-      const pluginEnvValue = context.settings.pluginEnv?.[envVarName];
-      const processEnv = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } })
-        .process?.env;
-      const apiKey = pluginEnvValue || processEnv?.[envVarName];
+      if (context.settings.customAiApiKey) {
+        return context.settings.customAiApiKey;
+      }
 
-      if (!apiKey) {
+      if (envVarName) {
         throw new Error(
-          `Custom provider API key env var ${envVarName} is not set. Use Input port or configure the environment variable.`,
+          `Custom provider API key env var ${envVarName} is not set. Use Input port, configure Settings > LLM, or configure the environment variable.`,
         );
       }
 
-      return apiKey;
+      return undefined;
     }
   }
 }
@@ -300,7 +296,7 @@ export function resolveLLMChatV2BuiltInTools(
       }
 
       const provider = createOpenAI({
-        apiKey: apiKey || context.settings.openAiKey || undefined,
+        apiKey: apiKey || context.settings.openAiApiKey || context.settings.openAiKey || undefined,
         organization: context.settings.openAiOrganization || undefined,
         baseURL: config.baseURL,
         headers: config.headers,
@@ -326,7 +322,7 @@ export function resolveLLMChatV2BuiltInTools(
       }
 
       const provider = createGoogleGenerativeAI({
-        apiKey: apiKey || context.getPluginConfig('googleApiKey') || undefined,
+        apiKey: apiKey || context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined,
         baseURL: config.baseURL,
         headers: config.headers,
       });

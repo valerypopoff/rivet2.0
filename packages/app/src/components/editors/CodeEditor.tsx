@@ -2,7 +2,17 @@ import { HelperMessage, Label } from '@atlaskit/form';
 import { type CodeEditorDefinition, type ChartNode } from '@valerypopoff/rivet2-core';
 import { useLatest, useDebounceFn } from 'ahooks';
 import { useAtomValue } from 'jotai';
-import { type FC, type MutableRefObject, type ReactNode, useRef, useEffect, Suspense, useMemo, useState } from 'react';
+import {
+  type FC,
+  type MutableRefObject,
+  type ReactNode,
+  useContext,
+  useRef,
+  useEffect,
+  Suspense,
+  useMemo,
+  useState,
+} from 'react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import MinusIcon from 'majesticons/line/minus-line.svg?react';
 import { type monaco } from '../../utils/monaco';
@@ -41,6 +51,7 @@ import {
   type MultilineEditorFontSizeCommand,
 } from '../../utils/multilineEditorFontSize.js';
 import { Tooltip } from '../Tooltip.js';
+import { NodeCodeEditorFooterActionContext } from './NodeCodeEditorFooterActionContext.js';
 
 type CodeEditorDefinitionWithInterpolationSyntax = CodeEditorDefinition<ChartNode> & {
   interpolationSyntax?: EditorInterpolationSyntax;
@@ -90,6 +101,17 @@ function getSpellcheckStatusMessage(status: SpellcheckStatus | undefined): strin
 
 function shouldEnableJsonStringPreview(language: string | undefined): boolean {
   return language === 'json';
+}
+
+function getSelectedEditorText(editor: monaco.editor.IStandaloneCodeEditor): string | undefined {
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+
+  if (!model || !selection || selection.isEmpty()) {
+    return undefined;
+  }
+
+  return model.getValueInRange(selection);
 }
 
 const FONT_SIZE_COMMANDS = [
@@ -252,6 +274,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const [mountedEditorState, setMountedEditorState] = useState<MountedEditorState>();
   const [spellcheckStatus, setSpellcheckStatus] = useState<SpellcheckStatus>();
   const { fontSize, adjustFontSize } = useMultilineEditorFontSize();
+  const footerActionBridge = useContext(NodeCodeEditorFooterActionContext);
 
   const onChangeLatest = useLatest(onChange);
   const isEditorReadOnly = isReadonly || isDisabled;
@@ -381,6 +404,18 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!footerActionBridge || !mountedEditor) {
+      return undefined;
+    }
+
+    footerActionBridge.setSelectedTextGetter(() => getSelectedEditorText(mountedEditor));
+
+    return () => {
+      footerActionBridge.setSelectedTextGetter(undefined);
+    };
+  }, [footerActionBridge, mountedEditor]);
 
   return (
     <div className="editor-wrapper-wrapper">

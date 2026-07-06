@@ -34,6 +34,10 @@ export function getEditorListKey(editor: EditorDefinition<ChartNode>, index: num
   return `${editor.type}:${editor.label}:${index}`;
 }
 
+export function getCodeEditorDataKey(editor: EditorDefinition<ChartNode>): string | undefined {
+  return editor.type === 'code' ? String(editor.dataKey) : undefined;
+}
+
 export type EditorRenderRow =
   | {
       type: 'single';

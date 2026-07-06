@@ -1,4 +1,4 @@
-import { type FC, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type FC, useEffect, useState } from 'react';
 import { type ChartNode, type EditorDefinition } from '@valerypopoff/rivet2-core';
 import { css } from '@emotion/react';
 import { type SharedEditorProps } from './SharedEditorProps';
@@ -7,8 +7,8 @@ import { useGetRivetUIContext } from '../../hooks/useGetRivetUIContext';
 import { useProjectNodeRegistry } from '../../hooks/useProjectNodeRegistry';
 import { produce } from 'immer';
 import { handleError } from '../../utils/errorHandling.js';
-import { getEditorListKey, getEditorRenderRows } from './editorUtils';
-import { NodeCodeEditorFooterActionContext } from './NodeCodeEditorFooterActionContext.js';
+import { getCodeEditorDataKey, getEditorListKey, getEditorRenderRows } from './editorUtils';
+import { CodeEditorAiAssistBridge, GenericCodeEditorAiAssist } from './CodeEditorAiAssist';
 
 const AI_ASSIST_TARGET_DATA_KEYS: Record<string, string> = {
   CodeNodeAIAssist: 'code',
@@ -21,10 +21,6 @@ const AI_ASSIST_TARGET_DATA_KEYS: Record<string, string> = {
 
 function getAiAssistTargetDataKey(editor: EditorDefinition<ChartNode>): string | undefined {
   return editor.type === 'custom' ? AI_ASSIST_TARGET_DATA_KEYS[editor.customEditorId] : undefined;
-}
-
-function getCodeEditorDataKey(editor: EditorDefinition<ChartNode>): string | undefined {
-  return editor.type === 'code' ? String(editor.dataKey) : undefined;
 }
 
 export const defaultEditorContainerStyles = css`
@@ -376,10 +372,6 @@ export const defaultEditorContainerStyles = css`
     display: none;
   }
 
-  .node-editor-code-ai-pair > .row.custom:not(:empty) {
-    margin-top: calc(10px * var(--ui-font-scale));
-  }
-
   .editor-status-line {
     display: flex;
     flex-wrap: wrap;
@@ -521,12 +513,9 @@ const NodeCodeEditorWithAiAssist: FC<
   codeEditor,
   codeEditorIndex,
 }) => {
-  const [footerLeftAction, setFooterLeftAction] = useState<ReactNode | null>(null);
-  const footerActionBridge = useMemo(() => ({ setFooterLeftAction }), []);
-
   return (
-    <div className="node-editor-code-ai-pair">
-      <NodeCodeEditorFooterActionContext.Provider value={footerActionBridge}>
+    <CodeEditorAiAssistBridge
+      codeEditor={(footerLeftAction) => (
         <DefaultNodeEditorField
           node={node}
           onChange={onChange}
@@ -538,6 +527,8 @@ const NodeCodeEditorWithAiAssist: FC<
           onRefreshEditors={onRefreshEditors}
           codeEditorFooterLeft={footerLeftAction}
         />
+      )}
+      aiAssist={
         <DefaultNodeEditorField
           node={node}
           onChange={onChange}
@@ -548,8 +539,48 @@ const NodeCodeEditorWithAiAssist: FC<
           onClose={onClose}
           onRefreshEditors={onRefreshEditors}
         />
-      </NodeCodeEditorFooterActionContext.Provider>
-    </div>
+      }
+    />
+  );
+};
+
+const NodeCodeEditorWithGenericAiAssist: FC<
+  Omit<SharedEditorProps, 'isDisabled'> & {
+    codeEditor: Extract<EditorDefinition<ChartNode>, { type: 'code' }>;
+    codeEditorIndex: number;
+    onClose?: () => void;
+    onRefreshEditors: () => void;
+  }
+> = ({ node, onChange, isReadonly, onClose, onRefreshEditors, codeEditor, codeEditorIndex }) => {
+  const isDisabled = codeEditor.disableIf?.(node.data) ?? false;
+
+  return (
+    <CodeEditorAiAssistBridge
+      codeEditor={(footerLeftAction) => (
+        <DefaultNodeEditorField
+          node={node}
+          onChange={onChange}
+          editor={codeEditor}
+          editorKey={getEditorListKey(codeEditor, codeEditorIndex)}
+          isReadonly={isReadonly}
+          isDisabled={isDisabled}
+          onClose={onClose}
+          onRefreshEditors={onRefreshEditors}
+          codeEditorFooterLeft={footerLeftAction}
+        />
+      )}
+      aiAssist={
+        <GenericCodeEditorAiAssist
+          node={node}
+          onChange={onChange}
+          isReadonly={isReadonly}
+          isDisabled={isDisabled}
+          onClose={onClose}
+          onRefreshEditors={onRefreshEditors}
+          codeEditor={codeEditor}
+        />
+      }
+    />
   );
 };
 
@@ -690,6 +721,21 @@ export const DefaultNodeEditor: FC<
               codeEditorIndex={row.index}
               aiAssistEditor={aiAssistEntry.editor}
               aiAssistIndex={aiAssistEntry.index}
+            />
+          );
+        }
+
+        if (row.editor.type === 'code') {
+          return (
+            <NodeCodeEditorWithGenericAiAssist
+              key={`${row.key}:generic-ai-assist`}
+              node={node}
+              onChange={onChange}
+              isReadonly={isReadonly}
+              onClose={onClose}
+              onRefreshEditors={refreshEditors}
+              codeEditor={row.editor}
+              codeEditorIndex={row.index}
             />
           );
         }

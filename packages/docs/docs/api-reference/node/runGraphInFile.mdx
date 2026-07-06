@@ -29,7 +29,11 @@ The `RunGraphOptions` type is used to pass various parameters to the `runGraphIn
 - `inputs`: Specifies the input values to the graph. These can either be plain JavaScript values like "foo", or `{type: 'string', value: 'foo'}` objects.
 - `context`: Similar to `inputs`, but these values are available to every graph and subgraph.
 - `externalFunctions`: This is how you define integration points that you can call from inside Rivet graphs.
-- `openAiKey`: Your OpenAI API key. This is used by OpenAI-backed LLM Chat nodes, legacy Chat nodes, Get Embedding nodes, and OpenAI plugin nodes when they are not supplied a key another way.
+- `openAiApiKey`: Your OpenAI API key. This is used by OpenAI-backed LLM Chat nodes, legacy Chat nodes, Get Embedding nodes, and OpenAI plugin nodes when they are not supplied a key another way.
+- `openAiKey`: Legacy alias for `openAiApiKey`.
+- `anthropicApiKey`: Your Anthropic API key. This is used by Anthropic-backed LLM Chat nodes when API key source is Configured key.
+- `googleApiKey`: Your Google Generative AI API key. This is used by Google-backed LLM Chat nodes when API key source is Configured key.
+- `customAiApiKey`: Generic API key for custom-provider LLM Chat nodes when API key source is Configured key.
 - `openAiOrganization`: If you are using a non-default OpenAI organization, you may specify your organization here.
 
 For more details, refer to [RunGraphOptions](./RunGraphOptions).
@@ -60,7 +64,10 @@ await runGraphInFile('./myProject.rivet', {
       console.log(data);
     },
   },
-  openAiKey: 'my-openai-key',
+  openAiApiKey: 'my-openai-key',
+  anthropicApiKey: 'my-anthropic-key',
+  googleApiKey: 'my-google-key',
+  customAiApiKey: 'my-custom-provider-key',
   openAiOrganization: 'my-organization',
 });
 ```

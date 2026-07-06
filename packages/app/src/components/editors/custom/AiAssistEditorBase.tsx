@@ -1,40 +1,44 @@
-import { useContext, useEffect, useState, type FC, ReactNode } from 'react';
-import { type SharedEditorProps } from '../SharedEditorProps';
+import { useContext, useEffect, useRef, useState } from 'react';
 import {
   getError,
   type ChartNode,
   type CustomEditorDefinition,
   coreCreateProcessor,
   deserializeProject,
-  ExecutionRecorder,
   registerBuiltInNodes,
   NodeRegistration,
-  plugins as corePlugins,
 } from '@valerypopoff/rivet2-core';
 import { Field } from '@atlaskit/form';
 import Button from '@atlaskit/button';
 import { css } from '@emotion/react';
-import Select from '@atlaskit/select';
 import { toast } from 'react-toastify';
 import codeGeneratorProject from '../../../../graphs/code-node-generator.rivet-project?raw';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtomValue } from 'jotai';
 import { settingsState } from '../../../state/settings';
 import { fillMissingSettingsFromEnvironmentVariables } from '../../../utils/tauri';
 import { useDependsOnPlugins } from '../../../hooks/useDependsOnPlugins';
 import { marked } from 'marked';
-import { modelSelectorOptions } from '../../../utils/modelSelectorOptions';
 import TextArea from '@atlaskit/textarea';
-import { selectedAssistModelState } from '../../../state/ai';
-import { nativeCreateDir, nativeWriteFile } from '../../../utils/platform/fs.js';
+import {
+  aiAssistCustomModelState,
+  aiAssistCustomProviderBaseURLState,
+  selectedAssistModelState,
+} from '../../../state/ai';
 import { handleError } from '../../../utils/errorHandling.js';
 import { useMultilineEditorFontSize } from '../../../hooks/useMultilineEditorFontSize.js';
 import Collapsible from 'react-collapsible';
+import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
 import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
 import { useEnvironmentProvider } from '../../../providers/ProvidersContext.js';
 import { NodeCodeEditorFooterActionContext } from '../NodeCodeEditorFooterActionContext.js';
 import SparklesIcon from '../../../assets/icons/ai-sparks-solid.svg?react';
 import { Tooltip } from '../../Tooltip.js';
+import { AppModalHeader } from '../../AppModalHeader.js';
+import { resolveAiAssistModelSettings } from '../../../utils/aiAssistModelSettings.js';
+import { createAiAssistVercelGeneratorChatNodeDefinition } from '../../../utils/aiAssistVercelGenerator.js';
+
+const AI_ASSIST_CANCEL_REASON = 'Generate using AI canceled';
 
 const styles = css`
   --ai-assist-radius: calc(16px * var(--ui-font-scale));
@@ -115,9 +119,9 @@ const styles = css`
 
   .ai-assist-body {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 8px;
+    flex-direction: column;
+    gap: calc(12px * var(--ui-font-scale));
+    margin: 0;
   }
 
   .ai-assist-panel {
@@ -125,11 +129,49 @@ const styles = css`
     padding: 6px 16px 16px;
   }
 
-  .model-and-button {
-    width: 350px;
+  .ai-assist-action-row {
+    display: flex;
+    gap: calc(8px * var(--ui-font-scale));
+    justify-content: flex-end;
+  }
+
+  .ai-assist-model-note {
+    color: var(--grey-light);
+    font-size: var(--ui-font-size-sm);
+    line-height: 1.35;
+
+    strong {
+      color: var(--foreground);
+      font-weight: 600;
+    }
+  }
+
+  .ai-assist-textarea-shell + .ai-assist-model-note {
+    margin-top: calc(4px * var(--ui-font-scale));
+  }
+
+  .ai-assist-missing-configuration {
+    color: var(--warning);
+  }
+
+  .ai-assist-modal-panel {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: calc(16px * var(--ui-font-scale));
+  }
+
+  .ai-assist-textarea-shell {
+    width: 100%;
+  }
+
+  .ai-assist-textarea-shell .text-area,
+  .ai-assist-textarea-shell textarea {
+    width: 100%;
+  }
+
+  .ai-assist-textarea-shell textarea {
+    border-radius: var(--ui-button-radius);
+    corner-shape: squircle;
   }
 `;
 
@@ -144,6 +186,7 @@ export interface AiAssistEditorBaseProps<TNodeData, TOutputs> {
   updateData: (data: TNodeData, result: TOutputs) => TNodeData | null;
   placeholder: string;
   label?: string;
+  buildGeneratorPrompt?: (prompt: string, context: { selectedText?: string }) => string;
   collapsible?: boolean;
   defaultOpen?: boolean;
   onError?: (error: any) => void;
@@ -162,6 +205,7 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
   updateData,
   placeholder,
   label = 'Generate Using AI',
+  buildGeneratorPrompt,
   collapsible = false,
   defaultOpen = true,
   onError,
@@ -171,15 +215,31 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
 }: AiAssistEditorBaseProps<TNodeData, TOutputs>) => {
   const [prompt, setPrompt] = useState('');
   const [working, setWorking] = useState(false);
-  const [footerPanelOpen, setFooterPanelOpen] = useState(defaultOpen);
+  const [footerModalOpen, setFooterModalOpen] = useState(false);
+  const [selectedTextContext, setSelectedTextContext] = useState<string>();
+  const generationInFlightRef = useRef(false);
+  const activeGenerationIdRef = useRef<symbol | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(true);
+  const currentNodeIdRef = useRef(node.id);
+  const latestNodeRef = useRef(node);
+  const latestDataRef = useRef(data);
+
+  latestNodeRef.current = node;
+  latestDataRef.current = data;
 
   const settings = useAtomValue(settingsState);
   const plugins = useDependsOnPlugins();
   const environmentProvider = useEnvironmentProvider();
+  const selectedAssistModel = useAtomValue(selectedAssistModelState);
+  const customAssistProviderBaseURL = useAtomValue(aiAssistCustomProviderBaseURLState);
+  const customAssistModel = useAtomValue(aiAssistCustomModelState);
 
-  const record = true;
-
-  const [modelAndApi, setModelAndApi] = useAtom(selectedAssistModelState);
+  const assistModel = resolveAiAssistModelSettings({
+    customModel: customAssistModel,
+    customProviderBaseURL: customAssistProviderBaseURL,
+    selectedModel: selectedAssistModel,
+  });
   const {
     fontSize,
     handleKeyDown: handleMultilineEditorFontSizeKeyDown,
@@ -188,6 +248,39 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
   const footerActionBridge = useContext(NodeCodeEditorFooterActionContext);
   const useFooterTrigger = collapsible && footerActionBridge != null;
   const footerLabel = label === 'Generate Using AI' ? 'Generate using AI' : label;
+
+  const abortGeneration = () => {
+    abortControllerRef.current?.abort(AI_ASSIST_CANCEL_REASON);
+  };
+
+  const closeFooterModal = () => {
+    abortGeneration();
+    setFooterModalOpen(false);
+  };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      abortControllerRef.current?.abort(AI_ASSIST_CANCEL_REASON);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentNodeIdRef.current === node.id) {
+      return;
+    }
+
+    abortControllerRef.current?.abort(AI_ASSIST_CANCEL_REASON);
+    activeGenerationIdRef.current = null;
+    abortControllerRef.current = null;
+    generationInFlightRef.current = false;
+    setWorking(false);
+    setFooterModalOpen(false);
+    setSelectedTextContext(undefined);
+    currentNodeIdRef.current = node.id;
+  }, [node.id]);
 
   useEffect(() => {
     if (!useFooterTrigger) {
@@ -200,9 +293,12 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
           type="button"
           className="node-editor-code-ai-footer-button"
           aria-label={footerLabel}
-          aria-expanded={footerPanelOpen}
+          aria-expanded={footerModalOpen}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={() => setFooterPanelOpen((isOpen) => !isOpen)}
+          onClick={() => {
+            setSelectedTextContext(footerActionBridge.getSelectedText());
+            setFooterModalOpen(true);
+          }}
         >
           <SparklesIcon />
         </button>
@@ -212,60 +308,97 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
     return () => {
       footerActionBridge.setFooterLeftAction(null);
     };
-  }, [footerActionBridge, footerLabel, footerPanelOpen, useFooterTrigger]);
+  }, [footerActionBridge, footerLabel, footerModalOpen, useFooterTrigger]);
+
+  const buildPromptInput = () => {
+    const selectedText = selectedTextContext?.length ? selectedTextContext : undefined;
+
+    if (buildGeneratorPrompt) {
+      return buildGeneratorPrompt(prompt, { selectedText });
+    }
+
+    if (!selectedText) {
+      return prompt;
+    }
+
+    return [
+      'Use the selected editor content as context for this generation request.',
+      '',
+      '<selected_editor_content>',
+      selectedText,
+      '</selected_editor_content>',
+      '',
+      '<user_request>',
+      prompt,
+      '</user_request>',
+    ].join('\n');
+  };
 
   const generate = async () => {
+    if (isReadonly || isDisabled || assistModel.missingConfiguration || generationInFlightRef.current) {
+      return;
+    }
+
+    const generationId = Symbol('ai-assist-generation');
+    const generationNodeId = node.id;
+    const abortController = new AbortController();
+    const isCurrentGenerationCanceled = () =>
+      abortController.signal.aborted ||
+      activeGenerationIdRef.current !== generationId ||
+      latestNodeRef.current.id !== generationNodeId;
+
+    activeGenerationIdRef.current = generationId;
+    abortControllerRef.current = abortController;
+    generationInFlightRef.current = true;
+    setWorking(true);
+
     try {
       const [project] = deserializeProject(codeGeneratorProject);
-      const [api, model] = modelAndApi.split(':');
-
-      const recorder = new ExecutionRecorder();
 
       const registry = registerBuiltInNodes(new NodeRegistration());
-      registry.registerPlugin(corePlugins.anthropic);
+      const resolvedSettings = await fillMissingSettingsFromEnvironmentVariables(settings, plugins, {
+        environmentProvider,
+      });
+      const generationAssistModel = resolveAiAssistModelSettings({
+        customModel: customAssistModel,
+        customProviderBaseURL: customAssistProviderBaseURL,
+        selectedModel: selectedAssistModel,
+      });
+
+      if (isCurrentGenerationCanceled()) {
+        return;
+      }
+
+      registry.register(createAiAssistVercelGeneratorChatNodeDefinition(generationAssistModel));
 
       const processor = coreCreateProcessor(project, {
         graph: graphName,
         inputs: {
-          prompt,
-          model: model!,
-          api: api!,
+          prompt: buildPromptInput(),
+          model: generationAssistModel.model,
+          api: generationAssistModel.graphApi,
         },
         registry,
-        ...(await fillMissingSettingsFromEnvironmentVariables(settings, plugins, {
-          environmentProvider,
-        })),
+        ...resolvedSettings,
+        abortSignal: abortController.signal,
       });
-
-      if (record) {
-        recorder.record(processor.processor);
-      }
-
-      setWorking(true);
 
       const outputs = (await processor.run()) as TOutputs;
 
-      if (record) {
-        const fileName = `recordings/${graphName.replace(/ /g, '-')}-${Date.now()}.rivet-recording`;
-
-        await nativeCreateDir('recordings', {
-          dir: 'AppLog',
-          recursive: true,
-        });
-
-        await nativeWriteFile(fileName, recorder.serialize(), {
-          dir: 'AppLog',
-        });
+      if (isCurrentGenerationCanceled()) {
+        return;
       }
 
       const isErrorResponse = getIsError ? getIsError(outputs) : false;
 
       if (!isErrorResponse) {
-        const updatedData = updateData(data, outputs);
+        const baseNode = latestNodeRef.current.id === node.id ? latestNodeRef.current : node;
+        const baseData = latestNodeRef.current.id === node.id ? latestDataRef.current : data;
+        const updatedData = updateData(baseData, outputs);
 
         if (updatedData) {
           const updatedNode = {
-            ...node,
+            ...baseNode,
             data: updatedData,
           };
 
@@ -288,11 +421,15 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
         });
       }
     } catch (err) {
+      if (abortController.signal.aborted) {
+        return;
+      }
+
       const error = getError(err);
       handleError(error, 'Failed to generate AI assist content', {
         metadata: {
           graphName,
-          modelAndApi,
+          model: assistModel.displayName,
           nodeId: node.id,
           promptLength: prompt.length,
         },
@@ -303,46 +440,72 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
         onError(error);
       }
     } finally {
-      setWorking(false);
+      if (activeGenerationIdRef.current === generationId) {
+        activeGenerationIdRef.current = null;
+        abortControllerRef.current = null;
+        generationInFlightRef.current = false;
+
+        if (isMountedRef.current) {
+          setWorking(false);
+        }
+      }
     }
   };
 
-  const selectedModel = modelSelectorOptions.find((option) => option.value === modelAndApi);
+  const generateDisabled = isReadonly || isDisabled || working || Boolean(assistModel.missingConfiguration);
+  const cancelButton = working ? (
+    <Button aria-label="Cancel generation" onClick={abortGeneration}>
+      Cancel
+    </Button>
+  ) : null;
+
+  const modelNote = (
+    <div className="ai-assist-model-note">
+      <span>
+        Using <strong>{assistModel.displayName}</strong>. To change it, go to Settings &gt; LLM.
+      </span>
+      {assistModel.missingConfiguration && (
+        <div className="ai-assist-missing-configuration">{assistModel.missingConfiguration}</div>
+      )}
+    </div>
+  );
+
+  const renderPromptTextArea = (minimumRows: number, placeholderText = placeholder) => (
+    <div className="ai-assist-textarea-shell">
+      <TextArea
+        isDisabled={isDisabled || working}
+        isReadOnly={isReadonly}
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder={placeholderText}
+        className="text-area"
+        onKeyDown={(e) => {
+          if (handleMultilineEditorFontSizeKeyDown(e.nativeEvent)) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+
+          if (!generateDisabled && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            void generate();
+          }
+        }}
+        onWheel={(e) => handleMultilineEditorFontSizeWheel(e.nativeEvent)}
+        minimumRows={minimumRows}
+        resize="vertical"
+        style={{ fontSize }}
+      />
+    </div>
+  );
 
   const editorBody = (
     <div className={collapsible ? 'ai-assist-panel' : undefined}>
       <div className="ai-assist-body">
-        <TextArea
-          isDisabled={isDisabled || working}
-          isReadOnly={isReadonly}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder={placeholder}
-          className="text-area"
-          onKeyDown={(e) => {
-            if (handleMultilineEditorFontSizeKeyDown(e.nativeEvent)) {
-              e.preventDefault();
-              e.stopPropagation();
-              return;
-            }
-
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              generate();
-            }
-          }}
-          onWheel={(e) => handleMultilineEditorFontSizeWheel(e.nativeEvent)}
-          minimumRows={3}
-          style={{ fontSize }}
-        />
-        <div className="model-and-button">
-          <Select
-            options={modelSelectorOptions}
-            value={selectedModel}
-            onChange={(option) => setModelAndApi(option!.value)}
-            isDisabled={isDisabled || working}
-            className="model-selector"
-          />
-          <Button appearance="primary" onClick={() => void generate()} isDisabled={isDisabled || working}>
+        {renderPromptTextArea(3)}
+        {modelNote}
+        <div className="ai-assist-action-row">
+          {cancelButton}
+          <Button appearance="primary" onClick={() => void generate()} isDisabled={generateDisabled}>
             Generate
           </Button>
         </div>
@@ -359,11 +522,27 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
   }
 
   if (useFooterTrigger) {
-    return footerPanelOpen ? (
-      <div css={styles} className="ai-assist-footer-panel">
-        {editorBody}
-      </div>
-    ) : null;
+    return (
+      <ModalTransition>
+        {footerModalOpen && (
+          <Modal autoFocus={false} onClose={closeFooterModal} width="large">
+            <AppModalHeader title={footerLabel} onClose={closeFooterModal} />
+            <ModalBody>
+              <div css={styles} className="ai-assist-modal-panel">
+                {renderPromptTextArea(4, 'What should Rivet generate?')}
+                {modelNote}
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              {cancelButton}
+              <Button appearance="primary" onClick={() => void generate()} isDisabled={generateDisabled}>
+                Generate
+              </Button>
+            </ModalFooter>
+          </Modal>
+        )}
+      </ModalTransition>
+    );
   }
 
   const toggle = (isOpen?: boolean) => (

@@ -8,7 +8,7 @@ import {
   CustomPluginsSettingsPage,
   GeneralSettingsPage,
   GraphsSettingsPage,
-  OpenAiSettingsPage,
+  LlmSettingsPage,
   PluginsCatalogPage,
   PluginsSettingsPage,
   UiSettingsPage,
@@ -87,7 +87,7 @@ const modalBody = css`
   }
 `;
 
-type DefaultPages = 'general' | 'graphs' | 'ui' | 'openai' | 'plugins' | 'pluginsSettings' | 'updates';
+type DefaultPages = 'general' | 'graphs' | 'ui' | 'llm' | 'plugins' | 'pluginsSettings' | 'updates';
 type Pages = DefaultPages | string;
 
 const settingsNavButtonStyles = css`
@@ -175,8 +175,8 @@ export const SettingsModal: FC<SettingsModalProps> = () => {
                   <SettingsNavButton isSelected={page === 'ui'} onClick={() => setPage('ui')}>
                     UI
                   </SettingsNavButton>
-                  <SettingsNavButton isSelected={page === 'openai'} onClick={() => setPage('openai')}>
-                    OpenAI
+                  <SettingsNavButton isSelected={page === 'llm'} onClick={() => setPage('llm')}>
+                    LLM
                   </SettingsNavButton>
                   <SettingsNavButton isSelected={page === 'plugins'} onClick={() => setPage('plugins')}>
                     Plugins
@@ -188,7 +188,11 @@ export const SettingsModal: FC<SettingsModalProps> = () => {
                     Updates
                   </SettingsNavButton>
                   {pluginsWithCustomPages.map((plugin) => (
-                    <SettingsNavButton key={plugin.id} isSelected={page === plugin.id} onClick={() => setPage(plugin.id)}>
+                    <SettingsNavButton
+                      key={plugin.id}
+                      isSelected={page === plugin.id}
+                      onClick={() => setPage(plugin.id)}
+                    >
                       {plugin.configPage!.label}
                     </SettingsNavButton>
                   ))}
@@ -199,7 +203,7 @@ export const SettingsModal: FC<SettingsModalProps> = () => {
                   .with('general', () => <GeneralSettingsPage />)
                   .with('graphs', () => <GraphsSettingsPage />)
                   .with('ui', () => <UiSettingsPage />)
-                  .with('openai', () => <OpenAiSettingsPage />)
+                  .with('llm', () => <LlmSettingsPage />)
                   .with('plugins', () => <PluginsCatalogPage />)
                   .with('pluginsSettings', () => <PluginsSettingsPage />)
                   .with('updates', () => <UpdatesSettingsPage />)

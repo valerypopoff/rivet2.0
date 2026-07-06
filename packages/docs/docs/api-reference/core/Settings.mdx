@@ -17,7 +17,11 @@ export interface Settings<PluginSettings = Record<string, Record<string, unknown
   pluginEnv?: {
     [key: string]: string | undefined;
   };
+  openAiApiKey?: string;
   openAiKey?: string;
+  anthropicApiKey?: string;
+  googleApiKey?: string;
+  customAiApiKey?: string;
   openAiOrganization?: string;
   openAiEndpoint?: string;
   chatNodeTimeout?: number;
@@ -58,11 +62,35 @@ Type: `Record<string, string | undefined>`
 
 Environment-like values made available to plugins. In `@valerypopoff/rivet2-node`, if `pluginEnv` is unset, Rivet fills plugin-declared environment values from `process.env`.
 
+### openAiApiKey
+
+Type: `string`
+
+Shared OpenAI key used by LLM Chat when its provider is OpenAI and API key source is Configured key. It is also used by legacy Chat, Get Embedding, and OpenAI plugin nodes.
+
 ### openAiKey
 
 Type: `string`
 
-Legacy/shared OpenAI key used by legacy Chat and OpenAI-backed execution paths. LLM Chat can also use provider-specific settings or an API Key input port depending on its API key source.
+Legacy alias for `openAiApiKey`. New code should prefer `openAiApiKey`; Rivet still normalizes both names to the same runtime value for compatibility.
+
+### anthropicApiKey
+
+Type: `string`
+
+Shared Anthropic key used by LLM Chat when its provider is Anthropic and API key source is Configured key. Legacy Anthropic plugin nodes also read this value through the shared plugin-config resolver when no non-empty Anthropic plugin key is stored.
+
+### googleApiKey
+
+Type: `string`
+
+Shared Google Generative AI key used by LLM Chat when its provider is Google and API key source is Configured key. Legacy Google plugin nodes also read this value through the shared plugin-config resolver when no non-empty Google plugin key is stored.
+
+### customAiApiKey
+
+Type: `string`
+
+Shared custom-provider key used by LLM Chat custom providers when API key source is Configured key. If unset, custom providers still fall back to the node's `API key env var name` through `pluginEnv` or `process.env`.
 
 ### openAiOrganization
 
@@ -101,14 +129,14 @@ Settings fields are merged directly into [RunGraphOptions](../node/RunGraphOptio
 ```typescript
 const options: RunGraphOptions = {
   graph: 'Main',
-  openAiKey: process.env.OPENAI_API_KEY,
-  pluginEnv: {
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-  },
+  openAiApiKey: process.env.OPENAI_API_KEY,
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  googleApiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+  customAiApiKey: process.env.CUSTOM_AI_API_KEY,
 };
 ```
 
-When using the Node package, unset OpenAI defaults are filled from `OPENAI_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_ENDPOINT` when possible.
+When using the Node package, unset shared LLM defaults are filled from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `CUSTOM_AI_API_KEY` or `CUSTOM_PROVIDER_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_ENDPOINT` when possible.
 
 ## See Also
 

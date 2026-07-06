@@ -72,6 +72,20 @@ export async function fillMissingSettingsFromEnvironmentVariables(
   const getProviderEnvVar = (name: string) => environmentProvider.getEnvVar(name);
   const resolveSetting = (value: string | undefined, envVarName: string) =>
     value ? Promise.resolve(value) : getProviderEnvVar(envVarName);
+  const resolveSettingFromAnyEnv = async (value: string | undefined, envVarNames: string[]) => {
+    if (value) {
+      return value;
+    }
+
+    for (const envVarName of envVarNames) {
+      const envValue = await getProviderEnvVar(envVarName);
+      if (envValue) {
+        return envValue;
+      }
+    }
+
+    return undefined;
+  };
   const pluginEnvVarNames = new Set<string>();
 
   for (const plugin of plugins) {
@@ -98,17 +112,32 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     pluginEnvVarNames.add(envVarName);
   }
 
-  const [openAiKey, openAiOrganization, openAiEndpoint, pluginEnvEntries] = await Promise.all([
-    resolveSetting(settings.openAiKey, 'OPENAI_API_KEY'),
-    resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
-    resolveSetting(settings.openAiEndpoint, 'OPENAI_ENDPOINT'),
-    Promise.all(
-      [...pluginEnvVarNames].map(async (envVarName) => [envVarName, await getProviderEnvVar(envVarName)] as const),
-    ),
-  ]);
+  const [
+    openAiApiKey,
+    anthropicApiKey,
+    googleApiKey,
+    customAiApiKey,
+    openAiOrganization,
+    openAiEndpoint,
+    pluginEnvEntries,
+  ] = await Promise.all([
+      resolveSetting(settings.openAiApiKey || settings.openAiKey, 'OPENAI_API_KEY'),
+      resolveSetting(settings.anthropicApiKey, 'ANTHROPIC_API_KEY'),
+      resolveSetting(settings.googleApiKey, 'GOOGLE_GENERATIVE_AI_API_KEY'),
+      resolveSettingFromAnyEnv(settings.customAiApiKey, ['CUSTOM_AI_API_KEY', 'CUSTOM_PROVIDER_API_KEY']),
+      resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
+      resolveSetting(settings.openAiEndpoint, 'OPENAI_ENDPOINT'),
+      Promise.all(
+        [...pluginEnvVarNames].map(async (envVarName) => [envVarName, await getProviderEnvVar(envVarName)] as const),
+      ),
+    ]);
   const fullSettings: Settings = {
     ...settings,
-    openAiKey: openAiKey ?? '',
+    openAiApiKey: openAiApiKey ?? '',
+    openAiKey: openAiApiKey ?? '',
+    anthropicApiKey: anthropicApiKey ?? '',
+    googleApiKey: googleApiKey ?? '',
+    customAiApiKey: customAiApiKey ?? '',
     openAiOrganization: openAiOrganization ?? '',
     openAiEndpoint: openAiEndpoint ?? '',
     pluginSettings: settings.pluginSettings,

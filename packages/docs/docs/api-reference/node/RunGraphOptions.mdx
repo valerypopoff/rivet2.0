@@ -206,22 +206,24 @@ Graph processor event handlers. Event names are PascalCase and prefixed with `on
 
 ## Settings
 
-The optional properties of [Settings](../core/Settings) are merged into `RunGraphOptions`. Node runs fill unset OpenAI/plugin environment defaults from `process.env` where possible.
+The optional properties of [Settings](../core/Settings) are merged into `RunGraphOptions`. Node runs fill unset shared LLM and plugin environment defaults from `process.env` where possible.
+
+For LLM keys, new programmatic code should use `openAiApiKey`, `anthropicApiKey`, `googleApiKey`, and `customAiApiKey`. The older `openAiKey` option remains supported as an alias for `openAiApiKey`.
 
 ## Node Package Defaults
 
 When using `@valerypopoff/rivet2-node`, `createProcessor` and `runGraph`
 provide these defaults when the corresponding option is omitted:
 
-| Option | Node default |
-| --- | --- |
-| `nativeApi` | `NodeNativeApi` |
-| `mcpProvider` | `NodeMCPProvider` |
-| `tokenizer` | fallback character-count tokenizer |
-| `codeRunner` | `NodeCodeRunner` for `runGraph` and compatible `createProcessor`; omitted-default `createProcessor` may use a run-scoped cached Node CodeRunner |
-| `projectReferenceLoader` | `NodeProjectReferenceLoader` |
-| `pluginEnv` | plugin environment values read from `process.env` |
-| OpenAI settings | `OPENAI_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_ENDPOINT` when unset |
+| Option                   | Node default                                                                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nativeApi`              | `NodeNativeApi`                                                                                                                                 |
+| `mcpProvider`            | `NodeMCPProvider`                                                                                                                               |
+| `tokenizer`              | fallback character-count tokenizer                                                                                                              |
+| `codeRunner`             | `NodeCodeRunner` for `runGraph` and compatible `createProcessor`; omitted-default `createProcessor` may use a run-scoped cached Node CodeRunner |
+| `projectReferenceLoader` | `NodeProjectReferenceLoader`                                                                                                                    |
+| `pluginEnv`              | plugin environment values read from `process.env`                                                                                               |
+| LLM settings             | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `CUSTOM_AI_API_KEY` or `CUSTOM_PROVIDER_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_ENDPOINT` when unset |
 
 `createGraphRunner` resolves the same Node defaults once at runner creation and
 reuses them across repeated runs of the same graph. This is the preferred

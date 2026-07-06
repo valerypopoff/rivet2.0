@@ -19,6 +19,9 @@ export type DatasetCliOptions = {
 
 export type ProviderCliOptions = {
   openaiApiKey?: string;
+  anthropicApiKey?: string;
+  googleApiKey?: string;
+  customAiApiKey?: string;
   openaiEndpoint?: string;
   openaiOrganization?: string;
 };
@@ -91,7 +94,15 @@ export function withCliProcessorOptions(
   providerOptions: ProviderCliOptions,
   options: Omit<
     NodeCreateProcessorOptions,
-    'datasetProvider' | 'openAiEndpoint' | 'openAiKey' | 'openAiOrganization' | 'projectPath'
+    | 'anthropicApiKey'
+    | 'customAiApiKey'
+    | 'datasetProvider'
+    | 'googleApiKey'
+    | 'openAiApiKey'
+    | 'openAiEndpoint'
+    | 'openAiKey'
+    | 'openAiOrganization'
+    | 'projectPath'
   >,
 ): NodeCreateProcessorOptions {
   return withRuntimeProcessorOptions(runtime, withProviderProcessorOptions(providerOptions, options));
@@ -99,7 +110,10 @@ export function withCliProcessorOptions(
 
 export function withProviderProcessorOptions(
   providerOptions: ProviderCliOptions,
-  options: Omit<NodeCreateProcessorOptions, 'openAiEndpoint' | 'openAiKey' | 'openAiOrganization'>,
+  options: Omit<
+    NodeCreateProcessorOptions,
+    'anthropicApiKey' | 'customAiApiKey' | 'googleApiKey' | 'openAiApiKey' | 'openAiEndpoint' | 'openAiKey' | 'openAiOrganization'
+  >,
 ): NodeCreateProcessorOptions {
   const providerSettings: Partial<NodeCreateProcessorOptions> = {};
 
@@ -108,7 +122,19 @@ export function withProviderProcessorOptions(
   }
 
   if (providerOptions.openaiApiKey != null) {
-    providerSettings.openAiKey = providerOptions.openaiApiKey;
+    providerSettings.openAiApiKey = providerOptions.openaiApiKey;
+  }
+
+  if (providerOptions.anthropicApiKey != null) {
+    providerSettings.anthropicApiKey = providerOptions.anthropicApiKey;
+  }
+
+  if (providerOptions.googleApiKey != null) {
+    providerSettings.googleApiKey = providerOptions.googleApiKey;
+  }
+
+  if (providerOptions.customAiApiKey != null) {
+    providerSettings.customAiApiKey = providerOptions.customAiApiKey;
   }
 
   if (providerOptions.openaiOrganization != null) {
@@ -126,6 +152,24 @@ export function addProviderOptions<T>(y: yargs.Argv<T>): yargs.Argv<T> {
     .option('openai-api-key', {
       describe:
         'The OpenAI API key to use for the project. If omitted, the environment variable OPENAI_API_KEY is used.',
+      type: 'string',
+      demandOption: false,
+    })
+    .option('anthropic-api-key', {
+      describe:
+        'The Anthropic API key to use for LLM Chat nodes. If omitted, the environment variable ANTHROPIC_API_KEY is used.',
+      type: 'string',
+      demandOption: false,
+    })
+    .option('google-api-key', {
+      describe:
+        'The Google Generative AI API key to use for LLM Chat nodes. If omitted, the environment variable GOOGLE_GENERATIVE_AI_API_KEY is used.',
+      type: 'string',
+      demandOption: false,
+    })
+    .option('custom-ai-api-key', {
+      describe:
+        'The generic custom-provider API key to use for LLM Chat custom providers. If omitted, CUSTOM_AI_API_KEY, CUSTOM_PROVIDER_API_KEY, or the node-specific environment variable is used.',
       type: 'string',
       demandOption: false,
     })

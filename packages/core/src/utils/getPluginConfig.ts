@@ -1,5 +1,17 @@
 import type { RivetPlugin, Settings, StringPluginConfigurationSpec } from '../index.js';
 
+function getSharedLlmPluginConfig(plugin: RivetPlugin, settings: Settings, name: string) {
+  if (plugin.id === 'anthropic' && name === 'anthropicApiKey') {
+    return settings.anthropicApiKey;
+  }
+
+  if (plugin.id === 'google' && name === 'googleApiKey') {
+    return settings.googleApiKey;
+  }
+
+  return undefined;
+}
+
 export function getPluginConfig(plugin: RivetPlugin | undefined, settings: Settings, name: string) {
   if (!plugin) {
     return undefined;
@@ -14,11 +26,14 @@ export function getPluginConfig(plugin: RivetPlugin | undefined, settings: Setti
   const pluginSettings = settings.pluginSettings?.[plugin.id];
   if (pluginSettings) {
     const value = pluginSettings[name];
-    if (!value || typeof value !== 'string') {
-      return undefined;
+    if (value && typeof value === 'string') {
+      return value;
     }
+  }
 
-    return value;
+  const sharedLlmValue = getSharedLlmPluginConfig(plugin, settings, name);
+  if (sharedLlmValue) {
+    return sharedLlmValue;
   }
 
   const envFallback = (configSpec as StringPluginConfigurationSpec).pullEnvironmentVariable;

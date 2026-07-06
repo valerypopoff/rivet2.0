@@ -15,8 +15,12 @@ export interface Settings<PluginSettings = Record<string, Record<string, unknown
     [key: string]: string | undefined;
   };
 
-  // TODO move to openai plugin
+  // Shared LLM provider settings. Legacy OpenAI-backed nodes still consume the OpenAI fields directly.
+  openAiApiKey?: string;
   openAiKey?: string;
+  anthropicApiKey?: string;
+  googleApiKey?: string;
+  customAiApiKey?: string;
   openAiOrganization?: string;
   openAiEndpoint?: string;
 

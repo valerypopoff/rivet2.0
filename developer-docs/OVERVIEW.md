@@ -231,7 +231,7 @@ This split shows up repeatedly in app save/load code and should be treated as ar
 
 ### Runtime settings normalization
 
-Runtime execution settings are normalized in core through `resolveProcessSettings(...)`. The app, Node package, and Trivet should pass their available runtime/env values into that shared resolver instead of each package reconstructing a full legacy `Settings` object. Editor-only preferences may still live in persisted app settings, but they should not become required inputs for backend/programmatic workflow execution.
+Runtime execution settings are normalized in core through `resolveProcessSettings(...)`. The app, Node package, and Trivet should pass their available runtime/env values into that shared resolver instead of each package reconstructing a full legacy `Settings` object. Editor-only preferences may still live in persisted app settings, but they should not become required inputs for backend/programmatic workflow execution. `openAiApiKey` is the preferred OpenAI key field, `openAiKey` remains a legacy alias, and the resolver must keep both names synchronized with the same runtime value.
 
 ## Current Refactor Hotspots
 

@@ -19,7 +19,7 @@ Open the Text node settings and change the text to:
 Hello, AI!
 ```
 
-Open the LLM Chat node settings and make sure the **Model** section has a provider and model selected. If you are using OpenAI from app settings, the default OpenAI provider is enough after you add your API key in Settings.
+Open the LLM Chat node settings and make sure the **Model** section has a provider and model selected. If you are using OpenAI from app settings, the default OpenAI provider is enough after you add your API key in Settings > LLM.
 
 Finally, click **Run** in the top right of the Canvas workspace. The Text node sends `Hello, AI!` into the LLM Chat prompt, and the LLM Chat node sends the request to the selected provider.
 

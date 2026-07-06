@@ -1279,8 +1279,8 @@ data:
             dataType: chat-message[]
             id: prompt
           outgoingConnections:
-            - data->"Chat (Anthropic)" Rv5MxLY3518_Yf6me2g8m/prompt
-            - data->"Chat" y9Z7DZhgOThYAfYwElEII/prompt
+            - data->"AI Assist Chat V2 (Anthropic)" Rv5MxLY3518_Yf6me2g8m/prompt
+            - data->"AI Assist Chat V2" y9Z7DZhgOThYAfYwElEII/prompt
           visualData: 149.66020273340712/946.4795465916277/300/23//
         '[1rdTBJBF0atKnTh7jXVYc]:graphOutput "Graph Output"':
           data:
@@ -1292,8 +1292,8 @@ data:
             dataType: gpt-function[]
             id: functions
           outgoingConnections:
-            - data->"Chat (Anthropic)" Rv5MxLY3518_Yf6me2g8m/tools
-            - data->"Chat" y9Z7DZhgOThYAfYwElEII/functions
+            - data->"AI Assist Chat V2 (Anthropic)" Rv5MxLY3518_Yf6me2g8m/tools
+            - data->"AI Assist Chat V2" y9Z7DZhgOThYAfYwElEII/functions
           visualData: 149.66020273340712/746.4795465916277/300/23//
         '[4LfCjl6S3VUN47UYF3h6u]:graphOutput "Graph Output"':
           data:
@@ -1310,8 +1310,8 @@ data:
             defaultValue: claude-3-7-sonnet-latest
             id: model
           outgoingConnections:
-            - data->"Chat (Anthropic)" Rv5MxLY3518_Yf6me2g8m/model
-            - data->"Chat" y9Z7DZhgOThYAfYwElEII/model
+            - data->"AI Assist Chat V2 (Anthropic)" Rv5MxLY3518_Yf6me2g8m/model
+            - data->"AI Assist Chat V2" y9Z7DZhgOThYAfYwElEII/model
           visualData: 149.66020273340712/546.4795465916277/300/23//
         '[QfbUn0AwBlzG-tA9VS2Mv]:graphInput "Graph Input"':
           data:
@@ -1320,8 +1320,9 @@ data:
           outgoingConnections:
             - data->"Match" _ikdv5KFl0iRXcxWoMw2U/value
           visualData: 149.66020273340712/346.47954659162764/300/23//
-        '[Rv5MxLY3518_Yf6me2g8m]:chatAnthropic "Chat (Anthropic)"':
+        '[Rv5MxLY3518_Yf6me2g8m]:aiAssistGeneratorChatV2 "AI Assist Chat V2 (Anthropic)"':
           data:
+            aiAssistGeneratorChatBranch: anthropic
             cache: false
             enableCitations: false
             enableToolUse: true
@@ -1358,8 +1359,8 @@ data:
               - openai
               - anthropic
           outgoingConnections:
-            - case1->"Chat" y9Z7DZhgOThYAfYwElEII/systemPrompt
-            - case2->"Chat (Anthropic)" Rv5MxLY3518_Yf6me2g8m/system
+            - case1->"AI Assist Chat V2" y9Z7DZhgOThYAfYwElEII/systemPrompt
+            - case2->"AI Assist Chat V2 (Anthropic)" Rv5MxLY3518_Yf6me2g8m/system
           visualData: 606.4940985349134/253.74368599041935/280/23//
         '[r0uBLvfajb1wGyqlvNLXp]:graphInput "Graph Input"':
           data:
@@ -1379,9 +1380,10 @@ data:
           outgoingConnections:
             - output->"Graph Output" 1rdTBJBF0atKnTh7jXVYc/value
           visualData: 1836.4765928198726/625.1700543418503/180/23//
-        '[y9Z7DZhgOThYAfYwElEII]:chat "Chat"':
+        '[y9Z7DZhgOThYAfYwElEII]:aiAssistGeneratorChatV2 "AI Assist Chat V2"':
           data:
             additionalParameters: []
+            aiAssistGeneratorChatBranch: openaiCompatible
             cache: false
             enableFunctionUse: true
             headers: []

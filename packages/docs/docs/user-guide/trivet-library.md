@@ -143,7 +143,7 @@ This function takes a `TrivetOpts` object and returns a Promise that resolves wi
 - **createTestGraphRunner**
 
 ```typescript
-function createTestGraphRunner(opts: { openAiKey: string }): TrivetGraphRunner;
+function createTestGraphRunner(opts: { openAiApiKey: string }): TrivetGraphRunner;
 ```
 
-This function takes an object with an `openAiKey` and returns a `TrivetGraphRunner
+This function takes an object with an `openAiApiKey` and returns a `TrivetGraphRunner`. The legacy `openAiKey` alias is still accepted through normal Rivet runtime settings.

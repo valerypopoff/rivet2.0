@@ -113,7 +113,8 @@ Let's break down the important fields:
 - `externalFunctions`: This is how you define integration points that you can call from inside Rivet graphs.
 - `registry`: Use this when running custom plugin nodes.
 - `remoteDebugger`: Node-only. Attach a debugger server so the Rivet app can inspect the run.
-- `openAiKey` / `openAiOrganization` / `openAiEndpoint`: Legacy/shared OpenAI settings used by legacy Chat and OpenAI-backed nodes. LLM Chat can also use provider settings or an API Key input port depending on its API key source.
+- `openAiApiKey` / `anthropicApiKey` / `googleApiKey` / `customAiApiKey`: Shared provider keys used by LLM Chat when API key source is Configured key. `openAiKey` remains a legacy alias for `openAiApiKey`.
+- `openAiOrganization` / `openAiEndpoint`: OpenAI organization and OpenAI-compatible endpoint defaults used by OpenAI-backed paths.
 - `pluginEnv`: Environment-like values for plugins. If omitted in `@valerypopoff/rivet2-node`, plugin-declared environment variables are read from `process.env`.
 
 ### Example Code
@@ -144,7 +145,10 @@ await runGraphInFile('./myProject.rivet', {
       console.log(data);
     },
   },
-  openAiKey: 'my-openai-key',
+  openAiApiKey: 'my-openai-key',
+  anthropicApiKey: 'my-anthropic-key',
+  googleApiKey: 'my-google-key',
+  customAiApiKey: 'my-custom-provider-key',
   openAiOrganization: 'my-organization',
 });
 ```

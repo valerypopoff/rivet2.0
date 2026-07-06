@@ -98,10 +98,13 @@ In `--dev` mode, the project and dataset provider are recreated for each web-app
 ### Provider Configuration
 
 - `--openai-api-key`: The OpenAI API key to use for OpenAI-backed graph actions. If omitted, Node execution falls back to `OPENAI_API_KEY` where supported.
+- `--anthropic-api-key`: The Anthropic API key to use for LLM Chat graph actions in Configured key mode. If omitted, Node execution falls back to `ANTHROPIC_API_KEY`.
+- `--google-api-key`: The Google Generative AI API key to use for LLM Chat graph actions in Configured key mode. If omitted, Node execution falls back to `GOOGLE_GENERATIVE_AI_API_KEY`.
+- `--custom-ai-api-key`: The generic custom-provider API key to use for LLM Chat custom providers in Configured key mode. If omitted, Node execution falls back to `CUSTOM_AI_API_KEY`, `CUSTOM_PROVIDER_API_KEY`, or the node-specific API key environment variable.
 - `--openai-endpoint`: Endpoint override for legacy OpenAI-compatible Chat behavior. If omitted, Node execution falls back to `OPENAI_ENDPOINT` where supported.
 - `--openai-organization`: OpenAI organization ID. If omitted, Node execution falls back to the environment where supported.
 
-For LLM Chat, the node's API key source controls where the key comes from. If a graph action connects the LLM Chat API Key input port, send that key through the web-app data mapping instead of relying on these CLI OpenAI options.
+For LLM Chat, the node's API key source controls where the key comes from. If a graph action connects the LLM Chat API Key input port, send that key through the web-app data mapping instead of relying on these configured-key CLI options.
 
 ## Auth Caveat
 

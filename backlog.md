@@ -1,8 +1,19 @@
+
+- LLM chat should have an provider-agnostic usage statistics output node
+
+- When the node produced error, the "Copy" button isn't working
+- After error, there has to be a vertical gap
+
+- Recorded actions in the Editor? Like, record connecting some nodes. Then record disconnecting them. Like some chore that needs to be done before saving for example
+
 - When zoom out the canvas, the main buttons in teh output area should scale down slower than the nod eitself. Like, when the node zoomed out 2x, the buttons in the output area should only zoom out 1.5x. Or should work when the scale is lower than some threshold. Choose the threshold wisely.
 
 - While the workflow is running, send some kind of a number of run nodes that can be a progress indicator
 
-- Code editor: show a hint that Ctrl++ and Ctrl+- are working here. Also add Ctrl/Cmd+scroll to scale the font size
+- Generate with AI - should be possible to use custom provider for it (new tab in settings like "AI abilities for the platform")
+
+- AWS marketplace ready to launch thing for Rivet 2
+
 
 - A special node mode that works like a filter: in this mode the node can accept multiple connections from different nodes into one port. Without such mode, I have to copy-paste the same node multiple times. Probably, for each connection set there should be a separate execution path. Like, "add path". Or! Allow connecting an auxiliary node as a filter for selected inputs/outputs of a node.
 

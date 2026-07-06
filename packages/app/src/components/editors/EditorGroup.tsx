@@ -14,6 +14,7 @@ import { LabeledToggle } from '../LabeledToggle';
 import { useAtom } from 'jotai';
 import { nodeEditorGroupOpenState } from '../../state/ui.js';
 import { resolveNodeEditorGroupOpen, setNodeEditorGroupOpen } from '../../utils/nodeEditorGroupState.js';
+import { CodeEditorAiAssistBridge, GenericCodeEditorAiAssist } from './CodeEditorAiAssist';
 
 const styles = css`
   --editor-group-radius: calc(16px * var(--ui-font-scale));
@@ -126,6 +127,7 @@ const styles = css`
   }
 
   .editor-group > .row:not(:last-child),
+  .editor-group > .node-editor-code-ai-pair:not(:last-child),
   .editor-group > .inline-editor-row:not(:last-child) {
     margin-bottom: var(--node-editor-row-gap, calc(24px * var(--ui-font-scale)));
   }
@@ -203,6 +205,30 @@ export const EditorGroup: FC<
   const renderEditorField = (editor: (typeof editors)[number], index: number) => {
     const isDisabled = editor.disableIf?.(sharedProps.node.data) || sharedProps.isDisabled;
     const childEditorKey = `${editorKey}/${getEditorListKey(editor, index)}`;
+
+    if (editor.type === 'code') {
+      return (
+        <CodeEditorAiAssistBridge
+          key={childEditorKey}
+          codeEditor={(footerLeftAction) => (
+            <DefaultNodeEditorField
+              {...sharedProps}
+              editor={editor}
+              editorKey={childEditorKey}
+              isDisabled={isDisabled}
+              codeEditorFooterLeft={footerLeftAction}
+            />
+          )}
+          aiAssist={
+            <GenericCodeEditorAiAssist
+              {...sharedProps}
+              isDisabled={isDisabled}
+              codeEditor={editor}
+            />
+          }
+        />
+      );
+    }
 
     return (
       <DefaultNodeEditorField

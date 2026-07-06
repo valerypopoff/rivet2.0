@@ -10,6 +10,7 @@ import {
   buildLLMChatV2EditorCacheKey,
   resolveLLMChatV2RuntimeProviderOptions,
 } from '../../../src/model/nodes/LLMChatV2Node.js';
+import { resolveLLMChatV2ApiKey } from '../../../src/model/chat-v2/chatV2RuntimeOptions.js';
 import {
   cloneLLMChatV2EditorCacheOutputs,
   resolveLLMChatV2RuntimeConfig,
@@ -1209,6 +1210,106 @@ describe('LLMChatV2NodeImpl', () => {
           context: createRuntimeContext(),
         }),
       /API Key input is required/,
+    );
+  });
+
+  it('resolves configured provider keys from shared LLM settings', () => {
+    assert.equal(
+      resolveLLMChatV2ApiKey(
+        createNode({ provider: 'openai' }).data,
+        {},
+        createRuntimeContext({
+          settings: {
+            openAiApiKey: 'configured-openai-api-key',
+            openAiKey: '',
+            openAiEndpoint: '',
+            openAiOrganization: '',
+            chatNodeHeaders: {},
+          },
+        }),
+      ),
+      'configured-openai-api-key',
+    );
+    assert.equal(
+      resolveLLMChatV2ApiKey(
+        createNode({ provider: 'anthropic' }).data,
+        {},
+        createRuntimeContext({
+          settings: {
+            openAiKey: '',
+            openAiEndpoint: '',
+            openAiOrganization: '',
+            chatNodeHeaders: {},
+            anthropicApiKey: 'configured-anthropic-key',
+          },
+          getPluginConfig: () => '',
+        }),
+      ),
+      'configured-anthropic-key',
+    );
+    assert.equal(
+      resolveLLMChatV2ApiKey(
+        createNode({ provider: 'google' }).data,
+        {},
+        createRuntimeContext({
+          settings: {
+            openAiKey: '',
+            openAiEndpoint: '',
+            openAiOrganization: '',
+            chatNodeHeaders: {},
+            googleApiKey: 'configured-google-key',
+          },
+          getPluginConfig: () => '',
+        }),
+      ),
+      'configured-google-key',
+    );
+  });
+
+  it('resolves Custom provider configured key from node env vars before shared LLM settings', () => {
+    assert.equal(
+      resolveLLMChatV2ApiKey(
+        createNode({
+          provider: 'custom',
+          customProviderApiKeyEnvVarName: 'CEREBRAS_API_KEY',
+        }).data,
+        {},
+        createRuntimeContext({
+          settings: {
+            openAiKey: '',
+            openAiEndpoint: '',
+            openAiOrganization: '',
+            chatNodeHeaders: {},
+            customAiApiKey: 'configured-custom-key',
+            pluginEnv: {
+              CEREBRAS_API_KEY: 'env-specific-key',
+            },
+          },
+        }),
+      ),
+      'env-specific-key',
+    );
+  });
+
+  it('falls back to shared Custom provider LLM settings when the configured env var is absent', () => {
+    assert.equal(
+      resolveLLMChatV2ApiKey(
+        createNode({
+          provider: 'custom',
+          customProviderApiKeyEnvVarName: 'CEREBRAS_API_KEY',
+        }).data,
+        {},
+        createRuntimeContext({
+          settings: {
+            openAiKey: '',
+            openAiEndpoint: '',
+            openAiOrganization: '',
+            chatNodeHeaders: {},
+            customAiApiKey: 'configured-custom-key',
+          },
+        }),
+      ),
+      'configured-custom-key',
     );
   });
 
