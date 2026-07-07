@@ -7,6 +7,7 @@ import {
   printFailureDiagnostics,
   readDockerWaitTimeoutSeconds,
   run,
+  runCapture,
 } from './lib/docker-launcher.mjs';
 import {
   assertNoRetiredEnv,
@@ -18,6 +19,24 @@ const rootDir = process.cwd();
 let composeBase = 'docker compose -f ops/compose/docker-compose.managed-services.yml -f ops/compose/docker-compose.dev.yml';
 const diagnosticServices = 'api web executor proxy';
 let envFileLabel = '.env';
+
+async function runningWebDependenciesNeedRefresh(env) {
+  const dependencyMarkerCheck = [
+    'test -f /workspace/rivet/node_modules/.rivet-dev-yarn-install-ok',
+    'test -f /workspace/rivet/.yarn/unplugged/.rivet-dev-yarn-install-ok',
+    'test -f /workspace/rivet/node_modules/.yarn.lock',
+    'cmp -s /workspace/rivet/yarn.lock /workspace/rivet/node_modules/.yarn.lock',
+    'test -f /workspace/wrapper/web/node_modules/.package-lock.json',
+    'cmp -s /workspace/wrapper/web/package-lock.json /workspace/wrapper/web/node_modules/.package-lock.json',
+  ].join(' && ');
+
+  const result = await runCapture(`${composeBase} exec -T web sh -lc "${dependencyMarkerCheck}"`, env, {
+    allowFailure: true,
+    cwd: rootDir,
+  });
+
+  return result.exitCode !== 0;
+}
 
 async function main() {
   const action = process.argv[2] == null ? 'dev' : process.argv[2];
@@ -82,6 +101,23 @@ async function main() {
           envFileLabel,
           label: 'dev-docker',
         });
+      }
+    }
+
+    if (action === 'dev') {
+      const webAlreadyRunning = await isComposeServiceRunning('web', {
+        composeBase,
+        cwd: rootDir,
+        env: mergedEnv,
+      });
+
+      if (webAlreadyRunning && (await runningWebDependenciesNeedRefresh(mergedEnv))) {
+        console.log('[dev-docker] Recreating web because dependency markers changed.');
+        await run(
+          `${composeBase} up -d --no-deps --force-recreate --wait --wait-timeout ${waitTimeoutSeconds} web`,
+          mergedEnv,
+          { cwd: rootDir },
+        );
       }
     }
 

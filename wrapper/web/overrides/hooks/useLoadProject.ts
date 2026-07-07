@@ -14,6 +14,7 @@ import type { TrivetState } from '../../../../rivet/packages/app/src/state/trive
 import { toast } from 'react-toastify';
 import { useStore } from 'jotai';
 import { getOpenedProjectSession, primeOpenedProjectSession } from '../../io/openedProjectSessionCache.js';
+import { normalizeHostedProjectExecutorMode } from '../utils/hostedExecutorMode';
 
 export function useLoadProject() {
   const store = useStore();
@@ -75,7 +76,7 @@ export function useLoadProject() {
         data,
         fsPath: projectInfo.fsPath,
         openedGraph: projectInfo.openedGraph,
-        executorMode: projectInfo.executorMode,
+        executorMode: normalizeHostedProjectExecutorMode(projectInfo.executorMode),
         markClean,
         testSuites,
       });

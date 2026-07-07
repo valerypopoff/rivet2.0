@@ -55,6 +55,7 @@ services:
       - ../..:/workspace
       - ${RIVET_SOURCE_HOST_PATH:-../../rivet}:/workspace/rivet
       - rivet_node_modules:/workspace/rivet/node_modules
+      - rivet_yarn_unplugged:/workspace/rivet/.yarn/unplugged
       - wrapper_web_node_modules:/workspace/wrapper/web/node_modules
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
@@ -63,10 +64,11 @@ services:
         corepack enable &&
         corepack prepare yarn@4.6.0 --activate &&
         cd /workspace/rivet &&
-        if [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
-          YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable ||
-          YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install;
-          cp yarn.lock node_modules/.yarn.lock;
+        if [ ! -f node_modules/.rivet-dev-yarn-install-ok ] || [ ! -f .yarn/unplugged/.rivet-dev-yarn-install-ok ] || [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
+          (YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable ||
+          YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install) &&
+          cp yarn.lock node_modules/.yarn.lock &&
+          touch node_modules/.rivet-dev-yarn-install-ok .yarn/unplugged/.rivet-dev-yarn-install-ok;
         fi &&
         cd /workspace/wrapper/web &&
         if [ ! -f node_modules/.package-lock.json ] || ! cmp -s package-lock.json node_modules/.package-lock.json; then
@@ -152,6 +154,7 @@ services:
       - ../..:/workspace
       - ${RIVET_SOURCE_HOST_PATH:-../../rivet}:/workspace/rivet
       - rivet_node_modules:/workspace/rivet/node_modules
+      - rivet_yarn_unplugged:/workspace/rivet/.yarn/unplugged
       - ../../wrapper/api:/app
       - ../../scripts:/scripts:ro
       - ../../wrapper/shared:/shared
@@ -245,6 +248,8 @@ services:
 
 volumes:
   rivet_node_modules:
+    driver: local
+  rivet_yarn_unplugged:
     driver: local
   wrapper_web_node_modules:
     driver: local

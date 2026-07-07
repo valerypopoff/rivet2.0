@@ -41,14 +41,56 @@ type HostedRuntimeConfig = {
   latestAppsBasePath?: unknown;
 };
 
+type BrowserLocation = {
+  host: string;
+  protocol: string;
+};
+
 function applyString(value: unknown, currentValue: string): string {
   return typeof value === 'string' ? value : currentValue;
 }
 
+function getBrowserLocation(): BrowserLocation | undefined {
+  return typeof window !== 'undefined' ? window.location : undefined;
+}
+
+export function normalizeRuntimeWebSocketUrl(value: string): string {
+  const location = getBrowserLocation();
+  if (location?.protocol !== 'https:') {
+    return value;
+  }
+
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'ws:' && url.host === location.host) {
+      url.protocol = 'wss:';
+      return url.toString();
+    }
+  } catch {
+    return value;
+  }
+
+  return value;
+}
+
+export function normalizeHostedRuntimeConfig(config: HostedRuntimeConfig): HostedRuntimeConfig {
+  return {
+    ...config,
+    executorWsUrl: typeof config.executorWsUrl === 'string'
+      ? normalizeRuntimeWebSocketUrl(config.executorWsUrl)
+      : config.executorWsUrl,
+    remoteDebuggerDefaultWs: typeof config.remoteDebuggerDefaultWs === 'string'
+      ? normalizeRuntimeWebSocketUrl(config.remoteDebuggerDefaultWs)
+      : config.remoteDebuggerDefaultWs,
+  };
+}
+
 export function applyHostedRuntimeConfig(config: HostedRuntimeConfig): void {
-  RIVET_EXECUTOR_WS_URL = applyString(config.executorWsUrl, RIVET_EXECUTOR_WS_URL);
+  const normalizedConfig = normalizeHostedRuntimeConfig(config);
+
+  RIVET_EXECUTOR_WS_URL = applyString(normalizedConfig.executorWsUrl, RIVET_EXECUTOR_WS_URL);
   RIVET_REMOTE_DEBUGGER_DEFAULT_WS = applyString(
-    config.remoteDebuggerDefaultWs,
+    normalizedConfig.remoteDebuggerDefaultWs,
     RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
   );
   RIVET_PUBLISHED_WORKFLOWS_BASE_PATH = normalizeBasePath(
