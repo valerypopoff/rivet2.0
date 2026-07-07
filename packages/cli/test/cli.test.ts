@@ -30,7 +30,7 @@ import {
   type ServeArgs,
 } from '../src/commands/serve.js';
 import { createWebAppServeApp, makeCommand as makeServeAppCommand, type ServeAppArgs } from '../src/commands/serveApp.js';
-import { resolveDatasetFilePath, throwIfInvalidGraph, throwIfNoMainGraph } from '../src/cliRuntime.js';
+import { resolveDatasetFilePath, throwIfInvalidGraph, throwIfNoMainGraph, withProviderProcessorOptions } from '../src/cliRuntime.js';
 import { formatListenUrl } from '../src/http.js';
 import { shapeOutputs } from '../src/output.js';
 
@@ -51,6 +51,9 @@ test('run command builder registers its default option values', async () => {
   assert.equal(options.key['dataset-file'], true);
   assert.equal(options.key['save-datasets'], true);
   assert.equal(options.key['openai-api-key'], true);
+  assert.equal(options.key['anthropic-api-key'], true);
+  assert.equal(options.key['google-api-key'], true);
+  assert.equal(options.key['custom-ai-api-key'], true);
   assert.equal(options.key['openai-endpoint'], true);
   assert.equal(options.key['openai-organization'], true);
 });
@@ -101,6 +104,9 @@ test('serve-app command exposes its expected defaults', () => {
   assert.equal(options.default.dev, false);
   assert.deepEqual(options.default['cors-origin'], []);
   assert.equal(options.key['openai-api-key'], true);
+  assert.equal(options.key['anthropic-api-key'], true);
+  assert.equal(options.key['google-api-key'], true);
+  assert.equal(options.key['custom-ai-api-key'], true);
   assert.equal(options.key['openai-endpoint'], true);
   assert.equal(options.key['openai-organization'], true);
 });
@@ -259,7 +265,10 @@ test('buildStreamEventFilter filters SSE events when --stream names a node', () 
 
 test('serve processor options keep non-streaming runs on the default runtime policy', () => {
   const options = buildGraphProcessorOptions({
+    anthropicApiKey: undefined,
+    customAiApiKey: undefined,
     graph: 'Main',
+    googleApiKey: undefined,
     inputs: { input: 'value' },
     openaiApiKey: undefined,
     openaiEndpoint: undefined,
@@ -267,6 +276,7 @@ test('serve processor options keep non-streaming runs on the default runtime pol
   });
 
   assert.equal('runtimeProfile' in options, false);
+  assert.equal('openAiApiKey' in options, false);
   assert.equal('openAiKey' in options, false);
   assert.equal(options.graph, 'Main');
   assert.deepEqual(options.inputs, { input: 'value' });
@@ -274,21 +284,49 @@ test('serve processor options keep non-streaming runs on the default runtime pol
 
 test('serve processor options include only explicit provider overrides', () => {
   const options = buildGraphProcessorOptions({
+    anthropicApiKey: 'anthropic-key',
+    customAiApiKey: 'custom-key',
     graph: 'Main',
+    googleApiKey: 'google-key',
     inputs: {},
     openaiApiKey: 'key',
     openaiEndpoint: 'https://example.test/v1',
     openaiOrganization: undefined,
   });
 
-  assert.equal(options.openAiKey, 'key');
+  assert.equal(options.openAiApiKey, 'key');
+  assert.equal(options.anthropicApiKey, 'anthropic-key');
+  assert.equal(options.googleApiKey, 'google-key');
+  assert.equal(options.customAiApiKey, 'custom-key');
   assert.equal(options.openAiEndpoint, 'https://example.test/v1');
   assert.equal('openAiOrganization' in options, false);
 });
 
+test('CLI provider options map to shared LLM runtime settings', () => {
+  const options = withProviderProcessorOptions(
+    {
+      anthropicApiKey: 'anthropic-key',
+      customAiApiKey: 'custom-key',
+      googleApiKey: 'google-key',
+      openaiApiKey: 'openai-key',
+      openaiEndpoint: undefined,
+      openaiOrganization: undefined,
+    },
+    { graph: 'Main' },
+  );
+
+  assert.equal(options.openAiApiKey, 'openai-key');
+  assert.equal(options.anthropicApiKey, 'anthropic-key');
+  assert.equal(options.googleApiKey, 'google-key');
+  assert.equal(options.customAiApiKey, 'custom-key');
+});
+
 test('serve streaming runs force the compatible runtime policy', () => {
   const options = buildStreamingGraphProcessorOptions({
+    anthropicApiKey: undefined,
+    customAiApiKey: undefined,
     graph: 'Main',
+    googleApiKey: undefined,
     inputs: { input: 'value' },
     openaiApiKey: undefined,
     openaiEndpoint: undefined,

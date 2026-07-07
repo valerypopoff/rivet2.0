@@ -211,6 +211,16 @@ filtering uses `graphRunId` only:
 - **`setSelectedNodePageLatest()`** matches by `graphId` to decide whether to
   auto-follow the latest execution.
 
+Canvas execution chrome, such as node running indicators, drag previews, port
+tooltips, and running wire highlighting, treats a missing per-node selected
+process page as `latest`.
+This is intentional: nodes can start while their graph is not the active canvas,
+so their `nodeStart` event stores running data but may not seed
+`selectedProcessPageNodesState` for that graph view. Output pagers can still
+keep their own explicit historical page selection; this default only prevents
+off-screen running nodes from looking idle when the user navigates to their
+graph mid-run.
+
 **When modifying `getGraphRunsForView`, preserve its fallback logic.** It is how
 the app works for the most common navigation path (sidebar click to view a subgraph
 after execution).

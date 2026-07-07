@@ -7,7 +7,21 @@ import { useGetRivetUIContext } from '../../hooks/useGetRivetUIContext';
 import { useProjectNodeRegistry } from '../../hooks/useProjectNodeRegistry';
 import { produce } from 'immer';
 import { handleError } from '../../utils/errorHandling.js';
-import { getEditorListKey, getEditorRenderRows } from './editorUtils';
+import { getCodeEditorDataKey, getEditorListKey, getEditorRenderRows } from './editorUtils';
+import { CodeEditorAiAssistBridge, GenericCodeEditorAiAssist } from './CodeEditorAiAssist';
+
+const AI_ASSIST_TARGET_DATA_KEYS: Record<string, string> = {
+  CodeNodeAIAssist: 'code',
+  ExtractRegexNodeAiAssist: 'regex',
+  GptFunctionNodeJsonSchemaAiAssist: 'schema',
+  ObjectNodeAiAssist: 'jsonTemplate',
+  PromptNodeAiAssist: 'promptText',
+  TextNodeAiAssist: 'text',
+};
+
+function getAiAssistTargetDataKey(editor: EditorDefinition<ChartNode>): string | undefined {
+  return editor.type === 'custom' ? AI_ASSIST_TARGET_DATA_KEYS[editor.customEditorId] : undefined;
+}
 
 export const defaultEditorContainerStyles = css`
   --node-editor-row-gap: calc(18px * var(--ui-font-scale));
@@ -41,6 +55,7 @@ export const defaultEditorContainerStyles = css`
   }
 
   > .row:not(:last-child),
+  > .node-editor-code-ai-pair:not(:last-child),
   > .inline-editor-row:not(:last-child) {
     margin-bottom: var(--node-editor-row-gap);
   }
@@ -185,7 +200,7 @@ export const defaultEditorContainerStyles = css`
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
-    padding: 10px 10px 14px;
+    padding: 10px 10px 8px;
     background-color: var(--grey-darkest);
     border-radius: 16px;
     corner-shape: squircle;
@@ -204,6 +219,103 @@ export const defaultEditorContainerStyles = css`
       border-radius: 6px;
     }
     overflow: visible;
+  }
+
+  .node-editor-code-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    min-height: 34px;
+    gap: 12px;
+    padding: 8px 2px 0;
+    color: var(--foreground-muted);
+    font-size: var(--ui-font-size-compact);
+    line-height: 1;
+  }
+
+  .node-editor-code-footer-left {
+    display: flex;
+    align-items: center;
+    justify-self: start;
+    min-width: 0;
+  }
+
+  .node-editor-code-footer-center {
+    justify-self: center;
+    min-width: 0;
+  }
+
+  .node-editor-code-ai-footer-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--foreground-muted);
+    cursor: pointer;
+    transition:
+      background 120ms ease,
+      color 120ms ease;
+  }
+
+  .node-editor-code-ai-footer-button:hover,
+  .node-editor-code-ai-footer-button[aria-expanded='true'] {
+    background: var(--grey-darkerish);
+    color: var(--primary);
+  }
+
+  .node-editor-code-ai-footer-button svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .node-editor-code-font-controls {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    justify-self: end;
+    white-space: nowrap;
+  }
+
+  .node-editor-code-font-size {
+    color: var(--foreground-muted);
+  }
+
+  .node-editor-code-font-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--foreground-muted);
+    cursor: pointer;
+    transition:
+      background 120ms ease,
+      color 120ms ease;
+  }
+
+  .node-editor-code-font-button:hover:not(:disabled) {
+    background: var(--grey-darkerish);
+    color: var(--foreground);
+  }
+
+  .node-editor-code-font-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.35;
+  }
+
+  .node-editor-code-font-button svg {
+    width: 14px;
+    height: 14px;
   }
 
   .editor-container {
@@ -237,17 +349,6 @@ export const defaultEditorContainerStyles = css`
   .node-editor-static-code-editor {
     min-height: 500px;
     flex: 1 1 auto;
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    gap: 0;
-    padding: 10px;
-    background-color: var(--grey-dark);
-    border-radius: 16px;
-    corner-shape: squircle;
-    @supports not (corner-shape: squircle) {
-      border-radius: 8px;
-    }
   }
 
   .node-editor-static-code-editor .editor-container {
@@ -261,15 +362,31 @@ export const defaultEditorContainerStyles = css`
     overflow: visible;
   }
 
+  .node-editor-code-ai-pair {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .node-editor-code-ai-pair > .row:empty {
+    display: none;
+  }
+
   .editor-status-line {
     display: flex;
     flex-wrap: wrap;
+    justify-content: center;
     column-gap: 24px;
     row-gap: 2px;
-    margin-top: 6px;
     color: var(--foreground-muted);
     font-size: var(--ui-font-size-compact);
     line-height: 1.4;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .editor-spellcheck-status {
+    color: var(--foreground-muted);
   }
 
   .node-editor-code-resize-handle {
@@ -376,6 +493,97 @@ export const defaultEditorContainerStyles = css`
   }
 `;
 
+const NodeCodeEditorWithAiAssist: FC<
+  Omit<SharedEditorProps, 'isDisabled'> & {
+    aiAssistEditor: EditorDefinition<ChartNode>;
+    aiAssistIndex: number;
+    codeEditor: EditorDefinition<ChartNode>;
+    codeEditorIndex: number;
+    onClose?: () => void;
+    onRefreshEditors: () => void;
+  }
+> = ({
+  node,
+  onChange,
+  isReadonly,
+  onClose,
+  onRefreshEditors,
+  aiAssistEditor,
+  aiAssistIndex,
+  codeEditor,
+  codeEditorIndex,
+}) => {
+  return (
+    <CodeEditorAiAssistBridge
+      codeEditor={(footerLeftAction) => (
+        <DefaultNodeEditorField
+          node={node}
+          onChange={onChange}
+          editor={codeEditor}
+          editorKey={getEditorListKey(codeEditor, codeEditorIndex)}
+          isReadonly={isReadonly}
+          isDisabled={codeEditor.disableIf?.(node.data) ?? false}
+          onClose={onClose}
+          onRefreshEditors={onRefreshEditors}
+          codeEditorFooterLeft={footerLeftAction}
+        />
+      )}
+      aiAssist={
+        <DefaultNodeEditorField
+          node={node}
+          onChange={onChange}
+          editor={aiAssistEditor}
+          editorKey={getEditorListKey(aiAssistEditor, aiAssistIndex)}
+          isReadonly={isReadonly}
+          isDisabled={aiAssistEditor.disableIf?.(node.data) ?? false}
+          onClose={onClose}
+          onRefreshEditors={onRefreshEditors}
+        />
+      }
+    />
+  );
+};
+
+const NodeCodeEditorWithGenericAiAssist: FC<
+  Omit<SharedEditorProps, 'isDisabled'> & {
+    codeEditor: Extract<EditorDefinition<ChartNode>, { type: 'code' }>;
+    codeEditorIndex: number;
+    onClose?: () => void;
+    onRefreshEditors: () => void;
+  }
+> = ({ node, onChange, isReadonly, onClose, onRefreshEditors, codeEditor, codeEditorIndex }) => {
+  const isDisabled = codeEditor.disableIf?.(node.data) ?? false;
+
+  return (
+    <CodeEditorAiAssistBridge
+      codeEditor={(footerLeftAction) => (
+        <DefaultNodeEditorField
+          node={node}
+          onChange={onChange}
+          editor={codeEditor}
+          editorKey={getEditorListKey(codeEditor, codeEditorIndex)}
+          isReadonly={isReadonly}
+          isDisabled={isDisabled}
+          onClose={onClose}
+          onRefreshEditors={onRefreshEditors}
+          codeEditorFooterLeft={footerLeftAction}
+        />
+      )}
+      aiAssist={
+        <GenericCodeEditorAiAssist
+          node={node}
+          onChange={onChange}
+          isReadonly={isReadonly}
+          isDisabled={isDisabled}
+          onClose={onClose}
+          onRefreshEditors={onRefreshEditors}
+          codeEditor={codeEditor}
+        />
+      }
+    />
+  );
+};
+
 export const DefaultNodeEditor: FC<
   Omit<SharedEditorProps, 'isDisabled'> & {
     onClose?: () => void;
@@ -441,6 +649,25 @@ export const DefaultNodeEditor: FC<
   }, [editorLoadKey, editorRefreshNonce, getUIContext, node, projectNodeRegistry]);
 
   const editors = editorState?.editorLoadKey === editorLoadKey ? editorState.editors : [];
+  const aiAssistByTargetDataKey = new Map<string, { editor: EditorDefinition<ChartNode>; index: number }>();
+  const pairedAiAssistIndexes = new Set<number>();
+
+  editors.forEach((editor, index) => {
+    const targetDataKey = getAiAssistTargetDataKey(editor);
+
+    if (targetDataKey && !aiAssistByTargetDataKey.has(targetDataKey)) {
+      aiAssistByTargetDataKey.set(targetDataKey, { editor, index });
+    }
+  });
+
+  editors.forEach((editor) => {
+    const dataKey = getCodeEditorDataKey(editor);
+    const aiAssistEntry = dataKey ? aiAssistByTargetDataKey.get(dataKey) : undefined;
+
+    if (aiAssistEntry) {
+      pairedAiAssistIndexes.add(aiAssistEntry.index);
+    }
+  });
 
   const renderEditorField = (editor: EditorDefinition<ChartNode>, index: number) => {
     const isDisabled = editor.disableIf?.(node.data) ?? false;
@@ -471,6 +698,45 @@ export const DefaultNodeEditor: FC<
                 renderEditorField(inlineEditor, row.startIndex + inlineIndex),
               )}
             </div>
+          );
+        }
+
+        if (pairedAiAssistIndexes.has(row.index)) {
+          return null;
+        }
+
+        const dataKey = getCodeEditorDataKey(row.editor);
+        const aiAssistEntry = dataKey ? aiAssistByTargetDataKey.get(dataKey) : undefined;
+
+        if (aiAssistEntry) {
+          return (
+            <NodeCodeEditorWithAiAssist
+              key={`${row.key}:${getEditorListKey(aiAssistEntry.editor, aiAssistEntry.index)}`}
+              node={node}
+              onChange={onChange}
+              isReadonly={isReadonly}
+              onClose={onClose}
+              onRefreshEditors={refreshEditors}
+              codeEditor={row.editor}
+              codeEditorIndex={row.index}
+              aiAssistEditor={aiAssistEntry.editor}
+              aiAssistIndex={aiAssistEntry.index}
+            />
+          );
+        }
+
+        if (row.editor.type === 'code') {
+          return (
+            <NodeCodeEditorWithGenericAiAssist
+              key={`${row.key}:generic-ai-assist`}
+              node={node}
+              onChange={onChange}
+              isReadonly={isReadonly}
+              onClose={onClose}
+              onRefreshEditors={refreshEditors}
+              codeEditor={row.editor}
+              codeEditorIndex={row.index}
+            />
           );
         }
 

@@ -43,6 +43,13 @@ export const useMultilineEditorFontSize = () => {
     [setStoredFontSize],
   );
 
+  const adjustFontSize = useCallback(
+    (command: 'increase' | 'decrease' | 'reset') => {
+      setNormalizedFontSize((currentFontSize) => adjustMultilineEditorFontSize(currentFontSize, command));
+    },
+    [setNormalizedFontSize],
+  );
+
   const handleKeyDown = useCallback(
     (event: HandledMultilineEditorFontSizeKeyEvent): boolean => {
       const command = getMultilineEditorFontSizeCommand(event);
@@ -54,10 +61,10 @@ export const useMultilineEditorFontSize = () => {
       event.preventDefault();
       event.stopPropagation();
 
-      setNormalizedFontSize((currentFontSize) => adjustMultilineEditorFontSize(currentFontSize, command));
+      adjustFontSize(command);
       return true;
     },
-    [setNormalizedFontSize],
+    [adjustFontSize],
   );
 
   const handleWheel = useCallback(
@@ -71,14 +78,15 @@ export const useMultilineEditorFontSize = () => {
       event.preventDefault();
       event.stopPropagation();
 
-      setNormalizedFontSize((currentFontSize) => adjustMultilineEditorFontSize(currentFontSize, command));
+      adjustFontSize(command);
       return true;
     },
-    [setNormalizedFontSize],
+    [adjustFontSize],
   );
 
   return {
     fontSize: normalizedFontSize,
+    adjustFontSize,
     handleKeyDown,
     handleWheel,
   };

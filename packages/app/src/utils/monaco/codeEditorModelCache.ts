@@ -8,6 +8,7 @@ type CachedCodeEditorModel = {
 };
 
 const modelCache = new Map<string, CachedCodeEditorModel>();
+const viewStateCache = new Map<string, monaco.editor.ICodeEditorViewState>();
 
 function encodeCodeEditorModelCachePart(value: string | null | undefined): string {
   return encodeURIComponent(value?.trim() || 'none');
@@ -46,6 +47,7 @@ export function getOrCreateCodeEditorModel(params: {
 
     if (cached.lastInputText !== text && cached.model.getValue() !== text) {
       cached.model.setValue(text);
+      viewStateCache.delete(cacheKey);
     }
     cached.lastInputText = text;
 
@@ -73,6 +75,11 @@ export function clearCodeEditorModelCacheForProject(projectId: string): void {
       modelCache.delete(cacheKey);
     }
   }
+  for (const cacheKey of viewStateCache.keys()) {
+    if (cacheKey.startsWith(prefix)) {
+      viewStateCache.delete(cacheKey);
+    }
+  }
 }
 
 export function clearCodeEditorModelCache(): void {
@@ -80,10 +87,30 @@ export function clearCodeEditorModelCache(): void {
     cached.model.dispose();
   }
   modelCache.clear();
+  viewStateCache.clear();
 }
 
 export function getCachedCodeEditorModelCount(): number {
   return modelCache.size;
+}
+
+export function getCodeEditorViewState(cacheKey: string | undefined): monaco.editor.ICodeEditorViewState | undefined {
+  return cacheKey ? viewStateCache.get(cacheKey) : undefined;
+}
+
+export function saveCodeEditorViewState(
+  cacheKey: string | undefined,
+  viewState: monaco.editor.ICodeEditorViewState | null,
+): void {
+  if (!cacheKey) {
+    return;
+  }
+
+  if (viewState) {
+    viewStateCache.set(cacheKey, viewState);
+  } else {
+    viewStateCache.delete(cacheKey);
+  }
 }
 
 function evictOldModels(): void {
@@ -96,5 +123,6 @@ function evictOldModels(): void {
     const oldest = modelCache.get(oldestKey);
     oldest?.model.dispose();
     modelCache.delete(oldestKey);
+    viewStateCache.delete(oldestKey);
   }
 }

@@ -23,6 +23,7 @@ import type { useNodeTypes } from '../../hooks/useNodeTypes.js';
 import type { PageValue, ProcessDataForNode } from '../../state/dataFlow.js';
 import { resolveDraggingExecutionContext } from './dragOverlayExecutionContext.js';
 import { projectState } from '../../state/savedGraphs.js';
+import { resolveCanvasExecutionProcessPage } from '../../state/selectors/executionSelectors.js';
 
 type CanvasViewValue = ContextType<typeof CanvasViewContext>;
 type CanvasHandlersValue = ContextType<typeof CanvasHandlersContext>;
@@ -210,7 +211,7 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
                   lastRun={lastRunPerNode[node.id]}
                   onDragActivatorPointerDown={onNodeDragActivatorPointerDown}
                   isOutputExpanded={expandedOutputNodeIdSet.has(node.id)}
-                  processPage={selectedProcessPagePerNode[node.id]!}
+                  processPage={resolveCanvasExecutionProcessPage(selectedProcessPagePerNode[node.id])}
                   renderHeavyContent={heavyContentNodeIdSet.has(node.id)}
                 />
               );

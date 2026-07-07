@@ -394,10 +394,7 @@ function configureNodeProcessor(processor: NodeGraphProcessor): void {
   });
 }
 
-function createRunnerProcessor(
-  project: Project,
-  options: RunGraphOptions,
-): NodeGraphProcessor {
+function createRunnerProcessor(project: Project, options: RunGraphOptions): NodeGraphProcessor {
   const processorInfo = coreCreateProcessor(
     project,
     {
@@ -435,7 +432,10 @@ function createNodeProcessContext(
     settings: resolveProcessSettings(
       { ...options, pluginEnv },
       {
-        openAiKey: process.env.OPENAI_API_KEY ?? '',
+        openAiApiKey: process.env.OPENAI_API_KEY ?? '',
+        anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
+        googleApiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? '',
+        customAiApiKey: process.env.CUSTOM_AI_API_KEY ?? process.env.CUSTOM_PROVIDER_API_KEY ?? '',
         openAiOrganization: process.env.OPENAI_ORG_ID ?? '',
         openAiEndpoint: process.env.OPENAI_ENDPOINT ?? '',
       },

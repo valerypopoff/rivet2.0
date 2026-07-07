@@ -9,12 +9,15 @@ import { getAppVersion } from '../../../utils/platform/app.js';
 import { checkForUpdatesState, skippedMaxVersionState } from '../../../state/settings.js';
 import { fields } from '../settingsPageStyles.js';
 import { LabeledToggle } from '../../LabeledToggle.js';
+import { getVisibleSkippedUpdateVersion } from './updateSettingsVersionVisibility.js';
 
 export const UpdatesSettingsPage: FC = () => {
   const checkForUpdatesNow = useCheckForUpdate({ notifyNoUpdates: true, force: true });
   const [checkForUpdates, setCheckForUpdates] = useAtom(checkForUpdatesState);
   const skippedMaxVersion = useAtomValue(skippedMaxVersionState);
-  const [currentVersion, setCurrentVersion] = useState('');
+  const [currentVersion, setCurrentVersion] = useState<string>();
+  const visibleSkippedMaxVersion =
+    currentVersion === undefined ? undefined : getVisibleSkippedUpdateVersion(currentVersion, skippedMaxVersion);
 
   useAsyncEffect(async () => {
     setCurrentVersion(await getAppVersion());
@@ -23,7 +26,7 @@ export const UpdatesSettingsPage: FC = () => {
   return (
     <div css={fields}>
       <p>
-        You are currently on <strong>Rivet {currentVersion}</strong>
+        You are currently on <strong>Rivet {currentVersion ?? ''}</strong>
       </p>
       <Field name="check-for-updates">
         {() => (
@@ -46,14 +49,16 @@ export const UpdatesSettingsPage: FC = () => {
           </Button>
         )}
       </Field>
-      {skippedMaxVersion && (
+      {visibleSkippedMaxVersion && (
         <Field name="skipped-update-version">
           {() => (
             <>
               <Label htmlFor="skipped-update-version" testId="skipped-update-version">
                 Skipped update version
               </Label>
-              <div>You have skipped version {skippedMaxVersion}. You may update by clicking the button above.</div>
+              <div>
+                You have skipped version {visibleSkippedMaxVersion}. You may update by clicking the button above.
+              </div>
             </>
           )}
         </Field>

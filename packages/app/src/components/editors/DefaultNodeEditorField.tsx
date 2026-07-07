@@ -1,6 +1,6 @@
 import { type EditorDefinition, type ChartNode } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
-import { type FC } from 'react';
+import { type FC, type ReactNode } from 'react';
 import { match } from 'ts-pattern';
 import PlugIcon from '../../assets/icons/plug-icon.svg?react';
 import { type SharedEditorProps } from './SharedEditorProps';
@@ -31,8 +31,9 @@ export const DefaultNodeEditorField: FC<
   SharedEditorProps & {
     editor: EditorDefinition<ChartNode>;
     editorKey: string;
+    codeEditorFooterLeft?: ReactNode;
   }
-> = ({ node, onChange, editor, editorKey, isReadonly, isDisabled, onClose, onRefreshEditors }) => {
+> = ({ node, onChange, editor, editorKey, isReadonly, isDisabled, onClose, onRefreshEditors, codeEditorFooterLeft }) => {
   const data = node.data as Record<string, unknown>;
 
   if (editor.hideIf?.(node.data)) {
@@ -57,7 +58,9 @@ export const DefaultNodeEditorField: FC<
     .with({ type: 'dropdown' }, (editor) => <DefaultDropdownEditor {...sharedProps} editor={editor} />)
     .with({ type: 'segmented' }, (editor) => <DefaultSegmentedEditor {...sharedProps} editor={editor} />)
     .with({ type: 'number' }, (editor) => <DefaultNumberEditor {...sharedProps} editor={editor} />)
-    .with({ type: 'code' }, (editor) => <DefaultCodeEditor {...sharedProps} editor={editor} />)
+    .with({ type: 'code' }, (editor) => (
+      <DefaultCodeEditor {...sharedProps} editor={editor} footerLeft={codeEditorFooterLeft} />
+    ))
     .with({ type: 'graphSelector' }, (editor) => <DefaultGraphSelectorEditor {...sharedProps} editor={editor} />)
     .with({ type: 'datasetSelector' }, (editor) => <DefaultDatasetSelectorEditor {...sharedProps} editor={editor} />)
     .with({ type: 'color' }, (editor) => <DefaultColorEditor {...sharedProps} editor={editor} />)

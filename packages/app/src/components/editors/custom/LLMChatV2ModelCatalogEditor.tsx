@@ -31,6 +31,10 @@ import {
   invalidateChatV2DiscoveredModelOptions,
 } from '../../../utils/chatV2ModelCatalog.js';
 import {
+  getChatV2ModelRefreshStatus,
+  type ChatV2ModelRefreshStatus,
+} from '../../../utils/chatV2ModelCatalogStatus.js';
+import {
   forgetRefreshedModelOptions,
   getVisibleModelOptions,
   rememberRefreshedModelOptions,
@@ -142,23 +146,13 @@ const styles = css`
   }
 `;
 
-type RefreshStatus =
-  | {
-      tone: 'success' | 'warning';
-      message: string;
-    }
-  | undefined;
-
 type Props = SharedEditorProps & {
   editor: CustomEditorDefinition<ChartNode>;
 };
 
 type ProviderName = 'openai' | 'anthropic' | 'google' | 'custom';
 
-type ModelRefreshResult = Awaited<ReturnType<typeof getChatV2DiscoveredModelOptionsWithStatus>>;
-type ResolvedSettings = Awaited<ReturnType<typeof fillMissingSettingsFromEnvironmentVariables>>;
-
-const modelCatalogRefreshStatus = new Map<string, RefreshStatus>();
+const modelCatalogRefreshStatus = new Map<string, ChatV2ModelRefreshStatus>();
 
 function getProvider(data: unknown): ProviderName {
   return ((data as { provider?: ProviderName }).provider ?? 'openai') as ProviderName;
@@ -166,23 +160,6 @@ function getProvider(data: unknown): ProviderName {
 
 function getStatusKey(nodeId: string, provider: ProviderName, apiKeySource: string): string {
   return `${nodeId}:${provider}:${apiKeySource}`;
-}
-
-function getMissingCredentialMessage(
-  provider: ProviderName,
-  resolvedSettings: ResolvedSettings,
-  apiKey?: string,
-): string | undefined {
-  switch (provider) {
-    case 'openai':
-      return apiKey || resolvedSettings.openAiKey ? undefined : 'OpenAI API key is not configured.';
-    case 'anthropic':
-      return undefined;
-    case 'google':
-      return undefined;
-    case 'custom':
-      return undefined;
-  }
 }
 
 function getApiKeySource(data: unknown): string {
@@ -213,27 +190,6 @@ function getLatestInputApiKey(options: {
   return coerceTypeOptional(tryRestoreStoredDataValue(storedApiKey, options.dataRefs), 'string')?.trim();
 }
 
-function getRefreshStatus(
-  provider: ProviderName,
-  result: ModelRefreshResult,
-  resolvedSettings: ResolvedSettings,
-  apiKey?: string,
-): RefreshStatus {
-  if (result.source === 'api') {
-    return {
-      tone: 'success',
-      message: `Loaded ${result.options.length} models from ${provider}.`,
-    };
-  }
-
-  return {
-    tone: 'warning',
-    message: `Using built-in ${provider} model list (${result.options.length}). ${
-      getMissingCredentialMessage(provider, resolvedSettings, apiKey) ?? result.error ?? 'API fetch failed.'
-    }`,
-  };
-}
-
 export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
   node,
   onChange,
@@ -253,7 +209,7 @@ export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
   const data = node.data as Record<string, unknown>;
   const apiKeySource = getApiKeySource(data);
   const statusKey = getStatusKey(node.id, provider, apiKeySource);
-  const [status, setStatus] = useState<RefreshStatus>(() => modelCatalogRefreshStatus.get(statusKey));
+  const [status, setStatus] = useState<ChatV2ModelRefreshStatus>(() => modelCatalogRefreshStatus.get(statusKey));
   const [menuPortalTarget, setMenuPortalTarget] = useState<HTMLDivElement | null>(null);
   const modelOptions = getVisibleModelOptions({
     editor,
@@ -265,7 +221,7 @@ export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
   const isControlDisabled = isReadonly || isDisabled;
   const isCustomProvider = provider === 'custom';
 
-  const updateStatus = (nextStatus: RefreshStatus) => {
+  const updateStatus = (nextStatus: ChatV2ModelRefreshStatus) => {
     if (nextStatus == null) {
       modelCatalogRefreshStatus.delete(statusKey);
     } else {
@@ -305,7 +261,7 @@ export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
       invalidateChatV2DiscoveredModelOptions(provider, context);
       const result = await getChatV2DiscoveredModelOptionsWithStatus(provider, context);
       rememberRefreshedModelOptions(statusKey, result.options);
-      updateStatus(getRefreshStatus(provider, result, resolvedSettings, apiKey));
+      updateStatus(getChatV2ModelRefreshStatus(provider, result, resolvedSettings, plugins, apiKey));
       onRefreshEditors?.();
     } catch (error) {
       updateStatus({

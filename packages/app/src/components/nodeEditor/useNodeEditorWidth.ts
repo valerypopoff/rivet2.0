@@ -6,16 +6,16 @@ type ResizeHandleMouseEvent = globalThis.MouseEvent;
 
 export const DEFAULT_WIDTH_RATIO = 0.45;
 export const MIN_WIDTH = 500;
-export const MAX_WIDTH = 1000;
-export const MIN_CANVAS_WIDTH = 320;
+export const MAX_WIDTH_RATIO = 0.5;
 
 export function isValidWidth(width: number | null | undefined): width is number {
   return typeof width === 'number' && Number.isFinite(width) && width > 0;
 }
 
 export function clampNodeEditorWidth(width: number, viewportWidth: number): number {
-  const maxWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(viewportWidth - MIN_CANVAS_WIDTH)));
-  return Math.max(MIN_WIDTH, Math.min(maxWidth, Math.round(width)));
+  const maxWidth = Math.max(1, Math.round(viewportWidth * MAX_WIDTH_RATIO));
+  const minWidth = Math.min(MIN_WIDTH, maxWidth);
+  return Math.max(minWidth, Math.min(maxWidth, Math.round(width)));
 }
 
 export function resolveNodeEditorWidth({

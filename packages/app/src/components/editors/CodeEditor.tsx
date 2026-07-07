@@ -2,7 +2,19 @@ import { HelperMessage, Label } from '@atlaskit/form';
 import { type CodeEditorDefinition, type ChartNode } from '@valerypopoff/rivet2-core';
 import { useLatest, useDebounceFn } from 'ahooks';
 import { useAtomValue } from 'jotai';
-import { type FC, type MutableRefObject, useRef, useEffect, Suspense, useMemo, useState } from 'react';
+import {
+  type FC,
+  type MutableRefObject,
+  type ReactNode,
+  useContext,
+  useRef,
+  useEffect,
+  Suspense,
+  useMemo,
+  useState,
+} from 'react';
+import PlusIcon from 'majesticons/line/plus-line.svg?react';
+import MinusIcon from 'majesticons/line/minus-line.svg?react';
 import { type monaco } from '../../utils/monaco';
 import { themeState } from '../../state/settings.js';
 import { graphMetadataState } from '../../state/graph.js';
@@ -26,6 +38,20 @@ import { getCodeNodeErrorLineHighlight, type CodeNodeErrorLineHighlight } from '
 import { type EditorInterpolationSyntax } from '../../utils/monaco/interpolationDiagnostics.js';
 import { buildCodeEditorModelCacheKey } from '../../utils/monaco/codeEditorModelCacheKey.js';
 import { shouldEnableMarkdownFolding } from '../../utils/monaco/markdownFoldingRanges.js';
+import {
+  clearCodeEditorSpellcheckMarkers,
+  runCodeEditorSpellcheck,
+  type SpellcheckResult,
+} from '../../utils/monaco/spellcheck.js';
+import { JsonStringPreviewAffordance } from '../renderDataValue/JsonStringPreviewAffordance.js';
+import { useMultilineEditorFontSize } from '../../hooks/useMultilineEditorFontSize.js';
+import {
+  MAX_MULTILINE_EDITOR_FONT_SIZE,
+  MIN_MULTILINE_EDITOR_FONT_SIZE,
+  type MultilineEditorFontSizeCommand,
+} from '../../utils/multilineEditorFontSize.js';
+import { Tooltip } from '../Tooltip.js';
+import { NodeCodeEditorFooterActionContext } from './NodeCodeEditorFooterActionContext.js';
 
 type CodeEditorDefinitionWithInterpolationSyntax = CodeEditorDefinition<ChartNode> & {
   interpolationSyntax?: EditorInterpolationSyntax;
@@ -35,11 +61,109 @@ function getErrorLineHighlightKey(highlight: CodeNodeErrorLineHighlight | undefi
   return highlight ? `${highlight.runKey}:${highlight.line}` : undefined;
 }
 
+type SpellcheckStatus =
+  | { type: 'checking' }
+  | { type: 'done'; result: SpellcheckResult }
+  | { type: 'error'; message: string };
+
+type MountedEditorState = {
+  editor: monaco.editor.IStandaloneCodeEditor;
+  editorMountKey: string;
+};
+
+function getSpellcheckStatusMessage(status: SpellcheckStatus | undefined): string | undefined {
+  if (!status) {
+    return undefined;
+  }
+
+  if (status.type === 'checking') {
+    return 'Checking spelling...';
+  }
+
+  if (status.type === 'error') {
+    return status.message;
+  }
+
+  const { issueCount, markerCount, reachedLimit } = status.result;
+
+  if (issueCount === 0) {
+    return 'No spelling issues found';
+  }
+
+  if (reachedLimit) {
+    return `${markerCount.toLocaleString()}+ possible spelling issues`;
+  }
+
+  const issueLabel = issueCount === 1 ? 'possible spelling issue' : 'possible spelling issues';
+
+  return `${issueCount.toLocaleString()} ${issueLabel}`;
+}
+
+function shouldEnableJsonStringPreview(language: string | undefined): boolean {
+  return language === 'json';
+}
+
+function getSelectedEditorText(editor: monaco.editor.IStandaloneCodeEditor): string | undefined {
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+
+  if (!model || !selection || selection.isEmpty()) {
+    return undefined;
+  }
+
+  return model.getValueInRange(selection);
+}
+
+const FONT_SIZE_COMMANDS = [
+  {
+    command: 'decrease' as const,
+    label: 'Decrease editor font size',
+    icon: <MinusIcon />,
+    getDisabled: (fontSize: number) => fontSize <= MIN_MULTILINE_EDITOR_FONT_SIZE,
+  },
+  {
+    command: 'increase' as const,
+    label: 'Increase editor font size',
+    icon: <PlusIcon />,
+    getDisabled: (fontSize: number) => fontSize >= MAX_MULTILINE_EDITOR_FONT_SIZE,
+  },
+];
+
+const CodeEditorFooter: FC<{
+  center: ReactNode;
+  left: ReactNode;
+  fontSize: number;
+  onAdjustFontSize: (command: MultilineEditorFontSizeCommand) => void;
+}> = ({ center, left, fontSize, onAdjustFontSize }) => (
+  <div className="node-editor-code-footer">
+    <div className="node-editor-code-footer-left">{left}</div>
+    <div className="node-editor-code-footer-center">{center}</div>
+    <div className="node-editor-code-font-controls" aria-label="Editor font size controls">
+      <span className="node-editor-code-font-size">Font size: {fontSize}px</span>
+      {FONT_SIZE_COMMANDS.map(({ command, label, icon, getDisabled }) => (
+        <Tooltip key={command} content={label}>
+          <button
+            type="button"
+            className="node-editor-code-font-button"
+            aria-label={label}
+            disabled={getDisabled(fontSize)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onAdjustFontSize(command)}
+          >
+            {icon}
+          </button>
+        </Tooltip>
+      ))}
+    </div>
+  </div>
+);
+
 export const DefaultCodeEditor: FC<
   SharedEditorProps & {
     editor: CodeEditorDefinition<ChartNode>;
+    footerLeft?: ReactNode;
   }
-> = ({ node, isReadonly, isDisabled, onChange, editor: editorDef, onClose }) => {
+> = ({ node, isReadonly, isDisabled, onChange, editor: editorDef, onClose, footerLeft }) => {
   const helperMessage = getHelperMessage(editorDef, node.data);
   const postEditorHelperMessage = getPostEditorHelperMessage(editorDef, node.data);
   const nodeLatest = useLatest(node);
@@ -75,6 +199,7 @@ export const DefaultCodeEditor: FC<
     nodeType: node.type,
     defaultHeight: editorDef.height,
     showTextStats: 'showTextStats' in editorDef && editorDef.showTextStats === true,
+    footerLeft,
   };
 
   if ((node.type === 'code' || node.type === 'codeNew') && editorDef.dataKey === 'code') {
@@ -117,6 +242,7 @@ type CodeEditorProps = {
   defaultHeight?: number;
   showTextStats?: boolean;
   errorLineHighlight?: CodeNodeErrorLineHighlight;
+  footerLeft?: ReactNode;
 };
 
 export const CodeEditor: FC<CodeEditorProps> = ({
@@ -139,10 +265,16 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   defaultHeight,
   showTextStats = false,
   errorLineHighlight,
+  footerLeft = null,
 }) => {
   const editorInstance = useRef<monaco.editor.IStandaloneCodeEditor>();
+  const spellcheckRunId = useRef(0);
   const [displayValue, setDisplayValue] = useState(value ?? '');
   const [dismissedErrorLineHighlightKey, setDismissedErrorLineHighlightKey] = useState<string>();
+  const [mountedEditorState, setMountedEditorState] = useState<MountedEditorState>();
+  const [spellcheckStatus, setSpellcheckStatus] = useState<SpellcheckStatus>();
+  const { fontSize, adjustFontSize } = useMultilineEditorFontSize();
+  const footerActionBridge = useContext(NodeCodeEditorFooterActionContext);
 
   const onChangeLatest = useLatest(onChange);
   const isEditorReadOnly = isReadonly || isDisabled;
@@ -172,6 +304,25 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       ? errorLineHighlight
       : undefined;
   const textStats = showTextStats ? getTextEditorStats(displayValue) : undefined;
+  const spellcheckStatusMessage = getSpellcheckStatusMessage(spellcheckStatus);
+  const mountedEditor = mountedEditorState?.editorMountKey === editorMountKey ? mountedEditorState.editor : undefined;
+  const footerCenter = (textStats || spellcheckStatusMessage) && (
+    <div className="editor-status-line">
+      {textStats && (
+        <>
+          <span>Words: {textStats.wordCount.toLocaleString()}</span>
+          <span>Characters: {textStats.characterCount.toLocaleString()}</span>
+        </>
+      )}
+      {spellcheckStatusMessage && <span className="editor-spellcheck-status">{spellcheckStatusMessage}</span>}
+    </div>
+  );
+  const footer = (
+    <CodeEditorFooter center={footerCenter} left={footerLeft} fontSize={fontSize} onAdjustFontSize={adjustFontSize} />
+  );
+  const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
+    setMountedEditorState({ editor, editorMountKey });
+  };
 
   useEffect(() => {
     if (editorInstance.current) {
@@ -195,6 +346,9 @@ export const CodeEditor: FC<CodeEditorProps> = ({
 
   const handleEditorChange = (newText: string) => {
     setDisplayValue(newText);
+    spellcheckRunId.current += 1;
+    clearCodeEditorSpellcheckMarkers(editorInstance.current);
+    setSpellcheckStatus(undefined);
 
     if (errorLineHighlightKey && newText !== errorLineHighlight?.source) {
       setDismissedErrorLineHighlightKey(errorLineHighlightKey);
@@ -216,6 +370,52 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       }
     }
   };
+
+  const handleCheckSpelling = async () => {
+    const editor = editorInstance.current;
+
+    if (!editor) {
+      return;
+    }
+
+    const runId = spellcheckRunId.current + 1;
+    spellcheckRunId.current = runId;
+    setSpellcheckStatus({ type: 'checking' });
+
+    try {
+      const result = await runCodeEditorSpellcheck(editor);
+
+      if (spellcheckRunId.current === runId) {
+        setSpellcheckStatus({ type: 'done', result });
+      } else {
+        clearCodeEditorSpellcheckMarkers(editor);
+      }
+    } catch {
+      if (spellcheckRunId.current === runId) {
+        setSpellcheckStatus({ type: 'error', message: 'Spellcheck failed to load' });
+      }
+    }
+  };
+
+  useEffect(
+    () => () => {
+      spellcheckRunId.current += 1;
+      clearCodeEditorSpellcheckMarkers(editorInstance.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!footerActionBridge || !mountedEditor) {
+      return undefined;
+    }
+
+    footerActionBridge.setSelectedTextGetter(() => getSelectedEditorText(mountedEditor));
+
+    return () => {
+      footerActionBridge.setSelectedTextGetter(undefined);
+    };
+  }, [footerActionBridge, mountedEditor]);
 
   return (
     <div className="editor-wrapper-wrapper">
@@ -239,10 +439,14 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           autoFocus={autoFocus}
           enableFolding={effectiveEnableFolding}
           modelCacheKey={modelCacheKey}
+          onSpellcheckAction={handleCheckSpelling}
+          mountedEditor={mountedEditor}
+          onEditorMount={handleEditorMount}
           editorKey={editorIdentityKey}
           nodeType={nodeType}
           defaultHeight={defaultHeight}
           errorLineHighlight={activeErrorLineHighlight}
+          footer={footer}
         />
       ) : (
         <NonResizableCodeEditorViewport
@@ -258,20 +462,18 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           autoFocus={autoFocus}
           enableFolding={effectiveEnableFolding}
           modelCacheKey={modelCacheKey}
+          onSpellcheckAction={handleCheckSpelling}
+          mountedEditor={mountedEditor}
+          onEditorMount={handleEditorMount}
           editorKey={editorIdentityKey}
           defaultHeight={defaultHeight}
           errorLineHighlight={activeErrorLineHighlight}
+          footer={footer}
         />
       )}
       {postEditorHelperMessage && (
         <div className="node-editor-code-helper node-editor-code-helper-after">
           <HelperMessage>{postEditorHelperMessage}</HelperMessage>
-        </div>
-      )}
-      {textStats && (
-        <div className="editor-status-line">
-          <span>Words: {textStats.wordCount.toLocaleString()}</span>
-          <span>Characters: {textStats.characterCount.toLocaleString()}</span>
         </div>
       )}
     </div>
@@ -291,8 +493,12 @@ type ViewportProps = {
   autoFocus: boolean | undefined;
   enableFolding: boolean | undefined;
   modelCacheKey: string | undefined;
+  onSpellcheckAction: () => void | Promise<void>;
+  mountedEditor: monaco.editor.IStandaloneCodeEditor | undefined;
+  onEditorMount: (editor: monaco.editor.IStandaloneCodeEditor) => void;
   editorKey: string | undefined;
   errorLineHighlight?: CodeNodeErrorLineHighlight;
+  footer: ReactNode;
 };
 
 const CodeEditorLoadingFallback: FC = () => (
@@ -314,6 +520,8 @@ const SuspendedCodeEditor: FC<ViewportProps> = ({
   autoFocus,
   enableFolding,
   modelCacheKey,
+  onSpellcheckAction,
+  onEditorMount,
   errorLineHighlight,
 }) => (
   <Suspense fallback={<CodeEditorLoadingFallback />}>
@@ -330,6 +538,8 @@ const SuspendedCodeEditor: FC<ViewportProps> = ({
       autoFocus={autoFocus}
       enableFolding={enableFolding}
       modelCacheKey={modelCacheKey}
+      onSpellcheckAction={onSpellcheckAction}
+      onEditorMount={onEditorMount}
       errorLineHighlight={errorLineHighlight}
     />
   </Suspense>
@@ -341,6 +551,8 @@ const ResizableCodeEditorViewport: FC<
     defaultHeight: number | undefined;
   }
 > = ({ nodeType, defaultHeight, ...editorProps }) => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const jsonPreviewEnabled = shouldEnableJsonStringPreview(editorProps.language);
   const { viewportHeight, resizeHandleProps } = useNodeEditorCodeViewportHeight({
     nodeType,
     editorKey: editorProps.editorKey,
@@ -348,14 +560,23 @@ const ResizableCodeEditorViewport: FC<
   });
 
   return (
-    <div className="editor-viewport-shell" style={{ height: viewportHeight }}>
+    <div ref={rootRef} className="editor-viewport-shell" style={{ height: viewportHeight }}>
       <div className="editor-wrapper">
         <SuspendedCodeEditor {...editorProps} />
       </div>
+      {editorProps.footer}
       <ResizeHandle
         className="node-editor-code-resize-handle"
         dragCursor={resizeCursorStyles.vertical}
         {...resizeHandleProps}
+      />
+      <JsonStringPreviewAffordance
+        buttonCoordinateMode="root"
+        editor={editorProps.mountedEditor}
+        enabled={jsonPreviewEnabled}
+        minDecodedLength={0}
+        rootRef={rootRef}
+        text={editorProps.text}
       />
     </div>
   );
@@ -366,11 +587,24 @@ const NonResizableCodeEditorViewport: FC<
     defaultHeight: number | undefined;
   }
 > = ({ defaultHeight, ...editorProps }) => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const jsonPreviewEnabled = shouldEnableJsonStringPreview(editorProps.language);
   const staticViewportStyle = isValidHeight(defaultHeight) ? { minHeight: Math.round(defaultHeight) } : undefined;
 
   return (
-    <div className="editor-wrapper node-editor-static-code-editor" style={staticViewportStyle}>
-      <SuspendedCodeEditor {...editorProps} />
+    <div ref={rootRef} className="editor-viewport-shell node-editor-static-code-editor" style={staticViewportStyle}>
+      <div className="editor-wrapper">
+        <SuspendedCodeEditor {...editorProps} />
+      </div>
+      {editorProps.footer}
+      <JsonStringPreviewAffordance
+        buttonCoordinateMode="root"
+        editor={editorProps.mountedEditor}
+        enabled={jsonPreviewEnabled}
+        minDecodedLength={0}
+        rootRef={rootRef}
+        text={editorProps.text}
+      />
     </div>
   );
 };

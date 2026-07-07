@@ -14,7 +14,10 @@ function createContext(apiKey?: string) {
   return {
     settings: {
       openAiEndpoint: 'https://api.openai.com/v1/responses',
-      openAiKey: 'configured-openai-key',
+      openAiApiKey: 'configured-openai-key',
+      openAiKey: '',
+      anthropicApiKey: 'configured-anthropic-key',
+      googleApiKey: 'configured-google-key',
     } as Settings,
     plugins: [],
     apiKey,
@@ -64,6 +67,22 @@ test('OpenAI model refresh cache stays scoped by explicit API key override', asy
   assert.deepEqual(authorizations, ['Bearer input-openai-key-a', 'Bearer input-openai-key-b']);
 });
 
+test('OpenAI model refresh uses the configured openAiApiKey alias', async () => {
+  const context = createContext();
+  let authorization: string | null = null;
+
+  globalThis.fetch = async (_input, init) => {
+    authorization = new Headers(init?.headers).get('Authorization');
+    return new Response(JSON.stringify({ data: [{ id: 'gpt-configured-model' }] }));
+  };
+
+  invalidateChatV2DiscoveredModelOptions('openai', context);
+  const result = await getChatV2DiscoveredModelOptionsWithStatus('openai', context);
+
+  assert.equal(result.source, 'api');
+  assert.equal(authorization, 'Bearer configured-openai-key');
+});
+
 test('Anthropic model refresh uses the explicit API key override without configured plugin credentials', async () => {
   const context = createContext('input-anthropic-key');
   let apiKey: string | null = null;
@@ -78,6 +97,62 @@ test('Anthropic model refresh uses the explicit API key override without configu
 
   assert.equal(result.source, 'api');
   assert.equal(apiKey, 'input-anthropic-key');
+});
+
+test('Anthropic model refresh uses the configured LLM settings key', async () => {
+  const context = createContext();
+  let apiKey: string | null = null;
+
+  globalThis.fetch = async (_input, init) => {
+    apiKey = new Headers(init?.headers).get('x-api-key');
+    return new Response(
+      JSON.stringify({ data: [{ id: 'claude-configured-model', display_name: 'Claude Configured' }] }),
+    );
+  };
+
+  invalidateChatV2DiscoveredModelOptions('anthropic', context);
+  const result = await getChatV2DiscoveredModelOptionsWithStatus('anthropic', context);
+
+  assert.equal(result.source, 'api');
+  assert.equal(apiKey, 'configured-anthropic-key');
+});
+
+test('Anthropic model refresh falls back to the legacy plugin key', async () => {
+  const context = {
+    settings: {
+      openAiEndpoint: 'https://api.openai.com/v1/responses',
+      openAiKey: 'configured-openai-key',
+      anthropicApiKey: '',
+      pluginSettings: {
+        anthropic: {
+          anthropicApiKey: 'legacy-plugin-anthropic-key',
+        },
+      },
+    } as Settings,
+    plugins: [
+      {
+        id: 'anthropic',
+        configSpec: {
+          anthropicApiKey: {
+            type: 'secret' as const,
+            label: 'Anthropic API Key',
+          },
+        },
+      },
+    ],
+  };
+  let apiKey: string | null = null;
+
+  globalThis.fetch = async (_input, init) => {
+    apiKey = new Headers(init?.headers).get('x-api-key');
+    return new Response(JSON.stringify({ data: [{ id: 'claude-plugin-model', display_name: 'Claude Plugin' }] }));
+  };
+
+  invalidateChatV2DiscoveredModelOptions('anthropic', context);
+  const result = await getChatV2DiscoveredModelOptionsWithStatus('anthropic', context);
+
+  assert.equal(result.source, 'api');
+  assert.equal(apiKey, 'legacy-plugin-anthropic-key');
 });
 
 test('Google model refresh uses the explicit API key override in the model-list URL', async () => {
@@ -105,4 +180,78 @@ test('Google model refresh uses the explicit API key override in the model-list 
   assert.equal(result.source, 'api');
   assert.match(requestUrl, /key=input-google-key/);
   assert.doesNotMatch(requestUrl, /configured-openai-key/);
+});
+
+test('Google model refresh uses the configured LLM settings key', async () => {
+  const context = createContext();
+  let requestUrl = '';
+
+  globalThis.fetch = async (input) => {
+    requestUrl = String(input);
+    return new Response(
+      JSON.stringify({
+        models: [
+          {
+            name: 'models/gemini-configured-model',
+            displayName: 'Gemini Configured',
+            supportedGenerationMethods: ['generateContent'],
+          },
+        ],
+      }),
+    );
+  };
+
+  invalidateChatV2DiscoveredModelOptions('google', context);
+  const result = await getChatV2DiscoveredModelOptionsWithStatus('google', context);
+
+  assert.equal(result.source, 'api');
+  assert.match(requestUrl, /key=configured-google-key/);
+});
+
+test('Google model refresh falls back to the legacy plugin key', async () => {
+  const context = {
+    settings: {
+      openAiEndpoint: 'https://api.openai.com/v1/responses',
+      openAiKey: 'configured-openai-key',
+      googleApiKey: '',
+      pluginSettings: {
+        google: {
+          googleApiKey: 'legacy-plugin-google-key',
+        },
+      },
+    } as Settings,
+    plugins: [
+      {
+        id: 'google',
+        configSpec: {
+          googleApiKey: {
+            type: 'secret' as const,
+            label: 'Google API Key',
+          },
+        },
+      },
+    ],
+  };
+  let requestUrl = '';
+
+  globalThis.fetch = async (input) => {
+    requestUrl = String(input);
+    return new Response(
+      JSON.stringify({
+        models: [
+          {
+            name: 'models/gemini-plugin-model',
+            displayName: 'Gemini Plugin',
+            supportedGenerationMethods: ['generateContent'],
+          },
+        ],
+      }),
+    );
+  };
+
+  invalidateChatV2DiscoveredModelOptions('google', context);
+  const result = await getChatV2DiscoveredModelOptionsWithStatus('google', context);
+
+  assert.equal(result.source, 'api');
+  assert.match(requestUrl, /key=legacy-plugin-google-key/);
 });

@@ -286,7 +286,7 @@ export function createChatV2Model(
   switch (provider) {
     case 'openai': {
       const providerInstance = createOpenAI({
-        apiKey: options.apiKey || context.settings.openAiKey || undefined,
+        apiKey: options.apiKey || context.settings.openAiApiKey || context.settings.openAiKey || undefined,
         organization: context.settings.openAiOrganization || undefined,
         baseURL: options.baseURL || undefined,
         headers: options.headers,
@@ -298,7 +298,8 @@ export function createChatV2Model(
 
     case 'anthropic': {
       const providerInstance = createAnthropic({
-        apiKey: options.apiKey || context.getPluginConfig('anthropicApiKey') || undefined,
+        apiKey:
+          options.apiKey || context.settings.anthropicApiKey || context.getPluginConfig('anthropicApiKey') || undefined,
         baseURL: options.baseURL || context.getPluginConfig('anthropicApiEndpoint') || undefined,
         headers: options.headers,
         fetch: maybeCreateRequestBodyCapturingFetch(options),
@@ -309,7 +310,7 @@ export function createChatV2Model(
 
     case 'google': {
       const providerInstance = createGoogleGenerativeAI({
-        apiKey: options.apiKey || context.getPluginConfig('googleApiKey') || undefined,
+        apiKey: options.apiKey || context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined,
         baseURL: options.baseURL || undefined,
         headers: options.headers,
         fetch: maybeCreateRequestBodyCapturingFetch(options),

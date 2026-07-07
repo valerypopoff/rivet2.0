@@ -183,6 +183,10 @@ export function getSelectedProcessRun(
   return getSelectedProcessData(processData, selectedPage, options)?.data;
 }
 
+export function resolveCanvasExecutionProcessPage(selectedPage: PageValue | undefined): PageValue {
+  return selectedPage ?? 'latest';
+}
+
 export function getSelectedProcessPageIndex(
   processData: ProcessDataForNode[] | undefined,
   selectedPage: PageValue,

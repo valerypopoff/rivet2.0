@@ -34,7 +34,7 @@ jobs:
           workspaces: packages/app/src-tauri -> target
 
       - name: Install dependencies
-        run: yarn --immutable
+        run: node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache
 
       - name: Sync desktop version metadata
         run: yarn sync:desktop-version
@@ -78,7 +78,7 @@ jobs:
           workspaces: packages/app/src-tauri -> target
 
       - name: Install dependencies
-        run: yarn --immutable
+        run: node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache
 
       - name: Sync desktop version metadata
         run: yarn sync:desktop-version
@@ -137,7 +137,7 @@ jobs:
       - uses: ./.github/actions/setup-yarn
 
       - name: Install dependencies
-        run: yarn --immutable
+        run: node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache
 
       - name: Build documentation site
         run: node .yarn/releases/yarn-4.6.0.cjs workspace docs run build

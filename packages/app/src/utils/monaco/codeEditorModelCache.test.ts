@@ -7,7 +7,9 @@ import {
   clearCodeEditorModelCache,
   clearCodeEditorModelCacheForProject,
   getCachedCodeEditorModelCount,
+  getCodeEditorViewState,
   getOrCreateCodeEditorModel,
+  saveCodeEditorViewState,
 } from './codeEditorModelCache.js';
 import { buildCodeEditorModelCacheKey } from './codeEditorModelCacheKey.js';
 
@@ -91,6 +93,23 @@ test('getOrCreateCodeEditorModel does not overwrite warm edits with the same sta
   assert.equal(second.model.getValue(), 'edited');
 });
 
+test('getOrCreateCodeEditorModel clears stale view state when cached text is externally refreshed', () => {
+  getOrCreateCodeEditorModel({
+    cacheKey: 'key',
+    text: 'one',
+    createModel: () => createFakeModel('one'),
+  });
+  saveCodeEditorViewState('key', { cursorState: [], viewState: {} } as any);
+
+  getOrCreateCodeEditorModel({
+    cacheKey: 'key',
+    text: 'two',
+    createModel: () => createFakeModel('never used'),
+  });
+
+  assert.equal(getCodeEditorViewState('key'), undefined);
+});
+
 test('getOrCreateCodeEditorModel returns uncached models without retaining them', () => {
   const first = getOrCreateCodeEditorModel({
     cacheKey: undefined,
@@ -146,12 +165,19 @@ test('clearCodeEditorModelCacheForProject disposes only that project models', ()
     text: 'b',
     createModel: () => createFakeModel('b'),
   }).model as unknown as FakeTextModel;
+  const projectAViewState = { cursorState: [], viewState: {} } as any;
+  const projectBViewState = { cursorState: [{ inSelectionMode: false }], viewState: {} } as any;
+
+  saveCodeEditorViewState(projectAKey, projectAViewState);
+  saveCodeEditorViewState(projectBKey, projectBViewState);
 
   clearCodeEditorModelCacheForProject('project-a');
 
   assert.equal(projectAModel.disposed, true);
   assert.equal(projectBModel.disposed, false);
   assert.equal(getCachedCodeEditorModelCount(), 1);
+  assert.equal(getCodeEditorViewState(projectAKey), undefined);
+  assert.equal(getCodeEditorViewState(projectBKey), projectBViewState);
 });
 
 test('model cache evicts oldest models', () => {
@@ -173,6 +199,21 @@ test('model cache evicts oldest models', () => {
   assert.equal(models[0]!.disposed, true);
   assert.equal(models[12]!.disposed, false);
   assert.equal(getCachedCodeEditorModelCount(), 12);
+});
+
+test('model cache evicts matching editor view state', () => {
+  const firstKey = 'project:p|graph:g|node:n-0|editor:code|language:none|interpolation:none';
+  saveCodeEditorViewState(firstKey, { cursorState: [], viewState: {} } as any);
+
+  for (let index = 0; index < 13; index++) {
+    getOrCreateCodeEditorModel({
+      cacheKey: `project:p|graph:g|node:n-${index}|editor:code|language:none|interpolation:none`,
+      text: String(index),
+      createModel: () => createFakeModel(String(index)),
+    });
+  }
+
+  assert.equal(getCodeEditorViewState(firstKey), undefined);
 });
 
 test('model cache module stays independent from main-used cache key helpers', () => {

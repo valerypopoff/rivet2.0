@@ -19,11 +19,12 @@ import {
   lastRunDataByNodeState,
   resolvedGraphSelectionState,
   selectedProcessPageNodesState,
+  type PageValue,
   type RunDataByNodeId,
 } from '../state/dataFlow';
 import { useStableCallback } from '../hooks/useStableCallback';
 import { useAtom, useAtomValue, useStore } from 'jotai';
-import { getSelectedProcessData } from '../state/selectors/executionSelectors.js';
+import { getSelectedProcessData, resolveCanvasExecutionProcessPage } from '../state/selectors/executionSelectors.js';
 import { canvasIoDefinitionsForNodeState } from '../state/selectors/canvasGraphSelectors.js';
 import { resolveClosestWireDropTargetFromPoint } from '../utils/wireDropTarget.js';
 import { useRenderableWires } from './nodeCanvas/useRenderableWires.js';
@@ -249,7 +250,7 @@ export const WireLayer: FC<WireLayerProps> = ({
     for (const [nodeId, processData] of Object.entries(lastRunDataByNode) as Array<[NodeId, RunDataByNodeId[NodeId]]>) {
       const selectedProcessData = getSelectedProcessData(
         processData,
-        selectedProcessPageNodes[nodeId] ?? 0,
+        resolveCanvasExecutionProcessPage(selectedProcessPageNodes[nodeId]),
         graphSelectionOptions,
       );
 
@@ -622,7 +623,7 @@ const StaticWireContents = memo(
     portPositions: PortPositions;
     renderableWires: NodeConnection[];
     runningNodeIdSet: ReadonlySet<NodeId>;
-    selectedProcessPageNodes: Record<NodeId, number | 'latest'>;
+    selectedProcessPageNodes: Record<NodeId, PageValue>;
   }) => {
     const highlightedNodeIdSet = useMemo(
       () => (highlightedNodes ? new Set(highlightedNodes) : undefined),
@@ -710,18 +711,18 @@ StaticWireContents.displayName = 'StaticWireContents';
 
 function getIsNotRan(
   connection: NodeConnection,
-  selectedProcessPageNodes: Record<NodeId, number | 'latest'>,
+  selectedProcessPageNodes: Record<NodeId, PageValue>,
   lastRunDataByNode: RunDataByNodeId,
   graphSelectionOptions: Parameters<typeof getSelectedProcessData>[2],
 ) {
   const inputNodeSelectedExecution = getSelectedProcessData(
     lastRunDataByNode[connection.inputNodeId],
-    selectedProcessPageNodes[connection.inputNodeId] ?? 0,
+    resolveCanvasExecutionProcessPage(selectedProcessPageNodes[connection.inputNodeId]),
     graphSelectionOptions,
   );
   const outputNodeSelectedExecution = getSelectedProcessData(
     lastRunDataByNode[connection.outputNodeId],
-    selectedProcessPageNodes[connection.outputNodeId] ?? 0,
+    resolveCanvasExecutionProcessPage(selectedProcessPageNodes[connection.outputNodeId]),
     graphSelectionOptions,
   );
 

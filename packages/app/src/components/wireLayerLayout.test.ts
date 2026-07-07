@@ -68,3 +68,10 @@ test('wire bend handles are local rendered-wire affordances with persisted conne
   assert.match(wireLayerSource, /onMouseDown=\{\(event\) => onConnectionBendMouseDown\(connection, connectionKey, event\)\}/);
   assert.match(wireLayerSource, /bendPoint=\{bendPoint\}/);
 });
+
+test('wire execution chrome uses the shared canvas process-page default', () => {
+  const wireLayerSource = readFileSync(join(componentsDir, 'WireLayer.tsx'), 'utf8');
+
+  assert.match(wireLayerSource, /resolveCanvasExecutionProcessPage/);
+  assert.doesNotMatch(wireLayerSource, /selectedProcessPageNodes\[[^\]]+\]\s*\?\?\s*0/);
+});

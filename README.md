@@ -164,7 +164,8 @@ This repo publishes Windows installer downloads to the GitHub Pages documentatio
 
 On pushes to `develop`, the workflow:
 
-1. Installs dependencies with `yarn install --immutable`.
+1. Installs dependencies with the pinned Yarn install command and immutable
+   cache validation.
 2. Builds the monorepo with `yarn build`.
 3. Builds Windows MSI and NSIS installer bundles from `packages/app`.
 4. Builds the Docusaurus documentation site from `packages/docs`.

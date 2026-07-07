@@ -294,12 +294,15 @@ async function streamGraph({
 export function buildGraphProcessorOptions({
   inputs,
   graph,
+  anthropicApiKey,
+  customAiApiKey,
+  googleApiKey,
   openaiApiKey,
   openaiEndpoint,
   openaiOrganization,
 }: GraphProcessorArgs): NodeCreateProcessorOptions {
   return withProviderProcessorOptions(
-    { openaiApiKey, openaiEndpoint, openaiOrganization },
+    { anthropicApiKey, customAiApiKey, googleApiKey, openaiApiKey, openaiEndpoint, openaiOrganization },
     {
       graph,
       inputs,

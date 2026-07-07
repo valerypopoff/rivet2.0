@@ -5,7 +5,19 @@ import { installEditorInterpolationSupport } from '../utils/monaco/interpolation
 import { type EditorInterpolationSyntax } from '../utils/monaco/interpolationDiagnostics.js';
 import { installJsStyleCommentHighlighting } from '../utils/monaco/commentHighlighting.js';
 import { shouldHighlightJsStyleComments } from '../utils/monaco/commentRangeScanner.js';
-import { getCodeEditorModelUri, getOrCreateCodeEditorModel } from '../utils/monaco/codeEditorModelCache.js';
+import { jsonEscapeText, jsonUnescapeText } from '../utils/monaco/editorTextTransforms.js';
+import {
+  clearCodeEditorSpellcheckMarkers,
+  runCodeEditorSpellcheck,
+  SPELLCHECK_MARKER_OWNER,
+  type SpellcheckCapableCodeEditor,
+} from '../utils/monaco/spellcheck.js';
+import {
+  getCodeEditorModelUri,
+  getCodeEditorViewState,
+  getOrCreateCodeEditorModel,
+  saveCodeEditorViewState,
+} from '../utils/monaco/codeEditorModelCache.js';
 
 const DEFAULT_MONACO_THEME = 'vs-dark';
 const DEFAULT_MULTILINE_EDITOR_FONT_SIZE = 14;
@@ -21,6 +33,119 @@ type MultilineEditorFontSizeWheelEvent = Pick<WheelEvent, 'deltaY' | 'ctrlKey' |
   preventDefault(): void;
   stopPropagation(): void;
 };
+
+type SelectedEditorText = {
+  selection: monaco.Selection;
+  text: string;
+};
+
+function getSelectedEditorText(editor: monaco.editor.IStandaloneCodeEditor): SelectedEditorText | undefined {
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+
+  if (!model || !selection || selection.isEmpty()) {
+    return undefined;
+  }
+
+  return {
+    selection,
+    text: model.getValueInRange(selection),
+  };
+}
+
+function isCodeEditorReadonly(editor: monaco.editor.IStandaloneCodeEditor): boolean {
+  return editor.getOption(monaco.editor.EditorOption.readOnly);
+}
+
+function replaceSelectedEditorText(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  getReplacement: (selectedText: string) => string | undefined,
+): void {
+  if (isCodeEditorReadonly(editor)) {
+    return;
+  }
+
+  const selected = getSelectedEditorText(editor);
+
+  if (!selected) {
+    return;
+  }
+
+  const replacement = getReplacement(selected.text);
+
+  if (replacement == null || replacement === selected.text) {
+    return;
+  }
+
+  editor.pushUndoStop();
+  editor.executeEdits('rivet.textTools', [
+    {
+      range: selected.selection,
+      text: replacement,
+      forceMoveMarkers: true,
+    },
+  ]);
+  editor.pushUndoStop();
+}
+
+async function runMonacoPrettify(editor: monaco.editor.IStandaloneCodeEditor): Promise<void> {
+  if (isCodeEditorReadonly(editor)) {
+    return;
+  }
+
+  const selection = editor.getSelection();
+  const actionId = selection && !selection.isEmpty() ? 'editor.action.formatSelection' : 'editor.action.formatDocument';
+  const action = editor.getAction(actionId);
+
+  if (!action?.isSupported()) {
+    return;
+  }
+
+  await action.run();
+}
+
+function registerEditorTextToolActions(editor: monaco.editor.IStandaloneCodeEditor): monaco.IDisposable[] {
+  return [
+    editor.addAction({
+      id: 'rivet.prettify',
+      label: 'Prettify',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.6,
+      run: async () => {
+        await runMonacoPrettify(editor);
+      },
+    }),
+    editor.addAction({
+      id: 'rivet.jsonEscapeSelection',
+      label: 'JSON escape',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.7,
+      run: () => {
+        replaceSelectedEditorText(editor, jsonEscapeText);
+      },
+    }),
+    editor.addAction({
+      id: 'rivet.jsonUnescapeSelection',
+      label: 'JSON unescape',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.8,
+      run: () => {
+        replaceSelectedEditorText(editor, jsonUnescapeText);
+      },
+    }),
+  ];
+}
+
+export type CodeEditorDisplayOptions = Pick<
+  monaco.editor.IStandaloneEditorConstructionOptions,
+  | 'fontFamily'
+  | 'lineHeight'
+  | 'padding'
+  | 'roundedSelection'
+  | 'selectionHighlight'
+  | 'occurrencesHighlight'
+  | 'renderLineHighlight'
+>;
 
 export type CodeEditorProps = {
   text: string;
@@ -38,6 +163,7 @@ export type CodeEditorProps = {
   enableFolding?: boolean;
   wordWrap?: 'on' | 'off';
   scrollbar?: monaco.editor.IEditorScrollbarOptions;
+  displayOptions?: CodeEditorDisplayOptions;
   onContentHeightChange?: (height: number) => void;
   errorLineHighlight?: {
     line: number;
@@ -48,6 +174,8 @@ export type CodeEditorProps = {
   onFontSizeWheel?: (event: MultilineEditorFontSizeWheelEvent) => boolean;
   isNodeEditorResizing?: boolean;
   modelCacheKey?: string;
+  enableSpellcheckAction?: boolean;
+  onSpellcheckAction?: () => void | Promise<void>;
 };
 
 export const CodeEditor: FC<CodeEditorProps> = ({
@@ -66,6 +194,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   enableFolding,
   wordWrap = 'on',
   scrollbar,
+  displayOptions,
   onContentHeightChange,
   errorLineHighlight,
   fontSize = DEFAULT_MULTILINE_EDITOR_FONT_SIZE,
@@ -73,14 +202,18 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   onFontSizeWheel,
   isNodeEditorResizing = false,
   modelCacheKey,
+  enableSpellcheckAction = true,
+  onSpellcheckAction,
 }) => {
   const editorContainer = useRef<HTMLDivElement>(null);
   const editorInstance = useRef<monaco.editor.IStandaloneCodeEditor>();
   const errorLineDecorationIds = useRef<string[]>([]);
   const pendingResizeLayoutRef = useRef(false);
+  const spellcheckActionDisposable = useRef<monaco.IDisposable>();
 
   const onChangeLatest = useLatest(onChange);
   const onContentHeightChangeLatest = useLatest(onContentHeightChange);
+  const onSpellcheckActionLatest = useLatest(onSpellcheckAction);
   const isNodeEditorResizingRef = useRef(isNodeEditorResizing);
 
   isNodeEditorResizingRef.current = isNodeEditorResizing;
@@ -113,6 +246,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       minimap: {
         enabled: false,
       },
+      ...displayOptions,
       fontSize,
       wordWrap,
       readOnly: isReadonly,
@@ -122,7 +256,21 @@ export const CodeEditor: FC<CodeEditorProps> = ({
         ...scrollbar,
         alwaysConsumeMouseWheel: false,
       },
-    });
+    }) as SpellcheckCapableCodeEditor & monaco.editor.IStandaloneCodeEditor;
+
+    editor.__rivetSpellcheckMarkers = {
+      clear: () => {
+        monaco.editor.setModelMarkers(model, SPELLCHECK_MARKER_OWNER, []);
+      },
+      setMarkers: (markers) => {
+        monaco.editor.setModelMarkers(model, SPELLCHECK_MARKER_OWNER, [...markers]);
+      },
+    };
+
+    const cachedViewState = getCodeEditorViewState(modelCacheKey);
+    if (cachedViewState) {
+      editor.restoreViewState(cachedViewState);
+    }
 
     editor.layout();
     onContentHeightChangeLatest.current?.(editor.getContentHeight());
@@ -131,6 +279,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     const commentHighlightingSupport = shouldHighlightJsStyleComments(language)
       ? installJsStyleCommentHighlighting(editor)
       : undefined;
+    const textToolActionDisposables = registerEditorTextToolActions(editor);
 
     const onResize = () => {
       // Resizing the node settings panel can emit a dense stream of ResizeObserver
@@ -152,6 +301,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     });
 
     editor.onDidChangeModelContent(() => {
+      clearCodeEditorSpellcheckMarkers(editor);
       onChangeLatest.current?.(editor.getValue());
     });
 
@@ -173,14 +323,20 @@ export const CodeEditor: FC<CodeEditorProps> = ({
 
     return () => {
       currentOnChange?.(editor.getValue());
+      saveCodeEditorViewState(modelCacheKey, editor.saveViewState());
+      spellcheckActionDisposable.current?.dispose();
+      spellcheckActionDisposable.current = undefined;
       editorInstance.current = undefined;
       if (editorRef) {
         editorRef.current = undefined;
       }
       resizeObserver?.disconnect();
       contentSizeChangeDisposable.dispose();
+      textToolActionDisposables.forEach((disposable) => disposable.dispose());
       interpolationSupport?.dispose();
       commentHighlightingSupport?.dispose();
+      clearCodeEditorSpellcheckMarkers(editor);
+      delete editor.__rivetSpellcheckMarkers;
       editor.dispose();
       if (!isCached) {
         model.dispose();
@@ -188,6 +344,46 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const editor = editorInstance.current as
+      | (SpellcheckCapableCodeEditor & monaco.editor.IStandaloneCodeEditor)
+      | undefined;
+
+    spellcheckActionDisposable.current?.dispose();
+    spellcheckActionDisposable.current = undefined;
+
+    if (!editor || !enableSpellcheckAction) {
+      return undefined;
+    }
+
+    spellcheckActionDisposable.current = editor.addAction({
+      id: 'rivet.checkSpelling',
+      label: 'Check spelling',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.5,
+      run: async () => {
+        try {
+          const customSpellcheckAction = onSpellcheckActionLatest.current;
+
+          if (customSpellcheckAction) {
+            await customSpellcheckAction();
+          } else {
+            await runCodeEditorSpellcheck(editor);
+          }
+        } catch {
+          // Some wrappers report spellcheck failures in their own status line.
+          // Keep the native Monaco action quiet so a dictionary load problem
+          // cannot break the context-menu flow.
+        }
+      },
+    });
+
+    return () => {
+      spellcheckActionDisposable.current?.dispose();
+      spellcheckActionDisposable.current = undefined;
+    };
+  }, [enableSpellcheckAction, onSpellcheckActionLatest]);
 
   useEffect(() => {
     const editor = editorInstance.current;

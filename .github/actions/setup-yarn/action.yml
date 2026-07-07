@@ -1,5 +1,5 @@
 name: Setup Node and Yarn
-description: Set up the repository Node toolchain and restore the local Yarn cache.
+description: Set up the repository Node toolchain and restore Yarn install state.
 
 inputs:
   node-version:
@@ -15,12 +15,8 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
-    - name: Restore Yarn cache
+    - name: Restore Yarn install state
       uses: actions/cache@v4
       with:
-        path: |
-          .yarn/cache
-          .yarn/install-state.gz
+        path: .yarn/install-state.gz
         key: ${{ runner.os }}-node-${{ inputs.node-version }}-yarn-${{ hashFiles('yarn.lock', '.yarnrc.yml') }}
-        restore-keys: |
-          ${{ runner.os }}-node-${{ inputs.node-version }}-yarn-

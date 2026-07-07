@@ -14,7 +14,11 @@ export const settingsState = atomWithStorage<Settings>(
     defaultNodeColors: false,
     openNodeSettingsOnCreate: true,
 
+    openAiApiKey: '',
     openAiKey: '',
+    anthropicApiKey: '',
+    googleApiKey: '',
+    customAiApiKey: '',
     openAiOrganization: '',
     openAiEndpoint: '',
     chatNodeTimeout: DEFAULT_CHAT_NODE_TIMEOUT,
@@ -166,7 +170,9 @@ export const DEFAULT_CUSTOM_THEME_PRIMARY_COLOR = 'rgba(255,153,0,1)';
 const CSS_RGBA_COLOR_NUMBER_PATTERN = '-?(?:\\d+(?:\\.\\d+)?|\\.\\d+)';
 
 export function resolveCanvasBackgroundPattern(value: unknown): CanvasBackgroundPattern {
-  return canvasBackgroundPatterns.some((pattern) => pattern.value === value) ? (value as CanvasBackgroundPattern) : 'grid';
+  return canvasBackgroundPatterns.some((pattern) => pattern.value === value)
+    ? (value as CanvasBackgroundPattern)
+    : 'grid';
 }
 
 export function resolveCanvasBackgroundColorMode(value: unknown): CanvasBackgroundColorMode {
@@ -255,10 +261,7 @@ function mixRgbaColor(baseColor: RgbaColor, mixColor: RgbaColor, mixAmount: numb
   };
 }
 
-function parseRgbaColor(
-  value: unknown,
-  fallback: RgbaColor,
-): RgbaColor {
+function parseRgbaColor(value: unknown, fallback: RgbaColor): RgbaColor {
   if (typeof value !== 'string') {
     return fallback;
   }
@@ -320,10 +323,7 @@ export function clampCanvasBackgroundPatternOpacity(value: unknown): number {
     return DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY;
   }
 
-  return Math.min(
-    MAX_CANVAS_BACKGROUND_PATTERN_OPACITY,
-    Math.max(MIN_CANVAS_BACKGROUND_PATTERN_OPACITY, value),
-  );
+  return Math.min(MAX_CANVAS_BACKGROUND_PATTERN_OPACITY, Math.max(MIN_CANVAS_BACKGROUND_PATTERN_OPACITY, value));
 }
 
 export const canvasBackgroundPatternState = atomWithStorage<CanvasBackgroundPattern>(

@@ -56,6 +56,7 @@ import { warmCodeEditor } from './LazyComponents.js';
 import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
 import { selectedUiGraphIdState } from '../state/uiGraphs.js';
+import type { EditorGraphRunOptions } from '../hooks/editorGraphRunOptions.js';
 
 const styles = css`
   position: fixed;
@@ -158,12 +159,12 @@ export const RivetApp: FC = () => {
   useRestorePersistedWorkspace();
   useProjectPlugins();
 
-  const runGraph = wrapAsync(async () => {
+  const runGraph = wrapAsync(async (options?: EditorGraphRunOptions) => {
     if (nodeLibraryOpen || uiGraphOpen) {
       return;
     }
 
-    await tryRunGraph();
+    await tryRunGraph(options);
   }, 'Run graph');
   const runTests = wrapAsync(tryRunTests, 'Run tests');
 

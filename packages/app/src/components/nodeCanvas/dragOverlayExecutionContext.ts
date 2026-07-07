@@ -1,5 +1,6 @@
 import type { NodeId } from '@valerypopoff/rivet2-core';
 import type { PageValue, ProcessDataForNode } from '../../state/dataFlow.js';
+import { resolveCanvasExecutionProcessPage } from '../../state/selectors/executionSelectors.js';
 import type { DragMode } from './nodeDragInteraction.js';
 
 type DraggingExecutionSourceOptions = {
@@ -38,6 +39,6 @@ export function resolveDraggingExecutionContext(options: DraggingExecutionContex
     executionSourceNodeId,
     isOutputExpanded: expandedOutputNodeIdSet.has(executionSourceNodeId),
     lastRun: lastRunPerNode[executionSourceNodeId],
-    processPage: selectedProcessPagePerNode[executionSourceNodeId] ?? 'latest',
+    processPage: resolveCanvasExecutionProcessPage(selectedProcessPagePerNode[executionSourceNodeId]),
   };
 }

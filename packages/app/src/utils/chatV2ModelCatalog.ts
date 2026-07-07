@@ -109,7 +109,7 @@ function fingerprintSecret(secret: string | undefined): string {
 }
 
 async function fetchOpenAIModels(context: ChatModelCatalogContext): Promise<ChatModelOption[]> {
-  const apiKey = context.apiKey || context.settings.openAiKey;
+  const apiKey = context.apiKey || context.settings.openAiApiKey || context.settings.openAiKey;
 
   if (!apiKey) {
     logModelCatalogDebug('openai', 'No API key configured. Using built-in fallback list.');
@@ -148,7 +148,10 @@ async function fetchOpenAIModels(context: ChatModelCatalogContext): Promise<Chat
 
 async function fetchAnthropicModels(context: ChatModelCatalogContext): Promise<ChatModelOption[]> {
   const plugin = getPluginById(context.plugins, 'anthropic');
-  const apiKey = context.apiKey || (plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiKey') : undefined);
+  const apiKey =
+    context.apiKey ||
+    context.settings.anthropicApiKey ||
+    (plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiKey') : undefined);
   const apiEndpoint = plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiEndpoint') : undefined;
 
   if (!apiKey) {
@@ -196,7 +199,10 @@ async function fetchAnthropicModels(context: ChatModelCatalogContext): Promise<C
 
 async function fetchGoogleModels(context: ChatModelCatalogContext): Promise<ChatModelOption[]> {
   const plugin = getPluginById(context.plugins, 'google');
-  const apiKey = context.apiKey || (plugin ? getPluginConfig(plugin, context.settings, 'googleApiKey') : undefined);
+  const apiKey =
+    context.apiKey ||
+    context.settings.googleApiKey ||
+    (plugin ? getPluginConfig(plugin, context.settings, 'googleApiKey') : undefined);
 
   if (!apiKey) {
     logModelCatalogDebug('google', 'No API key configured. Using built-in fallback list.');
@@ -248,7 +254,7 @@ function getCacheKey(provider: ChatV2Provider, context: ChatModelCatalogContext)
         provider,
         context.settings.openAiEndpoint || DEFAULT_CHAT_ENDPOINT,
         context.settings.openAiOrganization || '',
-        fingerprintSecret(context.apiKey || context.settings.openAiKey),
+        fingerprintSecret(context.apiKey || context.settings.openAiApiKey || context.settings.openAiKey),
       ]);
 
     case 'anthropic': {
@@ -257,7 +263,9 @@ function getCacheKey(provider: ChatV2Provider, context: ChatModelCatalogContext)
         provider,
         plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiEndpoint') || '' : '',
         fingerprintSecret(
-          context.apiKey || (plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiKey') : ''),
+          context.apiKey ||
+            context.settings.anthropicApiKey ||
+            (plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiKey') : ''),
         ),
       ]);
     }
@@ -266,7 +274,11 @@ function getCacheKey(provider: ChatV2Provider, context: ChatModelCatalogContext)
       const plugin = getPluginById(context.plugins, 'google');
       return JSON.stringify([
         provider,
-        fingerprintSecret(context.apiKey || (plugin ? getPluginConfig(plugin, context.settings, 'googleApiKey') : '')),
+        fingerprintSecret(
+          context.apiKey ||
+            context.settings.googleApiKey ||
+            (plugin ? getPluginConfig(plugin, context.settings, 'googleApiKey') : ''),
+        ),
       ]);
     }
 
