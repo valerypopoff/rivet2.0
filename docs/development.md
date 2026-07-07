@@ -383,6 +383,7 @@ The `Run recordings` modal can also filter a workflow's runs by recorded request
 - authored source lives under `wrapper/`, `image/`, `ops/`, `charts/`, `scripts/`, `docs/`, and `.github/`
 - runtime/bootstrap code belongs under `wrapper/bootstrap/`, not under `ops/`
 - hosted editor patches that must survive production image builds should live under `wrapper/web/overrides/`, `wrapper/web/dashboard/`, or other tracked wrapper files
+- the hosted web image builds upstream `rivet/packages/app` through `wrapper/web/vite.config.ts`, not through upstream Rivet's app Vite config. When upstream app code imports browser-only virtual modules such as `dictionary-en` or `rivet-cspell-words`, mirror the required Vite plugin seam in the wrapper config and cover it in `wrapper/web/tests/vite-aliases.test.ts`.
 - `rivet/` is upstream source that can be replaced or refreshed and should be treated as read-only input for this repo
 - generated build output should not be treated as authored source
 
