@@ -96,6 +96,7 @@ test('settings override delegates upstream settings and keeps hosted-only export
   assert.match(settingsOverride, /export\s+\*\s+from\s+['"][^'"]*\/state\/settings\.js['"]/);
   assert.deepEqual([...overrideExports].sort(), ['debuggerDefaultUrlState', 'updateModalOpenState']);
   assert.match(settingsOverride, /RIVET_REMOTE_DEBUGGER_DEFAULT_WS/);
+  assert.match(settingsOverride, /normalizeRuntimeWebSocketUrl/);
 });
 
 test('context menu override keeps upstream virtual anchor contract and hosted focus cleanup', () => {
@@ -114,13 +115,14 @@ test('context menu override keeps upstream virtual anchor contract and hosted fo
 
 test('hosted opened-project overrides preserve upstream project executor mode contract', () => {
   assert.match(syncOpenedProjectsOverride, /resolveCurrentProjectExecutorMode/);
+  assert.match(syncOpenedProjectsOverride, /normalizeHostedProjectExecutorMode/);
   assert.match(syncOpenedProjectsOverride, /executorMode:\s*currentExecutorMode/);
   assert.match(
     syncOpenedProjectsOverride,
     /projectExecutorModesEqual\(existingProject\?\.executorMode,\s*currentExecutorMode\)/,
   );
   assert.match(syncOpenedProjectsOverride, /useSyncCurrentStateIntoOpenedProjects\(\{ enabled = true \}/);
-  assert.match(loadProjectOverride, /executorMode:\s*projectInfo\.executorMode/);
+  assert.match(loadProjectOverride, /normalizeHostedProjectExecutorMode\(projectInfo\.executorMode\)/);
 });
 
 test('hosted project tab label transform handles legacy upstream labels', () => {

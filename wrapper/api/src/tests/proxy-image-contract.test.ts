@@ -284,6 +284,12 @@ test('API images and launchers use the filtered Rivet source context and symlink
     );
   }
   assert.match(devCompose, /api:[\s\S]*- rivet_node_modules:\/workspace\/rivet\/node_modules/);
+  assert.match(devCompose, /web:[\s\S]*- rivet_yarn_unplugged:\/workspace\/rivet\/\.yarn\/unplugged/);
+  assert.match(devCompose, /api:[\s\S]*- rivet_yarn_unplugged:\/workspace\/rivet\/\.yarn\/unplugged/);
+  assert.match(devCompose, /node_modules\/\.rivet-dev-yarn-install-ok/);
+  assert.match(devCompose, /\[ ! -f \.yarn\/unplugged\/\.rivet-dev-yarn-install-ok \]/);
+  assert.match(devCompose, /\.yarn\/unplugged\/\.rivet-dev-yarn-install-ok/);
+  assert.match(devDockerLauncher, /rivet\/\.yarn\/unplugged\/\.rivet-dev-yarn-install-ok/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/workspace\/rivet node \/workspace\/scripts\/ensure-rivet-runtime-build\.mjs/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/tmp\/rivet-source RIVET_API_PACKAGE_ROOT=\/app node \/workspace\/scripts\/link-rivet-node-package\.mjs/);
   assert.match(ensureRivetRuntimeBuild, /yarn-4\.6\.0\.cjs/);

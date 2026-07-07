@@ -22,7 +22,6 @@ import { useExecutorSessionState } from '../../../../rivet/packages/app/src/hook
 import {
   projectExecutorModesEqual,
   resolveCurrentProjectExecutorMode,
-  sanitizeProjectExecutorMode,
   type ProjectExecutorMode,
 } from '../../../../rivet/packages/app/src/utils/projectExecutorMode.js';
 import {
@@ -32,6 +31,7 @@ import {
   markProjectDirtyFlag,
 } from '../../../../rivet/packages/app/src/utils/projectUnsavedChanges.js';
 import { selectedExecutorState } from '../state/settings';
+import { normalizeHostedProjectExecutorMode } from '../utils/hostedExecutorMode';
 import { resolveHostedProjectTitle, withHostedProjectTitle } from '../../dashboard/openedProjectMetadata';
 import { primeOpenedProjectSession, syncOpenedProjectSessionIds } from '../../io/openedProjectSessionCache';
 
@@ -71,7 +71,7 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
   const legacyProject = entry.project ?? null;
   const projectId = (entry.projectId ?? legacyProject?.metadata?.id ?? previousProjectId) as ProjectId;
   const fsPath = entry.fsPath ?? null;
-  const executorMode = sanitizeProjectExecutorMode(entry.executorMode);
+  const executorMode = normalizeHostedProjectExecutorMode(entry.executorMode);
   const title = resolveHostedProjectTitle(
     {
       metadata: {
@@ -203,10 +203,12 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
   const currentExecutorMode = useMemo(
     () =>
-      resolveCurrentProjectExecutorMode({
-        selectedExecutor,
-        target: executorTarget,
-      }),
+      normalizeHostedProjectExecutorMode(
+        resolveCurrentProjectExecutorMode({
+          selectedExecutor,
+          target: executorTarget,
+        }),
+      ),
     [executorTarget, selectedExecutor],
   );
   const currentProjectWithData = useMemo(

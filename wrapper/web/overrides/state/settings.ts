@@ -3,9 +3,13 @@
 
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
+import type { SyncStorage } from 'jotai/vanilla/utils/atomWithStorage';
 import { createHybridStorage } from '../../../../rivet/packages/app/src/state/storage.js';
 import { isHostedMode } from '../utils/tauri';
-import { RIVET_REMOTE_DEBUGGER_DEFAULT_WS } from '../../../shared/hosted-env';
+import {
+  normalizeRuntimeWebSocketUrl,
+  RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
+} from '../../../shared/hosted-env';
 
 export * from '../../../../rivet/packages/app/src/state/settings.js';
 
@@ -14,8 +18,18 @@ const { storage } = createHybridStorage('recoil-persist', undefined, { debounceM
 
 export const updateModalOpenState = atom<boolean>(false);
 
+function normalizeDebuggerDefaultUrl(value: unknown, fallback: string): string {
+  return normalizeRuntimeWebSocketUrl(typeof value === 'string' ? value : fallback);
+}
+
+const debuggerDefaultUrlStorage: SyncStorage<string> = {
+  getItem: (key, initialValue) => normalizeDebuggerDefaultUrl(storage.getItem(key, initialValue), initialValue),
+  setItem: (key, value) => storage.setItem(key, normalizeDebuggerDefaultUrl(value, RIVET_REMOTE_DEBUGGER_DEFAULT_WS)),
+  removeItem: (key) => storage.removeItem(key),
+};
+
 export const debuggerDefaultUrlState = atomWithStorage(
   'debuggerDefaultUrl',
   isHostedMode() ? RIVET_REMOTE_DEBUGGER_DEFAULT_WS : 'ws://localhost:21888',
-  storage,
+  isHostedMode() ? debuggerDefaultUrlStorage : storage,
 );
