@@ -1,6 +1,10 @@
 import { useLatest } from 'ahooks';
 import { type FC, type MutableRefObject, useEffect, useRef } from 'react';
-import { ensureCodeEditorMonacoLanguages, monaco } from '../utils/monaco/codeEditorMonaco.js';
+import {
+  ensureCodeEditorMonacoLanguages,
+  installJsonSchemaRequiredDefinitionNavigation,
+  monaco,
+} from '../utils/monaco/codeEditorMonaco.js';
 import { installEditorInterpolationSupport } from '../utils/monaco/interpolationEditorSupport.js';
 import { type EditorInterpolationSyntax } from '../utils/monaco/interpolationDiagnostics.js';
 import { installJsStyleCommentHighlighting } from '../utils/monaco/commentHighlighting.js';
@@ -279,6 +283,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     const commentHighlightingSupport = shouldHighlightJsStyleComments(language)
       ? installJsStyleCommentHighlighting(editor)
       : undefined;
+    const jsonSchemaRequiredDefinitionNavigation = installJsonSchemaRequiredDefinitionNavigation(editor);
     const textToolActionDisposables = registerEditorTextToolActions(editor);
 
     const onResize = () => {
@@ -335,6 +340,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       textToolActionDisposables.forEach((disposable) => disposable.dispose());
       interpolationSupport?.dispose();
       commentHighlightingSupport?.dispose();
+      jsonSchemaRequiredDefinitionNavigation.dispose();
       clearCodeEditorSpellcheckMarkers(editor);
       delete editor.__rivetSpellcheckMarkers;
       editor.dispose();

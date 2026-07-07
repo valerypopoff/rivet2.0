@@ -455,6 +455,49 @@ test('node Markdown code editors opt into Monaco folding', () => {
   assert.match(codeEditorMonacoSource, /registerFoldingRangeProvider/);
 });
 
+test('JSON code editors register schema required field definitions', () => {
+  const codeEditorMonacoSource = readFileSync(
+    join(componentsDir, '..', 'utils', 'monaco', 'codeEditorMonaco.ts'),
+    'utf8',
+  );
+  const indexCssSource = readFileSync(join(componentsDir, '..', 'index.css'), 'utf8');
+  const requiredDefinitionSource = readFileSync(
+    join(componentsDir, '..', 'utils', 'monaco', 'jsonSchemaRequiredDefinition.ts'),
+    'utf8',
+  );
+
+  assert.match(codeEditorMonacoSource, /getJsonSchemaRequiredFieldDefinitionAtOffset/);
+  assert.match(codeEditorMonacoSource, /gotoSymbol\/browser\/goToCommands\.js/);
+  assert.doesNotMatch(codeEditorMonacoSource, /goToDefinitionAtPosition\.js/);
+  assert.match(codeEditorMonacoSource, /registerJsonSchemaRequiredDefinitionProvider/);
+  assert.match(codeEditorMonacoSource, /registerDefinitionProvider\('json'/);
+  assert.match(codeEditorMonacoSource, /installJsonSchemaRequiredDefinitionNavigation/);
+  assert.match(codeEditorMonacoSource, /editor\.getModel\(\)\?\.getLanguageId\(\) !== 'json'/);
+  assert.match(codeEditorMonacoSource, /hasJsonSchemaDefinitionClickModifier/);
+  assert.match(codeEditorMonacoSource, /isMacOSPlatform\(\) \? event\.metaKey && !event\.ctrlKey : event\.ctrlKey && !event\.metaKey/);
+  assert.match(codeEditorMonacoSource, /JSON_SCHEMA_DEFINITION_HOVER_SUPPRESSED_CLASS/);
+  assert.match(codeEditorMonacoSource, /classList\.toggle\(JSON_SCHEMA_DEFINITION_HOVER_SUPPRESSED_CLASS, suppressed\)/);
+  assert.match(codeEditorMonacoSource, /editor\.updateOptions\(\{ hover: \{ enabled: !suppressed \} \}\)/);
+  assert.match(codeEditorMonacoSource, /editor\.onMouseMove\(\(event\) => \{/);
+  assert.match(codeEditorMonacoSource, /editor\.onKeyDown\(\(event\) => \{/);
+  assert.match(codeEditorMonacoSource, /editor\.onDidBlurEditorWidget\(\(\) => \{/);
+  assert.match(codeEditorMonacoSource, /editor\.setSelection\(targetRange, 'rivet\.jsonSchemaRequiredDefinitionNavigation'\)/);
+  assert.match(codeEditorMonacoSource, /setHoverSuppressed\(false\);[\s\S]*disposables\.forEach/);
+  assert.match(codeEditorMonacoSource, /model\.getOffsetAt\(position\)/);
+  assert.match(codeEditorMonacoSource, /originSelectionRange/);
+  assert.match(codeEditorMonacoSource, /targetSelectionRange/);
+  const sharedCodeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
+
+  assert.match(sharedCodeEditorSource, /installJsonSchemaRequiredDefinitionNavigation/);
+  assert.match(sharedCodeEditorSource, /jsonSchemaRequiredDefinitionNavigation\.dispose\(\)/);
+  assert.match(indexCssSource, /\.rivet-json-schema-definition-hover-suppressed \.monaco-hover/);
+  assert.match(indexCssSource, /display: none !important;/);
+  assert.match(requiredDefinitionSource, /getActiveInterpolationOffsetRanges/);
+  assert.match(requiredDefinitionSource, /collectObjectRequiredFieldDefinitions/);
+  assert.match(requiredDefinitionSource, /getFirstProperty\(objectValue, 'required'\)/);
+  assert.match(requiredDefinitionSource, /getFirstProperty\(objectValue, 'properties'\)/);
+});
+
 test('readonly display code editors keep Monaco model text synchronized', () => {
   const codeEditorSource = readFileSync(join(componentsDir, 'CodeEditor.tsx'), 'utf8');
 

@@ -311,6 +311,10 @@ code {
   color: #6a9955;
 }
 
+.rivet-json-schema-definition-hover-suppressed .monaco-hover {
+  display: none !important;
+}
+
 .atlaskit-portal-container {
   position: absolute;
   left: 0;

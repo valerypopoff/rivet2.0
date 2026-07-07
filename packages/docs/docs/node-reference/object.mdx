@@ -105,6 +105,8 @@ When a placeholder is embedded in a JSON string, strings are inserted as text, n
 
 The JSON Template editor validates the template live while you type. It treats `{{name}}` as Rivet template syntax, so valid placeholders such as `{ "age": {{age}} }`, `{ {{key}}: "value" }`, and `"Hello {{name}}"` do not show JSON syntax errors. Validation still applies to the surrounding JSON structure, and the node can still error at runtime if the final interpolated value is not valid JSON.
 
+When editing JSON Schema-style templates, you can Ctrl-click a field name inside a `required` array to jump to the matching definition under the sibling `properties` object. On macOS, use Cmd-click.
+
 ## Error Handling
 
 The Object Node will error if the JSON Template is not a valid JSON string or if the interpolated JSON string (after inserting the input values) is not a valid JSON string.
