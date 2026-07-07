@@ -144,8 +144,8 @@ services:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:80/healthz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 12
+      start_period: 360s
     restart: unless-stopped
 
   executor:
