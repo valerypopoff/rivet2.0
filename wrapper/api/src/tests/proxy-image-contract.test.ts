@@ -289,7 +289,10 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(ensureRivetRuntimeBuild, /yarn-4\.6\.0\.cjs/);
   assert.match(ensureRivetRuntimeBuild, /'build:runtime'/);
   assert.match(ensureRivetRuntimeBuild, /webAppHandler\.js/);
+  assert.match(prodCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);
+  assert.match(prodCompose, /api:[\s\S]*healthcheck:[\s\S]*retries: 12/);
   assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);
+  assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*retries: 12/);
   assert.match(devDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
   assert.match(devDockerLauncher, /readDockerWaitTimeoutSeconds/);
   assert.match(prodDockerLauncher, /readDockerWaitTimeoutSeconds/);
