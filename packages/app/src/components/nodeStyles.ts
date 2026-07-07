@@ -998,6 +998,13 @@ export const nodeStyles = css`
     overflow: hidden;
   }
 
+  .node-output-error-message {
+    color: var(--error-light);
+    margin-bottom: 12px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
   .node.running .node-output:not(.multi) .node-output-inner,
   .node.running .multi-node-output {
     border-top-color: var(--primary);

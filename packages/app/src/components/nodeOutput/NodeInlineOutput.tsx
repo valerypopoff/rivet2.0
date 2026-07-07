@@ -157,16 +157,6 @@ const NodeOutputSingleProcess: FC<{
     });
   };
 
-  const handleOutputActionMouseDown = useStableCallback((event: MouseEvent<HTMLDivElement>) => {
-    // Output controls are hover affordances. Do not let clicking them focus the
-    // draggable node root, otherwise the settings gear stays visible after leave.
-    event.preventDefault();
-    event.stopPropagation();
-  });
-  const handleOutputActionClick = useStableCallback((event: MouseEvent<HTMLDivElement>) => {
-    event.stopPropagation();
-  });
-
   const content = useMemo(
     () =>
       createNodeOutputContentViewModel({
@@ -189,12 +179,24 @@ const NodeOutputSingleProcess: FC<{
   const handleCopyToClipboard = useStableCallback(() =>
     copyOutputValue(copySource, dataRefs, getCopyValueData, io.outputDefinitions),
   );
+  const hasPromptDesignerAction = node.type === 'chat';
+  const outputInnerClassName = hasPromptDesignerAction
+    ? 'node-output-inner has-output-actions has-prompt-designer-action'
+    : 'node-output-inner has-output-actions';
+  const erroredOutputInnerClassName = `${outputInnerClassName} errored`;
 
   if (content.kind === 'code-error') {
     const contentKey = getNodeOutputContentKey(processId, data, content.contentKeyKind);
 
     return (
-      <div className="node-output-inner errored">
+      <div className={erroredOutputInnerClassName}>
+        <NodeOutputOverlayButtons
+          hasPromptDesignerAction={hasPromptDesignerAction}
+          onCopyToClipboard={handleCopyToClipboard}
+          onOpenFullscreenModal={onOpenFullscreenModal}
+          onOpenPromptDesigner={handleOpenPromptDesigner}
+          onToggleExpandedOutput={onToggleExpandedOutput}
+        />
         <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
           {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody />}
           {showDurationMeta && <NodeRunDurationMeta data={data} hasBody />}
@@ -208,7 +210,14 @@ const NodeOutputSingleProcess: FC<{
     const contentKey = getNodeOutputContentKey(processId, data, content.contentKeyKind);
 
     return (
-      <div className="node-output-inner errored">
+      <div className={erroredOutputInnerClassName}>
+        <NodeOutputOverlayButtons
+          hasPromptDesignerAction={hasPromptDesignerAction}
+          onCopyToClipboard={handleCopyToClipboard}
+          onOpenFullscreenModal={onOpenFullscreenModal}
+          onOpenPromptDesigner={handleOpenPromptDesigner}
+          onToggleExpandedOutput={onToggleExpandedOutput}
+        />
         <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
           {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody />}
           {showDurationMeta && <NodeRunDurationMeta data={data} hasBody />}
@@ -238,57 +247,23 @@ const NodeOutputSingleProcess: FC<{
   });
   const hasBody = body != null;
   const contentKey = getNodeOutputContentKey(processId, data, content.contentKeyKind);
-  const hasPromptDesignerAction = node.type === 'chat';
 
   return (
-    <div
-      className={
-        hasPromptDesignerAction
-          ? 'node-output-inner has-output-actions has-prompt-designer-action'
-          : 'node-output-inner has-output-actions'
-      }
-    >
-      <div className="overlay-buttons" onMouseDown={handleOutputActionMouseDown} onClick={handleOutputActionClick}>
-        <Tooltip content="Unfold output">
-          <div
-            className="output-toggle-button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleExpandedOutput();
-            }}
-          >
-            <ExpandDownStopIcon />
-          </div>
-        </Tooltip>
-        <Tooltip content="Copy node output to clipboard">
-          <div className="copy-button" onClick={handleCopyToClipboard}>
-            <CopyIcon />
-          </div>
-        </Tooltip>
-
-        {hasPromptDesignerAction && (
-          <Tooltip content="Open chat in Prompt Designer">
-            <div className="prompt-designer-button" onClick={handleOpenPromptDesigner}>
-              <FlaskIcon />
-            </div>
-          </Tooltip>
-        )}
-        <Tooltip content="Show full output">
-          <div
-            className="expand-button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenFullscreenModal?.();
-            }}
-          >
-            <ExpandIcon />
-          </div>
-        </Tooltip>
-      </div>
+    <div className={outputInnerClassName}>
+      <NodeOutputOverlayButtons
+        hasPromptDesignerAction={hasPromptDesignerAction}
+        onCopyToClipboard={handleCopyToClipboard}
+        onOpenFullscreenModal={onOpenFullscreenModal}
+        onOpenPromptDesigner={handleOpenPromptDesigner}
+        onToggleExpandedOutput={onToggleExpandedOutput}
+      />
       {isFrozen && <FrozenOutputNotice />}
       <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
         {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody={hasBody} />}
         {showDurationMeta && <NodeRunDurationMeta data={data} hasBody={hasBody} />}
+        {content.kind === 'output' && content.errorMessage && (
+          <div className="node-output-error-message">{content.errorMessage}</div>
+        )}
         {body}
       </NodeOutputContentFade>
       {content.warnings && (
@@ -300,6 +275,70 @@ const NodeOutputSingleProcess: FC<{
           ))}
         </div>
       )}
+    </div>
+  );
+};
+
+const NodeOutputOverlayButtons: FC<{
+  hasPromptDesignerAction: boolean;
+  onCopyToClipboard: () => void;
+  onOpenFullscreenModal?: () => void;
+  onOpenPromptDesigner: () => void;
+  onToggleExpandedOutput: () => void;
+}> = ({
+  hasPromptDesignerAction,
+  onCopyToClipboard,
+  onOpenFullscreenModal,
+  onOpenPromptDesigner,
+  onToggleExpandedOutput,
+}) => {
+  const handleOutputActionMouseDown = useStableCallback((event: MouseEvent<HTMLDivElement>) => {
+    // Output controls are hover affordances. Do not let clicking them focus the
+    // draggable node root, otherwise the settings gear stays visible after leave.
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  const handleOutputActionClick = useStableCallback((event: MouseEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+  });
+
+  return (
+    <div className="overlay-buttons" onMouseDown={handleOutputActionMouseDown} onClick={handleOutputActionClick}>
+      <Tooltip content="Unfold output">
+        <div
+          className="output-toggle-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleExpandedOutput();
+          }}
+        >
+          <ExpandDownStopIcon />
+        </div>
+      </Tooltip>
+      <Tooltip content="Copy node output to clipboard">
+        <div className="copy-button" onClick={onCopyToClipboard}>
+          <CopyIcon />
+        </div>
+      </Tooltip>
+
+      {hasPromptDesignerAction && (
+        <Tooltip content="Open chat in Prompt Designer">
+          <div className="prompt-designer-button" onClick={onOpenPromptDesigner}>
+            <FlaskIcon />
+          </div>
+        </Tooltip>
+      )}
+      <Tooltip content="Show full output">
+        <div
+          className="expand-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenFullscreenModal?.();
+          }}
+        >
+          <ExpandIcon />
+        </div>
+      </Tooltip>
     </div>
   );
 };

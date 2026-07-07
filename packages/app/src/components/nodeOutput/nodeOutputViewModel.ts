@@ -13,7 +13,11 @@ import {
   serializeDisplayedOutputs,
 } from '../../utils/executionDataCopyValue.js';
 import { getStoredOutputWarnings, restoreDisplayedNodeOutputs } from '../../utils/executionDataReaders.js';
-import { hasVisibleStoredPortMapValues, isVisibleOutputPort } from '../../utils/outputPortVisibility.js';
+import {
+  hasVisibleStoredPortMapValues,
+  hasVisibleStoredSplitOutputValues,
+  isVisibleOutputPort,
+} from '../../utils/outputPortVisibility.js';
 import { keys } from '../../utils/typeSafety.js';
 import { getSortedRenderableSplitOutputEntries } from './splitOutputEntries.js';
 import {
@@ -23,7 +27,9 @@ import {
   shouldUseCustomNodeErrorOutput,
 } from './nodeOutputVisibility.js';
 
-export type NodeOutputCopySource = Pick<NodeRunDataWithRefs, 'outputData' | 'splitOutputData'>;
+export type NodeOutputCopySource = Pick<NodeRunDataWithRefs, 'outputData' | 'splitOutputData'> & {
+  errorMessage?: string;
+};
 
 export type NodeOutputContentViewModel =
   | {
@@ -32,15 +38,18 @@ export type NodeOutputContentViewModel =
   | {
       kind: 'code-error';
       contentKeyKind: 'code-error';
+      copySource: NodeOutputCopySource;
     }
   | {
       kind: 'generic-error';
       contentKeyKind: 'error';
+      copySource: NodeOutputCopySource;
       error: string;
     }
   | {
       kind: 'output' | 'custom-error';
       contentKeyKind: 'output' | 'custom-error';
+      errorMessage?: string;
       warnings: string[] | undefined;
       copySource: NodeOutputCopySource;
     };
@@ -96,20 +105,24 @@ export function createNodeOutputContentViewModel(options: {
   showNodeRunDuration?: boolean;
 }): NodeOutputContentViewModel {
   const { nodeType, data, dataRefs, showNodeRunDuration = false } = options;
+  const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
+  const hasVisibleOutputs = hasVisibleStoredPortMapValues(data.outputData) || hasVisibleStoredSplitOutputValues(data.splitOutputData);
   const shouldUseCustomErrorOutput = shouldUseCustomNodeErrorOutput(nodeType, data);
 
-  if (shouldUseCodeErrorOutput(nodeType, data)) {
+  if (errorMessage && shouldUseCodeErrorOutput(nodeType, data) && !hasVisibleOutputs) {
     return {
       kind: 'code-error',
       contentKeyKind: 'code-error',
+      copySource: createNodeOutputCopySource(data, errorMessage),
     };
   }
 
-  if (data.status?.type === 'error' && !shouldUseCustomErrorOutput) {
+  if (errorMessage && !shouldUseCustomErrorOutput && !hasVisibleOutputs) {
     return {
       kind: 'generic-error',
       contentKeyKind: 'error',
-      error: data.status.error,
+      copySource: createNodeOutputCopySource(data, errorMessage),
+      error: errorMessage,
     };
   }
 
@@ -122,9 +135,17 @@ export function createNodeOutputContentViewModel(options: {
   return {
     kind: shouldUseCustomErrorOutput ? 'custom-error' : 'output',
     contentKeyKind: shouldUseCustomErrorOutput ? 'custom-error' : 'output',
+    errorMessage,
     warnings: getStoredOutputWarnings(data, dataRefs),
-    copySource: data,
+    copySource: createNodeOutputCopySource(data, errorMessage),
   };
+}
+
+function createNodeOutputCopySource(
+  data: Pick<NodeRunDataWithRefs, 'outputData' | 'splitOutputData'>,
+  errorMessage: string | undefined,
+): NodeOutputCopySource {
+  return errorMessage ? { ...data, errorMessage } : data;
 }
 
 export function createNodeOutputBodyViewModel(options: {
@@ -249,7 +270,7 @@ export function getSelectedNodeOutputProcess(
 }
 
 export function getNodeOutputCopySource(content: NodeOutputContentViewModel): NodeOutputCopySource | undefined {
-  return content.kind === 'output' || content.kind === 'custom-error' ? content.copySource : undefined;
+  return content.kind === 'empty' ? undefined : content.copySource;
 }
 
 export function serializeNodeOutputDisplayCopy(
@@ -264,7 +285,18 @@ export function serializeNodeOutputDisplayCopy(
     return undefined;
   }
 
-  return serializeDisplayedOutputs(copySource, dataRefs, options);
+  const serializedOutputs = serializeDisplayedOutputs(copySource, dataRefs, options);
+  const { errorMessage } = copySource;
+
+  if (!errorMessage) {
+    return serializedOutputs;
+  }
+
+  if (serializedOutputs == null) {
+    return errorMessage;
+  }
+
+  return `Error\n${errorMessage}\n\n${serializedOutputs}`;
 }
 
 export function serializeNodeOutputJsonCopy(

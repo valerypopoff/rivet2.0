@@ -102,10 +102,10 @@ const CodeNewNodeOutputBody: FC<{
           </div>
         </StructuredNodeOutputSection>
       )}
-      {!hasError && hasSplitOutputs && (
+      {hasSplitOutputs && (
         <div className="split-output">{splitOutputEntries.map(([key, outputs]) => renderResult(outputs, key))}</div>
       )}
-      {!hasError && !hasSplitOutputs && renderResult(data.outputData)}
+      {!hasSplitOutputs && renderResult(data.outputData)}
     </StructuredNodeOutput>
   );
 };

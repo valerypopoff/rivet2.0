@@ -57,6 +57,23 @@ test('chat copy-value projector returns plain response text when only the respon
   assert.equal(serialized, 'Hello world!');
 });
 
+test('chat copy-value projector still runs when the process has error status and visible outputs', () => {
+  const serialized = serializeDisplayedOutputs(
+    {
+      outputData: {
+        response: inlineStored('string', 'Partial response'),
+      },
+      status: { type: 'error', error: 'Tool call failed' },
+    } as NodeRunDataWithRefs,
+    createDataRefStore(),
+    {
+      getCopyValueData: getChatNodeCopyValueData,
+    },
+  );
+
+  assert.equal(serialized, 'Partial response');
+});
+
 test('chat copy-value projector preserves missing response fallback text', () => {
   const serialized = serializeDisplayedOutputs(
     {

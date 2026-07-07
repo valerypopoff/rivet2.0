@@ -62,6 +62,12 @@ const structuredNodeOutputCss = css`
 
   .structured-node-output-error {
     color: var(--error-light);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .structured-node-output-error:not(:last-child) {
+    margin-bottom: var(--output-section-group-gap, ${outputSectionGroupGap});
   }
 `;
 

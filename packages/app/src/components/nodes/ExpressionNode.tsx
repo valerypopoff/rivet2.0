@@ -92,10 +92,10 @@ const ExpressionNodeOutputBody: FC<{
       parsedSource={shouldShowParsedExpression ? parsedExpression ?? '' : undefined}
       parsedSourceLanguage="javascript"
     >
-      {!hasError && hasSplitOutputs && (
+      {hasSplitOutputs && (
         <div className="split-output">{splitOutputEntries.map(([key, outputs]) => renderResult(outputs, key))}</div>
       )}
-      {!hasError && !hasSplitOutputs && renderResult(data.outputData)}
+      {!hasSplitOutputs && renderResult(data.outputData)}
     </StructuredNodeOutput>
   );
 };
