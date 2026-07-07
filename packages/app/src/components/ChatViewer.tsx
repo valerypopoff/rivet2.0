@@ -1,11 +1,11 @@
-import { type FC, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { type FC, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue, useAtom } from 'jotai';
 import { orderBy } from 'lodash-es';
 import { overlayOpenState } from '../state/ui';
 import { css } from '@emotion/react';
 import clsx from 'clsx';
 import { type NodeId } from '@valerypopoff/rivet2-core';
-import { lastRunDataByNodeState, graphRunningState, type NodeRunDataWithRefs } from '../state/dataFlow';
+import { lastRunDataByNodeState, type NodeRunDataWithRefs } from '../state/dataFlow';
 import { projectState } from '../state/savedGraphs';
 import { graphState } from '../state/graph';
 import { ErrorBoundary } from 'react-error-boundary';
@@ -14,7 +14,6 @@ import { useGoToNode } from '../hooks/useGoToNode';
 import MaximizeIcon from 'majesticons/line/maximize-line.svg?react';
 import MinimizeIcon from 'majesticons/line/minimize-line.svg?react';
 import { useToggle } from 'ahooks';
-import { FixedSizeList } from 'react-window';
 import { RenderDataValue } from './RenderDataValue.js';
 import { useDataRefs } from '../providers/ProvidersContext.js';
 import {
@@ -66,52 +65,66 @@ const styles = css`
   }
 
   .chats {
-    padding: 0 48px;
-    display: flex;
-    flex-direction: column;
-    column-gap: 32px;
-    row-gap: 16px;
+    padding: 0 48px 56px;
+    display: grid;
+    gap: 28px;
 
     section {
-      display: flex;
-      flex-wrap: wrap;
-
-      column-gap: 32px;
-      row-gap: 16px;
-    }
-
-    section.completed-chats {
-    }
-
-    section.in-progress-chats {
-      min-height: 550px;
+      display: grid;
+      gap: 16px;
+      min-width: 0;
     }
   }
 
+  .empty-state {
+    color: var(--foreground-muted);
+    padding: 24px;
+    text-align: center;
+    background: var(--grey-dark);
+    border: 1px dashed var(--app-panel-border);
+    border-radius: 14px;
+  }
+
   .chat-bubble {
-    width: 500px;
-
-    border: 1px solid var(--primary);
-    border-radius: 20px;
+    background: var(--grey-dark);
+    border: 1px solid var(--app-panel-border);
+    border-radius: 14px;
+    box-shadow: none;
+    box-sizing: border-box;
     corner-shape: squircle;
+    content-visibility: auto;
+    contain-intrinsic-size: 150px;
+    overflow: hidden;
+    width: 100%;
+
     @supports not (corner-shape: squircle) {
-      border-radius: 10px;
+      border-radius: 8px;
     }
-    box-shadow: 0 0 10px var(--shadow-primary-bright);
 
-    &.complete,
-    &.error {
-      border: 0;
-      box-shadow: none;
-      width: 100%;
+    &.status-running {
+      border-color: color-mix(in srgb, var(--primary) 58%, var(--app-panel-border));
+      box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 18%, transparent);
+    }
 
+    &.status-not-ran {
+      border-style: dashed;
+      border-color: color-mix(in srgb, var(--foreground-muted) 50%, var(--app-panel-border));
+    }
+
+    &.status-error,
+    &.status-interrupted {
+      border-color: var(--error);
+    }
+
+    &.status-ok,
+    &.status-error {
       &:not(.expanded) .prompt {
         max-height: 0;
         padding: 0;
       }
 
       &:not(.expanded) .response {
-        height: 100px;
+        max-height: 110px;
         overflow: hidden;
       }
 
@@ -120,27 +133,37 @@ const styles = css`
       }
     }
 
-    &.error {
-      border: 1px solid var(--error);
-      box-shadow: none;
+    &.status-ok header {
+      border-bottom: 1px solid var(--success);
     }
 
-    &.complete header {
-      border-bottom: 1px solid var(--success);
+    &.status-running header {
+      border-bottom-color: var(--primary);
+    }
+
+    &.status-error header,
+    &.status-interrupted header {
+      border-bottom-color: var(--error);
+    }
+
+    &.status-not-ran header {
+      border-bottom-style: dashed;
+      border-bottom-color: color-mix(in srgb, var(--foreground-muted) 50%, var(--app-panel-border));
     }
 
     header {
       padding: 0 15px;
       background-color: var(--grey-darkish);
-      border-radius: 20px 20px 0 0;
-      corner-shape: squircle;
-      @supports not (corner-shape: squircle) {
-        border-radius: 10px 10px 0 0;
-      }
       border-bottom: 1px solid var(--grey-light);
       display: flex;
       align-items: center;
+      gap: 16px;
       justify-content: space-between;
+
+      .chat-title {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
 
       .graph-name,
       .node-title {
@@ -165,9 +188,11 @@ const styles = css`
         display: flex;
         align-items: center;
         column-gap: 8px;
+        flex-shrink: 0;
 
         .expand {
           border: 0;
+          border-radius: 6px;
           margin: 0;
           padding: 0;
           width: 32px;
@@ -200,7 +225,7 @@ const styles = css`
     .response {
       padding: 15px;
       white-space: pre-wrap;
-      height: 400px;
+      max-height: 480px;
       overflow: auto;
     }
   }
@@ -214,7 +239,6 @@ export const ChatViewer: FC<{
   const allLastRunData = useAtomValue(lastRunDataByNodeState);
   const [graphFilter, setGraphFilter] = useState('');
   const goToNode = useGoToNode();
-  const graphRunning = useAtomValue(graphRunningState);
 
   const graphEntries = useMemo(
     () => getChatViewerGraphEntries(project.graphs, currentGraph),
@@ -244,41 +268,13 @@ export const ChatViewer: FC<{
     return getChatViewerProcessRows(processes);
   }, [processes]);
 
-  const [runningProcesses, completedProcesses] = useMemo(() => {
-    return [
-      orderBy(
-        processesWithIndex.filter(({ process }) => process.data.status?.type === 'running'),
-        ({ process }) => process?.data.startedAt ?? 0,
-        'desc',
-      ),
-      orderBy(
-        processesWithIndex.filter(({ process }) => process.data.status?.type !== 'running'),
-        ({ process }) => process?.data.finishedAt ?? 0,
-        'desc',
-      ),
-    ];
+  const orderedProcesses = useMemo(() => {
+    return orderBy(processesWithIndex, ({ process }) => process.data.finishedAt ?? process.data.startedAt ?? 0, 'asc');
   }, [processesWithIndex]);
 
   const doGoToNode = (nodeId: NodeId) => {
     goToNode(nodeId);
     onClose();
-  };
-
-  const CompletedRow = ({ index, style }: { index: number; style: any }) => {
-    const { node, process, index: processIndex } = completedProcesses[index]!;
-    const graphName = nodesToGraphNameMap[node.id] ?? 'Unknown Graph';
-    return (
-      <ChatBubble
-        style={style}
-        nodeId={node.id}
-        nodeTitle={node.title}
-        data={process.data}
-        key={getChatViewerProcessKey(node.id, process.processId, processIndex)}
-        graphName={graphName}
-        onGoToNode={doGoToNode}
-        splitIndex={processIndex}
-      />
-    );
   };
 
   return (
@@ -291,9 +287,9 @@ export const ChatViewer: FC<{
         />
       </div>
       <div className="chats">
-        {graphRunning && (
-          <section className="in-progress-chats">
-            {runningProcesses.map(({ node, process, index }) => {
+        <section className="chat-list">
+          {orderedProcesses.length > 0 ? (
+            orderedProcesses.map(({ node, process, index }) => {
               const graphName = nodesToGraphNameMap[node.id] ?? 'Unknown Graph';
               return (
                 <ChatBubble
@@ -306,14 +302,12 @@ export const ChatViewer: FC<{
                   splitIndex={index}
                 />
               );
-            })}
-          </section>
-        )}
-
-        <section className="completed-chats">
-          <FixedSizeList height={window.innerHeight} width="100%" itemCount={completedProcesses.length} itemSize={150}>
-            {CompletedRow}
-          </FixedSizeList>
+            })
+          ) : (
+            <div className="empty-state">
+              {graphFilter.trim() ? 'No chat outputs match this graph filter.' : 'No chat outputs to show yet.'}
+            </div>
+          )}
         </section>
       </div>
     </div>
@@ -326,9 +320,8 @@ const ChatBubble: FC<{
   nodeTitle: string;
   data: NodeRunDataWithRefs;
   splitIndex: number;
-  style?: CSSProperties;
   onGoToNode?: (nodeId: NodeId) => void;
-}> = ({ nodeId, nodeTitle, splitIndex, data, graphName, style, onGoToNode }) => {
+}> = ({ nodeId, nodeTitle, splitIndex, data, graphName, onGoToNode }) => {
   const dataRefs = useDataRefs();
   const promptRef = useRef<HTMLDivElement>(null);
   const responseRef = useRef<HTMLDivElement>(null);
@@ -369,21 +362,28 @@ const ChatBubble: FC<{
   return (
     <div
       className={clsx('chat-bubble', {
-        complete: data.status?.type === 'ok',
-        error: data.status?.type === 'error',
         expanded,
+        'status-error': data.status?.type === 'error',
+        'status-interrupted': data.status?.type === 'interrupted',
+        'status-not-ran': data.status?.type === 'notRan',
+        'status-ok': data.status?.type === 'ok',
+        'status-running': data.status?.type === 'running',
       })}
-      style={style}
     >
       <header>
-        <span>
+        <span className="chat-title">
           <span className="node-title">{nodeTitle}</span> in <span className="graph-name">{graphName}</span>
         </span>
         <div className="buttons">
-          <button className="go-to-node" onClick={() => onGoToNode?.(nodeId)}>
+          <button type="button" className="go-to-node" onClick={() => onGoToNode?.(nodeId)}>
             Go To
           </button>
-          <button className="expand" onClick={toggleExpanded.toggle}>
+          <button
+            type="button"
+            aria-label={expanded ? 'Collapse chat output' : 'Expand chat output'}
+            className="expand"
+            onClick={toggleExpanded.toggle}
+          >
             {expanded ? <MinimizeIcon /> : <MaximizeIcon />}
           </button>
         </div>

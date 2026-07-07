@@ -22,6 +22,8 @@ The graph tree is where you can navigate between all graphs in your project, fil
 
 Clicking on a graph in the list will open it in the main graph area. When the graph tree has focus, press **F2** to rename the currently open graph; press **Enter** to save the rename, or press **Escape** or click anywhere else, including the canvas, to cancel it. To add a new graph, right click in the blank space in the graph list and select "New Graph". To collapse or expand every folder without adding permanent toolbar buttons, right click the blank space in the graph list or right click a folder and choose **Collapse all folders** or **Expand all folders**.
 
+Rivet can show a broken-thread icon next to graphs that are unreachable from the project's configured Main Graph. Hover the icon to see the explanation. This is only a diagnostic marker: the graph is not deleted, disabled, or hidden, and you can still open and edit it.
+
 Use the search button in the top bar, or press **Ctrl+F** or **Cmd+F**, to search across graph names and node content in the current project. When matches are found, Rivet shows how many text occurrences were found and how many graphs contain them.
 
 To delete a graph, right click on it and select "Delete". This will delete the graph from your project.

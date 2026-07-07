@@ -8,14 +8,8 @@ const srcDir = dirname(fileURLToPath(import.meta.url));
 
 test('project top bar owns the graph tree sidebar toggle for the active project workspace', () => {
   const projectSelectorShellSource = readFileSync(join(srcDir, 'ProjectSelector.tsx'), 'utf8');
-  const projectSelectorStylesSource = readFileSync(
-    join(srcDir, 'projectSelector', 'projectSelectorStyles.ts'),
-    'utf8',
-  );
-  const graphTopBarControlsSource = readFileSync(
-    join(srcDir, 'projectSelector', 'GraphTopBarControls.tsx'),
-    'utf8',
-  );
+  const projectSelectorStylesSource = readFileSync(join(srcDir, 'projectSelector', 'projectSelectorStyles.ts'), 'utf8');
+  const graphTopBarControlsSource = readFileSync(join(srcDir, 'projectSelector', 'GraphTopBarControls.tsx'), 'utf8');
   const projectFileMenuSource = readFileSync(join(srcDir, 'projectSelector', 'ProjectFileMenu.tsx'), 'utf8');
   const projectTabRowSource = readFileSync(join(srcDir, 'projectSelector', 'ProjectTabRow.tsx'), 'utf8');
   const projectCloseConfirmSource = readFileSync(
@@ -288,10 +282,7 @@ test('project top bar owns the graph tree sidebar toggle for the active project 
       "const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
     ),
   );
-  assert.match(
-    projectSelectorTsx,
-    /const ProjectTabSurface: FC<\{/,
-  );
+  assert.match(projectSelectorTsx, /const ProjectTabSurface: FC<\{/);
   assert.match(
     projectSelectorTsx,
     /className={clsx\('project', className, \{ active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges \}\)}/,
@@ -405,6 +396,7 @@ test('windows and macos desktop use the in-strip Menu dropdown instead of a full
   const platformOsSource = readFileSync(join(srcDir, '..', 'utils', 'platform', 'os.ts'), 'utf8');
   const platformCoreSource = readFileSync(join(srcDir, '..', 'utils', 'platform', 'core.ts'), 'utf8');
   const inAppMenuHotkeysSource = readFileSync(join(srcDir, '..', 'hooks', 'useInAppMenuHotkeys.tsx'), 'utf8');
+  const inAppMenuHotkeyUtilsSource = readFileSync(join(srcDir, '..', 'utils', 'inAppMenuHotkeys.ts'), 'utf8');
   const rivetAppSource = readFileSync(join(srcDir, 'RivetApp.tsx'), 'utf8');
   const tauriMainSource = readFileSync(join(srcDir, '..', '..', 'src-tauri', 'src', 'main.rs'), 'utf8');
   const windowStatePluginSource = readFileSync(
@@ -430,7 +422,10 @@ test('windows and macos desktop use the in-strip Menu dropdown instead of a full
   assert.match(projectSelectorTsx, /appWindow\.toggleMaximize\?\.\(\)/);
   assert.match(projectSelectorTsx, /appWindow\.isMaximized\?\.\(\)/);
   assert.match(projectSelectorTsx, /appWindow\.close\(\)/);
-  assert.match(projectSelectorTsx, /const runWindowAction = \(getAppWindow: GetAppWindow, action: WindowAction, errorMessage: string\) => \{/);
+  assert.match(
+    projectSelectorTsx,
+    /const runWindowAction = \(getAppWindow: GetAppWindow, action: WindowAction, errorMessage: string\) => \{/,
+  );
   assert.match(projectSelectorTsx, /appWindow\.startDragging\?\.\(\)/);
   assert.match(projectSelectorTsx, /event\.detail > 1/);
   assert.match(projectSelectorTsx, /onDoubleClick={toggleMaximize}/);
@@ -452,8 +447,10 @@ test('windows and macos desktop use the in-strip Menu dropdown instead of a full
     /const shouldUseInAppMenuHotkeys = isWindowsPlatform\(\) \|\| \(isInTauri\(\) && isMacOSPlatform\(\)\);/,
   );
   assert.match(inAppMenuHotkeysSource, /__rivetInAppMenuHotkeysCleanup/);
-  assert.match(inAppMenuHotkeysSource, /'CmdOrCtrl\+S': 'save_project'/);
-  assert.match(inAppMenuHotkeysSource, /'CmdOrCtrl\+ENTER': 'run'/);
+  assert.match(inAppMenuHotkeyUtilsSource, /'CmdOrCtrl\+S': 'save_project'/);
+  assert.match(inAppMenuHotkeyUtilsSource, /'CmdOrCtrl\+ENTER': 'run'/);
+  assert.match(inAppMenuHotkeyUtilsSource, /event\.metaKey && !event\.ctrlKey : event\.ctrlKey && !event\.metaKey/);
+  assert.match(inAppMenuHotkeyUtilsSource, /\^Key\(\[A-Z\]\)\$/);
   assert.match(inAppMenuHotkeysSource, /window\.addEventListener\('keydown', onKeyDown, hotkeyListenerOptions\)/);
   assert.doesNotMatch(inAppMenuHotkeysSource, /Hotkey Fix|Fix applied for Windows platform/);
   assert.match(rivetAppSource, /import \{ useInAppMenuHotkeys \} from '\.\.\/hooks\/useInAppMenuHotkeys';/);
