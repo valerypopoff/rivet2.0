@@ -13,6 +13,47 @@ function normalizeColorizedWordWrapSpaces(element: HTMLElement) {
   }
 }
 
+function inlineMonacoTokenStyles(element: HTMLElement) {
+  for (const token of element.querySelectorAll<HTMLElement>('span[class*="mtk"]')) {
+    const style = getComputedStyle(token);
+
+    token.style.color = style.color;
+    token.style.fontStyle = style.fontStyle;
+    token.style.fontWeight = style.fontWeight;
+    token.style.textDecoration = style.textDecoration;
+    token.removeAttribute('class');
+  }
+}
+
+async function colorizeStableHtml(text: string, language: string, theme: string): Promise<string> {
+  const scratchRoot = document.createElement('div');
+  const colorizedBody = document.createElement('pre');
+
+  scratchRoot.style.cssText = [
+    'contain: strict',
+    'height: 1px',
+    'left: -10000px',
+    'overflow: hidden',
+    'position: fixed',
+    'top: -10000px',
+    'visibility: hidden',
+    'width: 1px',
+  ].join(';');
+  colorizedBody.textContent = text;
+  colorizedBody.dataset.lang = language;
+  scratchRoot.appendChild(colorizedBody);
+  document.body.appendChild(scratchRoot);
+
+  try {
+    await monaco.editor.colorizeElement(colorizedBody, { theme });
+    inlineMonacoTokenStyles(colorizedBody);
+
+    return colorizedBody.innerHTML;
+  } finally {
+    scratchRoot.remove();
+  }
+}
+
 export const ColorizedPreformattedText: FC<{
   text: string;
   language: string;
@@ -39,10 +80,9 @@ export const ColorizedPreformattedText: FC<{
 
     body.textContent = text;
     body.dataset.lang = language;
-    monaco.editor.setTheme(resolvedTheme);
 
     void ensureMonacoLanguage(language)
-      .then(() => monaco.editor.colorize(text, language, {}))
+      .then(() => colorizeStableHtml(text, language, resolvedTheme))
       .then((html) => {
         if (cancelled || colorizeRequestRef.current !== colorizeRequest || bodyRef.current !== body) {
           return;
