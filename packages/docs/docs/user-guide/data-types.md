@@ -43,4 +43,4 @@ This is different from `control-flow-excluded`. A `control-flow-excluded` output
 
 ## Interpolation-aware editors
 
-Editors that support Rivet `{{name}}` interpolation treat those tokens as Rivet syntax while you type. Code-style editors such as Code, Expression, and the JS Filter / JS Map Callback Body editors still use JavaScript highlighting and diagnostics for the surrounding code. JSON-template editors such as Object JSON Template and GPT Function Schema still validate the surrounding JSON, but interpolation tokens themselves are not shown as JSON syntax errors.
+Editors that support Rivet `{{name}}` interpolation treat those tokens as Rivet syntax while you type. Code-style editors such as Code, Expression, and the JS Filter / JS Map Callback Body editors still use JavaScript highlighting and diagnostics for the surrounding code. JSON-template editors such as Object JSON Template and GPT Function Schema validate the surrounding JSON live, but valid interpolation tokens can appear as JSON values, object keys, or string fragments without being shown as JSON syntax errors.

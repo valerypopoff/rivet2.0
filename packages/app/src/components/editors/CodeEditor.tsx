@@ -52,6 +52,7 @@ import {
 } from '../../utils/multilineEditorFontSize.js';
 import { Tooltip } from '../Tooltip.js';
 import { NodeCodeEditorFooterActionContext } from './NodeCodeEditorFooterActionContext.js';
+import { validateJsonTemplate } from '../../utils/monaco/jsonTemplateValidation.js';
 
 type CodeEditorDefinitionWithInterpolationSyntax = CodeEditorDefinition<ChartNode> & {
   interpolationSyntax?: EditorInterpolationSyntax;
@@ -70,6 +71,8 @@ type MountedEditorState = {
   editor: monaco.editor.IStandaloneCodeEditor;
   editorMountKey: string;
 };
+
+const JSON_TEMPLATE_VALIDITY_DEBOUNCE_MS = 300;
 
 function getSpellcheckStatusMessage(status: SpellcheckStatus | undefined): string | undefined {
   if (!status) {
@@ -101,6 +104,19 @@ function getSpellcheckStatusMessage(status: SpellcheckStatus | undefined): strin
 
 function shouldEnableJsonStringPreview(language: string | undefined): boolean {
   return language === 'json';
+}
+
+function getJsonTemplateValidityStatus(
+  interpolationSyntax: EditorInterpolationSyntax | undefined,
+  value: string,
+): { type: 'valid' | 'invalid'; label: string } | undefined {
+  if (interpolationSyntax !== 'json-template') {
+    return undefined;
+  }
+
+  return validateJsonTemplate(value).length === 0
+    ? { type: 'valid', label: 'Valid JSON template' }
+    : { type: 'invalid', label: 'Invalid JSON template' };
 }
 
 function getSelectedEditorText(editor: monaco.editor.IStandaloneCodeEditor): string | undefined {
@@ -305,8 +321,20 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       : undefined;
   const textStats = showTextStats ? getTextEditorStats(displayValue) : undefined;
   const spellcheckStatusMessage = getSpellcheckStatusMessage(spellcheckStatus);
+  const [debouncedJsonTemplateValidation, setDebouncedJsonTemplateValidation] = useState({
+    editorMountKey,
+    value: displayValue,
+  });
+  const jsonTemplateValidationValue =
+    debouncedJsonTemplateValidation.editorMountKey === editorMountKey
+      ? debouncedJsonTemplateValidation.value
+      : displayValue;
+  const jsonTemplateValidityStatus = getJsonTemplateValidityStatus(
+    interpolationSyntax,
+    jsonTemplateValidationValue,
+  );
   const mountedEditor = mountedEditorState?.editorMountKey === editorMountKey ? mountedEditorState.editor : undefined;
-  const footerCenter = (textStats || spellcheckStatusMessage) && (
+  const footerCenter = (textStats || spellcheckStatusMessage || jsonTemplateValidityStatus) && (
     <div className="editor-status-line">
       {textStats && (
         <>
@@ -315,6 +343,11 @@ export const CodeEditor: FC<CodeEditorProps> = ({
         </>
       )}
       {spellcheckStatusMessage && <span className="editor-spellcheck-status">{spellcheckStatusMessage}</span>}
+      {jsonTemplateValidityStatus && (
+        <span className={`editor-json-template-status ${jsonTemplateValidityStatus.type}`}>
+          {jsonTemplateValidityStatus.label}
+        </span>
+      )}
     </div>
   );
   const footer = (
@@ -323,6 +356,18 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
     setMountedEditorState({ editor, editorMountKey });
   };
+
+  useEffect(() => {
+    if (interpolationSyntax !== 'json-template') {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setDebouncedJsonTemplateValidation({ editorMountKey, value: displayValue });
+    }, JSON_TEMPLATE_VALIDITY_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [displayValue, editorMountKey, interpolationSyntax]);
 
   useEffect(() => {
     if (editorInstance.current) {

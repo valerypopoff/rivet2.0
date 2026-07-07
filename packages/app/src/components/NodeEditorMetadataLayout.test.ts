@@ -563,16 +563,33 @@ test('node settings code editors own footer font controls and AI assist trigger 
   assert.match(nodeEditorCodeEditorSource, /NodeCodeEditorFooterActionContext/);
   assert.match(nodeEditorCodeEditorSource, /function getSelectedEditorText/);
   assert.match(nodeEditorCodeEditorSource, /footerActionBridge\.setSelectedTextGetter/);
-  assert.match(nodeEditorCodeEditorSource, /const footerCenter = \(textStats \|\| spellcheckStatusMessage\) && \(/);
+  assert.match(
+    nodeEditorCodeEditorSource,
+    /const footerCenter = \(textStats \|\| spellcheckStatusMessage \|\| jsonTemplateValidityStatus\) && \(/,
+  );
+  assert.match(nodeEditorCodeEditorSource, /JSON_TEMPLATE_VALIDITY_DEBOUNCE_MS = 300/);
+  assert.match(nodeEditorCodeEditorSource, /setDebouncedJsonTemplateValidation\(\{ editorMountKey, value: displayValue \}\)/);
+  assert.match(nodeEditorCodeEditorSource, /validateJsonTemplate\(value\)/);
+  assert.match(nodeEditorCodeEditorSource, /jsonTemplateValidationValue/);
+  assert.match(nodeEditorCodeEditorSource, /Valid JSON template/);
+  assert.match(nodeEditorCodeEditorSource, /Invalid JSON template/);
   assert.match(nodeEditorCodeEditorSource, /center=\{footerCenter\}/);
   assert.match(nodeEditorCodeEditorSource, /Font size: \{fontSize\}px/);
   assert.match(nodeEditorCodeEditorSource, /onAdjustFontSize\('increase'\)|onAdjustFontSize\(command\)/);
   assert.match(nodeEditorCodeEditorSource, /onAdjustFontSize\('decrease'\)|onAdjustFontSize\(command\)/);
   assert.match(nodeEditorCodeEditorSource, /\{editorProps\.footer\}/);
   assert.match(nodeEditorCodeEditorSource, /className="editor-viewport-shell node-editor-static-code-editor"/);
+  assert.match(defaultNodeEditorSource, /\.editor-json-template-status\.valid \{\s*color: var\(--foreground-muted\);/);
+  assert.match(defaultNodeEditorSource, /\.editor-json-template-status\.valid::before \{\s*content: '\\\\2713';/);
+  assert.match(defaultNodeEditorSource, /\.editor-json-template-status\.invalid \{/);
+  assert.doesNotMatch(defaultNodeEditorSource, /\.editor-json-template-status::before \{/);
+  assert.doesNotMatch(defaultNodeEditorSource, /\.editor-json-template-status \{[\s\S]*?font-weight:/);
 
   assert.match(aiAssistEditorSource, /NodeCodeEditorFooterActionContext/);
-  assert.match(aiAssistEditorSource, /buildGeneratorPrompt\?: \(prompt: string, context: \{ selectedText\?: string \}\) => string;/);
+  assert.match(
+    aiAssistEditorSource,
+    /buildGeneratorPrompt\?: \(prompt: string, context: \{ selectedText\?: string \}\) => string;/,
+  );
   assert.match(aiAssistEditorSource, /resolveAiAssistModelSettings/);
   assert.match(aiAssistEditorSource, /const assistModel = resolveAiAssistModelSettings/);
   assert.match(aiAssistEditorSource, /const generationAssistModel = resolveAiAssistModelSettings/);
@@ -617,8 +634,14 @@ test('node settings code editors own footer font controls and AI assist trigger 
   assert.match(aiAssistEditorSource, /latestNodeRef\.current = node;/);
   assert.match(aiAssistEditorSource, /latestDataRef\.current = data;/);
   assert.match(aiAssistEditorSource, /const AI_ASSIST_CANCEL_REASON = 'Generate using AI canceled';/);
-  assert.match(aiAssistEditorSource, /const abortGeneration = \(\) => \{[\s\S]*abortControllerRef\.current\?\.abort\(AI_ASSIST_CANCEL_REASON\);/);
-  assert.match(aiAssistEditorSource, /const closeFooterModal = \(\) => \{[\s\S]*abortGeneration\(\);[\s\S]*setFooterModalOpen\(false\);/);
+  assert.match(
+    aiAssistEditorSource,
+    /const abortGeneration = \(\) => \{[\s\S]*abortControllerRef\.current\?\.abort\(AI_ASSIST_CANCEL_REASON\);/,
+  );
+  assert.match(
+    aiAssistEditorSource,
+    /const closeFooterModal = \(\) => \{[\s\S]*abortGeneration\(\);[\s\S]*setFooterModalOpen\(false\);/,
+  );
   assert.match(
     aiAssistEditorSource,
     /isMountedRef\.current = true;[\s\S]*return \(\) => \{[\s\S]*isMountedRef\.current = false;[\s\S]*abortControllerRef\.current\?\.abort\(AI_ASSIST_CANCEL_REASON\);/,
@@ -666,10 +689,7 @@ test('node settings code editors own footer font controls and AI assist trigger 
     aiAssistEditorSource,
     /onClick=\{\(\) => \{[\s\S]*setSelectedTextContext\(footerActionBridge\.getSelectedText\(\)\);[\s\S]*setFooterModalOpen\(true\);[\s\S]*\}\}/,
   );
-  assert.match(
-    aiAssistEditorSource,
-    /<Modal autoFocus=\{false\} onClose=\{closeFooterModal\} width="large">/,
-  );
+  assert.match(aiAssistEditorSource, /<Modal autoFocus=\{false\} onClose=\{closeFooterModal\} width="large">/);
   assert.match(aiAssistEditorSource, /<AppModalHeader title=\{footerLabel\} onClose=\{closeFooterModal\} \/>/);
   assert.match(
     aiAssistEditorSource,
