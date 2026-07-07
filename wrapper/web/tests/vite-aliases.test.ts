@@ -8,6 +8,7 @@ import { replaceHostedProjectTabLabelExpression } from '../project-tab-label-tra
 
 const overrideDir = resolve('/repo/wrapper/web/overrides');
 const updateCheckScript = readFileSync(new URL('../../../scripts/update-check.sh', import.meta.url), 'utf8');
+const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
 const settingsOverride = readFileSync(new URL('../overrides/state/settings.ts', import.meta.url), 'utf8');
 const contextMenuOverride = readFileSync(new URL('../overrides/hooks/useContextMenu.ts', import.meta.url), 'utf8');
 const loadProjectOverride = readFileSync(new URL('../overrides/hooks/useLoadProject.ts', import.meta.url), 'utf8');
@@ -70,6 +71,23 @@ test('upstream compatibility scanner watches every active module override target
       `scripts/update-check.sh should watch upstream ${aliasedOverrideTarget}`,
     );
   }
+});
+
+test('hosted Vite config carries upstream spellcheck browser virtual modules', () => {
+  assert.match(viteConfig, /const dictionaryEnBrowserPlugin = \(\): PluginOption =>/);
+  assert.match(viteConfig, /if \(id === 'dictionary-en'\)/);
+  assert.match(viteConfig, /const cspellWordsBrowserPlugin = \(\): PluginOption =>/);
+  assert.match(viteConfig, /if \(id === 'rivet-cspell-words'\)/);
+  assert.match(viteConfig, /function resolveUpstreamAppDependency|const resolveUpstreamAppDependency =/);
+  assert.match(viteConfig, /resolveUpstreamAppDependency\('@cspell\/dict-software-terms\/cspell-ext\.json'\)/);
+  assert.match(viteConfig, /resolveUpstreamAppDependency\('@cspell\/dict-companies\/cspell-ext\.json'\)/);
+  assert.match(viteConfig, /dependency !== '@cspell\/dict-companies'/);
+  assert.match(viteConfig, /dependency !== '@cspell\/dict-software-terms'/);
+  assert.match(viteConfig, /dependency !== 'dictionary-en'/);
+  assert.match(viteConfig, /include: \['nspell'\]/);
+  assert.match(viteConfig, /exclude: \[[\s\S]*'dictionary-en'[\s\S]*'rivet-cspell-words'/);
+  assert.match(viteConfig, /dictionaryEnBrowserPlugin\(\),/);
+  assert.match(viteConfig, /cspellWordsBrowserPlugin\(\),/);
 });
 
 test('settings override delegates upstream settings and keeps hosted-only exports narrow', () => {

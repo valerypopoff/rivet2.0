@@ -6,9 +6,10 @@ import svgr from 'vite-plugin-svgr';
 import monacoEditorPlugin from 'vite-plugin-monaco-editor';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { createBrowserSubpathAliases, createModuleOverrideAliases, createTauriShimAliases } from './vite-aliases';
 import { replaceHostedProjectTabLabelExpression } from './project-tab-label-transform';
 
@@ -24,6 +25,18 @@ const overrideDir = resolve(__dirname, 'overrides');
 const webDistDir = resolve(__dirname, 'dist');
 
 const wrapperRequire = createRequire(resolve(__dirname, 'package.json'));
+const upstreamAppRequire = createRequire(resolve(upstreamApp, 'package.json'));
+const dictionaryEnBrowserModuleId = '\0hosted-rivet-dictionary-en-browser';
+const cspellWordsBrowserModuleId = '\0hosted-rivet-cspell-words-browser';
+const cspellSoftwareTermFiles = [
+  'dict/softwareTerms.txt.gz',
+  'dict/software-tools.txt',
+  'dict/networkingTerms.txt',
+  'dict/webServices.txt',
+  'dict/computing-acronyms.txt',
+  'dict/coding-compound-terms.txt',
+  'dict/software-terms-alternative.txt',
+];
 
 const isBareImport = (specifier: string) => {
   return !specifier.startsWith('.') && !specifier.startsWith('/') && !specifier.startsWith('\0') && !specifier.startsWith('virtual:');
@@ -67,6 +80,9 @@ const wrapperAliasedDependencies = Object.keys(wrapperPackageJson.dependencies ?
     !dependency.startsWith('@types/') &&
     dependency !== 'assemblyai' &&
     dependency !== '@google/genai' &&
+    dependency !== '@cspell/dict-companies' &&
+    dependency !== '@cspell/dict-software-terms' &&
+    dependency !== 'dictionary-en' &&
     dependency !== 'nanoid' &&
     dependency !== 'vite' &&
     !dependency.startsWith('@vitejs/') &&
@@ -108,6 +124,14 @@ const resolveWrapperImport = (specifier: string) => {
     };
     const entry = packageJson.module ?? packageJson.main ?? 'index.js';
     return resolve(packageJsonPath, '..', entry);
+  }
+};
+
+const resolveUpstreamAppDependency = (specifier: string) => {
+  try {
+    return upstreamAppRequire.resolve(specifier);
+  } catch {
+    return wrapperRequire.resolve(specifier);
   }
 };
 
@@ -221,6 +245,70 @@ const normalizeHostedProjectTabLabels = (): PluginOption => {
   };
 };
 
+const dictionaryEnBrowserPlugin = (): PluginOption => ({
+  name: 'hosted-rivet-dictionary-en-browser',
+  enforce: 'pre',
+  resolveId(id) {
+    if (id === 'dictionary-en') {
+      return dictionaryEnBrowserModuleId;
+    }
+  },
+  load(id) {
+    if (id !== dictionaryEnBrowserModuleId) {
+      return;
+    }
+
+    const dictionaryDir = dirname(resolveUpstreamAppDependency('dictionary-en'));
+    const dictionary = {
+      aff: readFileSync(join(dictionaryDir, 'index.aff'), 'utf8'),
+      dic: readFileSync(join(dictionaryDir, 'index.dic'), 'utf8'),
+    };
+
+    return `export default ${JSON.stringify(dictionary)};`;
+  },
+});
+
+function readCspellDictionaryFile(dictionaryDir: string, fileName: string): string {
+  const file = readFileSync(join(dictionaryDir, fileName));
+
+  return fileName.endsWith('.gz') ? gunzipSync(file).toString('utf8') : file.toString('utf8');
+}
+
+function parseCspellDictionaryWords(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && !line.startsWith('!'))
+    .map((line) => line.replace(/^\*+|\*+$/g, '').toLowerCase())
+    .filter((word) => /\p{L}/u.test(word) && !/\s/u.test(word));
+}
+
+const cspellWordsBrowserPlugin = (): PluginOption => ({
+  name: 'hosted-rivet-cspell-words-browser',
+  enforce: 'pre',
+  resolveId(id) {
+    if (id === 'rivet-cspell-words') {
+      return cspellWordsBrowserModuleId;
+    }
+  },
+  load(id) {
+    if (id !== cspellWordsBrowserModuleId) {
+      return;
+    }
+
+    const softwareTermsDir = dirname(resolveUpstreamAppDependency('@cspell/dict-software-terms/cspell-ext.json'));
+    const companiesDir = dirname(resolveUpstreamAppDependency('@cspell/dict-companies/cspell-ext.json'));
+    const words = new Set([
+      ...cspellSoftwareTermFiles.flatMap((fileName) =>
+        parseCspellDictionaryWords(readCspellDictionaryFile(softwareTermsDir, fileName)),
+      ),
+      ...parseCspellDictionaryWords(readCspellDictionaryFile(companiesDir, 'dict/companies.txt')),
+    ]);
+
+    return `export default ${JSON.stringify([...words])};`;
+  },
+});
+
 const resolveWrapperDependency = (): PluginOption => ({
   name: 'resolve-wrapper-dependency',
   async resolveId(source, importer) {
@@ -254,7 +342,8 @@ export default defineConfig({
     publicDir: resolve(upstreamApp, 'public'),
 
     optimizeDeps: {
-      exclude: ['@valerypopoff/rivet2-core', '@valerypopoff/trivet'],
+      include: ['nspell'],
+      exclude: ['@valerypopoff/rivet2-core', '@valerypopoff/trivet', 'dictionary-en', 'rivet-cspell-words'],
     },
 
     resolve: {
@@ -312,6 +401,8 @@ export default defineConfig({
       resolveBrowserSafeGoogleCoreModule(),
       resolveRivetModuleOverride(),
       normalizeHostedProjectTabLabels(),
+      dictionaryEnBrowserPlugin(),
+      cspellWordsBrowserPlugin(),
       resolveWrapperDependency(),
       react(),
       viteTsconfigPaths({ root: upstreamApp }),
