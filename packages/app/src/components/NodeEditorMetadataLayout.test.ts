@@ -766,6 +766,8 @@ test('node settings code editors own footer font controls and AI assist trigger 
   assert.doesNotMatch(aiAssistEditorSource, /setFooterPanelOpen/);
 
   assert.match(fontSizeHookSource, /adjustFontSize/);
+  assert.match(fontSizeHookSource, /MultilineEditorFontSizeScope = 'editor' \| 'fullscreen-output'/);
+  assert.match(fontSizeHookSource, /fullscreenOutputEditorFontSizeState/);
   assert.match(fontSizeHookSource, /return \{\s+fontSize: normalizedFontSize,\s+adjustFontSize,/);
 });
 
@@ -779,6 +781,9 @@ test('lazy Monaco editor chunk stays independent from app UI state', () => {
   );
 
   assert.match(lazyComponentsSource, /useMultilineEditorFontSize/);
+  assert.match(lazyComponentsSource, /fontSizeScope\?: MultilineEditorFontSizeScope/);
+  assert.match(lazyComponentsSource, /fontSizeScope = 'editor'/);
+  assert.match(lazyComponentsSource, /useMultilineEditorFontSize\(fontSizeScope\)/);
   assert.match(lazyComponentsSource, /useIsNodeEditorResizing/);
   assert.match(codeEditorSource, /codeEditorMonaco/);
   assert.match(legacyMonacoSource, /definePITheme\('bright', \{ primary: '1769e0', base: 'vs' \}\);/);

@@ -90,6 +90,7 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   assert.match(foldingCodeBlockSource, /selectionHighlight: false/);
   assert.match(foldingCodeBlockSource, /occurrencesHighlight: false/);
   assert.match(foldingCodeBlockSource, /renderLineHighlight: 'none'/);
+  assert.match(foldingCodeBlockSource, /fontSizeScope="fullscreen-output"/);
   assert.match(foldingCodeBlockSource, /displayOptions=\{OUTPUT_CODE_EDITOR_DISPLAY_OPTIONS\}/);
   assert.match(codeEditorSource, /export type CodeEditorDisplayOptions = Pick</);
   assert.match(codeEditorSource, /displayOptions\?: CodeEditorDisplayOptions;/);

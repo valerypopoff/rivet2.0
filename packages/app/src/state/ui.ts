@@ -140,4 +140,10 @@ export const multilineEditorFontSizeState = atomWithStorage<number>(
   storage,
 );
 
+export const fullscreenOutputEditorFontSizeState = atomWithStorage<number>(
+  'fullscreenOutputEditorFontSizeState',
+  DEFAULT_MULTILINE_EDITOR_FONT_SIZE,
+  storage,
+);
+
 export const helpModalOpenState = atom<boolean>(false);

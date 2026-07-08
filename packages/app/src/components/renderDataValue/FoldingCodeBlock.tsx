@@ -308,6 +308,7 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
             theme={resolvedTheme}
             isReadonly
             enableFolding
+            fontSizeScope="fullscreen-output"
             wordWrap={wrapLines ? 'on' : 'off'}
             displayOptions={OUTPUT_CODE_EDITOR_DISPLAY_OPTIONS}
             scrollBeyondLastLine={false}
