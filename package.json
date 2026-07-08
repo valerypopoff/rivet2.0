@@ -29,7 +29,7 @@
     "test:app-executor": "yarn workspace @valerypopoff/rivet-app-executor run test",
     "test:cli": "yarn workspace @valerypopoff/rivet2-cli run test",
     "test:docs": "yarn workspace docs run typecheck",
-    "test:style": "node scripts/checks/check-test-style.mjs && node scripts/checks/check-doc-links.mjs",
+    "test:style": "node scripts/checks/check-test-style.mjs && node scripts/checks/check-doc-links.mjs && node scripts/checks/check-graph-creator-data.mjs",
     "check:file-tree": "node scripts/checks/check-file-tree.mjs",
     "bench:runtime-speed": "yarn workspace @valerypopoff/rivet2-node run bench:runtime-speed",
     "bench:runtime-attribution": "yarn workspace @valerypopoff/rivet2-node run bench:runtime-attribution",

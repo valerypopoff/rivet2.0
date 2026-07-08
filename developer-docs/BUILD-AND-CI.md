@@ -182,8 +182,9 @@ generated JavaScript beside Docusaurus source files during CI or local cleanup.
 
 ### `yarn test:style`
 
-Runs [`scripts/checks/check-test-style.mjs`](../scripts/checks/check-test-style.mjs)
-and [`scripts/checks/check-doc-links.mjs`](../scripts/checks/check-doc-links.mjs).
+Runs [`scripts/checks/check-test-style.mjs`](../scripts/checks/check-test-style.mjs),
+[`scripts/checks/check-doc-links.mjs`](../scripts/checks/check-doc-links.mjs), and
+[`scripts/checks/check-graph-creator-data.mjs`](../scripts/checks/check-graph-creator-data.mjs).
 The test-style script fails when `test.only`, `it.only`, `describe.only`,
 `suite.only`, or `context.only` calls are present in tracked or untracked
 non-ignored test files. It also prints report-only lists of test files that use
@@ -195,6 +196,12 @@ The documentation-link checker validates local Markdown links in root-level
 docs and direct `developer-docs/*.md` files. It skips external URLs, anchors,
 and fenced code blocks, then resolves remaining links against the repo root so
 Windows and Linux CI runners use the same containment rules.
+
+The graph-creator-data checker verifies that the AI graph-builder bundled
+context in `packages/app/graphs/graph-creator.rivet-data` is generated from the
+current built-in node source files and current node-reference docs. If it fails,
+refresh the generated bundle with
+`node scripts/checks/check-graph-creator-data.mjs --write`.
 
 ### `yarn lint`
 
@@ -494,16 +501,19 @@ Runs on `ubuntu-latest` and performs:
 1. checkout
 2. shared Node/Yarn setup and install-state cache restore
 3. `node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache`
-4. `yarn build`
-5. `yarn test`
-6. `yarn test:docs`
-7. `yarn test:style`
-8. `yarn lint`
-9. `yarn prettier:check`
+4. `node scripts/checks/check-graph-creator-data.mjs`
+5. `yarn build`
+6. `yarn test`
+7. `yarn test:docs`
+8. `yarn test:style`
+9. `yarn lint`
+10. `yarn prettier:check`
 
 ### Important notes
 
 - build runs with increased `NODE_OPTIONS`
+- the AI graph-builder context check is also run as a named workflow step so stale node/source context gets a clear
+  GitHub failure line before the heavier build/test phases; `yarn test:style` keeps the same guard for local parity
 - formatting check covers repo-maintenance docs and scripts that are already Prettier-clean. The full repo is not
   currently Prettier-normalized, so do not switch this to `prettier --check .` without a dedicated format pass.
 
@@ -534,6 +544,12 @@ Per matrix entry, the workflow:
 7. runs `node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache`
 8. runs `yarn build:hosted-web-deps`
 9. invokes `tauri-apps/tauri-action`
+
+A separate Linux prerequisite job verifies the AI graph-builder context with
+`node scripts/checks/check-graph-creator-data.mjs` once per workflow run before
+any platform bundle job starts. The check is platform-independent and needs only
+the checked-out repo, so release workflows should keep it as one shared
+prerequisite instead of repeating it in every Windows/macOS/Linux build job.
 
 `yarn build:hosted-web-deps` builds only the core and Trivet package outputs
 that the app package typecheck consumes. The Tauri `beforeBuildCommand` still
@@ -616,13 +632,14 @@ The release workflows share the `rivet-docs-pages` concurrency group with `cance
 
 #### Current behavior
 
-The workflow has five jobs:
+The workflow has six jobs:
 
-1. `build-windows` runs on `windows-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
-2. `build-macos` runs on `macos-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
-3. `build-docs` runs on `ubuntu-latest`, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
-4. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, preserves the current developer release feed from Pages if it exists, writes stable release metadata and installer files into `packages/docs/build`, and uploads that complete docs-site artifact.
-5. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`.
+1. `verify-ai-graph-builder-context` runs on `ubuntu-latest`, checks out the repo, and runs `node scripts/checks/check-graph-creator-data.mjs`.
+2. `build-windows` runs on `windows-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
+3. `build-macos` runs on `macos-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
+4. `build-docs` runs on `ubuntu-latest` after that verifier, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
+5. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, preserves the current developer release feed from Pages if it exists, writes stable release metadata and installer files into `packages/docs/build`, and uploads that complete docs-site artifact.
+6. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`.
 
 The stable deploy job uses the `github-pages` environment. If that environment has branch restrictions, it must allow `main`.
 
@@ -637,13 +654,14 @@ This workflow is intentionally develop-only. It does not run for `main`.
 
 ### Current behavior
 
-The workflow has five jobs:
+The workflow has six jobs:
 
-1. `build-windows` runs on `windows-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
-2. `build-macos` runs on `macos-latest`, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
-3. `build-docs` runs on `ubuntu-latest`, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
-4. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, preserves the current stable release feed from Pages if it exists, writes developer release metadata and installer files into `packages/docs/build`, and uploads that complete docs-site artifact.
-5. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`.
+1. `verify-ai-graph-builder-context` runs on `ubuntu-latest`, checks out the repo, and runs `node scripts/checks/check-graph-creator-data.mjs`.
+2. `build-windows` runs on `windows-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
+3. `build-macos` runs on `macos-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
+4. `build-docs` runs on `ubuntu-latest` after that verifier, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
+5. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, preserves the current stable release feed from Pages if it exists, writes developer release metadata and installer files into `packages/docs/build`, and uploads that complete docs-site artifact.
+6. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`.
 
 Docusaurus owns the site root and reads `developer-release.json` on the `/download` page. The generated Pages site represents the current public docs plus the latest successful developer Windows and macOS release from `develop`, while preserving the stable release feed that was already published from `main`.
 
@@ -710,11 +728,12 @@ The workflow:
 2. verifies the checkout starts clean
 3. runs the shared Node/Yarn setup for the build, matching the repo development toolchain and restoring Yarn install state
 4. installs dependencies with the checked-in Yarn release and `--immutable --immutable-cache --check-cache`
-5. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and `@valerypopoff/rivet2-cli`
-6. verifies that dependency install and package build touched only generated artifacts
-7. switches to Node `22.14.x` and npm `11.5.1` for npm trusted-publishing compatibility
-8. verifies that the repository `NPM_TOKEN` secret is present and accepted by `npm whoami`
-9. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`
+5. verifies the AI graph-builder context with `node scripts/checks/check-graph-creator-data.mjs`
+6. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and `@valerypopoff/rivet2-cli`
+7. verifies that dependency install and package build touched only generated artifacts
+8. switches to Node `22.14.x` and npm `11.5.1` for npm trusted-publishing compatibility
+9. verifies that the repository `NPM_TOKEN` secret is present and accepted by `npm whoami`
+10. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`
 
 The publish step intentionally skips the script's clean-tree check because this
 job installs dependencies and builds ignored publish artifacts immediately

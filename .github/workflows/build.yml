@@ -17,6 +17,8 @@ jobs:
       - uses: ./.github/actions/setup-yarn
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache
+      - name: Verify AI graph builder context
+        run: node scripts/checks/check-graph-creator-data.mjs
       - name: Build
         run: yarn build
         env:

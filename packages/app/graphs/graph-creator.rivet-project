@@ -519,7 +519,7 @@ data:
             errorOnMissingFile: false
             filterGlobs: []
             ignores: []
-            path: /usr/local/repos/rivet/packages/core/src/model/nodes
+            path: packages/core/src/model/nodes
             recursive: false
             useFilterGlobsInput: false
             useIgnoresInput: false
@@ -1236,7 +1236,7 @@ data:
             errorOnMissingFile: false
             filterGlobs: []
             ignores: []
-            path: /usr/local/repos/rivet/packages/docs/docs/node-reference
+            path: packages/docs/docs/node-reference
             recursive: false
             useFilterGlobsInput: false
             useIgnoresInput: false
@@ -2052,7 +2052,7 @@ data:
             filterGlobs: []
             ignores: []
             includeDirectories: false
-            path: /usr/local/repos/rivet/packages/core/src/model/nodes
+            path: packages/core/src/model/nodes
             recursive: false
             relative: true
             useFilterGlobsInput: false

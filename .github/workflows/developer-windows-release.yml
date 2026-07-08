@@ -16,9 +16,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-ai-graph-builder-context:
+    name: Verify AI graph builder context
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify AI graph builder context
+        run: node scripts/checks/check-graph-creator-data.mjs
+
   build-windows:
     name: Developer Windows desktop bundle
     if: github.ref == 'refs/heads/develop'
+    needs: verify-ai-graph-builder-context
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -61,6 +72,7 @@ jobs:
   build-macos:
     name: Developer macOS desktop bundle
     if: github.ref == 'refs/heads/develop'
+    needs: verify-ai-graph-builder-context
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -130,6 +142,7 @@ jobs:
   build-docs:
     name: Developer documentation site
     if: github.ref == 'refs/heads/develop'
+    needs: verify-ai-graph-builder-context
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
