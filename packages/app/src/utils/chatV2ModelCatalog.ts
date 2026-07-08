@@ -1,5 +1,4 @@
 import {
-  DEFAULT_CHAT_ENDPOINT,
   type RivetPlugin,
   getChatV2ModelOptions,
   getPluginConfig,
@@ -43,20 +42,7 @@ type GoogleModelResponse = {
 };
 
 const modelCatalogCache = new Map<string, Promise<ChatModelCatalogResult>>();
-
-function removeTrailingSlash(value: string): string {
-  return value.endsWith('/') ? value.slice(0, -1) : value;
-}
-
-function openAIEndpointToBaseURL(endpoint: string): string {
-  const normalized = endpoint.replace(/\/(chat\/completions|responses)\/?$/i, '');
-
-  try {
-    return removeTrailingSlash(new URL(normalized).toString());
-  } catch {
-    return removeTrailingSlash(normalized);
-  }
-}
+const OPENAI_MODEL_CATALOG_BASE_URL = 'https://api.openai.com/v1';
 
 function isOpenAIChatLikeModelId(id: string): boolean {
   const normalized = id.trim().toLowerCase();
@@ -116,14 +102,12 @@ async function fetchOpenAIModels(context: ChatModelCatalogContext): Promise<Chat
     throw new Error('OpenAI API key is not configured.');
   }
 
-  const baseURL = openAIEndpointToBaseURL(context.settings.openAiEndpoint || DEFAULT_CHAT_ENDPOINT);
-  const requestURL = `${baseURL}/models`;
+  const requestURL = `${OPENAI_MODEL_CATALOG_BASE_URL}/models`;
   logModelCatalogDebug('openai', `Fetching model catalog from ${requestURL}`);
-  const response = await fetch(`${baseURL}/models`, {
+  const response = await fetch(requestURL, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       ...(context.settings.openAiOrganization ? { 'OpenAI-Organization': context.settings.openAiOrganization } : {}),
-      ...(context.settings.chatNodeHeaders ?? {}),
     },
   });
 
@@ -152,20 +136,18 @@ async function fetchAnthropicModels(context: ChatModelCatalogContext): Promise<C
     context.apiKey ||
     context.settings.anthropicApiKey ||
     (plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiKey') : undefined);
-  const apiEndpoint = plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiEndpoint') : undefined;
 
   if (!apiKey) {
     logModelCatalogDebug('anthropic', 'No API key configured. Using built-in fallback list.');
     throw new Error('Anthropic API key is not configured.');
   }
 
-  const endpoint = `${removeTrailingSlash(apiEndpoint || 'https://api.anthropic.com/v1')}/models`;
+  const endpoint = 'https://api.anthropic.com/v1/models';
   logModelCatalogDebug('anthropic', `Fetching model catalog from ${endpoint}`);
   const response = await fetch(endpoint, {
     headers: {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
-      ...(context.settings.chatNodeHeaders ?? {}),
     },
   });
 
@@ -214,9 +196,7 @@ async function fetchGoogleModels(context: ChatModelCatalogContext): Promise<Chat
     'google',
     'Fetching model catalog from https://generativelanguage.googleapis.com/v1beta/models?key=<redacted>',
   );
-  const response = await fetch(requestURL, {
-    headers: context.settings.chatNodeHeaders ?? {},
-  });
+  const response = await fetch(requestURL);
 
   if (!response.ok) {
     throw new Error(`Google models request failed with ${response.status}`);
@@ -252,7 +232,6 @@ function getCacheKey(provider: ChatV2Provider, context: ChatModelCatalogContext)
     case 'openai':
       return JSON.stringify([
         provider,
-        context.settings.openAiEndpoint || DEFAULT_CHAT_ENDPOINT,
         context.settings.openAiOrganization || '',
         fingerprintSecret(context.apiKey || context.settings.openAiApiKey || context.settings.openAiKey),
       ]);
@@ -261,7 +240,6 @@ function getCacheKey(provider: ChatV2Provider, context: ChatModelCatalogContext)
       const plugin = getPluginById(context.plugins, 'anthropic');
       return JSON.stringify([
         provider,
-        plugin ? getPluginConfig(plugin, context.settings, 'anthropicApiEndpoint') || '' : '',
         fingerprintSecret(
           context.apiKey ||
             context.settings.anthropicApiKey ||

@@ -27,16 +27,15 @@ import {
 import { handleError } from '../../../utils/errorHandling.js';
 import { useMultilineEditorFontSize } from '../../../hooks/useMultilineEditorFontSize.js';
 import Collapsible from 'react-collapsible';
-import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
 import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
 import { useEnvironmentProvider } from '../../../providers/ProvidersContext.js';
 import { NodeCodeEditorFooterActionContext } from '../NodeCodeEditorFooterActionContext.js';
 import SparklesIcon from '../../../assets/icons/ai-sparks-solid.svg?react';
 import { Tooltip } from '../../Tooltip.js';
-import { AppModalHeader } from '../../AppModalHeader.js';
 import { resolveAiAssistModelSettings } from '../../../utils/aiAssistModelSettings.js';
 import { createAiAssistVercelGeneratorChatNodeDefinition } from '../../../utils/aiAssistVercelGenerator.js';
+import { AiAssistPromptModal } from '../../AiAssistPromptModal.js';
 
 const AI_ASSIST_CANCEL_REASON = 'Generate using AI canceled';
 
@@ -152,12 +151,6 @@ const styles = css`
 
   .ai-assist-missing-configuration {
     color: var(--warning);
-  }
-
-  .ai-assist-modal-panel {
-    display: flex;
-    flex-direction: column;
-    gap: calc(16px * var(--ui-font-scale));
   }
 
   .ai-assist-textarea-shell {
@@ -523,25 +516,21 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
 
   if (useFooterTrigger) {
     return (
-      <ModalTransition>
-        {footerModalOpen && (
-          <Modal autoFocus={false} onClose={closeFooterModal} width="large">
-            <AppModalHeader title={footerLabel} onClose={closeFooterModal} />
-            <ModalBody>
-              <div css={styles} className="ai-assist-modal-panel">
-                {renderPromptTextArea(4, 'What should Rivet generate?')}
-                {modelNote}
-              </div>
-            </ModalBody>
-            <ModalFooter>
-              {cancelButton}
-              <Button appearance="primary" onClick={() => void generate()} isDisabled={generateDisabled}>
-                Generate
-              </Button>
-            </ModalFooter>
-          </Modal>
-        )}
-      </ModalTransition>
+      <AiAssistPromptModal
+        generateDisabled={generateDisabled}
+        isDisabled={isDisabled}
+        isOpen={footerModalOpen}
+        isReadonly={isReadonly}
+        missingConfiguration={assistModel.missingConfiguration}
+        modelDisplayName={assistModel.displayName}
+        onCancel={abortGeneration}
+        onClose={closeFooterModal}
+        onGenerate={() => void generate()}
+        onPromptChange={setPrompt}
+        prompt={prompt}
+        title={footerLabel}
+        working={working}
+      />
     );
   }
 

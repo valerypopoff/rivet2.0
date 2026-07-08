@@ -566,6 +566,13 @@ test('node settings code editors own footer font controls and AI assist trigger 
   const editorUtilsSource = readFileSync(join(componentsDir, 'editors', 'editorUtils.ts'), 'utf8');
   const nodeEditorCodeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
   const aiAssistEditorSource = readFileSync(join(componentsDir, 'editors', 'custom', 'AiAssistEditorBase.tsx'), 'utf8');
+  const aiAssistPromptModalSource = readFileSync(join(componentsDir, 'AiAssistPromptModal.tsx'), 'utf8');
+  const aiGraphCreatorInputSource = readFileSync(join(componentsDir, 'AiGraphCreatorInput.tsx'), 'utf8');
+  const aiGraphBuilderSource = readFileSync(join(componentsDir, '..', 'hooks', 'useAiGraphBuilder.ts'), 'utf8');
+  const graphCreatorProjectSource = readFileSync(
+    join(componentsDir, '..', '..', 'graphs', 'graph-creator.rivet-project'),
+    'utf8',
+  );
   const fontSizeHookSource = readFileSync(join(componentsDir, '..', 'hooks', 'useMultilineEditorFontSize.ts'), 'utf8');
 
   assert.match(defaultNodeEditorSource, /const AI_ASSIST_TARGET_DATA_KEYS: Record<string, string> = \{/);
@@ -668,8 +675,7 @@ test('node settings code editors own footer font controls and AI assist trigger 
   assert.match(aiAssistEditorSource, /<Tooltip content=\{footerLabel\} tag="span">/);
   assert.match(aiAssistEditorSource, /aria-label=\{footerLabel\}/);
   assert.match(aiAssistEditorSource, /<SparklesIcon \/>/);
-  assert.match(aiAssistEditorSource, /Modal, \{ ModalBody, ModalFooter, ModalTransition \}/);
-  assert.match(aiAssistEditorSource, /AppModalHeader/);
+  assert.match(aiAssistEditorSource, /<AiAssistPromptModal/);
   assert.match(
     aiAssistEditorSource,
     /const footerLabel = label === 'Generate Using AI' \? 'Generate using AI' : label;/,
@@ -740,20 +746,16 @@ test('node settings code editors own footer font controls and AI assist trigger 
     aiAssistEditorSource,
     /onClick=\{\(\) => \{[\s\S]*setSelectedTextContext\(footerActionBridge\.getSelectedText\(\)\);[\s\S]*setFooterModalOpen\(true\);[\s\S]*\}\}/,
   );
-  assert.match(aiAssistEditorSource, /<Modal autoFocus=\{false\} onClose=\{closeFooterModal\} width="large">/);
-  assert.match(aiAssistEditorSource, /<AppModalHeader title=\{footerLabel\} onClose=\{closeFooterModal\} \/>/);
   assert.match(
     aiAssistEditorSource,
-    /className="ai-assist-modal-panel"[\s\S]*\{renderPromptTextArea\(4,[\s\S]*\{modelNote\}/,
+    /<AiAssistPromptModal[\s\S]*generateDisabled=\{generateDisabled\}[\s\S]*modelDisplayName=\{assistModel\.displayName\}[\s\S]*onClose=\{closeFooterModal\}/,
   );
-  assert.match(aiAssistEditorSource, /renderPromptTextArea\(4, 'What should Rivet generate\?'\)/);
   assert.match(aiAssistEditorSource, /resize="vertical"/);
   assert.match(aiAssistEditorSource, /if \(!generateDisabled && e\.key === 'Enter'/);
   assert.match(aiAssistEditorSource, /void generate\(\);/);
   assert.match(aiAssistEditorSource, /const cancelButton = working \? \(/);
   assert.match(aiAssistEditorSource, /<Button aria-label="Cancel generation" onClick=\{abortGeneration\}>/);
   assert.match(aiAssistEditorSource, /\{cancelButton\}/);
-  assert.match(aiAssistEditorSource, /<ModalFooter>[\s\S]*<Button appearance="primary"[\s\S]*Generate/);
   assert.match(aiAssistEditorSource, /\.ai-assist-textarea-shell \+ \.ai-assist-model-note \{[\s\S]*margin-top:/);
   assert.doesNotMatch(aiAssistEditorSource, /\.ai-assist-modal-panel \.ai-assist-model-note \{[\s\S]*margin-bottom:/);
   assert.match(aiAssistEditorSource, /\.ai-assist-textarea-shell \{[\s\S]*width: 100%;/);
@@ -764,6 +766,37 @@ test('node settings code editors own footer font controls and AI assist trigger 
   assert.doesNotMatch(aiAssistEditorSource, /model-and-button/);
   assert.doesNotMatch(aiAssistEditorSource, /ai-assist-footer-panel/);
   assert.doesNotMatch(aiAssistEditorSource, /setFooterPanelOpen/);
+
+  assert.match(aiAssistPromptModalSource, /Modal, \{ ModalBody, ModalFooter, ModalTransition \}/);
+  assert.match(aiAssistPromptModalSource, /AppModalHeader/);
+  assert.match(aiAssistPromptModalSource, /placeholder = 'What should Rivet generate\?'/);
+  assert.match(aiAssistPromptModalSource, /Using <strong>\{modelDisplayName\}<\/strong>\. To change it, go to Settings &gt; LLM\./);
+  assert.match(aiAssistPromptModalSource, /resize="vertical"/);
+  assert.match(aiAssistPromptModalSource, /if \(!generateDisabled && e\.key === 'Enter'/);
+  assert.match(aiAssistPromptModalSource, /e\.preventDefault\(\);[\s\S]*e\.stopPropagation\(\);[\s\S]*void onGenerate\(\);/);
+  assert.match(aiAssistPromptModalSource, /<Modal autoFocus=\{false\} onClose=\{onClose\} width="large">/);
+  assert.match(aiAssistPromptModalSource, /<ModalFooter>[\s\S]*<Button appearance="primary"[\s\S]*\{generateLabel\}/);
+
+  assert.match(aiGraphCreatorInputSource, /<AiAssistPromptModal/);
+  assert.match(aiGraphCreatorInputSource, /resolveAiAssistModelSettings/);
+  assert.match(aiGraphCreatorInputSource, /selectedAssistModelState/);
+  assert.match(aiGraphCreatorInputSource, /title="Generate graph using AI"/);
+  assert.match(aiGraphCreatorInputSource, /placeholder="Describe the graph to create or edit\.\.\."/);
+  assert.match(aiGraphCreatorInputSource, /aria-label="AI graph generation log"/);
+  assert.match(aiGraphCreatorInputSource, /setFeedbackItems\(\(prev\) => \[\.\.\.prev, feedback\]\)/);
+  assert.doesNotMatch(aiGraphCreatorInputSource, /slice\(-6\)/);
+  assert.doesNotMatch(aiGraphCreatorInputSource, /modelSelectorOptions|<Select|Go<\/Button>|model\.value|record/);
+  assert.match(aiGraphBuilderSource, /wrapLoggedExternalFunctions/);
+  assert.match(aiGraphBuilderSource, /CALL \$\{name\}/);
+  assert.match(aiGraphBuilderSource, /OK \$\{name\}/);
+  assert.match(aiGraphBuilderSource, /ERROR \$\{name\}/);
+  assert.match(aiGraphBuilderSource, /formatExternalFunctionArgs/);
+  assert.match(aiGraphBuilderSource, /createAiAssistVercelGeneratorChatNodeDefinition\(assistModel\)/);
+  assert.match(aiGraphBuilderSource, /model: assistModel\.model/);
+  assert.match(aiGraphBuilderSource, /api: assistModel\.graphApi/);
+  assert.doesNotMatch(aiGraphBuilderSource, /modelAndApi|corePlugins|registerPlugin|ExecutionRecorder|AppLog/);
+  assert.match(graphCreatorProjectSource, /aiAssistGeneratorChatV2/);
+  assert.doesNotMatch(graphCreatorProjectSource, /\]:chat |chatAnthropic/);
 
   assert.match(fontSizeHookSource, /adjustFontSize/);
   assert.match(fontSizeHookSource, /MultilineEditorFontSizeScope = 'editor' \| 'fullscreen-output'/);

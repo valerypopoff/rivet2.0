@@ -223,7 +223,7 @@ provide these defaults when the corresponding option is omitted:
 | `codeRunner`             | `NodeCodeRunner` for `runGraph` and compatible `createProcessor`; omitted-default `createProcessor` may use a run-scoped cached Node CodeRunner |
 | `projectReferenceLoader` | `NodeProjectReferenceLoader`                                                                                                                    |
 | `pluginEnv`              | plugin environment values read from `process.env`                                                                                               |
-| LLM settings             | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `CUSTOM_AI_API_KEY` or `CUSTOM_PROVIDER_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_ENDPOINT` when unset |
+| LLM settings             | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, canonical `CUSTOM_PROVIDER_API_KEY`, legacy `CUSTOM_AI_API_KEY`, and `OPENAI_ORG_ID` when unset. `OPENAI_ENDPOINT` is not read automatically; pass `openAiEndpoint` explicitly only for legacy Chat compatibility |
 
 `createGraphRunner` resolves the same Node defaults once at runner creation and
 reuses them across repeated runs of the same graph. This is the preferred

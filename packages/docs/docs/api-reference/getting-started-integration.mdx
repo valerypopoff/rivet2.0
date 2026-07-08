@@ -115,7 +115,8 @@ Let's break down the important fields:
 - `remoteDebugger`: Node-only. Attach a debugger server so the Rivet app can inspect the run.
 - `openAiApiKey` / `anthropicApiKey` / `googleApiKey` / `customAiApiKey`: Shared provider keys used by LLM Chat when API key source is Configured key. `openAiKey` remains a legacy alias for `openAiApiKey`.
 - Named custom-provider keys: If a custom-provider LLM Chat node sets `Alternative programmatic key name`, pass a top-level run option with that exact name.
-- `openAiOrganization` / `openAiEndpoint`: OpenAI organization and OpenAI-compatible endpoint defaults used by OpenAI-backed paths.
+- `openAiOrganization`: Optional OpenAI organization for OpenAI-backed paths.
+- `openAiEndpoint`: Explicit legacy Chat endpoint override. Built-in LLM Chat and Generate using AI use provider-owned endpoints; use Custom provider settings for OpenAI-compatible hosts.
 - `pluginEnv`: Environment-like values for plugins. If omitted in `@valerypopoff/rivet2-node`, plugin-declared environment variables are read from `process.env`.
 
 ### Example Code

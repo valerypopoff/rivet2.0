@@ -323,7 +323,7 @@ export function resolveLLMChatV2BuiltInTools(
       const provider = createOpenAI({
         apiKey: apiKey || context.settings.openAiApiKey || context.settings.openAiKey || undefined,
         organization: context.settings.openAiOrganization || undefined,
-        baseURL: config.baseURL,
+        baseURL: undefined,
         headers: config.headers,
       });
       const tools: ChatV2ToolSet = {};
@@ -348,7 +348,7 @@ export function resolveLLMChatV2BuiltInTools(
 
       const provider = createGoogleGenerativeAI({
         apiKey: apiKey || context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined,
-        baseURL: config.baseURL,
+        baseURL: undefined,
         headers: config.headers,
       });
       const tools: ChatV2ToolSet = {};

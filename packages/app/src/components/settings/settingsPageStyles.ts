@@ -2,6 +2,7 @@ import { css } from '@emotion/react';
 
 export const fields = css`
   --settings-field-gap: calc(20px * var(--ui-font-scale));
+  --settings-section-gap: calc(24px * var(--ui-font-scale));
   --settings-auto-configuration-gap: calc(16px * var(--ui-font-scale));
 
   display: flex;
@@ -18,6 +19,10 @@ export const fields = css`
     display: flex;
     flex-direction: column;
     gap: calc(14px * var(--ui-font-scale));
+  }
+
+  .settings-section + .settings-section {
+    margin-top: var(--settings-section-gap);
   }
 
   .settings-section-heading {

@@ -3,24 +3,18 @@ import { strict as assert } from 'node:assert';
 import { createChatV2Model, resolveChatV2ProviderConfig } from '../../../src/model/chat-v2/providerOptions.js';
 
 describe('resolveChatV2ProviderConfig', () => {
-  it('derives OpenAI baseURL and merges global and resolved headers', async () => {
+  it('ignores legacy OpenAI endpoint overrides and keeps node/global headers', async () => {
     const result = await resolveChatV2ProviderConfig(
       'openai',
       'gpt-5',
       {
         settings: {
-          openAiEndpoint: 'https://example.test/v1/chat/completions',
+          openAiEndpoint: 'https://legacy-openai-compatible.example.test/v1/chat/completions?legacy=1',
           chatNodeHeaders: {
             'x-global': 'global',
           },
         },
         getPluginConfig: () => undefined,
-        getChatNodeEndpoint: async (endpoint) => ({
-          endpoint: endpoint.replace('example.test', 'proxy.test'),
-          headers: {
-            'x-proxy': 'proxy',
-          },
-        }),
       } as any,
       {
         headers: {
@@ -29,16 +23,72 @@ describe('resolveChatV2ProviderConfig', () => {
       },
     );
 
-    assert.equal(result.baseURL, 'https://proxy.test/v1');
+    assert.equal(result.baseURL, undefined);
     assert.deepEqual(result.headers, {
       'x-global': 'global',
       'x-node': 'node',
-      'x-proxy': 'proxy',
     });
+  });
+
+  it('ignores explicit OpenAI baseURL overrides from stale node settings', async () => {
+    const result = await resolveChatV2ProviderConfig(
+      'openai',
+      'gpt-5',
+      {
+        settings: {
+          openAiEndpoint: 'https://stale.example.test/v1/chat/completions',
+          chatNodeHeaders: {},
+        },
+        getPluginConfig: () => undefined,
+      } as any,
+      {
+        baseURL: 'https://proxy.example.test/v1/responses',
+      },
+    );
+
+    assert.equal(result.baseURL, undefined);
+  });
+
+  it('ignores built-in Anthropic and Google baseURL overrides too', async () => {
+    const context = {
+      settings: {
+        chatNodeHeaders: {},
+      },
+      getPluginConfig: (key: string) => (key === 'anthropicApiEndpoint' ? 'https://plugin-anthropic.example/v1' : ''),
+    } as any;
+
+    const anthropic = await resolveChatV2ProviderConfig('anthropic', 'claude-test', context, {
+      baseURL: 'https://stale-anthropic.example/v1',
+    });
+    const google = await resolveChatV2ProviderConfig('google', 'gemini-test', context, {
+      baseURL: 'https://stale-google.example/v1',
+    });
+
+    assert.equal(anthropic.baseURL, undefined);
+    assert.equal(google.baseURL, undefined);
   });
 });
 
 describe('createChatV2Model', () => {
+  it('keeps built-in provider models away from stale endpoint overrides', () => {
+    const context = {
+      settings: {},
+      getPluginConfig: (key: string) => (key === 'anthropicApiEndpoint' ? 'https://plugin-anthropic.example/v1' : ''),
+    } as any;
+    const anthropic = createChatV2Model('anthropic', 'claude-test', context, {
+      apiKey: 'test-key',
+      baseURL: 'https://stale-anthropic.example/v1',
+    }) as { config?: { baseURL?: string } };
+    const google = createChatV2Model('google', 'gemini-test', context, {
+      apiKey: 'test-key',
+      baseURL: 'https://stale-google.example/v1',
+    }) as { config?: { baseURL?: string } };
+
+    assert.notEqual(anthropic.config?.baseURL, 'https://stale-anthropic.example/v1');
+    assert.notEqual(anthropic.config?.baseURL, 'https://plugin-anthropic.example/v1');
+    assert.notEqual(google.config?.baseURL, 'https://stale-google.example/v1');
+  });
+
   it('enables structured outputs on custom OpenAI-compatible chat models', async () => {
     const model = createChatV2Model(
       'custom',

@@ -3,6 +3,7 @@ import {
   createChatV2Model,
   type ChartNode,
   type ChatMessageMessagePart,
+  type ChatV2ProviderOptions,
   type DataValue,
   type GptFunction,
   type Inputs,
@@ -46,6 +47,8 @@ function createPortId(id: string): PortId {
 }
 
 const RESPONSE_PORT_ID = createPortId('response');
+const FUNCTION_CALLS_PORT_ID = createPortId('function-calls');
+const ALL_MESSAGES_PORT_ID = createPortId('all-messages');
 
 function getDataNumber(data: Record<string, unknown>, key: string): number | undefined {
   const value = data[key];
@@ -90,26 +93,6 @@ function getOptionalStopSequences(data: Record<string, unknown>, inputs: Inputs)
   return getDataBoolean(data, 'useStop') && stop ? [stop] : undefined;
 }
 
-function getTemperature(data: Record<string, unknown>, inputs: Inputs): number | undefined {
-  return getDataBoolean(data, 'useTemperatureInput')
-    ? (getInputNumber(inputs, 'temperature') ?? getDataNumber(data, 'temperature'))
-    : getDataNumber(data, 'temperature');
-}
-
-function getTopP(data: Record<string, unknown>, inputs: Inputs): number | undefined {
-  const useTopP = getDataBoolean(data, 'useUseTopPInput')
-    ? (coerceTypeOptional(inputs[createPortId('useTopP')], 'boolean') ?? getDataBoolean(data, 'useTopP'))
-    : getDataBoolean(data, 'useTopP');
-
-  if (!useTopP) {
-    return undefined;
-  }
-
-  return getDataBoolean(data, 'useTopPInput')
-    ? (getInputNumber(inputs, 'top_p') ?? getDataNumber(data, 'top_p'))
-    : getDataNumber(data, 'top_p');
-}
-
 function getMaxTokens(data: Record<string, unknown>, inputs: Inputs): number | undefined {
   return getDataBoolean(data, 'useMaxTokensInput')
     ? (getInputNumber(inputs, 'maxTokens') ?? getDataNumber(data, 'maxTokens'))
@@ -118,9 +101,9 @@ function getMaxTokens(data: Record<string, unknown>, inputs: Inputs): number | u
 
 function pickGeneratorOutputs(outputs: Outputs): Outputs {
   return {
-    [createPortId('response')]: outputs[createPortId('response')] ?? CONTROL_FLOW_EXCLUDED,
-    [createPortId('function-calls')]: outputs[createPortId('function-calls')] ?? CONTROL_FLOW_EXCLUDED,
-    [createPortId('all-messages')]: outputs[createPortId('all-messages')] ?? CONTROL_FLOW_EXCLUDED,
+    [RESPONSE_PORT_ID]: outputs[RESPONSE_PORT_ID] ?? CONTROL_FLOW_EXCLUDED,
+    [FUNCTION_CALLS_PORT_ID]: outputs[FUNCTION_CALLS_PORT_ID] ?? CONTROL_FLOW_EXCLUDED,
+    [ALL_MESSAGES_PORT_ID]: outputs[ALL_MESSAGES_PORT_ID] ?? CONTROL_FLOW_EXCLUDED,
   };
 }
 
@@ -140,6 +123,49 @@ function getCustomProviderApiKey(
   context: InternalProcessContext,
 ): string | undefined {
   return provider === 'custom' ? context.settings.customAiApiKey || undefined : undefined;
+}
+
+function getGeneratorProviderOptions(provider: ResolvedAiAssistModelSettings['provider']): ChatV2ProviderOptions | undefined {
+  return provider === 'openai'
+    ? {
+        openai: {
+          parallelToolCalls: false,
+        },
+      }
+    : undefined;
+}
+
+export function constrainAiAssistGeneratorToolCallsToOneForLegacyLoop(outputs: Outputs): void {
+  const functionCallsOutput = outputs[FUNCTION_CALLS_PORT_ID];
+  if (functionCallsOutput?.type !== 'object[]' || functionCallsOutput.value.length <= 1) {
+    return;
+  }
+
+  const [firstFunctionCall] = functionCallsOutput.value;
+  outputs[FUNCTION_CALLS_PORT_ID] = {
+    ...functionCallsOutput,
+    value: [firstFunctionCall!],
+  };
+
+  const allMessagesOutput = outputs[ALL_MESSAGES_PORT_ID];
+  if (allMessagesOutput?.type !== 'chat-message[]') {
+    return;
+  }
+
+  outputs[ALL_MESSAGES_PORT_ID] = {
+    ...allMessagesOutput,
+    value: allMessagesOutput.value.map((message) => {
+      if (message.type !== 'assistant' || !message.function_calls || message.function_calls.length <= 1) {
+        return message;
+      }
+
+      return {
+        ...message,
+        function_call: message.function_call ?? message.function_calls[0],
+        function_calls: [message.function_calls[0]!],
+      };
+    }),
+  };
 }
 
 const inputDefinitions: NodeInputDefinition[] = [
@@ -299,13 +325,13 @@ export function createAiAssistVercelGeneratorChatNodeDefinition(
         systemPrompt: getOptionalSystemPrompt(inputs),
         functions: getOptionalFunctions(inputs),
         maxTokens: getMaxTokens(this.data, inputs),
-        temperature: getTemperature(this.data, inputs),
-        topP: getTopP(this.data, inputs),
         stopSequences: getOptionalStopSequences(this.data, inputs),
         includeFunctionCalls: true,
+        providerOptions: getGeneratorProviderOptions(provider),
         emitPartialOutputs: false,
         context,
       });
+      constrainAiAssistGeneratorToolCallsToOneForLegacyLoop(result.commonOutputs);
       const response = result.commonOutputs[RESPONSE_PORT_ID];
 
       if (response?.type === 'string') {

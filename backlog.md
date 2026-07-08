@@ -1,27 +1,28 @@
 
-- LLM chat should have an provider-agnostic usage statistics output node
 
-- When the node produced error, the "Copy" button isn't working
-- After error, there has to be a vertical gap
+- A setting for LLM chat node to race several LLM calls and return the fastest. Need to think through how it works along with retries
+
+
+- Rework ChatViewer workspace into an actual chat interface that is connected to a specific graph with cpecific inputs and outputs so the user can test their graph in a chat-like interface.
+
+- Bind certain graphs to Ctrl+1, Ctrl+2, etc.
 
 - Recorded actions in the Editor? Like, record connecting some nodes. Then record disconnecting them. Like some chore that needs to be done before saving for example
 
 - When zoom out the canvas, the main buttons in teh output area should scale down slower than the nod eitself. Like, when the node zoomed out 2x, the buttons in the output area should only zoom out 1.5x. Or should work when the scale is lower than some threshold. Choose the threshold wisely.
 
-- While the workflow is running, send some kind of a number of run nodes that can be a progress indicator
-
-- Generate with AI - should be possible to use custom provider for it (new tab in settings like "AI abilities for the platform")
-
-- AWS marketplace ready to launch thing for Rivet 2
-
-
-- A special node mode that works like a filter: in this mode the node can accept multiple connections from different nodes into one port. Without such mode, I have to copy-paste the same node multiple times. Probably, for each connection set there should be a separate execution path. Like, "add path". Or! Allow connecting an auxiliary node as a filter for selected inputs/outputs of a node.
 
 - Node from rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?
 
-- Rework ChatViewer workspace into an actual chat interface that is connected to a specific graph with cpecific inputs and outputs so the user can test their graph in a chat-like interface.
+- A special node mode that works like a filter: in this mode the node can accept multiple connections from different nodes into one port. Without such mode, I have to copy-paste the same node multiple times. Probably, for each connection set there should be a separate execution path. Like, "add path". Or! Allow connecting an auxiliary node as a filter for selected inputs/outputs of a node.
+
 
 - After graph or project running (in the editor or via remote debugger) highlight the input nodes that got no input. Like, it can indicate that the subgraph node hasn't passed all the needed inputs to the subgraph.
+
+- While the workflow is running, send some kind of a number of run nodes that can be a progress indicator
+
+- AWS marketplace ready to launch thing for Rivet 2
+
 
 - Need to show the curent graph name somewhere. When there's many and they are in the folders and you click through subgraphs, the user gets lost. It's already shown in the run button. maybe make it more noticeable?
 
@@ -32,7 +33,6 @@
 - Apply a style where there's a straight line and another line in parallel close to it, just like in the Rivet logo
 
 - Get back to MCP and see if it works and how it works. I don't see an MCP node. I think we need it
-- Reassess all the "Generate using AI" in different nodes. The model picker is clipped by the section border
 
 - In nodes that have variadic inputs, when an input in the middle is removed, the remaining inputs look weird. Do we need to automatically remove them? It should we allow the user to remove them if needed?
 
@@ -42,7 +42,6 @@
 
 - In the node output when there's yellow headers, without hover the headers are not visible. I want them to be visible
 
-- A setting for LLM chat node to race several LLM calls and return the fastest. Need to think through how it works along with retries
 
 - Reassess rivet example project
   rivet2.0/packages/app/src/assets/tutorials

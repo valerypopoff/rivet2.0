@@ -169,13 +169,13 @@ export function addProviderOptions<T>(y: yargs.Argv<T>): yargs.Argv<T> {
     })
     .option('custom-ai-api-key', {
       describe:
-        'The generic custom-provider API key to use for LLM Chat custom providers. If omitted, CUSTOM_AI_API_KEY, CUSTOM_PROVIDER_API_KEY, or the node-specific environment variable is used.',
+        'The generic custom-provider API key to use for LLM Chat custom providers. If omitted, CUSTOM_PROVIDER_API_KEY, legacy CUSTOM_AI_API_KEY, or the node-specific environment variable is used.',
       type: 'string',
       demandOption: false,
     })
     .option('openai-endpoint', {
       describe:
-        'The OpenAI API endpoint to use for the project. If omitted, the environment variable OPENAI_ENDPOINT is used.',
+        'Explicit legacy OpenAI-compatible Chat endpoint override. Built-in LLM Chat and Generate using AI use provider-owned endpoints; use Custom provider for OpenAI-compatible hosts.',
       type: 'string',
       demandOption: false,
     })

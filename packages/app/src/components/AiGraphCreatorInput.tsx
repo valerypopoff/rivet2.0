@@ -1,168 +1,152 @@
 import { css } from '@emotion/react';
-import { useState, type FC, type KeyboardEvent } from 'react';
-import TextArea from '@atlaskit/textarea';
+import { useCallback, useEffect, useRef, useState, type FC } from 'react';
+import { atom, useAtom, useAtomValue } from 'jotai';
 import { useAiGraphBuilder } from '../hooks/useAiGraphBuilder';
-import Select from '@atlaskit/select';
-import Button from '@atlaskit/button';
-import { atom, useAtom } from 'jotai';
-import { modelSelectorOptions } from '../utils/modelSelectorOptions';
+import {
+  aiAssistCustomModelState,
+  aiAssistCustomProviderBaseURLState,
+  selectedAssistModelState,
+} from '../state/ai';
+import { resolveAiAssistModelSettings } from '../utils/aiAssistModelSettings.js';
 import { wrapAsync } from '../utils/errorHandling';
-import { useMultilineEditorFontSize } from '../hooks/useMultilineEditorFontSize.js';
+import { AiAssistPromptModal } from './AiAssistPromptModal.js';
 
-const styles = css`
-  position: fixed;
-  top: calc(var(--project-selector-height) + 40px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--grey-darker);
-  border-radius: 8px;
-  corner-shape: squircle;
-  @supports not (corner-shape: squircle) {
-    border-radius: 4px;
-  }
-  border: 1px solid var(--grey-dark);
-  z-index: 50;
-  gap: 8px;
-  box-shadow: 3px 1px 10px rgba(0, 0, 0, 0.5);
-  user-select: none;
-  width: 700px;
+const AI_GRAPH_CREATOR_CANCEL_REASON = 'AI graph creator canceled';
 
-  .input-area {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-    padding: 8px;
-
-    .model-selector {
-      min-width: 200px;
-    }
-  }
-
-  .feedback {
-    font-size: var(--ui-font-size-sm);
-    color: var(--grey-light);
-    padding: 8px;
-  }
+const feedbackStyles = css`
+  min-height: calc(120px * var(--ui-font-scale));
+  max-height: calc(240px * var(--ui-font-scale));
+  width: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  resize: vertical;
+  border: 1px solid var(--grey);
+  border-radius: var(--ui-button-radius);
+  background: var(--grey-dark);
+  color: var(--grey-light);
+  font-family: var(--font-family-monospace);
+  font-size: var(--ui-font-size-sm);
+  line-height: 1.35;
+  padding: calc(8px * var(--ui-font-scale));
+  white-space: pre-wrap;
 `;
 
 export const showAiGraphCreatorInputState = atom(false);
 
 export const AiGraphCreatorInput: FC = () => {
-  const [prompt, setPrompt] = useState<string>('');
-
-  const [running, setRunning] = useState(false);
   const [feedbackItems, setFeedbackItems] = useState<string[]>([]);
-  const [model, setModel] = useState<(typeof modelSelectorOptions)[number]>(modelSelectorOptions[1]);
-  const [record, setRecord] = useState(true);
-
+  const [prompt, setPrompt] = useState('');
+  const [running, setRunning] = useState(false);
   const [show, setShow] = useAtom(showAiGraphCreatorInputState);
-  const {
-    fontSize,
-    handleKeyDown: handleMultilineEditorFontSizeKeyDown,
-    handleWheel: handleMultilineEditorFontSizeWheel,
-  } = useMultilineEditorFontSize();
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const feedbackLogRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const [abortController, setAbortController] = useState<AbortController | null>(null);
+  const selectedAssistModel = useAtomValue(selectedAssistModelState);
+  const customAssistProviderBaseURL = useAtomValue(aiAssistCustomProviderBaseURLState);
+  const customAssistModel = useAtomValue(aiAssistCustomModelState);
+
+  const assistModel = resolveAiAssistModelSettings({
+    customModel: customAssistModel,
+    customProviderBaseURL: customAssistProviderBaseURL,
+    selectedModel: selectedAssistModel,
+  });
 
   const buildFromPrompt = useAiGraphBuilder({
-    record,
     onFeedback: (feedback) => {
-      setFeedbackItems((prev) => [...prev, feedback].slice(-6));
+      setFeedbackItems((prev) => [...prev, feedback]);
     },
   });
 
-  async function applyPrompt(prompt: string) {
-    setRunning(true);
-    const abortController = new AbortController();
-    setAbortController(abortController);
+  const abortGeneration = useCallback(() => {
+    abortControllerRef.current?.abort(AI_GRAPH_CREATOR_CANCEL_REASON);
+  }, []);
 
-    await buildFromPrompt(prompt, model.value, abortController.signal);
-    setFeedbackItems([]);
+  const closeModal = useCallback(() => {
+    abortGeneration();
     setShow(false);
-    setRunning(false);
-  }
+  }, [abortGeneration, setShow]);
 
-  const runPrompt = wrapAsync(async () => {
-    await applyPrompt(prompt);
-    setPrompt('');
-  }, 'Apply AI graph prompt');
+  useEffect(() => {
+    if (show) {
+      return undefined;
+    }
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (handleMultilineEditorFontSizeKeyDown(e.nativeEvent)) {
-      e.preventDefault();
-      e.stopPropagation();
+    abortGeneration();
+    setFeedbackItems([]);
+    return undefined;
+  }, [abortGeneration, show]);
+
+  useEffect(
+    () => () => {
+      abortGeneration();
+    },
+    [abortGeneration],
+  );
+
+  useEffect(() => {
+    const log = feedbackLogRef.current;
+    if (!log) {
       return;
     }
 
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      runPrompt();
+    log.scrollTop = log.scrollHeight;
+  }, [feedbackItems]);
+
+  const runPrompt = wrapAsync(async () => {
+    if (running || assistModel.missingConfiguration || !prompt.trim()) {
+      return;
     }
 
-    if (e.key === 'Escape') {
-      setShow(false);
-      setPrompt('');
-      setFeedbackItems([]);
-      setRunning(false);
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    setRunning(true);
+    setFeedbackItems([]);
+
+    try {
+      const didApply = await buildFromPrompt(prompt, assistModel, abortController.signal);
+
+      if (!abortController.signal.aborted && didApply) {
+        setPrompt('');
+        setFeedbackItems([]);
+        setShow(false);
+      }
+    } finally {
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null;
+        setRunning(false);
+      }
     }
-  };
+  }, 'Apply AI graph prompt');
 
   if (!show) {
     return null;
   }
 
   return (
-    <div css={styles}>
-      <div className="input-area">
-        <TextArea
-          isCompact
-          isRequired
-          isDisabled={running}
-          isInvalid={false}
-          isReadOnly={false}
-          placeholder="Enter instructions for creating or editing the current graph..."
-          value={prompt}
-          autoFocus
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onWheel={(e) => handleMultilineEditorFontSizeWheel(e.nativeEvent)}
-          style={{ fontSize }}
-        />
-        <div className="model-selector">
-          <Select
-            options={modelSelectorOptions}
-            value={model}
-            isDisabled={running}
-            onChange={(selectedOption) => setModel(selectedOption as (typeof modelSelectorOptions)[number])}
+    <AiAssistPromptModal
+      bodyExtra={
+        feedbackItems.length > 0 ? (
+          <textarea
+            aria-label="AI graph generation log"
+            css={feedbackStyles}
+            readOnly
+            ref={feedbackLogRef}
+            value={feedbackItems.join('\n')}
           />
-        </div>
-        <div className="go-button">
-          {running ? (
-            <Button
-              appearance="danger"
-              onClick={() => {
-                abortController?.abort();
-                setRunning(false);
-                setFeedbackItems([]);
-                setShow(false);
-                setPrompt('');
-                setAbortController(null);
-              }}
-            >
-              Stop
-            </Button>
-          ) : (
-            <Button isDisabled={running} onClick={runPrompt} appearance="primary">
-              Go
-            </Button>
-          )}
-        </div>
-      </div>
-      <div className="feedback">
-        {feedbackItems.map((item, index) => (
-          <div key={index}>{item}</div>
-        ))}
-      </div>
-    </div>
+        ) : null
+      }
+      generateDisabled={running || Boolean(assistModel.missingConfiguration) || !prompt.trim()}
+      isOpen={show}
+      missingConfiguration={assistModel.missingConfiguration}
+      modelDisplayName={assistModel.displayName}
+      onCancel={closeModal}
+      onClose={closeModal}
+      onGenerate={runPrompt}
+      onPromptChange={setPrompt}
+      placeholder="Describe the graph to create or edit..."
+      prompt={prompt}
+      title="Generate graph using AI"
+      working={running}
+    />
   );
 };

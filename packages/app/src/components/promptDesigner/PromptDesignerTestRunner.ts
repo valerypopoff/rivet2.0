@@ -17,6 +17,7 @@ import {
   type PortId,
   coerceType,
   coerceTypeOptional,
+  resolveProcessSettings,
 } from '@valerypopoff/rivet2-core';
 import { TauriNativeApi } from '../../model/native/TauriNativeApi.js';
 import { projectState } from '../../state/savedGraphs.js';
@@ -90,7 +91,7 @@ export function useRunPromptDesignerTestGroup(datasetProvider: DatasetProvider) 
       {
         nativeApi: new TauriNativeApi(),
         datasetProvider,
-        settings,
+        settings: resolveProcessSettings(settings),
         tokenizer: new GptTokenizerTokenizer(),
       },
       {

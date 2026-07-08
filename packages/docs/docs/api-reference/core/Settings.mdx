@@ -108,7 +108,7 @@ Optional OpenAI organization ID for OpenAI-backed calls.
 
 Type: `string`
 
-Optional endpoint override for legacy OpenAI-compatible Chat behavior.
+Optional explicit endpoint override for legacy OpenAI-compatible Chat behavior. Built-in LLM Chat and Generate using AI use provider-owned endpoints; use the Custom provider base URL for OpenAI-compatible hosts.
 
 ### chatNodeTimeout
 
@@ -138,12 +138,12 @@ const options: RunGraphOptions = {
   openAiApiKey: process.env.OPENAI_API_KEY,
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   googleApiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-  customAiApiKey: process.env.CUSTOM_AI_API_KEY,
+  customAiApiKey: process.env.CUSTOM_PROVIDER_API_KEY,
   cerebrasApiKey: process.env.CEREBRAS_API_KEY,
 };
 ```
 
-When using the Node package, unset shared LLM defaults are filled from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `CUSTOM_AI_API_KEY` or `CUSTOM_PROVIDER_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_ENDPOINT` when possible.
+When using the Node package, unset shared LLM defaults are filled from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, canonical `CUSTOM_PROVIDER_API_KEY`, legacy `CUSTOM_AI_API_KEY`, and `OPENAI_ORG_ID` when possible. `OPENAI_ENDPOINT` is not read automatically; pass `openAiEndpoint` explicitly only for legacy Chat compatibility.
 
 ## See Also
 

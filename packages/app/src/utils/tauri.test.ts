@@ -36,12 +36,11 @@ test('fillMissingSettingsFromEnvironmentVariables resolves independent env looku
 
   assert.deepEqual([...requestedEnvVars].sort(), [
     'ANTHROPIC_API_KEY',
-    'CUSTOM_AI_API_KEY',
     'CUSTOM_ENV',
+    'CUSTOM_PROVIDER_API_KEY',
     'EXTRA_ENV',
     'GOOGLE_GENERATIVE_AI_API_KEY',
     'OPENAI_API_KEY',
-    'OPENAI_ENDPOINT',
     'OPENAI_ORG_ID',
     'PLUGIN_KEY',
   ]);
@@ -54,8 +53,8 @@ test('fillMissingSettingsFromEnvironmentVariables resolves independent env looku
           ? 'anthropic-key'
           : envVarName === 'GOOGLE_GENERATIVE_AI_API_KEY'
             ? 'google-key'
-            : envVarName === 'CUSTOM_AI_API_KEY'
-              ? 'custom-ai-key'
+            : envVarName === 'CUSTOM_PROVIDER_API_KEY'
+              ? 'custom-provider-key'
               : envVarName === 'CUSTOM_ENV'
                 ? 'custom-value'
                 : envVarName === 'EXTRA_ENV'
@@ -70,7 +69,7 @@ test('fillMissingSettingsFromEnvironmentVariables resolves independent env looku
   assert.equal(settings.openAiKey, 'openai-key');
   assert.equal(settings.anthropicApiKey, 'anthropic-key');
   assert.equal(settings.googleApiKey, 'google-key');
-  assert.equal(settings.customAiApiKey, 'custom-ai-key');
+  assert.equal(settings.customAiApiKey, 'custom-provider-key');
   assert.equal(settings.openAiOrganization, '');
   assert.equal(settings.openAiEndpoint, '');
   assert.deepEqual(settings.pluginEnv, {
@@ -89,6 +88,18 @@ test('fillMissingSettingsFromEnvironmentVariables falls back to the default cust
   });
 
   assert.equal(settings.customAiApiKey, 'custom-provider-key');
+});
+
+test('fillMissingSettingsFromEnvironmentVariables preserves the legacy custom provider key env var fallback', async () => {
+  const settings = await fillMissingSettingsFromEnvironmentVariables({}, [], {
+    environmentProvider: {
+      async getEnvVar(name) {
+        return name === 'CUSTOM_AI_API_KEY' ? 'legacy-custom-key' : undefined;
+      },
+    },
+  });
+
+  assert.equal(settings.customAiApiKey, 'legacy-custom-key');
 });
 
 test('fillMissingSettingsFromEnvironmentVariables preserves legacy OpenAI app settings', async () => {

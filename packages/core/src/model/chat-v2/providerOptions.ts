@@ -2,7 +2,6 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { DEFAULT_CHAT_ENDPOINT } from '../../utils/defaults.js';
 import { cleanHeaders } from '../../utils/inputs.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { ChatV2Model, ChatV2Provider } from './chatV2Types.js';
@@ -113,7 +112,7 @@ type StructuredOutputCapableChatModel = ChatV2Model & {
 
 export type ResolveChatV2ProviderConfigContext = Pick<
   InternalProcessContext,
-  'getChatNodeEndpoint' | 'getPluginConfig' | 'settings'
+  'getPluginConfig' | 'settings'
 >;
 
 export type ResolvedChatV2ProviderConfig = {
@@ -137,18 +136,6 @@ function openAIEndpointToBaseURL(endpoint: string): string {
 
 export function openAICompatibleEndpointToBaseURL(endpoint: string): string {
   return openAIEndpointToBaseURL(endpoint);
-}
-
-function openAIBaseURLToEndpoint(baseURL: string): string {
-  const normalizedBaseURL = removeTrailingSlash(baseURL);
-
-  try {
-    const url = new URL(normalizedBaseURL);
-    url.pathname = `${url.pathname.replace(/\/$/, '')}/chat/completions`;
-    return url.toString();
-  } catch {
-    return `${normalizedBaseURL}/chat/completions`;
-  }
 }
 
 function parseBodyText(text: string): unknown {
@@ -217,7 +204,7 @@ function maybeCreateRequestBodyCapturingFetch(options: CreateChatV2ModelOptions)
 
 export async function resolveChatV2ProviderConfig(
   provider: ChatV2Provider,
-  modelId: string,
+  _modelId: string,
   context: ResolveChatV2ProviderConfigContext,
   options: CreateChatV2ModelOptions = {},
 ): Promise<ResolvedChatV2ProviderConfig> {
@@ -227,38 +214,21 @@ export async function resolveChatV2ProviderConfig(
   });
 
   switch (provider) {
-    case 'openai': {
-      const configuredBaseURL = options.baseURL
-        ? options.baseURL
-        : openAIEndpointToBaseURL(context.settings.openAiEndpoint || DEFAULT_CHAT_ENDPOINT);
-
-      if (context.getChatNodeEndpoint == null) {
-        return {
-          baseURL: configuredBaseURL,
-          headers: Object.keys(headers).length > 0 ? headers : undefined,
-        };
-      }
-
-      const resolved = await context.getChatNodeEndpoint(openAIBaseURLToEndpoint(configuredBaseURL), modelId);
-
+    case 'openai':
       return {
-        baseURL: openAIEndpointToBaseURL(resolved.endpoint),
-        headers: cleanHeaders({
-          ...headers,
-          ...resolved.headers,
-        }),
+        baseURL: undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
       };
-    }
 
     case 'anthropic':
       return {
-        baseURL: options.baseURL || context.getPluginConfig('anthropicApiEndpoint') || undefined,
+        baseURL: undefined,
         headers: Object.keys(headers).length > 0 ? headers : undefined,
       };
 
     case 'google':
       return {
-        baseURL: options.baseURL || undefined,
+        baseURL: undefined,
         headers: Object.keys(headers).length > 0 ? headers : undefined,
       };
 
@@ -288,7 +258,7 @@ export function createChatV2Model(
       const providerInstance = createOpenAI({
         apiKey: options.apiKey || context.settings.openAiApiKey || context.settings.openAiKey || undefined,
         organization: context.settings.openAiOrganization || undefined,
-        baseURL: options.baseURL || undefined,
+        baseURL: undefined,
         headers: options.headers,
         fetch: maybeCreateRequestBodyCapturingFetch(options),
       });
@@ -300,7 +270,7 @@ export function createChatV2Model(
       const providerInstance = createAnthropic({
         apiKey:
           options.apiKey || context.settings.anthropicApiKey || context.getPluginConfig('anthropicApiKey') || undefined,
-        baseURL: options.baseURL || context.getPluginConfig('anthropicApiEndpoint') || undefined,
+        baseURL: undefined,
         headers: options.headers,
         fetch: maybeCreateRequestBodyCapturingFetch(options),
       });
@@ -311,7 +281,7 @@ export function createChatV2Model(
     case 'google': {
       const providerInstance = createGoogleGenerativeAI({
         apiKey: options.apiKey || context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined,
-        baseURL: options.baseURL || undefined,
+        baseURL: undefined,
         headers: options.headers,
         fetch: maybeCreateRequestBodyCapturingFetch(options),
       });

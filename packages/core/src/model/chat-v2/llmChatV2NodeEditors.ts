@@ -486,14 +486,6 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
 function getProviderAdvancedEditors(): LLMChatV2EditorDefinition {
   return group('Provider Advanced', [
     {
-      type: 'string',
-      label: 'Base URL',
-      dataKey: 'baseURL',
-      useInputToggleDataKey: 'useBaseURLInput',
-      placeholder: 'Optional provider base URL override',
-      hideIf: (data) => data.provider === 'custom',
-    },
-    {
       type: 'keyValuePair',
       label: 'Headers',
       dataKey: 'headers',

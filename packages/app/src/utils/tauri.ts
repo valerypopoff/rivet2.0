@@ -1,4 +1,10 @@
-import { type RivetPlugin, type Settings, type StringPluginConfigurationSpec } from '@valerypopoff/rivet2-core';
+import {
+  resolveProcessSettings,
+  type RivetPlugin,
+  type RuntimeSettings,
+  type Settings,
+  type StringPluginConfigurationSpec,
+} from '@valerypopoff/rivet2-core';
 import { entries } from './typeSafety';
 import { invokeNative, isInTauri as detectTauri } from './platform/core.js';
 import type { EnvironmentProvider, PathPolicyProvider } from '../providers/ProvidersContext.js';
@@ -64,7 +70,7 @@ export async function fillMissingSettingsFromEnvironmentVariables(
   settings: Partial<Settings>,
   plugins: RivetPlugin[],
   optionsOrExtraEnvVarNames: string[] | { extraEnvVarNames?: string[]; environmentProvider?: EnvironmentProvider } = [],
-) {
+): Promise<RuntimeSettings> {
   const options = Array.isArray(optionsOrExtraEnvVarNames)
     ? { extraEnvVarNames: optionsOrExtraEnvVarNames }
     : optionsOrExtraEnvVarNames;
@@ -118,15 +124,13 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     googleApiKey,
     customAiApiKey,
     openAiOrganization,
-    openAiEndpoint,
     pluginEnvEntries,
   ] = await Promise.all([
       resolveSetting(settings.openAiApiKey || settings.openAiKey, 'OPENAI_API_KEY'),
       resolveSetting(settings.anthropicApiKey, 'ANTHROPIC_API_KEY'),
       resolveSetting(settings.googleApiKey, 'GOOGLE_GENERATIVE_AI_API_KEY'),
-      resolveSettingFromAnyEnv(settings.customAiApiKey, ['CUSTOM_AI_API_KEY', 'CUSTOM_PROVIDER_API_KEY']),
+      resolveSettingFromAnyEnv(settings.customAiApiKey, ['CUSTOM_PROVIDER_API_KEY', 'CUSTOM_AI_API_KEY']),
       resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
-      resolveSetting(settings.openAiEndpoint, 'OPENAI_ENDPOINT'),
       Promise.all(
         [...pluginEnvVarNames].map(async (envVarName) => [envVarName, await getProviderEnvVar(envVarName)] as const),
       ),
@@ -139,7 +143,7 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     googleApiKey: googleApiKey ?? '',
     customAiApiKey: customAiApiKey ?? '',
     openAiOrganization: openAiOrganization ?? '',
-    openAiEndpoint: openAiEndpoint ?? '',
+    openAiEndpoint: settings.openAiEndpoint ?? '',
     pluginSettings: settings.pluginSettings,
     pluginEnv: {},
   };
@@ -150,7 +154,7 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     }
   }
 
-  return fullSettings;
+  return resolveProcessSettings(fullSettings);
 }
 
 export async function allowDataFileNeighbor(projectFilePath: string): Promise<void> {

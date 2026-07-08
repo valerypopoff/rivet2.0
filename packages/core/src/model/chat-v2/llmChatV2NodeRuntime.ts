@@ -51,7 +51,7 @@ function resolveLLMChatV2BaseURL(data: LLMChatV2NodeData, inputs: Inputs): strin
   return data.provider === 'custom'
     ? getInputOrData(data, inputs, 'customProviderBaseURL', 'string', 'useCustomProviderBaseURLInput')?.trim() ||
         undefined
-    : getInputOrData(data, inputs, 'baseURL', 'string', 'useBaseURLInput')?.trim() || undefined;
+    : undefined;
 }
 
 export async function resolveLLMChatV2RuntimeConfig(params: {

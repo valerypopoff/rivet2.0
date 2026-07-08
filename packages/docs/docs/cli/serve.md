@@ -168,8 +168,8 @@ Endpoint aliases are validated when the server starts. Duplicate endpoint names,
 - `--openai-api-key`: The OpenAI API key to use for OpenAI-backed nodes. If omitted, Node execution falls back to `OPENAI_API_KEY` where supported.
 - `--anthropic-api-key`: The Anthropic API key to use for LLM Chat nodes in Configured key mode. If omitted, Node execution falls back to `ANTHROPIC_API_KEY`.
 - `--google-api-key`: The Google Generative AI API key to use for LLM Chat nodes in Configured key mode. If omitted, Node execution falls back to `GOOGLE_GENERATIVE_AI_API_KEY`.
-- `--custom-ai-api-key`: The generic custom-provider API key to use for LLM Chat custom providers in Configured key mode. If omitted, Node execution falls back to `CUSTOM_AI_API_KEY`, `CUSTOM_PROVIDER_API_KEY`, or the node-specific API key environment variable.
-- `--openai-endpoint`: Endpoint override for legacy OpenAI-compatible Chat behavior. If omitted, Node execution falls back to `OPENAI_ENDPOINT` where supported.
+- `--custom-ai-api-key`: The generic custom-provider API key to use for LLM Chat custom providers in Configured key mode. If omitted, Node execution falls back to `CUSTOM_PROVIDER_API_KEY`, legacy `CUSTOM_AI_API_KEY`, or the node-specific API key environment variable.
+- `--openai-endpoint`: Explicit endpoint override for legacy OpenAI-compatible Chat behavior. Built-in LLM Chat and Generate using AI use provider-owned endpoints; use Custom provider settings for OpenAI-compatible hosts.
 - `--openai-organization`: OpenAI organization ID. If omitted, the CLI option description uses `OPENAI_ORGANIZATION`; the Node runtime also supports the current `OPENAI_ORG_ID` default in direct package usage.
 
 For LLM Chat, the node's API key source controls where the key comes from. If a graph connects the LLM Chat API Key input port, pass that key through the graph inputs rather than through these configured-key CLI options.

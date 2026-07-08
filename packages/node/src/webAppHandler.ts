@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import {
   type DataValue,
+  type LooseDataValue,
   type Project,
   RIVET_WEB_APP_DOCUMENT_CSS,
   RIVET_WEB_APP_RENDERER_CSS,
@@ -222,13 +223,19 @@ export async function runRivetWebAppAction(
     await callActionHook(onActionStart, actionContext);
 
     const processorOptions = await resolveProcessorOptions(createProcessorOptions, actionContext);
+    const defaultContext: Record<string, LooseDataValue> = {};
+    const context = (processorOptions.context ??
+      (resolveContext ? await resolveContext(actionRequest) : defaultContext)) as Record<string, LooseDataValue>;
+    const inputs = (processorOptions.inputs ??
+      Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]))) as Record<
+      string,
+      LooseDataValue
+    >;
     const processor = createProcessor(project, {
       ...processorOptions,
-      context: processorOptions.context ?? (resolveContext ? await resolveContext(actionRequest) : {}),
+      context,
       graph: component.action.graphId,
-      inputs:
-        processorOptions.inputs ??
-        Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)])),
+      inputs,
     });
     const outputs = await processor.run();
     const result = {
