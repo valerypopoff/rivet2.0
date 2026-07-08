@@ -167,22 +167,64 @@ const RivetWebAppComponent: FC<{
           {isRunning ? 'Running...' : component.label}
         </button>
       );
-    case 'output':
+    case 'output': {
+      const renderedOutputValue = renderOutputValue(state[component.stateKey], outputRenderMode ?? 'text');
+      const canCopyOutput = hasRenderedOutputValue(state, component.stateKey);
+
       return (
         <section className="rivet-web-app-card rivet-web-app-output">
           <div className="rivet-web-app-output-title">{component.label || component.stateKey}</div>
+          {canCopyOutput && (
+            <button
+              type="button"
+              className="rivet-web-app-output-copy-button"
+              title="Copy output"
+              aria-label="Copy output"
+              onClick={(event) => {
+                event.stopPropagation();
+                void copyWebAppOutputValue(renderedOutputValue);
+              }}
+            />
+          )}
           {outputRenderMode === 'markdown' ? (
             <div
               className="rivet-web-app-output-markdown markdown-body rivet-markdown-output"
               dangerouslySetInnerHTML={markdownHtml}
             />
           ) : (
-            <pre>{renderOutputValue(state[component.stateKey], outputRenderMode ?? 'text')}</pre>
+            <pre>{renderedOutputValue}</pre>
           )}
         </section>
       );
+    }
   }
 };
+
+function hasRenderedOutputValue(state: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(state, key) && state[key] !== undefined;
+}
+
+async function copyWebAppOutputValue(value: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return;
+  } catch {
+    // Fall back for preview hosts that do not expose the clipboard API.
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = value;
+  textArea.style.position = 'fixed';
+  textArea.style.opacity = '0';
+  document.body.append(textArea);
+  textArea.select();
+
+  try {
+    document.execCommand('copy');
+  } finally {
+    textArea.remove();
+  }
+}
 
 function renderOutputValue(value: unknown, renderAs: 'text' | 'json' | 'markdown'): string {
   if (renderAs === 'json') {

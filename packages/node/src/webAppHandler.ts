@@ -518,6 +518,30 @@ const WEB_APP_CLIENT_JS = String.raw`
     return typeof value === 'string' ? value : value == null ? '' : stringifyOutputValue(value);
   };
 
+  const hasRenderedOutputValue = (key) => Object.prototype.hasOwnProperty.call(state, key) && state[key] !== undefined;
+
+  const copyText = async (value) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall back for hosts that do not expose the clipboard API.
+    }
+
+    const textArea = document.createElement('textarea');
+    textArea.value = value;
+    textArea.style.position = 'fixed';
+    textArea.style.opacity = '0';
+    document.body.append(textArea);
+    textArea.select();
+
+    try {
+      document.execCommand('copy');
+    } finally {
+      textArea.remove();
+    }
+  };
+
   async function runAction(component) {
     pending = true;
     error = '';
@@ -602,14 +626,31 @@ const WEB_APP_CLIENT_JS = String.raw`
     }
     if (component.type === 'output') {
       const value = state[component.stateKey];
+      const renderedValue = renderValue(value, component.renderAs || 'text');
       const outputBody = component.renderAs === 'markdown'
-        ? renderMarkdownElement(renderValue(value, 'markdown'), 'rivet-web-app-output-markdown markdown-body rivet-markdown-output')
-        : el('pre', { text: renderValue(value, component.renderAs || 'text') });
+        ? renderMarkdownElement(renderedValue, 'rivet-web-app-output-markdown markdown-body rivet-markdown-output')
+        : el('pre', { text: renderedValue });
 
-      return el('section', { className: 'rivet-web-app-card rivet-web-app-output' }, [
+      const children = [
         el('div', { className: 'rivet-web-app-output-title', text: component.label || component.stateKey }),
-        outputBody,
-      ]);
+      ];
+
+      if (hasRenderedOutputValue(component.stateKey)) {
+        children.push(el('button', {
+          className: 'rivet-web-app-output-copy-button',
+          type: 'button',
+          title: 'Copy output',
+          'aria-label': 'Copy output',
+          onClick: (event) => {
+            event.stopPropagation();
+            void copyText(renderedValue);
+          },
+        }));
+      }
+
+      children.push(outputBody);
+
+      return el('section', { className: 'rivet-web-app-card rivet-web-app-output' }, children);
     }
     return el('div', { className: 'rivet-web-app-card', text: 'Unsupported component' });
   }

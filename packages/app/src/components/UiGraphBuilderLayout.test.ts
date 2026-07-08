@@ -73,6 +73,28 @@ test('web app output renderers keep missing output state blank', () => {
   assert.doesNotMatch(nodeHandlerSource, /JSON\.stringify\(value \?\? null/);
 });
 
+test('web app output renderers expose copy actions for populated outputs', () => {
+  const rendererSource = readFileSync(join(componentsDir, 'rivetWebApps', 'RivetWebAppRenderer.tsx'), 'utf8');
+  const nodeHandlerSource = readFileSync(join(rootDir, 'packages', 'node', 'src', 'webAppHandler.ts'), 'utf8');
+  const sharedStyles = readFileSync(
+    join(rootDir, 'packages', 'core', 'src', 'model', 'UiGraphRendererStyles.ts'),
+    'utf8',
+  );
+
+  assert.match(rendererSource, /hasRenderedOutputValue\(state, component\.stateKey\)/);
+  assert.match(rendererSource, /copyWebAppOutputValue\(renderedOutputValue\)/);
+  assert.match(rendererSource, /className="rivet-web-app-output-copy-button"/);
+  assert.match(rendererSource, /title="Copy output"/);
+  assert.match(rendererSource, /aria-label="Copy output"/);
+  assert.match(nodeHandlerSource, /hasRenderedOutputValue\(component\.stateKey\)/);
+  assert.match(nodeHandlerSource, /copyText\(renderedValue\)/);
+  assert.match(nodeHandlerSource, /className: 'rivet-web-app-output-copy-button'/);
+  assert.match(sharedStyles, /\.rivet-web-app-output \{[\s\S]*position: relative;/);
+  assert.match(sharedStyles, /\.rivet-web-app-output-title \{[\s\S]*padding-right: 32px;/);
+  assert.match(sharedStyles, /\.rivet-web-app-output-copy-button \{[\s\S]*position: absolute;/);
+  assert.match(sharedStyles, /\.rivet-web-app-output-copy-button::before,\s+\.rivet-web-app-output-copy-button::after/);
+});
+
 test('web app desktop preview action is host-configurable', () => {
   const builderSource = readFileSync(join(componentsDir, 'UiGraphBuilder.tsx'), 'utf8');
   const hostUiConfigSource = readFileSync(

@@ -101,11 +101,55 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 .rivet-web-app-output {
   display: grid;
   gap: 8px;
+  position: relative;
 }
 
 .rivet-web-app-output-title {
   color: var(--rivet-web-app-output-title);
   font-weight: 700;
+  padding-right: 32px;
+}
+
+.rivet-web-app-output-copy-button {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--rivet-web-app-foreground) 68%, transparent);
+  cursor: pointer;
+  padding: 0;
+}
+
+.rivet-web-app-output-copy-button::before,
+.rivet-web-app-output-copy-button::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.rivet-web-app-output-copy-button::before {
+  top: 5px;
+  left: 8px;
+}
+
+.rivet-web-app-output-copy-button::after {
+  top: 8px;
+  left: 5px;
+  background: var(--rivet-web-app-card-background);
+}
+
+.rivet-web-app-output-copy-button:hover,
+.rivet-web-app-output-copy-button:focus-visible {
+  color: var(--primary, #ff9e2c);
+  outline: none;
+  background: color-mix(in srgb, var(--rivet-web-app-foreground) 8%, transparent);
 }
 
 .rivet-web-app-output pre {
