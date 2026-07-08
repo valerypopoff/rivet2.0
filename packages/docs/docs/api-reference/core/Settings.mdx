@@ -4,7 +4,7 @@
 
 `Settings` contains runtime and editor settings that can be passed into graph execution. It is intentionally optional-heavy: callers only provide the values needed by the nodes and plugins they run.
 
-`RunGraphOptions` extends `Settings`, so these fields are passed at the top level of a graph run options object.
+`RunGraphOptions` extends `Settings`, so these fields are passed at the top level of a graph run options object. `RunGraphOptions` also allows extra top-level fields for advanced runtime cases such as named custom-provider API keys.
 
 ## Definition
 
@@ -60,7 +60,7 @@ Settings owned by plugins.
 
 Type: `Record<string, string | undefined>`
 
-Environment-like values made available to plugins. In `@valerypopoff/rivet2-node`, if `pluginEnv` is unset, Rivet fills plugin-declared environment values from `process.env`.
+Environment-like values made available to plugins. In `@valerypopoff/rivet2-node`, if `pluginEnv` is unset, Rivet fills plugin-declared environment values from `process.env`. Custom-provider LLM Chat nodes can still read `pluginEnv[Alternative API key env var]` as an environment-style fallback, but new programmatic integrations should use the named top-level run option configured in `Alternative programmatic key name`.
 
 ### openAiApiKey
 
@@ -90,7 +90,13 @@ Shared Google Generative AI key used by LLM Chat when its provider is Google and
 
 Type: `string`
 
-Shared custom-provider key used by LLM Chat custom providers when API key source is Configured key. If unset, custom providers still fall back to the node's `API key env var name` through `pluginEnv` or `process.env`.
+Shared custom-provider key used by LLM Chat custom providers when API key source is Configured key. Custom-provider nodes fall back to this shared key when they do not have a matching named top-level run option or an env-var-specific key.
+
+### Named custom-provider keys
+
+Type: `string`
+
+Custom-provider LLM Chat nodes can set `Alternative programmatic key name` to a top-level run option name such as `cerebrasApiKey`. Programmatic runs can then pass `{ cerebrasApiKey: '...' }`. `RunGraphOptions` allows these additional top-level keys for named custom-provider credentials.
 
 ### openAiOrganization
 
@@ -133,6 +139,7 @@ const options: RunGraphOptions = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   googleApiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
   customAiApiKey: process.env.CUSTOM_AI_API_KEY,
+  cerebrasApiKey: process.env.CEREBRAS_API_KEY,
 };
 ```
 

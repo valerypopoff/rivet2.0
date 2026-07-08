@@ -31,3 +31,8 @@ export interface Settings<PluginSettings = Record<string, Record<string, unknown
 
   throttleChatNode?: number;
 }
+
+export type RuntimeSettings<PluginSettings = Record<string, Record<string, unknown>>> = Required<
+  Settings<PluginSettings>
+> &
+  Record<string, unknown>;

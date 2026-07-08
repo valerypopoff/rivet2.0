@@ -58,6 +58,28 @@ async function getResolvedModelOptions(data: LLMChatV2NodeData, context: RivetUI
     : [{ value: data.model, label: `${data.model} (Current)` }, ...modelOptions];
 }
 
+function getApiKeySourceHelperMessage(data: LLMChatV2NodeData): string {
+  if (data.apiKeySource === 'input') {
+    return 'Uses the API Key input port instead of a configured provider key.';
+  }
+
+  switch (data.provider) {
+    case 'openai':
+      return 'Configured key uses Settings > LLM > OpenAI API Key in the Rivet editor, with OPENAI_API_KEY as a desktop/Node fallback. Programmatic runs can pass openAiApiKey or set OPENAI_API_KEY.';
+    case 'anthropic':
+      return 'Configured key uses Settings > LLM > Anthropic API Key in the Rivet editor, with ANTHROPIC_API_KEY as a desktop/Node fallback. Programmatic runs can pass anthropicApiKey or set ANTHROPIC_API_KEY.';
+    case 'google':
+      return 'Configured key uses Settings > LLM > Google API Key in the Rivet editor, with GOOGLE_GENERATIVE_AI_API_KEY as a desktop/Node fallback. Programmatic runs can pass googleApiKey or set GOOGLE_GENERATIVE_AI_API_KEY.';
+    case 'custom': {
+      const programmaticName = data.customProviderApiKeyProgrammaticName?.trim();
+      const envVarName = data.customProviderApiKeyEnvVarName?.trim() || 'CUSTOM_PROVIDER_API_KEY';
+      return programmaticName
+        ? `Configured key checks ${programmaticName}, then ${envVarName} env var, then Settings > LLM > Custom provider API key.`
+        : `Configured key checks ${envVarName} env var, then Settings > LLM > Custom provider API key. Programmatic runs can pass the shared customAiApiKey.`;
+    }
+  }
+}
+
 function getModelEditors(modelOptions: { value: string; label: string }[]): LLMChatV2EditorDefinition {
   return group(
     'Model',
@@ -95,14 +117,23 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
           { value: 'environment', label: 'Configured key' },
           { value: 'input', label: 'Input port' },
         ],
-        helperMessage: 'Whether to use the configured provider API key or get one through an input port.',
+        helperMessage: getApiKeySourceHelperMessage,
       },
       {
         type: 'string',
-        label: 'API key env var name',
+        label: 'Alternative programmatic key name',
+        dataKey: 'customProviderApiKeyProgrammaticName',
+        placeholder: 'cerebrasApiKey',
+        helperMessage:
+          'If set, programmatic runs read this named run option instead of the shared customAiApiKey.',
+        hideIf: (data) => data.provider !== 'custom' || data.apiKeySource === 'input',
+      },
+      {
+        type: 'string',
+        label: 'Alternative API key env var',
         dataKey: 'customProviderApiKeyEnvVarName',
         placeholder: 'CUSTOM_PROVIDER_API_KEY',
-        helperMessage: 'Only used for Custom provider when API key source is Configured key.',
+        helperMessage: 'If set, this env var is used instead of CUSTOM_PROVIDER_API_KEY.',
         hideIf: (data) => data.provider !== 'custom' || data.apiKeySource === 'input',
       },
     ],

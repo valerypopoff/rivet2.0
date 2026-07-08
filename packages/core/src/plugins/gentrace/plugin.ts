@@ -14,6 +14,7 @@ import { ExecutionRecorder } from '../../recording/ExecutionRecorder.js';
 import { inferType } from '../../utils/coerceType.js';
 // eslint-disable-next-line import/no-cycle -- Local Gentrace execution intentionally depends on GraphProcessor.
 import { GraphProcessor } from '../../model/GraphProcessor.js';
+import { resolveProcessSettings } from '../../api/processSettings.js';
 
 const apiKeyConfigSpec: SecretPluginConfigurationSpec = {
   type: 'secret',
@@ -76,7 +77,7 @@ export const runGentraceTests = async (
     const runContextValues = cloneDeep(contextValues);
     await processor.processGraph(
       {
-        settings,
+        settings: resolveProcessSettings(settings),
         nativeApi,
         tokenizer: new GptTokenizerTokenizer(),
       },

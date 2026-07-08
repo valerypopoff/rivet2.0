@@ -94,6 +94,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.title, 'LLM Chat');
     assert.equal(node.data.provider, 'openai');
     assert.equal(node.data.apiKeySource, 'environment');
+    assert.equal(node.data.customProviderApiKeyProgrammaticName, '');
     assert.equal(node.data.customProviderApiKeyEnvVarName, 'CUSTOM_PROVIDER_API_KEY');
     assert.equal(node.data.customProviderBaseURL, '');
     assert.equal(node.data.useCustomProviderBaseURLInput, false);
@@ -162,6 +163,19 @@ describe('LLMChatV2NodeImpl', () => {
       { value: 'environment', label: 'Configured key' },
       { value: 'input', label: 'Input port' },
     ]);
+    assert.equal(typeof apiKeySourceEditor?.helperMessage, 'function');
+    assert.equal(
+      apiKeySourceEditor.helperMessage(defaultNode.data),
+      'Configured key uses Settings > LLM > OpenAI API Key in the Rivet editor, with OPENAI_API_KEY as a desktop/Node fallback. Programmatic runs can pass openAiApiKey or set OPENAI_API_KEY.',
+    );
+    assert.equal(
+      apiKeySourceEditor.helperMessage(inputNode.data),
+      'Uses the API Key input port instead of a configured provider key.',
+    );
+    assert.equal(
+      apiKeySourceEditor.helperMessage(createNode({ provider: 'anthropic' }).data),
+      'Configured key uses Settings > LLM > Anthropic API Key in the Rivet editor, with ANTHROPIC_API_KEY as a desktop/Node fallback. Programmatic runs can pass anthropicApiKey or set ANTHROPIC_API_KEY.',
+    );
   });
 
   it('exposes Custom provider as an OpenAI-compatible provider mode', async () => {
@@ -178,6 +192,9 @@ describe('LLMChatV2NodeImpl', () => {
     const modelGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Model') as any;
     const providerEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'provider');
     const modelEditor = modelGroup.editors.find((editor: any) => editor.customEditorId === 'LLMChatV2ModelCatalog');
+    const programmaticKeyEditor = modelGroup.editors.find(
+      (editor: any) => editor.dataKey === 'customProviderApiKeyProgrammaticName',
+    );
     const envVarEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'customProviderApiKeyEnvVarName');
     const customBaseUrlEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'customProviderBaseURL');
     const providerAdvancedGroup = editors.find(
@@ -190,15 +207,44 @@ describe('LLMChatV2NodeImpl', () => {
 
     assert.deepEqual(
       modelGroup.editors.map((editor: any) => editor.dataKey ?? editor.customEditorId),
-      ['provider', 'customProviderBaseURL', 'LLMChatV2ModelCatalog', 'apiKeySource', 'customProviderApiKeyEnvVarName'],
+      [
+        'provider',
+        'customProviderBaseURL',
+        'LLMChatV2ModelCatalog',
+        'apiKeySource',
+        'customProviderApiKeyProgrammaticName',
+        'customProviderApiKeyEnvVarName',
+      ],
     );
     assert.ok(
       providerEditor.options.some((option: any) => option.value === 'custom' && option.label === 'Custom provider'),
     );
     assert.deepEqual(modelEditor.data.modelOptions, [{ value: 'llama-custom', label: 'llama-custom' }]);
-    assert.equal(envVarEditor.label, 'API key env var name');
+    assert.equal(programmaticKeyEditor.label, 'Alternative programmatic key name');
+    assert.equal(
+      programmaticKeyEditor.helperMessage,
+      'If set, programmatic runs read this named run option instead of the shared customAiApiKey.',
+    );
+    assert.equal(programmaticKeyEditor.hideIf({ provider: 'custom', apiKeySource: 'environment' }), false);
+    assert.equal(programmaticKeyEditor.hideIf({ provider: 'custom', apiKeySource: 'input' }), true);
+    assert.equal(envVarEditor.label, 'Alternative API key env var');
+    assert.equal(envVarEditor.helperMessage, 'If set, this env var is used instead of CUSTOM_PROVIDER_API_KEY.');
     assert.equal(envVarEditor.hideIf({ provider: 'custom', apiKeySource: 'environment' }), false);
     assert.equal(envVarEditor.hideIf({ provider: 'custom', apiKeySource: 'input' }), true);
+    assert.equal(
+      modelGroup.editors
+        .find((editor: any) => editor.dataKey === 'apiKeySource')
+        .helperMessage({
+          ...node.data,
+          customProviderApiKeyProgrammaticName: 'makoraApiKey',
+          customProviderApiKeyEnvVarName: 'MAKORA_API_KEY',
+        }),
+      'Configured key checks makoraApiKey, then MAKORA_API_KEY env var, then Settings > LLM > Custom provider API key.',
+    );
+    assert.equal(
+      modelGroup.editors.find((editor: any) => editor.dataKey === 'apiKeySource').helperMessage(node.data),
+      'Configured key checks CUSTOM_PROVIDER_API_KEY env var, then Settings > LLM > Custom provider API key. Programmatic runs can pass the shared customAiApiKey.',
+    );
     assert.equal(customBaseUrlEditor.label, 'Provider base URL');
     assert.equal(customBaseUrlEditor.useInputToggleDataKey, 'useCustomProviderBaseURLInput');
     assert.equal(customBaseUrlEditor.hideIf({ provider: 'custom' }), false);
@@ -1266,7 +1312,34 @@ describe('LLMChatV2NodeImpl', () => {
     );
   });
 
-  it('resolves Custom provider configured key from node env vars before shared LLM settings', () => {
+  it('resolves Custom provider configured key from programmatic key names before env vars and shared settings', () => {
+    assert.equal(
+      resolveLLMChatV2ApiKey(
+        createNode({
+          provider: 'custom',
+          customProviderApiKeyProgrammaticName: 'cerebrasApiKey',
+          customProviderApiKeyEnvVarName: 'CEREBRAS_API_KEY',
+        }).data,
+        {},
+        createRuntimeContext({
+          settings: {
+            openAiKey: '',
+            openAiEndpoint: '',
+            openAiOrganization: '',
+            chatNodeHeaders: {},
+            customAiApiKey: 'configured-custom-key',
+            cerebrasApiKey: 'programmatic-specific-key',
+            pluginEnv: {
+              CEREBRAS_API_KEY: 'env-specific-key',
+            },
+          },
+        }),
+      ),
+      'programmatic-specific-key',
+    );
+  });
+
+  it('falls back to Custom provider API key env vars before shared LLM settings', () => {
     assert.equal(
       resolveLLMChatV2ApiKey(
         createNode({

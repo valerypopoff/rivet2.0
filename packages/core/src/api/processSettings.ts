@@ -1,25 +1,23 @@
-import type { Settings } from '../model/Settings.js';
+import type { RuntimeSettings, Settings } from '../model/Settings.js';
 import { DEFAULT_CHAT_NODE_TIMEOUT } from '../utils/defaults.js';
 
-type ProcessSettingsFallbacks = Pick<
-  Settings,
-  | 'openAiApiKey'
-  | 'openAiKey'
-  | 'anthropicApiKey'
-  | 'googleApiKey'
-  | 'customAiApiKey'
-  | 'openAiOrganization'
-  | 'openAiEndpoint'
-  | 'pluginEnv'
->;
+function definedRuntimeSettings(settings: Settings): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(settings).filter(([, value]) => value !== undefined && value !== ''),
+  );
+}
 
-export function resolveProcessSettings(
-  settings: Settings = {},
-  fallbacks: Partial<ProcessSettingsFallbacks> = {},
-): Required<Settings> {
+export function resolveProcessSettings(settings?: Settings, fallbacks?: Partial<RuntimeSettings>): RuntimeSettings;
+export function resolveProcessSettings<T extends Record<string, unknown>>(
+  settings?: Settings & T,
+  fallbacks?: Partial<RuntimeSettings>,
+): RuntimeSettings & T;
+export function resolveProcessSettings(settings: Settings = {}, fallbacks: Partial<RuntimeSettings> = {}): RuntimeSettings {
   const openAiApiKey = settings.openAiApiKey || settings.openAiKey || fallbacks.openAiApiKey || fallbacks.openAiKey || '';
 
   return {
+    ...fallbacks,
+    ...definedRuntimeSettings(settings),
     openAiApiKey,
     openAiKey: openAiApiKey,
     anthropicApiKey: settings.anthropicApiKey || fallbacks.anthropicApiKey || '',

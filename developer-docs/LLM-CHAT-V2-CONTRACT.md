@@ -40,8 +40,15 @@ paths and should not be used as the primary target for new provider refactors.
 - `maxTokens` remains both the persisted field name and the input id even when a
   provider or SDK calls it `maxOutputTokens`.
 - Credential resolution must preserve the current priority: explicit input
-  credentials when configured, then configured settings/plugin credentials, then
-  custom-provider env lookup.
+  credentials when configured; built-in providers use configured settings with
+  legacy plugin/env fallback; custom providers use their named top-level runtime
+  setting, then their node-specific env var, then the shared custom-provider
+  setting.
+- The `API key source` helper text in `llmChatV2NodeEditors.ts` is part of the
+  user-facing credential contract: `Configured key` must explain the matching
+  Settings > LLM key plus the programmatic runtime setting or env fallback for
+  the selected provider, while `Input port` must explain that the `API Key` port
+  is used instead.
 - Undefined SDK request fields should be omitted rather than serialized as
   explicit `undefined` provider options.
 - New LLM Chat nodes leave optional generation fields such as `topP` unset

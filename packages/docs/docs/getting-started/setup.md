@@ -18,7 +18,7 @@ In the `LLM` page in Settings, you can set OpenAI, Anthropic, Google, and custom
 
 ### LLM Providers
 
-For new chat workflows, prefer [LLM Chat](../node-reference/llm-chat.mdx). It supports OpenAI, Anthropic, Google, and custom OpenAI-compatible providers from one node. Each node can either use a configured provider API key from Settings > LLM or expose an `API Key` input port. Custom providers first use the configured custom-provider key, then the environment variable named by the node's `API key env var name` setting, or an `API Key` input port. They have their own `Provider base URL` field, separate from the advanced base URL override for built-in providers.
+For new chat workflows, prefer [LLM Chat](../node-reference/llm-chat.mdx). It supports OpenAI, Anthropic, Google, and custom OpenAI-compatible providers from one node. Each node can either use a configured provider API key from Settings > LLM or expose an `API Key` input port. Custom providers can use an `API Key` input port, a node-specific alternative programmatic key name passed as a top-level run option, the environment variable named by the node's `Alternative API key env var` setting, or the shared custom-provider key from Settings > LLM. They have their own `Provider base URL` field, separate from the advanced base URL override for built-in providers.
 
 ### Plugin Settings
 

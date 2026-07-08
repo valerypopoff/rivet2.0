@@ -114,6 +114,7 @@ Let's break down the important fields:
 - `registry`: Use this when running custom plugin nodes.
 - `remoteDebugger`: Node-only. Attach a debugger server so the Rivet app can inspect the run.
 - `openAiApiKey` / `anthropicApiKey` / `googleApiKey` / `customAiApiKey`: Shared provider keys used by LLM Chat when API key source is Configured key. `openAiKey` remains a legacy alias for `openAiApiKey`.
+- Named custom-provider keys: If a custom-provider LLM Chat node sets `Alternative programmatic key name`, pass a top-level run option with that exact name.
 - `openAiOrganization` / `openAiEndpoint`: OpenAI organization and OpenAI-compatible endpoint defaults used by OpenAI-backed paths.
 - `pluginEnv`: Environment-like values for plugins. If omitted in `@valerypopoff/rivet2-node`, plugin-declared environment variables are read from `process.env`.
 
@@ -149,11 +150,13 @@ await runGraphInFile('./myProject.rivet', {
   anthropicApiKey: 'my-anthropic-key',
   googleApiKey: 'my-google-key',
   customAiApiKey: 'my-custom-provider-key',
+  cerebrasApiKey: 'my-cerebras-key',
   openAiOrganization: 'my-organization',
 });
 ```
 
 If the graph uses LLM Chat with `API key source` set to `Input port`, pass the key through the graph input connected to that node's API Key port instead of relying on settings.
+For multiple custom providers in one project, set each custom-provider LLM Chat node's `Alternative programmatic key name`, then pass matching top-level run options.
 
 ## Reusing a Loaded Graph
 

@@ -22,6 +22,11 @@ export type LLMChatV2GenerationParameters = Pick<
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined };
 type JsonObject = { [key: string]: JsonValue | undefined };
 
+function getStringSetting(settings: InternalProcessContext['settings'], key: string): string | undefined {
+  const value = settings[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
 export function resolveLLMChatV2Headers(data: LLMChatV2NodeData, inputs: Inputs): Record<string, string> | undefined {
   const resolvedHeaders =
     data.useHeadersInput && inputs['headers' as PortId] != null
@@ -44,13 +49,25 @@ function resolveConfiguredProviderApiKey(
     case 'google':
       return context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined;
     case 'custom': {
+      const programmaticName = data.customProviderApiKeyProgrammaticName?.trim();
       const envVarName = data.customProviderApiKeyEnvVarName?.trim();
+
+      if (programmaticName) {
+        const customAiApiKey = getStringSetting(context.settings, programmaticName);
+        if (customAiApiKey) {
+          return customAiApiKey;
+        }
+      }
 
       if (envVarName) {
         const pluginEnvValue = context.settings.pluginEnv?.[envVarName];
+        if (pluginEnvValue) {
+          return pluginEnvValue;
+        }
+
         const processEnv = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } })
           .process?.env;
-        const apiKey = pluginEnvValue || processEnv?.[envVarName];
+        const apiKey = processEnv?.[envVarName];
 
         if (apiKey) {
           return apiKey;
@@ -61,9 +78,17 @@ function resolveConfiguredProviderApiKey(
         return context.settings.customAiApiKey;
       }
 
-      if (envVarName) {
+      const missingKeys = [
+        programmaticName ? `programmatic key ${programmaticName}` : undefined,
+        envVarName ? `env var ${envVarName}` : undefined,
+      ].filter(Boolean);
+
+      if (missingKeys.length > 0) {
+        const programmaticHint = programmaticName
+          ? `pass ${programmaticName}`
+          : 'set Alternative programmatic key name and pass that named run option';
         throw new Error(
-          `Custom provider API key env var ${envVarName} is not set. Use Input port, configure Settings > LLM, or configure the environment variable.`,
+          `Custom provider API key ${missingKeys.join(' and ')} is not set. Use Input port, configure Settings > LLM, ${programmaticHint}, or configure the environment variable.`,
         );
       }
 

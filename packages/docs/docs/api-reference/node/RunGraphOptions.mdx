@@ -208,7 +208,7 @@ Graph processor event handlers. Event names are PascalCase and prefixed with `on
 
 The optional properties of [Settings](../core/Settings) are merged into `RunGraphOptions`. Node runs fill unset shared LLM and plugin environment defaults from `process.env` where possible.
 
-For LLM keys, new programmatic code should use `openAiApiKey`, `anthropicApiKey`, `googleApiKey`, and `customAiApiKey`. The older `openAiKey` option remains supported as an alias for `openAiApiKey`.
+For LLM keys, new programmatic code should use `openAiApiKey`, `anthropicApiKey`, `googleApiKey`, and `customAiApiKey`. When different custom-provider LLM Chat nodes need different named keys, set each node's `Alternative programmatic key name` and pass a matching top-level run option, such as `cerebrasApiKey`. The older `openAiKey` option remains supported as an alias for `openAiApiKey`.
 
 ## Node Package Defaults
 
