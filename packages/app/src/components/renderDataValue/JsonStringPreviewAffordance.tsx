@@ -1,5 +1,6 @@
 import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
 import EditIcon from 'majesticons/line/edit-pen-2-line.svg?react';
+import Button from '@atlaskit/button';
 import { Global, css } from '@emotion/react';
 import { useAtom } from 'jotai';
 import {
@@ -20,10 +21,12 @@ import { copyToClipboard } from '../../utils/copyToClipboard.js';
 import {
   DEFAULT_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
   DEFAULT_JSON_STRING_PREVIEW_POPOVER_WIDTH,
+  type JsonStringEditModalSize,
   MAX_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
   MAX_JSON_STRING_PREVIEW_POPOVER_WIDTH,
   MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
   MIN_JSON_STRING_PREVIEW_POPOVER_WIDTH,
+  jsonStringEditModalSizeState,
   jsonStringPreviewPopoverMaxHeightState,
   jsonStringPreviewPopoverWidthState,
 } from '../../state/ui.js';
@@ -38,6 +41,10 @@ const POPOVER_GAP = 8;
 const VIEWPORT_PADDING = 12;
 const MIN_VISIBLE_POPOVER_BODY_HEIGHT = 48;
 const POPOVER_RESIZE_KEYBOARD_STEP = 20;
+const EDIT_MODAL_VIEWPORT_GAP = 24;
+const EDIT_MODAL_RESIZE_HITBOX = 28;
+const MIN_JSON_STRING_EDIT_MODAL_WIDTH = 560;
+const MIN_JSON_STRING_EDIT_MODAL_HEIGHT = 520;
 const BUTTON_VIEWPORT_WIDTH = 30;
 const BUTTON_VIEWPORT_HEIGHT = 20;
 const BUTTON_ANCHOR_OFFSET_X = 4;
@@ -194,7 +201,7 @@ const jsonStringPreviewAffordanceStyles = css`
     display: flex;
     inset: 0;
     justify-content: center;
-    padding: 28px;
+    padding: 12px;
     position: fixed;
     z-index: 4100;
   }
@@ -207,11 +214,14 @@ const jsonStringPreviewAffordanceStyles = css`
     color: var(--grey-lightest);
     display: grid;
     gap: 14px;
-    max-height: min(760px, calc(100vh - 56px));
-    max-width: min(900px, calc(100vw - 56px));
+    grid-template-rows: auto minmax(320px, 1fr) auto;
+    max-height: calc(100vh - 24px);
+    max-width: calc(100vw - 24px);
+    min-width: min(560px, calc(100vw - 24px));
     overflow: auto;
     padding: 22px;
-    width: min(760px, calc(100vw - 56px));
+    resize: both;
+    width: min(960px, calc(100vw - 24px));
   }
 
   .json-string-edit-modal-header {
@@ -232,10 +242,11 @@ const jsonStringPreviewAffordanceStyles = css`
     color: var(--foreground);
     font-family: var(--font-family-monospace);
     font-size: var(--ui-font-size-base);
+    height: 100%;
     line-height: 1.45;
-    min-height: 320px;
+    min-height: 0;
     padding: 12px 14px;
-    resize: vertical;
+    resize: none;
     width: 100%;
   }
 
@@ -251,8 +262,7 @@ const jsonStringPreviewAffordanceStyles = css`
     justify-content: flex-end;
   }
 
-  .json-string-edit-secondary-button,
-  .json-string-edit-primary-button {
+  .json-string-edit-secondary-button {
     border-radius: 6px;
     cursor: pointer;
     font: inherit;
@@ -267,12 +277,7 @@ const jsonStringPreviewAffordanceStyles = css`
   }
 
   .json-string-edit-primary-button {
-    background: var(--primary);
-    border: 1px solid var(--primary);
-    border-radius: var(--ui-button-radius);
-    corner-shape: squircle;
-    color: var(--foreground-on-primary);
-    min-height: 32px;
+    min-width: calc(84px * var(--ui-font-scale));
   }
 
   .json-string-edit-secondary-button:hover,
@@ -280,12 +285,6 @@ const jsonStringPreviewAffordanceStyles = css`
     outline: none;
   }
 
-  .json-string-edit-primary-button:hover,
-  .json-string-edit-primary-button:focus-visible {
-    background: var(--primary-dark);
-    border-color: var(--primary-dark);
-    outline: none;
-  }
 `;
 
 type JsonStringPreviewAffordanceProps = {
@@ -331,6 +330,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 }) => {
   const [savedPopoverWidth, setSavedPopoverWidth] = useAtom(jsonStringPreviewPopoverWidthState);
   const [savedPopoverMaxHeight, setSavedPopoverMaxHeight] = useAtom(jsonStringPreviewPopoverMaxHeightState);
+  const [savedEditModalSize, setSavedEditModalSize] = useAtom(jsonStringEditModalSizeState);
   const ranges = useMemo(
     () => (enabled ? getJsonStringPreviewRanges(text, { minDecodedLength }) : []),
     [enabled, minDecodedLength, text],
@@ -342,6 +342,8 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   const buttonStateRef = useRef<ButtonState | null>(null);
   const decodedTextRef = useRef<HTMLPreElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const editModalRef = useRef<HTMLDivElement | null>(null);
+  const editModalResizeActiveRef = useRef(false);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const buttonKeepsPreviewRef = useRef(false);
   const popoverOpenRef = useRef(false);
@@ -365,6 +367,12 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     popoverMaxHeight,
     popover?.top,
     buttonRef.current?.ownerDocument.defaultView,
+  );
+  const visibleEditModalSize = getVisibleJsonStringEditModalSize(
+    savedEditModalSize,
+    editTextAreaRef.current?.ownerDocument.defaultView ??
+      rootRef.current?.ownerDocument.defaultView ??
+      buttonRef.current?.ownerDocument.defaultView,
   );
 
   rangesRef.current = ranges;
@@ -428,6 +436,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   const clearPreviewAffordance = useCallback(() => {
     popoverOpenRef.current = false;
     buttonKeepsPreviewRef.current = false;
+    editModalResizeActiveRef.current = false;
     activeRangeRef.current = null;
     buttonRangeRef.current = null;
     setVisibleButtonState(null);
@@ -805,6 +814,39 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     clearPreviewAffordance();
   }, [clearPreviewAffordance, editModal, onEditString]);
 
+  const handleEditModalPointerDownCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const modal = editModalRef.current;
+
+    if (!modal) {
+      return;
+    }
+
+    const rect = modal.getBoundingClientRect();
+    const isResizeCorner =
+      event.clientX >= rect.right - EDIT_MODAL_RESIZE_HITBOX &&
+      event.clientY >= rect.bottom - EDIT_MODAL_RESIZE_HITBOX;
+
+    if (!isResizeCorner) {
+      return;
+    }
+
+    const modalWindow = modal.ownerDocument.defaultView ?? window;
+    editModalResizeActiveRef.current = true;
+
+    const clearResizeActive = () => {
+      modalWindow.removeEventListener('pointerup', clearResizeActive, true);
+      modalWindow.removeEventListener('pointercancel', clearResizeActive, true);
+      modalWindow.requestAnimationFrame(() => {
+        modalWindow.requestAnimationFrame(() => {
+          editModalResizeActiveRef.current = false;
+        });
+      });
+    };
+
+    modalWindow.addEventListener('pointerup', clearResizeActive, true);
+    modalWindow.addEventListener('pointercancel', clearResizeActive, true);
+  }, []);
+
   useLayoutEffect(() => {
     if (!enabled || !editor || ranges.length === 0) {
       clearPreviewAffordance();
@@ -993,6 +1035,62 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     };
   }, [closeEditModal, editModalRangeId, rootRef, saveEditModal]);
 
+  useEffect(() => {
+    const modal = editModalRef.current;
+
+    if (!editModalRangeId || !modal) {
+      return;
+    }
+
+    const modalWindow = modal.ownerDocument.defaultView ?? window;
+
+    if (typeof modalWindow.ResizeObserver !== 'function') {
+      return;
+    }
+
+    let animationFrame: number | undefined;
+    let hasObservedInitialSize = false;
+    const observer = new modalWindow.ResizeObserver(() => {
+      if (!hasObservedInitialSize) {
+        hasObservedInitialSize = true;
+        return;
+      }
+
+      if (!editModalResizeActiveRef.current) {
+        return;
+      }
+
+      if (animationFrame != null) {
+        modalWindow.cancelAnimationFrame(animationFrame);
+      }
+
+      animationFrame = modalWindow.requestAnimationFrame(() => {
+        const rect = modal.getBoundingClientRect();
+        const nextSize = getVisibleJsonStringEditModalSize(
+          {
+            height: rect.height,
+            width: rect.width,
+          },
+          modalWindow,
+        );
+
+        setSavedEditModalSize((previousSize) =>
+          previousSize.height === nextSize.height && previousSize.width === nextSize.width ? previousSize : nextSize,
+        );
+      });
+    });
+
+    observer.observe(modal);
+
+    return () => {
+      observer.disconnect();
+
+      if (animationFrame != null) {
+        modalWindow.cancelAnimationFrame(animationFrame);
+      }
+    };
+  }, [editModalRangeId, setSavedEditModalSize]);
+
   if (!buttonState && !popover && !editModal) {
     return null;
   }
@@ -1120,11 +1218,14 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       }}
     >
       <div
+        ref={editModalRef}
         className="json-string-edit-modal"
         role="dialog"
         aria-modal="true"
         aria-label="Edit unescaped JSON string"
         data-rivet-consume-run-hotkey="true"
+        style={{ height: visibleEditModalSize.height, width: visibleEditModalSize.width }}
+        onPointerDownCapture={handleEditModalPointerDownCapture}
       >
         <div className="json-string-edit-modal-header">
           <h2>Edit unescaped string</h2>
@@ -1139,9 +1240,9 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
           <button type="button" className="json-string-edit-secondary-button" onClick={closeEditModal}>
             Cancel
           </button>
-          <button type="button" className="json-string-edit-primary-button" onClick={saveEditModal}>
+          <Button appearance="primary" className="json-string-edit-primary-button" onClick={saveEditModal}>
             Save
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -1190,6 +1291,24 @@ function clampJsonStringPreviewPopoverMaxHeight(value: unknown): number {
     MAX_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT,
     Math.max(MIN_JSON_STRING_PREVIEW_POPOVER_MAX_HEIGHT, Math.round(value)),
   );
+}
+
+function getVisibleJsonStringEditModalSize(
+  size: JsonStringEditModalSize,
+  ownerWindow?: Window | null,
+): JsonStringEditModalSize {
+  const targetWindow = ownerWindow ?? window;
+  const maxWidth = Math.max(1, targetWindow.innerWidth - EDIT_MODAL_VIEWPORT_GAP);
+  const maxHeight = Math.max(1, targetWindow.innerHeight - EDIT_MODAL_VIEWPORT_GAP);
+  const minWidth = Math.min(MIN_JSON_STRING_EDIT_MODAL_WIDTH, maxWidth);
+  const minHeight = Math.min(MIN_JSON_STRING_EDIT_MODAL_HEIGHT, maxHeight);
+  const width = typeof size.width === 'number' && Number.isFinite(size.width) ? size.width : minWidth;
+  const height = typeof size.height === 'number' && Number.isFinite(size.height) ? size.height : minHeight;
+
+  return {
+    height: Math.min(maxHeight, Math.max(minHeight, Math.round(height))),
+    width: Math.min(maxWidth, Math.max(minWidth, Math.round(width))),
+  };
 }
 
 function getPopoverResizeStartMaxHeight(textElement: HTMLElement | null, fallbackMaxHeight: number): number {
