@@ -525,8 +525,15 @@ test('node settings JSON code editors expose unescaped string previews', () => {
   const nodeEditorCodeEditorSource = readFileSync(join(componentsDir, 'editors', 'CodeEditor.tsx'), 'utf8');
 
   assert.match(nodeEditorCodeEditorSource, /JsonStringPreviewAffordance/);
+  assert.match(nodeEditorCodeEditorSource, /type JsonStringPreviewRange/);
   assert.match(nodeEditorCodeEditorSource, /function shouldEnableJsonStringPreview/);
   assert.match(nodeEditorCodeEditorSource, /return language === 'json';/);
+  assert.match(nodeEditorCodeEditorSource, /function replaceJsonStringLiteral/);
+  assert.match(nodeEditorCodeEditorSource, /editor\.executeEdits\('json-string-preview-edit'/);
+  assert.match(nodeEditorCodeEditorSource, /text: JSON\.stringify\(decodedValue\)/);
+  assert.match(nodeEditorCodeEditorSource, /forceMoveMarkers: true/);
+  assert.match(nodeEditorCodeEditorSource, /const handleJsonStringEdit = \(range: JsonStringPreviewRange, decodedValue: string\)/);
+  assert.match(nodeEditorCodeEditorSource, /onEditJsonString=\{!isEditorReadOnly \? handleJsonStringEdit : undefined\}/);
   assert.match(nodeEditorCodeEditorSource, /type MountedEditorState = \{/);
   assert.match(nodeEditorCodeEditorSource, /const \[mountedEditorState, setMountedEditorState\] = useState/);
   assert.match(
@@ -542,6 +549,7 @@ test('node settings JSON code editors expose unescaped string previews', () => {
   assert.match(nodeEditorCodeEditorSource, /editor=\{editorProps\.mountedEditor\}/);
   assert.match(nodeEditorCodeEditorSource, /enabled=\{jsonPreviewEnabled\}/);
   assert.match(nodeEditorCodeEditorSource, /minDecodedLength=\{0\}/);
+  assert.match(nodeEditorCodeEditorSource, /onEditString=\{editorProps\.onEditJsonString\}/);
   assert.match(nodeEditorCodeEditorSource, /rootRef=\{rootRef\}/);
   assert.match(nodeEditorCodeEditorSource, /text=\{editorProps\.text\}/);
   assert.doesNotMatch(nodeEditorCodeEditorSource, /node-settings-json-string-preview|widgetId|data-widget-id/);

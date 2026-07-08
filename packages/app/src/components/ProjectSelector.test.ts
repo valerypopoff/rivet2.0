@@ -451,6 +451,8 @@ test('windows and macos desktop use the in-strip Menu dropdown instead of a full
   assert.match(inAppMenuHotkeyUtilsSource, /'CmdOrCtrl\+ENTER': 'run'/);
   assert.match(inAppMenuHotkeyUtilsSource, /event\.metaKey && !event\.ctrlKey : event\.ctrlKey && !event\.metaKey/);
   assert.match(inAppMenuHotkeyUtilsSource, /\^Key\(\[A-Z\]\)\$/);
+  assert.match(inAppMenuHotkeysSource, /data-rivet-consume-run-hotkey/);
+  assert.match(inAppMenuHotkeysSource, /command !== 'run'/);
   assert.match(inAppMenuHotkeysSource, /window\.addEventListener\('keydown', onKeyDown, hotkeyListenerOptions\)/);
   assert.doesNotMatch(inAppMenuHotkeysSource, /Hotkey Fix|Fix applied for Windows platform/);
   assert.match(rivetAppSource, /import \{ useInAppMenuHotkeys \} from '\.\.\/hooks\/useInAppMenuHotkeys';/);

@@ -44,6 +44,7 @@ import {
   type SpellcheckResult,
 } from '../../utils/monaco/spellcheck.js';
 import { JsonStringPreviewAffordance } from '../renderDataValue/JsonStringPreviewAffordance.js';
+import { type JsonStringPreviewRange } from '../renderDataValue/jsonStringPreviewRanges.js';
 import { useMultilineEditorFontSize } from '../../hooks/useMultilineEditorFontSize.js';
 import {
   MAX_MULTILINE_EDITOR_FONT_SIZE,
@@ -128,6 +129,37 @@ function getSelectedEditorText(editor: monaco.editor.IStandaloneCodeEditor): str
   }
 
   return model.getValueInRange(selection);
+}
+
+function replaceJsonStringLiteral(
+  editor: monaco.editor.IStandaloneCodeEditor | undefined,
+  range: JsonStringPreviewRange,
+  decodedValue: string,
+) {
+  const model = editor?.getModel();
+
+  if (!editor || !model) {
+    return;
+  }
+
+  const start = model.getPositionAt(range.startOffset);
+  const end = model.getPositionAt(range.endOffset);
+
+  editor.pushUndoStop();
+  editor.executeEdits('json-string-preview-edit', [
+    {
+      range: {
+        startLineNumber: start.lineNumber,
+        startColumn: start.column,
+        endLineNumber: end.lineNumber,
+        endColumn: end.column,
+      },
+      text: JSON.stringify(decodedValue),
+      forceMoveMarkers: true,
+    },
+  ]);
+  editor.pushUndoStop();
+  editor.focus();
 }
 
 const FONT_SIZE_COMMANDS = [
@@ -442,6 +474,10 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     }
   };
 
+  const handleJsonStringEdit = (range: JsonStringPreviewRange, decodedValue: string) => {
+    replaceJsonStringLiteral(mountedEditor, range, decodedValue);
+  };
+
   useEffect(
     () => () => {
       spellcheckRunId.current += 1;
@@ -486,6 +522,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           modelCacheKey={modelCacheKey}
           onSpellcheckAction={handleCheckSpelling}
           mountedEditor={mountedEditor}
+          onEditJsonString={!isEditorReadOnly ? handleJsonStringEdit : undefined}
           onEditorMount={handleEditorMount}
           editorKey={editorIdentityKey}
           nodeType={nodeType}
@@ -509,6 +546,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           modelCacheKey={modelCacheKey}
           onSpellcheckAction={handleCheckSpelling}
           mountedEditor={mountedEditor}
+          onEditJsonString={!isEditorReadOnly ? handleJsonStringEdit : undefined}
           onEditorMount={handleEditorMount}
           editorKey={editorIdentityKey}
           defaultHeight={defaultHeight}
@@ -540,6 +578,7 @@ type ViewportProps = {
   modelCacheKey: string | undefined;
   onSpellcheckAction: () => void | Promise<void>;
   mountedEditor: monaco.editor.IStandaloneCodeEditor | undefined;
+  onEditJsonString?: (range: JsonStringPreviewRange, decodedValue: string) => void;
   onEditorMount: (editor: monaco.editor.IStandaloneCodeEditor) => void;
   editorKey: string | undefined;
   errorLineHighlight?: CodeNodeErrorLineHighlight;
@@ -620,6 +659,7 @@ const ResizableCodeEditorViewport: FC<
         editor={editorProps.mountedEditor}
         enabled={jsonPreviewEnabled}
         minDecodedLength={0}
+        onEditString={editorProps.onEditJsonString}
         rootRef={rootRef}
         text={editorProps.text}
       />
@@ -647,6 +687,7 @@ const NonResizableCodeEditorViewport: FC<
         editor={editorProps.mountedEditor}
         enabled={jsonPreviewEnabled}
         minDecodedLength={0}
+        onEditString={editorProps.onEditJsonString}
         rootRef={rootRef}
         text={editorProps.text}
       />

@@ -1,4 +1,5 @@
 import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
+import EditIcon from 'majesticons/line/edit-pen-2-line.svg?react';
 import { Global, css } from '@emotion/react';
 import { useAtom } from 'jotai';
 import {
@@ -105,7 +106,7 @@ const jsonStringPreviewAffordanceStyles = css`
     min-width: 0;
   }
 
-  .json-string-preview-copy-button {
+  .json-string-preview-action-button {
     align-items: center;
     background: transparent;
     border: 0;
@@ -117,13 +118,13 @@ const jsonStringPreviewAffordanceStyles = css`
     padding: 2px 4px;
   }
 
-  .json-string-preview-copy-button:hover,
-  .json-string-preview-copy-button:focus-visible {
+  .json-string-preview-action-button:hover,
+  .json-string-preview-action-button:focus-visible {
     color: var(--primary);
     outline: none;
   }
 
-  .json-string-preview-copy-button svg {
+  .json-string-preview-action-button svg {
     height: 14px;
     width: 14px;
   }
@@ -186,6 +187,105 @@ const jsonStringPreviewAffordanceStyles = css`
   .json-string-preview-resize-handle:focus-visible {
     outline: none;
   }
+
+  .json-string-edit-modal-backdrop {
+    align-items: center;
+    background: color-mix(in srgb, var(--grey-dark) 64%, transparent);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    padding: 28px;
+    position: fixed;
+    z-index: 4100;
+  }
+
+  .json-string-edit-modal {
+    background: var(--modal-surface-bg);
+    border: 1px solid var(--foldable-section-border);
+    border-radius: 8px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
+    color: var(--grey-lightest);
+    display: grid;
+    gap: 14px;
+    max-height: min(760px, calc(100vh - 56px));
+    max-width: min(900px, calc(100vw - 56px));
+    overflow: auto;
+    padding: 22px;
+    width: min(760px, calc(100vw - 56px));
+  }
+
+  .json-string-edit-modal-header {
+    display: grid;
+    gap: 6px;
+  }
+
+  .json-string-edit-modal h2 {
+    font-size: var(--ui-font-size-lg);
+    line-height: 1.25;
+    margin: 0;
+  }
+
+  .json-string-edit-modal textarea {
+    background: var(--form-control-bg);
+    border: 1px solid var(--form-control-border);
+    border-radius: 8px;
+    color: var(--foreground);
+    font-family: var(--font-family-monospace);
+    font-size: var(--ui-font-size-base);
+    line-height: 1.45;
+    min-height: 320px;
+    padding: 12px 14px;
+    resize: vertical;
+    width: 100%;
+  }
+
+  .json-string-edit-modal textarea:focus {
+    background: var(--form-control-bg);
+    border-color: var(--form-control-border);
+    outline: none;
+  }
+
+  .json-string-edit-modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+
+  .json-string-edit-secondary-button,
+  .json-string-edit-primary-button {
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: 8px 14px;
+  }
+
+  .json-string-edit-secondary-button {
+    background: transparent;
+    border: 1px solid var(--foldable-section-border);
+    color: var(--foreground);
+  }
+
+  .json-string-edit-primary-button {
+    background: var(--primary);
+    border: 1px solid var(--primary);
+    border-radius: var(--ui-button-radius);
+    corner-shape: squircle;
+    color: var(--foreground-on-primary);
+    min-height: 32px;
+  }
+
+  .json-string-edit-secondary-button:hover,
+  .json-string-edit-secondary-button:focus-visible {
+    outline: none;
+  }
+
+  .json-string-edit-primary-button:hover,
+  .json-string-edit-primary-button:focus-visible {
+    background: var(--primary-dark);
+    border-color: var(--primary-dark);
+    outline: none;
+  }
 `;
 
 type JsonStringPreviewAffordanceProps = {
@@ -193,8 +293,14 @@ type JsonStringPreviewAffordanceProps = {
   editor?: monaco.editor.IStandaloneCodeEditor;
   enabled: boolean;
   minDecodedLength?: number;
+  onEditString?(range: JsonStringPreviewRange, decodedValue: string): void;
   rootRef: MutableRefObject<HTMLDivElement | null>;
   text: string;
+};
+
+type EditModalState = {
+  draft: string;
+  range: JsonStringPreviewRange;
 };
 
 type PopoverState = {
@@ -219,6 +325,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   editor,
   enabled,
   minDecodedLength,
+  onEditString,
   rootRef,
   text,
 }) => {
@@ -242,8 +349,11 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
   const [livePopoverWidth, setLivePopoverWidth] = useState<number | null>(null);
   const [livePopoverMaxHeight, setLivePopoverMaxHeight] = useState<number | null>(null);
   const [buttonState, setButtonState] = useState<ButtonState | null>(null);
+  const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [popover, setPopover] = useState<PopoverState | null>(null);
+  const editTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const popoverRangeId = popover?.range.id;
+  const editModalRangeId = editModal?.range.id;
   const popoverWidth = livePopoverWidth ?? clampJsonStringPreviewPopoverWidth(savedPopoverWidth);
   const popoverMaxHeight = livePopoverMaxHeight ?? clampJsonStringPreviewPopoverMaxHeight(savedPopoverMaxHeight);
   const visiblePopoverWidth = getVisibleJsonStringPreviewPopoverWidth(
@@ -317,10 +427,12 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
 
   const clearPreviewAffordance = useCallback(() => {
     popoverOpenRef.current = false;
+    buttonKeepsPreviewRef.current = false;
     activeRangeRef.current = null;
     buttonRangeRef.current = null;
     setVisibleButtonState(null);
     setPopover(null);
+    setEditModal(null);
   }, [setVisibleButtonState]);
 
   const hideButton = useCallback(() => {
@@ -668,6 +780,31 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     ],
   );
 
+  const openEditModal = useCallback(
+    (range: JsonStringPreviewRange) => {
+      activeRangeRef.current = null;
+      buttonRangeRef.current = null;
+      popoverOpenRef.current = false;
+      setVisibleButtonState(null);
+      setPopover(null);
+      setEditModal({ range, draft: range.decodedValue });
+    },
+    [setVisibleButtonState],
+  );
+
+  const closeEditModal = useCallback(() => {
+    clearPreviewAffordance();
+  }, [clearPreviewAffordance]);
+
+  const saveEditModal = useCallback(() => {
+    if (!editModal || !onEditString) {
+      return;
+    }
+
+    onEditString(editModal.range, editModal.draft);
+    clearPreviewAffordance();
+  }, [clearPreviewAffordance, editModal, onEditString]);
+
   useLayoutEffect(() => {
     if (!enabled || !editor || ranges.length === 0) {
       clearPreviewAffordance();
@@ -824,7 +961,39 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     };
   }, [closePopover, editor, popoverRangeId, repositionPopoverForRange]);
 
-  if (!buttonState && !popover) {
+  useEffect(() => {
+    if (!editModalRangeId) {
+      return;
+    }
+
+    const editWindow =
+      editTextAreaRef.current?.ownerDocument.defaultView ??
+      buttonRef.current?.ownerDocument.defaultView ??
+      rootRef.current?.ownerDocument.defaultView ??
+      window;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        closeEditModal();
+      } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        saveEditModal();
+      }
+    };
+
+    editWindow.addEventListener('keydown', handleKeyDown, true);
+    requestAnimationFrame(() => editTextAreaRef.current?.focus());
+
+    return () => {
+      editWindow.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [closeEditModal, editModalRangeId, rootRef, saveEditModal]);
+
+  if (!buttonState && !popover && !editModal) {
     return null;
   }
 
@@ -908,13 +1077,23 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
     >
       <div className="json-string-preview-popover-header">
         <span>Unescaped string</span>
+        {onEditString && (
+          <button
+            type="button"
+            className="json-string-preview-action-button"
+            onClick={() => openEditModal(popover.range)}
+          >
+            <EditIcon />
+            Edit
+          </button>
+        )}
         <button
           type="button"
-          className="json-string-preview-copy-button"
+          className="json-string-preview-action-button"
           onClick={() => void copyToClipboard(popover.range.decodedValue)}
         >
           <CopyIcon />
-          Copy value
+          Copy
         </button>
       </div>
       <pre ref={decodedTextRef} style={{ maxHeight: visiblePopoverMaxHeight }}>
@@ -930,6 +1109,43 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
       />
     </div>
   ) : null;
+  const editModalElement = editModal ? (
+    <div
+      className="json-string-edit-modal-backdrop"
+      role="presentation"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) {
+          closeEditModal();
+        }
+      }}
+    >
+      <div
+        className="json-string-edit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Edit unescaped JSON string"
+        data-rivet-consume-run-hotkey="true"
+      >
+        <div className="json-string-edit-modal-header">
+          <h2>Edit unescaped string</h2>
+        </div>
+        <textarea
+          ref={editTextAreaRef}
+          aria-label="Unescaped string value"
+          value={editModal.draft}
+          onChange={(event) => setEditModal((current) => (current ? { ...current, draft: event.target.value } : null))}
+        />
+        <div className="json-string-edit-modal-actions">
+          <button type="button" className="json-string-edit-secondary-button" onClick={closeEditModal}>
+            Cancel
+          </button>
+          <button type="button" className="json-string-edit-primary-button" onClick={saveEditModal}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
   const portalElement =
     buttonRef.current?.ownerDocument.body ??
     rootRef.current?.ownerDocument.body ??
@@ -942,6 +1158,7 @@ export const JsonStringPreviewAffordance: FC<JsonStringPreviewAffordanceProps> =
         ? createPortal(buttonElement, portalElement)
         : buttonElement}
       {popoverElement && portalElement ? createPortal(popoverElement, portalElement) : null}
+      {editModalElement && portalElement ? createPortal(editModalElement, portalElement) : null}
     </>
   );
 };

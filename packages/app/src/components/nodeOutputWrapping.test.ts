@@ -106,6 +106,7 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   assert.match(foldingCodeBlockSource, /querySelector<HTMLElement>\(`\.\$\{MATCH_ACTIVE_CLASS\}`\)/);
   assert.match(foldingCodeBlockSource, /JsonStringPreviewAffordance/);
   assert.match(foldingCodeBlockSource, /enabled=\{language === 'json'\}/);
+  assert.doesNotMatch(foldingCodeBlockSource, /onEditString/);
   assert.match(jsonStringPreviewAffordanceSource, /const jsonStringPreviewAffordanceStyles = css/);
   assert.match(jsonStringPreviewAffordanceSource, /<Global styles=\{jsonStringPreviewAffordanceStyles\} \/>/);
   assert.match(jsonStringPreviewAffordanceSource, /max-width: calc\(100vw - 24px\)/);
@@ -153,6 +154,32 @@ test('fullscreen object output uses foldable JSON while chunked previews keep sa
   assert.match(jsonStringPreviewAffordanceSource, /onPointerDown=\{\(event\) =>/);
   assert.match(jsonStringPreviewAffordanceSource, /event\.key === 'Enter' \|\| event\.key === ' '/);
   assert.match(jsonStringPreviewAffordanceSource, /copyToClipboard\(popover\.range\.decodedValue\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /edit-pen-2-line\.svg\?react/);
+  assert.match(jsonStringPreviewAffordanceSource, /json-string-preview-action-button/);
+  assert.ok(
+    jsonStringPreviewAffordanceSource.indexOf('<EditIcon />') < jsonStringPreviewAffordanceSource.indexOf('<CopyIcon />'),
+  );
+  assert.match(jsonStringPreviewAffordanceSource, /<EditIcon \/>[\s\S]*Edit[\s\S]*<CopyIcon \/>[\s\S]*Copy/);
+  assert.doesNotMatch(jsonStringPreviewAffordanceSource, /Copy value/);
+  assert.match(jsonStringPreviewAffordanceSource, /onEditString\?\(range: JsonStringPreviewRange, decodedValue: string\): void/);
+  assert.match(jsonStringPreviewAffordanceSource, /openEditModal\(popover\.range\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /Edit/);
+  assert.match(jsonStringPreviewAffordanceSource, /Edit unescaped string/);
+  assert.match(jsonStringPreviewAffordanceSource, /json-string-edit-modal/);
+  assert.match(jsonStringPreviewAffordanceSource, /data-rivet-consume-run-hotkey="true"/);
+  assert.match(jsonStringPreviewAffordanceSource, /onEditString\(editModal\.range, editModal\.draft\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /\.json-string-edit-modal textarea:focus \{/);
+  assert.match(jsonStringPreviewAffordanceSource, /background: var\(--form-control-bg\);/);
+  assert.match(jsonStringPreviewAffordanceSource, /border-color: var\(--form-control-border\);/);
+  assert.match(jsonStringPreviewAffordanceSource, /color: var\(--foreground-on-primary\);/);
+  assert.match(jsonStringPreviewAffordanceSource, /border-radius: var\(--ui-button-radius\);/);
+  assert.match(jsonStringPreviewAffordanceSource, /background: var\(--primary-dark\);/);
+  assert.match(jsonStringPreviewAffordanceSource, /event\.key === 'Enter' && \(event\.ctrlKey \|\| event\.metaKey\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /saveEditModal\(\)/);
+  assert.match(jsonStringPreviewAffordanceSource, /buttonKeepsPreviewRef\.current = false/);
+  assert.match(jsonStringPreviewAffordanceSource, /overflow: auto;/);
+  assert.match(jsonStringPreviewAffordanceSource, /aria-label="Unescaped string value"/);
+  assert.doesNotMatch(jsonStringPreviewAffordanceSource, /--button-text/);
   assert.match(jsonStringPreviewAffordanceSource, /event\.stopImmediatePropagation\(\)/);
   assert.match(jsonStringPreviewAffordanceSource, /ownerDocument\.defaultView/);
   assert.match(

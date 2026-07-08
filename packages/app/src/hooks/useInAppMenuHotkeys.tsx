@@ -11,9 +11,18 @@ declare let window: InAppMenuHotkeyWindow;
 
 const shouldUseInAppMenuHotkeys = isWindowsPlatform() || (isInTauri() && isMacOSPlatform());
 const hotkeyListenerOptions = { capture: true };
+const consumeRunHotkeySelector = '[data-rivet-consume-run-hotkey="true"]';
 
 function getInAppMenuHotkeyPlatform(): InAppMenuHotkeyPlatform {
   return isMacOSPlatform() ? 'macos' : 'windows';
+}
+
+function shouldSkipInAppMenuHotkey(event: KeyboardEvent, command: string) {
+  if (command !== 'run' || !(event.target instanceof Element)) {
+    return false;
+  }
+
+  return event.target.closest(consumeRunHotkeySelector) != null;
 }
 
 export const useInAppMenuHotkeys = () => {
@@ -31,6 +40,10 @@ export const useInAppMenuHotkeys = () => {
       const command = getInAppMenuHotkeyCommand(event, platform);
 
       if (command) {
+        if (shouldSkipInAppMenuHotkey(event, command)) {
+          return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
 
