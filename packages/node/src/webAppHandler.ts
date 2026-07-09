@@ -227,10 +227,9 @@ export async function runRivetWebAppAction(
     const context = (processorOptions.context ??
       (resolveContext ? await resolveContext(actionRequest) : defaultContext)) as Record<string, LooseDataValue>;
     const inputs = (processorOptions.inputs ??
-      Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]))) as Record<
-      string,
-      LooseDataValue
-    >;
+      Object.fromEntries(
+        Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]),
+      )) as Record<string, LooseDataValue>;
     const processor = createProcessor(project, {
       ...processorOptions,
       context,
@@ -527,6 +526,53 @@ const WEB_APP_CLIENT_JS = String.raw`
 
   const hasRenderedOutputValue = (key) => Object.prototype.hasOwnProperty.call(state, key) && state[key] !== undefined;
 
+  const stringifyJsonDownloadValue = (value) => {
+    try {
+      return JSON.stringify(value, null, 2) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const formatDownloadDateTime = (date) => {
+    const pad = (value) => String(value).padStart(2, '0');
+    return [
+      date.getFullYear(),
+      '-',
+      pad(date.getMonth() + 1),
+      '-',
+      pad(date.getDate()),
+      ' ',
+      pad(date.getHours()),
+      '-',
+      pad(date.getMinutes()),
+      '-',
+      pad(date.getSeconds()),
+    ].join('');
+  };
+
+  const getWebAppJsonOutputFilename = () => {
+    const safeName = String(config.uiGraph?.name || 'Rivet web app')
+      .trim()
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-')
+      .replace(/\s+/g, ' ')
+      .slice(0, 80);
+
+    return (safeName || 'Rivet web app') + ' ' + formatDownloadDateTime(new Date()) + '.json';
+  };
+
+  const downloadJson = (value) => {
+    const blob = new Blob([value], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = getWebAppJsonOutputFilename();
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
   const copyText = async (value) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -634,6 +680,9 @@ const WEB_APP_CLIENT_JS = String.raw`
     if (component.type === 'output') {
       const value = state[component.stateKey];
       const renderedValue = renderValue(value, component.renderAs || 'text');
+      const jsonDownloadValue = component.renderAs === 'json' && hasRenderedOutputValue(component.stateKey)
+        ? stringifyJsonDownloadValue(value)
+        : undefined;
       const outputBody = component.renderAs === 'markdown'
         ? renderMarkdownElement(renderedValue, 'rivet-web-app-output-markdown markdown-body rivet-markdown-output')
         : el('pre', { text: renderedValue });
@@ -644,7 +693,7 @@ const WEB_APP_CLIENT_JS = String.raw`
 
       if (hasRenderedOutputValue(component.stateKey)) {
         children.push(el('button', {
-          className: 'rivet-web-app-output-copy-button',
+          className: 'rivet-web-app-output-action-button rivet-web-app-output-copy-button',
           type: 'button',
           title: 'Copy output',
           'aria-label': 'Copy output',
@@ -655,9 +704,26 @@ const WEB_APP_CLIENT_JS = String.raw`
         }));
       }
 
+      if (jsonDownloadValue != null) {
+        children.push(el('button', {
+          className: 'rivet-web-app-output-action-button rivet-web-app-output-download-button',
+          type: 'button',
+          title: 'Download JSON',
+          'aria-label': 'Download JSON',
+          onClick: (event) => {
+            event.stopPropagation();
+            downloadJson(jsonDownloadValue);
+          },
+        }));
+      }
+
       children.push(outputBody);
 
-      return el('section', { className: 'rivet-web-app-card rivet-web-app-output' }, children);
+      return el('section', {
+        className:
+          'rivet-web-app-card rivet-web-app-output' +
+          (jsonDownloadValue != null ? ' rivet-web-app-output-has-download' : ''),
+      }, children);
     }
     return el('div', { className: 'rivet-web-app-card', text: 'Unsupported component' });
   }

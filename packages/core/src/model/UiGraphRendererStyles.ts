@@ -110,10 +110,13 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   padding-right: 32px;
 }
 
-.rivet-web-app-output-copy-button {
+.rivet-web-app-output-has-download .rivet-web-app-output-title {
+  padding-right: 64px;
+}
+
+.rivet-web-app-output-action-button {
   position: absolute;
   top: 11px;
-  right: 11px;
   width: 24px;
   height: 24px;
   border: 0;
@@ -122,6 +125,14 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   color: color-mix(in srgb, var(--rivet-web-app-foreground) 68%, transparent);
   cursor: pointer;
   padding: 0;
+}
+
+.rivet-web-app-output-copy-button {
+  right: 11px;
+}
+
+.rivet-web-app-output-download-button {
+  right: 39px;
 }
 
 .rivet-web-app-output-copy-button::before,
@@ -145,8 +156,35 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   background: var(--rivet-web-app-card-background);
 }
 
-.rivet-web-app-output-copy-button:hover,
-.rivet-web-app-output-copy-button:focus-visible {
+.rivet-web-app-output-download-button::before,
+.rivet-web-app-output-download-button::after {
+  content: "";
+  position: absolute;
+}
+
+.rivet-web-app-output-download-button::before {
+  top: 5px;
+  left: 8px;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.rivet-web-app-output-download-button::after {
+  top: 16px;
+  left: 6px;
+  width: 12px;
+  height: 4px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  border-left: 1.5px solid currentColor;
+  border-radius: 0 0 2px 2px;
+}
+
+.rivet-web-app-output-action-button:hover,
+.rivet-web-app-output-action-button:focus-visible {
   color: var(--primary, #ff9e2c);
   outline: none;
   background: color-mix(in srgb, var(--rivet-web-app-foreground) 8%, transparent);

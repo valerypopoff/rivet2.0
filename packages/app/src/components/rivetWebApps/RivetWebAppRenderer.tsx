@@ -85,6 +85,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
               <RivetWebAppComponent
                 component={component}
                 isRunning={runningComponentId === component.id}
+                uiGraphName={uiGraph.name}
                 state={state}
                 onRunAction={runAction}
                 onStateChange={updateState}
@@ -114,10 +115,11 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
 const RivetWebAppComponent: FC<{
   component: UiGraphComponent;
   isRunning: boolean;
+  uiGraphName: string;
   state: Record<string, unknown>;
   onRunAction(component: Extract<UiGraphComponent, { type: 'button' }>): Promise<void> | void;
   onStateChange(key: string, value: unknown): void;
-}> = ({ component, isRunning, onRunAction, onStateChange, state }) => {
+}> = ({ component, isRunning, onRunAction, onStateChange, state, uiGraphName }) => {
   const outputRenderMode = component.type === 'output' ? component.renderAs ?? 'text' : undefined;
   const markdownText =
     component.type === 'markdown'
@@ -168,21 +170,40 @@ const RivetWebAppComponent: FC<{
         </button>
       );
     case 'output': {
-      const renderedOutputValue = renderOutputValue(state[component.stateKey], outputRenderMode ?? 'text');
+      const rawOutputValue = state[component.stateKey];
+      const renderedOutputValue = renderOutputValue(rawOutputValue, outputRenderMode ?? 'text');
       const canCopyOutput = hasRenderedOutputValue(state, component.stateKey);
+      const jsonDownloadValue =
+        canCopyOutput && outputRenderMode === 'json' ? stringifyJsonDownloadValue(rawOutputValue) : undefined;
 
       return (
-        <section className="rivet-web-app-card rivet-web-app-output">
+        <section
+          className={`rivet-web-app-card rivet-web-app-output${
+            jsonDownloadValue != null ? ' rivet-web-app-output-has-download' : ''
+          }`}
+        >
           <div className="rivet-web-app-output-title">{component.label || component.stateKey}</div>
           {canCopyOutput && (
             <button
               type="button"
-              className="rivet-web-app-output-copy-button"
+              className="rivet-web-app-output-action-button rivet-web-app-output-copy-button"
               title="Copy output"
               aria-label="Copy output"
               onClick={(event) => {
                 event.stopPropagation();
                 void copyWebAppOutputValue(renderedOutputValue);
+              }}
+            />
+          )}
+          {jsonDownloadValue != null && (
+            <button
+              type="button"
+              className="rivet-web-app-output-action-button rivet-web-app-output-download-button"
+              title="Download JSON"
+              aria-label="Download JSON"
+              onClick={(event) => {
+                event.stopPropagation();
+                downloadWebAppJsonOutput(jsonDownloadValue, uiGraphName);
               }}
             />
           )}
@@ -202,6 +223,36 @@ const RivetWebAppComponent: FC<{
 
 function hasRenderedOutputValue(state: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(state, key) && state[key] !== undefined;
+}
+
+function downloadWebAppJsonOutput(value: string, appName: string) {
+  const blob = new Blob([value], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = getWebAppJsonOutputFilename(appName);
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function getWebAppJsonOutputFilename(appName: string): string {
+  const safeName = appName
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80);
+
+  return `${safeName || 'Rivet web app'} ${formatDownloadDateTime(new Date())}.json`;
+}
+
+function formatDownloadDateTime(date: Date): string {
+  const pad = (value: number) => `${value}`.padStart(2, '0');
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}-${pad(
+    date.getMinutes(),
+  )}-${pad(date.getSeconds())}`;
 }
 
 async function copyWebAppOutputValue(value: string) {
@@ -239,5 +290,13 @@ function stringifyOutputValue(value: unknown): string {
     return JSON.stringify(value, null, 2) ?? '';
   } catch {
     return '[Unserializable value]';
+  }
+}
+
+function stringifyJsonDownloadValue(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value, null, 2) ?? undefined;
+  } catch {
+    return undefined;
   }
 }

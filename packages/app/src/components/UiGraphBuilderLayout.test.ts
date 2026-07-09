@@ -83,16 +83,55 @@ test('web app output renderers expose copy actions for populated outputs', () =>
 
   assert.match(rendererSource, /hasRenderedOutputValue\(state, component\.stateKey\)/);
   assert.match(rendererSource, /copyWebAppOutputValue\(renderedOutputValue\)/);
-  assert.match(rendererSource, /className="rivet-web-app-output-copy-button"/);
+  assert.match(rendererSource, /className="rivet-web-app-output-action-button rivet-web-app-output-copy-button"/);
   assert.match(rendererSource, /title="Copy output"/);
   assert.match(rendererSource, /aria-label="Copy output"/);
   assert.match(nodeHandlerSource, /hasRenderedOutputValue\(component\.stateKey\)/);
   assert.match(nodeHandlerSource, /copyText\(renderedValue\)/);
-  assert.match(nodeHandlerSource, /className: 'rivet-web-app-output-copy-button'/);
+  assert.match(nodeHandlerSource, /className: 'rivet-web-app-output-action-button rivet-web-app-output-copy-button'/);
   assert.match(sharedStyles, /\.rivet-web-app-output \{[\s\S]*position: relative;/);
   assert.match(sharedStyles, /\.rivet-web-app-output-title \{[\s\S]*padding-right: 32px;/);
-  assert.match(sharedStyles, /\.rivet-web-app-output-copy-button \{[\s\S]*position: absolute;/);
+  assert.match(sharedStyles, /\.rivet-web-app-output-action-button \{[\s\S]*position: absolute;/);
   assert.match(sharedStyles, /\.rivet-web-app-output-copy-button::before,\s+\.rivet-web-app-output-copy-button::after/);
+});
+
+test('web app JSON output renderers expose download actions for populated JSON outputs', () => {
+  const rendererSource = readFileSync(join(componentsDir, 'rivetWebApps', 'RivetWebAppRenderer.tsx'), 'utf8');
+  const nodeHandlerSource = readFileSync(join(rootDir, 'packages', 'node', 'src', 'webAppHandler.ts'), 'utf8');
+  const sharedStyles = readFileSync(
+    join(rootDir, 'packages', 'core', 'src', 'model', 'UiGraphRendererStyles.ts'),
+    'utf8',
+  );
+
+  assert.match(
+    rendererSource,
+    /outputRenderMode === 'json' \? stringifyJsonDownloadValue\(rawOutputValue\) : undefined/,
+  );
+  assert.match(rendererSource, /downloadWebAppJsonOutput\(jsonDownloadValue, uiGraphName\)/);
+  assert.match(rendererSource, /getWebAppJsonOutputFilename\(appName\)/);
+  assert.match(rendererSource, /formatDownloadDateTime\(new Date\(\)\)/);
+  assert.match(rendererSource, /rivet-web-app-output-has-download/);
+  assert.match(rendererSource, /className="rivet-web-app-output-action-button rivet-web-app-output-download-button"/);
+  assert.match(rendererSource, /title="Download JSON"/);
+  assert.match(rendererSource, /aria-label="Download JSON"/);
+  assert.match(nodeHandlerSource, /component\.renderAs === 'json' && hasRenderedOutputValue\(component\.stateKey\)/);
+  assert.match(nodeHandlerSource, /downloadJson\(jsonDownloadValue\)/);
+  assert.match(nodeHandlerSource, /getWebAppJsonOutputFilename/);
+  assert.match(nodeHandlerSource, /formatDownloadDateTime\(new Date\(\)\)/);
+  assert.match(nodeHandlerSource, /rivet-web-app-output-has-download/);
+  assert.match(
+    nodeHandlerSource,
+    /className: 'rivet-web-app-output-action-button rivet-web-app-output-download-button'/,
+  );
+  assert.match(
+    sharedStyles,
+    /\.rivet-web-app-output-has-download \.rivet-web-app-output-title \{[\s\S]*padding-right: 64px;/,
+  );
+  assert.match(sharedStyles, /\.rivet-web-app-output-download-button \{[\s\S]*right: 39px;/);
+  assert.match(
+    sharedStyles,
+    /\.rivet-web-app-output-download-button::before,\s+\.rivet-web-app-output-download-button::after/,
+  );
 });
 
 test('web app desktop preview action is host-configurable', () => {
@@ -142,7 +181,10 @@ test('web app builder reorders components from preview handles', () => {
 
   assert.match(rendererSource, /renderComponentFrame\?\(props: RivetWebAppComponentFrameProps\): ReactNode;/);
   assert.match(rendererSource, /renderComponentFrame\(frameProps\)/);
-  assert.match(source, /renderComponentFrame=\{\(frameProps\) => <SortablePreviewComponentFrame \{...frameProps\} \/>\}/);
+  assert.match(
+    source,
+    /renderComponentFrame=\{\(frameProps\) => <SortablePreviewComponentFrame \{...frameProps\} \/>\}/,
+  );
   assert.match(source, /const SortablePreviewComponentFrame: FC<RivetWebAppComponentFrameProps>/);
   assert.match(source, /className="ui-graph-preview-drag-handle"/);
   assert.match(source, /\.ui-graph-preview-sortable-row \{[\s\S]*position: relative;/);
@@ -172,7 +214,10 @@ test('web app button mappings are derived from graph boundary ids', () => {
     /const component = createUiComponent\(type, project\.metadata\.mainGraphId\);[\s\S]*normalizeButtonActionToGraphBoundary\(component, getGraphBoundary\(project, component\.action\.graphId\)\);[\s\S]*draft\.components\.push\(component\);/,
   );
   assert.match(source, /normalizeButtonActionToGraphBoundary\(button, nextBoundary\)/);
-  assert.match(source, /normalizeButtonActionToGraphBoundary\(component, getGraphBoundary\(project, component\.action\.graphId\)\)/);
+  assert.match(
+    source,
+    /normalizeButtonActionToGraphBoundary\(component, getGraphBoundary\(project, component\.action\.graphId\)\)/,
+  );
   assert.match(source, /alignInputRowsToBoundary\(boundary, rows\)/);
   assert.match(source, /alignOutputRowsToBoundary\(boundary, rows\)/);
   assert.match(source, /const dataKeyUsages = collectUiGraphDataKeyUsages\(uiGraph\)/);
