@@ -51,6 +51,6 @@ The npm package names describe the runtime package boundaries. A source-vendored
 
 ### Requirements
 
-The repository toolchain targets Node.js `22.22.3`. Published runtime packages keep
+The repository toolchain targets Node.js `22.21.1`. Published runtime packages keep
 their own `engines` ranges; use the package range for integrations and the pinned
 Node 22 release when developing Rivet itself.

@@ -86,7 +86,7 @@
     "image-size@npm:^2.0.2": "patch:image-size@npm%3A2.0.2#~/.yarn/patches/image-size-npm-2.0.2-43abbcfb5c.patch"
   },
   "volta": {
-    "node": "22.22.3",
+    "node": "22.21.1",
     "yarn": "4.17.1"
   },
   "dependencies": {

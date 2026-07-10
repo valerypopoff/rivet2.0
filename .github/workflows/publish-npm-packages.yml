@@ -63,7 +63,7 @@ jobs:
       - name: Set up publish Node
         uses: actions/setup-node@v5
         with:
-          node-version: '22.22.x'
+          node-version: '22.21.1'
           registry-url: https://registry.npmjs.org
 
       - name: Install trusted-publishing capable npm

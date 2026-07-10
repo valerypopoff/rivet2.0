@@ -178,7 +178,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: '22.22.x'
+          node-version: '22.21.1'
 
       - name: Sync desktop version metadata
         run: node scripts/sync-desktop-version.mjs

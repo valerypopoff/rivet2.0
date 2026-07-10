@@ -158,7 +158,7 @@
     "jest-mock": "^28.1.0"
   },
   "volta": {
-    "node": "22.22.3",
+    "node": "22.21.1",
     "yarn": "4.17.1"
   },
   "devDependencies": {

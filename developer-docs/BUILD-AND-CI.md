@@ -8,13 +8,16 @@
 
 Repo-level toolchain expectations:
 
-- Node `22.22.3` via Volta
+- Node `22.21.1` via Volta
 - root `packageManager`: `yarn@4.17.1`
 - Plug'n'Play enabled
 
 Workspace manifests, Volta metadata, shared CI setup, and Tauri commands all use
-the same Node 22.22 / Yarn 4.17 toolchain. Keep those declarations aligned so a
-package-local command cannot silently select a different Yarn runtime.
+the same Node `22.21.1` / Yarn `4.17.1` toolchain. Keep those declarations
+aligned so a package-local command cannot silently select a different Yarn
+runtime. Node `22.22.3` currently regresses synchronous CommonJS loading under
+Yarn Plug'n'Play's ESM loader on Linux, which breaks both `tsx` tests and the
+Docusaurus build; do not advance this pin without rerunning those CI gates.
 
 ### Rust
 
@@ -456,7 +459,7 @@ Workflows live under [`.github/workflows/`](../.github/workflows/).
 
 Node/Yarn CI jobs should use
 [`.github/actions/setup-yarn`](../.github/actions/setup-yarn/action.yml)
-after checkout. The composite action installs Node `22.22.x` by default and
+after checkout. The composite action installs Node `22.21.1` by default and
 restores only Yarn's generated `.yarn/install-state.gz` file with a key based
 on the OS, Node version, `yarn.lock`, and `.yarnrc.yml`.
 
@@ -795,7 +798,7 @@ The workflow:
 5. verifies the AI graph-builder context with `node scripts/checks/check-graph-creator-data.mjs`
 6. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and `@valerypopoff/rivet2-cli`
 7. verifies that dependency install and package build touched only generated artifacts
-8. uses Node `22.22.x` and npm `11.5.1` for npm trusted-publishing compatibility
+8. uses Node `22.21.1` and npm `11.5.1` for npm trusted-publishing compatibility
 9. verifies that the repository `NPM_TOKEN` secret is present and accepted by `npm whoami`
 10. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`
 
