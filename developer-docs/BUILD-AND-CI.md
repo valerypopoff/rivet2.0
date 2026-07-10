@@ -262,15 +262,16 @@ This publishes only the public npm package set: `@valerypopoff/rivet2-core`,
 
 - `build`: `build:esm` then `build:cjs`
 - ESM output via `tsc -b`
-- CJS bundle via `tsx bundle.esbuild.ts`. The script loads esbuild with
-  `createRequire(...)`, rather than a static ESM import, so Yarn PnP resolves
-  esbuild through its synchronous CJS hook even when Node's ESM loader is active
-  in Linux CI.
+- CJS bundle via `node bundle.esbuild.cjs`. The launcher itself is CommonJS so
+  esbuild and its synchronous internal `require()` calls stay on Yarn PnP's CJS
+  hook. Do not move this launcher back behind `tsx` or an `.mjs` entry: on Node 22
+  Linux, imported CommonJS can otherwise reach the asynchronous PnP ESM loader
+  through `require()` and fail because that loader has no `resolveSync()` hook.
 - watch mode via `tsc -b -w`
 
 #### CJS bundle alias strategy
 
-The CJS bundle (built by `bundle.esbuild.ts`) targets Node 16 and aliases several ESM-only dependencies to older CJS-compatible versions:
+The CJS bundle (built by `bundle.esbuild.cjs`) targets Node 16 and aliases several ESM-only dependencies to older CJS-compatible versions:
 
 | ESM dependency | CJS alias       | Reason                   |
 | -------------- | --------------- | ------------------------ |
@@ -354,11 +355,11 @@ Maintenance rules:
 
 `packages/app-executor/package.json`:
 
-- `build`: `tsx scripts/build-executor.mts`
+- `build`: `node scripts/build-executor.cjs`
 - `dev`: `tsx watch --inspect=9228 --experimental-network-imports bin/executor.mts`
 - `start`: build then run bundled executor
 
-The build script (`scripts/build-executor.mts`) bundles the ESM source to CJS using esbuild, then compiles the CJS bundle into a native binary via `pkg`. CJS format is required because `pkg` needs static analysis of `require()` calls. A custom esbuild plugin (`resolveRivet`) maps `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` to their workspace source entrypoints before package exports are resolved. This keeps the desktop Node executor in lockstep with local source edits and prevents stale `packages/core/dist` / `packages/node/dist` output from being bundled into a fresh sidecar.
+The CommonJS build launcher (`scripts/build-executor.cjs`) bundles the ESM source to CJS using esbuild, then compiles the CJS bundle into a native binary via `pkg`. Keeping the launcher itself in CJS avoids the Node 22/Yarn PnP mixed-loader failure described under Core; the ESM-only `execa` and `chalk` build helpers are loaded asynchronously after esbuild. CJS output format is required because `pkg` needs static analysis of `require()` calls. A custom esbuild plugin (`resolveRivet`) maps `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` to their workspace source entrypoints before package exports are resolved. This keeps the desktop Node executor in lockstep with local source edits and prevents stale `packages/core/dist` / `packages/node/dist` output from being bundled into a fresh sidecar.
 
 The app-executor binary accepts `--port` / `-p` and `--host` flags. The default
 host is `127.0.0.1` for the desktop internal sidecar; hosted/container wrappers

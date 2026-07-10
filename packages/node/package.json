@@ -32,10 +32,10 @@
   ],
   "scripts": {
     "build": "yarn build:web-app-client && yarn build:esm && yarn build:cjs",
-    "build:web-app-client": "node scripts/build-web-app-client.mjs",
-    "check:web-app-client": "node scripts/build-web-app-client.mjs --check",
+    "build:web-app-client": "node scripts/build-web-app-client.cjs",
+    "check:web-app-client": "node scripts/build-web-app-client.cjs --check",
     "build:esm": "rimraf dist/esm dist/types dist/tsconfig.tsbuildinfo && tsc -b --verbose",
-    "build:cjs": "rimraf dist/cjs && tsx ../core/bundle.esbuild.ts",
+    "build:cjs": "rimraf dist/cjs && node ../core/bundle.esbuild.cjs",
     "bench:debugger-transport": "tsx bench/debuggerTransport.bench.ts",
     "bench:runtime-attribution": "tsx bench/runtimeAttribution.bench.ts",
     "bench:runtime-speed": "yarn workspace @valerypopoff/rivet2-core run build:esm && tsx bench/runtimeSpeed.bench.ts",

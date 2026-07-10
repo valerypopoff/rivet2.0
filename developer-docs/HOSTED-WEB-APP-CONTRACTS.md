@@ -17,7 +17,7 @@ same project.
 
 Shared component semantics live in core's UI-graph runtime model. React desktop
 preview and the generated Node client consume that model. The generated client is a
-checked artifact; `packages/node/scripts/build-web-app-client.mjs --check` must fail
+checked artifact; `packages/node/scripts/build-web-app-client.cjs --check` must fail
 when its source changes without regeneration. Its build script fixes esbuild's
 working directory to the Node package, so generating from the repository root or
 through a workspace command produces the same artifact.

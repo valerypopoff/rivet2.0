@@ -23,6 +23,6 @@ runs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/pkg-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-pkg-${{ hashFiles('yarn.lock', 'packages/app-executor/package.json', 'packages/app-executor/scripts/build-executor.mts') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-pkg-${{ hashFiles('yarn.lock', 'packages/app-executor/package.json', 'packages/app-executor/scripts/build-executor.cjs') }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-pkg-

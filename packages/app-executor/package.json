@@ -6,7 +6,7 @@
   "bin": "./bin/executor-bundle.cjs",
   "type": "module",
   "scripts": {
-    "build": "tsx scripts/build-executor.mts",
+    "build": "node scripts/build-executor.cjs",
     "dev": "tsx watch --inspect=9228 --experimental-network-imports bin/executor.mts",
     "test": "tsx --test bin/**/*.test.mts",
     "start": "yarn build && node --experimental-network-imports bin/executor-bundle.cjs",
