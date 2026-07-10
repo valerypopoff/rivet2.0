@@ -6,6 +6,7 @@ import {
   type UiGraphComponent,
   RIVET_WEB_APP_RENDERER_CSS,
   applyUiGraphStatePatch,
+  getUiGraphActionState,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
   getUiGraphInitialState,
@@ -65,7 +66,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     setError(undefined);
 
     try {
-      const result = await onRunAction(component.id, state);
+      const result = await onRunAction(component.id, getUiGraphActionState(component.action, state));
       setState((current) => applyUiGraphStatePatch(current, result.statePatch));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

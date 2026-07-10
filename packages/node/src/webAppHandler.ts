@@ -11,6 +11,7 @@ import {
   type UiGraphComponent,
   type UiGraphId,
   getUiGraphActionComponent,
+  getUiGraphActionState,
   getUiGraphInitialState,
   jsonValueToDataValue,
   RIVET_MARKDOWN_SANITIZER_POLICY,
@@ -187,7 +188,7 @@ export async function runRivetWebAppAction(
   }: RunRivetWebAppActionOptions,
 ): Promise<RivetWebAppActionResult> {
   const actionRequest = request ?? new Request('https://rivet.local/web-app-action');
-  const actionState = normalizeActionState(state);
+  const receivedState = normalizeActionState(state);
 
   if (revisionKey != null && requestRevisionKey !== revisionKey) {
     throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
@@ -211,6 +212,7 @@ export async function runRivetWebAppAction(
     throw new Error('This UI action is not connected to a graph.');
   }
 
+  const actionState = getUiGraphActionState(component.action, receivedState);
   const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
   const actionContext: RivetWebAppActionContext = {
     actionInput: rawInputs,

@@ -1,5 +1,6 @@
 import {
   applyUiGraphStatePatch,
+  getUiGraphActionState,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
   type RivetMarkdownSanitizerPolicy,
@@ -189,7 +190,11 @@ if (config && root) {
 
     try {
       const response = await fetch(config.actionPath, {
-        body: JSON.stringify({ componentId: component.id, revisionKey: config.revisionKey, state }),
+        body: JSON.stringify({
+          componentId: component.id,
+          revisionKey: config.revisionKey,
+          state: getUiGraphActionState(component.action, state),
+        }),
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         method: 'POST',

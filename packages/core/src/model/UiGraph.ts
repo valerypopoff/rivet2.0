@@ -174,6 +174,19 @@ export function resolveUiGraphActionInputs(
   return inputs;
 }
 
+/**
+ * Selects the UI state that a button action is explicitly allowed to send.
+ * Outputs and unrelated form fields stay local to the rendered web app.
+ */
+export function getUiGraphActionState(action: UiGraphRunGraphAction, state: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    [...new Set(getUiGraphActionInputBindings(action).map((binding) => binding.stateKey))]
+      .filter(Boolean)
+      .filter((stateKey) => Object.prototype.hasOwnProperty.call(state, stateKey))
+      .map((stateKey) => [stateKey, state[stateKey]]),
+  );
+}
+
 export function resolveUiGraphActionOutputStateValue(action: UiGraphRunGraphAction, outputs: UiGraphOutputs): unknown {
   if (!action.outputKey) {
     return outputs;

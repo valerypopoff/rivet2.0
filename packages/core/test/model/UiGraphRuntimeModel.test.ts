@@ -2,10 +2,12 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   applyUiGraphStatePatch,
+  getUiGraphActionState,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
   getUiGraphOutputRenderModel,
   type UiGraphComponent,
+  type UiGraphRunGraphAction,
   type UiComponentId,
 } from '../../src/index.js';
 
@@ -55,6 +57,26 @@ describe('UiGraphRuntimeModel', () => {
       answer: 'after',
       extra: true,
     });
+  });
+
+  it('selects only state keys explicitly mapped to a graph action', () => {
+    const state = { genre: 'fantasy', prompt: 'Write a story', previousResult: 'old', unrelated: true };
+    const action: UiGraphRunGraphAction = {
+      type: 'runGraph',
+      inputMappings: [
+        { inputKey: 'question', stateKey: 'prompt' },
+        { inputKey: 'category', stateKey: 'genre' },
+      ],
+    };
+
+    assert.deepEqual(getUiGraphActionState(action, state), { genre: 'fantasy', prompt: 'Write a story' });
+    assert.deepEqual(
+      getUiGraphActionState(
+        { type: 'runGraph', inputs: { fixed: { type: 'literal', value: 'fixed' }, question: { type: 'state', key: 'prompt' } } },
+        state,
+      ),
+      { prompt: 'Write a story' },
+    );
   });
 
   it('creates portable JSON download filenames from the app name and current time', () => {

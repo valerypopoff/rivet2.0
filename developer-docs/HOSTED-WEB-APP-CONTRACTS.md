@@ -32,6 +32,13 @@ auth, revision, storage, recordings, headers, and error-envelope ownership.
 return the machine-readable `revision_mismatch` conflict used by the shared reload
 modal.
 
+Each button action has a narrow state boundary. The React preview and generated
+browser client project UI state to only the data keys named by that button's graph
+input bindings before crossing an action boundary. `runRivetWebAppAction(...)`
+repeats the projection for direct host calls, so lifecycle hooks and
+`createProcessorOptions` receive only those action-relevant keys. Unrelated form
+values and prior output state remain local to the web app.
+
 ## Security
 
 Web apps are declarative: no project JavaScript or arbitrary HTML execution.

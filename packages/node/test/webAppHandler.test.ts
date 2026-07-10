@@ -141,6 +141,43 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(clientScript ?? '', /browserGlobals\.DOMPurify\?\.sanitize/);
   });
 
+  void it('posts only a button\'s input-bound state from the generated client', async () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const button = uiGraph.components[0] as Extract<UiGraphComponent, { type: 'button' }>;
+    button.action = {
+      graphId,
+      inputMappings: [
+        { inputKey: 'question', stateKey: 'prompt' },
+        { inputKey: 'category', stateKey: 'genre' },
+      ],
+      type: 'runGraph',
+    };
+    uiGraph.components = [
+      { defaultValue: 'hello', id: 'prompt-field' as any, label: 'Prompt', stateKey: 'prompt', type: 'input' },
+      { defaultValue: 'internal', id: 'other-field' as any, label: 'Other', stateKey: 'other', type: 'input' },
+      { defaultValue: 'fiction', id: 'genre-field' as any, label: 'Genre', stateKey: 'genre', type: 'input' },
+      button,
+    ];
+    const requests: Record<string, unknown>[] = [];
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        window.fetch = async (_input, init) => {
+          requests.push(JSON.parse(`${init?.body ?? '{}'}`) as Record<string, unknown>);
+          return { json: async () => ({ outputs: {}, statePatch: {} }), ok: true, status: 200 } as Response;
+        };
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    dom.window.document.querySelector('button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    dom.window.close();
+
+    assert.deepEqual(requests, [{ componentId: 'run-button', state: { prompt: 'hello', genre: 'fiction' } }]);
+  });
+
   void it('sanitizes hosted Markdown with the shared browser policy', () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
@@ -272,7 +309,11 @@ void describe('createRivetWebAppHandler', () => {
     });
     const response = await handler.handleRequest(
       new Request('https://example.test/app/actions/run', {
-        body: JSON.stringify({ componentId: 'run-button', revisionKey: 'rev-1', state: { prompt: 'hello' } }),
+        body: JSON.stringify({
+          componentId: 'run-button',
+          revisionKey: 'rev-1',
+          state: { prompt: 'hello', unrelated: 'do not expose to the action' },
+        }),
         headers: { 'content-type': 'application/json' },
         method: 'POST',
       }),
