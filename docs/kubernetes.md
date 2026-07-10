@@ -212,7 +212,7 @@ images:
     tag: latest
 ```
 
-The `latest` tag is produced from pushes to `main-rivet2`; commit SHA and tag-derived image tags are also produced by the same workflow. The image workflow resolves the configured upstream Rivet ref to an exact commit before the Rivet-consuming image builds and labels the resulting images with that Rivet source, ref, and revision.
+The `latest` tag is produced from pushes to `main-rivet2`; commit SHA and tag-derived image tags are also produced by the same workflow. The image workflow resolves the configured upstream Rivet ref to an exact commit before the Rivet-consuming image builds and labels the resulting images with that Rivet source, ref, and revision. All four images first publish under a deterministic wrapper-commit plus Rivet-commit staging tag; public tags are promoted only after the complete image matrix succeeds. Runs for the same Git ref are serialized so overlapping pushes cannot race an older image set back onto `latest`.
 For production, prefer pinning all four image tags to the same published commit SHA or release tag instead of leaving them on `latest`.
 If the GHCR packages are private, configure `imagePullSecrets`; public packages should pull anonymously.
 
