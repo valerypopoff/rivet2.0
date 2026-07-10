@@ -182,39 +182,44 @@ void describe('createRivetWebAppHandler', () => {
     assert.deepEqual(requests, [{ componentId: 'run-button', state: { prompt: 'hello', genre: 'fiction' } }]);
   });
 
-  void it('keeps hosted button loading state scoped to the clicked component', async () => {
+  void it('repairs duplicate button IDs before scoping hosted loading state', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const firstButton = uiGraph.components[0] as Extract<UiGraphComponent, { type: 'button' }>;
     uiGraph.components = [
       firstButton,
       {
-        id: 'second-button' as any,
+        id: firstButton.id,
         type: 'button',
         label: 'Second',
         action: firstButton.action,
       },
     ];
 
+    const requests: Record<string, unknown>[] = [];
     let resolveAction!: (response: Response) => void;
     const actionResponse = new Promise<Response>((resolve) => {
       resolveAction = resolve;
     });
     const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
       beforeParse(window) {
-        window.fetch = async () => actionResponse;
+        window.fetch = async (_input, init) => {
+          requests.push(JSON.parse(`${init?.body ?? '{}'}`) as Record<string, unknown>);
+          return await actionResponse;
+        };
       },
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
 
-    dom.window.document.querySelectorAll('button')[0]?.click();
+    dom.window.document.querySelectorAll('button')[1]?.click();
     const buttons = [...dom.window.document.querySelectorAll('button')] as HTMLButtonElement[];
 
-    assert.equal(buttons[0]?.textContent, 'Running...');
-    assert.equal(buttons[0]?.disabled, true);
-    assert.equal(buttons[1]?.textContent, 'Second');
-    assert.equal(buttons[1]?.disabled, false);
+    assert.deepEqual(requests, [{ componentId: 'ui-graph-component-2', state: {} }]);
+    assert.equal(buttons[0]?.textContent, 'Run');
+    assert.equal(buttons[0]?.disabled, false);
+    assert.equal(buttons[1]?.textContent, 'Running...');
+    assert.equal(buttons[1]?.disabled, true);
 
     resolveAction({
       ok: true,
@@ -311,6 +316,39 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(response.status, 200);
     assert.deepEqual(body.outputs.value, { type: 'string', value: 'hello' });
     assert.equal(body.statePatch.result, 'hello');
+  });
+
+  void it('dispatches an action through a repaired duplicate component ID', async () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const firstButton = uiGraph.components[0] as Extract<UiGraphComponent, { type: 'button' }>;
+    uiGraph.components = [
+      {
+        ...firstButton,
+        id: 'duplicate-button' as any,
+        action: { ...firstButton.action, outputStateKey: 'first-result' },
+      },
+      {
+        ...firstButton,
+        id: 'duplicate-button' as any,
+        label: 'Second',
+        action: { ...firstButton.action, outputStateKey: 'second-result' },
+      },
+    ];
+
+    const handler = createRivetWebAppHandler(project, { basePath: '/app', uiGraphId: 'ui-graph' });
+    const response = await handler.handleRequest(
+      new Request('https://example.test/app/actions/run', {
+        body: JSON.stringify({ componentId: 'ui-graph-component-2', state: { prompt: 'hello' } }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+    );
+    const body = (await response.json()) as { statePatch: Record<string, unknown> };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.statePatch['first-result'], undefined);
+    assert.equal(body.statePatch['second-result'], 'hello');
   });
 
   void it('maps array action inputs to typed Data Values', async () => {
