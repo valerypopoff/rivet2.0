@@ -581,9 +581,10 @@ function addWebAppOAuthLogoutLink(html: string, logoutPath: string): string {
   .rivet-web-app-auth-logout { position: fixed; top: 12px; right: 12px; z-index: 2147483647; display: inline-flex; align-items: center; min-height: 28px; padding: 0 10px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 6px; background: rgb(20 20 24 / 0.82); color: #f4f4f5; font: 600 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; text-decoration: none; box-shadow: 0 8px 30px rgb(0 0 0 / 0.25); backdrop-filter: blur(8px); }
   .rivet-web-app-auth-logout:hover { background: rgb(40 42 48 / 0.94); }
 </style>
-<a class="rivet-web-app-auth-logout" href="${escapeHtml(logoutPath)}">Sign out</a>`;
-  return /<\/body>/i.test(html)
-    ? html.replace(/<\/body>/i, `${logoutHtml}</body>`)
+<a id="rivet-web-app-auth-logout" class="rivet-web-app-auth-logout" href="${escapeHtml(logoutPath)}">Sign out</a>`;
+  const closingBodyIndex = html.toLowerCase().lastIndexOf('</body>');
+  return closingBodyIndex >= 0
+    ? `${html.slice(0, closingBodyIndex)}${logoutHtml}${html.slice(closingBodyIndex)}`
     : `${html}${logoutHtml}`;
 }
 

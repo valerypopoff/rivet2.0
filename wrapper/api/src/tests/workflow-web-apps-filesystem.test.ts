@@ -899,6 +899,10 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
       const allowedHtml = await allowedResponse.text();
       assert.match(allowedHtml, /rivet-web-app-auth-logout/);
       assert.match(allowedHtml, /href="\/apps\/auth\/logout\?return_to=%2Fapps%2Fpublished-web-app-oauth&amp;select_account=1"/);
+      const logoutAttachmentIndex = allowedHtml.indexOf('id="rivet-web-app-auth-logout"');
+      const logoutEndIndex = allowedHtml.indexOf('</a>', logoutAttachmentIndex);
+      assert.ok(logoutAttachmentIndex >= 0 && logoutEndIndex > logoutAttachmentIndex);
+      assert.match(allowedHtml.slice(logoutEndIndex + '</a>'.length), /^\s*<\/body>\s*<\/html>\s*$/i);
 
       const crossOriginActionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth/actions/run`, {
         method: 'POST',
