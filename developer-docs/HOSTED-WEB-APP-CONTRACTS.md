@@ -18,7 +18,9 @@ same project.
 Shared component semantics live in core's UI-graph runtime model. React desktop
 preview and the generated Node client consume that model. The generated client is a
 checked artifact; `packages/node/scripts/build-web-app-client.mjs --check` must fail
-when its source changes without regeneration.
+when its source changes without regeneration. Its build script fixes esbuild's
+working directory to the Node package, so generating from the repository root or
+through a workspace command produces the same artifact.
 
 ## Node Serving API
 
@@ -31,6 +33,14 @@ auth, revision, storage, recordings, headers, and error-envelope ownership.
 `revisionKey` is an opaque consistency token, not authentication; stale actions
 return the machine-readable `revision_mismatch` conflict used by the shared reload
 modal.
+
+The generated browser client reads every action response body as text once before
+attempting to parse the JSON action protocol. JSON errors continue to use their
+`error` and `code` fields, including the `revision_mismatch` reload flow. A failed
+empty, HTML, or other non-JSON response is rendered only as its HTTP status message
+(for example, `413 Request Entity Too Large`), never as proxy content or a JSON
+parser error. A successful non-JSON response is treated as an invalid action
+response.
 
 Each button action has a narrow state boundary. The React preview and generated
 browser client project UI state to only the data keys named by that button's graph

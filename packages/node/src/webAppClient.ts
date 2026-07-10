@@ -37,6 +37,12 @@ type DomPurifyApi = {
   sanitize?: (value: string, options: Record<string, unknown>) => string;
 };
 
+type WebAppActionResponse = {
+  code?: string;
+  error?: string;
+  statePatch?: Record<string, unknown>;
+};
+
 const browserGlobals = globalThis as typeof globalThis & {
   DOMPurify?: DomPurifyApi;
   marked?: MarkedApi;
@@ -146,10 +152,30 @@ if (config && root) {
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
+  const getActionFailureMessage = (response: Pick<Response, 'status' | 'statusText'>): string =>
+    `${response.status} ${response.statusText || 'Action failed'}`;
+
+  const isWebAppActionResponse = (value: unknown): value is WebAppActionResponse =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+  const readActionResponse = async (response: Response): Promise<WebAppActionResponse> => {
+    const body = (await response.text()).trim();
+    if (!body) {
+      throw new Error(response.ok ? 'Action returned an invalid response.' : getActionFailureMessage(response));
+    }
+
+    try {
+      const result: unknown = JSON.parse(body);
+      if (isWebAppActionResponse(result)) return result;
+    } catch {
+      // Proxy and upstream failures may return HTML or plain text instead of action JSON.
+    }
+
+    throw new Error(response.ok ? 'Action returned an invalid response.' : getActionFailureMessage(response));
+  };
+
   const renderError = (): Node[] =>
-    error && !revisionMismatch
-      ? [createElement('div', { className: 'rivet-web-app-error', text: error })]
-      : [];
+    error && !revisionMismatch ? [createElement('div', { className: 'rivet-web-app-error', text: error })] : [];
 
   const renderRevisionMismatchModal = (): Node[] => {
     if (!revisionMismatch) return [];
@@ -199,7 +225,7 @@ if (config && root) {
         headers: { 'content-type': 'application/json' },
         method: 'POST',
       });
-      const result = (await response.json()) as { code?: string; error?: string; statePatch?: Record<string, unknown> };
+      const result = await readActionResponse(response);
       if (!response.ok) {
         if (response.status === 409 && result.code === 'revision_mismatch') {
           revisionMismatch = true;
@@ -225,7 +251,10 @@ if (config && root) {
         content = createElement('div', { className: 'rivet-web-app-card', text: renderModel.text });
         break;
       case 'markdown':
-        content = renderMarkdownElement(renderModel.markdown, 'rivet-web-app-card rivet-web-app-markdown markdown-body');
+        content = renderMarkdownElement(
+          renderModel.markdown,
+          'rivet-web-app-card rivet-web-app-markdown markdown-body',
+        );
         break;
       case 'input':
       case 'textarea': {
@@ -256,7 +285,9 @@ if (config && root) {
       }
       case 'output': {
         const { output } = renderModel;
-        const children: Node[] = [createElement('div', { className: 'rivet-web-app-output-title', text: renderModel.label })];
+        const children: Node[] = [
+          createElement('div', { className: 'rivet-web-app-output-title', text: renderModel.label }),
+        ];
         if (output.hasValue) {
           children.push(
             createElement('button', {
@@ -287,7 +318,10 @@ if (config && root) {
         }
         children.push(
           output.renderAs === 'markdown'
-            ? renderMarkdownElement(output.renderedValue, 'rivet-web-app-output-markdown markdown-body rivet-markdown-output')
+            ? renderMarkdownElement(
+                output.renderedValue,
+                'rivet-web-app-output-markdown markdown-body rivet-markdown-output',
+              )
             : createElement('pre', { text: output.renderedValue }),
         );
         content = createElement(

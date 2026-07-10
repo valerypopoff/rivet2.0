@@ -141,7 +141,7 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(clientScript ?? '', /browserGlobals\.DOMPurify\?\.sanitize/);
   });
 
-  void it('posts only a button\'s input-bound state from the generated client', async () => {
+  void it("posts only a button's input-bound state from the generated client", async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const button = uiGraph.components[0] as Extract<UiGraphComponent, { type: 'button' }>;
@@ -176,6 +176,33 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
 
     assert.deepEqual(requests, [{ componentId: 'run-button', state: { prompt: 'hello', genre: 'fiction' } }]);
+  });
+
+  void it('renders a friendly HTTP error when a proxy returns non-JSON action content', async () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        window.fetch = async () =>
+          ({
+            ok: false,
+            status: 413,
+            statusText: 'Request Entity Too Large',
+            text: async () => '<html><body>Request Entity Too Large</body></html>',
+          }) as Response;
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    dom.window.document.querySelector('button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const renderedError = dom.window.document.querySelector('.rivet-web-app-error')?.textContent;
+    dom.window.close();
+
+    assert.equal(renderedError, '413 Request Entity Too Large');
+    assert.doesNotMatch(renderedError ?? '', /Unexpected token|<html>/i);
   });
 
   void it('sanitizes hosted Markdown with the shared browser policy', () => {
