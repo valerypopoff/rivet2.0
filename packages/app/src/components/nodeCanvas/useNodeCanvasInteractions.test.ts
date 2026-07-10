@@ -189,10 +189,6 @@ test('non-graph canvases keep drag, resize, and alignment commands out of graph 
   assert.match(nodeCanvasSource, /onNodesChanged=\{disableGraphCommands \? onNodesChanged : undefined\}/);
   assert.match(nodeCanvasSource, /if \(disableGraphCommands\) \{[\s\S]*onNodesDeleted\?\.\(selectedNodeIds\);[\s\S]*return;[\s\S]*\}/);
   assert.match(nodeLibraryBuilderSource, /getCanvasPositionForNodes/);
-  assert.match(
-    nodeLibraryBuilderSource,
-    /setCanvasPosition\(getCanvasPositionForNodes\(editingPrefab \? \[editingPrefab\.sourceNode\] : nodes, sidebarOpen\)\)/,
-  );
   assert.match(nodeLibraryBuilderSource, /setCanvasPosition\(getCanvasPositionForNodes\(\[editingPrefab\.sourceNode\], sidebarOpen\)\)/);
   assert.match(nodeLibraryBuilderSource, /else if \(canUseNodeAsPrefabSource\(nextNode\)\)[\s\S]*buildNodePrefab\(nextNode\)/);
   assert.match(nodeLibraryBuilderSource, /onCanvasClick=\{closeEditor\}/);

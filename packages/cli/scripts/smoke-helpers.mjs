@@ -7,7 +7,7 @@ import { gunzipSync } from 'node:zlib';
 
 export const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const repoRoot = resolve(packageDir, '../..');
-export const yarnPath = join(repoRoot, '.yarn/releases/yarn-4.6.0.cjs');
+export const yarnPath = join(repoRoot, '.yarn/releases/yarn-4.17.1.cjs');
 
 export function buildWorkspace(workspaceName) {
   run('node', [yarnPath, 'workspace', workspaceName, 'run', 'build'], repoRoot);

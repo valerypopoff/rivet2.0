@@ -1,4 +1,4 @@
-import { type FC, useEffect, useRef, useState } from 'react';
+import { type FC, useCallback, useSyncExternalStore } from 'react';
 import { useAtom } from 'jotai';
 import TextField from '@atlaskit/textfield';
 import Button from '@atlaskit/button';
@@ -22,21 +22,13 @@ import {
   getAiAssistProviderOption,
   getDefaultAiAssistModelForProvider,
   includeCurrentAiAssistModelOption,
-  type AiAssistModelOption,
   type AiAssistModelSelectorValue,
   type AiAssistProvider,
 } from '../../../utils/aiAssistModelSettings.js';
 import { useDependsOnPlugins } from '../../../hooks/useDependsOnPlugins.js';
 import { fillMissingSettingsFromEnvironmentVariables } from '../../../utils/tauri.js';
 import { useEnvironmentProvider } from '../../../providers/ProvidersContext.js';
-import {
-  getChatV2DiscoveredModelOptionsWithStatus,
-  invalidateChatV2DiscoveredModelOptions,
-} from '../../../utils/chatV2ModelCatalog.js';
-import {
-  getChatV2ModelRefreshStatus,
-  type ChatV2ModelRefreshStatus,
-} from '../../../utils/chatV2ModelCatalogStatus.js';
+import { chatV2ModelCatalogService } from '../../../utils/chatV2ModelCatalogService.js';
 
 const llmSettingsStyles = css`
   .ai-assist-model-control {
@@ -87,9 +79,6 @@ const llmSettingsStyles = css`
 
 type RefreshableAiAssistProvider = Exclude<AiAssistProvider, 'custom'>;
 
-const aiAssistRefreshedModelOptions = new Map<RefreshableAiAssistProvider, AiAssistModelOption[]>();
-const aiAssistModelCatalogRefreshStatus = new Map<RefreshableAiAssistProvider, ChatV2ModelRefreshStatus>();
-
 function isRefreshableAiAssistProvider(provider: AiAssistProvider): provider is RefreshableAiAssistProvider {
   return provider !== 'custom';
 }
@@ -102,16 +91,26 @@ export const LlmSettingsPage: FC = () => {
   const plugins = useDependsOnPlugins();
   const environmentProvider = useEnvironmentProvider();
   const selectedAssistProvider = getAiAssistProviderFromModel(selectedAssistModel);
-  const selectedAssistProviderRef = useRef(selectedAssistProvider);
-  const selectedAssistProviderOption = getAiAssistProviderOption(selectedAssistProvider);
-  const [assistModelRefreshStatus, setAssistModelRefreshStatus] = useState<ChatV2ModelRefreshStatus>(() =>
-    isRefreshableAiAssistProvider(selectedAssistProvider)
-      ? aiAssistModelCatalogRefreshStatus.get(selectedAssistProvider)
-      : undefined,
+  const modelCatalogSessionKey = `ai-assist:${selectedAssistProvider}`;
+  const subscribeToModelCatalog = useCallback(
+    (listener: () => void) => chatV2ModelCatalogService.subscribe(modelCatalogSessionKey, listener),
+    [modelCatalogSessionKey],
   );
+  const getModelCatalogSnapshot = useCallback(
+    () => chatV2ModelCatalogService.getSnapshot(modelCatalogSessionKey),
+    [modelCatalogSessionKey],
+  );
+  const modelCatalogSession = useSyncExternalStore(
+    subscribeToModelCatalog,
+    getModelCatalogSnapshot,
+    getModelCatalogSnapshot,
+  );
+  const selectedAssistProviderOption = getAiAssistProviderOption(selectedAssistProvider);
   const assistModelOptions = includeCurrentAiAssistModelOption(
     isRefreshableAiAssistProvider(selectedAssistProvider)
-      ? (aiAssistRefreshedModelOptions.get(selectedAssistProvider) ?? getAiAssistModelOptionsForProvider(selectedAssistProvider))
+      ? modelCatalogSession.options
+        ? createAiAssistModelOptions(selectedAssistProvider, modelCatalogSession.options)
+        : getAiAssistModelOptionsForProvider(selectedAssistProvider)
       : getAiAssistModelOptionsForProvider(selectedAssistProvider),
     selectedAssistModel,
     selectedAssistProvider,
@@ -122,57 +121,23 @@ export const LlmSettingsPage: FC = () => {
     assistModelOptions,
   );
 
-  useEffect(() => {
-    selectedAssistProviderRef.current = selectedAssistProvider;
-    setAssistModelRefreshStatus(
-      isRefreshableAiAssistProvider(selectedAssistProvider)
-        ? aiAssistModelCatalogRefreshStatus.get(selectedAssistProvider)
-        : undefined,
-    );
-  }, [selectedAssistProvider]);
-
-  const updateAiAssistModelRefreshStatus = (
-    provider: RefreshableAiAssistProvider,
-    nextStatus: ChatV2ModelRefreshStatus,
-  ) => {
-    if (nextStatus == null) {
-      aiAssistModelCatalogRefreshStatus.delete(provider);
-    } else {
-      aiAssistModelCatalogRefreshStatus.set(provider, nextStatus);
-    }
-
-    if (provider === selectedAssistProviderRef.current) {
-      setAssistModelRefreshStatus(nextStatus);
-    }
-  };
-
   const refreshAiAssistModelOptions = async () => {
     if (!isRefreshableAiAssistProvider(selectedAssistProvider)) {
       return;
     }
 
     const provider = selectedAssistProvider;
-    aiAssistRefreshedModelOptions.delete(provider);
-    updateAiAssistModelRefreshStatus(provider, {
-      tone: 'warning',
-      message: 'Refreshing model list...',
-    });
-
     try {
       const resolvedSettings = await fillMissingSettingsFromEnvironmentVariables(settings, plugins, {
         environmentProvider,
       });
-      const context = { settings: resolvedSettings, plugins };
-
-      invalidateChatV2DiscoveredModelOptions(provider, context);
-      const result = await getChatV2DiscoveredModelOptionsWithStatus(provider, context);
-      aiAssistRefreshedModelOptions.set(provider, createAiAssistModelOptions(provider, result.options));
-      updateAiAssistModelRefreshStatus(provider, getChatV2ModelRefreshStatus(provider, result, resolvedSettings, plugins));
-    } catch (error) {
-      updateAiAssistModelRefreshStatus(provider, {
-        tone: 'warning',
-        message: error instanceof Error ? error.message : 'Failed to refresh model list.',
+      await chatV2ModelCatalogService.refresh({
+        sessionKey: modelCatalogSessionKey,
+        provider,
+        context: { settings: resolvedSettings, plugins },
       });
+    } catch (error) {
+      chatV2ModelCatalogService.setError(modelCatalogSessionKey, error);
     }
   };
 
@@ -219,9 +184,9 @@ export const LlmSettingsPage: FC = () => {
                       Re-fetch Model List
                     </Button>
                   </div>
-                  {assistModelRefreshStatus ? (
-                    <div className={`ai-assist-refresh-status ${assistModelRefreshStatus.tone}`}>
-                      {assistModelRefreshStatus.message}
+                  {modelCatalogSession.status ? (
+                    <div className={`ai-assist-refresh-status ${modelCatalogSession.status.tone}`}>
+                      {modelCatalogSession.status.message}
                     </div>
                   ) : null}
                 </div>

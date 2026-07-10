@@ -1,14 +1,18 @@
 # Refactor Plan: Security, Reliability, And Maintainability
 
-Status: Planned
+Status: Completed
 
 Audit date: 2026-07-10
 
+Completion date: 2026-07-10
+
 Baseline: `6dfa1273 Add JSON downloads for web app outputs`
+
+Completion record: `refactor-history.md` item 133
 
 ## Purpose
 
-This plan identifies the ten highest-value refactors for making Rivet safer, more
+This completed plan identifies the ten highest-value refactors for making Rivet safer, more
 reliable, easier to understand, and easier to extend. It is based on the current
 code, current dependency graph, `refactor-history.md`, the deleted previous
 `refactor.md`, and the feature work added after the June 2026 ownership refactor.
@@ -63,9 +67,10 @@ as follows:
 - **GraphProcessor lifecycle ownership** remains valid and is item 9, but its scope
   is narrowed to one extraction at a time to preserve runtime event order and speed.
 
-## Current Evidence Snapshot
+## Baseline Evidence Snapshot
 
-The plan is grounded in the following current observations:
+The plan was grounded in the following pre-refactor observations. They are retained
+as baseline evidence and must not be read as descriptions of the completed code:
 
 - `packages/core/src/model/GraphProcessor.ts` is approximately 2,532 physical lines
   and still owns run lifecycle, abort/pause state, node processing, loops, races,
@@ -106,6 +111,23 @@ The plan is grounded in the following current observations:
 These numbers are diagnostics, not line-count targets. A smaller file is useful only
 when the resulting owners are clearer and the total system has fewer concepts.
 
+## Completion Evidence
+
+- All ten numbered items below are implemented and marked `DONE`; durable ownership
+  and reassessment details are recorded in `refactor-history.md` item 133.
+- The final audit fixed additional integration gaps found only by broad verification:
+  package-owned generated-client tooling, ancestry-scoped dependency exceptions,
+  browser-safe Gentrace imports, a public core web-app runtime entrypoint, and
+  Windows-safe app test discovery.
+- Full build, aggregate tests, lint, docs typecheck, style/boundary checks, file-tree
+  checks, formatting, JavaScript and Rust audits, runtime equivalence/benchmarks, and
+  diff hygiene pass. A clean temporary workspace also passes the exact immutable
+  cache install used by CI while the developer's live `yarn dev` process remains
+  untouched.
+- Legacy source-reading tests and long relative imports are no longer open-ended:
+  57 reviewed source-reading tests and 154 long-relative imports remain on shrinking
+  baselines, while new entries and package source deep imports fail immediately.
+
 ## Priority Order
 
 | Order | Refactor                                                | Primary value                        | Relative risk | Expected production LOC                           |
@@ -144,7 +166,7 @@ inside every earlier item rather than postponed entirely to the end.
 - Run focused tests first, then package typecheck/lint/build according to blast radius.
 - Use `git diff --check` for every item.
 
-## 1. MCP Transport, Environment, And Client Lifecycle Safety
+## 1. MCP Transport, Environment, And Client Lifecycle Safety — DONE
 
 ### Why This Is A Priority
 
@@ -240,7 +262,7 @@ arguments.
 MCP calls have one cleanup path, configured stdio env works, secrets are not logged,
 and the adapter is shorter. Public node/YAML behavior remains unchanged.
 
-## 2. Default-Safe Markdown And HTML Rendering Boundary
+## 2. Default-Safe Markdown And HTML Rendering Boundary — DONE
 
 ### Why This Is A Priority
 
@@ -348,7 +370,7 @@ Untrusted Markdown is safe by default, raw HTML sinks are auditable, and compone
 lose repeated rendering choices. The only visible changes should be removal of unsafe
 HTML/URL behavior.
 
-## 3. Dependency And Toolchain Security Baseline
+## 3. Dependency And Toolchain Security Baseline — DONE
 
 ### Why This Is A Priority
 
@@ -452,7 +474,7 @@ not merely dump an untriaged monorepo report.
 Rivet has a current, coherent toolchain; known runtime vulnerabilities are removed or
 explicitly time-bounded; and CI prevents silent reintroduction.
 
-## 4. Shared Minimal Web App Runtime Model
+## 4. Shared Minimal Web App Runtime Model — DONE
 
 ### Why This Is A Priority
 
@@ -565,7 +587,7 @@ New web-app behavior is implemented once, hosted client code is normal testable
 source, `webAppHandler.ts` becomes smaller, and wrapper/desktop parity stops relying
 on regex tests and human synchronization.
 
-## 5. Schema-Driven UI Graph Builder
+## 5. Schema-Driven UI Graph Builder — DONE
 
 ### Why This Is A Priority
 
@@ -663,7 +685,7 @@ specific to button/graph boundaries, not a generic component concern.
 The builder shell is substantially smaller, adding a component has one obvious path,
 and graph-binding/data-key correctness is testable without rendering the full editor.
 
-## 6. Monaco Feature And JSON-Preview Architecture
+## 6. Monaco Feature And JSON-Preview Architecture — DONE
 
 ### Why This Is A Priority
 
@@ -769,7 +791,7 @@ Monaco features become composable and disposable, decoded-string UI has clear
 geometry/controller/view ownership, and future editor features do not enlarge one
 mount effect or one 1,300-line overlay component.
 
-## 7. Project Workspace Target And Navigator Ownership
+## 7. Project Workspace Target And Navigator Ownership — DONE
 
 ### Why This Is A Priority
 
@@ -877,7 +899,7 @@ Workspace selection has one valid state, transition code is shorter, `GraphList`
 shell again, and adding another project resource no longer requires new booleans in
 every app subsystem.
 
-## 8. LLM Chat V2 And AI-Assist Request Contract
+## 8. LLM Chat V2 And AI-Assist Request Contract — DONE
 
 ### Why This Is A Priority
 
@@ -993,7 +1015,7 @@ One request plan explains what Rivet sends, all Vercel SDK consumers share provi
 policy, model fetching leaves view components, and legacy Chat cannot silently leak
 back into new features.
 
-## 9. GraphProcessor Run-Lifecycle Extraction
+## 9. GraphProcessor Run-Lifecycle Extraction — DONE
 
 ### Why This Is A Priority
 
@@ -1086,7 +1108,7 @@ safe.
 `GraphProcessor` loses one meaningful responsibility, lifecycle invariants become
 explicit and testable, and runtime behavior/performance remain unchanged.
 
-## 10. Behavioral Tests, Architecture Boundaries, And Navigable Contracts
+## 10. Behavioral Tests, Architecture Boundaries, And Navigable Contracts — DONE
 
 ### Why This Is A Priority
 

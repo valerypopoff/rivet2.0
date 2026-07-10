@@ -8,11 +8,13 @@
 
 Repo-level toolchain expectations:
 
-- Node `20.4.0` via Volta
-- root `packageManager`: `yarn@4.6.0`
+- Node `22.22.3` via Volta
+- root `packageManager`: `yarn@4.17.1`
 - Plug'n'Play enabled
 
-Several packages still declare `yarn@3.5.0` in local manifests, but the root workspace tooling is the authoritative setup for normal development.
+Workspace manifests, Volta metadata, shared CI setup, and Tauri commands all use
+the same Node 22.22 / Yarn 4.17 toolchain. Keep those declarations aligned so a
+package-local command cannot silently select a different Yarn runtime.
 
 ### Rust
 
@@ -51,6 +53,7 @@ yarn test:app-executor
 yarn test:cli
 yarn test:docs
 yarn test:style
+yarn security:audit
 yarn bench:build-timing
 yarn lint
 yarn prettier:fix
@@ -180,17 +183,32 @@ separate step so runtime/package tests and documentation validation stay
 visibly distinct. The docs typecheck is non-emitting so it cannot leave
 generated JavaScript beside Docusaurus source files during CI or local cleanup.
 
+The app test script lets the Node/tsx test runner discover `*.test.ts` files
+instead of expanding `src/**/*.test.ts` in the shell. Keep discovery internal to
+the runner: expanding the app's full test list exceeds the Windows command-line
+limit before tests can start.
+
 ### `yarn test:style`
 
-Runs [`scripts/checks/check-test-style.mjs`](../scripts/checks/check-test-style.mjs),
-[`scripts/checks/check-doc-links.mjs`](../scripts/checks/check-doc-links.mjs), and
-[`scripts/checks/check-graph-creator-data.mjs`](../scripts/checks/check-graph-creator-data.mjs).
+Runs repository checks for test style, documentation links, generated graph-builder
+context, rich-text sinks, AI runtime boundaries, desktop shell policy, low-level
+editor boundaries, and generated web-app client freshness.
+The web-app freshness check runs through the Node workspace's
+`check:web-app-client` script so both generation and verification resolve the same
+package-owned `esbuild` dependency.
 The test-style script fails when `test.only`, `it.only`, `describe.only`,
 `suite.only`, or `context.only` calls are present in tracked or untracked
-non-ignored test files. It also prints report-only lists of test files that use
-`readFileSync`, async `readFile(...)`, or `.skip`; those reports keep the remaining source-shape
-guardrails and any temporary skipped tests visible without blocking cleanup
-work.
+non-ignored test files. Source-reading tests are controlled by the explicit shrinking
+allowlist in `source-reading-test-allowlist.mjs`: a new source-reading test fails,
+and removing one requires removing its stale allowlist entry. `.skip` remains a
+visible review queue because several parked runtime optimizations intentionally keep
+characterization cases beside the active suite.
+
+`check-ai-runtime-boundaries.mjs` prevents Generate using AI and the graph builder
+from regaining legacy Chat/Azure endpoint seams. `check-desktop-shell-contract.mjs`
+owns static Tauri minimum-size/macOS-menu invariants that previously lived in a
+brittle TSX source parser. `check-editor-boundaries.mjs` prevents low-level Monaco
+owners from importing app state/product layers.
 
 The documentation-link checker validates local Markdown links in root-level
 docs and direct `developer-docs/*.md` files. It skips external URLs, anchors,
@@ -202,6 +220,10 @@ context in `packages/app/graphs/graph-creator.rivet-data` is generated from the
 current built-in node source files and current node-reference docs. If it fails,
 refresh the generated bundle with
 `node scripts/checks/check-graph-creator-data.mjs --write`.
+
+`yarn check:file-tree` rejects unignored generated paths and package source deep
+imports. The remaining production long-relative-import queue has a shrinking numeric
+baseline; increasing it fails so settled boundaries cannot silently regress.
 
 ### `yarn lint`
 
@@ -298,7 +320,7 @@ Current dev/build detail:
 - `packages/app/scripts/dev.mjs` does a Windows-only cleanup pass for stale `src-tauri/target/*/app-executor.exe` processes before launching `tauri dev`, because Tauri's sidecar-copy step fails if a previous dev session left that copied sidecar binary locked
 - The root Yarn setup uses Plug'n'Play. Keep the root `.pnp.cjs` and `.pnp.loader.mjs` files tracked even though they are generated, because `yarn dev` and other Yarn commands refuse to run scripts when `.pnp.cjs` is missing. `.yarn/install-state.gz` remains ignored/cacheable because Yarn can regenerate it from the tracked PnP loader and lock/cache state.
 - `packages/app/scripts/dev.mjs` and `packages/app/scripts/prepare-tauri.mjs` use the shared `packages/app/scripts/pnp-env.mjs` child-process environment helper. It strips stale `NODE_OPTIONS` preloads for missing `.pnp.cjs` / `.pnp.loader.mjs` files, because some local checkouts can temporarily have Yarn PnP config plus a `node_modules` install layout; nested Tauri, Node, and Yarn sidecar commands must be allowed to start the pinned Yarn file instead of failing before Yarn runs.
-- `packages/app/src-tauri/tauri.conf.json` runs `node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri` before both dev and build commands, then uses that same pinned Yarn file for `start`/`build`. Keep those Tauri commands on the explicit root Yarn path instead of bare `yarn`: Tauri runs them from `packages/app`, and the explicit path avoids workspace package-manager drift and missing `.pnp.cjs` loader failures while still rebuilding the sidecar when app/core code has changed.
+- `packages/app/src-tauri/tauri.conf.json` runs `node ../../.yarn/releases/yarn-4.17.1.cjs prepare:tauri` before both dev and build commands, then uses that same pinned Yarn file for `start`/`build`. Keep those Tauri commands on the explicit root Yarn path instead of bare `yarn`: Tauri runs them from `packages/app`, and the explicit path avoids workspace package-manager drift and missing `.pnp.cjs` loader failures while still rebuilding the sidecar when app/core code has changed.
 - `packages/app/src-tauri/vendor/` now carries the small vendored Tauri v1 plugin crates (`tauri-plugin-persisted-scope` and `tauri-plugin-window-state`) so Cargo no longer has to parse the upstream `plugins-workspace` template manifest during metadata/check/dev runs
 - Vite bundle visualization is opt-in for normal app builds. Set `RIVET_BUNDLE_ANALYZE=true`
   before running `yarn workspace @valerypopoff/rivet-app run build` when a Rollup visualizer
@@ -428,7 +450,7 @@ Workflows live under [`.github/workflows/`](../.github/workflows/).
 
 Node/Yarn CI jobs should use
 [`.github/actions/setup-yarn`](../.github/actions/setup-yarn/action.yml)
-after checkout. The composite action installs Node `20.4.x` by default and
+after checkout. The composite action installs Node `22.22.x` by default and
 restores only Yarn's generated `.yarn/install-state.gz` file with a key based
 on the OS, Node version, `yarn.lock`, and `.yarnrc.yml`.
 
@@ -451,6 +473,38 @@ CI and desktop bundle jobs covered with `os: linux`, `darwin`, and `win32`,
 install can leave native archives such as Rollup, SWC, esbuild, or Tauri CLI out
 of the tracked cache, and the next `--immutable-cache` install will fail before
 tests start.
+
+The documentation stack uses `image-size` while reading checked-in image assets.
+Root `resolutions` applies the checked-in `image-size` patch because its Node 22
+file-handle path reads incorrectly from a Yarn zip archive. Keep the patch and
+resolution together unless the package removes that PnP incompatibility; this no
+longer requires `dependenciesMeta` or an unplugged package copy.
+
+### Dependency security
+
+`yarn security:audit` parses Yarn's recursive NDJSON audit output and fails on
+every critical finding and every unreviewed high finding. Temporary high-severity
+exceptions live in
+[`security/dependency-audit-exceptions.json`](../security/dependency-audit-exceptions.json)
+and must name their package/advisory, normalized direct dependents, scope, reason,
+owner, and expiry. The dependent allowlist prevents a docs/build exception from
+silently waiving a new runtime ancestry for the same vulnerable package. The check
+validates policy rather than a frozen advisory count, so a newly published high
+finding or a new unreviewed dependent fails CI even when lower-severity counts
+change.
+
+The build workflow runs that JavaScript audit immediately after dependency
+installation. A separate `rustsec/audit-check` job scans
+`packages/app/src-tauri/Cargo.lock`; keeping it separate avoids adding Rust setup
+time to the normal Node build. Weekly Dependabot groups Yarn production/development
+updates, Cargo updates, and GitHub Action updates into reviewable pull requests.
+
+Current reviewed JavaScript exceptions are limited to docs/build/lint tooling,
+native build tooling, and the archived `pkg` executor packager. They are not a
+waiver for runtime dependencies. The checked-in pnpm 8.8 desktop sidecar binaries
+are outside Yarn's audit graph; their version, provenance, and hashes remain owned
+by `packages/app/sidecars/pnpm/README.md` and `SHA256SUMS` and must be reviewed as a
+binary dependency during each sidecar refresh.
 
 Use the pinned Yarn file for CI installs so workflow behavior follows the
 repository toolchain instead of the runner's package-manager shim. Regular
@@ -500,14 +554,18 @@ Runs on `ubuntu-latest` and performs:
 
 1. checkout
 2. shared Node/Yarn setup and install-state cache restore
-3. `node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache`
-4. `node scripts/checks/check-graph-creator-data.mjs`
-5. `yarn build`
-6. `yarn test`
-7. `yarn test:docs`
-8. `yarn test:style`
-9. `yarn lint`
-10. `yarn prettier:check`
+3. `node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache`
+4. `yarn security:audit`
+5. `node scripts/checks/check-graph-creator-data.mjs`
+6. `yarn build`
+7. `yarn test`
+8. `yarn test:docs`
+9. `yarn test:style`
+10. `yarn lint`
+11. `yarn prettier:check`
+
+The independent Rust audit job checks the desktop `Cargo.lock` in parallel with
+the Node build.
 
 ### Important notes
 
@@ -541,7 +599,7 @@ Per matrix entry, the workflow:
 4. sets up Rust toolchains
 5. restores the Tauri/Rust cache
 6. installs Linux system dependencies where needed
-7. runs `node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache`
+7. runs `node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache`
 8. runs `yarn build:hosted-web-deps`
 9. invokes `tauri-apps/tauri-action`
 
@@ -731,7 +789,7 @@ The workflow:
 5. verifies the AI graph-builder context with `node scripts/checks/check-graph-creator-data.mjs`
 6. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and `@valerypopoff/rivet2-cli`
 7. verifies that dependency install and package build touched only generated artifacts
-8. switches to Node `22.14.x` and npm `11.5.1` for npm trusted-publishing compatibility
+8. uses Node `22.22.x` and npm `11.5.1` for npm trusted-publishing compatibility
 9. verifies that the repository `NPM_TOKEN` secret is present and accepted by `npm whoami`
 10. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`
 
@@ -852,14 +910,18 @@ Tauri config lives in [`packages/app/src-tauri/tauri.conf.json`](../packages/app
 
 ### Verified current details
 
-- `beforeDevCommand`: `node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri && node ../../.yarn/releases/yarn-4.6.0.cjs start`
-- `beforeBuildCommand`: `node ../../.yarn/releases/yarn-4.6.0.cjs prepare:tauri && node ../../.yarn/releases/yarn-4.6.0.cjs build`
+- `beforeDevCommand`: `node ../../.yarn/releases/yarn-4.17.1.cjs prepare:tauri && node ../../.yarn/releases/yarn-4.17.1.cjs start`
+- `beforeBuildCommand`: `node ../../.yarn/releases/yarn-4.17.1.cjs prepare:tauri && node ../../.yarn/releases/yarn-4.17.1.cjs build`
 - `devPath`: `http://localhost:5173`
 - `distDir`: `../dist`
 - product name/window title: `Rivet 2`, so installed desktop builds are distinguishable from the older Rivet app
 - `package.version`: the version Tauri uses for installer filenames; it must match `packages/app/package.json`
 - the legacy Tauri updater endpoint still exists in the default config, but the app's Settings > Updates flow does not call it
 - external binaries include app-executor and bundled `pnpm`
+- Tauri compile features mirror the APIs the app actually calls: targeted file,
+  dialog, HTTP, and window operations replace the previous `*-all` feature groups;
+  path and global-shortcut remain all-or-nothing in Tauri v1, and the updater
+  feature remains because tagged updater packaging still consumes its config
 
 ### Packaging significance
 

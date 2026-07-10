@@ -1,0 +1,35 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      runtime-dependencies:
+        dependency-type: production
+        patterns:
+          - '*'
+      development-dependencies:
+        dependency-type: development
+        patterns:
+          - '*'
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: cargo
+    directory: /packages/app/src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns:
+          - '*'

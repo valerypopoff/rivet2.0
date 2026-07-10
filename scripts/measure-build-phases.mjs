@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const yarnPath = path.join(repoRoot, '.yarn', 'releases', 'yarn-4.6.0.cjs');
+const yarnPath = path.join(repoRoot, '.yarn', 'releases', 'yarn-4.17.1.cjs');
 const args = new Set(process.argv.slice(2));
 
 function workspaceBuildPhase(label, workspace) {

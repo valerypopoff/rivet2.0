@@ -18,8 +18,8 @@ import { useAtomValue } from 'jotai';
 import { nodeConstructorsState } from '../state/graph';
 import { projectState, referencedProjectsState } from '../state/savedGraphs';
 import { handleError } from '../utils/errorHandling.js';
-import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
 import { canUseNodeAsPrefabSource } from '../domain/nodeLibrary/nodePrefabs.js';
+import { useProjectWorkspaceTarget } from './useProjectWorkspaceTarget.js';
 
 export const addContextMenuGroups = [
   {
@@ -81,7 +81,7 @@ export const addContextMenuGroups = [
 export function useContextMenuAddNodeConfiguration() {
   const referencedProjects = useAtomValue(referencedProjectsState);
   const project = useAtomValue(projectState);
-  const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
+  const nodeLibraryOpen = useProjectWorkspaceTarget()?.type === 'nodeLibrary';
   const constructors = useAtomValue(nodeConstructorsState);
   const builtInImages = useBuiltInNodeImages();
   const getUIContext = useGetRivetUIContext();
@@ -164,29 +164,29 @@ export function useContextMenuAddNodeConfiguration() {
       });
     }
 
-      if (!nodeLibraryOpen && Object.keys(project.nodePrefabs ?? {}).length > 0) {
-        allGroups.push({
-          id: 'add-node-group:node-library',
-          label: 'Library',
-        });
-      }
+    if (!nodeLibraryOpen && Object.keys(project.nodePrefabs ?? {}).length > 0) {
+      allGroups.push({
+        id: 'add-node-group:node-library',
+        label: 'Library',
+      });
+    }
 
-      const groups = allGroups.map((group) => {
-        let items =
-          group.label === 'Library'
-            ? Object.values(project.nodePrefabs ?? {}).map((prefab): ContextMenuItem => {
-                const label = getNodePrefabDisplayName(project, prefab.id as NodePrefabId);
+    const groups = allGroups.map((group) => {
+      let items =
+        group.label === 'Library'
+          ? Object.values(project.nodePrefabs ?? {}).map((prefab): ContextMenuItem => {
+              const label = getNodePrefabDisplayName(project, prefab.id as NodePrefabId);
 
               return {
                 id: `add-node:${NODE_PREFAB_INSTANCE_TYPE}:${prefab.id}`,
                 label,
-                  data: `${NODE_PREFAB_INSTANCE_TYPE}:${prefab.id}`,
-                  infoBox: {
-                    title: label,
-                    description: 'Creates a linked node.',
-                  },
-                };
-              })
+                data: `${NODE_PREFAB_INSTANCE_TYPE}:${prefab.id}`,
+                infoBox: {
+                  title: label,
+                  description: 'Creates a linked node.',
+                },
+              };
+            })
           : nodeTypesWithUiData
               .filter((item) =>
                 Array.isArray(item.uiData.group)

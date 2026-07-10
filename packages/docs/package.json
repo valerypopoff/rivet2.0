@@ -16,21 +16,23 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@docusaurus/core": "2.4.3",
-    "@docusaurus/preset-classic": "2.4.3",
-    "@mdx-js/react": "^1.6.22",
+    "@docusaurus/core": "3.10.1",
+    "@docusaurus/preset-classic": "3.10.1",
+    "@mdx-js/react": "^3.1.1",
     "clsx": "^2.0.0",
-    "docusaurus-plugin-image-zoom": "^1.0.1",
+    "docusaurus-plugin-image-zoom": "^3.0.1",
     "prism-react-renderer": "^2.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@docusaurus/module-type-aliases": "2.4.3",
-    "@docusaurus/theme-classic": "^2.4.3",
-    "@docusaurus/types": "^2.4.3",
-    "@tsconfig/docusaurus": "^2.0.2",
-    "@types/node": "^20.8.7",
+    "@docusaurus/module-type-aliases": "3.10.1",
+    "@docusaurus/theme-classic": "^3.10.1",
+    "@docusaurus/types": "^3.10.1",
+    "@tsconfig/docusaurus": "^2.0.9",
+    "@types/node": "^22.20.1",
+    "@types/react": "18.2.31",
+    "@types/react-dom": "^18.2.14",
     "tslib": "^2.6.2",
     "typescript": "^5.7.3"
   },
@@ -47,6 +49,6 @@
     ]
   },
   "engines": {
-    "node": ">=20.4"
+    "node": ">=22.22"
   }
 }

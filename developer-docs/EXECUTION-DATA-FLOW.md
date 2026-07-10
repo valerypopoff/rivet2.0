@@ -1,5 +1,8 @@
 # Execution Data Flow and Graph View Identity
 
+This is the detailed event/storage reference. The shorter canonical ownership guide
+is [Execution Identity And Snapshots](./EXECUTION-IDENTITY-AND-SNAPSHOTS.md).
+
 > Internal reference for how graph execution, subgraph runs, navigation context,
 > and node data storage interact in the desktop app.
 >
@@ -259,6 +262,14 @@ User clicks "Run" on main graph
 ```
 
 ### How events flow
+
+Core run-state transitions are owned by
+[`GraphRunLifecycle`](../packages/core/src/model/GraphRunLifecycle.ts), while
+`GraphProcessor` owns the event emitter and the exact order of `graphStart`, node
+terminals, `graphFinish`/`graphError`, `done`, `abort`, and root `finish`.
+`claimRootFinish(...)` is the finish-once guard; subprocessors never claim or emit
+the root `finish` event. Pause remains persistent across processor runs, matching
+the existing ability to pause before calling `processGraph(...)`.
 
 Events from subprocessors bubble up through `wireSubprocessorEvents()` in
 `SubprocessorBridge.ts`. The key behavior:
@@ -1044,6 +1055,8 @@ connecting, the ActionBar hides editor-side run buttons, menu and
 hotkey run commands no-op, and node `Run to here` / `Run from here` context-menu
 items stay hidden; live execution data is expected to arrive from the remote
 process instead.
+
+Editor-side run eligibility also derives from the active per-project `ProjectWorkspaceTarget`, not separate Node-library/web-app flags. Graph targets are executable; Node library and UI-graph targets are not. Switching targets commits live graph state only when leaving a graph, so a Node-library canvas viewport can never be mistaken for the hidden graph viewport. This target policy gates UI commands only and does not change core project execution APIs or hosted execution of a selected graph.
 
 The app-executor sidecar treats graph failures as request-scoped execution
 events rather than process/session failures. If a dynamic run throws because a

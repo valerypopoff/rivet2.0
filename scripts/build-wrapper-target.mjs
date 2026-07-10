@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { reportTiming, startTimer } from './ci-timing.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const yarnPath = path.join(repoRoot, '.yarn', 'releases', 'yarn-4.6.0.cjs');
+const yarnPath = path.join(repoRoot, '.yarn', 'releases', 'yarn-4.17.1.cjs');
 
 const targets = {
   runtime: ['@valerypopoff/rivet2-core', '@valerypopoff/rivet2-node'],

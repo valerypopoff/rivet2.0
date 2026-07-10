@@ -5,16 +5,16 @@ import {
   type Settings,
 } from '@valerypopoff/rivet2-core';
 
-type ChatV2Provider = 'openai' | 'anthropic' | 'google' | 'custom';
-type ChatModelOption = { value: string; label: string };
+export type ChatV2ModelCatalogProvider = 'openai' | 'anthropic' | 'google' | 'custom';
+export type ChatModelOption = { value: string; label: string };
 
-type ChatModelCatalogContext = {
+export type ChatModelCatalogContext = {
   settings: Settings;
   plugins: RivetPlugin[];
   apiKey?: string;
 };
 
-type ChatModelCatalogResult = {
+export type ChatModelCatalogResult = {
   options: ChatModelOption[];
   source: 'api' | 'fallback';
   error?: string;
@@ -49,7 +49,7 @@ function isOpenAIChatLikeModelId(id: string): boolean {
   return normalized.startsWith('gpt') || normalized.startsWith('o');
 }
 
-function logModelCatalogDebug(provider: ChatV2Provider, message: string, details?: unknown): void {
+function logModelCatalogDebug(provider: ChatV2ModelCatalogProvider, message: string, details?: unknown): void {
   const prefix = `[LLM Chat][${provider} models]`;
   if (details === undefined) {
     console.info(`${prefix} ${message}`);
@@ -62,7 +62,7 @@ function sortModelOptions(options: ChatModelOption[]): ChatModelOption[] {
   return [...options].sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function mergeWithStaticFallback(provider: ChatV2Provider, discovered: ChatModelOption[]): ChatModelOption[] {
+function mergeWithStaticFallback(provider: ChatV2ModelCatalogProvider, discovered: ChatModelOption[]): ChatModelOption[] {
   const merged = new Map<string, ChatModelOption>();
 
   for (const option of getChatV2ModelOptions(provider)) {
@@ -227,7 +227,10 @@ async function fetchGoogleModels(context: ChatModelCatalogContext): Promise<Chat
   return mergeWithStaticFallback('google', discovered);
 }
 
-function getCacheKey(provider: ChatV2Provider, context: ChatModelCatalogContext): string {
+export function getChatV2ModelCatalogCacheKey(
+  provider: ChatV2ModelCatalogProvider,
+  context: ChatModelCatalogContext,
+): string {
   switch (provider) {
     case 'openai':
       return JSON.stringify([
@@ -266,7 +269,7 @@ function getCacheKey(provider: ChatV2Provider, context: ChatModelCatalogContext)
 }
 
 export async function getChatV2DiscoveredModelOptions(
-  provider: ChatV2Provider,
+  provider: ChatV2ModelCatalogProvider,
   context: ChatModelCatalogContext,
 ): Promise<ChatModelOption[]> {
   const result = await getChatV2DiscoveredModelOptionsWithStatus(provider, context);
@@ -274,10 +277,10 @@ export async function getChatV2DiscoveredModelOptions(
 }
 
 export async function getChatV2DiscoveredModelOptionsWithStatus(
-  provider: ChatV2Provider,
+  provider: ChatV2ModelCatalogProvider,
   context: ChatModelCatalogContext,
 ): Promise<ChatModelCatalogResult> {
-  const cacheKey = getCacheKey(provider, context);
+  const cacheKey = getChatV2ModelCatalogCacheKey(provider, context);
   const cached = modelCatalogCache.get(cacheKey);
 
   if (cached) {
@@ -327,10 +330,10 @@ export async function getChatV2DiscoveredModelOptionsWithStatus(
 }
 
 export function invalidateChatV2DiscoveredModelOptions(
-  provider: ChatV2Provider,
+  provider: ChatV2ModelCatalogProvider,
   context: ChatModelCatalogContext,
 ): void {
-  modelCatalogCache.delete(getCacheKey(provider, context));
+  modelCatalogCache.delete(getChatV2ModelCatalogCacheKey(provider, context));
 }
 
 export function prefetchChatV2DiscoveredModelOptions(context: ChatModelCatalogContext): void {

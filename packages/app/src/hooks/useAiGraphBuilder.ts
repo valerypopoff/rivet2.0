@@ -474,7 +474,7 @@ export function useAiGraphBuilder({ onFeedback }: { onFeedback: (feedback: strin
           request: prompt,
           graph: JSON.stringify(workingGraph, null, 2),
           model: assistModel.model,
-          api: assistModel.graphApi,
+          api: assistModel.generatorBranch,
         },
         abortSignal: abort,
         context: {

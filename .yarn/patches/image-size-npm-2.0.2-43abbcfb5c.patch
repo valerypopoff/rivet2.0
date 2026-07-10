@@ -1,0 +1,13 @@
+diff --git a/dist/fromFile.cjs b/dist/fromFile.cjs
+index c226d3dac07f235db456c774b26cca88f655e1af..2085ea74072384b24a6f772fdf53944ae0794ad1 100644
+--- a/dist/fromFile.cjs
++++ b/dist/fromFile.cjs
+@@ -1035,7 +1035,7 @@ var processQueue = async () => {
+         throw new Error("Empty file");
+       }
+       const inputSize = Math.min(size, MaxInputSize);
+-      const input = new Uint8Array(inputSize);
++      const input = Buffer.allocUnsafe(inputSize);
+       await handle.read(input, 0, inputSize, 0);
+       resolve2(imageSize(input));
+     } catch (err) {

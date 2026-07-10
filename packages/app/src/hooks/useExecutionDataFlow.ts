@@ -152,7 +152,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
 
   const setSelectedNodePageLatest = (nodeId: NodeId, execution: GraphExecutionMetadata | undefined) => {
     const view = currentGraphViewLatest.current;
-    const selectionByView = selectedGraphRunByViewLatest.current;
+    const selectionByView = selectedGraphRunByViewLatest.current ?? {};
     const shouldFollowLatest =
       view != null && execution?.graphId === view.graphId && (selectionByView[view.key] ?? 'latest') === 'latest';
 
@@ -186,7 +186,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     setLastRecordingState(undefined);
     setUserInputQuestions({});
     setLastRunData({});
-    clearExecutionDataRefs(dataRefs, lastRunDataLatest.current);
+    clearExecutionDataRefs(dataRefs, lastRunDataLatest.current ?? {});
   };
 
   return {

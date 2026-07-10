@@ -4,6 +4,7 @@ import { afterEach, test } from 'node:test';
 import type { Settings } from '@valerypopoff/rivet2-core';
 
 import {
+  getChatV2ModelCatalogCacheKey,
   getChatV2DiscoveredModelOptionsWithStatus,
   invalidateChatV2DiscoveredModelOptions,
 } from './chatV2ModelCatalog.js';
@@ -96,6 +97,13 @@ test('OpenAI model refresh cache stays scoped by explicit API key override', asy
   assert.equal(secondResult.source, 'api');
   assert.equal(cachedFirstResult.source, 'api');
   assert.deepEqual(authorizations, ['Bearer input-openai-key-a', 'Bearer input-openai-key-b']);
+});
+
+test('model catalog cache identity fingerprints credentials without exposing them', () => {
+  const cacheKey = getChatV2ModelCatalogCacheKey('openai', createContext('input-openai-secret'));
+
+  assert.doesNotMatch(cacheKey, /input-openai-secret/);
+  assert.match(cacheKey, /openai/);
 });
 
 test('OpenAI model refresh uses the configured openAiApiKey alias', async () => {

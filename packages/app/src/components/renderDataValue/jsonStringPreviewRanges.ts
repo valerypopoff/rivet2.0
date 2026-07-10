@@ -179,3 +179,11 @@ function getOffsetDistance(range: JsonStringPreviewRange, offset: number): numbe
 
   return 0;
 }
+
+export function isCurrentJsonStringPreviewLiteral(rawLiteral: string, expectedRange: JsonStringPreviewRange): boolean {
+  try {
+    return JSON.parse(rawLiteral) === expectedRange.decodedValue;
+  } catch {
+    return false;
+  }
+}

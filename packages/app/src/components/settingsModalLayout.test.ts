@@ -68,8 +68,8 @@ test('LLM settings page explains where provider keys are used', () => {
   assert.match(source, /className="ai-assist-model-control"/);
   assert.match(source, /Re-fetch Model List/);
   assert.doesNotMatch(source, /\.ai-assist-refresh-models \{[\s\S]*min-height:/);
-  assert.match(source, /getChatV2DiscoveredModelOptionsWithStatus/);
-  assert.match(source, /getChatV2ModelRefreshStatus/);
+  assert.match(source, /chatV2ModelCatalogService\.refresh/);
+  assert.match(source, /modelCatalogSession\.status/);
   assert.match(source, /ai-assist-refresh-status/);
   assert.match(source, /selectedAssistProvider === 'custom'/);
   assert.match(source, /Custom provider API URL/);

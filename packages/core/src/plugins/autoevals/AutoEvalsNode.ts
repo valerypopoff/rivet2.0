@@ -252,7 +252,9 @@ export const AutoEvalsNodeImpl: PluginNodeImpl<AutoEvalsNode> = {
     return {
       ['score' as PortId]: {
         type: 'number',
-        value: result.score,
+        // Newer AutoEvals versions represent unavailable scores as null, while
+        // this node's declared port remains numeric.
+        value: result.score ?? 0,
       },
       ['rationale' as PortId]: {
         type: 'string',

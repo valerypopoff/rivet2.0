@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import { marked } from 'marked';
+import { JSDOM } from 'jsdom';
 import {
   createRivetWebAppHandler,
   type DataValue,
@@ -101,16 +102,21 @@ void describe('createRivetWebAppHandler', () => {
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const html = renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' });
     const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
-    const markedScript = scripts.at(-2);
+    const markedScript = scripts.at(-3);
+    const domPurifyScript = scripts.at(-2);
     const clientScript = scripts.at(-1);
 
     assert.ok(markedScript);
+    assert.ok(domPurifyScript);
     assert.ok(clientScript);
     assert.match(markedScript, /marked v\d+\.\d+\.\d+/);
-    assert.match(clientScript, /globalThis\.marked\?\.parse/);
+    assert.match(domPurifyScript, /DOMPurify/);
+    assert.match(clientScript, /browserGlobals\.marked\?\.parse/);
+    assert.match(clientScript, /browserGlobals\.DOMPurify\?\.sanitize/);
+    assert.match(clientScript, /ALLOWED_URI_REGEXP/);
     assert.match(clientScript, /createSafeMarkdownRenderer/);
-    assert.match(clientScript, /renderer\.html = \(html\) => escapeHtml\(html\);/);
-    assert.match(clientScript, /JSON\.stringify\(value, null, 2\) \?\? ''/);
+    assert.match(clientScript, /getUiGraphComponentRenderModel/);
+    assert.match(clientScript, /applyUiGraphStatePatch/);
     assert.doesNotMatch(clientScript, /JSON\.stringify\(value \?\? null/);
     assert.doesNotMatch(clientScript, /renderInlineMarkdown/);
     assert.doesNotThrow(() => new Function(markedScript));
@@ -125,12 +131,36 @@ void describe('createRivetWebAppHandler', () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const html = renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' });
-    const clientScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)?.[1];
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+    const clientScript = scripts.at(-1);
     const converted = marked('# Hello\n\n- **one**\n- two');
 
     assert.match(converted, /<h1>Hello<\/h1>/);
     assert.match(converted, /<li><strong>one<\/strong><\/li>/);
-    assert.match(clientScript ?? '', /globalThis\.marked\?\.parse/);
+    assert.match(clientScript ?? '', /browserGlobals\.marked\?\.parse/);
+    assert.match(clientScript ?? '', /browserGlobals\.DOMPurify\?\.sanitize/);
+  });
+
+  void it('sanitizes hosted Markdown with the shared browser policy', () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    uiGraph.components = [
+      {
+        id: 'unsafe-markdown' as any,
+        type: 'markdown',
+        markdown: '<img src=x onerror="alert(1)">\n\n[unsafe](javascript:alert(2)) [safe](https://example.com/path)',
+      },
+    ];
+
+    const html = renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' });
+    const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'https://example.test/app' });
+    const markdown = dom.window.document.querySelector('.rivet-web-app-markdown');
+    const links = markdown?.querySelectorAll('a');
+
+    assert.ok(markdown);
+    assert.equal(markdown.querySelector('img'), null);
+    assert.equal(links?.[0]?.hasAttribute('href'), false);
+    assert.equal(links?.[1]?.getAttribute('href'), 'https://example.com/path');
   });
 
   void it('serves the shared web app renderer styles', async () => {
@@ -140,9 +170,9 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.equal(response.status, 200);
     assert.match(html, /class="rivet-web-app-root"/);
-    assert.match(html, /className: 'rivet-web-app-surface'/);
-    assert.match(html, /className: 'rivet-web-app-field'/);
-    assert.match(html, /className: 'rivet-web-app-card rivet-web-app-output'/);
+    assert.match(html, /rivet-web-app-surface/);
+    assert.match(html, /rivet-web-app-field/);
+    assert.match(html, /rivet-web-app-card rivet-web-app-output/);
     assert.match(html, /\.markdown-body \{/);
     assert.ok(html.includes(RIVET_WEB_APP_DOCUMENT_CSS));
     assert.ok(html.includes(RIVET_WEB_APP_RENDERER_CSS));
@@ -308,7 +338,7 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.match(html, /"revisionKey":"rev-1"/);
     assert.match(html, /revisionKey: config\.revisionKey/);
-    assert.match(html, /credentials: 'same-origin'/);
+    assert.match(html, /credentials: "same-origin"/);
 
     const accepted = await handler.handleRequest(
       new Request('https://example.test/app/actions/run', {
@@ -330,20 +360,17 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(rejected.status, 409);
     assert.equal(rejectedBody.error, 'Rivet web app revision mismatch.');
     assert.equal(rejectedBody.code, 'revision_mismatch');
-    assert.match(html, /data\?\.code === 'revision_mismatch'/);
+    assert.match(html, /result\.code === "revision_mismatch"/);
     assert.match(html, /renderRevisionMismatchModal/);
-    assert.match(html, /role: 'dialog'/);
-    assert.match(html, /'aria-modal': 'true'/);
+    assert.match(html, /role: "dialog"/);
+    assert.match(html, /"aria-modal": "true"/);
     assert.match(html, /This app was updated\. Reload to continue\./);
-    assert.match(html, /text: 'Reload'/);
+    assert.match(html, /text: "Reload"/);
     assert.match(html, /window\.location\.reload\(\)/);
-    assert.match(html, /root\.querySelector\('\.rivet-web-app-modal-button'\)\?\.focus\(\)/);
+    assert.match(html, /root\.querySelector\("\.rivet-web-app-modal-button"\)\?\.focus\(\)/);
     assert.ok(RIVET_WEB_APP_RENDERER_CSS.includes('.rivet-web-app-modal-backdrop'));
     assert.ok(RIVET_WEB_APP_RENDERER_CSS.includes('.rivet-web-app-modal'));
-    assert.match(
-      RIVET_WEB_APP_RENDERER_CSS,
-      /background: rgba\(0, 0, 0, 0\.46\);[\s\S]*background: color-mix/,
-    );
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /background: rgba\(0, 0, 0, 0\.46\);[\s\S]*background: color-mix/);
   });
 
   void it('exports a lower-level action helper', async () => {

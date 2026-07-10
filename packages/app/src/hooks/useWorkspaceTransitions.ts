@@ -56,8 +56,13 @@ import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js'
 import { markProjectClean, markProjectDirtyFlag } from '../utils/projectUnsavedChanges.js';
 import { useApplyProjectExecutorMode } from './useProjectExecutorMode.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
-import { editingNodePrefabIdState, nodeLibraryOpenState } from '../state/nodeLibrary.js';
-import { selectedUiGraphIdState } from '../state/uiGraphs.js';
+import { projectWorkspaceTargetsState, setProjectWorkspaceTargetState } from '../state/workspaceTarget.js';
+import {
+  createGraphWorkspaceTarget,
+  getFallbackGraphView,
+  getProjectWorkspaceLeavePolicy,
+  resolveProjectWorkspaceTarget,
+} from '../domain/workspace/projectWorkspaceTarget.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -80,9 +85,7 @@ export function useWorkspaceTransitions() {
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
   const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
   const setProjects = useSetAtom(projectsState);
-  const setNodeLibraryOpen = useSetAtom(nodeLibraryOpenState);
-  const setEditingNodePrefabId = useSetAtom(editingNodePrefabIdState);
-  const setSelectedUiGraphId = useSetAtom(selectedUiGraphIdState);
+  const setWorkspaceTarget = useSetAtom(setProjectWorkspaceTargetState);
   const centerViewOnGraph = useCenterViewOnGraph();
   const saveCurrentGraph = useSaveCurrentGraph();
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
@@ -96,6 +99,36 @@ export function useWorkspaceTransitions() {
     persistCurrentProjectEditorSnapshot,
     projectEditorStateByProjectId,
   } = useCurrentProjectEditorSnapshot();
+
+  const persistCurrentGraphWorkspace = () => {
+    const currentTarget = store.get(projectWorkspaceTargetsState)[project.metadata.id];
+    const leavePolicy = getProjectWorkspaceLeavePolicy(currentTarget);
+    const currentGraphId = currentGraph.metadata?.id;
+
+    if (project.metadata.id && leavePolicy.persistGraphViewport) {
+      persistCurrentProjectEditorSnapshot({ currentGraphId });
+
+      if (currentGraphId) {
+        setLastSavedPositions((previousPositionsByGraph) => ({
+          ...previousPositionsByGraph,
+          [currentGraphId]: {
+            x: canvasPosition.x,
+            y: canvasPosition.y,
+            zoom: canvasPosition.zoom,
+          },
+        }));
+      }
+    }
+
+    const savedCurrentGraph = leavePolicy.commitLiveGraph ? saveCurrentGraph() : undefined;
+    const latestProject = store.get(projectState);
+
+    if (latestProject.metadata.id && savedCurrentGraph) {
+      persistOpenedProjectSnapshot({ project: latestProject, graph: savedCurrentGraph });
+    }
+
+    return { latestProject, savedCurrentGraph };
+  };
 
   async function applyStaticData(data: Project['data'] | undefined) {
     setProjectData(data);
@@ -150,22 +183,27 @@ export function useWorkspaceTransitions() {
         const currentProjectHasOpenTab = Boolean(
           currentProjectId && store.get(projectsState).openedProjects[currentProjectId],
         );
-        const shouldPersistCurrentProjectEditorState = shouldPersistProjectBeforeLoad({
+        const targetProjectHasOpenTab = Boolean(store.get(projectsState).openedProjects[targetProjectId]);
+        const storedWorkspaceTarget = store.get(projectWorkspaceTargetsState)[targetProjectId];
+        const shouldPersistCurrentProject = shouldPersistProjectBeforeLoad({
           currentProjectHasOpenTab,
           loadedProject,
           navigationStack: graphNavigationStack,
           project,
         });
+        const currentWorkspaceTarget = store.get(projectWorkspaceTargetsState)[currentProjectId];
+        const shouldPersistCurrentProjectEditorState =
+          shouldPersistCurrentProject && getProjectWorkspaceLeavePolicy(currentWorkspaceTarget).persistGraphViewport;
 
         const currentProjectEditorSnapshot = shouldPersistCurrentProjectEditorState
           ? persistCurrentProjectEditorSnapshot()
           : undefined;
 
-        if (shouldPersistCurrentProjectEditorState && currentProjectId) {
+        if (shouldPersistCurrentProject && currentProjectId) {
           persistOpenedProjectSnapshot();
         }
         const currentProjectExecutionSnapshot =
-          shouldPersistCurrentProjectEditorState && currentProjectId
+          shouldPersistCurrentProject && currentProjectId
             ? persistCurrentProjectExecutionSnapshot(currentProjectId)
             : undefined;
 
@@ -190,6 +228,23 @@ export function useWorkspaceTransitions() {
           project: projectInfo.project,
           viewport: restoreTarget.viewport,
         });
+        const fallbackGraphId = transition.graph.metadata?.id;
+        if (!fallbackGraphId) {
+          throw new Error('Cannot load a project without a valid graph target.');
+        }
+        const fallbackGraphView =
+          transition.navigationStack.stack[transition.navigationStack.index ?? 0] ??
+          getFallbackGraphView(fallbackGraphId);
+        const workspaceTarget = resolveProjectWorkspaceTarget({
+          fallbackGraphView,
+          project: projectInfo.project,
+          restoreResourceTarget:
+            targetProjectHasOpenTab &&
+            projectInfo.graphToLoad == null &&
+            projectInfo.graphView == null &&
+            projectInfo.openedGraph == null,
+          storedTarget: storedWorkspaceTarget,
+        });
 
         if (projectInfo.markClean) {
           setSavedProjectContentDigests((previousDigests) =>
@@ -206,9 +261,7 @@ export function useWorkspaceTransitions() {
         cleanupNodeAtomFamilies(transition.cleanupNodeIds);
         setIsReadOnlyGraph(false);
         setHistoricalGraph(null);
-        setNodeLibraryOpen(false);
-        setEditingNodePrefabId(undefined);
-        setSelectedUiGraphId(undefined);
+        setWorkspaceTarget({ projectId: targetProjectId, target: workspaceTarget });
         setGraph(transition.graph);
         const persistedCanvasPositionsByGraph = resolvePersistedCanvasPositionsForLegacyCache({
           project: projectInfo.project,
@@ -263,32 +316,7 @@ export function useWorkspaceTransitions() {
       savedGraph: typeof currentGraph,
       options: { graphView?: GraphViewContext; pushHistory?: boolean } = {},
     ) {
-      const currentGraphId = currentGraph.metadata?.id;
-
-      if (project.metadata.id) {
-        persistCurrentProjectEditorSnapshot({
-          currentGraphId,
-        });
-
-        if (currentGraphId) {
-          setLastSavedPositions((previousPositionsByGraph) => ({
-            ...previousPositionsByGraph,
-            [currentGraphId]: {
-              x: canvasPosition.x,
-              y: canvasPosition.y,
-              zoom: canvasPosition.zoom,
-            },
-          }));
-        }
-      }
-
-      const savedCurrentGraph = saveCurrentGraph();
-
-      if (project.metadata.id && savedCurrentGraph) {
-        persistOpenedProjectSnapshot({
-          graph: savedCurrentGraph,
-        });
-      }
+      persistCurrentGraphWorkspace();
 
       const transition = createGraphSwitchTransition({
         currentGraph,
@@ -311,9 +339,17 @@ export function useWorkspaceTransitions() {
       setSelectedNodes(transition.selectedNodes);
       setIsReadOnlyGraph(false);
       setHistoricalGraph(null);
-      setNodeLibraryOpen(false);
-      setEditingNodePrefabId(undefined);
-      setSelectedUiGraphId(undefined);
+      const nextGraphId = transition.graph.metadata?.id;
+      if (nextGraphId) {
+        const graphView =
+          options.graphView ??
+          transition.navigationStack?.stack[transition.navigationStack.index ?? 0] ??
+          getFallbackGraphView(nextGraphId);
+        setWorkspaceTarget({
+          projectId: project.metadata.id,
+          target: createGraphWorkspaceTarget(graphView),
+        });
+      }
 
       if (transition.navigationStack) {
         setNavigationStack(transition.navigationStack);
@@ -331,83 +367,27 @@ export function useWorkspaceTransitions() {
     switchToNodeLibrary(
       options: { selectedNodeIds?: readonly NodeId[]; editingPrefabId?: NodePrefabId | undefined } = {},
     ) {
-      const currentGraphId = currentGraph.metadata?.id;
-
-      if (project.metadata.id) {
-        persistCurrentProjectEditorSnapshot({
-          currentGraphId,
-        });
-
-        if (currentGraphId) {
-          setLastSavedPositions((previousPositionsByGraph) => ({
-            ...previousPositionsByGraph,
-            [currentGraphId]: {
-              x: canvasPosition.x,
-              y: canvasPosition.y,
-              zoom: canvasPosition.zoom,
-            },
-          }));
-        }
-      }
-
-      const savedCurrentGraph = saveCurrentGraph();
-      const latestProject = store.get(projectState);
-      const projectWithCurrentGraph = mergeCurrentGraphIntoProject(latestProject, savedCurrentGraph);
-      setProject(projectWithCurrentGraph);
-
-      if (latestProject.metadata.id && savedCurrentGraph) {
-        persistOpenedProjectSnapshot({
-          project: projectWithCurrentGraph,
-          graph: savedCurrentGraph,
-        });
-      }
+      const { latestProject } = persistCurrentGraphWorkspace();
 
       setSelectedNodes([...(options.selectedNodeIds ?? [])]);
       setIsReadOnlyGraph(false);
       setHistoricalGraph(null);
-      setSelectedUiGraphId(undefined);
-      setNodeLibraryOpen(true);
-      setEditingNodePrefabId(options.editingPrefabId);
+      setWorkspaceTarget({
+        projectId: latestProject.metadata.id,
+        target: { editingPrefabId: options.editingPrefabId, type: 'nodeLibrary' },
+      });
     },
 
     switchToUiGraph(uiGraphId: UiGraphId) {
-      const currentGraphId = currentGraph.metadata?.id;
-
-      if (project.metadata.id) {
-        persistCurrentProjectEditorSnapshot({
-          currentGraphId,
-        });
-
-        if (currentGraphId) {
-          setLastSavedPositions((previousPositionsByGraph) => ({
-            ...previousPositionsByGraph,
-            [currentGraphId]: {
-              x: canvasPosition.x,
-              y: canvasPosition.y,
-              zoom: canvasPosition.zoom,
-            },
-          }));
-        }
-      }
-
-      const savedCurrentGraph = saveCurrentGraph();
-      const latestProject = store.get(projectState);
-      const projectWithCurrentGraph = mergeCurrentGraphIntoProject(latestProject, savedCurrentGraph);
-      setProject(projectWithCurrentGraph);
-
-      if (latestProject.metadata.id && savedCurrentGraph) {
-        persistOpenedProjectSnapshot({
-          project: projectWithCurrentGraph,
-          graph: savedCurrentGraph,
-        });
-      }
+      const { latestProject } = persistCurrentGraphWorkspace();
 
       setSelectedNodes([]);
       setIsReadOnlyGraph(false);
       setHistoricalGraph(null);
-      setNodeLibraryOpen(false);
-      setEditingNodePrefabId(undefined);
-      setSelectedUiGraphId(uiGraphId);
+      setWorkspaceTarget({
+        projectId: latestProject.metadata.id,
+        target: { type: 'uiGraph', uiGraphId },
+      });
     },
 
     buildProjectForSave() {

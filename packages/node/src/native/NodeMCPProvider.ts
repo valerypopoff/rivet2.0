@@ -1,236 +1,206 @@
 import { type MCP, type MCPProvider } from '@valerypopoff/rivet2-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import {
+  getDefaultEnvironment,
+  StdioClientTransport,
+  type StdioServerParameters,
+} from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-export type MCPClient = Client;
-export class NodeMCPProvider implements MCPProvider {
-  /**
-   * HTTP
-   */
-  async #getHTTPClient(clientConfig: { name: string; version: string }, serverUrl: string) {
-    const url = new URL(serverUrl);
+type ClientConfig = { name: string; version: string };
+type ClientTransport = Parameters<Client['connect']>[0];
 
+export interface NodeMCPProviderDependencies {
+  createClient(config: ClientConfig): Client;
+  createSseTransport(url: URL): ClientTransport;
+  createStdioTransport(parameters: StdioServerParameters): ClientTransport;
+  createStreamableHttpTransport(url: URL): ClientTransport;
+  getDefaultEnvironment(): Record<string, string>;
+}
+
+const defaultDependencies: NodeMCPProviderDependencies = {
+  createClient: (config) => new Client(config),
+  createSseTransport: (url) => new SSEClientTransport(url),
+  createStdioTransport: (parameters) => new StdioClientTransport(parameters),
+  createStreamableHttpTransport: (url) => new StreamableHTTPClientTransport(url),
+  getDefaultEnvironment,
+};
+
+function attachCloseError(operationError: unknown, closeError: unknown): void {
+  if (!(operationError instanceof Error) || operationError.cause !== undefined) {
+    return;
+  }
+
+  Object.defineProperty(operationError, 'cause', {
+    configurable: true,
+    value: closeError,
+  });
+}
+
+async function closeAfterFailedConnect(client: Client, connectError: unknown): Promise<void> {
+  try {
+    await client.close();
+  } catch (closeError) {
+    attachCloseError(connectError, closeError);
+  }
+}
+
+export async function withMcpClient<T>(createClient: () => Promise<Client>, operation: (client: Client) => Promise<T>) {
+  const client = await createClient();
+  let operationError: unknown;
+
+  try {
+    return await operation(client);
+  } catch (error) {
+    operationError = error;
+    throw error;
+  } finally {
     try {
-      const client = new Client(clientConfig);
-
-      let transport: StreamableHTTPClientTransport | SSEClientTransport;
-
-      try {
-        transport = new StreamableHTTPClientTransport(url);
-        await client.connect(transport);
-      } catch (err) {
-        const sseTransport = new SSEClientTransport(url);
-        try {
-          await client.connect(sseTransport);
-        } catch (err) {
-          throw err;
-        }
+      await client.close();
+    } catch (closeError) {
+      if (operationError === undefined) {
+        throw closeError;
       }
+      attachCloseError(operationError, closeError);
+    }
+  }
+}
 
-      return client;
-    } catch (err) {
-      throw err;
+export class NodeMCPProvider implements MCPProvider {
+  readonly #dependencies: NodeMCPProviderDependencies;
+
+  constructor(dependencies: Partial<NodeMCPProviderDependencies> = {}) {
+    this.#dependencies = { ...defaultDependencies, ...dependencies };
+  }
+
+  async #createHTTPClient(clientConfig: ClientConfig, serverUrl: string): Promise<Client> {
+    const url = new URL(serverUrl);
+    const streamableClient = this.#dependencies.createClient(clientConfig);
+
+    try {
+      await streamableClient.connect(this.#dependencies.createStreamableHttpTransport(url));
+      return streamableClient;
+    } catch (streamableError) {
+      await closeAfterFailedConnect(streamableClient, streamableError);
+    }
+
+    const sseClient = this.#dependencies.createClient(clientConfig);
+    try {
+      await sseClient.connect(this.#dependencies.createSseTransport(url));
+      return sseClient;
+    } catch (sseError) {
+      await closeAfterFailedConnect(sseClient, sseError);
+      throw sseError;
     }
   }
 
-  async httpToolCall(
-    clientConfig: { name: string; version: string },
-    serverUrl: string,
-    toolCall: MCP.ToolCallRequest,
-  ): Promise<MCP.ToolCallResponse> {
+  async #createStdioClient(clientConfig: ClientConfig, serverConfig: MCP.ServerConfigWithId): Promise<Client> {
+    const client = this.#dependencies.createClient(clientConfig);
+    const configuredEnvironment = serverConfig.config.env;
+    const transport = this.#dependencies.createStdioTransport({
+      command: serverConfig.config.command,
+      args: serverConfig.config.args ?? [],
+      env: configuredEnvironment
+        ? { ...this.#dependencies.getDefaultEnvironment(), ...configuredEnvironment }
+        : undefined,
+    });
+
     try {
-      const client = await this.#getHTTPClient(clientConfig, serverUrl);
-
-      const response = await this.#callTool(client, toolCall);
-      await client.close();
-
-      return response;
-    } catch (err) {
-      throw err;
-    }
-  }
-
-  async getHTTPTools(clientConfig: { name: string; version: string }, serverUrl: string): Promise<MCP.Tool[]> {
-    try {
-      const client = await this.#getHTTPClient(clientConfig, serverUrl);
-
-      const tools = await this.#getTools(client);
-      await client.close();
-
-      return tools;
-    } catch (err) {
-      throw err;
-    }
-  }
-
-  async getHTTPPrompts(clientConfig: { name: string; version: string }, serverUrl: string): Promise<MCP.Prompt[]> {
-    try {
-      const client = await this.#getHTTPClient(clientConfig, serverUrl);
-
-      const prompts = await this.#getPrompts(client);
-      await client.close();
-
-      return prompts;
-    } catch (err) {
-      throw err;
-    }
-  }
-
-  async getHTTPrompt(
-    clientConfig: { name: string; version: string },
-    serverUrl: string,
-    getPromptRequest: MCP.GetPromptRequest,
-  ): Promise<MCP.GetPromptResponse> {
-    try {
-      const client = await this.#getHTTPClient(clientConfig, serverUrl);
-
-      const prompt = await this.#getPrompt(client, getPromptRequest);
-      await client.close();
-
-      return prompt;
-    } catch (err) {
-      throw err;
-    }
-  }
-
-  /**
-   * STDIO
-   */
-
-  async #getStdioClient(clientConfig: { name: string; version: string }, serverConfig: MCP.ServerConfigWithId) {
-    try {
-      const client = new Client(clientConfig);
-      console.log(serverConfig);
-
-      const transport = new StdioClientTransport({
-        command: serverConfig.config.command,
-        args: serverConfig.config.args || [],
-      });
-
       await client.connect(transport);
-
       return client;
-    } catch (err) {
-      throw err;
+    } catch (error) {
+      await closeAfterFailedConnect(client, error);
+      throw error;
     }
   }
 
-  async stdioToolCall(
-    clientConfig: { name: string; version: string },
+  httpToolCall(
+    clientConfig: ClientConfig,
+    serverUrl: string,
+    toolCall: MCP.ToolCallRequest,
+  ): Promise<MCP.ToolCallResponse> {
+    return withMcpClient(
+      () => this.#createHTTPClient(clientConfig, serverUrl),
+      async (client) => {
+        const response = await client.callTool(toolCall);
+        return { content: response.content, isError: response.isError } as MCP.ToolCallResponse;
+      },
+    );
+  }
+
+  getHTTPTools(clientConfig: ClientConfig, serverUrl: string): Promise<MCP.Tool[]> {
+    return withMcpClient(() => this.#createHTTPClient(clientConfig, serverUrl), listTools);
+  }
+
+  getHTTPPrompts(clientConfig: ClientConfig, serverUrl: string): Promise<MCP.Prompt[]> {
+    return withMcpClient(() => this.#createHTTPClient(clientConfig, serverUrl), listPrompts);
+  }
+
+  getHTTPrompt(
+    clientConfig: ClientConfig,
+    serverUrl: string,
+    request: MCP.GetPromptRequest,
+  ): Promise<MCP.GetPromptResponse> {
+    return withMcpClient(
+      () => this.#createHTTPClient(clientConfig, serverUrl),
+      (client) => getPrompt(client, request),
+    );
+  }
+
+  stdioToolCall(
+    clientConfig: ClientConfig,
     serverConfig: MCP.ServerConfigWithId,
     toolCall: MCP.ToolCallRequest,
   ): Promise<MCP.ToolCallResponse> {
-    try {
-      const client = await this.#getStdioClient(clientConfig, serverConfig);
-
-      const response = await this.#callTool(client, toolCall);
-      await client.close();
-
-      return response;
-    } catch (err) {
-      throw err;
-    }
+    return withMcpClient(
+      () => this.#createStdioClient(clientConfig, serverConfig),
+      async (client) => {
+        const response = await client.callTool(toolCall);
+        return { content: response.content, isError: response.isError } as MCP.ToolCallResponse;
+      },
+    );
   }
 
-  async getStdioTools(
-    clientConfig: { name: string; version: string },
-    serverConfig: MCP.ServerConfigWithId,
-  ): Promise<MCP.Tool[]> {
-    try {
-      const client = await this.#getStdioClient(clientConfig, serverConfig);
-
-      const response = await this.#getTools(client);
-      await client.close();
-
-      return response;
-    } catch (err) {
-      throw err;
-    }
+  getStdioTools(clientConfig: ClientConfig, serverConfig: MCP.ServerConfigWithId): Promise<MCP.Tool[]> {
+    return withMcpClient(() => this.#createStdioClient(clientConfig, serverConfig), listTools);
   }
 
-  async getStdioPrompts(
-    clientConfig: { name: string; version: string },
-    serverConfig: MCP.ServerConfigWithId,
-  ): Promise<MCP.Prompt[]> {
-    const client = await this.#getStdioClient(clientConfig, serverConfig);
-
-    const response = await this.#getPrompts(client);
-    await client.close();
-
-    return response;
+  getStdioPrompts(clientConfig: ClientConfig, serverConfig: MCP.ServerConfigWithId): Promise<MCP.Prompt[]> {
+    return withMcpClient(() => this.#createStdioClient(clientConfig, serverConfig), listPrompts);
   }
 
-  async getStdioPrompt(
-    clientConfig: { name: string; version: string },
+  getStdioPrompt(
+    clientConfig: ClientConfig,
     serverConfig: MCP.ServerConfigWithId,
-    getPromptRequest: MCP.GetPromptRequest,
+    request: MCP.GetPromptRequest,
   ): Promise<MCP.GetPromptResponse> {
-    const client = await this.#getStdioClient(clientConfig, serverConfig);
-
-    const response = await this.#getPrompt(client, getPromptRequest);
-
-    await client.close();
-
-    return response;
+    return withMcpClient(
+      () => this.#createStdioClient(clientConfig, serverConfig),
+      (client) => getPrompt(client, request),
+    );
   }
+}
 
-  async #getPrompts(client: Client): Promise<MCP.Prompt[]> {
-    try {
-      const promptsResult = await client.listPrompts();
+async function listPrompts(client: Client): Promise<MCP.Prompt[]> {
+  const result = await client.listPrompts();
+  return result.prompts.map((prompt) => ({
+    name: prompt.name,
+    description: prompt.description,
+    arugments: prompt.arguments,
+  }));
+}
 
-      const mcpPrompts: MCP.Prompt[] = promptsResult.prompts.map((prompt) => ({
-        name: prompt.name,
-        description: prompt.description,
-        arugments: prompt.arguments,
-      }));
-      return mcpPrompts;
-    } catch (err) {
-      throw err;
-    }
-  }
+async function getPrompt(client: Client, request: MCP.GetPromptRequest): Promise<MCP.GetPromptResponse> {
+  const result = await client.getPrompt(request);
+  return { description: result.description, messages: result.messages } as MCP.GetPromptResponse;
+}
 
-  async #getPrompt(client: Client, getPrompt: MCP.GetPromptRequest): Promise<MCP.GetPromptResponse> {
-    try {
-      const promptResult = await client.getPrompt(getPrompt);
-      const mcpPrompt: MCP.GetPromptResponse = {
-        description: promptResult.description,
-        messages: promptResult.messages,
-      };
-
-      return mcpPrompt;
-    } catch (err) {
-      throw err;
-    }
-  }
-
-  async #getTools(client: Client): Promise<MCP.Tool[]> {
-    try {
-      const toolsResult = await client.listTools();
-
-      const mcpTools: MCP.Tool[] = toolsResult.tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema,
-      }));
-      return mcpTools;
-    } catch (err) {
-      throw err;
-    }
-  }
-
-  async #callTool(client: Client, toolCall: MCP.ToolCallRequest): Promise<MCP.ToolCallResponse> {
-    try {
-      const toolResponse = await client.callTool(toolCall);
-      const response = {
-        content: toolResponse.content,
-        isError: toolResponse.isError,
-      } as MCP.ToolCallResponse;
-
-      return response;
-    } catch (err) {
-      throw err;
-    }
-  }
+async function listTools(client: Client): Promise<MCP.Tool[]> {
+  const result = await client.listTools();
+  return result.tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  }));
 }

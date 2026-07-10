@@ -18,6 +18,8 @@ const generatedPathPatterns = [
   /^tmp-macos-signing-test\//,
   /^tmp-rivet-icon-test\//,
 ];
+// Shrink this as legacy deep relative imports are moved behind local barrels.
+const longRelativeImportBaseline = 154;
 
 function git(args) {
   return execFileSync('git', args, {
@@ -69,7 +71,7 @@ function findImportBoundaryReports(files) {
         reports.push(`${file}:${index + 1}: package deep import`);
       }
 
-      if (/from\s+['"](?:\.\.\/){3,}[^'"]*['"]/.test(line)) {
+      if (!/\.(?:test|spec)\.[^.]+$/.test(file) && /from\s+['"](?:\.\.\/){3,}[^'"]*['"]/.test(line)) {
         reports.push(`${file}:${index + 1}: long relative import`);
       }
     }
@@ -107,9 +109,27 @@ if (generatedFiles.length > 0) {
 }
 
 const importBoundaryReports = findImportBoundaryReports(repoFiles);
+const packageDeepImports = importBoundaryReports.filter((report) => report.endsWith('package deep import'));
+const longRelativeImports = importBoundaryReports.filter((report) => report.endsWith('long relative import'));
+
+if (packageDeepImports.length > 0) {
+  console.error('Package source deep imports are not allowed:');
+  for (const report of packageDeepImports) console.error(`  - ${report}`);
+  process.exitCode = 1;
+}
+if (longRelativeImports.length > longRelativeImportBaseline) {
+  console.error(
+    `Long relative imports grew from the reviewed baseline (${longRelativeImportBaseline}) to ${longRelativeImports.length}:`,
+  );
+  for (const report of longRelativeImports.slice(longRelativeImportBaseline)) console.error(`  - ${report}`);
+  process.exitCode = 1;
+}
+
 if (importBoundaryReports.length > 0) {
   console.log('');
-  console.log(`Import-boundary review queue (${importBoundaryReports.length}, report only):`);
+  console.log(
+    `Import-boundary review queue (${longRelativeImports.length}/${longRelativeImportBaseline} long relative imports; new package deep imports fail):`,
+  );
   for (const report of importBoundaryReports.slice(0, 100)) {
     console.log(`  - ${report}`);
   }

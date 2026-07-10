@@ -44,7 +44,10 @@ import {
   type SpellcheckResult,
 } from '../../utils/monaco/spellcheck.js';
 import { JsonStringPreviewAffordance } from '../renderDataValue/JsonStringPreviewAffordance.js';
-import { type JsonStringPreviewRange } from '../renderDataValue/jsonStringPreviewRanges.js';
+import {
+  isCurrentJsonStringPreviewLiteral,
+  type JsonStringPreviewRange,
+} from '../renderDataValue/jsonStringPreviewRanges.js';
 import { useMultilineEditorFontSize } from '../../hooks/useMultilineEditorFontSize.js';
 import {
   MAX_MULTILINE_EDITOR_FONT_SIZE,
@@ -144,16 +147,21 @@ function replaceJsonStringLiteral(
 
   const start = model.getPositionAt(range.startOffset);
   const end = model.getPositionAt(range.endOffset);
+  const modelRange = {
+    startLineNumber: start.lineNumber,
+    startColumn: start.column,
+    endLineNumber: end.lineNumber,
+    endColumn: end.column,
+  };
+
+  if (!isCurrentJsonStringPreviewLiteral(model.getValueInRange(modelRange), range)) {
+    return;
+  }
 
   editor.pushUndoStop();
   editor.executeEdits('json-string-preview-edit', [
     {
-      range: {
-        startLineNumber: start.lineNumber,
-        startColumn: start.column,
-        endLineNumber: end.lineNumber,
-        endColumn: end.column,
-      },
+      range: modelRange,
       text: JSON.stringify(decodedValue),
       forceMoveMarkers: true,
     },
@@ -361,10 +369,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     debouncedJsonTemplateValidation.editorMountKey === editorMountKey
       ? debouncedJsonTemplateValidation.value
       : displayValue;
-  const jsonTemplateValidityStatus = getJsonTemplateValidityStatus(
-    interpolationSyntax,
-    jsonTemplateValidationValue,
-  );
+  const jsonTemplateValidityStatus = getJsonTemplateValidityStatus(interpolationSyntax, jsonTemplateValidationValue);
   const mountedEditor = mountedEditorState?.editorMountKey === editorMountKey ? mountedEditorState.editor : undefined;
   const footerCenter = (textStats || spellcheckStatusMessage || jsonTemplateValidityStatus) && (
     <div className="editor-status-line">
@@ -431,7 +436,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       setDismissedErrorLineHighlightKey(errorLineHighlightKey);
     }
 
-    onChangeLatest.current(newText);
+    onChangeLatest.current?.(newText);
   };
 
   const handleKeyDown = (e: monaco.IKeyboardEvent) => {

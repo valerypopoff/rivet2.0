@@ -2,19 +2,8 @@ import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from '
 import { css } from '@emotion/react';
 import { type FC, type MouseEvent, type KeyboardEvent, memo, useMemo, useRef, useState, type SVGProps } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import Button from '@atlaskit/button';
-import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
-import {
-  createDefaultUiGraph,
-  newId,
-  type GraphId,
-  type NodeGraph,
-  type UiComponentId,
-  type UiGraph,
-  type UiGraphId,
-} from '@valerypopoff/rivet2-core';
+import { type GraphId, type NodeGraph, type UiGraph, type UiGraphId } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
-import { produce } from 'immer';
 import { runningGraphsState } from '../state/dataFlow.js';
 import { graphState } from '../state/graph.js';
 import { openOrFocusGraphSearchState, searchingGraphState } from '../state/graphBuilder.js';
@@ -27,44 +16,35 @@ import {
   showUnreachableGraphTagsState,
 } from '../state/ui.js';
 import { useContextMenu } from '../hooks/useContextMenu.js';
-import Portal from '@atlaskit/portal';
-import CrossIcon from 'majesticons/line/multiply-line.svg?react';
 import { useStableCallback } from '../hooks/useStableCallback.js';
 import { useGraphOperations } from '../hooks/useGraphOperations';
 import { useGraphListDragDrop } from '../hooks/useGraphListDragDrop';
 import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry.js';
 import { FolderItem } from './graphList/FolderItem';
-import { AppModalHeader } from './AppModalHeader';
 import EditPenIcon from 'majesticons/line/edit-pen-2-line.svg?react';
 import DuplicateIcon from '../assets/icons/duplicate-icon.svg?react';
 import DeleteIcon from 'majesticons/line/delete-bin-line.svg?react';
 import InfoIcon from 'majesticons/line/info-circle-line.svg?react';
-import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import FolderIcon from 'majesticons/line/folder-line.svg?react';
-import SearchIcon from 'majesticons/line/search-line.svg?react';
 import { MainGraphIcon } from './graphList/MainGraphIcon';
-import { GraphInfoModal } from './GraphInfoModal';
-import { ProjectInfoModal } from './ProjectInfoModal';
 import {
   buildFolderContextMenuItems,
   buildGraphItemContextMenuItems,
   buildGraphListContextMenuItems,
   buildUiGraphItemContextMenuItems,
   type GraphListContextMenuIcons,
-  type GraphListContextMenuItem,
 } from './graphList/graphListContextMenu.js';
 import { useGraphListPresentation } from './graphList/useGraphListPresentation.js';
 import { setAllGraphFolderExpansionStates } from './graphList/graphFolders.js';
-import { GRAPH_FILTER_INPUT_MARKER } from './graphList/graphFilterFocus.js';
-import { PopupMenuItem, popupMenuListStyles } from './PopupMenu.js';
-import { Tooltip } from './Tooltip.js';
 import { activeProjectComparisonState } from '../state/projectComparison.js';
-import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
-import { SubgraphLinkIcon } from './visualNode/SubgraphLinkIcon.js';
 import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
-import { selectedUiGraphIdState } from '../state/uiGraphs.js';
-import { useOpenUiGraph } from '../hooks/useOpenUiGraph.js';
+import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
+import { useUiGraphOperations } from '../hooks/useUiGraphOperations.js';
+import { GraphListDialogs } from './graphList/GraphListDialogs.js';
+import { GraphListHeader } from './graphList/GraphListHeader.js';
+import { UiGraphResourceSection } from './graphList/UiGraphResourceSection.js';
+import { GraphListContextMenus } from './graphList/GraphListContextMenus.js';
 
 const NO_SELECTED_GRAPH: NodeGraph = {
   nodes: [],
@@ -650,22 +630,6 @@ const styles = css`
   }
 `;
 
-const contextMenuStyles = css`
-  ${popupMenuListStyles};
-  z-index: 1;
-
-  .context-menu-items {
-    display: flex;
-    flex-direction: column;
-  }
-`;
-
-const deleteGraphConfirmBody = css`
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-`;
-
 function isInteractiveGraphListTarget(target: EventTarget): boolean {
   return target instanceof Element
     ? target.closest('a, button, input, select, textarea, [contenteditable="true"], [role="textbox"]') != null
@@ -707,16 +671,20 @@ export const GraphList: FC = memo(() => {
     renameFolderItem,
   } = useGraphOperations();
   const setGraph = useSetAtom(graphState);
-  const setProject = useSetAtom(projectState);
   const setSavedGraphs = useSetAtom(savedGraphsState);
   const setGraphSearch = useSetAtom(searchingGraphState);
   const setOpenOverlay = useSetAtom(overlayOpenState);
   const setExpandedFolders = useSetAtom(expandedFoldersState);
-  const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
-  const selectedUiGraphId = useAtomValue(selectedUiGraphIdState);
-  const setSelectedUiGraphId = useSetAtom(selectedUiGraphIdState);
+  const workspaceTarget = useProjectWorkspaceTarget();
+  const nodeLibraryOpen = workspaceTarget?.type === 'nodeLibrary';
+  const selectedUiGraphId = workspaceTarget?.type === 'uiGraph' ? workspaceTarget.uiGraphId : undefined;
   const openNodeLibrary = useOpenNodeLibrary();
-  const openUiGraph = useOpenUiGraph();
+  const {
+    createUiGraph,
+    deleteUiGraph,
+    duplicateUiGraph: duplicateUiGraphResource,
+    openUiGraph,
+  } = useUiGraphOperations();
   const graphListContainerRef = useRef<HTMLDivElement>(null);
 
   const { draggingItemFolder, dragOverFolderName, handleDragStart, handleDragEnd, handleDragOver } =
@@ -791,15 +759,7 @@ export const GraphList: FC = memo(() => {
   });
 
   const handleCreateUiGraph = useStableCallback(() => {
-    const uiGraph = createDefaultUiGraph({ graphId: project.metadata.mainGraphId });
-
-    setProject((currentProject) =>
-      produce(currentProject, (draft) => {
-        draft.uiGraphs ??= {};
-        draft.uiGraphs[uiGraph.id] = uiGraph;
-      }),
-    );
-    openUiGraph(uiGraph.id);
+    createUiGraph();
   });
 
   const handleOpenUiGraph = useStableCallback((uiGraphId: UiGraphId) => {
@@ -888,15 +848,7 @@ export const GraphList: FC = memo(() => {
   });
 
   const duplicateUiGraph = useStableCallback((uiGraph: UiGraph) => {
-    const duplicate = cloneUiGraph(uiGraph);
-
-    setProject((currentProject) =>
-      produce(currentProject, (draft) => {
-        draft.uiGraphs ??= {};
-        draft.uiGraphs[duplicate.id] = duplicate;
-      }),
-    );
-    openUiGraph(duplicate.id);
+    duplicateUiGraphResource(uiGraph);
   });
 
   const confirmDeleteUiGraph = useStableCallback(() => {
@@ -904,28 +856,8 @@ export const GraphList: FC = memo(() => {
       return;
     }
 
-    const deletedUiGraphId = uiGraphPendingDelete.id;
-    const fallbackGraph =
-      savedGraphs.find((savedGraph) => savedGraph.metadata?.id === project.metadata.mainGraphId) ?? savedGraphs[0];
-
-    setProject((currentProject) =>
-      produce(currentProject, (draft) => {
-        delete draft.uiGraphs?.[deletedUiGraphId];
-
-        if (draft.uiGraphs && Object.keys(draft.uiGraphs).length === 0) {
-          delete draft.uiGraphs;
-        }
-      }),
-    );
+    deleteUiGraph(uiGraphPendingDelete.id);
     setUiGraphPendingDelete(null);
-
-    if (selectedUiGraphId === deletedUiGraphId) {
-      if (fallbackGraph) {
-        loadGraph(fallbackGraph);
-      } else {
-        setSelectedUiGraphId(undefined);
-      }
-    }
   });
 
   const updateGraphInfo = useStableCallback((updatedGraph: NodeGraph) => {
@@ -1068,67 +1000,18 @@ export const GraphList: FC = memo(() => {
 
   return (
     <div css={styles}>
-      <div className="project-tree-panel-header">
-        <div className="project-tree-header">
-          <span className="project-tree-header-label">Project:</span>
-          <span className="project-tree-header-title">{project.metadata.title}</span>
-        </div>
-        <div className="graph-list-toolbar">
-          <Tooltip content="Search (Ctrl/Cmd+F)" placement="right" tag="span" className="graph-list-action-tooltip">
-            <button type="button" className="graph-list-action" onClick={openGraphSearch}>
-              <SearchIcon aria-hidden="true" className="project-tree-panel-icon project-tree-panel-icon-search" />
-              <span>Search</span>
-            </button>
-          </Tooltip>
-          <button type="button" className="graph-list-action" onClick={() => setIsProjectInfoOpen(true)}>
-            <SettingsCogIcon
-              aria-hidden="true"
-              className="project-tree-panel-icon project-tree-panel-icon-project-settings"
-            />
-            <span>Project settings</span>
-          </button>
-          <button
-            type="button"
-            className={clsx('graph-list-action', { selected: nodeLibraryOpen })}
-            aria-current={nodeLibraryOpen ? 'page' : undefined}
-            onClick={handleOpenNodeLibrary}
-          >
-            <span className="project-tree-panel-icon project-tree-panel-icon-node-library">
-              <SubgraphLinkIcon />
-            </span>
-            <span>Node library</span>
-            {nodeLibraryItemCount > 0 && (
-              <span className="graph-folder-count">
-                <span>{nodeLibraryItemCount}</span>
-              </span>
-            )}
-          </button>
-          <div className="graph-list-filter">
-            <label className="graph-list-filter-label">
-              <FilterIcon aria-hidden="true" className="project-tree-panel-icon project-tree-panel-icon-filter" />
-              <input
-                {...GRAPH_FILTER_INPUT_MARKER}
-                aria-label="Filter graphs"
-                autoComplete="off"
-                spellCheck={false}
-                type="text"
-                placeholder="Filter graphs"
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                onKeyDown={handleSearchKeyDown}
-              />
-            </label>
-            {searchText.length > 0 && (
-              <button type="button" className="clear" onClick={() => setSearchText('')} aria-label="Clear graph filter">
-                <CrossIcon
-                  aria-hidden="true"
-                  className="project-tree-panel-icon project-tree-panel-icon-filter-clear"
-                />
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+      <GraphListHeader
+        nodeLibraryItemCount={nodeLibraryItemCount}
+        nodeLibraryOpen={nodeLibraryOpen}
+        projectTitle={project.metadata.title}
+        searchText={searchText}
+        onClearFilter={() => setSearchText('')}
+        onFilterKeyDown={handleSearchKeyDown}
+        onFilterTextChange={setSearchText}
+        onOpenNodeLibrary={handleOpenNodeLibrary}
+        onOpenProjectSettings={() => setIsProjectInfoOpen(true)}
+        onOpenSearch={openGraphSearch}
+      />
       <div
         className="graph-list-container"
         onContextMenu={handleSidebarContextMenu}
@@ -1138,28 +1021,12 @@ export const GraphList: FC = memo(() => {
         ref={graphListContainerRef}
         tabIndex={-1}
       >
-        <div className="graph-list-heading">Web Apps</div>
-        <div className="ui-graph-list">
-          {Object.values(project.uiGraphs ?? {}).map((uiGraph) => (
-            <button
-              key={uiGraph.id}
-              type="button"
-              className={clsx('ui-graph-entry', { selected: selectedUiGraphId === uiGraph.id })}
-              data-contextmenutype="ui-graph-item"
-              data-uigraphid={uiGraph.id}
-              onClick={() => handleOpenUiGraph(uiGraph.id)}
-            >
-              <span className="project-tree-panel-icon project-tree-panel-icon-web-app">
-                <WebAppIcon />
-              </span>
-              <span className="ui-graph-entry-name">{uiGraph.name}</span>
-            </button>
-          ))}
-          <button type="button" className="ui-graph-create" onClick={handleCreateUiGraph}>
-            <PlusIcon aria-hidden="true" className="project-tree-panel-icon" />
-            <span>New web app</span>
-          </button>
-        </div>
+        <UiGraphResourceSection
+          selectedUiGraphId={selectedUiGraphId}
+          uiGraphs={Object.values(project.uiGraphs ?? {})}
+          onCreate={handleCreateUiGraph}
+          onOpen={handleOpenUiGraph}
+        />
         <div className="graph-list-heading">Graphs</div>
         {graphListReachability.notice && <div className="graph-list-notice">{graphListReachability.notice}</div>}
         <div
@@ -1193,114 +1060,56 @@ export const GraphList: FC = memo(() => {
             ))}
             <GraphListSpacer />
           </DndContext>
-          <Portal>
-            {graphListContextMenu.showGraphItemContextMenu && (
-              <div
-                className="graph-item-context-menu"
-                css={contextMenuStyles}
-                style={{ ...floatingStyles, zIndex: 500 }}
-                ref={setFloatingMenu}
-              >
-                <GraphListContextMenuItems items={graphItemMenuItems} onSelected={handleGraphItemMenuSelected} />
-              </div>
-            )}
-            {graphListContextMenu.showFolderContextMenu && (
-              <div
-                className="graph-item-context-menu"
-                css={contextMenuStyles}
-                style={{ ...floatingStyles, zIndex: 500 }}
-                ref={setFloatingMenu}
-              >
-                <GraphListContextMenuItems items={folderMenuItems} onSelected={handleFolderMenuSelected} />
-              </div>
-            )}
-            {graphListContextMenu.showUiGraphItemContextMenu && (
-              <div
-                className="ui-graph-context-menu"
-                css={contextMenuStyles}
-                style={{ ...floatingStyles, zIndex: 500 }}
-                ref={setFloatingMenu}
-              >
-                <GraphListContextMenuItems items={uiGraphItemMenuItems} onSelected={handleUiGraphItemMenuSelected} />
-              </div>
-            )}
-          </Portal>
         </div>
-        <Portal>
-          {graphListContextMenu.showGraphListContextMenu && (
-            <div
-              className="graph-list-context-menu"
-              css={contextMenuStyles}
-              style={{ ...floatingStyles, zIndex: 500 }}
-              ref={setFloatingMenu}
-            >
-              <GraphListContextMenuItems items={graphListMenuItems} onSelected={handleGraphListMenuSelected} />
-            </div>
-          )}
-        </Portal>
-        <DeleteGraphConfirmModal
-          graph={graphPendingDelete}
-          onClose={() => setGraphPendingDelete(null)}
-          onConfirm={confirmDeleteGraph}
+        <GraphListContextMenus
+          floatingStyles={floatingStyles}
+          setFloatingMenu={setFloatingMenu}
+          menus={[
+            {
+              className: 'graph-item-context-menu',
+              items: graphItemMenuItems,
+              onSelected: handleGraphItemMenuSelected,
+              visible: graphListContextMenu.showGraphItemContextMenu,
+            },
+            {
+              className: 'graph-item-context-menu',
+              items: folderMenuItems,
+              onSelected: handleFolderMenuSelected,
+              visible: graphListContextMenu.showFolderContextMenu,
+            },
+            {
+              className: 'ui-graph-context-menu',
+              items: uiGraphItemMenuItems,
+              onSelected: handleUiGraphItemMenuSelected,
+              visible: graphListContextMenu.showUiGraphItemContextMenu,
+            },
+            {
+              className: 'graph-list-context-menu',
+              items: graphListMenuItems,
+              onSelected: handleGraphListMenuSelected,
+              visible: graphListContextMenu.showGraphListContextMenu,
+            },
+          ]}
         />
-        <DeleteUiGraphConfirmModal
-          uiGraph={uiGraphPendingDelete}
-          onClose={() => setUiGraphPendingDelete(null)}
-          onConfirm={confirmDeleteUiGraph}
+        <GraphListDialogs
+          graphPendingDelete={graphPendingDelete}
+          graphPendingInfo={graphPendingInfo}
+          isProjectInfoOpen={isProjectInfoOpen}
+          uiGraphPendingDelete={uiGraphPendingDelete}
+          onCloseGraphDelete={() => setGraphPendingDelete(null)}
+          onCloseGraphInfo={() => setGraphPendingInfo(null)}
+          onCloseProjectInfo={() => setIsProjectInfoOpen(false)}
+          onCloseUiGraphDelete={() => setUiGraphPendingDelete(null)}
+          onConfirmGraphDelete={confirmDeleteGraph}
+          onConfirmUiGraphDelete={confirmDeleteUiGraph}
+          onUpdateGraphInfo={updateGraphInfo}
         />
-        <GraphInfoModal graph={graphPendingInfo} onChange={updateGraphInfo} onClose={() => setGraphPendingInfo(null)} />
-        <ProjectInfoModal isOpen={isProjectInfoOpen} onClose={() => setIsProjectInfoOpen(false)} />
       </div>
     </div>
   );
 });
 
 GraphList.displayName = 'GraphList';
-
-const GraphListContextMenuItems: FC<{
-  items: GraphListContextMenuItem[];
-  onSelected: (id: string) => void;
-}> = ({ items, onSelected }) => (
-  <div className="context-menu-items">
-    {items.map((item, index) => (
-      <PopupMenuItem
-        key={item.id}
-        icon={item.icon}
-        separatorBefore={index > 0 && item.separatorBefore === true}
-        tone={item.tone}
-        onClick={() => onSelected(item.id)}
-      >
-        {item.label}
-      </PopupMenuItem>
-    ))}
-  </div>
-);
-
-function cloneUiGraph(uiGraph: UiGraph): UiGraph {
-  const duplicate = structuredClone(uiGraph) as UiGraph;
-
-  duplicate.id = newId<UiGraphId>();
-  duplicate.name = `${uiGraph.name} (Copy)`;
-  duplicate.components = duplicate.components.map((component) => ({
-    ...component,
-    id: newId<UiComponentId>(),
-  })) as UiGraph['components'];
-
-  return duplicate;
-}
-
-const FilterIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" {...props}>
-    <path d="M2.5 3.5h11L9.25 8.35v3.4l-2.5.9v-4.3L2.5 3.5Z" fill="currentColor" />
-  </svg>
-);
-
-const WebAppIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" {...props}>
-    <rect x="2.5" y="3" width="11" height="10" rx="1.6" stroke="currentColor" strokeWidth="1.45" />
-    <path d="M2.9 6h10.2" stroke="currentColor" strokeLinecap="round" strokeWidth="1.45" />
-  </svg>
-);
 
 function CollapseAllFoldersIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -1339,65 +1148,3 @@ export const GraphListSpacer: FC = memo(() => {
 });
 
 GraphListSpacer.displayName = 'GraphListSpacer';
-
-const DeleteGraphConfirmModal: FC<{
-  graph: NodeGraph | null;
-  onClose: () => void;
-  onConfirm: () => void;
-}> = ({ graph, onClose, onConfirm }) => {
-  const graphName = graph?.metadata?.name ?? 'Untitled graph';
-
-  return (
-    <ModalTransition>
-      {graph && (
-        <Modal autoFocus={false} onClose={onClose} width="small">
-          <AppModalHeader title="Delete Graph?" onClose={onClose} />
-          <ModalBody>
-            <div css={deleteGraphConfirmBody}>
-              <p>
-                Delete <strong>{graphName}</strong>?
-              </p>
-              <p>This cannot be undone.</p>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button onClick={onClose}>Cancel</Button>
-            <Button appearance="danger" onClick={onConfirm}>
-              Delete
-            </Button>
-          </ModalFooter>
-        </Modal>
-      )}
-    </ModalTransition>
-  );
-};
-
-const DeleteUiGraphConfirmModal: FC<{
-  uiGraph: UiGraph | null;
-  onClose: () => void;
-  onConfirm: () => void;
-}> = ({ uiGraph, onClose, onConfirm }) => {
-  return (
-    <ModalTransition>
-      {uiGraph && (
-        <Modal autoFocus={false} onClose={onClose} width="small">
-          <AppModalHeader title="Delete Web App?" onClose={onClose} />
-          <ModalBody>
-            <div css={deleteGraphConfirmBody}>
-              <p>
-                Delete <strong>{uiGraph.name}</strong>?
-              </p>
-              <p>This cannot be undone.</p>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button onClick={onClose}>Cancel</Button>
-            <Button appearance="danger" onClick={onConfirm}>
-              Delete
-            </Button>
-          </ModalFooter>
-        </Modal>
-      )}
-    </ModalTransition>
-  );
-};

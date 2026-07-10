@@ -1,4 +1,4 @@
-import { Pipeline, StepRun, init, runTest, getPipelines } from '@gentrace/core';
+import { Pipeline, StepRun, init, runTest, getPipelines } from './gentraceSdk.js';
 
 import type { Project } from '../../model/Project.js';
 import type { GraphId, NodeGraph } from '../../model/NodeGraph.js';
@@ -290,6 +290,7 @@ function convertRecordingToStepRuns(recording: Recording, project: Omit<Project,
             gentraceOpenAIModelParams,
             gentraceOpenAIOutputs,
             {},
+            undefined,
           ),
         );
 
@@ -308,6 +309,7 @@ function convertRecordingToStepRuns(recording: Recording, project: Omit<Project,
         pair.modelParams,
         pair.outputs,
         {},
+        undefined,
       ),
     );
   }

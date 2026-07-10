@@ -17,7 +17,6 @@ import { useAtomValue } from 'jotai';
 import { settingsState } from '../../../state/settings';
 import { fillMissingSettingsFromEnvironmentVariables } from '../../../utils/tauri';
 import { useDependsOnPlugins } from '../../../hooks/useDependsOnPlugins';
-import { marked } from 'marked';
 import TextArea from '@atlaskit/textarea';
 import {
   aiAssistCustomModelState,
@@ -36,6 +35,7 @@ import { Tooltip } from '../../Tooltip.js';
 import { resolveAiAssistModelSettings } from '../../../utils/aiAssistModelSettings.js';
 import { createAiAssistVercelGeneratorChatNodeDefinition } from '../../../utils/aiAssistVercelGenerator.js';
 import { AiAssistPromptModal } from '../../AiAssistPromptModal.js';
+import { renderMarkdown, toSanitizedMarkdownHtml } from '../../../hooks/useMarkdown.js';
 
 const AI_ASSIST_CANCEL_REASON = 'Generate using AI canceled';
 
@@ -369,7 +369,7 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
         inputs: {
           prompt: buildPromptInput(),
           model: generationAssistModel.model,
-          api: generationAssistModel.graphApi,
+          api: generationAssistModel.generatorBranch,
         },
         registry,
         ...resolvedSettings,
@@ -406,8 +406,8 @@ export const AiAssistEditorBase = <TNodeData, TOutputs>({
         // Handle error response
         const responseText = getErrorMessage ? getErrorMessage(outputs) : 'An error occurred';
 
-        const markdownResponse = marked(responseText);
-        toast.info(<div dangerouslySetInnerHTML={{ __html: markdownResponse }}></div>, {
+        const markdownResponse = toSanitizedMarkdownHtml(renderMarkdown(responseText));
+        toast.info(<div dangerouslySetInnerHTML={markdownResponse}></div>, {
           autoClose: false,
           containerId: 'wide',
           toastId: 'ai-assist-response',

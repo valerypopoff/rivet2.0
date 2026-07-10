@@ -258,14 +258,16 @@ export function useGraphExecutionEvents(
   };
 
   const resetLastRunDataForRunStart = (nodeIdsToPreserve: NodeId[] | undefined) => {
+    const currentLastRunData = lastRunDataLatest.current ?? {};
+
     if (!nodeIdsToPreserve?.length) {
       setLastRunData({});
-      clearExecutionDataRefs(dataRefs, lastRunDataLatest.current);
+      clearExecutionDataRefs(dataRefs, currentLastRunData);
       return;
     }
 
     const { preservedRunData, removedRunData } = splitRunDataByPreservedNodes(
-      lastRunDataLatest.current,
+      currentLastRunData,
       nodeIdsToPreserve,
     );
 

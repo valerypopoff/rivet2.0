@@ -1,4 +1,5 @@
 import { type Content, type FunctionCall, type Tool } from '@google/genai';
+import type { Content as VertexContent } from '@google-cloud/vertexai';
 
 export type GoogleModelDeprecated = {
   maxTokens: number;
@@ -226,15 +227,15 @@ export async function* streamChatCompletions({
   const vertexAi = new VertexAI({ project, location });
   const generativeModel = vertexAi.preview.getGenerativeModel({
     model,
-    generation_config: {
-      max_output_tokens,
+    generationConfig: {
+      maxOutputTokens: max_output_tokens,
       temperature,
-      top_p,
-      top_k,
+      topP: top_p,
+      topK: top_k,
     },
   });
   const response = await generativeModel.generateContentStream({
-    contents: prompt as unknown as Parameters<typeof generativeModel.generateContentStream>[0]['contents'],
+    contents: prompt as unknown as VertexContent[],
   });
 
   let hadChunks = false;
@@ -242,10 +243,13 @@ export async function* streamChatCompletions({
   for await (const chunk of response.stream) {
     hadChunks = true;
 
-    if (!signal?.aborted && chunk.candidates[0]?.content.parts[0]?.text) {
+    const candidate = chunk.candidates?.[0];
+    const completion = candidate?.content.parts[0]?.text;
+
+    if (!signal?.aborted && completion) {
       yield {
-        completion: chunk.candidates[0]?.content.parts[0]?.text,
-        finish_reason: chunk.candidates[0]?.finishReason as ChatCompletionChunk['finish_reason'],
+        completion,
+        finish_reason: candidate.finishReason as ChatCompletionChunk['finish_reason'],
         model,
       };
     } else {

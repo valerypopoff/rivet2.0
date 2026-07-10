@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { JSDOM } from 'jsdom';
 import { renderMarkdown } from './useMarkdown.js';
+
+Object.defineProperty(globalThis, 'window', { configurable: true, value: new JSDOM('').window });
 
 test('renderMarkdown keeps links enabled by default', () => {
   const html = renderMarkdown('[Docs](https://example.com)');

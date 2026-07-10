@@ -26,7 +26,7 @@ export const useGlobalHotkey = (
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === key && (!notWhenInputFocused || !isTextEntryFocused())) {
-        latestAction.current(e);
+        latestAction.current?.(e);
       }
     };
 

@@ -349,6 +349,14 @@ The app uses `assembleRegistry()` to rebuild `projectNodeRegistryState` from app
 
 Built-in plugin resolution stays with the plugin catalogue in [`plugins.ts`](../packages/core/src/plugins.ts) through `resolveBuiltInPlugin(id)`. `RegistryAssembly.ts` deliberately does not import that catalogue; keeping registry assembly plugin-catalogue-free avoids cycles through plugins that need execution engine APIs, such as Gentrace.
 
+The Gentrace plugin imports the SDK APIs it uses through
+[`plugins/gentrace/gentraceSdk.ts`](../packages/core/src/plugins/gentrace/gentraceSdk.ts).
+Do not replace that adapter with an `@gentrace/core` package-root import: the SDK
+root also re-exports a Node-only test-job runner (`async_hooks` and `ws`), which is
+unrelated to Rivet's pipeline integration and cannot be bundled into the browser
+app. Keep any future Gentrace SDK path changes confined to this adapter and verify
+both the core build and app Vite build.
+
 Architectural significance:
 
 - this registry is the bridge between serialized graph data and executable node implementations
@@ -397,7 +405,7 @@ At a high level, it owns:
 - control-flow exclusion
 - split-run handling
 - subgraph execution
-- pause/resume/abort
+- pause/resume/abort orchestration and event emission
 - user input requests
 - global state/event propagation
 - recording playback
@@ -408,6 +416,7 @@ Important current boundary:
 - graph-topology queries and readiness checks have been extracted into [`NodeExecutionPlanner.ts`](../packages/core/src/model/NodeExecutionPlanner.ts)
 - node exclusion decisions and excluded output construction have been extracted into [`NodeExclusionPolicy.ts`](../packages/core/src/model/NodeExclusionPolicy.ts)
 - child-processor event/lifecycle wiring has been extracted into [`SubprocessorBridge.ts`](../packages/core/src/model/SubprocessorBridge.ts)
+- run/paused/abort/finish-once transitions have been extracted into [`GraphRunLifecycle.ts`](../packages/core/src/model/GraphRunLifecycle.ts); it owns no queues, graph traversal, event emitter, or node work
 - `GraphProcessor` still remains the public evented execution surface and the owner of execution state
 
 ## Chat Runtime Seams
@@ -459,13 +468,15 @@ intentionally split under
 
 - `llmChatV2NodeData.ts` owns the persisted data/default shape.
 - `llmChatV2NodeEditors.ts` owns the settings manifest and keeps provider-specific editor groups named in place.
-- `chatV2RuntimeOptions.ts` owns credential lookup, provider factory config, generation parameters, provider options, built-in provider tools, tool-choice conversion, and OpenAI-specific parallel-tool-call option mapping.
+- `chatV2ProviderProfile.ts` is the shared credential/provider boundary for LLM Chat and app AI-assist adapters. It applies one precedence table and returns the live credential separately from a secret-free provider profile; neither request-plan summaries nor catalog keys may contain the credential value.
+- `chatV2RuntimeOptions.ts` converts persisted node data and input values into generation parameters, provider options, built-in provider tools, and tool choice; it delegates credentials/provider construction to the profile boundary.
+- `chatV2RequestPlan.ts` is the pure transport-policy boundary. It selects stream versus generate, normalizes the explicit Rivet retry policy, fixes Vercel AI SDK retries at zero, and carries tools/response format/provider options/generation/output policy into `chatV2Pipeline.ts`.
 - `chatV2EditorCache.ts` owns editor-only cache key construction, secret fingerprinting, and cached-output cloning.
 - `llmChatV2NodeRuntime.ts` is a coordinator that assembles those policies for the runtime and re-exports compatibility helpers used by existing tests/imports.
 - `chatV2Errors.ts` owns provider/Vercel SDK error normalization, including API-call and browser/runtime fetch-failure classification for request-status outputs where no HTTP response is observable. It extracts HTTP status codes from common raw/normalized error shapes for retry and request-status outputs, and must not stringify whole provider data objects into user-visible node errors.
 - `chatV2Retry.ts` owns `Retry on non-200` defaults, repeat/cooldown normalization, and abort-safe repeat waits for LLM provider retries, including the zero-cooldown path before a repeat starts.
 - `chatV2Outputs.ts` owns provider-neutral output assembly: `Response` typing for structured formats, assistant/function-call outputs, usage/cost normalization, reusable control-flow exclusion for absent optional outputs, reasoning exclusion, request-status/request-error/request-body outputs, retry-attempt status/error arrays, and provider-failure output shape.
-- `chatV2Pipeline.ts` and `toolContinuation.ts` stay focused on provider-neutral streaming orchestration, retry coordination, provider-error decisions, and auto-continuation behavior. `aiSdkBridge.ts` always passes `maxRetries: 0` to Vercel AI SDK calls so hidden SDK-level retries do not bypass the node's `Retry on non-200` switch; Rivet's retry loop is the single source of retry behavior and per-attempt status/error outputs. For structured response formats with an SDK output descriptor, `aiSdkBridge.ts` resolves the AI SDK's parsed `output` promise on a best-effort basis and `chatV2Outputs.ts` uses that parsed value for the `Response` output while keeping the assistant message text unchanged for chat history. Parsed-output failures fall back to the response text as a string instead of failing the node. Structured-output calls also ask `consumeAiSdkStream(...)` to collapse exact duplicate text blocks and normalize repeated parseable JSON text before partial-output updates or fallback parsing, because some AI SDK/provider combinations expose the same final JSON object more than once.
+- `chatV2Pipeline.ts` executes `ChatV2RequestPlan` and stays focused on provider-neutral orchestration, retry outcomes, provider-error decisions, and output assembly; `toolContinuation.ts` owns continuation. `aiSdkBridge.ts` adapts the planned request to Vercel AI SDK call signatures and retains a defensive zero-retry default for direct bridge callers. Rivet's request plan/retry loop is the single source of retry behavior and per-attempt status/error outputs. For structured response formats with an SDK output descriptor, `aiSdkBridge.ts` resolves the AI SDK's parsed `output` promise on a best-effort basis and `chatV2Outputs.ts` uses that parsed value for the `Response` output while keeping the assistant message text unchanged for chat history. Parsed-output failures fall back to the response text as a string instead of failing the node. Structured-output calls also ask `consumeAiSdkStream(...)` to collapse exact duplicate text blocks and normalize repeated parseable JSON text before partial-output updates or fallback parsing, because some AI SDK/provider combinations expose the same final JSON object more than once.
 - `providerOptions.ts` keeps Custom provider requests on the conservative OpenAI-compatible path. Custom JSON object mode is represented by the raw `response_format: { type: "json_object" }` provider option instead of an SDK output descriptor, and the Custom provider factory does not request streamed usage via `stream_options.include_usage`; compatible providers can still return usage naturally, but Rivet does not force optional OpenAI stream metadata onto every custom endpoint. Provider factories also own the parsed request-body hook used by LLM Chat request diagnostics: the hook wraps the provider fetch function, records the body handed to the actual provider HTTP call, parses it for the `LLM request body` output, and deliberately omits request headers / Rivet-managed API key headers so the normal error formatter can remain payload-free while the explicit diagnostic remains a truthful body inspector.
 
 Keep future Chat v2 changes inside the smallest relevant seam. Do not add provider
@@ -480,6 +491,13 @@ The class maintains both:
 - per-run state, such as results, visited nodes, abort controllers, globals, loaded references, and queue state
 
 This distinction is important because some state is reused across runs and some is rebuilt on each `processGraph(...)`.
+
+`GraphRunLifecycle` owns the small run-level state machine (`idle`, `running`,
+`aborting`, `finished`), pause persistence, one accepted abort decision, and the
+root `finish` claim. `GraphProcessor` still creates/aborts controllers and emits
+all events, so event order remains explicit in the orchestrator. A lifecycle
+transition must return a decision before `GraphProcessor` performs side effects;
+do not move scheduler queues or node execution into this state owner.
 
 Current behavioral detail:
 
@@ -1164,3 +1182,12 @@ Visible from the current code:
 - When changing execution behavior, review `GraphProcessor`, `SplitRunProcessor`, and streaming APIs together.
 - When changing node/plugin contracts, review both app editor usage and runtime construction paths.
 - Be careful with registry-global behavior; several packages assume built-ins are present and plugins are additive/resettable.
+
+# MCP provider lifecycle
+
+Core exposes the transport-neutral `MCPProvider` contract, including optional
+per-server stdio environment values. The Node package owns transport construction
+and process/network lifecycle. Its default provider uses one short-lived client per
+operation, guarantees cleanup after operation failures, and performs Streamable
+HTTP-to-SSE fallback with separate SDK clients. Core nodes must not assume that an
+MCP connection is pooled or retain transport-specific client state.

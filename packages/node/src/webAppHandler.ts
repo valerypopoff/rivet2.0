@@ -13,14 +13,17 @@ import {
   getUiGraphActionComponent,
   getUiGraphInitialState,
   jsonValueToDataValue,
+  RIVET_MARKDOWN_SANITIZER_POLICY,
   resolveUiGraphActionOutputStatePatch,
   resolveUiGraphActionInputs,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
+import { RIVET_WEB_APP_CLIENT_JS } from './generated/webAppClient.generated.js';
 
 let requireForWebAppAssets: ReturnType<typeof createRequire> | undefined;
 let githubMarkdownCss: string | undefined;
 let markedBrowserScript: string | undefined;
+let domPurifyBrowserScript: string | undefined;
 
 export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
 
@@ -272,10 +275,11 @@ export function renderRivetWebAppHtml(uiGraph: UiGraph, options: { actionPath: s
 <body>
   <div id="app" class="rivet-web-app-root"></div>
   <script>
-    window.__RIVET_WEB_APP__ = ${jsonForScript({ actionPath: options.actionPath, initialState: getUiGraphInitialState(uiGraph), revisionKey: options.revisionKey, uiGraph })};
+    window.__RIVET_WEB_APP__ = ${jsonForScript({ actionPath: options.actionPath, initialState: getUiGraphInitialState(uiGraph), markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY, revisionKey: options.revisionKey, uiGraph })};
   </script>
   <script>${scriptForHtml(getMarkedBrowserScript())}</script>
-  <script>${scriptForHtml(WEB_APP_CLIENT_JS)}</script>
+  <script>${scriptForHtml(getDOMPurifyBrowserScript())}</script>
+  <script>${scriptForHtml(RIVET_WEB_APP_CLIENT_JS)}</script>
 </body>
 </html>`;
 }
@@ -432,6 +436,11 @@ function getMarkedBrowserScript(): string {
   return markedBrowserScript;
 }
 
+function getDOMPurifyBrowserScript(): string {
+  domPurifyBrowserScript ??= readFileSync(getRequireForWebAppAssets().resolve('dompurify/dist/purify.min.js'), 'utf8');
+  return domPurifyBrowserScript;
+}
+
 function getRequireForWebAppAssets(): ReturnType<typeof createRequire> {
   requireForWebAppAssets ??= createRequire(getCreateRequireAnchor());
   return requireForWebAppAssets;
@@ -457,285 +466,3 @@ function escapeHtml(value: unknown): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
-
-const WEB_APP_CLIENT_JS = String.raw`
-(() => {
-  const config = window.__RIVET_WEB_APP__;
-  const root = document.getElementById('app');
-  let state = { ...(config.initialState || {}) };
-  let pending = false;
-  let error = '';
-  let revisionMismatch = false;
-
-  const el = (tag, attrs = {}, children = []) => {
-    const node = document.createElement(tag);
-    for (const [key, value] of Object.entries(attrs)) {
-      if (key === 'className') node.className = value;
-      else if (key === 'text') node.textContent = value;
-      else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2).toLowerCase(), value);
-      else if (value != null) node.setAttribute(key, value);
-    }
-    for (const child of children) node.append(child);
-    return node;
-  };
-
-  const stringifyOutputValue = (value) => {
-    try {
-      return JSON.stringify(value, null, 2) ?? '';
-    } catch {
-      return '[Unserializable value]';
-    }
-  };
-
-  const escapeHtml = (value) => String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-
-  const createSafeMarkdownRenderer = () => {
-    const Renderer = globalThis.marked?.Renderer;
-    if (typeof Renderer !== 'function') return undefined;
-    const renderer = new Renderer();
-    renderer.html = (html) => escapeHtml(html);
-    return renderer;
-  };
-
-  const safeMarkdownRenderer = createSafeMarkdownRenderer();
-
-  const renderMarkdown = (value) => {
-    const parser = globalThis.marked?.parse ?? globalThis.marked?.marked;
-    if (typeof parser !== 'function' || !safeMarkdownRenderer) {
-      return escapeHtml(value);
-    }
-
-    return parser(String(value ?? ''), { renderer: safeMarkdownRenderer });
-  };
-
-  const renderMarkdownElement = (value, className) => {
-    const node = el('div', { className });
-    node.innerHTML = renderMarkdown(value);
-    return node;
-  };
-
-  const renderValue = (value, mode) => {
-    if (mode === 'json') return stringifyOutputValue(value);
-    return typeof value === 'string' ? value : value == null ? '' : stringifyOutputValue(value);
-  };
-
-  const hasRenderedOutputValue = (key) => Object.prototype.hasOwnProperty.call(state, key) && state[key] !== undefined;
-
-  const stringifyJsonDownloadValue = (value) => {
-    try {
-      return JSON.stringify(value, null, 2) ?? undefined;
-    } catch {
-      return undefined;
-    }
-  };
-
-  const formatDownloadDateTime = (date) => {
-    const pad = (value) => String(value).padStart(2, '0');
-    return [
-      date.getFullYear(),
-      '-',
-      pad(date.getMonth() + 1),
-      '-',
-      pad(date.getDate()),
-      ' ',
-      pad(date.getHours()),
-      '-',
-      pad(date.getMinutes()),
-      '-',
-      pad(date.getSeconds()),
-    ].join('');
-  };
-
-  const getWebAppJsonOutputFilename = () => {
-    const safeName = String(config.uiGraph?.name || 'Rivet web app')
-      .trim()
-      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-')
-      .replace(/\s+/g, ' ')
-      .slice(0, 80);
-
-    return (safeName || 'Rivet web app') + ' ' + formatDownloadDateTime(new Date()) + '.json';
-  };
-
-  const downloadJson = (value) => {
-    const blob = new Blob([value], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = getWebAppJsonOutputFilename();
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  };
-
-  const copyText = async (value) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      return;
-    } catch {
-      // Fall back for hosts that do not expose the clipboard API.
-    }
-
-    const textArea = document.createElement('textarea');
-    textArea.value = value;
-    textArea.style.position = 'fixed';
-    textArea.style.opacity = '0';
-    document.body.append(textArea);
-    textArea.select();
-
-    try {
-      document.execCommand('copy');
-    } finally {
-      textArea.remove();
-    }
-  };
-
-  async function runAction(component) {
-    pending = true;
-    error = '';
-    revisionMismatch = false;
-    render();
-    try {
-      const response = await fetch(config.actionPath, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ componentId: component.id, revisionKey: config.revisionKey, state }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        if (response.status === 409 && data?.code === 'revision_mismatch') {
-          revisionMismatch = true;
-          return;
-        }
-
-        throw new Error(data.error || 'Action failed.');
-      }
-      state = { ...state, ...(data.statePatch || {}) };
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-    } finally {
-      pending = false;
-      render();
-    }
-  }
-
-  function renderError() {
-    if (!error || revisionMismatch) return [];
-
-    return [el('div', { className: 'rivet-web-app-error' }, [
-      el('span', { text: error }),
-    ])];
-  }
-
-  function renderRevisionMismatchModal() {
-    if (!revisionMismatch) return [];
-
-    return [el('div', { className: 'rivet-web-app-modal-backdrop' }, [
-      el('div', {
-        className: 'rivet-web-app-modal',
-        role: 'dialog',
-        'aria-modal': 'true',
-        'aria-labelledby': 'rivet-web-app-revision-mismatch-title',
-      }, [
-        el('div', {
-          className: 'rivet-web-app-modal-message',
-          id: 'rivet-web-app-revision-mismatch-title',
-          text: 'This app was updated. Reload to continue.',
-        }),
-        el('button', {
-          className: 'rivet-web-app-button rivet-web-app-modal-button',
-          text: 'Reload',
-          onClick: () => window.location.reload(),
-        }),
-      ]),
-    ])];
-  }
-
-  function renderComponent(component) {
-    if (component.type === 'text') return el('div', { className: 'rivet-web-app-card', text: component.text });
-    if (component.type === 'markdown') return renderMarkdownElement(component.markdown, 'rivet-web-app-card rivet-web-app-markdown markdown-body');
-    if (component.type === 'input' || component.type === 'textarea') {
-      const control = el(component.type === 'textarea' ? 'textarea' : 'input', {
-        className: 'rivet-web-app-control inputarea',
-        placeholder: component.placeholder || '',
-      });
-      control.value = state[component.stateKey] ?? component.defaultValue ?? '';
-      control.addEventListener('input', () => { state = { ...state, [component.stateKey]: control.value }; });
-      return el('label', { className: 'rivet-web-app-field' }, [
-        el('span', { text: component.label || component.stateKey }),
-        control,
-      ]);
-    }
-    if (component.type === 'button') {
-      const button = el('button', { className: 'rivet-web-app-button', text: pending ? 'Running...' : component.label, onClick: () => runAction(component) });
-      button.disabled = pending;
-      return button;
-    }
-    if (component.type === 'output') {
-      const value = state[component.stateKey];
-      const renderedValue = renderValue(value, component.renderAs || 'text');
-      const jsonDownloadValue = component.renderAs === 'json' && hasRenderedOutputValue(component.stateKey)
-        ? stringifyJsonDownloadValue(value)
-        : undefined;
-      const outputBody = component.renderAs === 'markdown'
-        ? renderMarkdownElement(renderedValue, 'rivet-web-app-output-markdown markdown-body rivet-markdown-output')
-        : el('pre', { text: renderedValue });
-
-      const children = [
-        el('div', { className: 'rivet-web-app-output-title', text: component.label || component.stateKey }),
-      ];
-
-      if (hasRenderedOutputValue(component.stateKey)) {
-        children.push(el('button', {
-          className: 'rivet-web-app-output-action-button rivet-web-app-output-copy-button',
-          type: 'button',
-          title: 'Copy output',
-          'aria-label': 'Copy output',
-          onClick: (event) => {
-            event.stopPropagation();
-            void copyText(renderedValue);
-          },
-        }));
-      }
-
-      if (jsonDownloadValue != null) {
-        children.push(el('button', {
-          className: 'rivet-web-app-output-action-button rivet-web-app-output-download-button',
-          type: 'button',
-          title: 'Download JSON',
-          'aria-label': 'Download JSON',
-          onClick: (event) => {
-            event.stopPropagation();
-            downloadJson(jsonDownloadValue);
-          },
-        }));
-      }
-
-      children.push(outputBody);
-
-      return el('section', {
-        className:
-          'rivet-web-app-card rivet-web-app-output' +
-          (jsonDownloadValue != null ? ' rivet-web-app-output-has-download' : ''),
-      }, children);
-    }
-    return el('div', { className: 'rivet-web-app-card', text: 'Unsupported component' });
-  }
-
-  function render() {
-    const surface = el('main', { className: 'rivet-web-app-surface' }, [
-      ...config.uiGraph.components.map(renderComponent),
-      ...renderError(),
-    ]);
-    root.replaceChildren(surface, ...renderRevisionMismatchModal());
-    if (revisionMismatch) root.querySelector('.rivet-web-app-modal-button')?.focus();
-  }
-
-  render();
-})();`;

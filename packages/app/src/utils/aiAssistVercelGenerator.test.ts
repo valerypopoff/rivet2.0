@@ -99,7 +99,7 @@ test('bundled AI graph creator graph stores Vercel adapter nodes directly', () =
 test('AI assist generator Vercel adapter preserves the legacy generator graph port contract', () => {
   const definition = createAiAssistVercelGeneratorChatNodeDefinition({
     displayName: 'GPT-5',
-    graphApi: 'openai',
+    generatorBranch: 'openai',
     model: 'gpt-5',
     provider: 'openai',
   });
@@ -123,7 +123,7 @@ test('AI assist generator adapter owns the Vercel SDK path instead of legacy cha
   );
 
   assert.match(source, /runChatV2Pipeline/);
-  assert.match(source, /createChatV2Model/);
+  assert.match(source, /createResolvedChatV2Provider/);
   assert.match(source, /emitPartialOutputs: false/);
   assert.match(source, /getInputRawString\(inputs, 'stop'\)/);
   assert.match(source, /parallelToolCalls: false/);

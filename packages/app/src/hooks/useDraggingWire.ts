@@ -3,7 +3,6 @@ import { type ChartNode, type NodeConnection, type NodeId, type PortId } from '@
 import { useAtom, useStore } from 'jotai';
 import { ioDefinitionsForNodeState } from '../state/graph.js';
 import { draggingWireClosestPortState, draggingWireState, type DraggingWireDef } from '../state/graphBuilder.js';
-import { useLatest } from 'ahooks';
 import { useMakeConnectionCommand } from '../commands/makeConnectionCommand';
 import { useBreakConnectionCommand } from '../commands/breakConnectionCommand';
 import { useRewireConnectionCommand } from '../commands/rewireConnectionCommand.js';
@@ -39,12 +38,16 @@ export const useDraggingWire = ({
   const [closestPortToDraggingWire, setClosestPortToDraggingWire] = useAtom(draggingWireClosestPortState);
   const isDragging = !!draggingWire;
 
-  const latestDraggingWire = useLatest(draggingWire);
+  const latestDraggingWire = useRef(draggingWire);
   const wireGestureStartRef = useRef<{ x: number; y: number } | undefined>(undefined);
 
   const makeConnection = useMakeConnectionCommand();
   const breakConnection = useBreakConnectionCommand();
   const rewireConnection = useRewireConnectionCommand();
+
+  useEffect(() => {
+    latestDraggingWire.current = draggingWire;
+  }, [draggingWire]);
 
   const setActiveDraggingWire = useCallback(
     (wire: DraggingWireDef | undefined) => {

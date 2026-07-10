@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sourceReadingTestAllowlist } from './source-reading-test-allowlist.mjs';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const testFilePattern = /\.(?:test|spec)\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/;
@@ -54,8 +55,24 @@ if (focusedTests.length > 0) {
   console.log('No committed focused tests found.');
 }
 
+const newSourceReadingTests = sourceReadingTests.filter((file) => !sourceReadingTestAllowlist.has(file));
+const staleSourceReadingAllowlist = [...sourceReadingTestAllowlist].filter(
+  (file) => !sourceReadingTests.includes(file),
+);
+
+if (newSourceReadingTests.length > 0) {
+  console.error('New source-reading tests are not allowed:');
+  for (const file of newSourceReadingTests) console.error(`- ${file}`);
+  process.exitCode = 1;
+}
+if (staleSourceReadingAllowlist.length > 0) {
+  console.error('Remove migrated or deleted tests from the source-reading allowlist:');
+  for (const file of staleSourceReadingAllowlist) console.error(`- ${file}`);
+  process.exitCode = 1;
+}
+
 if (sourceReadingTests.length > 0) {
-  console.log(`Source-reading test files (${sourceReadingTests.length}, report only):`);
+  console.log(`Reviewed source-reading migration queue (${sourceReadingTests.length}, new entries fail):`);
   for (const file of sourceReadingTests) {
     console.log(`- ${file}`);
   }

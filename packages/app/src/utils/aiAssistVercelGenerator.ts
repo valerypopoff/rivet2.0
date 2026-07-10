@@ -1,6 +1,6 @@
 import {
   coerceTypeOptional,
-  createChatV2Model,
+  createResolvedChatV2Provider,
   type ChartNode,
   type ChatMessageMessagePart,
   type ChatV2ProviderOptions,
@@ -20,7 +20,7 @@ import {
   type PortId,
   type Project,
   type ProjectId,
-  resolveChatV2ProviderConfig,
+  resolveChatV2Credential,
   runChatV2Pipeline,
 } from '@valerypopoff/rivet2-core';
 import type { ResolvedAiAssistModelSettings } from './aiAssistModelSettings.js';
@@ -116,13 +116,6 @@ function getCustomProviderBaseURL(
   modelSettings: ResolvedAiAssistModelSettings,
 ): string | undefined {
   return provider === 'custom' ? modelSettings.customProviderBaseURL : undefined;
-}
-
-function getCustomProviderApiKey(
-  provider: ResolvedAiAssistModelSettings['provider'],
-  context: InternalProcessContext,
-): string | undefined {
-  return provider === 'custom' ? context.settings.customAiApiKey || undefined : undefined;
 }
 
 function getGeneratorProviderOptions(provider: ResolvedAiAssistModelSettings['provider']): ChatV2ProviderOptions | undefined {
@@ -310,16 +303,17 @@ export function createAiAssistVercelGeneratorChatNodeDefinition(
     async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
       const provider = getProviderForGeneratorNode(this.data.aiAssistGeneratorChatBranch, modelSettings);
       const modelId = getInputString(inputs, 'model') ?? modelSettings.model;
-      const providerConfig = await resolveChatV2ProviderConfig(provider, modelId, context, {
+      const credential = resolveChatV2Credential({ provider, context });
+      const resolvedProvider = await createResolvedChatV2Provider({
+        provider,
+        modelId,
+        context,
         baseURL: getCustomProviderBaseURL(provider, modelSettings),
-      });
-      const model = createChatV2Model(provider, modelId, context, {
-        ...providerConfig,
-        apiKey: getCustomProviderApiKey(provider, context),
+        credential,
       });
       const result = await runChatV2Pipeline({
         provider,
-        model,
+        model: resolvedProvider.model,
         modelId,
         prompt: inputs[createPortId('prompt')],
         systemPrompt: getOptionalSystemPrompt(inputs),

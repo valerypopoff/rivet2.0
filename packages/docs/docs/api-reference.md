@@ -51,4 +51,6 @@ The npm package names describe the runtime package boundaries. A source-vendored
 
 ### Requirements
 
-The repository toolchain targets Node.js `20.4.0`. For application integrations, use a modern Node 20 runtime unless a specific package release states otherwise.
+The repository toolchain targets Node.js `22.22.3`. Published runtime packages keep
+their own `engines` ranges; use the package range for integrations and the pinned
+Node 22 release when developing Rivet itself.

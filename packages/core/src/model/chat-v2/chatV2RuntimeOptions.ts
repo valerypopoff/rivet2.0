@@ -6,6 +6,7 @@ import type { Inputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { ResolvedChatV2ProviderConfig } from './providerOptions.js';
+import { resolveChatV2Credential } from './chatV2ProviderProfile.js';
 import type {
   ChatV2ProviderOptions,
   ChatV2ToolChoice,
@@ -22,11 +23,6 @@ export type LLMChatV2GenerationParameters = Pick<
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined };
 type JsonObject = { [key: string]: JsonValue | undefined };
 
-function getStringSetting(settings: InternalProcessContext['settings'], key: string): string | undefined {
-  const value = settings[key];
-  return typeof value === 'string' && value.trim() ? value : undefined;
-}
-
 export function resolveLLMChatV2Headers(data: LLMChatV2NodeData, inputs: Inputs): Record<string, string> | undefined {
   const resolvedHeaders =
     data.useHeadersInput && inputs['headers' as PortId] != null
@@ -37,82 +33,19 @@ export function resolveLLMChatV2Headers(data: LLMChatV2NodeData, inputs: Inputs)
   return Object.keys(cleaned).length > 0 ? cleaned : undefined;
 }
 
-function resolveConfiguredProviderApiKey(
-  data: LLMChatV2NodeData,
-  context: Pick<InternalProcessContext, 'getPluginConfig' | 'settings'>,
-): string | undefined {
-  switch (data.provider) {
-    case 'openai':
-      return context.settings.openAiApiKey || context.settings.openAiKey || undefined;
-    case 'anthropic':
-      return context.settings.anthropicApiKey || context.getPluginConfig('anthropicApiKey') || undefined;
-    case 'google':
-      return context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined;
-    case 'custom': {
-      const programmaticName = data.customProviderApiKeyProgrammaticName?.trim();
-      const envVarName = data.customProviderApiKeyEnvVarName?.trim();
-
-      if (programmaticName) {
-        const customAiApiKey = getStringSetting(context.settings, programmaticName);
-        if (customAiApiKey) {
-          return customAiApiKey;
-        }
-      }
-
-      if (envVarName) {
-        const pluginEnvValue = context.settings.pluginEnv?.[envVarName];
-        if (pluginEnvValue) {
-          return pluginEnvValue;
-        }
-
-        const processEnv = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } })
-          .process?.env;
-        const apiKey = processEnv?.[envVarName];
-
-        if (apiKey) {
-          return apiKey;
-        }
-      }
-
-      if (context.settings.customAiApiKey) {
-        return context.settings.customAiApiKey;
-      }
-
-      const missingKeys = [
-        programmaticName ? `programmatic key ${programmaticName}` : undefined,
-        envVarName ? `env var ${envVarName}` : undefined,
-      ].filter(Boolean);
-
-      if (missingKeys.length > 0) {
-        const programmaticHint = programmaticName
-          ? `pass ${programmaticName}`
-          : 'set Alternative programmatic key name and pass that named run option';
-        throw new Error(
-          `Custom provider API key ${missingKeys.join(' and ')} is not set. Use Input port, configure Settings > LLM, ${programmaticHint}, or configure the environment variable.`,
-        );
-      }
-
-      return undefined;
-    }
-  }
-}
-
 export function resolveLLMChatV2ApiKey(
   data: LLMChatV2NodeData,
   inputs: Inputs,
   context: Pick<InternalProcessContext, 'getPluginConfig' | 'settings'>,
 ): string | undefined {
-  if (data.apiKeySource !== 'input') {
-    return resolveConfiguredProviderApiKey(data, context);
-  }
-
-  const apiKey = coerceTypeOptional(inputs['apiKey' as PortId], 'string')?.trim();
-
-  if (!apiKey) {
-    throw new Error('API Key input is required when API key source is Input port.');
-  }
-
-  return apiKey;
+  return resolveChatV2Credential({
+    provider: data.provider,
+    context,
+    apiKeySource: data.apiKeySource === 'input' ? 'input' : 'configured',
+    inputs,
+    customProgrammaticName: data.customProviderApiKeyProgrammaticName,
+    customEnvironmentName: data.customProviderApiKeyEnvVarName,
+  }).value;
 }
 
 function parseExtraProviderOptionsText(rawText: string): JsonObject | undefined {
