@@ -9,6 +9,15 @@ import { replaceHostedProjectTabLabelExpression } from '../project-tab-label-tra
 const overrideDir = resolve('/repo/wrapper/web/overrides');
 const updateCheckScript = readFileSync(new URL('../../../scripts/update-check.sh', import.meta.url), 'utf8');
 const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
+const wrapperPackageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+  dependencies?: Record<string, string>;
+};
+const upstreamCorePackageJson = JSON.parse(readFileSync(new URL('../../../rivet/packages/core/package.json', import.meta.url), 'utf8')) as {
+  dependencies?: Record<string, string>;
+};
+const upstreamNodePackageJson = JSON.parse(readFileSync(new URL('../../../rivet/packages/node/package.json', import.meta.url), 'utf8')) as {
+  dependencies?: Record<string, string>;
+};
 const settingsOverride = readFileSync(new URL('../overrides/state/settings.ts', import.meta.url), 'utf8');
 const contextMenuOverride = readFileSync(new URL('../overrides/hooks/useContextMenu.ts', import.meta.url), 'utf8');
 const loadProjectOverride = readFileSync(new URL('../overrides/hooks/useLoadProject.ts', import.meta.url), 'utf8');
@@ -88,6 +97,13 @@ test('hosted Vite config carries upstream spellcheck browser virtual modules', (
   assert.match(viteConfig, /exclude: \[[\s\S]*'dictionary-en'[\s\S]*'rivet-cspell-words'/);
   assert.match(viteConfig, /dictionaryEnBrowserPlugin\(\),/);
   assert.match(viteConfig, /cspellWordsBrowserPlugin\(\),/);
+});
+
+test('hosted Vite config mirrors upstream browser dependencies with provider subpath support', () => {
+  assert.equal(wrapperPackageJson.dependencies?.['@gentrace/core'], upstreamCorePackageJson.dependencies?.['@gentrace/core']);
+  assert.equal(wrapperPackageJson.dependencies?.dompurify, upstreamNodePackageJson.dependencies?.dompurify);
+  assert.ok(viteConfig.includes('find: /^@gentrace\\/core\\/(.+)$/'));
+  assert.ok(viteConfig.includes('node_modules/@gentrace/core/$1'));
 });
 
 test('settings override delegates upstream settings and keeps hosted-only exports narrow', () => {

@@ -36,7 +36,7 @@ The Docker dev and production stacks expose these route families through nginx:
 | `/ws/executor/internal` | `executor` | Hosted editor execution websocket |
 | `/ws/executor` | `executor` | Upstream-compatible executor websocket path |
 
-The nginx configs also set `client_max_body_size 100m`, so large API/editor payloads are allowed up to that limit.
+The nginx configs keep a `100 MiB` server-wide body limit for API/editor payloads. App Settings -> `Web apps` can independently change the maximum JSON data a web-app button action may send (default `100 MiB`); nginx hot-reloads that value as a location-specific `client_max_body_size` for the published and latest web-app route families, and the API enforces the same limit when it receives an action directly. If an external ingress or host reverse proxy sits in front of Rivet, it must independently allow at least the same body size; the wrapper cannot reconfigure infrastructure outside its own proxy container.
 
 Current proxy timeout behavior:
 

@@ -10,6 +10,7 @@ import {
   resolveUiGraphActionOutputStatePatch,
   RivetWebAppActionHttpError,
   type DataValue,
+  type LooseDataValue,
   type RivetWebAppActionResult,
   type RivetWebAppProcessorOptions,
   type UiComponentId,
@@ -906,11 +907,14 @@ async function runRecordedWebAppAction(
     codeRunnerTelemetry,
     options,
   );
+  const inputs = (processorOptions.inputs ??
+    Object.fromEntries(
+      Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]),
+    )) as Record<string, LooseDataValue>;
   const processor = createProcessor(executionProject.project, {
     ...processorOptions,
     graph: component.action.graphId,
-    inputs: processorOptions.inputs ??
-      Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)])),
+    inputs,
   });
   const recorder = isWorkflowRecordingEnabled()
     ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())

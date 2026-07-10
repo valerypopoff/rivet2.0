@@ -168,6 +168,7 @@ function normalizeRuntimeLimitSettingsDraft(value: unknown): RuntimeLimitSetting
     'commandTimeoutSeconds',
     'maxOutputBytes',
     'proxyReadTimeoutSeconds',
+    'webAppActionRequestLimitBytes',
     'dockerWaitTimeoutSeconds',
   ] as const) {
     if (Object.prototype.hasOwnProperty.call(raw, key)) {

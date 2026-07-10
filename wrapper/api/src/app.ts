@@ -35,10 +35,43 @@ import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config
 import { requireAuth } from './middleware/auth.js';
 import { isTrustedProxyRequest } from './auth.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
+import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 
 type RuntimeExpressRouter = {
   handle: (req: Request, res: Response, next: NextFunction) => void;
 };
+
+const DEFAULT_JSON_BODY_LIMIT_BYTES = 100 * 1024 * 1024;
+
+function isWebAppActionRequest(req: Request): boolean {
+  const requestPath = req.path.replace(/\/+$/, '');
+
+  if (req.method !== 'POST' || !requestPath.endsWith('/actions/run')) {
+    return false;
+  }
+
+  return [getPublishedWebAppsBasePath(), getLatestWebAppsBasePath()].some((basePath) => {
+    const prefix = `${basePath}/`;
+    const slug = requestPath.slice(prefix.length, -'/actions/run'.length);
+    return requestPath.startsWith(prefix) && slug.length > 0 && !slug.includes('/');
+  });
+}
+
+function createJsonBodyParser(): RequestHandler {
+  const defaultParser = express.json({ limit: DEFAULT_JSON_BODY_LIMIT_BYTES, strict: false });
+
+  return (req, res, next) => {
+    if (!isWebAppActionRequest(req)) {
+      defaultParser(req, res, next);
+      return;
+    }
+
+    express.json({
+      limit: readRuntimeLimitSettingsSync().webAppActionRequestLimitBytes,
+      strict: false,
+    })(req, res, next);
+  };
+}
 
 export function getApiErrorResponse(err: Error): { status: number; body: { error: string } } {
   const status = (err as { status?: number }).status ?? 500;
@@ -218,7 +251,7 @@ export function createApiApp(profile = getApiRuntimeProfile()): Express {
   app.use(cors((req, callback) => {
     callback(null, createCorsOptions(req));
   }));
-  app.use(express.json({ limit: '100mb', strict: false }));
+  app.use(createJsonBodyParser());
   app.use(express.urlencoded({ extended: false }));
 
   app.get('/healthz', (_req, res) => {
@@ -242,8 +275,10 @@ export function createApiApp(profile = getApiRuntimeProfile()): Express {
   });
 
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error('Unhandled API error:', err);
     const response = getApiErrorResponse(err);
+    if (response.status >= 500) {
+      console.error('Unhandled API error:', err);
+    }
     res.status(response.status).json(response.body);
   });
 

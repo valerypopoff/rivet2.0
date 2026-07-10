@@ -183,8 +183,10 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
   assert.match(proxyBootstrap, /runtime_limit_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json"/);
   assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "proxyReadTimeoutSeconds"/);
+  assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "webAppActionRequestLimitBytes"/);
   assert.match(proxyBootstrap, /\*\[!0123456789\]\*/);
   assert.match(proxyBootstrap, /RIVET_PROXY_READ_TIMEOUT="\$\{proxy_read_timeout_seconds\}s"/);
+  assert.match(proxyBootstrap, /RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES="\$web_app_action_request_limit_bytes"/);
   assert.match(proxyBootstrap, /read_runtime_limit_settings/);
   assert.match(proxyBootstrap, /RIVET_PROXY_TIMEOUT_INCLUDE_FILE:-\/tmp\/nginx\/rivet-proxy-timeout\.inc/);
   assert.match(proxyBootstrap, /write_proxy_timeout_include\(\)/);
@@ -192,6 +194,7 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   assert.match(proxyBootstrap, /proxy_read_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
   assert.match(proxyBootstrap, /proxy_send_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
   assert.match(proxyBootstrap, /include \$\{RIVET_PROXY_TIMEOUT_INCLUDE_FILE\};/);
+  assert.match(proxyBootstrap, /client_max_body_size \$\{RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES\};/);
   assert.match(proxyBootstrap, /previous_proxy_timeout_include/);
   assert.match(proxyDockerfile, /ENV RIVET_PROXY_READ_TIMEOUT=180s/);
   assert.doesNotMatch(prodCompose, /RIVET_PROXY_READ_TIMEOUT/);
@@ -231,7 +234,11 @@ test('executor image and compose contracts keep the websocket service independen
 test('API images and launchers use the filtered Rivet source context and symlink-preserved runtime links', () => {
   const apiDockerfile = readRepoFile('image/api/Dockerfile');
   const apiEntrypoint = readRepoFile('image/api/entrypoint.sh');
+  const executorDockerfile = readRepoFile('image/executor/Dockerfile');
+  const webDockerfile = readRepoFile('image/web/Dockerfile');
   const composeApiDockerfile = readRepoFile('ops/docker/Dockerfile.api');
+  const composeExecutorDockerfile = readRepoFile('ops/docker/Dockerfile.executor');
+  const composeWebDockerfile = readRepoFile('ops/docker/Dockerfile.web');
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
   const devDockerLauncher = readRepoFile('scripts/dev-docker.mjs');
@@ -251,6 +258,18 @@ test('API images and launchers use the filtered Rivet source context and symlink
     assert.match(dockerfile, /YARN_NODE_LINKER=node-modules yarn build:runtime/);
     assert.doesNotMatch(dockerfile, /yarn workspace @valerypopoff\/rivet2-(core|node) run build/);
     assert.match(dockerfile, /RUN node \/app\/scripts\/link-rivet-node-package\.mjs/);
+  }
+
+  for (const dockerfile of [
+    apiDockerfile,
+    executorDockerfile,
+    webDockerfile,
+    composeApiDockerfile,
+    composeExecutorDockerfile,
+    composeWebDockerfile,
+  ]) {
+    assert.match(dockerfile, /corepack enable/);
+    assert.doesNotMatch(dockerfile, /corepack prepare yarn@/);
   }
 
   assert.match(apiDockerfile, /COPY --from=builder --chown=10001:10001 \/app\/rivet\/node_modules \/app\/rivet\/node_modules/);
@@ -292,7 +311,11 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(devDockerLauncher, /rivet\/\.yarn\/unplugged\/\.rivet-dev-yarn-install-ok/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/workspace\/rivet node \/workspace\/scripts\/ensure-rivet-runtime-build\.mjs/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/tmp\/rivet-source RIVET_API_PACKAGE_ROOT=\/app node \/workspace\/scripts\/link-rivet-node-package\.mjs/);
-  assert.match(ensureRivetRuntimeBuild, /yarn-4\.6\.0\.cjs/);
+  assert.match(ensureRivetRuntimeBuild, /function getConfiguredYarnPath\(\)/);
+  assert.match(ensureRivetRuntimeBuild, /\.yarnrc\.yml/);
+  assert.match(ensureRivetRuntimeBuild, /Expected yarnPath/);
+  assert.doesNotMatch(ensureRivetRuntimeBuild, /yarn-4\.6\.0\.cjs/);
+  assert.doesNotMatch(devCompose, /corepack prepare yarn@/);
   assert.match(ensureRivetRuntimeBuild, /'build:runtime'/);
   assert.match(ensureRivetRuntimeBuild, /webAppHandler\.js/);
   assert.match(prodCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);

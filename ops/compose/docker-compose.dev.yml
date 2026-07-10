@@ -62,7 +62,6 @@ services:
     command: >
       sh -lc "
         corepack enable &&
-        corepack prepare yarn@4.6.0 --activate &&
         cd /workspace/rivet &&
         if [ ! -f node_modules/.rivet-dev-yarn-install-ok ] || [ ! -f .yarn/unplugged/.rivet-dev-yarn-install-ok ] || [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
           (YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable ||
