@@ -89,13 +89,19 @@ export function useWireDragScrolling() {
         return;
       }
 
-      const dx = nearLatest.current.isMouseNearLeftEdge ? 1 : nearLatest.current.isMouseNearRightEdge ? -1 : 0;
-      const dy = nearLatest.current.isMouseNearTopEdge ? 1 : nearLatest.current.isMouseNearBottomEdge ? -1 : 0;
+      const near = nearLatest.current;
+      const currentCanvasPosition = latestCanvasPosition.current;
+      if (!near || !currentCanvasPosition) {
+        return;
+      }
+
+      const dx = near.isMouseNearLeftEdge ? 1 : near.isMouseNearRightEdge ? -1 : 0;
+      const dy = near.isMouseNearTopEdge ? 1 : near.isMouseNearBottomEdge ? -1 : 0;
 
       setCanvasPosition((pos) => ({
         ...pos,
-        x: pos.x + (dx * 10) / latestCanvasPosition.current.zoom,
-        y: pos.y + (dy * 10) / latestCanvasPosition.current.zoom,
+        x: pos.x + (dx * 10) / currentCanvasPosition.zoom,
+        y: pos.y + (dy * 10) / currentCanvasPosition.zoom,
       }));
     }, 25);
   }, [

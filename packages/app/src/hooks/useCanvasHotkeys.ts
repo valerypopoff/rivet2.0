@@ -18,15 +18,12 @@ import { useRedo, useUndo } from '../commands/Command';
 import { graphMetadataState, nodesState } from '../state/graph';
 import { showAiGraphCreatorInputState } from '../components/AiGraphCreatorInput';
 import { overlayOpenState } from '../state/ui';
-import {
-  blurCanvasNavigationShortcutFocus,
-  getCanvasNavigationShortcut,
-} from './canvasNavigationShortcuts.js';
+import { blurCanvasNavigationShortcutFocus, getCanvasNavigationShortcut } from './canvasNavigationShortcuts.js';
 import { useGraphHistoryNavigation } from './useGraphHistoryNavigation.js';
 import { projectState } from '../state/savedGraphs.js';
 import { useLoadGraph } from './useLoadGraph.js';
 import { createRootGraphViewContext } from '../domain/graphEditing/navigationActions.js';
-import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
+import { useProjectWorkspaceTarget } from './useProjectWorkspaceTarget.js';
 
 type CanvasHotkeyOptions =
   | boolean
@@ -67,7 +64,7 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
   const loadGraph = useLoadGraph();
   const graphMetadata = useAtomValue(graphMetadataState);
   const project = useAtomValue(projectState);
-  const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
+  const nodeLibraryOpen = useProjectWorkspaceTarget()?.type === 'nodeLibrary';
 
   const nodes = useAtomValue(nodesState);
   const [selectedNodeIds, setSelectedNodes] = useAtom(selectedNodesState);
@@ -260,7 +257,7 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
 
   useEffect(() => {
     const listener = (e: KeyboardEvent) => {
-      latestHandler.current(e);
+      latestHandler.current?.(e);
     };
 
     window.addEventListener('keydown', listener);

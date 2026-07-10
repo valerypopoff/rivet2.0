@@ -15,6 +15,12 @@
   --ui-button-radius: calc(10px * var(--ui-font-scale));
   --ui-button-radius-sm: calc(8px * var(--ui-font-scale));
   --form-control-border-width: 1px;
+  --form-control-radius: calc(8px * var(--ui-font-scale));
+  --form-control-option-radius: calc(6px * var(--ui-font-scale));
+  --form-control-select-height: calc(34px * var(--ui-font-scale));
+  --form-control-select-option-min-height: calc(30px * var(--ui-font-scale));
+  --form-control-select-option-padding-block: calc(5px * var(--ui-font-scale));
+  --form-control-select-option-padding-inline: calc(10px * var(--ui-font-scale));
   --resize-edge-horizontal-cursor: ew-resize;
   --resize-edge-vertical-cursor: ns-resize;
   --resize-edge-diagonal-down-cursor: nwse-resize;
@@ -101,6 +107,8 @@
   :root {
     --ui-button-radius: calc(5px * var(--ui-font-scale));
     --ui-button-radius-sm: calc(4px * var(--ui-font-scale));
+    --form-control-radius: calc(4px * var(--ui-font-scale));
+    --form-control-option-radius: calc(3px * var(--ui-font-scale));
   }
 }
 
@@ -190,9 +198,14 @@ select,
 textarea:not(.inputarea) {
   border: var(--form-control-border-width) solid var(--form-control-border);
   border-width: var(--form-control-border-width) !important;
+  border-radius: var(--form-control-radius);
   background-color: var(--form-control-bg);
   color: var(--foreground);
   color-scheme: var(--form-control-color-scheme);
+}
+
+select {
+  min-height: var(--form-control-select-height);
 }
 
 input:not(.inputarea):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not(
@@ -236,7 +249,8 @@ legend[class],
 
 [class*='-control']:has(input[id^='react-select-']) {
   border-width: var(--form-control-border-width) !important;
-  min-height: calc(40px * var(--ui-font-scale)) !important;
+  min-height: var(--form-control-select-height) !important;
+  border-radius: var(--form-control-radius) !important;
 }
 
 [data-ds--text-field--container] {
@@ -257,6 +271,17 @@ legend[class],
   --ds-background-input-pressed: var(--form-control-bg-focus);
   --ds-border-input: var(--form-control-border);
   --ds-border-focused: var(--form-control-border-focus);
+}
+
+[class*='-menu']:has([role='option']) {
+  border-radius: var(--form-control-radius) !important;
+}
+
+[class*='-menu']:has([role='option']) [role='option'] {
+  min-height: var(--form-control-select-option-min-height) !important;
+  padding-block: var(--form-control-select-option-padding-block) !important;
+  padding-inline: var(--form-control-select-option-padding-inline) !important;
+  border-radius: var(--form-control-option-radius) !important;
 }
 
 [class*='-singleValue'] {
@@ -309,6 +334,10 @@ code {
 
 .monaco-editor .rivet-editor-js-style-comment {
   color: #6a9955;
+}
+
+.rivet-json-schema-definition-hover-suppressed .monaco-hover {
+  display: none !important;
 }
 
 .atlaskit-portal-container {

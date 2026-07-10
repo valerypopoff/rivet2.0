@@ -6,6 +6,7 @@ import type { Inputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { ResolvedChatV2ProviderConfig } from './providerOptions.js';
+import { resolveChatV2Credential } from './chatV2ProviderProfile.js';
 import type {
   ChatV2ProviderOptions,
   ChatV2ToolChoice,
@@ -32,62 +33,19 @@ export function resolveLLMChatV2Headers(data: LLMChatV2NodeData, inputs: Inputs)
   return Object.keys(cleaned).length > 0 ? cleaned : undefined;
 }
 
-function resolveConfiguredProviderApiKey(
-  data: LLMChatV2NodeData,
-  context: Pick<InternalProcessContext, 'getPluginConfig' | 'settings'>,
-): string | undefined {
-  switch (data.provider) {
-    case 'openai':
-      return context.settings.openAiApiKey || context.settings.openAiKey || undefined;
-    case 'anthropic':
-      return context.settings.anthropicApiKey || context.getPluginConfig('anthropicApiKey') || undefined;
-    case 'google':
-      return context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined;
-    case 'custom': {
-      const envVarName = data.customProviderApiKeyEnvVarName?.trim();
-
-      if (envVarName) {
-        const pluginEnvValue = context.settings.pluginEnv?.[envVarName];
-        const processEnv = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } })
-          .process?.env;
-        const apiKey = pluginEnvValue || processEnv?.[envVarName];
-
-        if (apiKey) {
-          return apiKey;
-        }
-      }
-
-      if (context.settings.customAiApiKey) {
-        return context.settings.customAiApiKey;
-      }
-
-      if (envVarName) {
-        throw new Error(
-          `Custom provider API key env var ${envVarName} is not set. Use Input port, configure Settings > LLM, or configure the environment variable.`,
-        );
-      }
-
-      return undefined;
-    }
-  }
-}
-
 export function resolveLLMChatV2ApiKey(
   data: LLMChatV2NodeData,
   inputs: Inputs,
   context: Pick<InternalProcessContext, 'getPluginConfig' | 'settings'>,
 ): string | undefined {
-  if (data.apiKeySource !== 'input') {
-    return resolveConfiguredProviderApiKey(data, context);
-  }
-
-  const apiKey = coerceTypeOptional(inputs['apiKey' as PortId], 'string')?.trim();
-
-  if (!apiKey) {
-    throw new Error('API Key input is required when API key source is Input port.');
-  }
-
-  return apiKey;
+  return resolveChatV2Credential({
+    provider: data.provider,
+    context,
+    apiKeySource: data.apiKeySource === 'input' ? 'input' : 'configured',
+    inputs,
+    customProgrammaticName: data.customProviderApiKeyProgrammaticName,
+    customEnvironmentName: data.customProviderApiKeyEnvVarName,
+  }).value;
 }
 
 function parseExtraProviderOptionsText(rawText: string): JsonObject | undefined {
@@ -298,7 +256,7 @@ export function resolveLLMChatV2BuiltInTools(
       const provider = createOpenAI({
         apiKey: apiKey || context.settings.openAiApiKey || context.settings.openAiKey || undefined,
         organization: context.settings.openAiOrganization || undefined,
-        baseURL: config.baseURL,
+        baseURL: undefined,
         headers: config.headers,
       });
       const tools: ChatV2ToolSet = {};
@@ -323,7 +281,7 @@ export function resolveLLMChatV2BuiltInTools(
 
       const provider = createGoogleGenerativeAI({
         apiKey: apiKey || context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined,
-        baseURL: config.baseURL,
+        baseURL: undefined,
         headers: config.headers,
       });
       const tools: ChatV2ToolSet = {};

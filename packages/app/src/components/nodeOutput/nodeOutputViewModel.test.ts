@@ -68,6 +68,88 @@ test('createNodeOutputContentViewModel keeps generic node errors on the generic 
 
   assert.equal(content.kind, 'generic-error');
   assert.equal(content.error, 'Failed');
+  assert.equal(serializeNodeOutputDisplayCopy(getNodeOutputCopySource(content), createDataRefStore()), 'Failed');
+  assert.equal(serializeNodeOutputJsonCopy(getNodeOutputCopySource(content), createDataRefStore()), undefined);
+});
+
+test('createNodeOutputContentViewModel treats generic errors with stored outputs as additive output content', () => {
+  const data = {
+    outputData: {
+      ['output' as PortId]: inlineStored('string', 'hello'),
+    },
+    status: { type: 'error', error: 'Failed' },
+  } as NodeRunDataWithRefs;
+  const content = createNodeOutputContentViewModel({
+    nodeType: 'text',
+    data,
+    dataRefs: createDataRefStore(),
+  });
+  const copySource = getNodeOutputCopySource(content);
+
+  assert.equal(content.kind, 'output');
+  assert.equal(content.kind === 'output' ? content.errorMessage : undefined, 'Failed');
+  assert.equal(serializeNodeOutputDisplayCopy(copySource, createDataRefStore()), 'Error\nFailed\n\nhello');
+  assert.equal(
+    serializeNodeOutputJsonCopy(copySource, createDataRefStore()),
+    JSON.stringify(
+      {
+        output: {
+          type: 'string',
+          value: 'hello',
+        },
+      },
+      null,
+      2,
+    ),
+  );
+});
+
+test('createNodeOutputContentViewModel preserves split outputs when a run ends with an error', () => {
+  const content = createNodeOutputContentViewModel({
+    nodeType: 'text',
+    data: {
+      splitOutputData: {
+        0: {
+          ['output' as PortId]: inlineStored('string', 'first'),
+        },
+        1: {
+          ['output' as PortId]: inlineStored('string', 'second'),
+        },
+      },
+      status: { type: 'error', error: 'Split failed' },
+    } as NodeRunDataWithRefs,
+    dataRefs: createDataRefStore(),
+  });
+
+  assert.equal(content.kind, 'output');
+  assert.equal(content.kind === 'output' ? content.errorMessage : undefined, 'Split failed');
+  assert.equal(
+    serializeNodeOutputDisplayCopy(getNodeOutputCopySource(content), createDataRefStore()),
+    'Error\nSplit failed\n\nfirst\n\nsecond',
+  );
+});
+
+test('createNodeOutputContentViewModel keeps custom errors copyable with and without stored outputs', () => {
+  const errorOnlyContent = createNodeOutputContentViewModel({
+    nodeType: 'codeNew',
+    data: { status: { type: 'error', error: 'SyntaxError' } },
+    dataRefs: createDataRefStore(),
+  });
+  const mixedContent = createNodeOutputContentViewModel({
+    nodeType: 'codeNew',
+    data: {
+      outputData: {
+        ['output' as PortId]: inlineStored('string', 'value'),
+      },
+      status: { type: 'error', error: 'SyntaxError' },
+    },
+    dataRefs: createDataRefStore(),
+  });
+
+  assert.equal(errorOnlyContent.kind, 'custom-error');
+  assert.equal(serializeNodeOutputDisplayCopy(getNodeOutputCopySource(errorOnlyContent), createDataRefStore()), 'SyntaxError');
+  assert.equal(mixedContent.kind, 'custom-error');
+  assert.equal(serializeNodeOutputDisplayCopy(getNodeOutputCopySource(mixedContent), createDataRefStore()), 'Error\nSyntaxError\n\nvalue');
 });
 
 test('createNodeOutputContentViewModel exposes warnings separately from body output ports', () => {

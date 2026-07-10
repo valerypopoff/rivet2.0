@@ -1,11 +1,14 @@
 import { cloneDeep } from 'lodash-es';
 import * as monaco from 'monaco-editor';
 
+import 'monaco-editor/esm/vs/editor/contrib/gotoSymbol/browser/goToCommands.js';
 import {
   conf as markdownConf,
   language as markdownLanguage,
 } from 'monaco-editor/esm/vs/basic-languages/markdown/markdown';
 import { getMarkdownFoldingRanges, MARKDOWN_FOLDING_LANGUAGES } from './markdownFoldingRanges.js';
+import { getJsonSchemaRequiredFieldDefinitionAtOffset } from './jsonSchemaRequiredDefinition.js';
+import { isMacOSPlatform } from '../platform/os.js';
 
 export { monaco };
 
@@ -67,6 +70,7 @@ function definePromptInterpolationThemes(): void {
 }
 
 let markdownFoldingProvidersRegistered = false;
+let jsonSchemaRequiredDefinitionProviderRegistered = false;
 
 function registerMarkdownFoldingProviders(): void {
   if (markdownFoldingProvidersRegistered) {
@@ -88,9 +92,144 @@ function registerMarkdownFoldingProviders(): void {
   }
 }
 
+function offsetRangeToMonacoRange(model: monaco.editor.ITextModel, start: number, end: number): monaco.Range {
+  const startPosition = model.getPositionAt(start);
+  const endPosition = model.getPositionAt(end);
+
+  return new monaco.Range(startPosition.lineNumber, startPosition.column, endPosition.lineNumber, endPosition.column);
+}
+
+function registerJsonSchemaRequiredDefinitionProvider(): void {
+  if (jsonSchemaRequiredDefinitionProviderRegistered) {
+    return;
+  }
+
+  jsonSchemaRequiredDefinitionProviderRegistered = true;
+
+  monaco.languages.registerDefinitionProvider('json', {
+    provideDefinition(model, position) {
+      const definition = getJsonSchemaRequiredFieldDefinitionAtOffset(
+        model.getValue(),
+        model.getOffsetAt(position),
+      );
+
+      if (!definition) {
+        return undefined;
+      }
+
+      const targetRange = offsetRangeToMonacoRange(model, definition.targetKeyStart, definition.targetKeyEnd);
+
+      return [
+        {
+          uri: model.uri,
+          originSelectionRange: offsetRangeToMonacoRange(
+            model,
+            definition.requiredStringStart,
+            definition.requiredStringEnd,
+          ),
+          range: targetRange,
+          targetSelectionRange: targetRange,
+        },
+      ];
+    },
+  });
+}
+
+type JsonSchemaDefinitionModifierEvent = Pick<monaco.IMouseEvent, 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>;
+
+const JSON_SCHEMA_DEFINITION_HOVER_SUPPRESSED_CLASS = 'rivet-json-schema-definition-hover-suppressed';
+
+function hasJsonSchemaDefinitionClickModifier(event: JsonSchemaDefinitionModifierEvent): boolean {
+  if (event.altKey || event.shiftKey) {
+    return false;
+  }
+
+  return isMacOSPlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+}
+
+export function installJsonSchemaRequiredDefinitionNavigation(
+  editor: monaco.editor.IStandaloneCodeEditor,
+): monaco.IDisposable {
+  if (editor.getModel()?.getLanguageId() !== 'json') {
+    return { dispose() {} };
+  }
+
+  let hoverSuppressed = false;
+
+  const setHoverSuppressed = (suppressed: boolean) => {
+    if (hoverSuppressed === suppressed) {
+      return;
+    }
+
+    hoverSuppressed = suppressed;
+    editor.getDomNode()?.classList.toggle(JSON_SCHEMA_DEFINITION_HOVER_SUPPRESSED_CLASS, suppressed);
+    editor.updateOptions({ hover: { enabled: !suppressed } });
+  };
+
+  const shouldSuppressHover = (event: JsonSchemaDefinitionModifierEvent) =>
+    editor.getModel()?.getLanguageId() === 'json' && hasJsonSchemaDefinitionClickModifier(event);
+
+  const disposables = [
+    editor.onMouseMove((event) => {
+      setHoverSuppressed(shouldSuppressHover(event.event));
+    }),
+    editor.onMouseLeave(() => {
+      setHoverSuppressed(false);
+    }),
+    editor.onKeyDown((event) => {
+      setHoverSuppressed(shouldSuppressHover(event));
+    }),
+    editor.onKeyUp((event) => {
+      setHoverSuppressed(shouldSuppressHover(event));
+    }),
+    editor.onDidChangeModel(() => {
+      setHoverSuppressed(false);
+    }),
+    editor.onDidBlurEditorWidget(() => {
+      setHoverSuppressed(false);
+    }),
+    editor.onMouseDown((event) => {
+      const model = editor.getModel();
+      const position = event.target.position;
+
+      if (
+        !model ||
+        model.getLanguageId() !== 'json' ||
+        !position ||
+        !event.event.leftButton ||
+        !hasJsonSchemaDefinitionClickModifier(event.event)
+      ) {
+        return;
+      }
+
+      const definition = getJsonSchemaRequiredFieldDefinitionAtOffset(model.getValue(), model.getOffsetAt(position));
+
+      if (!definition) {
+        return;
+      }
+
+      const targetRange = offsetRangeToMonacoRange(model, definition.targetKeyStart, definition.targetKeyEnd);
+
+      event.event.preventDefault();
+      event.event.stopPropagation();
+      editor.focus();
+      editor.setSelection(targetRange, 'rivet.jsonSchemaRequiredDefinitionNavigation');
+      editor.revealRangeInCenterIfOutsideViewport(targetRange, monaco.editor.ScrollType.Smooth);
+    }),
+  ];
+
+  return {
+    dispose() {
+      setHoverSuppressed(false);
+      disposables.forEach((disposable) => disposable.dispose());
+    },
+  };
+}
+
 export function ensureCodeEditorMonacoLanguages(): void {
   registerPromptInterpolationLanguage();
   registerPromptInterpolationMarkdownLanguage();
   registerMarkdownFoldingProviders();
+  registerJsonSchemaRequiredDefinitionProvider();
   definePromptInterpolationThemes();
 }

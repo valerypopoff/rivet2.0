@@ -1,0 +1,162 @@
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const rootDirectory = resolve(import.meta.dirname, '../..');
+const defaultExceptionsPath = resolve(rootDirectory, 'security/dependency-audit-exceptions.json');
+
+const parseArguments = (arguments_) => {
+  const inputIndex = arguments_.indexOf('--input');
+  const exceptionsIndex = arguments_.indexOf('--exceptions');
+
+  return {
+    inputPath: inputIndex >= 0 ? resolve(rootDirectory, arguments_[inputIndex + 1]) : undefined,
+    exceptionsPath:
+      exceptionsIndex >= 0 ? resolve(rootDirectory, arguments_[exceptionsIndex + 1]) : defaultExceptionsPath,
+  };
+};
+
+const parseAuditRows = (text) =>
+  text
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line, index) => {
+      try {
+        return JSON.parse(line);
+      } catch (error) {
+        throw new Error(`Unable to parse dependency audit line ${index + 1}.`, { cause: error });
+      }
+    })
+    .filter((row) => row.children?.Severity);
+
+const runAudit = () => {
+  const result = spawnSync(
+    process.execPath,
+    ['.yarn/releases/yarn-4.17.1.cjs', 'npm', 'audit', '--all', '--recursive', '--json'],
+    {
+      cwd: rootDirectory,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    },
+  );
+
+  if (result.error) throw result.error;
+  if (!result.stdout.trim()) {
+    throw new Error(`Dependency audit produced no report.${result.stderr ? `\n${result.stderr.trim()}` : ''}`);
+  }
+
+  return result.stdout;
+};
+
+const loadExceptions = (path) => {
+  const document = JSON.parse(readFileSync(path, 'utf8'));
+  if (document.version !== 1 || !Array.isArray(document.exceptions)) {
+    throw new Error('Dependency audit exceptions must use version 1 and contain an exceptions array.');
+  }
+
+  const seenKeys = new Set();
+  return document.exceptions.flatMap((exception) => {
+    const requiredStrings = ['scope', 'reason', 'owner', 'expires'];
+    const hasNonEmptyStrings = (values) =>
+      Array.isArray(values) && values.length > 0 && values.every((value) => typeof value === 'string' && value.trim());
+    if (
+      !Array.isArray(exception.advisoryIds) ||
+      exception.advisoryIds.length === 0 ||
+      !hasNonEmptyStrings(exception.packages) ||
+      !hasNonEmptyStrings(exception.dependents) ||
+      requiredStrings.some((key) => typeof exception[key] !== 'string' || !exception[key].trim())
+    ) {
+      throw new Error(
+        'Every dependency exception needs advisoryIds, packages, dependents, scope, reason, owner, and expires.',
+      );
+    }
+
+    const expiresAt = new Date(`${exception.expires}T23:59:59.999Z`);
+    if (Number.isNaN(expiresAt.getTime())) {
+      throw new Error(`Invalid dependency exception expiry date: ${exception.expires}`);
+    }
+
+    return exception.advisoryIds.flatMap((advisoryId) =>
+      exception.packages.map((packageName) => {
+        const key = `${String(advisoryId)}:${packageName}`;
+        if (seenKeys.has(key)) throw new Error(`Duplicate dependency exception: ${key}`);
+        seenKeys.add(key);
+        return {
+          ...exception,
+          advisoryId: String(advisoryId),
+          packageName,
+          dependents: new Set(exception.dependents.map((dependent) => dependent.trim())),
+          expiresAt,
+          key,
+        };
+      }),
+    );
+  });
+};
+
+const normalizeDependent = (dependent) => dependent.replace(/@virtual:[^#]+#npm:/, '@npm:');
+
+const unexpectedDependents = (row, exception) =>
+  Array.isArray(row.children.Dependents) && row.children.Dependents.length > 0
+    ? row.children.Dependents.map(normalizeDependent).filter((dependent) => !exception?.dependents.has(dependent))
+    : ['<audit ancestry unavailable>'];
+
+const formatFinding = (row) => {
+  const finding = row.children;
+  return `${String(finding.Severity).toUpperCase()} ${row.value} (${finding.ID}): ${finding.Issue}`;
+};
+
+const { inputPath, exceptionsPath } = parseArguments(process.argv.slice(2));
+const rows = parseAuditRows(inputPath ? readFileSync(inputPath, 'utf8') : runAudit());
+const exceptions = loadExceptions(exceptionsPath);
+const now = new Date();
+const usedExceptions = new Set();
+const blockingFindings = [];
+const severityCounts = new Map();
+
+for (const row of rows) {
+  const severity = String(row.children.Severity).toLowerCase();
+  severityCounts.set(severity, (severityCounts.get(severity) ?? 0) + 1);
+  if (severity !== 'high' && severity !== 'critical') continue;
+
+  const key = `${String(row.children.ID)}:${row.value}`;
+  const exception = exceptions.find((candidate) => candidate.key === key);
+  const unreviewedDependents = unexpectedDependents(row, exception);
+  if (severity === 'critical' || !exception || exception.expiresAt < now || unreviewedDependents.length > 0) {
+    blockingFindings.push({ row, exception, unreviewedDependents });
+  } else {
+    usedExceptions.add(exception.key);
+  }
+}
+
+const summary = [...severityCounts.entries()]
+  .sort(
+    ([left], [right]) =>
+      ['critical', 'high', 'moderate', 'low'].indexOf(left) - ['critical', 'high', 'moderate', 'low'].indexOf(right),
+  )
+  .map(([severity, count]) => `${severity}: ${count}`)
+  .join(', ');
+console.log(`Dependency audit summary: ${summary || 'no findings'}.`);
+
+if (usedExceptions.size > 0) {
+  console.log(`Accepted ${usedExceptions.size} high-severity finding(s) through current, documented exceptions.`);
+}
+
+for (const exception of exceptions) {
+  if (!usedExceptions.has(exception.key)) {
+    console.warn(`Unused dependency exception: ${exception.key} (expires ${exception.expires}).`);
+  }
+}
+
+if (blockingFindings.length > 0) {
+  console.error('\nBlocking dependency findings:');
+  for (const { row, exception, unreviewedDependents } of blockingFindings) {
+    const expired = exception?.expiresAt < now ? ` Exception expired ${exception.expires}.` : '';
+    const ancestry =
+      unreviewedDependents.length > 0 ? ` Unreviewed dependent(s): ${unreviewedDependents.join(', ')}.` : '';
+    const suffix = `${expired}${ancestry}`;
+    console.error(`- ${formatFinding(row)}${suffix}`);
+  }
+  process.exitCode = 1;
+}

@@ -13,7 +13,7 @@ export function testProcessContext(): ProcessContext {
     settings: {
       openAiKey: process.env.OPENAI_API_KEY,
       openAiOrganization: process.env.OPENAI_ORG_ID,
-      openAiEndpoint: process.env.OPENAI_API_ENDPOINT,
+      openAiEndpoint: '',
     },
   };
 }

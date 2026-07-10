@@ -389,6 +389,27 @@ export const defaultEditorContainerStyles = css`
     color: var(--foreground-muted);
   }
 
+  .editor-json-template-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .editor-json-template-status.valid {
+    color: var(--foreground-muted);
+  }
+
+  .editor-json-template-status.valid::before {
+    content: '\\2713';
+    color: currentColor;
+    font-size: 0.9em;
+    line-height: 1;
+  }
+
+  .editor-json-template-status.invalid {
+    color: var(--error);
+  }
+
   .node-editor-code-resize-handle {
     position: absolute;
     left: 0;

@@ -7,6 +7,7 @@ import {
   shouldSuppressMarkerForInterpolation,
   type OffsetRange,
 } from './interpolationDiagnostics.js';
+import { JSON_TEMPLATE_VALIDATION_MARKER_OWNER, validateJsonTemplate } from './jsonTemplateValidation.js';
 
 const INTERPOLATION_TOKEN_CLASS_NAME = 'rivet-editor-interpolation-token';
 const INTERPOLATION_MARKER_OWNERS_BY_SYNTAX = {
@@ -50,6 +51,25 @@ function markerToMarkerData(marker: monaco.editor.IMarker): monaco.editor.IMarke
   };
 }
 
+function offsetRangeToMarkerData(
+  model: monaco.editor.ITextModel,
+  range: OffsetRange,
+  message: string,
+): monaco.editor.IMarkerData {
+  const start = model.getPositionAt(range.start);
+  const end = model.getPositionAt(range.end);
+
+  return {
+    severity: monaco.MarkerSeverity.Error,
+    message,
+    source: 'Rivet JSON template validation',
+    startLineNumber: start.lineNumber,
+    startColumn: start.column,
+    endLineNumber: end.lineNumber,
+    endColumn: end.column,
+  };
+}
+
 export function installEditorInterpolationSupport(
   editor: monaco.editor.IStandaloneCodeEditor,
   syntax: EditorInterpolationSyntax,
@@ -62,9 +82,32 @@ export function installEditorInterpolationSupport(
 
   const decorations = editor.createDecorationsCollection();
   const disposables: monaco.IDisposable[] = [];
+  const pendingMarkerFilterTimeouts: ReturnType<typeof setTimeout>[] = [];
   let disposed = false;
 
   const getInterpolationRanges = () => getActiveInterpolationOffsetRanges(model.getValue());
+
+  const clearPendingMarkerFilterTimeouts = () => {
+    while (pendingMarkerFilterTimeouts.length > 0) {
+      const timeout = pendingMarkerFilterTimeouts.pop();
+
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  };
+
+  const updateJsonTemplateValidation = () => {
+    if (syntax !== 'json-template') {
+      return;
+    }
+
+    const markers = validateJsonTemplate(model.getValue()).map((diagnostic) =>
+      offsetRangeToMarkerData(model, diagnostic, diagnostic.message),
+    );
+
+    monaco.editor.setModelMarkers(model, JSON_TEMPLATE_VALIDATION_MARKER_OWNER, markers);
+  };
 
   const updateDecorations = () => {
     const interpolationRanges = getInterpolationRanges();
@@ -87,22 +130,37 @@ export function installEditorInterpolationSupport(
 
     const interpolationRanges = getInterpolationRanges();
 
-    if (interpolationRanges.length === 0) {
-      return;
-    }
-
     for (const owner of INTERPOLATION_MARKER_OWNERS_BY_SYNTAX[syntax]) {
       const markers = monaco.editor.getModelMarkers({
         owner,
         resource: model.uri,
       });
-      const filteredMarkers = markers.filter(
-        (marker) => !shouldSuppressMarkerForInterpolation(markerToOffsetRange(model, marker), interpolationRanges),
-      );
+      const filteredMarkers =
+        syntax === 'json-template'
+          ? []
+          : markers.filter(
+              (marker) =>
+                !shouldSuppressMarkerForInterpolation(markerToOffsetRange(model, marker), interpolationRanges),
+            );
 
       if (filteredMarkers.length !== markers.length) {
         monaco.editor.setModelMarkers(model, owner, filteredMarkers.map(markerToMarkerData));
       }
+    }
+  };
+
+  const scheduleMarkerFilter = () => {
+    filterMarkers();
+
+    if (syntax !== 'json-template') {
+      return;
+    }
+
+    clearPendingMarkerFilterTimeouts();
+    queueMicrotask(filterMarkers);
+
+    for (const delay of [0, 50, 250]) {
+      pendingMarkerFilterTimeouts.push(setTimeout(filterMarkers, delay));
     }
   };
 
@@ -112,14 +170,15 @@ export function installEditorInterpolationSupport(
     }
 
     updateDecorations();
-    filterMarkers();
+    updateJsonTemplateValidation();
+    scheduleMarkerFilter();
   };
 
   disposables.push(model.onDidChangeContent(refresh));
   disposables.push(
     monaco.editor.onDidChangeMarkers((resources) => {
       if (resources.some((resource) => resource.toString() === model.uri.toString())) {
-        filterMarkers();
+        scheduleMarkerFilter();
       }
     }),
   );
@@ -130,6 +189,8 @@ export function installEditorInterpolationSupport(
     dispose: () => {
       disposed = true;
       decorations.clear();
+      monaco.editor.setModelMarkers(model, JSON_TEMPLATE_VALIDATION_MARKER_OWNER, []);
+      clearPendingMarkerFilterTimeouts();
       disposables.forEach((disposable) => disposable.dispose());
     },
   };

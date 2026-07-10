@@ -13,6 +13,7 @@ export type LLMChatV2ApiKeySource = 'environment' | 'input';
 export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   provider: ChatV2Provider;
   apiKeySource?: LLMChatV2ApiKeySource;
+  customProviderApiKeyProgrammaticName?: string;
   customProviderApiKeyEnvVarName?: string;
   customProviderBaseURL: string;
   useCustomProviderBaseURLInput: boolean;
@@ -82,6 +83,7 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     }),
     provider: 'openai',
     apiKeySource: 'environment',
+    customProviderApiKeyProgrammaticName: '',
     customProviderApiKeyEnvVarName: 'CUSTOM_PROVIDER_API_KEY',
     customProviderBaseURL: '',
     useCustomProviderBaseURLInput: false,

@@ -108,6 +108,11 @@ test('native and react-select controls inherit tinted form-control surfaces', ()
     /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*border-width: var\(--form-control-border-width\) !important;/,
   );
   assert.match(indexCss, /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*color: var\(--foreground\);/);
+  assert.ok(indexCss.includes('--form-control-radius: calc(8px * var(--ui-font-scale));'));
+  assert.ok(indexCss.includes('--form-control-select-height: calc(34px * var(--ui-font-scale));'));
+  assert.ok(indexCss.includes('--form-control-select-option-min-height: calc(30px * var(--ui-font-scale));'));
+  assert.match(indexCss, /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*border-radius: var\(--form-control-radius\);/);
+  assert.match(indexCss, /select\s*{[\s\S]*min-height: var\(--form-control-select-height\);/);
   assert.match(
     indexCss,
     /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*color-scheme: var\(--form-control-color-scheme\);/,
@@ -117,6 +122,15 @@ test('native and react-select controls inherit tinted form-control surfaces', ()
   assert.match(
     indexCss,
     /\[class\*='-control'\]:has\(input\[id\^='react-select-'\]\) \{[\s\S]*border-width: var\(--form-control-border-width\) !important;/,
+  );
+  assert.match(
+    indexCss,
+    /\[class\*='-control'\]:has\(input\[id\^='react-select-'\]\) \{[\s\S]*min-height: var\(--form-control-select-height\) !important;/,
+  );
+  assert.match(indexCss, /\[class\*='-menu'\]:has\(\[role='option'\]\) \{[\s\S]*border-radius: var\(--form-control-radius\) !important;/);
+  assert.match(
+    indexCss,
+    /\[class\*='-menu'\]:has\(\[role='option'\]\) \[role='option'\] \{[\s\S]*min-height: var\(--form-control-select-option-min-height\) !important;/,
   );
   assert.match(
     indexCss,
@@ -146,9 +160,20 @@ test('host entry reasserts one-pixel form-control borders after Atlaskit reset',
     postResetCss,
     /input:not\(\.inputarea\):not\(\[type='checkbox'\]\)[\s\S]*color-scheme: var\(--form-control-color-scheme\);/,
   );
+  assert.match(postResetCss, /select,[\s\S]*textarea:not\(\.inputarea\) \{[\s\S]*border-radius: var\(--form-control-radius\);/);
+  assert.match(postResetCss, /select\s*{[\s\S]*min-height: var\(--form-control-select-height\);/);
   assert.match(
     postResetCss,
     /\[class\*='-control'\]:has\(input\[id\^='react-select-'\]\) \{[\s\S]*border-width: var\(--form-control-border-width\) !important;/,
+  );
+  assert.match(
+    postResetCss,
+    /\[class\*='-control'\]:has\(input\[id\^='react-select-'\]\) \{[\s\S]*min-height: var\(--form-control-select-height\) !important;/,
+  );
+  assert.match(postResetCss, /\[class\*='-menu'\]:has\(\[role='option'\]\) \{[\s\S]*border-radius: var\(--form-control-radius\) !important;/);
+  assert.match(
+    postResetCss,
+    /\[class\*='-menu'\]:has\(\[role='option'\]\) \[role='option'\] \{[\s\S]*padding-block: var\(--form-control-select-option-padding-block\) !important;/,
   );
   assert.match(
     postResetCss,

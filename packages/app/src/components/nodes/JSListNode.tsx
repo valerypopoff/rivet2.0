@@ -29,7 +29,6 @@ const JSListNodeOutputBody: FC<{
 }> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const { outputId, resultLabel } = JS_LIST_OUTPUT_CONFIG[node.type];
   const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
-  const hasError = data.status?.type === 'error';
   const dataRefs = useDataRefs();
   const callbackBodySource = getJSListCallbackPreviewSource(node, data);
   const shouldShowParsedExpression = hasJSListCallbackInterpolationInputs(callbackBodySource);
@@ -55,7 +54,7 @@ const JSListNodeOutputBody: FC<{
       parsedSource={shouldShowParsedExpression ? parsedExpression ?? '' : undefined}
       parsedSourceLanguage="javascript"
     >
-      {!hasError && hasSplitOutputs && (
+      {hasSplitOutputs && (
         <div className="split-output">
           {splitOutputEntries
             .filter(([, outputs]) => outputs[outputId] != null)
@@ -72,7 +71,7 @@ const JSListNodeOutputBody: FC<{
         </div>
       )}
 
-      {!hasError && !hasSplitOutputs && data.outputData?.[outputId] != null && (
+      {!hasSplitOutputs && data.outputData?.[outputId] != null && (
         <StructuredNodeOutputSection label={resultLabel} statsValue={data.outputData?.[outputId]}>
           <RenderDataValue
             value={data.outputData?.[outputId]}

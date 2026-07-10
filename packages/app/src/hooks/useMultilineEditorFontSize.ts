@@ -1,6 +1,6 @@
 import { useAtom } from 'jotai';
 import { useCallback, useEffect } from 'react';
-import { multilineEditorFontSizeState } from '../state/ui.js';
+import { fullscreenOutputEditorFontSizeState, multilineEditorFontSizeState } from '../state/ui.js';
 import {
   adjustMultilineEditorFontSize,
   clampMultilineEditorFontSize,
@@ -20,8 +20,14 @@ type HandledMultilineEditorFontSizeWheelEvent = MultilineEditorFontSizeWheelEven
   stopPropagation(): void;
 };
 
-export const useMultilineEditorFontSize = () => {
-  const [storedFontSize, setStoredFontSize] = useAtom(multilineEditorFontSizeState);
+export type MultilineEditorFontSizeScope = 'editor' | 'fullscreen-output';
+
+function getFontSizeState(scope: MultilineEditorFontSizeScope) {
+  return scope === 'fullscreen-output' ? fullscreenOutputEditorFontSizeState : multilineEditorFontSizeState;
+}
+
+export const useMultilineEditorFontSize = (scope: MultilineEditorFontSizeScope = 'editor') => {
+  const [storedFontSize, setStoredFontSize] = useAtom(getFontSizeState(scope));
   const normalizedFontSize = clampMultilineEditorFontSize(storedFontSize);
 
   useEffect(() => {

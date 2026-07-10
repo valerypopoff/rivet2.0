@@ -7,11 +7,13 @@ import {
   type GraphId,
   type Inputs,
   type NodeId,
+  type Outputs,
   type PortId,
   type Project,
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
 import {
+  constrainAiAssistGeneratorToolCallsToOneForLegacyLoop,
   createAiAssistVercelGeneratorChatNodeDefinition,
   normalizeAiAssistGeneratorResponseForTaggedHelper,
 } from './aiAssistVercelGenerator.js';
@@ -56,12 +58,14 @@ function createTaggedPromptInputs(message: string): Inputs {
   };
 }
 
-test('bundled AI assist generator graph stores Vercel adapter nodes directly', () => {
-  const projectText = readFileSync(
-    fileURLToPath(new URL('../../graphs/code-node-generator.rivet-project', import.meta.url)),
-    'utf8',
-  );
+function readBundledGraph(name: string): Project {
+  const projectText = readFileSync(fileURLToPath(new URL(`../../graphs/${name}`, import.meta.url)), 'utf8');
   const [project] = deserializeProject(projectText);
+  return project;
+}
+
+test('bundled AI assist generator graphs store Vercel adapter nodes directly', () => {
+  const project = readBundledGraph('code-node-generator.rivet-project');
   const nodes = Object.values(project.graphs).flatMap((graph) => graph.nodes);
   const adapterNodes = nodes.filter((node) => node.type === 'aiAssistGeneratorChatV2');
 
@@ -74,10 +78,28 @@ test('bundled AI assist generator graph stores Vercel adapter nodes directly', (
   assert.equal(adapterNodes.some((node) => 'aiAssistGeneratorChatSourceType' in (node.data as Record<string, unknown>)), false);
 });
 
+test('bundled AI graph creator graph stores Vercel adapter nodes directly', () => {
+  const project = readBundledGraph('graph-creator.rivet-project');
+  const nodes = Object.values(project.graphs).flatMap((graph) => graph.nodes);
+  const adapterNodes = nodes.filter((node) => node.type === 'aiAssistGeneratorChatV2');
+  const functionNodes = nodes.filter((node) => node.type === 'gptFunction');
+  const deleteNodeFunction = functionNodes.find((node) => (node.data as Record<string, unknown>).name === 'deleteNode');
+  const deleteNodeSchema = JSON.parse(String((deleteNodeFunction?.data as Record<string, unknown> | undefined)?.schema ?? '{}'));
+
+  assert.equal(nodes.some((node) => node.type === 'chat' || node.type === 'chatAnthropic'), false);
+  assert.equal(adapterNodes.length, 6);
+  assert.deepEqual(
+    adapterNodes.map((node) => (node.data as Record<string, unknown>).aiAssistGeneratorChatBranch).sort(),
+    ['anthropic', 'openaiCompatible', 'openaiCompatible', 'openaiCompatible', 'openaiCompatible', 'openaiCompatible'],
+  );
+  assert.deepEqual(deleteNodeSchema.required, ['nodeId']);
+  assert.equal('data' in deleteNodeSchema.properties, false);
+});
+
 test('AI assist generator Vercel adapter preserves the legacy generator graph port contract', () => {
   const definition = createAiAssistVercelGeneratorChatNodeDefinition({
     displayName: 'GPT-5',
-    graphApi: 'openai',
+    generatorBranch: 'openai',
     model: 'gpt-5',
     provider: 'openai',
   });
@@ -101,11 +123,58 @@ test('AI assist generator adapter owns the Vercel SDK path instead of legacy cha
   );
 
   assert.match(source, /runChatV2Pipeline/);
-  assert.match(source, /createChatV2Model/);
+  assert.match(source, /createResolvedChatV2Provider/);
   assert.match(source, /emitPartialOutputs: false/);
   assert.match(source, /getInputRawString\(inputs, 'stop'\)/);
+  assert.match(source, /parallelToolCalls: false/);
+  assert.doesNotMatch(source, /temperature:\s*getTemperature/);
+  assert.doesNotMatch(source, /topP:\s*getTopP/);
   assert.doesNotMatch(source, /streamChatCompletions/);
   assert.doesNotMatch(source, /openAiCompatibleBaseURLToChatEndpoint/);
+});
+
+test('AI assist generator adapter preserves the legacy graph builder one-tool-call loop contract', () => {
+  const outputs: Outputs = {
+    ['function-calls' as PortId]: {
+      type: 'object[]',
+      value: [
+        { name: 'updateUser', arguments: { message: 'Working' }, id: 'call-1' },
+        { name: 'plan', arguments: { plan: 'Next' }, id: 'call-2' },
+      ],
+    },
+    ['all-messages' as PortId]: {
+      type: 'chat-message[]',
+      value: [
+        {
+          type: 'assistant',
+          message: '',
+          function_call: undefined,
+          function_calls: [
+            { name: 'updateUser', arguments: '{"message":"Working"}', id: 'call-1' },
+            { name: 'plan', arguments: '{"plan":"Next"}', id: 'call-2' },
+          ],
+        },
+      ],
+    },
+  };
+
+  constrainAiAssistGeneratorToolCallsToOneForLegacyLoop(outputs);
+
+  assert.deepEqual(outputs['function-calls' as PortId], {
+    type: 'object[]',
+    value: [{ name: 'updateUser', arguments: { message: 'Working' }, id: 'call-1' }],
+  });
+  assert.deepEqual(outputs['all-messages' as PortId], {
+    type: 'chat-message[]',
+    value: [
+      {
+        type: 'assistant',
+        message: '',
+        function_call: { name: 'updateUser', arguments: '{"message":"Working"}', id: 'call-1' },
+        function_calls: [{ name: 'updateUser', arguments: '{"message":"Working"}', id: 'call-1' }],
+      },
+    ],
+  });
 });
 
 test('AI assist generator wraps plain text for tagged response helper graphs', () => {

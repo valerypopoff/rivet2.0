@@ -4,6 +4,7 @@ import {
   findJsonStringPreviewRangeAtOffset,
   findJsonStringPreviewRangeAtPosition,
   getJsonStringPreviewRanges,
+  isCurrentJsonStringPreviewLiteral,
 } from './jsonStringPreviewRanges.js';
 
 test('detects escaped object string values and ignores object keys', () => {
@@ -150,4 +151,13 @@ test('same-line fallback chooses the nearest string value', () => {
 
   assert.equal(findJsonStringPreviewRangeAtPosition(ranges, firstRange.endOffset + 1, 1), firstRange);
   assert.equal(findJsonStringPreviewRangeAtPosition(ranges, secondRange.startOffset - 1, 1), secondRange);
+});
+
+test('editable previews reject stale or malformed source literals', () => {
+  const [range] = getJsonStringPreviewRanges('{"value":"line\\nvalue"}', { minDecodedLength: 0 });
+
+  assert.ok(range);
+  assert.equal(isCurrentJsonStringPreviewLiteral('"line\\nvalue"', range), true);
+  assert.equal(isCurrentJsonStringPreviewLiteral('"changed"', range), false);
+  assert.equal(isCurrentJsonStringPreviewLiteral('"incomplete', range), false);
 });

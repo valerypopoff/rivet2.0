@@ -138,9 +138,14 @@ select,
 textarea:not(.inputarea) {
   border: var(--form-control-border-width) solid var(--form-control-border);
   border-width: var(--form-control-border-width) !important;
+  border-radius: var(--form-control-radius);
   background-color: var(--form-control-bg);
   color: var(--foreground);
   color-scheme: var(--form-control-color-scheme);
+}
+
+select {
+  min-height: var(--form-control-select-height);
 }
 
 input:not(.inputarea):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not(
@@ -164,6 +169,19 @@ textarea:not(.inputarea):focus {
 
 [class*='-control']:has(input[id^='react-select-']) {
   border-width: var(--form-control-border-width) !important;
+  min-height: var(--form-control-select-height) !important;
+  border-radius: var(--form-control-radius) !important;
+}
+
+[class*='-menu']:has([role='option']) {
+  border-radius: var(--form-control-radius) !important;
+}
+
+[class*='-menu']:has([role='option']) [role='option'] {
+  min-height: var(--form-control-select-option-min-height) !important;
+  padding-block: var(--form-control-select-option-padding-block) !important;
+  padding-inline: var(--form-control-select-option-padding-inline) !important;
+  border-radius: var(--form-control-option-radius) !important;
 }
 
 [data-ds--text-field--container] {

@@ -47,6 +47,9 @@ describe('resolveProcessSettings', () => {
       resolveProcessSettings({ openAiKey: 'explicit', pluginEnv: { A: '1' } }, { pluginEnv: { B: '2' } }).pluginEnv,
       { A: '1' },
     );
+    assert.equal(resolveProcessSettings({ customOne: 'explicit' }, { customOne: 'fallback' }).customOne, 'explicit');
+    assert.equal(resolveProcessSettings({ customOne: '' }, { customOne: 'fallback' }).customOne, 'fallback');
+    assert.equal(resolveProcessSettings({ customOne: undefined }, { customOne: 'fallback' }).customOne, 'fallback');
   });
 
   it('uses host fallbacks when explicit settings are missing', () => {
@@ -56,6 +59,7 @@ describe('resolveProcessSettings', () => {
         anthropicApiKey: 'anthropic-env-key',
         googleApiKey: 'google-env-key',
         customAiApiKey: 'custom-env-key',
+        customOne: 'custom-one-env-key',
         openAiOrganization: 'env-org',
         openAiEndpoint: 'env-endpoint',
         pluginEnv: { API_TOKEN: 'token' },
@@ -66,6 +70,7 @@ describe('resolveProcessSettings', () => {
         anthropicApiKey: 'anthropic-env-key',
         googleApiKey: 'google-env-key',
         customAiApiKey: 'custom-env-key',
+        customOne: 'custom-one-env-key',
         openAiOrganization: 'env-org',
         openAiEndpoint: 'env-endpoint',
         pluginEnv: { API_TOKEN: 'token' },

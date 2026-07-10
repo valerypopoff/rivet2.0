@@ -18,6 +18,8 @@ To navigate between graphs, click on the graph in the graph list in the sidebar.
 
 After visiting more than one graph, use the previous and next graph buttons on the left side of the canvas toolbar row to move through your graph navigation history. If only one direction is available, Rivet keeps the other button visible but disabled so the pair stays in the same place.
 
+Rivet marks graphs as reachable from the project's Main Graph through supported static graph-call relationships, such as Subgraph nodes and static graph references. A graph with the broken-thread icon is still editable, but it may not run as part of the project until it is called from reachable graph flow.
+
 ## Deleting a Graph
 
 To delete a graph, right click on it in the graph list in the sidebar and select "Delete". This will delete the graph from your project. (**Warning** there is no undo at this time!)

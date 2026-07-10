@@ -22,6 +22,7 @@ import { isInTauri } from '../utils/tauri.js';
 import { OverlayTabs } from './OverlayTabs.js';
 import { GraphHistoryControls, GraphTreeSidebarToggle } from './projectSelector/GraphTopBarControls.js';
 import { ProjectFileMenu } from './projectSelector/ProjectFileMenu.js';
+import { resolveProjectSelectorPlatformPolicy } from './projectSelector/projectSelectorModel.js';
 import { projectSelectorStyles } from './projectSelector/projectSelectorStyles.js';
 import { ProjectTabRow } from './projectSelector/ProjectTabRow.js';
 import { useProjectCloseConfirmation } from './projectSelector/useProjectCloseConfirmation.js';
@@ -66,8 +67,11 @@ export const ProjectSelector: FC<{
   const loadProject = useLoadProject();
   const projectTabsSelected = projectMode && openOverlay === undefined;
   const reserveSidebarColumn = projectTabsSelected && sidebarOpen;
-  const showFileMenu = !isInTauri() || isWindowsPlatform() || isMacOSPlatform();
-  const showWindowsWindowControls = isInTauri() && isWindowsPlatform();
+  const { showFileMenu, showWindowsWindowControls } = resolveProjectSelectorPlatformPolicy({
+    inTauri: isInTauri(),
+    macOS: isMacOSPlatform(),
+    windows: isWindowsPlatform(),
+  });
 
   useSyncCurrentStateIntoOpenedProjects({ enabled: projectMode && selectedOpeningProjectTabId == null });
 

@@ -42,7 +42,6 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 | Tools                  | `gpt-function` or `gpt-function[]`                        | Available when Tool use is enabled. Defines functions/tools the model may call.                                                            |
 | API Key                | `string`                                                  | Available when API key source is set to Input port.                                                                                        |
 | Provider base URL      | `string`                                                  | Available for Custom provider when Provider base URL uses an input. Accepts an OpenAI-compatible base URL or full `/chat/completions` URL. |
-| Base URL               | `string`                                                  | Available for built-in providers when Base URL uses an input.                                                                              |
 | Headers                | `object`                                                  | Available when Headers uses an input. Adds provider request headers.                                                                       |
 | Extra Provider Options | `string` or `object`                                      | Available when Extra provider options uses an input. Power-user Vercel provider options.                                                   |
 | Response Schema        | `object` or `gpt-function`                                | Available when Response format is JSON schema.                                                                                             |
@@ -74,13 +73,14 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ### Model
 
-| Setting              | Description                                                                              |
-| -------------------- | ---------------------------------------------------------------------------------------- |
-| Provider             | OpenAI, Anthropic, Google, or Custom provider.                                           |
-| Provider base URL    | Custom provider only. This is separate from Provider Advanced > Base URL.                |
-| Model                | Provider model. For Custom provider, enter the model ID expected by that provider.       |
-| API key source       | Use the configured provider key or expose an API Key input port.                         |
-| API key env var name | Custom provider only when using a configured key. Defaults to `CUSTOM_PROVIDER_API_KEY`. |
+| Setting                  | Description                                                                                                                            |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider                 | OpenAI, Anthropic, Google, or Custom provider.                                                                                         |
+| Provider base URL        | Custom provider only. OpenAI-compatible hosts belong here by choosing Custom provider, not by overriding built-in OpenAI.               |
+| Model                    | Provider model. For Custom provider, enter the model ID expected by that provider.                                                     |
+| API key source           | Use the configured provider key or expose an API Key input port.                                                                       |
+| Alternative programmatic key name | Custom provider only when using a configured key. Programmatic runs can pass this key as a top-level run option. If blank, `customAiApiKey` is used. |
+| Alternative API key env var       | Custom provider only when using a configured key. Defaults to `CUSTOM_PROVIDER_API_KEY`.                                               |
 
 ### Parameters
 
@@ -106,7 +106,7 @@ Tool use enables the Tools input and optional tool-choice controls. Auto-continu
 
 ### Provider Advanced
 
-Provider Advanced contains optional Base URL, Headers, and Extra provider options. For Custom provider, use the Model section's Provider base URL instead of Provider Advanced > Base URL.
+Provider Advanced contains optional Headers and Extra provider options. Built-in OpenAI, Anthropic, and Google providers use their provider-owned endpoints. For OpenAI-compatible custom hosts, choose Custom provider and use the Model section's Provider base URL.
 
 ### Technical Details
 
@@ -139,12 +139,13 @@ The Base URL line is shown as plain configuration text in the node body, not as 
 The custom provider API key can come from, in precedence order:
 
 - the API Key input port
-- the environment variable named by API key env var name
+- the alternative programmatic key name as a top-level run option, when set
+- the alternative API key env var through `pluginEnv` or `process.env`
 - the custom-provider key in Settings > LLM
 
-The API Key input port wins when it is enabled. In configured-key mode, the named environment variable is checked first so older graphs with different custom-provider credentials keep working; the Settings > LLM custom-provider key is the fallback.
+The API Key input port wins when it is enabled. In configured-key mode, `Alternative programmatic key name` lets backend code pass different custom-provider secrets per node as top-level run options, while `Alternative API key env var` lets desktop or Node runs read a named environment variable. If the alternative programmatic key name is blank, Rivet skips the named top-level lookup and still checks the env var name before the shared `customAiApiKey`. The Settings > LLM custom-provider key is the app-side source of that shared key.
 
-OpenAI, Anthropic, Google, and custom-provider configured keys are set in Settings > LLM. When running through `@valerypopoff/rivet2-node`, unset configured keys can also come from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, and `CUSTOM_AI_API_KEY` or `CUSTOM_PROVIDER_API_KEY`.
+OpenAI, Anthropic, Google, and custom-provider configured keys are set in Settings > LLM. When running through `@valerypopoff/rivet2-node`, unset configured keys can also come from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, and the canonical custom-provider `CUSTOM_PROVIDER_API_KEY` env var. Legacy `CUSTOM_AI_API_KEY` is still accepted as a compatibility alias.
 
 ## Error Handling
 

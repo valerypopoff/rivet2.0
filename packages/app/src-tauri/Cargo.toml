@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "2.7.1"
+version = "2.7.2"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -17,10 +17,37 @@ tauri-build = { version = "1.2.1", features = [] }
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-tauri = { version = "1.8.2", features = [ "process-relaunch", "shell-execute", "http-all", "path-all", "updater", "shell-open", "dialog-all", "fs-all", "global-shortcut-all", "shell-sidecar", "window-all", "devtools"] }
+tauri = { version = "1.8.3", features = [
+  "process-relaunch",
+  "shell-execute",
+  "http-request",
+  "path-all",
+  "updater",
+  "shell-open",
+  "dialog-open",
+  "dialog-save",
+  "fs-read-dir",
+  "fs-read-file",
+  "fs-write-file",
+  "fs-create-dir",
+  "fs-remove-dir",
+  "fs-exists",
+  "global-shortcut-all",
+  "shell-sidecar",
+  "window-create",
+  "window-center",
+  "window-set-always-on-top",
+  "window-set-title",
+  "window-maximize",
+  "window-unmaximize",
+  "window-minimize",
+  "window-close",
+  "window-start-dragging",
+  "devtools",
+] }
 tauri-plugin-persisted-scope = { path = "vendor/tauri-plugin-persisted-scope" }
 tauri-plugin-window-state = { path = "vendor/tauri-plugin-window-state" }
-tar = "0.4.40"
+tar = "0.4.45"
 flate2 = "1.0.27"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 

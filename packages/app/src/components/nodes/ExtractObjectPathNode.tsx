@@ -27,7 +27,6 @@ const ExtractObjectPathNodeOutputBody: FC<{
   wrapLines?: boolean;
 }> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
-  const hasError = data.status?.type === 'error';
   const dataRefs = useDataRefs();
   const pathSource = getExtractObjectPathPreviewSource(node, data);
   const shouldShowParsedExpression =
@@ -73,13 +72,13 @@ const ExtractObjectPathNodeOutputBody: FC<{
       parsedSource={shouldShowParsedExpression ? parsedExpression ?? '' : undefined}
       parsedSourceLanguage="jsonpath"
     >
-      {!hasError && hasSplitOutputs && (
+      {hasSplitOutputs && (
         <div className="split-output">
           {splitOutputEntries.map(([key, outputs]) => renderOutputs(outputs, `${key}:`))}
         </div>
       )}
 
-      {!hasError && !hasSplitOutputs && renderOutputs(data.outputData)}
+      {!hasSplitOutputs && renderOutputs(data.outputData)}
     </StructuredNodeOutput>
   );
 };

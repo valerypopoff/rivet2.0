@@ -58,7 +58,8 @@ export type RunGraphOptions = {
   editorExecutionCache?: ProcessContext['editorExecutionCache'];
 } & {
   [P in keyof ProcessEvents as `on${PascalCase<P>}`]?: (params: ProcessEvents[P]) => void;
-} & Settings;
+} & Settings &
+  Record<string, unknown>;
 
 export type CoreCreateProcessorInternalOptions = {
   cacheLoadedProjects?: boolean;

@@ -7,7 +7,7 @@ import { getChildProcessEnvWithoutMissingPnpPreload } from './pnp-env.mjs';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(scriptDir, '..');
 const repoRoot = resolve(appDir, '..', '..');
-const yarnPath = resolve(repoRoot, '.yarn', 'releases', 'yarn-4.6.0.cjs');
+const yarnPath = resolve(repoRoot, '.yarn', 'releases', 'yarn-4.17.1.cjs');
 const syncDesktopVersionScript = resolve(repoRoot, 'scripts', 'sync-desktop-version.mjs');
 const childProcessEnv = getChildProcessEnvWithoutMissingPnpPreload(repoRoot);
 

@@ -25,7 +25,7 @@ Use the **Components** palette to add blocks. Hover a component type to reveal t
 
 When a block is focused in the settings panel, Rivet highlights the matching component in the live preview. Focusing or clicking a component in the preview highlights the matching settings block. Text input and textarea components save user-entered values into their **Data key**. Rivet warns on later components if that key is already used by an earlier value source.
 
-Markdown components render Markdown in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps. Output components start blank until the selected data key receives a value.
+Markdown components render Markdown in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps. Output components start blank until the selected data key receives a value. After an output has a value, its top-right copy button copies that output value. JSON output blocks also show a download button that saves the displayed JSON as a `.json` file named from the web app and the current date/time.
 
 ## Binding a Button to a Graph
 

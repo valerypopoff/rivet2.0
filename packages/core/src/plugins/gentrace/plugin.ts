@@ -1,4 +1,4 @@
-import { Pipeline, StepRun, init, runTest, getPipelines } from '@gentrace/core';
+import { Pipeline, StepRun, init, runTest, getPipelines } from './gentraceSdk.js';
 
 import type { Project } from '../../model/Project.js';
 import type { GraphId, NodeGraph } from '../../model/NodeGraph.js';
@@ -14,6 +14,7 @@ import { ExecutionRecorder } from '../../recording/ExecutionRecorder.js';
 import { inferType } from '../../utils/coerceType.js';
 // eslint-disable-next-line import/no-cycle -- Local Gentrace execution intentionally depends on GraphProcessor.
 import { GraphProcessor } from '../../model/GraphProcessor.js';
+import { resolveProcessSettings } from '../../api/processSettings.js';
 
 const apiKeyConfigSpec: SecretPluginConfigurationSpec = {
   type: 'secret',
@@ -76,7 +77,7 @@ export const runGentraceTests = async (
     const runContextValues = cloneDeep(contextValues);
     await processor.processGraph(
       {
-        settings,
+        settings: resolveProcessSettings(settings),
         nativeApi,
         tokenizer: new GptTokenizerTokenizer(),
       },
@@ -289,6 +290,7 @@ function convertRecordingToStepRuns(recording: Recording, project: Omit<Project,
             gentraceOpenAIModelParams,
             gentraceOpenAIOutputs,
             {},
+            undefined,
           ),
         );
 
@@ -307,6 +309,7 @@ function convertRecordingToStepRuns(recording: Recording, project: Omit<Project,
         pair.modelParams,
         pair.outputs,
         {},
+        undefined,
       ),
     );
   }

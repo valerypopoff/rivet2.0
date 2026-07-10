@@ -1,11 +1,16 @@
-import { Fragment, type FC, type ReactNode, useEffect, useRef, useState } from 'react';
+import { Fragment, type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type DataValue,
   type UiComponentId,
   type UiGraph,
   type UiGraphComponent,
   RIVET_WEB_APP_RENDERER_CSS,
+  applyUiGraphStatePatch,
+  getUiGraphActionState,
+  getUiGraphComponentRenderModel,
+  getUiGraphJsonOutputFilename,
   getUiGraphInitialState,
+  normalizeUiGraphComponentIds,
 } from '@valerypopoff/rivet2-core';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
 
@@ -37,21 +42,22 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   onRunAction,
   uiGraph,
 }) => {
-  const previousUiGraphId = useRef(uiGraph.id);
-  const [state, setState] = useState<Record<string, unknown>>(() => getUiGraphInitialState(uiGraph));
+  const normalizedUiGraph = useMemo(() => normalizeUiGraphComponentIds(uiGraph), [uiGraph]);
+  const previousUiGraphId = useRef(normalizedUiGraph.id);
+  const [state, setState] = useState<Record<string, unknown>>(() => getUiGraphInitialState(normalizedUiGraph));
   const [runningComponentId, setRunningComponentId] = useState<UiComponentId | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   useEffect(() => {
-    if (previousUiGraphId.current === uiGraph.id) {
+    if (previousUiGraphId.current === normalizedUiGraph.id) {
       return;
     }
 
-    previousUiGraphId.current = uiGraph.id;
-    setState(getUiGraphInitialState(uiGraph));
+    previousUiGraphId.current = normalizedUiGraph.id;
+    setState(getUiGraphInitialState(normalizedUiGraph));
     setError(undefined);
     setRunningComponentId(undefined);
-  }, [uiGraph]);
+  }, [normalizedUiGraph]);
 
   const updateState = (key: string, value: unknown) => {
     setState((current) => ({ ...current, [key]: value }));
@@ -62,8 +68,8 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     setError(undefined);
 
     try {
-      const result = await onRunAction(component.id, state);
-      setState((current) => ({ ...current, ...(result.statePatch ?? {}) }));
+      const result = await onRunAction(component.id, getUiGraphActionState(component.action, state));
+      setState((current) => applyUiGraphStatePatch(current, result.statePatch));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -75,7 +81,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     <div className="rivet-web-app-root">
       <style>{RIVET_WEB_APP_RENDERER_CSS}</style>
       <main className="rivet-web-app-surface">
-        {uiGraph.components.map((component) => {
+        {normalizedUiGraph.components.map((component) => {
           const frameProps: RivetWebAppComponentFrameProps = {
             className: `rivet-web-app-component-frame${activeComponentId === component.id ? ' active' : ''}`,
             component,
@@ -85,6 +91,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
               <RivetWebAppComponent
                 component={component}
                 isRunning={runningComponentId === component.id}
+                uiGraphName={normalizedUiGraph.name}
                 state={state}
                 onRunAction={runAction}
                 onStateChange={updateState}
@@ -114,22 +121,23 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
 const RivetWebAppComponent: FC<{
   component: UiGraphComponent;
   isRunning: boolean;
+  uiGraphName: string;
   state: Record<string, unknown>;
   onRunAction(component: Extract<UiGraphComponent, { type: 'button' }>): Promise<void> | void;
   onStateChange(key: string, value: unknown): void;
-}> = ({ component, isRunning, onRunAction, onStateChange, state }) => {
-  const outputRenderMode = component.type === 'output' ? component.renderAs ?? 'text' : undefined;
+}> = ({ component, isRunning, onRunAction, onStateChange, state, uiGraphName }) => {
+  const renderModel = getUiGraphComponentRenderModel(component, state);
   const markdownText =
-    component.type === 'markdown'
-      ? component.markdown
-      : component.type === 'output' && outputRenderMode === 'markdown'
-        ? renderOutputValue(state[component.stateKey], 'markdown')
+    renderModel.type === 'markdown'
+      ? renderModel.markdown
+      : renderModel.type === 'output' && renderModel.output.renderAs === 'markdown'
+        ? renderModel.output.renderedValue
         : undefined;
   const markdownHtml = useMarkdown(markdownText, markdownText != null, { allowHtml: false });
 
-  switch (component.type) {
+  switch (renderModel.type) {
     case 'text':
-      return <div className="rivet-web-app-card">{component.text}</div>;
+      return <div className="rivet-web-app-card">{renderModel.text}</div>;
     case 'markdown':
       return (
         <div
@@ -140,62 +148,116 @@ const RivetWebAppComponent: FC<{
     case 'input':
       return (
         <label className="rivet-web-app-field">
-          <span>{component.label}</span>
+          <span>{renderModel.label}</span>
           <input
             className="rivet-web-app-control inputarea"
-            placeholder={component.placeholder ?? ''}
-            value={`${state[component.stateKey] ?? component.defaultValue ?? ''}`}
-            onChange={(event) => onStateChange(component.stateKey, event.target.value)}
+            placeholder={renderModel.component.placeholder ?? ''}
+            value={renderModel.value}
+            onChange={(event) => onStateChange(renderModel.component.stateKey, event.target.value)}
           />
         </label>
       );
     case 'textarea':
       return (
         <label className="rivet-web-app-field">
-          <span>{component.label}</span>
+          <span>{renderModel.label}</span>
           <textarea
             className="rivet-web-app-control inputarea"
-            placeholder={component.placeholder ?? ''}
-            value={`${state[component.stateKey] ?? component.defaultValue ?? ''}`}
-            onChange={(event) => onStateChange(component.stateKey, event.target.value)}
+            placeholder={renderModel.component.placeholder ?? ''}
+            value={renderModel.value}
+            onChange={(event) => onStateChange(renderModel.component.stateKey, event.target.value)}
           />
         </label>
       );
     case 'button':
       return (
-        <button className="rivet-web-app-button" disabled={isRunning} onClick={() => void onRunAction(component)}>
-          {isRunning ? 'Running...' : component.label}
+        <button
+          className="rivet-web-app-button"
+          disabled={isRunning}
+          onClick={() => void onRunAction(renderModel.component)}
+        >
+          {isRunning ? 'Running...' : renderModel.label}
         </button>
       );
-    case 'output':
+    case 'output': {
+      const { output } = renderModel;
+      const jsonDownloadValue = output.jsonDownloadValue;
+
       return (
-        <section className="rivet-web-app-card rivet-web-app-output">
-          <div className="rivet-web-app-output-title">{component.label || component.stateKey}</div>
-          {outputRenderMode === 'markdown' ? (
+        <section
+          className={`rivet-web-app-card rivet-web-app-output${
+            output.jsonDownloadValue != null ? ' rivet-web-app-output-has-download' : ''
+          }`}
+        >
+          <div className="rivet-web-app-output-title">{renderModel.label}</div>
+          {output.hasValue && (
+            <button
+              type="button"
+              className="rivet-web-app-output-action-button rivet-web-app-output-copy-button"
+              title="Copy output"
+              aria-label="Copy output"
+              onClick={(event) => {
+                event.stopPropagation();
+                void copyWebAppOutputValue(output.renderedValue);
+              }}
+            />
+          )}
+          {jsonDownloadValue != null && (
+            <button
+              type="button"
+              className="rivet-web-app-output-action-button rivet-web-app-output-download-button"
+              title="Download JSON"
+              aria-label="Download JSON"
+              onClick={(event) => {
+                event.stopPropagation();
+                downloadWebAppJsonOutput(jsonDownloadValue, uiGraphName);
+              }}
+            />
+          )}
+          {output.renderAs === 'markdown' ? (
             <div
               className="rivet-web-app-output-markdown markdown-body rivet-markdown-output"
               dangerouslySetInnerHTML={markdownHtml}
             />
           ) : (
-            <pre>{renderOutputValue(state[component.stateKey], outputRenderMode ?? 'text')}</pre>
+            <pre>{output.renderedValue}</pre>
           )}
         </section>
       );
+    }
   }
 };
 
-function renderOutputValue(value: unknown, renderAs: 'text' | 'json' | 'markdown'): string {
-  if (renderAs === 'json') {
-    return stringifyOutputValue(value);
-  }
-
-  return typeof value === 'string' ? value : value == null ? '' : stringifyOutputValue(value);
+function downloadWebAppJsonOutput(value: string, appName: string) {
+  const blob = new Blob([value], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = getUiGraphJsonOutputFilename(appName);
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function stringifyOutputValue(value: unknown): string {
+async function copyWebAppOutputValue(value: string) {
   try {
-    return JSON.stringify(value, null, 2) ?? '';
+    await navigator.clipboard.writeText(value);
+    return;
   } catch {
-    return '[Unserializable value]';
+    // Fall back for preview hosts that do not expose the clipboard API.
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = value;
+  textArea.style.position = 'fixed';
+  textArea.style.opacity = '0';
+  document.body.append(textArea);
+  textArea.select();
+
+  try {
+    document.execCommand('copy');
+  } finally {
+    textArea.remove();
   }
 }

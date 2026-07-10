@@ -18,6 +18,10 @@ import {
 import { projectTabUiState } from '../../state/projectTabUi.js';
 import { hasProjectUnsavedChanges } from '../../utils/projectUnsavedChanges.js';
 import { type ProjectTabListItem } from '../../utils/openingProjectTabs.js';
+import {
+  resolveOpeningProjectTabPresentation,
+  resolveProjectTabPresentation,
+} from './projectSelectorModel.js';
 
 export const ProjectTabRow: FC<{
   projectTabsSelected: boolean;
@@ -145,21 +149,24 @@ const ProjectTab: FC<{
 
   const project = openedProjects[projectId];
 
-  const unsaved = !project?.fsPath;
   const hasUnsavedChanges = hasProjectUnsavedChanges(projectUnsavedChanges, projectDataUnsavedChanges, projectId);
-  const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\/]/).pop();
-  const active = projectTabsSelected && selectedOpeningProjectTabId == null && currentProject.metadata.id === projectId;
-  const preview = projectTabUi[projectId]?.preview === true;
-  const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;
+  const presentation = resolveProjectTabPresentation({
+    title: project?.title ?? '',
+    fsPath: project?.fsPath,
+    current: currentProject.metadata.id === projectId,
+    projectTabsSelected,
+    openingTabSelected: selectedOpeningProjectTabId != null,
+    preview: projectTabUi[projectId]?.preview,
+  });
 
   return (
     <ProjectTabSurface
-      active={active}
-      displayName={projectDisplayName}
+      active={presentation.active}
+      displayName={presentation.displayName}
       dragListeners={dragListeners}
       hasUnsavedChanges={hasUnsavedChanges}
-      preview={preview}
-      unsaved={unsaved}
+      preview={presentation.preview}
+      unsaved={presentation.unsaved}
       onCloseProject={onCloseProject}
       onSelectProject={onSelectProject}
     />
@@ -180,18 +187,21 @@ const OpeningProjectTab: FC<{
     return null;
   }
 
-  const active = projectTabsSelected && selectedOpeningProjectTabId === openingTabId;
-  const preview = openingTab.tabUi?.preview === true;
-  const fileName = openingTab.path?.split(/[\\/]/).pop();
-  const projectDisplayName = active ? `${openingTab.title}${fileName ? ` [${fileName}]` : ''}` : openingTab.title;
+  const presentation = resolveOpeningProjectTabPresentation({
+    title: openingTab.title,
+    path: openingTab.path,
+    projectTabsSelected,
+    selected: selectedOpeningProjectTabId === openingTabId,
+    preview: openingTab.tabUi?.preview,
+  });
 
   return (
     <div className="draggableProject openingProject">
       <ProjectTabSurface
-        active={active}
+        active={presentation.active}
         className="opening"
-        displayName={projectDisplayName}
-        preview={preview}
+        displayName={presentation.displayName}
+        preview={presentation.preview}
         onCloseProject={onCloseProject}
         onSelectProject={onSelectProject}
       />

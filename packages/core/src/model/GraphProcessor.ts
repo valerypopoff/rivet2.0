@@ -74,6 +74,7 @@ import {
   SUCCESSFUL_GRAPH_ABORT_EXCLUSION_REASON,
 } from './GraphAbortReasons.js';
 import { emitDetached } from '../utils/emitDetached.js';
+import { GraphRunLifecycle } from './GraphRunLifecycle.js';
 import {
   createExcludedNodeOutputs,
   getControlFlowExclusionDecision,
@@ -423,11 +424,10 @@ export class GraphProcessor {
   readonly #nodeInstances: Record<NodeId, NodeImpl<ChartNode>>;
   readonly #connections: Record<NodeId, NodeConnection[]>;
   readonly #emitter: Emittery<ProcessEvents> = new Emittery();
-  #running = false;
+  readonly #lifecycle = new GraphRunLifecycle();
   #isSubProcessor = false;
   #externalFunctions: Record<string, ExternalFunction> = {};
   slowMode = false;
-  #isPaused = false;
   #parent: GraphProcessor | undefined;
   readonly #registry: NodeRegistration<any, any>;
   readonly #concurrency: Required<GraphProcessorConcurrency>;
@@ -488,9 +488,6 @@ export class GraphProcessor {
   #contextValues: Record<string, DataValue> = undefined!;
   #globals: Map<string, ScalarOrArrayDataValue> = undefined!;
   #attachedNodeData: Map<NodeId, AttachedNodeData> = undefined!;
-  #aborted = false;
-  #abortSuccessfully = false;
-  #abortError: Error | string | undefined = undefined;
   #successfulAbortTerminalProcessIds: Set<ProcessId> = undefined!;
   #totalCost: number = 0;
   #ignoreNodes: Set<NodeId> = undefined!;
@@ -513,11 +510,10 @@ export class GraphProcessor {
     NodeId,
     { resolve: (values: StringArrayDataValue) => void; reject: (error: unknown) => void }
   > = undefined!;
-  #finishEmitted = false;
   #unsubscribeTokenizerError: (() => void) | undefined;
 
   get isRunning() {
-    return this.#running;
+    return this.#lifecycle.isRunning;
   }
 
   #startNodeTiming(): NodeTimingStart {
@@ -810,12 +806,10 @@ export class GraphProcessor {
   }
 
   async abort(successful: boolean = false, error?: Error | string): Promise<void> {
-    if (!this.#running || this.#aborted) {
+    if (!this.#lifecycle.requestAbort(successful, error)) {
       return Promise.resolve();
     }
 
-    this.#abortSuccessfully = successful;
-    this.#abortError = error;
     const abortReason = createGraphAbortReason(successful, error);
     this.#abortController.abort(abortReason);
     this.#abortActiveNodeControllers(abortReason);
@@ -830,15 +824,13 @@ export class GraphProcessor {
   }
 
   pause(): void {
-    if (this.#isPaused === false) {
-      this.#isPaused = true;
+    if (this.#lifecycle.pause()) {
       emitDetached(this.#emitter, 'pause', void 0);
     }
   }
 
   resume(): void {
-    if (this.#isPaused) {
-      this.#isPaused = false;
+    if (this.#lifecycle.resume()) {
       emitDetached(this.#emitter, 'resume', void 0);
     }
   }
@@ -848,18 +840,18 @@ export class GraphProcessor {
   }
 
   async #waitUntilUnpaused(): Promise<void> {
-    if (!this.#isPaused) {
+    if (!this.#lifecycle.isPaused) {
       return;
     }
 
     if (this.#abortController.signal.aborted) {
-      throw this.#getAbortError();
+      throw this.#lifecycle.getAbortError();
     }
 
     await new Promise<void>((resolve, reject) => {
       const abortListener = () => {
         cleanup();
-        reject(this.#getAbortError());
+        reject(this.#lifecycle.getAbortError());
       };
 
       const unsubscribeResume = this.#emitter.on('resume', () => {
@@ -874,14 +866,6 @@ export class GraphProcessor {
 
       this.#abortController.signal.addEventListener('abort', abortListener, { once: true });
     });
-  }
-
-  #getAbortError(): Error {
-    if (typeof this.#abortError === 'string') {
-      return new Error(this.#abortError);
-    }
-
-    return this.#abortError ?? new Error('Processing aborted');
   }
 
   async *events(): AsyncGenerator<ProcessEvent> {
@@ -963,7 +947,7 @@ export class GraphProcessor {
       erroredNodes: this.#erroredNodes,
       graphInputs: this.#graphInputs,
       graphOutputs: this.#graphOutputs,
-      isAborted: () => this.#aborted,
+      isAborted: () => this.#lifecycle.isAborted,
       nodeResults: this.#nodeResults,
       project: this.#project,
       recorder,
@@ -978,7 +962,7 @@ export class GraphProcessor {
         this.#graphOutputs = graphOutputs;
       },
       setRunning: (running) => {
-        this.#running = running;
+        if (!running) this.#lifecycle.complete();
       },
       visitedNodes: this.#visitedNodes,
       waitUntilUnpaused: () => this.#waitUntilUnpaused(),
@@ -988,8 +972,7 @@ export class GraphProcessor {
   }
 
   #initProcessState() {
-    this.#running = true;
-    this.#finishEmitted = false;
+    this.#lifecycle.begin();
 
     if (!this.#hasPreloadedData) {
       this.#nodeResults = new Map();
@@ -1018,12 +1001,6 @@ export class GraphProcessor {
     this.#runToRelevantNodeIds = undefined;
 
     this.#abortController = this.#newAbortController();
-    this.#abortController.signal.addEventListener('abort', () => {
-      this.#aborted = true;
-    });
-    this.#aborted = false;
-    this.#abortError = undefined;
-    this.#abortSuccessfully = false;
     this.#successfulAbortTerminalProcessIds = new Set();
     this.#nodeAbortControllers = new Map();
     this.#loadedProjects =
@@ -1048,7 +1025,7 @@ export class GraphProcessor {
     /** Contextual data available to all graphs and subgraphs. Kind of like react context, avoids drilling down data into subgraphs. Be careful when using it. */
     contextValues: Record<string, DataValue> = {},
   ): Promise<GraphOutputs> {
-    if (this.#running) {
+    if (this.#lifecycle.isRunning) {
       throw new Error('Cannot process graph while already processing');
     }
 
@@ -1076,7 +1053,7 @@ export class GraphProcessor {
       await this.#profileRuntimeAsync('throwIfGraphErrored', () => this.#throwIfGraphErrored());
       return await this.#profileRuntimeAsync('finalizeGraphRun', () => this.#finalizeGraphRun());
     } finally {
-      this.#running = false;
+      this.#lifecycle.complete();
       this.#cleanupTokenizerErrorListener();
 
       await this.#profileRuntimeAsync('emitFinish', () => this.#emitFinishIfNeeded());
@@ -1084,11 +1061,10 @@ export class GraphProcessor {
   }
 
   async #emitFinishIfNeeded(): Promise<void> {
-    if (this.#isSubProcessor || this.#finishEmitted) {
+    if (!this.#lifecycle.claimRootFinish(this.#isSubProcessor)) {
       return;
     }
 
-    this.#finishEmitted = true;
     await this.#emitter.emit('finish', undefined);
   }
 
@@ -1368,8 +1344,8 @@ export class GraphProcessor {
   }
 
   #createGraphError(erroredNodes: [NodeId, Error | string][]): Error {
-    if (this.#abortError) {
-      return this.#getAbortError();
+    if (this.#lifecycle.abortError) {
+      return this.#lifecycle.getAbortError();
     }
 
     const message = `Graph ${this.#graph.metadata!.name} (${
@@ -1391,7 +1367,7 @@ export class GraphProcessor {
 
   async #throwIfGraphErrored(): Promise<void> {
     const erroredNodes = this.#getUnhandledErroredNodes();
-    if (!erroredNodes.length || this.#abortSuccessfully) {
+    if (!erroredNodes.length || this.#lifecycle.abortSuccessful) {
       return;
     }
 
@@ -1409,7 +1385,7 @@ export class GraphProcessor {
     ensureGraphCostOutput(this.#graphOutputs, this.#totalCost);
 
     const outputValues = this.#graphOutputs;
-    this.#running = false;
+    this.#lifecycle.complete();
 
     await this.#emitter.emit('graphFinish', this.#withExecution({ graph: this.#graph, outputs: outputValues }));
 
@@ -1879,7 +1855,7 @@ export class GraphProcessor {
       markNodeVisited: (nodeId) => this.#visitedNodes.add(nodeId),
       nodeErrored: (n, err, pid, durationMs, splitRunDurationMs) =>
         this.#nodeErrored(n, err, pid, durationMs, splitRunDurationMs),
-      isAborted: () => this.#aborted,
+      isAborted: () => this.#lifecycle.isAborted,
       getAbortError: () => createGraphAbortErrorFromSignal(this.#abortController.signal),
       emit: (event, data) => {
         if (event === 'partialOutput') {
@@ -2023,9 +1999,9 @@ export class GraphProcessor {
       return SUCCESSFUL_GRAPH_ABORT_EXCLUSION_REASON;
     }
 
-    if (this.#abortSuccessfully && isAbortLikeError(error)) {
+    if (this.#lifecycle.abortSuccessful && isAbortLikeError(error)) {
       const exclusionReason =
-        this.#abortError === RACE_LOSER_EXCLUSION_REASON
+        this.#lifecycle.abortError === RACE_LOSER_EXCLUSION_REASON
           ? RACE_LOSER_EXCLUSION_REASON
           : SUCCESSFUL_GRAPH_ABORT_EXCLUSION_REASON;
       if (exclusionReason === SUCCESSFUL_GRAPH_ABORT_EXCLUSION_REASON) {
@@ -2352,7 +2328,7 @@ export class GraphProcessor {
     const wireEventsProfileStart = this.#startRuntimeProfile();
     try {
       wireSubprocessorEvents(processor, this.#emitter, {
-        isPaused: () => this.#isPaused,
+        isPaused: () => this.#lifecycle.isPaused,
         pause: () => {
           void this.pause();
         },

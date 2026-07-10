@@ -74,7 +74,7 @@ export function useCopyNodesHotkeys() {
 
   useEffect(() => {
     const listener = (e: KeyboardEvent) => {
-      latestListener.current(e);
+      latestListener.current?.(e);
     };
     window.addEventListener('keydown', listener);
 

@@ -87,7 +87,7 @@ export function createRuntimeSpeedProcessContext(
     codeRunner: new NodeCodeRunner(),
     ...overrides,
     settings: {
-      openAiEndpoint: process.env.OPENAI_ENDPOINT ?? '',
+      openAiEndpoint: '',
       openAiKey: process.env.OPENAI_API_KEY ?? '',
       openAiOrganization: process.env.OPENAI_ORG_ID ?? '',
     },

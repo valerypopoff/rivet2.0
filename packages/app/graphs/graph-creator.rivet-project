@@ -255,9 +255,10 @@ data:
             dataType: string
             id: output
           visualData: 1741.760260868777/384.978918966359/330/19//
-        '[QUHs-HJl5DW-MfOrRUymS]:chat "Chat"':
+        '[QUHs-HJl5DW-MfOrRUymS]:aiAssistGeneratorChatV2 "AI Assist Chat V2"':
           data:
             additionalParameters: []
+            aiAssistGeneratorChatBranch: openaiCompatible
             cache: false
             enableFunctionUse: false
             maxTokens: 1024
@@ -336,7 +337,7 @@ data:
 
               Reply with only the corresponding node type.
           outgoingConnections:
-            - output->"Chat" QUHs-HJl5DW-MfOrRUymS/prompt
+            - output->"AI Assist Chat V2" QUHs-HJl5DW-MfOrRUymS/prompt
           visualData: -142.40629429944877/269.4623924478585/330/13//
         '[xcX_2iyt7CLbRDdDPZzh7]:externalCall "External Call"':
           data:
@@ -431,7 +432,7 @@ data:
 
               Reply with only the file name, or NONE.
           outgoingConnections:
-            - output->"Chat" tyiFjvGEnQqyPZzsc3gFO/prompt
+            - output->"AI Assist Chat V2" tyiFjvGEnQqyPZzsc3gFO/prompt
           visualData: -8.354088813334897/512.6076518644442/330/27//
         '[jD_RIxhvBN807mnDJzSCN]:if "If"':
           data:
@@ -443,9 +444,10 @@ data:
           outgoingConnections:
             - output->"Graph Output" 4ScAjCsTsiek85eDudUti/value
           visualData: 2038/583/180/22//
-        '[tyiFjvGEnQqyPZzsc3gFO]:chat "Chat"':
+        '[tyiFjvGEnQqyPZzsc3gFO]:aiAssistGeneratorChatV2 "AI Assist Chat V2"':
           data:
             additionalParameters: []
+            aiAssistGeneratorChatBranch: openaiCompatible
             cache: false
             enableFunctionUse: false
             headers: []
@@ -517,7 +519,7 @@ data:
             errorOnMissingFile: false
             filterGlobs: []
             ignores: []
-            path: /usr/local/repos/rivet/packages/core/src/model/nodes
+            path: packages/core/src/model/nodes
             recursive: false
             useFilterGlobsInput: false
             useIgnoresInput: false
@@ -623,13 +625,9 @@ data:
                   "nodeId": {
                     "type": "string",
                     "description": "The ID of the node."
-                  },
-                  "data": {
-                    "type": "string",
-                    "description": "A stringified JSON representing a record of key-value pairs."
                   }
                 },
-                "required": ["nodeId", "data"],
+                "required": ["nodeId"],
                 "additionalProperties": false
               }
           outgoingConnections:
@@ -953,8 +951,8 @@ data:
               - openai
               - anthropic
           outgoingConnections:
-            - case1->"Chat" BcmMNftAd1gGeS8wxkQoy/systemPrompt
-            - case2->"Chat (Anthropic)" BXmnIPObcoDx2Iaqz8sl2/system
+            - case1->"AI Assist Chat V2" BcmMNftAd1gGeS8wxkQoy/systemPrompt
+            - case2->"AI Assist Chat V2 (Anthropic)" BXmnIPObcoDx2Iaqz8sl2/system
           visualData: 181.76672343915334/211.65480179211588/280/13//
         '[7Q7CZ-pKFyKlFx2nGbCdP]:graphInput "Graph Input"':
           data:
@@ -962,11 +960,12 @@ data:
             defaultValue: claude-3-7-sonnet-latest
             id: model
           outgoingConnections:
-            - data->"Chat (Anthropic)" BXmnIPObcoDx2Iaqz8sl2/model
-            - data->"Chat" BcmMNftAd1gGeS8wxkQoy/model
+            - data->"AI Assist Chat V2 (Anthropic)" BXmnIPObcoDx2Iaqz8sl2/model
+            - data->"AI Assist Chat V2" BcmMNftAd1gGeS8wxkQoy/model
           visualData: -275.067172362353/504.3906623933242/300/9//
-        '[BXmnIPObcoDx2Iaqz8sl2]:chatAnthropic "Chat (Anthropic)"':
+        '[BXmnIPObcoDx2Iaqz8sl2]:aiAssistGeneratorChatV2 "AI Assist Chat V2 (Anthropic)"':
           data:
+            aiAssistGeneratorChatBranch: anthropic
             cache: false
             enableCitations: false
             enableToolUse: true
@@ -992,9 +991,10 @@ data:
             - all-messages->"Coalesce" iem_GrN-_h9d4vwBMci51/input2
             - function-calls->"Coalesce" EJXEibAyApSK3e9K9vjg-/input2
           visualData: 778.154380459147/609.5846628131387/305/22//
-        '[BcmMNftAd1gGeS8wxkQoy]:chat "Chat"':
+        '[BcmMNftAd1gGeS8wxkQoy]:aiAssistGeneratorChatV2 "AI Assist Chat V2"':
           data:
             additionalParameters: []
+            aiAssistGeneratorChatBranch: openaiCompatible
             cache: false
             enableFunctionUse: true
             headers: []
@@ -1043,16 +1043,16 @@ data:
             dataType: gpt-function[]
             id: functions
           outgoingConnections:
-            - data->"Chat (Anthropic)" BXmnIPObcoDx2Iaqz8sl2/tools
-            - data->"Chat" BcmMNftAd1gGeS8wxkQoy/functions
+            - data->"AI Assist Chat V2 (Anthropic)" BXmnIPObcoDx2Iaqz8sl2/tools
+            - data->"AI Assist Chat V2" BcmMNftAd1gGeS8wxkQoy/functions
           visualData: -275.067172362353/704.3906623933242/300/9//
         '[_skuDHO-AhK2Ezc6yOB3u]:graphInput "Graph Input"':
           data:
             dataType: chat-message[]
             id: prompt
           outgoingConnections:
-            - data->"Chat (Anthropic)" BXmnIPObcoDx2Iaqz8sl2/prompt
-            - data->"Chat" BcmMNftAd1gGeS8wxkQoy/prompt
+            - data->"AI Assist Chat V2 (Anthropic)" BXmnIPObcoDx2Iaqz8sl2/prompt
+            - data->"AI Assist Chat V2" BcmMNftAd1gGeS8wxkQoy/prompt
           visualData: -275.067172362353/904.3906623933242/300/9//
         '[iem_GrN-_h9d4vwBMci51]:coalesce "Coalesce"':
           outgoingConnections:
@@ -1111,9 +1111,10 @@ data:
           outgoingConnections:
             - output->"Graph Output" nO0XPCZb9V5_qVP5kDfBr/value
           visualData: 3297.2236675616327/441.4098568084575/180/49//
-        '[OnPRxjZ6CtHEfEfp74Dha]:chat "Chat"':
+        '[OnPRxjZ6CtHEfEfp74Dha]:aiAssistGeneratorChatV2 "AI Assist Chat V2"':
           data:
             additionalParameters: []
+            aiAssistGeneratorChatBranch: openaiCompatible
             cache: false
             enableFunctionUse: false
             headers: []
@@ -1175,7 +1176,7 @@ data:
 
               Reply with only the file name, or NONE.
           outgoingConnections:
-            - output->"Chat" OnPRxjZ6CtHEfEfp74Dha/prompt
+            - output->"AI Assist Chat V2" OnPRxjZ6CtHEfEfp74Dha/prompt
           visualData: 1143.6459111866652/504.60765186444416/330/27//
         '[b7ekhp_HDG7GXL4Gv3_P4]:destructure "Destructure"':
           data:
@@ -1235,7 +1236,7 @@ data:
             errorOnMissingFile: false
             filterGlobs: []
             ignores: []
-            path: /usr/local/repos/rivet/packages/docs/docs/node-reference
+            path: packages/docs/docs/node-reference
             recursive: false
             useFilterGlobsInput: false
             useIgnoresInput: false
@@ -1629,7 +1630,7 @@ data:
 
               You are a Rivet brainstorming agent. You are given a query, and based on what you know about Rivet, you should try to answer the query as best you can. You are used in order to brainstorm what nodes to use in Rivet, and how to use them to accomplish a task.
           outgoingConnections:
-            - output->"Chat" yXH_UosXKvIFjuHIphzCM/systemPrompt
+            - output->"AI Assist Chat V2" yXH_UosXKvIFjuHIphzCM/systemPrompt
           visualData: 148.89757405283854/1.6297195291977005/330/3//
         '[KFGUplLNTsxLNMsvmiOnk]:text "Text"':
           data:
@@ -1669,7 +1670,7 @@ data:
 
               {{task | quote}}
           outgoingConnections:
-            - output->"Chat" yXH_UosXKvIFjuHIphzCM/prompt
+            - output->"AI Assist Chat V2" yXH_UosXKvIFjuHIphzCM/prompt
           visualData: 672.2346244227379/350.5699049988241/330/8//
         '[cqxS47_isRTfE4pIFbmUl]:subGraph "Subgraph"':
           data:
@@ -1707,9 +1708,10 @@ data:
           outgoingConnections:
             - data->"Text" KFGUplLNTsxLNMsvmiOnk/task
           visualData: -27.87472826412764/603.765327215936/330/14//
-        '[yXH_UosXKvIFjuHIphzCM]:chat "Chat"':
+        '[yXH_UosXKvIFjuHIphzCM]:aiAssistGeneratorChatV2 "AI Assist Chat V2"':
           data:
             additionalParameters: []
+            aiAssistGeneratorChatBranch: openaiCompatible
             cache: false
             enableFunctionUse: false
             headers: []
@@ -2050,7 +2052,7 @@ data:
             filterGlobs: []
             ignores: []
             includeDirectories: false
-            path: /usr/local/repos/rivet/packages/core/src/model/nodes
+            path: packages/core/src/model/nodes
             recursive: false
             relative: true
             useFilterGlobsInput: false

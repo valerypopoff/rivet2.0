@@ -54,9 +54,9 @@ import { useProjectPlugins } from '../hooks/useProjectPlugins.js';
 import { MissingAppPluginsModalRenderer } from './MissingAppPluginsModal.js';
 import { warmCodeEditor } from './LazyComponents.js';
 import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
-import { nodeLibraryOpenState } from '../state/nodeLibrary.js';
-import { selectedUiGraphIdState } from '../state/uiGraphs.js';
 import type { EditorGraphRunOptions } from '../hooks/editorGraphRunOptions.js';
+import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
+import { getProjectWorkspaceTargetCapabilities } from '../domain/workspace/projectWorkspaceTarget.js';
 
 const styles = css`
   position: fixed;
@@ -120,8 +120,7 @@ export const RivetApp: FC = () => {
   const openOverlay = useAtomValue(overlayOpenState);
   const workspaceVisibleTabCount = useAtomValue(workspaceVisibleTabCountState);
   const selectedOpeningProjectTabId = useAtomValue(selectedOpeningProjectTabIdState);
-  const nodeLibraryOpen = useAtomValue(nodeLibraryOpenState);
-  const selectedUiGraphId = useAtomValue(selectedUiGraphIdState);
+  const workspaceTarget = useProjectWorkspaceTarget();
   const uiFontSizeCssVariables = useMemo(() => getUiFontSizeCssVariables(uiFontSize), [uiFontSize]);
   const customThemeCssVariables = useMemo<Record<string, string>>(
     () =>
@@ -153,14 +152,16 @@ export const RivetApp: FC = () => {
   const noProjectOpen = workspaceVisibleTabCount === 0;
   const isCanvasMode = openOverlay === undefined;
   const openingProjectSelected = isCanvasMode && selectedOpeningProjectTabId != null;
-  const uiGraphOpen = selectedUiGraphId != null;
+  const nodeLibraryOpen = workspaceTarget?.type === 'nodeLibrary';
+  const uiGraphOpen = workspaceTarget?.type === 'uiGraph';
+  const workspaceCapabilities = getProjectWorkspaceTargetCapabilities(workspaceTarget);
 
   useLoadStaticData();
   useRestorePersistedWorkspace();
   useProjectPlugins();
 
   const runGraph = wrapAsync(async (options?: EditorGraphRunOptions) => {
-    if (nodeLibraryOpen || uiGraphOpen) {
+    if (!workspaceCapabilities.canRun) {
       return;
     }
 

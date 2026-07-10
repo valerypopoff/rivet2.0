@@ -15,6 +15,7 @@ import { handleError } from '../../utils/errorHandling.js';
 import { removeProjectUnsavedState } from '../../utils/projectUnsavedChanges.js';
 import { useProjectExecutionSnapshots } from '../useProjectExecutionSnapshots.js';
 import { useStableCallback } from '../useStableCallback.js';
+import { removeProjectWorkspaceTargetState } from '../../state/workspaceTarget.js';
 
 function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId): void {
   window.setTimeout(() => {
@@ -40,6 +41,7 @@ export function useWorkspaceHostProjectCleanup() {
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
   const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
   const setProjectTabUiStates = useSetAtom(projectTabUiState);
+  const removeWorkspaceTarget = useSetAtom(removeProjectWorkspaceTargetState);
   const executorSessionRegistry = useExecutorSessionRegistry();
   const { removeProjectExecutionSnapshot } = useProjectExecutionSnapshots();
 
@@ -59,6 +61,7 @@ export function useWorkspaceHostProjectCleanup() {
       setProjectUnsavedChanges((flags) => removeProjectUnsavedState(flags, projectId));
       setProjectDataUnsavedChanges((flags) => removeProjectUnsavedState(flags, projectId));
       setProjectTabUiStates((states) => removeProjectTabUiState(states, projectId));
+      removeWorkspaceTarget(projectId);
       executorSessionRegistry.removeProject(projectId);
       releaseProjectContextState(projectId);
       clearCodeEditorModelCacheForClosedProject(projectId);

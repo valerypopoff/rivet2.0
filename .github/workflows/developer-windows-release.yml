@@ -16,9 +16,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-ai-graph-builder-context:
+    name: Verify AI graph builder context
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify AI graph builder context
+        run: node scripts/checks/check-graph-creator-data.mjs
+
   build-windows:
     name: Developer Windows desktop bundle
     if: github.ref == 'refs/heads/develop'
+    needs: verify-ai-graph-builder-context
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -34,7 +45,7 @@ jobs:
           workspaces: packages/app/src-tauri -> target
 
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
 
       - name: Sync desktop version metadata
         run: yarn sync:desktop-version
@@ -61,6 +72,7 @@ jobs:
   build-macos:
     name: Developer macOS desktop bundle
     if: github.ref == 'refs/heads/develop'
+    needs: verify-ai-graph-builder-context
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -78,7 +90,7 @@ jobs:
           workspaces: packages/app/src-tauri -> target
 
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
 
       - name: Sync desktop version metadata
         run: yarn sync:desktop-version
@@ -130,6 +142,7 @@ jobs:
   build-docs:
     name: Developer documentation site
     if: github.ref == 'refs/heads/develop'
+    needs: verify-ai-graph-builder-context
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -137,10 +150,10 @@ jobs:
       - uses: ./.github/actions/setup-yarn
 
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.6.0.cjs install --immutable --immutable-cache
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
 
       - name: Build documentation site
-        run: node .yarn/releases/yarn-4.6.0.cjs workspace docs run build
+        run: node .yarn/releases/yarn-4.17.1.cjs workspace docs run build
         env:
           NODE_OPTIONS: --max-old-space-size=6000
 
@@ -165,7 +178,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: '20.4.x'
+          node-version: '22.21.1'
 
       - name: Sync desktop version metadata
         run: node scripts/sync-desktop-version.mjs

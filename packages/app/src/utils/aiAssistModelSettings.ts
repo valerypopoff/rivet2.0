@@ -29,7 +29,7 @@ export const defaultAiAssistModelSelectorValue = getDefaultAiAssistModelForProvi
 export type ResolvedAiAssistModelSettings = {
   displayName: string;
   provider: AiAssistProvider;
-  graphApi: 'openai' | 'anthropic';
+  generatorBranch: 'openai' | 'anthropic';
   model: string;
   customProviderBaseURL?: string;
   missingConfiguration?: string;
@@ -125,7 +125,7 @@ export function resolveAiAssistModelSettings({
     return {
       displayName: model ? `Custom: ${model}` : 'Custom provider',
       provider: 'custom',
-      graphApi: 'openai',
+      generatorBranch: 'openai',
       model,
       customProviderBaseURL: baseURL,
       missingConfiguration: !baseURL
@@ -152,7 +152,7 @@ export function resolveAiAssistModelSettings({
   return {
     displayName: selectedOption?.label ?? model,
     provider: api,
-    graphApi: api === 'anthropic' ? 'anthropic' : 'openai',
+    generatorBranch: api === 'anthropic' ? 'anthropic' : 'openai',
     model,
   };
 }

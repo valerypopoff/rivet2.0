@@ -1,17 +1,21 @@
 import { useLatest } from 'ahooks';
 import { type FC, type MutableRefObject, useEffect, useRef } from 'react';
 import { ensureCodeEditorMonacoLanguages, monaco } from '../utils/monaco/codeEditorMonaco.js';
-import { installEditorInterpolationSupport } from '../utils/monaco/interpolationEditorSupport.js';
 import { type EditorInterpolationSyntax } from '../utils/monaco/interpolationDiagnostics.js';
-import { installJsStyleCommentHighlighting } from '../utils/monaco/commentHighlighting.js';
-import { shouldHighlightJsStyleComments } from '../utils/monaco/commentRangeScanner.js';
-import { jsonEscapeText, jsonUnescapeText } from '../utils/monaco/editorTextTransforms.js';
 import {
   clearCodeEditorSpellcheckMarkers,
-  runCodeEditorSpellcheck,
   SPELLCHECK_MARKER_OWNER,
   type SpellcheckCapableCodeEditor,
 } from '../utils/monaco/spellcheck.js';
+import {
+  EditorDisposableStore,
+  installCodeEditorCapabilities,
+  installCodeEditorSpellcheckAction,
+} from '../utils/monaco/editorCapabilities.js';
+import {
+  resolveCodeEditorCapabilities,
+  type CodeEditorCapabilities,
+} from '../utils/monaco/editorCapabilityModel.js';
 import {
   getCodeEditorModelUri,
   getCodeEditorViewState,
@@ -33,108 +37,6 @@ type MultilineEditorFontSizeWheelEvent = Pick<WheelEvent, 'deltaY' | 'ctrlKey' |
   preventDefault(): void;
   stopPropagation(): void;
 };
-
-type SelectedEditorText = {
-  selection: monaco.Selection;
-  text: string;
-};
-
-function getSelectedEditorText(editor: monaco.editor.IStandaloneCodeEditor): SelectedEditorText | undefined {
-  const model = editor.getModel();
-  const selection = editor.getSelection();
-
-  if (!model || !selection || selection.isEmpty()) {
-    return undefined;
-  }
-
-  return {
-    selection,
-    text: model.getValueInRange(selection),
-  };
-}
-
-function isCodeEditorReadonly(editor: monaco.editor.IStandaloneCodeEditor): boolean {
-  return editor.getOption(monaco.editor.EditorOption.readOnly);
-}
-
-function replaceSelectedEditorText(
-  editor: monaco.editor.IStandaloneCodeEditor,
-  getReplacement: (selectedText: string) => string | undefined,
-): void {
-  if (isCodeEditorReadonly(editor)) {
-    return;
-  }
-
-  const selected = getSelectedEditorText(editor);
-
-  if (!selected) {
-    return;
-  }
-
-  const replacement = getReplacement(selected.text);
-
-  if (replacement == null || replacement === selected.text) {
-    return;
-  }
-
-  editor.pushUndoStop();
-  editor.executeEdits('rivet.textTools', [
-    {
-      range: selected.selection,
-      text: replacement,
-      forceMoveMarkers: true,
-    },
-  ]);
-  editor.pushUndoStop();
-}
-
-async function runMonacoPrettify(editor: monaco.editor.IStandaloneCodeEditor): Promise<void> {
-  if (isCodeEditorReadonly(editor)) {
-    return;
-  }
-
-  const selection = editor.getSelection();
-  const actionId = selection && !selection.isEmpty() ? 'editor.action.formatSelection' : 'editor.action.formatDocument';
-  const action = editor.getAction(actionId);
-
-  if (!action?.isSupported()) {
-    return;
-  }
-
-  await action.run();
-}
-
-function registerEditorTextToolActions(editor: monaco.editor.IStandaloneCodeEditor): monaco.IDisposable[] {
-  return [
-    editor.addAction({
-      id: 'rivet.prettify',
-      label: 'Prettify',
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 1.6,
-      run: async () => {
-        await runMonacoPrettify(editor);
-      },
-    }),
-    editor.addAction({
-      id: 'rivet.jsonEscapeSelection',
-      label: 'JSON escape',
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 1.7,
-      run: () => {
-        replaceSelectedEditorText(editor, jsonEscapeText);
-      },
-    }),
-    editor.addAction({
-      id: 'rivet.jsonUnescapeSelection',
-      label: 'JSON unescape',
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 1.8,
-      run: () => {
-        replaceSelectedEditorText(editor, jsonUnescapeText);
-      },
-    }),
-  ];
-}
 
 export type CodeEditorDisplayOptions = Pick<
   monaco.editor.IStandaloneEditorConstructionOptions,
@@ -176,6 +78,7 @@ export type CodeEditorProps = {
   modelCacheKey?: string;
   enableSpellcheckAction?: boolean;
   onSpellcheckAction?: () => void | Promise<void>;
+  capabilities?: CodeEditorCapabilities;
 };
 
 export const CodeEditor: FC<CodeEditorProps> = ({
@@ -204,6 +107,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   modelCacheKey,
   enableSpellcheckAction = true,
   onSpellcheckAction,
+  capabilities,
 }) => {
   const editorContainer = useRef<HTMLDivElement>(null);
   const editorInstance = useRef<monaco.editor.IStandaloneCodeEditor>();
@@ -215,6 +119,12 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const onContentHeightChangeLatest = useLatest(onContentHeightChange);
   const onSpellcheckActionLatest = useLatest(onSpellcheckAction);
   const isNodeEditorResizingRef = useRef(isNodeEditorResizing);
+  const resolvedCapabilities = resolveCodeEditorCapabilities({
+    capabilities,
+    enableSpellcheckAction,
+    interpolationSyntax,
+    language,
+  });
 
   isNodeEditorResizingRef.current = isNodeEditorResizing;
 
@@ -274,12 +184,8 @@ export const CodeEditor: FC<CodeEditorProps> = ({
 
     editor.layout();
     onContentHeightChangeLatest.current?.(editor.getContentHeight());
-    const interpolationSupport =
-      interpolationSyntax != null ? installEditorInterpolationSupport(editor, interpolationSyntax) : undefined;
-    const commentHighlightingSupport = shouldHighlightJsStyleComments(language)
-      ? installJsStyleCommentHighlighting(editor)
-      : undefined;
-    const textToolActionDisposables = registerEditorTextToolActions(editor);
+    const lifecycle = new EditorDisposableStore();
+    lifecycle.add(installCodeEditorCapabilities(editor, resolvedCapabilities));
 
     const onResize = () => {
       // Resizing the node settings panel can emit a dense stream of ResizeObserver
@@ -294,20 +200,26 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     };
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(container);
-    const contentSizeChangeDisposable = editor.onDidContentSizeChange((event) => {
-      if (event.contentHeightChanged) {
-        onContentHeightChangeLatest.current?.(editor.getContentHeight());
-      }
-    });
+    lifecycle.add(
+      editor.onDidContentSizeChange((event) => {
+        if (event.contentHeightChanged) {
+          onContentHeightChangeLatest.current?.(editor.getContentHeight());
+        }
+      }),
+    );
 
-    editor.onDidChangeModelContent(() => {
-      clearCodeEditorSpellcheckMarkers(editor);
-      onChangeLatest.current?.(editor.getValue());
-    });
+    lifecycle.add(
+      editor.onDidChangeModelContent(() => {
+        clearCodeEditorSpellcheckMarkers(editor);
+        onChangeLatest.current?.(editor.getValue());
+      }),
+    );
 
-    editor.onDidBlurEditorWidget(() => {
-      onBlur?.();
-    });
+    lifecycle.add(
+      editor.onDidBlurEditorWidget(() => {
+        onBlur?.();
+      }),
+    );
 
     editorInstance.current = editor;
     if (editorRef) {
@@ -331,10 +243,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
         editorRef.current = undefined;
       }
       resizeObserver?.disconnect();
-      contentSizeChangeDisposable.dispose();
-      textToolActionDisposables.forEach((disposable) => disposable.dispose());
-      interpolationSupport?.dispose();
-      commentHighlightingSupport?.dispose();
+      lifecycle.dispose();
       clearCodeEditorSpellcheckMarkers(editor);
       delete editor.__rivetSpellcheckMarkers;
       editor.dispose();
@@ -353,37 +262,20 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     spellcheckActionDisposable.current?.dispose();
     spellcheckActionDisposable.current = undefined;
 
-    if (!editor || !enableSpellcheckAction) {
+    if (!editor || !resolvedCapabilities.spellcheckAction) {
       return undefined;
     }
 
-    spellcheckActionDisposable.current = editor.addAction({
-      id: 'rivet.checkSpelling',
-      label: 'Check spelling',
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 1.5,
-      run: async () => {
-        try {
-          const customSpellcheckAction = onSpellcheckActionLatest.current;
-
-          if (customSpellcheckAction) {
-            await customSpellcheckAction();
-          } else {
-            await runCodeEditorSpellcheck(editor);
-          }
-        } catch {
-          // Some wrappers report spellcheck failures in their own status line.
-          // Keep the native Monaco action quiet so a dictionary load problem
-          // cannot break the context-menu flow.
-        }
-      },
-    });
+    spellcheckActionDisposable.current = installCodeEditorSpellcheckAction(
+      editor,
+      onSpellcheckActionLatest.current ?? undefined,
+    );
 
     return () => {
       spellcheckActionDisposable.current?.dispose();
       spellcheckActionDisposable.current = undefined;
     };
-  }, [enableSpellcheckAction, onSpellcheckActionLatest]);
+  }, [onSpellcheckActionLatest, resolvedCapabilities.spellcheckAction]);
 
   useEffect(() => {
     const editor = editorInstance.current;

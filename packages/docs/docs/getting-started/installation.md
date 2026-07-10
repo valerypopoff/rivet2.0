@@ -20,7 +20,7 @@ To build and run Rivet from source, you will need:
 
 - Rust (use [rustup](https://rustup.rs/))
 - Node.js 20.4.x or another compatible Node 20 runtime
-- the checked-in Yarn release (`packageManager` currently points at Yarn 4.6.0)
+- the checked-in Yarn release (`packageManager` currently points at Yarn 4.17.1)
 - On Windows, Visual Studio Build Tools with the Windows SDK. Tauri needs
   `RC.EXE` on `PATH`, so use Developer PowerShell for Visual Studio or another
   shell where the Windows SDK tools are available.

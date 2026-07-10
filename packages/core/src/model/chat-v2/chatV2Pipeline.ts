@@ -10,6 +10,7 @@ import type {
   StreamChatV2Options,
 } from './chatV2Types.js';
 import { chatV2ToolsToAiSdk } from './toolConverter.js';
+import { buildChatV2RequestPlan, type ChatV2RequestPlan } from './chatV2RequestPlan.js';
 import {
   getChatV2ProviderErrorStatusCode,
   isChatV2ProviderApiCallError,
@@ -17,8 +18,6 @@ import {
   normalizeChatV2ProviderError,
 } from './chatV2Errors.js';
 import {
-  normalizeLLMChatV2RetryCooldownMs,
-  normalizeLLMChatV2RetryCount,
   waitForLLMChatV2RetryCooldown,
 } from './chatV2Retry.js';
 import {
@@ -33,8 +32,6 @@ type ChatV2WithRetryResult = {
   requestErrors: unknown[];
   responseError?: unknown;
 };
-
-type ChatV2TransportMode = 'stream' | 'generate';
 
 class ChatV2RetryFailure extends Error {
   constructor(
@@ -89,16 +86,10 @@ function normalizeProviderFailureMessages(
 
 async function runChatV2WithRetry(
   chatOptions: StreamChatV2Options,
-  retryOptions: Pick<
-    RunChatV2PipelineOptions,
-    'context' | 'retryOnNon200' | 'retryOnNon200RepeatTimes' | 'retryOnNon200CooldownMs'
-  >,
-  transportMode: ChatV2TransportMode,
+  retryPlan: ChatV2RequestPlan['retry'],
+  signal: AbortSignal,
+  transportMode: ChatV2RequestPlan['transportMode'],
 ): Promise<ChatV2WithRetryResult> {
-  const repeatTimes = retryOptions.retryOnNon200
-    ? normalizeLLMChatV2RetryCount(retryOptions.retryOnNon200RepeatTimes)
-    : 0;
-  const cooldownMs = normalizeLLMChatV2RetryCooldownMs(retryOptions.retryOnNon200CooldownMs);
   const requestStatuses: number[] = [];
   const requestErrors: unknown[] = [];
 
@@ -107,37 +98,37 @@ async function runChatV2WithRetry(
       const result = transportMode === 'generate' ? await generateChatV2(chatOptions) : await streamChatV2(chatOptions);
       const statusCode = result.requestStatus ?? 200;
 
-      if (retryOptions.retryOnNon200) {
+      if (retryPlan.enabled) {
         requestStatuses.push(statusCode);
       }
 
-      if (!retryOptions.retryOnNon200 || statusCode === 200) {
+      if (!retryPlan.enabled || statusCode === 200) {
         return { result, requestStatuses, requestErrors };
       }
 
       const responseError = buildNon200StatusError(statusCode);
       requestErrors.push(responseError);
 
-      if (attempt >= repeatTimes) {
+      if (attempt >= retryPlan.repeatTimes) {
         return { result, requestStatuses, requestErrors, responseError };
       }
 
-      await waitForLLMChatV2RetryCooldown(cooldownMs, retryOptions.context.signal);
+      await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
     } catch (error) {
       const statusCode = getChatV2ProviderErrorStatusCode(error);
 
-      if (!retryOptions.retryOnNon200 || statusCode == null || statusCode === 200) {
+      if (!retryPlan.enabled || statusCode == null || statusCode === 200) {
         throw error;
       }
 
       requestStatuses.push(statusCode);
       requestErrors.push(error);
 
-      if (attempt >= repeatTimes) {
+      if (attempt >= retryPlan.repeatTimes) {
         throw new ChatV2RetryFailure(error, requestStatuses, requestErrors);
       }
 
-      await waitForLLMChatV2RetryCooldown(cooldownMs, retryOptions.context.signal);
+      await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
     }
   }
 }
@@ -145,12 +136,13 @@ async function runChatV2WithRetry(
 function buildProviderFailureResult(
   requestMessages: ChatMessage[],
   options: RunChatV2PipelineOptions,
+  plan: ChatV2RequestPlan,
   normalizedError: unknown,
   rawError: unknown,
   requestStatuses: number[],
   requestErrors: string[],
 ): ChatV2PipelineResult | undefined {
-  if (!options.outputRequestStatus) {
+  if (!plan.output.outputRequestStatus) {
     return undefined;
   }
 
@@ -159,14 +151,14 @@ function buildProviderFailureResult(
     return undefined;
   }
   const responseError = getProviderFailureMessage(normalizedError);
-  const retryRequestStatuses = options.retryOnNon200
+  const retryRequestStatuses = plan.retry.enabled
     ? requestStatuses.length > 0
       ? requestStatuses
       : statusCode == null
         ? []
         : [statusCode]
     : [];
-  const retryRequestErrors = options.retryOnNon200 ? (requestErrors.length > 0 ? requestErrors : [responseError]) : [];
+  const retryRequestErrors = plan.retry.enabled ? (requestErrors.length > 0 ? requestErrors : [responseError]) : [];
 
   const commonOutputs = createChatV2ProviderFailureOutputs({
     requestMessages,
@@ -175,10 +167,10 @@ function buildProviderFailureResult(
     requestStatuses: retryRequestStatuses,
     requestErrors: retryRequestErrors,
     requestBodies: options.requestBodies,
-    outputUsage: options.outputUsage,
-    outputReasoning: options.outputReasoning,
-    includeFunctionCalls: options.includeFunctionCalls,
-    retryOnNon200: options.retryOnNon200,
+    outputUsage: plan.output.outputUsage,
+    outputReasoning: plan.output.outputReasoning,
+    includeFunctionCalls: plan.output.includeFunctionCalls,
+    retryOnNon200: plan.retry.enabled,
   });
   const allMessagesOutput = commonOutputs['all-messages' as PortId];
 
@@ -218,26 +210,16 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
       : options.additionalTools == null
         ? functionTools
         : { ...functionTools, ...options.additionalTools };
-  const shouldStreamResponse = options.emitPartialOutputs !== false;
-  const transportMode: ChatV2TransportMode = shouldStreamResponse ? 'stream' : 'generate';
+  const plan = buildChatV2RequestPlan({
+    ...options,
+    messages: modelMessages,
+    tools,
+  });
+  const shouldStreamResponse = plan.transportMode === 'stream';
 
   const chatResponse = await runChatV2WithRetry(
     {
-      model: options.model,
-      messages: modelMessages,
-      tools,
-      maxTokens: options.maxTokens,
-      temperature: options.temperature,
-      topP: options.topP,
-      topK: options.topK,
-      presencePenalty: options.presencePenalty,
-      frequencyPenalty: options.frequencyPenalty,
-      stopSequences: options.stopSequences,
-      seed: options.seed,
-      responseOutput: options.responseOutput,
-      responseFormat: options.responseFormat,
-      providerOptions: options.providerOptions,
-      toolChoice: options.toolChoice,
+      ...plan.request,
       abortSignal: options.context.signal,
       executeStream: options.executeStream,
       executeGenerate: options.executeGenerate,
@@ -260,16 +242,17 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
                 outputUsage: false,
                 outputReasoning: false,
                 outputRequestStatus: false,
-                includeFunctionCalls: options.includeFunctionCalls,
-                functionCallMode: options.functionCallMode,
+                includeFunctionCalls: plan.output.includeFunctionCalls,
+                functionCallMode: plan.output.functionCallMode,
                 retryOnNon200: false,
                 responseFormat: undefined,
               }),
             );
           },
     },
-    options,
-    transportMode,
+    plan.retry,
+    options.context.signal,
+    plan.transportMode,
   ).catch((caughtError: unknown) => {
     const retryFailure = isChatV2RetryFailure(caughtError) ? caughtError : undefined;
     const rawError = retryFailure?.error ?? caughtError;
@@ -282,6 +265,7 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
     const failureResult = buildProviderFailureResult(
       requestMessages,
       options,
+      plan,
       normalizedError,
       rawError,
       requestStatuses,
@@ -316,13 +300,13 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
     requestStatuses,
     requestErrors,
     requestBodies: options.requestBodies,
-    outputUsage: options.outputUsage,
-    outputReasoning: options.outputReasoning,
-    outputRequestStatus: options.outputRequestStatus,
-    includeFunctionCalls: options.includeFunctionCalls,
-    functionCallMode: options.functionCallMode,
-    retryOnNon200: options.retryOnNon200,
-    responseFormat: options.responseFormat,
+    outputUsage: plan.output.outputUsage,
+    outputReasoning: plan.output.outputReasoning,
+    outputRequestStatus: plan.output.outputRequestStatus,
+    includeFunctionCalls: plan.output.includeFunctionCalls,
+    functionCallMode: plan.output.functionCallMode,
+    retryOnNon200: plan.retry.enabled,
+    responseFormat: plan.request.responseFormat,
   });
   const allMessagesOutput = commonOutputs['all-messages' as PortId];
 

@@ -13,7 +13,9 @@ import {
   hasLLMChatV2ToolResponseFormatConflict,
   LLM_CHAT_V2_TOOL_RESPONSE_FORMAT_CONFLICT_COPY,
 } from './chatV2FeatureCompatibility.js';
-import { createChatV2Model, parseChatV2Provider, resolveChatV2ProviderConfig } from './providerOptions.js';
+import { parseChatV2Provider } from './providerOptions.js';
+import { createResolvedChatV2Provider, resolveChatV2Credential } from './chatV2ProviderProfile.js';
+import type { ChatV2ProviderProfile } from './chatV2ProviderProfile.js';
 import type { RunChatV2PipelineOptions } from './chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
@@ -21,7 +23,6 @@ import {
   resolveLLMChatV2EditorCache,
 } from './chatV2EditorCache.js';
 import {
-  resolveLLMChatV2ApiKey,
   resolveLLMChatV2BuiltInTools,
   resolveLLMChatV2GenerationParameters,
   resolveLLMChatV2Headers,
@@ -38,6 +39,7 @@ export { buildLLMChatV2EditorCacheKey, cloneLLMChatV2EditorCacheOutputs };
 export { resolveLLMChatV2RuntimeProviderOptions } from './chatV2RuntimeOptions.js';
 
 export type LLMChatV2RuntimeConfig = {
+  providerProfile: ChatV2ProviderProfile;
   runOptions: RunChatV2PipelineOptions;
   functions: GptFunction[] | undefined;
   cacheKey: string | undefined;
@@ -51,7 +53,7 @@ function resolveLLMChatV2BaseURL(data: LLMChatV2NodeData, inputs: Inputs): strin
   return data.provider === 'custom'
     ? getInputOrData(data, inputs, 'customProviderBaseURL', 'string', 'useCustomProviderBaseURLInput')?.trim() ||
         undefined
-    : getInputOrData(data, inputs, 'baseURL', 'string', 'useBaseURLInput')?.trim() || undefined;
+    : undefined;
 }
 
 export async function resolveLLMChatV2RuntimeConfig(params: {
@@ -70,17 +72,27 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
   const modelId = getInputOrData(data, inputs, 'model', 'string');
   const baseURL = resolveLLMChatV2BaseURL(data, inputs);
   const nodeHeaders = resolveLLMChatV2Headers(data, inputs);
-  const apiKey = resolveLLMChatV2ApiKey(data, inputs, context);
+  const credential = resolveChatV2Credential({
+    provider,
+    context,
+    apiKeySource: data.apiKeySource === 'input' ? 'input' : 'configured',
+    inputs,
+    customProgrammaticName: data.customProviderApiKeyProgrammaticName,
+    customEnvironmentName: data.customProviderApiKeyEnvVarName,
+  });
+  const apiKey = credential.value;
   const requestBodies: unknown[] | undefined = data.outputRequestStatus ? [] : undefined;
-  const providerConfig = await resolveChatV2ProviderConfig(provider, modelId, context, {
+  const resolvedProvider = await createResolvedChatV2Provider({
+    provider,
+    modelId,
+    context,
     baseURL,
     headers: nodeHeaders,
-  });
-  const model = createChatV2Model(provider, modelId, context, {
-    ...providerConfig,
-    apiKey,
+    credential,
     onRequestBody: requestBodies == null ? undefined : (body) => requestBodies.push(body),
   });
+  const providerConfig = resolvedProvider.config;
+  const model = resolvedProvider.model;
   const prompt = inputs['prompt' as PortId];
   const systemPrompt = inputs['systemPrompt' as PortId];
   const functions =
@@ -140,6 +152,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
   });
 
   return {
+    providerProfile: resolvedProvider.profile,
     runOptions,
     functions,
     cacheKey,

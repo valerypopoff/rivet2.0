@@ -60,7 +60,7 @@ test('AI assist custom provider resolves through the Vercel custom provider path
     selectedModel: 'custom',
   });
 
-  assert.equal(resolved.graphApi, 'openai');
+  assert.equal(resolved.generatorBranch, 'openai');
   assert.equal(resolved.provider, 'custom');
   assert.equal(resolved.model, 'deepseek-ai/DeepSeek-V4-Flash');
   assert.equal(resolved.displayName, 'Custom: deepseek-ai/DeepSeek-V4-Flash');
@@ -74,7 +74,7 @@ test('AI assist built-in provider keeps fetched or unknown selected model visibl
     selectedModel: 'openai:gpt-new-from-provider-catalog',
   });
 
-  assert.equal(resolved.graphApi, 'openai');
+  assert.equal(resolved.generatorBranch, 'openai');
   assert.equal(resolved.provider, 'openai');
   assert.equal(resolved.model, 'gpt-new-from-provider-catalog');
   assert.equal(resolved.displayName, 'gpt-new-from-provider-catalog');

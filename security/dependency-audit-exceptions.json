@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "advisoryIds": [1120258],
+      "packages": ["@babel/plugin-transform-modules-systemjs"],
+      "dependents": ["@babel/preset-env@npm:7.22.5"],
+      "scope": "Documentation build toolchain only; this package is not shipped in Rivet runtime bundles.",
+      "reason": "Docusaurus 3 still reaches this Babel transform through its webpack stack. Upgrade when the upstream toolchain moves to a fixed Babel release.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1101849],
+      "packages": ["path-to-regexp"],
+      "dependents": ["react-router@npm:5.3.4"],
+      "scope": "Documentation development server routing through Docusaurus React Router 5 only; it is not shipped in Rivet runtime bundles.",
+      "reason": "Docusaurus 3 still uses React Router 5. Upgrade when Docusaurus removes the affected path-to-regexp generation.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1115552],
+      "packages": ["picomatch"],
+      "dependents": ["micromatch@npm:4.0.8"],
+      "scope": "Documentation and build-time file matching only; it is not shipped in Rivet runtime bundles.",
+      "reason": "The remaining affected version is pinned through micromatch. Upgrade the owning toolchain when a compatible release is available.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1113686],
+      "packages": ["serialize-javascript"],
+      "dependents": ["copy-webpack-plugin@npm:11.0.0"],
+      "scope": "Documentation webpack asset generation only; it is not shipped in Rivet runtime bundles.",
+      "reason": "The advisory currently has no fixed serialize-javascript release in the accepted range. Remove the exception when upstream tooling adopts a fix.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1113459, 1113461, 1113465, 1113538, 1113540, 1113544, 1113546, 1113548, 1113552],
+      "packages": ["minimatch"],
+      "dependents": [
+        "@typescript-eslint/typescript-estree@npm:8.24.0",
+        "eslint-plugin-import@npm:2.31.0",
+        "glob@npm:8.1.0"
+      ],
+      "scope": "Lint, test, and build-time dependency traversal; no untrusted glob input reaches these versions at runtime.",
+      "reason": "Legacy transitive consumers pin minimatch 3, 5, and 9 descriptors that Yarn cannot safely replace across every range. Remove the consumers or upgrade when compatible releases land.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1112659, 1113300, 1113375, 1114200, 1114302, 1114680],
+      "packages": ["tar"],
+      "dependents": ["node-gyp@npm:9.3.1"],
+      "scope": "Native dependency build tooling reached through node-gyp; project or runtime data is not extracted through this package.",
+      "reason": "The affected tar 6 release is pinned by native build transitive dependencies. Keep native toolchain upgrades current and remove the exception once node-gyp moves forward.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1109532, 1109543, 1109552],
+      "packages": ["tar-fs"],
+      "dependents": ["pkg-fetch@npm:3.4.2"],
+      "scope": "Legacy app-executor packaging through pkg/pkg-fetch only; it does not extract user-controlled archives at runtime.",
+      "reason": "pkg is archived and pins pkg-fetch. Replace the executor binary packager before this exception expires.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    }
+  ]
+}

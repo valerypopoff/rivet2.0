@@ -1,6 +1,6 @@
 import type { Opaque } from 'type-fest';
 import {
-  type Settings,
+  type RuntimeSettings,
   type NativeApi,
   type Project,
   type DataValue,
@@ -25,7 +25,7 @@ import type { ProjectReferenceLoader } from './ProjectReferenceLoader.js';
 import type { GraphBoundary } from './GraphBoundaryCache.js';
 
 export type ProcessContext = {
-  settings: Settings;
+  settings: RuntimeSettings;
   nativeApi?: NativeApi;
 
   /** Sets the dataset provider to be used for all dataset node calls. */

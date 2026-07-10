@@ -1,7 +1,7 @@
 import { css } from '@emotion/react';
 import { type ChartNode } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import { type FC, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type FC, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useToggle } from 'ahooks';
 import { useNodeIO } from '../../hooks/useGetNodeIO.js';
 import { useStableCallback } from '../../hooks/useStableCallback.js';
@@ -211,6 +211,13 @@ const fullscreenOutputCss = css`
     margin-top: 8px;
   }
 
+  .node-output-error-message {
+    color: var(--error-light);
+    margin-bottom: 16px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
   .${MATCH_CLASS} {
     background: rgba(255, 214, 10, 0.3);
     border-radius: 4px;
@@ -416,41 +423,63 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   const showDurationMeta =
     !showDurationSummary && shouldShowNodeRunDurationMeta(node.type, selectedData, showNodeRunDurations);
 
+  let outputBody: ReactNode;
+
   if (content.kind === 'code-error') {
-    return (
+    outputBody = (
       <>
         {showDurationSummary && filteredOutput && <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody />}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
         <CodeNodeErrorOutput data={selectedData} />
       </>
     );
-  }
-
-  if (content.kind === 'generic-error') {
-    return (
+  } else if (content.kind === 'generic-error') {
+    outputBody = (
       <div className="errored">
         {showDurationSummary && filteredOutput && <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody />}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
         {content.error}
       </div>
     );
-  }
+  } else {
+    const body = renderNodeOutputBody({
+      FullscreenOutput,
+      Output,
+      OutputSimple,
+      FullscreenOutputSimple,
+      node,
+      data: selectedData,
+      definitions: io.outputDefinitions,
+      isCompact: false,
+      renderMarkdown,
+      renderMode: 'expanded-preview',
+      allowLargeStoredValueActions: true,
+      wrapLines,
+    });
+    const hasBody = body != null;
 
-  const body = renderNodeOutputBody({
-    FullscreenOutput,
-    Output,
-    OutputSimple,
-    FullscreenOutputSimple,
-    node,
-    data: selectedData,
-    definitions: io.outputDefinitions,
-    isCompact: false,
-    renderMarkdown,
-    renderMode: 'expanded-preview',
-    allowLargeStoredValueActions: true,
-    wrapLines,
-  });
-  const hasBody = body != null;
+    outputBody = (
+      <>
+        {showDurationSummary && filteredOutput && (
+          <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody={hasBody} />
+        )}
+        {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody={hasBody} />}
+        {content.kind === 'output' && content.errorMessage && (
+          <div className="node-output-error-message">{content.errorMessage}</div>
+        )}
+        {body}
+        {content.warnings && (
+          <div className="fullscreen-output-warnings">
+            {content.warnings.map((warning) => (
+              <div className="fullscreen-output-warning" key={warning}>
+                {warning}
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <div css={fullscreenOutputCss} ref={fullscreenOutputRootRef}>
@@ -492,20 +521,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
             renderMarkdown ? ' markdown-lines' : ''
           }`}
         >
-          {showDurationSummary && filteredOutput && (
-            <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody={hasBody} />
-          )}
-          {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody={hasBody} />}
-          {body}
-          {content.warnings && (
-            <div className="fullscreen-output-warnings">
-              {content.warnings.map((warning) => (
-                <div className="fullscreen-output-warning" key={warning}>
-                  {warning}
-                </div>
-              ))}
-            </div>
-          )}
+          {outputBody}
         </div>
       </FullscreenOutputSearchContext.Provider>
     </div>

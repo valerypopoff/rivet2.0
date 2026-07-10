@@ -104,16 +104,41 @@ This package is the shared Node runtime used by:
 - the CLI
 - parts of the app-executor stack
 
-It is not just a convenience wrapper. It sets Node-default providers, debugger integration, env-based LLM/plugin config fallback, and Node-specific reference loading. Runtime settings still flow through core's shared `resolveProcessSettings(...)` helper instead of being rebuilt independently in the Node package. When callers omit shared LLM credentials, the Node package fills `openAiApiKey`/legacy `openAiKey` from `OPENAI_API_KEY`, `anthropicApiKey` from `ANTHROPIC_API_KEY`, `googleApiKey` from `GOOGLE_GENERATIVE_AI_API_KEY`, and `customAiApiKey` from `CUSTOM_AI_API_KEY` or `CUSTOM_PROVIDER_API_KEY`, while plugin-declared env values continue to populate `pluginEnv`.
+It is not just a convenience wrapper. It sets Node-default providers, debugger integration, env-based LLM/plugin config fallback, and Node-specific reference loading. Runtime settings still flow through core's shared `resolveProcessSettings(...)` helper instead of being rebuilt independently in the Node package. When callers omit shared LLM credentials, the Node package fills `openAiApiKey`/legacy `openAiKey` from `OPENAI_API_KEY`, `anthropicApiKey` from `ANTHROPIC_API_KEY`, `googleApiKey` from `GOOGLE_GENERATIVE_AI_API_KEY`, and shared `customAiApiKey` from the canonical `CUSTOM_PROVIDER_API_KEY` env var before falling back to legacy `CUSTOM_AI_API_KEY`; named custom-provider keys should be passed explicitly as top-level run options whose names match each node's `Alternative programmatic key name`, while plugin-declared env values continue to populate `pluginEnv`.
 It also supplies a default tokenizer for Node-side runs when the caller does not provide one explicitly.
+
+The default Node MCP provider deliberately uses short-lived clients. Every tool or
+prompt operation creates, connects, and closes one client through a shared
+`try/finally` lifecycle. HTTP connections try Streamable HTTP first and use a fresh
+client for SSE fallback; failed connection attempts are closed before fallback.
+Stdio server `env` values are merged over the MCP SDK's safe inherited environment
+so configured secrets work without dropping essentials such as `PATH`. MCP server
+configuration and request payloads are never logged by this adapter.
+
+Workspace dependency policy is enforced by `yarn security:audit`. Direct runtime
+HTTP, MCP, WebSocket, YAML, JSONPath, Vite/Rollup, and cloud-provider dependencies
+stay on patched compatible releases; reviewed residual high findings are limited
+to non-runtime toolchains and require expiring entries in
+`security/dependency-audit-exceptions.json`. Cargo dependencies are independently
+checked by RustSec. The desktop Tauri feature list is method-scoped for file,
+dialog, HTTP, and window APIs; Tauri v1's all-or-nothing path and global-shortcut
+features remain because the app uses those APIs.
 
 `createRivetWebAppHandler(...)` is the minimal web-app serving seam. It takes a loaded `Project`, selects one `Project.uiGraphs` entry, serves a small declarative renderer, and exposes a Fetch-style action endpoint that runs ordinary same-project graphs through `createProcessor(...)`. Wrappers can also use `renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` directly when they need Express-owned timing, recording metadata, debug headers, or error envelopes. `createProcessorOptions` can be static for simple hosts or a request-scoped resolver that receives the `Request`, UI graph, button component, current UI state, mapped action input, and optional revision key; the selected button graph always overrides any supplied `graph` value. Resolver-provided `inputs` and `context` win, otherwise Rivet uses the UI input mappings and `resolveContext(request)`. Raw UI state values are converted into Rivet Data Values consistently in desktop preview and Node-hosted actions: raw objects become `object`, homogeneous raw arrays become typed arrays such as `string[]`, `number[]`, `boolean[]`, or `object[]`, and mixed, empty, null-containing, or nested arrays become `any[]`. Action lifecycle hooks are observability-only and are not an auth or route-policy seam. Optional `revisionKey` is embedded in the served HTML and echoed by action calls so wrappers can detect stale page/action mismatches; Rivet treats it as an opaque consistency token, not as authorization. Revision mismatches fail as `409` with `code: "revision_mismatch"`, and the embedded client renders a blocking reload dialog instead of an inline action error so users explicitly refresh stale published/latest pages before continuing. Action requests are JSON-only and require object-shaped UI state; malformed JSON, non-object request bodies, non-object state, and revision mismatches fail with `RivetWebAppActionHttpError` statuses and optional codes so lower-level wrapper adapters can preserve clear HTTP responses. Action state patches use the shared UI graph mappers: ordered `inputMappings` send several web-app data keys to several Graph Input IDs, ordered `outputs` can save several graph outputs back to several web-app data keys, no `outputKey` stores the full graph output map, and `outputKey` stores `outputs[outputKey].value` so wrappers and desktop preview agree on how to display Graph Output node values. Legacy `inputs` plus `outputKey` / `outputStateKey` are still accepted for old saved web apps. The server-rendered bootstrap payload is embedded with script-safe JSON escaping, and embedded client scripts are guarded against accidental `</script>` terminators. Markdown components and Markdown output mode use the same `marked` engine version and GitHub Markdown CSS baseline as the app preview, but web apps configure the renderer to escape raw HTML tokens so project content cannot inject arbitrary HTML or scripts. Node-hosted HTML inlines the packaged `github-markdown-css/github-markdown-dark-dimmed.css` before [`RIVET_WEB_APP_RENDERER_CSS`](../packages/core/src/model/UiGraphRendererStyles.ts), then inlines the packaged `marked` browser build before the declarative client renderer. Hosted HTML and the desktop preview share the same `.rivet-web-app-root` / `.rivet-web-app-surface` DOM shell; Node-hosted pages add only the exported document reset needed to remove browser body margins and fill the viewport. The shared renderer CSS owns web-app Markdown-body neutralization, including transparent Markdown backgrounds and inherited typography, and also owns the stale-revision reload modal surface so hosted pages do not depend on app-global `index.css` overrides or wrapper CSS. It also owns the web-app root font size, button radius, Markdown code/pre selectors, and preformatted output typography: hosted and preview surfaces use the same 15px and 6px defaults, wrappers can override them with `--rivet-web-app-host-font-size` / `--rivet-web-app-host-button-radius`, and output `<pre>` content uses an explicit monospace stack so it does not drift to browser defaults. Web-app input and textarea controls carry the app-global `inputarea` escape class in both renderers so Rivet's editor-wide form-control reset cannot affect preview-only controls. This keeps text, markdown, input, textarea, button, output card, and revision-stale modal styling synchronized without duplicating CSS in the app and node packages. It deliberately does not own authentication, domains, tenancy, deployment routing, or wrapper-specific request adapters; wrappers should adapt its `{ handleRequest(request) }` shape or its lower-level helpers to Express, Fastify, custom HTTP servers, or VM routing.
 
+[`UiGraphRuntimeModel.ts`](../packages/core/src/model/UiGraphRuntimeModel.ts) is the shared semantic owner for web-app component labels, input values, output formatting, JSON download eligibility and filenames, and action state patches. [`RivetWebAppRenderer.tsx`](../packages/app/src/components/rivetWebApps/RivetWebAppRenderer.tsx) and [`webAppClient.ts`](../packages/node/src/webAppClient.ts) consume that model while owning only React/DOM mechanics such as focus, events, clipboard fallback, and downloads. Cross-package client code imports this contract through the narrow `@valerypopoff/rivet2-core/web-app-runtime` package entrypoint, not through `packages/core/src`; [`build-web-app-client.cjs`](../packages/node/scripts/build-web-app-client.cjs) aliases that public entrypoint to [`webAppRuntime.ts`](../packages/core/src/webAppRuntime.ts) while generating, so the checked-in browser artifact is built from current source even before package output exists. The generator is a true CommonJS launcher so esbuild stays on Yarn PnP's synchronous CJS resolution path under Node 22 Linux. The hosted client is authored as TypeScript and generated by that script, then injected by [`webAppHandler.ts`](../packages/node/src/webAppHandler.ts); do not restore a handwritten `String.raw` browser program. The Node build and root style check both verify that the checked-in generated client is fresh.
+
 Keep the stale-revision modal CSS fallback-safe inside `RIVET_WEB_APP_RENDERER_CSS`: hosted web-app pages may run outside the desktop shell and should still show an opaque blocking modal backdrop even when a browser lacks newer CSS color functions.
+
+Markdown safety is enforced after parsing as well as during raw-HTML handling.
+Core exports `RIVET_MARKDOWN_SANITIZER_POLICY`; the desktop renderer applies it
+with DOMPurify, and hosted HTML embeds the same DOMPurify browser build and policy.
+The allowlist keeps normal Markdown structure and safe links while removing active
+elements, event attributes, inline styles, SVG, and unsafe or unknown URL schemes.
 
 Keep hosted and desktop web-app output stringification aligned: a missing UI state key (`undefined`) renders as an empty output, while an explicit post-action `null` value can still render as `null` in JSON mode. This prevents initial Output components from showing `null` before any graph action has written to their data key.
 
-The Node CJS bundle maps `import.meta.url` to `__filename` in [`packages/core/bundle.esbuild.ts`](../packages/core/bundle.esbuild.ts). Keep that mapping while the web-app handler resolves packaged browser-side assets such as `marked/marked.min.js`; ESM uses `import.meta.url`, and CJS needs the bundled filename as the equivalent resolver base.
+The Node CJS bundle maps `import.meta.url` to `__filename` in [`packages/core/bundle.esbuild.cjs`](../packages/core/bundle.esbuild.cjs). Keep that mapping while the web-app handler resolves packaged browser-side assets such as `marked/marked.min.js`; ESM uses `import.meta.url`, and CJS needs the bundled filename as the equivalent resolver base.
 
 ### Runtime-speed characterization
 
@@ -712,7 +737,7 @@ The app integrates this package directly for test UI and persistence.
 
 ### Role
 
-Docusaurus documentation site package.
+Docusaurus 3 documentation site package.
 
 ### Package metadata
 
@@ -733,6 +758,11 @@ Docs publishing is handled by the GitHub Pages release workflows. The docs
 package owns local Docusaurus commands such as `yarn build`, `yarn serve`, and
 `yarn deploy`, but normal release publishing does not use a root publishing
 script.
+
+The Docusaurus image pipeline reaches `image-size`; the root workspace applies a
+small Yarn patch so its Node file-handle reads operate on a compatible Buffer under
+PnP ZipFS. The patched dependency is automatically unplugged by Yarn. This is a
+PnP compatibility requirement, not a second docs dependency owner.
 
 ### Current content contract
 

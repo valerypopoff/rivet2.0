@@ -75,7 +75,46 @@ export function validateProject(project: unknown): ProjectValidationResult {
     }
   }
 
+  if (p.uiGraphs != null) {
+    validateUiGraphs(p.uiGraphs, errors);
+  }
+
   return { valid: errors.length === 0, errors, warnings };
+}
+
+function validateUiGraphs(uiGraphs: unknown, errors: string[]): void {
+  if (!uiGraphs || typeof uiGraphs !== 'object' || Array.isArray(uiGraphs)) {
+    errors.push('Project uiGraphs is not an object');
+    return;
+  }
+
+  for (const [uiGraphId, uiGraph] of Object.entries(uiGraphs)) {
+    if (!uiGraph || typeof uiGraph !== 'object' || Array.isArray(uiGraph)) {
+      errors.push(`UI graph "${uiGraphId}" is not an object`);
+      continue;
+    }
+
+    const components = (uiGraph as Record<string, unknown>).components;
+    if (!Array.isArray(components)) {
+      errors.push(`UI graph "${uiGraphId}" components is not an array`);
+      continue;
+    }
+
+    const componentIds = new Set<string>();
+    for (const [index, component] of components.entries()) {
+      const componentId =
+        component && typeof component === 'object' && !Array.isArray(component)
+          ? (component as Record<string, unknown>).id
+          : undefined;
+      if (typeof componentId !== 'string' || !componentId.trim()) {
+        errors.push(`UI graph "${uiGraphId}" component at index ${index} missing id`);
+      } else if (componentIds.has(componentId)) {
+        errors.push(`UI graph "${uiGraphId}" component "${componentId}" has a duplicate id`);
+      } else {
+        componentIds.add(componentId);
+      }
+    }
+  }
 }
 
 /** Quick structural check - throws on invalid project. */

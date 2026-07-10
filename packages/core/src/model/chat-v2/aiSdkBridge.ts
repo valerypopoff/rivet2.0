@@ -174,7 +174,7 @@ function buildTextArgs(options: StreamChatV2Options): Parameters<typeof streamTe
   const args: Parameters<typeof streamText>[0] = {
     model: options.model,
     messages: options.messages,
-    maxRetries: 0,
+    maxRetries: options.maxRetries ?? 0,
   };
 
   if (options.tools !== undefined) args.tools = options.tools;

@@ -1,4 +1,4 @@
-import { type CSSProperties, type FC, useEffect, useMemo, useRef } from 'react';
+import { type CSSProperties, type FC, useEffect, useMemo, useRef, type SetStateAction } from 'react';
 import styled from '@emotion/styled';
 import { produce } from 'immer';
 import { toast } from 'react-toastify';
@@ -19,9 +19,18 @@ import { useCanvasPositioning } from '../hooks/useCanvasPositioning.js';
 import { getCanvasPositionForNodes } from '../hooks/useCenterViewOnGraph.js';
 import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry.js';
 import { graphState } from '../state/graph.js';
-import { canvasPositionState, lastMousePositionState, selectedNodesState, sidebarOpenState } from '../state/graphBuilder.js';
-import { editingNodePrefabIdState } from '../state/nodeLibrary.js';
+import {
+  canvasPositionState,
+  lastMousePositionState,
+  selectedNodesState,
+  sidebarOpenState,
+} from '../state/graphBuilder.js';
 import { projectState, referencedProjectsState } from '../state/savedGraphs.js';
+import {
+  nodeLibraryCanvasPositionsState,
+  projectWorkspaceTargetsState,
+  setProjectWorkspaceTargetState,
+} from '../state/workspaceTarget.js';
 import { settingsState, resolveEditorPreferences } from '../state/settings.js';
 import { leftSidebarLiveWidthState } from '../state/ui.js';
 import { createAddedNode, duplicateNodesWithConnections } from '../domain/graphEditing/nodeActions.js';
@@ -85,19 +94,35 @@ export const NodeLibraryBuilder: FC = () => {
   const [currentGraph, setCurrentGraph] = useAtom(graphState);
   const referencedProjects = useAtomValue(referencedProjectsState);
   const [selectedNodeIds, setSelectedNodeIds] = useAtom(selectedNodesState);
-  const [editingPrefabId, setEditingPrefabId] = useAtom(editingNodePrefabIdState);
+  const workspaceTarget = useAtomValue(projectWorkspaceTargetsState)[project.metadata.id];
+  const editingPrefabId = workspaceTarget?.type === 'nodeLibrary' ? workspaceTarget.editingPrefabId : undefined;
+  const setEditingPrefabId = useStableCallback((update: SetStateAction<NodePrefabId | undefined>) => {
+    const currentTarget = store.get(projectWorkspaceTargetsState)[project.metadata.id];
+    const currentEditingPrefabId = currentTarget?.type === 'nodeLibrary' ? currentTarget.editingPrefabId : undefined;
+    const nextEditingPrefabId = typeof update === 'function' ? update(currentEditingPrefabId) : update;
+
+    store.set(setProjectWorkspaceTargetState, {
+      projectId: project.metadata.id,
+      target: { editingPrefabId: nextEditingPrefabId, type: 'nodeLibrary' },
+    });
+  });
   const settings = useAtomValue(settingsState);
   const sidebarOpen = useAtomValue(sidebarOpenState);
   const liveSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const clipboard = useAtomValue(clipboardState);
   const lastMousePosition = useAtomValue(lastMousePositionState);
   const setCanvasPosition = useSetAtom(canvasPositionState);
+  const canvasPosition = useAtomValue(canvasPositionState);
+  const nodeLibraryCanvasPositions = useAtomValue(nodeLibraryCanvasPositionsState);
+  const setNodeLibraryCanvasPositions = useSetAtom(nodeLibraryCanvasPositionsState);
   const setStaticData = useSetStaticData();
   const projectNodeRegistry = useProjectNodeRegistry();
   const { clientToCanvasPosition } = useCanvasPositioning();
   const editorPreferences = resolveEditorPreferences(settings);
   const centeredOnOpenRef = useRef(false);
   const centeredEditingPrefabIdRef = useRef<NodePrefabId | undefined>(undefined);
+  const latestCanvasPositionRef = useRef(canvasPosition);
+  latestCanvasPositionRef.current = canvasPosition;
 
   const prefabs = useMemo(() => Object.values(project.nodePrefabs ?? {}), [project.nodePrefabs]);
   const nodes = useMemo(() => prefabs.map((prefab) => prefab.sourceNode), [prefabs]);
@@ -118,7 +143,12 @@ export const NodeLibraryBuilder: FC = () => {
     if (!centeredOnOpenRef.current) {
       centeredOnOpenRef.current = true;
       centeredEditingPrefabIdRef.current = editingPrefabId;
-      setCanvasPosition(getCanvasPositionForNodes(editingPrefab ? [editingPrefab.sourceNode] : nodes, sidebarOpen));
+      const savedPosition = nodeLibraryCanvasPositions[project.metadata.id];
+      setCanvasPosition(
+        editingPrefab
+          ? getCanvasPositionForNodes([editingPrefab.sourceNode], sidebarOpen)
+          : savedPosition ?? getCanvasPositionForNodes(nodes, sidebarOpen),
+      );
       return;
     }
 
@@ -128,7 +158,25 @@ export const NodeLibraryBuilder: FC = () => {
 
     centeredEditingPrefabIdRef.current = editingPrefabId;
     setCanvasPosition(getCanvasPositionForNodes([editingPrefab.sourceNode], sidebarOpen));
-  }, [editingPrefab, editingPrefabId, nodes, setCanvasPosition, sidebarOpen]);
+  }, [
+    editingPrefab,
+    editingPrefabId,
+    nodeLibraryCanvasPositions,
+    nodes,
+    project.metadata.id,
+    setCanvasPosition,
+    sidebarOpen,
+  ]);
+
+  useEffect(
+    () => () => {
+      setNodeLibraryCanvasPositions((positions) => ({
+        ...positions,
+        [project.metadata.id]: latestCanvasPositionRef.current,
+      }));
+    },
+    [project.metadata.id, setNodeLibraryCanvasPositions],
+  );
 
   const updateProjectNodePrefabs = useStableCallback((update: (prefabs: Record<NodePrefabId, NodePrefab>) => void) => {
     const baseProject = produce(project, (draft) => {
@@ -195,23 +243,25 @@ export const NodeLibraryBuilder: FC = () => {
     store.set(recoverableNodeConnectionsStatePerGraph, nextRecoverableConnectionsByGraph);
   });
 
-  const updatePrefabSource = useStableCallback((prefabId: NodePrefabId, nextNode: ChartNode, newData?: Record<DataId, string>) => {
-    if (!canUseNodeAsPrefabSource(nextNode)) {
-      handleError(new Error(`"${nextNode.type}" cannot be a library node.`), 'Node library update failed');
-      return;
-    }
-
-    updateProjectNodePrefabs((draftPrefabs) => {
-      const prefab = draftPrefabs[prefabId];
-      if (prefab) {
-        prefab.sourceNode = nextNode;
+  const updatePrefabSource = useStableCallback(
+    (prefabId: NodePrefabId, nextNode: ChartNode, newData?: Record<DataId, string>) => {
+      if (!canUseNodeAsPrefabSource(nextNode)) {
+        handleError(new Error(`"${nextNode.type}" cannot be a library node.`), 'Node library update failed');
+        return;
       }
-    });
 
-    if (newData) {
-      setStaticData(newData);
-    }
-  });
+      updateProjectNodePrefabs((draftPrefabs) => {
+        const prefab = draftPrefabs[prefabId];
+        if (prefab) {
+          prefab.sourceNode = nextNode;
+        }
+      });
+
+      if (newData) {
+        setStaticData(newData);
+      }
+    },
+  );
 
   const handleNodesChanged = useStableCallback((nextNodes: ChartNode[]) => {
     updateProjectNodePrefabs((draftPrefabs) => {
@@ -377,7 +427,14 @@ export const NodeLibraryBuilder: FC = () => {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [clientToCanvasPosition, clipboard?.type, editingPrefabId, lastMousePosition.x, lastMousePosition.y, pastePrefabSources]);
+  }, [
+    clientToCanvasPosition,
+    clipboard?.type,
+    editingPrefabId,
+    lastMousePosition.x,
+    lastMousePosition.y,
+    pastePrefabSources,
+  ]);
 
   const handleContextMenuItemSelected = useStableCallback(
     (menuItemId: string, data: unknown, context: ContextMenuContext, meta: { x: number; y: number }) => {
@@ -457,7 +514,12 @@ export const NodeLibraryBuilder: FC = () => {
           pasteCommandsEnabled
         />
         {editingPrefab && (
-          <NodeEditor key={editingPrefab.id} selectedNode={editingPrefab.sourceNode} onDeselect={closeEditor} onUpdateNode={updateEditingPrefab} />
+          <NodeEditor
+            key={editingPrefab.id}
+            selectedNode={editingPrefab.sourceNode}
+            onDeselect={closeEditor}
+            onUpdateNode={updateEditingPrefab}
+          />
         )}
       </EditNodeCommandOverrideContext.Provider>
     </Container>

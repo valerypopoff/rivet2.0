@@ -12,7 +12,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { css } from '@emotion/react';
 import { useAtomValue } from 'jotai';
-import { type FC, useEffect, useState } from 'react';
+import { type FC, useCallback, useState, useSyncExternalStore } from 'react';
 import clsx from 'clsx';
 import { settingsState } from '../../../state/settings.js';
 import {
@@ -27,19 +27,10 @@ import { fillMissingSettingsFromEnvironmentVariables } from '../../../utils/taur
 import { tryRestoreStoredDataValue } from '../../../utils/executionDataStorage.js';
 import { getStaticInputApiKey } from '../../../utils/chatV2ModelCatalogInputKey.js';
 import {
-  getChatV2DiscoveredModelOptionsWithStatus,
-  invalidateChatV2DiscoveredModelOptions,
-} from '../../../utils/chatV2ModelCatalog.js';
-import {
-  getChatV2ModelRefreshStatus,
-  type ChatV2ModelRefreshStatus,
-} from '../../../utils/chatV2ModelCatalogStatus.js';
-import {
-  forgetRefreshedModelOptions,
-  getVisibleModelOptions,
-  rememberRefreshedModelOptions,
-  type ModelOption,
+  getModelOptions,
+  includeCurrentModelOption,
 } from './llmChatV2ModelCatalogOptions.js';
+import { chatV2ModelCatalogService } from '../../../utils/chatV2ModelCatalogService.js';
 import { type SharedEditorProps } from '../SharedEditorProps';
 import PlugIcon from '../../../assets/icons/plug-icon.svg?react';
 import { Tooltip } from '../../Tooltip';
@@ -152,8 +143,6 @@ type Props = SharedEditorProps & {
 
 type ProviderName = 'openai' | 'anthropic' | 'google' | 'custom';
 
-const modelCatalogRefreshStatus = new Map<string, ChatV2ModelRefreshStatus>();
-
 function getProvider(data: unknown): ProviderName {
   return ((data as { provider?: ProviderName }).provider ?? 'openai') as ProviderName;
 }
@@ -209,38 +198,27 @@ export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
   const data = node.data as Record<string, unknown>;
   const apiKeySource = getApiKeySource(data);
   const statusKey = getStatusKey(node.id, provider, apiKeySource);
-  const [status, setStatus] = useState<ChatV2ModelRefreshStatus>(() => modelCatalogRefreshStatus.get(statusKey));
+  const subscribeToModelCatalog = useCallback(
+    (listener: () => void) => chatV2ModelCatalogService.subscribe(statusKey, listener),
+    [statusKey],
+  );
+  const getModelCatalogSnapshot = useCallback(
+    () => chatV2ModelCatalogService.getSnapshot(statusKey),
+    [statusKey],
+  );
+  const modelCatalogSession = useSyncExternalStore(
+    subscribeToModelCatalog,
+    getModelCatalogSnapshot,
+    getModelCatalogSnapshot,
+  );
   const [menuPortalTarget, setMenuPortalTarget] = useState<HTMLDivElement | null>(null);
-  const modelOptions = getVisibleModelOptions({
-    editor,
-    currentModel: data.model,
-    optionsKey: statusKey,
-  });
+  const modelOptions = includeCurrentModelOption(modelCatalogSession.options ?? getModelOptions(editor), data.model);
   const selectedValue = modelOptions.find((option) => option.value === data.model);
   const isUsingModelInput = Boolean(data.useModelInput);
   const isControlDisabled = isReadonly || isDisabled;
   const isCustomProvider = provider === 'custom';
 
-  const updateStatus = (nextStatus: ChatV2ModelRefreshStatus) => {
-    if (nextStatus == null) {
-      modelCatalogRefreshStatus.delete(statusKey);
-    } else {
-      modelCatalogRefreshStatus.set(statusKey, nextStatus);
-    }
-    setStatus(nextStatus);
-  };
-
-  useEffect(() => {
-    setStatus(modelCatalogRefreshStatus.get(statusKey));
-  }, [statusKey]);
-
   const handleRefresh = async () => {
-    forgetRefreshedModelOptions(statusKey);
-    updateStatus({
-      tone: 'warning',
-      message: 'Refreshing model list...',
-    });
-
     try {
       const resolvedSettings = await fillMissingSettingsFromEnvironmentVariables(settings, plugins, {
         environmentProvider,
@@ -256,18 +234,15 @@ export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
         );
       }
 
-      const context = { settings: resolvedSettings, plugins, apiKey };
-
-      invalidateChatV2DiscoveredModelOptions(provider, context);
-      const result = await getChatV2DiscoveredModelOptionsWithStatus(provider, context);
-      rememberRefreshedModelOptions(statusKey, result.options);
-      updateStatus(getChatV2ModelRefreshStatus(provider, result, resolvedSettings, plugins, apiKey));
+      if (provider === 'custom') return;
+      await chatV2ModelCatalogService.refresh({
+        sessionKey: statusKey,
+        provider,
+        context: { settings: resolvedSettings, plugins, apiKey },
+      });
       onRefreshEditors?.();
     } catch (error) {
-      updateStatus({
-        tone: 'warning',
-        message: error instanceof Error ? error.message : 'Failed to refresh model list.',
-      });
+      chatV2ModelCatalogService.setError(statusKey, error);
     }
   };
 
@@ -349,7 +324,9 @@ export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
           </div>
         )}
       </Field>
-      {status ? <div className={`banner ${status.tone}`}>{status.message}</div> : null}
+      {modelCatalogSession.status ? (
+        <div className={`banner ${modelCatalogSession.status.tone}`}>{modelCatalogSession.status.message}</div>
+      ) : null}
     </div>
   );
 };

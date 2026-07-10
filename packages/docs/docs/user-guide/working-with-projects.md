@@ -14,6 +14,8 @@ To create a new project, choose **New Project** in the top-bar **Menu** dropdown
 
 Use **Project settings** at the top of the graph tree panel to give your project a new name and optionally a description. This is simply metadata and does not affect the execution of the project.
 
+The Main Graph setting controls where Rivet starts its unreachable-graph analysis. Graphs that cannot be reached from the Main Graph can show a broken-thread icon in the graph tree. To hide those markers, turn off **Show unreachable graph indicators** in **Rivet settings** > **Graphs**.
+
 ### Comparing Projects
 
 Use **Project settings** -> **Compare to an older version** to compare the currently opened project with another `.rivet-project` file. This is useful when you have a newer copy of a project open and want to see what changed since an older version.

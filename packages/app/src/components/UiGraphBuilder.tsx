@@ -1,28 +1,11 @@
 import { css } from '@emotion/react';
-import { produce } from 'immer';
-import { type CSSProperties, type FC, useEffect, useState } from 'react';
-import { useAtom, useAtomValue, useStore } from 'jotai';
-import { DndContext, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
-import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { type CSSProperties, type FC, useEffect, useMemo, useState } from 'react';
+import { useAtomValue, useStore } from 'jotai';
+import { arrayMove } from '@dnd-kit/sortable';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
-import {
-  type GraphId,
-  getGraphBoundary,
-  type GraphBoundary,
-  type Project,
-  type UiComponentId,
-  type UiGraph,
-  type UiGraphComponent,
-  type UiGraphId,
-  type UiGraphInputBinding,
-  type UiGraphOutputBinding,
-  getUiGraphActionInputBindings,
-  getUiGraphActionOutputBindings,
-  newId,
-} from '@valerypopoff/rivet2-core';
+import { getGraphBoundary, type UiComponentId, type UiGraphComponent } from '@valerypopoff/rivet2-core';
 import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
-import { selectedUiGraphIdState } from '../state/uiGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
 import { leftSidebarLiveWidthState } from '../state/ui.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
@@ -35,9 +18,16 @@ import {
   RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX,
   writeRivetWebAppPreviewPayload,
 } from './rivetWebApps/RivetWebAppPreviewWindow.js';
-import { RivetWebAppRenderer, type RivetWebAppComponentFrameProps } from './rivetWebApps/RivetWebAppRenderer.js';
 import { useRunUiGraphAction } from '../hooks/useRunUiGraphAction.js';
 import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
+import { createUiGraphComponent, UI_GRAPH_COMPONENT_PALETTE } from './uiGraphBuilder/componentDescriptors.js';
+import { normalizeButtonActionToGraphBoundary } from './uiGraphBuilder/buttonBindings.js';
+import { UiGraphComponentEditor } from './uiGraphBuilder/UiGraphComponentEditor.js';
+import { UiGraphPreviewEditor } from './uiGraphBuilder/UiGraphPreviewEditor.js';
+import { canRunDesktopWebAppPreview } from './uiGraphBuilder/uiGraphBuilderPolicy.js';
+import { useUiGraphMutations } from './uiGraphBuilder/useUiGraphMutations.js';
+import { collectUiGraphDataKeyUsages } from './uiGraphBuilder/dataKeys.js';
+import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
 
 const styles = css`
   position: fixed;
@@ -358,36 +348,23 @@ const styles = css`
 `;
 
 export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => {
-  const [project, setProject] = useAtom(projectState);
+  const project = useAtomValue(projectState);
   const store = useStore();
-  const selectedUiGraphId = useAtomValue(selectedUiGraphIdState);
+  const workspaceTarget = useProjectWorkspaceTarget();
+  const selectedUiGraphId = workspaceTarget?.type === 'uiGraph' ? workspaceTarget.uiGraphId : undefined;
+  const { updateComponent, updateUiGraph } = useUiGraphMutations(selectedUiGraphId);
   const runUiGraphAction = useRunUiGraphAction(runGraph);
   const sidebarOpen = useAtomValue(sidebarOpenState);
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const hostUiConfig = useRivetAppHostUiConfig();
-  const canRunDesktopPreview = hostUiConfig.webApps?.desktopPreview !== false;
-  const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const canRunDesktopPreview = canRunDesktopWebAppPreview(hostUiConfig);
   const [activeComponentId, setActiveComponentId] = useState<UiComponentId | undefined>();
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
-
-  const updateUiGraph = useStableCallback((updater: (uiGraph: UiGraph) => void) => {
-    if (!selectedUiGraphId) {
-      return;
-    }
-
-    setProject((currentProject) =>
-      produce(currentProject, (draft) => {
-        const draftUiGraph = draft.uiGraphs?.[selectedUiGraphId];
-        if (draftUiGraph) {
-          updater(draftUiGraph);
-        }
-      }),
-    );
-  });
+  const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
 
   const addComponent = useStableCallback((type: UiGraphComponent['type']) => {
     updateUiGraph((draft) => {
-      const component = createUiComponent(type, project.metadata.mainGraphId);
+      const component = createUiGraphComponent(type, project.metadata.mainGraphId);
       if (component.type === 'button') {
         normalizeButtonActionToGraphBoundary(component, getGraphBoundary(project, component.action.graphId));
       }
@@ -402,14 +379,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     });
   });
 
-  const handleComponentDragEnd = useStableCallback((event: DragEndEvent) => {
-    const draggedComponentId = event.active.id as UiComponentId;
-    const targetComponentId = event.over?.id as UiComponentId | undefined;
-
-    if (!targetComponentId || draggedComponentId === targetComponentId) {
-      return;
-    }
-
+  const reorderComponents = useStableCallback((draggedComponentId: UiComponentId, targetComponentId: UiComponentId) => {
     updateUiGraph((draft) => {
       const fromIndex = draft.components.findIndex((component) => component.id === draggedComponentId);
       const toIndex = draft.components.findIndex((component) => component.id === targetComponentId);
@@ -419,17 +389,6 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       }
     });
   });
-
-  const updateComponent = useStableCallback(
-    (componentId: UiComponentId, updater: (component: UiGraphComponent) => void) => {
-      updateUiGraph((draft) => {
-        const component = draft.components.find((candidate) => candidate.id === componentId);
-        if (component) {
-          updater(component);
-        }
-      });
-    },
-  );
 
   useEffect(() => {
     if (!selectedUiGraphId) {
@@ -578,7 +537,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           <div className="ui-graph-builder-palette">
             <div className="ui-graph-builder-palette-title">Components</div>
             <div className="ui-graph-builder-add">
-              {UI_GRAPH_COMPONENT_TYPES.map(({ label, type }) => (
+              {UI_GRAPH_COMPONENT_PALETTE.map(({ label, type }) => (
                 <button
                   key={type}
                   type="button"
@@ -595,12 +554,12 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           </div>
           <div className="ui-graph-components">
             {uiGraph.components.map((component) => (
-              <UiComponentEditor
+              <UiGraphComponentEditor
                 key={component.id}
                 activeComponentId={activeComponentId}
                 component={component}
+                dataKeyUsages={dataKeyUsages}
                 project={project}
-                uiGraph={uiGraph}
                 onActivate={setActiveComponentId}
                 onDelete={() => deleteComponent(component.id)}
                 onUpdate={(updater) => updateComponent(component.id, updater)}
@@ -620,584 +579,20 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
             <span>Run detached</span>
           </button>
         ) : null}
-        <DndContext sensors={dragSensors} collisionDetection={closestCenter} onDragEnd={handleComponentDragEnd}>
-          <SortableContext
-            items={uiGraph.components.map((component) => component.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            <RivetWebAppRenderer
-              activeComponentId={activeComponentId}
-              onActiveComponentChange={setActiveComponentId}
-              renderComponentFrame={(frameProps) => <SortablePreviewComponentFrame {...frameProps} />}
-              uiGraph={uiGraph}
-              onRunAction={(componentId, state) => runUiGraphAction(uiGraph, componentId, state)}
-            />
-          </SortableContext>
-        </DndContext>
+        <UiGraphPreviewEditor
+          activeComponentId={activeComponentId}
+          onActiveComponentChange={setActiveComponentId}
+          onReorder={reorderComponents}
+          uiGraph={uiGraph}
+          onRunAction={(componentId, state) => runUiGraphAction(uiGraph, componentId, state)}
+        />
       </section>
     </div>
   );
 };
 
-const UiComponentEditor: FC<{
-  activeComponentId: UiComponentId | undefined;
-  component: UiGraphComponent;
-  project: Project;
-  uiGraph: UiGraph;
-  onActivate(componentId: UiComponentId): void;
-  onDelete(): void;
-  onUpdate(updater: (component: UiGraphComponent) => void): void;
-}> = ({ activeComponentId, component, project, uiGraph, onActivate, onDelete, onUpdate }) => {
-  return (
-    <div
-      className={`ui-graph-component-card${activeComponentId === component.id ? ' active' : ''}`}
-      onFocusCapture={() => onActivate(component.id)}
-      onPointerDownCapture={() => onActivate(component.id)}
-    >
-      <div className="ui-graph-component-card-title">
-        <span className="ui-graph-component-card-title-main">
-          <span>{formatUiComponentTypeName(component.type)}</span>
-        </span>
-        <button
-          type="button"
-          className="ui-graph-component-delete-button"
-          aria-label="Delete component"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={onDelete}
-        >
-          &times;
-        </button>
-      </div>
-      {renderComponentFields(component, project, uiGraph, onUpdate)}
-    </div>
-  );
-};
-
-const SortablePreviewComponentFrame: FC<RivetWebAppComponentFrameProps> = ({
-  children,
-  className,
-  component,
-  onFocusCapture,
-  onPointerDownCapture,
-}) => {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: component.id });
-
-  const style: CSSProperties = {
-    transform: transform ? `translate3d(0, ${transform.y}px, 0)` : undefined,
-    transition,
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      className={`ui-graph-preview-sortable-row${isDragging ? ' dragging' : ''}`}
-      style={style}
-      onFocusCapture={onFocusCapture}
-      onPointerDownCapture={onPointerDownCapture}
-    >
-      <button
-        type="button"
-        className="ui-graph-preview-drag-handle"
-        title="Drag to reorder"
-        aria-label={`Drag ${formatUiComponentTypeName(component.type)} component to reorder`}
-        {...attributes}
-        {...listeners}
-      >
-        ::
-      </button>
-      <div className="ui-graph-preview-sortable-body">
-        <div className={className}>{children}</div>
-      </div>
-    </div>
-  );
-};
-
-function renderComponentFields(
-  component: UiGraphComponent,
-  project: Project,
-  uiGraph: UiGraph,
-  onUpdate: (updater: (component: UiGraphComponent) => void) => void,
-) {
-  switch (component.type) {
-    case 'text':
-      return (
-        <label className="ui-graph-builder-field">
-          Text
-          <textarea
-            value={component.text}
-            onChange={(event) =>
-              onUpdate((draft) => {
-                (draft as typeof component).text = event.target.value;
-              })
-            }
-          />
-        </label>
-      );
-    case 'markdown':
-      return (
-        <label className="ui-graph-builder-field">
-          Markdown
-          <textarea
-            value={component.markdown}
-            onChange={(event) =>
-              onUpdate((draft) => {
-                (draft as typeof component).markdown = event.target.value;
-              })
-            }
-          />
-        </label>
-      );
-    case 'input':
-    case 'textarea': {
-      const dataKeyUsages = collectUiGraphDataKeyUsages(uiGraph);
-      return (
-        <>
-          <label className="ui-graph-builder-field">
-            Label
-            <input
-              value={component.label}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  (draft as typeof component).label = event.target.value;
-                })
-              }
-            />
-          </label>
-          <label className="ui-graph-builder-field">
-            Data key
-            <input
-              value={component.stateKey}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  (draft as typeof component).stateKey = event.target.value;
-                })
-              }
-            />
-            {isDataKeyAlreadyUsedEarlier(dataKeyUsages, component.stateKey, { componentId: component.id }) && (
-              <span className="ui-graph-data-key-warning">This data key is already used.</span>
-            )}
-          </label>
-          <label className="ui-graph-builder-field">
-            Placeholder
-            <input
-              value={component.placeholder ?? ''}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  (draft as typeof component).placeholder = event.target.value;
-                })
-              }
-            />
-          </label>
-        </>
-      );
-    }
-    case 'button': {
-      const boundary = getGraphBoundary(project, component.action.graphId);
-      const dataKeyUsages = collectUiGraphDataKeyUsages(uiGraph);
-      return (
-        <>
-          <label className="ui-graph-builder-field">
-            Graph to run
-            <select
-              value={component.action.graphId ?? ''}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  const button = draft as typeof component;
-                  const graphId = event.target.value as GraphId;
-                  const nextBoundary = getGraphBoundary(project, graphId);
-                  button.action.graphId = graphId;
-                  normalizeButtonActionToGraphBoundary(button, nextBoundary);
-                })
-              }
-            >
-              {component.action.graphId ? null : (
-                <option value="" disabled>
-                  {Object.keys(project.graphs).length === 0 ? 'No graphs available' : 'Select graph...'}
-                </option>
-              )}
-              {Object.values(project.graphs).map((graph) => (
-                <option key={graph.metadata?.id} value={graph.metadata?.id}>
-                  {graph.metadata?.name ?? graph.metadata?.id}
-                </option>
-              ))}
-            </select>
-          </label>
-          <ButtonInputMappingsEditor
-            boundary={boundary}
-            component={component}
-            dataKeyUsages={dataKeyUsages}
-            onUpdate={onUpdate}
-          />
-          <ButtonOutputMappingsEditor
-            boundary={boundary}
-            component={component}
-            dataKeyUsages={dataKeyUsages}
-            onUpdate={onUpdate}
-          />
-          <div className="ui-graph-builder-separator" />
-          <label className="ui-graph-builder-field">
-            Label
-            <input
-              value={component.label}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  (draft as typeof component).label = event.target.value;
-                })
-              }
-            />
-          </label>
-        </>
-      );
-    }
-    case 'output': {
-      const dataKeyOptions = getUniqueDataKeyOptions(collectUiGraphDataKeyUsages(uiGraph));
-      return (
-        <>
-          <label className="ui-graph-builder-field">
-            Label
-            <input
-              value={component.label ?? ''}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  (draft as typeof component).label = event.target.value;
-                })
-              }
-            />
-          </label>
-          <label className="ui-graph-builder-field">
-            Data key
-            <select
-              disabled={dataKeyOptions.length === 0}
-              value={component.stateKey}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  (draft as typeof component).stateKey = event.target.value;
-                })
-              }
-            >
-              {dataKeyOptions.includes(component.stateKey) ? null : (
-                <option value={component.stateKey} disabled>
-                  {component.stateKey ? `${component.stateKey} (missing)` : 'No data keys available'}
-                </option>
-              )}
-              {dataKeyOptions.map((key) => (
-                <option key={key} value={key}>
-                  {key}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="ui-graph-builder-field">
-            Render as
-            <select
-              value={component.renderAs ?? 'text'}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  (draft as typeof component).renderAs = event.target.value as 'text' | 'json' | 'markdown';
-                })
-              }
-            >
-              <option value="text">Text</option>
-              <option value="json">JSON</option>
-              <option value="markdown">Markdown</option>
-            </select>
-          </label>
-        </>
-      );
-    }
-  }
-}
-
-type ButtonComponent = Extract<UiGraphComponent, { type: 'button' }>;
-
-type UiGraphDataKeyUsage = {
-  componentId: UiComponentId;
-  key: string;
-  outputIndex?: number;
-};
-
-const ButtonInputMappingsEditor: FC<{
-  boundary: GraphBoundary | undefined;
-  component: ButtonComponent;
-  dataKeyUsages: UiGraphDataKeyUsage[];
-  onUpdate(updater: (component: UiGraphComponent) => void): void;
-}> = ({ boundary, component, dataKeyUsages, onUpdate }) => {
-  const rows = getButtonInputRows(component, boundary);
-  const dataKeyOptions = getUniqueDataKeyOptions(dataKeyUsages);
-
-  return (
-    <div className="ui-graph-action-section">
-      {boundary && rows.length === 0 && <div className="ui-graph-action-empty">The selected graph has no inputs.</div>}
-      {rows.map((row, index) => (
-        <div className="ui-graph-action-mapping-row" key={`input-${index}`}>
-          <label className="ui-graph-builder-field">
-            Graph input ID
-            <input className="ui-graph-action-port-id" value={row.inputKey} readOnly disabled title={row.inputKey} />
-          </label>
-          <label className="ui-graph-builder-field">
-            Data key to send
-            <select
-              disabled={dataKeyOptions.length === 0}
-              value={row.stateKey}
-              onChange={(event) =>
-                onUpdate((draft) => {
-                  const button = draft as ButtonComponent;
-                  const nextRows = getButtonInputRows(button, boundary);
-                  nextRows[index] = { ...nextRows[index]!, stateKey: event.target.value };
-                  setButtonInputRows(button, nextRows);
-                })
-              }
-            >
-              {dataKeyOptions.includes(row.stateKey) ? null : (
-                <option value={row.stateKey} disabled>
-                  {row.stateKey ? `${row.stateKey} (missing)` : 'No data keys available'}
-                </option>
-              )}
-              {dataKeyOptions.map((key) => (
-                <option key={key} value={key}>
-                  {key}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-const ButtonOutputMappingsEditor: FC<{
-  boundary: GraphBoundary | undefined;
-  component: ButtonComponent;
-  dataKeyUsages: UiGraphDataKeyUsage[];
-  onUpdate(updater: (component: UiGraphComponent) => void): void;
-}> = ({ boundary, component, dataKeyUsages, onUpdate }) => {
-  const rows = getButtonOutputRows(component, boundary);
-
-  return (
-    <div className="ui-graph-action-section">
-      {boundary && rows.length === 0 && <div className="ui-graph-action-empty">The selected graph has no outputs.</div>}
-      {rows.map((row, index) => (
-        <div className="ui-graph-action-mapping-block" key={`output-${index}`}>
-          <div className="ui-graph-action-mapping-row">
-            <label className="ui-graph-builder-field">
-              Graph output ID
-              <input className="ui-graph-action-port-id" value={row.outputKey ?? ''} readOnly disabled title={row.outputKey} />
-            </label>
-            <label className="ui-graph-builder-field">
-              Data key to save to
-              <input
-                value={row.stateKey}
-                onChange={(event) =>
-                  onUpdate((draft) => {
-                    const button = draft as ButtonComponent;
-                    const nextRows = getButtonOutputRows(button, boundary);
-                    nextRows[index] = { ...nextRows[index]!, stateKey: event.target.value };
-                    setButtonOutputRows(button, nextRows);
-                  })
-                }
-              />
-            </label>
-          </div>
-          {isDataKeyAlreadyUsedEarlier(dataKeyUsages, row.stateKey, { componentId: component.id, outputIndex: index }) && (
-            <div className="ui-graph-data-key-warning">This data key is already used.</div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-};
-
-function getButtonInputRows(
-  component: ButtonComponent,
-  boundary: GraphBoundary | undefined,
-): UiGraphInputBinding[] {
-  const rows = getUiGraphActionInputBindings(component.action);
-  if (!boundary) {
-    return [];
-  }
-
-  return alignInputRowsToBoundary(boundary, rows);
-}
-
-function getButtonOutputRows(
-  component: ButtonComponent,
-  boundary: GraphBoundary | undefined,
-): UiGraphOutputBinding[] {
-  const rows = getUiGraphActionOutputBindings(component.action);
-  if (!boundary) {
-    return [];
-  }
-
-  return alignOutputRowsToBoundary(boundary, rows);
-}
-
-function setButtonInputRows(component: ButtonComponent, rows: UiGraphInputBinding[]) {
-  component.action.inputMappings = rows;
-  delete component.action.inputs;
-}
-
-function setButtonOutputRows(component: ButtonComponent, rows: UiGraphOutputBinding[]) {
-  const outputs = rows.map((row) => ({
-    outputKey: row.outputKey || undefined,
-    stateKey: row.stateKey,
-  }));
-
-  component.action.outputs = outputs;
-
-  delete component.action.outputKey;
-  delete component.action.outputStateKey;
-}
-
-function collectUiGraphDataKeyUsages(uiGraph: UiGraph): UiGraphDataKeyUsage[] {
-  const usages: UiGraphDataKeyUsage[] = [];
-
-  for (const component of uiGraph.components) {
-    if ((component.type === 'input' || component.type === 'textarea') && component.stateKey) {
-      usages.push({ componentId: component.id, key: component.stateKey });
-    } else if (component.type === 'button') {
-      getUiGraphActionOutputBindings(component.action).forEach((binding, outputIndex) => {
-        if (binding.stateKey) {
-          usages.push({
-            componentId: component.id,
-            key: binding.stateKey,
-            outputIndex,
-          });
-        }
-      });
-    }
-  }
-
-  return usages;
-}
-
-function getUniqueDataKeyOptions(usages: readonly UiGraphDataKeyUsage[]): string[] {
-  return Array.from(new Set(usages.map((usage) => usage.key)));
-}
-
-function isDataKeyAlreadyUsedEarlier(
-  usages: readonly UiGraphDataKeyUsage[],
-  key: string,
-  currentUsage: { componentId: UiComponentId; outputIndex?: number },
-): boolean {
-  if (!key) {
-    return false;
-  }
-
-  const currentIndex = usages.findIndex(
-    (usage) => usage.componentId === currentUsage.componentId && usage.outputIndex === currentUsage.outputIndex,
-  );
-  const searchableUsages = currentIndex >= 0 ? usages.slice(0, currentIndex) : usages;
-
-  return searchableUsages.some((usage) => usage.key === key);
-}
-
-function normalizeButtonActionToGraphBoundary(component: ButtonComponent, boundary: GraphBoundary | undefined) {
-  const currentInputRows = getUiGraphActionInputBindings(component.action);
-  const currentOutputRows = getUiGraphActionOutputBindings(component.action);
-  const nextInputRows = boundary ? alignInputRowsToBoundary(boundary, currentInputRows) : [];
-  const nextOutputRows = boundary ? alignOutputRowsToBoundary(boundary, currentOutputRows) : [];
-
-  if (component.action.inputs || !areInputRowsEqual(currentInputRows, nextInputRows)) {
-    setButtonInputRows(component, nextInputRows);
-  }
-
-  if (
-    component.action.outputKey ||
-    component.action.outputStateKey ||
-    !areOutputRowsEqual(currentOutputRows, nextOutputRows)
-  ) {
-    setButtonOutputRows(component, nextOutputRows);
-  }
-}
-
-function alignInputRowsToBoundary(
-  boundary: GraphBoundary,
-  rows: readonly UiGraphInputBinding[],
-): UiGraphInputBinding[] {
-  const inputIds = boundary.inputs.map((input) => input.id);
-
-  return inputIds.map((inputId, index) => {
-    const matchingRow = rows.find((row) => row.inputKey === inputId);
-    const existingRow = matchingRow ?? rows[index];
-
-    return {
-      inputKey: matchingRow ? matchingRow.inputKey : inputId,
-      stateKey: existingRow?.stateKey || inputId,
-    };
-  });
-}
-
-function alignOutputRowsToBoundary(
-  boundary: GraphBoundary,
-  rows: readonly UiGraphOutputBinding[],
-): UiGraphOutputBinding[] {
-  const outputIds = boundary.outputs.map((output) => output.id);
-
-  return outputIds.map((outputId, index) => {
-    const matchingRow = rows.find((row) => row.outputKey === outputId);
-    const existingRow = matchingRow ?? rows[index];
-
-    return {
-      outputKey: matchingRow ? matchingRow.outputKey : outputId,
-      stateKey: existingRow?.stateKey || outputId,
-    };
-  });
-}
-
-function areInputRowsEqual(left: readonly UiGraphInputBinding[], right: readonly UiGraphInputBinding[]): boolean {
-  return left.length === right.length && left.every((row, index) => row.inputKey === right[index]?.inputKey && row.stateKey === right[index]?.stateKey);
-}
-
-function areOutputRowsEqual(left: readonly UiGraphOutputBinding[], right: readonly UiGraphOutputBinding[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every((row, index) => row.outputKey === right[index]?.outputKey && row.stateKey === right[index]?.stateKey)
-  );
-}
-
 function getUiGraphBuilderStyle(sidebarOpen: boolean, leftSidebarWidth: number): CSSProperties {
   return {
     '--ui-graph-left-offset': sidebarOpen ? `${leftSidebarWidth}px` : '0px',
   } as CSSProperties;
-}
-
-function createUiComponent(type: UiGraphComponent['type'], graphId: GraphId | undefined): UiGraphComponent {
-  switch (type) {
-    case 'text':
-      return { id: newId<UiComponentId>(), type, text: 'Text' };
-    case 'markdown':
-      return { id: newId<UiComponentId>(), type, markdown: '## Heading' };
-    case 'input':
-      return { id: newId<UiComponentId>(), type, label: 'Input', stateKey: 'input' };
-    case 'textarea':
-      return { id: newId<UiComponentId>(), type, label: 'Input', stateKey: 'input' };
-    case 'button':
-      return {
-        id: newId<UiComponentId>(),
-        type,
-        label: 'Run graph',
-        action: {
-          type: 'runGraph',
-          graphId,
-          inputMappings: [{ inputKey: 'input', stateKey: 'input' }],
-          outputs: [{ stateKey: 'result' }],
-        },
-      };
-    case 'output':
-      return { id: newId<UiComponentId>(), type, label: 'Result', renderAs: 'json', stateKey: 'result' };
-  }
-}
-
-const UI_GRAPH_COMPONENT_TYPES: { label: string; type: UiGraphComponent['type'] }[] = [
-  { label: 'Text', type: 'text' },
-  { label: 'Markdown', type: 'markdown' },
-  { label: 'Input', type: 'input' },
-  { label: 'Textarea', type: 'textarea' },
-  { label: 'Button', type: 'button' },
-  { label: 'Output', type: 'output' },
-];
-
-function formatUiComponentTypeName(type: UiGraphComponent['type']): string {
-  return UI_GRAPH_COMPONENT_TYPES.find((componentType) => componentType.type === type)?.label ?? type;
 }

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { JSDOM } from 'jsdom';
 import { LLMChatV2NodeImpl, type LLMChatV2Node, type NodeId } from '@valerypopoff/rivet2-core';
 import { renderMarkdown } from '../hooks/useMarkdown.js';
+
+Object.defineProperty(globalThis, 'window', { configurable: true, value: new JSDOM('').window });
 
 function createLLMChatNode(data: Partial<LLMChatV2Node['data']> = {}) {
   const node = LLMChatV2NodeImpl.create();

@@ -64,6 +64,7 @@ export type ChatV2GenerateExecutor = (args: GenerateTextArgs) => ChatV2GenerateH
 export type StreamChatV2Options = {
   model: ChatV2Model;
   messages: ChatV2MessageList;
+  maxRetries?: 0 | undefined;
   tools?: ChatV2ToolSet | undefined;
   maxTokens?: number | undefined;
   temperature?: number | undefined;

@@ -84,8 +84,8 @@ function fingerprintNodeDataForCache(data: LLMChatV2NodeData): LLMChatV2NodeData
 
   return {
     ...data,
-    baseURL: isCustomProvider ? '' : data.baseURL,
-    useBaseURLInput: isCustomProvider ? false : data.useBaseURLInput,
+    baseURL: '',
+    useBaseURLInput: false,
     customProviderBaseURL: isCustomProvider ? data.customProviderBaseURL : '',
     useCustomProviderBaseURLInput: isCustomProvider ? data.useCustomProviderBaseURLInput : false,
     extraProviderOptions: data.useExtraProviderOptionsInput ? '' : fingerprintSecret(data.extraProviderOptions) ?? '',

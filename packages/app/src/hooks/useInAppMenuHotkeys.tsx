@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
-import { type MenuIds, useRunMenuCommand } from './useMenuCommands';
+import { useRunMenuCommand } from './useMenuCommands';
 import { isMacOSPlatform, isWindowsPlatform } from '../utils/platform/os.js';
 import { isInTauri } from '../utils/tauri.js';
+import { getInAppMenuHotkeyCommand, type InAppMenuHotkeyPlatform } from '../utils/inAppMenuHotkeys.js';
 
 interface InAppMenuHotkeyWindow extends Window {
   __rivetInAppMenuHotkeysCleanup?: () => void;
@@ -9,19 +10,20 @@ interface InAppMenuHotkeyWindow extends Window {
 declare let window: InAppMenuHotkeyWindow;
 
 const shouldUseInAppMenuHotkeys = isWindowsPlatform() || (isInTauri() && isMacOSPlatform());
-
-const shortcutToMenuId: Record<string, MenuIds> = {
-  F5: 'remote_debugger',
-  'CmdOrCtrl+Shift+O': 'load_recording',
-  'CmdOrCtrl+N': 'new_project',
-  'CmdOrCtrl+O': 'open_project',
-  'CmdOrCtrl+S': 'save_project',
-  'CmdOrCtrl+Shift+E': 'export_graph',
-  'CmdOrCtrl+Shift+S': 'save_project_as',
-  'CmdOrCtrl+ENTER': 'run',
-};
-
 const hotkeyListenerOptions = { capture: true };
+const consumeRunHotkeySelector = '[data-rivet-consume-run-hotkey="true"]';
+
+function getInAppMenuHotkeyPlatform(): InAppMenuHotkeyPlatform {
+  return isMacOSPlatform() ? 'macos' : 'windows';
+}
+
+function shouldSkipInAppMenuHotkey(event: KeyboardEvent, command: string) {
+  if (command !== 'run' || !(event.target instanceof Element)) {
+    return false;
+  }
+
+  return event.target.closest(consumeRunHotkeySelector) != null;
+}
 
 export const useInAppMenuHotkeys = () => {
   const runMenuCommandImpl = useRunMenuCommand();
@@ -32,13 +34,16 @@ export const useInAppMenuHotkeys = () => {
     }
 
     window.__rivetInAppMenuHotkeysCleanup?.();
+    const platform = getInAppMenuHotkeyPlatform();
 
     const onKeyDown = (event: KeyboardEvent) => {
-      const { key, ctrlKey, metaKey, shiftKey } = event;
-      const code = `${ctrlKey || metaKey ? 'CmdOrCtrl+' : ''}${shiftKey ? 'Shift+' : ''}${key.toUpperCase()}`;
-      const command = shortcutToMenuId[code];
+      const command = getInAppMenuHotkeyCommand(event, platform);
 
       if (command) {
+        if (shouldSkipInAppMenuHotkey(event, command)) {
+          return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
 

@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { type LLMChatV2Node, LLMChatV2NodeImpl } from '../../../src/index.js';
 import {
   createsLLMChatV2ToolResponseFormatConflictForEdit,
@@ -94,6 +96,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.title, 'LLM Chat');
     assert.equal(node.data.provider, 'openai');
     assert.equal(node.data.apiKeySource, 'environment');
+    assert.equal(node.data.customProviderApiKeyProgrammaticName, '');
     assert.equal(node.data.customProviderApiKeyEnvVarName, 'CUSTOM_PROVIDER_API_KEY');
     assert.equal(node.data.customProviderBaseURL, '');
     assert.equal(node.data.useCustomProviderBaseURLInput, false);
@@ -162,6 +165,19 @@ describe('LLMChatV2NodeImpl', () => {
       { value: 'environment', label: 'Configured key' },
       { value: 'input', label: 'Input port' },
     ]);
+    assert.equal(typeof apiKeySourceEditor?.helperMessage, 'function');
+    assert.equal(
+      apiKeySourceEditor.helperMessage(defaultNode.data),
+      'Configured key uses Settings > LLM > OpenAI API Key in the Rivet editor, with OPENAI_API_KEY as a desktop/Node fallback. Programmatic runs can pass openAiApiKey or set OPENAI_API_KEY.',
+    );
+    assert.equal(
+      apiKeySourceEditor.helperMessage(inputNode.data),
+      'Uses the API Key input port instead of a configured provider key.',
+    );
+    assert.equal(
+      apiKeySourceEditor.helperMessage(createNode({ provider: 'anthropic' }).data),
+      'Configured key uses Settings > LLM > Anthropic API Key in the Rivet editor, with ANTHROPIC_API_KEY as a desktop/Node fallback. Programmatic runs can pass anthropicApiKey or set ANTHROPIC_API_KEY.',
+    );
   });
 
   it('exposes Custom provider as an OpenAI-compatible provider mode', async () => {
@@ -178,32 +194,62 @@ describe('LLMChatV2NodeImpl', () => {
     const modelGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Model') as any;
     const providerEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'provider');
     const modelEditor = modelGroup.editors.find((editor: any) => editor.customEditorId === 'LLMChatV2ModelCatalog');
+    const programmaticKeyEditor = modelGroup.editors.find(
+      (editor: any) => editor.dataKey === 'customProviderApiKeyProgrammaticName',
+    );
     const envVarEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'customProviderApiKeyEnvVarName');
     const customBaseUrlEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'customProviderBaseURL');
     const providerAdvancedGroup = editors.find(
       (editor) => editor.type === 'group' && editor.label === 'Provider Advanced',
     ) as any;
-    const advancedBaseUrlEditor = providerAdvancedGroup.editors.find((editor: any) => editor.dataKey === 'baseURL');
     const extraProviderOptionsEditor = providerAdvancedGroup.editors.find(
       (editor: any) => editor.dataKey === 'extraProviderOptions',
     );
 
     assert.deepEqual(
       modelGroup.editors.map((editor: any) => editor.dataKey ?? editor.customEditorId),
-      ['provider', 'customProviderBaseURL', 'LLMChatV2ModelCatalog', 'apiKeySource', 'customProviderApiKeyEnvVarName'],
+      [
+        'provider',
+        'customProviderBaseURL',
+        'LLMChatV2ModelCatalog',
+        'apiKeySource',
+        'customProviderApiKeyProgrammaticName',
+        'customProviderApiKeyEnvVarName',
+      ],
     );
     assert.ok(
       providerEditor.options.some((option: any) => option.value === 'custom' && option.label === 'Custom provider'),
     );
     assert.deepEqual(modelEditor.data.modelOptions, [{ value: 'llama-custom', label: 'llama-custom' }]);
-    assert.equal(envVarEditor.label, 'API key env var name');
+    assert.equal(programmaticKeyEditor.label, 'Alternative programmatic key name');
+    assert.equal(
+      programmaticKeyEditor.helperMessage,
+      'If set, programmatic runs read this named run option instead of the shared customAiApiKey.',
+    );
+    assert.equal(programmaticKeyEditor.hideIf({ provider: 'custom', apiKeySource: 'environment' }), false);
+    assert.equal(programmaticKeyEditor.hideIf({ provider: 'custom', apiKeySource: 'input' }), true);
+    assert.equal(envVarEditor.label, 'Alternative API key env var');
+    assert.equal(envVarEditor.helperMessage, 'If set, this env var is used instead of CUSTOM_PROVIDER_API_KEY.');
     assert.equal(envVarEditor.hideIf({ provider: 'custom', apiKeySource: 'environment' }), false);
     assert.equal(envVarEditor.hideIf({ provider: 'custom', apiKeySource: 'input' }), true);
+    assert.equal(
+      modelGroup.editors
+        .find((editor: any) => editor.dataKey === 'apiKeySource')
+        .helperMessage({
+          ...node.data,
+          customProviderApiKeyProgrammaticName: 'makoraApiKey',
+          customProviderApiKeyEnvVarName: 'MAKORA_API_KEY',
+        }),
+      'Configured key checks makoraApiKey, then MAKORA_API_KEY env var, then Settings > LLM > Custom provider API key.',
+    );
+    assert.equal(
+      modelGroup.editors.find((editor: any) => editor.dataKey === 'apiKeySource').helperMessage(node.data),
+      'Configured key checks CUSTOM_PROVIDER_API_KEY env var, then Settings > LLM > Custom provider API key. Programmatic runs can pass the shared customAiApiKey.',
+    );
     assert.equal(customBaseUrlEditor.label, 'Provider base URL');
     assert.equal(customBaseUrlEditor.useInputToggleDataKey, 'useCustomProviderBaseURLInput');
     assert.equal(customBaseUrlEditor.hideIf({ provider: 'custom' }), false);
-    assert.equal(advancedBaseUrlEditor.hideIf({ provider: 'custom' }), true);
-    assert.equal(advancedBaseUrlEditor.hideIf({ provider: 'openai' }), false);
+    assert.equal(providerAdvancedGroup.editors.some((editor: any) => editor.dataKey === 'baseURL'), false);
     assert.equal(extraProviderOptionsEditor.type, 'code');
     assert.equal(extraProviderOptionsEditor.language, 'json');
     assert.equal(extraProviderOptionsEditor.useInputToggleDataKey, 'useExtraProviderOptionsInput');
@@ -460,7 +506,7 @@ describe('LLMChatV2NodeImpl', () => {
     ]);
   });
 
-  it('adds the base URL input for the active provider URL field', () => {
+  it('adds the base URL input only for Custom provider URL fields', () => {
     const customInputNode = createNode({
       provider: 'custom',
       useCustomProviderBaseURLInput: true,
@@ -479,15 +525,7 @@ describe('LLMChatV2NodeImpl', () => {
         required: false,
       },
     );
-    assert.deepEqual(
-      builtInInputNode.getInputDefinitions().find((input) => input.id === 'baseURL'),
-      {
-        id: 'baseURL',
-        title: 'Base URL',
-        dataType: 'string',
-        required: false,
-      },
-    );
+    assert.equal(builtInInputNode.getInputDefinitions().find((input) => input.id === 'baseURL'), undefined);
   });
 
   it('adds an extra provider options input when enabled', () => {
@@ -1266,7 +1304,34 @@ describe('LLMChatV2NodeImpl', () => {
     );
   });
 
-  it('resolves Custom provider configured key from node env vars before shared LLM settings', () => {
+  it('resolves Custom provider configured key from programmatic key names before env vars and shared settings', () => {
+    assert.equal(
+      resolveLLMChatV2ApiKey(
+        createNode({
+          provider: 'custom',
+          customProviderApiKeyProgrammaticName: 'cerebrasApiKey',
+          customProviderApiKeyEnvVarName: 'CEREBRAS_API_KEY',
+        }).data,
+        {},
+        createRuntimeContext({
+          settings: {
+            openAiKey: '',
+            openAiEndpoint: '',
+            openAiOrganization: '',
+            chatNodeHeaders: {},
+            customAiApiKey: 'configured-custom-key',
+            cerebrasApiKey: 'programmatic-specific-key',
+            pluginEnv: {
+              CEREBRAS_API_KEY: 'env-specific-key',
+            },
+          },
+        }),
+      ),
+      'programmatic-specific-key',
+    );
+  });
+
+  it('falls back to Custom provider API key env vars before shared LLM settings', () => {
     assert.equal(
       resolveLLMChatV2ApiKey(
         createNode({
@@ -1363,7 +1428,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(getCacheProviderConfig(runtime).baseURL, 'https://input.example.ai/v1');
   });
 
-  it('keeps Custom provider and built-in provider base URL input ports separate', async () => {
+  it('keeps Custom provider base URL active while ignoring stale built-in provider base URLs', async () => {
     const customNode = createNode({
       provider: 'custom',
       model: 'llama-custom',
@@ -1402,7 +1467,23 @@ describe('LLMChatV2NodeImpl', () => {
     });
 
     assert.equal(getCacheProviderConfig(customRuntime).baseURL, 'https://input-custom.example.ai/v1');
-    assert.equal(getCacheProviderConfig(openAiRuntime).baseURL, 'https://input-openai.example.test/v1');
+    assert.equal(getCacheProviderConfig(openAiRuntime).baseURL, undefined);
+  });
+
+  it('keeps built-in provider tools on provider-owned endpoints too', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../../../src/model/chat-v2/chatV2RuntimeOptions.ts', import.meta.url)),
+      'utf8',
+    );
+    const openAiToolsBlock = source.match(/case 'openai': \{[\s\S]*?case 'google': \{/);
+    const googleToolsBlock = source.match(/case 'google': \{[\s\S]*?case 'anthropic':/);
+
+    assert.ok(openAiToolsBlock);
+    assert.ok(googleToolsBlock);
+    assert.match(openAiToolsBlock[0], /createOpenAI\([\s\S]*baseURL: undefined/);
+    assert.match(googleToolsBlock[0], /createGoogleGenerativeAI\([\s\S]*baseURL: undefined/);
+    assert.doesNotMatch(openAiToolsBlock[0], /baseURL: config\.baseURL/);
+    assert.doesNotMatch(googleToolsBlock[0], /baseURL: config\.baseURL/);
   });
 
   it('does not reuse the Custom provider base URL as a built-in provider override', async () => {
@@ -1420,7 +1501,7 @@ describe('LLMChatV2NodeImpl', () => {
       context: createRuntimeContext(),
     });
 
-    assert.equal(getCacheProviderConfig(runtime).baseURL, 'https://api.openai.test/v1');
+    assert.equal(getCacheProviderConfig(runtime).baseURL, undefined);
   });
 
   it('ignores inactive base URL fields in editor cache keys', async () => {

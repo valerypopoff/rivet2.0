@@ -34,6 +34,7 @@ The `RunGraphOptions` type is used to pass various parameters to the `runGraphIn
 - `anthropicApiKey`: Your Anthropic API key. This is used by Anthropic-backed LLM Chat nodes when API key source is Configured key.
 - `googleApiKey`: Your Google Generative AI API key. This is used by Google-backed LLM Chat nodes when API key source is Configured key.
 - `customAiApiKey`: Generic API key for custom-provider LLM Chat nodes when API key source is Configured key.
+- Named custom-provider keys: If an LLM Chat custom-provider node sets an Alternative programmatic key name, pass a top-level option with that exact name.
 - `openAiOrganization`: If you are using a non-default OpenAI organization, you may specify your organization here.
 
 For more details, refer to [RunGraphOptions](./RunGraphOptions).
@@ -68,6 +69,7 @@ await runGraphInFile('./myProject.rivet', {
   anthropicApiKey: 'my-anthropic-key',
   googleApiKey: 'my-google-key',
   customAiApiKey: 'my-custom-provider-key',
+  cerebrasApiKey: 'my-cerebras-key',
   openAiOrganization: 'my-organization',
 });
 ```

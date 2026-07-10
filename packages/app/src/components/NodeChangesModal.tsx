@@ -6,6 +6,19 @@ import { useHistoricalNodeChangeInfo } from '../hooks/useHistoricalNodeChangeInf
 import * as yaml from 'yaml';
 import { diffStringsUnified } from 'jest-diff';
 import { AppModalHeader } from './AppModalHeader';
+import { escapeHtml, toSanitizedMarkdownHtml } from '../hooks/useMarkdown.js';
+import { sanitizeMarkdownHtml } from '../utils/markdown/sanitizeMarkdownHtml.js';
+import { css } from '@emotion/react';
+
+const diffStyles = css`
+  .rivet-yaml-diff-before {
+    color: #e74c3c;
+  }
+
+  .rivet-yaml-diff-after {
+    color: #00b74c;
+  }
+`;
 
 export const NodeChangesModalRenderer: FC = () => {
   const changes = useAtomValue(viewingNodeChangesState);
@@ -30,9 +43,10 @@ export const NodeChangesModal: FC = () => {
     expand: false,
     aAnnotation: 'Before',
     bAnnotation: 'After',
-    aColor: (str) => `<span style="color: #e74c3c;">${str}</span>`,
-    bColor: (str) => `<span style="color: #00b74c;">${str}</span>`,
+    aColor: (str) => `<span class="rivet-yaml-diff-before">${escapeHtml(str)}</span>`,
+    bColor: (str) => `<span class="rivet-yaml-diff-after">${escapeHtml(str)}</span>`,
   });
+  const safeYamlDiff = toSanitizedMarkdownHtml(sanitizeMarkdownHtml(yamlDiff));
 
   return (
     <Modal
@@ -44,7 +58,9 @@ export const NodeChangesModal: FC = () => {
     >
       <AppModalHeader title="Node Changes" />
       <ModalBody>
-        <pre style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: yamlDiff }} />
+        <div css={diffStyles}>
+          <pre style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={safeYamlDiff} />
+        </div>
       </ModalBody>
       <ModalFooter />
     </Modal>
