@@ -12,13 +12,37 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   RIVET_REPO_URL: https://github.com/valerypopoff/rivet2.0.git
   RIVET_REPO_REF: main
+  IMAGE_NAMESPACE: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper
 
 jobs:
+  verify-repository:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Verify Repo Structure
+        run: npm run verify:repo-structure
+
+      - name: Verify Test Style
+        run: npm run verify:test-style
+
   resolve-rivet:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       rivet_commit: ${{ steps.resolve.outputs.rivet_commit }}
       rivet_ref: ${{ steps.resolve.outputs.rivet_ref }}
@@ -47,10 +71,14 @@ jobs:
           echo "Resolved Rivet ref $ref -> $commit"
 
   build-and-push:
-    needs: resolve-rivet
+    needs:
+      - resolve-rivet
+      - verify-repository
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     env:
       RIVET_REPO_REF: ${{ needs.resolve-rivet.outputs.rivet_commit }}
+      SOURCE_TAG: build-${{ github.sha }}-${{ needs.resolve-rivet.outputs.rivet_commit }}
     strategy:
       fail-fast: false
       matrix:
@@ -60,36 +88,39 @@ jobs:
             image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/proxy
             platforms: linux/amd64,linux/arm64
             needsRivet: false
+            rivetSourceContext: .
+            rivetDependencyContext: .
           - service: web
             dockerfile: image/web/Dockerfile
             image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/web
             platforms: linux/amd64,linux/arm64
             needsRivet: true
+            rivetSourceContext: .data/docker-contexts/rivet-source
+            rivetDependencyContext: .data/docker-contexts/rivet-dependency-metadata
           - service: api
             dockerfile: image/api/Dockerfile
             image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/api
             platforms: linux/amd64
             needsRivet: true
+            rivetSourceContext: .data/docker-contexts/rivet-source
+            rivetDependencyContext: .data/docker-contexts/rivet-dependency-metadata
           - service: executor
             dockerfile: image/executor/Dockerfile
             image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/executor
             platforms: linux/amd64
             needsRivet: true
+            rivetSourceContext: .data/docker-contexts/rivet-source
+            rivetDependencyContext: .data/docker-contexts/rivet-dependency-metadata
 
     steps:
       - name: Check Out Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set Up Node
-        uses: actions/setup-node@v4
+        if: ${{ matrix.needsRivet }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
-
-      - name: Verify Repo Structure
-        run: npm run verify:repo-structure
-
-      - name: Verify Test Style
-        run: npm run verify:test-style
 
       - name: Bootstrap Upstream Rivet
         if: ${{ matrix.needsRivet }}
@@ -104,13 +135,13 @@ jobs:
 
       - name: Set Up QEMU
         if: ${{ contains(matrix.platforms, 'linux/arm64') }}
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set Up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log In to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -118,14 +149,11 @@ jobs:
 
       - name: Prepare Docker Metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ matrix.image }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main-rivet2' }}
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha,format=short
+            type=raw,value=${{ env.SOURCE_TAG }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -134,14 +162,15 @@ jobs:
             org.opencontainers.image.rivet.revision=${{ needs.resolve-rivet.outputs.rivet_commit }}
 
       - name: Build and Push ${{ matrix.service }}
-        if: ${{ matrix.needsRivet }}
-        uses: docker/build-push-action@v6
+        id: build
+        continue-on-error: true
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           build-contexts: |
-            rivet_source=.data/docker-contexts/rivet-source
-            rivet_dependency_metadata=.data/docker-contexts/rivet-dependency-metadata
+            rivet_source=${{ matrix.rivetSourceContext }}
+            rivet_dependency_metadata=${{ matrix.rivetDependencyContext }}
           platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -149,15 +178,98 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-      - name: Build and Push ${{ matrix.service }}
-        if: ${{ ! matrix.needsRivet }}
-        uses: docker/build-push-action@v6
+      - name: Refresh GHCR Login Before Retry
+        if: ${{ steps.build.outcome == 'failure' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retry Build and Push ${{ matrix.service }}
+        if: ${{ steps.build.outcome == 'failure' }}
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          build-contexts: |
+            rivet_source=${{ matrix.rivetSourceContext }}
+            rivet_dependency_metadata=${{ matrix.rivetDependencyContext }}
           platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  promote-images:
+    needs:
+      - resolve-rivet
+      - build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_TAG: build-${{ github.sha }}-${{ needs.resolve-rivet.outputs.rivet_commit }}
+    steps:
+      - name: Set Up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log In to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Release Metadata
+        id: release-meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAMESPACE }}/proxy
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main-rivet2' }}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Promote Complete Image Set
+        shell: bash
+        env:
+          PROXY_RELEASE_TAGS: ${{ steps.release-meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          tag_suffixes=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            prefix="${IMAGE_NAMESPACE}/proxy:"
+            if [[ "$tag" != "$prefix"* ]]; then
+              echo "::error::Unexpected release tag from metadata action: $tag"
+              exit 1
+            fi
+            tag_suffixes+=("${tag#"$prefix"}")
+          done <<< "$PROXY_RELEASE_TAGS"
+
+          if [ "${#tag_suffixes[@]}" -eq 0 ]; then
+            echo "::error::No release image tags were generated"
+            exit 1
+          fi
+
+          for service in proxy web api executor; do
+            source_image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            destination_args=()
+            for suffix in "${tag_suffixes[@]}"; do
+              destination_args+=(--tag "${IMAGE_NAMESPACE}/${service}:${suffix}")
+            done
+
+            for attempt in 1 2 3; do
+              if docker buildx imagetools create "${destination_args[@]}" "$source_image"; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to promote $service after $attempt attempts"
+                exit 1
+              fi
+              sleep "$((attempt * 5))"
+            done
+          done

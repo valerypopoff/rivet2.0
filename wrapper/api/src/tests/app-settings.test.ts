@@ -826,6 +826,7 @@ test('Runtime limit settings ignore environment values until saved', async () =>
     assert.equal(defaultSettings.commandTimeoutSeconds, 30);
     assert.equal(defaultSettings.maxOutputBytes, 10 * 1024 * 1024);
     assert.equal(defaultSettings.proxyReadTimeoutSeconds, 180);
+    assert.equal(defaultSettings.webAppActionRequestLimitBytes, 100 * 1024 * 1024);
     assert.equal(defaultSettings.dockerWaitTimeoutSeconds, 1200);
     assert.equal(getCommandTimeout(), 30_000);
     assert.equal(getMaxOutputBytes(), 10 * 1024 * 1024);
@@ -834,6 +835,7 @@ test('Runtime limit settings ignore environment values until saved', async () =>
       commandTimeoutSeconds: 45,
       maxOutputBytes: 12 * 1024 * 1024,
       proxyReadTimeoutSeconds: 240,
+      webAppActionRequestLimitBytes: 200 * 1024 * 1024,
       dockerWaitTimeoutSeconds: 1500,
     });
 
@@ -842,6 +844,7 @@ test('Runtime limit settings ignore environment values until saved', async () =>
     assert.equal(nextSettings.commandTimeoutSeconds, 45);
     assert.equal(nextSettings.maxOutputBytes, 12 * 1024 * 1024);
     assert.equal(nextSettings.proxyReadTimeoutSeconds, 240);
+    assert.equal(nextSettings.webAppActionRequestLimitBytes, 200 * 1024 * 1024);
     assert.equal(nextSettings.dockerWaitTimeoutSeconds, 1500);
     assert.equal(getCommandTimeout(), 45_000);
     assert.equal(getMaxOutputBytes(), 12 * 1024 * 1024);
@@ -863,6 +866,7 @@ test('Runtime limit settings API saves and returns persisted values', async () =
           commandTimeoutSeconds: '60',
           maxOutputBytes: String(20 * 1024 * 1024),
           proxyReadTimeoutSeconds: '300',
+          webAppActionRequestLimitBytes: String(150 * 1024 * 1024),
           dockerWaitTimeoutSeconds: '1800',
         }),
       });
@@ -873,6 +877,7 @@ test('Runtime limit settings API saves and returns persisted values', async () =
       assert.equal(saved.commandTimeoutSeconds, 60);
       assert.equal(saved.maxOutputBytes, 20 * 1024 * 1024);
       assert.equal(saved.proxyReadTimeoutSeconds, 300);
+      assert.equal(saved.webAppActionRequestLimitBytes, 150 * 1024 * 1024);
       assert.equal(saved.dockerWaitTimeoutSeconds, 1800);
 
       const readResponse = await fetch(`${server.baseUrl}/api/app-settings/runtime-limits`, {
@@ -883,6 +888,7 @@ test('Runtime limit settings API saves and returns persisted values', async () =
       assert.equal(settings.commandTimeoutSeconds, 60);
       assert.equal(settings.maxOutputBytes, 20 * 1024 * 1024);
       assert.equal(settings.proxyReadTimeoutSeconds, 300);
+      assert.equal(settings.webAppActionRequestLimitBytes, 150 * 1024 * 1024);
       assert.equal(settings.dockerWaitTimeoutSeconds, 1800);
 
       const partialSaveResponse = await fetch(`${server.baseUrl}/api/app-settings/runtime-limits`, {
@@ -900,9 +906,45 @@ test('Runtime limit settings API saves and returns persisted values', async () =
       assert.equal(partiallySaved.commandTimeoutSeconds, 60);
       assert.equal(partiallySaved.maxOutputBytes, 20 * 1024 * 1024);
       assert.equal(partiallySaved.proxyReadTimeoutSeconds, 360);
+      assert.equal(partiallySaved.webAppActionRequestLimitBytes, 150 * 1024 * 1024);
       assert.equal(partiallySaved.dockerWaitTimeoutSeconds, 1800);
     } finally {
       await server?.close();
+    }
+  });
+});
+
+test('Web app action JSON requests use the saved button-data limit on active app routes', async () => {
+  await withAppSettingsEnv(async () => {
+    await writeRuntimeLimitSettings({
+      webAppActionRequestLimitBytes: 1024 * 1024,
+    });
+
+    const server = await startServer('combined');
+    try {
+      await writePublicRouteSettings({
+        publishedWorkflowsBasePath: '/workflows',
+        latestWorkflowsBasePath: '/workflows-latest',
+        publishedAppsBasePath: '/published-apps',
+        latestAppsBasePath: '/latest-apps',
+      });
+
+      for (const route of [
+        '/published-apps/example/actions/run',
+        '/published-apps/example/actions/run/',
+        '/latest-apps/example/actions/run',
+        '/latest-apps/example/actions/run/',
+      ]) {
+        const response = await fetch(`${server.baseUrl}${route}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ data: 'x'.repeat(1024 * 1024) }),
+        });
+
+        assert.equal(response.status, 413, route);
+      }
+    } finally {
+      await server.close();
     }
   });
 });
@@ -914,6 +956,13 @@ test('Runtime limit settings reject invalid values and fail loudly when saved fi
         commandTimeoutSeconds: 0,
       }),
       /Command timeout must be a positive whole number/,
+    );
+
+    await assert.rejects(
+      writeRuntimeLimitSettings({
+        webAppActionRequestLimitBytes: 1,
+      }),
+      /Web app button data limit must be at least 1 MiB/,
     );
 
     const settingsPath = getRuntimeLimitSettingsPath();

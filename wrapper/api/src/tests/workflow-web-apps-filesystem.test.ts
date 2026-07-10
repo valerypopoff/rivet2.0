@@ -832,6 +832,24 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
       const loginState = new URL(loginLocation).searchParams.get('state') ?? '';
       assert.equal(decodeSignedPayload(loginState).returnTo, '/apps/published-web-app-oauth');
 
+      const switchAccountPromptResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth?auth_prompt=select_account`, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(switchAccountPromptResponse.status, 401);
+      const switchAccountPromptHtml = await switchAccountPromptResponse.text();
+      assert.match(switchAccountPromptHtml, /href="\/apps\/published-web-app-oauth\?auth_prompt=select_account&amp;auth_action=login"/);
+
+      const switchAccountRedirectResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth?auth_prompt=select_account&auth_action=login`, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(switchAccountRedirectResponse.status, 302);
+      const switchAccountLoginLocation = switchAccountRedirectResponse.headers.get('location') ?? '';
+      const switchAccountAuthorizeUrl = new URL(switchAccountLoginLocation);
+      assert.equal(switchAccountAuthorizeUrl.searchParams.get('prompt'), 'select_account');
+      assert.equal(decodeSignedPayload(switchAccountAuthorizeUrl.searchParams.get('state') ?? '').returnTo, '/apps/published-web-app-oauth');
+
       const authErrorResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth?auth_error=oauth_profile`, {
         redirect: 'manual',
         signal: AbortSignal.timeout(5000),
@@ -871,7 +889,7 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
       assert.match(deniedHtml, /Web app access denied/);
       assert.match(deniedHtml, /other@example\.com/);
       assert.match(deniedHtml, /Sign out and choose another account/);
-      assert.match(deniedHtml, /href="\/apps\/auth\/logout\?return_to=%2Fapps%2Fpublished-web-app-oauth"/);
+      assert.match(deniedHtml, /href="\/apps\/auth\/logout\?return_to=%2Fapps%2Fpublished-web-app-oauth&amp;select_account=1"/);
 
       const allowedResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth`, {
         headers: { cookie: allowedSessionCookie },
@@ -880,7 +898,7 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
       assert.equal(allowedResponse.status, 200);
       const allowedHtml = await allowedResponse.text();
       assert.match(allowedHtml, /rivet-web-app-auth-logout/);
-      assert.match(allowedHtml, /href="\/apps\/auth\/logout\?return_to=%2Fapps%2Fpublished-web-app-oauth"/);
+      assert.match(allowedHtml, /href="\/apps\/auth\/logout\?return_to=%2Fapps%2Fpublished-web-app-oauth&amp;select_account=1"/);
 
       const crossOriginActionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-oauth/actions/run`, {
         method: 'POST',

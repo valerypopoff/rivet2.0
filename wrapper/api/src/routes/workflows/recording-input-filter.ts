@@ -524,7 +524,7 @@ function valueContains(value: unknown, expected: unknown): boolean {
       return expected === 'undefined';
     }
 
-    return stringifyForContains(value).includes(expected);
+    return valueContainsText(value, expected);
   }
 
   if (typeof value === 'string') {
@@ -538,19 +538,43 @@ function valueContains(value: unknown, expected: unknown): boolean {
   return false;
 }
 
-function stringifyForContains(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
+function valueContainsText(value: unknown, expected: string): boolean {
+  if (expected === '') {
+    return value !== undefined;
   }
 
-  try {
-    const serialized = JSON.stringify(value);
-    if (typeof serialized === 'string') {
-      return serialized;
+  const visited = new Set<object>();
+
+  return valueContainsTextInner(value, expected, visited);
+}
+
+function valueContainsTextInner(value: unknown, expected: string, visited: Set<object>): boolean {
+  if (value === undefined) {
+    return false;
+  }
+
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).includes(expected);
+  }
+
+  if (typeof value !== 'object') {
+    return String(value).includes(expected);
+  }
+
+  if (visited.has(value)) {
+    return false;
+  }
+  visited.add(value);
+
+  if (Array.isArray(value)) {
+    return value.some((item) => valueContainsTextInner(item, expected, visited));
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    if (key.includes(expected) || valueContainsTextInner(item, expected, visited)) {
+      return true;
     }
-  } catch {
-    // Fall through to String(value) for unusual non-JSON values.
   }
 
-  return String(value);
+  return false;
 }

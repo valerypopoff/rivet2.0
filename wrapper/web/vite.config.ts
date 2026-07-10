@@ -352,6 +352,10 @@ export default defineConfig({
         ...createTauriShimAliases(shimDir),
         ...wrapperExactDependencyAliases,
         {
+          find: /^@gentrace\/core\/(.+)$/,
+          replacement: resolve(__dirname, 'node_modules/@gentrace/core/$1'),
+        },
+        {
           find: /^github-markdown-css\/(.+)$/,
           replacement: resolve(__dirname, 'node_modules/github-markdown-css/$1'),
         },

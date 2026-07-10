@@ -10,6 +10,7 @@ import {
   resolveUiGraphActionOutputStatePatch,
   RivetWebAppActionHttpError,
   type DataValue,
+  type LooseDataValue,
   type RivetWebAppActionResult,
   type RivetWebAppProcessorOptions,
   type UiComponentId,
@@ -36,6 +37,7 @@ import {
   getWebAppAuthMode,
   isWebAppOAuthSessionAllowed,
   readWebAppOAuthSession,
+  WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT,
 } from '../../web-app-oauth.js';
 import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
@@ -371,6 +373,7 @@ type WebAppRequestKind = 'html' | 'json' | 'action';
 
 const WEB_APP_OAUTH_AUTH_ACTION_QUERY = 'auth_action';
 const WEB_APP_OAUTH_LOGIN_ACTION = 'login';
+const WEB_APP_OAUTH_PROMPT_QUERY = 'auth_prompt';
 
 function getWebAppRequestReturnTo(req: Request): string {
   return req.originalUrl || req.url || '/';
@@ -396,19 +399,30 @@ function getWebAppAuthRetryPath(req: Request): string {
   return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
 }
 
+function getWebAppCleanReturnTo(req: Request): string {
+  const parsed = new URL(getWebAppAuthRetryPath(req), 'http://rivet.local');
+  parsed.searchParams.delete(WEB_APP_OAUTH_PROMPT_QUERY);
+  return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
+}
+
 function getWebAppOAuthLoginPath(req: Request): string {
   const parsed = new URL(getWebAppAuthRetryPath(req), 'http://rivet.local');
   parsed.searchParams.set(WEB_APP_OAUTH_AUTH_ACTION_QUERY, WEB_APP_OAUTH_LOGIN_ACTION);
   return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
 }
 
-function getWebAppOAuthLogoutPath(returnTo: string): string {
+function getWebAppOAuthLogoutPath(returnTo: string, options: {
+  selectAccount?: boolean;
+} = {}): string {
   const params = new URLSearchParams({ return_to: returnTo });
+  if (options.selectAccount) {
+    params.set('select_account', '1');
+  }
   return `${getPublishedWebAppsBasePath()}/auth/logout?${params.toString()}`;
 }
 
 function getWebAppCurrentLogoutPath(req: Request): string {
-  return getWebAppOAuthLogoutPath(getWebAppAuthRetryPath(req));
+  return getWebAppOAuthLogoutPath(getWebAppCleanReturnTo(req), { selectAccount: true });
 }
 
 function getWebAppAuthErrorMessage(errorCode: string): string {
@@ -584,7 +598,13 @@ function sendWebAppAuthJsonError(
 }
 
 function startWebAppOAuthLogin(req: Request, res: Response): void {
-  const redirect = createWebAppOAuthAuthorizationRedirect(req, getWebAppAuthRetryPath(req));
+  const redirect = createWebAppOAuthAuthorizationRedirect(
+    req,
+    getWebAppCleanReturnTo(req),
+    req.query[WEB_APP_OAUTH_PROMPT_QUERY] === WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT
+      ? { prompt: WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT }
+      : {},
+  );
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Set-Cookie', redirect.cookies);
@@ -887,11 +907,14 @@ async function runRecordedWebAppAction(
     codeRunnerTelemetry,
     options,
   );
+  const inputs = (processorOptions.inputs ??
+    Object.fromEntries(
+      Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]),
+    )) as Record<string, LooseDataValue>;
   const processor = createProcessor(executionProject.project, {
     ...processorOptions,
     graph: component.action.graphId,
-    inputs: processorOptions.inputs ??
-      Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)])),
+    inputs,
   });
   const recorder = isWorkflowRecordingEnabled()
     ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())

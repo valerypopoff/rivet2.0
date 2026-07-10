@@ -183,8 +183,10 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
   assert.match(proxyBootstrap, /runtime_limit_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json"/);
   assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "proxyReadTimeoutSeconds"/);
+  assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "webAppActionRequestLimitBytes"/);
   assert.match(proxyBootstrap, /\*\[!0123456789\]\*/);
   assert.match(proxyBootstrap, /RIVET_PROXY_READ_TIMEOUT="\$\{proxy_read_timeout_seconds\}s"/);
+  assert.match(proxyBootstrap, /RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES="\$web_app_action_request_limit_bytes"/);
   assert.match(proxyBootstrap, /read_runtime_limit_settings/);
   assert.match(proxyBootstrap, /RIVET_PROXY_TIMEOUT_INCLUDE_FILE:-\/tmp\/nginx\/rivet-proxy-timeout\.inc/);
   assert.match(proxyBootstrap, /write_proxy_timeout_include\(\)/);
@@ -192,6 +194,7 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   assert.match(proxyBootstrap, /proxy_read_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
   assert.match(proxyBootstrap, /proxy_send_timeout \$\{RIVET_PROXY_READ_TIMEOUT\};/);
   assert.match(proxyBootstrap, /include \$\{RIVET_PROXY_TIMEOUT_INCLUDE_FILE\};/);
+  assert.match(proxyBootstrap, /client_max_body_size \$\{RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES\};/);
   assert.match(proxyBootstrap, /previous_proxy_timeout_include/);
   assert.match(proxyDockerfile, /ENV RIVET_PROXY_READ_TIMEOUT=180s/);
   assert.doesNotMatch(prodCompose, /RIVET_PROXY_READ_TIMEOUT/);
@@ -231,7 +234,11 @@ test('executor image and compose contracts keep the websocket service independen
 test('API images and launchers use the filtered Rivet source context and symlink-preserved runtime links', () => {
   const apiDockerfile = readRepoFile('image/api/Dockerfile');
   const apiEntrypoint = readRepoFile('image/api/entrypoint.sh');
+  const executorDockerfile = readRepoFile('image/executor/Dockerfile');
+  const webDockerfile = readRepoFile('image/web/Dockerfile');
   const composeApiDockerfile = readRepoFile('ops/docker/Dockerfile.api');
+  const composeExecutorDockerfile = readRepoFile('ops/docker/Dockerfile.executor');
+  const composeWebDockerfile = readRepoFile('ops/docker/Dockerfile.web');
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
   const devDockerLauncher = readRepoFile('scripts/dev-docker.mjs');
@@ -251,6 +258,18 @@ test('API images and launchers use the filtered Rivet source context and symlink
     assert.match(dockerfile, /YARN_NODE_LINKER=node-modules yarn build:runtime/);
     assert.doesNotMatch(dockerfile, /yarn workspace @valerypopoff\/rivet2-(core|node) run build/);
     assert.match(dockerfile, /RUN node \/app\/scripts\/link-rivet-node-package\.mjs/);
+  }
+
+  for (const dockerfile of [
+    apiDockerfile,
+    executorDockerfile,
+    webDockerfile,
+    composeApiDockerfile,
+    composeExecutorDockerfile,
+    composeWebDockerfile,
+  ]) {
+    assert.match(dockerfile, /corepack enable/);
+    assert.doesNotMatch(dockerfile, /corepack prepare yarn@/);
   }
 
   assert.match(apiDockerfile, /COPY --from=builder --chown=10001:10001 \/app\/rivet\/node_modules \/app\/rivet\/node_modules/);
@@ -292,7 +311,11 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(devDockerLauncher, /rivet\/\.yarn\/unplugged\/\.rivet-dev-yarn-install-ok/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/workspace\/rivet node \/workspace\/scripts\/ensure-rivet-runtime-build\.mjs/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/tmp\/rivet-source RIVET_API_PACKAGE_ROOT=\/app node \/workspace\/scripts\/link-rivet-node-package\.mjs/);
-  assert.match(ensureRivetRuntimeBuild, /yarn-4\.6\.0\.cjs/);
+  assert.match(ensureRivetRuntimeBuild, /function getConfiguredYarnPath\(\)/);
+  assert.match(ensureRivetRuntimeBuild, /\.yarnrc\.yml/);
+  assert.match(ensureRivetRuntimeBuild, /Expected yarnPath/);
+  assert.doesNotMatch(ensureRivetRuntimeBuild, /yarn-4\.6\.0\.cjs/);
+  assert.doesNotMatch(devCompose, /corepack prepare yarn@/);
   assert.match(ensureRivetRuntimeBuild, /'build:runtime'/);
   assert.match(ensureRivetRuntimeBuild, /webAppHandler\.js/);
   assert.match(prodCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);
@@ -345,26 +368,54 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   const productionScripts = Object.keys(packageJson.scripts)
     .filter((scriptName) => scriptName === 'prod' || scriptName.startsWith('prod:'))
     .sort();
+  const promotionIndex = /\r?\n  promote-images:\r?\n/.exec(imageBuildWorkflow)?.index ?? -1;
+  assert.ok(promotionIndex > 0, 'expected a final image promotion job');
+  const imageBuildPhase = imageBuildWorkflow.slice(0, promotionIndex);
+  const imagePromotionPhase = imageBuildWorkflow.slice(promotionIndex);
   const legacyRepoPattern = new RegExp('Iron' + 'clad\\/rivet');
   const legacyImageNamespacePattern = new RegExp('cloud-hosted-' + 'rivet-wrapper');
 
   assert.match(imageBuildWorkflow, /branches:\s*\n\s*- main-rivet2/);
   assert.ok(imageBuildWorkflow.includes('RIVET_REPO_URL: https://github.com/valerypopoff/rivet2.0.git'));
   assert.ok(imageBuildWorkflow.includes('RIVET_REPO_REF: main'));
-  assert.match(imageBuildWorkflow, /uses: docker\/setup-qemu-action@v3/);
-  assert.match(imageBuildWorkflow, /uses: docker\/setup-buildx-action@v3/);
-  assert.match(imageBuildWorkflow, /uses: docker\/login-action@v3/);
-  assert.match(imageBuildWorkflow, /uses: docker\/metadata-action@v5/);
-  assert.match(imageBuildWorkflow, /uses: docker\/build-push-action@v6/);
+  for (const actionRef of [
+    'actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5',
+    'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+    'docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130',
+    'docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f',
+    'docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9',
+    'docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051',
+    'docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8',
+  ]) {
+    assert.ok(imageBuildWorkflow.includes(`uses: ${actionRef}`), actionRef);
+  }
+  assert.match(imageBuildWorkflow, /concurrency:\s*\n\s*group: build-images-\$\{\{ github\.ref \}\}/);
+  assert.match(imageBuildWorkflow, /cancel-in-progress: false/);
+  assert.match(imageBuildWorkflow, /verify-repository:[\s\S]*npm run verify:repo-structure/);
+  assert.match(imageBuildWorkflow, /verify-repository:[\s\S]*npm run verify:test-style/);
+  assert.equal((imageBuildWorkflow.match(/run: npm run verify:repo-structure/g) ?? []).length, 1);
+  assert.equal((imageBuildWorkflow.match(/run: npm run verify:test-style/g) ?? []).length, 1);
+  assert.match(imageBuildWorkflow, /build-and-push:\s*\n\s*needs:\s*\n\s*- resolve-rivet\s*\n\s*- verify-repository/);
   assert.match(imageBuildWorkflow, /needsRivet: false/);
   assert.match(imageBuildWorkflow, /if: \$\{\{ matrix\.needsRivet \}\}/);
-  assert.match(imageBuildWorkflow, /if: \$\{\{ ! matrix\.needsRivet \}\}/);
-  assert.match(imageBuildWorkflow, /build-contexts:\s*\|\s*\n\s*rivet_source=\.data\/docker-contexts\/rivet-source/);
-  assert.match(imageBuildWorkflow, /rivet_dependency_metadata=\.data\/docker-contexts\/rivet-dependency-metadata/);
+  assert.match(imageBuildWorkflow, /build-contexts:\s*\|\s*\n\s*rivet_source=\$\{\{ matrix\.rivetSourceContext \}\}/);
+  assert.match(imageBuildWorkflow, /rivet_dependency_metadata=\$\{\{ matrix\.rivetDependencyContext \}\}/);
+  assert.match(imageBuildWorkflow, /rivetSourceContext: \.data\/docker-contexts\/rivet-source/);
+  assert.match(imageBuildWorkflow, /rivetDependencyContext: \.data\/docker-contexts\/rivet-dependency-metadata/);
   assert.match(imageBuildWorkflow, /org\.opencontainers\.image\.rivet\.revision=\$\{\{ needs\.resolve-rivet\.outputs\.rivet_commit \}\}/);
   assert.match(imageBuildWorkflow, /push: true/);
-  assert.ok(imageBuildWorkflow.includes("type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main-rivet2' }}"));
-  assert.ok(imageBuildWorkflow.includes('type=ref,event=branch'));
+  assert.ok(
+    imageBuildWorkflow.includes('SOURCE_TAG: build-${{ github.sha }}-${{ needs.resolve-rivet.outputs.rivet_commit }}'),
+  );
+  assert.ok(imageBuildWorkflow.includes('type=raw,value=${{ env.SOURCE_TAG }}'));
+  assert.match(imageBuildWorkflow, /continue-on-error: true/);
+  assert.match(imageBuildWorkflow, /steps\.build\.outcome == 'failure'/);
+  assert.match(imageBuildWorkflow, /promote-images:[\s\S]*- build-and-push/);
+  assert.match(imageBuildWorkflow, /docker buildx imagetools create/);
+  assert.match(imageBuildWorkflow, /for service in proxy web api executor/);
+  assert.doesNotMatch(imageBuildPhase, /type=raw,value=latest/);
+  assert.ok(imagePromotionPhase.includes("type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main-rivet2' }}"));
+  assert.ok(imagePromotionPhase.includes('type=ref,event=branch'));
 
   for (const [service, dockerfile, platforms] of [
     ['proxy', 'image/proxy/Dockerfile', 'linux/amd64,linux/arm64'],

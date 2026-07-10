@@ -13,6 +13,7 @@ import {
   getWebAppAuthMode,
   isWebAppOAuthSessionAllowed,
   readWebAppOAuthSession,
+  WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT,
   webAppOAuthRouter,
   type WebAppOAuthSession,
 } from '../web-app-oauth.js';
@@ -201,6 +202,33 @@ test('web app OAuth redirect stores state and sanitizes return targets', async (
     assert.ok(location.searchParams.get('state'));
     assert.match(redirect.cookies.join('\n'), /rivet_web_app_oauth_state=/);
     assert.match(redirect.cookies.join('\n'), /Secure/);
+  });
+});
+
+test('web app OAuth redirect can request provider account selection', async () => {
+  await withEnv({
+    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+    OAUTH_USER_URL: 'https://oauth.example.test/profile',
+    OAUTH_CLIENT_ID: 'client-id',
+    OAUTH_CLIENT_SECRET: 'client-secret',
+    OAUTH_CALLBACK_URL: 'https://rivet.example.test/apps/auth/callback',
+  }, () => {
+    const redirect = createWebAppOAuthAuthorizationRedirect(
+      createMockRequest(trustedProxyHeaders({
+        host: 'api.internal:80',
+        'x-forwarded-host': 'rivet.example.test',
+        'x-forwarded-proto': 'https',
+      })) as any,
+      '/apps/my-tool?auth_prompt=select_account',
+      { prompt: WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT },
+    );
+    const location = new URL(redirect.location);
+    assert.equal(location.searchParams.get('prompt'), 'select_account');
+
+    const state = location.searchParams.get('state') ?? '';
+    const statePayload = JSON.parse(Buffer.from(state.split('.')[0] ?? '', 'base64url').toString('utf8')) as { returnTo?: string };
+    assert.equal(statePayload.returnTo, '/apps/my-tool');
   });
 });
 
@@ -869,6 +897,17 @@ test('web app OAuth logout clears OAuth cookies and returns to the requested app
 
       assert.equal(externalReturnResponse.status, 303);
       assert.equal(externalReturnResponse.headers.get('location'), '/');
+
+      const switchAccountResponse = await fetch(
+        `${baseUrl}/auth/logout?return_to=${encodeURIComponent('/apps/my-tool?x=1&auth_action=login&auth_prompt=select_account&auth_error=oauth_failed#top')}&select_account=1`,
+        { redirect: 'manual' },
+      );
+
+      assert.equal(switchAccountResponse.status, 303);
+      assert.equal(
+        switchAccountResponse.headers.get('location'),
+        '/apps/my-tool?x=1&auth_prompt=select_account#top',
+      );
     });
   });
 });

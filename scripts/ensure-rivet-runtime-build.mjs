@@ -96,9 +96,31 @@ function isPackageRuntimeBuildStale(pkg) {
   return distMtime === 0 || sourceMtime > distMtime;
 }
 
+function getConfiguredYarnPath() {
+  const yarnrcPath = path.join(rivetRootDir, '.yarnrc.yml');
+  const yarnrc = fs.readFileSync(yarnrcPath, 'utf8');
+  const configuredPath = /^yarnPath:\s*(\S+)\s*$/m.exec(yarnrc)?.[1];
+
+  if (!configuredPath) {
+    throw new Error(`[ensure-rivet-runtime-build] Expected yarnPath in ${yarnrcPath}`);
+  }
+
+  const yarnPath = path.resolve(rivetRootDir, configuredPath);
+  const relativeYarnPath = path.relative(rivetRootDir, yarnPath);
+  if (!relativeYarnPath || relativeYarnPath.startsWith('..') || path.isAbsolute(relativeYarnPath)) {
+    throw new Error(`[ensure-rivet-runtime-build] yarnPath must stay inside ${rivetRootDir}`);
+  }
+
+  if (!pathExists(yarnPath)) {
+    throw new Error(`[ensure-rivet-runtime-build] Configured Yarn release is missing: ${yarnPath}`);
+  }
+
+  return yarnPath;
+}
+
 function runRuntimeBuild() {
   console.log('[ensure-rivet-runtime-build] Rebuilding Rivet runtime packages because source is newer than dist.');
-  const yarnPath = path.join(rivetRootDir, '.yarn', 'releases', 'yarn-4.6.0.cjs');
+  const yarnPath = getConfiguredYarnPath();
   const result = spawnSync(process.execPath, ['--max-old-space-size=8192', yarnPath, 'build:runtime'], {
     cwd: rivetRootDir,
     env: {

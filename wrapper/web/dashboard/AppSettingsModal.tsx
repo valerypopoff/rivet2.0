@@ -65,7 +65,7 @@ type AppSettingsTab =
 type RunsKeptMode = 'latest' | 'all';
 type RecordingRetentionMode = 'limited' | 'forever';
 type PublicRouteSettingsScope = 'web-apps' | 'workflow-endpoints';
-type RuntimeLimitSettingsScope = 'shell' | 'proxy-timeout' | 'docker';
+type RuntimeLimitSettingsScope = 'shell' | 'proxy-timeout' | 'web-app-request-size' | 'docker';
 type WebAppAuthSettingsScope = 'web-apps' | 'oauth' | 'server-ui-access';
 type PublicRouteSettingsFormSnapshot = {
   publishedWorkflowsSlug: string;
@@ -77,6 +77,7 @@ type RuntimeLimitSettingsFormSnapshot = {
   commandTimeoutSeconds: string;
   maxOutputMiB: string;
   proxyReadTimeoutSeconds: string;
+  webAppActionRequestLimitMiB: string;
   dockerWaitTimeoutSeconds: string;
 };
 type TrustedHostSettingsFormSnapshot = {
@@ -121,6 +122,11 @@ type DeploymentStorageSettingsFormSnapshot = {
 const defaultMaxRunsPerEndpoint = '100';
 const defaultRetentionDays = '14';
 const defaultSessionTtlHours = '24';
+
+function isWebAppAuthSettingsTab(tab: AppSettingsTab): tab is WebAppAuthSettingsScope {
+  return tab === 'web-apps' || tab === 'oauth' || tab === 'server-ui-access';
+}
+
 function formatWebAppsAuthMode(value: HostedRouteConfig['webAppsAuthMode']): string {
   if (value === 'ui-gate') {
     return 'Key';
@@ -199,6 +205,7 @@ function createRuntimeLimitSnapshot(settings: RuntimeLimitSettings): RuntimeLimi
     commandTimeoutSeconds: String(settings.commandTimeoutSeconds),
     maxOutputMiB: bytesToMiBString(settings.maxOutputBytes),
     proxyReadTimeoutSeconds: String(settings.proxyReadTimeoutSeconds),
+    webAppActionRequestLimitMiB: bytesToMiBString(settings.webAppActionRequestLimitBytes),
     dockerWaitTimeoutSeconds: String(settings.dockerWaitTimeoutSeconds),
   };
 }
@@ -325,11 +332,13 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   const [commandTimeoutSeconds, setCommandTimeoutSeconds] = useState('30');
   const [maxOutputMiB, setMaxOutputMiB] = useState('10');
   const [proxyReadTimeoutSeconds, setProxyReadTimeoutSeconds] = useState('180');
+  const [webAppActionRequestLimitMiB, setWebAppActionRequestLimitMiB] = useState('100');
   const [dockerWaitTimeoutSeconds, setDockerWaitTimeoutSeconds] = useState('1200');
   const [initialRuntimeLimitSettings, setInitialRuntimeLimitSettings] = useState<RuntimeLimitSettingsFormSnapshot>({
     commandTimeoutSeconds: '30',
     maxOutputMiB: '10',
     proxyReadTimeoutSeconds: '180',
+    webAppActionRequestLimitMiB: '100',
     dockerWaitTimeoutSeconds: '1200',
   });
   const [loadingTrustedHostSettings, setLoadingTrustedHostSettings] = useState(false);
@@ -365,6 +374,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     requireBearerAuth: true,
   });
   const [loadingWebAppAuthSettings, setLoadingWebAppAuthSettings] = useState(false);
+  const [webAppAuthSettingsLoaded, setWebAppAuthSettingsLoaded] = useState(false);
   const [savingWebAppAuthSettings, setSavingWebAppAuthSettings] = useState(false);
   const [webAppAuthSettingsError, setWebAppAuthSettingsError] = useState<string | null>(null);
   const [webAppAuthSettingsSaved, setWebAppAuthSettingsSaved] = useState(false);
@@ -474,8 +484,9 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     commandTimeoutSeconds: commandTimeoutSeconds.trim(),
     maxOutputMiB: maxOutputMiB.trim(),
     proxyReadTimeoutSeconds: proxyReadTimeoutSeconds.trim(),
+    webAppActionRequestLimitMiB: webAppActionRequestLimitMiB.trim(),
     dockerWaitTimeoutSeconds: dockerWaitTimeoutSeconds.trim(),
-  }), [commandTimeoutSeconds, dockerWaitTimeoutSeconds, maxOutputMiB, proxyReadTimeoutSeconds]);
+  }), [commandTimeoutSeconds, dockerWaitTimeoutSeconds, maxOutputMiB, proxyReadTimeoutSeconds, webAppActionRequestLimitMiB]);
 
   const shellLimitSettingsChanged = useMemo(() => (
     currentRuntimeLimitSettings.commandTimeoutSeconds !== initialRuntimeLimitSettings.commandTimeoutSeconds ||
@@ -484,6 +495,10 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
 
   const proxyTimeoutSettingsChanged = useMemo(() => (
     currentRuntimeLimitSettings.proxyReadTimeoutSeconds !== initialRuntimeLimitSettings.proxyReadTimeoutSeconds
+  ), [currentRuntimeLimitSettings, initialRuntimeLimitSettings]);
+
+  const webAppRequestSizeSettingsChanged = useMemo(() => (
+    currentRuntimeLimitSettings.webAppActionRequestLimitMiB !== initialRuntimeLimitSettings.webAppActionRequestLimitMiB
   ), [currentRuntimeLimitSettings, initialRuntimeLimitSettings]);
 
   const dockerLimitSettingsChanged = useMemo(() => (
@@ -597,6 +612,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) {
+      setWebAppAuthSettingsLoaded(false);
       return;
     }
 
@@ -790,7 +806,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     if (
       !isOpen ||
       runtimeLimitSettingsLoaded ||
-      (activeTab !== 'general' && activeTab !== 'workflow-endpoints' && activeTab !== 'docker')
+      (activeTab !== 'general' && activeTab !== 'workflow-endpoints' && activeTab !== 'web-apps' && activeTab !== 'docker')
     ) {
       return;
     }
@@ -811,6 +827,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
         setCommandTimeoutSeconds(snapshot.commandTimeoutSeconds);
         setMaxOutputMiB(snapshot.maxOutputMiB);
         setProxyReadTimeoutSeconds(snapshot.proxyReadTimeoutSeconds);
+        setWebAppActionRequestLimitMiB(snapshot.webAppActionRequestLimitMiB);
         setDockerWaitTimeoutSeconds(snapshot.dockerWaitTimeoutSeconds);
         setInitialRuntimeLimitSettings(snapshot);
         setRuntimeLimitSettingsLoaded(true);
@@ -948,7 +965,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
   }, [activeTab, isOpen]);
 
   useEffect(() => {
-    if (!isOpen || (activeTab !== 'web-apps' && activeTab !== 'oauth' && activeTab !== 'server-ui-access')) {
+    if (!isOpen || !isWebAppAuthSettingsTab(activeTab) || webAppAuthSettingsLoaded) {
       return;
     }
 
@@ -984,10 +1001,12 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
         setWebAppDebugLogProfile(settings.debugLogProfile);
         setWebAppServerUiAdminEmailsText(snapshot.serverUiAdminEmailsText);
         setInitialWebAppAuthSettings(snapshot);
+        setWebAppAuthSettingsLoaded(true);
       })
       .catch((error) => {
         if (!cancelled) {
           setWebAppAuthSettingsError(error instanceof Error ? error.message : String(error));
+          setWebAppAuthSettingsStatusScope(activeTab);
         }
       })
       .finally(() => {
@@ -999,7 +1018,7 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, isOpen]);
+  }, [activeTab, isOpen, webAppAuthSettingsLoaded]);
 
   if (!isOpen) {
     return null;
@@ -1148,6 +1167,9 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
       proxyReadTimeoutSeconds: scope === 'proxy-timeout'
         ? currentRuntimeLimitSettings.proxyReadTimeoutSeconds
         : initialRuntimeLimitSettings.proxyReadTimeoutSeconds,
+      webAppActionRequestLimitBytes: scope === 'web-app-request-size'
+        ? miBStringToBytesString(currentRuntimeLimitSettings.webAppActionRequestLimitMiB)
+        : miBStringToBytesString(initialRuntimeLimitSettings.webAppActionRequestLimitMiB),
       dockerWaitTimeoutSeconds: scope === 'docker'
         ? currentRuntimeLimitSettings.dockerWaitTimeoutSeconds
         : initialRuntimeLimitSettings.dockerWaitTimeoutSeconds,
@@ -1161,6 +1183,8 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
         setMaxOutputMiB(snapshot.maxOutputMiB);
       } else if (scope === 'proxy-timeout') {
         setProxyReadTimeoutSeconds(snapshot.proxyReadTimeoutSeconds);
+      } else if (scope === 'web-app-request-size') {
+        setWebAppActionRequestLimitMiB(snapshot.webAppActionRequestLimitMiB);
       } else {
         setDockerWaitTimeoutSeconds(snapshot.dockerWaitTimeoutSeconds);
       }
@@ -1322,6 +1346,8 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
       setMaxOutputMiB(initialRuntimeLimitSettings.maxOutputMiB);
     } else if (scope === 'proxy-timeout') {
       setProxyReadTimeoutSeconds(initialRuntimeLimitSettings.proxyReadTimeoutSeconds);
+    } else if (scope === 'web-app-request-size') {
+      setWebAppActionRequestLimitMiB(initialRuntimeLimitSettings.webAppActionRequestLimitMiB);
     } else {
       setDockerWaitTimeoutSeconds(initialRuntimeLimitSettings.dockerWaitTimeoutSeconds);
     }
@@ -1364,7 +1390,12 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
       className={`project-settings-tab app-settings-nav-tab${activeTab === tab ? ' active' : ''}`}
       role="tab"
       aria-selected={activeTab === tab}
-      onClick={() => setActiveTab(tab)}
+      onClick={() => {
+        if (isWebAppAuthSettingsTab(tab) && !webAppAuthSettingsLoaded) {
+          setLoadingWebAppAuthSettings(true);
+        }
+        setActiveTab(tab);
+      }}
     >
       {label}
     </button>
@@ -2431,6 +2462,61 @@ export const AppSettingsModal: FC<AppSettingsModalProps> = ({
                         webAppAuthSettingsStatusScope === 'web-apps' ? webAppAuthSettingsError : null,
                         webAppAuthSettingsStatusScope === 'web-apps' && webAppAuthSettingsSaved,
                       )}
+                    </div>
+                  </section>
+
+                  <section className="app-settings-section" aria-label="Web app button data">
+                    <div className="app-settings-section-title">Button data</div>
+                    <div className="app-settings-field-grid" aria-busy={!runtimeLimitSettingsLoaded || loadingRuntimeLimitSettings || savingRuntimeLimitSettings}>
+                      <label className="app-settings-field">
+                        <span className="app-settings-field-label">Maximum data sent by web app buttons</span>
+                        <TextField
+                          aria-label="Maximum web app button data in MiB"
+                          type="number"
+                          min={1}
+                          value={webAppActionRequestLimitMiB}
+                          isDisabled={runtimeLimitControlsDisabled}
+                          elemAfterInput={<span className="app-settings-input-suffix">MiB</span>}
+                          onChange={(event) => {
+                            setWebAppActionRequestLimitMiB(event.currentTarget.value);
+                            setRuntimeLimitSettingsSaved(false);
+                          }}
+                        />
+                        <span className="app-settings-field-help">
+                          The largest JSON payload a web app button can send when it runs a graph. This applies to both published and latest saved web apps.
+                        </span>
+                        <span className="app-settings-field-help">
+                          Large payloads are buffered in the API process. If another reverse proxy sits in front of Rivet, configure it to allow at least this size too.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="app-settings-actions-row">
+                      <LoadingButton
+                        appearance="primary"
+                        className="app-settings-action-button button-size-l"
+                        isLoading={savingRuntimeLimitSettings && runtimeLimitSettingsStatusScope === 'web-app-request-size'}
+                        isDisabled={runtimeLimitControlsDisabled || !webAppRequestSizeSettingsChanged}
+                        onClick={() => handleSaveRuntimeLimitSettings('web-app-request-size')}
+                      >
+                        Save
+                      </LoadingButton>
+                      <Button
+                        appearance="subtle"
+                        className="app-settings-action-button button-size-l"
+                        isDisabled={runtimeLimitControlsDisabled || !webAppRequestSizeSettingsChanged}
+                        onClick={() => handleRevertRuntimeLimitSettings('web-app-request-size')}
+                      >
+                        Revert
+                      </Button>
+                      {runtimeLimitSettingsStatusScope === 'web-app-request-size' || runtimeLimitSettingsStatusScope === null
+                        ? renderActionStatus(
+                          runtimeLimitSettingsError,
+                          runtimeLimitSettingsSaved,
+                          undefined,
+                          'Saved. Applying within a few seconds.',
+                        )
+                        : null}
                     </div>
                   </section>
                 </div>

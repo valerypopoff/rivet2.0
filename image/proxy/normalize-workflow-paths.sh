@@ -209,8 +209,25 @@ normalize_positive_integer_seconds() {
   printf '%s' "$value"
 }
 
+normalize_positive_integer_bytes() {
+  value="$1"
+
+  case "$value" in
+    ''|0|*[!0123456789]*)
+      return 1
+      ;;
+  esac
+
+  if [ "$value" -lt 1048576 ] || [ "$value" -gt 1073741824 ]; then
+    return 1
+  fi
+
+  printf '%s' "$value"
+}
+
 set_default_runtime_limits() {
   RIVET_PROXY_READ_TIMEOUT="180s"
+  RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES=104857600
 }
 
 read_runtime_limit_settings() {
@@ -224,19 +241,36 @@ read_runtime_limit_settings() {
 
   raw_proxy_read_timeout_seconds="$(read_json_scalar_property "$runtime_limit_settings_file" "proxyReadTimeoutSeconds")"
   if has_json_property "$runtime_limit_settings_file" "proxyReadTimeoutSeconds" && [ -z "$raw_proxy_read_timeout_seconds" ]; then
-    >&2 printf 'Warning: invalid runtime limit settings file "%s"; keeping previous nginx public routes.\n' "$runtime_limit_settings_file"
+    >&2 printf 'Warning: invalid runtime limit settings file "%s"; keeping previous nginx settings.\n' "$runtime_limit_settings_file"
     RIVET_RUNTIME_LIMIT_SETTINGS_VALID=0
     return
   fi
 
   if [ -n "$raw_proxy_read_timeout_seconds" ]; then
     if ! proxy_read_timeout_seconds="$(normalize_positive_integer_seconds "$raw_proxy_read_timeout_seconds")"; then
-      >&2 printf 'Warning: invalid proxyReadTimeoutSeconds in "%s"; keeping previous nginx public routes.\n' "$runtime_limit_settings_file"
+      >&2 printf 'Warning: invalid proxyReadTimeoutSeconds in "%s"; keeping previous nginx settings.\n' "$runtime_limit_settings_file"
       RIVET_RUNTIME_LIMIT_SETTINGS_VALID=0
       return
     fi
 
     RIVET_PROXY_READ_TIMEOUT="${proxy_read_timeout_seconds}s"
+  fi
+
+  raw_web_app_action_request_limit_bytes="$(read_json_scalar_property "$runtime_limit_settings_file" "webAppActionRequestLimitBytes")"
+  if has_json_property "$runtime_limit_settings_file" "webAppActionRequestLimitBytes" && [ -z "$raw_web_app_action_request_limit_bytes" ]; then
+    >&2 printf 'Warning: invalid runtime limit settings file "%s"; keeping previous nginx settings.\n' "$runtime_limit_settings_file"
+    RIVET_RUNTIME_LIMIT_SETTINGS_VALID=0
+    return
+  fi
+
+  if [ -n "$raw_web_app_action_request_limit_bytes" ]; then
+    if ! web_app_action_request_limit_bytes="$(normalize_positive_integer_bytes "$raw_web_app_action_request_limit_bytes")"; then
+      >&2 printf 'Warning: invalid webAppActionRequestLimitBytes in "%s"; keeping previous nginx settings.\n' "$runtime_limit_settings_file"
+      RIVET_RUNTIME_LIMIT_SETTINGS_VALID=0
+      return
+    fi
+
+    RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES="$web_app_action_request_limit_bytes"
   fi
 }
 
@@ -390,6 +424,7 @@ write_public_routes_include() {
     }
 
     location ${RIVET_WEB_APPS_BASE_PATH}/ {
+        client_max_body_size ${RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES};
         proxy_pass \$execution_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
@@ -414,6 +449,7 @@ write_public_routes_include() {
     }
 
     location ${RIVET_LATEST_WEB_APPS_BASE_PATH}/ {
+        client_max_body_size ${RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES};
         proxy_pass \$api_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
@@ -459,13 +495,14 @@ EOF
 }
 
 get_public_routes_signature() {
-  printf '%s|%s|%s|%s|%s|%s|%s' \
+  printf '%s|%s|%s|%s|%s|%s|%s|%s' \
     "$RIVET_PUBLISHED_WORKFLOWS_BASE_PATH" \
     "$RIVET_LATEST_WORKFLOWS_BASE_PATH" \
     "$RIVET_WEB_APPS_BASE_PATH" \
     "$RIVET_LATEST_WEB_APPS_BASE_PATH" \
     "${RIVET_PROXY_AUTH_TOKEN:-}" \
     "${RIVET_PROXY_READ_TIMEOUT:-}" \
+    "${RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES:-}" \
     "${RIVET_TRUSTED_HOSTS_REGEX:-}"
 }
 
@@ -529,7 +566,7 @@ export RIVET_TRUSTED_HOSTS_INCLUDE_FILE="${RIVET_TRUSTED_HOSTS_INCLUDE_FILE:-/tm
 
 read_runtime_limit_settings
 if [ "${RIVET_RUNTIME_LIMIT_SETTINGS_VALID:-1}" != "1" ]; then
-  >&2 printf 'Error: invalid runtime limit settings; refusing to start nginx with unsafe route timeouts.\n'
+  >&2 printf 'Error: invalid runtime limit settings; refusing to start nginx with unsafe proxy limits.\n'
   exit 1
 fi
 

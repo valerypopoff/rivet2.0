@@ -21,7 +21,7 @@ ENV https_proxy=$https_proxy
 ENV all_proxy=$all_proxy
 ENV no_proxy=$no_proxy
 
-RUN corepack enable && corepack prepare yarn@4.6.0 --activate
+RUN corepack enable
 
 WORKDIR /app
 

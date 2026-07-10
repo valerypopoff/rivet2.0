@@ -16,6 +16,7 @@ const OAUTH_SESSION_COOKIE_NAME = 'rivet_web_app_oauth_session';
 const DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60;
 const STATE_TTL_SECONDS = 10 * 60;
 const DUMMY_OAUTH_CODE_PREFIX = 'dummy:';
+export const WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT = 'select_account';
 
 export type WebAppOAuthSession = {
   email: string;
@@ -268,13 +269,29 @@ function getCallbackUrl(req: Request): string {
   return `${getRequestOrigin(req)}${getPublishedWebAppsBasePath()}/auth/callback`;
 }
 
-export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: string): {
+function addSelectAccountPromptToReturnPath(returnTo: string): string {
+  const parsed = new URL(returnTo, 'http://rivet.local');
+  parsed.searchParams.set('auth_prompt', WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT);
+  return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
+}
+
+function sanitizeOAuthReturnTo(returnTo: string): string {
+  const parsed = new URL(sanitizeUiAuthReturnTo(returnTo), 'http://rivet.local');
+  parsed.searchParams.delete('auth_error');
+  parsed.searchParams.delete('auth_action');
+  parsed.searchParams.delete('auth_prompt');
+  return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
+}
+
+export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: string, options: {
+  prompt?: typeof WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT;
+} = {}): {
   location: string;
   cookies: string[];
 } {
   const config = getRequiredOauthConfig();
   const nonce = randomBytes(24).toString('base64url');
-  const sanitizedReturnTo = sanitizeUiAuthReturnTo(returnTo);
+  const sanitizedReturnTo = sanitizeOAuthReturnTo(returnTo);
   const expiresAt = Date.now() + STATE_TTL_SECONDS * 1000;
   const settingsVersion = getOAuthSettingsSessionVersion();
   const state = signPayload({
@@ -312,6 +329,9 @@ export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: s
   authorizeUrl.searchParams.set('state', state);
   if (config.scopes) {
     authorizeUrl.searchParams.set('scope', config.scopes);
+  }
+  if (options.prompt === WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT) {
+    authorizeUrl.searchParams.set('prompt', WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT);
   }
 
   return {
@@ -640,11 +660,15 @@ webAppOAuthRouter.get('/auth/logout', (req, res) => {
   const returnTo = typeof req.query.return_to === 'string'
     ? req.query.return_to
     : getPublishedWebAppsBasePath();
+  const sanitizedReturnTo = sanitizeOAuthReturnTo(returnTo);
+  const finalRedirectPath = req.query.select_account === '1'
+    ? addSelectAccountPromptToReturnPath(sanitizedReturnTo)
+    : sanitizedReturnTo;
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Set-Cookie', [
     clearCookie(OAUTH_STATE_COOKIE_NAME, req),
     clearCookie(OAUTH_SESSION_COOKIE_NAME, req),
   ]);
-  res.redirect(303, sanitizeUiAuthReturnTo(returnTo));
+  res.redirect(303, finalRedirectPath);
 });

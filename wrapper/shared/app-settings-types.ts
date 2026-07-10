@@ -66,6 +66,7 @@ export interface RuntimeLimitSettings {
   commandTimeoutSeconds: number;
   maxOutputBytes: number;
   proxyReadTimeoutSeconds: number;
+  webAppActionRequestLimitBytes: number;
   dockerWaitTimeoutSeconds: number;
   updatedAt: string | null;
   source: AppSettingsSource;
@@ -75,6 +76,7 @@ export interface RuntimeLimitSettingsDraft {
   commandTimeoutSeconds?: unknown;
   maxOutputBytes?: unknown;
   proxyReadTimeoutSeconds?: unknown;
+  webAppActionRequestLimitBytes?: unknown;
   dockerWaitTimeoutSeconds?: unknown;
 }
 

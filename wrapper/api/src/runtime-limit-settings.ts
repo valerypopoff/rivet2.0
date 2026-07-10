@@ -13,11 +13,14 @@ const repoRoot = path.resolve(process.cwd(), '..', '..');
 const RUNTIME_LIMIT_SETTINGS_RELATIVE_PATH = path.join('settings', 'runtime-limits.json');
 const MAX_RUNTIME_LIMIT_SECONDS = 86_400;
 const MAX_OUTPUT_BYTES = 1024 * 1024 * 1024;
+const MIN_WEB_APP_ACTION_REQUEST_LIMIT_BYTES = 1024 * 1024;
+const MAX_WEB_APP_ACTION_REQUEST_LIMIT_BYTES = 1024 * 1024 * 1024;
 
 export const DEFAULT_RUNTIME_LIMIT_SETTINGS = {
   commandTimeoutSeconds: 30,
   maxOutputBytes: 10 * 1024 * 1024,
   proxyReadTimeoutSeconds: 180,
+  webAppActionRequestLimitBytes: 100 * 1024 * 1024,
   dockerWaitTimeoutSeconds: 1200,
 } satisfies Omit<RuntimeLimitSettings, 'source' | 'updatedAt'>;
 
@@ -87,12 +90,29 @@ function normalizeRuntimeLimitSettingsDraft(
       'Proxy read timeout',
       MAX_RUNTIME_LIMIT_SECONDS,
     ),
+    webAppActionRequestLimitBytes: normalizeWebAppActionRequestLimitBytes(
+      valueOrFallback('webAppActionRequestLimitBytes', fallback.webAppActionRequestLimitBytes),
+    ),
     dockerWaitTimeoutSeconds: normalizePositiveInteger(
       valueOrFallback('dockerWaitTimeoutSeconds', fallback.dockerWaitTimeoutSeconds),
       'Docker startup wait timeout',
       MAX_RUNTIME_LIMIT_SECONDS,
     ),
   };
+}
+
+function normalizeWebAppActionRequestLimitBytes(value: unknown): number {
+  const parsed = normalizePositiveInteger(
+    value,
+    'Web app button data limit',
+    MAX_WEB_APP_ACTION_REQUEST_LIMIT_BYTES,
+  );
+
+  if (parsed < MIN_WEB_APP_ACTION_REQUEST_LIMIT_BYTES) {
+    throw badRequest('Web app button data limit must be at least 1 MiB');
+  }
+
+  return parsed;
 }
 
 function readRuntimeLimitSettingsFromText(settingsText: string): RuntimeLimitSettings {
@@ -161,6 +181,7 @@ export async function writeRuntimeLimitSettings(draft: unknown): Promise<Runtime
     commandTimeoutSeconds: saved.commandTimeoutSeconds,
     maxOutputBytes: saved.maxOutputBytes,
     proxyReadTimeoutSeconds: saved.proxyReadTimeoutSeconds,
+    webAppActionRequestLimitBytes: saved.webAppActionRequestLimitBytes,
     dockerWaitTimeoutSeconds: saved.dockerWaitTimeoutSeconds,
     updatedAt: saved.updatedAt,
   });

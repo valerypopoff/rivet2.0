@@ -155,6 +155,60 @@ test('recording input contains stringifies the left operand when filtering with 
     ),
     true,
   );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      createSerializedRecording({}),
+      { path: '$', operator: 'contains', value: '' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      createSerializedRecording([]),
+      { path: '$', operator: 'contains', value: '' },
+    ),
+    true,
+  );
+});
+
+test('recording input contains searches object text recursively without JSON escaping', () => {
+  const serializedRecording = createSerializedRecording({
+    foo: {
+      title: 'nested object',
+      payload: {
+        message: 'first line\nfoobar "quoted" value',
+      },
+    },
+  });
+
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$.foo', operator: 'contains', value: 'foobar' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$', operator: 'contains', value: 'foobar "quoted" value' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$', operator: 'contains', value: 'first line\nfoobar' },
+    ),
+    true,
+  );
+  assert.equal(
+    matchesWorkflowRecordingSerializedInputFilter(
+      serializedRecording,
+      { path: '$', operator: 'contains', value: String.raw`first line\nfoobar` },
+    ),
+    false,
+  );
 });
 
 test('recording input filters fall back to named graph inputs when no input port exists', () => {

@@ -21,7 +21,6 @@ ENV no_proxy=$no_proxy
 
 RUN apk add --no-cache git
 RUN corepack enable && \
-    corepack prepare yarn@4.6.0 --activate && \
     corepack prepare pnpm@10.18.3 --activate
 
 WORKDIR /app

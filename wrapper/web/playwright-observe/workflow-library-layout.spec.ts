@@ -98,6 +98,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     commandTimeoutSeconds: 30,
     maxOutputBytes: 10 * 1024 * 1024,
     proxyReadTimeoutSeconds: 180,
+    webAppActionRequestLimitBytes: 100 * 1024 * 1024,
     dockerWaitTimeoutSeconds: 1200,
     updatedAt: null as string | null,
     source: 'default',
@@ -305,6 +306,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
           commandTimeoutSeconds: Number(body.commandTimeoutSeconds ?? runtimeLimitSettings.commandTimeoutSeconds),
           maxOutputBytes: Number(body.maxOutputBytes ?? runtimeLimitSettings.maxOutputBytes),
           proxyReadTimeoutSeconds: Number(body.proxyReadTimeoutSeconds ?? runtimeLimitSettings.proxyReadTimeoutSeconds),
+          webAppActionRequestLimitBytes: Number(body.webAppActionRequestLimitBytes ?? runtimeLimitSettings.webAppActionRequestLimitBytes),
           dockerWaitTimeoutSeconds: Number(body.dockerWaitTimeoutSeconds ?? runtimeLimitSettings.dockerWaitTimeoutSeconds),
           updatedAt: '2026-06-30T12:01:00.000Z',
           source: 'app-settings',
@@ -710,9 +712,10 @@ test.describe('Workflow library layout', () => {
 
     await appSettingsModal.getByRole('tab', { name: 'Web apps' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-section-title')).toContainText(['Routes', 'Auth']);
+    await expect(appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-section-title')).toContainText(['Routes', 'Auth', 'Button data']);
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveCount(0);
     await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('apps');
+    await expect(appSettingsModal.getByLabel('Maximum web app button data in MiB')).toHaveValue('100');
     await expect(appSettingsModal.getByLabel('Latest saved changes URL slug')).toHaveValue('apps-latest');
     const appRouteRow = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-prefixed-input-row').first();
     await expect(appRouteRow).toHaveCSS('display', 'flex');
@@ -735,9 +738,16 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByText('Visitors enter the Rivet key before opening web apps.')).toBeVisible();
     await appSettingsModal.getByRole('button', { name: 'OAuth' }).click();
     await expect(appSettingsModal.getByText("Visitors sign in with the provider configured in the OAuth tab and are checked against each web app's allowed-email list.")).toBeVisible();
-    await appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
-    const webAuthModeActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').last();
+    const webAppAuthSection = appSettingsModal.locator('section[aria-label="Web app auth"]');
+    await webAppAuthSection.getByRole('button', { name: 'Save' }).click();
+    const webAuthModeActions = webAppAuthSection.locator('.app-settings-actions-row');
     await expect(webAuthModeActions.locator('.project-settings-success')).toHaveText('Saved.');
+
+    const webAppButtonDataSection = appSettingsModal.locator('section[aria-label="Web app button data"]');
+    await expect(webAppButtonDataSection.getByText('Large payloads are buffered in the API process.')).toBeVisible();
+    await appSettingsModal.getByLabel('Maximum web app button data in MiB').fill('200');
+    await webAppButtonDataSection.getByRole('button', { name: 'Save' }).click();
+    await expect(webAppButtonDataSection.locator('.project-settings-success')).toHaveText('Saved. Applying within a few seconds.');
 
     await appSettingsModal.getByRole('tab', { name: 'OAuth' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'OAuth' })).toHaveAttribute('aria-selected', 'true');
