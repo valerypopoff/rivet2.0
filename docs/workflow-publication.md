@@ -411,6 +411,8 @@ The action routes use the same project resolver family, dataset provider, projec
 
 Published web app action runs do not attach Remote Debugger. Latest web app action runs attach the same default-on `/ws/latest-debugger` remote debugger as latest workflow endpoint runs because they execute against the latest saved draft on the control-plane backend. Hardened deployments can explicitly disable that websocket with `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false`. Published and latest web app action graph runs are persisted into the same Run recordings history as workflow endpoint runs. Their `endpointNameAtExecution` value is the route path that executed the action, such as `/apps/my-tool` or `/apps-latest/my-tool`, so the Run recordings modal can show whether a saved run came from a workflow endpoint or a web-app action.
 
+The generated Rivet web-app client also handles action failures returned before the wrapper API can format JSON, such as an outer nginx or ingress body-size rejection. It shows the HTTP status message (for example, `413 Request Entity Too Large`) instead of attempting to parse the HTML error page as JSON. This makes the failure understandable, but does not raise an external proxy's request-body limit; configure that proxy or ingress to allow at least the `Settings` -> `Web apps` -> `Button data` limit.
+
 Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by the persisted `Settings` -> `Web apps` -> `Auth` mode, not by the workflow endpoint bearer-token setting:
 
 - `Key` is the default. Visitors enter the Rivet key before opening web apps.
