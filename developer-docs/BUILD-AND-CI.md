@@ -195,7 +195,9 @@ context, rich-text sinks, AI runtime boundaries, desktop shell policy, low-level
 editor boundaries, and generated web-app client freshness.
 The web-app freshness check runs through the Node workspace's
 `check:web-app-client` script so both generation and verification resolve the same
-package-owned `esbuild` dependency.
+package-owned `esbuild` dependency. The generator uses `createRequire(...)` for
+that dependency for the same Yarn PnP ESM-loader compatibility reason as the Core
+CJS and app-executor bundlers.
 The test-style script fails when `test.only`, `it.only`, `describe.only`,
 `suite.only`, or `context.only` calls are present in tracked or untracked
 non-ignored test files. Source-reading tests are controlled by the explicit shrinking
@@ -260,7 +262,10 @@ This publishes only the public npm package set: `@valerypopoff/rivet2-core`,
 
 - `build`: `build:esm` then `build:cjs`
 - ESM output via `tsc -b`
-- CJS bundle via `tsx bundle.esbuild.ts`
+- CJS bundle via `tsx bundle.esbuild.ts`. The script loads esbuild with
+  `createRequire(...)`, rather than a static ESM import, so Yarn PnP resolves
+  esbuild through its synchronous CJS hook even when Node's ESM loader is active
+  in Linux CI.
 - watch mode via `tsc -b -w`
 
 #### CJS bundle alias strategy

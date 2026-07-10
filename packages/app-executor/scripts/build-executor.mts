@@ -1,8 +1,13 @@
 import { cp } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { execaCommand } from 'execa';
 import chalk from 'chalk';
-import * as esbuild from 'esbuild';
 import { resolve } from 'node:path';
+
+import type * as Esbuild from 'esbuild';
+
+const require = createRequire(import.meta.url);
+const esbuild = require('esbuild') as typeof Esbuild;
 
 const rivetWorkspaceSourceEntries = new Map<string, string>([
   ['@valerypopoff/rivet2-core', '../core/src/index.ts'],

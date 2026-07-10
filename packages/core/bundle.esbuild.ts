@@ -1,4 +1,9 @@
-import * as esbuild from 'esbuild';
+import { createRequire } from 'node:module';
+
+import type * as Esbuild from 'esbuild';
+
+const require = createRequire(import.meta.url);
+const esbuild = require('esbuild') as typeof Esbuild;
 
 const aliasModule = (moduleFrom: string, moduleTo: string): esbuild.Plugin => ({
   name: 'alias-module',

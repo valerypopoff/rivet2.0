@@ -1,7 +1,10 @@
-import { build } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const { build } = require('esbuild');
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sourcePath = resolve(packageDirectory, 'src/webAppClient.ts');
