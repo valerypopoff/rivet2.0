@@ -5,6 +5,7 @@ import {
   type UiGraph,
   getUiGraphActionComponent,
   jsonValueToDataValue,
+  normalizeUiGraphComponentIds,
   resolveUiGraphActionOutputStatePatch,
   resolveUiGraphActionInputs,
 } from '@valerypopoff/rivet2-core';
@@ -23,7 +24,8 @@ export async function runUiGraphAction(options: {
   tryRunGraph: EditorGraphRun;
   uiGraph: UiGraph;
 }): Promise<{ outputs: GraphOutputs; statePatch: Record<string, unknown> }> {
-  const component = getUiGraphActionComponent(options.uiGraph, options.componentId);
+  const uiGraph = normalizeUiGraphComponentIds(options.uiGraph);
+  const component = getUiGraphActionComponent(uiGraph, options.componentId);
   if (!component) {
     throw new Error('UI action component not found.');
   }

@@ -17,6 +17,7 @@ import { entries } from '../typeSafety.js';
 import type { PluginLoadSpec } from '../../model/PluginLoadSpec.js';
 import type { CombinedDataset } from './serialization.js';
 import { type ProjectMetadata } from '../../model/Project.js';
+import { normalizeUiGraphComponentIds } from '../../model/UiGraph.js';
 import {
   type SerializedNodeConnection,
   serializeConnection,
@@ -115,12 +116,13 @@ function toSerializedProject(project: Project, attachedData?: AttachedData): Ser
     id: prefab.id,
     sourceNode: toSerializedIsolatedNode(prefab.sourceNode),
   }));
+  const uiGraphs = mapValues(project.uiGraphs ?? {}, normalizeUiGraphComponentIds);
 
   return {
     metadata: project.metadata,
     graphs: mapValues(project.graphs, (graph) => toSerializedGraph(graph)),
     nodePrefabs: Object.keys(nodePrefabs).length > 0 ? nodePrefabs : undefined,
-    uiGraphs: project.uiGraphs && Object.keys(project.uiGraphs).length > 0 ? project.uiGraphs : undefined,
+    uiGraphs: Object.keys(uiGraphs).length > 0 ? uiGraphs : undefined,
     attachedData,
     plugins: project.plugins ?? [],
     references: project.references ?? [],
@@ -132,16 +134,14 @@ function fromSerializedProject(serializedProject: SerializedProject): [Project, 
     id: prefab.id,
     sourceNode: fromSerializedIsolatedNode(prefab.sourceNode),
   }));
+  const uiGraphs = mapValues(serializedProject.uiGraphs ?? {}, normalizeUiGraphComponentIds);
 
   return [
     {
       metadata: serializedProject.metadata,
       graphs: mapValues(serializedProject.graphs, (graph) => fromSerializedGraph(graph)) as Record<GraphId, NodeGraph>,
       nodePrefabs: Object.keys(nodePrefabs).length > 0 ? nodePrefabs : undefined,
-      uiGraphs:
-        serializedProject.uiGraphs && Object.keys(serializedProject.uiGraphs).length > 0
-          ? serializedProject.uiGraphs
-          : undefined,
+      uiGraphs: Object.keys(uiGraphs).length > 0 ? uiGraphs : undefined,
       plugins: serializedProject.plugins ?? [],
       references: serializedProject.references ?? [],
     },

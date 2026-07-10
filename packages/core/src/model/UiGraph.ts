@@ -87,6 +87,71 @@ export type UiGraph = {
   components: UiGraphComponent[];
 };
 
+export function hasValidUiGraphComponentIds(uiGraph: UiGraph): boolean {
+  const componentIds = new Set<string>();
+
+  for (const component of uiGraph.components) {
+    const componentId = typeof component.id === 'string' ? component.id : '';
+    if (!componentId.trim() || componentIds.has(componentId)) {
+      return false;
+    }
+
+    componentIds.add(componentId);
+  }
+
+  return true;
+}
+
+/**
+ * Returns an immutable repair for legacy or externally assembled UI graphs.
+ * Repaired IDs are deterministic so separately rendered HTML and action calls agree
+ * without mutating a host-owned project snapshot.
+ */
+export function normalizeUiGraphComponentIds(uiGraph: UiGraph): UiGraph {
+  if (hasValidUiGraphComponentIds(uiGraph)) {
+    return uiGraph;
+  }
+
+  const reservedIds = new Set(
+    uiGraph.components
+      .map((component) => (typeof component.id === 'string' ? component.id : ''))
+      .filter((componentId) => Boolean(componentId.trim())),
+  );
+  const usedIds = new Set<string>();
+  const graphId = typeof uiGraph.id === 'string' && uiGraph.id.trim() ? uiGraph.id : 'ui-graph';
+  const components = uiGraph.components.map((component, index) => {
+    const componentId = typeof component.id === 'string' ? component.id : '';
+    if (componentId.trim() && !usedIds.has(componentId)) {
+      usedIds.add(componentId);
+      return component;
+    }
+
+    const repairedId = getRepairedUiGraphComponentId(graphId, index, reservedIds, usedIds);
+    usedIds.add(repairedId);
+    return { ...component, id: repairedId as UiComponentId };
+  });
+
+  return { ...uiGraph, components };
+}
+
+function getRepairedUiGraphComponentId(
+  graphId: string,
+  componentIndex: number,
+  reservedIds: ReadonlySet<string>,
+  usedIds: ReadonlySet<string>,
+): string {
+  const baseId = `${graphId}-component-${componentIndex + 1}`;
+  let repairedId = baseId;
+  let suffix = 2;
+
+  while (reservedIds.has(repairedId) || usedIds.has(repairedId)) {
+    repairedId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return repairedId;
+}
+
 export function createDefaultUiGraph(options: { graphId?: GraphId; name?: string } = {}): UiGraph {
   const promptStateKey = 'input';
   const resultStateKey = 'result';
@@ -178,7 +243,10 @@ export function resolveUiGraphActionInputs(
  * Selects the UI state that a button action is explicitly allowed to send.
  * Outputs and unrelated form fields stay local to the rendered web app.
  */
-export function getUiGraphActionState(action: UiGraphRunGraphAction, state: Record<string, unknown>): Record<string, unknown> {
+export function getUiGraphActionState(
+  action: UiGraphRunGraphAction,
+  state: Record<string, unknown>,
+): Record<string, unknown> {
   return Object.fromEntries(
     [...new Set(getUiGraphActionInputBindings(action).map((binding) => binding.stateKey))]
       .filter(Boolean)

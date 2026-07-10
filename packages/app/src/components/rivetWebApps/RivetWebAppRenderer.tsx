@@ -1,4 +1,4 @@
-import { Fragment, type FC, type ReactNode, useEffect, useRef, useState } from 'react';
+import { Fragment, type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type DataValue,
   type UiComponentId,
@@ -10,6 +10,7 @@ import {
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
   getUiGraphInitialState,
+  normalizeUiGraphComponentIds,
 } from '@valerypopoff/rivet2-core';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
 
@@ -41,21 +42,22 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   onRunAction,
   uiGraph,
 }) => {
-  const previousUiGraphId = useRef(uiGraph.id);
-  const [state, setState] = useState<Record<string, unknown>>(() => getUiGraphInitialState(uiGraph));
+  const normalizedUiGraph = useMemo(() => normalizeUiGraphComponentIds(uiGraph), [uiGraph]);
+  const previousUiGraphId = useRef(normalizedUiGraph.id);
+  const [state, setState] = useState<Record<string, unknown>>(() => getUiGraphInitialState(normalizedUiGraph));
   const [runningComponentId, setRunningComponentId] = useState<UiComponentId | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   useEffect(() => {
-    if (previousUiGraphId.current === uiGraph.id) {
+    if (previousUiGraphId.current === normalizedUiGraph.id) {
       return;
     }
 
-    previousUiGraphId.current = uiGraph.id;
-    setState(getUiGraphInitialState(uiGraph));
+    previousUiGraphId.current = normalizedUiGraph.id;
+    setState(getUiGraphInitialState(normalizedUiGraph));
     setError(undefined);
     setRunningComponentId(undefined);
-  }, [uiGraph]);
+  }, [normalizedUiGraph]);
 
   const updateState = (key: string, value: unknown) => {
     setState((current) => ({ ...current, [key]: value }));
@@ -79,7 +81,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     <div className="rivet-web-app-root">
       <style>{RIVET_WEB_APP_RENDERER_CSS}</style>
       <main className="rivet-web-app-surface">
-        {uiGraph.components.map((component) => {
+        {normalizedUiGraph.components.map((component) => {
           const frameProps: RivetWebAppComponentFrameProps = {
             className: `rivet-web-app-component-frame${activeComponentId === component.id ? ' active' : ''}`,
             component,
@@ -89,7 +91,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
               <RivetWebAppComponent
                 component={component}
                 isRunning={runningComponentId === component.id}
-                uiGraphName={uiGraph.name}
+                uiGraphName={normalizedUiGraph.name}
                 state={state}
                 onRunAction={runAction}
                 onStateChange={updateState}

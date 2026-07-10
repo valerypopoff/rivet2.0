@@ -14,6 +14,7 @@ import {
   getUiGraphActionState,
   getUiGraphInitialState,
   jsonValueToDataValue,
+  normalizeUiGraphComponentIds,
   RIVET_MARKDOWN_SANITIZER_POLICY,
   resolveUiGraphActionOutputStatePatch,
   resolveUiGraphActionInputs,
@@ -189,6 +190,7 @@ export async function runRivetWebAppAction(
 ): Promise<RivetWebAppActionResult> {
   const actionRequest = request ?? new Request('https://rivet.local/web-app-action');
   const receivedState = normalizeActionState(state);
+  const normalizedUiGraph = normalizeUiGraphComponentIds(uiGraph);
 
   if (revisionKey != null && requestRevisionKey !== revisionKey) {
     throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
@@ -199,7 +201,7 @@ export async function runRivetWebAppAction(
   }
 
   const resolvedComponentId = componentId as UiComponentId;
-  const component = getUiGraphActionComponent(uiGraph, resolvedComponentId);
+  const component = getUiGraphActionComponent(normalizedUiGraph, resolvedComponentId);
   if (!component) {
     throw new Error('UI action component not found.');
   }
@@ -221,7 +223,7 @@ export async function runRivetWebAppAction(
     request: actionRequest,
     revisionKey,
     state: actionState,
-    uiGraph,
+    uiGraph: normalizedUiGraph,
   };
 
   try {
@@ -256,20 +258,20 @@ export async function runRivetWebAppAction(
 }
 
 function resolveUiGraph(project: Project, uiGraphId: UiGraphId | string | undefined): UiGraph | undefined {
-  if (uiGraphId) {
-    return project.uiGraphs?.[uiGraphId as UiGraphId];
-  }
+  const uiGraph = uiGraphId ? project.uiGraphs?.[uiGraphId as UiGraphId] : Object.values(project.uiGraphs ?? {})[0];
 
-  return Object.values(project.uiGraphs ?? {})[0];
+  return uiGraph ? normalizeUiGraphComponentIds(uiGraph) : undefined;
 }
 
 export function renderRivetWebAppHtml(uiGraph: UiGraph, options: { actionPath: string; revisionKey?: string }): string {
+  const normalizedUiGraph = normalizeUiGraphComponentIds(uiGraph);
+
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(uiGraph.name)}</title>
+  <title>${escapeHtml(normalizedUiGraph.name)}</title>
   <style>${styleForHtml(RIVET_WEB_APP_DOCUMENT_CSS)}</style>
   <style>${styleForHtml(getGithubMarkdownCss())}</style>
   <style>${styleForHtml(RIVET_WEB_APP_RENDERER_CSS)}</style>
@@ -277,7 +279,7 @@ export function renderRivetWebAppHtml(uiGraph: UiGraph, options: { actionPath: s
 <body>
   <div id="app" class="rivet-web-app-root"></div>
   <script>
-    window.__RIVET_WEB_APP__ = ${jsonForScript({ actionPath: options.actionPath, initialState: getUiGraphInitialState(uiGraph), markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY, revisionKey: options.revisionKey, uiGraph })};
+    window.__RIVET_WEB_APP__ = ${jsonForScript({ actionPath: options.actionPath, initialState: getUiGraphInitialState(normalizedUiGraph), markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY, revisionKey: options.revisionKey, uiGraph: normalizedUiGraph })};
   </script>
   <script>${scriptForHtml(getMarkedBrowserScript())}</script>
   <script>${scriptForHtml(getDOMPurifyBrowserScript())}</script>

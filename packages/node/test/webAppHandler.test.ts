@@ -164,7 +164,11 @@ void describe('createRivetWebAppHandler', () => {
       beforeParse(window) {
         window.fetch = async (_input, init) => {
           requests.push(JSON.parse(`${init?.body ?? '{}'}`) as Record<string, unknown>);
-          return { json: async () => ({ outputs: {}, statePatch: {} }), ok: true, status: 200 } as Response;
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ outputs: {}, statePatch: {} }),
+          } as Response;
         };
       },
       runScripts: 'dangerously',
@@ -176,6 +180,49 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
 
     assert.deepEqual(requests, [{ componentId: 'run-button', state: { prompt: 'hello', genre: 'fiction' } }]);
+  });
+
+  void it('keeps hosted button loading state scoped to the clicked component', async () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const firstButton = uiGraph.components[0] as Extract<UiGraphComponent, { type: 'button' }>;
+    uiGraph.components = [
+      firstButton,
+      {
+        id: 'second-button' as any,
+        type: 'button',
+        label: 'Second',
+        action: firstButton.action,
+      },
+    ];
+
+    let resolveAction!: (response: Response) => void;
+    const actionResponse = new Promise<Response>((resolve) => {
+      resolveAction = resolve;
+    });
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        window.fetch = async () => actionResponse;
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    dom.window.document.querySelectorAll('button')[0]?.click();
+    const buttons = [...dom.window.document.querySelectorAll('button')] as HTMLButtonElement[];
+
+    assert.equal(buttons[0]?.textContent, 'Running...');
+    assert.equal(buttons[0]?.disabled, true);
+    assert.equal(buttons[1]?.textContent, 'Second');
+    assert.equal(buttons[1]?.disabled, false);
+
+    resolveAction({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ outputs: {}, statePatch: {} }),
+    } as Response);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    dom.window.close();
   });
 
   void it('renders a friendly HTTP error when a proxy returns non-JSON action content', async () => {

@@ -12,7 +12,7 @@ import { prepareSerializedInput } from '../../src/utils/serialization/serializat
 import { projectV2Deserializer } from '../../src/utils/serialization/serialization_v2.js';
 import { graphV3Serializer } from '../../src/utils/serialization/serialization_v3.js';
 import { projectV4Deserializer } from '../../src/utils/serialization/serialization_v4.js';
-import { detectSerializationVersion } from '../../src/utils/serialization/serializationUtils.js';
+import { detectSerializationVersion, validateProject } from '../../src/utils/serialization/serializationUtils.js';
 import {
   serializeConnection,
   deserializeConnection,
@@ -475,6 +475,61 @@ describe('serialization compatibility', () => {
       deserialized.uiGraphs?.['ui-graph-1']?.components[0],
       project.uiGraphs?.['ui-graph-1']?.components[0],
     );
+  });
+
+  it('repairs missing and duplicate UI component IDs from legacy V4 projects', () => {
+    const serializedLegacyProject = JSON.stringify({
+      version: 4,
+      data: {
+        metadata: {
+          id: 'project-legacy-ui',
+          title: 'Legacy UI project',
+          description: '',
+        },
+        graphs: {},
+        uiGraphs: {
+          'legacy-ui': {
+            id: 'legacy-ui',
+            name: 'Legacy app',
+            components: [
+              { type: 'text', text: 'Missing ID' },
+              { id: 'shared-id', type: 'text', text: 'First shared ID' },
+              { id: 'shared-id', type: 'text', text: 'Duplicate shared ID' },
+            ],
+          },
+        },
+      },
+    });
+
+    const [project] = deserializeProject(serializedLegacyProject);
+    const components = project.uiGraphs?.['legacy-ui' as any]?.components ?? [];
+
+    assert.deepEqual(
+      components.map((component) => component.id),
+      ['legacy-ui-component-1', 'shared-id', 'legacy-ui-component-3'],
+    );
+    assert.equal(new Set(components.map((component) => component.id)).size, components.length);
+    assert.equal(validateProject(project).valid, true);
+  });
+
+  it('reports invalid UI component IDs before migration', () => {
+    const result = validateProject({
+      metadata: { id: 'project-invalid-ui', title: 'Invalid UI project' },
+      graphs: {},
+      uiGraphs: {
+        'invalid-ui': {
+          id: 'invalid-ui',
+          name: 'Invalid app',
+          components: [
+            { id: 'same', type: 'text' },
+            { id: 'same', type: 'text' },
+          ],
+        },
+      },
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join('\n'), /duplicate id/);
   });
 
   it('deserializes old-style Subgraph nodes without manual port order fields', () => {
