@@ -1,7 +1,10 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyNodeGraph, type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
-import { createRootGraphViewContext, createSubgraphGraphViewContext } from '../domain/graphEditing/navigationActions.js';
+import {
+  createRootGraphViewContext,
+  createSubgraphGraphViewContext,
+} from '../domain/graphEditing/navigationActions.js';
 import {
   chooseProjectGraph,
   createDefaultTrivetState,
@@ -230,6 +233,68 @@ describe('workspaceTransitions', () => {
 
     assert.equal(merged.graphs['g-1' as GraphId], updatedGraph);
     assert.equal(merged.graphs['g-2' as GraphId], siblingGraph);
+  });
+
+  test('mergeCurrentGraphIntoProject reconciles web app bindings for proven graph port renames', () => {
+    const oldGraph = makeGraph('g-1', 'Graph', [
+      {
+        data: { dataType: 'string', id: 'prompt' },
+        id: 'input-node',
+        type: 'graphInput',
+        visualData: { x: 0, y: 0 },
+      } as any,
+      {
+        data: { dataType: 'string', id: 'answer' },
+        id: 'output-node',
+        type: 'graphOutput',
+        visualData: { x: 200, y: 0 },
+      } as any,
+    ]);
+    const renamedGraph = makeGraph('g-1', 'Graph', [
+      {
+        data: { dataType: 'string', id: 'question' },
+        id: 'input-node',
+        type: 'graphInput',
+        visualData: { x: 0, y: 0 },
+      } as any,
+      {
+        data: { dataType: 'string', id: 'response' },
+        id: 'output-node',
+        type: 'graphOutput',
+        visualData: { x: 200, y: 0 },
+      } as any,
+    ]);
+    const project = {
+      ...makeProject([oldGraph]),
+      uiGraphs: {
+        app: {
+          components: [
+            {
+              action: {
+                graphId: 'g-1' as GraphId,
+                inputMappings: [{ inputKey: 'prompt', stateKey: 'draft' }],
+                outputs: [{ outputKey: 'answer', stateKey: 'result' }],
+                type: 'runGraph' as const,
+              },
+              id: 'button',
+              label: 'Run',
+              type: 'button' as const,
+            },
+          ],
+          id: 'app',
+          name: 'App',
+        },
+      },
+    } as Omit<Project, 'data'>;
+
+    const merged = mergeCurrentGraphIntoProject(project, renamedGraph);
+    const component = Object.values(merged.uiGraphs ?? {})[0]?.components[0];
+
+    assert.equal(component?.type, 'button');
+    if (component?.type === 'button') {
+      assert.deepEqual(component.action.inputMappings, [{ inputKey: 'question', stateKey: 'draft' }]);
+      assert.deepEqual(component.action.outputs, [{ outputKey: 'response', stateKey: 'result' }]);
+    }
   });
 
   test('mergeCurrentGraphIntoProject preserves unusual sibling graph map entries', () => {

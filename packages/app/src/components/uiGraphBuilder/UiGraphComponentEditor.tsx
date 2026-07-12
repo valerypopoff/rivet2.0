@@ -1,5 +1,5 @@
 import DeleteIcon from 'majesticons/line/delete-bin-line.svg?react';
-import type { FC } from 'react';
+import type { FC, KeyboardEvent, PointerEvent } from 'react';
 import type { Project, UiComponentId, UiGraphComponent } from '@valerypopoff/rivet2-core';
 import { Tooltip } from '../Tooltip.js';
 import {
@@ -44,9 +44,9 @@ export const UiGraphComponentEditor: FC<{
             role="button"
             tabIndex={0}
             aria-label="Delete component"
-            onPointerDown={(event) => event.stopPropagation()}
+            onPointerDown={(event: PointerEvent<SVGSVGElement>) => event.stopPropagation()}
             onClick={onDelete}
-            onKeyDown={(event) => {
+            onKeyDown={(event: KeyboardEvent<SVGSVGElement>) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 onDelete();

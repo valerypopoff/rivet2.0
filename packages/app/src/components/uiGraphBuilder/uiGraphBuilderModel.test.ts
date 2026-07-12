@@ -67,6 +67,17 @@ test('button bindings follow graph boundary order while preserving matching data
   );
 });
 
+test('button bindings do not reuse data keys from unrelated rows by position', () => {
+  assert.deepEqual(
+    alignInputRowsToBoundary(makeBoundary(['replacement'], []), [{ inputKey: 'removed', stateKey: 'old-state' }]),
+    [{ inputKey: 'replacement', stateKey: 'replacement' }],
+  );
+  assert.deepEqual(
+    alignOutputRowsToBoundary(makeBoundary([], ['replacement']), [{ outputKey: 'removed', stateKey: 'old-state' }]),
+    [{ outputKey: 'replacement', stateKey: 'replacement' }],
+  );
+});
+
 test('button normalization migrates legacy bindings without changing mapped state keys', () => {
   const button: UiGraphButtonComponent = {
     action: {

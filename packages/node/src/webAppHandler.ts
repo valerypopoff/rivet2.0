@@ -10,6 +10,7 @@ import {
   type UiGraph,
   type UiGraphComponent,
   type UiGraphId,
+  formatUiGraphButtonBindingIssues,
   getUiGraphActionComponent,
   getUiGraphActionState,
   getUiGraphInitialState,
@@ -18,6 +19,7 @@ import {
   RIVET_MARKDOWN_SANITIZER_POLICY,
   resolveUiGraphActionOutputStatePatch,
   resolveUiGraphActionInputs,
+  validateUiGraphButtonBindings,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
 import { RIVET_WEB_APP_CLIENT_JS } from './generated/webAppClient.generated.js';
@@ -227,6 +229,15 @@ export async function runRivetWebAppAction(
   };
 
   try {
+    const bindingErrors = validateUiGraphButtonBindings(project, normalizedUiGraph, resolvedComponentId);
+    if (bindingErrors.length > 0) {
+      throw new RivetWebAppActionHttpError(
+        `Invalid web app button bindings: ${formatUiGraphButtonBindingIssues(bindingErrors)}`,
+        400,
+        'invalid_button_bindings',
+      );
+    }
+
     await callActionHook(onActionStart, actionContext);
 
     const processorOptions = await resolveProcessorOptions(createProcessorOptions, actionContext);

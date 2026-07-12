@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { GraphId, GraphOutputs, UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
+import type { GraphId, GraphOutputs, Project, UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
 import { runUiGraphAction } from './useRunUiGraphAction.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 
@@ -34,6 +34,7 @@ test('web app actions run through the editor graph runner and wait for outputs',
 
   const result = await runUiGraphAction({
     componentId,
+    project: makeProject(uiGraph, graphId),
     state: { prompt: 'hello' },
     tryRunGraph: async (options) => {
       calls.push(options ?? {});
@@ -95,6 +96,7 @@ test('web app actions can map multiple inputs and outputs', async () => {
 
   const result = await runUiGraphAction({
     componentId,
+    project: makeProject(uiGraph, graphId),
     state: { draftCount: 2, draftPrompt: 'hello' },
     tryRunGraph: async (options) => {
       calls.push(options ?? {});
@@ -143,6 +145,7 @@ test('web app actions map array state values to typed Data Values', async () => 
 
   await runUiGraphAction({
     componentId,
+    project: makeProject(uiGraph, graphId),
     state: { draftTags: ['one', 'two'] },
     tryRunGraph: async (options) => {
       calls.push(options ?? {});
@@ -183,6 +186,7 @@ test('web app actions can store one unwrapped graph output value', async () => {
 
   const result = await runUiGraphAction({
     componentId,
+    project: makeProject(uiGraph, graphId),
     state: {},
     tryRunGraph: async () => outputs,
     uiGraph,
@@ -221,12 +225,54 @@ test('web app actions fail clearly when the selected graph output is missing', a
     () =>
       runUiGraphAction({
         componentId,
+        project: makeProject(uiGraph, graphId),
         state: {},
         tryRunGraph: async () => ({ result: { type: 'string', value: 'done' } }),
         uiGraph,
       }),
     /Graph output "missing" was not returned by the target graph/,
   );
+});
+
+test('web app actions reject stale bindings before starting an editor graph run', async () => {
+  const componentId = 'button-1' as UiComponentId;
+  const graphId = 'graph-1' as GraphId;
+  const uiGraph: UiGraph = {
+    components: [
+      {
+        action: {
+          graphId,
+          inputMappings: [{ inputKey: 'removed', stateKey: 'prompt' }],
+          type: 'runGraph',
+        },
+        id: componentId,
+        label: 'Run',
+        type: 'button',
+      },
+    ],
+    id: 'ui-graph-1' as UiGraphId,
+    name: 'Test app',
+  };
+  const project = makeProject(uiGraph, graphId);
+  const inputNode = project.graphs[graphId]!.nodes[0]!;
+  (inputNode.data as { id: string }).id = 'current';
+  let didRun = false;
+
+  await assert.rejects(
+    () =>
+      runUiGraphAction({
+        componentId,
+        project,
+        state: { prompt: 'hello' },
+        tryRunGraph: async () => {
+          didRun = true;
+          return {};
+        },
+        uiGraph,
+      }),
+    /Graph input "removed" no longer exists/,
+  );
+  assert.equal(didRun, false);
 });
 
 test('web app actions propagate cancellation and reject results completed after abort', async () => {
@@ -254,6 +300,7 @@ test('web app actions propagate cancellation and reject results completed after 
   const actionPromise = runUiGraphAction({
     abortSignal: abortController.signal,
     componentId,
+    project: makeProject(uiGraph, graphId),
     state: {},
     tryRunGraph: async (options) => {
       receivedAbortSignal = options?.abortSignal;
@@ -268,3 +315,40 @@ test('web app actions propagate cancellation and reject results completed after 
   await assert.rejects(actionPromise, (error) => error instanceof DOMException && error.name === 'AbortError');
   assert.equal(receivedAbortSignal, abortController.signal);
 });
+
+function makeProject(uiGraph: UiGraph, graphId: GraphId): Project {
+  const button = uiGraph.components.find((component) => component.type === 'button');
+  assert.ok(button?.type === 'button');
+  const inputIds =
+    button.action.inputMappings?.map((binding) => binding.inputKey) ?? Object.keys(button.action.inputs ?? {});
+  const outputIds = (button.action.outputs?.map((binding) => binding.outputKey) ?? [button.action.outputKey]).filter(
+    (outputId): outputId is string => !!outputId,
+  );
+
+  return {
+    graphs: {
+      [graphId]: {
+        connections: [],
+        metadata: { description: '', id: graphId, name: 'Graph' },
+        nodes: [
+          ...inputIds.map((id, index) => ({
+            data: { dataType: 'string', id },
+            id: `input-${index}` as any,
+            title: id,
+            type: 'graphInput' as const,
+            visualData: { x: 0, y: index * 100 },
+          })),
+          ...outputIds.map((id, index) => ({
+            data: { dataType: 'string', id },
+            id: `output-${index}` as any,
+            title: id,
+            type: 'graphOutput' as const,
+            visualData: { x: 300, y: index * 100 },
+          })),
+        ] as any,
+      },
+    },
+    metadata: { description: '', id: 'project' as any, title: 'Project' },
+    uiGraphs: { [uiGraph.id]: uiGraph },
+  };
+}

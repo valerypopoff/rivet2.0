@@ -28,6 +28,13 @@ through a workspace command produces the same artifact.
 - `runRivetWebAppAction(...)` validates mappings and runs the target graph.
 - `createRivetWebAppHandler(...)` provides the Fetch-style reference host.
 
+`validateProjectUiGraphButtonBindings(...)` is the publication/load preflight for
+hosts that want to inspect every web-app button without mutating an immutable
+revision. Hosted action execution runs the same component-level preflight and
+rejects stale or ambiguous mappings as `400` with code
+`invalid_button_bindings`. Omitted inputs and outputs remain valid because graph
+defaults and intentionally ignored outputs are part of the action contract.
+
 Processor options are action/request scoped. Wrappers retain Express/Fastify route,
 auth, revision, storage, recordings, headers, and error-envelope ownership.
 `revisionKey` is an opaque consistency token, not authentication; stale actions

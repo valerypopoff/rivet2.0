@@ -6,6 +6,7 @@ import {
   type NodeId,
   type Project,
   emptyNodeGraph,
+  reconcileProjectUiGraphButtonBindings,
 } from '@valerypopoff/rivet2-core';
 import {
   createRootGraphViewContext,
@@ -127,11 +128,10 @@ export function createProjectLoadTransition(options: {
       loaded: true,
       path: options.path ?? null,
     },
-    navigationStack:
-      options.navigationStack ?? {
-        stack: [createRootGraphViewContext(options.graphToLoad.metadata!.id!)],
-        index: 0,
-      },
+    navigationStack: options.navigationStack ?? {
+      stack: [createRootGraphViewContext(options.graphToLoad.metadata!.id!)],
+      index: 0,
+    },
     project: options.project,
     resetHistoricalGraph: true,
     resetReadOnlyGraph: true,
@@ -170,7 +170,10 @@ export function createGraphSwitchTransition(options: {
   };
 }
 
-export function mergeCurrentGraphIntoProject(project: Omit<Project, 'data'>, savedGraph?: NodeGraph): Omit<Project, 'data'> {
+export function mergeCurrentGraphIntoProject(
+  project: Omit<Project, 'data'>,
+  savedGraph?: NodeGraph,
+): Omit<Project, 'data'> {
   if (!savedGraph) {
     return project;
   }
@@ -180,9 +183,11 @@ export function mergeCurrentGraphIntoProject(project: Omit<Project, 'data'>, sav
     return project;
   }
 
-  return produce(project, (draft) => {
+  const mergedProject = produce(project, (draft) => {
     draft.graphs[prepared.currentGraph.metadata!.id!] = prepared.currentGraph;
   });
+
+  return reconcileProjectUiGraphButtonBindings(project, mergedProject);
 }
 
 export function shouldPersistProjectBeforeLoad(options: {

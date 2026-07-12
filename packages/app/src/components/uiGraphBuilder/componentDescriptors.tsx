@@ -16,6 +16,7 @@ import {
 import {
   getButtonInputRows,
   getButtonOutputRows,
+  initializeButtonActionToGraphBoundary,
   normalizeButtonActionToGraphBoundary,
   setButtonInputRows,
   setButtonOutputRows,
@@ -258,8 +259,14 @@ const ButtonSettings: FC<UiGraphComponentSettingsProps> = ({
             onUpdate((draft) => {
               const button = draft as UiGraphButtonComponent;
               const graphId = value as GraphId;
+              const isInitialTarget = button.action.graphId == null;
               button.action.graphId = graphId;
-              normalizeButtonActionToGraphBoundary(button, getGraphBoundary(project, graphId));
+              const boundary = getGraphBoundary(project, graphId);
+              if (isInitialTarget) {
+                initializeButtonActionToGraphBoundary(button, boundary);
+              } else {
+                normalizeButtonActionToGraphBoundary(button, boundary);
+              }
             })
           }
         />

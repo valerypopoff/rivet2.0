@@ -656,6 +656,29 @@ void describe('createRivetWebAppHandler', () => {
     assert.deepEqual(result.statePatch, { result: 'hello' });
   });
 
+  void it('rejects stale button bindings before dispatching a hosted graph action', async () => {
+    const project = makeProject();
+    const component = project.uiGraphs?.['ui-graph' as UiGraphId]?.components[0];
+    assert.equal(component?.type, 'button');
+    if (component?.type === 'button') {
+      component.action.inputs = { removedInput: { key: 'prompt', type: 'state' } };
+    }
+
+    await assert.rejects(
+      () =>
+        runRivetWebAppAction(project, {
+          componentId: 'run-button',
+          state: { prompt: 'hello' },
+          uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+        }),
+      (error) =>
+        error instanceof RivetWebAppActionHttpError &&
+        error.status === 400 &&
+        error.code === 'invalid_button_bindings' &&
+        error.message.includes('Graph input "removedInput" no longer exists.'),
+    );
+  });
+
   void it('uses the action request signal as the default processor cancellation signal', async () => {
     const project = makeProject();
     const abortController = new AbortController();
@@ -769,7 +792,7 @@ void describe('createRivetWebAppHandler', () => {
     );
 
     assert.equal(response.status, 400);
-    assert.deepEqual(errors, ['Graph output "missing-output" was not returned by the target graph.']);
+    assert.deepEqual(errors, ['Invalid web app button bindings: Graph output "missing-output" no longer exists.']);
   });
 
   void it('reports malformed action JSON clearly', async () => {
@@ -838,9 +861,10 @@ void describe('createRivetWebAppHandler', () => {
         method: 'POST',
       }),
     );
-    const body = (await response.json()) as { error?: string };
+    const body = (await response.json()) as { code?: string; error?: string };
 
     assert.equal(response.status, 400);
-    assert.equal(body.error, 'Graph output "missing-output" was not returned by the target graph.');
+    assert.equal(body.error, 'Invalid web app button bindings: Graph output "missing-output" no longer exists.');
+    assert.equal(body.code, 'invalid_button_bindings');
   });
 });

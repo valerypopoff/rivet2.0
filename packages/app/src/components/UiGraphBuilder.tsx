@@ -21,7 +21,10 @@ import {
 import { useRunUiGraphAction } from '../hooks/useRunUiGraphAction.js';
 import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
 import { createUiGraphComponent, UI_GRAPH_COMPONENT_PALETTE } from './uiGraphBuilder/componentDescriptors.js';
-import { normalizeButtonActionToGraphBoundary } from './uiGraphBuilder/buttonBindings.js';
+import {
+  initializeButtonActionToGraphBoundary,
+  normalizeButtonActionToGraphBoundary,
+} from './uiGraphBuilder/buttonBindings.js';
 import { UiGraphComponentEditor } from './uiGraphBuilder/UiGraphComponentEditor.js';
 import { UiGraphPreviewEditor } from './uiGraphBuilder/UiGraphPreviewEditor.js';
 import { canRunDesktopWebAppPreview } from './uiGraphBuilder/uiGraphBuilderPolicy.js';
@@ -357,9 +360,10 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
 
   const addComponent = useStableCallback((type: UiGraphComponent['type']) => {
     updateUiGraph((draft) => {
-      const component = createUiGraphComponent(type, project.metadata.mainGraphId);
+      const boundary = getGraphBoundary(project, project.metadata.mainGraphId);
+      const component = createUiGraphComponent(type, boundary ? project.metadata.mainGraphId : undefined);
       if (component.type === 'button') {
-        normalizeButtonActionToGraphBoundary(component, getGraphBoundary(project, component.action.graphId));
+        initializeButtonActionToGraphBoundary(component, boundary);
       }
 
       draft.components.push(component);
@@ -400,20 +404,6 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const activatePreviewComponent = useStableCallback((componentId: UiComponentId) =>
     activateComponent(componentId, settingsScrollRef.current),
   );
-
-  useEffect(() => {
-    if (!selectedUiGraphId) {
-      return;
-    }
-
-    updateUiGraph((draft) => {
-      for (const component of draft.components) {
-        if (component.type === 'button') {
-          normalizeButtonActionToGraphBoundary(component, getGraphBoundary(project, component.action.graphId));
-        }
-      }
-    });
-  }, [project, selectedUiGraphId, updateUiGraph]);
 
   const openPreviewWindow = useStableCallback(async () => {
     if (!uiGraph) {

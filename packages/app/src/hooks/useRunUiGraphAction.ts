@@ -1,21 +1,28 @@
 import {
   type GraphInputs,
   type GraphOutputs,
+  type Project,
   type UiComponentId,
   type UiGraph,
+  formatUiGraphButtonBindingIssues,
   getUiGraphActionComponent,
   jsonValueToDataValue,
   normalizeUiGraphComponentIds,
   resolveUiGraphActionOutputStatePatch,
   resolveUiGraphActionInputs,
+  validateUiGraphButtonBindings,
 } from '@valerypopoff/rivet2-core';
+import { useAtomValue } from 'jotai';
 import { useStableCallback } from './useStableCallback.js';
 import type { EditorGraphRun } from './editorGraphRunOptions.js';
+import { projectState } from '../state/savedGraphs.js';
 
 export function useRunUiGraphAction(tryRunGraph: EditorGraphRun) {
+  const project = useAtomValue(projectState);
+
   return useStableCallback(
     async (uiGraph: UiGraph, componentId: UiComponentId, state: Record<string, unknown>, abortSignal?: AbortSignal) => {
-      return await runUiGraphAction({ abortSignal, componentId, state, tryRunGraph, uiGraph });
+      return await runUiGraphAction({ abortSignal, componentId, project, state, tryRunGraph, uiGraph });
     },
   );
 }
@@ -23,6 +30,7 @@ export function useRunUiGraphAction(tryRunGraph: EditorGraphRun) {
 export async function runUiGraphAction(options: {
   abortSignal?: AbortSignal;
   componentId: UiComponentId;
+  project: Project;
   state: Record<string, unknown>;
   tryRunGraph: EditorGraphRun;
   uiGraph: UiGraph;
@@ -39,6 +47,11 @@ export async function runUiGraphAction(options: {
 
   if (!component.action.graphId) {
     throw new Error('This UI action is not connected to a graph.');
+  }
+
+  const bindingErrors = validateUiGraphButtonBindings(options.project, uiGraph, options.componentId);
+  if (bindingErrors.length > 0) {
+    throw new Error(`Invalid web app button bindings: ${formatUiGraphButtonBindingIssues(bindingErrors)}`);
   }
 
   options.abortSignal?.throwIfAborted();
