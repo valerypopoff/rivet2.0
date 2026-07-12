@@ -13,17 +13,22 @@ import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { type InternalProcessContext } from '../../index.js';
 
 import { MCPError, MCPErrorType, type MCP } from '../../integrations/mcp/MCPProvider.js';
-import { coerceTypeOptional } from '../../utils/coerceType.js';
 
 import { getInputOrData } from '../../utils/index.js';
 import { getError } from '../../utils/errors.js';
-import { getMCPBaseInputs, type MCPBaseNodeData } from '../../integrations/mcp/MCPBase.js';
-import { getServerHelperMessage, getServerOptions, loadMCPConfiguration } from '../../integrations/mcp/MCPUtils.js';
+import {
+  getMCPBaseBody,
+  getMCPBaseInputs,
+  getMCPClientEditors,
+  getMCPServerEditors,
+  interpolateMCPArgumentTemplate,
+  requireMCPProvider,
+  resolveMCPServer,
+  type MCPBaseNodeData,
+} from '../../integrations/mcp/MCPBase.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../EditorDefinition.js';
-import { interpolate } from '../../utils/interpolation.js';
-import { keys } from '../../utils/typeSafety.js';
 
 export type MCPToolCallNode = ChartNode<'mcpToolCall', MCPToolCallNodeData>;
 
@@ -123,29 +128,7 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
 
   async getEditors(context: RivetUIContext): Promise<EditorDefinition<MCPToolCallNode>[]> {
     const editors: EditorDefinition<MCPToolCallNode>[] = [
-      {
-        type: 'string',
-        label: 'Name',
-        dataKey: 'name',
-        useInputToggleDataKey: 'useNameInput',
-        helperMessage: 'The name for the MCP Client',
-      },
-      {
-        type: 'string',
-        label: 'Version',
-        dataKey: 'version',
-        useInputToggleDataKey: 'useVersionInput',
-        helperMessage: 'A version for the MCP Client',
-      },
-      {
-        type: 'dropdown',
-        label: 'Transport Type',
-        dataKey: 'transportType',
-        options: [
-          { label: 'HTTP', value: 'http' },
-          { label: 'STDIO', value: 'stdio' },
-        ],
-      },
+      ...getMCPClientEditors<MCPToolCallNode>(),
       {
         type: 'string',
         label: 'Tool Name',
@@ -170,45 +153,13 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
       },
     ];
 
-    if (this.data.transportType === 'http') {
-      editors.push({
-        type: 'string',
-        label: 'Server URL',
-        dataKey: 'serverUrl',
-        useInputToggleDataKey: 'useServerUrlInput',
-        helperMessage: 'The endpoint URL for the MCP server to connect',
-      });
-    } else if (this.data.transportType === 'stdio') {
-      const serverOptions = await getServerOptions(context);
-
-      editors.push({
-        type: 'dropdown',
-        label: 'Server ID',
-        dataKey: 'serverId',
-        helperMessage: getServerHelperMessage(context, serverOptions.length),
-        options: serverOptions,
-      });
-    }
+    editors.push(...(await getMCPServerEditors<MCPToolCallNode>(context, this.data)));
 
     return editors;
   }
 
   getBody(context: RivetUIContext): string {
-    let base;
-    if (this.data.transportType === 'http') {
-      base = this.data.useServerUrlInput ? '(Using Server URL Input)' : this.data.serverUrl;
-    } else {
-      base = `Server ID: ${this.data.serverId || '(None)'}`;
-    }
-    const namePart = `Name: ${this.data.name}`;
-    const versionPart = `Version: ${this.data.version}`;
-    const parts = [namePart, versionPart, base];
-
-    if (context.executor !== 'nodejs') {
-      parts.push('(Requires Node Executor)');
-    }
-
-    return parts.join('\n');
+    return getMCPBaseBody(this.data, context);
   }
 
   static getUIData(): NodeUIData {
@@ -223,9 +174,6 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
-    const name = getInputOrData(this.data, inputs, 'name', 'string');
-    const version = getInputOrData(this.data, inputs, 'version', 'string');
-
     const toolName = getInputOrData(this.data, inputs, 'toolName', 'string');
 
     const toolCallId = getInputOrData(this.data, inputs, 'toolCallId', 'string');
@@ -238,22 +186,7 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
         throw new MCPError(MCPErrorType.INVALID_SCHEMA, 'Cannot parse tool argument with input toggle on');
       }
     } else {
-      const inputMap = keys(inputs)
-        .filter((key) => key.startsWith('input'))
-        .reduce(
-          (acc, key) => {
-            const stringValue = coerceTypeOptional(inputs[key], 'string') ?? '';
-
-            const interpolationKey = key.slice('input-'.length);
-            acc[interpolationKey] = stringValue;
-            return acc;
-          },
-          {} as Record<string, string>,
-        );
-
-      const interpolated = interpolate(this.data.toolArguments ?? '', inputMap);
-
-      toolArguments = JSON.parse(interpolated);
+      toolArguments = JSON.parse(interpolateMCPArgumentTemplate(this.data.toolArguments ?? '', inputs));
     }
 
     const toolCall: MCP.ToolCallRequest = {
@@ -261,42 +194,16 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
       arguments: toolArguments,
     };
 
-    const transportType = getInputOrData(this.data, inputs, 'transportType', 'string') as 'http' | 'stdio';
-
     let toolResponse: MCP.ToolCallResponse | undefined = undefined;
 
     try {
-      if (!context.mcpProvider) {
-        throw new Error('MCP Provider not found');
-      }
+      const mcpProvider = requireMCPProvider(context);
+      const server = await resolveMCPServer(this.data, inputs, context);
 
-      if (transportType === 'http') {
-        const serverUrl = getInputOrData(this.data, inputs, 'serverUrl', 'string');
-        if (!serverUrl || serverUrl === '') {
-          throw new MCPError(MCPErrorType.SERVER_NOT_FOUND, 'No server URL was provided');
-        }
-        if (!serverUrl.includes('/mcp')) {
-          throw new MCPError(
-            MCPErrorType.SERVER_COMMUNICATION_FAILED,
-            'Include /mcp in your server URL. For example: http://localhost:8080/mcp',
-          );
-        }
-
-        toolResponse = await context.mcpProvider.httpToolCall({ name, version }, serverUrl, toolCall);
-      } else if (transportType === 'stdio') {
-        const serverId = this.data.serverId ?? '';
-
-        const mcpConfig = await loadMCPConfiguration(context);
-        if (!mcpConfig.mcpServers[serverId]) {
-          throw new MCPError(MCPErrorType.SERVER_NOT_FOUND, `Server ${serverId} not found in MCP config`);
-        }
-
-        const serverConfig = {
-          config: mcpConfig.mcpServers[serverId],
-          serverId,
-        };
-
-        toolResponse = await context.mcpProvider.stdioToolCall({ name, version }, serverConfig, toolCall);
+      if (server?.transportType === 'http') {
+        toolResponse = await mcpProvider.httpToolCall(server.clientConfig, server.serverUrl, toolCall);
+      } else if (server?.transportType === 'stdio') {
+        toolResponse = await mcpProvider.stdioToolCall(server.clientConfig, server.serverConfig, toolCall);
       }
 
       const output: Outputs = {};

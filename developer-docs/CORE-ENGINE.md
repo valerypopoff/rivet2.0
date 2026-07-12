@@ -97,6 +97,8 @@ Only use debug logging for details that would be too noisy or too sensitive for 
 
 Provider stream JSON parsing should use [`parseProviderJsonChunk(...)`](../packages/core/src/utils/providerStreamParsing.ts). That helper preserves parse failures while avoiding raw chunk logging. If a provider needs richer parse diagnostics, extend the helper rather than adding a provider-local raw `console.error(chunk)`.
 
+Provider SSE transport belongs in [`fetchEventSource.ts`](../packages/core/src/utils/fetchEventSource.ts). Legacy OpenAI and Anthropic streaming both use this single reader so event splitting, `data:` / `event:` parsing, response-body isolation, header handling, and timeout cleanup stay consistent. Providers that need a timeout different from the shared chat default must pass it explicitly to the helper rather than cloning the transport.
+
 ## GraphProcessor Loop-Control Boundary
 
 `GraphProcessor` remains the central execution engine and still owns scheduling, event emission, subprocessors, control-flow exclusion, and loop/race handling.
@@ -1193,3 +1195,5 @@ and process/network lifecycle. Its default provider uses one short-lived client 
 operation, guarantees cleanup after operation failures, and performs Streamable
 HTTP-to-SSE fallback with separate SDK clients. Core nodes must not assume that an
 MCP connection is pooled or retain transport-specific client state.
+
+[`MCPBase.ts`](../packages/core/src/integrations/mcp/MCPBase.ts) owns the common behavior for MCP Discovery, Tool Call, and Get Prompt nodes: client/transport editor fragments, transport-specific server editors, compact node-body text, required-provider checks, HTTP `/mcp` validation, STDIO configuration resolution, and interpolation of JSON argument templates from dynamic `input-*` ports. Operation nodes keep only their request shape, response mapping, and intentionally node-specific browser error copy. Preserve the existing editor order by placing the shared client fragment before operation-specific fields and the shared server fragment after them. Do not add a node-local MCP editor or transport resolver; extend this base seam instead.

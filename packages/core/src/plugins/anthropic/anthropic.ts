@@ -1,4 +1,4 @@
-import fetchEventSource from './fetchEventSource.js';
+import fetchEventSource from '../../utils/fetchEventSource.js';
 import { parseProviderJsonChunk } from '../../utils/providerStreamParsing.js';
 
 export type AnthropicModel = {
