@@ -13,6 +13,7 @@ import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { dedent } from 'ts-dedent';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { type EditorDefinition } from '../EditorDefinition.js';
+import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 const INPUT_PORT_ID_PATTERN = /^input(\d+)$/;
 const IGNORE_NULL_LABEL = "Ignore 'null'";
@@ -46,7 +47,7 @@ export class CoalesceNodeImpl extends NodeImpl<CoalesceNode> {
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'strict-positive');
 
     inputs.push({
       dataType: 'boolean',
@@ -115,24 +116,6 @@ export class CoalesceNodeImpl extends NodeImpl<CoalesceNode> {
       contextMenuTitle: 'Coalesce',
       group: ['Logic'],
     };
-  }
-
-  #getInputPortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-
-    let maxInputNumber = 0;
-    for (const connection of connections) {
-      if (connection.inputNodeId !== inputNodeId) {
-        continue;
-      }
-
-      const inputNumber = this.#getInputPortNumber(connection.inputId);
-      if (inputNumber && inputNumber > maxInputNumber) {
-        maxInputNumber = inputNumber;
-      }
-    }
-
-    return maxInputNumber + 1;
   }
 
   async process(inputData: Inputs): Promise<Outputs> {

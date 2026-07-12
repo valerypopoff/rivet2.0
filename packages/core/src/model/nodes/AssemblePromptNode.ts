@@ -18,6 +18,7 @@ import type { EditorDefinition } from '../EditorDefinition.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { getInputOrData } from '../../utils/inputs.js';
+import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 export type AssemblePromptNode = ChartNode<'assemblePrompt', AssemblePromptNodeData>;
 
@@ -47,7 +48,7 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const messageCount = this.#getMessagePortCount(connections);
+    const messageCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'message', 'legacy');
 
     if (this.data.useIsLastMessageCacheBreakpointInput) {
       inputs.push({
@@ -90,23 +91,6 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
     }
 
     return outputs;
-  }
-
-  #getMessagePortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-    const messageConnections = connections.filter(
-      (connection) => connection.inputNodeId === inputNodeId && connection.inputId.startsWith('message'),
-    );
-
-    let maxMessageNumber = 0;
-    for (const connection of messageConnections) {
-      const messageNumber = parseInt(connection.inputId.replace('message', ''));
-      if (messageNumber > maxMessageNumber) {
-        maxMessageNumber = messageNumber;
-      }
-    }
-
-    return maxMessageNumber + 1;
   }
 
   static getUIData(): NodeUIData {
