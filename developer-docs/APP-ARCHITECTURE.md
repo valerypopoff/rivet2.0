@@ -310,6 +310,8 @@ Preview windows bootstrap the UI graph snapshot from local storage and fall back
 
 The global Go To search indexes UI graph names, descriptions, and component text/bindings as `Web app` results and opens the UI graph editor when selected. The graph-scoped search panel remains graph-canvas-only. Project comparison includes UI graph additions/removals/changes in the overall summary, but UI graphs do not produce canvas overlays or current-opened-graph counts because they are not workflow graphs.
 
+Web-app component selection is cross-pane: selecting or focusing a settings card highlights its preview frame, and selecting or focusing a preview frame highlights its settings card. The builder reveals the matching component in the other pane's own scroll container without moving focus or using `scrollIntoView`, so the current pane, fixed editor shell, and browser viewport stay put.
+
 ### `OverlayTabs`
 
 Acts as the switchboard for overlay-like product areas such as prompt designer, Trivet, chat viewer, Data Studio, and other auxiliary workspace surfaces.

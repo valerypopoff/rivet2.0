@@ -1,4 +1,4 @@
-import { Fragment, type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type FC, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type DataValue,
   type UiComponentId,
@@ -24,6 +24,7 @@ export type RivetWebAppRendererProps = {
   renderComponentFrame?(props: RivetWebAppComponentFrameProps): ReactNode;
   onActiveComponentChange?(componentId: UiComponentId): void;
   onRunAction(componentId: UiComponentId, state: Record<string, unknown>): Promise<RivetWebAppActionResult>;
+  rootRef?: RefObject<HTMLDivElement>;
   uiGraph: UiGraph;
 };
 
@@ -40,6 +41,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   renderComponentFrame,
   onActiveComponentChange,
   onRunAction,
+  rootRef,
   uiGraph,
 }) => {
   const normalizedUiGraph = useMemo(() => normalizeUiGraphComponentIds(uiGraph), [uiGraph]);
@@ -78,7 +80,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   };
 
   return (
-    <div className="rivet-web-app-root">
+    <div ref={rootRef} className="rivet-web-app-root">
       <style>{RIVET_WEB_APP_RENDERER_CSS}</style>
       <main className="rivet-web-app-surface">
         {normalizedUiGraph.components.map((component) => {

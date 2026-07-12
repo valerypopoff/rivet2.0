@@ -1,5 +1,5 @@
 import { css } from '@emotion/react';
-import { type CSSProperties, type FC, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue, useStore } from 'jotai';
 import { arrayMove } from '@dnd-kit/sortable';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
@@ -28,6 +28,7 @@ import { canRunDesktopWebAppPreview } from './uiGraphBuilder/uiGraphBuilderPolic
 import { useUiGraphMutations } from './uiGraphBuilder/useUiGraphMutations.js';
 import { collectUiGraphDataKeyUsages } from './uiGraphBuilder/dataKeys.js';
 import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
+import { revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
 
 const styles = css`
   position: fixed;
@@ -359,6 +360,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const hostUiConfig = useRivetAppHostUiConfig();
   const canRunDesktopPreview = canRunDesktopWebAppPreview(hostUiConfig);
   const [activeComponentId, setActiveComponentId] = useState<UiComponentId | undefined>();
+  const settingsScrollRef = useRef<HTMLDivElement>(null);
+  const previewScrollRef = useRef<HTMLDivElement>(null);
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
   const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
 
@@ -389,6 +392,19 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       }
     });
   });
+
+  const activateComponent = useStableCallback(
+    (componentId: UiComponentId, counterpartScrollContainer: HTMLElement | null) => {
+      setActiveComponentId(componentId);
+      revealUiGraphComponent(counterpartScrollContainer, componentId);
+    },
+  );
+  const activateSettingsComponent = useStableCallback((componentId: UiComponentId) =>
+    activateComponent(componentId, previewScrollRef.current),
+  );
+  const activatePreviewComponent = useStableCallback((componentId: UiComponentId) =>
+    activateComponent(componentId, settingsScrollRef.current),
+  );
 
   useEffect(() => {
     if (!selectedUiGraphId) {
@@ -509,7 +525,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   return (
     <div css={styles} style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}>
       <section className="ui-graph-builder-panel">
-        <div className="ui-graph-builder-scroll">
+        <div ref={settingsScrollRef} className="ui-graph-builder-scroll">
           <div className="ui-graph-builder-fields">
             <label className="ui-graph-builder-field">
               Name
@@ -560,7 +576,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
                 component={component}
                 dataKeyUsages={dataKeyUsages}
                 project={project}
-                onActivate={setActiveComponentId}
+                onActivate={activateSettingsComponent}
                 onDelete={() => deleteComponent(component.id)}
                 onUpdate={(updater) => updateComponent(component.id, updater)}
               />
@@ -581,8 +597,9 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
         ) : null}
         <UiGraphPreviewEditor
           activeComponentId={activeComponentId}
-          onActiveComponentChange={setActiveComponentId}
+          onActiveComponentChange={activatePreviewComponent}
           onReorder={reorderComponents}
+          scrollContainerRef={previewScrollRef}
           uiGraph={uiGraph}
           onRunAction={(componentId, state) => runUiGraphAction(uiGraph, componentId, state)}
         />

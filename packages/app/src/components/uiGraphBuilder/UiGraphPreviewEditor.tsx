@@ -1,4 +1,4 @@
-import type { CSSProperties, FC } from 'react';
+import type { CSSProperties, FC, RefObject } from 'react';
 import { DndContext, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import type { UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
@@ -14,8 +14,9 @@ export const UiGraphPreviewEditor: FC<{
   onActiveComponentChange(componentId: UiComponentId): void;
   onReorder(draggedComponentId: UiComponentId, targetComponentId: UiComponentId): void;
   onRunAction(componentId: UiComponentId, state: Record<string, unknown>): Promise<RivetWebAppActionResult>;
+  scrollContainerRef: RefObject<HTMLDivElement>;
   uiGraph: UiGraph;
-}> = ({ activeComponentId, onActiveComponentChange, onReorder, onRunAction, uiGraph }) => {
+}> = ({ activeComponentId, onActiveComponentChange, onReorder, onRunAction, scrollContainerRef, uiGraph }) => {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -34,6 +35,7 @@ export const UiGraphPreviewEditor: FC<{
           activeComponentId={activeComponentId}
           onActiveComponentChange={onActiveComponentChange}
           renderComponentFrame={(frameProps) => <SortablePreviewComponentFrame {...frameProps} />}
+          rootRef={scrollContainerRef}
           uiGraph={uiGraph}
           onRunAction={onRunAction}
         />
@@ -59,6 +61,7 @@ const SortablePreviewComponentFrame: FC<RivetWebAppComponentFrameProps> = ({
     <div
       ref={setNodeRef}
       className={`ui-graph-preview-sortable-row${isDragging ? ' dragging' : ''}`}
+      data-ui-graph-component-id={component.id}
       style={style}
       onFocusCapture={onFocusCapture}
       onPointerDownCapture={onPointerDownCapture}

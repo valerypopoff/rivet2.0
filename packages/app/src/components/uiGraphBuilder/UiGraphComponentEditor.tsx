@@ -28,6 +28,7 @@ export const UiGraphComponentEditor: FC<{
   return (
     <div
       className={`ui-graph-component-card${activeComponentId === component.id ? ' active' : ''}`}
+      data-ui-graph-component-id={component.id}
       onFocusCapture={() => onActivate(component.id)}
       onPointerDownCapture={() => onActivate(component.id)}
     >
