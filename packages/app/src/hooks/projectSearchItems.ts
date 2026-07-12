@@ -90,6 +90,8 @@ function getUiGraphSearchData(uiGraph: UiGraph): string {
           return [component.type, component.text];
         case 'markdown':
           return [component.type, component.markdown];
+        case 'gap':
+          return [component.type, component.size];
         case 'input':
         case 'textarea':
           return [component.type, component.label, component.placeholder, component.stateKey];

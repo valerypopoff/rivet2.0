@@ -1,5 +1,7 @@
+import DeleteIcon from 'majesticons/line/delete-bin-line.svg?react';
 import type { FC } from 'react';
 import type { Project, UiComponentId, UiGraphComponent } from '@valerypopoff/rivet2-core';
+import { Tooltip } from '../Tooltip.js';
 import {
   getUiGraphComponentDescriptor,
   getUiGraphComponentLabel,
@@ -36,15 +38,22 @@ export const UiGraphComponentEditor: FC<{
         <span className="ui-graph-component-card-title-main">
           <span>{getUiGraphComponentLabel(component.type)}</span>
         </span>
-        <button
-          type="button"
-          className="ui-graph-component-delete-button"
-          aria-label="Delete component"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={onDelete}
-        >
-          &times;
-        </button>
+        <Tooltip content="Delete component" tag="span">
+          <DeleteIcon
+            className="ui-graph-component-delete-icon"
+            role="button"
+            tabIndex={0}
+            aria-label="Delete component"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={onDelete}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onDelete();
+              }
+            }}
+          />
+        </Tooltip>
       </div>
       <Settings {...settingsProps} />
     </div>

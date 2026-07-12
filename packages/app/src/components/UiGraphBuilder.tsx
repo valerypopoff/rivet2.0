@@ -113,9 +113,8 @@ const styles = css`
     font-weight: 700;
   }
 
-  .ui-graph-builder-field input,
-  .ui-graph-builder-field textarea,
-  .ui-graph-builder-field select {
+  .ui-graph-builder-field > input,
+  .ui-graph-builder-field > textarea {
     min-width: 0;
     border: 1px solid var(--form-control-border);
     border-radius: 7px;
@@ -126,22 +125,7 @@ const styles = css`
     padding: 8px 10px;
   }
 
-  .ui-graph-builder-field select {
-    appearance: none;
-    background-color: var(--form-control-bg);
-    background-image: linear-gradient(45deg, transparent 50%, var(--foreground-muted) 50%),
-      linear-gradient(135deg, var(--foreground-muted) 50%, transparent 50%);
-    background-position:
-      calc(100% - 18px) 50%,
-      calc(100% - 13px) 50%;
-    background-repeat: no-repeat;
-    background-size:
-      5px 5px,
-      5px 5px;
-    padding-right: 36px;
-  }
-
-  .ui-graph-builder-field textarea {
+  .ui-graph-builder-field > textarea {
     appearance: none;
     min-height: 78px;
     resize: vertical;
@@ -277,22 +261,24 @@ const styles = css`
     align-items: end;
   }
 
-  .ui-graph-component-delete-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: 0;
-    border-radius: var(--ui-button-radius);
-    background: var(--grey-dark-colorish);
-    color: var(--foreground);
+  .ui-graph-component-delete-icon {
+    display: block;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    color: var(--foreground-muted);
     cursor: pointer;
-    font: inherit;
-    font-weight: 700;
-    font-size: var(--ui-font-size-xl);
-    line-height: 1;
-    padding: 0;
+    outline: none;
+  }
+
+  .ui-graph-component-delete-icon:hover,
+  .ui-graph-component-delete-icon:focus-visible {
+    color: var(--error);
+  }
+
+  .ui-graph-component-delete-icon:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   .ui-graph-action-empty {
@@ -365,6 +351,10 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
   const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
 
+  useEffect(() => {
+    setActiveComponentId(undefined);
+  }, [selectedUiGraphId]);
+
   const addComponent = useStableCallback((type: UiGraphComponent['type']) => {
     updateUiGraph((draft) => {
       const component = createUiGraphComponent(type, project.metadata.mainGraphId);
@@ -377,6 +367,11 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   });
 
   const deleteComponent = useStableCallback((componentId: UiComponentId) => {
+    if (!window.confirm('Are you sure you want to delete this component?')) {
+      return;
+    }
+
+    setActiveComponentId((activeComponentId) => (activeComponentId === componentId ? undefined : activeComponentId));
     updateUiGraph((draft) => {
       draft.components = draft.components.filter((component) => component.id !== componentId);
     });

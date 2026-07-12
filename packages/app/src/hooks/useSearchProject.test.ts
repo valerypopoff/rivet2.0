@@ -64,6 +64,11 @@ test('buildProjectSearchItems indexes graph nodes and library nodes', () => {
                 outputs: [{ outputKey: 'reviewOutput', stateKey: 'result' }],
               },
             },
+            {
+              id: 'spacing' as UiComponentId,
+              size: 'large',
+              type: 'gap',
+            },
           ],
         },
       },
@@ -86,6 +91,7 @@ test('buildProjectSearchItems indexes graph nodes and library nodes', () => {
   );
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /reviewInput/);
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /reviewOutput/);
+  assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /large/);
 });
 
 test('buildProjectSearchItems ignores malformed graph entries without metadata ids', () => {

@@ -248,13 +248,16 @@ if (config && root) {
 
     switch (renderModel.type) {
       case 'text':
-        content = createElement('div', { className: 'rivet-web-app-card', text: renderModel.text });
+        content = createElement('div', { className: 'rivet-web-app-text', text: renderModel.text });
         break;
       case 'markdown':
-        content = renderMarkdownElement(
-          renderModel.markdown,
-          'rivet-web-app-card rivet-web-app-markdown markdown-body',
-        );
+        content = renderMarkdownElement(renderModel.markdown, 'rivet-web-app-markdown markdown-body');
+        break;
+      case 'gap':
+        content = createElement('div', {
+          'aria-hidden': 'true',
+          className: `rivet-web-app-gap rivet-web-app-gap-${renderModel.size}`,
+        });
         break;
       case 'input':
       case 'textarea': {

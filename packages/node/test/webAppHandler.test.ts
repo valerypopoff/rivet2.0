@@ -257,10 +257,15 @@ void describe('createRivetWebAppHandler', () => {
     assert.doesNotMatch(renderedError ?? '', /Unexpected token|<html>/i);
   });
 
-  void it('sanitizes hosted Markdown with the shared browser policy', () => {
+  void it('renders Text and Markdown without card surfaces and sanitizes hosted Markdown', () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     uiGraph.components = [
+      {
+        id: 'plain-text' as any,
+        text: 'Plain text',
+        type: 'text',
+      },
       {
         id: 'unsafe-markdown' as any,
         type: 'markdown',
@@ -270,13 +275,20 @@ void describe('createRivetWebAppHandler', () => {
 
     const html = renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' });
     const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'https://example.test/app' });
+    const text = dom.window.document.querySelector('.rivet-web-app-text');
     const markdown = dom.window.document.querySelector('.rivet-web-app-markdown');
     const links = markdown?.querySelectorAll('a');
 
+    assert.ok(text);
+    assert.equal(text.textContent, 'Plain text');
+    assert.equal(text.classList.contains('rivet-web-app-card'), false);
     assert.ok(markdown);
+    assert.equal(markdown.classList.contains('rivet-web-app-card'), false);
     assert.equal(markdown.querySelector('img'), null);
     assert.equal(links?.[0]?.hasAttribute('href'), false);
     assert.equal(links?.[1]?.getAttribute('href'), 'https://example.com/path');
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-text\s*\{\s*background: transparent;/);
+    dom.window.close();
   });
 
   void it('serves the shared web app renderer styles', async () => {
@@ -300,6 +312,26 @@ void describe('createRivetWebAppHandler', () => {
     assert.ok(documentStyleIndex >= 0);
     assert.ok(markdownStyleIndex > documentStyleIndex);
     assert.ok(rendererStyleIndex > markdownStyleIndex);
+  });
+
+  void it('renders Gap components as cardless shared spacing', () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    uiGraph.components = [{ id: 'large-gap' as any, size: 'large', type: 'gap' }];
+
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+    const gap = dom.window.document.querySelector('.rivet-web-app-gap.rivet-web-app-gap-large');
+
+    assert.ok(gap);
+    assert.equal(gap.getAttribute('aria-hidden'), 'true');
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-card'), null);
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-gap-small\s*\{\s*height: 8px;/);
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-gap-medium\s*\{\s*height: 24px;/);
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-gap-large\s*\{\s*height: 48px;/);
+    dom.window.close();
   });
 
   void it('runs bound graph actions and returns a state patch', async () => {

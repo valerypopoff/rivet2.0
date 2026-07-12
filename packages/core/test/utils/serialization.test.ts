@@ -461,6 +461,11 @@ describe('serialization compatibility', () => {
                 outputStateKey: 'result',
               },
             },
+            {
+              id: 'ui-component-2' as any,
+              type: 'gap',
+              size: 'large',
+            },
           ],
         },
       },
@@ -474,6 +479,10 @@ describe('serialization compatibility', () => {
     assert.deepEqual(
       deserialized.uiGraphs?.['ui-graph-1']?.components[0],
       project.uiGraphs?.['ui-graph-1']?.components[0],
+    );
+    assert.deepEqual(
+      deserialized.uiGraphs?.['ui-graph-1']?.components[1],
+      project.uiGraphs?.['ui-graph-1']?.components[1],
     );
   });
 

@@ -5,6 +5,8 @@ import type {
   GraphId,
   NodeId,
   PortId,
+  Project,
+  ProjectId,
   UiComponentId,
   UiGraph,
   UiGraphComponent,
@@ -18,6 +20,7 @@ import {
 import {
   createUiGraphComponent,
   getUiGraphComponentDataKeys,
+  getUiGraphGraphOptions,
   UI_GRAPH_COMPONENT_DESCRIPTORS,
   UI_GRAPH_COMPONENT_PALETTE,
 } from './componentDescriptors.js';
@@ -88,7 +91,15 @@ test('button normalization migrates legacy bindings without changing mapped stat
 });
 
 test('component descriptors exhaustively own labels, defaults, settings, and data-key policy', () => {
-  const expectedTypes: UiGraphComponent['type'][] = ['text', 'markdown', 'input', 'textarea', 'button', 'output'];
+  const expectedTypes: UiGraphComponent['type'][] = [
+    'text',
+    'markdown',
+    'gap',
+    'input',
+    'textarea',
+    'button',
+    'output',
+  ];
 
   assert.deepEqual(Object.keys(UI_GRAPH_COMPONENT_DESCRIPTORS), expectedTypes);
   assert.deepEqual(
@@ -105,7 +116,29 @@ test('component descriptors exhaustively own labels, defaults, settings, and dat
     assert.ok(descriptor.label);
     assert.equal(typeof descriptor.Settings, 'function');
     assert.doesNotThrow(() => getUiGraphComponentDataKeys(component));
+    if (component.type === 'gap') {
+      assert.equal(component.size, 'medium');
+      assert.deepEqual(getUiGraphComponentDataKeys(component), { reads: [], writes: [] });
+    }
   }
+});
+
+test('the graph selector keeps a deleted target visible as a disabled option', () => {
+  const project: Project = {
+    metadata: { description: '', id: 'project' as ProjectId, title: 'Project' },
+    graphs: {
+      [graphId]: {
+        connections: [],
+        metadata: { description: '', id: graphId, name: 'Main graph' },
+        nodes: [],
+      },
+    },
+  };
+
+  assert.deepEqual(getUiGraphGraphOptions(project, 'deleted-graph' as GraphId), [
+    { isDisabled: true, label: 'deleted-graph (missing)', value: 'deleted-graph' },
+    { label: 'Main graph', value: graphId },
+  ]);
 });
 
 test('data-key indexing reports only later producers as duplicates and exposes consumer reads', () => {

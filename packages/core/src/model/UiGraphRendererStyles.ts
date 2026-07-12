@@ -44,6 +44,28 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   padding: 16px;
 }
 
+.rivet-web-app-text {
+  background: transparent;
+}
+
+.rivet-web-app-gap {
+  width: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.rivet-web-app-gap-small {
+  height: 8px;
+}
+
+.rivet-web-app-gap-medium {
+  height: 24px;
+}
+
+.rivet-web-app-gap-large {
+  height: 48px;
+}
+
 .rivet-web-app-component-frame {
   border-radius: 12px;
   margin: -5px;
@@ -207,7 +229,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-markdown.markdown-body {
-  background: var(--rivet-web-app-card-background);
+  background: transparent;
   font-family: inherit;
   min-width: 0;
 }

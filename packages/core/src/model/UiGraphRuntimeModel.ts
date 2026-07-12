@@ -1,4 +1,4 @@
-import type { UiGraphComponent } from './UiGraph.js';
+import type { UiGraphComponent, UiGraphGapSize } from './UiGraph.js';
 
 export type UiGraphOutputRenderMode = 'text' | 'json' | 'markdown';
 
@@ -19,6 +19,11 @@ export type UiGraphComponentRenderModel =
       component: Extract<UiGraphComponent, { type: 'markdown' }>;
       markdown: string;
       type: 'markdown';
+    }
+  | {
+      component: Extract<UiGraphComponent, { type: 'gap' }>;
+      size: UiGraphGapSize;
+      type: 'gap';
     }
   | {
       component: Extract<UiGraphComponent, { type: 'input' | 'textarea' }>;
@@ -47,6 +52,8 @@ export function getUiGraphComponentRenderModel(
       return { component, text: component.text, type: 'text' };
     case 'markdown':
       return { component, markdown: component.markdown, type: 'markdown' };
+    case 'gap':
+      return { component, size: component.size, type: 'gap' };
     case 'input':
     case 'textarea':
       return {

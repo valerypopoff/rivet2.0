@@ -139,14 +139,11 @@ const RivetWebAppComponent: FC<{
 
   switch (renderModel.type) {
     case 'text':
-      return <div className="rivet-web-app-card">{renderModel.text}</div>;
+      return <div className="rivet-web-app-text">{renderModel.text}</div>;
     case 'markdown':
-      return (
-        <div
-          className="rivet-web-app-card rivet-web-app-markdown markdown-body"
-          dangerouslySetInnerHTML={markdownHtml}
-        />
-      );
+      return <div className="rivet-web-app-markdown markdown-body" dangerouslySetInnerHTML={markdownHtml} />;
+    case 'gap':
+      return <div aria-hidden="true" className={`rivet-web-app-gap rivet-web-app-gap-${renderModel.size}`} />;
     case 'input':
       return (
         <label className="rivet-web-app-field">

@@ -6,6 +6,8 @@ import type { DataValue } from './DataValue.js';
 export type UiGraphId = Opaque<string, 'UiGraphId'>;
 export type UiComponentId = Opaque<string, 'UiComponentId'>;
 export type UiGraphOutputs = Record<string, DataValue>;
+export const UI_GRAPH_GAP_SIZES = ['small', 'medium', 'large'] as const;
+export type UiGraphGapSize = (typeof UI_GRAPH_GAP_SIZES)[number];
 
 export type UiGraphValueBinding =
   | {
@@ -49,6 +51,11 @@ export type UiGraphComponent =
       id: UiComponentId;
       type: 'markdown';
       markdown: string;
+    }
+  | {
+      id: UiComponentId;
+      type: 'gap';
+      size: UiGraphGapSize;
     }
   | {
       id: UiComponentId;

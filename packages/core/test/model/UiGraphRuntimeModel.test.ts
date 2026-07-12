@@ -19,6 +19,7 @@ describe('UiGraphRuntimeModel', () => {
     const components: UiGraphComponent[] = [
       { id: componentId, text: 'Static text', type: 'text' },
       { id: componentId, markdown: '**Markdown**', type: 'markdown' },
+      { id: componentId, size: 'large', type: 'gap' },
       { id: componentId, label: 'Prompt', stateKey: 'prompt', type: 'input' },
       { id: componentId, label: '', stateKey: 'prompt', type: 'textarea' },
       { id: componentId, label: 'Run', action: { type: 'runGraph' }, type: 'button' },
@@ -27,10 +28,14 @@ describe('UiGraphRuntimeModel', () => {
 
     const models = components.map((component) => getUiGraphComponentRenderModel(component, state));
 
-    assert.deepEqual(models.map((model) => model.type), ['text', 'markdown', 'input', 'textarea', 'button', 'output']);
-    assert.equal(models[2]?.type === 'input' && models[2].value, 'Hello');
-    assert.equal(models[3]?.type === 'textarea' && models[3].label, 'prompt');
-    assert.equal(models[5]?.type === 'output' && models[5].output.renderedValue, '{\n  "value": 42\n}');
+    assert.deepEqual(
+      models.map((model) => model.type),
+      ['text', 'markdown', 'gap', 'input', 'textarea', 'button', 'output'],
+    );
+    assert.equal(models[2]?.type === 'gap' && models[2].size, 'large');
+    assert.equal(models[3]?.type === 'input' && models[3].value, 'Hello');
+    assert.equal(models[4]?.type === 'textarea' && models[4].label, 'prompt');
+    assert.equal(models[6]?.type === 'output' && models[6].output.renderedValue, '{\n  "value": 42\n}');
   });
 
   it('keeps empty output blocks empty until the action stores a value', () => {
@@ -72,7 +77,10 @@ describe('UiGraphRuntimeModel', () => {
     assert.deepEqual(getUiGraphActionState(action, state), { genre: 'fantasy', prompt: 'Write a story' });
     assert.deepEqual(
       getUiGraphActionState(
-        { type: 'runGraph', inputs: { fixed: { type: 'literal', value: 'fixed' }, question: { type: 'state', key: 'prompt' } } },
+        {
+          type: 'runGraph',
+          inputs: { fixed: { type: 'literal', value: 'fixed' }, question: { type: 'state', key: 'prompt' } },
+        },
         state,
       ),
       { prompt: 'Write a story' },
