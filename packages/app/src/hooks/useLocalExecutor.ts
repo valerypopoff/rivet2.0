@@ -310,6 +310,8 @@ export function useLocalExecutor() {
       return;
     }
 
+    options.abortSignal?.throwIfAborted();
+
     if (
       currentProcessorsByProjectId.current.get(runProjectId)?.isRunning ||
       (recordingToReplay && recordingPlaybackStartingRef.current)
@@ -333,10 +335,14 @@ export function useLocalExecutor() {
     }
 
     let processor: GraphProcessor | undefined;
+    const handleAbort = () => {
+      void processor?.abort();
+    };
 
     try {
       if (recordingToReplay) {
         await yieldToMacrotask();
+        options.abortSignal?.throwIfAborted();
       }
 
       const savedGraph = saveGraph() ?? graph;
@@ -364,6 +370,8 @@ export function useLocalExecutor() {
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
+      options.abortSignal?.addEventListener('abort', handleAbort, { once: true });
+      options.abortSignal?.throwIfAborted();
       processor.executor = 'browser';
       processor.recordingPlaybackChatLatency = savedSettings.recordingPlaybackLatency ?? 1000;
 
@@ -461,6 +469,8 @@ export function useLocalExecutor() {
       }
       return undefined;
     } finally {
+      options.abortSignal?.removeEventListener('abort', handleAbort);
+
       if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
         dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
       }

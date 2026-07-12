@@ -49,6 +49,22 @@ repeats the projection for direct host calls, so lifecycle hooks and
 `createProcessorOptions` receive only those action-relevant keys. Unrelated form
 values and prior output state remain local to the web app.
 
+Button execution is request-scoped rather than represented by one global pending
+button. Different buttons can remain active independently, while a second click on
+the same pending button is ignored. If concurrent actions write the same UI data
+key, the latest-started action owns that key; disjoint state patches still apply,
+and a newer direct form edit prevents an older action from overwriting it.
+
+The generated client aborts active fetches when the page unloads and aborts sibling
+requests after a revision mismatch. `runRivetWebAppAction(...)` prefers an explicit
+`createProcessorOptions.abortSignal`, then falls back to the supplied Fetch
+`Request.signal`. It forwards that source through an action-scoped signal and removes
+the forwarding listener as soon as processor execution settles, so a wrapper may
+safely reuse a longer-lived cancellation signal without retaining completed processors.
+Wrappers that adapt Express requests should bridge their
+disconnect/close event into that Fetch signal (or return an explicit signal) when
+they want abandoned browser actions to stop the underlying graph run.
+
 ## Security
 
 Web apps are declarative: no project JavaScript or arbitrary HTML execution.

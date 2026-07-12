@@ -228,3 +228,43 @@ test('web app actions fail clearly when the selected graph output is missing', a
     /Graph output "missing" was not returned by the target graph/,
   );
 });
+
+test('web app actions propagate cancellation and reject results completed after abort', async () => {
+  const componentId = 'button-1' as UiComponentId;
+  const graphId = 'graph-1' as GraphId;
+  const uiGraph: UiGraph = {
+    id: 'ui-graph-1' as UiGraphId,
+    name: 'Test app',
+    components: [
+      {
+        action: {
+          graphId,
+          outputs: [{ outputKey: 'result', stateKey: 'lastResult' }],
+          type: 'runGraph',
+        },
+        id: componentId,
+        label: 'Run',
+        type: 'button',
+      },
+    ],
+  };
+  const abortController = new AbortController();
+  let receivedAbortSignal: AbortSignal | undefined;
+  let resolveRun!: (outputs: GraphOutputs) => void;
+  const actionPromise = runUiGraphAction({
+    abortSignal: abortController.signal,
+    componentId,
+    state: {},
+    tryRunGraph: async (options) => {
+      receivedAbortSignal = options?.abortSignal;
+      return await new Promise<GraphOutputs>((resolve) => (resolveRun = resolve));
+    },
+    uiGraph,
+  });
+
+  abortController.abort();
+  resolveRun({ result: { type: 'string', value: 'stale' } });
+
+  await assert.rejects(actionPromise, (error) => error instanceof DOMException && error.name === 'AbortError');
+  assert.equal(receivedAbortSignal, abortController.signal);
+});

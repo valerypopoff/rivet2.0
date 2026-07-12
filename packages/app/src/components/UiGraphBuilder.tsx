@@ -353,7 +353,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
 
   useEffect(() => {
     setActiveComponentId(undefined);
-  }, [selectedUiGraphId]);
+  }, [project.metadata.id, selectedUiGraphId]);
 
   const addComponent = useStableCallback((type: UiGraphComponent['type']) => {
     updateUiGraph((draft) => {
@@ -425,6 +425,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     const storageKey = `${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`;
     writeRivetWebAppPreviewPayload(token, { uiGraph });
     const channel = new BroadcastChannel(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`);
+    const actionAbortControllers = new Map<string, AbortController>();
     let previewWindow: Awaited<ReturnType<typeof createWebviewWindowHandle>> | undefined;
     let unlistenClose: (() => unknown) | undefined;
     let cleaned = false;
@@ -435,6 +436,10 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       }
 
       cleaned = true;
+      for (const abortController of actionAbortControllers.values()) {
+        abortController.abort();
+      }
+      actionAbortControllers.clear();
       channel.removeEventListener('message', handleMessage);
       channel.close();
       localStorage.removeItem(storageKey);
@@ -448,17 +453,22 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       void handlePreviewAction(event);
     };
     const handlePreviewAction = async (event: MessageEvent<PreviewActionRequest>) => {
-      if (event.data.type !== 'runAction') {
-        if (event.data.type === 'requestPayload') {
-          channel.postMessage({
-            payload: { uiGraph },
-            requestId: event.data.requestId,
-            type: 'previewPayload',
-          } satisfies PreviewActionResponse);
-        }
+      if (event.data.type === 'requestPayload') {
+        channel.postMessage({
+          payload: { uiGraph },
+          requestId: event.data.requestId,
+          type: 'previewPayload',
+        } satisfies PreviewActionResponse);
         return;
       }
 
+      if (event.data.type === 'cancelAction') {
+        actionAbortControllers.get(event.data.requestId)?.abort();
+        return;
+      }
+
+      const abortController = new AbortController();
+      actionAbortControllers.set(event.data.requestId, abortController);
       try {
         const activeProject = store.get(projectState);
         if (activeProject.metadata.id !== previewProjectId) {
@@ -470,7 +480,12 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           throw new Error('This web app was deleted from the project. Open a new preview window.');
         }
 
-        const result = await runUiGraphAction(uiGraph, event.data.componentId, event.data.state);
+        const result = await runUiGraphAction(
+          uiGraph,
+          event.data.componentId,
+          event.data.state,
+          abortController.signal,
+        );
         if (cleaned) {
           return;
         }
@@ -490,6 +505,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           requestId: event.data.requestId,
           type: 'actionError',
         } satisfies PreviewActionResponse);
+      } finally {
+        actionAbortControllers.delete(event.data.requestId);
       }
     };
 
@@ -591,12 +608,13 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           </button>
         ) : null}
         <UiGraphPreviewEditor
+          key={`${project.metadata.id}:${uiGraph.id}`}
           activeComponentId={activeComponentId}
           onActiveComponentChange={activatePreviewComponent}
           onReorder={reorderComponents}
           scrollContainerRef={previewScrollRef}
           uiGraph={uiGraph}
-          onRunAction={(componentId, state) => runUiGraphAction(uiGraph, componentId, state)}
+          onRunAction={(componentId, state, abortSignal) => runUiGraphAction(uiGraph, componentId, state, abortSignal)}
         />
       </section>
     </div>

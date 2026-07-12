@@ -205,27 +205,64 @@ export function startActiveRemoteGraphRunRequest(options: {
   };
 }
 
-export function sendPendingRemoteGraphRunRequest(options: {
+export async function sendPendingRemoteGraphRunRequest(options: {
+  abortSignal?: AbortSignal;
   disconnectErrorMessage: string;
   executorSession: Pick<ExecutorSessionRuntime, 'createPendingGraphExecution' | 'rejectPendingGraphExecution'>;
+  onRequestCreated?(requestId: RemoteRunRequestId): void;
+  onRequestSettled?(requestId: RemoteRunRequestId): void;
   payload: RemoteRunPayloadWithoutRequestId;
+  sendAbort?(requestId: RemoteRunRequestId): boolean;
   sendRun: RemoteRunRequestSender;
 }): Promise<GraphOutputs> {
-  const { disconnectErrorMessage, executorSession, payload, sendRun } = options;
+  const { abortSignal, disconnectErrorMessage, executorSession, payload, sendRun } = options;
+  abortSignal?.throwIfAborted();
   const { requestId, promise } = executorSession.createPendingGraphExecution();
+  options.onRequestCreated?.(requestId);
+  let runSent = false;
 
-  const runSent = sendRun({
-    ...payload,
-    requestId,
-  });
+  const handleAbort = () => {
+    let abortSent = false;
+    try {
+      abortSent = runSent && (options.sendAbort?.(requestId) ?? false);
+    } catch {
+      // Transport failures fall through to local pending-request cleanup.
+    }
+    if (abortSent) {
+      return;
+    }
+    executorSession.rejectPendingGraphExecution(
+      requestId,
+      abortSignal?.reason ?? new DOMException('The graph run was aborted.', 'AbortError'),
+    );
+  };
+  abortSignal?.addEventListener('abort', handleAbort, { once: true });
 
-  if (!runSent) {
-    const error = new Error(disconnectErrorMessage);
-    executorSession.rejectPendingGraphExecution(requestId, error);
-    return promise;
+  try {
+    if (abortSignal?.aborted) {
+      handleAbort();
+      return await promise;
+    }
+
+    try {
+      runSent = sendRun({
+        ...payload,
+        requestId,
+      });
+    } catch (error) {
+      executorSession.rejectPendingGraphExecution(requestId, error);
+      return await promise;
+    }
+
+    if (!runSent) {
+      executorSession.rejectPendingGraphExecution(requestId, new Error(disconnectErrorMessage));
+    }
+
+    return await promise;
+  } finally {
+    abortSignal?.removeEventListener('abort', handleAbort);
+    options.onRequestSettled?.(requestId);
   }
-
-  return promise;
 }
 
 function shouldAcceptUnscopedStartEvent(

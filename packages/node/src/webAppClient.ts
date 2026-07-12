@@ -1,10 +1,10 @@
 import {
   applyUiGraphStatePatch,
+  createUiGraphActionExecutionController,
   getUiGraphActionState,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
   type RivetMarkdownSanitizerPolicy,
-  type UiComponentId,
   type UiGraph,
   type UiGraphComponent,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
@@ -53,9 +53,20 @@ const root = document.getElementById('app');
 
 if (config && root) {
   let state = { ...config.initialState };
-  let error = '';
-  let pendingComponentId: UiComponentId | undefined;
   let revisionMismatch = false;
+  const actionController = createUiGraphActionExecutionController();
+  const actionAbortControllers = new Map<number, AbortController>();
+  const actionErrors = new Map<string, string>();
+
+  const abortPendingActions = (exceptExecutionId?: number): void => {
+    for (const [executionId, abortController] of actionAbortControllers) {
+      if (executionId !== exceptExecutionId) {
+        abortController.abort();
+      }
+    }
+  };
+
+  window.addEventListener('pagehide', () => abortPendingActions());
 
   const createElement = <TagName extends keyof HTMLElementTagNameMap>(
     tagName: TagName,
@@ -174,8 +185,12 @@ if (config && root) {
     throw new Error(response.ok ? 'Action returned an invalid response.' : getActionFailureMessage(response));
   };
 
-  const renderError = (): Node[] =>
-    error && !revisionMismatch ? [createElement('div', { className: 'rivet-web-app-error', text: error })] : [];
+  const renderErrors = (): Node[] =>
+    revisionMismatch
+      ? []
+      : [...actionErrors.entries()].map(([componentId, message]) =>
+          createElement('div', { className: 'rivet-web-app-error', 'data-component-id': componentId, text: message }),
+        );
 
   const renderRevisionMismatchModal = (): Node[] => {
     if (!revisionMismatch) return [];
@@ -209,8 +224,14 @@ if (config && root) {
   };
 
   const runAction = async (component: Extract<UiGraphComponent, { type: 'button' }>): Promise<void> => {
-    pendingComponentId = component.id;
-    error = '';
+    const execution = actionController.begin(component);
+    if (!execution) {
+      return;
+    }
+
+    const abortController = new AbortController();
+    actionAbortControllers.set(execution.id, abortController);
+    actionErrors.delete(component.id);
     revisionMismatch = false;
     render();
 
@@ -224,20 +245,29 @@ if (config && root) {
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         method: 'POST',
+        signal: abortController.signal,
       });
       const result = await readActionResponse(response);
       if (!response.ok) {
         if (response.status === 409 && result.code === 'revision_mismatch') {
           revisionMismatch = true;
+          abortPendingActions(execution.id);
           return;
         }
         throw new Error(result.error || 'Action failed.');
       }
-      state = applyUiGraphStatePatch(state, result.statePatch);
+      const statePatch = actionController.resolveStatePatch(execution, result.statePatch);
+      if (statePatch) {
+        state = applyUiGraphStatePatch(state, statePatch);
+      }
     } catch (caughtError) {
-      error = caughtError instanceof Error ? caughtError.message : `${caughtError}`;
+      if (!abortController.signal.aborted && actionController.isCurrent(execution)) {
+        const message = caughtError instanceof Error ? caughtError.message : `${caughtError}`;
+        actionErrors.set(component.id, message);
+      }
     } finally {
-      pendingComponentId = undefined;
+      actionAbortControllers.delete(execution.id);
+      actionController.finish(execution);
       render();
     }
   };
@@ -267,6 +297,7 @@ if (config && root) {
         }) as HTMLInputElement | HTMLTextAreaElement;
         control.value = renderModel.value;
         control.addEventListener('input', () => {
+          actionController.noteStateWrite(renderModel.component.stateKey);
           state = { ...state, [renderModel.component.stateKey]: control.value };
         });
         content = createElement('label', { className: 'rivet-web-app-field' }, [
@@ -276,7 +307,7 @@ if (config && root) {
         break;
       }
       case 'button': {
-        const isRunning = pendingComponentId === renderModel.component.id;
+        const isRunning = actionController.isRunning(renderModel.component.id);
         content = createElement('button', {
           className: 'rivet-web-app-button',
           onClick: () => void runAction(renderModel.component),
@@ -350,7 +381,7 @@ if (config && root) {
   const render = (): void => {
     const surface = createElement('main', { className: 'rivet-web-app-surface' }, [
       ...config.uiGraph.components.map(renderComponent),
-      ...renderError(),
+      ...renderErrors(),
     ]);
     root.replaceChildren(surface, ...renderRevisionMismatchModal());
     if (revisionMismatch) {

@@ -237,13 +237,26 @@ export async function runRivetWebAppAction(
       Object.fromEntries(
         Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]),
       )) as Record<string, LooseDataValue>;
-    const processor = createProcessor(project, {
-      ...processorOptions,
-      context,
-      graph: component.action.graphId,
-      inputs,
-    });
-    const outputs = await processor.run();
+    const configuredAbortSignal = (processorOptions as { abortSignal?: AbortSignal }).abortSignal;
+    const sourceAbortSignal = configuredAbortSignal ?? request?.signal;
+    sourceAbortSignal?.throwIfAborted();
+    const actionAbortController = sourceAbortSignal ? new AbortController() : undefined;
+    const forwardAbort = () => actionAbortController?.abort(sourceAbortSignal?.reason);
+    sourceAbortSignal?.addEventListener('abort', forwardAbort, { once: true });
+
+    let outputs: Record<string, DataValue>;
+    try {
+      const processor = createProcessor(project, {
+        ...processorOptions,
+        abortSignal: actionAbortController?.signal,
+        context,
+        graph: component.action.graphId,
+        inputs,
+      });
+      outputs = await processor.run();
+    } finally {
+      sourceAbortSignal?.removeEventListener('abort', forwardAbort);
+    }
     const result = {
       outputs,
       statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),

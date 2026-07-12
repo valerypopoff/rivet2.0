@@ -1,4 +1,14 @@
-import { Fragment, type FC, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  type FC,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   type DataValue,
   type UiComponentId,
@@ -6,6 +16,7 @@ import {
   type UiGraphComponent,
   RIVET_WEB_APP_RENDERER_CSS,
   applyUiGraphStatePatch,
+  createUiGraphActionExecutionController,
   getUiGraphActionState,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
@@ -23,7 +34,11 @@ export type RivetWebAppRendererProps = {
   activeComponentId?: UiComponentId;
   renderComponentFrame?(props: RivetWebAppComponentFrameProps): ReactNode;
   onActiveComponentChange?(componentId: UiComponentId): void;
-  onRunAction(componentId: UiComponentId, state: Record<string, unknown>): Promise<RivetWebAppActionResult>;
+  onRunAction(
+    componentId: UiComponentId,
+    state: Record<string, unknown>,
+    abortSignal: AbortSignal,
+  ): Promise<RivetWebAppActionResult>;
   rootRef?: RefObject<HTMLDivElement>;
   uiGraph: UiGraph;
 };
@@ -46,9 +61,34 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
 }) => {
   const normalizedUiGraph = useMemo(() => normalizeUiGraphComponentIds(uiGraph), [uiGraph]);
   const previousUiGraphId = useRef(normalizedUiGraph.id);
+  const mounted = useRef(false);
+  const abortControllers = useRef(new Map<number, { abortController: AbortController; componentId: UiComponentId }>());
+  const [actionController] = useState(createUiGraphActionExecutionController);
+  const [, setActionRevision] = useState(0);
   const [state, setState] = useState<Record<string, unknown>>(() => getUiGraphInitialState(normalizedUiGraph));
-  const [runningComponentId, setRunningComponentId] = useState<UiComponentId | undefined>();
-  const [error, setError] = useState<string | undefined>();
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+
+  const abortAllActions = useCallback(() => {
+    const hadActiveActions = abortControllers.current.size > 0;
+    for (const { abortController } of abortControllers.current.values()) {
+      abortController.abort();
+    }
+    abortControllers.current.clear();
+    actionController.reset();
+    if (hadActiveActions && mounted.current) {
+      setActionRevision((revision) => revision + 1);
+    }
+  }, [actionController]);
+
+  useEffect(() => {
+    mounted.current = true;
+    window.addEventListener('pagehide', abortAllActions);
+    return () => {
+      mounted.current = false;
+      window.removeEventListener('pagehide', abortAllActions);
+      abortAllActions();
+    };
+  }, [abortAllActions]);
 
   useEffect(() => {
     if (previousUiGraphId.current === normalizedUiGraph.id) {
@@ -56,26 +96,78 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     }
 
     previousUiGraphId.current = normalizedUiGraph.id;
+    abortAllActions();
     setState(getUiGraphInitialState(normalizedUiGraph));
-    setError(undefined);
-    setRunningComponentId(undefined);
-  }, [normalizedUiGraph]);
+    setActionErrors({});
+  }, [abortAllActions, normalizedUiGraph]);
+
+  useEffect(() => {
+    const actionComponentIds = new Set(
+      normalizedUiGraph.components.filter((component) => component.type === 'button').map((component) => component.id),
+    );
+    for (const [executionId, { abortController, componentId }] of abortControllers.current) {
+      if (!actionComponentIds.has(componentId)) {
+        abortController.abort();
+        abortControllers.current.delete(executionId);
+        actionController.finish({ componentId, id: executionId });
+      }
+    }
+    setActionErrors((current) => {
+      const remainingEntries = Object.entries(current).filter(([componentId]) =>
+        actionComponentIds.has(componentId as UiComponentId),
+      );
+      return remainingEntries.length === Object.keys(current).length ? current : Object.fromEntries(remainingEntries);
+    });
+  }, [actionController, normalizedUiGraph.components]);
 
   const updateState = (key: string, value: unknown) => {
+    actionController.noteStateWrite(key);
     setState((current) => ({ ...current, [key]: value }));
   };
 
   const runAction = async (component: Extract<UiGraphComponent, { type: 'button' }>) => {
-    setRunningComponentId(component.id);
-    setError(undefined);
+    const execution = actionController.begin(component);
+    if (!execution) {
+      return;
+    }
+
+    const abortController = new AbortController();
+    abortControllers.current.set(execution.id, { abortController, componentId: component.id });
+    setActionRevision((revision) => revision + 1);
+    setActionErrors((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, component.id)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[component.id];
+      return next;
+    });
 
     try {
-      const result = await onRunAction(component.id, getUiGraphActionState(component.action, state));
-      setState((current) => applyUiGraphStatePatch(current, result.statePatch));
+      const result = await onRunAction(
+        component.id,
+        getUiGraphActionState(component.action, state),
+        abortController.signal,
+      );
+      if (!mounted.current) {
+        return;
+      }
+
+      const statePatch = actionController.resolveStatePatch(execution, result.statePatch);
+      if (statePatch) {
+        setState((current) => applyUiGraphStatePatch(current, statePatch));
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && !abortController.signal.aborted && actionController.isCurrent(execution)) {
+        const message = err instanceof Error ? err.message : String(err);
+        setActionErrors((current) => ({ ...current, [component.id]: message }));
+      }
     } finally {
-      setRunningComponentId(undefined);
+      abortControllers.current.delete(execution.id);
+      if (actionController.finish(execution) && mounted.current) {
+        setActionRevision((revision) => revision + 1);
+      }
     }
   };
 
@@ -92,7 +184,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             children: (
               <RivetWebAppComponent
                 component={component}
-                isRunning={runningComponentId === component.id}
+                isRunning={actionController.isRunning(component.id)}
                 uiGraphName={normalizedUiGraph.name}
                 state={state}
                 onRunAction={runAction}
@@ -114,7 +206,11 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             </div>
           );
         })}
-        {error && <div className="rivet-web-app-error">{error}</div>}
+        {Object.entries(actionErrors).map(([componentId, message]) => (
+          <div key={componentId} className="rivet-web-app-error">
+            {message}
+          </div>
+        ))}
       </main>
     </div>
   );

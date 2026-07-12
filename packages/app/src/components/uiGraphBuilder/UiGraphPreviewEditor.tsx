@@ -13,7 +13,11 @@ export const UiGraphPreviewEditor: FC<{
   activeComponentId: UiComponentId | undefined;
   onActiveComponentChange(componentId: UiComponentId): void;
   onReorder(draggedComponentId: UiComponentId, targetComponentId: UiComponentId): void;
-  onRunAction(componentId: UiComponentId, state: Record<string, unknown>): Promise<RivetWebAppActionResult>;
+  onRunAction(
+    componentId: UiComponentId,
+    state: Record<string, unknown>,
+    abortSignal: AbortSignal,
+  ): Promise<RivetWebAppActionResult>;
   scrollContainerRef: RefObject<HTMLDivElement>;
   uiGraph: UiGraph;
 }> = ({ activeComponentId, onActiveComponentChange, onReorder, onRunAction, scrollContainerRef, uiGraph }) => {

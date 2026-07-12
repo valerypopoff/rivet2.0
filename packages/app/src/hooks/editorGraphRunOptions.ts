@@ -1,6 +1,7 @@
 import type { GraphId, GraphInputs, GraphOutputs, NodeId } from '@valerypopoff/rivet2-core';
 
 export type EditorGraphRunOptions = {
+  abortSignal?: AbortSignal;
   from?: NodeId;
   graphId?: GraphId;
   inputs?: GraphInputs;

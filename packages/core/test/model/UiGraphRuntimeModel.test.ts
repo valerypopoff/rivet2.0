@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   applyUiGraphStatePatch,
+  createUiGraphActionExecutionController,
   getUiGraphActionState,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
@@ -91,5 +92,81 @@ describe('UiGraphRuntimeModel', () => {
     const filename = getUiGraphJsonOutputFilename(' Test: app / result ', new Date(2026, 6, 10, 9, 8, 7));
 
     assert.equal(filename, 'Test- app - result 2026-07-10 09-08-07.json');
+  });
+
+  it('tracks independently running buttons without letting one completion clear another', () => {
+    const controller = createUiGraphActionExecutionController();
+    const firstButton: Extract<UiGraphComponent, { type: 'button' }> = {
+      action: { outputs: [{ stateKey: 'firstResult' }], type: 'runGraph' },
+      id: 'first-button' as UiComponentId,
+      label: 'First',
+      type: 'button',
+    };
+    const secondButton: Extract<UiGraphComponent, { type: 'button' }> = {
+      action: { outputs: [{ stateKey: 'secondResult' }], type: 'runGraph' },
+      id: 'second-button' as UiComponentId,
+      label: 'Second',
+      type: 'button',
+    };
+
+    const firstExecution = controller.begin(firstButton)!;
+    const secondExecution = controller.begin(secondButton)!;
+
+    assert.equal(controller.begin(firstButton), undefined);
+    assert.equal(controller.isCurrent(firstExecution), true);
+    assert.equal(controller.isRunning(firstButton.id), true);
+    assert.equal(controller.isRunning(secondButton.id), true);
+    assert.equal(controller.finish(firstExecution), true);
+    assert.equal(controller.isCurrent(firstExecution), false);
+    assert.equal(controller.isRunning(firstButton.id), false);
+    assert.equal(controller.isRunning(secondButton.id), true);
+    assert.equal(controller.finish(secondExecution), true);
+  });
+
+  it('lets the latest-started action own overlapping state keys while preserving independent patches', () => {
+    const controller = createUiGraphActionExecutionController();
+    const firstButton: Extract<UiGraphComponent, { type: 'button' }> = {
+      action: {
+        outputs: [{ stateKey: 'sharedResult' }, { stateKey: 'firstOnly' }],
+        type: 'runGraph',
+      },
+      id: 'first-button' as UiComponentId,
+      label: 'First',
+      type: 'button',
+    };
+    const secondButton: Extract<UiGraphComponent, { type: 'button' }> = {
+      action: { outputs: [{ stateKey: 'sharedResult' }], type: 'runGraph' },
+      id: 'second-button' as UiComponentId,
+      label: 'Second',
+      type: 'button',
+    };
+
+    const firstExecution = controller.begin(firstButton)!;
+    const secondExecution = controller.begin(secondButton)!;
+
+    assert.deepEqual(controller.resolveStatePatch(firstExecution, { firstOnly: 'first', sharedResult: 'stale' }), {
+      firstOnly: 'first',
+    });
+    assert.deepEqual(controller.resolveStatePatch(secondExecution, { sharedResult: 'current' }), {
+      sharedResult: 'current',
+    });
+  });
+
+  it('does not let an in-flight action overwrite a newer direct state edit', () => {
+    const controller = createUiGraphActionExecutionController();
+    const button: Extract<UiGraphComponent, { type: 'button' }> = {
+      action: { outputs: [{ stateKey: 'result' }], type: 'runGraph' },
+      id: 'run-button' as UiComponentId,
+      label: 'Run',
+      type: 'button',
+    };
+
+    const execution = controller.begin(button)!;
+    controller.noteStateWrite('result');
+
+    assert.equal(controller.resolveStatePatch(execution, { result: 'stale' }), undefined);
+    controller.reset();
+    assert.equal(controller.isRunning(button.id), false);
+    assert.equal(controller.finish(execution), false);
   });
 });

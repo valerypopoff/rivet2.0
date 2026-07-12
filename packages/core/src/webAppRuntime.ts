@@ -3,6 +3,7 @@ export type { RivetMarkdownSanitizerPolicy } from './model/MarkdownSanitizationP
 export { getUiGraphActionState } from './model/UiGraph.js';
 export {
   applyUiGraphStatePatch,
+  createUiGraphActionExecutionController,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
 } from './model/UiGraphRuntimeModel.js';

@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import { runInNewContext } from 'node:vm';
 import { marked } from 'marked';
 import { JSDOM } from 'jsdom';
@@ -227,6 +228,91 @@ void describe('createRivetWebAppHandler', () => {
       text: async () => JSON.stringify({ outputs: {}, statePatch: {} }),
     } as Response);
     await new Promise((resolve) => setTimeout(resolve, 0));
+    dom.window.close();
+  });
+
+  void it('keeps concurrent button loading independent and ignores stale overlapping state patches', async () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const action = {
+      graphId,
+      outputs: [{ outputKey: 'value', stateKey: 'result' }],
+      type: 'runGraph' as const,
+    };
+    uiGraph.components = [
+      { action, id: 'first-button' as any, label: 'First', type: 'button' },
+      { action, id: 'second-button' as any, label: 'Second', type: 'button' },
+      { id: 'result-output' as any, label: 'Result', stateKey: 'result', type: 'output' },
+    ];
+    const resolveAction = new Map<string, (response: Response) => void>();
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        window.fetch = async (_input, init) => {
+          const body = JSON.parse(`${init?.body ?? '{}'}`) as { componentId: string };
+          return await new Promise<Response>((resolve) => resolveAction.set(body.componentId, resolve));
+        };
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    dom.window.document.querySelectorAll('button')[0]?.click();
+    dom.window.document.querySelectorAll('button')[1]?.click();
+
+    let buttons = [...dom.window.document.querySelectorAll('button')] as HTMLButtonElement[];
+    assert.equal(buttons[0]?.textContent, 'Running...');
+    assert.equal(buttons[0]?.disabled, true);
+    assert.equal(buttons[1]?.textContent, 'Running...');
+    assert.equal(buttons[1]?.disabled, true);
+
+    resolveAction.get('first-button')?.({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ outputs: {}, statePatch: { result: 'stale' } }),
+    } as Response);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    buttons = [...dom.window.document.querySelectorAll('button')] as HTMLButtonElement[];
+    assert.equal(buttons[0]?.textContent, 'First');
+    assert.equal(buttons[0]?.disabled, false);
+    assert.equal(buttons[1]?.textContent, 'Running...');
+    assert.equal(buttons[1]?.disabled, true);
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-output pre')?.textContent, '');
+
+    resolveAction.get('second-button')?.({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ outputs: {}, statePatch: { result: 'current' } }),
+    } as Response);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-output pre')?.textContent, 'current');
+    dom.window.close();
+  });
+
+  void it('aborts hosted action fetches when the page is unloaded', async () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    let actionSignal: AbortSignal | undefined;
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        window.fetch = async (_input, init) => {
+          actionSignal = init?.signal ?? undefined;
+          return await new Promise<Response>((_resolve, reject) => {
+            actionSignal?.addEventListener('abort', () => reject(actionSignal?.reason), { once: true });
+          });
+        };
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    dom.window.document.querySelector('button')?.click();
+    dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(actionSignal?.aborted, true);
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-error'), null);
     dom.window.close();
   });
 
@@ -568,6 +654,42 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.deepEqual(result.outputs.value, { type: 'string', value: 'hello' });
     assert.deepEqual(result.statePatch, { result: 'hello' });
+  });
+
+  void it('uses the action request signal as the default processor cancellation signal', async () => {
+    const project = makeProject();
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await assert.rejects(
+      () =>
+        runRivetWebAppAction(project, {
+          componentId: 'run-button',
+          request: new Request('https://example.test/app/actions/run', { signal: abortController.signal }),
+          state: { prompt: 'hello' },
+          uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+        }),
+      (error) => error instanceof DOMException && error.name === 'AbortError',
+    );
+  });
+
+  void it('prefers an explicit processor abort signal over the action request signal', async () => {
+    const project = makeProject();
+    const requestAbortController = new AbortController();
+    const processorAbortController = new AbortController();
+    requestAbortController.abort();
+
+    assert.equal(getEventListeners(processorAbortController.signal, 'abort').length, 0);
+    const result = await runRivetWebAppAction(project, {
+      componentId: 'run-button',
+      createProcessorOptions: { abortSignal: processorAbortController.signal },
+      request: new Request('https://example.test/app/actions/run', { signal: requestAbortController.signal }),
+      state: { prompt: 'hello' },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    assert.deepEqual(result.statePatch, { result: 'hello' });
+    assert.equal(getEventListeners(processorAbortController.signal, 'abort').length, 0);
   });
 
   void it('exports an HTTP-shaped action error for lower-level helper conflicts', async () => {

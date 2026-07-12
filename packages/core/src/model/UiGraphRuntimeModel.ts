@@ -1,4 +1,9 @@
-import type { UiGraphComponent, UiGraphGapSize } from './UiGraph.js';
+import {
+  getUiGraphActionOutputBindings,
+  type UiComponentId,
+  type UiGraphComponent,
+  type UiGraphGapSize,
+} from './UiGraph.js';
 
 export type UiGraphOutputRenderMode = 'text' | 'json' | 'markdown';
 
@@ -42,6 +47,88 @@ export type UiGraphComponentRenderModel =
       output: UiGraphOutputRenderModel;
       type: 'output';
     };
+
+export type UiGraphActionExecution = Readonly<{
+  componentId: UiComponentId;
+  id: number;
+}>;
+
+export type UiGraphActionExecutionController = {
+  begin(component: Extract<UiGraphComponent, { type: 'button' }>): UiGraphActionExecution | undefined;
+  finish(execution: UiGraphActionExecution): boolean;
+  isCurrent(execution: UiGraphActionExecution): boolean;
+  isRunning(componentId: UiComponentId): boolean;
+  noteStateWrite(stateKey: string): void;
+  resolveStatePatch(
+    execution: UiGraphActionExecution,
+    statePatch: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | undefined;
+  reset(): void;
+};
+
+/**
+ * Coordinates independent web-app actions without allowing older completions to
+ * clear newer loading states or overwrite newer writes to the same UI state key.
+ */
+export function createUiGraphActionExecutionController(): UiGraphActionExecutionController {
+  let nextVersion = 0;
+  const activeExecutionByComponent = new Map<UiComponentId, number>();
+  const latestWriterByStateKey = new Map<string, number>();
+
+  return {
+    begin(component) {
+      if (activeExecutionByComponent.has(component.id)) {
+        return undefined;
+      }
+
+      const execution = { componentId: component.id, id: ++nextVersion };
+      activeExecutionByComponent.set(component.id, execution.id);
+
+      for (const binding of getUiGraphActionOutputBindings(component.action)) {
+        const stateKey = binding.stateKey.trim();
+        if (stateKey) {
+          latestWriterByStateKey.set(stateKey, execution.id);
+        }
+      }
+
+      return execution;
+    },
+    finish(execution) {
+      if (activeExecutionByComponent.get(execution.componentId) !== execution.id) {
+        return false;
+      }
+
+      activeExecutionByComponent.delete(execution.componentId);
+      return true;
+    },
+    isCurrent(execution) {
+      return activeExecutionByComponent.get(execution.componentId) === execution.id;
+    },
+    isRunning(componentId) {
+      return activeExecutionByComponent.has(componentId);
+    },
+    noteStateWrite(stateKey) {
+      const normalizedStateKey = stateKey.trim();
+      if (normalizedStateKey) {
+        latestWriterByStateKey.set(normalizedStateKey, ++nextVersion);
+      }
+    },
+    resolveStatePatch(execution, statePatch) {
+      if (!statePatch) {
+        return undefined;
+      }
+
+      const applicableEntries = Object.entries(statePatch).filter(
+        ([stateKey]) => latestWriterByStateKey.get(stateKey) === execution.id,
+      );
+      return applicableEntries.length > 0 ? Object.fromEntries(applicableEntries) : undefined;
+    },
+    reset() {
+      activeExecutionByComponent.clear();
+      latestWriterByStateKey.clear();
+    },
+  };
+}
 
 export function getUiGraphComponentRenderModel(
   component: UiGraphComponent,

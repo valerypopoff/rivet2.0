@@ -13,12 +13,15 @@ import { useStableCallback } from './useStableCallback.js';
 import type { EditorGraphRun } from './editorGraphRunOptions.js';
 
 export function useRunUiGraphAction(tryRunGraph: EditorGraphRun) {
-  return useStableCallback(async (uiGraph: UiGraph, componentId: UiComponentId, state: Record<string, unknown>) => {
-    return await runUiGraphAction({ componentId, state, tryRunGraph, uiGraph });
-  });
+  return useStableCallback(
+    async (uiGraph: UiGraph, componentId: UiComponentId, state: Record<string, unknown>, abortSignal?: AbortSignal) => {
+      return await runUiGraphAction({ abortSignal, componentId, state, tryRunGraph, uiGraph });
+    },
+  );
 }
 
 export async function runUiGraphAction(options: {
+  abortSignal?: AbortSignal;
   componentId: UiComponentId;
   state: Record<string, unknown>;
   tryRunGraph: EditorGraphRun;
@@ -38,14 +41,18 @@ export async function runUiGraphAction(options: {
     throw new Error('This UI action is not connected to a graph.');
   }
 
+  options.abortSignal?.throwIfAborted();
   const rawInputs = resolveUiGraphActionInputs(component.action, options.state);
-  const outputs = await options.tryRunGraph({
+  const runOptions = {
     graphId: component.action.graphId,
     inputs: toGraphInputs(rawInputs),
     requireLiveRun: true,
     throwOnError: true,
     waitForResults: true,
-  });
+    ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+  };
+  const outputs = await options.tryRunGraph(runOptions);
+  options.abortSignal?.throwIfAborted();
 
   if (!outputs) {
     throw new Error('The web app action did not return graph outputs.');
