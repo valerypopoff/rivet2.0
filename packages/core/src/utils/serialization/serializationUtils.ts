@@ -1,5 +1,10 @@
 import type { Project } from '../../index.js';
 import type * as yaml from 'yaml';
+import {
+  formatUiGraphNormalizationIssue,
+  normalizeUiGraphRecord,
+  UiGraphNormalizationError,
+} from '../../model/UiGraphNormalization.js';
 import { prepareSerializedInput } from './serializationInput.js';
 
 /** Additional data that has been attached to a project/graph, for use by plugins, etc. */
@@ -83,37 +88,14 @@ export function validateProject(project: unknown): ProjectValidationResult {
 }
 
 function validateUiGraphs(uiGraphs: unknown, errors: string[]): void {
-  if (!uiGraphs || typeof uiGraphs !== 'object' || Array.isArray(uiGraphs)) {
-    errors.push('Project uiGraphs is not an object');
-    return;
-  }
-
-  for (const [uiGraphId, uiGraph] of Object.entries(uiGraphs)) {
-    if (!uiGraph || typeof uiGraph !== 'object' || Array.isArray(uiGraph)) {
-      errors.push(`UI graph "${uiGraphId}" is not an object`);
-      continue;
+  try {
+    normalizeUiGraphRecord(uiGraphs, { repairComponentIds: false });
+  } catch (error) {
+    if (error instanceof UiGraphNormalizationError) {
+      errors.push(...error.issues.map(formatUiGraphNormalizationIssue));
+      return;
     }
-
-    const components = (uiGraph as Record<string, unknown>).components;
-    if (!Array.isArray(components)) {
-      errors.push(`UI graph "${uiGraphId}" components is not an array`);
-      continue;
-    }
-
-    const componentIds = new Set<string>();
-    for (const [index, component] of components.entries()) {
-      const componentId =
-        component && typeof component === 'object' && !Array.isArray(component)
-          ? (component as Record<string, unknown>).id
-          : undefined;
-      if (typeof componentId !== 'string' || !componentId.trim()) {
-        errors.push(`UI graph "${uiGraphId}" component at index ${index} missing id`);
-      } else if (componentIds.has(componentId)) {
-        errors.push(`UI graph "${uiGraphId}" component "${componentId}" has a duplicate id`);
-      } else {
-        componentIds.add(componentId);
-      }
-    }
+    throw error;
   }
 }
 

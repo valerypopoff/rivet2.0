@@ -21,7 +21,7 @@ import {
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
   getUiGraphInitialState,
-  normalizeUiGraphComponentIds,
+  normalizeUiGraph,
 } from '@valerypopoff/rivet2-core';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
 
@@ -59,7 +59,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   rootRef,
   uiGraph,
 }) => {
-  const normalizedUiGraph = useMemo(() => normalizeUiGraphComponentIds(uiGraph), [uiGraph]);
+  const normalizedUiGraph = useMemo(() => normalizeUiGraph(uiGraph), [uiGraph]);
   const previousUiGraphId = useRef(normalizedUiGraph.id);
   const mounted = useRef(false);
   const abortControllers = useRef(new Map<number, { abortController: AbortController; componentId: UiComponentId }>());

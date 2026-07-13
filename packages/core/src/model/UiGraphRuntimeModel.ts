@@ -3,9 +3,8 @@ import {
   type UiComponentId,
   type UiGraphComponent,
   type UiGraphGapSize,
+  type UiGraphOutputRenderMode,
 } from './UiGraph.js';
-
-export type UiGraphOutputRenderMode = 'text' | 'json' | 'markdown';
 
 export type UiGraphOutputRenderModel = {
   hasValue: boolean;

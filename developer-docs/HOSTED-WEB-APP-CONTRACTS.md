@@ -22,11 +22,29 @@ when its source changes without regeneration. Its build script fixes esbuild's
 working directory to the Node package, so generating from the repository root or
 through a workspace command produces the same artifact.
 
+Core's `normalizeUiGraph(...)` / `normalizeProjectUiGraphs(...)` functions are the
+shared structural boundary for wrapper-provided snapshots. They validate every
+component and `runGraph` action discriminator and required field, and report
+`UiGraphNormalizationError.issues` with UI graph IDs, component indexes, nested
+binding indexes, and field names. The only automatic migration repairs missing,
+blank, or duplicate legacy component IDs. A wrong-type ID, unknown component,
+missing action/state key, or invalid enum is rejected rather than reaching a
+renderer. Hosted editor project snapshots are normalized before app state is
+updated, and the Node serving APIs normalize direct inputs before rendering or
+dispatch.
+
 ## Node Serving API
 
 - `renderRivetWebAppHtml(...)` renders the document/runtime payload.
 - `runRivetWebAppAction(...)` validates mappings and runs the target graph.
 - `createRivetWebAppHandler(...)` provides the Fetch-style reference host.
+
+`createRivetWebAppHandler(...)` validates and applies legacy ID repair to the
+project's complete `uiGraphs` collection when the handler is created. Lower-level
+`renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` validate the selected
+UI graph directly. Wrappers should surface `UiGraphNormalizationError.message` (or
+its structured `issues`) as a project/publication configuration error; it is not an
+action request error and should not be retried.
 
 `validateProjectUiGraphButtonBindings(...)` is the publication/load preflight for
 hosts that want to inspect every web-app button without mutating an immutable

@@ -1,4 +1,4 @@
-import type { Project } from '@valerypopoff/rivet2-core';
+import { normalizeProjectUiGraphs, type Project } from '@valerypopoff/rivet2-core';
 import type { RivetProjectSnapshotInput } from './types.js';
 
 export type NormalizedProjectSnapshot = {
@@ -10,7 +10,7 @@ export function normalizeProjectSnapshot(snapshot: RivetProjectSnapshotInput): N
   const { data: attachedData, ...project } = snapshot.project as Project;
 
   return {
-    project,
+    project: normalizeProjectUiGraphs(project),
     data: snapshot.data ?? attachedData,
   };
 }

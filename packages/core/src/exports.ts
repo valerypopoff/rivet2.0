@@ -8,6 +8,7 @@ export * from './model/NodePrefabResolver.js';
 export { getGraphBoundary } from './model/GraphBoundaryCache.js';
 export type { GraphBoundary } from './model/GraphBoundaryCache.js';
 export * from './model/UiGraph.js';
+export * from './model/UiGraphNormalization.js';
 export * from './model/UiGraphBindings.js';
 export * from './model/UiGraphRuntimeModel.js';
 export * from './model/UiGraphRendererStyles.js';

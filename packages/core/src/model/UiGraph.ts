@@ -8,6 +8,8 @@ export type UiComponentId = Opaque<string, 'UiComponentId'>;
 export type UiGraphOutputs = Record<string, DataValue>;
 export const UI_GRAPH_GAP_SIZES = ['small', 'medium', 'large'] as const;
 export type UiGraphGapSize = (typeof UI_GRAPH_GAP_SIZES)[number];
+export const UI_GRAPH_OUTPUT_RENDER_MODES = ['text', 'json', 'markdown'] as const;
+export type UiGraphOutputRenderMode = (typeof UI_GRAPH_OUTPUT_RENDER_MODES)[number];
 
 export type UiGraphValueBinding =
   | {
@@ -84,7 +86,7 @@ export type UiGraphComponent =
       type: 'output';
       label?: string;
       stateKey: string;
-      renderAs?: 'text' | 'json' | 'markdown';
+      renderAs?: UiGraphOutputRenderMode;
     };
 
 export type UiGraph = {
@@ -110,9 +112,8 @@ export function hasValidUiGraphComponentIds(uiGraph: UiGraph): boolean {
 }
 
 /**
- * Returns an immutable repair for legacy or externally assembled UI graphs.
- * Repaired IDs are deterministic so separately rendered HTML and action calls agree
- * without mutating a host-owned project snapshot.
+ * Returns an immutable component-ID repair for legacy or externally assembled
+ * UI graphs. Full untrusted-data validation belongs to normalizeUiGraph().
  */
 export function normalizeUiGraphComponentIds(uiGraph: UiGraph): UiGraph {
   if (hasValidUiGraphComponentIds(uiGraph)) {

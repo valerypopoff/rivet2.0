@@ -88,6 +88,39 @@ function makeProject(): Project {
 }
 
 void describe('createRivetWebAppHandler', () => {
+  void it('rejects malformed UI graphs before serving requests', () => {
+    const project = makeProject();
+    project.uiGraphs!['ui-graph' as UiGraphId]!.components = [
+      { id: 'broken' as any, label: 'Run', type: 'button' } as UiGraphComponent,
+    ];
+
+    assert.throws(
+      () => createRivetWebAppHandler(project, { basePath: '/app', uiGraphId: 'ui-graph' }),
+      /UI graph "ui-graph" component at index 0\.action/,
+    );
+  });
+
+  void it('rejects malformed UI graphs passed directly to the HTML renderer', () => {
+    const uiGraph = makeProject().uiGraphs!['ui-graph' as UiGraphId]!;
+    uiGraph.components = [{ id: 'broken' as any, renderAs: 'html', stateKey: 'result', type: 'output' } as never];
+
+    assert.throws(
+      () => renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }),
+      /UI graph "ui-graph" component at index 0\.renderAs/,
+    );
+  });
+
+  void it('rejects malformed UI graphs passed directly to the action runner', async () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs!['ui-graph' as UiGraphId]!;
+    uiGraph.components = [{ id: 'broken' as any, label: 'Run', type: 'button' } as UiGraphComponent];
+
+    await assert.rejects(
+      runRivetWebAppAction(project, { componentId: 'broken', uiGraph }),
+      /UI graph "ui-graph" component at index 0\.action/,
+    );
+  });
+
   void it('serves the UI graph HTML', async () => {
     const handler = createRivetWebAppHandler(makeProject(), { basePath: '/app', uiGraphId: 'ui-graph' });
     const response = await handler.handleRequest(new Request('https://example.test/app'));

@@ -6,6 +6,8 @@ Rivet web apps are small project-contained user interfaces that can call graphs 
 
 Web apps are saved in the `.rivet-project` file, but they are not workflow graphs. They cannot be selected as the Main Graph, they do not have nodes or connections, and they are not run by the normal graph executor.
 
+Rivet validates every saved web-app component and button action when the project opens. Older projects with missing or duplicate component IDs are repaired automatically. If a project file was edited manually and contains an unknown component or is missing a required field, Rivet rejects it with a message that identifies the web app, component index, and invalid field instead of opening a broken renderer.
+
 ## Creating a Web App
 
 Open the left graph panel and use **New web app** in the **Web Apps** section. Right-click an existing web app to duplicate it or delete it. Delete asks for confirmation before removing the web app from the project.

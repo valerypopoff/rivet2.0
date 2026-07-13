@@ -9,15 +9,13 @@ import type {
   ProjectId,
   ChartNodeVariant,
   NodePrefabId,
-  UiGraph,
-  UiGraphId,
 } from '../../index.js';
 import { type AttachedData, doubleCheckProject } from './serializationUtils.js';
 import { entries } from '../typeSafety.js';
 import type { PluginLoadSpec } from '../../model/PluginLoadSpec.js';
 import type { CombinedDataset } from './serialization.js';
 import { type ProjectMetadata } from '../../model/Project.js';
-import { normalizeUiGraphComponentIds } from '../../model/UiGraph.js';
+import { normalizeUiGraphRecord } from '../../model/UiGraphNormalization.js';
 import {
   type SerializedNodeConnection,
   serializeConnection,
@@ -33,7 +31,7 @@ type SerializedProject = {
 
   graphs: Record<GraphId, SerializedGraph>;
   nodePrefabs?: Record<NodePrefabId, SerializedNodePrefab>;
-  uiGraphs?: Record<UiGraphId, UiGraph>;
+  uiGraphs?: unknown;
 
   attachedData?: AttachedData;
   plugins?: PluginLoadSpec[];
@@ -116,7 +114,7 @@ function toSerializedProject(project: Project, attachedData?: AttachedData): Ser
     id: prefab.id,
     sourceNode: toSerializedIsolatedNode(prefab.sourceNode),
   }));
-  const uiGraphs = mapValues(project.uiGraphs ?? {}, normalizeUiGraphComponentIds);
+  const uiGraphs = normalizeUiGraphRecord(project.uiGraphs === undefined ? {} : project.uiGraphs);
 
   return {
     metadata: project.metadata,
@@ -134,7 +132,7 @@ function fromSerializedProject(serializedProject: SerializedProject): [Project, 
     id: prefab.id,
     sourceNode: fromSerializedIsolatedNode(prefab.sourceNode),
   }));
-  const uiGraphs = mapValues(serializedProject.uiGraphs ?? {}, normalizeUiGraphComponentIds);
+  const uiGraphs = normalizeUiGraphRecord(serializedProject.uiGraphs === undefined ? {} : serializedProject.uiGraphs);
 
   return [
     {

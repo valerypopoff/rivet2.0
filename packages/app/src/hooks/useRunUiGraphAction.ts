@@ -7,7 +7,7 @@ import {
   formatUiGraphButtonBindingIssues,
   getUiGraphActionComponent,
   jsonValueToDataValue,
-  normalizeUiGraphComponentIds,
+  normalizeUiGraph,
   resolveUiGraphActionOutputStatePatch,
   resolveUiGraphActionInputs,
   validateUiGraphButtonBindings,
@@ -35,7 +35,7 @@ export async function runUiGraphAction(options: {
   tryRunGraph: EditorGraphRun;
   uiGraph: UiGraph;
 }): Promise<{ outputs: GraphOutputs; statePatch: Record<string, unknown> }> {
-  const uiGraph = normalizeUiGraphComponentIds(options.uiGraph);
+  const uiGraph = normalizeUiGraph(options.uiGraph);
   const component = getUiGraphActionComponent(uiGraph, options.componentId);
   if (!component) {
     throw new Error('UI action component not found.');

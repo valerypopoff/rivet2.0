@@ -5,6 +5,7 @@ import type { Project, NodeGraph, Dataset, DatasetMetadata, ChartNode } from '..
 import { getError } from '../errors.js';
 import { type AttachedData, type SerializationVersion, yamlProblem } from './serializationUtils.js';
 import { prepareSerializedInput } from './serializationInput.js';
+import { UiGraphNormalizationError } from '../../model/UiGraphNormalization.js';
 import {
   datasetV4Deserializer,
   datasetV4Serializer,
@@ -37,6 +38,9 @@ export function deserializeProject(serializedProject: unknown, path: string | nu
       yamlProblem(err);
     }
     console.warn(`Failed to deserialize project v${version}: ${errMessage(err)}`);
+    if (err instanceof UiGraphNormalizationError) {
+      throw new Error(`Could not deserialize project: ${err.message}`, { cause: err });
+    }
     throw new Error('Could not deserialize project');
   }
 }

@@ -530,15 +530,56 @@ describe('serialization compatibility', () => {
           id: 'invalid-ui',
           name: 'Invalid app',
           components: [
-            { id: 'same', type: 'text' },
-            { id: 'same', type: 'text' },
+            { id: 'same', text: 'First', type: 'text' },
+            { id: 'same', text: 'Second', type: 'text' },
           ],
         },
       },
     });
 
     assert.equal(result.valid, false);
-    assert.match(result.errors.join('\n'), /duplicate id/);
+    assert.match(result.errors.join('\n'), /duplicates component id/);
+  });
+
+  it('rejects malformed UI component and action shapes with indexed diagnostics', () => {
+    const serializedProject = JSON.stringify({
+      version: 4,
+      data: {
+        metadata: { id: 'project-invalid-ui-shape', title: 'Invalid UI project' },
+        graphs: {},
+        uiGraphs: {
+          'invalid-ui': {
+            components: [
+              { id: 'input', label: 'Question', type: 'input' },
+              {
+                action: { inputMappings: [{ inputKey: 'prompt' }], type: 'runGraph' },
+                id: 'button',
+                label: 'Run',
+                type: 'button',
+              },
+            ],
+            id: 'invalid-ui',
+            name: 'Invalid app',
+          },
+        },
+      },
+    });
+    const originalWarn = console.warn;
+    console.warn = () => undefined;
+
+    try {
+      assert.throws(
+        () => deserializeProject(serializedProject),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /UI graph "invalid-ui" component at index 0\.stateKey/);
+          assert.match(error.message, /component at index 1\.action\.inputMappings at index 0\.stateKey/);
+          return true;
+        },
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   it('deserializes old-style Subgraph nodes without manual port order fields', () => {

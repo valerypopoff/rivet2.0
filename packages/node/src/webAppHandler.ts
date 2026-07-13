@@ -15,7 +15,8 @@ import {
   getUiGraphActionState,
   getUiGraphInitialState,
   jsonValueToDataValue,
-  normalizeUiGraphComponentIds,
+  normalizeProjectUiGraphs,
+  normalizeUiGraph,
   RIVET_MARKDOWN_SANITIZER_POLICY,
   resolveUiGraphActionOutputStatePatch,
   resolveUiGraphActionInputs,
@@ -104,6 +105,7 @@ export function createRivetWebAppHandler(
   project: Project,
   options: RivetWebAppHandlerOptions = {},
 ): RivetWebAppHandler {
+  const normalizedProject = normalizeProjectUiGraphs(project);
   const basePath = normalizeBasePath(options.basePath ?? '/');
 
   return {
@@ -116,7 +118,7 @@ export function createRivetWebAppHandler(
       }
 
       if (request.method === 'GET' && (routePath === '/' || routePath === '')) {
-        const uiGraph = resolveUiGraph(project, options.uiGraphId);
+        const uiGraph = resolveUiGraph(normalizedProject, options.uiGraphId);
         if (!uiGraph) {
           return htmlResponse(renderErrorHtml('Rivet web app not found'), 404);
         }
@@ -130,19 +132,19 @@ export function createRivetWebAppHandler(
       }
 
       if (request.method === 'GET' && routePath === '/app.json') {
-        const uiGraph = resolveUiGraph(project, options.uiGraphId);
+        const uiGraph = resolveUiGraph(normalizedProject, options.uiGraphId);
         return uiGraph ? jsonResponse(uiGraph) : jsonResponse({ error: 'Rivet web app not found' }, 404);
       }
 
       if (request.method === 'POST' && routePath === '/actions/run') {
-        const uiGraph = resolveUiGraph(project, options.uiGraphId);
+        const uiGraph = resolveUiGraph(normalizedProject, options.uiGraphId);
         if (!uiGraph) {
           return jsonResponse({ error: 'Rivet web app not found' }, 404);
         }
 
         try {
           const body = await readActionRequestBody(request);
-          const result = await runRivetWebAppAction(project, {
+          const result = await runRivetWebAppAction(normalizedProject, {
             componentId: body.componentId,
             createProcessorOptions: options.createProcessorOptions,
             onActionError: options.onActionError,
@@ -192,7 +194,7 @@ export async function runRivetWebAppAction(
 ): Promise<RivetWebAppActionResult> {
   const actionRequest = request ?? new Request('https://rivet.local/web-app-action');
   const receivedState = normalizeActionState(state);
-  const normalizedUiGraph = normalizeUiGraphComponentIds(uiGraph);
+  const normalizedUiGraph = normalizeUiGraph(uiGraph);
 
   if (revisionKey != null && requestRevisionKey !== revisionKey) {
     throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
@@ -282,13 +284,11 @@ export async function runRivetWebAppAction(
 }
 
 function resolveUiGraph(project: Project, uiGraphId: UiGraphId | string | undefined): UiGraph | undefined {
-  const uiGraph = uiGraphId ? project.uiGraphs?.[uiGraphId as UiGraphId] : Object.values(project.uiGraphs ?? {})[0];
-
-  return uiGraph ? normalizeUiGraphComponentIds(uiGraph) : undefined;
+  return uiGraphId ? project.uiGraphs?.[uiGraphId as UiGraphId] : Object.values(project.uiGraphs ?? {})[0];
 }
 
 export function renderRivetWebAppHtml(uiGraph: UiGraph, options: { actionPath: string; revisionKey?: string }): string {
-  const normalizedUiGraph = normalizeUiGraphComponentIds(uiGraph);
+  const normalizedUiGraph = normalizeUiGraph(uiGraph);
 
   return `<!doctype html>
 <html lang="en">
