@@ -1,4 +1,5 @@
 const esbuild = require('esbuild');
+const { existsSync } = require('node:fs');
 
 const aliasModule = (moduleFrom, moduleTo) => ({
   name: 'alias-module',
@@ -21,11 +22,16 @@ const aliasModule = (moduleFrom, moduleTo) => ({
 
 // Several dependencies ship as ESM-only in their latest versions. The CJS
 // bundle aliases them to installed CJS-compatible versions so require() works.
+const hasWebAppRuntimeEntry = existsSync('src/webAppRuntime.ts');
 const options = {
-  entryPoints: ['src/index.ts'],
+  entryPoints: hasWebAppRuntimeEntry
+    ? { bundle: 'src/index.ts', webAppRuntime: 'src/webAppRuntime.ts' }
+    : ['src/index.ts'],
   bundle: true,
   platform: 'node',
-  outfile: 'dist/cjs/bundle.cjs',
+  ...(hasWebAppRuntimeEntry
+    ? { outdir: 'dist/cjs', outExtension: { '.js': '.cjs' } }
+    : { outfile: 'dist/cjs/bundle.cjs' }),
   format: 'cjs',
   target: 'node16',
   packages: 'external',

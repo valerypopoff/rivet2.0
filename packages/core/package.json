@@ -30,7 +30,7 @@
     "./web-app-runtime": {
       "types": "./dist/types/webAppRuntime.d.ts",
       "import": "./dist/esm/webAppRuntime.js",
-      "require": "./dist/cjs/bundle.cjs"
+      "require": "./dist/cjs/webAppRuntime.cjs"
     }
   },
   "files": [

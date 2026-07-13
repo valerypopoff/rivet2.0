@@ -1,12 +1,12 @@
 import {
-  applyUiGraphStatePatch,
-  createUiGraphActionExecutionController,
-  getUiGraphActionState,
+  copyUiGraphText,
+  createUiGraphInteractionController,
+  downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
-  getUiGraphJsonOutputFilename,
   type RivetMarkdownSanitizerPolicy,
   type UiGraph,
   type UiGraphComponent,
+  type UiGraphInteractionSnapshot,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 
 type WebAppClientConfig = {
@@ -52,21 +52,10 @@ const config = window.__RIVET_WEB_APP__;
 const root = document.getElementById('app');
 
 if (config && root) {
-  let state = { ...config.initialState };
   let revisionMismatch = false;
-  const actionController = createUiGraphActionExecutionController();
-  const actionAbortControllers = new Map<number, AbortController>();
-  const actionErrors = new Map<string, string>();
-
-  const abortPendingActions = (exceptExecutionId?: number): void => {
-    for (const [executionId, abortController] of actionAbortControllers) {
-      if (executionId !== exceptExecutionId) {
-        abortController.abort();
-      }
-    }
-  };
-
-  window.addEventListener('pagehide', () => abortPendingActions());
+  const interactionController = createUiGraphInteractionController(config.uiGraph, {
+    initialState: config.initialState,
+  });
 
   const createElement = <TagName extends keyof HTMLElementTagNameMap>(
     tagName: TagName,
@@ -131,38 +120,6 @@ if (config && root) {
     return element;
   };
 
-  const copyText = async (value: string): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(value);
-      return;
-    } catch {
-      // Browser preview hosts may not expose the modern clipboard API.
-    }
-
-    const textArea = document.createElement('textarea');
-    textArea.value = value;
-    textArea.style.opacity = '0';
-    textArea.style.position = 'fixed';
-    document.body.append(textArea);
-    textArea.select();
-    try {
-      document.execCommand('copy');
-    } finally {
-      textArea.remove();
-    }
-  };
-
-  const downloadJson = (value: string): void => {
-    const url = URL.createObjectURL(new Blob([value], { type: 'application/json' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = getUiGraphJsonOutputFilename(config.uiGraph.name);
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  };
-
   const getActionFailureMessage = (response: Pick<Response, 'status' | 'statusText'>): string =>
     `${response.status} ${response.statusText || 'Action failed'}`;
 
@@ -188,7 +145,7 @@ if (config && root) {
   const renderErrors = (): Node[] =>
     revisionMismatch
       ? []
-      : [...actionErrors.entries()].map(([componentId, message]) =>
+      : Object.entries(interactionController.getSnapshot().actionErrors).map(([componentId, message]) =>
           createElement('div', { className: 'rivet-web-app-error', 'data-component-id': componentId, text: message }),
         );
 
@@ -224,56 +181,34 @@ if (config && root) {
   };
 
   const runAction = async (component: Extract<UiGraphComponent, { type: 'button' }>): Promise<void> => {
-    const execution = actionController.begin(component);
-    if (!execution) {
-      return;
-    }
-
-    const abortController = new AbortController();
-    actionAbortControllers.set(execution.id, abortController);
-    actionErrors.delete(component.id);
     revisionMismatch = false;
-    render();
-
-    try {
+    await interactionController.runAction(component, async ({ abortOtherActions, componentId, signal, state }) => {
       const response = await fetch(config.actionPath, {
         body: JSON.stringify({
-          componentId: component.id,
+          componentId,
           revisionKey: config.revisionKey,
-          state: getUiGraphActionState(component.action, state),
+          state,
         }),
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         method: 'POST',
-        signal: abortController.signal,
+        signal,
       });
       const result = await readActionResponse(response);
       if (!response.ok) {
         if (response.status === 409 && result.code === 'revision_mismatch') {
           revisionMismatch = true;
-          abortPendingActions(execution.id);
-          return;
+          abortOtherActions();
+          return {};
         }
         throw new Error(result.error || 'Action failed.');
       }
-      const statePatch = actionController.resolveStatePatch(execution, result.statePatch);
-      if (statePatch) {
-        state = applyUiGraphStatePatch(state, statePatch);
-      }
-    } catch (caughtError) {
-      if (!abortController.signal.aborted && actionController.isCurrent(execution)) {
-        const message = caughtError instanceof Error ? caughtError.message : `${caughtError}`;
-        actionErrors.set(component.id, message);
-      }
-    } finally {
-      actionAbortControllers.delete(execution.id);
-      actionController.finish(execution);
-      render();
-    }
+      return { statePatch: result.statePatch };
+    });
   };
 
-  const renderComponent = (component: UiGraphComponent): HTMLElement => {
-    const renderModel = getUiGraphComponentRenderModel(component, state);
+  const renderComponent = (component: UiGraphComponent, interaction: UiGraphInteractionSnapshot): HTMLElement => {
+    const renderModel = getUiGraphComponentRenderModel(component, interaction.state);
     let content: HTMLElement | undefined;
 
     switch (renderModel.type) {
@@ -297,8 +232,7 @@ if (config && root) {
         }) as HTMLInputElement | HTMLTextAreaElement;
         control.value = renderModel.value;
         control.addEventListener('input', () => {
-          actionController.noteStateWrite(renderModel.component.stateKey);
-          state = { ...state, [renderModel.component.stateKey]: control.value };
+          interactionController.updateState(renderModel.component.stateKey, control.value);
         });
         content = createElement('label', { className: 'rivet-web-app-field' }, [
           createElement('span', { text: renderModel.label }),
@@ -307,7 +241,7 @@ if (config && root) {
         break;
       }
       case 'button': {
-        const isRunning = actionController.isRunning(renderModel.component.id);
+        const isRunning = interaction.runningComponentIds.has(renderModel.component.id);
         content = createElement('button', {
           className: 'rivet-web-app-button',
           onClick: () => void runAction(renderModel.component),
@@ -329,7 +263,7 @@ if (config && root) {
               className: 'rivet-web-app-output-action-button rivet-web-app-output-copy-button',
               onClick: (event: Event) => {
                 event.stopPropagation();
-                void copyText(output.renderedValue);
+                void copyUiGraphText(output.renderedValue);
               },
               title: 'Copy output',
               type: 'button',
@@ -343,7 +277,7 @@ if (config && root) {
               className: 'rivet-web-app-output-action-button rivet-web-app-output-download-button',
               onClick: (event: Event) => {
                 event.stopPropagation();
-                downloadJson(output.jsonDownloadValue!);
+                downloadUiGraphJsonOutput(output.jsonDownloadValue!, config.uiGraph.name);
               },
               title: 'Download JSON',
               type: 'button',
@@ -379,8 +313,9 @@ if (config && root) {
   };
 
   const render = (): void => {
+    const interaction = interactionController.getSnapshot();
     const surface = createElement('main', { className: 'rivet-web-app-surface' }, [
-      ...config.uiGraph.components.map(renderComponent),
+      ...config.uiGraph.components.map((component) => renderComponent(component, interaction)),
       ...renderErrors(),
     ]);
     root.replaceChildren(surface, ...renderRevisionMismatchModal());
@@ -389,5 +324,11 @@ if (config && root) {
     }
   };
 
+  interactionController.subscribe((change) => {
+    if (change !== 'state') {
+      render();
+    }
+  });
+  window.addEventListener('pagehide', () => interactionController.abortActions());
   render();
 }

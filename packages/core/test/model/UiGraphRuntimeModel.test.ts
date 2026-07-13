@@ -3,11 +3,15 @@ import { describe, it } from 'node:test';
 import {
   applyUiGraphStatePatch,
   createUiGraphActionExecutionController,
+  createUiGraphInteractionController,
   getUiGraphActionState,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
   getUiGraphOutputRenderModel,
   type UiGraphComponent,
+  type UiGraph,
+  type UiGraphActionRunContext,
+  type UiGraphId,
   type UiGraphRunGraphAction,
   type UiComponentId,
 } from '../../src/index.js';
@@ -169,4 +173,112 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(controller.isRunning(button.id), false);
     assert.equal(controller.finish(execution), false);
   });
+
+  it('owns state, independent loading, errors, and stale-patch protection for every renderer', async () => {
+    const action = {
+      inputMappings: [{ inputKey: 'prompt', stateKey: 'prompt' }],
+      outputs: [{ stateKey: 'result' }],
+      type: 'runGraph' as const,
+    };
+    const firstButton = makeButton('first-button', action);
+    const secondButton = makeButton('second-button', action);
+    const uiGraph = makeUiGraph([firstButton, secondButton]);
+    const controller = createUiGraphInteractionController(uiGraph, { initialState: { prompt: 'Initial' } });
+    const changes: string[] = [];
+    const unsubscribe = controller.subscribe((change) => changes.push(change));
+    const firstRun = deferred<{ statePatch?: Record<string, unknown> }>();
+    const secondRun = deferred<{ statePatch?: Record<string, unknown> }>();
+    const runContexts = new Map<string, UiGraphActionRunContext>();
+
+    controller.updateState('prompt', 'Edited');
+    const firstPromise = controller.runAction(firstButton, (context) => {
+      runContexts.set('first', context);
+      return firstRun.promise;
+    });
+    const secondPromise = controller.runAction(secondButton, (context) => {
+      runContexts.set('second', context);
+      return secondRun.promise;
+    });
+
+    assert.deepEqual(runContexts.get('first')?.state, { prompt: 'Edited' });
+    assert.deepEqual([...controller.getSnapshot().runningComponentIds], [firstButton.id, secondButton.id]);
+
+    firstRun.resolve({ statePatch: { result: 'stale' } });
+    await firstPromise;
+    assert.equal(controller.getSnapshot().state.result, undefined);
+    assert.deepEqual([...controller.getSnapshot().runningComponentIds], [secondButton.id]);
+
+    secondRun.resolve({ statePatch: { result: 'current' } });
+    await secondPromise;
+    assert.equal(controller.getSnapshot().state.result, 'current');
+    assert.equal(controller.getSnapshot().runningComponentIds.size, 0);
+
+    await controller.runAction(firstButton, async () => {
+      throw new Error('Action failed');
+    });
+    assert.equal(controller.getSnapshot().actionErrors[firstButton.id], 'Action failed');
+    assert.equal(changes[0], 'state');
+    assert.equal(changes.includes('action'), true);
+    unsubscribe();
+  });
+
+  it('aborts removed actions and resets state when the rendered UI graph changes', async () => {
+    const button = makeButton('run-button', { type: 'runGraph' });
+    const initialGraph = makeUiGraph([
+      { defaultValue: 'Initial', id: 'input' as UiComponentId, label: 'Input', stateKey: 'input', type: 'input' },
+      button,
+    ]);
+    const controller = createUiGraphInteractionController(initialGraph);
+    const removedAction = deferred<{ statePatch?: Record<string, unknown> }>();
+    let removedSignal: AbortSignal | undefined;
+    const removedPromise = controller.runAction(button, ({ signal }) => {
+      removedSignal = signal;
+      return removedAction.promise;
+    });
+
+    controller.setUiGraph(makeUiGraph([]));
+    assert.equal(removedSignal?.aborted, true);
+    assert.equal(controller.getSnapshot().runningComponentIds.size, 0);
+
+    removedAction.resolve({ statePatch: { result: 'ignored' } });
+    await removedPromise;
+    assert.equal(controller.getSnapshot().state.result, undefined);
+
+    controller.updateState('input', 'Edited');
+    controller.setUiGraph({
+      components: [
+        {
+          defaultValue: 'Replacement',
+          id: 'next-input' as UiComponentId,
+          label: 'Input',
+          stateKey: 'input',
+          type: 'input',
+        },
+      ],
+      id: 'replacement' as UiGraphId,
+      name: 'Replacement',
+    });
+    assert.deepEqual(controller.getSnapshot().state, { input: 'Replacement' });
+  });
 });
+
+function makeButton(
+  id: string,
+  action: Extract<UiGraphComponent, { type: 'button' }>['action'],
+): Extract<UiGraphComponent, { type: 'button' }> {
+  return { action, id: id as UiComponentId, label: id, type: 'button' };
+}
+
+function makeUiGraph(components: UiGraphComponent[]): UiGraph {
+  return { components, id: 'ui-graph' as UiGraphId, name: 'App' };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  return {
+    promise: new Promise<T>((resolvePromise) => {
+      resolve = resolvePromise;
+    }),
+    resolve,
+  };
+}

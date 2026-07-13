@@ -226,7 +226,7 @@ export function getUiGraphActionComponent(
 
 export function resolveUiGraphActionInputs(
   action: UiGraphRunGraphAction,
-  state: Record<string, unknown>,
+  state: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   const inputs: Record<string, unknown> = {};
 
@@ -253,7 +253,7 @@ export function resolveUiGraphActionInputs(
  */
 export function getUiGraphActionState(
   action: UiGraphRunGraphAction,
-  state: Record<string, unknown>,
+  state: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   return Object.fromEntries(
     [...new Set(getUiGraphActionInputBindings(action).map((binding) => binding.stateKey))]

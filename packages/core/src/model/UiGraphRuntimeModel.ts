@@ -1,6 +1,9 @@
 import {
+  getUiGraphActionState,
   getUiGraphActionOutputBindings,
+  getUiGraphInitialState,
   type UiComponentId,
+  type UiGraph,
   type UiGraphComponent,
   type UiGraphGapSize,
   type UiGraphOutputRenderMode,
@@ -64,6 +67,45 @@ export type UiGraphActionExecutionController = {
   ): Record<string, unknown> | undefined;
   reset(): void;
 };
+
+export type UiGraphInteractionChange = 'action' | 'graph' | 'state';
+
+export type UiGraphInteractionSnapshot = Readonly<{
+  actionErrors: Readonly<Record<string, string>>;
+  runningComponentIds: ReadonlySet<UiComponentId>;
+  state: Readonly<Record<string, unknown>>;
+}>;
+
+export type UiGraphActionRunContext = Readonly<{
+  abortOtherActions(): void;
+  componentId: UiComponentId;
+  signal: AbortSignal;
+  state: Record<string, unknown>;
+}>;
+
+export type UiGraphActionRunResult = {
+  statePatch?: Record<string, unknown>;
+};
+
+export type UiGraphActionRunner = (context: UiGraphActionRunContext) => Promise<UiGraphActionRunResult>;
+
+export type UiGraphInteractionController = {
+  abortActions(): void;
+  getSnapshot(): UiGraphInteractionSnapshot;
+  runAction(component: Extract<UiGraphComponent, { type: 'button' }>, runner: UiGraphActionRunner): Promise<void>;
+  setUiGraph(uiGraph: UiGraph): void;
+  subscribe(listener: (change: UiGraphInteractionChange) => void): () => void;
+  updateState(stateKey: string, value: unknown): void;
+};
+
+export type UiGraphInteractionControllerOptions = {
+  initialState?: Record<string, unknown>;
+};
+
+type ActiveUiGraphAction = Readonly<{
+  abortController: AbortController;
+  execution: UiGraphActionExecution;
+}>;
 
 /**
  * Coordinates independent web-app actions without allowing older completions to
@@ -129,9 +171,156 @@ export function createUiGraphActionExecutionController(): UiGraphActionExecution
   };
 }
 
+/**
+ * Owns mutable web-app interaction state for every renderer. React and direct
+ * DOM hosts subscribe to this controller instead of reimplementing action
+ * cancellation, loading/error state, and stale state-patch protection.
+ */
+export function createUiGraphInteractionController(
+  initialUiGraph: UiGraph,
+  options: UiGraphInteractionControllerOptions = {},
+): UiGraphInteractionController {
+  let uiGraphId = initialUiGraph.id;
+  let state = options.initialState ? { ...options.initialState } : getUiGraphInitialState(initialUiGraph);
+  let actionErrors: Record<string, string> = {};
+  let snapshot: UiGraphInteractionSnapshot;
+  const actionController = createUiGraphActionExecutionController();
+  const activeActions = new Map<number, ActiveUiGraphAction>();
+  const listeners = new Set<(change: UiGraphInteractionChange) => void>();
+
+  const updateSnapshot = (): void => {
+    snapshot = {
+      actionErrors,
+      runningComponentIds: new Set([...activeActions.values()].map(({ execution }) => execution.componentId)),
+      state,
+    };
+  };
+  const publish = (change: UiGraphInteractionChange): void => {
+    updateSnapshot();
+    for (const listener of listeners) {
+      listener(change);
+    }
+  };
+  const abortMatchingActions = (
+    predicate: (activeAction: ActiveUiGraphAction, executionId: number) => boolean,
+    notify: boolean,
+  ): boolean => {
+    let changed = false;
+    for (const [executionId, activeAction] of activeActions) {
+      if (!predicate(activeAction, executionId)) {
+        continue;
+      }
+      activeAction.abortController.abort();
+      activeActions.delete(executionId);
+      actionController.finish(activeAction.execution);
+      changed = true;
+    }
+    if (changed && notify) {
+      publish('action');
+    }
+    return changed;
+  };
+  const abortAllActions = (notify: boolean): void => {
+    const changed = abortMatchingActions(() => true, false);
+    actionController.reset();
+    if (changed && notify) {
+      publish('action');
+    }
+  };
+
+  updateSnapshot();
+
+  return {
+    abortActions() {
+      abortAllActions(true);
+    },
+    getSnapshot() {
+      return snapshot;
+    },
+    async runAction(component, runner) {
+      const execution = actionController.begin(component);
+      if (!execution) {
+        return;
+      }
+
+      const abortController = new AbortController();
+      activeActions.set(execution.id, { abortController, execution });
+      if (Object.prototype.hasOwnProperty.call(actionErrors, component.id)) {
+        actionErrors = { ...actionErrors };
+        delete actionErrors[component.id];
+      }
+      publish('action');
+
+      try {
+        const result = await runner({
+          abortOtherActions: () =>
+            abortMatchingActions((_activeAction, executionId) => executionId !== execution.id, true),
+          componentId: component.id,
+          signal: abortController.signal,
+          state: getUiGraphActionState(component.action, state),
+        });
+        if (!actionController.isCurrent(execution)) {
+          return;
+        }
+
+        const statePatch = actionController.resolveStatePatch(execution, result.statePatch);
+        if (statePatch) {
+          state = applyUiGraphStatePatch(state, statePatch);
+        }
+      } catch (error) {
+        if (!abortController.signal.aborted && actionController.isCurrent(execution)) {
+          actionErrors = {
+            ...actionErrors,
+            [component.id]: error instanceof Error ? error.message : String(error),
+          };
+        }
+      } finally {
+        if (activeActions.delete(execution.id)) {
+          actionController.finish(execution);
+          publish('action');
+        }
+      }
+    },
+    setUiGraph(nextUiGraph) {
+      if (nextUiGraph.id !== uiGraphId) {
+        abortAllActions(false);
+        uiGraphId = nextUiGraph.id;
+        state = getUiGraphInitialState(nextUiGraph);
+        actionErrors = {};
+        publish('graph');
+        return;
+      }
+
+      const actionComponentIds = new Set(
+        nextUiGraph.components.filter((component) => component.type === 'button').map((component) => component.id),
+      );
+      let changed = abortMatchingActions(({ execution }) => !actionComponentIds.has(execution.componentId), false);
+      const remainingErrors = Object.fromEntries(
+        Object.entries(actionErrors).filter(([componentId]) => actionComponentIds.has(componentId as UiComponentId)),
+      );
+      if (Object.keys(remainingErrors).length !== Object.keys(actionErrors).length) {
+        actionErrors = remainingErrors;
+        changed = true;
+      }
+      if (changed) {
+        publish('graph');
+      }
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    updateState(stateKey, value) {
+      actionController.noteStateWrite(stateKey);
+      state = { ...state, [stateKey]: value };
+      publish('state');
+    },
+  };
+}
+
 export function getUiGraphComponentRenderModel(
   component: UiGraphComponent,
-  state: Record<string, unknown>,
+  state: Readonly<Record<string, unknown>>,
 ): UiGraphComponentRenderModel {
   switch (component.type) {
     case 'text':
@@ -167,7 +356,7 @@ export function getUiGraphComponentLabel(
 }
 
 export function getUiGraphOutputRenderModel(
-  state: Record<string, unknown>,
+  state: Readonly<Record<string, unknown>>,
   stateKey: string,
   renderAs: UiGraphOutputRenderMode,
 ): UiGraphOutputRenderModel {
@@ -183,7 +372,7 @@ export function getUiGraphOutputRenderModel(
   };
 }
 
-export function hasUiGraphStateValue(state: Record<string, unknown>, key: string): boolean {
+export function hasUiGraphStateValue(state: Readonly<Record<string, unknown>>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(state, key) && state[key] !== undefined;
 }
 

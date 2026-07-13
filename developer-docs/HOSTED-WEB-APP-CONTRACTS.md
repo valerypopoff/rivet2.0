@@ -15,12 +15,17 @@ not import app-internal atoms.
 workflow graphs and cannot be a Main Graph. Actions target ordinary graphs in the
 same project.
 
-Shared component semantics live in core's UI-graph runtime model. React desktop
-preview and the generated Node client consume that model. The generated client is a
-checked artifact; `packages/node/scripts/build-web-app-client.cjs --check` must fail
-when its source changes without regeneration. Its build script fixes esbuild's
-working directory to the Node package, so generating from the repository root or
-through a workspace command produces the same artifact.
+Shared component and interaction semantics live in core's UI-graph runtime model.
+React desktop preview and the generated Node client both use
+`createUiGraphInteractionController(...)` for UI state, per-button running/errors,
+abort propagation, and stale-patch protection. Clipboard fallback and JSON downloads
+also use core's browser-runtime helpers; only React-versus-direct-DOM rendering and
+Markdown integration remain host adapters. A cross-host JSDOM parity test executes
+the same UI graph through both adapters. The generated client is a checked artifact;
+`packages/node/scripts/build-web-app-client.cjs --check` must fail when its source
+changes without regeneration. Its build script fixes esbuild's working directory to
+the Node package, so generating from the repository root or through a workspace
+command produces the same artifact.
 
 Core's `normalizeUiGraph(...)` / `normalizeProjectUiGraphs(...)` functions are the
 shared structural boundary for wrapper-provided snapshots. They validate every
