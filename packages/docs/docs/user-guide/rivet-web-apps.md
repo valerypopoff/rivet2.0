@@ -70,6 +70,8 @@ Wrappers can also use lower-level helpers:
 - `renderRivetWebAppHtml(...)` to serve the HTML from a wrapper-owned route
 - `runRivetWebAppAction(...)` to run a button action from an existing route handler
 
+The Node handler serves a self-contained page by default. Production wrappers can enable external assets so Rivet's CSS, Markdown libraries, sanitizer, and client use content-addressed filenames that browsers and CDNs can cache. External mode also avoids inline scripts and styles for stricter Content Security Policy setups. The wrapper still owns the CSP header, asset route or CDN, authentication, and deployment policy.
+
 Action requests are JSON-only and the web app state must be an object. If a wrapper uses the lower-level action helper, Rivet throws `RivetWebAppActionHttpError` for request-shaped failures such as malformed state or stale revision keys so the wrapper can return the matching HTTP status and optional machine-readable error code.
 
 If a wrapper publishes immutable project revisions, it can pass a `revisionKey`. Rivet embeds that opaque key into the served page and rejects action requests that send a different key, helping wrappers avoid a stale page running against a newer published app revision. When a served page becomes stale, Rivet shows a blocking message, **This app was updated. Reload to continue.**, with a **Reload** button. The app does not refresh automatically, so typed input remains visible until you choose to reload.
@@ -95,7 +97,7 @@ V1 is intentionally small and safe:
 - there is no custom JavaScript
 - there is no separate raw HTML component
 - markdown components and markdown output mode follow Rivet's standard Markdown renderer, with raw HTML escaped
-- there is no custom asset pipeline
+- there is no project-authored custom asset pipeline
 - there are no reusable UI components or page navigation yet
 
 Use ordinary graphs for workflow logic and web apps for a minimal UI over those graphs.

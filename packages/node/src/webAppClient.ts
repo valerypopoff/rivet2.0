@@ -48,8 +48,8 @@ const browserGlobals = globalThis as typeof globalThis & {
   marked?: MarkedApi;
 };
 
-const config = window.__RIVET_WEB_APP__;
 const root = document.getElementById('app');
+const config = window.__RIVET_WEB_APP__ ?? readEmbeddedConfig(root);
 
 if (config && root) {
   let revisionMismatch = false;
@@ -331,4 +331,16 @@ if (config && root) {
   });
   window.addEventListener('pagehide', () => interactionController.abortActions());
   render();
+}
+
+function readEmbeddedConfig(root: HTMLElement | null): WebAppClientConfig | undefined {
+  const serializedConfig = root?.getAttribute('data-rivet-web-app-config');
+  if (!serializedConfig) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(serializedConfig) as WebAppClientConfig;
+  } catch {
+    return undefined;
+  }
 }

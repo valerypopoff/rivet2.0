@@ -10,9 +10,8 @@ export async function copyUiGraphText(value: string): Promise<boolean> {
   }
 
   const textArea = document.createElement('textarea');
+  textArea.className = 'rivet-web-app-clipboard-fallback';
   textArea.value = value;
-  textArea.style.opacity = '0';
-  textArea.style.position = 'fixed';
   try {
     document.body.append(textArea);
     textArea.select();

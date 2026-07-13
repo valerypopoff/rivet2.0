@@ -43,6 +43,8 @@ dispatch.
 - `renderRivetWebAppHtml(...)` renders the document/runtime payload.
 - `runRivetWebAppAction(...)` validates mappings and runs the target graph.
 - `createRivetWebAppHandler(...)` provides the Fetch-style reference host.
+- `getRivetWebAppAssetManifest()` exposes the immutable browser assets for
+  lower-level or CDN-backed hosts.
 
 `createRivetWebAppHandler(...)` validates and applies legacy ID repair to the
 project's complete `uiGraphs` collection when the handler is created. Lower-level
@@ -57,6 +59,40 @@ revision. Hosted action execution runs the same component-level preflight and
 rejects stale or ambiguous mappings as `400` with code
 `invalid_button_bindings`. Omitted inputs and outputs remain valid because graph
 defaults and intentionally ignored outputs are part of the action contract.
+
+### Asset And CSP Modes
+
+`inline` is the default asset mode and keeps each HTML response self-contained.
+`external` mode removes inline style and executable script content from the page.
+The reference handler serves its content-addressed CSS and JavaScript below
+`<basePath>/_rivet/assets`; that path is reserved while external mode is active.
+The asset route supports `GET` and `HEAD`; neither successful nor missing `HEAD`
+responses include a body. Asset responses use one-year immutable caching, strong
+ETags, explicit MIME types, and `X-Content-Type-Options: nosniff`. HTML tags also
+carry SHA-256 Subresource Integrity metadata.
+
+Wrappers that call `renderRivetWebAppHtml(...)` directly should serve the entries
+from `getRivetWebAppAssetManifest()` and pass their route or absolute CDN URL as
+`assetBasePath`. Use each entry's `content`, `contentType`, `etag`, and `fileName`
+without rewriting the content or filename. A cross-origin asset host must permit
+anonymous CORS because the generated tags combine SRI with
+`crossorigin="anonymous"`.
+
+The serialized UI graph and initial state live in a non-executable data attribute,
+not an inline bootstrap script. External same-origin mode therefore supports a
+strict `script-src 'self'; style-src 'self'` policy. For self-contained pages,
+`renderRivetWebAppHtml(...)` accepts `cspNonce`; the reference handler's
+`resolveCspNonce(request)` resolves one per HTML response. Rivet applies that value
+to every inline style/script tag (and external scripts for `strict-dynamic`
+policies), but the host owns nonce generation and the matching
+`Content-Security-Policy` response header. Never reuse a nonce between responses.
+The shared clipboard fallback uses a renderer CSS class rather than assigning DOM
+inline styles, so copying output does not weaken that policy after first paint.
+The packaged Markdown stylesheet uses a data-URL mask, so a complete host policy
+also needs `img-src data:`; allowlist any remote Markdown image origins separately.
+Handler tests boot the external page and reject browser assets that introduce
+`eval(...)` or the `Function(...)` constructor, preserving operation without
+`'unsafe-eval'` as dependencies change.
 
 Processor options are action/request scoped. Wrappers retain Express/Fastify route,
 auth, revision, storage, recordings, headers, and error-envelope ownership.

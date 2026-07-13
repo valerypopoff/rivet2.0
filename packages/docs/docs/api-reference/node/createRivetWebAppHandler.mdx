@@ -14,7 +14,7 @@ The handler serves:
 
 It does not own authentication, routing, domains, tenancy, or deployment. Those stay wrapper-owned.
 
-Markdown components and Markdown-rendered outputs are rendered by the built-in client with the same `marked` Markdown engine and GitHub Markdown CSS baseline used by the Rivet app preview. Raw HTML tokens inside Markdown are escaped for web apps; V1 does not expose arbitrary HTML or JavaScript authoring. The hosted HTML embeds the packaged CSS and browser script, so wrapper servers do not need to mount a separate Markdown asset or provide their own renderer.
+Markdown components and Markdown-rendered outputs are rendered by the built-in client with the same `marked` Markdown engine and GitHub Markdown CSS baseline used by the Rivet app preview. Raw HTML tokens inside Markdown are escaped for web apps; V1 does not expose arbitrary HTML or JavaScript authoring. Hosted HTML is self-contained by default. Production hosts can opt into content-addressed external assets for browser/CDN caching and a CSP with no inline scripts or styles.
 
 ## Syntax
 
@@ -37,7 +37,10 @@ type RivetWebAppCreateProcessorOptions =
       context: RivetWebAppActionContext,
     ) => Promise<RivetWebAppProcessorOptions | null | undefined> | RivetWebAppProcessorOptions | null | undefined);
 
+type RivetWebAppAssetMode = 'external' | 'inline';
+
 type RivetWebAppHandlerOptions = {
+  assetMode?: RivetWebAppAssetMode;
   basePath?: string;
   createProcessorOptions?: RivetWebAppCreateProcessorOptions;
   onActionError?: (context: RivetWebAppActionContext & { error: unknown }) => Promise<void> | void;
@@ -49,6 +52,7 @@ type RivetWebAppHandlerOptions = {
   ) => Promise<void> | void;
   onActionStart?: (context: RivetWebAppActionContext) => Promise<void> | void;
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
+  resolveCspNonce?: (request: Request) => Promise<string | undefined> | string | undefined;
   revisionKey?: string;
   uiGraphId?: UiGraphId | string;
 };
@@ -84,6 +88,10 @@ Before dispatch, `runRivetWebAppAction(...)` runs core's non-mutating binding pr
 
 The embedded client sends only the web-app data keys referenced by the clicked button's input mappings. Unrelated form values and previous output state remain in the browser. `runRivetWebAppAction(...)` applies the same projection for lower-level host integrations, so its action hooks and processor-options resolver receive the action-relevant state only.
 
+`assetMode` defaults to `inline`, preserving a single self-contained HTML response. With `assetMode: 'external'`, the reference handler serves content-addressed assets below `<basePath>/_rivet/assets`. Those files use immutable caching, ETags, explicit MIME types, `nosniff`, and Subresource Integrity. The page's bootstrap data is stored in a non-executable data attribute, so external mode contains no inline executable scripts or styles.
+
+`resolveCspNonce(request)` is evaluated for each HTML request. In inline mode, Rivet applies the returned nonce to every inline style and script. In external mode it applies the nonce to external script tags for policies that use `strict-dynamic`. The host must generate a fresh cryptographically random nonce and send the matching `Content-Security-Policy` header; Rivet does not set deployment policy headers.
+
 Action requests are JSON-only. The request body and `state` must be objects; malformed bodies return `400` responses from the Fetch-style handler. The lower-level helper throws `RivetWebAppActionHttpError` for HTTP-shaped action failures such as revision mismatches or malformed action state, so wrappers can preserve `error.status` and optional `error.code` in their own Express responses.
 
 ## Example
@@ -110,6 +118,58 @@ export default {
   },
 };
 ```
+
+## External assets and CSP
+
+The reference handler can serve its own immutable assets:
+
+```typescript
+const webApp = createRivetWebAppHandler(project, {
+  assetMode: 'external',
+  basePath: '/apps/story-helper',
+  uiGraphId: 'story-helper-ui',
+});
+```
+
+This reserves `/apps/story-helper/_rivet/assets/*` inside that handler. A same-origin host can use a policy such as `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:`, adjusted for the rest of the host application and any remote images intentionally allowed in Markdown.
+
+Wrappers that own their HTML and asset routes can use the lower-level manifest:
+
+```typescript
+import {
+  getRivetWebAppAssetManifest,
+  renderRivetWebAppHtml,
+  RIVET_WEB_APP_ASSET_CACHE_CONTROL,
+} from '@valerypopoff/rivet2-node';
+
+const assets = getRivetWebAppAssetManifest();
+
+app.get('/rivet-assets/:fileName', (req, res) => {
+  const asset = Object.values(assets).find((candidate) => candidate.fileName === req.params.fileName);
+  if (!asset) {
+    res.sendStatus(404);
+    return;
+  }
+
+  res
+    .set({
+      'Cache-Control': RIVET_WEB_APP_ASSET_CACHE_CONTROL,
+      'Content-Type': asset.contentType,
+      ETag: asset.etag,
+      'X-Content-Type-Options': 'nosniff',
+    })
+    .send(asset.content);
+});
+
+const html = renderRivetWebAppHtml(uiGraph, {
+  actionPath: '/apps/story-helper/actions/run',
+  assetBasePath: '/rivet-assets',
+  assetMode: 'external',
+  revisionKey,
+});
+```
+
+`assetBasePath` may be an absolute CDN URL. Keep each manifest filename paired with its exact content because the filename and emitted SRI value are derived from that content. Cross-origin CDNs must allow anonymous CORS for SRI requests.
 
 ## Request-scoped processor options
 

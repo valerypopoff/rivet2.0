@@ -3,14 +3,17 @@ import * as assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import { runInNewContext } from 'node:vm';
 import { marked } from 'marked';
-import { JSDOM } from 'jsdom';
+import { JSDOM, ResourceLoader } from 'jsdom';
 import {
   createRivetWebAppHandler,
+  getRivetWebAppAssetManifest,
   type DataValue,
   type GraphId,
   type NodeGraph,
   type Project,
   RIVET_WEB_APP_DOCUMENT_CSS,
+  RIVET_WEB_APP_ASSET_CACHE_CONTROL,
+  RIVET_WEB_APP_ASSET_ROUTE,
   RIVET_WEB_APP_RENDERER_CSS,
   RivetWebAppActionHttpError,
   type UiGraphComponent,
@@ -129,6 +132,178 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(response.status, 200);
     assert.match(html, /Test App/);
     assert.match(html, /\/app\/actions\/run/);
+  });
+
+  void it('serves content-addressed external assets without inline scripts or styles', async () => {
+    const nonce = 'request-nonce';
+    const handler = createRivetWebAppHandler(makeProject(), {
+      assetMode: 'external',
+      basePath: '/app',
+      resolveCspNonce: (request) => {
+        assert.equal(request.url, 'https://example.test/app');
+        return nonce;
+      },
+      uiGraphId: 'ui-graph',
+    });
+    const htmlResponse = await handler.handleRequest(new Request('https://example.test/app'));
+    const html = await htmlResponse.text();
+    const dom = new JSDOM(html);
+    const manifest = getRivetWebAppAssetManifest();
+
+    assert.equal(Object.isFrozen(manifest), true);
+    assert.equal(Object.values(manifest).every(Object.isFrozen), true);
+    assert.equal(dom.window.document.querySelectorAll('style').length, 0);
+    assert.equal(dom.window.document.querySelectorAll('link[rel="stylesheet"]').length, 1);
+    assert.equal(dom.window.document.querySelectorAll('script').length, 3);
+    assert.deepEqual(
+      [...dom.window.document.querySelectorAll('script')].map((script) => script.getAttribute('src')),
+      [manifest.marked, manifest.domPurify, manifest.client].map(
+        (asset) => `/app${RIVET_WEB_APP_ASSET_ROUTE}/${asset.fileName}`,
+      ),
+    );
+    assert.equal(
+      [...dom.window.document.querySelectorAll('script')].every(
+        (script) => script.getAttribute('src') && script.textContent === '' && script.getAttribute('nonce') === nonce,
+      ),
+      true,
+    );
+    assert.equal(html.includes('window.__RIVET_WEB_APP__'), false);
+
+    const embeddedConfig = JSON.parse(
+      dom.window.document.getElementById('app')!.getAttribute('data-rivet-web-app-config')!,
+    ) as { actionPath: string; initialState: Record<string, unknown>; uiGraph: { name: string } };
+    assert.equal(embeddedConfig.actionPath, '/app/actions/run');
+    assert.deepEqual(embeddedConfig.initialState, {});
+    assert.equal(embeddedConfig.uiGraph.name, 'Test App');
+
+    for (const asset of [manifest.marked, manifest.domPurify, manifest.client]) {
+      assert.doesNotMatch(asset.content, /\b(?:eval|Function)\s*\(/);
+    }
+
+    for (const asset of Object.values(manifest)) {
+      assert.equal(asset.fileName.includes(asset.hash.slice(0, 20)), true);
+      assert.match(asset.integrity, /^sha256-/);
+      assert.equal(html.includes(`${RIVET_WEB_APP_ASSET_ROUTE}/${asset.fileName}`), true);
+      assert.equal(html.includes(`integrity="${asset.integrity}"`), true);
+
+      const assetUrl = `https://example.test/app${RIVET_WEB_APP_ASSET_ROUTE}/${asset.fileName}`;
+      const assetResponse = await handler.handleRequest(new Request(assetUrl));
+      assert.equal(assetResponse.status, 200);
+      assert.equal(assetResponse.headers.get('cache-control'), RIVET_WEB_APP_ASSET_CACHE_CONTROL);
+      assert.equal(assetResponse.headers.get('content-type'), asset.contentType);
+      assert.equal(assetResponse.headers.get('etag'), asset.etag);
+      assert.equal(assetResponse.headers.get('x-content-type-options'), 'nosniff');
+      assert.equal(await assetResponse.text(), asset.content);
+
+      const headResponse = await handler.handleRequest(new Request(assetUrl, { method: 'HEAD' }));
+      assert.equal(headResponse.status, 200);
+      assert.equal(await headResponse.text(), '');
+
+      const cachedResponse = await handler.handleRequest(
+        new Request(assetUrl, { headers: { 'if-none-match': asset.etag } }),
+      );
+      assert.equal(cachedResponse.status, 304);
+      assert.equal(await cachedResponse.text(), '');
+
+      const weakCachedResponse = await handler.handleRequest(
+        new Request(assetUrl, { headers: { 'if-none-match': `W/${asset.etag}` } }),
+      );
+      assert.equal(weakCachedResponse.status, 304);
+    }
+
+    const missingAssetResponse = await handler.handleRequest(
+      new Request(`https://example.test/app${RIVET_WEB_APP_ASSET_ROUTE}/missing.js`),
+    );
+    assert.equal(missingAssetResponse.status, 404);
+    assert.deepEqual(await missingAssetResponse.json(), { error: 'Not found' });
+
+    const missingHeadResponse = await handler.handleRequest(
+      new Request(`https://example.test/app${RIVET_WEB_APP_ASSET_ROUTE}/missing.js`, { method: 'HEAD' }),
+    );
+    assert.equal(missingHeadResponse.status, 404);
+    assert.equal(await missingHeadResponse.text(), '');
+    dom.window.close();
+  });
+
+  void it('adds a CSP nonce to every inline style and script while keeping bootstrap data non-executable', () => {
+    const uiGraph = makeProject().uiGraphs!['ui-graph' as UiGraphId]!;
+    uiGraph.name = '</div><script>unsafe()</script>';
+    const html = renderRivetWebAppHtml(uiGraph, {
+      actionPath: '/app/actions/run',
+      cspNonce: 'nonce-value',
+    });
+    const dom = new JSDOM(html);
+
+    assert.equal(
+      [...dom.window.document.querySelectorAll('style, script')].every(
+        (element) => element.getAttribute('nonce') === 'nonce-value',
+      ),
+      true,
+    );
+    assert.equal(dom.window.document.querySelectorAll('script').length, 3);
+    assert.equal(dom.window.document.querySelectorAll('script[src]').length, 0);
+    const embeddedConfig = JSON.parse(
+      dom.window.document.getElementById('app')!.getAttribute('data-rivet-web-app-config')!,
+    ) as { uiGraph: { name: string } };
+    assert.equal(embeddedConfig.uiGraph.name, '</div><script>unsafe()</script>');
+    dom.window.close();
+  });
+
+  void it('renders external assets from an absolute CDN base URL', () => {
+    const uiGraph = makeProject().uiGraphs!['ui-graph' as UiGraphId]!;
+    const html = renderRivetWebAppHtml(uiGraph, {
+      actionPath: '/apps/test/actions/run',
+      assetBasePath: 'https://cdn.example.test/rivet-assets/',
+      assetMode: 'external',
+    });
+
+    for (const asset of Object.values(getRivetWebAppAssetManifest())) {
+      assert.equal(html.includes(`="https://cdn.example.test/rivet-assets/${asset.fileName}"`), true);
+    }
+  });
+
+  void it('boots the generated client from external assets', { timeout: 5_000 }, async () => {
+    const uiGraph = makeProject().uiGraphs!['ui-graph' as UiGraphId]!;
+    uiGraph.components.unshift({
+      id: 'markdown' as any,
+      markdown: '**Loaded externally**',
+      type: 'markdown',
+    });
+    const manifest = getRivetWebAppAssetManifest();
+    const fetchedAssets = new Set<string>();
+    const resourceLoader = new (class extends ResourceLoader {
+      override fetch(url: string): Promise<Buffer<ArrayBuffer>> | null {
+        const asset = Object.values(manifest).find((candidate) => url.endsWith(`/${candidate.fileName}`));
+        if (!asset) {
+          return null;
+        }
+        fetchedAssets.add(asset.fileName);
+        return Promise.resolve(Buffer.from(asset.content));
+      }
+    })();
+    const html = renderRivetWebAppHtml(uiGraph, {
+      actionPath: '/apps/test/actions/run',
+      assetBasePath: 'https://cdn.example.test/rivet-assets',
+      assetMode: 'external',
+    });
+    const dom = new JSDOM(html, {
+      resources: resourceLoader,
+      runScripts: 'dangerously',
+      url: 'https://app.example.test/apps/test',
+    });
+
+    try {
+      await new Promise<void>((resolve) => dom.window.addEventListener('load', () => resolve(), { once: true }));
+
+      assert.deepEqual(fetchedAssets, new Set(Object.values(manifest).map((asset) => asset.fileName)));
+      assert.equal(
+        dom.window.document.querySelector('.rivet-web-app-markdown strong')?.textContent,
+        'Loaded externally',
+      );
+      assert.equal(dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.textContent, 'Run');
+    } finally {
+      dom.window.close();
+    }
   });
 
   void it('emits syntactically valid inline client JavaScript', () => {
@@ -407,6 +582,7 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(links?.[0]?.hasAttribute('href'), false);
     assert.equal(links?.[1]?.getAttribute('href'), 'https://example.com/path');
     assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-text\s*\{\s*background: transparent;/);
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-clipboard-fallback\s*\{[\s\S]*position: fixed;/);
     dom.window.close();
   });
 
@@ -640,7 +816,12 @@ void describe('createRivetWebAppHandler', () => {
       uiGraphId: 'ui-graph',
     });
 
-    assert.match(html, /"revisionKey":"rev-1"/);
+    const revisionDom = new JSDOM(html);
+    const embeddedConfig = JSON.parse(
+      revisionDom.window.document.getElementById('app')!.getAttribute('data-rivet-web-app-config')!,
+    ) as { revisionKey?: string };
+    revisionDom.window.close();
+    assert.equal(embeddedConfig.revisionKey, 'rev-1');
     assert.match(html, /revisionKey: config\.revisionKey/);
     assert.match(html, /credentials: "same-origin"/);
 

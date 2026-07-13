@@ -326,6 +326,16 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 .rivet-web-app-modal-button {
   justify-self: start;
 }
+
+.rivet-web-app-clipboard-fallback {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
 `;
 
 export const RIVET_WEB_APP_DOCUMENT_CSS = `
