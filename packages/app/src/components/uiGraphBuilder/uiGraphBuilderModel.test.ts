@@ -18,6 +18,7 @@ import {
   type UiGraphButtonComponent,
 } from './buttonBindings.js';
 import {
+  createChatAdditionalInputBinding,
   createUiGraphComponent,
   getUiGraphComponentDataKeys,
   getUiGraphGraphOptions,
@@ -109,6 +110,7 @@ test('component descriptors exhaustively own labels, defaults, settings, and dat
     'input',
     'textarea',
     'button',
+    'chat',
     'output',
   ];
 
@@ -132,6 +134,55 @@ test('component descriptors exhaustively own labels, defaults, settings, and dat
       assert.deepEqual(getUiGraphComponentDataKeys(component), { reads: [], writes: [] });
     }
   }
+});
+
+test('Chat descriptor reports only explicitly mapped page data as reads', () => {
+  const chat = createUiGraphComponent('chat', graphId);
+  assert.equal(chat.type, 'chat');
+  chat.action.inputMappings = [
+    { inputKey: 'tone', stateKey: 'selectedTone' },
+    { inputKey: 'context', stateKey: 'pageContext' },
+  ];
+
+  assert.deepEqual(getUiGraphComponentDataKeys(chat), {
+    reads: ['selectedTone', 'pageContext'],
+    writes: [],
+  });
+});
+
+test('Chat can add unfinished additional input rows after graph inputs are exhausted', () => {
+  const boundary = makeBoundary(['message', 'history', 'tone'], ['response']);
+  assert.deepEqual(
+    createChatAdditionalInputBinding(
+      {
+        graphId,
+        historyInputId: 'history',
+        responseOutputId: 'response',
+        type: 'runGraph',
+        userInputId: 'message',
+      },
+      boundary,
+      ['tone'],
+    ),
+    { inputKey: 'tone', stateKey: 'tone' },
+  );
+  const action = {
+    graphId,
+    historyInputId: 'history',
+    inputMappings: [{ inputKey: 'tone', stateKey: 'tone' }],
+    responseOutputId: 'response',
+    type: 'runGraph' as const,
+    userInputId: 'message',
+  };
+
+  assert.deepEqual(createChatAdditionalInputBinding(action, boundary, ['tone']), {
+    inputKey: '',
+    stateKey: 'tone',
+  });
+  assert.deepEqual(createChatAdditionalInputBinding({ graphId, type: 'runGraph' }, undefined, []), {
+    inputKey: '',
+    stateKey: '',
+  });
 });
 
 test('the graph selector keeps a deleted target visible as a disabled option', () => {

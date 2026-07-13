@@ -1,10 +1,13 @@
 import {
   copyUiGraphText,
+  createUiGraphChatSubmissionStatePatch,
   createUiGraphInteractionController,
   downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
+  getUiGraphChatDraftStateKey,
   type RivetMarkdownSanitizerPolicy,
   type UiGraph,
+  type UiGraphActionComponent,
   type UiGraphComponent,
   type UiGraphInteractionSnapshot,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
@@ -145,8 +148,16 @@ if (config && root) {
   const renderErrors = (): Node[] =>
     revisionMismatch
       ? []
-      : Object.entries(interactionController.getSnapshot().actionErrors).map(([componentId, message]) =>
-          createElement('div', { className: 'rivet-web-app-error', 'data-component-id': componentId, text: message }),
+      : Object.entries(interactionController.getSnapshot().actionErrors).flatMap(([componentId, message]) =>
+          config.uiGraph.components.some((component) => component.id === componentId && component.type === 'chat')
+            ? []
+            : [
+                createElement('div', {
+                  className: 'rivet-web-app-error',
+                  'data-component-id': componentId,
+                  text: message,
+                }),
+              ],
         );
 
   const renderRevisionMismatchModal = (): Node[] => {
@@ -180,7 +191,7 @@ if (config && root) {
     ];
   };
 
-  const runAction = async (component: Extract<UiGraphComponent, { type: 'button' }>): Promise<void> => {
+  const runAction = async (component: UiGraphActionComponent): Promise<void> => {
     revisionMismatch = false;
     await interactionController.runAction(component, async ({ abortOtherActions, componentId, signal, state }) => {
       const response = await fetch(config.actionPath, {
@@ -251,6 +262,107 @@ if (config && root) {
         (content as HTMLButtonElement).disabled = isRunning;
         break;
       }
+      case 'chat': {
+        const isRunning = interaction.runningComponentIds.has(renderModel.component.id);
+        const submit = () => {
+          const statePatch = createUiGraphChatSubmissionStatePatch(
+            renderModel.component.id,
+            interactionController.getSnapshot().state,
+          );
+          if (!statePatch || isRunning) return;
+          textarea.focus();
+          interactionController.updateStatePatch(statePatch);
+          void runAction(renderModel.component);
+        };
+        const messageNodes = renderModel.messages.map((message) =>
+          createElement('div', {
+            className: `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role}`,
+            text: message.content,
+          }),
+        );
+        if (messageNodes.length === 0) {
+          messageNodes.push(
+            createElement('div', { className: 'rivet-web-app-chat-empty' }, [
+              createElement('strong', { text: 'Start a conversation' }),
+              createElement('span', { text: 'Send a message to run the connected Rivet graph.' }),
+            ]),
+          );
+        }
+        if (isRunning) {
+          messageNodes.push(
+            createElement(
+              'div',
+              {
+                className:
+                  'rivet-web-app-chat-message rivet-web-app-chat-message-assistant rivet-web-app-chat-thinking',
+              },
+              [createElement('span'), createElement('span'), createElement('span')],
+            ),
+          );
+        }
+
+        const textarea = createElement('textarea', {
+          'aria-label': 'Message',
+          'data-rivet-chat-component-id': renderModel.component.id,
+          placeholder: renderModel.component.placeholder || 'Message...',
+          rows: '1',
+        });
+        textarea.value = renderModel.draft;
+        const sendButton = createElement('button', {
+          'aria-label': 'Send message',
+          className: 'rivet-web-app-chat-send',
+          text: String.fromCodePoint(8593),
+          title: 'Send message',
+          type: 'submit',
+        });
+        sendButton.disabled = isRunning || !renderModel.draft.trim();
+        textarea.addEventListener('input', () => {
+          interactionController.updateState(getUiGraphChatDraftStateKey(renderModel.component.id), textarea.value);
+          sendButton.disabled = isRunning || !textarea.value.trim();
+        });
+        textarea.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+            event.preventDefault();
+            submit();
+          }
+        });
+        const composer = createElement(
+          'form',
+          {
+            className: 'rivet-web-app-chat-composer',
+            onSubmit: (event: Event) => {
+              event.preventDefault();
+              submit();
+            },
+          },
+          [textarea, sendButton],
+        );
+        const actionError = interaction.actionErrors[renderModel.component.id];
+        content = createElement('section', { className: 'rivet-web-app-chat' }, [
+          createElement('div', { className: 'rivet-web-app-chat-header' }, [
+            createElement('span', { text: 'Chat' }),
+            createElement('span', {
+              className: 'rivet-web-app-chat-status',
+              text: isRunning ? 'Responding' : 'Ready',
+            }),
+          ]),
+          createElement(
+            'div',
+            {
+              'aria-live': 'polite',
+              'aria-relevant': 'additions text',
+              className: 'rivet-web-app-chat-messages',
+              role: 'log',
+            },
+            messageNodes,
+          ),
+          ...(actionError
+            ? [createElement('div', { className: 'rivet-web-app-chat-error', role: 'alert', text: actionError })]
+            : []),
+          composer,
+        ]);
+        break;
+      }
       case 'output': {
         const { output } = renderModel;
         const children: Node[] = [
@@ -309,18 +421,37 @@ if (config && root) {
       throw new Error('Unsupported UI graph component.');
     }
 
-    return createElement('div', { className: 'rivet-web-app-component-frame' }, [content]);
+    return createElement(
+      'div',
+      {
+        className: 'rivet-web-app-component-frame',
+        'data-rivet-web-app-component-type': component.type,
+      },
+      [content],
+    );
   };
 
   const render = (): void => {
+    const activeElement = document.activeElement;
+    const focusedChatComponentId =
+      activeElement instanceof HTMLTextAreaElement && root.contains(activeElement)
+        ? activeElement.dataset.rivetChatComponentId
+        : undefined;
     const interaction = interactionController.getSnapshot();
     const surface = createElement('main', { className: 'rivet-web-app-surface' }, [
       ...config.uiGraph.components.map((component) => renderComponent(component, interaction)),
       ...renderErrors(),
     ]);
     root.replaceChildren(surface, ...renderRevisionMismatchModal());
+    root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-messages').forEach((messages) => {
+      messages.scrollTop = messages.scrollHeight;
+    });
     if (revisionMismatch) {
       root.querySelector<HTMLButtonElement>('.rivet-web-app-modal-button')?.focus();
+    } else if (focusedChatComponentId) {
+      [...root.querySelectorAll<HTMLTextAreaElement>('[data-rivet-chat-component-id]')]
+        .find((textarea) => textarea.dataset.rivetChatComponentId === focusedChatComponentId)
+        ?.focus();
     }
   };
 

@@ -466,6 +466,19 @@ describe('serialization compatibility', () => {
               type: 'gap',
               size: 'large',
             },
+            {
+              id: 'ui-component-3' as any,
+              type: 'chat',
+              placeholder: 'Ask anything...',
+              action: {
+                type: 'runGraph',
+                graphId: 'main-graph' as any,
+                userInputId: 'message',
+                historyInputId: 'history',
+                inputMappings: [{ inputKey: 'tone', stateKey: 'tone' }],
+                responseOutputId: 'response',
+              },
+            },
           ],
         },
       },
@@ -483,6 +496,10 @@ describe('serialization compatibility', () => {
     assert.deepEqual(
       deserialized.uiGraphs?.['ui-graph-1']?.components[1],
       project.uiGraphs?.['ui-graph-1']?.components[1],
+    );
+    assert.deepEqual(
+      deserialized.uiGraphs?.['ui-graph-1']?.components[2],
+      project.uiGraphs?.['ui-graph-1']?.components[2],
     );
   });
 

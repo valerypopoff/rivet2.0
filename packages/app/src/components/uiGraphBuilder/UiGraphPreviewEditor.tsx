@@ -65,6 +65,7 @@ const SortablePreviewComponentFrame: FC<RivetWebAppComponentFrameProps> = ({
     <div
       ref={setNodeRef}
       className={`ui-graph-preview-sortable-row${isDragging ? ' dragging' : ''}`}
+      data-rivet-web-app-component-type={component.type}
       data-ui-graph-component-id={component.id}
       style={style}
       onFocusCapture={onFocusCapture}
@@ -81,7 +82,9 @@ const SortablePreviewComponentFrame: FC<RivetWebAppComponentFrameProps> = ({
         ::
       </button>
       <div className="ui-graph-preview-sortable-body">
-        <div className={className}>{children}</div>
+        <div className={className} data-rivet-web-app-component-type={component.type}>
+          {children}
+        </div>
       </div>
     </div>
   );

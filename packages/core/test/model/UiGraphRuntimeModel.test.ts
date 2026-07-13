@@ -2,12 +2,18 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   applyUiGraphStatePatch,
+  createUiGraphChatSubmissionStatePatch,
   createUiGraphActionExecutionController,
   createUiGraphInteractionController,
   getUiGraphActionState,
+  getUiGraphChatDraftStateKey,
+  getUiGraphChatMessagesStateKey,
+  getUiGraphComponentActionState,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
   getUiGraphOutputRenderModel,
+  resolveUiGraphComponentActionInputs,
+  resolveUiGraphComponentActionOutputStatePatch,
   type UiGraphComponent,
   type UiGraph,
   type UiGraphActionRunContext,
@@ -28,6 +34,7 @@ describe('UiGraphRuntimeModel', () => {
       { id: componentId, label: 'Prompt', stateKey: 'prompt', type: 'input' },
       { id: componentId, label: '', stateKey: 'prompt', type: 'textarea' },
       { id: componentId, label: 'Run', action: { type: 'runGraph' }, type: 'button' },
+      { id: componentId, action: { type: 'runGraph' }, type: 'chat' },
       { id: componentId, label: 'Answer', stateKey: 'answer', renderAs: 'json', type: 'output' },
     ];
 
@@ -35,12 +42,69 @@ describe('UiGraphRuntimeModel', () => {
 
     assert.deepEqual(
       models.map((model) => model.type),
-      ['text', 'markdown', 'gap', 'input', 'textarea', 'button', 'output'],
+      ['text', 'markdown', 'gap', 'input', 'textarea', 'button', 'chat', 'output'],
     );
     assert.equal(models[2]?.type === 'gap' && models[2].size, 'large');
     assert.equal(models[3]?.type === 'input' && models[3].value, 'Hello');
     assert.equal(models[4]?.type === 'textarea' && models[4].label, 'prompt');
-    assert.equal(models[6]?.type === 'output' && models[6].output.renderedValue, '{\n  "value": 42\n}');
+    assert.equal(models[6]?.type === 'chat' && models[6].messages.length, 0);
+    assert.equal(models[7]?.type === 'output' && models[7].output.renderedValue, '{\n  "value": 42\n}');
+  });
+
+  it('submits Chat state as a current string, prior native history, and explicitly mapped page data', () => {
+    const chat = {
+      action: {
+        graphId: 'graph' as never,
+        historyInputId: 'history',
+        responseOutputId: 'response',
+        inputMappings: [{ inputKey: 'tone', stateKey: 'tone' }],
+        type: 'runGraph' as const,
+        userInputId: 'message',
+      },
+      id: 'chat' as UiComponentId,
+      type: 'chat' as const,
+    };
+    const draftKey = getUiGraphChatDraftStateKey(chat.id);
+    const messagesKey = getUiGraphChatMessagesStateKey(chat.id);
+    const initialState = {
+      [draftKey]: '  Hello  ',
+      [messagesKey]: [{ role: 'assistant', content: 'Welcome' }],
+      tone: 'Friendly',
+    };
+    const submission = createUiGraphChatSubmissionStatePatch(chat.id, initialState)!;
+    const submittedState = applyUiGraphStatePatch(initialState, submission);
+    const actionState = getUiGraphComponentActionState(chat, submittedState);
+
+    assert.deepEqual(submission, {
+      [draftKey]: '',
+      [messagesKey]: [
+        { role: 'assistant', content: 'Welcome' },
+        { role: 'user', content: 'Hello' },
+      ],
+    });
+    assert.deepEqual(actionState, { [messagesKey]: submission[messagesKey], tone: 'Friendly' });
+    assert.deepEqual(resolveUiGraphComponentActionInputs(chat, actionState), {
+      message: 'Hello',
+      history: {
+        type: 'chat-message[]',
+        value: [{ type: 'assistant', message: 'Welcome', function_call: undefined, function_calls: undefined }],
+      },
+      tone: 'Friendly',
+    });
+    assert.deepEqual(
+      resolveUiGraphComponentActionOutputStatePatch(
+        chat,
+        { response: { type: 'string', value: 'Hi there' } },
+        actionState,
+      ),
+      {
+        [messagesKey]: [
+          { role: 'assistant', content: 'Welcome' },
+          { role: 'user', content: 'Hello' },
+          { role: 'assistant', content: 'Hi there' },
+        ],
+      },
+    );
   });
 
   it('keeps empty output blocks empty until the action stores a value', () => {

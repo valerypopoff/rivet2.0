@@ -1,17 +1,23 @@
 import Portal from '@atlaskit/portal';
 import Select from '@atlaskit/select';
 import { type FC, type ReactNode, useState } from 'react';
+import PlusIcon from 'majesticons/line/plus-line.svg?react';
+import DeleteIcon from 'majesticons/line/delete-bin-line.svg?react';
 import {
+  type GraphBoundary,
   type GraphId,
   getGraphBoundary,
   getUiGraphActionInputBindings,
   getUiGraphActionOutputBindings,
+  initializeUiGraphChatActionBindings,
   newId,
   type Project,
   UI_GRAPH_GAP_SIZES,
   type UiComponentId,
   type UiGraphComponent,
   type UiGraphGapSize,
+  type UiGraphChatRunGraphAction,
+  type UiGraphInputBinding,
 } from '@valerypopoff/rivet2-core';
 import {
   getButtonInputRows,
@@ -92,6 +98,9 @@ const UiGraphSelect: FC<{
 function getDataKeySelectOptions(value: string, dataKeyOptions: readonly string[]): UiGraphSelectOption[] {
   const options = dataKeyOptions.map((key) => ({ label: key, value: key }));
 
+  if (!value) {
+    return options.length > 0 ? options : [{ isDisabled: true, label: 'No data keys available', value: '' }];
+  }
   if (dataKeyOptions.includes(value)) {
     return options;
   }
@@ -99,7 +108,7 @@ function getDataKeySelectOptions(value: string, dataKeyOptions: readonly string[
   return [
     {
       isDisabled: true,
-      label: value ? `${value} (missing)` : 'No data keys available',
+      label: `${value} (missing)`,
       value,
     },
     ...options,
@@ -301,12 +310,252 @@ const ButtonSettings: FC<UiGraphComponentSettingsProps> = ({
   );
 };
 
-const ButtonMappingField: FC<{ children: ReactNode; label: string; showLabel: boolean }> = ({
+type UiGraphChatComponent = Extract<UiGraphComponent, { type: 'chat' }>;
+
+const ChatSettings: FC<UiGraphComponentSettingsProps> = ({ component, dataKeyOptions, onUpdate, project }) => {
+  if (component.type !== 'chat') {
+    return null;
+  }
+
+  const boundary = getGraphBoundary(project, component.action.graphId);
+  const graphOptions = getUiGraphGraphOptions(project, component.action.graphId);
+  const hasSelectableGraph = graphOptions.some((option) => !option.isDisabled);
+  const additionalInputs = component.action.inputMappings ?? [];
+  const additionalInputIds = additionalInputs.map((binding) => binding.inputKey);
+  const updateAction = (updater: (action: UiGraphChatRunGraphAction) => void) =>
+    onUpdate((draft) => updater((draft as UiGraphChatComponent).action));
+
+  return (
+    <>
+      <label className="ui-graph-builder-field">
+        Graph to run
+        <UiGraphSelect
+          isDisabled={!hasSelectableGraph}
+          options={graphOptions}
+          placeholder={hasSelectableGraph ? 'Select graph...' : 'No graphs available'}
+          value={component.action.graphId}
+          onChange={(value) =>
+            onUpdate((draft) => {
+              const chat = draft as UiGraphChatComponent;
+              const graphId = value as GraphId;
+              chat.action = initializeUiGraphChatActionBindings(
+                { graphId, type: 'runGraph' },
+                getGraphBoundary(project, graphId),
+              );
+            })
+          }
+        />
+      </label>
+      <div className="ui-graph-builder-separator" />
+      <ChatPortField
+        label="User message input"
+        emptyLabel="The selected graph has no inputs"
+        ports={boundary?.inputs ?? []}
+        value={component.action.userInputId}
+        unavailableIds={new Set([component.action.historyInputId, ...additionalInputIds].filter(Boolean))}
+        onChange={(userInputId) =>
+          updateAction((action) => {
+            action.userInputId = userInputId;
+          })
+        }
+      />
+      <ChatPortField
+        label="Conversation history input"
+        emptyLabel="The selected graph has no inputs"
+        ports={boundary?.inputs ?? []}
+        value={component.action.historyInputId}
+        unavailableIds={new Set([component.action.userInputId, ...additionalInputIds].filter(Boolean))}
+        onChange={(historyInputId) =>
+          updateAction((action) => {
+            action.historyInputId = historyInputId;
+          })
+        }
+      />
+      <ChatPortField
+        label="Assistant response output"
+        emptyLabel="The selected graph has no outputs"
+        ports={boundary?.outputs ?? []}
+        value={component.action.responseOutputId}
+        onChange={(responseOutputId) =>
+          updateAction((action) => {
+            action.responseOutputId = responseOutputId;
+          })
+        }
+      />
+      <div className="ui-graph-builder-separator" />
+      <ChatAdditionalInputsEditor
+        boundary={boundary}
+        component={component}
+        dataKeyOptions={dataKeyOptions}
+        onUpdate={onUpdate}
+      />
+      <div className="ui-graph-builder-separator" />
+      <label className="ui-graph-builder-field">
+        Message placeholder
+        <input
+          value={component.placeholder ?? ''}
+          onChange={(event) =>
+            onUpdate((draft) => {
+              (draft as UiGraphChatComponent).placeholder = event.target.value;
+            })
+          }
+        />
+      </label>
+    </>
+  );
+};
+
+const ChatPortField: FC<{
+  emptyLabel: string;
+  label: string;
+  onChange(value: string): void;
+  ports: readonly { id: string }[];
+  unavailableIds?: ReadonlySet<string | undefined>;
+  value?: string;
+}> = ({ emptyLabel, label, onChange, ports, unavailableIds, value }) => (
+  <label className="ui-graph-builder-field">
+    {label}
+    <UiGraphSelect
+      isDisabled={ports.length === 0}
+      options={getGraphPortOptions(value, ports, unavailableIds)}
+      placeholder={ports.length > 0 ? `Select ${label.toLowerCase()}...` : emptyLabel}
+      value={value}
+      onChange={onChange}
+    />
+  </label>
+);
+
+function getGraphPortOptions(
+  value: string | undefined,
+  ports: readonly { id: string }[],
+  unavailableIds: ReadonlySet<string | undefined> = new Set(),
+): UiGraphSelectOption[] {
+  const options = ports.map(({ id }) => ({ isDisabled: id !== value && unavailableIds.has(id), label: id, value: id }));
+  if (!value || options.some((option) => option.value === value)) {
+    return options;
+  }
+  return [{ isDisabled: true, label: `${value} (missing)`, value }, ...options];
+}
+
+const ChatAdditionalInputsEditor: FC<{
+  boundary: ReturnType<typeof getGraphBoundary>;
+  component: UiGraphChatComponent;
+  dataKeyOptions: readonly string[];
+  onUpdate(updater: (component: UiGraphComponent) => void): void;
+}> = ({ boundary, component, dataKeyOptions, onUpdate }) => {
+  const rows = component.action.inputMappings ?? [];
+  const nextBinding = createChatAdditionalInputBinding(component.action, boundary, dataKeyOptions);
+
+  return (
+    <div className="ui-graph-action-section">
+      {rows.map((row, index) => {
+        const unavailableIds = new Set([
+          component.action.userInputId,
+          component.action.historyInputId,
+          ...rows.filter((_, rowIndex) => rowIndex !== index).map((binding) => binding.inputKey),
+        ]);
+        const showLabels = index === 0;
+
+        return (
+          <div className="ui-graph-chat-input-row" key={`chat-input-${index}`}>
+            <ActionMappingField label="Graph input ID" showLabel={showLabels}>
+              <UiGraphSelect
+                ariaLabel={showLabels ? undefined : `Graph input ID for additional input ${index + 1}`}
+                isDisabled={!boundary}
+                options={getGraphPortOptions(row.inputKey, boundary?.inputs ?? [], unavailableIds)}
+                placeholder="Select graph input..."
+                value={row.inputKey}
+                onChange={(inputKey) =>
+                  onUpdate((draft) => {
+                    const chat = draft as UiGraphChatComponent;
+                    chat.action.inputMappings = (chat.action.inputMappings ?? []).map((binding, rowIndex) =>
+                      rowIndex === index ? { ...binding, inputKey } : binding,
+                    );
+                  })
+                }
+              />
+            </ActionMappingField>
+            <ActionMappingField label="Data key to send" showLabel={showLabels}>
+              <UiGraphSelect
+                ariaLabel={showLabels ? undefined : `Data key to send for additional input ${index + 1}`}
+                isDisabled={dataKeyOptions.length === 0}
+                options={getDataKeySelectOptions(row.stateKey, dataKeyOptions)}
+                placeholder="Select data key..."
+                value={row.stateKey}
+                onChange={(stateKey) =>
+                  onUpdate((draft) => {
+                    const chat = draft as UiGraphChatComponent;
+                    chat.action.inputMappings = (chat.action.inputMappings ?? []).map((binding, rowIndex) =>
+                      rowIndex === index ? { ...binding, stateKey } : binding,
+                    );
+                  })
+                }
+              />
+            </ActionMappingField>
+            <button
+              type="button"
+              className="ui-graph-chat-input-remove"
+              aria-label={`Remove additional input ${row.inputKey || index + 1}`}
+              title="Remove additional input"
+              onClick={() =>
+                onUpdate((draft) => {
+                  const action = (draft as UiGraphChatComponent).action;
+                  const nextRows = (action.inputMappings ?? []).filter((_, rowIndex) => rowIndex !== index);
+                  if (nextRows.length > 0) {
+                    action.inputMappings = nextRows;
+                  } else {
+                    delete action.inputMappings;
+                  }
+                })
+              }
+            >
+              <DeleteIcon aria-hidden="true" />
+            </button>
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        className="ui-graph-builder-button secondary ui-graph-chat-add-input"
+        title="Add another graph input mapping"
+        onClick={() =>
+          onUpdate((draft) => {
+            const action = (draft as UiGraphChatComponent).action;
+            action.inputMappings = [...(action.inputMappings ?? []), nextBinding];
+          })
+        }
+      >
+        <PlusIcon aria-hidden="true" />
+        <span>Add input</span>
+      </button>
+    </div>
+  );
+};
+
+export function createChatAdditionalInputBinding(
+  action: UiGraphChatRunGraphAction,
+  boundary: GraphBoundary | undefined,
+  dataKeyOptions: readonly string[],
+): UiGraphInputBinding {
+  const reservedInputIds = new Set([
+    action.userInputId,
+    action.historyInputId,
+    ...(action.inputMappings ?? []).map((binding) => binding.inputKey),
+  ]);
+  const inputKey = boundary?.inputs.find((input) => !reservedInputIds.has(input.id))?.id ?? '';
+  return { inputKey, stateKey: dataKeyOptions[0] ?? '' };
+}
+
+function ActionMappingField({
   children,
   label,
   showLabel,
-}) =>
-  showLabel ? (
+}: {
+  children: ReactNode;
+  label: string;
+  showLabel: boolean;
+}): ReactNode {
+  return showLabel ? (
     <label className="ui-graph-builder-field">
       {label}
       {children}
@@ -314,6 +563,7 @@ const ButtonMappingField: FC<{ children: ReactNode; label: string; showLabel: bo
   ) : (
     <div className="ui-graph-builder-field">{children}</div>
   );
+}
 
 const OutputSettings: FC<UiGraphComponentSettingsProps> = ({ component, dataKeyOptions, onUpdate }) => {
   if (component.type !== 'output') {
@@ -382,7 +632,7 @@ const ButtonInputMappingsEditor: FC<{
 
         return (
           <div className="ui-graph-action-mapping-row" key={`input-${index}`}>
-            <ButtonMappingField label="Graph input ID" showLabel={showLabels}>
+            <ActionMappingField label="Graph input ID" showLabel={showLabels}>
               <input
                 aria-label={showLabels ? undefined : `Graph input ID: ${row.inputKey}`}
                 className="ui-graph-action-port-id"
@@ -391,8 +641,8 @@ const ButtonInputMappingsEditor: FC<{
                 disabled
                 title={row.inputKey}
               />
-            </ButtonMappingField>
-            <ButtonMappingField label="Data key to send" showLabel={showLabels}>
+            </ActionMappingField>
+            <ActionMappingField label="Data key to send" showLabel={showLabels}>
               <UiGraphSelect
                 ariaLabel={showLabels ? undefined : `Data key to send for ${row.inputKey}`}
                 isDisabled={dataKeyOptions.length === 0}
@@ -407,7 +657,7 @@ const ButtonInputMappingsEditor: FC<{
                   })
                 }
               />
-            </ButtonMappingField>
+            </ActionMappingField>
           </div>
         );
       })}
@@ -432,7 +682,7 @@ const ButtonOutputMappingsEditor: FC<{
         return (
           <div className="ui-graph-action-mapping-block" key={`output-${index}`}>
             <div className="ui-graph-action-mapping-row">
-              <ButtonMappingField label="Graph output ID" showLabel={showLabels}>
+              <ActionMappingField label="Graph output ID" showLabel={showLabels}>
                 <input
                   aria-label={showLabels ? undefined : `Graph output ID: ${row.outputKey ?? ''}`}
                   className="ui-graph-action-port-id"
@@ -441,8 +691,8 @@ const ButtonOutputMappingsEditor: FC<{
                   disabled
                   title={row.outputKey}
                 />
-              </ButtonMappingField>
-              <ButtonMappingField label="Data key to save to" showLabel={showLabels}>
+              </ActionMappingField>
+              <ActionMappingField label="Data key to save to" showLabel={showLabels}>
                 <input
                   aria-label={showLabels ? undefined : `Data key to save for ${row.outputKey ?? ''}`}
                   value={row.stateKey}
@@ -455,7 +705,7 @@ const ButtonOutputMappingsEditor: FC<{
                     })
                   }
                 />
-              </ButtonMappingField>
+              </ActionMappingField>
             </div>
             {isDataKeyAlreadyUsed(row.stateKey, { componentId: component.id, outputIndex: index }) && (
               <div className="ui-graph-data-key-warning">This data key is already used.</div>
@@ -532,6 +782,23 @@ export const UI_GRAPH_COMPONENT_DESCRIPTORS = {
       };
     },
     label: 'Button',
+  },
+  chat: {
+    Settings: ChatSettings,
+    create: ({ graphId, id }) => ({
+      action: { graphId, type: 'runGraph' },
+      id,
+      placeholder: 'Message...',
+      type: 'chat',
+    }),
+    getDataKeys: (component) =>
+      component.type === 'chat'
+        ? {
+            reads: (component.action.inputMappings ?? []).map((binding) => binding.stateKey).filter(Boolean),
+            writes: [],
+          }
+        : noDataKeys(),
+    label: 'Chat',
   },
   output: {
     Settings: OutputSettings,

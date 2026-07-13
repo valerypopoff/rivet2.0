@@ -108,18 +108,22 @@ empty, HTML, or other non-JSON response is rendered only as its HTTP status mess
 parser error. A successful non-JSON response is treated as an invalid action
 response.
 
-Each button action has a narrow state boundary. The React preview and generated
-browser client project UI state to only the data keys named by that button's graph
-input bindings before crossing an action boundary. `runRivetWebAppAction(...)`
-repeats the projection for direct host calls, so lifecycle hooks and
-`createProcessorOptions` receive only those action-relevant keys. Unrelated form
-values and prior output state remain local to the web app.
+Each workflow-bound component has a narrow state boundary. The React preview and
+generated browser client project UI state for a Button to only the data keys named
+by that button's graph input bindings. Chat projects its own validated user/assistant
+conversation and any data keys named by its additional input mappings, excluding its
+draft and every unrelated app key. Action input resolution then sends the latest user
+turn separately and converts only earlier turns into the native history Data Value.
+`runRivetWebAppAction(...)` repeats the projection for direct host calls, so
+lifecycle hooks and `createProcessorOptions` receive only action-relevant state.
+Unrelated form values and prior output state remain local to the web app.
 
-Button execution is request-scoped rather than represented by one global pending
-button. Different buttons can remain active independently, while a second click on
-the same pending button is ignored. If concurrent actions write the same UI data
-key, the latest-started action owns that key; disjoint state patches still apply,
-and a newer direct form edit prevents an older action from overwriting it.
+Action execution is request-scoped rather than represented by one global pending
+control. Different Button and Chat components can remain active independently,
+while a second submission to the same pending component is ignored. If concurrent
+Button actions write the same UI data key, the latest-started action owns that key;
+disjoint state patches still apply, and a newer direct form edit prevents an older
+action from overwriting it. Chat message keys are component-specific.
 
 The generated client aborts active fetches when the page unloads and aborts sibling
 requests after a revision mismatch. `runRivetWebAppAction(...)` prefers an explicit

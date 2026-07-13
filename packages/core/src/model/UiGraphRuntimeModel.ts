@@ -1,9 +1,13 @@
 import {
-  getUiGraphActionState,
-  getUiGraphActionOutputBindings,
+  getUiGraphChatDraftStateKey,
+  getUiGraphChatMessages,
+  getUiGraphComponentActionOutputStateKeys,
+  getUiGraphComponentActionState,
   getUiGraphInitialState,
   type UiComponentId,
   type UiGraph,
+  type UiGraphActionComponent,
+  type UiGraphChatMessage,
   type UiGraphComponent,
   type UiGraphGapSize,
   type UiGraphOutputRenderMode,
@@ -44,6 +48,12 @@ export type UiGraphComponentRenderModel =
       type: 'button';
     }
   | {
+      component: Extract<UiGraphComponent, { type: 'chat' }>;
+      draft: string;
+      messages: UiGraphChatMessage[];
+      type: 'chat';
+    }
+  | {
       component: Extract<UiGraphComponent, { type: 'output' }>;
       label: string;
       output: UiGraphOutputRenderModel;
@@ -56,7 +66,7 @@ export type UiGraphActionExecution = Readonly<{
 }>;
 
 export type UiGraphActionExecutionController = {
-  begin(component: Extract<UiGraphComponent, { type: 'button' }>): UiGraphActionExecution | undefined;
+  begin(component: UiGraphActionComponent): UiGraphActionExecution | undefined;
   finish(execution: UiGraphActionExecution): boolean;
   isCurrent(execution: UiGraphActionExecution): boolean;
   isRunning(componentId: UiComponentId): boolean;
@@ -92,10 +102,11 @@ export type UiGraphActionRunner = (context: UiGraphActionRunContext) => Promise<
 export type UiGraphInteractionController = {
   abortActions(): void;
   getSnapshot(): UiGraphInteractionSnapshot;
-  runAction(component: Extract<UiGraphComponent, { type: 'button' }>, runner: UiGraphActionRunner): Promise<void>;
+  runAction(component: UiGraphActionComponent, runner: UiGraphActionRunner): Promise<void>;
   setUiGraph(uiGraph: UiGraph): void;
   subscribe(listener: (change: UiGraphInteractionChange) => void): () => void;
   updateState(stateKey: string, value: unknown): void;
+  updateStatePatch(statePatch: Record<string, unknown>): void;
 };
 
 export type UiGraphInteractionControllerOptions = {
@@ -125,11 +136,8 @@ export function createUiGraphActionExecutionController(): UiGraphActionExecution
       const execution = { componentId: component.id, id: ++nextVersion };
       activeExecutionByComponent.set(component.id, execution.id);
 
-      for (const binding of getUiGraphActionOutputBindings(component.action)) {
-        const stateKey = binding.stateKey.trim();
-        if (stateKey) {
-          latestWriterByStateKey.set(stateKey, execution.id);
-        }
+      for (const stateKey of getUiGraphComponentActionOutputStateKeys(component)) {
+        latestWriterByStateKey.set(stateKey, execution.id);
       }
 
       return execution;
@@ -257,7 +265,7 @@ export function createUiGraphInteractionController(
             abortMatchingActions((_activeAction, executionId) => executionId !== execution.id, true),
           componentId: component.id,
           signal: abortController.signal,
-          state: getUiGraphActionState(component.action, state),
+          state: getUiGraphComponentActionState(component, state),
         });
         if (!actionController.isCurrent(execution)) {
           return;
@@ -292,7 +300,9 @@ export function createUiGraphInteractionController(
       }
 
       const actionComponentIds = new Set(
-        nextUiGraph.components.filter((component) => component.type === 'button').map((component) => component.id),
+        nextUiGraph.components
+          .filter((component) => component.type === 'button' || component.type === 'chat')
+          .map((component) => component.id),
       );
       let changed = abortMatchingActions(({ execution }) => !actionComponentIds.has(execution.componentId), false);
       const remainingErrors = Object.fromEntries(
@@ -313,6 +323,13 @@ export function createUiGraphInteractionController(
     updateState(stateKey, value) {
       actionController.noteStateWrite(stateKey);
       state = { ...state, [stateKey]: value };
+      publish('state');
+    },
+    updateStatePatch(statePatch) {
+      for (const stateKey of Object.keys(statePatch)) {
+        actionController.noteStateWrite(stateKey);
+      }
+      state = applyUiGraphStatePatch(state, statePatch);
       publish('state');
     },
   };
@@ -339,6 +356,13 @@ export function getUiGraphComponentRenderModel(
       };
     case 'button':
       return { component, label: component.label, type: 'button' };
+    case 'chat':
+      return {
+        component,
+        draft: `${state[getUiGraphChatDraftStateKey(component.id)] ?? ''}`,
+        messages: getUiGraphChatMessages(component.id, state),
+        type: 'chat',
+      };
     case 'output':
       return {
         component,

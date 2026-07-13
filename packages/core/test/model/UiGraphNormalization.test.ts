@@ -104,6 +104,8 @@ void describe('UI graph normalization', () => {
           { id: 'textarea-state', label: 'Input', type: 'textarea' },
           { action: { type: 'runGraph' }, id: 'button-label', type: 'button' },
           { id: 'button-action', label: 'Run', type: 'button' },
+          { id: 'chat-action', type: 'chat' },
+          { action: { type: 'request' }, id: 'chat-type', type: 'chat' },
           { id: 'output', type: 'output' },
         ],
         id: 'required-fields',
@@ -122,7 +124,9 @@ void describe('UI graph normalization', () => {
         'UI graph "required-fields" component at index 5.stateKey',
         'UI graph "required-fields" component at index 6.label',
         'UI graph "required-fields" component at index 7.action',
-        'UI graph "required-fields" component at index 8.stateKey',
+        'UI graph "required-fields" component at index 8.action',
+        'UI graph "required-fields" component at index 9.action.type',
+        'UI graph "required-fields" component at index 10.stateKey',
       ],
     );
   });
@@ -191,6 +195,14 @@ void describe('UI graph normalization', () => {
             label: 'Run',
             type: 'button',
           },
+          {
+            action: {
+              inputMappings: [{ stateKey: 'tone' }],
+              type: 'runGraph',
+            },
+            id: 'chat',
+            type: 'chat',
+          },
         ],
         id: 'broken-action',
         name: 'Broken action',
@@ -205,6 +217,7 @@ void describe('UI graph normalization', () => {
         'UI graph "broken-action" component at index 0.action.inputs["state"].key',
         'UI graph "broken-action" component at index 0.action.inputs["unsupported"].type',
         'UI graph "broken-action" component at index 0.action.outputs at index 0.stateKey',
+        'UI graph "broken-action" component at index 1.action.inputMappings at index 0.inputKey',
       ],
     );
   });
@@ -353,6 +366,19 @@ function makeUiGraph(): UiGraph {
         id: 'button' as never,
         label: 'Run',
         type: 'button',
+      },
+      {
+        action: {
+          graphId: 'graph' as GraphId,
+          historyInputId: 'history',
+          inputMappings: [{ inputKey: 'tone', stateKey: 'tone' }],
+          responseOutputId: 'answer',
+          type: 'runGraph',
+          userInputId: 'message',
+        },
+        id: 'chat' as never,
+        placeholder: 'Message...',
+        type: 'chat',
       },
       { id: 'output' as never, label: 'Result', renderAs: 'markdown', stateKey: 'result', type: 'output' },
     ],

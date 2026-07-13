@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client';
 import { act, Simulate } from 'react-dom/test-utils';
 import {
   getUiGraphInitialState,
+  getUiGraphChatMessagesStateKey,
   RIVET_MARKDOWN_SANITIZER_POLICY,
   type UiComponentId,
   type UiGraph,
@@ -101,6 +102,99 @@ test('React and hosted renderers keep the same component and action behavior', a
   }
 });
 
+test('React and hosted Chat renderers submit scoped conversation and mapped page state', async () => {
+  const hostedClientScript = await loadGeneratedHostedClient();
+  const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
+  const hostedDom = new JSDOM('<div id="app"></div>', { runScripts: 'outside-only', url: 'https://example.test/app' });
+  const restoreGlobals = installDomGlobals(reactDom);
+  const uiGraph = makeChatUiGraph();
+  const reactAction = deferred<RivetWebAppActionResult>();
+  const hostedAction = deferred<Response>();
+  let reactActionState: Record<string, unknown> | undefined;
+  let hostedActionState: Record<string, unknown> | undefined;
+  const reactRootElement = reactDom.window.document.getElementById('root')!;
+  const reactRoot = createRoot(reactRootElement);
+
+  try {
+    await act(async () => {
+      reactRoot.render(
+        <RivetWebAppRenderer
+          uiGraph={uiGraph}
+          onRunAction={(_componentId, state) => {
+            reactActionState = state;
+            return reactAction.promise;
+          }}
+        />,
+      );
+    });
+    configureHostedRenderer(hostedDom, hostedClientScript, uiGraph, (state) => {
+      hostedActionState = state;
+      return hostedAction.promise;
+    });
+
+    await act(async () => {
+      const textarea = reactRootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!;
+      Object.getOwnPropertyDescriptor(reactDom.window.HTMLTextAreaElement.prototype, 'value')?.set?.call(
+        textarea,
+        'Hello',
+      );
+      Simulate.change(textarea);
+    });
+    setTextareaValue(hostedDom.window.document, 'Hello', hostedDom);
+    focusReactControl(reactRootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!);
+    hostedDom.window.document.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')?.focus();
+    await act(async () => reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.click());
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.click();
+
+    const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
+    assert.deepEqual(reactActionState, {
+      [messagesKey]: [{ role: 'user', content: 'Hello' }],
+      tone: 'Friendly',
+    });
+    assert.deepEqual(hostedActionState, reactActionState);
+    assert.deepEqual(readChatState(reactRootElement), readChatState(hostedDom.window.document));
+    assert.deepEqual(readChatState(reactRootElement), {
+      disabled: true,
+      messages: ['Hello', ''],
+      status: 'Responding',
+    });
+    assert.equal(isChatComposerFocused(reactDom.window.document), true);
+    assert.equal(isChatComposerFocused(hostedDom.window.document), true);
+
+    const statePatch = {
+      [messagesKey]: [
+        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: 'Hi!' },
+      ],
+    };
+    await act(async () => {
+      reactAction.resolve({ outputs: {}, statePatch });
+      await reactAction.promise;
+    });
+    hostedAction.resolve({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ outputs: {}, statePatch }),
+    } as Response);
+    await hostedAction.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(readChatState(reactRootElement), readChatState(hostedDom.window.document));
+    assert.deepEqual(readChatState(reactRootElement), {
+      disabled: true,
+      messages: ['Hello', 'Hi!'],
+      status: 'Ready',
+    });
+    assert.equal(isChatComposerFocused(reactDom.window.document), true);
+    assert.equal(isChatComposerFocused(hostedDom.window.document), true);
+  } finally {
+    await act(async () => reactRoot.unmount());
+    restoreGlobals();
+    reactDom.window.close();
+    hostedDom.window.close();
+  }
+});
+
 function configureHostedRenderer(
   dom: JSDOM,
   clientScript: string,
@@ -139,6 +233,7 @@ function readRenderedComponents(root: ParentNode): unknown[] {
     return {
       ariaHidden: content.getAttribute('aria-hidden'),
       className: content.className,
+      componentType: frame.dataset.rivetWebAppComponentType,
       control: control
         ? { placeholder: control.placeholder, tagName: control.tagName.toLowerCase(), value: control.value }
         : undefined,
@@ -156,6 +251,36 @@ function readRenderedComponents(root: ParentNode): unknown[] {
 function setInputValue(input: HTMLInputElement, value: string, dom: JSDOM): void {
   Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')?.set?.call(input, value);
   input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+}
+
+function setTextareaValue(root: ParentNode, value: string, dom: JSDOM): void {
+  const textarea = root.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!;
+  Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')?.set?.call(textarea, value);
+  textarea.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+}
+
+function readChatState(root: ParentNode): { disabled: boolean; messages: string[]; status: string | null } {
+  return {
+    disabled: root.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.disabled ?? false,
+    messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map(
+      (message) => message.textContent ?? '',
+    ),
+    status: root.querySelector('.rivet-web-app-chat-status')?.textContent ?? null,
+  };
+}
+
+function isChatComposerFocused(document: Document): boolean {
+  return document.activeElement?.matches('.rivet-web-app-chat-composer textarea') ?? false;
+}
+
+function focusReactControl(element: HTMLElement): void {
+  const legacyFocusElement = element as HTMLElement & {
+    attachEvent?: () => void;
+    detachEvent?: () => void;
+  };
+  legacyFocusElement.attachEvent ??= () => undefined;
+  legacyFocusElement.detachEvent ??= () => undefined;
+  element.focus();
 }
 
 function readButtonStates(root: ParentNode): Array<{ disabled: boolean; text: string | null }> {
@@ -190,6 +315,34 @@ function makeParityUiGraph(): UiGraph {
     ],
     id: 'parity-app' as UiGraphId,
     name: 'Parity app',
+  };
+}
+
+function makeChatUiGraph(): UiGraph {
+  return {
+    components: [
+      {
+        defaultValue: 'Friendly',
+        id: 'tone' as UiComponentId,
+        label: 'Tone',
+        stateKey: 'tone',
+        type: 'input',
+      },
+      {
+        action: {
+          graphId: 'graph' as never,
+          historyInputId: 'history',
+          inputMappings: [{ inputKey: 'tone', stateKey: 'tone' }],
+          responseOutputId: 'response',
+          type: 'runGraph',
+          userInputId: 'message',
+        },
+        id: 'chat' as UiComponentId,
+        type: 'chat',
+      },
+    ],
+    id: 'chat-app' as UiGraphId,
+    name: 'Chat app',
   };
 }
 

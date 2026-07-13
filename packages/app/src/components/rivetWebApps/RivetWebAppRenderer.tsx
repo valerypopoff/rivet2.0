@@ -7,6 +7,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -14,9 +15,12 @@ import {
   type DataValue,
   type UiComponentId,
   type UiGraph,
+  type UiGraphActionComponent,
   type UiGraphComponent,
   RIVET_WEB_APP_RENDERER_CSS,
   createUiGraphInteractionController,
+  createUiGraphChatSubmissionStatePatch,
+  getUiGraphChatDraftStateKey,
   getUiGraphComponentRenderModel,
   normalizeUiGraph,
 } from '@valerypopoff/rivet2-core';
@@ -79,7 +83,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   }, [interactionController]);
 
   const runAction = useCallback(
-    (component: Extract<UiGraphComponent, { type: 'button' }>) =>
+    (component: UiGraphActionComponent) =>
       interactionController.runAction(component, ({ componentId, signal, state }) =>
         onRunAction(componentId, state, signal),
       ),
@@ -99,11 +103,13 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             children: (
               <RivetWebAppComponent
                 component={component}
+                actionError={interaction.actionErrors[component.id]}
                 isRunning={interaction.runningComponentIds.has(component.id)}
                 uiGraphName={normalizedUiGraph.name}
                 state={interaction.state}
                 onRunAction={runAction}
                 onStateChange={interactionController.updateState}
+                onStatePatch={interactionController.updateStatePatch}
               />
             ),
           };
@@ -114,6 +120,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             <div
               key={component.id}
               className={frameProps.className}
+              data-rivet-web-app-component-type={component.type}
               onFocusCapture={frameProps.onFocusCapture}
               onPointerDownCapture={frameProps.onPointerDownCapture}
             >
@@ -121,24 +128,30 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             </div>
           );
         })}
-        {Object.entries(interaction.actionErrors).map(([componentId, message]) => (
-          <div key={componentId} className="rivet-web-app-error">
-            {message}
-          </div>
-        ))}
+        {Object.entries(interaction.actionErrors).flatMap(([componentId, message]) =>
+          normalizedUiGraph.components.some((component) => component.id === componentId && component.type === 'chat')
+            ? []
+            : [
+                <div key={componentId} className="rivet-web-app-error">
+                  {message}
+                </div>,
+              ],
+        )}
       </main>
     </div>
   );
 };
 
 const RivetWebAppComponent: FC<{
+  actionError?: string;
   component: UiGraphComponent;
   isRunning: boolean;
   uiGraphName: string;
   state: Readonly<Record<string, unknown>>;
-  onRunAction(component: Extract<UiGraphComponent, { type: 'button' }>): Promise<void> | void;
+  onRunAction(component: UiGraphActionComponent): Promise<void> | void;
   onStateChange(key: string, value: unknown): void;
-}> = ({ component, isRunning, onRunAction, onStateChange, state, uiGraphName }) => {
+  onStatePatch(patch: Record<string, unknown>): void;
+}> = ({ actionError, component, isRunning, onRunAction, onStateChange, onStatePatch, state, uiGraphName }) => {
   const renderModel = getUiGraphComponentRenderModel(component, state);
   const markdownText =
     renderModel.type === 'markdown'
@@ -189,6 +202,18 @@ const RivetWebAppComponent: FC<{
           {isRunning ? 'Running...' : renderModel.label}
         </button>
       );
+    case 'chat':
+      return (
+        <RivetWebAppChat
+          actionError={actionError}
+          isRunning={isRunning}
+          renderModel={renderModel}
+          onRunAction={onRunAction}
+          onStateChange={onStateChange}
+          onStatePatch={onStatePatch}
+          state={state}
+        />
+      );
     case 'output': {
       const { output } = renderModel;
       const jsonDownloadValue = output.jsonDownloadValue;
@@ -236,4 +261,106 @@ const RivetWebAppComponent: FC<{
       );
     }
   }
+};
+
+const RivetWebAppChat: FC<{
+  actionError?: string;
+  isRunning: boolean;
+  onRunAction(component: Extract<UiGraphComponent, { type: 'chat' }>): Promise<void> | void;
+  onStateChange(key: string, value: unknown): void;
+  onStatePatch(patch: Record<string, unknown>): void;
+  renderModel: Extract<ReturnType<typeof getUiGraphComponentRenderModel>, { type: 'chat' }>;
+  state: Readonly<Record<string, unknown>>;
+}> = ({ actionError, isRunning, onRunAction, onStateChange, onStatePatch, renderModel, state }) => {
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const { component, draft, messages } = renderModel;
+
+  useEffect(() => {
+    const messagesElement = messagesRef.current;
+    if (messagesElement) {
+      messagesElement.scrollTop = messagesElement.scrollHeight;
+    }
+  }, [isRunning, messages.length]);
+
+  const submit = () => {
+    const statePatch = createUiGraphChatSubmissionStatePatch(component.id, state);
+    if (!statePatch || isRunning) {
+      return;
+    }
+    onStatePatch(statePatch);
+    void onRunAction(component);
+  };
+
+  return (
+    <section className="rivet-web-app-chat">
+      <div className="rivet-web-app-chat-header">
+        <span>Chat</span>
+        <span className="rivet-web-app-chat-status">{isRunning ? 'Responding' : 'Ready'}</span>
+      </div>
+      <div
+        ref={messagesRef}
+        className="rivet-web-app-chat-messages"
+        aria-live="polite"
+        aria-relevant="additions text"
+        role="log"
+      >
+        {messages.length === 0 && (
+          <div className="rivet-web-app-chat-empty">
+            <strong>Start a conversation</strong>
+            <span>Send a message to run the connected Rivet graph.</span>
+          </div>
+        )}
+        {messages.map((message, index) => (
+          <div
+            key={`${index}-${message.role}`}
+            className={`rivet-web-app-chat-message rivet-web-app-chat-message-${message.role}`}
+          >
+            {message.content}
+          </div>
+        ))}
+        {isRunning && (
+          <div className="rivet-web-app-chat-message rivet-web-app-chat-message-assistant rivet-web-app-chat-thinking">
+            <span />
+            <span />
+            <span />
+          </div>
+        )}
+      </div>
+      {actionError && (
+        <div className="rivet-web-app-chat-error" role="alert">
+          {actionError}
+        </div>
+      )}
+      <form
+        className="rivet-web-app-chat-composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <textarea
+          aria-label="Message"
+          placeholder={component.placeholder || 'Message...'}
+          rows={1}
+          value={draft}
+          onChange={(event) => onStateChange(getUiGraphChatDraftStateKey(component.id), event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <button
+          type="submit"
+          className="rivet-web-app-chat-send"
+          aria-label="Send message"
+          title="Send message"
+          disabled={isRunning || !draft.trim()}
+        >
+          &uarr;
+        </button>
+      </form>
+    </section>
+  );
 };

@@ -4,19 +4,19 @@ import {
   type Project,
   type UiComponentId,
   type UiGraph,
-  type UiGraphComponent,
   type UiGraphId,
-  formatUiGraphButtonBindingIssues,
+  formatUiGraphActionBindingIssues,
   getUiGraphActionComponent,
-  getUiGraphActionState,
+  getUiGraphComponentActionState,
   getUiGraphInitialState,
   jsonValueToDataValue,
   normalizeProjectUiGraphs,
   normalizeUiGraph,
   RIVET_MARKDOWN_SANITIZER_POLICY,
-  resolveUiGraphActionOutputStatePatch,
-  resolveUiGraphActionInputs,
-  validateUiGraphButtonBindings,
+  resolveUiGraphComponentActionInputs,
+  resolveUiGraphComponentActionOutputStatePatch,
+  type UiGraphActionComponent,
+  validateUiGraphActionBindings,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
 import {
@@ -30,7 +30,7 @@ export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'grap
 
 export type RivetWebAppActionContext = {
   actionInput: Record<string, unknown>;
-  component: Extract<UiGraphComponent, { type: 'button' }>;
+  component: UiGraphActionComponent;
   componentId: UiComponentId;
   request: Request;
   revisionKey?: string;
@@ -242,8 +242,8 @@ export async function runRivetWebAppAction(
     throw new Error('This UI action is not connected to a graph.');
   }
 
-  const actionState = getUiGraphActionState(component.action, receivedState);
-  const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
+  const actionState = getUiGraphComponentActionState(component, receivedState);
+  const rawInputs = resolveUiGraphComponentActionInputs(component, actionState);
   const actionContext: RivetWebAppActionContext = {
     actionInput: rawInputs,
     component,
@@ -255,12 +255,12 @@ export async function runRivetWebAppAction(
   };
 
   try {
-    const bindingErrors = validateUiGraphButtonBindings(project, normalizedUiGraph, resolvedComponentId);
+    const bindingErrors = validateUiGraphActionBindings(project, normalizedUiGraph, resolvedComponentId);
     if (bindingErrors.length > 0) {
       throw new RivetWebAppActionHttpError(
-        `Invalid web app button bindings: ${formatUiGraphButtonBindingIssues(bindingErrors)}`,
+        `Invalid web app ${component.type} bindings: ${formatUiGraphActionBindingIssues(bindingErrors)}`,
         400,
-        'invalid_button_bindings',
+        component.type === 'button' ? 'invalid_button_bindings' : 'invalid_chat_bindings',
       );
     }
 
@@ -296,7 +296,7 @@ export async function runRivetWebAppAction(
     }
     const result = {
       outputs,
-      statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
+      statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, actionState),
     };
 
     await callActionHook(onActionFinish, { ...actionContext, ...result });

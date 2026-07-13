@@ -7,6 +7,7 @@ import { JSDOM, ResourceLoader } from 'jsdom';
 import {
   createRivetWebAppHandler,
   getRivetWebAppAssetManifest,
+  getUiGraphChatMessagesStateKey,
   type DataValue,
   type GraphId,
   type NodeGraph,
@@ -596,6 +597,24 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(html, /rivet-web-app-surface/);
     assert.match(html, /rivet-web-app-field/);
     assert.match(html, /rivet-web-app-card rivet-web-app-output/);
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-surface\s*\{[\s\S]*display: flex;/);
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /--rivet-web-app-chat-min-height: clamp\(360px, calc\(100vh - 136px\), 540px\);/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /--rivet-web-app-chat-min-height: clamp\(320px, calc\(100vh - 64px\), 540px\);/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-component-frame\[data-rivet-web-app-component-type='chat'\][\s\S]*flex: 1 0/,
+    );
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-chat-messages\s*\{[\s\S]*overflow-y: auto;/);
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-messages > :first-child\s*\{[\s\S]*margin-top: auto;/,
+    );
     assert.match(html, /\.markdown-body \{/);
     assert.ok(html.includes(RIVET_WEB_APP_DOCUMENT_CSS));
     assert.ok(html.includes(RIVET_WEB_APP_RENDERER_CSS));
@@ -868,6 +887,70 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.deepEqual(result.outputs.value, { type: 'string', value: 'hello' });
     assert.deepEqual(result.statePatch, { result: 'hello' });
+  });
+
+  void it('runs Chat with the current message, prior native history, and mapped page data', async () => {
+    const project = makeProject();
+    project.graphs[graphId]!.nodes.push({
+      id: 'history-node' as any,
+      type: 'graphInput',
+      title: 'History',
+      visualData: { x: 0, y: 120 },
+      data: { dataType: 'chat-message[]', id: 'history' },
+    } as any);
+    project.graphs[graphId]!.nodes.push({
+      id: 'tone-node' as any,
+      type: 'graphInput',
+      title: 'Tone',
+      visualData: { x: 0, y: 240 },
+      data: { dataType: 'string', id: 'tone' },
+    } as any);
+    const uiGraph = project.uiGraphs!['ui-graph' as UiGraphId]!;
+    uiGraph.components = [
+      {
+        action: {
+          graphId,
+          historyInputId: 'history',
+          inputMappings: [{ inputKey: 'tone', stateKey: 'tone' }],
+          responseOutputId: 'value',
+          type: 'runGraph',
+          userInputId: 'input',
+        },
+        id: 'chat' as any,
+        type: 'chat',
+      },
+    ];
+    const messagesKey = getUiGraphChatMessagesStateKey('chat' as any);
+    const state = {
+      [messagesKey]: [
+        { role: 'assistant', content: 'Welcome' },
+        { role: 'user', content: 'Hello' },
+      ],
+      tone: 'Friendly',
+    };
+    let actionInput: Record<string, unknown> | undefined;
+
+    const result = await runRivetWebAppAction(project, {
+      componentId: 'chat',
+      createProcessorOptions: (context) => {
+        actionInput = context.actionInput;
+        return {};
+      },
+      state,
+      uiGraph,
+    });
+
+    assert.deepEqual(actionInput, {
+      history: {
+        type: 'chat-message[]',
+        value: [{ type: 'assistant', message: 'Welcome', function_call: undefined, function_calls: undefined }],
+      },
+      input: 'Hello',
+      tone: 'Friendly',
+    });
+    assert.deepEqual(result.statePatch, {
+      [messagesKey]: [...state[messagesKey], { role: 'assistant', content: 'Hello' }],
+    });
   });
 
   void it('rejects stale button bindings before dispatching a hosted graph action', async () => {

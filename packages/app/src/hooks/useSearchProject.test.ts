@@ -69,6 +69,18 @@ test('buildProjectSearchItems indexes graph nodes and library nodes', () => {
               size: 'large',
               type: 'gap',
             },
+            {
+              action: {
+                graphId,
+                historyInputId: 'conversationHistory',
+                responseOutputId: 'assistantReply',
+                type: 'runGraph',
+                userInputId: 'userMessage',
+              },
+              id: 'chat' as UiComponentId,
+              placeholder: 'Ask anything',
+              type: 'chat',
+            },
           ],
         },
       },
@@ -92,6 +104,8 @@ test('buildProjectSearchItems indexes graph nodes and library nodes', () => {
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /reviewInput/);
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /reviewOutput/);
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /large/);
+  assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /conversationHistory/);
+  assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /assistantReply/);
 });
 
 test('buildProjectSearchItems ignores malformed graph entries without metadata ids', () => {

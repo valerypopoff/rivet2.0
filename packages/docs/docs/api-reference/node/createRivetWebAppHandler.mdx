@@ -10,7 +10,7 @@ The handler serves:
 
 - the HTML/client renderer for the selected `Project.uiGraphs` entry
 - `GET /app.json` for the selected UI graph definition
-- `POST /actions/run` for button actions that run ordinary graphs in the same project
+- `POST /actions/run` for Button and Chat actions that run ordinary graphs in the same project
 
 It does not own authentication, routing, domains, tenancy, or deployment. Those stay wrapper-owned.
 
@@ -24,7 +24,7 @@ type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
 type RivetWebAppActionContext = {
   request: Request;
   uiGraph: UiGraph;
-  component: Extract<UiGraphComponent, { type: 'button' }>;
+  component: UiGraphActionComponent;
   componentId: UiComponentId;
   state: Record<string, unknown>;
   actionInput: Record<string, unknown>;
@@ -74,7 +74,7 @@ If `uiGraphId` is omitted, Rivet serves the first UI graph in `project.uiGraphs`
 
 Handler construction validates the project's complete `uiGraphs` collection through core's discriminated UI-graph normalizer. Missing or duplicate legacy component IDs are repaired deterministically without mutating the supplied project. Malformed component types, required fields, action bindings, and enum values throw `UiGraphNormalizationError` with graph and component-index diagnostics before any request is served. Already-valid graphs retain their object identity, so hosts should continue treating a project revision passed to the handler as immutable. The lower-level `renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` helpers perform the same validation for the selected UI graph passed directly to them.
 
-`createProcessorOptions` can be a static object or a request-scoped resolver. Rivet always fills in the selected button action graph after resolving those options, so the UI action target cannot be overridden by a wrapper option. If the returned options include `inputs`, those inputs are used. Otherwise Rivet maps the web app state into graph inputs through the button's input bindings. Raw objects become `object` Data Values, homogeneous raw arrays become typed arrays such as `string[]`, `number[]`, `boolean[]`, or `object[]`, and mixed, empty, null-containing, or nested arrays become `any[]`. If the returned options include `context`, that context is used. Otherwise Rivet calls `resolveContext(request)` when provided. If a resolver returns `undefined` or `null`, Rivet treats it like an empty options object and uses the default input/context mapping.
+`createProcessorOptions` can be a static object or a request-scoped resolver. Rivet always fills in the selected component action graph after resolving those options, so the UI action target cannot be overridden by a wrapper option. If the returned options include `inputs`, those inputs are used. Otherwise Rivet maps Button data keys through its input bindings, or maps a Chat submission to its configured current-message, prior-conversation, and optional additional inputs. Chat history is a native Rivet `chat-message[]` Data Value and excludes the newly submitted user turn because that turn is sent separately. Raw mapped values keep the existing object and typed-array conversion rules. If the returned options include `context`, that context is used. Otherwise Rivet calls `resolveContext(request)` when provided. If a resolver returns `undefined` or `null`, Rivet treats it like an empty options object and uses the default input/context mapping.
 
 `resolveContext` lets wrappers derive Rivet context values from the incoming HTTP request, for example authenticated user IDs or request headers.
 
@@ -82,11 +82,11 @@ Handler construction validates the project's complete `uiGraphs` collection thro
 
 The action lifecycle hooks are for observability only. Use wrapper route middleware for auth, endpoint ownership, and final response policy.
 
-Button actions return both raw graph `outputs` and a `statePatch` for the client renderer. New UI graph actions can define several `inputMappings` and several output bindings in `outputs`. Each input mapping sends one web-app data key to one Graph Input ID. Each output binding saves either the whole output map, when its `outputKey` is empty, or the unwrapped Rivet data value from `outputs[outputKey].value` to its configured web-app data key. Legacy single-output `outputKey` / `outputStateKey` actions still work through the same mapper. If the target graph does not return a configured output key, the action endpoint returns an error response.
+Actions return both raw graph `outputs` and a `statePatch` for the client renderer. Button actions can define several `inputMappings` and output bindings. Chat actions select one user-message input, one prior-history input, and one assistant-response output, and can define additional `inputMappings` for other web-app data keys; Rivet appends the unwrapped response to that Chat component's session-only message state. If the target graph does not return a configured output key, the action endpoint returns an error response.
 
-Before dispatch, `runRivetWebAppAction(...)` runs core's non-mutating binding preflight. A stale Graph Input/Output ID, duplicate input target, duplicate output data-key write, or blank required mapping fails with status `400` and code `invalid_button_bindings`. Hosts can call `validateProjectUiGraphButtonBindings(project)` before publishing to inspect the same diagnostics without running or modifying the project. Omitted mappings remain valid because graph inputs may use defaults and actions may intentionally ignore outputs.
+Before dispatch, `runRivetWebAppAction(...)` runs core's non-mutating binding preflight. Invalid Button mappings fail with status `400` and code `invalid_button_bindings`; missing, stale, or overlapping Chat role IDs fail with `invalid_chat_bindings`. Hosts can call `validateProjectUiGraphActionBindings(project)` before publishing to inspect all Button and Chat diagnostics without running or modifying the project.
 
-The embedded client sends only the web-app data keys referenced by the clicked button's input mappings. Unrelated form values and previous output state remain in the browser. `runRivetWebAppAction(...)` applies the same projection for lower-level host integrations, so its action hooks and processor-options resolver receive the action-relevant state only.
+The embedded client sends only the state referenced by the activated component. Buttons send their input-bound data keys. Chat sends its own message history plus data keys named by its optional additional input mappings; its draft and unrelated component state remain in the browser. `runRivetWebAppAction(...)` applies the same projection for lower-level host integrations, so its action hooks and processor-options resolver receive action-relevant state only.
 
 `assetMode` defaults to `inline`, preserving a single self-contained HTML response. With `assetMode: 'external'`, the reference handler serves content-addressed assets below `<basePath>/_rivet/assets`. Those files use immutable caching, ETags, explicit MIME types, `nosniff`, and Subresource Integrity. The page's bootstrap data is stored in a non-executable data attribute, so external mode contains no inline executable scripts or styles.
 

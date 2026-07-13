@@ -2,11 +2,15 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   getGraphBoundary,
+  initializeUiGraphChatActionBindings,
   initializeUiGraphRunGraphActionBindings,
+  reconcileUiGraphChatActionBindings,
   reconcileProjectUiGraphButtonBindings,
+  reconcileProjectUiGraphBindings,
   reconcileUiGraphRunGraphActionBindings,
   validateProjectUiGraphButtonBindings,
   validateUiGraphButtonBindings,
+  validateUiGraphActionBindings,
   type GraphBoundary,
   type GraphId,
   type NodeId,
@@ -38,6 +42,167 @@ void describe('UI graph button bindings', () => {
 
     assert.deepEqual(action.inputMappings, [{ inputKey: 'question', stateKey: 'input' }]);
     assert.deepEqual(action.outputs, [{ outputKey: 'response', stateKey: 'result' }]);
+  });
+
+  void it('initializes, validates, and reconciles Chat graph roles by boundary identity', () => {
+    const previous = makeProject(makeBoundaryGraph({ input: 'message', output: 'answer' }));
+    const next = makeProject(makeBoundaryGraph({ input: 'question', output: 'response' }));
+    addGraphInput(previous.graphs[graphId]!, 'history', 'history-input');
+    addGraphInput(next.graphs[graphId]!, 'history', 'history-input');
+    const boundary = getGraphBoundary(previous, graphId)!;
+    const initialized = initializeUiGraphChatActionBindings({ graphId, type: 'runGraph' }, boundary);
+
+    assert.deepEqual(initialized, {
+      graphId,
+      historyInputId: 'history',
+      responseOutputId: 'answer',
+      type: 'runGraph',
+      userInputId: 'message',
+    });
+    assert.deepEqual(
+      initializeUiGraphChatActionBindings(
+        { graphId, type: 'runGraph' },
+        {
+          inputs: boundary.inputs
+            .filter((input) => input.id !== 'history')
+            .concat({
+              dataType: 'string' as const,
+              id: 'prompt',
+              portId: 'prompt' as PortId,
+            }),
+          outputs: boundary.outputs,
+        },
+      ),
+      {
+        graphId,
+        historyInputId: 'prompt',
+        responseOutputId: 'answer',
+        type: 'runGraph',
+        userInputId: 'message',
+      },
+    );
+    assert.deepEqual(
+      initializeUiGraphChatActionBindings(
+        { graphId, type: 'runGraph' },
+        {
+          inputs: [
+            { dataType: 'string', id: 'history', portId: 'history' as PortId },
+            { dataType: 'chat-message[]', id: 'chatContext', portId: 'chat-context' as PortId },
+            { dataType: 'string', id: 'prompt', portId: 'prompt' as PortId },
+          ],
+          outputs: boundary.outputs,
+        },
+      ),
+      {
+        graphId,
+        historyInputId: 'chatContext',
+        responseOutputId: 'answer',
+        type: 'runGraph',
+        userInputId: 'prompt',
+      },
+    );
+
+    addGraphInput(previous.graphs[graphId]!, 'tone', 'tone-input', 'string');
+    addGraphInput(next.graphs[graphId]!, 'style', 'tone-input', 'string');
+    const initializedWithAdditionalInput = {
+      ...initialized,
+      inputMappings: [{ inputKey: 'tone', stateKey: 'selectedTone' }],
+    };
+    for (const project of [previous, next]) {
+      project.uiGraphs![uiGraphId]!.components = [
+        {
+          action: initializedWithAdditionalInput,
+          id: 'chat' as any,
+          type: 'chat',
+        },
+      ];
+    }
+
+    const reconciled = reconcileProjectUiGraphBindings(previous, next);
+    const chat = reconciled.uiGraphs![uiGraphId]!.components[0]!;
+    assert.equal(chat.type, 'chat');
+    assert.deepEqual(chat.action, {
+      graphId,
+      historyInputId: 'history',
+      inputMappings: [{ inputKey: 'style', stateKey: 'selectedTone' }],
+      responseOutputId: 'response',
+      type: 'runGraph',
+      userInputId: 'question',
+    });
+    assert.deepEqual(validateUiGraphActionBindings(reconciled, reconciled.uiGraphs![uiGraphId]!), []);
+
+    chat.action.historyInputId = chat.action.userInputId;
+    assert.deepEqual(
+      validateUiGraphActionBindings(reconciled, reconciled.uiGraphs![uiGraphId]!).map((issue) => issue.code),
+      ['duplicate-chat-input'],
+    );
+  });
+
+  void it('reports invalid Chat additional input mappings without mutating them', () => {
+    const project = makeProject(makeBoundaryGraph({ input: 'message', output: 'answer' }));
+    addGraphInput(project.graphs[graphId]!, 'history', 'history-input');
+    addGraphInput(project.graphs[graphId]!, 'tone', 'tone-input', 'string');
+    const uiGraph = project.uiGraphs![uiGraphId]!;
+    uiGraph.components = [
+      {
+        action: {
+          graphId,
+          historyInputId: 'history',
+          inputMappings: [
+            { inputKey: 'message', stateKey: 'duplicate' },
+            { inputKey: 'missing', stateKey: 'missing' },
+            { inputKey: 'tone', stateKey: '' },
+            { inputKey: '', stateKey: '' },
+          ],
+          responseOutputId: 'answer',
+          type: 'runGraph',
+          userInputId: 'message',
+        },
+        id: 'chat' as any,
+        type: 'chat',
+      },
+    ];
+    const before = structuredClone(uiGraph.components[0]);
+
+    assert.deepEqual(
+      validateUiGraphActionBindings(project, uiGraph).map((issue) => issue.code),
+      [
+        'duplicate-input-binding',
+        'stale-input-binding',
+        'empty-input-state-key',
+        'empty-input-id',
+        'empty-input-state-key',
+      ],
+    );
+    assert.deepEqual(uiGraph.components[0], before);
+  });
+
+  void it('preserves unfinished Chat input rows and clears only stale configured IDs', () => {
+    const project = makeProject(makeBoundaryGraph({ input: 'message', output: 'answer' }));
+    addGraphInput(project.graphs[graphId]!, 'history', 'history-input');
+    const boundary = getGraphBoundary(project, graphId)!;
+
+    const action = reconcileUiGraphChatActionBindings(
+      {
+        graphId,
+        historyInputId: 'history',
+        inputMappings: [
+          { inputKey: '', stateKey: '' },
+          { inputKey: '', stateKey: 'futureValue' },
+          { inputKey: 'removed', stateKey: 'oldValue' },
+        ],
+        responseOutputId: 'answer',
+        type: 'runGraph',
+        userInputId: 'message',
+      },
+      boundary,
+    );
+
+    assert.deepEqual(action.inputMappings, [
+      { inputKey: '', stateKey: '' },
+      { inputKey: '', stateKey: 'futureValue' },
+      { inputKey: '', stateKey: 'oldValue' },
+    ]);
   });
 
   void it('keeps generated output data keys unique', () => {
@@ -327,6 +492,21 @@ function makeBoundaryGraph(options: {
         : []),
     ],
   };
+}
+
+function addGraphInput(
+  graph: NodeGraph,
+  id: string,
+  nodeId: string,
+  dataType: 'chat-message[]' | 'string' = 'chat-message[]',
+): void {
+  graph.nodes.push({
+    data: { dataType, id },
+    id: nodeId as any,
+    title: id,
+    type: 'graphInput',
+    visualData: { x: 0, y: 100 },
+  } as any);
 }
 
 function getButtonAction(project: Project) {

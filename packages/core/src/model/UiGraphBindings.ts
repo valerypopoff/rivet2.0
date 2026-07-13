@@ -7,6 +7,7 @@ import {
   getUiGraphActionOutputBindings,
   type UiComponentId,
   type UiGraph,
+  type UiGraphChatRunGraphAction,
   type UiGraphComponent,
   type UiGraphId,
   type UiGraphInputBinding,
@@ -20,13 +21,17 @@ export type UiGraphButtonBindingRenames = {
   outputIds?: Readonly<Record<string, string>>;
 };
 
-export type UiGraphButtonBindingIssue = {
+export type UiGraphActionBindingIssue = {
   code:
+    | 'duplicate-chat-input'
     | 'duplicate-input-binding'
     | 'duplicate-output-state-key'
     | 'empty-input-id'
     | 'empty-input-state-key'
     | 'empty-output-state-key'
+    | 'missing-chat-history-input'
+    | 'missing-chat-response-output'
+    | 'missing-chat-user-input'
     | 'missing-target-graph'
     | 'stale-input-binding'
     | 'stale-output-binding'
@@ -39,8 +44,12 @@ export type UiGraphButtonBindingIssue = {
   uiGraphId: UiGraphId;
 };
 
+/** @deprecated Use UiGraphActionBindingIssue for Button and Chat components. */
+export type UiGraphButtonBindingIssue = UiGraphActionBindingIssue;
+
 type UiGraphButtonComponent = Extract<UiGraphComponent, { type: 'button' }>;
-type BindingIssueContext = Pick<UiGraphButtonBindingIssue, 'componentId' | 'graphId' | 'uiGraphId'>;
+type UiGraphChatComponent = Extract<UiGraphComponent, { type: 'chat' }>;
+type BindingIssueContext = Pick<UiGraphActionBindingIssue, 'componentId' | 'graphId' | 'uiGraphId'>;
 type GraphBoundaryChange = {
   boundary: GraphBoundary;
   inputsChanged: boolean;
@@ -52,6 +61,9 @@ type BindingReconciliationOptions = {
   inputs?: { addMissing: boolean };
   outputs?: { addMissing: boolean };
 };
+
+const CHAT_HISTORY_INPUT_PATTERN = /(?:history|conversation|messages)/i;
+const CHAT_USER_INPUT_PATTERN = /(?:user|prompt|question|message|input)/i;
 
 /**
  * Aligns a button with a graph boundary without guessing by row position.
@@ -154,6 +166,59 @@ export function initializeUiGraphRunGraphActionBindings(
   return nextAction;
 }
 
+/** Seeds the three graph-boundary roles required by a new Chat component. */
+export function initializeUiGraphChatActionBindings(
+  action: UiGraphChatRunGraphAction,
+  boundary: GraphBoundary | undefined,
+): UiGraphChatRunGraphAction {
+  const historyInput =
+    boundary?.inputs.find((input) => input.dataType === 'chat-message[]') ??
+    boundary?.inputs.find((input) => CHAT_HISTORY_INPUT_PATTERN.test(input.id)) ??
+    boundary?.inputs[1];
+  const userInputCandidates = boundary?.inputs.filter((input) => input.id !== historyInput?.id) ?? [];
+  const userInput =
+    userInputCandidates.find(
+      (input) => CHAT_USER_INPUT_PATTERN.test(input.id) && !CHAT_HISTORY_INPUT_PATTERN.test(input.id),
+    ) ??
+    userInputCandidates.find((input) => !CHAT_HISTORY_INPUT_PATTERN.test(input.id)) ??
+    userInputCandidates[0];
+
+  return {
+    ...action,
+    userInputId: userInput?.id,
+    historyInputId: historyInput?.id,
+    responseOutputId: boundary?.outputs[0]?.id,
+  };
+}
+
+export function reconcileUiGraphChatActionBindings(
+  action: UiGraphChatRunGraphAction,
+  boundary: GraphBoundary,
+  renames: UiGraphButtonBindingRenames = {},
+  changed: { inputs: boolean; outputs: boolean } = { inputs: true, outputs: true },
+): UiGraphChatRunGraphAction {
+  const userInputId = changed.inputs
+    ? reconcileBoundaryId(action.userInputId, boundary.inputs, renames.inputIds)
+    : action.userInputId;
+  const historyInputId = changed.inputs
+    ? reconcileBoundaryId(action.historyInputId, boundary.inputs, renames.inputIds)
+    : action.historyInputId;
+  const responseOutputId = changed.outputs
+    ? reconcileBoundaryId(action.responseOutputId, boundary.outputs, renames.outputIds)
+    : action.responseOutputId;
+  const inputMappings =
+    changed.inputs && action.inputMappings
+      ? reconcileChatAdditionalInputMappings(boundary, action.inputMappings, renames.inputIds)
+      : action.inputMappings;
+
+  return userInputId === action.userInputId &&
+    historyInputId === action.historyInputId &&
+    responseOutputId === action.responseOutputId &&
+    inputMappings === action.inputMappings
+    ? action
+    : { ...action, userInputId, historyInputId, responseOutputId, inputMappings };
+}
+
 export function getReconciledUiGraphActionInputBindings(
   action: UiGraphRunGraphAction,
   boundary: GraphBoundary,
@@ -168,8 +233,8 @@ export function getReconciledUiGraphActionOutputBindings(
   return getUiGraphActionOutputBindings(reconcileUiGraphRunGraphActionBindings(action, boundary));
 }
 
-/** Reconciles buttons only for boundaries changed between two immutable snapshots. */
-export function reconcileProjectUiGraphButtonBindings<TProject extends Project>(
+/** Reconciles workflow-bound UI components for changed graph boundaries. */
+export function reconcileProjectUiGraphBindings<TProject extends Project>(
   previousProject: TProject,
   nextProject: TProject,
 ): TProject {
@@ -185,9 +250,9 @@ export function reconcileProjectUiGraphButtonBindings<TProject extends Project>(
 
     uiGraph.components.forEach((component, index) => {
       if (
-        component.type !== 'button' ||
+        (component.type !== 'button' && component.type !== 'chat') ||
         !component.action.graphId ||
-        hasAmbiguousUiGraphButtonBindings(component.action)
+        (component.type === 'button' && hasAmbiguousUiGraphButtonBindings(component.action))
       ) {
         return;
       }
@@ -202,14 +267,20 @@ export function reconcileProjectUiGraphButtonBindings<TProject extends Project>(
         return;
       }
 
-      const action = reconcileActionBindings(component.action, change.boundary, change.renames, {
-        inputs: change.inputsChanged
-          ? { addMissing: hasCompleteInputCoverage(component.action, change.previousBoundary) }
-          : undefined,
-        outputs: change.outputsChanged
-          ? { addMissing: hasCompleteOutputCoverage(component.action, change.previousBoundary) }
-          : undefined,
-      });
+      const action =
+        component.type === 'button'
+          ? reconcileActionBindings(component.action, change.boundary, change.renames, {
+              inputs: change.inputsChanged
+                ? { addMissing: hasCompleteInputCoverage(component.action, change.previousBoundary) }
+                : undefined,
+              outputs: change.outputsChanged
+                ? { addMissing: hasCompleteOutputCoverage(component.action, change.previousBoundary) }
+                : undefined,
+            })
+          : reconcileUiGraphChatActionBindings(component.action, change.boundary, change.renames, {
+              inputs: change.inputsChanged,
+              outputs: change.outputsChanged,
+            });
       if (action === component.action) {
         return;
       }
@@ -230,7 +301,29 @@ export function reconcileProjectUiGraphButtonBindings<TProject extends Project>(
   return uiGraphs ? ({ ...nextProject, uiGraphs } as TProject) : nextProject;
 }
 
+/** @deprecated Use reconcileProjectUiGraphBindings for all workflow-bound components. */
+export const reconcileProjectUiGraphButtonBindings = reconcileProjectUiGraphBindings;
+
 /** Non-mutating preflight for desktop and hosted web-app runners. */
+export function validateUiGraphActionBindings(
+  project: Project,
+  uiGraph: UiGraph,
+  componentId?: UiComponentId,
+): UiGraphActionBindingIssue[] {
+  return uiGraph.components.flatMap((component) => {
+    if (componentId && component.id !== componentId) {
+      return [];
+    }
+    if (component.type === 'button') {
+      return validateButtonBindings(project, uiGraph.id, component);
+    }
+    if (component.type === 'chat') {
+      return validateChatBindings(project, uiGraph.id, component);
+    }
+    return [];
+  });
+}
+
 export function validateUiGraphButtonBindings(
   project: Project,
   uiGraph: UiGraph,
@@ -248,8 +341,16 @@ export function validateProjectUiGraphButtonBindings(project: Project): UiGraphB
   return Object.values(project.uiGraphs ?? {}).flatMap((uiGraph) => validateUiGraphButtonBindings(project, uiGraph));
 }
 
-export function formatUiGraphButtonBindingIssues(issues: readonly UiGraphButtonBindingIssue[]): string {
+export function validateProjectUiGraphActionBindings(project: Project): UiGraphActionBindingIssue[] {
+  return Object.values(project.uiGraphs ?? {}).flatMap((uiGraph) => validateUiGraphActionBindings(project, uiGraph));
+}
+
+export function formatUiGraphActionBindingIssues(issues: readonly UiGraphActionBindingIssue[]): string {
   return issues.map((issue) => issue.message).join(' ');
+}
+
+export function formatUiGraphButtonBindingIssues(issues: readonly UiGraphButtonBindingIssue[]): string {
+  return formatUiGraphActionBindingIssues(issues);
 }
 
 function validateButtonBindings(
@@ -272,6 +373,143 @@ function validateButtonBindings(
     ...validateInputBindings(context, component, boundary),
     ...validateOutputBindings(context, component, boundary),
   ];
+}
+
+function validateChatBindings(
+  project: Project,
+  uiGraphId: UiGraphId,
+  component: UiGraphChatComponent,
+): UiGraphActionBindingIssue[] {
+  const graphId = component.action.graphId;
+  const context = { componentId: component.id, graphId, uiGraphId };
+  if (!graphId) {
+    return [createIssue(context, 'missing-target-graph', 'The Chat component has no target graph.')];
+  }
+
+  const boundary = getGraphBoundary(project, graphId);
+  if (!boundary) {
+    return [
+      createIssue(context, 'target-graph-not-found', `The Chat component target graph "${graphId}" does not exist.`),
+    ];
+  }
+
+  const issues: UiGraphActionBindingIssue[] = [];
+  const inputIds = new Set(boundary.inputs.map((input) => input.id));
+  const outputIds = new Set(boundary.outputs.map((output) => output.id));
+  validateChatPort(
+    issues,
+    context,
+    component.action.userInputId,
+    inputIds,
+    'missing-chat-user-input',
+    'user message input',
+    'input',
+  );
+  validateChatPort(
+    issues,
+    context,
+    component.action.historyInputId,
+    inputIds,
+    'missing-chat-history-input',
+    'conversation history input',
+    'input',
+  );
+  validateChatPort(
+    issues,
+    context,
+    component.action.responseOutputId,
+    outputIds,
+    'missing-chat-response-output',
+    'assistant response output',
+    'output',
+  );
+  if (
+    component.action.userInputId &&
+    component.action.historyInputId &&
+    component.action.userInputId === component.action.historyInputId
+  ) {
+    issues.push(
+      createIssue(
+        context,
+        'duplicate-chat-input',
+        'The Chat user message and conversation history must use different graph inputs.',
+        component.action.userInputId,
+      ),
+    );
+  }
+  validateChatAdditionalInputs(issues, context, component, inputIds);
+  return issues;
+}
+
+function validateChatAdditionalInputs(
+  issues: UiGraphActionBindingIssue[],
+  context: BindingIssueContext,
+  component: UiGraphChatComponent,
+  availableIds: ReadonlySet<string>,
+): void {
+  const seenIds = new Set([component.action.userInputId, component.action.historyInputId].filter(Boolean));
+  for (const binding of component.action.inputMappings ?? []) {
+    const hasInputKey = binding.inputKey.trim().length > 0;
+    if (!hasInputKey) {
+      issues.push(createIssue(context, 'empty-input-id', 'A Chat additional input has an empty graph input ID.'));
+    } else if (seenIds.has(binding.inputKey)) {
+      issues.push(
+        createIssue(
+          context,
+          'duplicate-input-binding',
+          `Graph input "${binding.inputKey}" is used more than once by the Chat component.`,
+          binding.inputKey,
+        ),
+      );
+    } else if (!availableIds.has(binding.inputKey)) {
+      issues.push(
+        createIssue(
+          context,
+          'stale-input-binding',
+          `The Chat additional input "${binding.inputKey}" no longer exists.`,
+          binding.inputKey,
+        ),
+      );
+    }
+    if (hasInputKey) {
+      seenIds.add(binding.inputKey);
+    }
+    if (!binding.stateKey.trim()) {
+      issues.push(
+        createIssue(
+          context,
+          'empty-input-state-key',
+          hasInputKey
+            ? `Chat graph input "${binding.inputKey}" has no data key to send.`
+            : 'A Chat additional input has no data key to send.',
+          binding.inputKey,
+        ),
+      );
+    }
+  }
+}
+
+function validateChatPort(
+  issues: UiGraphActionBindingIssue[],
+  context: BindingIssueContext,
+  portId: string | undefined,
+  availableIds: ReadonlySet<string>,
+  missingCode: 'missing-chat-user-input' | 'missing-chat-history-input' | 'missing-chat-response-output',
+  label: string,
+  portKind: 'input' | 'output',
+): void {
+  if (!portId) {
+    issues.push(createIssue(context, missingCode, `The Chat component has no ${label}.`));
+  } else if (!availableIds.has(portId)) {
+    issues.push(
+      createIssue(
+        context,
+        portKind === 'input' ? 'stale-input-binding' : 'stale-output-binding',
+        `The Chat ${label} "${portId}" no longer exists.`,
+        portId,
+      ),
+    );
+  }
 }
 
 function validateInputBindings(
@@ -381,10 +619,10 @@ function validateOutputBindings(
 
 function createIssue(
   context: BindingIssueContext,
-  code: UiGraphButtonBindingIssue['code'],
+  code: UiGraphActionBindingIssue['code'],
   message: string,
   portId?: string,
-): UiGraphButtonBindingIssue {
+): UiGraphActionBindingIssue {
   return { ...context, code, message, portId, severity: 'error' };
 }
 
@@ -398,6 +636,20 @@ function alignInputMappings(
   return boundary.inputs.flatMap((input) => {
     const binding = findBinding(input.id);
     return binding || addMissing ? [{ inputKey: input.id, stateKey: binding?.stateKey || input.id }] : [];
+  });
+}
+
+function reconcileChatAdditionalInputMappings(
+  boundary: GraphBoundary,
+  bindings: readonly UiGraphInputBinding[],
+  renames: Readonly<Record<string, string>> | undefined,
+): UiGraphInputBinding[] {
+  return bindings.map((binding) => {
+    if (!binding.inputKey.trim()) {
+      return binding;
+    }
+    const inputKey = reconcileBoundaryId(binding.inputKey, boundary.inputs, renames) ?? '';
+    return inputKey === binding.inputKey ? binding : { ...binding, inputKey };
   });
 }
 
@@ -465,6 +717,22 @@ function createBindingLookup<T>(
   const bindingsById = new Map(bindings.map((binding) => [getId(binding), binding]));
   const oldIdsByNewId = new Map(Object.entries(renames ?? {}).map(([oldId, newId]) => [newId, oldId]));
   return (newId) => bindingsById.get(newId) ?? bindingsById.get(oldIdsByNewId.get(newId));
+}
+
+function reconcileBoundaryId(
+  currentId: string | undefined,
+  ports: readonly { id: string }[],
+  renames: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+  if (!currentId) {
+    return undefined;
+  }
+  const availableIds = new Set(ports.map((port) => port.id));
+  if (availableIds.has(currentId)) {
+    return currentId;
+  }
+  const renamedId = renames?.[currentId];
+  return renamedId && availableIds.has(renamedId) ? renamedId : undefined;
 }
 
 function createBindingListLookup<T>(

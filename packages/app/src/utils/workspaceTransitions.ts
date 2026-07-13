@@ -6,7 +6,7 @@ import {
   type NodeId,
   type Project,
   emptyNodeGraph,
-  reconcileProjectUiGraphButtonBindings,
+  reconcileProjectUiGraphBindings,
 } from '@valerypopoff/rivet2-core';
 import {
   createRootGraphViewContext,
@@ -187,7 +187,7 @@ export function mergeCurrentGraphIntoProject(
     draft.graphs[prepared.currentGraph.metadata!.id!] = prepared.currentGraph;
   });
 
-  return reconcileProjectUiGraphButtonBindings(project, mergedProject);
+  return reconcileProjectUiGraphBindings(project, mergedProject);
 }
 
 export function shouldPersistProjectBeforeLoad(options: {

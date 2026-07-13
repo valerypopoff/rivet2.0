@@ -11,7 +11,7 @@ import {
   type ProjectId,
   type ChartNode,
   type DataValue,
-  reconcileProjectUiGraphButtonBindings,
+  reconcileProjectUiGraphBindings,
 } from '@valerypopoff/rivet2-core';
 import { blankProject } from '../utils/blankProject.js';
 import { entries, values } from '../utils/typeSafety';
@@ -111,7 +111,7 @@ export const savedGraphsState = atom(
       }
     });
 
-    set(projectState, reconcileProjectUiGraphButtonBindings(project, newProject));
+    set(projectState, reconcileProjectUiGraphBindings(project, newProject));
   },
 );
 

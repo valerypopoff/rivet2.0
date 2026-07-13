@@ -4,13 +4,13 @@ import {
   type Project,
   type UiComponentId,
   type UiGraph,
-  formatUiGraphButtonBindingIssues,
+  formatUiGraphActionBindingIssues,
   getUiGraphActionComponent,
   jsonValueToDataValue,
   normalizeUiGraph,
-  resolveUiGraphActionOutputStatePatch,
-  resolveUiGraphActionInputs,
-  validateUiGraphButtonBindings,
+  resolveUiGraphComponentActionInputs,
+  resolveUiGraphComponentActionOutputStatePatch,
+  validateUiGraphActionBindings,
 } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import { useStableCallback } from './useStableCallback.js';
@@ -49,13 +49,13 @@ export async function runUiGraphAction(options: {
     throw new Error('This UI action is not connected to a graph.');
   }
 
-  const bindingErrors = validateUiGraphButtonBindings(options.project, uiGraph, options.componentId);
+  const bindingErrors = validateUiGraphActionBindings(options.project, uiGraph, options.componentId);
   if (bindingErrors.length > 0) {
-    throw new Error(`Invalid web app button bindings: ${formatUiGraphButtonBindingIssues(bindingErrors)}`);
+    throw new Error(`Invalid web app ${component.type} bindings: ${formatUiGraphActionBindingIssues(bindingErrors)}`);
   }
 
   options.abortSignal?.throwIfAborted();
-  const rawInputs = resolveUiGraphActionInputs(component.action, options.state);
+  const rawInputs = resolveUiGraphComponentActionInputs(component, options.state);
   const runOptions = {
     graphId: component.action.graphId,
     inputs: toGraphInputs(rawInputs),
@@ -73,7 +73,7 @@ export async function runUiGraphAction(options: {
 
   return {
     outputs,
-    statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
+    statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, options.state),
   };
 }
 

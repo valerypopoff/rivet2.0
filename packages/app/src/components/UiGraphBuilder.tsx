@@ -3,7 +3,12 @@ import { type CSSProperties, type FC, useEffect, useMemo, useRef, useState } fro
 import { useAtomValue, useStore } from 'jotai';
 import { arrayMove } from '@dnd-kit/sortable';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
-import { getGraphBoundary, type UiComponentId, type UiGraphComponent } from '@valerypopoff/rivet2-core';
+import {
+  getGraphBoundary,
+  initializeUiGraphChatActionBindings,
+  type UiComponentId,
+  type UiGraphComponent,
+} from '@valerypopoff/rivet2-core';
 import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
@@ -22,6 +27,10 @@ import { useRunUiGraphAction } from '../hooks/useRunUiGraphAction.js';
 import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
 import { createUiGraphComponent, UI_GRAPH_COMPONENT_PALETTE } from './uiGraphBuilder/componentDescriptors.js';
 import {
+  getCurrentUiGraphComponentDeletionId,
+  type PendingUiGraphComponentDeletion,
+} from './uiGraphBuilder/componentDeletion.js';
+import {
   initializeButtonActionToGraphBoundary,
   normalizeButtonActionToGraphBoundary,
 } from './uiGraphBuilder/buttonBindings.js';
@@ -31,6 +40,7 @@ import { canRunDesktopWebAppPreview } from './uiGraphBuilder/uiGraphBuilderPolic
 import { useUiGraphMutations } from './uiGraphBuilder/useUiGraphMutations.js';
 import { collectUiGraphDataKeyUsages } from './uiGraphBuilder/dataKeys.js';
 import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
+import { DeleteResourceConfirmModal } from './DeleteResourceConfirmModal.js';
 import { revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
 
 const styles = css`
@@ -100,6 +110,11 @@ const styles = css`
   .ui-graph-builder-button.secondary {
     background: var(--grey-dark-colorish);
     color: var(--foreground);
+  }
+
+  .ui-graph-builder-button:disabled {
+    cursor: default;
+    opacity: 0.5;
   }
 
   .ui-graph-builder-fields,
@@ -207,6 +222,12 @@ const styles = css`
     min-width: 0;
   }
 
+  .ui-graph-preview-sortable-row[data-rivet-web-app-component-type='chat'] {
+    display: flex;
+    flex: 1 0 var(--rivet-web-app-chat-min-height);
+    min-height: var(--rivet-web-app-chat-min-height);
+  }
+
   .ui-graph-preview-sortable-row.dragging {
     opacity: 0.68;
     z-index: 1;
@@ -214,6 +235,14 @@ const styles = css`
 
   .ui-graph-preview-sortable-body {
     min-width: 0;
+  }
+
+  .ui-graph-preview-sortable-row[data-rivet-web-app-component-type='chat'] .ui-graph-preview-sortable-body,
+  .ui-graph-preview-sortable-row[data-rivet-web-app-component-type='chat'] .rivet-web-app-component-frame {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
   }
 
   .ui-graph-preview-drag-handle {
@@ -262,6 +291,46 @@ const styles = css`
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 8px;
     align-items: end;
+  }
+
+  .ui-graph-chat-input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
+    gap: 8px;
+    align-items: end;
+  }
+
+  .ui-graph-chat-input-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 34px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--foreground-muted);
+    cursor: pointer;
+    padding: 5px;
+  }
+
+  .ui-graph-chat-input-remove:hover,
+  .ui-graph-chat-input-remove:focus-visible {
+    color: var(--error);
+  }
+
+  .ui-graph-chat-input-remove:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+
+  .ui-graph-chat-input-remove svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .ui-graph-chat-add-input {
+    justify-self: start;
   }
 
   .ui-graph-component-delete-icon {
@@ -349,13 +418,22 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const hostUiConfig = useRivetAppHostUiConfig();
   const canRunDesktopPreview = canRunDesktopWebAppPreview(hostUiConfig);
   const [activeComponentId, setActiveComponentId] = useState<UiComponentId | undefined>();
+  const [pendingComponentDeletion, setPendingComponentDeletion] = useState<
+    PendingUiGraphComponentDeletion | undefined
+  >();
   const settingsScrollRef = useRef<HTMLDivElement>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
   const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
+  const pendingDeleteComponentId = getCurrentUiGraphComponentDeletionId(
+    pendingComponentDeletion,
+    project.metadata.id,
+    uiGraph,
+  );
 
   useEffect(() => {
     setActiveComponentId(undefined);
+    setPendingComponentDeletion(undefined);
   }, [project.metadata.id, selectedUiGraphId]);
 
   const addComponent = useStableCallback((type: UiGraphComponent['type']) => {
@@ -364,21 +442,34 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       const component = createUiGraphComponent(type, boundary ? project.metadata.mainGraphId : undefined);
       if (component.type === 'button') {
         initializeButtonActionToGraphBoundary(component, boundary);
+      } else if (component.type === 'chat') {
+        component.action = initializeUiGraphChatActionBindings(component.action, boundary);
       }
 
       draft.components.push(component);
     });
   });
 
-  const deleteComponent = useStableCallback((componentId: UiComponentId) => {
-    if (!window.confirm('Are you sure you want to delete this component?')) {
+  const confirmDeleteComponent = useStableCallback(() => {
+    const componentId = getCurrentUiGraphComponentDeletionId(pendingComponentDeletion, project.metadata.id, uiGraph);
+    if (componentId == null) {
+      setPendingComponentDeletion(undefined);
       return;
     }
 
+    setPendingComponentDeletion(undefined);
     setActiveComponentId((activeComponentId) => (activeComponentId === componentId ? undefined : activeComponentId));
     updateUiGraph((draft) => {
       draft.components = draft.components.filter((component) => component.id !== componentId);
     });
+  });
+
+  const requestDeleteComponent = useStableCallback((componentId: UiComponentId) => {
+    if (!uiGraph) {
+      return;
+    }
+
+    setPendingComponentDeletion({ componentId, projectId: project.metadata.id, uiGraphId: uiGraph.id });
   });
 
   const reorderComponents = useStableCallback((draggedComponentId: UiComponentId, targetComponentId: UiComponentId) => {
@@ -579,7 +670,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
                 dataKeyUsages={dataKeyUsages}
                 project={project}
                 onActivate={activateSettingsComponent}
-                onDelete={() => deleteComponent(component.id)}
+                onDelete={() => requestDeleteComponent(component.id)}
                 onUpdate={(updater) => updateComponent(component.id, updater)}
               />
             ))}
@@ -607,6 +698,13 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           onRunAction={(componentId, state, abortSignal) => runUiGraphAction(uiGraph, componentId, state, abortSignal)}
         />
       </section>
+      <DeleteResourceConfirmModal
+        isOpen={pendingDeleteComponentId != null}
+        resourceName="this component"
+        title="Delete Component?"
+        onClose={() => setPendingComponentDeletion(undefined)}
+        onConfirm={confirmDeleteComponent}
+      />
     </div>
   );
 };

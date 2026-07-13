@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { GraphId, GraphOutputs, Project, UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
+import {
+  getUiGraphChatMessagesStateKey,
+  type GraphId,
+  type GraphOutputs,
+  type Project,
+  type UiComponentId,
+  type UiGraph,
+  type UiGraphId,
+} from '@valerypopoff/rivet2-core';
 import { runUiGraphAction } from './useRunUiGraphAction.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 
@@ -156,6 +164,65 @@ test('web app actions map array state values to typed Data Values', async () => 
 
   assert.deepEqual(calls[0]?.inputs, {
     tags: { type: 'string[]', value: ['one', 'two'] },
+  });
+});
+
+test('Chat actions run visibly with current input, prior native history, and mapped page data', async () => {
+  const componentId = 'chat' as UiComponentId;
+  const graphId = 'graph-1' as GraphId;
+  const messagesKey = getUiGraphChatMessagesStateKey(componentId);
+  const uiGraph: UiGraph = {
+    components: [
+      {
+        action: {
+          graphId,
+          historyInputId: 'history',
+          inputMappings: [{ inputKey: 'tone', stateKey: 'tone' }],
+          responseOutputId: 'response',
+          type: 'runGraph',
+          userInputId: 'message',
+        },
+        id: componentId,
+        type: 'chat',
+      },
+    ],
+    id: 'ui-graph-1' as UiGraphId,
+    name: 'Chat app',
+  };
+  const state = {
+    [messagesKey]: [
+      { role: 'assistant', content: 'Welcome' },
+      { role: 'user', content: 'Hello' },
+    ],
+    tone: 'Friendly',
+  };
+  let call: EditorGraphRunOptions | undefined;
+
+  const result = await runUiGraphAction({
+    componentId,
+    project: makeProject(uiGraph, graphId),
+    state,
+    tryRunGraph: async (options) => {
+      call = options;
+      return { response: { type: 'string', value: 'Hi!' } };
+    },
+    uiGraph,
+  });
+
+  assert.deepEqual(call?.inputs, {
+    history: {
+      type: 'chat-message[]',
+      value: [{ type: 'assistant', message: 'Welcome', function_call: undefined, function_calls: undefined }],
+    },
+    message: { type: 'string', value: 'Hello' },
+    tone: { type: 'string', value: 'Friendly' },
+  });
+  assert.deepEqual(result.statePatch, {
+    [messagesKey]: [
+      { role: 'assistant', content: 'Welcome' },
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi!' },
+    ],
   });
 });
 
@@ -317,13 +384,24 @@ test('web app actions propagate cancellation and reject results completed after 
 });
 
 function makeProject(uiGraph: UiGraph, graphId: GraphId): Project {
-  const button = uiGraph.components.find((component) => component.type === 'button');
-  assert.ok(button?.type === 'button');
-  const inputIds =
-    button.action.inputMappings?.map((binding) => binding.inputKey) ?? Object.keys(button.action.inputs ?? {});
-  const outputIds = (button.action.outputs?.map((binding) => binding.outputKey) ?? [button.action.outputKey]).filter(
-    (outputId): outputId is string => !!outputId,
+  const actionComponent = uiGraph.components.find(
+    (component) => component.type === 'button' || component.type === 'chat',
   );
+  assert.ok(actionComponent);
+  const inputIds =
+    actionComponent.type === 'button'
+      ? actionComponent.action.inputMappings?.map((binding) => binding.inputKey) ??
+        Object.keys(actionComponent.action.inputs ?? {})
+      : [
+          actionComponent.action.userInputId,
+          actionComponent.action.historyInputId,
+          ...(actionComponent.action.inputMappings ?? []).map((binding) => binding.inputKey),
+        ].filter((inputId): inputId is string => !!inputId);
+  const outputIds = (
+    actionComponent.type === 'button'
+      ? actionComponent.action.outputs?.map((binding) => binding.outputKey) ?? [actionComponent.action.outputKey]
+      : [actionComponent.action.responseOutputId]
+  ).filter((outputId): outputId is string => !!outputId);
 
   return {
     graphs: {
@@ -332,7 +410,7 @@ function makeProject(uiGraph: UiGraph, graphId: GraphId): Project {
         metadata: { description: '', id: graphId, name: 'Graph' },
         nodes: [
           ...inputIds.map((id, index) => ({
-            data: { dataType: 'string', id },
+            data: { dataType: id === 'history' ? 'chat-message[]' : 'string', id },
             id: `input-${index}` as any,
             title: id,
             type: 'graphInput' as const,

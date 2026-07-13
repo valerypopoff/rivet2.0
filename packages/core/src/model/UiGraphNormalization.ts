@@ -205,6 +205,10 @@ const UI_GRAPH_COMPONENT_VALIDATORS = {
     requireString(component, 'label', path, issues);
     validateAction(component.action, `${path}.action`, issues);
   },
+  chat(component, path, issues) {
+    optionalString(component, 'placeholder', path, issues);
+    validateChatAction(component.action, `${path}.action`, issues);
+  },
   output(component, path, issues) {
     optionalString(component, 'label', path, issues);
     requireString(component, 'stateKey', path, issues);
@@ -235,6 +239,21 @@ function validateAction(value: unknown, path: string, issues: UiGraphNormalizati
   }
 
   UI_GRAPH_ACTION_VALIDATORS[actionType](value, path, issues);
+}
+
+function validateChatAction(value: unknown, path: string, issues: UiGraphNormalizationIssue[]): void {
+  if (!isRecord(value)) {
+    issues.push({ message: 'must be an object', path });
+    return;
+  }
+  if (value.type !== 'runGraph') {
+    issues.push({ message: 'must be "runGraph"', path: `${path}.type` });
+  }
+  optionalString(value, 'graphId', path, issues);
+  optionalString(value, 'userInputId', path, issues);
+  optionalString(value, 'historyInputId', path, issues);
+  optionalString(value, 'responseOutputId', path, issues);
+  validateInputMappings(value.inputMappings, `${path}.inputMappings`, issues);
 }
 
 const UI_GRAPH_ACTION_VALIDATORS = {
