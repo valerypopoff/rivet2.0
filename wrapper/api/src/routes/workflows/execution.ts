@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import type { IncomingMessage } from 'node:http';
 import { Router, type Request, type Response } from 'express';
 import {
   createProcessor,
@@ -34,6 +35,7 @@ import { isTrustedProxyRequest, isTrustedTokenFreeHostRequest } from '../../auth
 import { isServerUiAuthRequestAllowed } from '../../server-ui-auth.js';
 import {
   createWebAppOAuthAuthorizationRedirect,
+  getWebAppOAuthSessionOwnerKey,
   getWebAppAuthMode,
   isWebAppOAuthSessionAllowed,
   readWebAppOAuthSession,
@@ -70,7 +72,7 @@ type WorkflowExecutionContext = {
   };
 };
 
-type WorkflowExecutionProject = Awaited<ReturnType<typeof resolvePublishedExecutionProject>> extends infer T
+export type WorkflowExecutionProject = Awaited<ReturnType<typeof resolvePublishedExecutionProject>> extends infer T
   ? Exclude<T, null>
   : never;
 
@@ -265,7 +267,7 @@ function isEnvFlagEnabled(value: string | undefined, defaultValue = false): bool
   return defaultValue;
 }
 
-function getWorkflowErrorMessage(error: unknown): string {
+export function getWorkflowErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
@@ -292,7 +294,7 @@ function getWorkflowExecutionContext(
   };
 }
 
-function getWebAppWorkflowExecutionContext(req: Request): WorkflowExecutionContext {
+function getWebAppWorkflowExecutionContext(req: Pick<Request | IncomingMessage, 'headers'>): WorkflowExecutionContext {
   return {
     headers: {
       type: 'any',
@@ -654,6 +656,38 @@ function isWebAppBrowserRequestOriginAllowed(req: Request, requestKind: WebAppRe
   return requestKind === 'html' || fetchSite !== 'cross-site';
 }
 
+function getIncomingHeader(req: IncomingMessage, name: string): string {
+  const value = req.headers[name.toLowerCase()];
+  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
+}
+
+function getWebAppSocketRequestOrigin(req: IncomingMessage): string | null {
+  const trustedProxy = isTrustedProxyRequest(req);
+  const protocol = trustedProxy
+    ? getIncomingHeader(req, 'x-forwarded-proto').split(',')[0]?.trim().toLowerCase()
+    : ((req.socket as { encrypted?: boolean }).encrypted ? 'https' : 'http');
+  const host = trustedProxy
+    ? getIncomingHeader(req, 'x-forwarded-host').split(',')[0]?.trim() || getIncomingHeader(req, 'host')
+    : getIncomingHeader(req, 'host');
+  if (!protocol || !host) return null;
+  try {
+    return new URL(`${protocol}://${host}`).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isWebAppSocketOriginAllowed(req: IncomingMessage): boolean {
+  const requestOrigin = getWebAppSocketRequestOrigin(req);
+  const origin = getIncomingHeader(req, 'origin').trim();
+  if (!requestOrigin || !origin) return false;
+  try {
+    return new URL(origin).origin === requestOrigin;
+  } catch {
+    return false;
+  }
+}
+
 function authorizeWebAppRequestBeforeResolve(
   req: Request,
   res: Response,
@@ -764,9 +798,9 @@ function encodeUrlPathSegment(value: string): string {
   return encodeURIComponent(value).replace(/%2F/gi, '%252F');
 }
 
-type WebAppRouteKind = 'published' | 'latest';
+export type WebAppRouteKind = 'published' | 'latest';
 
-function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
+export function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
   const basePath = routeKind === 'published'
     ? getPublishedWebAppsBasePath()
     : getLatestWebAppsBasePath();
@@ -780,7 +814,7 @@ function getLatestRemoteDebuggerForExecution(options?: { enableRemoteDebugger?: 
     : undefined;
 }
 
-function resolveWebAppUiGraph(executionProject: WorkflowExecutionProject): UiGraph | null {
+export function resolveWebAppUiGraph(executionProject: WorkflowExecutionProject): UiGraph | null {
   const uiGraphId = executionProject.webAppUiGraphId;
 
   return uiGraphId
@@ -990,9 +1024,99 @@ async function resolveWebAppExecutionProject(
   return { slug, executionProject };
 }
 
-async function createWebAppProcessorOptions(
+export type WebAppSocketExecutionResolution =
+  | {
+      executionProject: WorkflowExecutionProject;
+      ownerScope: string;
+      uiGraph: UiGraph;
+    }
+  | {
+      code: string;
+      message: string;
+      statusCode: number;
+    };
+
+/**
+ * WebSocket upgrades cannot use the HTML redirect/prompt flow. They share the
+ * normal web-app policy, but require a strict Origin header before accepting a
+ * browser socket.
+ */
+export async function resolveWebAppSocketExecution(
+  req: IncomingMessage,
+  routeKind: WebAppRouteKind,
+  rawSlug: string,
+): Promise<WebAppSocketExecutionResolution> {
+  if (!isWebAppSocketOriginAllowed(req)) {
+    return { statusCode: 403, code: 'origin_forbidden', message: 'Cross-origin web app request denied' };
+  }
+
+  const mode = getWebAppAuthMode();
+  const tokenFreeHost = isTrustedTokenFreeHostRequest(req);
+  if (!tokenFreeHost && mode === 'ui-gate' && !isServerUiAuthRequestAllowed(req)) {
+    return { statusCode: 401, code: 'ui_gate_required', message: 'Rivet access key required' };
+  }
+
+  const oauthSession = !tokenFreeHost && mode === 'oauth' ? readWebAppOAuthSession(req) : null;
+  if (!tokenFreeHost && mode === 'oauth' && !oauthSession) {
+    return { statusCode: 401, code: 'oauth_required', message: 'OAuth login required' };
+  }
+
+  const slug = normalizeStoredEndpointName(rawSlug);
+  if (!slug) {
+    return { statusCode: 400, code: 'invalid_slug', message: 'Web app slug is required' };
+  }
+
+  const executionProject = routeKind === 'published'
+    ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
+    : await resolveLatestWebAppExecutionProjectWithBackend(slug);
+  if (!executionProject) {
+    return {
+      statusCode: 404,
+      code: 'not_found',
+      message: routeKind === 'published' ? 'Published Rivet web app not found' : 'Latest Rivet web app not found',
+    };
+  }
+
+  if (
+    !tokenFreeHost &&
+    mode === 'oauth' &&
+    !isWebAppOAuthSessionAllowed(oauthSession, executionProject.webAppAllowedEmails ?? [])
+  ) {
+    return { statusCode: 403, code: 'oauth_forbidden', message: 'Forbidden' };
+  }
+
+  const uiGraph = resolveWebAppUiGraph(executionProject);
+  if (!uiGraph) {
+    return { statusCode: 404, code: 'not_found', message: 'Rivet web app not found' };
+  }
+
+  let principal = tokenFreeHost ? 'trusted-host' : mode;
+  if (oauthSession) {
+    try {
+      principal = `oauth:${getWebAppOAuthSessionOwnerKey(oauthSession)}`;
+    } catch {
+      return { statusCode: 401, code: 'oauth_required', message: 'OAuth login required' };
+    }
+  }
+
+  return {
+    executionProject,
+    uiGraph,
+    ownerScope: [principal, routeKind, slug, executionProject.revisionKey].join(':'),
+  };
+}
+
+export function createWebAppSocketFetchRequest(req: IncomingMessage): globalThis.Request {
+  const origin = getWebAppSocketRequestOrigin(req) ?? 'http://rivet.local';
+  const headers = normalizeWorkflowRequestHeadersForContext(req.headers, {
+    excludeHeaderNames: SENSITIVE_WEB_APP_ACTION_HEADER_NAMES,
+  });
+  return new globalThis.Request(new URL(req.url || '/', origin), { headers });
+}
+
+export async function createWebAppProcessorOptions(
   executionProject: WorkflowExecutionProject,
-  req: Request,
+  req: Pick<Request | IncomingMessage, 'headers'>,
   codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
   options?: {
     enableRemoteDebugger?: boolean;
@@ -1050,6 +1174,24 @@ function enqueueExecutionRecording(
       errorMessage: recording.errorMessage,
     });
   });
+}
+
+export function enqueueWebAppActionRecording(
+  executionProject: WorkflowExecutionProject,
+  recorder: ExecutionRecorder | null,
+  durationMs: number,
+  status: 'succeeded' | 'failed' | 'suspicious',
+  errorMessage: string | undefined,
+  options: {
+    endpointName: string;
+    runKind: 'published' | 'latest';
+  },
+): void {
+  enqueueExecutionRecording(
+    executionProject,
+    { recorder, durationMs, status, errorMessage },
+    options,
+  );
 }
 
 async function executeWorkflowEndpoint(
@@ -1231,7 +1373,10 @@ async function handleWebAppHtmlRequest(req: Request, res: Response, routeKind: W
     }
 
     const html = renderRivetWebAppHtml(uiGraph, {
-      actionPath: `${getWebAppBasePath(routeKind, resolved.slug)}/actions/run`,
+      actionTransport: {
+        type: 'websocket',
+        socketPath: `${getWebAppBasePath(routeKind, resolved.slug)}/actions/ws`,
+      },
       revisionKey: resolved.executionProject.revisionKey,
     });
     sendHtmlWithDuration(

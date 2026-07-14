@@ -33,6 +33,10 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.match(proxyBootstrap, /location \$\{RIVET_LATEST_WORKFLOWS_BASE_PATH\}\/ \{/);
   assert.match(proxyBootstrap, /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/ \{/);
   assert.match(proxyBootstrap, /proxy_pass \\\$execution_upstream;[\s\S]*proxy_pass \\\$execution_upstream;[\s\S]*proxy_pass \\\$api_upstream;[\s\S]*proxy_pass \\\$api_upstream;/);
+  assert.match(proxyBootstrap, /location ~ \^\$\{RIVET_WEB_APPS_BASE_PATH\}\/\[\^\/\]\+\/actions\/ws\$ \{/);
+  assert.match(proxyBootstrap, /location ~ \^\$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\[\^\/\]\+\/actions\/ws\$ \{/);
+  assert.match(proxyBootstrap, /actions\/ws\$ \{[\s\S]*?proxy_pass \\\$execution_upstream;[\s\S]*?proxy_set_header Upgrade \\\$http_upgrade;[\s\S]*?proxy_read_timeout 86400s;[\s\S]*?proxy_buffering off;/);
+  assert.match(proxyBootstrap, /actions\/ws\$ \{[\s\S]*?proxy_pass \\\$api_upstream;[\s\S]*?proxy_set_header Upgrade \\\$http_upgrade;[\s\S]*?proxy_read_timeout 86400s;[\s\S]*?proxy_buffering off;/);
 
   const latestDebuggerLocation = proxyLocation(imageProxyTemplate, /location \/ws\/latest-debugger\s*\{/);
   assert.match(imageProxyTemplate, /set \$api_latest_debugger_upstream http:\/\/\$\{RIVET_API_UPSTREAM_HOST\}:\$\{RIVET_API_UPSTREAM_PORT\}\/ws\/latest-debugger;/);

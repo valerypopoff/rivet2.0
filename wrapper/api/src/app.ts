@@ -165,6 +165,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
       `${publishedAppsBasePath}/auth/logout`,
       `${latestWorkflowsBasePath}/:endpointName`,
       `${latestAppsBasePath}/:slug`,
+      `${latestAppsBasePath}/:slug/actions/ws`,
       '/api/native/*',
       '/api/shell/*',
       '/api/plugins/*',
@@ -183,6 +184,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
       `${publishedAppsBasePath}/auth/logout`,
       `${publishedWorkflowsBasePath}/:endpointName`,
       `${publishedAppsBasePath}/:slug`,
+      `${publishedAppsBasePath}/:slug/actions/ws`,
       '/internal/workflows/:endpointName',
     );
   }

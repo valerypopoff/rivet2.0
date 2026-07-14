@@ -9,6 +9,12 @@ import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-set
 import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import {
+  closeWebSocket,
+  connectWebSocket,
+  expectWebSocketConnectionFailure,
+  waitForWebSocketMessages,
+} from './helpers/websocket-harness.js';
+import {
   createWebAppProject,
   createWebAppProjectWithUiGraphs,
   extractWebAppRevisionKey,
@@ -224,6 +230,23 @@ function createSignedOAuthSessionCookie(email: string, secret: string): string {
 function decodeSignedPayload(value: string): Record<string, unknown> {
   const payload = value.split('.')[0] ?? '';
   return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+}
+
+function toWebAppSocketUrl(baseUrl: string, slug: string): string {
+  return `${baseUrl.replace(/^http/, 'ws')}/${encodeURIComponent(slug)}/actions/ws`;
+}
+
+function parseWebAppSocketMessage(raw: import('ws').RawData): {
+  data: Record<string, unknown>;
+  message: string;
+} {
+  const data = JSON.parse(raw.toString()) as Record<string, unknown>;
+  const message = typeof data.type === 'string' ? data.type : '';
+  if (!message) {
+    throw new Error(`Web app WebSocket message did not include a type: ${raw.toString()}`);
+  }
+
+  return { data, message };
 }
 
 test('workflow web app publication routes publish multiple project web apps independently', async () => {
@@ -555,7 +578,7 @@ test('published filesystem web apps serve HTML and app JSON from the published s
     assert.match(htmlResponse.headers.get('content-type') ?? '', /text\/html/);
     assert.match(html, /Published Web App/);
     assert.doesNotMatch(html, /Draft Web App/);
-    assert.match(html, /\/apps\/published-web-app\/actions\/run/);
+    assert.match(html, /\/apps\/published-web-app\/actions\/ws/);
     assert.match(extractWebAppRevisionKey(html), /^filesystem-web-app:/);
 
     const appJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app/app.json`, {
@@ -583,7 +606,7 @@ test('latest filesystem web apps serve the saved draft for a published web app s
     assert.equal(publishedHtmlResponse.status, 200);
     assert.match(publishedHtml, /Published Latest Web App/);
     assert.doesNotMatch(publishedHtml, /Draft Latest Web App/);
-    assert.match(publishedHtml, /\/apps\/latest-web-app\/actions\/run/);
+    assert.match(publishedHtml, /\/apps\/latest-web-app\/actions\/ws/);
 
     const latestHtmlResponse = await fetch(`${latestWebAppsBaseUrl}/latest-web-app`, {
       signal: AbortSignal.timeout(5000),
@@ -593,7 +616,7 @@ test('latest filesystem web apps serve the saved draft for a published web app s
     assert.equal(latestHtmlResponse.status, 200);
     assert.match(latestHtml, /Draft Latest Web App/);
     assert.doesNotMatch(latestHtml, /Published Latest Web App/);
-    assert.match(latestHtml, /\/apps-latest\/latest-web-app\/actions\/run/);
+    assert.match(latestHtml, /\/apps-latest\/latest-web-app\/actions\/ws/);
 
     const latestAppJsonResponse = await fetch(`${latestWebAppsBaseUrl}/latest-web-app/app.json`, {
       signal: AbortSignal.timeout(5000),
@@ -939,6 +962,30 @@ test('published filesystem web apps can use OAuth instead of the UI key gate', a
       const actionBody = await actionResponse.json() as { error?: string; code?: string };
       assert.equal(actionBody.error, 'OAuth login required');
       assert.equal(actionBody.code, 'oauth_required');
+
+      const unauthenticatedSocket = await expectWebSocketConnectionFailure(
+        toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-oauth'),
+        { headers: { origin: webAppsBaseUrl } },
+      );
+      assert.equal(unauthenticatedSocket.statusCode, 401);
+
+      const deniedSocket = await expectWebSocketConnectionFailure(
+        toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-oauth'),
+        { headers: { cookie: deniedSessionCookie, origin: webAppsBaseUrl } },
+      );
+      assert.equal(deniedSocket.statusCode, 403);
+
+      const allowedSocket = await connectWebSocket(
+        toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-oauth'),
+        { headers: { cookie: allowedSessionCookie, origin: webAppsBaseUrl } },
+      );
+      try {
+        const ready = waitForWebSocketMessages(allowedSocket, ['server.ready'], { parser: parseWebAppSocketMessage });
+        allowedSocket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+        await ready;
+      } finally {
+        closeWebSocket(allowedSocket);
+      }
     });
     });
   });
@@ -995,6 +1042,86 @@ test('published filesystem web app actions run through the wrapper execution dep
     assert.equal(actionResponse.status, 200);
     assert.deepEqual(actionBody.outputs?.value, { type: 'string', value: 'hello from web app' });
     assert.deepEqual(actionBody.statePatch, { result: 'hello from web app' });
+  });
+});
+
+test('published filesystem web app actions use authenticated same-origin WebSockets and persist recordings', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppSocketAction');
+  await writeWebAppProject(created.absolutePath, 'PublishedWebAppSocketAction', 'Published Socket Action App');
+  await publishWebApp(created.relativePath, 'published-web-app-socket-action');
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl, webAppsBaseUrl }) => {
+    const html = await (await fetch(`${webAppsBaseUrl}/published-web-app-socket-action`, {
+      signal: AbortSignal.timeout(5000),
+    })).text();
+    const revisionKey = extractWebAppRevisionKey(html);
+    assert.match(html, /\/actions\/ws/);
+
+    const socket = await connectWebSocket(
+      toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-socket-action'),
+      { headers: { origin: webAppsBaseUrl } },
+    );
+    try {
+      const ready = waitForWebSocketMessages(socket, ['server.ready'], { parser: parseWebAppSocketMessage });
+      socket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+      await ready;
+
+      const terminal = waitForWebSocketMessages(socket, ['action.accepted', 'action.completed'], {
+        parser: parseWebAppSocketMessage,
+      });
+      socket.send(JSON.stringify({
+        type: 'action.start',
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+        requestId: 'published-web-app-socket-action',
+        revisionKey,
+        state: { prompt: 'hello from web app WebSocket' },
+      }));
+
+      const messages = await terminal;
+      const accepted = messages.find((message) => message.message === 'action.accepted')?.data as Record<string, unknown> | undefined;
+      const completed = messages.find((message) => message.message === 'action.completed')?.data as Record<string, unknown> | undefined;
+      assert.equal(typeof accepted?.runId, 'string');
+      assert.deepEqual(completed?.statePatch, { result: 'hello from web app WebSocket' });
+
+      const recordings = await waitForRecordingWorkflows(
+        apiBaseUrl,
+        (items) => items[0]?.totalRuns === 1,
+      ) as { workflows: Array<{ workflowId: string; totalRuns: number }> };
+      const workflow = recordings.workflows[0];
+      assert.ok(workflow);
+      assert.equal(workflow.totalRuns, 1);
+
+      const runPage = await readJson<{
+        runs: Array<{ endpointNameAtExecution?: string }>;
+      }>(await fetch(`${apiBaseUrl}/recordings/workflows/${workflow.workflowId}/runs?page=1&pageSize=20&status=all`));
+      assert.equal(runPage.runs[0]?.endpointNameAtExecution, '/apps/published-web-app-socket-action');
+    } finally {
+      closeWebSocket(socket);
+    }
+  });
+});
+
+test('published filesystem web app WebSocket upgrades reject a cross-origin browser', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppSocketOrigin');
+  await writeWebAppProject(created.absolutePath, 'PublishedWebAppSocketOrigin', 'Published Socket Origin App');
+  await publishWebApp(created.relativePath, 'published-web-app-socket-origin');
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    const failure = await expectWebSocketConnectionFailure(
+      toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-socket-origin'),
+      { headers: { origin: 'https://untrusted.example.test' } },
+    );
+    assert.equal(failure.statusCode, 403);
+  });
+});
+
+test('malformed filesystem web app WebSocket upgrades fail promptly', async () => {
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    const failure = await expectWebSocketConnectionFailure(
+      `${toWebAppSocketUrl(webAppsBaseUrl, 'missing-web-app')}/unexpected`,
+      { headers: { origin: webAppsBaseUrl } },
+    );
+    assert.equal(failure.statusCode, 404);
   });
 });
 

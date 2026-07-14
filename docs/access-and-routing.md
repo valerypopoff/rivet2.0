@@ -30,18 +30,21 @@ The Docker dev and production stacks expose these route families through nginx:
 | `/api/*` | control-plane `api` | Wrapper API surface |
 | `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}/:endpointName` | execution-plane `api` | Execute frozen published workflow snapshot |
 | `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug` | execution-plane `api` | Serve one published declarative Rivet web app from its frozen project snapshot |
+| `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/actions/ws` | execution-plane `api` | Resumable WebSocket transport for published web-app graph actions |
 | `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}/:endpointName` | control-plane `api` | Execute the latest live draft for a still-published workflow, keyed by the current draft endpoint |
 | `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug` | control-plane `api` | Serve one published declarative Rivet web app from the latest saved draft/current server-side project |
+| `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/ws` | control-plane `api` | Resumable WebSocket transport for latest-draft web-app graph actions |
 | `/ws/latest-debugger` | control-plane `api` | Latest workflow and latest web-app action remote debugger websocket |
 | `/ws/executor/internal` | `executor` | Hosted editor execution websocket |
 | `/ws/executor` | `executor` | Upstream-compatible executor websocket path |
 
-The nginx configs keep a `100 MiB` server-wide body limit for API/editor payloads. App Settings -> `Web apps` can independently change the maximum JSON data a web-app button action may send (default `100 MiB`); nginx hot-reloads that value as a location-specific `client_max_body_size` for the published and latest web-app route families, and the API enforces the same limit when it receives an action directly. If an external ingress or host reverse proxy sits in front of Rivet, it must independently allow at least the same body size; the wrapper cannot reconfigure infrastructure outside its own proxy container.
+The nginx configs keep a `100 MiB` server-wide body limit for API/editor payloads. App Settings -> `Web apps` can independently change the maximum JSON data a web-app button action may send (default `100 MiB`); nginx hot-reloads that value as a location-specific `client_max_body_size` for the published and latest web-app route families, and the API enforces the same limit when it receives an HTTP action directly. The WebSocket server captures its message cap when the API process starts, so after changing this setting, gracefully restart/recreate the API process after any active actions finish. If an external ingress or host reverse proxy sits in front of Rivet, it must independently allow at least the same body size; the wrapper cannot reconfigure infrastructure outside its own proxy container.
 
 Current proxy timeout behavior:
 
 - `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` use the App Settings -> `Workflow endpoints` HTTP timeout, saved in seconds under `settings/runtime-limits.json` and defaulting to `180`; the proxy watches that file and rewrites a generated timeout include before reloading nginx
 - websocket routes stay long-lived at `86400s`; the workflow-endpoint timeout is only for the standard HTTP upstream routes
+- web-app action sockets use `Upgrade`/`Connection: upgrade`, disable proxy buffering, and stay on their route family: published actions reach execution and latest actions reach control
 - this proxy timeout is separate from App Settings -> `General` shell command limits, which only apply to hosted shell execution under `/api/shell/exec`
 
 Important local-Docker wiring note:
@@ -62,6 +65,14 @@ The browser transport seams now match the backend route split more explicitly:
 - wrapper code still owns dashboard/editor `window.postMessage` commands and hosted project IO
 
 Those executor websocket responsibilities are separate from the dashboard/editor `window.postMessage` bridge. The bridge coordinates project-open/save/delete/path-move behavior between browsing contexts; the executor session talks to executor routes.
+
+## Web-app action sockets
+
+Newly rendered web-app pages use `${RIVET_PUBLISHED_APPS_BASE_PATH}/:slug/actions/ws` or `${RIVET_LATEST_APPS_BASE_PATH}/:slug/actions/ws`. The upstream client performs the protocol handshake, starts actions idempotently, streams `Report Progress` events, reconnects, resumes by durable sequence number, and can cancel an accepted run. The existing `POST .../actions/run` routes remain mounted for pages rendered by older Rivet builds; the generated client deliberately does not retry a WebSocket action through HTTP because that could duplicate side effects.
+
+The wrapper authorizes an upgrade before resolving the project. It requires a same-origin `Origin` header even for `No gate` and trusted-host web apps, then applies the same UI-key or OAuth policy and per-app OAuth email allowlist as the HTML route. Its owner scope includes the route kind, app slug, pinned revision, and an HMAC-derived OAuth user key when OAuth is active. A socket can therefore resume or cancel only runs in its own authorization scope.
+
+Published sockets are routed to the execution plane; latest sockets are routed to the control plane and receive the same optional latest Remote Debugger attachment as latest HTTP actions. Both transports use the same project resolver, datasets, references, `ManagedCodeRunner`, request-header sanitization, and Run recordings metadata.
 
 ## `/api/*` route families
 

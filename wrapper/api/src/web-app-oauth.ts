@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import { Router, type Request, type Response } from 'express';
 
 import { getPublishedWebAppsBasePath } from './workflowEndpointPaths.js';
@@ -188,8 +189,9 @@ function getOAuthSettingsSessionVersion(): string {
     .digest('base64url');
 }
 
-function readCookie(req: Request, name: string): string | null {
-  const cookieHeader = req.get('cookie') ?? '';
+function readCookie(req: Request | IncomingMessage, name: string): string | null {
+  const rawCookieHeader = 'get' in req ? req.get('cookie') : req.headers.cookie;
+  const cookieHeader = Array.isArray(rawCookieHeader) ? rawCookieHeader.join(';') : rawCookieHeader ?? '';
   for (const cookie of cookieHeader.split(';')) {
     const separatorIndex = cookie.indexOf('=');
     if (separatorIndex < 0) {
@@ -340,7 +342,7 @@ export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: s
   };
 }
 
-export function readWebAppOAuthSession(req: Request): WebAppOAuthSession | null {
+export function readWebAppOAuthSession(req: Request | IncomingMessage): WebAppOAuthSession | null {
   const payload = readSignedPayload<WebAppOAuthSession>(readCookie(req, OAUTH_SESSION_COOKIE_NAME));
   if (!payload || typeof payload.email !== 'string') {
     return null;
@@ -359,6 +361,16 @@ export function readWebAppOAuthSession(req: Request): WebAppOAuthSession | null 
 
   const email = payload.email.trim().toLowerCase();
   return email ? { email, expiresAt: payload.expiresAt, settingsVersion: payload.settingsVersion } : null;
+}
+
+/**
+ * A stable, non-PII OAuth principal for run ownership. It intentionally uses
+ * the same rotating session secret as the signed browser session.
+ */
+export function getWebAppOAuthSessionOwnerKey(session: WebAppOAuthSession): string {
+  return createHmac('sha256', getSigningSecret())
+    .update(`web-app-owner:${session.email}`)
+    .digest('base64url');
 }
 
 export function isWebAppOAuthSessionAllowed(

@@ -3,6 +3,8 @@ import type { TestContext } from 'node:test';
 import express from 'express';
 import type { NextFunction, Request, Response as ExpressResponse, Router } from 'express';
 
+import type { WebAppActionWebSocketRuntime } from '../../web-app-action-websocket.js';
+
 import { listenTestServer } from './http-server-harness.js';
 
 type InitializeWorkflowStorage = () => Promise<void>;
@@ -13,6 +15,7 @@ type WorkflowApiServerHarnessOptions = {
 };
 
 type WorkflowExecutionServerHarnessOptions = WorkflowApiServerHarnessOptions & {
+  initializeWebAppActionWebSockets?: (server: http.Server) => Promise<WebAppActionWebSocketRuntime>;
   latestWebAppsRouter?: Router;
   publishedWebAppsRouter?: Router;
   publishedWorkflowsRouter: Router;
@@ -136,6 +139,7 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
     attachJsonFallbackHandlers(app);
 
     const server = http.createServer(app);
+    const webAppActionWebSockets = await options.initializeWebAppActionWebSockets?.(server);
     const listener = await listenTestServer(server);
 
     try {
@@ -147,6 +151,7 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
         latestBaseUrl: `${listener.baseUrl}/workflows-latest`,
       });
     } finally {
+      await webAppActionWebSockets?.dispose({ interrupt: true });
       await listener.close();
     }
   };

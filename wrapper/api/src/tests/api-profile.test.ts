@@ -118,6 +118,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/apps/auth/logout',
     '/workflows-latest/:endpointName',
     '/apps-latest/:slug',
+    '/apps-latest/:slug/actions/ws',
     '/api/native/*',
     '/api/shell/*',
     '/api/plugins/*',
@@ -134,6 +135,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/apps/auth/logout',
     '/workflows/:endpointName',
     '/apps/:slug',
+    '/apps/:slug/actions/ws',
     '/internal/workflows/:endpointName',
   ]);
 
@@ -147,6 +149,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/apps/auth/logout',
     '/workflows-latest/:endpointName',
     '/apps-latest/:slug',
+    '/apps-latest/:slug/actions/ws',
     '/api/native/*',
     '/api/shell/*',
     '/api/plugins/*',
@@ -157,6 +160,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/config*',
     '/workflows/:endpointName',
     '/apps/:slug',
+    '/apps/:slug/actions/ws',
     '/internal/workflows/:endpointName',
   ]);
 });

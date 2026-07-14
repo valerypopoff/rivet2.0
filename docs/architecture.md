@@ -47,7 +47,7 @@ The current runtime keeps the control plane conservative while published executi
   - latest execution, latest web apps, and latest debugger
 - execution plane
   - published endpoint execution
-  - published Rivet web app HTML, app JSON, and action execution
+  - published Rivet web app HTML, app JSON, HTTP action compatibility, and resumable WebSocket action execution
   - internal published-only execution for trusted in-cluster callers
 
 That control-plane singleton is intentional, not accidental. In the current supported Kubernetes topology:
@@ -61,6 +61,12 @@ That control-plane singleton is intentional, not accidental. In the current supp
 - the latest debugger is still process-local rather than a distributed cross-replica service
 
 The important operational detail is that these tiers scale independently. A new execution replica is only another execution-plane API pod; it does not automatically imply a matching proxy pod. In an endpoint-heavy deployment, `execution` is the primary scale target, `proxy` is the supporting ingress tier, `web` can remain fixed at `1`, and `backend` remains singleton by constraint rather than by capacity preference.
+
+### Resumable web-app action transport
+
+Newly rendered Rivet web apps call graph-backed buttons over `/apps/<slug>/actions/ws` or `/apps-latest/<slug>/actions/ws`. The upstream client owns the WebSocket protocol, button-local progress/loading state, reconnect, replay, cancellation, and idempotent request IDs. The wrapper owns route selection, same-origin upgrade checks, web-app gate/OAuth policy, project/revision resolution, `ManagedCodeRunner`, datasets, project references, latest Remote Debugger attachment, and recorder persistence. It keeps the legacy `POST .../actions/run` endpoint for already-open pages emitted by an older renderer, but never retries a WebSocket action through HTTP because that could repeat an external side effect.
+
+Filesystem deployments use upstream's process-local action ledger. Managed deployments use the wrapper's Postgres-backed run store and coordinator: the run record carries an owner scope, lease, sequenced event replay, and cancellation command; Postgres `LISTEN`/`NOTIFY` wakes connected replicas while batched polling covers missed notifications. Both delivery paths are at-least-once, and the coordinator suppresses already-delivered event sequences before invoking subscriptions. A cancellation stays accepted once its database command is stored even if the notification is temporarily unavailable, because polling will deliver it to the owner. The graph processor stays on its owning API process, so another replica can replay durable events but never takes over a live run. Pod/runner identities come from `RIVET_RUNNER_SLOT_ID` in Kubernetes and hostname elsewhere. A drained or failed owner records an explicit interruption once its lease expires. Short-lived transport rows are pruned after 24 hours and are intentionally separate from long-lived Run recordings; recorder attachment happens before `processor.run()`, while persistence waits for the upstream durable terminal event.
 
 ## Hosted UI model
 

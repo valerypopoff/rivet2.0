@@ -109,7 +109,7 @@ export function WebAppsSettingsTab({
           onRevert={() => limits.revert('web-app-request-size')}
           onSave={() => limits.save('web-app-request-size')}
           saved={limitStatus && limits.saved}
-          savedMessage="Saved. Applying within a few seconds."
+          savedMessage="Saved. Nginx reloads shortly; restart the API to apply the new WebSocket message limit."
         />
       </section>
     </div>
