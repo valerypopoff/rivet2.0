@@ -24,9 +24,7 @@ export const DeleteResourceConfirmModal: FC<{
         <ModalBody>
           <div css={confirmBody}>
             <p>
-              Delete <strong>{resourceName}</strong>?
-            </p>
-            <p>This cannot be undone.</p>
+              Delete <strong>{resourceName}</strong>? This cannot be undone.</p>
           </div>
         </ModalBody>
         <ModalFooter>
