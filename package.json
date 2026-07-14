@@ -1,7 +1,7 @@
 {
   "name": "rivet-studio-server",
   "private": true,
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Root launcher for the Rivet Studio Server Docker stacks",
   "scripts": {
     "pretest": "node scripts/ensure-dev-deps.mjs",
