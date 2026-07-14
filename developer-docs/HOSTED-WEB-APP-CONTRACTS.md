@@ -130,6 +130,22 @@ Button actions write the same UI data key, the latest-started action owns that k
 disjoint state patches still apply, and a newer direct form edit prevents an older
 action from overwriting it. Chat message keys are component-specific.
 
+Core graph processors provide the External Call function `setWebAppStatus`,
+including desktop Node processors and nested graphs. The function receives the first
+External Call argument, converts strings directly and other values to JSON/string
+text, then reports it through normal `GraphProgress`; the shared normalizer caps the
+visible message before transport. Web-app action processors reserve the name after
+host options are applied, so the web-app behavior cannot be replaced accidentally.
+Desktop preview receives the message through its local progress callback; hosted
+WebSocket pages receive it as an `action.progress` event. HTTP actions retain the
+same function for consistency, but cannot display intermediate status before the
+response completes. Status is component-scoped, renders beneath its Button controls,
+and is cleared by the shared interaction controller when the action finishes, fails,
+is cancelled, or is interrupted. Ordinary graph runs may emit the same progress
+event, but only a host with a web-app progress surface displays it. Other
+host-supplied external functions are preserved, and no web-app-specific executor
+marker is needed.
+
 ### Long-running WebSocket actions
 
 HTTP actions remain the compatibility/default path. A host opts a rendered page
@@ -302,9 +318,11 @@ actions instead detach on unload so the server run can continue. Automatic repla
 covers temporary socket loss while the same page is alive; a full reload does not
 currently restore the browser-side run handle unless the host adds its own run
 discovery/session restoration. Detach releases browser-side promises and listeners
-without sending cancellation. Explicit **Stop** sends
+without sending cancellation. Explicit **Abort** sends
 `action.cancel`, immediately records/broadcasts `action.cancelled`, and requests
-processor abort. Revision mismatch remains a terminal error and uses the existing
+processor abort. Button actions keep their authored label while running and show
+the shared circular running indicator to its right. Revision mismatch remains a
+terminal error and uses the existing
 blocking reload modal. `runRivetWebAppAction(...)` prefers an explicit
 `createProcessorOptions.abortSignal`, then falls back to the supplied Fetch
 `Request.signal`. It forwards that source through an action-scoped signal and removes

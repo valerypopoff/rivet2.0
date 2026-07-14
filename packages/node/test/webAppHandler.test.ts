@@ -92,6 +92,38 @@ function makeProject(): Project {
   } as Project;
 }
 
+function makeExternalStatusProject(): Project {
+  const project = makeProject();
+  project.graphs[graphId]!.nodes = [
+    {
+      data: { dataType: 'string', id: 'input' },
+      id: 'input-node',
+      title: 'Input',
+      type: 'graphInput',
+      visualData: { x: 0, y: 0 },
+    },
+    {
+      data: { functionName: 'setWebAppStatus', useErrorOutput: false, useFunctionNameInput: false },
+      id: 'status-node',
+      title: 'Set web app status',
+      type: 'externalCall',
+      visualData: { x: 200, y: 0 },
+    },
+    {
+      data: { dataType: 'string', id: 'value' },
+      id: 'output-node',
+      title: 'Output',
+      type: 'graphOutput',
+      visualData: { x: 400, y: 0 },
+    },
+  ];
+  project.graphs[graphId]!.connections = [
+    { inputId: 'arguments', inputNodeId: 'status-node', outputId: 'data', outputNodeId: 'input-node' },
+    { inputId: 'value', inputNodeId: 'output-node', outputId: 'result', outputNodeId: 'status-node' },
+  ];
+  return project;
+}
+
 void describe('createRivetWebAppHandler', () => {
   void it('rejects malformed UI graphs before serving requests', () => {
     const project = makeProject();
@@ -453,8 +485,10 @@ void describe('createRivetWebAppHandler', () => {
     assert.deepEqual(requests, [{ componentId: 'ui-graph-component-2', state: {} }]);
     assert.equal(buttons[0]?.textContent, 'Run');
     assert.equal(buttons[0]?.disabled, false);
-    assert.equal(buttons[1]?.textContent, 'Running...');
+    assert.equal(buttons[1]?.textContent, 'Second');
+    assert.ok(buttons[1]?.querySelector('.rivet-web-app-running-indicator'));
     assert.equal(buttons[1]?.disabled, true);
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-abort-button')?.textContent, 'Abort');
 
     resolveAction({
       ok: true,
@@ -496,9 +530,11 @@ void describe('createRivetWebAppHandler', () => {
     let buttons = [
       ...dom.window.document.querySelectorAll('.rivet-web-app-action-stack > .rivet-web-app-button'),
     ] as HTMLButtonElement[];
-    assert.equal(buttons[0]?.textContent, 'Running...');
+    assert.equal(buttons[0]?.textContent, 'First');
+    assert.ok(buttons[0]?.querySelector('.rivet-web-app-running-indicator'));
     assert.equal(buttons[0]?.disabled, true);
-    assert.equal(buttons[1]?.textContent, 'Running...');
+    assert.equal(buttons[1]?.textContent, 'Second');
+    assert.ok(buttons[1]?.querySelector('.rivet-web-app-running-indicator'));
     assert.equal(buttons[1]?.disabled, true);
 
     resolveAction.get('first-button')?.({
@@ -513,7 +549,8 @@ void describe('createRivetWebAppHandler', () => {
     ] as HTMLButtonElement[];
     assert.equal(buttons[0]?.textContent, 'First');
     assert.equal(buttons[0]?.disabled, false);
-    assert.equal(buttons[1]?.textContent, 'Running...');
+    assert.equal(buttons[1]?.textContent, 'Second');
+    assert.ok(buttons[1]?.querySelector('.rivet-web-app-running-indicator'));
     assert.equal(buttons[1]?.disabled, true);
     assert.equal(dom.window.document.querySelector('.rivet-web-app-output pre')?.textContent, '');
 
@@ -611,7 +648,7 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(rerenderedInput.selectionStart, 1);
     assert.equal(rerenderedInput.selectionEnd, 4);
 
-    (dom.window.document.querySelector('.rivet-web-app-stop-button') as HTMLButtonElement).click();
+    (dom.window.document.querySelector('.rivet-web-app-abort-button') as HTMLButtonElement).click();
     assert.deepEqual(socket.sent.at(-1), { type: 'action.cancel', runId: 'run-1' });
     socket.receive({
       type: 'action.cancelled',
@@ -842,7 +879,7 @@ void describe('createRivetWebAppHandler', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const firstSocket = sockets[0]!;
     const start = firstSocket.sent.find((message) => message.type === 'action.start')!;
-    (dom.window.document.querySelector('.rivet-web-app-stop-button') as HTMLButtonElement).click();
+    (dom.window.document.querySelector('.rivet-web-app-abort-button') as HTMLButtonElement).click();
     firstSocket.close();
 
     await new Promise((resolve) => setTimeout(resolve, 550));
@@ -957,6 +994,14 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(
       RIVET_WEB_APP_RENDERER_CSS,
       /\.rivet-web-app-component-frame\[data-rivet-web-app-component-type='chat'\][\s\S]*flex: 1 0/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-button\s*\{[\s\S]*width: fit-content;[\s\S]*height: var\(--rivet-web-app-button-height\);[\s\S]*padding: 0\.5rem 1rem;/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-action-stack-running > \.rivet-web-app-button,[\s\S]*height: var\(--rivet-web-app-button-height\);[\s\S]*padding: 0\.5rem 1rem;/,
     );
     assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-chat-messages\s*\{[\s\S]*overflow-y: auto;/);
     assert.match(
@@ -1235,6 +1280,23 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.deepEqual(result.outputs.value, { type: 'string', value: 'hello' });
     assert.deepEqual(result.statePatch, { result: 'hello' });
+  });
+
+  void it('exposes setWebAppStatus to the action graph and forwards its message as progress', async () => {
+    const project = makeExternalStatusProject();
+    const progress: unknown[] = [];
+
+    const result = await runRivetWebAppAction(project, {
+      componentId: 'run-button',
+      createProcessorOptions: {
+        onProgress: ({ progress: nextProgress }) => progress.push(nextProgress),
+      },
+      state: { prompt: 'Preparing the answer' },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    assert.deepEqual(progress, [{ message: 'Preparing the answer' }]);
+    assert.deepEqual(result.outputs.value, { type: 'string', value: 'Preparing the answer' });
   });
 
   void it('prepares an inspectable action without starting it and runs it only once', async () => {

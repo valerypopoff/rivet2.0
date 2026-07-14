@@ -276,20 +276,31 @@ if (config && root) {
       }
       case 'button': {
         const isRunning = interaction.runningComponentIds.has(renderModel.component.id);
-        const button = createElement('button', {
-          className: 'rivet-web-app-button',
-          onClick: () => void runAction(renderModel.component),
-          text: isRunning ? 'Running...' : renderModel.label,
-          type: 'button',
-        });
+        const button = createElement(
+          'button',
+          {
+            'aria-busy': isRunning,
+            'aria-label': isRunning ? `${renderModel.label} (running)` : undefined,
+            className: 'rivet-web-app-button',
+            onClick: () => void runAction(renderModel.component),
+            text: isRunning ? renderModel.label : undefined,
+            type: 'button',
+          },
+          isRunning
+            ? [createElement('span', { 'aria-hidden': 'true', className: 'rivet-web-app-running-indicator' })]
+            : [],
+        );
+        if (!isRunning) {
+          button.textContent = renderModel.label;
+        }
         (button as HTMLButtonElement).disabled = isRunning;
         const actionChildren: Node[] = [button];
         if (isRunning) {
           actionChildren.push(
             createElement('button', {
-              className: 'rivet-web-app-stop-button',
+              className: 'rivet-web-app-abort-button',
               onClick: () => interactionController.cancelAction(renderModel.component.id),
-              text: 'Stop',
+              text: 'Abort',
               type: 'button',
             }),
           );
@@ -297,7 +308,11 @@ if (config && root) {
         const progress = interaction.actionProgress[renderModel.component.id];
         const progressElement = renderActionProgress(progress);
         if (progressElement) actionChildren.push(progressElement);
-        content = createElement('div', { className: 'rivet-web-app-action-stack' }, actionChildren);
+        content = createElement(
+          'div',
+          { className: `rivet-web-app-action-stack${isRunning ? ' rivet-web-app-action-stack-running' : ''}` },
+          actionChildren,
+        );
         break;
       }
       case 'chat': {
@@ -386,9 +401,9 @@ if (config && root) {
         if (isRunning) {
           headerActions.push(
             createElement('button', {
-              className: 'rivet-web-app-stop-button',
+              className: 'rivet-web-app-abort-button',
               onClick: () => interactionController.cancelAction(renderModel.component.id),
-              text: 'Stop',
+              text: 'Abort',
               type: 'button',
             }),
           );

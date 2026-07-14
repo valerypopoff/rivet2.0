@@ -6,7 +6,8 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   --rivet-web-app-card-border: var(--foldable-section-border, rgba(255, 255, 255, 0.04));
   --rivet-web-app-control-background: var(--form-control-bg, #20252d);
   --rivet-web-app-control-border: var(--form-control-border, rgba(255, 255, 255, 0.14));
-  --rivet-web-app-button-radius: var(--rivet-web-app-host-button-radius, 6px);
+  --rivet-web-app-button-radius: var(--rivet-web-app-host-button-radius, var(--ui-button-radius, 6px));
+  --rivet-web-app-button-height: calc(32px * var(--ui-font-scale, 1));
   --rivet-web-app-button-background: var(--success, #3ba85b);
   --rivet-web-app-button-foreground: var(--grey-lightest, #ffffff);
   --rivet-web-app-output-title: var(--rivet-web-app-foreground, #ffffff);
@@ -120,28 +121,79 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   background: var(--rivet-web-app-button-background);
   color: var(--rivet-web-app-button-foreground);
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   font: inherit;
-  font-weight: 700;
-  padding: 10px 16px;
+  font-family: var(--font-family, Inter, system-ui, sans-serif);
+  font-size: var(--ui-font-size-base, var(--rivet-web-app-font-size));
+  height: var(--rivet-web-app-button-height);
+  margin: 0;
+  padding: 0.5rem 1rem;
+  corner-shape: squircle;
 }
 
 .rivet-web-app-button:disabled {
+  background: var(--grey-darkish, #30343b);
+  color: var(--grey-light, #b6b8bf);
   cursor: wait;
-  opacity: 0.72;
+  opacity: 0.8;
+}
+
+.rivet-web-app-button:hover:not(:disabled) {
+  background: var(--success-dark, #009624);
+}
+
+.rivet-web-app-running-indicator {
+  box-sizing: border-box;
+  color: currentColor;
+  display: inline-block;
+  width: calc(16px * var(--ui-font-scale, 1));
+  height: calc(16px * var(--ui-font-scale, 1));
+  border: calc(2px * var(--ui-font-scale, 1)) solid currentColor;
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  pointer-events: none;
+  animation: rivet-web-app-running-indicator-spin 0.8s linear infinite;
+}
+
+@keyframes rivet-web-app-running-indicator-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .rivet-web-app-action-stack {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
 }
 
-.rivet-web-app-action-stack .rivet-web-app-progress {
-  flex: 1;
+.rivet-web-app-action-stack-running > .rivet-web-app-button,
+.rivet-web-app-action-stack-running > .rivet-web-app-abort-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--rivet-web-app-button-height);
+  min-height: var(--rivet-web-app-button-height);
+  padding: 0.5rem 1rem;
 }
 
-.rivet-web-app-stop-button {
+.rivet-web-app-action-stack-running > .rivet-web-app-button {
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.rivet-web-app-action-stack .rivet-web-app-progress {
+  flex: 0 0 100%;
+}
+
+.rivet-web-app-abort-button {
   flex: 0 0 auto;
   border: 1px solid var(--rivet-web-app-control-border);
   border-radius: var(--rivet-web-app-button-radius);
@@ -149,12 +201,12 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   color: var(--rivet-web-app-foreground);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--ui-font-size-base, var(--rivet-web-app-font-size));
   padding: 6px 10px;
 }
 
-.rivet-web-app-stop-button:hover,
-.rivet-web-app-stop-button:focus-visible {
+.rivet-web-app-abort-button:hover,
+.rivet-web-app-abort-button:focus-visible {
   border-color: color-mix(in srgb, var(--rivet-web-app-foreground) 40%, transparent);
   outline: none;
 }

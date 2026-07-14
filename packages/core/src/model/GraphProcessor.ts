@@ -72,6 +72,7 @@ import {
 import { emitDetached } from '../utils/emitDetached.js';
 import { GraphRunLifecycle } from './GraphRunLifecycle.js';
 import { normalizeGraphProgress, type GraphProgress } from './GraphProgress.js';
+import { RIVET_WEB_APP_STATUS_FUNCTION_NAME, rivetWebAppStatusExternalFunction } from './UiGraphWebAppStatus.js';
 import {
   createExcludedNodeOutputs,
   getControlFlowExclusionDecision,
@@ -602,6 +603,7 @@ export class GraphProcessor {
     this.#emitter.bindMethods(this as unknown as Record<string, unknown>, ['on', 'off', 'once', 'onAny', 'offAny']);
 
     this.setExternalFunction('echo', async (value) => ({ type: 'any', value }) satisfies DataValue);
+    this.setExternalFunction(RIVET_WEB_APP_STATUS_FUNCTION_NAME, rivetWebAppStatusExternalFunction);
 
     this.#emitter.on('globalSet', ({ id, value }: ProcessEvents['globalSet']) => {
       emitDetached(this.#emitter, `globalSet:${id}`, value);

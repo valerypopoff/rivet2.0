@@ -211,21 +211,25 @@ const RivetWebAppComponent: FC<{
       );
     case 'button':
       return (
-        <div className="rivet-web-app-action-stack">
+        <div className={`rivet-web-app-action-stack${isRunning ? ' rivet-web-app-action-stack-running' : ''}`}>
           <button
+            aria-busy={isRunning}
+            aria-label={isRunning ? `${renderModel.label} (running)` : undefined}
             className="rivet-web-app-button"
             disabled={isRunning}
             onClick={() => void onRunAction(renderModel.component)}
+            type="button"
           >
-            {isRunning ? 'Running...' : renderModel.label}
+            {renderModel.label}
+            {isRunning && <span aria-hidden="true" className="rivet-web-app-running-indicator" />}
           </button>
           {isRunning && (
             <button
               type="button"
-              className="rivet-web-app-stop-button"
+              className="rivet-web-app-abort-button"
               onClick={() => onCancelAction(renderModel.component.id)}
             >
-              Stop
+              Abort
             </button>
           )}
           <RivetWebAppProgress progress={actionProgress} />
@@ -354,8 +358,8 @@ const RivetWebAppChat: FC<{
         <span className="rivet-web-app-chat-header-actions">
           <span className="rivet-web-app-chat-status">{isRunning ? 'Responding' : 'Ready'}</span>
           {isRunning && (
-            <button type="button" className="rivet-web-app-stop-button" onClick={() => onCancelAction(component.id)}>
-              Stop
+            <button type="button" className="rivet-web-app-abort-button" onClick={() => onCancelAction(component.id)}>
+              Abort
             </button>
           )}
         </span>

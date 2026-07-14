@@ -18,6 +18,8 @@ import {
   resolveUiGraphComponentActionOutputStatePatch,
   type UiGraphActionComponent,
   validateUiGraphActionBindings,
+  RIVET_WEB_APP_STATUS_FUNCTION_NAME,
+  rivetWebAppStatusExternalFunction,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
 import {
@@ -306,6 +308,10 @@ export async function prepareRivetWebAppAction(
       ...processorOptions,
       abortSignal: actionAbortController.signal,
       context,
+      externalFunctions: {
+        ...(processorOptions.externalFunctions ?? {}),
+        [RIVET_WEB_APP_STATUS_FUNCTION_NAME]: rivetWebAppStatusExternalFunction,
+      },
       graph: component.action.graphId,
       inputs,
     });

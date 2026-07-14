@@ -11,6 +11,7 @@ export * from './model/UiGraph.js';
 export * from './model/UiGraphNormalization.js';
 export * from './model/UiGraphBindings.js';
 export * from './model/UiGraphRuntimeModel.js';
+export * from './model/UiGraphWebAppStatus.js';
 export * from './model/UiGraphActionProtocol.js';
 export * from './model/GraphProgress.js';
 export * from './model/UiGraphRendererStyles.js';

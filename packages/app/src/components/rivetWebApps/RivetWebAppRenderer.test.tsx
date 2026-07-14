@@ -3,7 +3,7 @@ import test from 'node:test';
 import { act } from 'react-dom/test-utils';
 import { createRoot } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
-import type { UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
+import type { GraphProgress, UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
 import { RivetWebAppRenderer, type RivetWebAppActionResult } from './RivetWebAppRenderer.js';
 
 test('React web app actions keep independent loading, reject stale patches, and reset after cancellation', async () => {
@@ -37,7 +37,11 @@ test('React web app actions keep independent loading, reject stale patches, and 
   };
   const pendingActions = new Map<
     UiComponentId,
-    { abortSignal: AbortSignal; resolve(result: RivetWebAppActionResult): void }
+    {
+      abortSignal: AbortSignal;
+      reportProgress(progress: GraphProgress): void;
+      resolve(result: RivetWebAppActionResult): void;
+    }
   >();
   const rootElement = dom.window.document.getElementById('root')!;
   const root = createRoot(rootElement);
@@ -47,8 +51,8 @@ test('React web app actions keep independent loading, reject stale patches, and 
       root.render(
         <RivetWebAppRenderer
           uiGraph={uiGraph}
-          onRunAction={(componentId, _state, abortSignal) =>
-            new Promise((resolve) => pendingActions.set(componentId, { abortSignal, resolve }))
+          onRunAction={(componentId, _state, abortSignal, reportProgress) =>
+            new Promise((resolve) => pendingActions.set(componentId, { abortSignal, reportProgress, resolve }))
           }
         />,
       );
@@ -61,8 +65,22 @@ test('React web app actions keep independent loading, reject stale patches, and 
     });
 
     let buttons = rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button');
-    assert.equal(buttons[0]?.textContent, 'Running...');
-    assert.equal(buttons[1]?.textContent, 'Running...');
+    assert.equal(buttons[0]?.textContent, 'First');
+    assert.equal(buttons[1]?.textContent, 'Second');
+    assert.equal(buttons[0]?.querySelector('.rivet-web-app-running-indicator') != null, true);
+    assert.equal(buttons[1]?.querySelector('.rivet-web-app-running-indicator') != null, true);
+    assert.equal(rootElement.querySelectorAll('.rivet-web-app-abort-button').length, 2);
+    assert.equal(buttons[0]?.type, 'button');
+
+    await act(async () => {
+      pendingActions.get('first-button' as UiComponentId)?.reportProgress({ message: 'Preparing response' });
+    });
+    const firstActionStack = buttons[0]?.closest('.rivet-web-app-action-stack');
+    assert.equal(firstActionStack?.querySelector('.rivet-web-app-progress')?.textContent, 'Preparing response');
+    assert.deepEqual(
+      [...(firstActionStack?.children ?? [])].map((child) => child.className),
+      ['rivet-web-app-button', 'rivet-web-app-abort-button', 'rivet-web-app-progress'],
+    );
 
     await act(async () => {
       pendingActions.get('first-button' as UiComponentId)?.resolve({ outputs: {}, statePatch: { result: 'stale' } });
@@ -70,7 +88,7 @@ test('React web app actions keep independent loading, reject stale patches, and 
 
     buttons = rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button');
     assert.equal(buttons[0]?.textContent, 'First');
-    assert.equal(buttons[1]?.textContent, 'Running...');
+    assert.equal(buttons[1]?.textContent, 'Second');
     assert.equal(rootElement.querySelector('.rivet-web-app-output pre')?.textContent, '');
 
     await act(async () => {

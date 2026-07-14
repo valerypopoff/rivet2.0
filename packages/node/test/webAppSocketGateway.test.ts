@@ -103,6 +103,20 @@ void describe('Rivet web app WebSocket gateway', () => {
     assert.equal(starts, 1);
   });
 
+  void it('streams status messages sent by the setWebAppStatus external call', async () => {
+    const harness = await createHarness(makeExternalStatusProject());
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('request-status')));
+    await messages.next('action.accepted');
+    const progress = await messages.next('action.progress');
+    const completed = await messages.next('action.completed');
+
+    assert.deepEqual(progress.progress, { message: 'Hello' });
+    assert.deepEqual(completed.statePatch, { result: 'Hello' });
+  });
+
   void it('exposes the prepared processor before execution so hosts can attach complete recordings', async () => {
     const lifecycle: string[] = [];
     let recorder!: ExecutionRecorder;
@@ -1567,6 +1581,41 @@ function makeProject(delay = 0): Project {
       },
     },
   } as Project;
+}
+
+function makeExternalStatusProject(): Project {
+  const project = makeProject();
+  const projectGraphId = Object.keys(project.graphs)[0] as GraphId;
+  const button = project.uiGraphs!['ui-graph' as UiGraphId]!.components[0];
+  if (button?.type === 'button') button.action.outputKey = 'value';
+  project.graphs[projectGraphId]!.nodes = [
+    {
+      data: { dataType: 'string', id: 'input' },
+      id: 'input-node',
+      title: 'Input',
+      type: 'graphInput',
+      visualData: { x: 0, y: 0 },
+    },
+    {
+      data: { functionName: 'setWebAppStatus', useErrorOutput: false, useFunctionNameInput: false },
+      id: 'status-node',
+      title: 'Set web app status',
+      type: 'externalCall',
+      visualData: { x: 200, y: 0 },
+    },
+    {
+      data: { dataType: 'string', id: 'value' },
+      id: 'output-node',
+      title: 'Output',
+      type: 'graphOutput',
+      visualData: { x: 400, y: 0 },
+    },
+  ];
+  project.graphs[projectGraphId]!.connections = [
+    { inputId: 'arguments', inputNodeId: 'status-node', outputId: 'data', outputNodeId: 'input-node' },
+    { inputId: 'value', inputNodeId: 'output-node', outputId: 'result', outputNodeId: 'status-node' },
+  ];
+  return project;
 }
 
 function waitForClose(socket: WebSocket): Promise<{ code: number; reason: Buffer }> {

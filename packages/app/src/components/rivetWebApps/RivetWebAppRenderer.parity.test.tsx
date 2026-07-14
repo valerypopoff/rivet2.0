@@ -72,8 +72,8 @@ test('React and hosted renderers keep the same component and action behavior', a
     assert.deepEqual(hostedActionState, reactActionState);
     assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
     assert.deepEqual(readButtonStates(reactRootElement), [
-      { disabled: true, text: 'Running...' },
-      { disabled: false, text: 'Second' },
+      { disabled: true, hasSpinner: true, text: 'First' },
+      { disabled: false, hasSpinner: false, text: 'Second' },
     ]);
 
     const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
@@ -98,8 +98,8 @@ test('React and hosted renderers keep the same component and action behavior', a
     });
     assert.deepEqual(readRenderedImage(hostedDom.window.document), readRenderedImage(reactRootElement));
     assert.deepEqual(readButtonStates(reactRootElement), [
-      { disabled: false, text: 'First' },
-      { disabled: false, text: 'Second' },
+      { disabled: false, hasSpinner: false, text: 'First' },
+      { disabled: false, hasSpinner: false, text: 'Second' },
     ]);
   } finally {
     await act(async () => reactRoot.unmount());
@@ -304,9 +304,13 @@ function focusReactControl(element: HTMLElement): void {
   element.focus();
 }
 
-function readButtonStates(root: ParentNode): Array<{ disabled: boolean; text: string | null }> {
-  return [...root.querySelectorAll<HTMLButtonElement>('.rivet-web-app-component-frame > .rivet-web-app-button')].map(
-    (button) => ({ disabled: button.disabled, text: button.textContent }),
+function readButtonStates(root: ParentNode): Array<{ disabled: boolean; hasSpinner: boolean; text: string | null }> {
+  return [...root.querySelectorAll<HTMLButtonElement>('.rivet-web-app-component-frame .rivet-web-app-button')].map(
+    (button) => ({
+      disabled: button.disabled,
+      hasSpinner: button.querySelector('.rivet-web-app-running-indicator') != null,
+      text: button.textContent,
+    }),
   );
 }
 

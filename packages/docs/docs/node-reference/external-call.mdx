@@ -38,7 +38,28 @@ External functions are useful for many use-cases, they can do things like:
 - Get user information about who is running the graph
 - Anything else you can think of!
 
-External functions are extremely powerful. They can only be used when running Rivet from a host application, and are not available when running Rivet in the Rivet applicaton. The external function nodes will error when running in the Rivet application. Use [Remote Debugging](../user-guide/remote-debugging.md) to run External Call nodes in the Rivet application.
+### Web app status messages
+
+The External Call function name `setWebAppStatus` is provided automatically by
+Rivet for every graph run. Pass the status message as the first argument. When the
+graph is running as a web-app action, the message appears below the running Button
+or Chat action through the normal progress channel and disappears when the action
+finishes, fails, or is aborted. This is available in the desktop preview and in
+hosted pages using WebSocket actions; a regular HTTP action cannot display an
+intermediate message before its response arrives. Other hosts may receive the
+message as a normal graph-progress event or ignore it if they have no UI for it.
+
+The function is reserved by Rivet for web-app actions. Other host external
+functions continue to work normally, but a host-provided function with this name
+will be replaced for web-app runs. In ordinary runs it reports normal graph
+progress and does not require a host-provided external function.
+
+External functions are extremely powerful. They can only be used when running Rivet
+from a host application, and ordinary custom external functions are not available
+when running Rivet in the Rivet application. The `setWebAppStatus` function is the
+exception: Rivet provides it locally for graph progress, and web-app actions can
+surface that progress in the preview. Use [Remote Debugging](../user-guide/remote-debugging.md)
+to run other External Call nodes in the Rivet application.
 
 <Tabs
   defaultValue="inputs"

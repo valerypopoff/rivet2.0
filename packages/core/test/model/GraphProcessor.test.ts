@@ -9,6 +9,7 @@ import {
   nodeDefinition,
   type ChartNode,
   type GraphId,
+  type GraphProgress,
   type Inputs,
   type NodeConnection,
   type NodeId,
@@ -418,6 +419,47 @@ class ThrowingCleanupTokenizer extends CountingTokenizer {
 }
 
 void describe('GraphProcessor', () => {
+  void it('provides the web-app status external function to every graph processor', async () => {
+    const graph = {
+      metadata: {
+        id: 'web-app-status-graph',
+        name: 'Web app status graph',
+        description: '',
+      },
+      nodes: [
+        {
+          id: 'input-node',
+          type: 'graphInput',
+          title: 'Graph Input',
+          data: { dataType: 'any[]', id: 'message' },
+          visualData: { x: 0, y: 0, width: 200 },
+        },
+        {
+          id: 'status-node',
+          type: 'externalCall',
+          title: 'Set web app status',
+          data: { functionName: 'setWebAppStatus', useErrorOutput: false, useFunctionNameInput: false },
+          visualData: { x: 250, y: 0, width: 200 },
+        },
+        makeGraphOutputNode('result', 'any'),
+      ],
+      connections: [
+        { inputId: 'arguments', inputNodeId: 'status-node', outputId: 'data', outputNodeId: 'input-node' },
+        { inputId: 'value', inputNodeId: 'result-output-node', outputId: 'result', outputNodeId: 'status-node' },
+      ],
+    };
+    const processor = new GraphProcessor(makeProject(graph), graph.metadata.id, globalRivetNodeRegistry);
+    const progress: GraphProgress[] = [];
+    processor.on('progress', (event) => progress.push(event.progress));
+
+    const outputs = await processor.processGraph(testProcessContext(), {
+      message: { type: 'any[]', value: ['Working...'] },
+    });
+
+    assert.equal(outputs.result?.value, 'Working...');
+    assert.deepEqual(progress, [{ message: 'Working...' }]);
+  });
+
   void it('Can run passthrough graph', async () => {
     const processor = await loadTestGraphInProcessor('Passthrough');
 
