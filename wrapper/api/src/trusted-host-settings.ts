@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 
@@ -8,7 +6,7 @@ import type {
   TrustedHostSettingsDraft,
 } from '../../shared/app-settings-types.js';
 import { getAppDataRoot } from './security.js';
-import { writeJsonSettingsFile } from './settings-file-writer.js';
+import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { badRequest } from './utils/httpError.js';
 
 const TRUSTED_HOST_SETTINGS_RELATIVE_PATH = path.join('settings', 'trusted-hosts.json');
@@ -116,57 +114,36 @@ function readTrustedHostSettingsFromText(settingsText: string): TrustedHostSetti
   };
 }
 
-export function readTrustedHostSettingsSync(): TrustedHostSettings {
-  try {
-    return readTrustedHostSettingsFromText(fs.readFileSync(getTrustedHostSettingsPath(), 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...DEFAULT_TRUSTED_HOST_SETTINGS,
-        updatedAt: null,
-        source: 'default',
-      };
-    }
+export const trustedHostSettingsRepository = new VersionedSettingsRepository<TrustedHostSettings>({
+  key: 'trusted host',
+  currentVersion: 1,
+  getPath: getTrustedHostSettingsPath,
+  getDefault: () => ({
+    ...DEFAULT_TRUSTED_HOST_SETTINGS,
+    updatedAt: null,
+    source: 'default',
+  }),
+  parseStored: (stored) => readTrustedHostSettingsFromText(JSON.stringify(stored)),
+  serialize: (settings) => ({
+    trustedHosts: settings.trustedHosts,
+    trustedHostsCsv: settings.trustedHosts.join(','),
+    updatedAt: settings.updatedAt,
+  }),
+  mode: 0o644,
+});
 
-    throw error;
-  }
+export function readTrustedHostSettingsSync(): TrustedHostSettings {
+  return trustedHostSettingsRepository.readSync().value;
 }
 
 export async function readTrustedHostSettings(): Promise<TrustedHostSettings> {
-  try {
-    return readTrustedHostSettingsFromText(await fsp.readFile(getTrustedHostSettingsPath(), 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...DEFAULT_TRUSTED_HOST_SETTINGS,
-        updatedAt: null,
-        source: 'default',
-      };
-    }
-
-    throw error;
-  }
+  return (await trustedHostSettingsRepository.read()).value;
 }
 
-export async function writeTrustedHostSettings(draft: unknown): Promise<TrustedHostSettings> {
-  const previousSettings = await readTrustedHostSettings();
-  const settings = normalizeTrustedHostSettingsDraft(draft, previousSettings);
-  const saved: TrustedHostSettings = {
-    ...settings,
+export async function writeTrustedHostSettings(draft: unknown, expectedRevision?: string): Promise<TrustedHostSettings> {
+  return (await trustedHostSettingsRepository.update((previousSettings) => ({
+    ...normalizeTrustedHostSettingsDraft(draft, previousSettings),
     updatedAt: new Date().toISOString(),
     source: 'app-settings',
-  };
-
-  await writeJsonSettingsFile(
-    getTrustedHostSettingsPath(),
-    {
-      version: 1,
-      trustedHosts: saved.trustedHosts,
-      trustedHostsCsv: saved.trustedHosts.join(','),
-      updatedAt: saved.updatedAt,
-    },
-    0o644,
-  );
-
-  return saved;
+  }), expectedRevision)).value;
 }

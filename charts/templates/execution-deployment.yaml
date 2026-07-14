@@ -60,6 +60,10 @@ spec:
             periodSeconds: 10
           env:
 {{ include "rivet.env.apiWorkload" (dict "root" . "port" .Values.service.execution.targetPort "profile" "execution" "storageBackend" .Values.workflowStorage.backend "replicaTier" "endpoint" "jobWorkerEnabled" "false") | nindent 12 }}
+            - name: RIVET_RUNNER_SLOT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           volumeMounts:
 {{ include "rivet.pod.apiVolumeMounts" . | nindent 12 }}
           resources:

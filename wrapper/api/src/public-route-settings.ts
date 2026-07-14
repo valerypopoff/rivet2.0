@@ -8,8 +8,8 @@ import type {
   PublicRouteSettingsDraft,
   WebAppRouteSettings,
 } from '../../shared/app-settings-types.js';
+import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { getAppDataRoot } from './security.js';
-import { writeJsonSettingsFile } from './settings-file-writer.js';
 import { badRequest } from './utils/httpError.js';
 
 export const PUBLIC_ROUTE_SETTINGS_RELATIVE_PATH = path.join('settings', 'public-routes.json');
@@ -182,55 +182,47 @@ export function getLegacyWebAppRouteSettingsPath(): string {
   return path.join(getSettingsRoot(), LEGACY_WEB_APP_ROUTE_SETTINGS_RELATIVE_PATH);
 }
 
-export function readPublicRouteSettingsSync(): RuntimePublicRouteSettings {
-  const settingsPath = getPublicRouteSettingsPath();
-
+function getDefaultOrLegacyPublicRouteSettings(): RuntimePublicRouteSettings {
   try {
-    return normalizeStoredPublicRouteSettings(JSON.parse(fs.readFileSync(settingsPath, 'utf8')));
+    return normalizeLegacyWebAppRouteSettings(JSON.parse(fs.readFileSync(getLegacyWebAppRouteSettingsPath(), 'utf8')));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw error;
     }
-  }
-
-  const legacySettingsPath = getLegacyWebAppRouteSettingsPath();
-  try {
-    return normalizeLegacyWebAppRouteSettings(JSON.parse(fs.readFileSync(legacySettingsPath, 'utf8')));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
-    }
-
     return getDefaultPublicRouteSettings();
   }
 }
 
-export async function readPublicRouteSettings(): Promise<PublicRouteSettings> {
-  return readPublicRouteSettingsSync();
+export const publicRouteSettingsRepository = new VersionedSettingsRepository<RuntimePublicRouteSettings>({
+  key: 'public route',
+  currentVersion: 1,
+  getPath: getPublicRouteSettingsPath,
+  getDefault: getDefaultOrLegacyPublicRouteSettings,
+  parseStored: normalizeStoredPublicRouteSettings,
+  serialize: (settings) => ({
+    publishedWorkflowsBasePath: settings.publishedWorkflowsBasePath,
+    latestWorkflowsBasePath: settings.latestWorkflowsBasePath,
+    publishedAppsBasePath: settings.publishedAppsBasePath,
+    latestAppsBasePath: settings.latestAppsBasePath,
+    updatedAt: settings.updatedAt,
+  }),
+  mode: 0o644,
+});
+
+export function readPublicRouteSettingsSync(): RuntimePublicRouteSettings {
+  return publicRouteSettingsRepository.readSync().value;
 }
 
-export async function writePublicRouteSettings(draft: unknown): Promise<PublicRouteSettings> {
-  const settings = normalizePublicRouteSettingsDraft(draft, readPublicRouteSettingsSync());
-  const saved: PublicRouteSettings = {
-    ...settings,
+export async function readPublicRouteSettings(): Promise<PublicRouteSettings> {
+  return (await publicRouteSettingsRepository.read()).value;
+}
+
+export async function writePublicRouteSettings(draft: unknown, expectedRevision?: string): Promise<PublicRouteSettings> {
+  return (await publicRouteSettingsRepository.update((previousSettings) => ({
+    ...normalizePublicRouteSettingsDraft(draft, previousSettings),
     updatedAt: new Date().toISOString(),
     source: 'app-settings',
-  };
-
-  await writeJsonSettingsFile(
-    getPublicRouteSettingsPath(),
-    {
-      version: 1,
-      publishedWorkflowsBasePath: saved.publishedWorkflowsBasePath,
-      latestWorkflowsBasePath: saved.latestWorkflowsBasePath,
-      publishedAppsBasePath: saved.publishedAppsBasePath,
-      latestAppsBasePath: saved.latestAppsBasePath,
-      updatedAt: saved.updatedAt,
-    },
-    0o644,
-  );
-
-  return saved;
+  }), expectedRevision)).value;
 }
 
 export function getPublishedWebAppsBasePath(): string {
@@ -263,12 +255,15 @@ export async function readWebAppRouteSettings(): Promise<WebAppRouteSettings> {
   };
 }
 
-export async function writeWebAppRouteSettings(draft: unknown): Promise<WebAppRouteSettings> {
-  const current = readPublicRouteSettingsSync();
-  const settings = await writePublicRouteSettings({
-    ...current,
-    ...(draft && typeof draft === 'object' ? draft : {}),
-  });
+export async function writeWebAppRouteSettings(draft: unknown, expectedRevision?: string): Promise<WebAppRouteSettings> {
+  const settings = (await publicRouteSettingsRepository.update((current) => ({
+    ...normalizePublicRouteSettingsDraft({
+      ...current,
+      ...(draft && typeof draft === 'object' ? draft : {}),
+    }, current),
+    updatedAt: new Date().toISOString(),
+    source: 'app-settings',
+  }), expectedRevision)).value;
 
   return {
     publishedAppsBasePath: settings.publishedAppsBasePath,

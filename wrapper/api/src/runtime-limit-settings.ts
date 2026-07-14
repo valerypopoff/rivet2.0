@@ -1,12 +1,10 @@
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
   RuntimeLimitSettings,
   RuntimeLimitSettingsDraft,
 } from '../../shared/app-settings-types.js';
-import { writePrivateJsonSettingsFile } from './settings-file-writer.js';
+import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { badRequest } from './utils/httpError.js';
 
 const repoRoot = path.resolve(process.cwd(), '..', '..');
@@ -131,60 +129,38 @@ function readRuntimeLimitSettingsFromText(settingsText: string): RuntimeLimitSet
   };
 }
 
+export const runtimeLimitSettingsRepository = new VersionedSettingsRepository<RuntimeLimitSettings>({
+  key: 'runtime limit',
+  currentVersion: 1,
+  getPath: getRuntimeLimitSettingsPath,
+  getDefault: () => ({
+    ...DEFAULT_RUNTIME_LIMIT_SETTINGS,
+    updatedAt: null,
+    source: 'default',
+  }),
+  parseStored: (stored) => readRuntimeLimitSettingsFromText(JSON.stringify(stored)),
+  serialize: (settings) => ({
+    commandTimeoutSeconds: settings.commandTimeoutSeconds,
+    maxOutputBytes: settings.maxOutputBytes,
+    proxyReadTimeoutSeconds: settings.proxyReadTimeoutSeconds,
+    webAppActionRequestLimitBytes: settings.webAppActionRequestLimitBytes,
+    dockerWaitTimeoutSeconds: settings.dockerWaitTimeoutSeconds,
+    updatedAt: settings.updatedAt,
+  }),
+});
+
 export function readRuntimeLimitSettingsSync(): RuntimeLimitSettings {
-  const settingsPath = getRuntimeLimitSettingsPath();
-
-  try {
-    return readRuntimeLimitSettingsFromText(fs.readFileSync(settingsPath, 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...DEFAULT_RUNTIME_LIMIT_SETTINGS,
-        updatedAt: null,
-        source: 'default',
-      };
-    }
-
-    throw error;
-  }
+  return runtimeLimitSettingsRepository.readSync().value;
 }
 
 export async function readRuntimeLimitSettings(): Promise<RuntimeLimitSettings> {
-  const settingsPath = getRuntimeLimitSettingsPath();
-
-  try {
-    return readRuntimeLimitSettingsFromText(await fsp.readFile(settingsPath, 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...DEFAULT_RUNTIME_LIMIT_SETTINGS,
-        updatedAt: null,
-        source: 'default',
-      };
-    }
-
-    throw error;
-  }
+  return (await runtimeLimitSettingsRepository.read()).value;
 }
 
-export async function writeRuntimeLimitSettings(draft: unknown): Promise<RuntimeLimitSettings> {
-  const previousSettings = await readRuntimeLimitSettings();
-  const settings = normalizeRuntimeLimitSettingsDraft(draft, previousSettings);
-  const saved: RuntimeLimitSettings = {
-    ...settings,
+export async function writeRuntimeLimitSettings(draft: unknown, expectedRevision?: string): Promise<RuntimeLimitSettings> {
+  return (await runtimeLimitSettingsRepository.update((previousSettings) => ({
+    ...normalizeRuntimeLimitSettingsDraft(draft, previousSettings),
     updatedAt: new Date().toISOString(),
     source: 'app-settings',
-  };
-
-  await writePrivateJsonSettingsFile(getRuntimeLimitSettingsPath(), {
-    version: 1,
-    commandTimeoutSeconds: saved.commandTimeoutSeconds,
-    maxOutputBytes: saved.maxOutputBytes,
-    proxyReadTimeoutSeconds: saved.proxyReadTimeoutSeconds,
-    webAppActionRequestLimitBytes: saved.webAppActionRequestLimitBytes,
-    dockerWaitTimeoutSeconds: saved.dockerWaitTimeoutSeconds,
-    updatedAt: saved.updatedAt,
-  });
-
-  return saved;
+  }), expectedRevision)).value;
 }

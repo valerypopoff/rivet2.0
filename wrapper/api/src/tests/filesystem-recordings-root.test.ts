@@ -5,8 +5,6 @@ import test from 'node:test';
 
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
 
-const RUN_RECORDINGS_SETTINGS_RELATIVE_PATH = path.join('settings', 'run-recordings.json');
-
 const envKeys = [
   'RIVET_WORKSPACE_ROOT',
   'RIVET_WORKFLOWS_ROOT',
@@ -37,6 +35,7 @@ const workflowFs = await import('../routes/workflows/fs-helpers.js');
 const workflowMutations = await import('../routes/workflows/workflow-mutations.js');
 const workflowRecordings = await import('../routes/workflows/recordings.js');
 const workflowRecordingDb = await import('../routes/workflows/recordings-db.js');
+const { writeRunRecordingsSettings } = await import('../routes/workflows/recordings-config.js');
 const rivetNode = await import('@valerypopoff/rivet2-node');
 
 async function resetFilesystemRoots(): Promise<void> {
@@ -311,14 +310,11 @@ test('recordings cleanup tolerates a permission failure deleting one stale bundl
   const run = runs[runs.length - 1];
   assert.ok(run);
 
-  const settingsPath = path.join(appDataRoot, RUN_RECORDINGS_SETTINGS_RELATIVE_PATH);
-  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-  await fs.writeFile(settingsPath, JSON.stringify({
-    version: 1,
+  await writeRunRecordingsSettings({
     maxPendingWrites: 100,
     maxRunsPerEndpoint: 1,
     retentionDays: 14,
-  }), 'utf8');
+  });
 
   const originalRm = fs.rm;
   const errors: unknown[] = [];

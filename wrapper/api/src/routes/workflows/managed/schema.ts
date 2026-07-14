@@ -249,4 +249,48 @@ CREATE TABLE IF NOT EXISTS workflow_recordings (
 
 CREATE INDEX IF NOT EXISTS workflow_recordings_workflow_id_idx ON workflow_recordings(workflow_id);
 CREATE INDEX IF NOT EXISTS workflow_recordings_created_at_idx ON workflow_recordings(created_at DESC);
+
+-- The web-app WebSocket transport keeps a compact, short-lived durable ledger.
+-- This is intentionally separate from workflow_recordings: it exists for action
+-- reconnect/replay and cancellation routing, while recordings remain the long-term
+-- editor replay artifact.
+CREATE TABLE IF NOT EXISTS web_app_action_runs (
+  run_id TEXT PRIMARY KEY,
+  owner_scope TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  component_id TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  lease_id TEXT NOT NULL,
+  lease_expires_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL,
+  last_sequence INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (owner_scope, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS web_app_action_runs_lease_idx
+  ON web_app_action_runs(status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS web_app_action_runs_host_idx
+  ON web_app_action_runs(host_id, status);
+
+CREATE TABLE IF NOT EXISTS web_app_action_run_events (
+  run_id TEXT NOT NULL REFERENCES web_app_action_runs(run_id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL,
+  event JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (run_id, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS web_app_action_cancel_commands (
+  run_id TEXT PRIMARY KEY REFERENCES web_app_action_runs(run_id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL,
+  owner_scope TEXT NOT NULL,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  acknowledged_at TIMESTAMPTZ NULL
+);
+
+CREATE INDEX IF NOT EXISTS web_app_action_cancel_commands_pending_idx
+  ON web_app_action_cancel_commands(host_id, requested_at)
+  WHERE acknowledged_at IS NULL;
 `;

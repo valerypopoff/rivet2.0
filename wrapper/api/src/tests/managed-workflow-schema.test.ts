@@ -105,6 +105,19 @@ test('managed schema keeps web app publications tied to immutable workflow revis
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('workflow_web_apps_revision_id_idx'));
 });
 
+test('managed schema persists resumable web app action runs separately from recordings', () => {
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS web_app_action_runs'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('UNIQUE (owner_scope, request_id)'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('lease_id TEXT NOT NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('lease_expires_at TIMESTAMPTZ NOT NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE INDEX IF NOT EXISTS web_app_action_runs_lease_idx'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS web_app_action_run_events'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('PRIMARY KEY (run_id, sequence)'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS web_app_action_cancel_commands'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('web_app_action_cancel_commands_pending_idx'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ON DELETE CASCADE'));
+});
+
 test('managed published execution lookup uses published endpoint rows and the published revision join', async () => {
   const { pool, queries } = createExecutionLookupPool();
   const managedQueries = createManagedWorkflowQueries(pool);

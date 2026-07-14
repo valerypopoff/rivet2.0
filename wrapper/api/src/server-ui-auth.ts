@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import type { Request } from 'express';
 
 import {
@@ -236,8 +237,9 @@ export function getServerUiOAuthSettingsVersion(): string {
     .digest('base64url');
 }
 
-export function readCookie(req: Request, name: string): string | null {
-  const cookieHeader = req.get('cookie') ?? '';
+export function readCookie(req: Request | IncomingMessage, name: string): string | null {
+  const rawCookieHeader = 'get' in req ? req.get('cookie') : req.headers.cookie;
+  const cookieHeader = Array.isArray(rawCookieHeader) ? rawCookieHeader.join(';') : rawCookieHeader ?? '';
   for (const cookie of cookieHeader.split(';')) {
     const separatorIndex = cookie.indexOf('=');
     if (separatorIndex < 0) {
@@ -334,7 +336,7 @@ export function createServerUiOAuthAuthorizationRedirect(req: Request, returnTo:
   };
 }
 
-export function readServerUiOAuthSession(req: Request): ServerUiOAuthSession | null {
+export function readServerUiOAuthSession(req: Request | IncomingMessage): ServerUiOAuthSession | null {
   const payload = readSignedPayload<ServerUiOAuthSession>(readCookie(req, SERVER_UI_OAUTH_SESSION_COOKIE_NAME));
   if (!payload || typeof payload.email !== 'string') {
     return null;
@@ -396,7 +398,7 @@ export function isServerUiOAuthSessionAllowed(session: ServerUiOAuthSession | nu
   return allowed.size > 0 && allowed.has(session.email);
 }
 
-export function isServerUiAuthRequestAllowed(req: Request): boolean {
+export function isServerUiAuthRequestAllowed(req: Request | IncomingMessage): boolean {
   if (isTrustedTokenFreeHostRequest(req)) {
     return true;
   }

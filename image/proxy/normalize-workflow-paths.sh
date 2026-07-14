@@ -436,6 +436,22 @@ write_public_routes_include() {
         include ${RIVET_PROXY_TIMEOUT_INCLUDE_FILE};
     }
 
+    location ~ ^${RIVET_WEB_APPS_BASE_PATH}/[^/]+/actions/ws$ {
+        proxy_pass \$execution_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering off;
+    }
+
     location ${RIVET_LATEST_WORKFLOWS_BASE_PATH}/ {
         proxy_pass \$api_upstream;
         proxy_http_version 1.1;
@@ -459,6 +475,22 @@ write_public_routes_include() {
         proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;
         include ${RIVET_PROXY_TIMEOUT_INCLUDE_FILE};
+    }
+
+    location ~ ^${RIVET_LATEST_WEB_APPS_BASE_PATH}/[^/]+/actions/ws$ {
+        proxy_pass \$api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-Host \$rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto \$rivet_forwarded_proto;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering off;
     }
 EOF
 

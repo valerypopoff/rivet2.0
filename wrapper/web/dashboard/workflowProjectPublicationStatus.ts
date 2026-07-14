@@ -4,7 +4,7 @@ import type { WorkflowProjectItem, WorkflowProjectStatus } from './types';
 export function getWorkflowProjectPublicationStatus(project: WorkflowProjectItem): WorkflowProjectStatus {
   return project.settings.publicationStatus ?? getAggregateWorkflowProjectStatus(
     project.settings.status,
-    project.settings.publishedWebApps.length > 0 ? ['published'] : [],
+    project.settings.publishedWebApps?.length > 0 ? ['published'] : [],
   );
 }
 

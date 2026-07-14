@@ -360,8 +360,18 @@ export default defineConfig({
           replacement: resolve(__dirname, 'node_modules/github-markdown-css/$1'),
         },
         ...createBrowserSubpathAliases(__dirname),
-        { find: '@valerypopoff/rivet2-core', replacement: resolve(__dirname, '../../rivet/packages/core/src/index.ts') },
-        { find: '@valerypopoff/trivet', replacement: resolve(__dirname, '../../rivet/packages/trivet/src/index.ts') },
+        {
+          find: '@valerypopoff/rivet2-core/web-app-runtime',
+          replacement: resolve(__dirname, '../../rivet/packages/core/src/webAppRuntime.ts'),
+        },
+        {
+          find: /^@valerypopoff\/rivet2-core$/,
+          replacement: resolve(__dirname, '../../rivet/packages/core/src/index.ts'),
+        },
+        {
+          find: /^@valerypopoff\/trivet$/,
+          replacement: resolve(__dirname, '../../rivet/packages/trivet/src/index.ts'),
+        },
       ],
     },
 

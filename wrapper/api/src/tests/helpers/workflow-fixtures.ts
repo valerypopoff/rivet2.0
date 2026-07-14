@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { invalidateAppSettingsRepositories } from '../../app-settings/settings-repository.js';
+
 export async function createWorkflowTestRoots(prefix: string): Promise<{
   tempRoot: string;
   workflowsRoot: string;
@@ -43,6 +45,8 @@ export async function resetWorkflowTestRoots(roots: {
     await fs.rm(dirPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await fs.mkdir(dirPath, { recursive: true });
   }
+
+  invalidateAppSettingsRepositories();
 }
 
 type CreatedWorkflowProjectItem = {

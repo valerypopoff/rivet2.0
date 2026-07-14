@@ -12,6 +12,7 @@ type MockWorkflowProjectItem = {
     status: 'unpublished';
     endpointName: string;
     lastPublishedAt: null;
+    publishedWebApps: [];
   };
 };
 
@@ -29,6 +30,7 @@ function createProjectFixture(name: string): MockWorkflowProjectItem {
       status: 'unpublished',
       endpointName: '',
       lastPublishedAt: null,
+      publishedWebApps: [],
     },
   };
 }

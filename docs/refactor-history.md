@@ -4,6 +4,30 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-07-14 - Settings Repository And Frontend Orchestration Split
+
+### Why
+
+App Settings had grown into one modal with independent copies of loading, normalization, dirty tracking, and persistence logic, while API settings domains each performed their own filesystem reads and writes. The workflow-library controller and editor bridge had also accumulated unrelated state machines in single modules. This made small domain changes risky and allowed one request to observe settings from different moments.
+
+### Ownership
+
+- `wrapper/api/src/app-settings/settings-repository.ts` owns cached immutable settings snapshots, schema versions/migrations, atomic revisioned updates, external-file refresh, subscriptions, and request-scoped snapshot capture. Refreshes and writes are serialized per settings file so the external-file poller cannot restore a stale read over a completed UI save. Domain files keep only their defaults, validation, public/private projection, and typed runtime accessors.
+- `captureAppSettingsSnapshot` captures every registered domain synchronously at request entry. Runtime request handlers must use domain repository accessors instead of reading settings JSON directly.
+- `/api/app-settings/*` uses shared GET/PATCH wiring with `ETag` and `If-Match`. A stale browser save returns `409`; the web form layer refreshes its baseline while preserving the user's current edits for review and retry.
+- `AppSettingsModal.tsx` is a composition shell. Domain forms live under `wrapper/web/dashboard/app-settings/` and share `useSettingsFormResource.ts`; saves remain scoped to the active domain/section.
+- `EditorMessageBridge.tsx` composes `useEditorCommandBridge.ts`, `usePreviewProjectLifecycle.ts`, `useWorkflowRecordingBridge.ts`, and `useEditorBridgeInteractions.ts`. The command hook owns only origin validation, dispatch, and FIFO ordering; project-open, detached preview/replay, and delete/path-move implementations live in the focused `editorProject*Commands.ts` modules.
+- `useWorkflowLibraryController.ts` composes focused tree, selection, drag/drop, mutation, saved-version, and retained-recordings hooks. Path moves still converge on one acknowledged editor-bridge operation.
+- App Settings, Project Settings, published-version history, and workflow overlay CSS live in focused files imported by `WorkflowLibraryPanel.css`; selector behavior and cascade intent remain unchanged.
+
+### Verification To Preserve
+
+- Repository and App Settings tests: `npm --prefix wrapper/api run test:files -- src/tests/settings-repository.test.ts src/tests/app-settings.test.ts`
+- API and web production builds: `npm --prefix wrapper/api run build` and `npm --prefix wrapper/web run build`
+- Pure web and style guards: `npm run verify:web-pure` and `npm run verify:test-style`
+- Browser-visible dashboard/editor behavior: set `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`, then run `node scripts/playwright-observe.mjs test`
+- Full non-browser gate: `npm run test`
+
 ## 2026-05-21 - Test Refactor Final Prune
 
 ### Why

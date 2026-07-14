@@ -9,11 +9,8 @@ import {
 } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 
-const RUN_RECORDINGS_SETTINGS_RELATIVE_PATH = path.join('settings', 'run-recordings.json');
-
 const {
   workflowsRoot,
-  appDataRoot,
   workflowMutations,
   workflowFs,
   workflowRecordings,
@@ -23,6 +20,7 @@ const {
   resetAndEnsureWorkflowsRoot,
   cleanupWorkflowSuite,
 } = await createFilesystemWorkflowSuiteHarness();
+const { writeRunRecordingsSettings } = await import('../routes/workflows/recordings-config.js');
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
@@ -569,14 +567,11 @@ test('workflow recording persistence snapshots the executed in-memory project st
 });
 
 test('workflow recording cleanup keeps only the newest configured runs per endpoint', async () => {
-  const settingsPath = path.join(appDataRoot, RUN_RECORDINGS_SETTINGS_RELATIVE_PATH);
-  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-  await fs.writeFile(settingsPath, JSON.stringify({
-    version: 1,
+  await writeRunRecordingsSettings({
     maxPendingWrites: 100,
     maxRunsPerEndpoint: 2,
     retentionDays: 14,
-  }));
+  });
 
   const created = await workflowMutations.createWorkflowProjectItem('', 'EndpointLimited');
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);

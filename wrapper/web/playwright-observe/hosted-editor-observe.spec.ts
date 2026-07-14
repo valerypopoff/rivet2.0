@@ -64,6 +64,7 @@ test.describe('Observable hosted editor flow', () => {
         status: 'unpublished',
         endpointName: '',
         lastPublishedAt: null,
+        publishedWebApps: [],
       },
     };
     let unexpectedSaveRequests = 0;

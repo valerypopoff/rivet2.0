@@ -106,7 +106,22 @@ export function serializeWebAppProject(rivetNode: RivetProjectSerializer, projec
 }
 
 export function extractWebAppRevisionKey(html: string): string {
-  const match = html.match(/"revisionKey":"([^"]+)"/);
-  assert.ok(match?.[1], 'web app HTML should embed a revision key');
-  return match[1];
+  const match = html.match(/\bdata-rivet-web-app-config="([^"]*)"/);
+  assert.ok(match?.[1], 'web app HTML should embed its serialized config');
+
+  const serializedConfig = match[1].replace(
+    /&(quot|#039|lt|gt|amp);/g,
+    (entity) => ({
+      '&amp;': '&',
+      '&#039;': "'",
+      '&gt;': '>',
+      '&lt;': '<',
+      '&quot;': '"',
+    })[entity] ?? entity,
+  );
+  const config = JSON.parse(serializedConfig) as { revisionKey?: unknown };
+  const revisionKey = config.revisionKey;
+  assert.equal(typeof revisionKey, 'string', 'web app HTML should embed a revision key');
+  assert.ok(revisionKey, 'web app HTML should embed a non-empty revision key');
+  return revisionKey as string;
 }

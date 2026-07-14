@@ -407,11 +407,13 @@ Top-level workflow and web-app route prefixes are wrapper app settings once save
 
 Project Settings displays workflow and web-app endpoint prefixes from the runtime `/api/config` response instead of hardcoding bundled Vite env values. After changing workflow route slugs in `Settings` -> `Workflow endpoints` -> `Routes` or web-app route slugs in `Settings` -> `Web apps` -> `Routes`, the settings modal waits until `/api/config` reflects the new paths before reporting success, so dashboard links and prefixed slug inputs update without a manual Docker/Compose/Kubernetes restart. In proxy-fronted deployments, the new public paths are served after the proxy's internal nginx reload completes; no image rebuild is required.
 
-The action routes use the same project resolver family, dataset provider, project-reference loader, `ManagedCodeRunner`, and request-header context injection as workflow execution. The wrapper uses upstream Rivet's web-app action primitives to resolve the clicked component, map declarative UI state into graph inputs, and apply output state patches, but it creates the processor itself so `ExecutionRecorder` can attach before `processor.run()`. HTML embeds an opaque `revisionKey`, and action posts with an older key fail with `409` plus `code: "revision_mismatch"` after that app slug is republished or the latest saved draft changes. The wrapper preserves `RivetWebAppActionHttpError.code` in its Express response envelope, and the embedded upstream Rivet web-app client treats that coded response as a stale open page. It shows a blocking modal with `This app was updated. Reload to continue.` and a `Reload` button instead of auto-refreshing or rerunning the action.
+Newly rendered app pages use the upstream resumable WebSocket action transport at `/apps/<slug>/actions/ws` or `/apps-latest/<slug>/actions/ws`. It starts each action idempotently, streams graph-authored `Report Progress` events, supports explicit cancellation, and reconnects/resumes from durable event sequence numbers without running the graph a second time. The existing `POST .../actions/run` routes remain available for an already-open page produced by an older Rivet renderer; the client never falls back from an interrupted socket action to HTTP because a retry could duplicate an external side effect.
+
+Both transports use the same project resolver family, dataset provider, project-reference loader, `ManagedCodeRunner`, and request-header context injection as workflow execution. The wrapper attaches an `ExecutionRecorder` in the WebSocket gateway's `onProcessorPrepared` hook, before `processor.run()`. After upstream Rivet durably stores the matching terminal socket event, its terminal hook queues the recorder into the normal Run recordings store using the exact server-assigned run id. This keeps concurrent button actions correlated correctly without delaying the browser result. HTML embeds an opaque `revisionKey`; stale HTTP or socket action attempts are rejected with `code: "revision_mismatch"`, and the embedded upstream Rivet web-app client shows a blocking `This app was updated. Reload to continue.` modal rather than auto-refreshing or rerunning the action.
 
 Published web app action runs do not attach Remote Debugger. Latest web app action runs attach the same default-on `/ws/latest-debugger` remote debugger as latest workflow endpoint runs because they execute against the latest saved draft on the control-plane backend. Hardened deployments can explicitly disable that websocket with `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false`. Published and latest web app action graph runs are persisted into the same Run recordings history as workflow endpoint runs. Their `endpointNameAtExecution` value is the route path that executed the action, such as `/apps/my-tool` or `/apps-latest/my-tool`, so the Run recordings modal can show whether a saved run came from a workflow endpoint or a web-app action.
 
-The generated Rivet web-app client also handles action failures returned before the wrapper API can format JSON, such as an outer nginx or ingress body-size rejection. It shows the HTTP status message (for example, `413 Request Entity Too Large`) instead of attempting to parse the HTML error page as JSON. This makes the failure understandable, but does not raise an external proxy's request-body limit; configure that proxy or ingress to allow at least the `Settings` -> `Web apps` -> `Button data` limit.
+The generated Rivet web-app client also handles action failures returned before the wrapper API can format JSON, such as an outer nginx or ingress body-size rejection. It shows the HTTP status message (for example, `413 Request Entity Too Large`) instead of attempting to parse the HTML error page as JSON. This makes the failure understandable, but does not raise an external proxy's request-body limit; configure that proxy or ingress to allow at least the `Settings` -> `Web apps` -> `Button data` limit. Saving that setting hot-reloads wrapper nginx and the HTTP parser; restart/recreate the API process after active actions complete to apply the new WebSocket message ceiling.
 
 Published and latest web apps are browser surfaces, so their HTML, `app.json`, and action routes are gated by the persisted `Settings` -> `Web apps` -> `Auth` mode, not by the workflow endpoint bearer-token setting:
 
@@ -805,7 +807,11 @@ When a project or folder is renamed, moved, duplicated, uploaded, downloaded, or
 
 The workflow-publication UI now follows the same controller-versus-view split as the backend:
 
-- `WorkflowLibraryPanel.tsx` renders the shell, while `useWorkflowLibraryController.ts` owns refresh, selection, drag/drop, duplicate/download/upload, and modal orchestration
+- `WorkflowLibraryPanel.tsx` renders the shell, while `useWorkflowLibraryController.ts` composes the tree and modal domains
+- `useWorkflowLibraryTree.ts` owns refresh, stale-request protection, folder expansion, and save-triggered reconciliation
+- `useWorkflowLibrarySelection.ts` owns selection, active-row scrolling, folder auto-expansion, and the single preview-open slot/debounce
+- `useWorkflowLibraryDragAndDrop.ts` owns drag state and move reconciliation; `useWorkflowLibraryMutations.ts` owns create/upload/rename/delete operations and inline mutation state
+- `useWorkflowProjectVersionActions.ts` owns duplicate/download/compare version choice and busy state; `useRunRecordingsModalState.ts` owns retained Run recordings modal state
 - `ProjectSettingsModal.tsx` is mostly presentational
 - `useProjectSettingsActions.ts` owns publish, unpublish, and guarded delete flows
 - `WorkflowPublishedVersionHistoryModal.tsx` lists published versions for a project and stars, downloads, previews, or restores a selected stored snapshot
@@ -848,6 +854,11 @@ The workflow-publication UI now follows the same controller-versus-view split as
 - `wrapper/api/src/routes/workflows/managed-virtual-io.ts` - managed virtual-path helpers used by hosted native IO
 - `wrapper/api/src/scripts/measure-workflow-execution.ts` - read-only filesystem/managed endpoint measurement helper for route-timing diagnosis
 - `wrapper/web/dashboard/useWorkflowLibraryController.ts` - workflow-tree controller
+- `wrapper/web/dashboard/useWorkflowLibraryTree.ts` - workflow-tree loading and expansion state
+- `wrapper/web/dashboard/useWorkflowLibrarySelection.ts` - project selection and preview-open lifecycle
+- `wrapper/web/dashboard/useWorkflowLibraryDragAndDrop.ts` - tree drag/drop operations
+- `wrapper/web/dashboard/useWorkflowLibraryMutations.ts` - folder/project create, upload, rename, and delete operations
+- `wrapper/web/dashboard/useWorkflowProjectVersionActions.ts` - duplicate, download, and compare version actions
 - `wrapper/web/dashboard/WorkflowInlineRenameInput.tsx` - shared inline rename input used by folder and project tree rows
 - `wrapper/web/dashboard/useProjectSettingsActions.ts` - project-settings mutations
 - `wrapper/web/dashboard/projectSettingsForm.ts` - project-settings validation and label helpers
