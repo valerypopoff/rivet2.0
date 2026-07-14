@@ -12,6 +12,7 @@ import {
   type UiGraphGapSize,
   type UiGraphOutputRenderMode,
 } from './UiGraph.js';
+import { normalizeGraphProgress, type GraphProgress } from './GraphProgress.js';
 
 export type UiGraphOutputRenderModel = {
   hasValue: boolean;
@@ -89,6 +90,7 @@ export type UiGraphInteractionChange = 'action' | 'graph' | 'state';
 
 export type UiGraphInteractionSnapshot = Readonly<{
   actionErrors: Readonly<Record<string, string>>;
+  actionProgress: Readonly<Record<string, GraphProgress>>;
   runningComponentIds: ReadonlySet<UiComponentId>;
   state: Readonly<Record<string, unknown>>;
 }>;
@@ -96,6 +98,7 @@ export type UiGraphInteractionSnapshot = Readonly<{
 export type UiGraphActionRunContext = Readonly<{
   abortOtherActions(): void;
   componentId: UiComponentId;
+  reportProgress(progress: GraphProgress): void;
   signal: AbortSignal;
   state: Record<string, unknown>;
 }>;
@@ -108,6 +111,8 @@ export type UiGraphActionRunner = (context: UiGraphActionRunContext) => Promise<
 
 export type UiGraphInteractionController = {
   abortActions(): void;
+  cancelAction(componentId: UiComponentId): void;
+  detachActions(): void;
   getSnapshot(): UiGraphInteractionSnapshot;
   runAction(component: UiGraphActionComponent, runner: UiGraphActionRunner): Promise<void>;
   setUiGraph(uiGraph: UiGraph): void;
@@ -198,6 +203,7 @@ export function createUiGraphInteractionController(
   let uiGraphId = initialUiGraph.id;
   let state = options.initialState ? { ...options.initialState } : getUiGraphInitialState(initialUiGraph);
   let actionErrors: Record<string, string> = {};
+  let actionProgress: Record<string, GraphProgress> = {};
   let snapshot: UiGraphInteractionSnapshot;
   const actionController = createUiGraphActionExecutionController();
   const activeActions = new Map<number, ActiveUiGraphAction>();
@@ -206,6 +212,7 @@ export function createUiGraphInteractionController(
   const updateSnapshot = (): void => {
     snapshot = {
       actionErrors,
+      actionProgress,
       runningComponentIds: new Set([...activeActions.values()].map(({ execution }) => execution.componentId)),
       state,
     };
@@ -236,10 +243,24 @@ export function createUiGraphInteractionController(
     return changed;
   };
   const abortAllActions = (notify: boolean): void => {
-    const changed = abortMatchingActions(() => true, false);
+    let changed = abortMatchingActions(() => true, false);
     actionController.reset();
+    if (Object.keys(actionProgress).length > 0) {
+      actionProgress = {};
+      changed = true;
+    }
     if (changed && notify) {
       publish('action');
+    }
+  };
+  const removeActionPresentation = (componentId: UiComponentId): void => {
+    if (Object.prototype.hasOwnProperty.call(actionErrors, componentId)) {
+      actionErrors = { ...actionErrors };
+      delete actionErrors[componentId];
+    }
+    if (Object.prototype.hasOwnProperty.call(actionProgress, componentId)) {
+      actionProgress = { ...actionProgress };
+      delete actionProgress[componentId];
     }
   };
 
@@ -248,6 +269,18 @@ export function createUiGraphInteractionController(
   return {
     abortActions() {
       abortAllActions(true);
+    },
+    cancelAction(componentId) {
+      if (abortMatchingActions(({ execution }) => execution.componentId === componentId, false)) {
+        removeActionPresentation(componentId);
+        publish('action');
+      }
+    },
+    detachActions() {
+      activeActions.clear();
+      actionController.reset();
+      actionProgress = {};
+      updateSnapshot();
     },
     getSnapshot() {
       return snapshot;
@@ -260,10 +293,7 @@ export function createUiGraphInteractionController(
 
       const abortController = new AbortController();
       activeActions.set(execution.id, { abortController, execution });
-      if (Object.prototype.hasOwnProperty.call(actionErrors, component.id)) {
-        actionErrors = { ...actionErrors };
-        delete actionErrors[component.id];
-      }
+      removeActionPresentation(component.id);
       publish('action');
 
       try {
@@ -271,6 +301,13 @@ export function createUiGraphInteractionController(
           abortOtherActions: () =>
             abortMatchingActions((_activeAction, executionId) => executionId !== execution.id, true),
           componentId: component.id,
+          reportProgress: (progress) => {
+            if (!actionController.isCurrent(execution)) return;
+            const normalized = normalizeGraphProgress(progress);
+            if (!normalized) return;
+            actionProgress = { ...actionProgress, [component.id]: normalized };
+            publish('action');
+          },
           signal: abortController.signal,
           state: getUiGraphComponentActionState(component, state),
         });
@@ -292,6 +329,10 @@ export function createUiGraphInteractionController(
       } finally {
         if (activeActions.delete(execution.id)) {
           actionController.finish(execution);
+          if (Object.prototype.hasOwnProperty.call(actionProgress, component.id)) {
+            actionProgress = { ...actionProgress };
+            delete actionProgress[component.id];
+          }
           publish('action');
         }
       }
@@ -302,6 +343,7 @@ export function createUiGraphInteractionController(
         uiGraphId = nextUiGraph.id;
         state = getUiGraphInitialState(nextUiGraph);
         actionErrors = {};
+        actionProgress = {};
         publish('graph');
         return;
       }
@@ -315,8 +357,15 @@ export function createUiGraphInteractionController(
       const remainingErrors = Object.fromEntries(
         Object.entries(actionErrors).filter(([componentId]) => actionComponentIds.has(componentId as UiComponentId)),
       );
+      const remainingProgress = Object.fromEntries(
+        Object.entries(actionProgress).filter(([componentId]) => actionComponentIds.has(componentId as UiComponentId)),
+      );
       if (Object.keys(remainingErrors).length !== Object.keys(actionErrors).length) {
         actionErrors = remainingErrors;
+        changed = true;
+      }
+      if (Object.keys(remainingProgress).length !== Object.keys(actionProgress).length) {
+        actionProgress = remainingProgress;
         changed = true;
       }
       if (changed) {

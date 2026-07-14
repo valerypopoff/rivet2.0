@@ -4,6 +4,7 @@ import {
   type Project,
   type UiComponentId,
   type UiGraph,
+  type GraphProgress,
   formatUiGraphActionBindingIssues,
   getUiGraphActionComponent,
   jsonValueToDataValue,
@@ -21,8 +22,14 @@ export function useRunUiGraphAction(tryRunGraph: EditorGraphRun) {
   const project = useAtomValue(projectState);
 
   return useStableCallback(
-    async (uiGraph: UiGraph, componentId: UiComponentId, state: Record<string, unknown>, abortSignal?: AbortSignal) => {
-      return await runUiGraphAction({ abortSignal, componentId, project, state, tryRunGraph, uiGraph });
+    async (
+      uiGraph: UiGraph,
+      componentId: UiComponentId,
+      state: Record<string, unknown>,
+      abortSignal?: AbortSignal,
+      onProgress?: (progress: GraphProgress) => void,
+    ) => {
+      return await runUiGraphAction({ abortSignal, componentId, onProgress, project, state, tryRunGraph, uiGraph });
     },
   );
 }
@@ -30,6 +37,7 @@ export function useRunUiGraphAction(tryRunGraph: EditorGraphRun) {
 export async function runUiGraphAction(options: {
   abortSignal?: AbortSignal;
   componentId: UiComponentId;
+  onProgress?: (progress: GraphProgress) => void;
   project: Project;
   state: Record<string, unknown>;
   tryRunGraph: EditorGraphRun;
@@ -59,6 +67,7 @@ export async function runUiGraphAction(options: {
   const runOptions = {
     graphId: component.action.graphId,
     inputs: toGraphInputs(rawInputs),
+    onProgress: options.onProgress,
     requireLiveRun: true,
     throwOnError: true,
     waitForResults: true,

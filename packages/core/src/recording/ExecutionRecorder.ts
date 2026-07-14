@@ -20,7 +20,10 @@ export type ExecutionRecorderEvents = {
   finish: { recording: Recording };
 };
 
-function withExecution<T extends object>(base: T, execution: GraphExecutionMetadata | undefined): T & { execution?: GraphExecutionMetadata } {
+function withExecution<T extends object>(
+  base: T,
+  execution: GraphExecutionMetadata | undefined,
+): T & { execution?: GraphExecutionMetadata } {
   return (execution == null ? base : { ...base, execution }) as T & { execution?: GraphExecutionMetadata };
 }
 
@@ -41,56 +44,109 @@ const toRecordedEventMap: {
 } = {
   graphStart: ({ graph, inputs, execution }) => withExecution({ graphId: graph.metadata!.id!, inputs }, execution),
   graphFinish: ({ graph, outputs, execution }) => withExecution({ graphId: graph.metadata!.id!, outputs }, execution),
-  graphError: ({ graph, error, execution }) => withExecution({
-    graphId: graph.metadata!.id!,
-    error: typeof error === 'string' ? error : error.stack!,
-  }, execution),
-  nodeStart: ({ node, inputs, processId, execution }) => withExecution({
-    nodeId: node.id,
-    inputs,
-    processId,
-  }, execution),
-  nodeFinish: ({ node, outputs, processId, durationMs, splitRunDurationMs, execution }) => withExecution(withDuration({
-    nodeId: node.id,
-    outputs,
-    processId,
-  }, durationMs, splitRunDurationMs), execution),
-  nodeError: ({ node, error, processId, durationMs, splitRunDurationMs, execution }) => withExecution(withDuration({
-    nodeId: node.id,
-    error: typeof error === 'string' ? error : error.stack!,
-    processId,
-  }, durationMs, splitRunDurationMs), execution),
+  graphError: ({ graph, error, execution }) =>
+    withExecution(
+      {
+        graphId: graph.metadata!.id!,
+        error: typeof error === 'string' ? error : error.stack!,
+      },
+      execution,
+    ),
+  nodeStart: ({ node, inputs, processId, execution }) =>
+    withExecution(
+      {
+        nodeId: node.id,
+        inputs,
+        processId,
+      },
+      execution,
+    ),
+  nodeFinish: ({ node, outputs, processId, durationMs, splitRunDurationMs, execution }) =>
+    withExecution(
+      withDuration(
+        {
+          nodeId: node.id,
+          outputs,
+          processId,
+        },
+        durationMs,
+        splitRunDurationMs,
+      ),
+      execution,
+    ),
+  nodeError: ({ node, error, processId, durationMs, splitRunDurationMs, execution }) =>
+    withExecution(
+      withDuration(
+        {
+          nodeId: node.id,
+          error: typeof error === 'string' ? error : error.stack!,
+          processId,
+        },
+        durationMs,
+        splitRunDurationMs,
+      ),
+      execution,
+    ),
   abort: ({ successful, error }) => ({ successful, error: typeof error === 'string' ? error : error?.stack }),
-  graphAbort: ({ successful, error, graph, execution }) => withExecution({
-    successful,
-    error: typeof error === 'string' ? error : error?.stack,
-    graphId: graph.metadata!.id!,
-  }, execution),
-  nodeExcluded: ({ node, processId, inputs, outputs, reason, execution }) => withExecution({
-    nodeId: node.id,
-    processId,
-    inputs,
-    outputs,
-    reason,
-  }, execution),
-  userInput: ({ node, inputs, callback, processId, inputStrings, renderingType, execution }) => withExecution({
-    nodeId: node.id,
-    inputs,
-    callback,
-    processId,
-    inputStrings,
-    renderingType,
-  }, execution),
-  partialOutput: ({ node, outputs, index, processId, execution }) => withExecution({
-    nodeId: node.id,
-    outputs,
-    index,
-    processId,
-  }, execution),
-  nodeOutputsCleared: ({ node, processId, execution }) => withExecution({
-    nodeId: node.id,
-    processId,
-  }, execution),
+  graphAbort: ({ successful, error, graph, execution }) =>
+    withExecution(
+      {
+        successful,
+        error: typeof error === 'string' ? error : error?.stack,
+        graphId: graph.metadata!.id!,
+      },
+      execution,
+    ),
+  nodeExcluded: ({ node, processId, inputs, outputs, reason, execution }) =>
+    withExecution(
+      {
+        nodeId: node.id,
+        processId,
+        inputs,
+        outputs,
+        reason,
+      },
+      execution,
+    ),
+  userInput: ({ node, inputs, callback, processId, inputStrings, renderingType, execution }) =>
+    withExecution(
+      {
+        nodeId: node.id,
+        inputs,
+        callback,
+        processId,
+        inputStrings,
+        renderingType,
+      },
+      execution,
+    ),
+  partialOutput: ({ node, outputs, index, processId, execution }) =>
+    withExecution(
+      {
+        nodeId: node.id,
+        outputs,
+        index,
+        processId,
+      },
+      execution,
+    ),
+  progress: ({ node, processId, progress, execution }) =>
+    withExecution(
+      {
+        nodeId: node.id,
+        processId,
+        progress,
+      },
+      execution,
+    ),
+  nodeOutputsCleared: ({ node, processId, execution }) =>
+    withExecution(
+      {
+        nodeId: node.id,
+        processId,
+      },
+      execution,
+    ),
   error: ({ error }) => ({
     error: typeof error === 'string' ? error : error.stack!,
   }),
@@ -98,12 +154,16 @@ const toRecordedEventMap: {
   globalSet: ({ id, processId, value, execution }) => withExecution({ id, processId, value }, execution),
   pause: () => void 0,
   resume: () => void 0,
-  start: ({ contextValues, inputs, project, startGraph, execution }) => withExecution({
-    contextValues,
-    inputs,
-    projectId: project.metadata!.id!,
-    startGraph: startGraph.metadata!.id!,
-  }, execution),
+  start: ({ contextValues, inputs, project, startGraph, execution }) =>
+    withExecution(
+      {
+        contextValues,
+        inputs,
+        projectId: project.metadata!.id!,
+        startGraph: startGraph.metadata!.id!,
+      },
+      execution,
+    ),
   trace: (message) => message,
   newAbortController: () => {},
   finish: () => void 0,

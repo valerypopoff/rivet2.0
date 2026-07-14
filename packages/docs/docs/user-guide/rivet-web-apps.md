@@ -84,10 +84,15 @@ The `@valerypopoff/rivet2-node` package exports `createRivetWebAppHandler(...)`.
 
 Button and Chat actions are ordinary same-project graph runs. A wrapper can provide request-scoped processor options so web app actions use the same code runner, runtime libraries, dataset provider, project reference loader, context, recordings, and telemetry policy as normal workflow endpoints.
 
+For graphs that can take minutes, a host can serve actions through Rivet's resumable WebSocket transport instead of keeping one POST request open. The page reconnects after a temporary network/proxy interruption and resumes the same server run rather than starting it again. The active Button or Chat shows its own **Stop** action. Closing or reloading the page detaches from a WebSocket run instead of cancelling it automatically; explicit **Stop** requests cancellation. Automatic resume covers connection loss while the page remains open. A full page reload needs host-provided run discovery to restore an earlier run in the new page session.
+
+To show useful status while a graph works, put a **Report Progress** node on the workflow path. It passes its value through unchanged and can report a message, a percentage, or both. Progress appears only on the Button or Chat that started that run. It is temporary UI state, not a Graph Output and not project data.
+
 Wrappers can also use lower-level helpers:
 
 - `renderRivetWebAppHtml(...)` to serve the HTML from a wrapper-owned route
 - `runRivetWebAppAction(...)` to run a Button or Chat action from an existing route handler
+- `createRivetWebAppWebSocketGateway(...)` to host reconnectable long-running actions on a wrapper-authenticated WebSocket route
 
 The Node handler serves a self-contained page by default. Production wrappers can enable external assets so Rivet's CSS, Markdown libraries, sanitizer, and client use content-addressed filenames that browsers and CDNs can cache. External mode also avoids inline scripts and styles for stricter Content Security Policy setups. The wrapper still owns the CSP header, asset route or CDN, authentication, and deployment policy.
 
@@ -107,6 +112,7 @@ Wrappers still own:
 - project loading and permissions
 - revision routing and cache invalidation
 - response headers, debug headers, recordings, and public error envelopes
+- WebSocket upgrade authentication, origin policy, durable run metadata, and deployment draining
 
 Rivet only provides the declarative renderer and the action endpoint that runs same-project graphs.
 

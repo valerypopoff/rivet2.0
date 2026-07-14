@@ -23,6 +23,7 @@ import type { Tokenizer } from '../integrations/Tokenizer.js';
 import type { CodeRunner } from '../integrations/CodeRunner.js';
 import type { ProjectReferenceLoader } from './ProjectReferenceLoader.js';
 import type { GraphBoundary } from './GraphBoundaryCache.js';
+import type { GraphProgress } from './GraphProgress.js';
 
 export type ProcessContext = {
   settings: RuntimeSettings;
@@ -139,6 +140,9 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
 
   /** Raises a user event that can be listened for on the GraphProcessor. */
   raiseEvent: (eventName: string, data: DataValue | undefined) => void;
+
+  /** Reports sanitized public progress to progress-aware graph hosts. */
+  reportProgress: (progress: GraphProgress) => void;
 
   waitEvent: (eventName: string) => Promise<DataValue | undefined>;
 

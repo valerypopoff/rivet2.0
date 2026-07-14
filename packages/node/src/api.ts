@@ -104,6 +104,10 @@ export type NodeRunGraphOptions = RunGraphOptions & {
 
 type NodeGraphProcessor = ReturnType<typeof coreCreateProcessor>['processor'];
 
+export type NodeCreatedProcessor = ReturnType<typeof coreCreateProcessor> & {
+  dispose(): void;
+};
+
 export type NodeCreateProcessorOptions = NodeRunGraphOptions & {
   runtimeProfiler?: GraphProcessorRuntimeProfiler;
   runtimeProfile?: NodeRuntimeProfile;
@@ -127,10 +131,7 @@ export type NodeGraphRunner = {
 
 type DefaultRunGraphRuntimePlan = 'compatible' | 'default-safe';
 
-export function createProcessor(
-  project: Project,
-  options: NodeCreateProcessorOptions,
-): ReturnType<typeof coreCreateProcessor> {
+export function createProcessor(project: Project, options: NodeCreateProcessorOptions): NodeCreatedProcessor {
   const { runtimeProfile, runtimeProfiler, ...processorOptions } = options;
   const effectiveProcessorOptions = {
     ...processorOptions,
@@ -169,13 +170,46 @@ export function createProcessor(
     remoteDebuggerAttached = false;
   };
 
+  const abortSignal = effectiveProcessorOptions.abortSignal;
+  let disposed = false;
+  let abortCleanupAttached = false;
+  const detachRemoteDebuggerOnAbort = () => {
+    abortCleanupAttached = false;
+    detachRemoteDebugger();
+  };
+  const attachAbortCleanup = () => {
+    if (!effectiveProcessorOptions.remoteDebugger || !abortSignal || abortCleanupAttached) return;
+    if (abortSignal.aborted) {
+      detachRemoteDebugger();
+      return;
+    }
+
+    abortSignal.addEventListener('abort', detachRemoteDebuggerOnAbort, { once: true });
+    abortCleanupAttached = true;
+  };
+  const detachAbortCleanup = () => {
+    if (!abortSignal || !abortCleanupAttached) return;
+    abortSignal.removeEventListener('abort', detachRemoteDebuggerOnAbort);
+    abortCleanupAttached = false;
+  };
+
   attachRemoteDebugger();
+  attachAbortCleanup();
 
   const pluginEnv = resolveNodePluginEnv(effectiveProcessorOptions);
 
   return {
     ...processor,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      detachAbortCleanup();
+      detachRemoteDebugger();
+    },
     async run() {
+      if (disposed) {
+        throw new Error('This Node processor has been disposed.');
+      }
       const shouldManageRemoteDebugger =
         effectiveProcessorOptions.remoteDebugger != null && !processor.processor.isRunning;
       const shouldManageRunScopedRuntimeCache = runtimePolicy.runtimeCache != null && !processor.processor.isRunning;
@@ -185,6 +219,7 @@ export function createProcessor(
 
       if (shouldManageRemoteDebugger) {
         attachRemoteDebugger();
+        attachAbortCleanup();
       }
 
       const runScopedCodeRunner = runtimePolicy.useCachedDefaultCodeRunner ? new CachedNodeCodeRunner() : undefined;
@@ -204,6 +239,7 @@ export function createProcessor(
         }
 
         if (shouldManageRemoteDebugger) {
+          detachAbortCleanup();
           detachRemoteDebugger();
         }
       }

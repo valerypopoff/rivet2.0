@@ -566,6 +566,15 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           event.data.componentId,
           event.data.state,
           abortController.signal,
+          (progress) => {
+            if (!cleaned) {
+              channel.postMessage({
+                progress,
+                requestId: event.data.requestId,
+                type: 'actionProgress',
+              } satisfies PreviewActionResponse);
+            }
+          },
         );
         if (cleaned) {
           return;
@@ -703,7 +712,9 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           onReorder={reorderComponents}
           scrollContainerRef={previewScrollRef}
           uiGraph={uiGraph}
-          onRunAction={(componentId, state, abortSignal) => runUiGraphAction(uiGraph, componentId, state, abortSignal)}
+          onRunAction={(componentId, state, abortSignal, onProgress) =>
+            runUiGraphAction(uiGraph, componentId, state, abortSignal, onProgress)
+          }
         />
       </section>
       <DeleteResourceConfirmModal

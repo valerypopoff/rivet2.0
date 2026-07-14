@@ -370,6 +370,9 @@ export function useLocalExecutor() {
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
+      if (options.onProgress) {
+        processor.on('progress', ({ progress }) => options.onProgress?.(progress));
+      }
       options.abortSignal?.addEventListener('abort', handleAbort, { once: true });
       options.abortSignal?.throwIfAborted();
       processor.executor = 'browser';

@@ -5,6 +5,7 @@ import {
   type GraphOutputs,
   type NodeId,
   type Outputs,
+  type ProcessEventMessageMap,
   type RemoteRunRequestId,
   type StringArrayDataValue,
   type GraphId,
@@ -263,6 +264,9 @@ export function useRemoteExecutor() {
             eventDispatcher.partialOutput(data);
           }
           break;
+        case 'progress':
+          executorSession.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
+          break;
         case 'graphStart':
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.graphStart(data);
@@ -434,6 +438,7 @@ export function useRemoteExecutor() {
               executorSession.setActiveGraphRunRequestId(null);
             }
           },
+          onProgress: options.onProgress,
           payload,
           sendAbort: (requestId) => remoteDebugger.send('abort', { requestId }),
           sendRun: (payload) => remoteDebugger.send('run', payload),

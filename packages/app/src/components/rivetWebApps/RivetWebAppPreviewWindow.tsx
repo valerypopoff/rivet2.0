@@ -1,5 +1,5 @@
 import { type FC, useEffect, useMemo, useState } from 'react';
-import type { UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
+import type { GraphProgress, UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
 import { RivetWebAppRenderer, type RivetWebAppActionResult } from './RivetWebAppRenderer.js';
 
 export const RIVET_WEB_APP_PREVIEW_PARAM = 'rivet-web-app-preview';
@@ -26,6 +26,11 @@ type PreviewActionRequest =
     };
 
 type PreviewActionResponse =
+  | {
+      progress: GraphProgress;
+      requestId: string;
+      type: 'actionProgress';
+    }
   | {
       requestId: string;
       result: RivetWebAppActionResult;
@@ -141,6 +146,7 @@ export const RivetWebAppPreviewWindow: FC = () => {
     componentId: UiComponentId,
     state: Record<string, unknown>,
     abortSignal: AbortSignal,
+    onProgress: (progress: GraphProgress) => void,
   ): Promise<RivetWebAppActionResult> => {
     if (!channel) {
       return Promise.reject(new Error('Preview channel is not available.'));
@@ -159,8 +165,12 @@ export const RivetWebAppPreviewWindow: FC = () => {
           return;
         }
 
-        cleanup();
+        if (event.data.type === 'actionProgress') {
+          onProgress(event.data.progress);
+          return;
+        }
 
+        cleanup();
         if (event.data.type === 'actionResult') {
           resolve(event.data.result);
         } else if (event.data.type === 'actionError') {

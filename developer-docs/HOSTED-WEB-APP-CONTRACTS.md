@@ -42,7 +42,12 @@ dispatch.
 
 - `renderRivetWebAppHtml(...)` renders the document/runtime payload.
 - `runRivetWebAppAction(...)` validates mappings and runs the target graph.
+- `prepareRivetWebAppAction(...)` exposes the validated processor before its
+  one-shot `run()` for transports that attach progress listeners or recorders.
+  A host that abandons a prepared action must call its idempotent `dispose()`.
 - `createRivetWebAppHandler(...)` provides the Fetch-style reference host.
+- `createRivetWebAppWebSocketGateway(...)` provides the resumable long-running
+  action protocol for an authenticated `ws` connection.
 - `getRivetWebAppAssetManifest()` exposes the immutable browser assets for
   lower-level or CDN-backed hosts.
 
@@ -125,8 +130,182 @@ Button actions write the same UI data key, the latest-started action owns that k
 disjoint state patches still apply, and a newer direct form edit prevents an older
 action from overwriting it. Chat message keys are component-specific.
 
-The generated client aborts active fetches when the page unloads and aborts sibling
-requests after a revision mismatch. `runRivetWebAppAction(...)` prefers an explicit
+### Long-running WebSocket actions
+
+HTTP actions remain the compatibility/default path. A host opts a rendered page
+into resumable actions with:
+
+```typescript
+renderRivetWebAppHtml(uiGraph, {
+  actionTransport: {
+    type: 'websocket',
+    socketPath: `/apps/${slug}/actions/ws`,
+  },
+  revisionKey,
+});
+```
+
+The browser creates one socket per page, sends a random action `requestId`, and
+receives a server-assigned `runId` plus monotonic event `sequence`. A reconnecting
+page resumes with `{ runId, lastSequence }`; the gateway replays newer retained
+events. Run attachment replays the first snapshot, subscribes, and then performs a
+catch-up read so a completion cannot disappear in the read/subscribe gap. Repeating
+the same request ID and component within the same owner scope reattaches to the
+original run instead of starting the graph twice; reusing it for another component
+is rejected as `request_id_conflict`. There is deliberately no silent
+fallback from WebSocket to POST, because replaying a request through another
+transport could duplicate side effects.
+
+Each socket must first send `client.hello` with the exported protocol version. The
+gateway closes missing or unsupported handshakes with WebSocket protocol error
+code `1002`; idle clients that never finish the handshake are closed after the
+configurable timeout. Only a valid hello receives `server.ready`; the generated
+client waits for that acknowledgement before sending starts or resumes. Temporary
+network/abnormal closes reconnect, while protocol, unsupported-data,
+invalid-payload, policy, and oversized-message closes (`1002`, `1003`, `1007`,
+`1008`, `1009`) are surfaced immediately because retrying the same rejected
+connection cannot recover. Reconnect backoff resets only after a valid
+`server.ready` message, not merely after the TCP/WebSocket connection opens, so a
+proxy that repeatedly accepts and drops an unusable socket cannot create a tight
+retry loop. Relative HTTP paths are upgraded to `ws`/`wss`; explicit `ws://` and
+`wss://` endpoints retain their configured scheme.
+
+The host must authenticate the upgrade and resolve the permitted immutable project
+revision/UI graph before calling `gateway.handleConnection(socket, session)`.
+`session.ownerScope` is the authorization boundary for start, resume, and cancel;
+use a stable composite such as tenant, principal, app endpoint, and revision. It is
+not an authentication token. Session processor options, context, datasets, project
+references, telemetry, and lifecycle hooks remain request/connection scoped and use
+the same `prepareRivetWebAppAction(...)` validation and mapping as HTTP actions.
+The optional session `onProcessorPrepared(...)` hook is awaited after the actual
+`GraphProcessor` is created and before `run()` or `onActionStart`. It receives the
+processor, action context, client request ID, and server run ID so wrappers can
+attach `ExecutionRecorder`, timing listeners, and other processor observers without
+reimplementing the socket protocol. Hook failures prevent execution, report the
+original exception through gateway `onError`, and expose only `action_unavailable`
+to the browser. The gateway disposes the prepared action in this path, which
+releases pre-run Remote Debugger attachments and other processor-owned transport
+resources. Cancellation while the hook is pending follows the same cleanup path.
+
+`onRunFinished(...)` and `onRunFailed(...)` are session-only terminal hooks for
+recording/telemetry ownership. They preserve the exact action context, client request
+ID, and server run ID received during `onProcessorPrepared(...)`, so hosts must key
+recorders by `runId`, never by a component ID or mutable UI state. The successful hook
+also receives the action result. The failed hook receives a terminal outcome of
+`failed`, `cancelled`, or `interrupted`, plus the original error when available;
+lease-recovery interruptions fall back to their persisted interruption message.
+Rivet invokes at most one terminal hook only after the corresponding terminal event
+is durably stored. Hook exceptions are reported through gateway `onError` and must not
+change protocol state, graph execution, or the persisted terminal event.
+If cancellation arrives while `onProcessorPrepared(...)` is still attaching a recorder,
+the browser receives its persisted cancellation immediately while Rivet waits to invoke
+the terminal hook until that attachment settles.
+
+`createInMemoryRivetWebAppRunStore(...)` and
+`createInMemoryRivetWebAppRunCoordinator(...)` are reference/local defaults. The
+store survives socket and proxy disconnects, retains the accepted event plus bounded
+recent event history, and prunes old completed runs. The coordinator lets several
+gateways in one Node process forward events and cancellation. Neither survives a
+process restart or coordinates separate replicas.
+
+Production multi-instance hosts should implement `RivetWebAppRunStore` in their
+database and `RivetWebAppRunCoordinator` over their internal message bus. The
+coordinator routes cancellation to the `hostId` that owns the live processor and
+publishes persisted events to reconnecting gateways. A reconnect may therefore land
+on any replica: it replays durable events, subscribes to the owner, then performs a
+second durable read to close the read/subscribe race. Event delivery may be
+duplicated or reordered: the gateway de-duplicates by durable sequence and fills
+sequence gaps from the run store before forwarding later events. Coordinator
+subscriptions must be active before `subscribe(...)` resolves. A missing live owner
+is not by itself a definitive coordinator failure because lease recovery may still
+publish the terminal interruption.
+
+The durable store is the authority for idempotency, event ordering, and ownership
+leases. `createRun(...)` atomically reserves `(ownerScope, requestId)` and derives
+`leaseExpiresAt` from `leaseDurationMs` using the store/database clock.
+`appendEvent(...)` atomically verifies the unexpired `leaseId`, assigns the next
+sequence, verifies the event's run/request identity, and appends the event. Run IDs
+must also be globally unique independently of the `(ownerScope, requestId)`
+idempotency key. Store reads must return detached snapshots so a caller cannot mutate
+durable replay state. `renewRunLeases(...)` renews only the explicitly
+listed active run IDs still owned by that lease and returns the IDs it renewed.
+`interruptExpiredRuns(...)` atomically adds one `action.interrupted` terminal to
+expired running rows; concurrent recovery workers must not both recover the same
+row. `interruptRunsByLease(...)` is the graceful-shutdown equivalent for one process
+incarnation. The gateway serializes its own event appends per run, so slower progress
+persistence cannot overtake a later terminal event.
+The in-memory store's `maxStoredRuns` is a hard process-wide bound. It prunes old
+terminal runs first and rejects a new run when every retained slot is still active;
+production wrappers should combine durable retention with wrapper-owned global and
+per-principal quotas.
+`hostId` is a unique routing identity for the current gateway process, while the
+gateway-generated `leaseId` identifies that exact process incarnation. Neither must
+survive a Deployment pod replacement. Active gateways renew only runs still present
+in their processor map. All gateways periodically recover expired rows, and
+`recoverInterruptedRuns()` is available for an explicit startup/operations sweep.
+This turns a dead pod's rows into durable `action.interrupted` terminals without
+knowing the old pod name. The recovering worker publishes that terminal under the
+original run identity so an already reconnected browser settles. Rivet never moves or
+pretends to resume the dead process's in-memory `GraphProcessor`.
+
+Without a coordinator, cross-process live resume/cancel still fails explicitly as
+`run_unavailable`; a durable store alone cannot reach a live processor. With both
+adapters, sticky client-IP or WebSocket routing is unnecessary. The wrapper remains
+responsible for implementing and operating the database and message-bus adapters.
+
+The gateway validates resource-limit options at construction, limits message size
+and active runs per owner scope, validates every protocol message, checks ownership
+on resume/cancel, and shares the debugger's ping/pong heartbeat utility. Missing,
+pruned, unauthorized, or process-orphaned run
+handles receive the same `run_unavailable` rejection so the client settles instead
+of waiting forever without disclosing whether another owner has that run ID. A cancel
+that races with a stored terminal event replays the terminal result. `drain()` rejects
+genuinely new starts while allowing existing runs to finish and idempotent request IDs
+to reattach. A start whose durable run reservation races with draining is finalized
+as interrupted and never reaches processor creation. `dispose({ interrupt: true })`
+marks unfinished stored runs owned by that gateway host as interrupted, broadcasts
+that terminal state, requests processor abort without waiting for a slow node to
+become cooperative, and closes every gateway-owned socket with service-restart code
+`1012`. The interruption is fenced by this gateway's `leaseId`, so one draining
+replica cannot terminate a sibling's runs. Plain `dispose()` also closes idle sockets
+and releases their heartbeat timers while leaving already-started processors to their host's shutdown policy;
+later connections are rejected with `1012`. The
+optional `onError` callback is the observability sink for asynchronous store/replay/
+terminal-persistence failures, and callback failures are isolated from transport
+cleanup; resume or cancel lookup failures also close the affected socket with code
+`1011`. Pre-accept infrastructure errors are exposed to the page only as
+`action_unavailable`, while the original error goes to `onError`. If terminal
+persistence fails after a run was accepted, attached clients receive `run_unavailable`
+instead of remaining in a permanent running state. Hosts still own websocket origin
+policy, authentication, global rate limits, deployment draining order, and any
+durable-store retention policy.
+
+The hosted renderer rebuilds its direct DOM presentation when action status or
+progress changes. It captures and restores the focused text control, selection, and
+internal scroll position across that render so progress reports do not interrupt a
+user typing in another component.
+
+`renderRivetWebAppHtml(...)` validates transport configuration at runtime as well as
+through TypeScript: HTTP `actionPath` and WebSocket `socketPath` values must be
+non-empty. This keeps JavaScript wrappers from publishing a page whose action runner
+cannot connect.
+
+Graph-authored status uses the built-in **Report Progress** passthrough node. It
+emits a normalized optional message and/or percentage through GraphProcessor,
+subgraphs, recordings, Browser execution, Node execution, Remote Debugger, desktop
+preview, and the hosted socket. Progress is presentation-only and is never a graph
+output. The shared interaction controller rejects progress from stale/cancelled
+executions and keeps Button/Chat progress independent.
+
+The generated client aborts active HTTP fetches when the page unloads. WebSocket
+actions instead detach on unload so the server run can continue. Automatic replay
+covers temporary socket loss while the same page is alive; a full reload does not
+currently restore the browser-side run handle unless the host adds its own run
+discovery/session restoration. Detach releases browser-side promises and listeners
+without sending cancellation. Explicit **Stop** sends
+`action.cancel`, immediately records/broadcasts `action.cancelled`, and requests
+processor abort. Revision mismatch remains a terminal error and uses the existing
+blocking reload modal. `runRivetWebAppAction(...)` prefers an explicit
 `createProcessorOptions.abortSignal`, then falls back to the supplied Fetch
 `Request.signal`. It forwards that source through an action-scoped signal and removes
 the forwarding listener as soon as processor execution settles, so a wrapper may

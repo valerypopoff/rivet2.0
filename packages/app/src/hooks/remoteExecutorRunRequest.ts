@@ -1,5 +1,6 @@
 import type {
   GraphOutputs,
+  GraphProgress,
   OutgoingMessageMap,
   ProcessEventMessageMap,
   RemoteRunRequestId,
@@ -211,13 +212,14 @@ export async function sendPendingRemoteGraphRunRequest(options: {
   executorSession: Pick<ExecutorSessionRuntime, 'createPendingGraphExecution' | 'rejectPendingGraphExecution'>;
   onRequestCreated?(requestId: RemoteRunRequestId): void;
   onRequestSettled?(requestId: RemoteRunRequestId): void;
+  onProgress?: (progress: GraphProgress) => void;
   payload: RemoteRunPayloadWithoutRequestId;
   sendAbort?(requestId: RemoteRunRequestId): boolean;
   sendRun: RemoteRunRequestSender;
 }): Promise<GraphOutputs> {
   const { abortSignal, disconnectErrorMessage, executorSession, payload, sendRun } = options;
   abortSignal?.throwIfAborted();
-  const { requestId, promise } = executorSession.createPendingGraphExecution();
+  const { requestId, promise } = executorSession.createPendingGraphExecution(undefined, options.onProgress);
   options.onRequestCreated?.(requestId);
   let runSent = false;
 

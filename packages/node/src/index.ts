@@ -9,3 +9,5 @@ export * from './native/NodeProjectReferenceLoader.js';
 export * from './native/codeRunnerRequire.js';
 export * from './webAppHandler.js';
 export * from './webAppAssets.js';
+export * from './webAppSocketGateway.js';
+export * from './webAppRunCoordinator.js';

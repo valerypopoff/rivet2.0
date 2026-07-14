@@ -13,6 +13,7 @@ import {
 } from 'react';
 import {
   type DataValue,
+  type GraphProgress,
   type UiComponentId,
   type UiGraph,
   type UiGraphActionComponent,
@@ -40,6 +41,7 @@ export type RivetWebAppRendererProps = {
     componentId: UiComponentId,
     state: Record<string, unknown>,
     abortSignal: AbortSignal,
+    onProgress: (progress: GraphProgress) => void,
   ): Promise<RivetWebAppActionResult>;
   rootRef?: RefObject<HTMLDivElement>;
   uiGraph: UiGraph;
@@ -84,8 +86,8 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
 
   const runAction = useCallback(
     (component: UiGraphActionComponent) =>
-      interactionController.runAction(component, ({ componentId, signal, state }) =>
-        onRunAction(componentId, state, signal),
+      interactionController.runAction(component, ({ componentId, reportProgress, signal, state }) =>
+        onRunAction(componentId, state, signal, reportProgress),
       ),
     [interactionController, onRunAction],
   );
@@ -104,10 +106,12 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
               <RivetWebAppComponent
                 component={component}
                 actionError={interaction.actionErrors[component.id]}
+                actionProgress={interaction.actionProgress[component.id]}
                 isRunning={interaction.runningComponentIds.has(component.id)}
                 uiGraphName={normalizedUiGraph.name}
                 state={interaction.state}
                 onRunAction={runAction}
+                onCancelAction={interactionController.cancelAction}
                 onStateChange={interactionController.updateState}
                 onStatePatch={interactionController.updateStatePatch}
               />
@@ -144,14 +148,27 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
 
 const RivetWebAppComponent: FC<{
   actionError?: string;
+  actionProgress?: GraphProgress;
   component: UiGraphComponent;
   isRunning: boolean;
   uiGraphName: string;
   state: Readonly<Record<string, unknown>>;
   onRunAction(component: UiGraphActionComponent): Promise<void> | void;
+  onCancelAction(componentId: UiComponentId): void;
   onStateChange(key: string, value: unknown): void;
   onStatePatch(patch: Record<string, unknown>): void;
-}> = ({ actionError, component, isRunning, onRunAction, onStateChange, onStatePatch, state, uiGraphName }) => {
+}> = ({
+  actionError,
+  actionProgress,
+  component,
+  isRunning,
+  onCancelAction,
+  onRunAction,
+  onStateChange,
+  onStatePatch,
+  state,
+  uiGraphName,
+}) => {
   const renderModel = getUiGraphComponentRenderModel(component, state);
   const markdownText =
     renderModel.type === 'markdown'
@@ -194,21 +211,35 @@ const RivetWebAppComponent: FC<{
       );
     case 'button':
       return (
-        <button
-          className="rivet-web-app-button"
-          disabled={isRunning}
-          onClick={() => void onRunAction(renderModel.component)}
-        >
-          {isRunning ? 'Running...' : renderModel.label}
-        </button>
+        <div className="rivet-web-app-action-stack">
+          <button
+            className="rivet-web-app-button"
+            disabled={isRunning}
+            onClick={() => void onRunAction(renderModel.component)}
+          >
+            {isRunning ? 'Running...' : renderModel.label}
+          </button>
+          {isRunning && (
+            <button
+              type="button"
+              className="rivet-web-app-stop-button"
+              onClick={() => onCancelAction(renderModel.component.id)}
+            >
+              Stop
+            </button>
+          )}
+          <RivetWebAppProgress progress={actionProgress} />
+        </div>
       );
     case 'chat':
       return (
         <RivetWebAppChat
           actionError={actionError}
+          actionProgress={actionProgress}
           isRunning={isRunning}
           renderModel={renderModel}
           onRunAction={onRunAction}
+          onCancelAction={onCancelAction}
           onStateChange={onStateChange}
           onStatePatch={onStatePatch}
           state={state}
@@ -278,13 +309,25 @@ const RivetWebAppComponent: FC<{
 
 const RivetWebAppChat: FC<{
   actionError?: string;
+  actionProgress?: GraphProgress;
   isRunning: boolean;
   onRunAction(component: Extract<UiGraphComponent, { type: 'chat' }>): Promise<void> | void;
+  onCancelAction(componentId: UiComponentId): void;
   onStateChange(key: string, value: unknown): void;
   onStatePatch(patch: Record<string, unknown>): void;
   renderModel: Extract<ReturnType<typeof getUiGraphComponentRenderModel>, { type: 'chat' }>;
   state: Readonly<Record<string, unknown>>;
-}> = ({ actionError, isRunning, onRunAction, onStateChange, onStatePatch, renderModel, state }) => {
+}> = ({
+  actionError,
+  actionProgress,
+  isRunning,
+  onCancelAction,
+  onRunAction,
+  onStateChange,
+  onStatePatch,
+  renderModel,
+  state,
+}) => {
   const messagesRef = useRef<HTMLDivElement>(null);
   const { component, draft, messages } = renderModel;
 
@@ -308,7 +351,14 @@ const RivetWebAppChat: FC<{
     <section className="rivet-web-app-chat">
       <div className="rivet-web-app-chat-header">
         <span>Chat</span>
-        <span className="rivet-web-app-chat-status">{isRunning ? 'Responding' : 'Ready'}</span>
+        <span className="rivet-web-app-chat-header-actions">
+          <span className="rivet-web-app-chat-status">{isRunning ? 'Responding' : 'Ready'}</span>
+          {isRunning && (
+            <button type="button" className="rivet-web-app-stop-button" onClick={() => onCancelAction(component.id)}>
+              Stop
+            </button>
+          )}
+        </span>
       </div>
       <div
         ref={messagesRef}
@@ -344,6 +394,7 @@ const RivetWebAppChat: FC<{
           {actionError}
         </div>
       )}
+      <RivetWebAppProgress progress={actionProgress} />
       <form
         className="rivet-web-app-chat-composer"
         onSubmit={(event) => {
@@ -377,3 +428,11 @@ const RivetWebAppChat: FC<{
     </section>
   );
 };
+
+const RivetWebAppProgress: FC<{ progress?: GraphProgress }> = ({ progress }) =>
+  progress ? (
+    <div className="rivet-web-app-progress" aria-live="polite">
+      {progress.message && <span>{progress.message}</span>}
+      {progress.percent != null && <progress aria-label="Action progress" max={100} value={progress.percent} />}
+    </div>
+  ) : null;

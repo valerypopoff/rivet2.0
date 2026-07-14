@@ -24,7 +24,12 @@ export type RecordingId = Opaque<string, 'RecordingId'>;
 export type RecordedEventsMap = OverrideProperties<
   ProcessEvents,
   {
-    start: WithOptionalExecution<{ projectId: ProjectId; inputs: GraphInputs; contextValues: Record<string, DataValue>; startGraph: GraphId }>;
+    start: WithOptionalExecution<{
+      projectId: ProjectId;
+      inputs: GraphInputs;
+      contextValues: Record<string, DataValue>;
+      startGraph: GraphId;
+    }>;
 
     /** Called when a graph or subgraph has started. */
     graphStart: WithOptionalExecution<{ graphId: GraphId; inputs: GraphInputs }>;
@@ -60,7 +65,13 @@ export type RecordedEventsMap = OverrideProperties<
     }>;
 
     /** Called when a node has been excluded from processing. */
-    nodeExcluded: WithOptionalExecution<{ nodeId: NodeId; processId: ProcessId; inputs: Inputs; outputs: Outputs; reason: string }>;
+    nodeExcluded: WithOptionalExecution<{
+      nodeId: NodeId;
+      processId: ProcessId;
+      inputs: Inputs;
+      outputs: Outputs;
+      reason: string;
+    }>;
 
     /** Called when a user input node requires user input. Call the callback when finished, or call userInput() on the GraphProcessor with the results. */
     userInput: WithOptionalExecution<{
@@ -74,6 +85,12 @@ export type RecordedEventsMap = OverrideProperties<
 
     /** Called when a node has partially processed, with the current partial output values for the node. */
     partialOutput: WithOptionalExecution<{ nodeId: NodeId; outputs: Outputs; index: number; processId: ProcessId }>;
+
+    progress: WithOptionalExecution<{
+      nodeId: NodeId;
+      processId: ProcessId;
+      progress: ProcessEvents['progress']['progress'];
+    }>;
 
     /** Called when the outputs of a node have been cleared entirely. If processId is present, only the one process() should be cleared. */
     nodeOutputsCleared: WithOptionalExecution<{ nodeId: NodeId; processId?: ProcessId }>;

@@ -101,6 +101,11 @@ export function createDebuggerProcessorAttachments(options: {
         }),
       );
       cleanups.push(
+        processor.on('progress', (data) => {
+          options.broadcast(processor, 'progress', data);
+        }),
+      );
+      cleanups.push(
         processor.on('abort', () => {
           options.broadcast(processor, 'abort', null);
         }),

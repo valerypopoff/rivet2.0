@@ -139,6 +139,10 @@ export function coreCreateProcessor(
     processor.on('partialOutput', options.onPartialOutput);
   }
 
+  if (options.onProgress) {
+    processor.on('progress', options.onProgress);
+  }
+
   if (options.onUserInput) {
     processor.on('userInput', options.onUserInput);
   }

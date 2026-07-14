@@ -1,7 +1,7 @@
 import type { CSSProperties, FC, RefObject } from 'react';
 import { DndContext, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import type { UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
+import type { GraphProgress, UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
 import {
   RivetWebAppRenderer,
   type RivetWebAppActionResult,
@@ -17,6 +17,7 @@ export const UiGraphPreviewEditor: FC<{
     componentId: UiComponentId,
     state: Record<string, unknown>,
     abortSignal: AbortSignal,
+    onProgress: (progress: GraphProgress) => void,
   ): Promise<RivetWebAppActionResult>;
   scrollContainerRef: RefObject<HTMLDivElement>;
   uiGraph: UiGraph;

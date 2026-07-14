@@ -355,6 +355,49 @@ describe('UiGraphRuntimeModel', () => {
     });
     assert.deepEqual(controller.getSnapshot().state, { input: 'Replacement' });
   });
+
+  it('normalizes current action progress and drops stale reports after cancellation', async () => {
+    const button = makeButton('run-button', { type: 'runGraph' });
+    const controller = createUiGraphInteractionController(makeUiGraph([button]));
+    const run = deferred<{ statePatch?: Record<string, unknown> }>();
+    let context: UiGraphActionRunContext | undefined;
+    const runPromise = controller.runAction(button, (runContext) => {
+      context = runContext;
+      return run.promise;
+    });
+
+    context?.reportProgress({ message: '  Working  ', percent: 130 });
+    assert.deepEqual(controller.getSnapshot().actionProgress[button.id], { message: 'Working', percent: 100 });
+
+    controller.cancelAction(button.id);
+    assert.equal(context?.signal.aborted, true);
+    assert.equal(controller.getSnapshot().actionProgress[button.id], undefined);
+    context?.reportProgress({ message: 'Stale' });
+    assert.equal(controller.getSnapshot().actionProgress[button.id], undefined);
+
+    run.resolve({ statePatch: { result: 'ignored' } });
+    await runPromise;
+    assert.equal(controller.getSnapshot().state.result, undefined);
+  });
+
+  it('detaches in-flight hosted actions without aborting their remote run', async () => {
+    const button = makeButton('run-button', { type: 'runGraph' });
+    const controller = createUiGraphInteractionController(makeUiGraph([button]));
+    const run = deferred<{ statePatch?: Record<string, unknown> }>();
+    let signal: AbortSignal | undefined;
+    const runPromise = controller.runAction(button, (context) => {
+      signal = context.signal;
+      return run.promise;
+    });
+
+    controller.detachActions();
+    assert.equal(signal?.aborted, false);
+    assert.equal(controller.getSnapshot().runningComponentIds.size, 0);
+
+    run.resolve({ statePatch: { result: 'detached' } });
+    await runPromise;
+    assert.equal(controller.getSnapshot().state.result, undefined);
+  });
 });
 
 function makeButton(

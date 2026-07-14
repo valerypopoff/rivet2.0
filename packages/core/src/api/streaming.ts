@@ -23,6 +23,9 @@ export type RivetEventStreamFilterSpec = {
 
   /** Stream node finish events for the specified nodeIDs or node titles. */
   nodeFinish?: string[] | true;
+
+  /** Stream application-level progress reports emitted by graph nodes. */
+  progress?: boolean;
 };
 
 /** Map of all possible event names to their data for streaming events. */
@@ -45,6 +48,11 @@ export type RivetEventStreamEvent = {
     nodeTitle: string;
     outputs: Outputs;
     durationMs?: number;
+  };
+
+  progress: {
+    message?: string;
+    percent?: number;
   };
 
   done: {
@@ -130,6 +138,11 @@ export async function* getProcessorEvents(
           ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
         };
       }
+    } else if (event.type === 'progress' && spec.progress) {
+      yield {
+        type: 'progress',
+        ...event.progress,
+      };
     }
   }
 }

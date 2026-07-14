@@ -1,0 +1,35 @@
+---
+id: report-progress
+title: Report Progress Node
+sidebar_label: Report Progress
+---
+
+## Overview
+
+The Report Progress node publishes a temporary status message, a percentage, or both to progress-aware hosts while passing its input value through unchanged. Use it on the execution path of a long-running graph to update the Button or Chat component that started a Rivet web-app action.
+
+Progress is presentation state. It is not a graph output and is not saved into project data.
+
+## Inputs
+
+| Title   | Data Type | Description                                                                  |
+| ------- | --------- | ---------------------------------------------------------------------------- |
+| Value   | `any`     | Required sequencing value. The node passes it to the Value output unchanged. |
+| Message | `string`  | Optional status text when the Message input toggle is enabled.               |
+| Percent | `number`  | Optional completion percentage when the Percent input toggle is enabled.     |
+
+Percentages are clamped to the range `0` through `100`. Empty progress reports are ignored.
+
+## Output
+
+| Title | Data Type | Description                            |
+| ----- | --------- | -------------------------------------- |
+| Value | `any`     | The exact value received by the input. |
+
+## Settings
+
+The **Message** and **Percent** settings can be configured directly or exposed as input ports. Reported messages are trimmed and length-limited before they cross executor and hosted web-app transports.
+
+## Host Support
+
+Progress is available through Browser, Node, and Remote Debugger execution, desktop web-app preview, execution recordings, processor progress events, and the resumable hosted web-app WebSocket transport. Hosts that do not subscribe to progress still execute the node normally as a pass-through.

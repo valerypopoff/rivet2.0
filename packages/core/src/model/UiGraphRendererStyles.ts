@@ -130,6 +130,49 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   opacity: 0.72;
 }
 
+.rivet-web-app-action-stack {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rivet-web-app-action-stack .rivet-web-app-progress {
+  flex: 1;
+}
+
+.rivet-web-app-stop-button {
+  flex: 0 0 auto;
+  border: 1px solid var(--rivet-web-app-control-border);
+  border-radius: var(--rivet-web-app-button-radius);
+  background: transparent;
+  color: var(--rivet-web-app-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.rivet-web-app-stop-button:hover,
+.rivet-web-app-stop-button:focus-visible {
+  border-color: color-mix(in srgb, var(--rivet-web-app-foreground) 40%, transparent);
+  outline: none;
+}
+
+.rivet-web-app-progress {
+  display: grid;
+  gap: 5px;
+  color: color-mix(in srgb, var(--rivet-web-app-foreground) 68%, transparent);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.rivet-web-app-progress progress {
+  width: min(320px, 100%);
+  height: 6px;
+  accent-color: var(--rivet-web-app-button-background);
+}
+
 .rivet-web-app-chat {
   display: grid;
   flex: 1;
@@ -156,6 +199,17 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   color: color-mix(in srgb, var(--rivet-web-app-foreground) 56%, transparent);
   font-size: 12px;
   font-weight: 500;
+}
+
+.rivet-web-app-chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rivet-web-app-chat > .rivet-web-app-progress {
+  border-top: 1px solid var(--rivet-web-app-card-border);
+  padding: 10px 14px 0;
 }
 
 .rivet-web-app-chat-messages {

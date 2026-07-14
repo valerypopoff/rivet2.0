@@ -4,6 +4,7 @@ import {
   getUiGraphChatMessagesStateKey,
   type GraphId,
   type GraphOutputs,
+  type GraphProgress,
   type Project,
   type UiComponentId,
   type UiGraph,
@@ -19,6 +20,8 @@ test('web app actions run through the editor graph runner and wait for outputs',
     result: { type: 'string', value: 'done' },
   };
   const calls: EditorGraphRunOptions[] = [];
+  const progress = { message: 'Working', percent: 25 };
+  const onProgress = (report: GraphProgress) => assert.equal(report, progress);
   const uiGraph: UiGraph = {
     id: 'ui-graph-1' as UiGraphId,
     name: 'Test app',
@@ -46,8 +49,10 @@ test('web app actions run through the editor graph runner and wait for outputs',
     state: { prompt: 'hello' },
     tryRunGraph: async (options) => {
       calls.push(options ?? {});
+      options?.onProgress?.(progress);
       return outputs;
     },
+    onProgress,
     uiGraph,
   });
 
@@ -59,6 +64,7 @@ test('web app actions run through the editor graph runner and wait for outputs',
       staticValue: { type: 'number', value: 42 },
     },
     requireLiveRun: true,
+    onProgress,
     throwOnError: true,
     waitForResults: true,
   });

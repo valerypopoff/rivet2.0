@@ -1,5 +1,6 @@
 import {
   type DataValue,
+  type GraphProcessor,
   type LooseDataValue,
   type Project,
   type UiComponentId,
@@ -66,8 +67,13 @@ export type RivetWebAppHandlerOptions = {
 
 export type RivetWebAppAssetMode = 'external' | 'inline';
 
+export type RivetWebAppActionTransport =
+  | { type: 'http'; actionPath: string }
+  | { type: 'websocket'; socketPath: string };
+
 type RivetWebAppHtmlBaseOptions = {
-  actionPath: string;
+  actionPath?: string;
+  actionTransport?: RivetWebAppActionTransport;
   cspNonce?: string;
   revisionKey?: string;
 };
@@ -97,6 +103,13 @@ export type RunRivetWebAppActionOptions = {
   revisionKey?: string;
   state?: Record<string, unknown>;
   uiGraph: UiGraph;
+};
+
+export type PreparedRivetWebAppAction = {
+  context: RivetWebAppActionContext;
+  dispose(): void;
+  processor: GraphProcessor;
+  run(): Promise<RivetWebAppActionResult>;
 };
 
 export class RivetWebAppActionHttpError extends Error {
@@ -202,6 +215,19 @@ export function createRivetWebAppHandler(
 
 export async function runRivetWebAppAction(
   project: Project,
+  options: RunRivetWebAppActionOptions,
+): Promise<RivetWebAppActionResult> {
+  return (await prepareRivetWebAppAction(project, options)).run();
+}
+
+/**
+ * Resolves and validates a UI action without running it. Hosts can attach
+ * recorders, telemetry, or progress listeners to the returned processor before
+ * calling run(). A host that abandons the prepared action must call dispose().
+ * HTTP and WebSocket transports share identical action semantics.
+ */
+export async function prepareRivetWebAppAction(
+  project: Project,
   {
     componentId,
     createProcessorOptions,
@@ -215,7 +241,7 @@ export async function runRivetWebAppAction(
     state = {},
     uiGraph,
   }: RunRivetWebAppActionOptions,
-): Promise<RivetWebAppActionResult> {
+): Promise<PreparedRivetWebAppAction> {
   const actionRequest = request ?? new Request('https://rivet.local/web-app-action');
   const receivedState = normalizeActionState(state);
   const normalizedUiGraph = normalizeUiGraph(uiGraph);
@@ -264,43 +290,71 @@ export async function runRivetWebAppAction(
       );
     }
 
-    await callActionHook(onActionStart, actionContext);
-
     const processorOptions = await resolveProcessorOptions(createProcessorOptions, actionContext);
-    const defaultContext: Record<string, LooseDataValue> = {};
-    const context = (processorOptions.context ??
-      (resolveContext ? await resolveContext(actionRequest) : defaultContext)) as Record<string, LooseDataValue>;
+    const context = (processorOptions.context ?? (resolveContext ? await resolveContext(actionRequest) : {})) as Record<
+      string,
+      LooseDataValue
+    >;
     const inputs = (processorOptions.inputs ??
       Object.fromEntries(
         Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]),
       )) as Record<string, LooseDataValue>;
-    const configuredAbortSignal = (processorOptions as { abortSignal?: AbortSignal }).abortSignal;
-    const sourceAbortSignal = configuredAbortSignal ?? request?.signal;
-    sourceAbortSignal?.throwIfAborted();
-    const actionAbortController = sourceAbortSignal ? new AbortController() : undefined;
-    const forwardAbort = () => actionAbortController?.abort(sourceAbortSignal?.reason);
-    sourceAbortSignal?.addEventListener('abort', forwardAbort, { once: true });
+    const sourceAbortSignal = (processorOptions as { abortSignal?: AbortSignal }).abortSignal ?? actionRequest.signal;
+    sourceAbortSignal.throwIfAborted();
+    const actionAbortController = new AbortController();
+    const processorRunner = createProcessor(project, {
+      ...processorOptions,
+      abortSignal: actionAbortController.signal,
+      context,
+      graph: component.action.graphId,
+      inputs,
+    });
+    let started = false;
+    let disposed = false;
 
-    let outputs: Record<string, DataValue>;
-    try {
-      const processor = createProcessor(project, {
-        ...processorOptions,
-        abortSignal: actionAbortController?.signal,
-        context,
-        graph: component.action.graphId,
-        inputs,
-      });
-      outputs = await processor.run();
-    } finally {
-      sourceAbortSignal?.removeEventListener('abort', forwardAbort);
-    }
-    const result = {
-      outputs,
-      statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, actionState),
+    return {
+      context: actionContext,
+      dispose() {
+        if (started || disposed) return;
+        disposed = true;
+        actionAbortController.abort(new Error('Prepared Rivet web app action disposed before execution.'));
+        processorRunner.dispose();
+      },
+      processor: processorRunner.processor,
+      async run() {
+        if (disposed) {
+          throw new Error('This prepared Rivet web app action has been disposed.');
+        }
+        if (started) {
+          throw new Error('This prepared Rivet web app action has already been run.');
+        }
+        started = true;
+        let processorRunStarted = false;
+        const forwardAbort = () => actionAbortController.abort(sourceAbortSignal.reason);
+        sourceAbortSignal.addEventListener('abort', forwardAbort, { once: true });
+
+        try {
+          sourceAbortSignal.throwIfAborted();
+          await callActionHook(onActionStart, actionContext);
+          processorRunStarted = true;
+          const outputs = await processorRunner.run();
+          const result = {
+            outputs,
+            statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, actionState),
+          };
+          await callActionHook(onActionFinish, { ...actionContext, ...result });
+          return result;
+        } catch (error) {
+          await callActionHook(onActionError, { ...actionContext, error });
+          throw error;
+        } finally {
+          sourceAbortSignal.removeEventListener('abort', forwardAbort);
+          if (!processorRunStarted) {
+            processorRunner.dispose();
+          }
+        }
+      },
     };
-
-    await callActionHook(onActionFinish, { ...actionContext, ...result });
-    return result;
   } catch (error) {
     await callActionHook(onActionError, { ...actionContext, error });
     throw error;
@@ -313,11 +367,13 @@ function resolveUiGraph(project: Project, uiGraphId: UiGraphId | string | undefi
 
 export function renderRivetWebAppHtml(uiGraph: UiGraph, options: RenderRivetWebAppHtmlOptions): string {
   const normalizedUiGraph = normalizeUiGraph(uiGraph);
+  const actionTransport = resolveActionTransport(options);
   const manifest = getRivetWebAppAssetManifest();
   const nonceAttribute = getNonceAttribute(options.cspNonce);
   const bootstrap = escapeHtml(
     JSON.stringify({
-      actionPath: options.actionPath,
+      actionPath: actionTransport.type === 'http' ? actionTransport.actionPath : options.actionPath,
+      actionTransport,
       initialState: getUiGraphInitialState(normalizedUiGraph),
       markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY,
       revisionKey: options.revisionKey,
@@ -349,6 +405,35 @@ export function renderRivetWebAppHtml(uiGraph: UiGraph, options: RenderRivetWebA
   ${scriptMarkup}
 </body>
 </html>`;
+}
+
+function resolveActionTransport(options: RivetWebAppHtmlBaseOptions): RivetWebAppActionTransport {
+  const transport: unknown =
+    options.actionTransport ?? (options.actionPath ? { type: 'http', actionPath: options.actionPath } : undefined);
+  if (!isRecord(transport)) {
+    throw new Error('Rivet web app HTML requires an actionPath or actionTransport.');
+  }
+  if (transport.type === 'http' && typeof transport.actionPath === 'string' && transport.actionPath.trim()) {
+    const actionPath = transport.actionPath.trim();
+    if (hasSupportedTransportProtocol(actionPath, ['http:', 'https:'])) {
+      return { type: 'http', actionPath };
+    }
+  }
+  if (transport.type === 'websocket' && typeof transport.socketPath === 'string' && transport.socketPath.trim()) {
+    const socketPath = transport.socketPath.trim();
+    if (hasSupportedTransportProtocol(socketPath, ['http:', 'https:', 'ws:', 'wss:'])) {
+      return { type: 'websocket', socketPath };
+    }
+  }
+  throw new Error('Rivet web app actionTransport must define a valid HTTP actionPath or HTTP/WebSocket socketPath.');
+}
+
+function hasSupportedTransportProtocol(path: string, protocols: string[]): boolean {
+  try {
+    return protocols.includes(new URL(path, 'https://rivet.invalid').protocol);
+  } catch {
+    return false;
+  }
 }
 
 async function readActionRequestBody(request: Request): Promise<RunActionRequestBody> {

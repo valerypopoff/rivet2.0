@@ -925,6 +925,17 @@ Local and remote editor run-from execution share the same explicit run plan:
 - `onNodeStart`/`onNodeFinish`/`onNodeExcluded`/`onPartialOutput`/`onNodeError`: Store per-node data.
 - `onDone`: Marks graph as no longer running.
 
+Host-facing progress is a separate additive event, not node output or execution
+status. `InternalProcessContext.reportProgress(...)` normalizes an optional message
+and percentage and emits `ProcessEvents.progress` with the current node, process,
+and execution identity. The built-in **Report Progress** node is a required-value
+passthrough so authors can place progress updates on the actual workflow path.
+`SubprocessorBridge`, executor serialization, Remote Debugger transport, execution
+recording/playback, and `createProcessor(...).onProgress` preserve this event. The
+app execution snapshot intentionally ignores it: web-app preview/host callbacks own
+ephemeral progress presentation, while node run history continues to be derived from
+the normal node/graph lifecycle events.
+
 Persisted app-side execution payloads now share one storage/preview utility layer before being cloned into history:
 
 - `sanitizeInputsOrOutputs(...)` in `executionDataSanitization.ts` fixes Uint8Array-shaped values without destructively truncating them

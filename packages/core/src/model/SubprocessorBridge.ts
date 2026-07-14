@@ -45,6 +45,7 @@ export function wireSubprocessorEvents(
   processor.on('nodeError', (event) => parentEmitter.emit('nodeError', event));
   processor.on('nodeFinish', (event) => parentEmitter.emit('nodeFinish', event));
   processor.on('partialOutput', (event) => parentEmitter.emit('partialOutput', event));
+  processor.on('progress', (event) => parentEmitter.emit('progress', event));
   processor.on('nodeExcluded', (event) => parentEmitter.emit('nodeExcluded', event));
   processor.on('nodeStart', (event) => parentEmitter.emit('nodeStart', event));
   processor.on('graphAbort', (event) => parentEmitter.emit('graphAbort', event));

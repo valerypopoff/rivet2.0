@@ -17,6 +17,7 @@ export type NodeProcessContextBase = Omit<
   | 'onPartialOutputs'
   | 'processId'
   | 'requestUserInput'
+  | 'reportProgress'
   | 'isDirectRunTarget'
   | 'setGlobal'
   | 'signal'
@@ -40,6 +41,7 @@ export function buildNodeProcessContext(options: {
   onPartialOutputs: (partialOutputs: Outputs) => void;
   processId: ProcessId;
   requestUserInput: (inputStrings: string[], renderingType: 'text' | 'markdown') => Promise<StringArrayDataValue>;
+  reportProgress: InternalProcessContext['reportProgress'];
   setGlobal: (id: string, value: ScalarOrArrayDataValue) => void;
   waitEvent: (event: string) => Promise<DataValue | undefined>;
 }): InternalProcessContext {
@@ -57,6 +59,7 @@ export function buildNodeProcessContext(options: {
     onPartialOutputs,
     processId,
     requestUserInput,
+    reportProgress,
     setGlobal,
     waitEvent,
   } = options;
@@ -76,6 +79,7 @@ export function buildNodeProcessContext(options: {
     createSubProcessor: createSubProcessor as InternalProcessContext['createSubProcessor'],
     getPluginConfig,
     requestUserInput,
+    reportProgress,
     execution,
   };
 }
