@@ -1,11 +1,11 @@
 import { RIVET_API_BASE_URL } from '../../shared/hosted-env';
 import type {
-  NodeExecutorProxySettings,
-  NodeExecutorProxySettingsDraft,
   DeploymentStorageSettings,
   DeploymentStorageSettingsDraft,
   ExecutorUrlOverrideSettings,
   ExecutorUrlOverrideSettingsDraft,
+  NodeExecutorProxySettings,
+  NodeExecutorProxySettingsDraft,
   PublicRouteSettings,
   PublicRouteSettingsDraft,
   RunRecordingsSettings,
@@ -23,169 +23,77 @@ import { parseJsonResponse } from './apiRequest';
 
 const API = `${RIVET_API_BASE_URL}/app-settings`;
 
+export type AppSettingsResourceResult<T> = {
+  revision: string | null;
+  settings: T;
+};
+
+export type AppSettingsResource<TSettings, TDraft> = {
+  read(): Promise<AppSettingsResourceResult<TSettings>>;
+  update(draft: TDraft, revision?: string | null): Promise<AppSettingsResourceResult<TSettings>>;
+};
+
 const appSettingsJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
   nonJsonErrorMessage:
     'App settings API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/app-settings is routed to the API service.',
 });
 
-export async function fetchNodeExecutorProxySettings(): Promise<NodeExecutorProxySettings> {
-  const response = await fetch(`${API}/node-executor-proxy`, {
-    cache: 'no-store',
+function createAppSettingsResource<TSettings, TDraft>(path: string): AppSettingsResource<TSettings, TDraft> {
+  const readResponse = async (response: Response): Promise<AppSettingsResourceResult<TSettings>> => ({
+    revision: response.headers.get('etag'),
+    settings: await appSettingsJsonResponse<TSettings>(response),
   });
-  return appSettingsJsonResponse<NodeExecutorProxySettings>(response);
+
+  return {
+    async read() {
+      return readResponse(await fetch(`${API}/${path}`, { cache: 'no-store' }));
+    },
+    async update(draft, revision) {
+      return readResponse(await fetch(`${API}/${path}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(revision ? { 'If-Match': revision } : {}),
+        },
+        body: JSON.stringify(draft),
+      }));
+    },
+  };
 }
 
-export async function saveNodeExecutorProxySettings(
-  settings: NodeExecutorProxySettingsDraft,
-): Promise<NodeExecutorProxySettings> {
-  const response = await fetch(`${API}/node-executor-proxy`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<NodeExecutorProxySettings>(response);
-}
-
-export async function fetchExecutorUrlOverrideSettings(): Promise<ExecutorUrlOverrideSettings> {
-  const response = await fetch(`${API}/executor-url-overrides`, {
-    cache: 'no-store',
-  });
-  return appSettingsJsonResponse<ExecutorUrlOverrideSettings>(response);
-}
-
-export async function saveExecutorUrlOverrideSettings(
-  settings: ExecutorUrlOverrideSettingsDraft,
-): Promise<ExecutorUrlOverrideSettings> {
-  const response = await fetch(`${API}/executor-url-overrides`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<ExecutorUrlOverrideSettings>(response);
-}
-
-export async function fetchRunRecordingsSettings(): Promise<RunRecordingsSettings> {
-  const response = await fetch(`${API}/run-recordings`, {
-    cache: 'no-store',
-  });
-  return appSettingsJsonResponse<RunRecordingsSettings>(response);
-}
-
-export async function saveRunRecordingsSettings(
-  settings: RunRecordingsSettingsDraft,
-): Promise<RunRecordingsSettings> {
-  const response = await fetch(`${API}/run-recordings`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<RunRecordingsSettings>(response);
-}
-
-export async function fetchRuntimeLimitSettings(): Promise<RuntimeLimitSettings> {
-  const response = await fetch(`${API}/runtime-limits`, {
-    cache: 'no-store',
-  });
-  return appSettingsJsonResponse<RuntimeLimitSettings>(response);
-}
-
-export async function saveRuntimeLimitSettings(
-  settings: RuntimeLimitSettingsDraft,
-): Promise<RuntimeLimitSettings> {
-  const response = await fetch(`${API}/runtime-limits`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<RuntimeLimitSettings>(response);
-}
-
-export async function fetchTrustedHostSettings(): Promise<TrustedHostSettings> {
-  const response = await fetch(`${API}/trusted-hosts`, {
-    cache: 'no-store',
-  });
-  return appSettingsJsonResponse<TrustedHostSettings>(response);
-}
-
-export async function saveTrustedHostSettings(
-  settings: TrustedHostSettingsDraft,
-): Promise<TrustedHostSettings> {
-  const response = await fetch(`${API}/trusted-hosts`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<TrustedHostSettings>(response);
-}
-
-export async function fetchDeploymentStorageSettings(): Promise<DeploymentStorageSettings> {
-  const response = await fetch(`${API}/deployment-storage`, {
-    cache: 'no-store',
-  });
-  return appSettingsJsonResponse<DeploymentStorageSettings>(response);
-}
-
-export async function saveDeploymentStorageSettings(
-  settings: DeploymentStorageSettingsDraft,
-): Promise<DeploymentStorageSettings> {
-  const response = await fetch(`${API}/deployment-storage`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<DeploymentStorageSettings>(response);
-}
-
-export async function fetchPublicRouteSettings(): Promise<PublicRouteSettings> {
-  const response = await fetch(`${API}/public-routes`, {
-    cache: 'no-store',
-  });
-  return appSettingsJsonResponse<PublicRouteSettings>(response);
-}
-
-export async function savePublicRouteSettings(
-  settings: PublicRouteSettingsDraft,
-): Promise<PublicRouteSettings> {
-  const response = await fetch(`${API}/public-routes`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<PublicRouteSettings>(response);
-}
-
-export async function fetchWorkflowEndpointAuthSettings(): Promise<WorkflowEndpointAuthSettings> {
-  const response = await fetch(`${API}/workflow-endpoint-auth`, {
-    cache: 'no-store',
-  });
-  return appSettingsJsonResponse<WorkflowEndpointAuthSettings>(response);
-}
-
-export async function saveWorkflowEndpointAuthSettings(
-  settings: WorkflowEndpointAuthSettingsDraft,
-): Promise<WorkflowEndpointAuthSettings> {
-  const response = await fetch(`${API}/workflow-endpoint-auth`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<WorkflowEndpointAuthSettings>(response);
-}
-
-export async function fetchWebAppAuthSettings(): Promise<WebAppAuthSettings> {
-  const response = await fetch(`${API}/web-app-auth`, {
-    cache: 'no-store',
-  });
-  return appSettingsJsonResponse<WebAppAuthSettings>(response);
-}
-
-export async function saveWebAppAuthSettings(
-  settings: WebAppAuthSettingsDraft,
-): Promise<WebAppAuthSettings> {
-  const response = await fetch(`${API}/web-app-auth`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-  return appSettingsJsonResponse<WebAppAuthSettings>(response);
-}
+export const nodeExecutorProxySettingsResource = createAppSettingsResource<
+  NodeExecutorProxySettings,
+  NodeExecutorProxySettingsDraft
+>('node-executor-proxy');
+export const executorUrlOverrideSettingsResource = createAppSettingsResource<
+  ExecutorUrlOverrideSettings,
+  ExecutorUrlOverrideSettingsDraft
+>('executor-url-overrides');
+export const runRecordingsSettingsResource = createAppSettingsResource<
+  RunRecordingsSettings,
+  RunRecordingsSettingsDraft
+>('run-recordings');
+export const runtimeLimitSettingsResource = createAppSettingsResource<
+  RuntimeLimitSettings,
+  RuntimeLimitSettingsDraft
+>('runtime-limits');
+export const trustedHostSettingsResource = createAppSettingsResource<
+  TrustedHostSettings,
+  TrustedHostSettingsDraft
+>('trusted-hosts');
+export const deploymentStorageSettingsResource = createAppSettingsResource<
+  DeploymentStorageSettings,
+  DeploymentStorageSettingsDraft
+>('deployment-storage');
+export const publicRouteSettingsResource = createAppSettingsResource<
+  PublicRouteSettings,
+  PublicRouteSettingsDraft
+>('public-routes');
+export const workflowEndpointAuthSettingsResource = createAppSettingsResource<
+  WorkflowEndpointAuthSettings,
+  WorkflowEndpointAuthSettingsDraft
+>('workflow-endpoint-auth');
+export const webAppAuthSettingsResource = createAppSettingsResource<
+  WebAppAuthSettings,
+  WebAppAuthSettingsDraft
+>('web-app-auth');

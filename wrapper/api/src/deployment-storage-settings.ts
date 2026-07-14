@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 
 import type {
@@ -9,8 +8,8 @@ import type {
   DeploymentStorageSettings,
   DeploymentStorageSettingsDraft,
 } from '../../shared/app-settings-types.js';
+import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { getAppDataRoot } from './security.js';
-import { writePrivateJsonSettingsFile } from './settings-file-writer.js';
 import { badRequest } from './utils/httpError.js';
 import { parseEnum } from './utils/env-parsing.js';
 
@@ -247,44 +246,41 @@ export function getDeploymentStorageSettingsPath(): string {
   );
 }
 
+export const deploymentStorageSettingsRepository = new VersionedSettingsRepository<DeploymentStorageRuntimeSettings>({
+  key: 'deployment storage',
+  currentVersion: 1,
+  getPath: getDeploymentStorageSettingsPath,
+  getDefault: getDefaultSettings,
+  parseStored: (stored) => normalizeSettings(stored, getDefaultSettings(), 'app-settings'),
+  serialize: (settings) => ({
+    storageMode: settings.storageMode,
+    artifactsHostPath: settings.artifactsHostPath,
+    databaseMode: settings.databaseMode,
+    databaseSslMode: settings.databaseSslMode,
+    databaseConnectionString: settings.databaseConnectionString,
+    storageUrl: settings.storageUrl,
+    storageAccessKeyId: settings.storageAccessKeyId,
+    storageAccessKey: settings.storageAccessKey,
+    updatedAt: settings.updatedAt,
+  }),
+});
+
 export function readDeploymentStorageRuntimeSettingsSync(): DeploymentStorageRuntimeSettings {
-  const settingsPath = getDeploymentStorageSettingsPath();
-
-  try {
-    return normalizeSettings(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), getDefaultSettings(), 'app-settings');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return getDefaultSettings();
-    }
-
-    throw error;
-  }
+  return deploymentStorageSettingsRepository.readSync().value;
 }
 
 export async function readDeploymentStorageSettings(): Promise<DeploymentStorageSettings> {
-  return toPublicSettings(readDeploymentStorageRuntimeSettingsSync());
+  return toPublicSettings((await deploymentStorageSettingsRepository.read()).value);
 }
 
-export async function writeDeploymentStorageSettings(draft: unknown): Promise<DeploymentStorageSettings> {
-  const previous = readDeploymentStorageRuntimeSettingsSync();
-  const saved = {
+export async function writeDeploymentStorageSettings(
+  draft: unknown,
+  expectedRevision?: string,
+): Promise<DeploymentStorageSettings> {
+  const saved = await deploymentStorageSettingsRepository.update((previous) => ({
     ...normalizeSettings(draft, previous, 'app-settings'),
     updatedAt: new Date().toISOString(),
-    source: 'app-settings' as const,
-  };
-
-  await writePrivateJsonSettingsFile(getDeploymentStorageSettingsPath(), {
-    version: 1,
-    storageMode: saved.storageMode,
-    artifactsHostPath: saved.artifactsHostPath,
-    databaseMode: saved.databaseMode,
-    databaseSslMode: saved.databaseSslMode,
-    databaseConnectionString: saved.databaseConnectionString,
-    storageUrl: saved.storageUrl,
-    storageAccessKeyId: saved.storageAccessKeyId,
-    storageAccessKey: saved.storageAccessKey,
-    updatedAt: saved.updatedAt,
-  });
-
-  return toPublicSettings(saved);
+    source: 'app-settings',
+  }), expectedRevision);
+  return toPublicSettings(saved.value);
 }

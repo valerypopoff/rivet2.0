@@ -805,7 +805,11 @@ When a project or folder is renamed, moved, duplicated, uploaded, downloaded, or
 
 The workflow-publication UI now follows the same controller-versus-view split as the backend:
 
-- `WorkflowLibraryPanel.tsx` renders the shell, while `useWorkflowLibraryController.ts` owns refresh, selection, drag/drop, duplicate/download/upload, and modal orchestration
+- `WorkflowLibraryPanel.tsx` renders the shell, while `useWorkflowLibraryController.ts` composes the tree and modal domains
+- `useWorkflowLibraryTree.ts` owns refresh, stale-request protection, folder expansion, and save-triggered reconciliation
+- `useWorkflowLibrarySelection.ts` owns selection, active-row scrolling, folder auto-expansion, and the single preview-open slot/debounce
+- `useWorkflowLibraryDragAndDrop.ts` owns drag state and move reconciliation; `useWorkflowLibraryMutations.ts` owns create/upload/rename/delete operations and inline mutation state
+- `useWorkflowProjectVersionActions.ts` owns duplicate/download/compare version choice and busy state; `useRunRecordingsModalState.ts` owns retained Run recordings modal state
 - `ProjectSettingsModal.tsx` is mostly presentational
 - `useProjectSettingsActions.ts` owns publish, unpublish, and guarded delete flows
 - `WorkflowPublishedVersionHistoryModal.tsx` lists published versions for a project and stars, downloads, previews, or restores a selected stored snapshot
@@ -848,6 +852,11 @@ The workflow-publication UI now follows the same controller-versus-view split as
 - `wrapper/api/src/routes/workflows/managed-virtual-io.ts` - managed virtual-path helpers used by hosted native IO
 - `wrapper/api/src/scripts/measure-workflow-execution.ts` - read-only filesystem/managed endpoint measurement helper for route-timing diagnosis
 - `wrapper/web/dashboard/useWorkflowLibraryController.ts` - workflow-tree controller
+- `wrapper/web/dashboard/useWorkflowLibraryTree.ts` - workflow-tree loading and expansion state
+- `wrapper/web/dashboard/useWorkflowLibrarySelection.ts` - project selection and preview-open lifecycle
+- `wrapper/web/dashboard/useWorkflowLibraryDragAndDrop.ts` - tree drag/drop operations
+- `wrapper/web/dashboard/useWorkflowLibraryMutations.ts` - folder/project create, upload, rename, and delete operations
+- `wrapper/web/dashboard/useWorkflowProjectVersionActions.ts` - duplicate, download, and compare version actions
 - `wrapper/web/dashboard/WorkflowInlineRenameInput.tsx` - shared inline rename input used by folder and project tree rows
 - `wrapper/web/dashboard/useProjectSettingsActions.ts` - project-settings mutations
 - `wrapper/web/dashboard/projectSettingsForm.ts` - project-settings validation and label helpers

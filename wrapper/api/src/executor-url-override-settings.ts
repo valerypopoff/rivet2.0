@@ -1,12 +1,10 @@
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
   ExecutorUrlOverrideSettings,
   ExecutorUrlOverrideSettingsDraft,
 } from '../../shared/app-settings-types.js';
-import { writePrivateJsonSettingsFile } from './settings-file-writer.js';
+import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { badRequest } from './utils/httpError.js';
 
 const repoRoot = path.resolve(process.cwd(), '..', '..');
@@ -100,57 +98,38 @@ function readExecutorUrlOverrideSettingsFromText(settingsText: string): Executor
   };
 }
 
+export const executorUrlOverrideSettingsRepository = new VersionedSettingsRepository<ExecutorUrlOverrideSettings>({
+  key: 'executor URL override',
+  currentVersion: 1,
+  getPath: getExecutorUrlOverrideSettingsPath,
+  getDefault: () => ({
+    ...DEFAULT_EXECUTOR_URL_OVERRIDE_SETTINGS,
+    updatedAt: null,
+    source: 'default',
+  }),
+  parseStored: (stored) => readExecutorUrlOverrideSettingsFromText(JSON.stringify(stored)),
+  serialize: (settings) => ({
+    executorWsUrl: settings.executorWsUrl,
+    remoteDebuggerDefaultWs: settings.remoteDebuggerDefaultWs,
+    updatedAt: settings.updatedAt,
+  }),
+});
+
 export function readExecutorUrlOverrideSettingsSync(): ExecutorUrlOverrideSettings {
-  const settingsPath = getExecutorUrlOverrideSettingsPath();
-
-  try {
-    return readExecutorUrlOverrideSettingsFromText(fs.readFileSync(settingsPath, 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...DEFAULT_EXECUTOR_URL_OVERRIDE_SETTINGS,
-        updatedAt: null,
-        source: 'default',
-      };
-    }
-
-    throw error;
-  }
+  return executorUrlOverrideSettingsRepository.readSync().value;
 }
 
 export async function readExecutorUrlOverrideSettings(): Promise<ExecutorUrlOverrideSettings> {
-  const settingsPath = getExecutorUrlOverrideSettingsPath();
-
-  try {
-    return readExecutorUrlOverrideSettingsFromText(await fsp.readFile(settingsPath, 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...DEFAULT_EXECUTOR_URL_OVERRIDE_SETTINGS,
-        updatedAt: null,
-        source: 'default',
-      };
-    }
-
-    throw error;
-  }
+  return (await executorUrlOverrideSettingsRepository.read()).value;
 }
 
-export async function writeExecutorUrlOverrideSettings(draft: unknown): Promise<ExecutorUrlOverrideSettings> {
-  const previousSettings = await readExecutorUrlOverrideSettings();
-  const settings = normalizeExecutorUrlOverrideSettingsDraft(draft, previousSettings);
-  const saved: ExecutorUrlOverrideSettings = {
-    ...settings,
+export async function writeExecutorUrlOverrideSettings(
+  draft: unknown,
+  expectedRevision?: string,
+): Promise<ExecutorUrlOverrideSettings> {
+  return (await executorUrlOverrideSettingsRepository.update((previousSettings) => ({
+    ...normalizeExecutorUrlOverrideSettingsDraft(draft, previousSettings),
     updatedAt: new Date().toISOString(),
     source: 'app-settings',
-  };
-
-  await writePrivateJsonSettingsFile(getExecutorUrlOverrideSettingsPath(), {
-    version: 1,
-    executorWsUrl: saved.executorWsUrl,
-    remoteDebuggerDefaultWs: saved.remoteDebuggerDefaultWs,
-    updatedAt: saved.updatedAt,
-  });
-
-  return saved;
+  }), expectedRevision)).value;
 }

@@ -27,6 +27,7 @@ function createCompareProjectItem(
       status: 'unpublished',
       endpointName: '',
       lastPublishedAt: null,
+      publishedWebApps: [],
       ...settings,
     },
   };

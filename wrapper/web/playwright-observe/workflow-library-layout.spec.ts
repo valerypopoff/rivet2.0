@@ -146,7 +146,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     const method = route.request().method();
 
     if (url.pathname === '/api/app-settings/node-executor-proxy') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as {
           httpProxy?: string;
           httpsProxy?: string;
@@ -186,7 +186,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/executor-url-overrides') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as {
           executorWsUrl?: string;
           remoteDebuggerDefaultWs?: string;
@@ -219,7 +219,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/run-recordings') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as {
           maxPendingWrites?: string | number;
           maxRunsPerEndpoint?: string | number;
@@ -259,7 +259,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/public-routes') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as {
           publishedWorkflowsBasePath?: string;
           latestWorkflowsBasePath?: string;
@@ -300,7 +300,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/runtime-limits') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as Record<string, unknown>;
         runtimeLimitSettings = {
           commandTimeoutSeconds: Number(body.commandTimeoutSeconds ?? runtimeLimitSettings.commandTimeoutSeconds),
@@ -333,7 +333,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/workflow-endpoint-auth') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as {
           requireBearerAuth?: boolean;
         };
@@ -364,7 +364,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/trusted-hosts') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as {
           trustedHosts?: string[];
         };
@@ -395,7 +395,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/deployment-storage') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as Record<string, unknown>;
         deploymentStorageSettings = {
           storageMode: String(body.storageMode ?? deploymentStorageSettings.storageMode),
@@ -431,7 +431,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/web-app-auth') {
-      if (method === 'PUT') {
+      if (method === 'PATCH') {
         const body = route.request().postDataJSON() as Record<string, unknown>;
         await route.fulfill({
           status: 200,

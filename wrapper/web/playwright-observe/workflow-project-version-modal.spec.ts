@@ -12,6 +12,7 @@ type MockWorkflowProjectItem = {
     status: 'unpublished' | 'published' | 'unpublished_changes';
     endpointName: string;
     lastPublishedAt: string | null;
+    publishedWebApps: [];
   };
 };
 
@@ -27,6 +28,7 @@ function createVersionChooserFixture(name: string): MockWorkflowProjectItem {
       status: 'unpublished_changes',
       endpointName: 'codex-version-modal-endpoint',
       lastPublishedAt: '2026-04-08T10:15:00.000Z',
+      publishedWebApps: [],
     },
   };
 }

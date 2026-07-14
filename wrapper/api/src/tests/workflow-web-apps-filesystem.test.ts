@@ -556,7 +556,7 @@ test('published filesystem web apps serve HTML and app JSON from the published s
     assert.match(html, /Published Web App/);
     assert.doesNotMatch(html, /Draft Web App/);
     assert.match(html, /\/apps\/published-web-app\/actions\/run/);
-    assert.match(html, /"revisionKey":"filesystem-web-app:/);
+    assert.match(extractWebAppRevisionKey(html), /^filesystem-web-app:/);
 
     const appJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app/app.json`, {
       signal: AbortSignal.timeout(5000),

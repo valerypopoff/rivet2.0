@@ -23,6 +23,7 @@ import { getWebAppAuthMode } from '../web-app-oauth.js';
 import {
   getWebAppAuthSettingsPath,
   readWebAppAuthSettings,
+  readWebAppAuthSettingsSync,
   writeWebAppAuthSettings,
 } from '../web-app-auth-settings.js';
 import {
@@ -247,6 +248,49 @@ test('Node executor proxy settings API saves and returns persisted values', asyn
     } finally {
       setNodeExecutorProxySettingsReloaderForTest(undefined);
       await server?.close();
+    }
+  });
+});
+
+test('App settings API supports revisioned partial updates without lost writes', async () => {
+  await withAppSettingsEnv(async () => {
+    const server = await startServer();
+    try {
+      const readResponse = await fetch(`${server.baseUrl}/api/app-settings/node-executor-proxy`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(readResponse.status, 200);
+      const originalRevision = readResponse.headers.get('etag');
+      assert.ok(originalRevision);
+
+      const firstUpdate = await fetch(`${server.baseUrl}/api/app-settings/node-executor-proxy`, {
+        method: 'PATCH',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+          'if-match': originalRevision,
+        },
+        body: JSON.stringify({ httpProxy: 'http://first-proxy.local:3128' }),
+      });
+      assert.equal(firstUpdate.status, 200);
+      assert.notEqual(firstUpdate.headers.get('etag'), originalRevision);
+
+      const staleUpdate = await fetch(`${server.baseUrl}/api/app-settings/node-executor-proxy`, {
+        method: 'PATCH',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+          'if-match': originalRevision,
+        },
+        body: JSON.stringify({ httpsProxy: 'http://stale-proxy.local:3128' }),
+      });
+      assert.equal(staleUpdate.status, 409);
+
+      const saved = await readNodeExecutorProxySettings();
+      assert.equal(saved.httpProxy, 'http://first-proxy.local:3128');
+      assert.equal(saved.httpsProxy, '');
+    } finally {
+      await server.close();
     }
   });
 });
@@ -1604,26 +1648,20 @@ test('Web app auth settings API saves and hides secrets', async () => {
       assert.equal(saved.emailClaim, 'data.email');
       assert.equal(saved.clientAuthMethod, 'basic');
       assert.deepEqual(saved.serverUiAdminEmails, ['admin@example.test', 'editor@example.test']);
+      const savedRevision = saveResponse.headers.get('etag');
+      assert.ok(savedRevision);
 
       const rotateResponse = await fetch(`${server.baseUrl}/api/app-settings/web-app-auth`, {
-        method: 'PUT',
+        method: 'PATCH',
         headers: {
           ...trustedProxyHeaders(),
           'content-type': 'application/json',
+          'if-match': savedRevision,
         },
         body: JSON.stringify({
-          mode: 'oauth',
-          provider: 'external',
-          authorizeUrl: 'https://oauth.example.test/authorize',
-          tokenUrl: 'https://oauth.example.test/token',
-          userUrl: 'https://oauth.example.test/profile',
-          clientId: 'client-id',
           clientSecret: '',
-          callbackUrl: 'https://rivet.example.test/apps/auth/callback',
           scopes: 'profile email',
-          emailClaim: 'data.email',
           sessionSecret: '',
-          sessionTtlSeconds: '3600',
           clientAuthMethod: 'body',
           debugLogProfile: false,
           serverUiAdminEmails: ['editor@example.test'],
@@ -1637,6 +1675,13 @@ test('Web app auth settings API saves and hides secrets', async () => {
       assert.equal(rotated.scopes, 'profile email');
       assert.equal(rotated.clientAuthMethod, 'body');
       assert.deepEqual(rotated.serverUiAdminEmails, ['editor@example.test']);
+
+      const runtime = readWebAppAuthSettingsSync();
+      assert.equal(runtime.mode, 'oauth');
+      assert.equal(runtime.authorizeUrl, 'https://oauth.example.test/authorize');
+      assert.equal(runtime.clientSecret, 'client-secret');
+      assert.equal(runtime.sessionSecret, 'session-secret');
+      assert.equal(runtime.sessionTtlSeconds, 7200);
     } finally {
       await server?.close();
     }

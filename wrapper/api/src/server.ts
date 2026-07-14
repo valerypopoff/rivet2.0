@@ -6,6 +6,7 @@ import { initializeLatestWorkflowRemoteDebugger } from './latestWorkflowRemoteDe
 import { initializeWorkflowStorage } from './routes/workflows/storage-backend.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile } from './runtime-profile.js';
 import { assertApiRuntimeProfileStartupPreconditions, createApiApp } from './app.js';
+import { initializeAppSettingsRepositories } from './app-settings/settings-repository.js';
 
 const app = createApiApp();
 const server = createServer(app);
@@ -69,6 +70,7 @@ process.once('SIGTERM', () => {
 
 async function startServer() {
   try {
+    await initializeAppSettingsRepositories();
     assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
     await reconcileRuntimeLibraries();
     await initializeWorkflowStorage();

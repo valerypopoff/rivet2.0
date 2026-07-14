@@ -1,12 +1,10 @@
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
   WorkflowEndpointAuthSettings,
   WorkflowEndpointAuthSettingsDraft,
 } from '../../shared/app-settings-types.js';
-import { writePrivateJsonSettingsFile } from './settings-file-writer.js';
+import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { badRequest } from './utils/httpError.js';
 
 const repoRoot = path.resolve(process.cwd(), '..', '..');
@@ -67,56 +65,37 @@ function readWorkflowEndpointAuthSettingsFromText(settingsText: string): Workflo
   };
 }
 
+export const workflowEndpointAuthSettingsRepository = new VersionedSettingsRepository<WorkflowEndpointAuthSettings>({
+  key: 'workflow endpoint auth',
+  currentVersion: 1,
+  getPath: getWorkflowEndpointAuthSettingsPath,
+  getDefault: () => ({
+    ...DEFAULT_WORKFLOW_ENDPOINT_AUTH_SETTINGS,
+    updatedAt: null,
+    source: 'default',
+  }),
+  parseStored: (stored) => readWorkflowEndpointAuthSettingsFromText(JSON.stringify(stored)),
+  serialize: (settings) => ({
+    requireBearerAuth: settings.requireBearerAuth,
+    updatedAt: settings.updatedAt,
+  }),
+});
+
 export function readWorkflowEndpointAuthSettingsSync(): WorkflowEndpointAuthSettings {
-  const settingsPath = getWorkflowEndpointAuthSettingsPath();
-
-  try {
-    return readWorkflowEndpointAuthSettingsFromText(fs.readFileSync(settingsPath, 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...DEFAULT_WORKFLOW_ENDPOINT_AUTH_SETTINGS,
-        updatedAt: null,
-        source: 'default',
-      };
-    }
-
-    throw error;
-  }
+  return workflowEndpointAuthSettingsRepository.readSync().value;
 }
 
 export async function readWorkflowEndpointAuthSettings(): Promise<WorkflowEndpointAuthSettings> {
-  const settingsPath = getWorkflowEndpointAuthSettingsPath();
-
-  try {
-    return readWorkflowEndpointAuthSettingsFromText(await fsp.readFile(settingsPath, 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        ...DEFAULT_WORKFLOW_ENDPOINT_AUTH_SETTINGS,
-        updatedAt: null,
-        source: 'default',
-      };
-    }
-
-    throw error;
-  }
+  return (await workflowEndpointAuthSettingsRepository.read()).value;
 }
 
-export async function writeWorkflowEndpointAuthSettings(draft: unknown): Promise<WorkflowEndpointAuthSettings> {
-  const previousSettings = await readWorkflowEndpointAuthSettings();
-  const settings = normalizeWorkflowEndpointAuthSettingsDraft(draft, previousSettings);
-  const saved: WorkflowEndpointAuthSettings = {
-    ...settings,
+export async function writeWorkflowEndpointAuthSettings(
+  draft: unknown,
+  expectedRevision?: string,
+): Promise<WorkflowEndpointAuthSettings> {
+  return (await workflowEndpointAuthSettingsRepository.update((previousSettings) => ({
+    ...normalizeWorkflowEndpointAuthSettingsDraft(draft, previousSettings),
     updatedAt: new Date().toISOString(),
     source: 'app-settings',
-  };
-
-  await writePrivateJsonSettingsFile(getWorkflowEndpointAuthSettingsPath(), {
-    version: 1,
-    requireBearerAuth: saved.requireBearerAuth,
-    updatedAt: saved.updatedAt,
-  });
-
-  return saved;
+  }), expectedRevision)).value;
 }

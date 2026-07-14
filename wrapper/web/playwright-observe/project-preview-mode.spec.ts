@@ -43,6 +43,7 @@ function createPreviewProject(projectName: string): WorkflowProjectItem {
       status: 'unpublished',
       endpointName: '',
       lastPublishedAt: null,
+      publishedWebApps: [],
     },
   };
 }

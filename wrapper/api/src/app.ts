@@ -36,6 +36,7 @@ import { requireAuth } from './middleware/auth.js';
 import { isTrustedProxyRequest } from './auth.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
+import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
 
 type RuntimeExpressRouter = {
   handle: (req: Request, res: Response, next: NextFunction) => void;
@@ -248,6 +249,7 @@ function mountPublishedExecutionRoutes(app: Express): void {
 export function createApiApp(profile = getApiRuntimeProfile()): Express {
   const app = express();
 
+  app.use(captureAppSettingsSnapshot);
   app.use(cors((req, callback) => {
     callback(null, createCorsOptions(req));
   }));

@@ -1,7 +1,7 @@
-import fs from 'node:fs';
 import path from 'node:path';
 
-import type { RunRecordingsSettingsDraft } from '../../../../shared/app-settings-types.js';
+import type { RunRecordingsSettings, RunRecordingsSettingsDraft } from '../../../../shared/app-settings-types.js';
+import { VersionedSettingsRepository } from '../../app-settings/settings-repository.js';
 import { parseBoolean, parseEnum, parseIntWithMinimum } from '../../utils/env-parsing.js';
 import { getAppDataRoot } from '../../security.js';
 
@@ -22,6 +22,8 @@ export const DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS: WorkflowRecordingLimitSe
   retentionDays: 14,
   maxRunsPerEndpoint: 100,
 };
+
+const MAX_RECORDING_SETTING_VALUE = 1_000_000;
 
 export type WorkflowRecordingConfig = {
   enabled: boolean;
@@ -94,17 +96,64 @@ export function getRunRecordingsSettingsPath(): string {
   );
 }
 
-export function readWorkflowRecordingLimitSettings(): WorkflowRecordingLimitSettings {
-  try {
-    const settingsText = fs.readFileSync(getRunRecordingsSettingsPath(), 'utf8');
-    return normalizeWorkflowRecordingLimitSettings(JSON.parse(settingsText));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS;
+function normalizeRunRecordingsSettingsDraft(value: unknown): WorkflowRecordingLimitSettings {
+  const settings = normalizeWorkflowRecordingLimitSettings(value);
+  for (const [label, setting] of [
+    ['Queued recording writes', settings.maxPendingWrites],
+    ['Runs kept per workflow endpoint', settings.maxRunsPerEndpoint],
+    ['Days to keep recordings', settings.retentionDays],
+  ] as const) {
+    if (setting > MAX_RECORDING_SETTING_VALUE) {
+      throw new Error(`${label} is too large`);
     }
-
-    throw error;
   }
+  return settings;
+}
+
+export const runRecordingsSettingsRepository = new VersionedSettingsRepository<RunRecordingsSettings>({
+  key: 'run recordings',
+  currentVersion: 1,
+  getPath: getRunRecordingsSettingsPath,
+  getDefault: () => ({
+    ...DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS,
+    updatedAt: null,
+    source: 'default',
+  }),
+  parseStored: (stored) => ({
+    ...normalizeRunRecordingsSettingsDraft(stored),
+    updatedAt: typeof stored.updatedAt === 'string' ? stored.updatedAt : null,
+    source: 'app-settings',
+  }),
+  serialize: (settings) => ({
+    maxPendingWrites: settings.maxPendingWrites,
+    maxRunsPerEndpoint: settings.maxRunsPerEndpoint,
+    retentionDays: settings.retentionDays,
+    updatedAt: settings.updatedAt,
+  }),
+});
+
+export function readWorkflowRecordingLimitSettings(): WorkflowRecordingLimitSettings {
+  const settings = runRecordingsSettingsRepository.readSync().value;
+  return {
+    maxPendingWrites: settings.maxPendingWrites,
+    retentionDays: settings.retentionDays,
+    maxRunsPerEndpoint: settings.maxRunsPerEndpoint,
+  };
+}
+
+export async function readRunRecordingsSettings(): Promise<RunRecordingsSettings> {
+  return (await runRecordingsSettingsRepository.read()).value;
+}
+
+export async function writeRunRecordingsSettings(draft: unknown, expectedRevision?: string): Promise<RunRecordingsSettings> {
+  return (await runRecordingsSettingsRepository.update((previous) => ({
+    ...normalizeRunRecordingsSettingsDraft({
+      ...previous,
+      ...(draft && typeof draft === 'object' ? draft : {}),
+    }),
+    updatedAt: new Date().toISOString(),
+    source: 'app-settings',
+  }), expectedRevision)).value;
 }
 
 export function getWorkflowRecordingConfig(): WorkflowRecordingConfig {

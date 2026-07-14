@@ -13,7 +13,7 @@ export function getWorkflowProjectStatusLabel(status: WorkflowProjectStatus): st
 }
 
 export function isWorkflowProjectFullyUnpublished(project: WorkflowProjectItem): boolean {
-  return project.settings.status === 'unpublished' && project.settings.publishedWebApps.length === 0;
+  return project.settings.status === 'unpublished' && (project.settings.publishedWebApps?.length ?? 0) === 0;
 }
 
 export function validateEndpointName(

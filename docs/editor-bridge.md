@@ -110,7 +110,7 @@ Node copy/paste shortcuts do not cross the editor bridge. Dashboard-focused dupl
 
 The editor bridge is not the same thing as the executor/debugger websocket transport. In the Rivet 2.0 integration, the hosted shell loads runtime `/api/config`, mounts the editor through `RivetAppHost`, and passes the configured hosted executor websocket as `executor.internalExecutorUrl`. By default that URL is derived from the current public host as `/ws/executor/internal`; App Settings -> `Node executor proxy` can store an explicit override for deployments that need a different websocket target.
 
-- the iframe app captures the upstream `RivetWorkspaceHost` through `RivetAppHost.onWorkspaceHostReady`, then renders `wrapper/web/dashboard/EditorMessageBridge.tsx` with that handle; executor UI classification stays in upstream Rivet's `useExecutorSession` / `useRemoteDebugger` flow through `executor.internalExecutorUrl`
+- the iframe app captures the upstream `RivetWorkspaceHost` through `RivetAppHost.onWorkspaceHostReady`, then renders `wrapper/web/dashboard/EditorMessageBridge.tsx` with that handle. The component only composes the bridge domains: command validation and FIFO dispatch live in `useEditorCommandBridge.ts`, command implementations are grouped in the `editorProject*Commands.ts` modules, preview promotion/replacement lives in `usePreviewProjectLifecycle.ts`, recording restoration in `useWorkflowRecordingBridge.ts`, and keyboard/focus capture in `useEditorBridgeInteractions.ts`; executor UI classification stays in upstream Rivet's `useExecutorSession` / `useRemoteDebugger` flow through `executor.internalExecutorUrl`
 - executor transport ownership stays in upstream Rivet app code (`useExecutorSession`, `useRemoteDebugger`, `useRemoteExecutor`, and the shared executor-session runtime); the wrapper passes the runtime-configured hosted executor URL and does not alias those transport/debugger hooks
 - hosted wrapper code still owns project-open/delete/path-move messages, parent-page save relay, hosted IO adapters, and the hosted File menu visibility policy; upstream Rivet owns workspace transitions, tab close fallback, path moves, command behavior, and the actual save transition
 - hosted UI policy uses the upstream `RivetAppHost.ui` seam. The wrapper exposes only `import_graph`, `export_graph`, `settings`, and `get_help` in the iframe File menu, preserving Rivet's command layer while hiding wrapper-owned project create/open/save commands. It also sets `webApps.desktopPreview: false` so the hosted web-app editor does not show the desktop-only `Run web app` preview action; hosted web apps are launched through published `/apps` and `/apps-latest` routes instead.
@@ -130,7 +130,14 @@ Those execution websocket responsibilities are separate from the dashboard/edito
 - `wrapper/web/dashboard/useEditorBridgeEvents.ts` - dashboard-side message listeners and outer-page save shortcut capture
 - `wrapper/web/dashboard/useEditorCommandQueue.ts` - pre-ready command buffering
 - `wrapper/web/dashboard/editorBridgeFocus.ts` - iframe/canvas focus helpers and save-shortcut detection
-- `wrapper/web/dashboard/EditorMessageBridge.tsx` - editor-side message handling
+- `wrapper/web/dashboard/EditorMessageBridge.tsx` - editor-side bridge composition and editor-state projection
+- `wrapper/web/dashboard/useEditorCommandBridge.ts` - serialized dashboard command validation, dispatch, and acknowledgement ordering
+- `wrapper/web/dashboard/editorProjectOpenCommands.ts` - normal project open, preview replacement, and disk refresh commands
+- `wrapper/web/dashboard/editorDetachedProjectCommands.ts` - recording, published-version preview, and compare commands
+- `wrapper/web/dashboard/editorProjectLifecycleCommands.ts` - project delete and path-move commands
+- `wrapper/web/dashboard/usePreviewProjectLifecycle.ts` - preview-tab ownership, replacement safety, and promotion
+- `wrapper/web/dashboard/useWorkflowRecordingBridge.ts` - recording artifact load/cache and replay activation
+- `wrapper/web/dashboard/useEditorBridgeInteractions.ts` - editor-side save/find/duplicate focus and keyboard capture
 - `wrapper/web/dashboard/HostedEditorApp.tsx` - `RivetAppHost` UI policy, callback forwarding for active project, open project count, saved project events, and workspace-host readiness
 - `wrapper/web/dashboard/useReconcileHostedProjectTitleAfterSave.ts` - save-completion title reconciliation through `RivetWorkspaceHost.updateProjectMetadata`; do not mutate active project, opened snapshot, or dirty-state atoms from wrapper code
 - `wrapper/web/dashboard/hostedRivetProviders.ts` - explicit provider overrides passed into `RivetAppHost`

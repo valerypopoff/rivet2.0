@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 
 import type {
@@ -9,8 +8,8 @@ import type {
   WebAppOAuthClientAuthMethod,
   WebAppOAuthProvider,
 } from '../../shared/app-settings-types.js';
+import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { getAppDataRoot } from './security.js';
-import { writePrivateJsonSettingsFile } from './settings-file-writer.js';
 import { badRequest, createHttpError } from './utils/httpError.js';
 
 export const WEB_APP_AUTH_SETTINGS_RELATIVE_PATH = path.join('settings', 'web-app-auth.json');
@@ -74,6 +73,10 @@ const FAIL_CLOSED_WEB_APP_AUTH_SETTINGS: WebAppAuthRuntimeSettings = {
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function isPresent(value: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function rejectControlCharacters(value: string, fieldLabel: string): void {
@@ -291,19 +294,35 @@ function normalizeDraftSettings(value: unknown, previous: WebAppAuthRuntimeSetti
     provider: normalizeOAuthProvider(raw.provider, previous.provider),
     dummyEmail: normalizeLimitedString(raw.dummyEmail, 'Dummy OAuth email') || previous.dummyEmail || DEFAULT_WEB_APP_AUTH_SETTINGS.dummyEmail,
     dummyAllowNonLocalhost: normalizeBoolean(raw.dummyAllowNonLocalhost, previous.dummyAllowNonLocalhost),
-    authorizeUrl: normalizeLimitedString(raw.authorizeUrl, 'Authorization URL', MAX_URL_LENGTH),
-    tokenUrl: normalizeLimitedString(raw.tokenUrl, 'Token URL', MAX_URL_LENGTH),
-    userUrl: normalizeLimitedString(raw.userUrl, 'Profile URL', MAX_URL_LENGTH),
-    clientId: normalizeLimitedString(raw.clientId, 'Client ID'),
+    authorizeUrl: isPresent(raw, 'authorizeUrl')
+      ? normalizeLimitedString(raw.authorizeUrl, 'Authorization URL', MAX_URL_LENGTH)
+      : previous.authorizeUrl,
+    tokenUrl: isPresent(raw, 'tokenUrl')
+      ? normalizeLimitedString(raw.tokenUrl, 'Token URL', MAX_URL_LENGTH)
+      : previous.tokenUrl,
+    userUrl: isPresent(raw, 'userUrl')
+      ? normalizeLimitedString(raw.userUrl, 'Profile URL', MAX_URL_LENGTH)
+      : previous.userUrl,
+    clientId: isPresent(raw, 'clientId') ? normalizeLimitedString(raw.clientId, 'Client ID') : previous.clientId,
     clientSecret: normalizeSecret(raw.clientSecret, previous.clientSecret),
-    callbackUrl: normalizeLimitedString(raw.callbackUrl, 'Callback URL', MAX_URL_LENGTH),
-    scopes: normalizeLimitedString(raw.scopes, 'OAuth scopes') || DEFAULT_WEB_APP_AUTH_SETTINGS.scopes,
-    emailClaim: normalizeLimitedString(raw.emailClaim, 'Email claim path') || DEFAULT_WEB_APP_AUTH_SETTINGS.emailClaim,
+    callbackUrl: isPresent(raw, 'callbackUrl')
+      ? normalizeLimitedString(raw.callbackUrl, 'Callback URL', MAX_URL_LENGTH)
+      : previous.callbackUrl,
+    scopes: isPresent(raw, 'scopes')
+      ? normalizeLimitedString(raw.scopes, 'OAuth scopes') || DEFAULT_WEB_APP_AUTH_SETTINGS.scopes
+      : previous.scopes,
+    emailClaim: isPresent(raw, 'emailClaim')
+      ? normalizeLimitedString(raw.emailClaim, 'Email claim path') || DEFAULT_WEB_APP_AUTH_SETTINGS.emailClaim
+      : previous.emailClaim,
     sessionSecret: normalizeSecret(raw.sessionSecret, previous.sessionSecret),
-    sessionTtlSeconds: normalizeSessionTtlSeconds(raw.sessionTtlSeconds, DEFAULT_WEB_APP_AUTH_SETTINGS.sessionTtlSeconds),
-    clientAuthMethod: normalizeClientAuthMethod(raw.clientAuthMethod, DEFAULT_WEB_APP_AUTH_SETTINGS.clientAuthMethod),
-    debugLogProfile: normalizeBoolean(raw.debugLogProfile, DEFAULT_WEB_APP_AUTH_SETTINGS.debugLogProfile),
-    serverUiAdminEmails: normalizeEmailList(raw.serverUiAdminEmails, 'Server UI admin emails'),
+    sessionTtlSeconds: isPresent(raw, 'sessionTtlSeconds')
+      ? normalizeSessionTtlSeconds(raw.sessionTtlSeconds, DEFAULT_WEB_APP_AUTH_SETTINGS.sessionTtlSeconds)
+      : previous.sessionTtlSeconds,
+    clientAuthMethod: normalizeClientAuthMethod(raw.clientAuthMethod, previous.clientAuthMethod),
+    debugLogProfile: normalizeBoolean(raw.debugLogProfile, previous.debugLogProfile),
+    serverUiAdminEmails: isPresent(raw, 'serverUiAdminEmails')
+      ? normalizeEmailList(raw.serverUiAdminEmails, 'Server UI admin emails')
+      : previous.serverUiAdminEmails,
     updatedAt: new Date().toISOString(),
     source: 'app-settings',
   };
@@ -343,55 +362,50 @@ export function getWebAppAuthSettingsPath(): string {
   );
 }
 
-function readStoredWebAppAuthSettingsSync(): WebAppAuthRuntimeSettings {
-  const settingsPath = getWebAppAuthSettingsPath();
-
-  try {
-    return normalizeStoredSettings(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), 'app-settings');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { ...DEFAULT_WEB_APP_AUTH_SETTINGS };
-    }
-
+export const webAppAuthSettingsRepository = new VersionedSettingsRepository<WebAppAuthRuntimeSettings>({
+  key: 'web app auth',
+  currentVersion: 1,
+  getPath: getWebAppAuthSettingsPath,
+  getDefault: () => ({ ...DEFAULT_WEB_APP_AUTH_SETTINGS }),
+  parseStored: (stored) => normalizeStoredSettings(stored, 'app-settings'),
+  serialize: (settings) => ({
+    mode: settings.mode,
+    provider: settings.provider,
+    dummyEmail: settings.dummyEmail,
+    dummyAllowNonLocalhost: settings.dummyAllowNonLocalhost,
+    authorizeUrl: settings.authorizeUrl,
+    tokenUrl: settings.tokenUrl,
+    userUrl: settings.userUrl,
+    clientId: settings.clientId,
+    clientSecret: settings.clientSecret,
+    callbackUrl: settings.callbackUrl,
+    scopes: settings.scopes,
+    emailClaim: settings.emailClaim,
+    sessionSecret: settings.sessionSecret,
+    sessionTtlSeconds: settings.sessionTtlSeconds,
+    clientAuthMethod: settings.clientAuthMethod,
+    debugLogProfile: settings.debugLogProfile,
+    serverUiAdminEmails: settings.serverUiAdminEmails,
+    updatedAt: settings.updatedAt,
+  }),
+  recoverReadError: (error) => {
     console.error('[web-app-auth] Failed to read web-app auth app settings; failing closed:', error);
     return { ...FAIL_CLOSED_WEB_APP_AUTH_SETTINGS };
-  }
-}
+  },
+});
 
 export function readWebAppAuthSettingsSync(): WebAppAuthRuntimeSettings {
-  return readStoredWebAppAuthSettingsSync();
+  return webAppAuthSettingsRepository.readSync().value;
 }
 
 export async function readWebAppAuthSettings(): Promise<WebAppAuthSettings> {
-  return toPublicSettings(readStoredWebAppAuthSettingsSync());
+  return toPublicSettings((await webAppAuthSettingsRepository.read()).value);
 }
 
-export async function writeWebAppAuthSettings(draft: unknown): Promise<WebAppAuthSettings> {
-  const previous = readStoredWebAppAuthSettingsSync();
-  const saved = normalizeDraftSettings(draft, previous);
-  const settingsPath = getWebAppAuthSettingsPath();
-
-  await writePrivateJsonSettingsFile(settingsPath, {
-    version: 1,
-    mode: saved.mode,
-    provider: saved.provider,
-    dummyEmail: saved.dummyEmail,
-    dummyAllowNonLocalhost: saved.dummyAllowNonLocalhost,
-    authorizeUrl: saved.authorizeUrl,
-    tokenUrl: saved.tokenUrl,
-    userUrl: saved.userUrl,
-    clientId: saved.clientId,
-    clientSecret: saved.clientSecret,
-    callbackUrl: saved.callbackUrl,
-    scopes: saved.scopes,
-    emailClaim: saved.emailClaim,
-    sessionSecret: saved.sessionSecret,
-    sessionTtlSeconds: saved.sessionTtlSeconds,
-    clientAuthMethod: saved.clientAuthMethod,
-    debugLogProfile: saved.debugLogProfile,
-    serverUiAdminEmails: saved.serverUiAdminEmails,
-    updatedAt: saved.updatedAt,
-  });
-
-  return toPublicSettings(saved);
+export async function writeWebAppAuthSettings(draft: unknown, expectedRevision?: string): Promise<WebAppAuthSettings> {
+  const saved = await webAppAuthSettingsRepository.update(
+    (previous) => normalizeDraftSettings(draft, previous),
+    expectedRevision,
+  );
+  return toPublicSettings(saved.value);
 }
