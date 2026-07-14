@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getUiGraphComponentRevealScrollTop } from './revealUiGraphComponent.js';
+import { JSDOM } from 'jsdom';
+import { getUiGraphComponentRevealScrollTop, isUiGraphComponentEventTarget } from './revealUiGraphComponent.js';
+
+test('recognizes pointer targets inside either web-app component frame', () => {
+  const dom = new JSDOM(`
+    <div data-ui-graph-component-id="component"><button id="inside">Inside</button></div>
+    <div data-ui-graph-builder-owned-portal><button id="portal">Option</button></div>
+    <button id="outside">Outside</button>
+  `);
+
+  assert.equal(isUiGraphComponentEventTarget(dom.window.document.querySelector('#inside')), true);
+  assert.equal(isUiGraphComponentEventTarget(dom.window.document.querySelector('#portal')), true);
+  assert.equal(isUiGraphComponentEventTarget(dom.window.document.querySelector('#outside')), false);
+  assert.equal(isUiGraphComponentEventTarget(null), false);
+  dom.window.close();
+});
 
 test('keeps a visible web-app component in place', () => {
   assert.equal(

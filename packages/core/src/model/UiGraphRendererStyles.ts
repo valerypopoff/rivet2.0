@@ -433,6 +433,26 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   word-break: break-word;
 }
 
+.rivet-web-app-output-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: min(70vh, 720px);
+  margin: 0 auto;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.rivet-web-app-output-image-placeholder {
+  color: color-mix(in srgb, var(--rivet-web-app-foreground) 56%, transparent);
+  font-size: 13px;
+}
+
+.rivet-web-app-output-image-placeholder:empty {
+  display: none;
+}
+
 .rivet-web-app-markdown,
 .rivet-web-app-output-markdown {
   word-break: break-word;

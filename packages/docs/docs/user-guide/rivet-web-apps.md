@@ -31,7 +31,9 @@ A **Gap** adds empty vertical space between components. Choose **Small**, **Medi
 
 When a block is focused in the settings panel, Rivet highlights the matching component in the live preview. Focusing or clicking a component in the preview highlights the matching settings block. Text input and textarea components save user-entered values into their **Data key**. Rivet warns on later components if that key is already used by an earlier value source.
 
-Text and Markdown components render without a surrounding card surface, but remain selectable and draggable in the editor preview. Markdown renders in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps. Output components start blank until the selected data key receives a value. After an output has a value, its top-right copy button copies that output value. JSON output blocks also show a download button that saves the displayed JSON as a `.json` file named from the web app and the current date/time.
+Text and Markdown components render without a surrounding card surface, but remain selectable and draggable in the editor preview. Markdown renders in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps.
+
+Set an Output component's **Render as** option to **Image** when its data key contains an image URL, a complete base64 image data URL, or raw PNG, JPEG, or GIF base64. HTTP(S), relative, and `blob:` image URLs are supported; unsupported values show a clear placeholder instead of being inserted as arbitrary markup. Output components start blank until the selected data key receives a value. After an output has a value, its top-right copy button copies the original output value. JSON output blocks also show a download button that saves the displayed JSON as a `.json` file named from the web app and the current date/time.
 
 ## Binding a Button to a Graph
 
@@ -88,6 +90,8 @@ Wrappers can also use lower-level helpers:
 - `runRivetWebAppAction(...)` to run a Button or Chat action from an existing route handler
 
 The Node handler serves a self-contained page by default. Production wrappers can enable external assets so Rivet's CSS, Markdown libraries, sanitizer, and client use content-addressed filenames that browsers and CDNs can cache. External mode also avoids inline scripts and styles for stricter Content Security Policy setups. The wrapper still owns the CSP header, asset route or CDN, authentication, and deployment policy.
+
+If a hosted app renders remote, `data:`, or `blob:` image sources, its wrapper-owned Content Security Policy must allow the intended source in `img-src`. Rivet applies `referrer-policy: no-referrer` to rendered Output images, but the wrapper remains responsible for deciding which remote image hosts its deployment permits.
 
 Action requests are JSON-only and the web app state must be an object. If a wrapper uses the lower-level action helper, Rivet throws `RivetWebAppActionHttpError` for request-shaped failures such as malformed state or stale revision keys so the wrapper can return the matching HTTP status and optional machine-readable error code.
 

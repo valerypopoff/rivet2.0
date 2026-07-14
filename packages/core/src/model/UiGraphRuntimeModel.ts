@@ -15,10 +15,17 @@ import {
 
 export type UiGraphOutputRenderModel = {
   hasValue: boolean;
+  imageErrorMessage?: string;
+  imageSource?: string;
   jsonDownloadValue?: string;
   renderedValue: string;
   renderAs: UiGraphOutputRenderMode;
 };
+
+const IMAGE_DATA_URL_PATTERN = /^data:(image\/(?:avif|bmp|gif|jpe?g|png|webp));base64,([\s\S]+)$/i;
+const IMAGE_URL_PATTERN = /^(?:https?:\/\/|blob:|\/\/|\/|\.\.?\/)/i;
+const RELATIVE_IMAGE_PATH_PATTERN = /\.(?:avif|bmp|gif|jpe?g|png|webp)(?:[?#].*)?$/i;
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 export type UiGraphComponentRenderModel =
   | {
@@ -387,9 +394,14 @@ export function getUiGraphOutputRenderModel(
   const value = state[stateKey];
   const hasValue = hasUiGraphStateValue(state, stateKey);
   const renderedValue = renderUiGraphOutputValue(value, renderAs);
+  const imageSource = hasValue && renderAs === 'image' ? getUiGraphImageSource(value) : undefined;
+  const imageErrorMessage =
+    hasValue && renderAs === 'image' && !imageSource ? 'Expected an image URL or base64 image.' : undefined;
 
   return {
     hasValue,
+    ...(imageErrorMessage ? { imageErrorMessage } : {}),
+    ...(imageSource ? { imageSource } : {}),
     ...(hasValue && renderAs === 'json' ? { jsonDownloadValue: stringifyUiGraphValue(value) } : {}),
     renderedValue,
     renderAs,
@@ -406,6 +418,57 @@ export function renderUiGraphOutputValue(value: unknown, renderAs: UiGraphOutput
   }
 
   return typeof value === 'string' ? value : value == null ? '' : stringifyUiGraphValue(value) ?? '';
+}
+
+export function getUiGraphImageSource(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const source = value.trim();
+  if (!source) {
+    return undefined;
+  }
+
+  const dataUrl = IMAGE_DATA_URL_PATTERN.exec(source);
+  if (dataUrl) {
+    const base64 = normalizeBase64(dataUrl[2]!);
+    return base64 ? `data:${normalizeImageMediaType(dataUrl[1]!)};base64,${base64}` : undefined;
+  }
+
+  const base64 = normalizeBase64(source);
+  const inferredMediaType = base64 ? inferBase64ImageMediaType(base64) : undefined;
+  if (base64 && inferredMediaType) {
+    return `data:${inferredMediaType};base64,${base64}`;
+  }
+
+  if (!IMAGE_URL_PATTERN.test(source) && !RELATIVE_IMAGE_PATH_PATTERN.test(source)) {
+    return undefined;
+  }
+
+  try {
+    const protocol = new URL(source, 'https://rivet.invalid').protocol;
+    return protocol === 'http:' || protocol === 'https:' || protocol === 'blob:' ? source : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeBase64(value: string): string | undefined {
+  const compact = value.replace(/\s/g, '');
+  return compact.length >= 8 && compact.length % 4 !== 1 && BASE64_PATTERN.test(compact) ? compact : undefined;
+}
+
+function normalizeImageMediaType(mediaType: string): string {
+  const normalized = mediaType.toLowerCase();
+  return normalized === 'image/jpg' ? 'image/jpeg' : normalized;
+}
+
+function inferBase64ImageMediaType(value: string): string | undefined {
+  if (value.startsWith('iVBORw0KGgo')) return 'image/png';
+  if (value.startsWith('/9j/')) return 'image/jpeg';
+  if (value.startsWith('R0lGODdh') || value.startsWith('R0lGODlh')) return 'image/gif';
+  return undefined;
 }
 
 export function stringifyUiGraphValue(value: unknown): string | undefined {

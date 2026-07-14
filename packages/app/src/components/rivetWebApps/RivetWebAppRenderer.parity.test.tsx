@@ -76,7 +76,8 @@ test('React and hosted renderers keep the same component and action behavior', a
       { disabled: false, text: 'Second' },
     ]);
 
-    const statePatch = { result: { answer: 'Done' } };
+    const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+    const statePatch = { image, result: { answer: 'Done' } };
     await act(async () => {
       reactAction.resolve({ outputs: {}, statePatch });
       await reactAction.promise;
@@ -90,6 +91,12 @@ test('React and hosted renderers keep the same component and action behavior', a
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
+    assert.deepEqual(readRenderedImage(reactRootElement), {
+      alt: 'Image',
+      referrerPolicy: 'no-referrer',
+      src: image,
+    });
+    assert.deepEqual(readRenderedImage(hostedDom.window.document), readRenderedImage(reactRootElement));
     assert.deepEqual(readButtonStates(reactRootElement), [
       { disabled: false, text: 'First' },
       { disabled: false, text: 'Second' },
@@ -239,6 +246,7 @@ function readRenderedComponents(root: ParentNode): unknown[] {
         : undefined,
       disabled: button?.disabled,
       markdownHtml: markdown?.innerHTML,
+      image: readRenderedImage(content),
       outputActions: [...content.querySelectorAll<HTMLButtonElement>('.rivet-web-app-output-action-button')].map(
         (action) => ({ ariaLabel: action.ariaLabel, className: action.className, title: action.title }),
       ),
@@ -246,6 +254,19 @@ function readRenderedComponents(root: ParentNode): unknown[] {
       text: content.textContent,
     };
   });
+}
+
+function readRenderedImage(
+  root: ParentNode,
+): { alt: string; referrerPolicy: string | null; src: string | null } | undefined {
+  const image = root.querySelector<HTMLImageElement>('.rivet-web-app-output-image');
+  return image
+    ? {
+        alt: image.alt,
+        referrerPolicy: image.getAttribute('referrerpolicy'),
+        src: image.getAttribute('src'),
+      }
+    : undefined;
 }
 
 function setInputValue(input: HTMLInputElement, value: string, dom: JSDOM): void {
@@ -292,7 +313,10 @@ function readButtonStates(root: ParentNode): Array<{ disabled: boolean; text: st
 function makeParityUiGraph(): UiGraph {
   const action = {
     inputMappings: [{ inputKey: 'prompt', stateKey: 'prompt' }],
-    outputs: [{ outputKey: 'result', stateKey: 'result' }],
+    outputs: [
+      { outputKey: 'result', stateKey: 'result' },
+      { outputKey: 'image', stateKey: 'image' },
+    ],
     type: 'runGraph' as const,
   };
   return {
@@ -312,6 +336,7 @@ function makeParityUiGraph(): UiGraph {
       { action, id: 'first-button' as UiComponentId, label: 'First', type: 'button' },
       { action, id: 'second-button' as UiComponentId, label: 'Second', type: 'button' },
       { id: 'output' as UiComponentId, label: 'Result', renderAs: 'json', stateKey: 'result', type: 'output' },
+      { id: 'image' as UiComponentId, label: 'Image', renderAs: 'image', stateKey: 'image', type: 'output' },
     ],
     id: 'parity-app' as UiGraphId,
     name: 'Parity app',

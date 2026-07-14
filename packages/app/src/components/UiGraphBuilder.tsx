@@ -41,7 +41,7 @@ import { useUiGraphMutations } from './uiGraphBuilder/useUiGraphMutations.js';
 import { collectUiGraphDataKeyUsages } from './uiGraphBuilder/dataKeys.js';
 import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
 import { DeleteResourceConfirmModal } from './DeleteResourceConfirmModal.js';
-import { revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
+import { isUiGraphComponentEventTarget, revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
 
 const styles = css`
   position: fixed;
@@ -616,7 +616,15 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   }
 
   return (
-    <div css={styles} style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}>
+    <div
+      css={styles}
+      style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}
+      onPointerDownCapture={(event) => {
+        if (!isUiGraphComponentEventTarget(event.target)) {
+          setActiveComponentId(undefined);
+        }
+      }}
+    >
       <section className="ui-graph-builder-panel">
         <div ref={settingsScrollRef} className="ui-graph-builder-scroll">
           <div className="ui-graph-builder-fields">

@@ -58,7 +58,13 @@ export type UiGraphComponent =
       placeholder?: string;
       action: UiGraphChatAction;
     }
-  | { id: UiComponentId; type: 'output'; label?: string; stateKey: string; renderAs?: 'text' | 'json' | 'markdown' };
+  | {
+      id: UiComponentId;
+      type: 'output';
+      label?: string;
+      stateKey: string;
+      renderAs?: 'text' | 'json' | 'markdown' | 'image';
+    };
 
 export type UiGraphAction = {
   type: 'runGraph';

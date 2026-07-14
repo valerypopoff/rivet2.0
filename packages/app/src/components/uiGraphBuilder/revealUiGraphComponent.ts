@@ -1,6 +1,7 @@
 import type { UiComponentId } from '@valerypopoff/rivet2-core';
 
 const COMPONENT_SELECTOR = '[data-ui-graph-component-id]';
+const BUILDER_INTERACTION_SELECTOR = `${COMPONENT_SELECTOR}, [data-ui-graph-builder-owned-portal]`;
 const REVEAL_PADDING = 16;
 
 type UiGraphComponentRevealPosition = {
@@ -9,6 +10,11 @@ type UiGraphComponentRevealPosition = {
   scrollTop: number;
   viewportHeight: number;
 };
+
+export function isUiGraphComponentEventTarget(target: EventTarget | null): boolean {
+  const element = target as Element | null;
+  return typeof element?.closest === 'function' && element.closest(BUILDER_INTERACTION_SELECTOR) != null;
+}
 
 export function getUiGraphComponentRevealScrollTop({
   componentHeight,

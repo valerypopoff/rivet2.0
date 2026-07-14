@@ -10,6 +10,7 @@ import {
   getUiGraphChatMessagesStateKey,
   getUiGraphComponentActionState,
   getUiGraphComponentRenderModel,
+  getUiGraphImageSource,
   getUiGraphJsonOutputFilename,
   getUiGraphOutputRenderModel,
   resolveUiGraphComponentActionInputs,
@@ -109,10 +110,13 @@ describe('UiGraphRuntimeModel', () => {
 
   it('keeps empty output blocks empty until the action stores a value', () => {
     const output = getUiGraphOutputRenderModel({}, 'result', 'text');
+    const imageOutput = getUiGraphOutputRenderModel({}, 'image', 'image');
 
     assert.equal(output.hasValue, false);
     assert.equal(output.renderedValue, '');
     assert.equal(output.jsonDownloadValue, undefined);
+    assert.equal(imageOutput.imageErrorMessage, undefined);
+    assert.equal(imageOutput.imageSource, undefined);
   });
 
   it('makes JSON output download and display use the same serialized value', () => {
@@ -121,6 +125,33 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(output.hasValue, true);
     assert.equal(output.renderedValue, '{\n  "nested": [\n    "value"\n  ]\n}');
     assert.equal(output.jsonDownloadValue, output.renderedValue);
+  });
+
+  it('derives safe image sources from URLs and base64 image data', () => {
+    const gifBase64 = 'R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+
+    assert.equal(getUiGraphImageSource('https://example.test/image.png'), 'https://example.test/image.png');
+    assert.equal(getUiGraphImageSource('./images/result.webp'), './images/result.webp');
+    assert.equal(getUiGraphImageSource(`data:image/gif;base64,${gifBase64}`), `data:image/gif;base64,${gifBase64}`);
+    assert.equal(getUiGraphImageSource(gifBase64), `data:image/gif;base64,${gifBase64}`);
+    assert.equal(getUiGraphImageSource('javascript:alert(1).png'), undefined);
+    assert.equal(getUiGraphImageSource('file:///private/image.png'), undefined);
+    assert.equal(getUiGraphImageSource('data:text/html;base64,PGgxPk5vdCBhbiBpbWFnZTwvaDE+'), undefined);
+    assert.equal(getUiGraphImageSource('SGVsbG8gd29ybGQ='), undefined);
+    assert.equal(
+      getUiGraphOutputRenderModel({ result: 'not an image' }, 'result', 'image').imageErrorMessage,
+      'Expected an image URL or base64 image.',
+    );
+  });
+
+  it('keeps the original image output value while exposing its render source', () => {
+    const gifBase64 = 'R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+    const output = getUiGraphOutputRenderModel({ result: gifBase64 }, 'result', 'image');
+
+    assert.equal(output.hasValue, true);
+    assert.equal(output.renderedValue, gifBase64);
+    assert.equal(output.imageSource, `data:image/gif;base64,${gifBase64}`);
+    assert.equal(output.jsonDownloadValue, undefined);
   });
 
   it('applies an action state patch without rebuilding state when no patch was returned', () => {

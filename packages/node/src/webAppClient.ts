@@ -397,12 +397,26 @@ if (config && root) {
           );
         }
         children.push(
-          output.renderAs === 'markdown'
-            ? renderMarkdownElement(
-                output.renderedValue,
-                'rivet-web-app-output-markdown markdown-body rivet-markdown-output',
-              )
-            : createElement('pre', { text: output.renderedValue }),
+          output.renderAs === 'image'
+            ? output.imageSource
+              ? createElement('img', {
+                  alt: renderModel.label,
+                  className: 'rivet-web-app-output-image',
+                  decoding: 'async',
+                  loading: 'lazy',
+                  referrerpolicy: 'no-referrer',
+                  src: output.imageSource,
+                })
+              : createElement('div', {
+                  className: 'rivet-web-app-output-image-placeholder',
+                  text: output.imageErrorMessage ?? '',
+                })
+            : output.renderAs === 'markdown'
+              ? renderMarkdownElement(
+                  output.renderedValue,
+                  'rivet-web-app-output-markdown markdown-body rivet-markdown-output',
+                )
+              : createElement('pre', { text: output.renderedValue }),
         );
         content = createElement(
           'section',

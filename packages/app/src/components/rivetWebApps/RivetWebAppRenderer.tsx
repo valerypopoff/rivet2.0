@@ -249,7 +249,20 @@ const RivetWebAppComponent: FC<{
               }}
             />
           )}
-          {output.renderAs === 'markdown' ? (
+          {output.renderAs === 'image' ? (
+            output.imageSource ? (
+              <img
+                alt={renderModel.label}
+                className="rivet-web-app-output-image"
+                decoding="async"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                src={output.imageSource}
+              />
+            ) : (
+              <div className="rivet-web-app-output-image-placeholder">{output.imageErrorMessage}</div>
+            )
+          ) : output.renderAs === 'markdown' ? (
             <div
               className="rivet-web-app-output-markdown markdown-body rivet-markdown-output"
               dangerouslySetInnerHTML={markdownHtml}

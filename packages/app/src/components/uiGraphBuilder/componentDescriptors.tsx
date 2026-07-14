@@ -18,6 +18,7 @@ import {
   type UiGraphGapSize,
   type UiGraphChatRunGraphAction,
   type UiGraphInputBinding,
+  type UiGraphOutputRenderMode,
 } from '@valerypopoff/rivet2-core';
 import {
   getButtonInputRows,
@@ -82,18 +83,28 @@ const UiGraphSelect: FC<{
       <Select
         aria-label={ariaLabel}
         isDisabled={isDisabled}
+        menuPlacement="auto"
         menuPortalTarget={menuPortalTarget}
+        menuPosition="fixed"
+        menuShouldScrollIntoView={false}
         options={options}
         placeholder={placeholder}
         value={selectedOption}
         onChange={(selected) => selected && onChange(selected.value)}
       />
       <Portal>
-        <div ref={setMenuPortalTarget} />
+        <div ref={setMenuPortalTarget} data-ui-graph-builder-owned-portal />
       </Portal>
     </>
   );
 };
+
+const OUTPUT_RENDER_OPTIONS: UiGraphSelectOption[] = [
+  { label: 'Text', value: 'text' },
+  { label: 'JSON', value: 'json' },
+  { label: 'Markdown', value: 'markdown' },
+  { label: 'Image', value: 'image' },
+];
 
 function getDataKeySelectOptions(value: string, dataKeyOptions: readonly string[]): UiGraphSelectOption[] {
   const options = dataKeyOptions.map((key) => ({ label: key, value: key }));
@@ -599,15 +610,11 @@ const OutputSettings: FC<UiGraphComponentSettingsProps> = ({ component, dataKeyO
       <label className="ui-graph-builder-field">
         Render as
         <UiGraphSelect
-          options={[
-            { label: 'Text', value: 'text' },
-            { label: 'JSON', value: 'json' },
-            { label: 'Markdown', value: 'markdown' },
-          ]}
+          options={OUTPUT_RENDER_OPTIONS}
           value={component.renderAs ?? 'text'}
           onChange={(value) =>
             onUpdate((draft) => {
-              (draft as typeof component).renderAs = value as 'text' | 'json' | 'markdown';
+              (draft as typeof component).renderAs = value as UiGraphOutputRenderMode;
             })
           }
         />

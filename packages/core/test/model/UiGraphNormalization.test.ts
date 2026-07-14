@@ -19,6 +19,15 @@ void describe('UI graph normalization', () => {
     assert.equal(normalizeUiGraphRecord({ app: uiGraph }).app, uiGraph);
   });
 
+  void it('accepts image output rendering as a persisted output mode', () => {
+    const uiGraph = makeUiGraph();
+    const output = uiGraph.components.find((component) => component.type === 'output');
+    assert.ok(output?.type === 'output');
+    output.renderAs = 'image';
+
+    assert.equal(normalizeUiGraph(uiGraph), uiGraph);
+  });
+
   void it('repairs only missing and duplicate legacy component IDs without mutating the source', () => {
     const uiGraph = {
       ...makeUiGraph(),

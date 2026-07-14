@@ -8,7 +8,7 @@ export type UiComponentId = Opaque<string, 'UiComponentId'>;
 export type UiGraphOutputs = Record<string, DataValue>;
 export const UI_GRAPH_GAP_SIZES = ['small', 'medium', 'large'] as const;
 export type UiGraphGapSize = (typeof UI_GRAPH_GAP_SIZES)[number];
-export const UI_GRAPH_OUTPUT_RENDER_MODES = ['text', 'json', 'markdown'] as const;
+export const UI_GRAPH_OUTPUT_RENDER_MODES = ['text', 'json', 'markdown', 'image'] as const;
 export type UiGraphOutputRenderMode = (typeof UI_GRAPH_OUTPUT_RENDER_MODES)[number];
 
 export type UiGraphValueBinding =
