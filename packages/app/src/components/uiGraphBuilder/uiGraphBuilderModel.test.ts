@@ -22,9 +22,9 @@ import {
   createUiGraphComponent,
   getUiGraphComponentDataKeys,
   getUiGraphGraphOptions,
-  UI_GRAPH_COMPONENT_DESCRIPTORS,
+  UI_GRAPH_COMPONENT_MODELS,
   UI_GRAPH_COMPONENT_PALETTE,
-} from './componentDescriptors.js';
+} from './uiGraphComponentModel.js';
 import { collectUiGraphDataKeyUsages, getUniqueDataKeyOptions, isDataKeyAlreadyUsedEarlier } from './dataKeys.js';
 import { canRunDesktopWebAppPreview } from './uiGraphBuilderPolicy.js';
 
@@ -102,7 +102,7 @@ test('button normalization migrates legacy bindings without changing mapped stat
   assert.equal(button.action.outputStateKey, undefined);
 });
 
-test('component descriptors exhaustively own labels, defaults, settings, and data-key policy', () => {
+test('component models exhaustively own labels, defaults, and data-key policy', () => {
   const expectedTypes: UiGraphComponent['type'][] = [
     'text',
     'markdown',
@@ -114,20 +114,19 @@ test('component descriptors exhaustively own labels, defaults, settings, and dat
     'output',
   ];
 
-  assert.deepEqual(Object.keys(UI_GRAPH_COMPONENT_DESCRIPTORS), expectedTypes);
+  assert.deepEqual(Object.keys(UI_GRAPH_COMPONENT_MODELS), expectedTypes);
   assert.deepEqual(
     UI_GRAPH_COMPONENT_PALETTE.map(({ type }) => type),
     expectedTypes,
   );
 
   for (const type of expectedTypes) {
-    const descriptor = UI_GRAPH_COMPONENT_DESCRIPTORS[type];
+    const descriptor = UI_GRAPH_COMPONENT_MODELS[type];
     const component = createUiGraphComponent(type, graphId);
 
     assert.equal(component.type, type);
     assert.ok(component.id);
     assert.ok(descriptor.label);
-    assert.equal(typeof descriptor.Settings, 'function');
     assert.doesNotThrow(() => getUiGraphComponentDataKeys(component));
     if (component.type === 'gap') {
       assert.equal(component.size, 'medium');

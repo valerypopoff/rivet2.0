@@ -4,20 +4,15 @@ import { type FC, type ReactNode, useState } from 'react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import DeleteIcon from 'majesticons/line/delete-bin-line.svg?react';
 import {
-  type GraphBoundary,
   type GraphId,
   getGraphBoundary,
-  getUiGraphActionInputBindings,
-  getUiGraphActionOutputBindings,
   initializeUiGraphChatActionBindings,
-  newId,
   type Project,
   UI_GRAPH_GAP_SIZES,
   type UiComponentId,
+  type UiGraphChatRunGraphAction,
   type UiGraphComponent,
   type UiGraphGapSize,
-  type UiGraphChatRunGraphAction,
-  type UiGraphInputBinding,
   type UiGraphOutputRenderMode,
 } from '@valerypopoff/rivet2-core';
 import {
@@ -29,16 +24,24 @@ import {
   setButtonOutputRows,
   type UiGraphButtonComponent,
 } from './buttonBindings.js';
+import {
+  createChatAdditionalInputBinding,
+  getUiGraphGraphOptions,
+  UI_GRAPH_COMPONENT_MODELS,
+  type UiGraphComponentDataKeys,
+  type UiGraphDataKeyWrite,
+  type UiGraphSelectOption,
+} from './uiGraphComponentModel.js';
 
-export type UiGraphDataKeyWrite = {
-  key: string;
-  outputIndex?: number;
-};
-
-export type UiGraphComponentDataKeys = {
-  reads: readonly string[];
-  writes: readonly UiGraphDataKeyWrite[];
-};
+export {
+  createChatAdditionalInputBinding,
+  createUiGraphComponent,
+  getUiGraphComponentDataKeys,
+  getUiGraphComponentLabel,
+  getUiGraphGraphOptions,
+  UI_GRAPH_COMPONENT_PALETTE,
+} from './uiGraphComponentModel.js';
+export type { UiGraphComponentDataKeys, UiGraphDataKeyWrite, UiGraphSelectOption } from './uiGraphComponentModel.js';
 
 export type UiGraphComponentSettingsProps = {
   component: UiGraphComponent;
@@ -57,14 +60,6 @@ type UiGraphComponentDescriptor = {
 
 type UiGraphComponentDescriptorMap = {
   [Type in UiGraphComponent['type']]: UiGraphComponentDescriptor;
-};
-
-const noDataKeys = (): UiGraphComponentDataKeys => ({ reads: [], writes: [] });
-
-type UiGraphSelectOption = {
-  isDisabled?: boolean;
-  label: string;
-  value: string;
 };
 
 const UiGraphSelect: FC<{
@@ -124,20 +119,6 @@ function getDataKeySelectOptions(value: string, dataKeyOptions: readonly string[
     },
     ...options,
   ];
-}
-
-export function getUiGraphGraphOptions(project: Project, selectedGraphId: GraphId | undefined): UiGraphSelectOption[] {
-  const options = Object.values(project.graphs).flatMap((graph) => {
-    const graphId = graph.metadata?.id;
-
-    return graphId ? [{ label: graph.metadata?.name || graphId, value: graphId }] : [];
-  });
-
-  if (!selectedGraphId || options.some((option) => option.value === selectedGraphId)) {
-    return options;
-  }
-
-  return [{ isDisabled: true, label: `${selectedGraphId} (missing)`, value: selectedGraphId }, ...options];
 }
 
 const TextSettings: FC<UiGraphComponentSettingsProps> = ({ component, onUpdate }) => {
@@ -543,20 +524,6 @@ const ChatAdditionalInputsEditor: FC<{
   );
 };
 
-export function createChatAdditionalInputBinding(
-  action: UiGraphChatRunGraphAction,
-  boundary: GraphBoundary | undefined,
-  dataKeyOptions: readonly string[],
-): UiGraphInputBinding {
-  const reservedInputIds = new Set([
-    action.userInputId,
-    action.historyInputId,
-    ...(action.inputMappings ?? []).map((binding) => binding.inputKey),
-  ]);
-  const inputKey = boundary?.inputs.find((input) => !reservedInputIds.has(input.id))?.id ?? '';
-  return { inputKey, stateKey: dataKeyOptions[0] ?? '' };
-}
-
 function ActionMappingField({
   children,
   label,
@@ -726,112 +693,39 @@ const ButtonOutputMappingsEditor: FC<{
 
 export const UI_GRAPH_COMPONENT_DESCRIPTORS = {
   text: {
+    ...UI_GRAPH_COMPONENT_MODELS.text,
     Settings: TextSettings,
-    create: ({ id }) => ({ id, text: 'Text', type: 'text' }),
-    getDataKeys: noDataKeys,
-    label: 'Text',
   },
   markdown: {
+    ...UI_GRAPH_COMPONENT_MODELS.markdown,
     Settings: MarkdownSettings,
-    create: ({ id }) => ({ id, markdown: '## Heading', type: 'markdown' }),
-    getDataKeys: noDataKeys,
-    label: 'Markdown',
   },
   gap: {
+    ...UI_GRAPH_COMPONENT_MODELS.gap,
     Settings: GapSettings,
-    create: ({ id }) => ({ id, size: 'medium', type: 'gap' }),
-    getDataKeys: noDataKeys,
-    label: 'Gap',
   },
   input: {
+    ...UI_GRAPH_COMPONENT_MODELS.input,
     Settings: InputLikeSettings,
-    create: ({ id }) => ({ id, label: 'Input', stateKey: 'input', type: 'input' }),
-    getDataKeys: (component) =>
-      component.type === 'input' && component.stateKey
-        ? { reads: [], writes: [{ key: component.stateKey }] }
-        : noDataKeys(),
-    label: 'Input',
   },
   textarea: {
+    ...UI_GRAPH_COMPONENT_MODELS.textarea,
     Settings: InputLikeSettings,
-    create: ({ id }) => ({ id, label: 'Input', stateKey: 'input', type: 'textarea' }),
-    getDataKeys: (component) =>
-      component.type === 'textarea' && component.stateKey
-        ? { reads: [], writes: [{ key: component.stateKey }] }
-        : noDataKeys(),
-    label: 'Textarea',
   },
   button: {
+    ...UI_GRAPH_COMPONENT_MODELS.button,
     Settings: ButtonSettings,
-    create: ({ graphId, id }) => ({
-      action: {
-        graphId,
-        inputMappings: [{ inputKey: 'input', stateKey: 'input' }],
-        outputs: [{ stateKey: 'result' }],
-        type: 'runGraph',
-      },
-      id,
-      label: 'Run graph',
-      type: 'button',
-    }),
-    getDataKeys: (component) => {
-      if (component.type !== 'button') {
-        return noDataKeys();
-      }
-
-      return {
-        reads: getUiGraphActionInputBindings(component.action)
-          .map((binding) => binding.stateKey)
-          .filter(Boolean),
-        writes: getUiGraphActionOutputBindings(component.action)
-          .filter((binding) => Boolean(binding.stateKey))
-          .map((binding, outputIndex) => ({ key: binding.stateKey, outputIndex })),
-      };
-    },
-    label: 'Button',
   },
   chat: {
+    ...UI_GRAPH_COMPONENT_MODELS.chat,
     Settings: ChatSettings,
-    create: ({ graphId, id }) => ({
-      action: { graphId, type: 'runGraph' },
-      id,
-      placeholder: 'Message...',
-      type: 'chat',
-    }),
-    getDataKeys: (component) =>
-      component.type === 'chat'
-        ? {
-            reads: (component.action.inputMappings ?? []).map((binding) => binding.stateKey).filter(Boolean),
-            writes: [],
-          }
-        : noDataKeys(),
-    label: 'Chat',
   },
   output: {
+    ...UI_GRAPH_COMPONENT_MODELS.output,
     Settings: OutputSettings,
-    create: ({ id }) => ({ id, label: 'Result', renderAs: 'json', stateKey: 'result', type: 'output' }),
-    getDataKeys: (component) =>
-      component.type === 'output' && component.stateKey ? { reads: [component.stateKey], writes: [] } : noDataKeys(),
-    label: 'Output',
   },
 } satisfies UiGraphComponentDescriptorMap;
 
-export const UI_GRAPH_COMPONENT_PALETTE = (
-  Object.keys(UI_GRAPH_COMPONENT_DESCRIPTORS) as UiGraphComponent['type'][]
-).map((type) => ({ label: UI_GRAPH_COMPONENT_DESCRIPTORS[type].label, type }));
-
-export function createUiGraphComponent(type: UiGraphComponent['type'], graphId: GraphId | undefined): UiGraphComponent {
-  return UI_GRAPH_COMPONENT_DESCRIPTORS[type].create({ graphId, id: newId<UiComponentId>() });
-}
-
-export function getUiGraphComponentDataKeys(component: UiGraphComponent): UiGraphComponentDataKeys {
-  return UI_GRAPH_COMPONENT_DESCRIPTORS[component.type].getDataKeys(component);
-}
-
 export function getUiGraphComponentDescriptor(type: UiGraphComponent['type']): UiGraphComponentDescriptor {
   return UI_GRAPH_COMPONENT_DESCRIPTORS[type];
-}
-
-export function getUiGraphComponentLabel(type: UiGraphComponent['type']): string {
-  return UI_GRAPH_COMPONENT_DESCRIPTORS[type].label;
 }
