@@ -93,6 +93,12 @@ paths may be used by humans, CI, and wrapper automation. Grouping build/release
 scripts into subfolders should wait until the ownership benefit outweighs the
 compatibility cost.
 
+The root `.pnp.cjs` and `.pnp.loader.mjs` files are tracked Yarn zero-install
+loaders. They are intentionally an exception to the usual generated-file rule:
+deleting either one breaks Yarn before any workspace command can run. The
+`check:pnp` repository check verifies that both files exist in the working tree,
+Git index, and `HEAD`.
+
 ## Local Noise Hygiene
 
 Generated and local-only paths must stay untracked. Important ignored paths
@@ -125,6 +131,17 @@ tracked files plus unignored untracked files. It fails if known generated/local
 output paths are unignored, and reports import-boundary review candidates. The
 import-boundary section is report-only: long relative imports and source deep
 imports need human review before any enforcement rule is added.
+
+For install-state problems, run the direct check first. It does not require
+Yarn's PnP loader, so it still works when the loader files are missing:
+
+```powershell
+node scripts/checks/check-pnp-install-state.mjs
+```
+
+If it fails, run the immutable install and stage the restored loaders before
+continuing. Once Yarn can start, `yarn check:pnp` runs the same check. Do not fix
+this by ignoring or deleting the root PnP files.
 
 ## Refactor Guidance
 

@@ -15,6 +15,10 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
+    - name: Verify tracked Yarn PnP loaders
+      shell: bash
+      run: node scripts/checks/check-pnp-install-state.mjs
+
     - name: Restore Yarn install state
       uses: actions/cache@v4
       with:

@@ -195,7 +195,8 @@ limit before tests can start.
 
 Runs repository checks for test style, documentation links, generated graph-builder
 context, rich-text sinks, AI runtime boundaries, desktop shell policy, low-level
-editor boundaries, and generated web-app client freshness.
+editor boundaries, tracked Yarn PnP install state, and generated web-app client
+freshness.
 The web-app freshness check runs through the Node workspace's
 `check:web-app-client` script so both generation and verification resolve the same
 package-owned `esbuild` dependency. The generator uses `createRequire(...)` for
@@ -229,6 +230,31 @@ refresh the generated bundle with
 `yarn check:file-tree` rejects unignored generated paths and package source deep
 imports. The remaining production long-relative-import queue has a shrinking numeric
 baseline; increasing it fails so settled boundaries cannot silently regress.
+
+### Yarn PnP install state
+
+The root `.pnp.cjs` and `.pnp.loader.mjs` files are tracked zero-install artifacts.
+They are required before Yarn can start, so they must remain present in the working
+tree, Git index, and `HEAD`. `node scripts/checks/check-pnp-install-state.mjs`
+verifies all three locations without loading Yarn; `yarn check:pnp` is the
+equivalent workspace command once Yarn can start. The
+shared [setup-yarn action](../.github/actions/setup-yarn/action.yml) runs the same
+check before dependency installation, which makes a commit that deletes either
+loader fail with a direct diagnostic instead of a later Yarn "project has not been
+installed" error.
+
+If a local checkout is missing either loader, run the direct check first, then
+restore the install state and stage the generated files:
+
+```powershell
+node scripts/checks/check-pnp-install-state.mjs
+node .yarn/releases/yarn-4.17.1.cjs install --immutable
+git add .pnp.cjs .pnp.loader.mjs
+```
+
+Do not remove these files during cleanup or include their deletion in a broad
+`git add -A`. They are part of the repository's install contract, not disposable
+build output.
 
 ### `yarn lint`
 
