@@ -227,10 +227,12 @@ export const DefaultCodeEditor: FC<
   const debouncedOnChange = useDebounceFn<(node: ChartNode) => void>(onChange, { wait: 100 });
 
   const onEditorChange = (newText: string) => {
+    const currentNode = nodeLatest.current;
+    if (!currentNode) return;
     debouncedOnChange.run({
-      ...nodeLatest.current,
+      ...currentNode,
       data: {
-        ...(nodeLatest.current?.data as Record<string, unknown> | undefined),
+        ...(currentNode.data as Record<string, unknown> | undefined),
         [editorDef.dataKey]: newText,
       },
     });

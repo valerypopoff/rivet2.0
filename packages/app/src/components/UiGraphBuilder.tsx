@@ -1,9 +1,14 @@
 import { css } from '@emotion/react';
-import { type CSSProperties, type FC, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue, useStore } from 'jotai';
 import { arrayMove } from '@dnd-kit/sortable';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
-import { getGraphBoundary, type UiComponentId, type UiGraphComponent } from '@valerypopoff/rivet2-core';
+import {
+  getGraphBoundary,
+  initializeUiGraphChatActionBindings,
+  type UiComponentId,
+  type UiGraphComponent,
+} from '@valerypopoff/rivet2-core';
 import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
@@ -21,13 +26,22 @@ import {
 import { useRunUiGraphAction } from '../hooks/useRunUiGraphAction.js';
 import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
 import { createUiGraphComponent, UI_GRAPH_COMPONENT_PALETTE } from './uiGraphBuilder/componentDescriptors.js';
-import { normalizeButtonActionToGraphBoundary } from './uiGraphBuilder/buttonBindings.js';
+import {
+  getCurrentUiGraphComponentDeletionId,
+  type PendingUiGraphComponentDeletion,
+} from './uiGraphBuilder/componentDeletion.js';
+import {
+  initializeButtonActionToGraphBoundary,
+  normalizeButtonActionToGraphBoundary,
+} from './uiGraphBuilder/buttonBindings.js';
 import { UiGraphComponentEditor } from './uiGraphBuilder/UiGraphComponentEditor.js';
 import { UiGraphPreviewEditor } from './uiGraphBuilder/UiGraphPreviewEditor.js';
 import { canRunDesktopWebAppPreview } from './uiGraphBuilder/uiGraphBuilderPolicy.js';
 import { useUiGraphMutations } from './uiGraphBuilder/useUiGraphMutations.js';
 import { collectUiGraphDataKeyUsages } from './uiGraphBuilder/dataKeys.js';
 import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
+import { DeleteResourceConfirmModal } from './DeleteResourceConfirmModal.js';
+import { isUiGraphComponentEventTarget, revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
 
 const styles = css`
   position: fixed;
@@ -98,6 +112,11 @@ const styles = css`
     color: var(--foreground);
   }
 
+  .ui-graph-builder-button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
   .ui-graph-builder-fields,
   .ui-graph-component-card {
     display: grid;
@@ -112,9 +131,8 @@ const styles = css`
     font-weight: 700;
   }
 
-  .ui-graph-builder-field input,
-  .ui-graph-builder-field textarea,
-  .ui-graph-builder-field select {
+  .ui-graph-builder-field > input,
+  .ui-graph-builder-field > textarea {
     min-width: 0;
     border: 1px solid var(--form-control-border);
     border-radius: 7px;
@@ -125,22 +143,7 @@ const styles = css`
     padding: 8px 10px;
   }
 
-  .ui-graph-builder-field select {
-    appearance: none;
-    background-color: var(--form-control-bg);
-    background-image: linear-gradient(45deg, transparent 50%, var(--foreground-muted) 50%),
-      linear-gradient(135deg, var(--foreground-muted) 50%, transparent 50%);
-    background-position:
-      calc(100% - 18px) 50%,
-      calc(100% - 13px) 50%;
-    background-repeat: no-repeat;
-    background-size:
-      5px 5px,
-      5px 5px;
-    padding-right: 36px;
-  }
-
-  .ui-graph-builder-field textarea {
+  .ui-graph-builder-field > textarea {
     appearance: none;
     min-height: 78px;
     resize: vertical;
@@ -219,6 +222,12 @@ const styles = css`
     min-width: 0;
   }
 
+  .ui-graph-preview-sortable-row[data-rivet-web-app-component-type='chat'] {
+    display: flex;
+    flex: 1 0 var(--rivet-web-app-chat-min-height);
+    min-height: var(--rivet-web-app-chat-min-height);
+  }
+
   .ui-graph-preview-sortable-row.dragging {
     opacity: 0.68;
     z-index: 1;
@@ -226,6 +235,14 @@ const styles = css`
 
   .ui-graph-preview-sortable-body {
     min-width: 0;
+  }
+
+  .ui-graph-preview-sortable-row[data-rivet-web-app-component-type='chat'] .ui-graph-preview-sortable-body,
+  .ui-graph-preview-sortable-row[data-rivet-web-app-component-type='chat'] .rivet-web-app-component-frame {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
   }
 
   .ui-graph-preview-drag-handle {
@@ -276,22 +293,64 @@ const styles = css`
     align-items: end;
   }
 
-  .ui-graph-component-delete-button {
+  .ui-graph-chat-input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
+    gap: 8px;
+    align-items: end;
+  }
+
+  .ui-graph-chat-input-remove {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 28px;
-    height: 28px;
+    height: 34px;
     border: 0;
-    border-radius: var(--ui-button-radius);
-    background: var(--grey-dark-colorish);
-    color: var(--foreground);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--foreground-muted);
     cursor: pointer;
-    font: inherit;
-    font-weight: 700;
-    font-size: var(--ui-font-size-xl);
-    line-height: 1;
-    padding: 0;
+    padding: 5px;
+  }
+
+  .ui-graph-chat-input-remove:hover,
+  .ui-graph-chat-input-remove:focus-visible {
+    color: var(--error);
+  }
+
+  .ui-graph-chat-input-remove:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+
+  .ui-graph-chat-input-remove svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .ui-graph-chat-add-input {
+    justify-self: start;
+  }
+
+  .ui-graph-component-delete-icon {
+    display: block;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    color: var(--foreground-muted);
+    cursor: pointer;
+    outline: none;
+  }
+
+  .ui-graph-component-delete-icon:hover,
+  .ui-graph-component-delete-icon:focus-visible {
+    color: var(--error);
+  }
+
+  .ui-graph-component-delete-icon:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   .ui-graph-action-empty {
@@ -359,24 +418,58 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const hostUiConfig = useRivetAppHostUiConfig();
   const canRunDesktopPreview = canRunDesktopWebAppPreview(hostUiConfig);
   const [activeComponentId, setActiveComponentId] = useState<UiComponentId | undefined>();
+  const [pendingComponentDeletion, setPendingComponentDeletion] = useState<
+    PendingUiGraphComponentDeletion | undefined
+  >();
+  const settingsScrollRef = useRef<HTMLDivElement>(null);
+  const previewScrollRef = useRef<HTMLDivElement>(null);
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
   const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
+  const pendingDeleteComponentId = getCurrentUiGraphComponentDeletionId(
+    pendingComponentDeletion,
+    project.metadata.id,
+    uiGraph,
+  );
+
+  useEffect(() => {
+    setActiveComponentId(undefined);
+    setPendingComponentDeletion(undefined);
+  }, [project.metadata.id, selectedUiGraphId]);
 
   const addComponent = useStableCallback((type: UiGraphComponent['type']) => {
     updateUiGraph((draft) => {
-      const component = createUiGraphComponent(type, project.metadata.mainGraphId);
+      const boundary = getGraphBoundary(project, project.metadata.mainGraphId);
+      const component = createUiGraphComponent(type, boundary ? project.metadata.mainGraphId : undefined);
       if (component.type === 'button') {
-        normalizeButtonActionToGraphBoundary(component, getGraphBoundary(project, component.action.graphId));
+        initializeButtonActionToGraphBoundary(component, boundary);
+      } else if (component.type === 'chat') {
+        component.action = initializeUiGraphChatActionBindings(component.action, boundary);
       }
 
       draft.components.push(component);
     });
   });
 
-  const deleteComponent = useStableCallback((componentId: UiComponentId) => {
+  const confirmDeleteComponent = useStableCallback(() => {
+    const componentId = getCurrentUiGraphComponentDeletionId(pendingComponentDeletion, project.metadata.id, uiGraph);
+    if (componentId == null) {
+      setPendingComponentDeletion(undefined);
+      return;
+    }
+
+    setPendingComponentDeletion(undefined);
+    setActiveComponentId((activeComponentId) => (activeComponentId === componentId ? undefined : activeComponentId));
     updateUiGraph((draft) => {
       draft.components = draft.components.filter((component) => component.id !== componentId);
     });
+  });
+
+  const requestDeleteComponent = useStableCallback((componentId: UiComponentId) => {
+    if (!uiGraph) {
+      return;
+    }
+
+    setPendingComponentDeletion({ componentId, projectId: project.metadata.id, uiGraphId: uiGraph.id });
   });
 
   const reorderComponents = useStableCallback((draggedComponentId: UiComponentId, targetComponentId: UiComponentId) => {
@@ -390,19 +483,18 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     });
   });
 
-  useEffect(() => {
-    if (!selectedUiGraphId) {
-      return;
-    }
-
-    updateUiGraph((draft) => {
-      for (const component of draft.components) {
-        if (component.type === 'button') {
-          normalizeButtonActionToGraphBoundary(component, getGraphBoundary(project, component.action.graphId));
-        }
-      }
-    });
-  }, [project, selectedUiGraphId, updateUiGraph]);
+  const activateComponent = useStableCallback(
+    (componentId: UiComponentId, counterpartScrollContainer: HTMLElement | null) => {
+      setActiveComponentId(componentId);
+      revealUiGraphComponent(counterpartScrollContainer, componentId);
+    },
+  );
+  const activateSettingsComponent = useStableCallback((componentId: UiComponentId) =>
+    activateComponent(componentId, previewScrollRef.current),
+  );
+  const activatePreviewComponent = useStableCallback((componentId: UiComponentId) =>
+    activateComponent(componentId, settingsScrollRef.current),
+  );
 
   const openPreviewWindow = useStableCallback(async () => {
     if (!uiGraph) {
@@ -414,6 +506,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     const storageKey = `${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`;
     writeRivetWebAppPreviewPayload(token, { uiGraph });
     const channel = new BroadcastChannel(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`);
+    const actionAbortControllers = new Map<string, AbortController>();
     let previewWindow: Awaited<ReturnType<typeof createWebviewWindowHandle>> | undefined;
     let unlistenClose: (() => unknown) | undefined;
     let cleaned = false;
@@ -424,6 +517,10 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       }
 
       cleaned = true;
+      for (const abortController of actionAbortControllers.values()) {
+        abortController.abort();
+      }
+      actionAbortControllers.clear();
       channel.removeEventListener('message', handleMessage);
       channel.close();
       localStorage.removeItem(storageKey);
@@ -437,17 +534,22 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       void handlePreviewAction(event);
     };
     const handlePreviewAction = async (event: MessageEvent<PreviewActionRequest>) => {
-      if (event.data.type !== 'runAction') {
-        if (event.data.type === 'requestPayload') {
-          channel.postMessage({
-            payload: { uiGraph },
-            requestId: event.data.requestId,
-            type: 'previewPayload',
-          } satisfies PreviewActionResponse);
-        }
+      if (event.data.type === 'requestPayload') {
+        channel.postMessage({
+          payload: { uiGraph },
+          requestId: event.data.requestId,
+          type: 'previewPayload',
+        } satisfies PreviewActionResponse);
         return;
       }
 
+      if (event.data.type === 'cancelAction') {
+        actionAbortControllers.get(event.data.requestId)?.abort();
+        return;
+      }
+
+      const abortController = new AbortController();
+      actionAbortControllers.set(event.data.requestId, abortController);
       try {
         const activeProject = store.get(projectState);
         if (activeProject.metadata.id !== previewProjectId) {
@@ -459,7 +561,21 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           throw new Error('This web app was deleted from the project. Open a new preview window.');
         }
 
-        const result = await runUiGraphAction(uiGraph, event.data.componentId, event.data.state);
+        const result = await runUiGraphAction(
+          uiGraph,
+          event.data.componentId,
+          event.data.state,
+          abortController.signal,
+          (progress) => {
+            if (!cleaned) {
+              channel.postMessage({
+                progress,
+                requestId: event.data.requestId,
+                type: 'actionProgress',
+              } satisfies PreviewActionResponse);
+            }
+          },
+        );
         if (cleaned) {
           return;
         }
@@ -479,6 +595,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           requestId: event.data.requestId,
           type: 'actionError',
         } satisfies PreviewActionResponse);
+      } finally {
+        actionAbortControllers.delete(event.data.requestId);
       }
     };
 
@@ -507,9 +625,17 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   }
 
   return (
-    <div css={styles} style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}>
+    <div
+      css={styles}
+      style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}
+      onPointerDownCapture={(event) => {
+        if (!isUiGraphComponentEventTarget(event.target)) {
+          setActiveComponentId(undefined);
+        }
+      }}
+    >
       <section className="ui-graph-builder-panel">
-        <div className="ui-graph-builder-scroll">
+        <div ref={settingsScrollRef} className="ui-graph-builder-scroll">
           <div className="ui-graph-builder-fields">
             <label className="ui-graph-builder-field">
               Name
@@ -560,8 +686,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
                 component={component}
                 dataKeyUsages={dataKeyUsages}
                 project={project}
-                onActivate={setActiveComponentId}
-                onDelete={() => deleteComponent(component.id)}
+                onActivate={activateSettingsComponent}
+                onDelete={() => requestDeleteComponent(component.id)}
                 onUpdate={(updater) => updateComponent(component.id, updater)}
               />
             ))}
@@ -580,13 +706,24 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           </button>
         ) : null}
         <UiGraphPreviewEditor
+          key={`${project.metadata.id}:${uiGraph.id}`}
           activeComponentId={activeComponentId}
-          onActiveComponentChange={setActiveComponentId}
+          onActiveComponentChange={activatePreviewComponent}
           onReorder={reorderComponents}
+          scrollContainerRef={previewScrollRef}
           uiGraph={uiGraph}
-          onRunAction={(componentId, state) => runUiGraphAction(uiGraph, componentId, state)}
+          onRunAction={(componentId, state, abortSignal, onProgress) =>
+            runUiGraphAction(uiGraph, componentId, state, abortSignal, onProgress)
+          }
         />
       </section>
+      <DeleteResourceConfirmModal
+        isOpen={pendingDeleteComponentId != null}
+        resourceName="this component"
+        title="Delete Component?"
+        onClose={() => setPendingComponentDeletion(undefined)}
+        onConfirm={confirmDeleteComponent}
+      />
     </div>
   );
 };

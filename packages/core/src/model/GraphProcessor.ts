@@ -40,11 +40,7 @@ import {
   preprocessGraphState,
   toReusableGraphExecutionPlan,
 } from './GraphPreprocessor.js';
-import {
-  getGraphBoundary,
-  type GraphBoundary,
-  type GraphBoundaryCache,
-} from './GraphBoundaryCache.js';
+import { getGraphBoundary, type GraphBoundary, type GraphBoundaryCache } from './GraphBoundaryCache.js';
 import { applyFrozenGraphBoundaryEffects, ensureGraphCostOutput } from './GraphBoundaryEffects.js';
 import { replayExecutionRecording } from './RecordingPlayer.js';
 import { didLoopControllerBreak, LOOP_NOT_BROKEN_SENTINEL } from './loopControllerBreak.js';
@@ -75,6 +71,8 @@ import {
 } from './GraphAbortReasons.js';
 import { emitDetached } from '../utils/emitDetached.js';
 import { GraphRunLifecycle } from './GraphRunLifecycle.js';
+import { normalizeGraphProgress, type GraphProgress } from './GraphProgress.js';
+import { RIVET_WEB_APP_STATUS_FUNCTION_NAME, rivetWebAppStatusExternalFunction } from './UiGraphWebAppStatus.js';
 import {
   createExcludedNodeOutputs,
   getControlFlowExclusionDecision,
@@ -155,6 +153,9 @@ export type ProcessEvents = {
 
   /** Called when a node has partially processed, with the current partial output values for the node. */
   partialOutput: WithExecution<{ node: ChartNode; outputs: Outputs; index: number; processId: ProcessId }>;
+
+  /** Called when a node reports host-facing progress. */
+  progress: WithExecution<{ node: ChartNode; processId: ProcessId; progress: GraphProgress }>;
 
   /** Called when the outputs of a node have been cleared entirely. If processId is present, only the one process() should be cleared. */
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
@@ -553,10 +554,7 @@ export class GraphProcessor {
     }
   }
 
-  async #profileRuntimeAsync<T>(
-    bucket: GraphProcessorRuntimeProfileBucket,
-    run: () => Promise<T>,
-  ): Promise<T> {
+  async #profileRuntimeAsync<T>(bucket: GraphProcessorRuntimeProfileBucket, run: () => Promise<T>): Promise<T> {
     const start = this.#startRuntimeProfile();
     try {
       return await run();
@@ -605,6 +603,7 @@ export class GraphProcessor {
     this.#emitter.bindMethods(this as unknown as Record<string, unknown>, ['on', 'off', 'once', 'onAny', 'offAny']);
 
     this.setExternalFunction('echo', async (value) => ({ type: 'any', value }) satisfies DataValue);
+    this.setExternalFunction(RIVET_WEB_APP_STATUS_FUNCTION_NAME, rivetWebAppStatusExternalFunction);
 
     this.#emitter.on('globalSet', ({ id, value }: ProcessEvents['globalSet']) => {
       emitDetached(this.#emitter, `globalSet:${id}`, value);
@@ -983,9 +982,7 @@ export class GraphProcessor {
     this.#currentlyProcessing = new Set();
     const seededExecutionPlan = this.#seededExecutionPlanForNextRun();
     this.#remainingNodes = new Set(
-      seededExecutionPlan
-        ? seededExecutionPlan.nodeIds
-        : this.#graph.nodes.map((node) => node.id),
+      seededExecutionPlan ? seededExecutionPlan.nodeIds : this.#graph.nodes.map((node) => node.id),
     );
     this.#pendingUserInputs = {};
     this.#processingQueue = new PQueue({ concurrency: this.#concurrency.nodeConcurrency });
@@ -1747,11 +1744,7 @@ export class GraphProcessor {
     }
   }
 
-  #assignChildLoopInfo(
-    node: ChartNode,
-    builtInNode: BuiltInNodes,
-    attachedData: AttachedNodeData,
-  ): Error | undefined {
+  #assignChildLoopInfo(node: ChartNode, builtInNode: BuiltInNodes, attachedData: AttachedNodeData): Error | undefined {
     if (builtInNode.type !== 'loopController') {
       return undefined;
     }
@@ -2188,6 +2181,12 @@ export class GraphProcessor {
       processId,
       requestUserInput: async (inputStrings, renderingType) =>
         this.#requestUserInput(node, inputStrings, inputValues, renderingType, processId),
+      reportProgress: (progress) => {
+        const normalized = normalizeGraphProgress(progress);
+        if (normalized) {
+          emitDetached(this.#emitter, 'progress', this.#withExecution({ node, processId, progress: normalized }));
+        }
+      },
       setGlobal: (id, value) => {
         this.#globals.set(id, value);
         emitDetached(this.#emitter, 'globalSet', this.#withExecution({ id, value, processId }));

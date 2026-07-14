@@ -1,3 +1,6 @@
+- A main page for the github website that says that it is a yet another workflow builder for AI but: free, developer oriented (not for everyone) so there's no bullshit, it's for professional work, it's good and optimized for production use (not only for POCs)
+
+- A new LLM Agent node: system prompt, tools, RAG, internet search, etc. A whole challenge is to reuse the current llm nodes just like in Langflow
 
 - A setting for LLM chat node to race several LLM calls and return the fastest. Need to think through how it works along with retries
 

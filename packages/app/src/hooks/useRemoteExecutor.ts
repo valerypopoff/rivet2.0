@@ -5,6 +5,7 @@ import {
   type GraphOutputs,
   type NodeId,
   type Outputs,
+  type ProcessEventMessageMap,
   type RemoteRunRequestId,
   type StringArrayDataValue,
   type GraphId,
@@ -263,6 +264,9 @@ export function useRemoteExecutor() {
             eventDispatcher.partialOutput(data);
           }
           break;
+        case 'progress':
+          executorSession.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
+          break;
         case 'graphStart':
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.graphStart(data);
@@ -316,9 +320,11 @@ export function useRemoteExecutor() {
   }, [eventDispatcher, executorSession, project.metadata.id, setFrozenNodeOutputs, store]);
 
   const tryRunGraph = async (options: EditorGraphRunOptions = {}): Promise<GraphOutputs | undefined> => {
+    options.abortSignal?.throwIfAborted();
     let sessionState = executorSession.getRuntimeState();
     if (!sessionState.capabilities.canSendRun && options.waitForResults) {
       sessionState = await waitForExecutorSessionRunCapability(executorSession);
+      options.abortSignal?.throwIfAborted();
     }
 
     if (!sessionState.capabilities.canSendRun) {
@@ -418,25 +424,25 @@ export function useRemoteExecutor() {
       };
 
       if (options.waitForResults) {
-        const { requestId, promise } = executorSession.createPendingGraphExecution();
-        activeGraphRequestIdRef.current = requestId;
-        executorSession.setActiveGraphRunRequestId(requestId);
-
-        const runSent = remoteDebugger.send('run', {
-          ...payload,
-          requestId,
+        return await sendPendingRemoteGraphRunRequest({
+          abortSignal: options.abortSignal,
+          disconnectErrorMessage: 'Remote executor disconnected before the graph run could be sent.',
+          executorSession,
+          onRequestCreated: (requestId) => {
+            activeGraphRequestIdRef.current = requestId;
+            executorSession.setActiveGraphRunRequestId(requestId);
+          },
+          onRequestSettled: (requestId) => {
+            clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+            if (requestId === executorSession.getActiveGraphRunRequestId()) {
+              executorSession.setActiveGraphRunRequestId(null);
+            }
+          },
+          onProgress: options.onProgress,
+          payload,
+          sendAbort: (requestId) => remoteDebugger.send('abort', { requestId }),
+          sendRun: (payload) => remoteDebugger.send('run', payload),
         });
-
-        if (!runSent) {
-          const error = new Error('Remote executor disconnected before the graph run could be sent.');
-          executorSession.rejectPendingGraphExecution(requestId, error);
-          clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
-          if (requestId === executorSession.getActiveGraphRunRequestId()) {
-            executorSession.setActiveGraphRunRequestId(null);
-          }
-        }
-
-        return await promise;
       }
 
       const runRequest = startActiveRemoteGraphRunRequest({

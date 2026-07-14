@@ -81,6 +81,13 @@ async function addEvents(recorder: ExecutionRecorder, options: { includeIntermed
       execution,
     });
 
+    await emitter.emit('progress', {
+      node,
+      processId,
+      progress: { message: 'Working', percent: 25 },
+      execution,
+    });
+
     await emitter.emit('nodeOutputsCleared', {
       node,
       processId,
@@ -171,19 +178,35 @@ void describe('ExecutionRecorder', () => {
     await addEvents(recorder, { includeIntermediateEvents: true });
 
     const partialOutputEvent = recorder.events.find((event) => event.type === 'partialOutput');
+    const progressEvent = recorder.events.find((event) => event.type === 'progress');
     const nodeOutputsClearedEvent = recorder.events.find((event) => event.type === 'nodeOutputsCleared');
 
     assert.equal(partialOutputEvent?.data.execution?.graphRunId, execution.graphRunId);
+    assert.equal(progressEvent?.data.execution?.graphRunId, execution.graphRunId);
+    assert.deepEqual(progressEvent?.data.progress, { message: 'Working', percent: 25 });
     assert.equal(nodeOutputsClearedEvent?.data.execution?.rootRunId, execution.rootRunId);
 
     const replayEmitter = new Emittery<ProcessEvents>();
-    const replayedEvents: Array<{ type: string; execution?: GraphExecutionMetadata; processId?: ProcessId; index?: number }> = [];
+    const replayedEvents: Array<{
+      type: string;
+      execution?: GraphExecutionMetadata;
+      processId?: ProcessId;
+      index?: number;
+    }> = [];
 
     replayEmitter.on('graphStart', (data: ProcessEvents['graphStart']) => {
       replayedEvents.push({ type: 'graphStart', execution: data.execution });
     });
     replayEmitter.on('partialOutput', (data: ProcessEvents['partialOutput']) => {
-      replayedEvents.push({ type: 'partialOutput', execution: data.execution, index: data.index, processId: data.processId });
+      replayedEvents.push({
+        type: 'partialOutput',
+        execution: data.execution,
+        index: data.index,
+        processId: data.processId,
+      });
+    });
+    replayEmitter.on('progress', (data: ProcessEvents['progress']) => {
+      replayedEvents.push({ type: 'progress', execution: data.execution, processId: data.processId });
     });
     replayEmitter.on('nodeOutputsCleared', (data: ProcessEvents['nodeOutputsCleared']) => {
       replayedEvents.push({ type: 'nodeOutputsCleared', execution: data.execution, processId: data.processId });
@@ -227,6 +250,7 @@ void describe('ExecutionRecorder', () => {
       [
         { type: 'graphStart', execution: execution },
         { type: 'partialOutput', execution: execution, index: 0, processId },
+        { type: 'progress', execution: execution, processId },
         { type: 'nodeOutputsCleared', execution: execution, processId },
         { type: 'graphFinish', execution: execution },
       ],

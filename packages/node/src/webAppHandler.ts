@@ -1,37 +1,39 @@
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import {
   type DataValue,
+  type GraphProcessor,
   type LooseDataValue,
   type Project,
-  RIVET_WEB_APP_DOCUMENT_CSS,
-  RIVET_WEB_APP_RENDERER_CSS,
   type UiComponentId,
   type UiGraph,
-  type UiGraphComponent,
   type UiGraphId,
+  formatUiGraphActionBindingIssues,
   getUiGraphActionComponent,
-  getUiGraphActionState,
+  getUiGraphComponentActionState,
   getUiGraphInitialState,
   jsonValueToDataValue,
-  normalizeUiGraphComponentIds,
+  normalizeProjectUiGraphs,
+  normalizeUiGraph,
   RIVET_MARKDOWN_SANITIZER_POLICY,
-  resolveUiGraphActionOutputStatePatch,
-  resolveUiGraphActionInputs,
+  resolveUiGraphComponentActionInputs,
+  resolveUiGraphComponentActionOutputStatePatch,
+  type UiGraphActionComponent,
+  validateUiGraphActionBindings,
+  RIVET_WEB_APP_STATUS_FUNCTION_NAME,
+  rivetWebAppStatusExternalFunction,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
-import { RIVET_WEB_APP_CLIENT_JS } from './generated/webAppClient.generated.js';
-
-let requireForWebAppAssets: ReturnType<typeof createRequire> | undefined;
-let githubMarkdownCss: string | undefined;
-let markedBrowserScript: string | undefined;
-let domPurifyBrowserScript: string | undefined;
+import {
+  RIVET_WEB_APP_ASSET_CACHE_CONTROL,
+  RIVET_WEB_APP_ASSET_ROUTE,
+  getRivetWebAppAssetManifest,
+  type RivetWebAppAsset,
+} from './webAppAssets.js';
 
 export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
 
 export type RivetWebAppActionContext = {
   actionInput: Record<string, unknown>;
-  component: Extract<UiGraphComponent, { type: 'button' }>;
+  component: UiGraphActionComponent;
   componentId: UiComponentId;
   request: Request;
   revisionKey?: string;
@@ -53,15 +55,33 @@ export type RivetWebAppActionResult = {
 };
 
 export type RivetWebAppHandlerOptions = {
+  assetMode?: RivetWebAppAssetMode;
   basePath?: string;
   createProcessorOptions?: RivetWebAppCreateProcessorOptions;
   onActionError?: (context: RivetWebAppActionContext & { error: unknown }) => Promise<void> | void;
   onActionFinish?: (context: RivetWebAppActionContext & RivetWebAppActionResult) => Promise<void> | void;
   onActionStart?: (context: RivetWebAppActionContext) => Promise<void> | void;
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
+  resolveCspNonce?: (request: Request) => Promise<string | undefined> | string | undefined;
   revisionKey?: string;
   uiGraphId?: UiGraphId | string;
 };
+
+export type RivetWebAppAssetMode = 'external' | 'inline';
+
+export type RivetWebAppActionTransport =
+  | { type: 'http'; actionPath: string }
+  | { type: 'websocket'; socketPath: string };
+
+type RivetWebAppHtmlBaseOptions = {
+  actionPath?: string;
+  actionTransport?: RivetWebAppActionTransport;
+  cspNonce?: string;
+  revisionKey?: string;
+};
+
+export type RenderRivetWebAppHtmlOptions = RivetWebAppHtmlBaseOptions &
+  ({ assetBasePath: string; assetMode: 'external' } | { assetBasePath?: never; assetMode?: 'inline' });
 
 export type RivetWebAppHandler = {
   handleRequest(request: Request): Promise<Response>;
@@ -87,6 +107,13 @@ export type RunRivetWebAppActionOptions = {
   uiGraph: UiGraph;
 };
 
+export type PreparedRivetWebAppAction = {
+  context: RivetWebAppActionContext;
+  dispose(): void;
+  processor: GraphProcessor;
+  run(): Promise<RivetWebAppActionResult>;
+};
+
 export class RivetWebAppActionHttpError extends Error {
   constructor(
     message: string,
@@ -102,7 +129,9 @@ export function createRivetWebAppHandler(
   project: Project,
   options: RivetWebAppHandlerOptions = {},
 ): RivetWebAppHandler {
+  const normalizedProject = normalizeProjectUiGraphs(project);
   const basePath = normalizeBasePath(options.basePath ?? '/');
+  const assetMode = options.assetMode ?? 'inline';
 
   return {
     async handleRequest(request: Request): Promise<Response> {
@@ -113,34 +142,48 @@ export function createRivetWebAppHandler(
         return jsonResponse({ error: 'Not found' }, 404);
       }
 
+      if (
+        assetMode === 'external' &&
+        (request.method === 'GET' || request.method === 'HEAD') &&
+        routePath.startsWith(`${RIVET_WEB_APP_ASSET_ROUTE}/`)
+      ) {
+        return serveRivetWebAppAsset(request, routePath.slice(RIVET_WEB_APP_ASSET_ROUTE.length + 1));
+      }
+
       if (request.method === 'GET' && (routePath === '/' || routePath === '')) {
-        const uiGraph = resolveUiGraph(project, options.uiGraphId);
+        const uiGraph = resolveUiGraph(normalizedProject, options.uiGraphId);
         if (!uiGraph) {
           return htmlResponse(renderErrorHtml('Rivet web app not found'), 404);
         }
 
-        return htmlResponse(
-          renderRivetWebAppHtml(uiGraph, {
-            actionPath: joinUrlPath(basePath, '/actions/run'),
-            revisionKey: options.revisionKey,
-          }),
-        );
+        const htmlOptions: RenderRivetWebAppHtmlOptions = {
+          actionPath: joinUrlPath(basePath, '/actions/run'),
+          cspNonce: await options.resolveCspNonce?.(request),
+          revisionKey: options.revisionKey,
+          ...(assetMode === 'external'
+            ? {
+                assetBasePath: joinUrlPath(basePath, RIVET_WEB_APP_ASSET_ROUTE),
+                assetMode,
+              }
+            : { assetMode }),
+        };
+        return htmlResponse(renderRivetWebAppHtml(uiGraph, htmlOptions));
       }
 
       if (request.method === 'GET' && routePath === '/app.json') {
-        const uiGraph = resolveUiGraph(project, options.uiGraphId);
+        const uiGraph = resolveUiGraph(normalizedProject, options.uiGraphId);
         return uiGraph ? jsonResponse(uiGraph) : jsonResponse({ error: 'Rivet web app not found' }, 404);
       }
 
       if (request.method === 'POST' && routePath === '/actions/run') {
-        const uiGraph = resolveUiGraph(project, options.uiGraphId);
+        const uiGraph = resolveUiGraph(normalizedProject, options.uiGraphId);
         if (!uiGraph) {
           return jsonResponse({ error: 'Rivet web app not found' }, 404);
         }
 
         try {
           const body = await readActionRequestBody(request);
-          const result = await runRivetWebAppAction(project, {
+          const result = await runRivetWebAppAction(normalizedProject, {
             componentId: body.componentId,
             createProcessorOptions: options.createProcessorOptions,
             onActionError: options.onActionError,
@@ -174,6 +217,19 @@ export function createRivetWebAppHandler(
 
 export async function runRivetWebAppAction(
   project: Project,
+  options: RunRivetWebAppActionOptions,
+): Promise<RivetWebAppActionResult> {
+  return (await prepareRivetWebAppAction(project, options)).run();
+}
+
+/**
+ * Resolves and validates a UI action without running it. Hosts can attach
+ * recorders, telemetry, or progress listeners to the returned processor before
+ * calling run(). A host that abandons the prepared action must call dispose().
+ * HTTP and WebSocket transports share identical action semantics.
+ */
+export async function prepareRivetWebAppAction(
+  project: Project,
   {
     componentId,
     createProcessorOptions,
@@ -187,10 +243,10 @@ export async function runRivetWebAppAction(
     state = {},
     uiGraph,
   }: RunRivetWebAppActionOptions,
-): Promise<RivetWebAppActionResult> {
+): Promise<PreparedRivetWebAppAction> {
   const actionRequest = request ?? new Request('https://rivet.local/web-app-action');
   const receivedState = normalizeActionState(state);
-  const normalizedUiGraph = normalizeUiGraphComponentIds(uiGraph);
+  const normalizedUiGraph = normalizeUiGraph(uiGraph);
 
   if (revisionKey != null && requestRevisionKey !== revisionKey) {
     throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
@@ -214,8 +270,8 @@ export async function runRivetWebAppAction(
     throw new Error('This UI action is not connected to a graph.');
   }
 
-  const actionState = getUiGraphActionState(component.action, receivedState);
-  const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
+  const actionState = getUiGraphComponentActionState(component, receivedState);
+  const rawInputs = resolveUiGraphComponentActionInputs(component, actionState);
   const actionContext: RivetWebAppActionContext = {
     actionInput: rawInputs,
     component,
@@ -227,30 +283,84 @@ export async function runRivetWebAppAction(
   };
 
   try {
-    await callActionHook(onActionStart, actionContext);
+    const bindingErrors = validateUiGraphActionBindings(project, normalizedUiGraph, resolvedComponentId);
+    if (bindingErrors.length > 0) {
+      throw new RivetWebAppActionHttpError(
+        `Invalid web app ${component.type} bindings: ${formatUiGraphActionBindingIssues(bindingErrors)}`,
+        400,
+        component.type === 'button' ? 'invalid_button_bindings' : 'invalid_chat_bindings',
+      );
+    }
 
     const processorOptions = await resolveProcessorOptions(createProcessorOptions, actionContext);
-    const defaultContext: Record<string, LooseDataValue> = {};
-    const context = (processorOptions.context ??
-      (resolveContext ? await resolveContext(actionRequest) : defaultContext)) as Record<string, LooseDataValue>;
+    const context = (processorOptions.context ?? (resolveContext ? await resolveContext(actionRequest) : {})) as Record<
+      string,
+      LooseDataValue
+    >;
     const inputs = (processorOptions.inputs ??
       Object.fromEntries(
         Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]),
       )) as Record<string, LooseDataValue>;
-    const processor = createProcessor(project, {
+    const sourceAbortSignal = (processorOptions as { abortSignal?: AbortSignal }).abortSignal ?? actionRequest.signal;
+    sourceAbortSignal.throwIfAborted();
+    const actionAbortController = new AbortController();
+    const processorRunner = createProcessor(project, {
       ...processorOptions,
+      abortSignal: actionAbortController.signal,
       context,
+      externalFunctions: {
+        ...(processorOptions.externalFunctions ?? {}),
+        [RIVET_WEB_APP_STATUS_FUNCTION_NAME]: rivetWebAppStatusExternalFunction,
+      },
       graph: component.action.graphId,
       inputs,
     });
-    const outputs = await processor.run();
-    const result = {
-      outputs,
-      statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
-    };
+    let started = false;
+    let disposed = false;
 
-    await callActionHook(onActionFinish, { ...actionContext, ...result });
-    return result;
+    return {
+      context: actionContext,
+      dispose() {
+        if (started || disposed) return;
+        disposed = true;
+        actionAbortController.abort(new Error('Prepared Rivet web app action disposed before execution.'));
+        processorRunner.dispose();
+      },
+      processor: processorRunner.processor,
+      async run() {
+        if (disposed) {
+          throw new Error('This prepared Rivet web app action has been disposed.');
+        }
+        if (started) {
+          throw new Error('This prepared Rivet web app action has already been run.');
+        }
+        started = true;
+        let processorRunStarted = false;
+        const forwardAbort = () => actionAbortController.abort(sourceAbortSignal.reason);
+        sourceAbortSignal.addEventListener('abort', forwardAbort, { once: true });
+
+        try {
+          sourceAbortSignal.throwIfAborted();
+          await callActionHook(onActionStart, actionContext);
+          processorRunStarted = true;
+          const outputs = await processorRunner.run();
+          const result = {
+            outputs,
+            statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, actionState),
+          };
+          await callActionHook(onActionFinish, { ...actionContext, ...result });
+          return result;
+        } catch (error) {
+          await callActionHook(onActionError, { ...actionContext, error });
+          throw error;
+        } finally {
+          sourceAbortSignal.removeEventListener('abort', forwardAbort);
+          if (!processorRunStarted) {
+            processorRunner.dispose();
+          }
+        }
+      },
+    };
   } catch (error) {
     await callActionHook(onActionError, { ...actionContext, error });
     throw error;
@@ -258,13 +368,35 @@ export async function runRivetWebAppAction(
 }
 
 function resolveUiGraph(project: Project, uiGraphId: UiGraphId | string | undefined): UiGraph | undefined {
-  const uiGraph = uiGraphId ? project.uiGraphs?.[uiGraphId as UiGraphId] : Object.values(project.uiGraphs ?? {})[0];
-
-  return uiGraph ? normalizeUiGraphComponentIds(uiGraph) : undefined;
+  return uiGraphId ? project.uiGraphs?.[uiGraphId as UiGraphId] : Object.values(project.uiGraphs ?? {})[0];
 }
 
-export function renderRivetWebAppHtml(uiGraph: UiGraph, options: { actionPath: string; revisionKey?: string }): string {
-  const normalizedUiGraph = normalizeUiGraphComponentIds(uiGraph);
+export function renderRivetWebAppHtml(uiGraph: UiGraph, options: RenderRivetWebAppHtmlOptions): string {
+  const normalizedUiGraph = normalizeUiGraph(uiGraph);
+  const actionTransport = resolveActionTransport(options);
+  const manifest = getRivetWebAppAssetManifest();
+  const nonceAttribute = getNonceAttribute(options.cspNonce);
+  const bootstrap = escapeHtml(
+    JSON.stringify({
+      actionPath: actionTransport.type === 'http' ? actionTransport.actionPath : options.actionPath,
+      actionTransport,
+      initialState: getUiGraphInitialState(normalizedUiGraph),
+      markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY,
+      revisionKey: options.revisionKey,
+      uiGraph: normalizedUiGraph,
+    }),
+  );
+  const styleMarkup =
+    options.assetMode === 'external'
+      ? renderExternalStylesheet(manifest.styles, options.assetBasePath)
+      : `<style${nonceAttribute}>${styleForHtml(manifest.styles.content)}</style>`;
+  const scriptMarkup = [manifest.marked, manifest.domPurify, manifest.client]
+    .map((asset) =>
+      options.assetMode === 'external'
+        ? renderExternalScript(asset, options.assetBasePath, nonceAttribute)
+        : `<script${nonceAttribute}>${scriptForHtml(asset.content)}</script>`,
+    )
+    .join('\n  ');
 
   return `<!doctype html>
 <html lang="en">
@@ -272,20 +404,42 @@ export function renderRivetWebAppHtml(uiGraph: UiGraph, options: { actionPath: s
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(normalizedUiGraph.name)}</title>
-  <style>${styleForHtml(RIVET_WEB_APP_DOCUMENT_CSS)}</style>
-  <style>${styleForHtml(getGithubMarkdownCss())}</style>
-  <style>${styleForHtml(RIVET_WEB_APP_RENDERER_CSS)}</style>
+  ${styleMarkup}
 </head>
 <body>
-  <div id="app" class="rivet-web-app-root"></div>
-  <script>
-    window.__RIVET_WEB_APP__ = ${jsonForScript({ actionPath: options.actionPath, initialState: getUiGraphInitialState(normalizedUiGraph), markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY, revisionKey: options.revisionKey, uiGraph: normalizedUiGraph })};
-  </script>
-  <script>${scriptForHtml(getMarkedBrowserScript())}</script>
-  <script>${scriptForHtml(getDOMPurifyBrowserScript())}</script>
-  <script>${scriptForHtml(RIVET_WEB_APP_CLIENT_JS)}</script>
+  <div id="app" class="rivet-web-app-root" data-rivet-web-app-config="${bootstrap}"></div>
+  ${scriptMarkup}
 </body>
 </html>`;
+}
+
+function resolveActionTransport(options: RivetWebAppHtmlBaseOptions): RivetWebAppActionTransport {
+  const transport: unknown =
+    options.actionTransport ?? (options.actionPath ? { type: 'http', actionPath: options.actionPath } : undefined);
+  if (!isRecord(transport)) {
+    throw new Error('Rivet web app HTML requires an actionPath or actionTransport.');
+  }
+  if (transport.type === 'http' && typeof transport.actionPath === 'string' && transport.actionPath.trim()) {
+    const actionPath = transport.actionPath.trim();
+    if (hasSupportedTransportProtocol(actionPath, ['http:', 'https:'])) {
+      return { type: 'http', actionPath };
+    }
+  }
+  if (transport.type === 'websocket' && typeof transport.socketPath === 'string' && transport.socketPath.trim()) {
+    const socketPath = transport.socketPath.trim();
+    if (hasSupportedTransportProtocol(socketPath, ['http:', 'https:', 'ws:', 'wss:'])) {
+      return { type: 'websocket', socketPath };
+    }
+  }
+  throw new Error('Rivet web app actionTransport must define a valid HTTP actionPath or HTTP/WebSocket socketPath.');
+}
+
+function hasSupportedTransportProtocol(path: string, protocols: string[]): boolean {
+  try {
+    return protocols.includes(new URL(path, 'https://rivet.invalid').protocol);
+  } catch {
+    return false;
+  }
 }
 
 async function readActionRequestBody(request: Request): Promise<RunActionRequestBody> {
@@ -412,13 +566,6 @@ function joinUrlPath(basePath: string, path: string): string {
   return `${basePath === '/' ? '' : basePath}/${path}`.replace(/\/+/g, '/');
 }
 
-function jsonForScript(value: unknown): string {
-  return JSON.stringify(value)
-    .replace(/</g, '\\u003c')
-    .replace(/\u2028/g, '\\u2028')
-    .replace(/\u2029/g, '\\u2029');
-}
-
 function scriptForHtml(script: string): string {
   return script.replace(/<\/script/gi, '<\\/script');
 }
@@ -427,39 +574,44 @@ function styleForHtml(style: string): string {
   return style.replace(/<\/style/gi, '<\\/style');
 }
 
-function getGithubMarkdownCss(): string {
-  githubMarkdownCss ??= readFileSync(
-    getRequireForWebAppAssets().resolve('github-markdown-css/github-markdown-dark-dimmed.css'),
-    'utf8',
-  );
-  return githubMarkdownCss;
-}
-
-function getMarkedBrowserScript(): string {
-  markedBrowserScript ??= readFileSync(getRequireForWebAppAssets().resolve('marked/marked.min.js'), 'utf8');
-  return markedBrowserScript;
-}
-
-function getDOMPurifyBrowserScript(): string {
-  domPurifyBrowserScript ??= readFileSync(getRequireForWebAppAssets().resolve('dompurify/dist/purify.min.js'), 'utf8');
-  return domPurifyBrowserScript;
-}
-
-function getRequireForWebAppAssets(): ReturnType<typeof createRequire> {
-  requireForWebAppAssets ??= createRequire(getCreateRequireAnchor());
-  return requireForWebAppAssets;
-}
-
-function getCreateRequireAnchor(): string {
-  if (typeof import.meta.url === 'string' && import.meta.url.length > 0) {
-    return import.meta.url;
+function serveRivetWebAppAsset(request: Request, fileName: string): Response {
+  const asset = Object.values(getRivetWebAppAssetManifest()).find((candidate) => candidate.fileName === fileName);
+  if (!asset) {
+    return request.method === 'HEAD'
+      ? new Response(null, { headers: { 'content-type': 'application/json; charset=utf-8' }, status: 404 })
+      : jsonResponse({ error: 'Not found' }, 404);
   }
 
-  if (typeof __filename === 'string' && __filename.length > 0) {
-    return __filename;
+  const headers = new Headers({
+    'cache-control': RIVET_WEB_APP_ASSET_CACHE_CONTROL,
+    'content-type': asset.contentType,
+    etag: asset.etag,
+    'x-content-type-options': 'nosniff',
+  });
+  const requestEtags = request.headers
+    .get('if-none-match')
+    ?.split(',')
+    .map((etag) => etag.trim());
+  if (requestEtags?.some((etag) => etag === '*' || etag.replace(/^W\//, '') === asset.etag)) {
+    return new Response(null, { headers, status: 304 });
   }
+  return new Response(request.method === 'HEAD' ? null : asset.content, { headers });
+}
 
-  return `${process.cwd()}/package.json`;
+function renderExternalStylesheet(asset: RivetWebAppAsset, assetBasePath: string): string {
+  return `<link rel="stylesheet" href="${escapeHtml(joinAssetUrl(assetBasePath, asset.fileName))}" integrity="${asset.integrity}" crossorigin="anonymous" />`;
+}
+
+function renderExternalScript(asset: RivetWebAppAsset, assetBasePath: string, nonceAttribute: string): string {
+  return `<script${nonceAttribute} src="${escapeHtml(joinAssetUrl(assetBasePath, asset.fileName))}" integrity="${asset.integrity}" crossorigin="anonymous"></script>`;
+}
+
+function joinAssetUrl(basePath: string, fileName: string): string {
+  return `${basePath.replace(/\/+$/, '')}/${fileName}`;
+}
+
+function getNonceAttribute(nonce: string | undefined): string {
+  return nonce ? ` nonce="${escapeHtml(nonce)}"` : '';
 }
 
 function escapeHtml(value: unknown): string {

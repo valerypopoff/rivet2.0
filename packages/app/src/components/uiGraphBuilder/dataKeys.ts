@@ -1,5 +1,5 @@
 import { type UiComponentId, type UiGraph } from '@valerypopoff/rivet2-core';
-import { getUiGraphComponentDataKeys } from './componentDescriptors.js';
+import { getUiGraphComponentDataKeys } from './uiGraphComponentModel.js';
 
 export type UiGraphDataKeyUsage = {
   componentId: UiComponentId;

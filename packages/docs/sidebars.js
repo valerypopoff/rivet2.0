@@ -322,6 +322,7 @@ const sidebars = {
         'node-reference/graph-reference',
         'node-reference/http-call',
         'node-reference/raise-event',
+        'node-reference/report-progress',
         'node-reference/referenced-graph-alias',
         'node-reference/set-global',
         'node-reference/subgraph',

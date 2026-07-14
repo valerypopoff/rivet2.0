@@ -13,6 +13,7 @@ import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { type EditorDefinition } from '../../index.js';
 import { dedent } from 'ts-dedent';
 import { getInputOrData } from '../../utils/inputs.js';
+import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 export type DelayNode = ChartNode<'delay', DelayNodeData>;
 
@@ -42,7 +43,7 @@ export class DelayNodeImpl extends NodeImpl<DelayNode> {
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
 
     if (this.data.useDelayInput) {
       inputs.push({
@@ -65,7 +66,7 @@ export class DelayNodeImpl extends NodeImpl<DelayNode> {
 
   getOutputDefinitions(connections: NodeConnection[]): NodeOutputDefinition[] {
     const outputs: NodeOutputDefinition[] = [];
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
 
     for (let i = 1; i <= inputCount - 1; i++) {
       outputs.push({
@@ -87,23 +88,6 @@ export class DelayNodeImpl extends NodeImpl<DelayNode> {
       contextMenuTitle: 'Delay',
       group: ['Logic'],
     };
-  }
-
-  #getInputPortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-    const inputConnections = connections.filter(
-      (connection) => connection.inputNodeId === inputNodeId && connection.inputId.startsWith('input'),
-    );
-
-    let maxInputNumber = 0;
-    for (const connection of inputConnections) {
-      const messageNumber = parseInt(connection.inputId.replace('input', ''), 10);
-      if (messageNumber > maxInputNumber) {
-        maxInputNumber = messageNumber;
-      }
-    }
-
-    return maxInputNumber + 1;
   }
 
   getEditors(): EditorDefinition<DelayNode>[] {

@@ -14,6 +14,7 @@ import { flattenDeep } from 'lodash-es';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../EditorDefinition.js';
 import { nodeDefinition } from '../NodeDefinition.js';
+import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 export type ArrayNode = ChartNode<'array', ArrayNodeData>;
 
@@ -44,7 +45,7 @@ export class ArrayNodeImpl extends NodeImpl<ArrayNode> {
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'legacy');
 
     for (let i = 1; i <= inputCount; i++) {
       inputs.push({
@@ -92,23 +93,6 @@ export class ArrayNodeImpl extends NodeImpl<ArrayNode> {
         dataKey: 'flattenDeep',
       },
     ];
-  }
-
-  #getInputPortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-    const inputConnections = connections.filter(
-      (connection) => connection.inputNodeId === inputNodeId && connection.inputId.startsWith('input'),
-    );
-
-    let maxInputNumber = 0;
-    for (const connection of inputConnections) {
-      const inputNumber = parseInt(connection.inputId.replace('input', ''));
-      if (inputNumber > maxInputNumber) {
-        maxInputNumber = inputNumber;
-      }
-    }
-
-    return maxInputNumber + 1;
   }
 
   static getUIData(): NodeUIData {

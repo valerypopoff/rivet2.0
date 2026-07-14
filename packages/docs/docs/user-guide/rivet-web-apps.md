@@ -2,9 +2,11 @@
 title: 'Rivet Web Apps'
 ---
 
-Rivet web apps are small project-contained user interfaces that can call graphs in the same project. They are useful when you want a simple form, button, and result view for a workflow without building and hosting a separate frontend.
+Rivet web apps are small project-contained user interfaces that can call graphs in the same project. They are useful when you want a simple form, chat, button, and result view for a workflow without building and hosting a separate frontend.
 
 Web apps are saved in the `.rivet-project` file, but they are not workflow graphs. They cannot be selected as the Main Graph, they do not have nodes or connections, and they are not run by the normal graph executor.
+
+Rivet validates every saved web-app component and workflow-bound action when the project opens. Older projects with missing or duplicate component IDs are repaired automatically. If a project file was edited manually and contains an unknown component or is missing a required field, Rivet rejects it with a message that identifies the web app, component index, and invalid field instead of opening a broken renderer.
 
 ## Creating a Web App
 
@@ -14,18 +16,24 @@ A web app contains declarative components:
 
 - text
 - markdown text
+- gap
 - input
 - textarea
 - button
+- chat
 - output
 
 The web app editor shows the component settings on the left and a live preview on the right.
 
 Use the **Components** palette to add blocks. Hover a component type to reveal the plus icon, then click to add it. In the live preview, drag the large handle to the right of a component to change the order shown in the web app.
 
+A **Gap** adds empty vertical space between components. Choose **Small**, **Medium**, or **Large** in its settings. It has no visible card surface in the rendered web app, but it remains selectable and draggable in the editor preview.
+
 When a block is focused in the settings panel, Rivet highlights the matching component in the live preview. Focusing or clicking a component in the preview highlights the matching settings block. Text input and textarea components save user-entered values into their **Data key**. Rivet warns on later components if that key is already used by an earlier value source.
 
-Markdown components render Markdown in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps. Output components start blank until the selected data key receives a value. After an output has a value, its top-right copy button copies that output value. JSON output blocks also show a download button that saves the displayed JSON as a `.json` file named from the web app and the current date/time.
+Text and Markdown components render without a surrounding card surface, but remain selectable and draggable in the editor preview. Markdown renders in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps.
+
+Set an Output component's **Render as** option to **Image** when its data key contains an image URL, a complete base64 image data URL, or raw PNG, JPEG, or GIF base64. HTTP(S), relative, and `blob:` image URLs are supported; unsupported values show a clear placeholder instead of being inserted as arbitrary markup. Output components start blank until the selected data key receives a value. After an output has a value, its top-right copy button copies the original output value. JSON output blocks also show a download button that saves the displayed JSON as a `.json` file named from the web app and the current date/time.
 
 ## Binding a Button to a Graph
 
@@ -38,13 +46,29 @@ For each button, choose:
 - **Graph output ID** / **Data key to save to** rows, one for each Graph Output in the selected graph
 - **Label**: the button text shown in the web app
 
-The **Graph input ID** and **Graph output ID** fields are dimmed, non-editable fields from the selected graph's current Graph Input and Graph Output nodes, so you do not need to type the IDs by hand. For graph inputs and output display components, choose an existing web-app **Data key** from the dropdown. Existing keys come from input and textarea components, plus values saved by button outputs. For graph outputs, type the **Data key** where the value should be saved; Rivet warns on later rows if that key is already used by an earlier value source. Choosing a different graph rebuilds the rows from that graph's boundary while preserving data-key text where possible.
+The **Graph input ID** and **Graph output ID** fields are dimmed, non-editable fields from the selected graph's current Graph Input and Graph Output nodes, so you do not need to type the IDs by hand. For graph inputs and output display components, choose an existing web-app **Data key** from the dropdown. Existing keys come from input and textarea components, plus values saved by button outputs. For graph outputs, type the **Data key** where the value should be saved; Rivet warns on later rows if that key is already used by an earlier value source. If a Graph Input or Graph Output is renamed, Rivet keeps its data-key mapping. A newly added or unrelated replacement port receives a new default mapping instead of borrowing a mapping from the same row position.
 
 For example, a textarea can write to data key `input`, a button can send that value to graph input `input`, and an output component can render the resulting `result` data key.
 
 When a button sends raw web-app data to a graph, Rivet converts it into normal graph Data Values. Text, numbers, and booleans keep their matching scalar types. Objects become `object` values. Homogeneous arrays become typed arrays such as `string[]`, `number[]`, `boolean[]`, or `object[]`; mixed, empty, null-containing, or nested arrays are sent as `any[]`.
 
 For each Graph Output row, Rivet reads that graph output and stores the inner Rivet value. For example, if the graph has a Graph Output node with ID `graphOutput` and the run returns `{ graphOutput: { type: 'string', value: 'Hello' } }`, the `graphOutput` row stores `Hello` in the chosen web app data key. If the target graph does not return that ID, the action shows an error instead of silently storing an empty value.
+
+## Building a Chat App
+
+Add a **Chat** component when you want a conversational UI over a graph. The Chat block is self-contained, so it can be the only component in an app, but you can place Text, Markdown, Gap, Output, or other components before and after it.
+
+Choose a **Graph to run**, then map three graph boundary IDs:
+
+- **User message input** receives the newly submitted message as a Rivet `string`.
+- **Conversation history input** receives the conversation before the newly submitted user message as a native Rivet `chat-message[]` value. The current message is sent only through **User message input**, so a graph can append it exactly once before calling an LLM.
+- **Assistant response output** supplies the reply shown in the chat. String outputs are shown directly; other output values are converted into readable text.
+
+When a Chat component is first connected, Rivet first prefers a `chat-message[]` Graph Input for conversation history, then an input named like `history`, `conversation`, or `messages`. It prefers a remaining input named like `user`, `message`, `prompt`, or `question` for the current message, and uses the first Graph Output for the response. Review the three dropdowns before running the app.
+
+Use **Add input** when the Chat graph also needs values from other Input or Textarea components. Each additional row maps one Graph Input ID to one existing web-app data key. You can add rows before those Graph Inputs exist; unfinished rows remain in the editor while you update the graph, but the Chat cannot run until every row is configured. If a mapped Graph Input is later removed, Rivet preserves the row and its data key so you can remap or remove it instead of silently dropping expected context. Rivet sends only explicitly mapped values with the Chat action; unrelated page state stays in the browser.
+
+Press **Enter** to send and **Shift+Enter** for a new line. Only the selected Chat block enters its responding state. The conversation is browser/preview session state and is not saved into the project YAML. Messages stay in chronological order from oldest to newest. A short conversation sits at the bottom of the message area beside the composer; as it grows, the conversation scrolls inside the Chat block while the composer stays visible. The Chat block grows to use the page's remaining viewport height while preserving its minimum height; if surrounding components plus the Chat minimum exceed the viewport, the page itself can still scroll normally.
 
 ## Previewing Locally
 
@@ -56,14 +80,23 @@ Preview state is temporary. Editing the web app changes the project and can be s
 
 ## Serving From a Wrapper
 
-The `@valerypopoff/rivet2-node` package exports `createRivetWebAppHandler(...)`. A wrapper can load a project, choose a UI graph, and adapt the handler to its own HTTP server. Wrapper servers usually mount web apps under their own route family, for example `/apps/my-tool`, while Rivet serves the HTML renderer and the button action endpoint under that base path.
+The `@valerypopoff/rivet2-node` package exports `createRivetWebAppHandler(...)`. A wrapper can load a project, choose a UI graph, and adapt the handler to its own HTTP server. Wrapper servers usually mount web apps under their own route family, for example `/apps/my-tool`, while Rivet serves the HTML renderer and graph-action endpoint under that base path.
 
-Button actions are ordinary same-project graph runs. A wrapper can provide request-scoped processor options so web app actions use the same code runner, runtime libraries, dataset provider, project reference loader, context, recordings, and telemetry policy as normal workflow endpoints.
+Button and Chat actions are ordinary same-project graph runs. A wrapper can provide request-scoped processor options so web app actions use the same code runner, runtime libraries, dataset provider, project reference loader, context, recordings, and telemetry policy as normal workflow endpoints.
+
+For graphs that can take minutes, a host can serve actions through Rivet's resumable WebSocket transport instead of keeping one POST request open. The page reconnects after a temporary network/proxy interruption and resumes the same server run rather than starting it again. The active Button or Chat shows its own **Stop** action. Closing or reloading the page detaches from a WebSocket run instead of cancelling it automatically; explicit **Stop** requests cancellation. Automatic resume covers connection loss while the page remains open. A full page reload needs host-provided run discovery to restore an earlier run in the new page session.
+
+To show useful status while a graph works, put a **Report Progress** node on the workflow path. It passes its value through unchanged and can report a message, a percentage, or both. Progress appears only on the Button or Chat that started that run. It is temporary UI state, not a Graph Output and not project data.
 
 Wrappers can also use lower-level helpers:
 
 - `renderRivetWebAppHtml(...)` to serve the HTML from a wrapper-owned route
-- `runRivetWebAppAction(...)` to run a button action from an existing route handler
+- `runRivetWebAppAction(...)` to run a Button or Chat action from an existing route handler
+- `createRivetWebAppWebSocketGateway(...)` to host reconnectable long-running actions on a wrapper-authenticated WebSocket route
+
+The Node handler serves a self-contained page by default. Production wrappers can enable external assets so Rivet's CSS, Markdown libraries, sanitizer, and client use content-addressed filenames that browsers and CDNs can cache. External mode also avoids inline scripts and styles for stricter Content Security Policy setups. The wrapper still owns the CSP header, asset route or CDN, authentication, and deployment policy.
+
+If a hosted app renders remote, `data:`, or `blob:` image sources, its wrapper-owned Content Security Policy must allow the intended source in `img-src`. Rivet applies `referrer-policy: no-referrer` to rendered Output images, but the wrapper remains responsible for deciding which remote image hosts its deployment permits.
 
 Action requests are JSON-only and the web app state must be an object. If a wrapper uses the lower-level action helper, Rivet throws `RivetWebAppActionHttpError` for request-shaped failures such as malformed state or stale revision keys so the wrapper can return the matching HTTP status and optional machine-readable error code.
 
@@ -79,6 +112,7 @@ Wrappers still own:
 - project loading and permissions
 - revision routing and cache invalidation
 - response headers, debug headers, recordings, and public error envelopes
+- WebSocket upgrade authentication, origin policy, durable run metadata, and deployment draining
 
 Rivet only provides the declarative renderer and the action endpoint that runs same-project graphs.
 
@@ -90,7 +124,7 @@ V1 is intentionally small and safe:
 - there is no custom JavaScript
 - there is no separate raw HTML component
 - markdown components and markdown output mode follow Rivet's standard Markdown renderer, with raw HTML escaped
-- there is no custom asset pipeline
+- there is no project-authored custom asset pipeline
 - there are no reusable UI components or page navigation yet
 
 Use ordinary graphs for workflow logic and web apps for a minimal UI over those graphs.

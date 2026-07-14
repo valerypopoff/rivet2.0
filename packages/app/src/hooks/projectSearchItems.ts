@@ -90,6 +90,8 @@ function getUiGraphSearchData(uiGraph: UiGraph): string {
           return [component.type, component.text];
         case 'markdown':
           return [component.type, component.markdown];
+        case 'gap':
+          return [component.type, component.size];
         case 'input':
         case 'textarea':
           return [component.type, component.label, component.placeholder, component.stateKey];
@@ -111,6 +113,16 @@ function getUiGraphSearchData(uiGraph: UiGraph): string {
             component.action.outputKey,
             component.action.outputStateKey,
             ...Object.keys(component.action.inputs ?? {}),
+          ];
+        case 'chat':
+          return [
+            component.type,
+            component.placeholder,
+            component.action.graphId,
+            component.action.userInputId,
+            component.action.historyInputId,
+            component.action.responseOutputId,
+            ...(component.action.inputMappings ?? []).flatMap((binding) => [binding.inputKey, binding.stateKey]),
           ];
       }
     })

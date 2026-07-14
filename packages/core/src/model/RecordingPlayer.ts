@@ -92,7 +92,9 @@ export async function replayExecutionRecording(options: {
   const getGraphIdForNode = (nodeId: NodeId) => {
     const graphId = graphIdByNodeId[nodeId];
     if (!graphId) {
-      throw new Error(`Mismatch between project and recording: node ${nodeId} is not associated with a graph in project`);
+      throw new Error(
+        `Mismatch between project and recording: node ${nodeId} is not associated with a graph in project`,
+      );
     }
     return graphId;
   };
@@ -102,10 +104,7 @@ export async function replayExecutionRecording(options: {
     const legacyGraphRunsByGraphId = new Map<GraphId, GraphRunId>();
     const nodeStartTimestamps = new Map<string, number>();
 
-    const getExecution = (
-      graphId: GraphId,
-      recordedExecution?: GraphExecutionMetadata,
-    ): GraphExecutionMetadata => {
+    const getExecution = (graphId: GraphId, recordedExecution?: GraphExecutionMetadata): GraphExecutionMetadata => {
       if (recordedExecution) {
         return recordedExecution;
       }
@@ -326,6 +325,16 @@ export async function replayExecutionRecording(options: {
             outputs: data.outputs,
             index: data.index,
             processId: data.processId as ProcessId,
+            execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
+          });
+          break;
+        }
+        case 'progress': {
+          const { data } = event;
+          emitDetached(emitter, 'progress', {
+            node: getNode(data.nodeId),
+            processId: data.processId as ProcessId,
+            progress: data.progress,
             execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
           });
           break;

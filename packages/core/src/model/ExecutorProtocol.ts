@@ -6,6 +6,7 @@ import type { GraphExecutionMetadata, ProcessId } from './ProcessContext.js';
 import type { Project, ProjectId } from './Project.js';
 import type { Settings } from './Settings.js';
 import type { FrozenNodeOutputsByGraph } from './GraphProcessor.js';
+import type { GraphProgress } from './GraphProgress.js';
 
 export type GraphInputs = Record<string, DataValue>;
 export type GraphOutputs = Record<string, DataValue>;
@@ -63,6 +64,11 @@ export type SerializedProcessEventMap = {
     renderingType: 'text' | 'markdown';
   }>;
   partialOutput: WithExecution<{ node: ChartNode; outputs: Outputs; index: number; processId: ProcessId }>;
+  progress: WithExecution<{
+    node: ChartNode;
+    processId: ProcessId;
+    progress: GraphProgress;
+  }>;
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
   error: { error: Error | string };
   done: { results: GraphOutputs };
@@ -92,6 +98,7 @@ export type ProcessEventMessageMap = {
   graphStart: SerializedProcessEventMap['graphStart'];
   graphFinish: SerializedProcessEventMap['graphFinish'];
   partialOutput: SerializedProcessEventMap['partialOutput'];
+  progress: SerializedProcessEventMap['progress'];
   nodeOutputsCleared: SerializedProcessEventMap['nodeOutputsCleared'];
   error: SerializedProcessEventMap['error'];
   graphError: SerializedProcessEventMap['graphError'];

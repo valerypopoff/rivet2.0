@@ -11,6 +11,7 @@ import {
 import { nanoid } from 'nanoid/non-secure';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { dedent } from 'ts-dedent';
+import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 export type PassthroughNode = ChartNode<'passthrough', PassthroughNodeData>;
 
@@ -34,7 +35,7 @@ export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
 
     for (let i = 1; i <= inputCount; i++) {
       inputs.push({
@@ -49,7 +50,7 @@ export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {
 
   getOutputDefinitions(connections: NodeConnection[]): NodeOutputDefinition[] {
     const outputs: NodeOutputDefinition[] = [];
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
 
     for (let i = 1; i <= inputCount - 1; i++) {
       outputs.push({
@@ -71,23 +72,6 @@ export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {
       contextMenuTitle: 'Passthrough',
       group: ['Logic'],
     };
-  }
-
-  #getInputPortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-    const inputConnections = connections.filter(
-      (connection) => connection.inputNodeId === inputNodeId && connection.inputId.startsWith('input'),
-    );
-
-    let maxInputNumber = 0;
-    for (const connection of inputConnections) {
-      const messageNumber = parseInt(connection.inputId.replace('input', ''), 10);
-      if (messageNumber > maxInputNumber) {
-        maxInputNumber = messageNumber;
-      }
-    }
-
-    return maxInputNumber + 1;
   }
 
   async process(inputData: Inputs): Promise<Outputs> {

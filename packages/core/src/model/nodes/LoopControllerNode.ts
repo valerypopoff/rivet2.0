@@ -15,6 +15,7 @@ import { type InternalProcessContext } from '../ProcessContext.js';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../../index.js';
 import { entries } from '../../utils/typeSafety.js';
+import { getHighestVariadicPortIndex } from './variadicPortIndex.js';
 
 export type LoopControllerNode = ChartNode<'loopController', LoopControllerNodeData>;
 
@@ -44,7 +45,7 @@ export class LoopControllerNodeImpl extends NodeImpl<LoopControllerNode> {
 
   getInputDefinitions(connections: NodeConnection[], nodes: Record<NodeId, ChartNode>): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const messageCount = this.#getInputPortCount(connections);
+    const messageCount = getHighestVariadicPortIndex(connections, this.chartNode.id, 'input', 'legacy');
 
     inputs.push({
       dataType: 'any',
@@ -87,7 +88,7 @@ export class LoopControllerNodeImpl extends NodeImpl<LoopControllerNode> {
   }
 
   getOutputDefinitions(connections: NodeConnection[], nodes: Record<NodeId, ChartNode>): NodeOutputDefinition[] {
-    const messageCount = this.#getInputPortCount(connections);
+    const messageCount = getHighestVariadicPortIndex(connections, this.chartNode.id, 'input', 'legacy');
 
     const outputs: NodeOutputDefinition[] = [];
 
@@ -161,23 +162,6 @@ export class LoopControllerNodeImpl extends NodeImpl<LoopControllerNode> {
       contextMenuTitle: 'Loop Controller',
       group: ['Logic'],
     };
-  }
-
-  #getInputPortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-    const messageConnections = connections.filter(
-      (connection) => connection.inputNodeId === inputNodeId && connection.inputId.startsWith('input'),
-    );
-
-    let maxMessageNumber = 0;
-    for (const connection of messageConnections) {
-      const messageNumber = parseInt(connection.inputId.replace('input', ''));
-      if (messageNumber > maxMessageNumber) {
-        maxMessageNumber = messageNumber;
-      }
-    }
-
-    return maxMessageNumber;
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {

@@ -76,6 +76,7 @@ export function useGetAdHocInternalProcessContext() {
         graphInputNodeValues: {},
         project: undefined!,
         raiseEvent: undefined!,
+        reportProgress: () => undefined,
         setGlobal: undefined!,
         signal: options?.signal ?? new AbortController().signal,
         trace: (trace: string) => logRuntimeDebug('Ad-hoc process trace', { trace }),

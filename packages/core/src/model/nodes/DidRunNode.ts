@@ -11,6 +11,7 @@ import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { type EditorDefinition } from '../EditorDefinition.js';
+import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 export type DidRunNode = ChartNode<'didRun', DidRunNodeData>;
 
@@ -35,7 +36,7 @@ export class DidRunNodeImpl extends NodeImpl<DidRunNode> {
   }
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
     const inputs: NodeInputDefinition[] = [];
 
     for (let i = 1; i <= inputCount; i++) {
@@ -76,23 +77,6 @@ export class DidRunNodeImpl extends NodeImpl<DidRunNode> {
         helperMessage: DID_RUN_EXPLANATION,
       },
     ];
-  }
-
-  #getInputPortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-    const inputConnections = connections.filter(
-      (connection) => connection.inputNodeId === inputNodeId && connection.inputId.startsWith('input'),
-    );
-
-    let maxInputNumber = 0;
-    for (const connection of inputConnections) {
-      const inputNumber = parseInt(connection.inputId.replace('input', ''), 10);
-      if (inputNumber > maxInputNumber) {
-        maxInputNumber = inputNumber;
-      }
-    }
-
-    return maxInputNumber + 1;
   }
 
   async process(inputData: Inputs): Promise<Outputs> {

@@ -12,6 +12,7 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../../index.js';
+import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 export type RaceInputsNode = ChartNode<'raceInputs', RaceInputsNodeData>;
 
@@ -34,26 +35,9 @@ export class RaceInputsNodeImpl extends NodeImpl<RaceInputsNode> {
     return chartNode;
   }
 
-  #getInputPortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-    const inputConnections = connections.filter(
-      (connection) => connection.inputNodeId === inputNodeId && connection.inputId.startsWith('input'),
-    );
-
-    let maxInputNumber = 0;
-    for (const connection of inputConnections) {
-      const messageNumber = parseInt(connection.inputId.replace('input', ''), 10);
-      if (messageNumber > maxInputNumber) {
-        maxInputNumber = messageNumber;
-      }
-    }
-
-    return maxInputNumber + 1;
-  }
-
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
 
     for (let i = 1; i <= inputCount; i++) {
       inputs.push({

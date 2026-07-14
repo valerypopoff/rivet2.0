@@ -2,6 +2,7 @@ import type {
   OutgoingMessageMap,
   ProcessEventMessageMap,
   GraphOutputs,
+  GraphProgress,
   RemoteRunRequestId,
 } from '@valerypopoff/rivet2-core';
 import { logRuntimeDebug } from '@valerypopoff/rivet2-core';
@@ -101,7 +102,10 @@ export type ExecutorSessionRuntime = {
   connectInternal(url?: string): Promise<void>;
   connectInternalDesktopExecutor(): Promise<void>;
   connectInternalHostedExecutor(url: string): Promise<void>;
-  createPendingGraphExecution(requestId?: RemoteRunRequestId): PendingGraphExecution;
+  createPendingGraphExecution(
+    requestId?: RemoteRunRequestId,
+    onProgress?: (progress: GraphProgress) => void,
+  ): PendingGraphExecution;
   createRemoteExecutionRequest(): RemoteRunRequestId;
   disconnect(options?: ExecutorSessionDisconnectOptions): void;
   getActiveGraphRunRequestId(): RemoteRunRequestId | null;
@@ -111,6 +115,7 @@ export type ExecutorSessionRuntime = {
   >;
   isReady(): boolean;
   rejectPendingGraphExecution(requestId: RemoteRunRequestId | undefined, reason: unknown): void;
+  reportPendingGraphProgress(requestId: RemoteRunRequestId | undefined, progress: GraphProgress): void;
   recordSocketEvents(recordSocket: (socket: WebSocket) => Promise<void>): Promise<void> | undefined;
   resolvePendingGraphExecution(requestId: RemoteRunRequestId | undefined, outputs: GraphOutputs): void;
   sendMessage<T extends keyof OutgoingMessageMap>(type: T, data: OutgoingMessageMap[T]): boolean;
@@ -163,15 +168,11 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function notifyStateChanged() {
-    runExecutorSessionCallback(
-      options.onStateChange,
-      'Executor session state-change callback failed',
-      {
-        socketReadyState: currentSocket?.readyState ?? null,
-        status: currentStatus,
-        target: currentTarget?.type ?? 'none',
-      },
-    );
+    runExecutorSessionCallback(options.onStateChange, 'Executor session state-change callback failed', {
+      socketReadyState: currentSocket?.readyState ?? null,
+      status: currentStatus,
+      target: currentTarget?.type ?? 'none',
+    });
   }
 
   function setConnectionStatus(status: ExecutorSessionStatus) {
@@ -541,6 +542,9 @@ export function createExecutorSessionRuntime(options: {
     rejectPendingGraphExecution(requestId, reason) {
       pendingGraphExecutions.rejectPendingGraphExecution(requestId, reason);
     },
+    reportPendingGraphProgress(requestId, progress) {
+      pendingGraphExecutions.reportPendingGraphProgress(requestId, progress);
+    },
     recordSocketEvents(recordSocket) {
       if (!getCapabilities().canRecordSocket || !currentSocket) {
         logRuntimeDebug('Executor socket recording skipped because the session cannot be recorded.', {
@@ -596,7 +600,9 @@ export function createExecutorSessionRuntime(options: {
   return runtime;
 }
 
-function legacyConnectionStateFor(status: ExecutorSessionStatus): Pick<ExecutorSessionState, 'reconnecting' | 'started'> {
+function legacyConnectionStateFor(
+  status: ExecutorSessionStatus,
+): Pick<ExecutorSessionState, 'reconnecting' | 'started'> {
   return {
     reconnecting: status === 'reconnecting',
     started: status === 'connecting' || status === 'ready',

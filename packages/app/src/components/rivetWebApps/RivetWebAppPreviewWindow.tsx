@@ -1,5 +1,5 @@
 import { type FC, useEffect, useMemo, useState } from 'react';
-import type { UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
+import type { GraphProgress, UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
 import { RivetWebAppRenderer, type RivetWebAppActionResult } from './RivetWebAppRenderer.js';
 
 export const RIVET_WEB_APP_PREVIEW_PARAM = 'rivet-web-app-preview';
@@ -18,10 +18,19 @@ type PreviewActionRequest =
     }
   | {
       requestId: string;
+      type: 'cancelAction';
+    }
+  | {
+      requestId: string;
       type: 'requestPayload';
     };
 
 type PreviewActionResponse =
+  | {
+      progress: GraphProgress;
+      requestId: string;
+      type: 'actionProgress';
+    }
   | {
       requestId: string;
       result: RivetWebAppActionResult;
@@ -133,7 +142,12 @@ export const RivetWebAppPreviewWindow: FC = () => {
     };
   }, [channel, token]);
 
-  const runAction = (componentId: UiComponentId, state: Record<string, unknown>): Promise<RivetWebAppActionResult> => {
+  const runAction = (
+    componentId: UiComponentId,
+    state: Record<string, unknown>,
+    abortSignal: AbortSignal,
+    onProgress: (progress: GraphProgress) => void,
+  ): Promise<RivetWebAppActionResult> => {
     if (!channel) {
       return Promise.reject(new Error('Preview channel is not available.'));
     }
@@ -142,21 +156,43 @@ export const RivetWebAppPreviewWindow: FC = () => {
     const request: PreviewActionRequest = { componentId, requestId, state, type: 'runAction' };
 
     return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        channel.removeEventListener('message', handleMessage);
+        abortSignal.removeEventListener('abort', handleAbort);
+      };
       const handleMessage = (event: MessageEvent<PreviewActionResponse>) => {
         if (event.data.requestId !== requestId) {
           return;
         }
 
-        channel.removeEventListener('message', handleMessage);
+        if (event.data.type === 'actionProgress') {
+          onProgress(event.data.progress);
+          return;
+        }
 
+        cleanup();
         if (event.data.type === 'actionResult') {
           resolve(event.data.result);
         } else if (event.data.type === 'actionError') {
           reject(new Error(event.data.error));
         }
       };
+      const handleAbort = () => {
+        cleanup();
+        try {
+          channel.postMessage({ requestId, type: 'cancelAction' } satisfies PreviewActionRequest);
+        } catch {
+          // The preview channel may already be closed while the window is unloading.
+        }
+        reject(abortSignal.reason ?? new DOMException('The web app action was aborted.', 'AbortError'));
+      };
 
+      if (abortSignal.aborted) {
+        handleAbort();
+        return;
+      }
       channel.addEventListener('message', handleMessage);
+      abortSignal.addEventListener('abort', handleAbort, { once: true });
       channel.postMessage(request);
     });
   };

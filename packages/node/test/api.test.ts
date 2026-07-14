@@ -296,6 +296,41 @@ describe('api', () => {
     assert.equal(attachedRequestId, 'request-123');
   });
 
+  it('detaches the remote debugger when an unstarted processor is aborted or disposed', async () => {
+    for (const release of ['abort', 'dispose'] as const) {
+      const abortController = new AbortController();
+      let attachCount = 0;
+      let detachCount = 0;
+      const remoteDebugger = {
+        on: () => undefined,
+        off: () => undefined,
+        webSocketServer: {} as never,
+        broadcast: () => undefined,
+        attach: () => {
+          attachCount += 1;
+        },
+        detach: () => {
+          detachCount += 1;
+        },
+      };
+      const processor = createProcessor(await loadTestGraphs(), {
+        abortSignal: abortController.signal,
+        graph: 'Passthrough',
+        inputs: { input: 'input value' },
+        remoteDebugger,
+      });
+
+      if (release === 'abort') abortController.abort();
+      else processor.dispose();
+
+      assert.equal(attachCount, 1);
+      assert.equal(detachCount, 1);
+      processor.dispose();
+      assert.equal(detachCount, 1);
+      await assert.rejects(() => processor.run(), /disposed/);
+    }
+  });
+
   it('does not detach a remote debugger when a concurrent run is rejected', async () => {
     let releaseRun: (() => void) | undefined;
     let markRunStarted: (() => void) | undefined;
@@ -474,10 +509,7 @@ describe('api', () => {
   it('uses default-safe runGraph planning for repeated Call Graph nodes', async () => {
     const fixture = makeCallGraphFanInProject(3);
 
-    await assertRunGraphMatchesDefaultSafeAndBeatsCompatible(
-      fixture.project,
-      makeStandardRunOptions(fixture.graphId),
-    );
+    await assertRunGraphMatchesDefaultSafeAndBeatsCompatible(fixture.project, makeStandardRunOptions(fixture.graphId));
   });
 
   it('uses default-safe runGraph planning for repeated referenced graph aliases', async () => {

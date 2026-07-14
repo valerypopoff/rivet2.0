@@ -181,64 +181,68 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
         projectId,
       });
 
-    const unsubscribeMessages = registry.subscribeMessagesForAllProjects((projectId, runtime, message, data, requestId) => {
-      if (!shouldRouteInactiveProjectEvent(projectId)) {
-        return;
-      }
-
-      const runtimeState = runtime.getRuntimeState();
-
-      const routingState =
-        routingStatesByProjectId.get(projectId) ?? createUnscopedRemoteExecutionRoutingState();
-      routingStatesByProjectId.set(projectId, routingState);
-
-      const dispatchDecision = getRemoteExecutionEventDispatchDecision({
-        activeRequestId: runtime.getActiveGraphRunRequestId(),
-        currentProjectId: projectId,
-        data,
-        message,
-        requestId,
-        unscopedRoutingState: routingState,
-      });
-      const shouldFlushFrozenOutputs = shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({
-        alreadyFlushed: false,
-        message,
-        shouldDispatchExecutionEvent: dispatchDecision.shouldDispatch,
-        target: runtimeState.target,
-      });
-
-      const shouldSettlePendingRequest = requestId != null || dispatchDecision.shouldDispatch;
-      if (shouldSettlePendingRequest) {
-        if (message === 'done') {
-          runtime.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
-        } else if (message === 'abort') {
-          runtime.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
-        } else if (message === 'error') {
-          runtime.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
+    const unsubscribeMessages = registry.subscribeMessagesForAllProjects(
+      (projectId, runtime, message, data, requestId) => {
+        if (!shouldRouteInactiveProjectEvent(projectId)) {
+          return;
         }
-      }
 
-      if (shouldSettlePendingRequest && (message === 'done' || message === 'abort' || message === 'error')) {
-        if (requestId === runtime.getActiveGraphRunRequestId()) {
-          runtime.setActiveGraphRunRequestId(null);
-        }
-      }
+        const runtimeState = runtime.getRuntimeState();
 
-      if (!dispatchDecision.shouldDispatch) {
-        return;
-      }
+        const routingState = routingStatesByProjectId.get(projectId) ?? createUnscopedRemoteExecutionRoutingState();
+        routingStatesByProjectId.set(projectId, routingState);
 
-      store.set(projectExecutionSnapshotsState, (previousSnapshots) =>
-        applyProcessEventToProjectExecutionSnapshots({
+        const dispatchDecision = getRemoteExecutionEventDispatchDecision({
+          activeRequestId: runtime.getActiveGraphRunRequestId(),
+          currentProjectId: projectId,
           data,
-          mapSnapshot: shouldFlushFrozenOutputs ? (snapshot) => ({ ...snapshot, frozenNodeOutputs: {} }) : undefined,
           message,
-          projectId,
-          refStore: dataRefs,
-          snapshots: previousSnapshots,
-        }),
-      );
-    });
+          requestId,
+          unscopedRoutingState: routingState,
+        });
+        const shouldFlushFrozenOutputs = shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({
+          alreadyFlushed: false,
+          message,
+          shouldDispatchExecutionEvent: dispatchDecision.shouldDispatch,
+          target: runtimeState.target,
+        });
+
+        const shouldSettlePendingRequest = requestId != null || dispatchDecision.shouldDispatch;
+        if (message === 'progress') {
+          runtime.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
+        }
+        if (shouldSettlePendingRequest) {
+          if (message === 'done') {
+            runtime.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
+          } else if (message === 'abort') {
+            runtime.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
+          } else if (message === 'error') {
+            runtime.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
+          }
+        }
+
+        if (shouldSettlePendingRequest && (message === 'done' || message === 'abort' || message === 'error')) {
+          if (requestId === runtime.getActiveGraphRunRequestId()) {
+            runtime.setActiveGraphRunRequestId(null);
+          }
+        }
+
+        if (!dispatchDecision.shouldDispatch) {
+          return;
+        }
+
+        store.set(projectExecutionSnapshotsState, (previousSnapshots) =>
+          applyProcessEventToProjectExecutionSnapshots({
+            data,
+            mapSnapshot: shouldFlushFrozenOutputs ? (snapshot) => ({ ...snapshot, frozenNodeOutputs: {} }) : undefined,
+            message,
+            projectId,
+            refStore: dataRefs,
+            snapshots: previousSnapshots,
+          }),
+        );
+      },
+    );
     const unsubscribeDisconnects = registry.subscribeDisconnectsForAllProjects((projectId) => {
       if (!shouldRouteInactiveProjectEvent(projectId)) {
         return;

@@ -1,9 +1,10 @@
-import type { GraphOutputs, RemoteRunRequestId } from '@valerypopoff/rivet2-core';
+import type { GraphOutputs, GraphProgress, RemoteRunRequestId } from '@valerypopoff/rivet2-core';
 
 type PendingExecution = {
   promise: Promise<GraphOutputs>;
   reject: (reason?: unknown) => void;
   resolve: (value: GraphOutputs) => void;
+  onProgress?: (progress: GraphProgress) => void;
 };
 
 export type PendingGraphExecution = {
@@ -20,7 +21,10 @@ export function createExecutorSessionPendingExecutions() {
     return `remote-run-${pendingRequestCounter}` as RemoteRunRequestId;
   }
 
-  function createPendingGraphExecution(requestId = createRemoteExecutionRequest()): PendingGraphExecution {
+  function createPendingGraphExecution(
+    requestId = createRemoteExecutionRequest(),
+    onProgress?: (progress: GraphProgress) => void,
+  ): PendingGraphExecution {
     rejectPendingExecution(requestId, new Error('graph execution replaced by a newer request'));
 
     let resolve!: (value: GraphOutputs) => void;
@@ -30,7 +34,7 @@ export function createExecutorSessionPendingExecutions() {
       reject = rej;
     });
 
-    pendingExecutions.set(requestId, { promise, reject, resolve });
+    pendingExecutions.set(requestId, { promise, reject, resolve, onProgress });
     return { promise, requestId };
   }
 
@@ -62,6 +66,13 @@ export function createExecutorSessionPendingExecutions() {
     pendingExecutions.clear();
   }
 
+  function reportPendingGraphProgress(requestId: RemoteRunRequestId | undefined, progress: GraphProgress): void {
+    const resolvedRequestId = resolveSinglePendingRequestId(requestId);
+    if (resolvedRequestId) {
+      pendingExecutions.get(resolvedRequestId)?.onProgress?.(progress);
+    }
+  }
+
   function rejectPendingExecution(requestId: RemoteRunRequestId, reason: unknown): void {
     const pendingExecution = pendingExecutions.get(requestId);
     if (!pendingExecution) {
@@ -89,6 +100,7 @@ export function createExecutorSessionPendingExecutions() {
     createRemoteExecutionRequest,
     rejectAllPendingGraphExecutions,
     rejectPendingGraphExecution,
+    reportPendingGraphProgress,
     resolvePendingGraphExecution,
   };
 }

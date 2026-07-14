@@ -28,7 +28,7 @@ npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project --dev
 
 ## Description
 
-Rivet web apps are declarative UI screens saved inside a Rivet project. `serve-app` serves the same renderer used by the Node package web-app handler and runs button actions through the ordinary Node runtime.
+Rivet web apps are declarative UI screens saved inside a Rivet project. `serve-app` serves the same renderer used by the Node package web-app handler and runs Button and Chat actions through the ordinary Node runtime.
 
 The command is a small local/reference host. It is useful for trying a web app from the command line, creating simple deployments, or checking how a wrapper server should adapt the Node web-app APIs.
 

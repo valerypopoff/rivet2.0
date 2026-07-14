@@ -1,11 +1,15 @@
 import type { Opaque } from 'type-fest';
 import type { GraphId } from './NodeGraph.js';
 import { newId } from '../utils/newId.js';
-import type { DataValue } from './DataValue.js';
+import type { ChatMessage, DataValue } from './DataValue.js';
 
 export type UiGraphId = Opaque<string, 'UiGraphId'>;
 export type UiComponentId = Opaque<string, 'UiComponentId'>;
 export type UiGraphOutputs = Record<string, DataValue>;
+export const UI_GRAPH_GAP_SIZES = ['small', 'medium', 'large'] as const;
+export type UiGraphGapSize = (typeof UI_GRAPH_GAP_SIZES)[number];
+export const UI_GRAPH_OUTPUT_RENDER_MODES = ['text', 'json', 'markdown', 'image'] as const;
+export type UiGraphOutputRenderMode = (typeof UI_GRAPH_OUTPUT_RENDER_MODES)[number];
 
 export type UiGraphValueBinding =
   | {
@@ -25,6 +29,20 @@ export type UiGraphRunGraphAction = {
   outputs?: UiGraphOutputBinding[];
   outputKey?: string;
   outputStateKey?: string;
+};
+
+export type UiGraphChatRunGraphAction = {
+  type: 'runGraph';
+  graphId?: GraphId;
+  userInputId?: string;
+  historyInputId?: string;
+  responseOutputId?: string;
+  inputMappings?: UiGraphInputBinding[];
+};
+
+export type UiGraphChatMessage = {
+  role: 'assistant' | 'user';
+  content: string;
 };
 
 export type UiGraphInputBinding = {
@@ -52,6 +70,11 @@ export type UiGraphComponent =
     }
   | {
       id: UiComponentId;
+      type: 'gap';
+      size: UiGraphGapSize;
+    }
+  | {
+      id: UiComponentId;
       type: 'input';
       label: string;
       stateKey: string;
@@ -74,10 +97,16 @@ export type UiGraphComponent =
     }
   | {
       id: UiComponentId;
+      type: 'chat';
+      action: UiGraphChatRunGraphAction;
+      placeholder?: string;
+    }
+  | {
+      id: UiComponentId;
       type: 'output';
       label?: string;
       stateKey: string;
-      renderAs?: 'text' | 'json' | 'markdown';
+      renderAs?: UiGraphOutputRenderMode;
     };
 
 export type UiGraph = {
@@ -86,6 +115,8 @@ export type UiGraph = {
   description?: string;
   components: UiGraphComponent[];
 };
+
+export type UiGraphActionComponent = Extract<UiGraphComponent, { type: 'button' | 'chat' }>;
 
 export function hasValidUiGraphComponentIds(uiGraph: UiGraph): boolean {
   const componentIds = new Set<string>();
@@ -103,9 +134,8 @@ export function hasValidUiGraphComponentIds(uiGraph: UiGraph): boolean {
 }
 
 /**
- * Returns an immutable repair for legacy or externally assembled UI graphs.
- * Repaired IDs are deterministic so separately rendered HTML and action calls agree
- * without mutating a host-owned project snapshot.
+ * Returns an immutable component-ID repair for legacy or externally assembled
+ * UI graphs. Full untrusted-data validation belongs to normalizeUiGraph().
  */
 export function normalizeUiGraphComponentIds(uiGraph: UiGraph): UiGraph {
   if (hasValidUiGraphComponentIds(uiGraph)) {
@@ -200,6 +230,9 @@ export function getUiGraphInitialState(uiGraph: UiGraph): Record<string, unknown
   for (const component of uiGraph.components) {
     if (component.type === 'input' || component.type === 'textarea') {
       state[component.stateKey] = component.defaultValue ?? '';
+    } else if (component.type === 'chat') {
+      state[getUiGraphChatDraftStateKey(component.id)] = '';
+      state[getUiGraphChatMessagesStateKey(component.id)] = [];
     }
   }
 
@@ -209,16 +242,126 @@ export function getUiGraphInitialState(uiGraph: UiGraph): Record<string, unknown
 export function getUiGraphActionComponent(
   uiGraph: UiGraph,
   componentId: UiComponentId,
-): Extract<UiGraphComponent, { type: 'button' }> | undefined {
+): UiGraphActionComponent | undefined {
   return uiGraph.components.find(
-    (component): component is Extract<UiGraphComponent, { type: 'button' }> =>
-      component.id === componentId && component.type === 'button',
+    (component): component is UiGraphActionComponent =>
+      component.id === componentId && (component.type === 'button' || component.type === 'chat'),
   );
+}
+
+export function getUiGraphChatDraftStateKey(componentId: UiComponentId): string {
+  return `__rivet_chat_${componentId}_draft`;
+}
+
+export function getUiGraphChatMessagesStateKey(componentId: UiComponentId): string {
+  return `__rivet_chat_${componentId}_messages`;
+}
+
+export function getUiGraphChatMessages(
+  componentId: UiComponentId,
+  state: Readonly<Record<string, unknown>>,
+): UiGraphChatMessage[] {
+  const messages = state[getUiGraphChatMessagesStateKey(componentId)];
+  return Array.isArray(messages) ? messages.filter(isUiGraphChatMessage) : [];
+}
+
+export function createUiGraphChatSubmissionStatePatch(
+  componentId: UiComponentId,
+  state: Readonly<Record<string, unknown>>,
+): Record<string, unknown> | undefined {
+  const draftStateKey = getUiGraphChatDraftStateKey(componentId);
+  const content = `${state[draftStateKey] ?? ''}`.trim();
+  if (!content) {
+    return undefined;
+  }
+
+  return {
+    [draftStateKey]: '',
+    [getUiGraphChatMessagesStateKey(componentId)]: [
+      ...getUiGraphChatMessages(componentId, state),
+      { role: 'user', content } satisfies UiGraphChatMessage,
+    ],
+  };
+}
+
+export function getUiGraphComponentActionState(
+  component: UiGraphActionComponent,
+  state: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  if (component.type === 'button') {
+    return getUiGraphActionState(component.action, state);
+  }
+
+  const messagesStateKey = getUiGraphChatMessagesStateKey(component.id);
+  return {
+    ...getUiGraphActionState(component.action, state),
+    [messagesStateKey]: getUiGraphChatMessages(component.id, state),
+  };
+}
+
+export function resolveUiGraphComponentActionInputs(
+  component: UiGraphActionComponent,
+  state: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  if (component.type === 'button') {
+    return resolveUiGraphActionInputs(component.action, state);
+  }
+
+  const messages = getUiGraphChatMessages(component.id, state);
+  const latestMessage = messages[messages.length - 1];
+  const latestUserMessage = latestMessage?.role === 'user' ? latestMessage : undefined;
+  const historyMessages = latestUserMessage ? messages.slice(0, -1) : messages;
+  const inputs = resolveUiGraphActionInputs(component.action, state);
+  if (component.action.userInputId) {
+    inputs[component.action.userInputId] = latestUserMessage?.content ?? '';
+  }
+  if (component.action.historyInputId) {
+    inputs[component.action.historyInputId] = {
+      type: 'chat-message[]',
+      value: historyMessages.map(toRivetChatMessage),
+    } satisfies DataValue;
+  }
+  return inputs;
+}
+
+export function resolveUiGraphComponentActionOutputStatePatch(
+  component: UiGraphActionComponent,
+  outputs: UiGraphOutputs,
+  state: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  if (component.type === 'button') {
+    return resolveUiGraphActionOutputStatePatch(component.action, outputs);
+  }
+
+  const outputId = component.action.responseOutputId;
+  if (!outputId || !Object.prototype.hasOwnProperty.call(outputs, outputId)) {
+    throw new Error(
+      outputId
+        ? `Graph output "${outputId}" was not returned by the target graph.`
+        : 'The Chat component has no response graph output.',
+    );
+  }
+
+  const messagesStateKey = getUiGraphChatMessagesStateKey(component.id);
+  return {
+    [messagesStateKey]: [
+      ...getUiGraphChatMessages(component.id, state),
+      { role: 'assistant', content: getUiGraphChatResponseText(outputs[outputId]!) } satisfies UiGraphChatMessage,
+    ],
+  };
+}
+
+export function getUiGraphComponentActionOutputStateKeys(component: UiGraphActionComponent): string[] {
+  return component.type === 'button'
+    ? getUiGraphActionOutputBindings(component.action)
+        .map((binding) => binding.stateKey.trim())
+        .filter(Boolean)
+    : [getUiGraphChatMessagesStateKey(component.id)];
 }
 
 export function resolveUiGraphActionInputs(
   action: UiGraphRunGraphAction,
-  state: Record<string, unknown>,
+  state: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   const inputs: Record<string, unknown> = {};
 
@@ -245,7 +388,7 @@ export function resolveUiGraphActionInputs(
  */
 export function getUiGraphActionState(
   action: UiGraphRunGraphAction,
-  state: Record<string, unknown>,
+  state: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   return Object.fromEntries(
     [...new Set(getUiGraphActionInputBindings(action).map((binding) => binding.stateKey))]
@@ -315,4 +458,49 @@ function resolveUiGraphOutputBindingValue(binding: UiGraphOutputBinding, outputs
   }
 
   return outputs[binding.outputKey]?.value;
+}
+
+function isUiGraphChatMessage(value: unknown): value is UiGraphChatMessage {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    ((value as UiGraphChatMessage).role === 'user' || (value as UiGraphChatMessage).role === 'assistant') &&
+    typeof (value as UiGraphChatMessage).content === 'string'
+  );
+}
+
+function toRivetChatMessage(message: UiGraphChatMessage): ChatMessage {
+  return message.role === 'user'
+    ? { type: 'user', message: message.content }
+    : {
+        type: 'assistant',
+        message: message.content,
+        function_call: undefined,
+        function_calls: undefined,
+      };
+}
+
+function getUiGraphChatResponseText(output: DataValue): string {
+  if (output.type === 'chat-message') {
+    const message = output.value.message;
+    if (typeof message === 'string') {
+      return message;
+    }
+    return (Array.isArray(message) ? message : [message])
+      .flatMap((part) => (typeof part === 'string' ? [part] : []))
+      .join('\n');
+  }
+
+  if (typeof output.value === 'string') {
+    return output.value;
+  }
+  if (output.value == null) {
+    return '';
+  }
+
+  try {
+    return JSON.stringify(output.value, null, 2);
+  } catch {
+    return String(output.value);
+  }
 }

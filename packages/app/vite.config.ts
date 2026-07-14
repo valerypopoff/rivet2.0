@@ -138,11 +138,15 @@ export default defineConfig({
   resolve: {
     preserveSymlinks: true,
 
-    alias: {
-      '@valerypopoff/rivet2-core': resolve('../core/src/index.ts'),
-      '@valerypopoff/trivet': resolve('../trivet/src/index.ts'),
-      '@google-cloud/vertexai': resolve('./src/utils/browser/vertexAiBrowserStub.ts'),
-    },
+    alias: [
+      {
+        find: '@valerypopoff/rivet2-core/web-app-runtime',
+        replacement: resolve('../core/src/webAppRuntime.ts'),
+      },
+      { find: /^@valerypopoff\/rivet2-core$/, replacement: resolve('../core/src/index.ts') },
+      { find: '@valerypopoff/trivet', replacement: resolve('../trivet/src/index.ts') },
+      { find: '@google-cloud/vertexai', replacement: resolve('./src/utils/browser/vertexAiBrowserStub.ts') },
+    ],
   },
   build: {
     chunkSizeWarningLimit: 10000,

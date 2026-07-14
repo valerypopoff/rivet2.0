@@ -54,22 +54,22 @@ export class EventSourceResponse extends Response {
 
   private async raceWithTimeout<T>(promise: Promise<T>, timeout?: number): Promise<T> {
     const raceTimeout = timeout ?? DEFAULT_CHAT_NODE_TIMEOUT;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
-    // eslint-disable-next-line no-async-promise-executor,@typescript-eslint/no-misused-promises -- Error handled correctly
-    return new Promise(async (resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Timeout: API response took too long.'));
-      }, raceTimeout);
-
-      try {
-        const result = await promise;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error('Timeout: API response took too long.'));
+          }, raceTimeout);
+        }),
+      ]);
+    } finally {
+      if (timer != null) {
         clearTimeout(timer);
-        resolve(result);
-      } catch (error) {
-        clearTimeout(timer);
-        reject(error);
       }
-    });
+    }
   }
 }
 
@@ -78,10 +78,8 @@ export default async function fetchEventSource(
   init?: RequestInit,
   timeout?: number,
 ): Promise<EventSourceResponse> {
-  const headers = {
-    ...init?.headers,
-    accept: 'text/event-stream',
-  };
+  const headers = new Headers(init?.headers);
+  headers.set('accept', 'text/event-stream');
 
   const response = await fetch(url, {
     ...init,

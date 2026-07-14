@@ -1,0 +1,144 @@
+# createRivetWebAppWebSocketGateway
+
+## Description
+
+`createRivetWebAppWebSocketGateway` hosts long-running Rivet web-app actions over a versioned WebSocket protocol. It keeps the graph run independent from one proxy connection, streams progress, supports explicit cancellation, and replays retained events after reconnect without starting the action twice.
+
+The gateway does not register an HTTP route or authenticate users. The wrapper must authenticate the WebSocket upgrade, resolve the authorized immutable project revision and UI graph, and then pass the accepted `ws` socket plus that session to `handleConnection(...)`.
+
+## Rendering the client
+
+```typescript
+const html = renderRivetWebAppHtml(uiGraph, {
+  actionTransport: {
+    type: 'websocket',
+    socketPath: `/apps/${slug}/actions/ws`,
+  },
+  revisionKey,
+});
+```
+
+The browser opens one socket for the page. Each action has a random client request ID, a server run ID, and monotonic event sequence. If the socket disconnects, the client reconnects and sends its last received sequence. Repeating a request ID for the same component inside the same owner scope attaches to the original run. Reusing that ID for another component is rejected with `request_id_conflict`.
+
+Attachment uses replay, subscribe, then a catch-up read, so a run that finishes while the reconnect is being attached cannot lose its terminal event. The browser retries temporary network failures. Protocol, unsupported-data, invalid-payload, policy, and oversized-message close codes are terminal and show their server-provided reason instead of reconnecting forever.
+
+The gateway sends `server.ready` only after validating `client.hello`, and the generated client waits for that acknowledgement before sending starts or resumes. Retry backoff resets after this acknowledgement, not merely when a socket opens. Relative paths inherit the page's `ws`/`wss` security, while explicit `ws://` and `wss://` endpoints retain their configured scheme.
+
+Every socket first sends `client.hello` with `RIVET_WEB_APP_ACTION_PROTOCOL_VERSION`. The generated client handles this automatically. Custom clients that omit the handshake, exceed `handshakeTimeoutMs`, or use an unsupported version are closed with WebSocket protocol error code `1002`.
+
+The built-in client keeps that identity in page memory. It resumes temporary socket loss, but it does not rediscover a detached run after a full page reload. A wrapper that needs reload recovery should persist and discover user-visible run identities through its own session UI.
+
+There is no automatic HTTP fallback. This prevents a reconnect from accidentally repeating a graph with side effects.
+
+## Gateway example
+
+```typescript
+import { WebSocketServer } from 'ws';
+import {
+  createInMemoryRivetWebAppRunCoordinator,
+  createInMemoryRivetWebAppRunStore,
+  createRivetWebAppWebSocketGateway,
+} from '@valerypopoff/rivet2-node';
+
+const runStore = createInMemoryRivetWebAppRunStore();
+const runCoordinator = createInMemoryRivetWebAppRunCoordinator();
+const gateway = createRivetWebAppWebSocketGateway({
+  hostId: crypto.randomUUID(),
+  runCoordinator,
+  runStore,
+  onError: (error) => reportWebAppTransportError(error),
+});
+const socketServer = new WebSocketServer({ noServer: true });
+
+httpServer.on('upgrade', async (request, socket, head) => {
+  const resolved = await authenticateAndResolveWebApp(request);
+  if (!resolved) {
+    socket.destroy();
+    return;
+  }
+
+  socketServer.handleUpgrade(request, socket, head, (webSocket) => {
+    gateway.handleConnection(webSocket, {
+      ownerScope: `${resolved.tenantId}:${resolved.userId}:${resolved.slug}:${resolved.revisionKey}`,
+      project: resolved.project,
+      uiGraph: resolved.uiGraph,
+      revisionKey: resolved.revisionKey,
+      request: resolved.fetchRequest,
+      onProcessorPrepared: async ({ processor, actionContext, requestId, runId }) => {
+        await attachExecutionRecorder({
+          processor,
+          actionContext,
+          requestId,
+          runId,
+        });
+      },
+      onRunFinished: async ({ actionContext, requestId, runId, result }) => {
+        await persistWebAppRecording({ actionContext, requestId, runId, result, status: 'completed' });
+      },
+      onRunFailed: async ({ actionContext, requestId, runId, outcome, error }) => {
+        await persistWebAppRecording({ actionContext, requestId, runId, outcome, error });
+      },
+      createProcessorOptions: async (actionContext) => ({
+        codeRunner: resolved.codeRunner,
+        datasetProvider: resolved.datasetProvider,
+        projectPath: resolved.projectVirtualPath,
+        projectReferenceLoader: resolved.projectReferenceLoader,
+        context: await resolveRivetContext(actionContext.request),
+      }),
+    });
+  });
+});
+```
+
+`ownerScope` is the authorization boundary for start, resume, and cancel. It should include every identity dimension that prevents one principal/app/revision from attaching to another one's run. It is not a secret and does not replace upgrade authentication.
+
+## Progress
+
+Add a **Report Progress** node to the running graph. It is a value passthrough and reports an optional status message and/or percentage. The event crosses subgraphs, Browser/Node/Remote Debugger execution, desktop preview, recordings, and the hosted WebSocket transport.
+
+The gateway delegates action validation, state projection, graph selection, processor options, outputs, and lifecycle hooks to `prepareRivetWebAppAction(...)`. Hosts do not need to reconstruct Button or Chat mappings.
+
+`onProcessorPrepared(...)` is session-scoped and awaited after the real processor is created but before `run()` and `onActionStart`. It receives `{ processor, actionContext, requestId, runId }`, allowing the host to attach `ExecutionRecorder`, timing instrumentation, or other processor observers. If the hook fails, the processor is not run, the original exception is sent to gateway `onError`, and the browser receives the generic `action_unavailable` code. Rivet disposes the prepared action in that failure path, including cancellation while an asynchronous hook is pending, so pre-run Remote Debugger attachments are released.
+
+`onRunFinished(...)` and `onRunFailed(...)` are WebSocket-session terminal hooks. They are intentionally separate from the existing generic action hooks and include the same `{ actionContext, requestId, runId }` identity received by `onProcessorPrepared(...)`. Rivet calls exactly one terminal hook only after its matching terminal event has been persisted. `onRunFinished` receives the action `result`; `onRunFailed` receives `outcome: 'failed' | 'cancelled' | 'interrupted'` and an error when one exists. If a lease-recovery interruption has no local thrown error, Rivet supplies its persisted interruption message instead. Use these hooks to persist the recorder attached during preparation without correlating concurrent actions by component ID. Terminal-hook failures go to gateway `onError` and never rewrite a graph outcome or a stored terminal event.
+
+If a user cancels while an asynchronous `onProcessorPrepared(...)` is still attaching a recorder, Rivet sends the persisted cancellation to the browser immediately, then invokes `onRunFailed(...)` after that attachment settles. This keeps cancellation responsive without racing the recorder setup.
+
+## Persistence and recovery
+
+`createInMemoryRivetWebAppRunStore(...)` is bounded and survives socket disconnects, but not a Node process restart. `createInMemoryRivetWebAppRunCoordinator(...)` connects multiple gateways inside one Node process. They are appropriate for local/reference hosting, not separate replicas.
+
+Production multi-instance wrappers should provide both adapters:
+
+- Implement `RivetWebAppRunStore` in the wrapper database. `createRun(...)` atomically enforces uniqueness for both `(ownerScope, requestId)` and `runId`. `appendEvent(...)` verifies the current unexpired lease plus matching run/request identity, atomically assigns the next sequence, and rejects stale writers. Read methods return detached snapshots. `renewRunLeases(...)` renews only the supplied active run IDs and returns those actually renewed. `interruptExpiredRuns(...)` must let concurrent workers add exactly one interruption terminal per expired running row. `interruptRunsByLease(...)` performs the same fenced transition for graceful shutdown.
+- Implement `RivetWebAppRunCoordinator` over the internal message bus. `registerHost(...)` exposes the current process's cancellation endpoint. `publishEvent(...)` forwards persisted owner or recovery events. `subscribe(...)` must be active before it resolves; delivery may be duplicated or reordered because the gateway de-duplicates by sequence and fills gaps from the durable store. `onUnavailable` means routing is definitively unavailable, not merely that an owner is awaiting lease recovery.
+
+The store derives `leaseExpiresAt` from the supplied duration using its own authoritative clock. A Postgres adapter should use database time in the same transaction as create, renewal, and expiry recovery. Do not derive durable expiry from individual pod clocks.
+
+Each run stores the `hostId` routing identity of its live processor and a gateway-generated `leaseId` for that exact process incarnation. `hostId` only needs to be unique among live coordinator registrations; it does not need to survive a Deployment pod replacement. The gateway renews only run IDs still present in its active processor map. Lease writes from a stale process are fenced even if a replacement pod has already recovered its rows.
+
+A reconnect may land on any gateway replica. It replays the durable snapshot, subscribes through the coordinator to the live owner, then rereads the store to close the subscription race. Cancellation is forwarded to that owner and revalidated against the durable owner scope and lease before processor abort. Sticky client-IP routing is unnecessary when both production adapters are installed.
+
+A crashed process cannot continue its in-memory `GraphProcessor`. Every gateway periodically renews its own active leases and atomically recovers expired rows from any dead owner. The recovering worker persists and publishes `action.interrupted` under the original run identity, so a browser already connected through another replica settles. `recoverInterruptedRuns()` is also available for an immediate startup or operations sweep. No stable StatefulSet slot or old pod name is required.
+
+The reference store enforces `maxStoredRuns` as a hard process-wide bound. It removes old terminal runs first and rejects a new run if all retained slots are active. Production retention and global/principal quotas remain host policy. The gateway serializes its own `appendEvent(...)` calls per run, but the store still owns cross-process atomicity.
+
+## Operations and security
+
+- The gateway validates protocol messages and caps message size and active runs per owner scope.
+- Invalid numeric limits and blank explicit `hostId` values fail when the gateway/store is constructed instead of silently disabling a safety bound.
+- HTML rendering rejects empty or malformed HTTP/WebSocket transport paths at runtime, including calls from plain JavaScript.
+- It uses ping/pong heartbeat handling suitable for idle runs behind proxies.
+- Missing, pruned, unauthorized, or process-orphaned run handles return `run_unavailable`, which prevents a resumed browser action from waiting forever without revealing another owner's run IDs. Cancellation that races with a terminal event replays the stored terminal result.
+- `drain()` rejects genuinely new starts while existing runs continue and repeated request IDs may safely reattach. If durable run creation races with draining, the reserved row is finalized as interrupted and no processor is created.
+- `dispose()` closes gateway-owned sockets with service-restart code `1012`, releases idle heartbeat timers, and rejects later connections. `dispose({ interrupt: true })` also records and broadcasts interruption for this gateway's exact `leaseId`, then requests abort without waiting for a slow node to cooperate. It cannot interrupt a sibling replica that happens to use a related host name.
+- The wrapper still owns upgrade auth, origin checks, global/rate quotas, durable retention, telemetry, recordings, and deployment draining order.
+- Use the optional `onError` callback to send asynchronous store, replay, and terminal-persistence failures to wrapper observability. Exceptions from that callback are isolated from action/connection cleanup. Pre-accept infrastructure failures are reported to this hook but exposed to the browser only as `action_unavailable`; the gateway does not leak database/runtime details. The gateway also closes an affected socket with code `1011` when a resume/cancel store lookup fails.
+- If terminal persistence fails after acceptance, current subscribers receive `run_unavailable` so their loading state settles; the private storage exception remains in `onError`.
+- Explicit **Stop** records cancellation immediately and requests processor abort. Some external operations may not stop until their underlying node/provider honors cancellation.
+
+## See Also
+
+- [createRivetWebAppHandler](./createRivetWebAppHandler.mdx)
+- [createProcessor](./createProcessor.mdx)
+- [Project](../core/Project.mdx)

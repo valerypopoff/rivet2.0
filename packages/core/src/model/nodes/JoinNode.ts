@@ -15,6 +15,7 @@ import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../EditorDefinition.js';
 import { handleEscapeCharacters } from '../../utils/index.js';
+import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 export type JoinNode = ChartNode<'join', JoinNodeData>;
 
@@ -45,7 +46,7 @@ export class JoinNodeImpl extends NodeImpl<JoinNode> {
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const inputCount = this.#getInputPortCount(connections);
+    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
 
     if (this.data.useJoinStringInput) {
       inputs.push({
@@ -74,23 +75,6 @@ export class JoinNodeImpl extends NodeImpl<JoinNode> {
         title: 'Joined',
       },
     ];
-  }
-
-  #getInputPortCount(connections: NodeConnection[]): number {
-    const inputNodeId = this.chartNode.id;
-    const inputConnections = connections.filter(
-      (connection) => connection.inputNodeId === inputNodeId && connection.inputId.startsWith('input'),
-    );
-
-    let maxInputNumber = 0;
-    for (const connection of inputConnections) {
-      const messageNumber = parseInt(connection.inputId.replace('input', ''), 10);
-      if (messageNumber > maxInputNumber) {
-        maxInputNumber = messageNumber;
-      }
-    }
-
-    return maxInputNumber + 1;
   }
 
   getEditors(): EditorDefinition<JoinNode>[] {

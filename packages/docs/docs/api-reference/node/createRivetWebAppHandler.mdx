@@ -10,11 +10,13 @@ The handler serves:
 
 - the HTML/client renderer for the selected `Project.uiGraphs` entry
 - `GET /app.json` for the selected UI graph definition
-- `POST /actions/run` for button actions that run ordinary graphs in the same project
+- `POST /actions/run` for Button and Chat actions that run ordinary graphs in the same project
 
 It does not own authentication, routing, domains, tenancy, or deployment. Those stay wrapper-owned.
 
-Markdown components and Markdown-rendered outputs are rendered by the built-in client with the same `marked` Markdown engine and GitHub Markdown CSS baseline used by the Rivet app preview. Raw HTML tokens inside Markdown are escaped for web apps; V1 does not expose arbitrary HTML or JavaScript authoring. The hosted HTML embeds the packaged CSS and browser script, so wrapper servers do not need to mount a separate Markdown asset or provide their own renderer.
+This reference handler uses request/response HTTP actions. For actions that may run for minutes, render the same page with a WebSocket `actionTransport` and mount [`createRivetWebAppWebSocketGateway`](./createRivetWebAppWebSocketGateway) on a wrapper-authenticated upgrade route. HTTP remains supported for simple/local hosts.
+
+Markdown components and Markdown-rendered outputs are rendered by the built-in client with the same `marked` Markdown engine and GitHub Markdown CSS baseline used by the Rivet app preview. Raw HTML tokens inside Markdown are escaped for web apps; V1 does not expose arbitrary HTML or JavaScript authoring. Hosted HTML is self-contained by default. Production hosts can opt into content-addressed external assets for browser/CDN caching and a CSP with no inline scripts or styles.
 
 ## Syntax
 
@@ -24,7 +26,7 @@ type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
 type RivetWebAppActionContext = {
   request: Request;
   uiGraph: UiGraph;
-  component: Extract<UiGraphComponent, { type: 'button' }>;
+  component: UiGraphActionComponent;
   componentId: UiComponentId;
   state: Record<string, unknown>;
   actionInput: Record<string, unknown>;
@@ -37,7 +39,10 @@ type RivetWebAppCreateProcessorOptions =
       context: RivetWebAppActionContext,
     ) => Promise<RivetWebAppProcessorOptions | null | undefined> | RivetWebAppProcessorOptions | null | undefined);
 
+type RivetWebAppAssetMode = 'external' | 'inline';
+
 type RivetWebAppHandlerOptions = {
+  assetMode?: RivetWebAppAssetMode;
   basePath?: string;
   createProcessorOptions?: RivetWebAppCreateProcessorOptions;
   onActionError?: (context: RivetWebAppActionContext & { error: unknown }) => Promise<void> | void;
@@ -49,6 +54,7 @@ type RivetWebAppHandlerOptions = {
   ) => Promise<void> | void;
   onActionStart?: (context: RivetWebAppActionContext) => Promise<void> | void;
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
+  resolveCspNonce?: (request: Request) => Promise<string | undefined> | string | undefined;
   revisionKey?: string;
   uiGraphId?: UiGraphId | string;
 };
@@ -68,7 +74,9 @@ function createRivetWebAppHandler(
 
 If `uiGraphId` is omitted, Rivet serves the first UI graph in `project.uiGraphs`.
 
-`createProcessorOptions` can be a static object or a request-scoped resolver. Rivet always fills in the selected button action graph after resolving those options, so the UI action target cannot be overridden by a wrapper option. If the returned options include `inputs`, those inputs are used. Otherwise Rivet maps the web app state into graph inputs through the button's input bindings. Raw objects become `object` Data Values, homogeneous raw arrays become typed arrays such as `string[]`, `number[]`, `boolean[]`, or `object[]`, and mixed, empty, null-containing, or nested arrays become `any[]`. If the returned options include `context`, that context is used. Otherwise Rivet calls `resolveContext(request)` when provided. If a resolver returns `undefined` or `null`, Rivet treats it like an empty options object and uses the default input/context mapping.
+Handler construction validates the project's complete `uiGraphs` collection through core's discriminated UI-graph normalizer. Missing or duplicate legacy component IDs are repaired deterministically without mutating the supplied project. Malformed component types, required fields, action bindings, and enum values throw `UiGraphNormalizationError` with graph and component-index diagnostics before any request is served. Already-valid graphs retain their object identity, so hosts should continue treating a project revision passed to the handler as immutable. The lower-level `renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` helpers perform the same validation for the selected UI graph passed directly to them.
+
+`createProcessorOptions` can be a static object or a request-scoped resolver. Rivet always fills in the selected component action graph after resolving those options, so the UI action target cannot be overridden by a wrapper option. If the returned options include `inputs`, those inputs are used. Otherwise Rivet maps Button data keys through its input bindings, or maps a Chat submission to its configured current-message, prior-conversation, and optional additional inputs. Chat history is a native Rivet `chat-message[]` Data Value and excludes the newly submitted user turn because that turn is sent separately. Raw mapped values keep the existing object and typed-array conversion rules. If the returned options include `context`, that context is used. Otherwise Rivet calls `resolveContext(request)` when provided. If a resolver returns `undefined` or `null`, Rivet treats it like an empty options object and uses the default input/context mapping.
 
 `resolveContext` lets wrappers derive Rivet context values from the incoming HTTP request, for example authenticated user IDs or request headers.
 
@@ -76,9 +84,15 @@ If `uiGraphId` is omitted, Rivet serves the first UI graph in `project.uiGraphs`
 
 The action lifecycle hooks are for observability only. Use wrapper route middleware for auth, endpoint ownership, and final response policy.
 
-Button actions return both raw graph `outputs` and a `statePatch` for the client renderer. New UI graph actions can define several `inputMappings` and several output bindings in `outputs`. Each input mapping sends one web-app data key to one Graph Input ID. Each output binding saves either the whole output map, when its `outputKey` is empty, or the unwrapped Rivet data value from `outputs[outputKey].value` to its configured web-app data key. Legacy single-output `outputKey` / `outputStateKey` actions still work through the same mapper. If the target graph does not return a configured output key, the action endpoint returns an error response.
+Actions return both raw graph `outputs` and a `statePatch` for the client renderer. Button actions can define several `inputMappings` and output bindings. Chat actions select one user-message input, one prior-history input, and one assistant-response output, and can define additional `inputMappings` for other web-app data keys; Rivet appends the unwrapped response to that Chat component's session-only message state. If the target graph does not return a configured output key, the action endpoint returns an error response.
 
-The embedded client sends only the web-app data keys referenced by the clicked button's input mappings. Unrelated form values and previous output state remain in the browser. `runRivetWebAppAction(...)` applies the same projection for lower-level host integrations, so its action hooks and processor-options resolver receive the action-relevant state only.
+Before dispatch, `runRivetWebAppAction(...)` runs core's non-mutating binding preflight. Invalid Button mappings fail with status `400` and code `invalid_button_bindings`; missing, stale, or overlapping Chat role IDs fail with `invalid_chat_bindings`. Hosts can call `validateProjectUiGraphActionBindings(project)` before publishing to inspect all Button and Chat diagnostics without running or modifying the project.
+
+The embedded client sends only the state referenced by the activated component. Buttons send their input-bound data keys. Chat sends its own message history plus data keys named by its optional additional input mappings; its draft and unrelated component state remain in the browser. `runRivetWebAppAction(...)` applies the same projection for lower-level host integrations, so its action hooks and processor-options resolver receive action-relevant state only.
+
+`assetMode` defaults to `inline`, preserving a single self-contained HTML response. With `assetMode: 'external'`, the reference handler serves content-addressed assets below `<basePath>/_rivet/assets`. Those files use immutable caching, ETags, explicit MIME types, `nosniff`, and Subresource Integrity. The page's bootstrap data is stored in a non-executable data attribute, so external mode contains no inline executable scripts or styles.
+
+`resolveCspNonce(request)` is evaluated for each HTML request. In inline mode, Rivet applies the returned nonce to every inline style and script. In external mode it applies the nonce to external script tags for policies that use `strict-dynamic`. The host must generate a fresh cryptographically random nonce and send the matching `Content-Security-Policy` header; Rivet does not set deployment policy headers.
 
 Action requests are JSON-only. The request body and `state` must be objects; malformed bodies return `400` responses from the Fetch-style handler. The lower-level helper throws `RivetWebAppActionHttpError` for HTTP-shaped action failures such as revision mismatches or malformed action state, so wrappers can preserve `error.status` and optional `error.code` in their own Express responses.
 
@@ -106,6 +120,60 @@ export default {
   },
 };
 ```
+
+## External assets and CSP
+
+The reference handler can serve its own immutable assets:
+
+```typescript
+const webApp = createRivetWebAppHandler(project, {
+  assetMode: 'external',
+  basePath: '/apps/story-helper',
+  uiGraphId: 'story-helper-ui',
+});
+```
+
+This reserves `/apps/story-helper/_rivet/assets/*` inside that handler. A same-origin host can use a policy such as `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:`, adjusted for the rest of the host application and any remote images intentionally allowed in Markdown.
+
+Wrappers that own their HTML and asset routes can use the lower-level manifest:
+
+```typescript
+import {
+  getRivetWebAppAssetManifest,
+  renderRivetWebAppHtml,
+  RIVET_WEB_APP_ASSET_CACHE_CONTROL,
+} from '@valerypopoff/rivet2-node';
+
+const assets = getRivetWebAppAssetManifest();
+
+app.get('/rivet-assets/:fileName', (req, res) => {
+  const asset = Object.values(assets).find((candidate) => candidate.fileName === req.params.fileName);
+  if (!asset) {
+    res.sendStatus(404);
+    return;
+  }
+
+  res
+    .set({
+      'Cache-Control': RIVET_WEB_APP_ASSET_CACHE_CONTROL,
+      'Content-Type': asset.contentType,
+      ETag: asset.etag,
+      'X-Content-Type-Options': 'nosniff',
+    })
+    .send(asset.content);
+});
+
+const html = renderRivetWebAppHtml(uiGraph, {
+  actionPath: '/apps/story-helper/actions/run',
+  assetBasePath: '/rivet-assets',
+  assetMode: 'external',
+  revisionKey,
+});
+```
+
+`renderRivetWebAppHtml(...)` normally receives `actionPath` for HTTP. To opt the generated client into the resumable protocol, pass `actionTransport: { type: 'websocket', socketPath }` instead. Rivet intentionally does not fall back from WebSocket to HTTP because retrying a side-effecting graph through another transport could run it twice.
+
+`assetBasePath` may be an absolute CDN URL. Keep each manifest filename paired with its exact content because the filename and emitted SRI value are derived from that content. Cross-origin CDNs must allow anonymous CORS for SRI requests.
 
 ## Request-scoped processor options
 
@@ -190,4 +258,5 @@ app.post('/apps/:endpointName/actions/run', async (req, res) => {
 
 - [Project](../core/Project.mdx)
 - [createProcessor](./createProcessor.mdx)
+- [createRivetWebAppWebSocketGateway](./createRivetWebAppWebSocketGateway.mdx)
 - [RunGraphOptions](./RunGraphOptions.mdx)

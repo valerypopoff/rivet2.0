@@ -2,6 +2,8 @@ import { produce } from 'immer';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
   createDefaultUiGraph,
+  getGraphBoundary,
+  initializeUiGraphRunGraphActionBindings,
   newId,
   type UiComponentId,
   type Project,
@@ -25,7 +27,12 @@ export function useUiGraphOperations() {
   const openUiGraph = useOpenUiGraph();
 
   const createUiGraph = useStableCallback(() => {
-    const uiGraph = createDefaultUiGraph({ graphId: project.metadata.mainGraphId });
+    const boundary = getGraphBoundary(project, project.metadata.mainGraphId);
+    const uiGraph = createDefaultUiGraph({ graphId: boundary ? project.metadata.mainGraphId : undefined });
+    const button = uiGraph.components.find((component) => component.type === 'button');
+    if (button?.type === 'button' && boundary) {
+      button.action = initializeUiGraphRunGraphActionBindings(button.action, boundary);
+    }
     setProject((currentProject) => addUiGraph(currentProject, uiGraph));
     openUiGraph(uiGraph.id);
   });

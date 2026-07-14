@@ -14,15 +14,19 @@ import { type EditorDefinition, type InternalProcessContext } from '../../index.
 
 import { MCPError, MCPErrorType, type MCP } from '../../integrations/mcp/MCPProvider.js';
 
-import { coerceTypeOptional } from '../../utils/coerceType.js';
-
 import { dedent, getInputOrData } from '../../utils/index.js';
 import { getError } from '../../utils/errors.js';
-import { getMCPBaseInputs, type MCPBaseNodeData } from '../../integrations/mcp/MCPBase.js';
-import { getServerHelperMessage, getServerOptions, loadMCPConfiguration } from '../../integrations/mcp/MCPUtils.js';
+import {
+  getMCPBaseBody,
+  getMCPBaseInputs,
+  getMCPClientEditors,
+  getMCPServerEditors,
+  interpolateMCPArgumentTemplate,
+  requireMCPProvider,
+  resolveMCPServer,
+  type MCPBaseNodeData,
+} from '../../integrations/mcp/MCPBase.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
-import { keys } from '../../utils/typeSafety.js';
-import { interpolate } from '../../utils/interpolation.js';
 
 export type MCPGetPromptNode = ChartNode<'mcpGetPrompt', MCPGetPromptNodeData>;
 
@@ -103,29 +107,7 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
 
   async getEditors(context: RivetUIContext): Promise<EditorDefinition<MCPGetPromptNode>[]> {
     const editors: EditorDefinition<MCPGetPromptNode>[] = [
-      {
-        type: 'string',
-        label: 'Name',
-        dataKey: 'name',
-        useInputToggleDataKey: 'useNameInput',
-        helperMessage: 'The name for the MCP Client',
-      },
-      {
-        type: 'string',
-        label: 'Version',
-        dataKey: 'version',
-        useInputToggleDataKey: 'useVersionInput',
-        helperMessage: 'A version for the MCP Client',
-      },
-      {
-        type: 'dropdown',
-        label: 'Transport Type',
-        dataKey: 'transportType',
-        options: [
-          { label: 'HTTP', value: 'http' },
-          { label: 'STDIO', value: 'stdio' },
-        ],
-      },
+      ...getMCPClientEditors<MCPGetPromptNode>(),
       {
         type: 'string',
         label: 'Prompt Name',
@@ -144,45 +126,13 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
       },
     ];
 
-    if (this.data.transportType === 'http') {
-      editors.push({
-        type: 'string',
-        label: 'Server URL',
-        dataKey: 'serverUrl',
-        useInputToggleDataKey: 'useServerUrlInput',
-        helperMessage: 'The endpoint URL for the MCP server to connect',
-      });
-    } else if (this.data.transportType === 'stdio') {
-      const serverOptions = await getServerOptions(context);
-
-      editors.push({
-        type: 'dropdown',
-        label: 'Server ID',
-        dataKey: 'serverId',
-        helperMessage: getServerHelperMessage(context, serverOptions.length),
-        options: serverOptions,
-      });
-    }
+    editors.push(...(await getMCPServerEditors<MCPGetPromptNode>(context, this.data)));
 
     return editors;
   }
 
   getBody(context: RivetUIContext): string {
-    let base;
-    if (this.data.transportType === 'http') {
-      base = this.data.useServerUrlInput ? '(Using Server URL Input)' : this.data.serverUrl;
-    } else {
-      base = `Server ID: ${this.data.serverId || '(None)'}`;
-    }
-    const namePart = `Name: ${this.data.name}`;
-    const versionPart = `Version: ${this.data.version}`;
-    const parts = [namePart, versionPart, base];
-
-    if (context.executor !== 'nodejs') {
-      parts.push('(Requires Node Executor)');
-    }
-
-    return parts.join('\n');
+    return getMCPBaseBody(this.data, context);
   }
 
   static getUIData(): NodeUIData {
@@ -197,9 +147,6 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
-    const name = getInputOrData(this.data, inputs, 'name', 'string');
-    const version = getInputOrData(this.data, inputs, 'version', 'string');
-
     const promptName = getInputOrData(this.data, inputs, 'promptName', 'string');
 
     let promptArguments;
@@ -211,22 +158,7 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
         throw new MCPError(MCPErrorType.INVALID_SCHEMA, 'Cannot parse tool argument with input toggle on');
       }
     } else {
-      const inputMap = keys(inputs)
-        .filter((key) => key.startsWith('input'))
-        .reduce(
-          (acc, key) => {
-            const stringValue = coerceTypeOptional(inputs[key], 'string') ?? '';
-
-            const interpolationKey = key.slice('input-'.length);
-            acc[interpolationKey] = stringValue;
-            return acc;
-          },
-          {} as Record<string, string>,
-        );
-
-      const interpolated = interpolate(this.data.promptArguments ?? '', inputMap);
-
-      promptArguments = JSON.parse(interpolated);
+      promptArguments = JSON.parse(interpolateMCPArgumentTemplate(this.data.promptArguments ?? '', inputs));
     }
 
     const getPromptRequest: MCP.GetPromptRequest = {
@@ -234,42 +166,20 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
       arguments: promptArguments,
     };
 
-    const transportType = getInputOrData(this.data, inputs, 'transportType', 'string') as 'http' | 'stdio';
-
     let getPromptResponse: MCP.GetPromptResponse | undefined = undefined;
 
     try {
-      if (!context.mcpProvider) {
-        throw new Error('MCP Provider not found');
-      }
+      const mcpProvider = requireMCPProvider(context);
+      const server = await resolveMCPServer(this.data, inputs, context);
 
-      if (transportType === 'http') {
-        const serverUrl = getInputOrData(this.data, inputs, 'serverUrl', 'string');
-        if (!serverUrl || serverUrl === '') {
-          throw new MCPError(MCPErrorType.SERVER_NOT_FOUND, 'No server URL was provided');
-        }
-        if (!serverUrl.includes('/mcp')) {
-          throw new MCPError(
-            MCPErrorType.SERVER_COMMUNICATION_FAILED,
-            'Include /mcp in your server URL. For example: http://localhost:8080/mcp',
-          );
-        }
-
-        getPromptResponse = await context.mcpProvider.getHTTPrompt({ name, version }, serverUrl, getPromptRequest);
-      } else if (transportType === 'stdio') {
-        const serverId = this.data.serverId ?? '';
-
-        const mcpConfig = await loadMCPConfiguration(context);
-        if (!mcpConfig.mcpServers[serverId]) {
-          throw new MCPError(MCPErrorType.SERVER_NOT_FOUND, `Server ${serverId} not found in MCP config`);
-        }
-
-        const serverConfig = {
-          config: mcpConfig.mcpServers[serverId],
-          serverId,
-        };
-
-        getPromptResponse = await context.mcpProvider.getStdioPrompt({ name, version }, serverConfig, getPromptRequest);
+      if (server?.transportType === 'http') {
+        getPromptResponse = await mcpProvider.getHTTPrompt(server.clientConfig, server.serverUrl, getPromptRequest);
+      } else if (server?.transportType === 'stdio') {
+        getPromptResponse = await mcpProvider.getStdioPrompt(
+          server.clientConfig,
+          server.serverConfig,
+          getPromptRequest,
+        );
       }
 
       const output: Outputs = {};

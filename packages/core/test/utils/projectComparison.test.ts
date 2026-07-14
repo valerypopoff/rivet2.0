@@ -393,7 +393,7 @@ test('compareProjects summarizes added, removed, and changed UI graphs', () => {
       [changedUiGraphId]: {
         id: changedUiGraphId,
         name: 'Changed app',
-        components: [{ id: 'text' as UiComponentId, kind: 'text', text: 'Updated' }],
+        components: [{ id: 'text' as UiComponentId, text: 'Updated', type: 'text' }],
       },
       [addedUiGraphId]: {
         id: addedUiGraphId,

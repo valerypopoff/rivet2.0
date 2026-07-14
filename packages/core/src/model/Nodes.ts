@@ -82,6 +82,9 @@ export * from './nodes/ExtractObjectPathNode.js';
 import { raiseEventNode } from './nodes/RaiseEventNode.js';
 export * from './nodes/RaiseEventNode.js';
 
+import { reportProgressNode } from './nodes/ReportProgressNode.js';
+export * from './nodes/ReportProgressNode.js';
+
 import { contextNode } from './nodes/ContextNode.js';
 export * from './nodes/ContextNode.js';
 
@@ -301,6 +304,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(externalCallNode)
     .register(extractObjectPathNode)
     .register(raiseEventNode)
+    .register(reportProgressNode)
     .register(contextNode)
     .register(coalesceNode)
     .register(didRunNode)

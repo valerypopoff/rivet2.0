@@ -20,6 +20,7 @@ const FALLBACK_DEBUGGER_MESSAGES = new Set([
   'nodeError',
   'nodeExcluded',
   'partialOutput',
+  'progress',
   'graphStart',
   'graphFinish',
   'graphError',
@@ -28,10 +29,7 @@ const FALLBACK_DEBUGGER_MESSAGES = new Set([
   'abort',
 ]);
 
-export function stringifyDebuggerMessage(
-  message: unknown,
-  emitter: DebuggerErrorEmitter,
-): string | undefined {
+export function stringifyDebuggerMessage(message: unknown, emitter: DebuggerErrorEmitter): string | undefined {
   try {
     return stringifyDebuggerPayloadForTransport(message);
   } catch (err) {
@@ -111,7 +109,7 @@ function createDebuggerFallbackData(
     execution: data ? readProperty(data, 'execution') : undefined,
   };
 
-  if (messageName.startsWith('node') || messageName === 'partialOutput') {
+  if (messageName.startsWith('node') || messageName === 'partialOutput' || messageName === 'progress') {
     fallbackData.node = data ? readProperty(data, 'node') : undefined;
     fallbackData.processId = data ? readProperty(data, 'processId') : undefined;
   }
@@ -127,7 +125,7 @@ function createDebuggerFallbackData(
   } else if (messageName === 'graphAbort') {
     fallbackData.successful = false;
     fallbackData.error = warning;
-  } else {
+  } else if (messageName !== 'progress') {
     fallbackData.outputs = createWarningOutputs(warning);
   }
 
@@ -138,6 +136,10 @@ function createDebuggerFallbackData(
 
   if (messageName === 'partialOutput') {
     fallbackData.index = data ? readProperty(data, 'index') : undefined;
+  }
+
+  if (messageName === 'progress') {
+    fallbackData.progress = { message: warning };
   }
 
   return fallbackData;

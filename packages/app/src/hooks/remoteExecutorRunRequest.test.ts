@@ -257,18 +257,12 @@ test('shouldDispatchRemoteExecutionEvent keeps late accepted events after root g
     dispatchUnscopedEvent(unscopedRoutingState, 'start', makeStartEvent('project-1', 'root-accepted')),
     true,
   );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-accepted')),
-    true,
-  );
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-accepted')), true);
   assert.equal(
     dispatchUnscopedEvent(unscopedRoutingState, 'start', makeStartEvent('project-2', 'root-ignored')),
     false,
   );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'nodeFinish', makeNodeFinishEvent('root-accepted')),
-    true,
-  );
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'nodeFinish', makeNodeFinishEvent('root-accepted')), true);
 });
 
 test('shouldDispatchRemoteExecutionEvent keeps late accepted events after terminal completion', () => {
@@ -278,19 +272,13 @@ test('shouldDispatchRemoteExecutionEvent keeps late accepted events after termin
     dispatchUnscopedEvent(unscopedRoutingState, 'start', makeStartEvent('project-1', 'root-accepted')),
     true,
   );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-accepted')),
-    true,
-  );
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-accepted')), true);
   assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'done', { results: {} }), true);
   assert.equal(
     dispatchUnscopedEvent(unscopedRoutingState, 'start', makeStartEvent('project-2', 'root-ignored')),
     false,
   );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'nodeFinish', makeNodeFinishEvent('root-accepted')),
-    true,
-  );
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'nodeFinish', makeNodeFinishEvent('root-accepted')), true);
 });
 
 test('getRemoteExecutionEventDispatchDecision explains why an event was routed', () => {
@@ -335,19 +323,13 @@ test('shouldDispatchRemoteExecutionEvent keeps late ignored events ignored after
     dispatchUnscopedEvent(unscopedRoutingState, 'start', makeStartEvent('project-2', 'root-ignored')),
     false,
   );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-ignored')),
-    false,
-  );
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-ignored')), false);
   assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'done', { results: {} }), false);
   assert.equal(
     dispatchUnscopedEvent(unscopedRoutingState, 'start', makeStartEvent('project-1', 'root-accepted')),
     true,
   );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'nodeFinish', makeNodeFinishEvent('root-ignored')),
-    false,
-  );
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'nodeFinish', makeNodeFinishEvent('root-ignored')), false);
 });
 
 test('shouldDispatchRemoteExecutionEvent does not leak duplicate root graph completions to later terminal frames', () => {
@@ -357,24 +339,15 @@ test('shouldDispatchRemoteExecutionEvent does not leak duplicate root graph comp
     dispatchUnscopedEvent(unscopedRoutingState, 'start', makeStartEvent('project-1', 'root-accepted')),
     true,
   );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-accepted')),
-    true,
-  );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-accepted')),
-    true,
-  );
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-accepted')), true);
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-accepted')), true);
   assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'done', { results: {} }), true);
 
   assert.equal(
     dispatchUnscopedEvent(unscopedRoutingState, 'start', makeStartEvent('project-2', 'root-ignored')),
     false,
   );
-  assert.equal(
-    dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-ignored')),
-    false,
-  );
+  assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'graphFinish', makeGraphFinishEvent('root-ignored')), false);
   assert.equal(dispatchUnscopedEvent(unscopedRoutingState, 'done', { results: {} }), false);
 });
 
@@ -608,4 +581,130 @@ test('sendPendingRemoteGraphRunRequest rejects the pending run when send fails',
     }),
     /test graph run could be sent/,
   );
+});
+
+test('sendPendingRemoteGraphRunRequest rejects a pre-aborted run before allocating a request', async () => {
+  const abortController = new AbortController();
+  let requestCreated = false;
+  abortController.abort();
+
+  await assert.rejects(
+    sendPendingRemoteGraphRunRequest({
+      abortSignal: abortController.signal,
+      disconnectErrorMessage: 'disconnected',
+      executorSession: {
+        createPendingGraphExecution: () => {
+          requestCreated = true;
+          throw new Error('should not create a request');
+        },
+        rejectPendingGraphExecution: () => {},
+      },
+      payload: makeRunPayload(),
+      sendRun: () => true,
+    }),
+    (error) => error instanceof DOMException && error.name === 'AbortError',
+  );
+  assert.equal(requestCreated, false);
+});
+
+test('sendPendingRemoteGraphRunRequest settles lifecycle ownership when sending throws', async () => {
+  let rejectPending!: (reason?: unknown) => void;
+  const pending = new Promise<GraphOutputs>((_resolve, reject) => {
+    rejectPending = reject;
+  });
+  const lifecycle: string[] = [];
+
+  await assert.rejects(
+    sendPendingRemoteGraphRunRequest({
+      disconnectErrorMessage: 'disconnected',
+      executorSession: {
+        createPendingGraphExecution: () => ({
+          promise: pending,
+          requestId: 'request-1' as RemoteRunRequestId,
+        }),
+        rejectPendingGraphExecution: (_requestId, reason) => rejectPending(reason),
+      },
+      onRequestCreated: (requestId) => lifecycle.push(`created:${requestId}`),
+      onRequestSettled: (requestId) => lifecycle.push(`settled:${requestId}`),
+      payload: makeRunPayload(),
+      sendRun: () => {
+        throw new Error('transport failed');
+      },
+    }),
+    /transport failed/,
+  );
+  assert.deepEqual(lifecycle, ['created:request-1', 'settled:request-1']);
+});
+
+test('sendPendingRemoteGraphRunRequest keeps ownership until the targeted abort settles remotely', async () => {
+  const abortController = new AbortController();
+  let rejectPending!: (reason?: unknown) => void;
+  const pending = new Promise<GraphOutputs>((_resolve, reject) => {
+    rejectPending = reject;
+  });
+  const lifecycle: string[] = [];
+  const abortedRequestIds: RemoteRunRequestId[] = [];
+  let localRejectCount = 0;
+  const resultPromise = sendPendingRemoteGraphRunRequest({
+    abortSignal: abortController.signal,
+    disconnectErrorMessage: 'disconnected',
+    executorSession: {
+      createPendingGraphExecution: () => ({
+        promise: pending,
+        requestId: 'request-1' as RemoteRunRequestId,
+      }),
+      rejectPendingGraphExecution: (_requestId, reason) => {
+        localRejectCount += 1;
+        rejectPending(reason);
+      },
+    },
+    onRequestCreated: (requestId) => lifecycle.push(`created:${requestId}`),
+    onRequestSettled: (requestId) => lifecycle.push(`settled:${requestId}`),
+    payload: makeRunPayload(),
+    sendAbort: (requestId) => {
+      abortedRequestIds.push(requestId);
+      return true;
+    },
+    sendRun: () => true,
+  });
+
+  abortController.abort();
+  await Promise.resolve();
+
+  assert.deepEqual(abortedRequestIds, ['request-1']);
+  assert.equal(localRejectCount, 0);
+  assert.deepEqual(lifecycle, ['created:request-1']);
+
+  const rejection = assert.rejects(resultPromise, /graph execution aborted/);
+  rejectPending(new Error('graph execution aborted'));
+  await rejection;
+  assert.deepEqual(lifecycle, ['created:request-1', 'settled:request-1']);
+});
+
+test('sendPendingRemoteGraphRunRequest rejects locally when a targeted abort cannot be sent', async () => {
+  const abortController = new AbortController();
+  let rejectPending!: (reason?: unknown) => void;
+  const pending = new Promise<GraphOutputs>((_resolve, reject) => {
+    rejectPending = reject;
+  });
+  const resultPromise = sendPendingRemoteGraphRunRequest({
+    abortSignal: abortController.signal,
+    disconnectErrorMessage: 'disconnected',
+    executorSession: {
+      createPendingGraphExecution: () => ({
+        promise: pending,
+        requestId: 'request-1' as RemoteRunRequestId,
+      }),
+      rejectPendingGraphExecution: (_requestId, reason) => rejectPending(reason),
+    },
+    payload: makeRunPayload(),
+    sendAbort: () => {
+      throw new Error('transport failed');
+    },
+    sendRun: () => true,
+  });
+
+  abortController.abort();
+
+  await assert.rejects(resultPromise, (error) => error instanceof DOMException && error.name === 'AbortError');
 });
