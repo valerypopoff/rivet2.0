@@ -473,27 +473,79 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 
 .rivet-web-app-output {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 48px;
+  max-height: min(80vh, 800px);
+  overflow: hidden;
+  padding: 0;
+}
+
+.rivet-web-app-output-has-value:not(.rivet-web-app-output-collapsed) {
+  resize: vertical;
+}
+
+.rivet-web-app-output-collapsed {
+  height: auto !important;
+  resize: none;
+}
+
+.rivet-web-app-output-header {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  max-height: clamp(160px, calc(100vh - 96px), 420px);
-  overflow-y: auto;
-  position: relative;
+  min-height: 48px;
+  border-radius: 9px;
+  padding: 8px 18px;
+}
+
+button.rivet-web-app-output-header {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+button.rivet-web-app-output-header:hover,
+button.rivet-web-app-output-header:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--rivet-web-app-foreground) 7%, transparent);
+}
+
+.rivet-web-app-output:not(.rivet-web-app-output-collapsed) .rivet-web-app-output-header {
+  border-bottom: 1px solid var(--rivet-web-app-card-border);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .rivet-web-app-output-title {
   color: var(--rivet-web-app-output-title);
+  flex: 1 1 auto;
   font-weight: 700;
-  padding-right: 32px;
+  min-width: 0;
 }
 
-.rivet-web-app-output-has-download .rivet-web-app-output-title {
-  padding-right: 64px;
+.rivet-web-app-output-toggle-icon {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: color-mix(in srgb, var(--rivet-web-app-foreground) 68%, transparent);
+  transform: rotate(-135deg);
+  transition: transform 120ms ease;
+}
+
+.rivet-web-app-output-toggle-icon.collapsed {
+  transform: rotate(45deg);
 }
 
 .rivet-web-app-output-action-button {
-  position: absolute;
-  top: 11px;
-  width: 24px;
-  height: 24px;
+  position: relative;
+  width: 28px;
+  height: 28px;
   border: 0;
   border-radius: 5px;
   background: transparent;
@@ -502,12 +554,29 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   padding: 0;
 }
 
-.rivet-web-app-output-copy-button {
-  right: 11px;
+.rivet-web-app-output-content {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 0 16px 16px;
 }
 
-.rivet-web-app-output-download-button {
-  right: 39px;
+.rivet-web-app-output-content-actions {
+  position: absolute;
+  top: 10px;
+  right: calc(10px + 1em);
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+}
+
+.rivet-web-app-output-content-body {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+  scrollbar-gutter: stable;
 }
 
 .rivet-web-app-output-copy-button::before,
@@ -565,7 +634,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   background: color-mix(in srgb, var(--rivet-web-app-foreground) 8%, transparent);
 }
 
-.rivet-web-app-output pre {
+.rivet-web-app-output-content-body pre {
   margin: 0;
   background: transparent;
   border-radius: 0;

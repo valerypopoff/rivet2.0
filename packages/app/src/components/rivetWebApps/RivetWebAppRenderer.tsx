@@ -123,10 +123,12 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
                 actionError={interaction.actionErrors[component.id]}
                 actionProgress={interaction.actionProgress[component.id]}
                 isRunning={interaction.runningComponentIds.has(component.id)}
+                isOutputCollapsed={interaction.collapsedOutputComponentIds.has(component.id)}
                 uiGraphName={normalizedUiGraph.name}
                 state={interaction.state}
                 onRunAction={runAction}
                 onCancelAction={interactionController.cancelAction}
+                onToggleOutputCollapsed={interactionController.toggleOutputCollapsed}
                 onStateChange={interactionController.updateState}
                 onStatePatch={interactionController.updateStatePatch}
               />
@@ -166,10 +168,12 @@ const RivetWebAppComponent: FC<{
   actionProgress?: GraphProgress;
   component: UiGraphComponent;
   isRunning: boolean;
+  isOutputCollapsed: boolean;
   uiGraphName: string;
   state: Readonly<Record<string, unknown>>;
   onRunAction(component: UiGraphActionComponent): Promise<void> | void;
   onCancelAction(componentId: UiComponentId): void;
+  onToggleOutputCollapsed(componentId: UiComponentId): void;
   onStateChange(key: string, value: unknown): void;
   onStatePatch(patch: Record<string, unknown>): void;
 }> = ({
@@ -177,8 +181,10 @@ const RivetWebAppComponent: FC<{
   actionProgress,
   component,
   isRunning,
+  isOutputCollapsed,
   onCancelAction,
   onRunAction,
+  onToggleOutputCollapsed,
   onStateChange,
   onStatePatch,
   state,
@@ -267,58 +273,84 @@ const RivetWebAppComponent: FC<{
     case 'output': {
       const { output } = renderModel;
       const jsonDownloadValue = output.jsonDownloadValue;
+      const isCollapsed = output.hasValue && isOutputCollapsed;
 
       return (
         <section
-          className={`rivet-web-app-card rivet-web-app-output${
-            output.jsonDownloadValue != null ? ' rivet-web-app-output-has-download' : ''
+          className={`rivet-web-app-card rivet-web-app-output${output.hasValue ? ' rivet-web-app-output-has-value' : ''}${
+            isCollapsed ? ' rivet-web-app-output-collapsed' : ''
           }`}
         >
-          <div className="rivet-web-app-output-title">{renderModel.label}</div>
-          {output.hasValue && (
+          {output.hasValue ? (
             <button
               type="button"
-              className="rivet-web-app-output-action-button rivet-web-app-output-copy-button"
-              title="Copy output"
-              aria-label="Copy output"
-              onClick={(event) => {
-                event.stopPropagation();
-                void copyUiGraphText(output.renderedValue);
-              }}
-            />
-          )}
-          {jsonDownloadValue != null && (
-            <button
-              type="button"
-              className="rivet-web-app-output-action-button rivet-web-app-output-download-button"
-              title="Download JSON"
-              aria-label="Download JSON"
-              onClick={(event) => {
-                event.stopPropagation();
-                downloadUiGraphJsonOutput(jsonDownloadValue, uiGraphName);
-              }}
-            />
-          )}
-          {output.renderAs === 'image' ? (
-            output.imageSource ? (
-              <img
-                alt={renderModel.label}
-                className="rivet-web-app-output-image"
-                decoding="async"
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                src={output.imageSource}
+              aria-expanded={!isCollapsed}
+              aria-label={isCollapsed ? `Expand ${renderModel.label}` : `Collapse ${renderModel.label}`}
+              className="rivet-web-app-output-header rivet-web-app-output-toggle"
+              title={isCollapsed ? 'Expand output' : 'Collapse output'}
+              onClick={() => onToggleOutputCollapsed(renderModel.component.id)}
+            >
+              <span className="rivet-web-app-output-title">{renderModel.label}</span>
+              <span
+                aria-hidden="true"
+                className={`rivet-web-app-output-toggle-icon${isCollapsed ? ' collapsed' : ''}`}
               />
-            ) : (
-              <div className="rivet-web-app-output-image-placeholder">{output.imageErrorMessage}</div>
-            )
-          ) : output.renderAs === 'markdown' ? (
-            <div
-              className="rivet-web-app-output-markdown markdown-body rivet-markdown-output"
-              dangerouslySetInnerHTML={markdownHtml}
-            />
+            </button>
           ) : (
-            <pre>{output.renderedValue}</pre>
+            <div className="rivet-web-app-output-header">
+              <div className="rivet-web-app-output-title">{renderModel.label}</div>
+            </div>
+          )}
+          {output.hasValue && !isCollapsed && (
+            <div className="rivet-web-app-output-content">
+              <div className="rivet-web-app-output-content-actions">
+                <button
+                  type="button"
+                  className="rivet-web-app-output-action-button rivet-web-app-output-copy-button"
+                  title="Copy output"
+                  aria-label="Copy output"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void copyUiGraphText(output.renderedValue);
+                  }}
+                />
+                {jsonDownloadValue != null && (
+                  <button
+                    type="button"
+                    className="rivet-web-app-output-action-button rivet-web-app-output-download-button"
+                    title="Download JSON"
+                    aria-label="Download JSON"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      downloadUiGraphJsonOutput(jsonDownloadValue, uiGraphName);
+                    }}
+                  />
+                )}
+              </div>
+              <div className="rivet-web-app-output-content-body">
+                {output.renderAs === 'image' ? (
+                  output.imageSource ? (
+                    <img
+                      alt={renderModel.label}
+                      className="rivet-web-app-output-image"
+                      decoding="async"
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      src={output.imageSource}
+                    />
+                  ) : (
+                    <div className="rivet-web-app-output-image-placeholder">{output.imageErrorMessage}</div>
+                  )
+                ) : output.renderAs === 'markdown' ? (
+                  <div
+                    className="rivet-web-app-output-markdown markdown-body rivet-markdown-output"
+                    dangerouslySetInnerHTML={markdownHtml}
+                  />
+                ) : (
+                  <pre>{output.renderedValue}</pre>
+                )}
+              </div>
+            </div>
           )}
         </section>
       );

@@ -412,6 +412,28 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(controller.getSnapshot().state.result, undefined);
   });
 
+  it('keeps output collapse state transient and scopes it to current output components', () => {
+    const output = { id: 'result' as UiComponentId, label: 'Result', stateKey: 'result', type: 'output' as const };
+    const controller = createUiGraphInteractionController(makeUiGraph([output]));
+
+    controller.toggleOutputCollapsed(output.id);
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(output.id), true);
+
+    controller.setUiGraph(makeUiGraph([output]));
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(output.id), true);
+
+    controller.setUiGraph(makeUiGraph([]));
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.size, 0);
+
+    controller.toggleOutputCollapsed(output.id);
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.size, 0);
+
+    controller.setUiGraph(makeUiGraph([output]));
+    controller.toggleOutputCollapsed(output.id);
+    controller.reset();
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.size, 0);
+  });
+
   it('detaches in-flight hosted actions without aborting their remote run', async () => {
     const button = makeButton('run-button', { type: 'runGraph' });
     const controller = createUiGraphInteractionController(makeUiGraph([button]));

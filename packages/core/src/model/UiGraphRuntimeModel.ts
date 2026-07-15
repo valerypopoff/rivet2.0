@@ -86,11 +86,12 @@ export type UiGraphActionExecutionController = {
   reset(): void;
 };
 
-export type UiGraphInteractionChange = 'action' | 'graph' | 'state';
+export type UiGraphInteractionChange = 'action' | 'graph' | 'presentation' | 'state';
 
 export type UiGraphInteractionSnapshot = Readonly<{
   actionErrors: Readonly<Record<string, string>>;
   actionProgress: Readonly<Record<string, GraphProgress>>;
+  collapsedOutputComponentIds: ReadonlySet<UiComponentId>;
   runningComponentIds: ReadonlySet<UiComponentId>;
   state: Readonly<Record<string, unknown>>;
 }>;
@@ -118,6 +119,7 @@ export type UiGraphInteractionController = {
   runAction(component: UiGraphActionComponent, runner: UiGraphActionRunner): Promise<void>;
   setUiGraph(uiGraph: UiGraph): void;
   subscribe(listener: (change: UiGraphInteractionChange) => void): () => void;
+  toggleOutputCollapsed(componentId: UiComponentId): void;
   updateState(stateKey: string, value: unknown): void;
   updateStatePatch(statePatch: Record<string, unknown>): void;
 };
@@ -202,11 +204,13 @@ export function createUiGraphInteractionController(
   options: UiGraphInteractionControllerOptions = {},
 ): UiGraphInteractionController {
   let uiGraphId = initialUiGraph.id;
+  let outputComponentIds = getUiGraphOutputComponentIds(initialUiGraph);
   const initialStateOverride = options.initialState ? { ...options.initialState } : undefined;
   let initialState = initialStateOverride ?? getUiGraphInitialState(initialUiGraph);
   let state = { ...initialState };
   let actionErrors: Record<string, string> = {};
   let actionProgress: Record<string, GraphProgress> = {};
+  const collapsedOutputComponentIds = new Set<UiComponentId>();
   let snapshot: UiGraphInteractionSnapshot;
   const actionController = createUiGraphActionExecutionController();
   const activeActions = new Map<number, ActiveUiGraphAction>();
@@ -216,6 +220,7 @@ export function createUiGraphInteractionController(
     snapshot = {
       actionErrors,
       actionProgress,
+      collapsedOutputComponentIds: new Set(collapsedOutputComponentIds),
       runningComponentIds: new Set([...activeActions.values()].map(({ execution }) => execution.componentId)),
       state,
     };
@@ -293,6 +298,7 @@ export function createUiGraphInteractionController(
       state = { ...initialState };
       actionErrors = {};
       actionProgress = {};
+      collapsedOutputComponentIds.clear();
       publish('state');
     },
     async runAction(component, runner) {
@@ -355,6 +361,8 @@ export function createUiGraphInteractionController(
         state = { ...initialState };
         actionErrors = {};
         actionProgress = {};
+        outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
+        collapsedOutputComponentIds.clear();
         publish('graph');
         return;
       }
@@ -363,12 +371,22 @@ export function createUiGraphInteractionController(
         initialState = getUiGraphInitialState(nextUiGraph);
       }
 
+      outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
+      const collapsedOutputIdsBeforeCleanup = collapsedOutputComponentIds.size;
+      for (const componentId of collapsedOutputComponentIds) {
+        if (!outputComponentIds.has(componentId)) {
+          collapsedOutputComponentIds.delete(componentId);
+        }
+      }
+
       const actionComponentIds = new Set(
         nextUiGraph.components
           .filter((component) => component.type === 'button' || component.type === 'chat')
           .map((component) => component.id),
       );
-      let changed = abortMatchingActions(({ execution }) => !actionComponentIds.has(execution.componentId), false);
+      let changed =
+        collapsedOutputComponentIds.size !== collapsedOutputIdsBeforeCleanup ||
+        abortMatchingActions(({ execution }) => !actionComponentIds.has(execution.componentId), false);
       const remainingErrors = Object.fromEntries(
         Object.entries(actionErrors).filter(([componentId]) => actionComponentIds.has(componentId as UiComponentId)),
       );
@@ -391,6 +409,18 @@ export function createUiGraphInteractionController(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    toggleOutputCollapsed(componentId) {
+      if (!outputComponentIds.has(componentId)) {
+        return;
+      }
+
+      if (collapsedOutputComponentIds.has(componentId)) {
+        collapsedOutputComponentIds.delete(componentId);
+      } else {
+        collapsedOutputComponentIds.add(componentId);
+      }
+      publish('presentation');
+    },
     updateState(stateKey, value) {
       actionController.noteStateWrite(stateKey);
       state = { ...state, [stateKey]: value };
@@ -404,6 +434,12 @@ export function createUiGraphInteractionController(
       publish('state');
     },
   };
+}
+
+function getUiGraphOutputComponentIds(uiGraph: UiGraph): Set<UiComponentId> {
+  return new Set(
+    uiGraph.components.filter((component) => component.type === 'output').map((component) => component.id),
+  );
 }
 
 export function getUiGraphComponentRenderModel(
