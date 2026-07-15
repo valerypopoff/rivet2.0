@@ -27,7 +27,7 @@ What happens when an If node is encountered, and the output of the If node shoul
 
 Then, every dependent node of the node that returned `control-flow-excluded` will also return `control-flow-excluded`, and so on. In this respect, control flow exclusion "spreads" to every dependent node after the value has been returned.
 
-Many nodes can return a `control-flow-excluded` value, such as a [Match Node](../node-reference/match.mdx) (for branches that do not match), and an [Extract Object Path Node](../node-reference/extract-object-path.mdx) (for when the input path is invalid for a given object).
+Many nodes can return a `control-flow-excluded` value, such as a [Regex Match Node](../node-reference/regex-match.mdx) (for branches that do not match), and an [Extract Object Path Node](../node-reference/extract-object-path.mdx) (for when the input path is invalid for a given object).
 
 Nodes with required input ports also return `control-flow-excluded` when a required port is not connected. For example, a Destructure node without an Object input, or an Extract Object Path node without an Object input, will show as `Not ran` instead of silently disappearing from the run results.
 

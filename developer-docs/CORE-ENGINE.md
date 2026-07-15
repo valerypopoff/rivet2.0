@@ -188,6 +188,13 @@ Projects currently include:
 - optional project references
 - optional metadata path
 
+Node display names are presentation metadata and are separate from serialized
+node types. The built-in `MatchNode` keeps the internal type `match` and its
+existing `MatchNode`/`matchNode` symbols, while its current UI display name is
+`Regex Match`. Existing node titles remain project data and are not rewritten
+when a display name changes, so old projects continue to load and run without
+an implicit migration.
+
 Graphs include:
 
 - graph metadata

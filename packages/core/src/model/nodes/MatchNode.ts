@@ -28,7 +28,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
   static create(): MatchNode {
     const chartNode: MatchNode = {
       type: 'match',
-      title: 'Match',
+      title: 'Regex Match',
       id: nanoid() as NodeId,
       visualData: {
         x: 0,
@@ -134,8 +134,8 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
       infoBoxBody: dedent`
         Any number of regular expressions can be configured, each corresponding to an output of the node. The output port of the first matching regex will be ran, and all other output ports will not be ran.
       `,
-      infoBoxTitle: 'Match Node',
-      contextMenuTitle: 'Match',
+      infoBoxTitle: 'Regex Match Node',
+      contextMenuTitle: 'Regex Match',
       group: ['Logic'],
     };
   }
@@ -191,4 +191,4 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
   }
 }
 
-export const matchNode = nodeDefinition(MatchNodeImpl, 'Match');
+export const matchNode = nodeDefinition(MatchNodeImpl, 'Regex Match');

@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 
 The Coalesce Node returns the first usable value from a list of inputs. By default, "usable" means the first input that is not `Not Ran`.
 
-Values that show as `Not Ran` in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a [Match Node](./match.mdx).
+Values that show as `Not Ran` in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a [Regex Match Node](./regex-match.mdx).
 
 `null` and `undefined` are treated as real output values by default. Enable `Ignore 'null'` or `Ignore 'undefined'` when those values should also be skipped so Coalesce continues checking later inputs.
 
@@ -75,15 +75,15 @@ If the If node runs and outputs an explicit `null` or `undefined`, Coalesce will
 
 ![Coalesce Node Example 1 Screenshot](./assets/coalesce-node-example-01.png)
 
-## Example 2: Getting a single value from a Match node
+## Example 2: Getting a single value from a Regex Match node
 
-1. Create a [Match Node](./match.mdx) with a few different cases, say `1`, `2`, and `3`.
+1. Create a [Regex Match Node](./regex-match.mdx) with a few different cases, say `1`, `2`, and `3`.
 2. For each of the cases, use an [If Node](./if.mdx) to transform each of the cases into a unique value, say `A`, `B`, and `C`. You can use a [Text Node](./text.mdx) connected to the `value` port of the If Nodes to set the value passed through for each of the cases.
 3. Connect the outputs of each of the If nodes to one of the inputs on a Coalesce node.
-4. Connect an input to the Match node so that only one of the cases will run.
+4. Connect an input to the Regex Match node so that only one of the cases will run.
 5. Run the graph. Note that the output of the Coalesce node will be the value of the If node that ran.
 
-The above is a common pattern for working with a Match node - you can get a unique value for each case using an If node, which is not dependent on the value passed into the Match node itself.
+The above is a common pattern for working with a Regex Match node - you can get a unique value for each case using an If node, which is not dependent on the value passed into the Regex Match node itself.
 
 ![Coalesce Node Example 2 Screenshot](./assets/coalesce-node-example-02.png)
 
@@ -103,6 +103,6 @@ A: Not by default. Coalesce outputs `null` and `undefined` as real values unless
 
 ## See Also
 
-- [Match Node](./match.mdx)
+- [Regex Match Node](./regex-match.mdx)
 - [If Node](./if.mdx)
 - [If/Else Node](./if-else.mdx)

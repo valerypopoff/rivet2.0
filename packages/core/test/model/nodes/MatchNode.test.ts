@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { MatchNodeImpl, type MatchNode, type PortId } from '../../../src/index.js';
+import { MatchNodeImpl, matchNode, type MatchNode, type PortId } from '../../../src/index.js';
 
 const createNode = (data: Partial<MatchNode['data']>) => {
   return new MatchNodeImpl({
@@ -14,6 +14,17 @@ const createNode = (data: Partial<MatchNode['data']>) => {
 };
 
 describe('MatchNode', () => {
+  it('uses Regex Match for UI labels while preserving the match node type', () => {
+    const node = MatchNodeImpl.create();
+    const uiData = MatchNodeImpl.getUIData();
+
+    assert.equal(node.type, 'match');
+    assert.equal(node.title, 'Regex Match');
+    assert.equal(matchNode.displayName, 'Regex Match');
+    assert.equal(uiData.contextMenuTitle, 'Regex Match');
+    assert.equal(uiData.infoBoxTitle, 'Regex Match Node');
+  });
+
   it('uses legacy output ids when stored case port ids are absent', async () => {
     const node = createNode({
       cases: ['YES', 'NO'],

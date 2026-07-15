@@ -70,6 +70,10 @@ test('built-in node documentation URLs point at checked-in Node Reference pages'
   assert.deepEqual(missingSlugs, []);
 });
 
+test('Match uses the Regex Match public documentation route', () => {
+  assert.equal(getBuiltInNodeDocumentationUrl('match'), `${NODE_REFERENCE_BASE_URL}/regex-match`);
+});
+
 test('built-in node documentation pages are linked from the Node Reference index and sidebar', () => {
   const sidebar = readFileSync(docsSidebarPath, 'utf8');
   const allNodesIndex = readFileSync(docsNodeReferenceIndexPath, 'utf8');

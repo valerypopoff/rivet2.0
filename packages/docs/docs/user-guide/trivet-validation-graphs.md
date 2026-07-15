@@ -4,7 +4,7 @@ sidebar_label: Validation Graphs
 
 # Trivet - Validator Graphs
 
-Instead of using baked-in validations, Trivet uses Rivet graphs to perform validation on your test graph. This allows you the ultimate flexibility in how you want to validate your graph. It is common to make LLM calls to validate your graph - a great pattern is asking an LLM to respond with `YES` or `NO` after asking it a question, and then using a [Match](../node-reference/match) node to find either the YES or NO.
+Instead of using baked-in validations, Trivet uses Rivet graphs to perform validation on your test graph. This allows you the ultimate flexibility in how you want to validate your graph. It is common to make LLM calls to validate your graph - a great pattern is asking an LLM to respond with `YES` or `NO` after asking it a question, and then using a [Regex Match](../node-reference/regex-match) node to find either the YES or NO.
 
 Select the validator graph using the dropdown at the top:
 

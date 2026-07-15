@@ -1,21 +1,21 @@
 ---
-id: match
-title: Match Node
-sidebar_label: Match
+id: regex-match
+title: Regex Match Node
+sidebar_label: Regex Match
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-![Match Node Screenshot](./assets/match-node.png)
+![Regex Match Node Screenshot](./assets/match-node.png)
 
 ## Overview
 
-The Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node.
+The Regex Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node.
 
 The node can be configured to either run the _first_ matching output port, or to run _all_ matching output ports. If no match is found, the `Unmatched` output port will be executed.
 
-This node is useful for routing control flow based on the content of a string. For example, you can use the Match Node to check if a user's message contains certain keywords and route the conversation accordingly.
+This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly.
 
 If the `Value` input is provided, it will be passed through the corresponding output port if a match is found. If the `Value` input is not provided, the `Test` input will be passed through the corresponding output port if a match is found.
 
@@ -67,17 +67,17 @@ If the `Value` input is provided, it will be passed through the corresponding ou
 
 1. Create an [LLM Chat Node](./llm-chat.mdx) and set the `Prompt` to a question, such as:
    > Would you like to hear about information about cats or dogs first? Please only pick one! I will give you information on both, I just want to know what you'd like to hear first.
-2. Create a Match Node and connect the `Response` output of the LLM Chat Node to the `Test` input of the Match Node.
-3. In the body of the Match Node, set the regular expressions to `cats` and `dogs`.
-4. Add three pairs of [If Nodes](./if.mdx) and [Text Nodes](./text.mdx). Connect the `Case 1` output of the Match Node to the first If Node's `If` input, the `Case 2` output of the Match Node to the second If Node's `If` input, and the `Unmatched` output of the Match Node to the third If Node's `If` input. Connect the text nodes to the If Nodes' `Value` inputs.
+2. Create a Regex Match Node and connect the `Response` output of the LLM Chat Node to the `Test` input of the Regex Match Node.
+3. In the body of the Regex Match Node, set the regular expressions to `cats` and `dogs`.
+4. Add three pairs of [If Nodes](./if.mdx) and [Text Nodes](./text.mdx). Connect the `Case 1` output of the Regex Match Node to the first If Node's `If` input, the `Case 2` output of the Regex Match Node to the second If Node's `If` input, and the `Unmatched` output of the Regex Match Node to the third If Node's `If` input. Connect the text nodes to the If Nodes' `Value` inputs.
 5. The text of the three Text Nodes should be "You chose cats!", "You chose dogs!", and "Sorry, I didn't understand that. Please try again.", respectively.
 6. Run the graph. Depending on the AI's response, the corresponding If Node will be executed, with the text the AI selected
 
-![Match Node Example 1](./assets/match-node-example-01.png)
+![Regex Match Node Example 1](./assets/match-node-example-01.png)
 
 ## Error Handling
 
-If the `Test` input is missing, `null`, or `undefined`, the Match Node treats it as an unmatched value. It does not run any case outputs and executes the `Unmatched` output port. If no regular expression matches the test value, the `Unmatched` output port is also executed.
+If the `Test` input is missing, `null`, or `undefined`, the Regex Match Node treats it as an unmatched value. It does not run any case outputs and executes the `Unmatched` output port. If no regular expression matches the test value, the `Unmatched` output port is also executed.
 
 ## FAQ
 
@@ -85,13 +85,13 @@ If the `Test` input is missing, `null`, or `undefined`, the Match Node treats it
 
 A: Yes, multiple cases can match at once. If multiple cases match, all of the corresponding output ports will be executed. This may become a toggleable option in the future, so that only the first matching case will be executed.
 
-**Q: Can I use the Match Node to match against numbers?**
+**Q: Can I use the Regex Match Node to match against numbers?**
 
-A: Yes, you can use the Match Node to match against numbers. However, the `Test` input will be coerced into a string for the matching.
+A: Yes, you can use the Regex Match Node to match against numbers. However, the `Test` input will be coerced into a string for the matching.
 
-**Q: Can I use the Match Node to match against a list of strings?**
+**Q: Can I use the Regex Match Node to match against a list of strings?**
 
-A: Yes, you can use the Match Node to match against a list of strings. However, the `Test` input will be coerced into a string for the matching. The default coercion will put each string on its own line for testing against.
+A: Yes, you can use the Regex Match Node to match against a list of strings. However, the `Test` input will be coerced into a string for the matching. The default coercion will put each string on its own line for testing against.
 
 ## See Also
 
