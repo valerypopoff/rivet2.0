@@ -17,6 +17,7 @@ import {
   PROVIDER_ATTRIBUTE,
   type SearchMatchRange,
 } from '../nodeOutput/fullscreenOutputSearch.js';
+import { scheduleFullscreenOutputSearchTargetReveal } from '../nodeOutput/fullscreenOutputSearchViewport.js';
 import { getLargeStoredValueChunkIndexForOffset, type LargeStoredValueChunk } from './largeStoredValueChunks.js';
 
 type ActiveSearchMatch = {
@@ -187,12 +188,13 @@ export function useLargeStoredValueFullscreenSearch(args: {
       includeMatchIndexAttribute: false,
     });
 
-    activeHighlightElement?.scrollIntoView({
-      block: 'nearest',
-      inline: 'nearest',
-    });
+    if (!activeHighlightElement) {
+      return;
+    }
 
+    const cancelReveal = scheduleFullscreenOutputSearchTargetReveal(() => activeHighlightElement);
     return () => {
+      cancelReveal();
       clearHighlights(contentElement);
     };
   }, [activeChunkText, activeVisibleMatchRange, contentRef, highlightMode]);

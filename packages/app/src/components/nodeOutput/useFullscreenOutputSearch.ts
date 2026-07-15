@@ -11,6 +11,7 @@ import {
   type SearchProvider,
   wrapMatchIndex,
 } from './fullscreenOutputSearch.js';
+import { scheduleFullscreenOutputSearchTargetReveal } from './fullscreenOutputSearchViewport.js';
 import type { NodeRunDataWithRefs } from '../../state/dataFlow.js';
 import type { ProcessId } from '@valerypopoff/rivet2-core';
 
@@ -215,10 +216,7 @@ export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSe
       element.classList.add(MATCH_ACTIVE_CLASS);
     });
 
-    activeHighlightElements[0]?.scrollIntoView({
-      block: 'nearest',
-      inline: 'nearest',
-    });
+    return scheduleFullscreenOutputSearchTargetReveal(() => activeHighlightElements[0] ?? null);
   }, [contentKey, currentMatchIndex, providersVersion, query]);
 
   useEffect(() => {

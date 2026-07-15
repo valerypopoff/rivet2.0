@@ -14,6 +14,7 @@ import {
   PROVIDER_ATTRIBUTE,
   type SearchMatchRange,
 } from '../nodeOutput/fullscreenOutputSearch.js';
+import { scheduleFullscreenOutputSearchTargetReveal } from '../nodeOutput/fullscreenOutputSearchViewport.js';
 import { JsonStringPreviewAffordance } from './JsonStringPreviewAffordance.js';
 
 const OUTPUT_CODE_LINE_HEIGHT = 20;
@@ -103,6 +104,7 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
   const decorationIdsRef = useRef<string[]>([]);
   const matchRangesRef = useRef<SearchMatchRange[]>([]);
   const activeMatchIndexRef = useRef<number | null>(null);
+  const revealCancelRef = useRef<(() => void) | null>(null);
   const [mountedEditor, setMountedEditor] = useState<monaco.editor.IStandaloneCodeEditor>();
   const rawProviderId = useId();
   const providerId = `folding-code-output-${rawProviderId}`;
@@ -158,13 +160,12 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
     const end = model.getPositionAt(matchRange.endOffset);
     const range = new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column);
 
-    editor.revealRangeInCenterIfOutsideViewport(range);
-    requestAnimationFrame(() => {
-      rootRef.current?.querySelector<HTMLElement>(`.${MATCH_ACTIVE_CLASS}`)?.scrollIntoView({
-        block: 'center',
-        inline: 'nearest',
-      });
-    });
+    editor.layout();
+    editor.revealRangeInCenterIfOutsideViewport(range, monaco.editor.ScrollType.Immediate);
+    revealCancelRef.current?.();
+    revealCancelRef.current = scheduleFullscreenOutputSearchTargetReveal(
+      () => rootRef.current?.querySelector<HTMLElement>(`.${MATCH_ACTIVE_CLASS}`) ?? null,
+    );
   }, []);
 
   const updateSearchDecorations = useCallback((activeMatchIndex: number | null) => {
@@ -215,6 +216,8 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
   const clearMatches = useCallback(() => {
     activeMatchIndexRef.current = null;
     matchRangesRef.current = [];
+    revealCancelRef.current?.();
+    revealCancelRef.current = null;
     clearSearchDecorations();
   }, [clearSearchDecorations]);
 
@@ -291,6 +294,14 @@ export const FoldingCodeBlock: FC<FoldingCodeBlockProps> = ({
       activateExternalMatchRange(activeMatchRange);
     }
   }, [activateExternalMatchRange, activeMatchRange, clearMatches, searchProvider, text]);
+
+  useLayoutEffect(
+    () => () => {
+      revealCancelRef.current?.();
+      revealCancelRef.current = null;
+    },
+    [],
+  );
 
   return (
     <div
