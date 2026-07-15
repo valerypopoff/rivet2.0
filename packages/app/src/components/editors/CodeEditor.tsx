@@ -26,8 +26,8 @@ import { resolveMonacoDisplayTheme } from '../codeEditorTheme.js';
 import { ResizeHandle } from '../ResizeHandle.js';
 import { resizeCursorStyles } from '../../utils/resizeCursors.js';
 import {
-  isValidHeight,
   RESIZABLE_LANGUAGES,
+  resolveStaticViewportHeight,
   useNodeEditorCodeViewportHeight,
 } from './useNodeEditorCodeViewportHeight.js';
 import { getTextEditorStats } from './textEditorStats.js';
@@ -681,7 +681,7 @@ const NonResizableCodeEditorViewport: FC<
 > = ({ defaultHeight, ...editorProps }) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const jsonPreviewEnabled = shouldEnableJsonStringPreview(editorProps.language);
-  const staticViewportStyle = isValidHeight(defaultHeight) ? { minHeight: Math.round(defaultHeight) } : undefined;
+  const staticViewportStyle = { height: resolveStaticViewportHeight(defaultHeight) };
 
   return (
     <div ref={rootRef} className="editor-viewport-shell node-editor-static-code-editor" style={staticViewportStyle}>
