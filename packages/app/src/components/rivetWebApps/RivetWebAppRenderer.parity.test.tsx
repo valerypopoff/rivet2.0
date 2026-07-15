@@ -101,6 +101,14 @@ test('React and hosted renderers keep the same component and action behavior', a
       { disabled: false, hasSpinner: false, text: 'First' },
       { disabled: false, hasSpinner: false, text: 'Second' },
     ]);
+
+    await act(async () => {
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-reset-button')?.click();
+    });
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-reset-button')?.click();
+    assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
+    assert.equal(reactRootElement.querySelector('.rivet-web-app-output pre')?.textContent, '');
+    assert.equal(hostedDom.window.document.querySelector('.rivet-web-app-output pre')?.textContent, '');
   } finally {
     await act(async () => reactRoot.unmount());
     restoreGlobals();

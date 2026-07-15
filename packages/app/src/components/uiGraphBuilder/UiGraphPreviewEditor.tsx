@@ -1,7 +1,7 @@
 import type { CSSProperties, FC, RefObject } from 'react';
 import { DndContext, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import type { GraphProgress, UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
+import type { GraphProgress, UiComponentId, UiGraph, UiGraphInteractionController } from '@valerypopoff/rivet2-core';
 import {
   RivetWebAppRenderer,
   type RivetWebAppActionResult,
@@ -11,6 +11,7 @@ import { getUiGraphComponentLabel } from './componentDescriptors.js';
 
 export const UiGraphPreviewEditor: FC<{
   activeComponentId: UiComponentId | undefined;
+  interactionController?: UiGraphInteractionController;
   onActiveComponentChange(componentId: UiComponentId): void;
   onReorder(draggedComponentId: UiComponentId, targetComponentId: UiComponentId): void;
   onRunAction(
@@ -21,7 +22,15 @@ export const UiGraphPreviewEditor: FC<{
   ): Promise<RivetWebAppActionResult>;
   scrollContainerRef: RefObject<HTMLDivElement>;
   uiGraph: UiGraph;
-}> = ({ activeComponentId, onActiveComponentChange, onReorder, onRunAction, scrollContainerRef, uiGraph }) => {
+}> = ({
+  activeComponentId,
+  interactionController,
+  onActiveComponentChange,
+  onReorder,
+  onRunAction,
+  scrollContainerRef,
+  uiGraph,
+}) => {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -38,6 +47,7 @@ export const UiGraphPreviewEditor: FC<{
       <SortableContext items={uiGraph.components.map(({ id }) => id)} strategy={verticalListSortingStrategy}>
         <RivetWebAppRenderer
           activeComponentId={activeComponentId}
+          interactionController={interactionController}
           onActiveComponentChange={onActiveComponentChange}
           renderComponentFrame={(frameProps) => <SortablePreviewComponentFrame {...frameProps} />}
           rootRef={scrollContainerRef}

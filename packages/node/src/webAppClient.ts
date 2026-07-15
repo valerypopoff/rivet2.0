@@ -215,6 +215,12 @@ if (config && root) {
     ];
   };
 
+  const resetApp = (): void => {
+    revisionMismatch = false;
+    interactionController.reset();
+    render();
+  };
+
   const runAction = async (component: UiGraphActionComponent): Promise<void> => {
     revisionMismatch = false;
     await interactionController.runAction(
@@ -521,6 +527,15 @@ if (config && root) {
     const focusedControl = captureFocusedTextControl(root);
     const interaction = interactionController.getSnapshot();
     const surface = createElement('main', { className: 'rivet-web-app-surface' }, [
+      createElement('div', { className: 'rivet-web-app-toolbar' }, [
+        createElement('button', {
+          'aria-label': 'Reset app',
+          className: 'rivet-web-app-reset-button',
+          onClick: resetApp,
+          title: 'Reset app',
+          type: 'button',
+        }),
+      ]),
       ...config.uiGraph.components.map((component) => renderComponent(component, interaction)),
       ...renderErrors(),
     ]);

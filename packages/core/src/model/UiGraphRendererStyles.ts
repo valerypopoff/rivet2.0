@@ -15,6 +15,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   --rivet-web-app-font-size: var(--rivet-web-app-host-font-size, 15px);
   --rivet-web-app-chat-min-height: clamp(360px, calc(100vh - 136px), 540px);
   box-sizing: border-box;
+  position: relative;
   height: 100%;
   background: var(--rivet-web-app-background);
   color: var(--rivet-web-app-foreground);
@@ -38,6 +39,40 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   margin: 0 auto;
   max-width: 760px;
   padding: 48px 20px;
+}
+
+.rivet-web-app-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+}
+
+.rivet-web-app-reset-button {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--rivet-web-app-foreground) 64%, transparent);
+  cursor: pointer;
+  padding: 0;
+}
+
+.rivet-web-app-reset-button::before {
+  content: "↻";
+  display: block;
+  font-family: Arial, sans-serif;
+  font-size: 23px;
+  line-height: 28px;
+}
+
+.rivet-web-app-reset-button:hover,
+.rivet-web-app-reset-button:focus-visible {
+  background: color-mix(in srgb, var(--rivet-web-app-foreground) 8%, transparent);
+  color: var(--primary, #ff9e2c);
+  outline: none;
 }
 
 .rivet-web-app-card,

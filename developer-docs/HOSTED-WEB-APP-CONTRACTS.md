@@ -301,6 +301,16 @@ progress changes. It captures and restores the focused text control, selection, 
 internal scroll position across that render so progress reports do not interrupt a
 user typing in another component.
 
+Every renderer includes the shared `Reset app` control in the upper-left toolbar.
+Reset is session-only: it aborts active actions, clears action errors/progress, and
+restores the UI graph's initial state without changing the project or YAML. The
+desktop editor preview keeps its interaction controller in an in-memory registry
+keyed by open project and UI graph, so switching to another graph or UI graph does
+not lose entered fields, outputs, or chat messages. The app clears those controllers
+when the project is closed or a project is opened as a new session. Detached previews
+and hosted pages own their own controller and therefore start a fresh session when
+they are opened or reloaded.
+
 `renderRivetWebAppHtml(...)` validates transport configuration at runtime as well as
 through TypeScript: HTTP `actionPath` and WebSocket `socketPath` values must be
 non-empty. This keeps JavaScript wrappers from publishing a page whose action runner

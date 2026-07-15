@@ -380,6 +380,38 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(controller.getSnapshot().state.result, undefined);
   });
 
+  it('resets renderer state, errors, progress, and active actions to the initial state', async () => {
+    const button = makeButton('run-button', { type: 'runGraph' });
+    const uiGraph = makeUiGraph([
+      { defaultValue: 'Initial', id: 'input' as UiComponentId, label: 'Input', stateKey: 'input', type: 'input' },
+      button,
+    ]);
+    const controller = createUiGraphInteractionController(uiGraph);
+    const run = deferred<{ statePatch?: Record<string, unknown> }>();
+    let signal: AbortSignal | undefined;
+
+    controller.updateState('input', 'Edited');
+    const runPromise = controller.runAction(button, (context) => {
+      signal = context.signal;
+      context.reportProgress({ message: 'Working' });
+      return run.promise;
+    });
+    assert.equal(controller.getSnapshot().runningComponentIds.has(button.id), true);
+    assert.equal(controller.getSnapshot().actionProgress[button.id]?.message, 'Working');
+
+    controller.reset();
+
+    assert.equal(signal?.aborted, true);
+    assert.deepEqual(controller.getSnapshot().state, { input: 'Initial' });
+    assert.deepEqual(controller.getSnapshot().actionErrors, {});
+    assert.deepEqual(controller.getSnapshot().actionProgress, {});
+    assert.equal(controller.getSnapshot().runningComponentIds.size, 0);
+
+    run.resolve({ statePatch: { result: 'ignored' } });
+    await runPromise;
+    assert.equal(controller.getSnapshot().state.result, undefined);
+  });
+
   it('detaches in-flight hosted actions without aborting their remote run', async () => {
     const button = makeButton('run-button', { type: 'runGraph' });
     const controller = createUiGraphInteractionController(makeUiGraph([button]));

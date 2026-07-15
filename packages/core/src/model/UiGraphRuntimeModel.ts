@@ -114,6 +114,7 @@ export type UiGraphInteractionController = {
   cancelAction(componentId: UiComponentId): void;
   detachActions(): void;
   getSnapshot(): UiGraphInteractionSnapshot;
+  reset(): void;
   runAction(component: UiGraphActionComponent, runner: UiGraphActionRunner): Promise<void>;
   setUiGraph(uiGraph: UiGraph): void;
   subscribe(listener: (change: UiGraphInteractionChange) => void): () => void;
@@ -201,7 +202,9 @@ export function createUiGraphInteractionController(
   options: UiGraphInteractionControllerOptions = {},
 ): UiGraphInteractionController {
   let uiGraphId = initialUiGraph.id;
-  let state = options.initialState ? { ...options.initialState } : getUiGraphInitialState(initialUiGraph);
+  const initialStateOverride = options.initialState ? { ...options.initialState } : undefined;
+  let initialState = initialStateOverride ?? getUiGraphInitialState(initialUiGraph);
+  let state = { ...initialState };
   let actionErrors: Record<string, string> = {};
   let actionProgress: Record<string, GraphProgress> = {};
   let snapshot: UiGraphInteractionSnapshot;
@@ -285,6 +288,13 @@ export function createUiGraphInteractionController(
     getSnapshot() {
       return snapshot;
     },
+    reset() {
+      abortAllActions(false);
+      state = { ...initialState };
+      actionErrors = {};
+      actionProgress = {};
+      publish('state');
+    },
     async runAction(component, runner) {
       const execution = actionController.begin(component);
       if (!execution) {
@@ -341,11 +351,16 @@ export function createUiGraphInteractionController(
       if (nextUiGraph.id !== uiGraphId) {
         abortAllActions(false);
         uiGraphId = nextUiGraph.id;
-        state = getUiGraphInitialState(nextUiGraph);
+        initialState = initialStateOverride ?? getUiGraphInitialState(nextUiGraph);
+        state = { ...initialState };
         actionErrors = {};
         actionProgress = {};
         publish('graph');
         return;
+      }
+
+      if (!initialStateOverride) {
+        initialState = getUiGraphInitialState(nextUiGraph);
       }
 
       const actionComponentIds = new Set(

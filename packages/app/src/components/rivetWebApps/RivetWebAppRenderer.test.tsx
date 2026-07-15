@@ -100,6 +100,11 @@ test('React web app actions keep independent loading, reject stale patches, and 
     assert.equal(rootElement.querySelector('.rivet-web-app-output pre')?.textContent, 'current');
 
     await act(async () => {
+      rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-reset-button')?.click();
+    });
+    assert.equal(rootElement.querySelector('.rivet-web-app-output pre')?.textContent, '');
+
+    await act(async () => {
       rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
     });
     const pagehideSignal = pendingActions.get('first-button' as UiComponentId)?.abortSignal;

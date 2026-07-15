@@ -8,7 +8,6 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
 } from 'react';
 import {
@@ -18,6 +17,7 @@ import {
   type UiGraph,
   type UiGraphActionComponent,
   type UiGraphComponent,
+  type UiGraphInteractionController,
   RIVET_WEB_APP_RENDERER_CSS,
   createUiGraphInteractionController,
   createUiGraphChatSubmissionStatePatch,
@@ -35,6 +35,7 @@ export type RivetWebAppActionResult = {
 
 export type RivetWebAppRendererProps = {
   activeComponentId?: UiComponentId;
+  interactionController?: UiGraphInteractionController;
   renderComponentFrame?(props: RivetWebAppComponentFrameProps): ReactNode;
   onActiveComponentChange?(componentId: UiComponentId): void;
   onRunAction(
@@ -57,6 +58,7 @@ export type RivetWebAppComponentFrameProps = {
 
 export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   activeComponentId,
+  interactionController: interactionControllerProp,
   renderComponentFrame,
   onActiveComponentChange,
   onRunAction,
@@ -64,7 +66,11 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   uiGraph,
 }) => {
   const normalizedUiGraph = useMemo(() => normalizeUiGraph(uiGraph), [uiGraph]);
-  const [interactionController] = useState(() => createUiGraphInteractionController(normalizedUiGraph));
+  const ownedInteractionControllerRef = useRef<UiGraphInteractionController | null>(null);
+  const interactionController =
+    interactionControllerProp ??
+    ownedInteractionControllerRef.current ??
+    (ownedInteractionControllerRef.current = createUiGraphInteractionController(normalizedUiGraph));
   const interaction = useSyncExternalStore(
     interactionController.subscribe,
     interactionController.getSnapshot,
@@ -96,6 +102,15 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     <div ref={rootRef} className="rivet-web-app-root">
       <style>{RIVET_WEB_APP_RENDERER_CSS}</style>
       <main className="rivet-web-app-surface">
+        <div className="rivet-web-app-toolbar">
+          <button
+            type="button"
+            className="rivet-web-app-reset-button"
+            aria-label="Reset app"
+            title="Reset app"
+            onClick={() => interactionController.reset()}
+          />
+        </div>
         {normalizedUiGraph.components.map((component) => {
           const frameProps: RivetWebAppComponentFrameProps = {
             className: `rivet-web-app-component-frame${activeComponentId === component.id ? ' active' : ''}`,

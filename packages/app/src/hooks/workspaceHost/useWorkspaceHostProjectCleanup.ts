@@ -16,6 +16,7 @@ import { removeProjectUnsavedState } from '../../utils/projectUnsavedChanges.js'
 import { useProjectExecutionSnapshots } from '../useProjectExecutionSnapshots.js';
 import { useStableCallback } from '../useStableCallback.js';
 import { removeProjectWorkspaceTargetState } from '../../state/workspaceTarget.js';
+import { clearUiGraphPreviewSessions } from '../../components/rivetWebApps/uiGraphPreviewSession.js';
 
 function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId): void {
   window.setTimeout(() => {
@@ -47,6 +48,7 @@ export function useWorkspaceHostProjectCleanup() {
 
   return useStableCallback(
     (projectId: ProjectId, options: { currentExecutionSnapshot?: ProjectExecutionSnapshot } = {}) => {
+      clearUiGraphPreviewSessions(projectId);
       removeProjectExecutionSnapshot(projectId, {
         currentSnapshot: options.currentExecutionSnapshot,
       });
