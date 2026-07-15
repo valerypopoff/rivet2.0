@@ -112,6 +112,17 @@ Loop-controller break detection is intentionally isolated in [`loopControllerBre
 
 Keep this policy covered by focused tests. The `loop-not-broken` sentinel is exported from the helper and reused by `GraphProcessor`; do not reintroduce duplicated string literals. If loop-controller behavior changes, update the helper and tests first, then wire `GraphProcessor` to the new policy. Avoid reintroducing inline type suppressions in loop/race control-flow branches.
 
+### Required Inputs With Nullish Payloads
+
+Node input definitions describe the expected data type, but a runtime `DataValue`
+can still carry a `null` or `undefined` payload. Node-specific semantics decide
+whether that is an error, a default, or a control-flow result; generic coercion
+must not be treated as the whole behavior contract. For example, `MatchNode`
+treats a missing, `null`, or `undefined` `Test` value as an unmatched result,
+marks every case output as control-flow-excluded, and emits its `Unmatched`
+output. It still preserves normal coercion and matching for non-nullish values,
+including an empty string.
+
 ## Optional Node Duration Metadata
 
 Per-node run durations are transient execution metadata, not graph outputs. [`GraphProcessor`](../packages/core/src/model/GraphProcessor.ts) only reads monotonic timestamps and emits `durationMs` on `nodeFinish` / `nodeError` when it is constructed with `captureNodeTimings: true`. The default remains `false`, so ordinary headless runs do not pay extra timestamp reads just because the app can display timings.

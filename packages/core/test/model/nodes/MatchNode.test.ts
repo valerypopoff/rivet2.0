@@ -67,4 +67,34 @@ describe('MatchNode', () => {
     assert.equal(output['case-no' as PortId]?.value, 'NO');
     assert.equal(output['unmatched' as PortId]?.type, 'control-flow-excluded');
   });
+
+  it('routes missing, null, and undefined test values to Unmatched', async () => {
+    const node = createNode({ cases: ['YES'] });
+    const cases = [
+      { label: 'missing', inputs: {} },
+      { label: 'null', inputs: { input: { type: 'any', value: null } } },
+      { label: 'undefined', inputs: { input: { type: 'any', value: undefined } } },
+    ] as const;
+
+    for (const { label, inputs } of cases) {
+      const output = await node.process(inputs as Record<PortId, any>);
+
+      assert.equal(output['case1' as PortId]?.type, 'control-flow-excluded', label);
+      assert.equal(output['unmatched' as PortId]?.type, 'string', label);
+      assert.equal(output['unmatched' as PortId]?.value, undefined, label);
+    }
+  });
+
+  it('still matches an empty string test value', async () => {
+    const node = createNode({ cases: ['^$'] });
+    const output = await node.process({
+      input: {
+        type: 'string',
+        value: '',
+      },
+    } as Record<PortId, any>);
+
+    assert.equal(output['case1' as PortId]?.value, '');
+    assert.equal(output['unmatched' as PortId]?.type, 'control-flow-excluded');
+  });
 });

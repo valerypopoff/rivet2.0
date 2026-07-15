@@ -77,7 +77,7 @@ If the `Value` input is provided, it will be passed through the corresponding ou
 
 ## Error Handling
 
-The Match Node will error if the `Test` input is not provided. If no match is found for the input string, the `Unmatched` output port will be executed.
+If the `Test` input is missing, `null`, or `undefined`, the Match Node treats it as an unmatched value. It does not run any case outputs and executes the `Unmatched` output port. If no regular expression matches the test value, the `Unmatched` output port is also executed.
 
 ## FAQ
 
