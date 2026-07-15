@@ -87,10 +87,16 @@ function getDatabasePath(): string {
 async function openDatabase(): Promise<DatabaseSync> {
   await fs.mkdir(path.dirname(getDatabasePath()), { recursive: true });
 
-  const db = new DatabaseSync(getDatabasePath());
-  db.exec(`
+  let db: DatabaseSync | null = null;
+
+  try {
+    db = new DatabaseSync(getDatabasePath());
+    db.exec(`
     PRAGMA foreign_keys = ON;
-    PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
+    -- The index is rebuildable from recording bundles. DELETE journaling avoids
+    -- WAL shared-memory files, which are unreliable on some Docker volumes/PVCs.
+    PRAGMA journal_mode = DELETE;
 
     CREATE TABLE IF NOT EXISTS recording_workflows (
       workflow_id TEXT PRIMARY KEY,
@@ -132,9 +138,13 @@ async function openDatabase(): Promise<DatabaseSync> {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
-  `);
+    `);
 
-  return db;
+    return db;
+  } catch (error) {
+    db?.close();
+    throw error;
+  }
 }
 
 async function getDatabase(): Promise<DatabaseSync> {

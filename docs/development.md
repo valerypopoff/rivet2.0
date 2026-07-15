@@ -340,7 +340,7 @@ Workflow recordings use two persistence locations:
 
 - in `filesystem` mode:
   - compressed replay artifacts under `RIVET_WORKFLOW_RECORDINGS_ROOT`
-  - a SQLite index under `RIVET_APP_DATA_ROOT`: `recordings.sqlite`
+  - a SQLite index under `RIVET_APP_DATA_ROOT`: `recordings.sqlite`; it uses rollback journaling instead of WAL so Docker volumes and Kubernetes PVCs do not need SQLite shared-memory support
   - queue and retention limits under `RIVET_APP_DATA_ROOT`: `settings/run-recordings.json`
 - in `managed` mode:
   - recording metadata rows in Postgres
@@ -366,6 +366,8 @@ Migration note for existing local Docker setups:
 For host-based API execution, filesystem-mode recording persistence still requires `node:sqlite` (Node 24+). If your host Node version is older, use the Docker dev stack instead of `npm run dev:local`.
 
 Filesystem-mode recording startup reconciliation is intentionally non-fatal for stale-bundle cleanup. If an old bundle directory cannot be removed because of host-side permissions, the API logs the cleanup error and still starts; the undeleted bundle simply remains on disk until permissions are corrected.
+
+The SQLite file is only a rebuildable metadata index. If a deployment from an older image cannot open a stale `recordings.sqlite-wal` or `recordings.sqlite-shm` sidecar, stop the API, move the three `recordings.sqlite*` files out of app data as a backup, and restart. The API rebuilds the index from the recording bundles; do not remove `/workflow-recordings` or the workflow/Postgres volumes.
 
 Filesystem-mode recording list requests also validate `recordings.sqlite` against completed bundle metadata under `RIVET_WORKFLOW_RECORDINGS_ROOT`:
 
