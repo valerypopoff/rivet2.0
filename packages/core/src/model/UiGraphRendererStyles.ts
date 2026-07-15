@@ -169,10 +169,10 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-button:disabled {
-  background: var(--grey-darkish, #30343b);
-  color: var(--grey-light, #b6b8bf);
+  background: var(--rivet-web-app-button-background);
+  color: var(--rivet-web-app-button-foreground);
   cursor: wait;
-  opacity: 0.8;
+  opacity: 0.55;
 }
 
 .rivet-web-app-button:hover:not(:disabled) {
@@ -474,6 +474,8 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 .rivet-web-app-output {
   display: grid;
   gap: 8px;
+  max-height: clamp(160px, calc(100vh - 96px), 420px);
+  overflow-y: auto;
   position: relative;
 }
 

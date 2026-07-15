@@ -311,6 +311,10 @@ when the project is closed or a project is opened as a new session. Detached pre
 and hosted pages own their own controller and therefore start a fresh session when
 they are opened or reloaded.
 
+Output components use the shared renderer styles and have a responsive maximum
+height with internal vertical scrolling, so large output values do not expand the
+entire web-app page.
+
 `renderRivetWebAppHtml(...)` validates transport configuration at runtime as well as
 through TypeScript: HTTP `actionPath` and WebSocket `socketPath` values must be
 non-empty. This keeps JavaScript wrappers from publishing a page whose action runner
@@ -330,8 +334,9 @@ currently restore the browser-side run handle unless the host adds its own run
 discovery/session restoration. Detach releases browser-side promises and listeners
 without sending cancellation. Explicit **Abort** sends
 `action.cancel`, immediately records/broadcasts `action.cancelled`, and requests
-processor abort. Button actions keep their authored label while running and show
-the shared circular running indicator to its right. Revision mismatch remains a
+processor abort. Button actions keep their authored label and configured green
+color while running, with reduced opacity, and show the shared circular running
+indicator to its right. Revision mismatch remains a
 terminal error and uses the existing
 blocking reload modal. `runRivetWebAppAction(...)` prefers an explicit
 `createProcessorOptions.abortSignal`, then falls back to the supplied Fetch
