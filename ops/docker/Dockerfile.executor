@@ -65,6 +65,7 @@ COPY --from=builder /app/rivet/packages/app-executor/bin/executor-bundle.cjs ./e
 RUN mkdir -p /root/.local/share/com.valerypopoff.rivet2/plugins
 
 ENV RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
+ENV RIVET_CODE_RUNNER_REQUIRE_ROOT=/data/runtime-libraries/current/node_modules
 ENV RIVET_EXECUTOR_HOST=0.0.0.0
 ENV RIVET_RUNTIME_PROCESS_ROLE=executor
 

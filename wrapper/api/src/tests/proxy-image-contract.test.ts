@@ -222,6 +222,7 @@ test('executor image and compose contracts keep the websocket service independen
   assert.match(executorDockerfile, /ENV RIVET_CODE_RUNNER_REQUIRE_ROOT=\/data\/runtime-libraries\/current\/node_modules/);
   assert.doesNotMatch(executorDockerfile, /ENV PORT=21889/);
   assert.match(composeExecutorDockerfile, /ENV RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
+  assert.match(composeExecutorDockerfile, /ENV RIVET_CODE_RUNNER_REQUIRE_ROOT=\/data\/runtime-libraries\/current\/node_modules/);
   assert.ok(composeExecutorDockerfile.includes('node executor-bundle.cjs --host \\"${RIVET_EXECUTOR_HOST}\\" --port 21889'));
   assert.match(executorBundler, /'import\.meta\.url': '__filename'/);
 
