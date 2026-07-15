@@ -320,6 +320,45 @@ void describe('streamChatV2', () => {
 });
 
 void describe('runChatV2Pipeline', () => {
+  void it('keeps assembled system messages when the System Prompt input is empty', async () => {
+    let capturedArgs: Record<string, unknown> | undefined;
+
+    await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5',
+      prompt: {
+        type: 'chat-message[]',
+        value: [
+          { type: 'system', message: 'Follow the project policy.' },
+          { type: 'system', message: 'Use the requested output format.' },
+          { type: 'user', message: 'Hello' },
+        ],
+      },
+      systemPrompt: { type: 'string', value: '' },
+      context: {
+        signal: new AbortController().signal,
+      },
+      executeStream: createTextStreamExecutor({
+        onArgs: (args) => {
+          capturedArgs = args;
+        },
+      }),
+    });
+
+    assert.deepEqual(
+      (capturedArgs?.messages as Array<{ role: string; content: unknown }>).map(({ role, content }) => ({
+        role,
+        content,
+      })),
+      [
+        { role: 'system', content: 'Follow the project policy.' },
+        { role: 'system', content: 'Use the requested output format.' },
+        { role: 'user', content: 'Hello' },
+      ],
+    );
+  });
+
   void it('retries Vercel provider stream errors with non-200 status codes before succeeding', async () => {
     let attempt = 0;
     const executeStream: ChatV2StreamExecutor = async () => {

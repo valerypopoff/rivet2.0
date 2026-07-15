@@ -456,7 +456,8 @@ Current responsibilities split this way:
 
 - `openAIChatRequest.ts`: request shaping shared inside the OpenAI-compatible chat path
 - `openAIChatRuntime.ts`: OpenAI-specific streaming/non-streaming execution and retry behavior
-- `chatMessages.ts`: prompt/input coercion into `ChatMessage[]` plus system-prompt injection helpers
+- `chatMessages.ts`: prompt/input coercion into `ChatMessage[]` plus system-prompt injection helpers. Native
+  `chat-message[]` values preserve every role.
 - `tokenBudget.ts`: shared prompt/max-token limit enforcement and request/response token output helpers
 - `streamChatResponse.ts`: streamed tool-call assembly and assistant-message reconstruction
 - `chatCost.ts`: prompt/completion/audio cost calculation and token-cost helpers

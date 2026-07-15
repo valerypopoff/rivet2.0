@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import {
+  AssemblePromptNodeImpl,
   GraphProcessor,
   PromptNodeImpl,
   globalRivetNodeRegistry,
@@ -109,6 +110,28 @@ describe('PromptNode', () => {
       type: 'user',
       message: 'First\nSecond\nLine\nThird',
       isCacheBreakpoint: undefined,
+    });
+  });
+
+  it('preserves multiple system messages through Assemble Prompt', async () => {
+    const first = await createNode({ type: 'system', promptText: 'System one' }).process({}, context);
+    const second = await createNode({ type: 'system', promptText: 'System two' }).process({}, context);
+    const assemblePrompt = new AssemblePromptNodeImpl(AssemblePromptNodeImpl.create());
+
+    const result = await assemblePrompt.process(
+      {
+        ['message1' as PortId]: first.output,
+        ['message2' as PortId]: second.output,
+      },
+      context,
+    );
+
+    assert.deepStrictEqual(result.prompt, {
+      type: 'chat-message[]',
+      value: [
+        { type: 'system', message: 'System one', isCacheBreakpoint: undefined },
+        { type: 'system', message: 'System two', isCacheBreakpoint: undefined },
+      ],
     });
   });
 

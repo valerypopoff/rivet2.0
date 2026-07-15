@@ -12,7 +12,7 @@ describe('chatMessages helpers', () => {
     ]);
   });
 
-  it('prepends system prompt and replaces an existing leading system message', () => {
+  it('prepends the dedicated system prompt without replacing prompt messages', () => {
     assert.deepEqual(
       prependSystemPrompt(
         [
@@ -23,6 +23,7 @@ describe('chatMessages helpers', () => {
       ),
       [
         { type: 'system', message: 'new' },
+        { type: 'system', message: 'old' },
         { type: 'user', message: 'hello' },
       ],
     );
