@@ -572,6 +572,36 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
+  void it('unfolds a collapsed Output when its data key receives a new value', () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    uiGraph.components = [
+      {
+        defaultValue: 'Initial',
+        id: 'result-input' as any,
+        label: 'Result',
+        stateKey: 'result',
+        type: 'input',
+      },
+      { id: 'result-output' as any, label: 'Result', stateKey: 'result', type: 'output' },
+    ];
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-output-toggle')?.click();
+    assert.ok(dom.window.document.querySelector('.rivet-web-app-output-collapsed'));
+
+    const input = dom.window.document.querySelector<HTMLInputElement>('.rivet-web-app-field input')!;
+    input.value = 'Updated';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-output-collapsed'), null);
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-output pre')?.textContent, 'Updated');
+    dom.window.close();
+  });
+
   void it('aborts hosted action fetches when the page is unloaded', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
@@ -885,7 +915,7 @@ void describe('createRivetWebAppHandler', () => {
     );
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForActionLoadingPresentation();
     const firstSocket = sockets[0]!;
     const start = firstSocket.sent.find((message) => message.type === 'action.start')!;
     (dom.window.document.querySelector('.rivet-web-app-abort-button') as HTMLButtonElement).click();

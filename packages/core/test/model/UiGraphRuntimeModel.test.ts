@@ -541,6 +541,32 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(controller.getSnapshot().collapsedOutputComponentIds.size, 0);
   });
 
+  it('unfolds collapsed outputs when their rendered value is added or updated', async () => {
+    const firstOutput = { id: 'first' as UiComponentId, stateKey: 'result', type: 'output' as const };
+    const secondOutput = { id: 'second' as UiComponentId, stateKey: 'result', type: 'output' as const };
+    const unrelatedOutput = { id: 'other' as UiComponentId, stateKey: 'other', type: 'output' as const };
+    const button = makeButton('run-button', { outputs: [{ stateKey: 'result' }], type: 'runGraph' });
+    const controller = createUiGraphInteractionController(
+      makeUiGraph([button, firstOutput, secondOutput, unrelatedOutput]),
+    );
+
+    for (const output of [firstOutput, secondOutput, unrelatedOutput]) {
+      controller.toggleOutputCollapsed(output.id);
+    }
+
+    controller.updateState('result', 'Direct value');
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(firstOutput.id), false);
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(secondOutput.id), false);
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(unrelatedOutput.id), true);
+
+    controller.toggleOutputCollapsed(firstOutput.id);
+    controller.updateStatePatch({ result: '' });
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(firstOutput.id), true);
+
+    await controller.runAction(button, async () => ({ statePatch: { result: 'Action value' } }));
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(firstOutput.id), false);
+  });
+
   it('detaches in-flight hosted actions without aborting their remote run', async () => {
     const button = makeButton('run-button', { type: 'runGraph' });
     const controller = createUiGraphInteractionController(makeUiGraph([button]));

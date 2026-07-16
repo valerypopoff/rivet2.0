@@ -219,6 +219,7 @@ export function createUiGraphInteractionController(
 ): UiGraphInteractionController {
   let uiGraphId = initialUiGraph.id;
   let outputComponentIds = getUiGraphOutputComponentIds(initialUiGraph);
+  let outputComponentsByStateKey = getUiGraphOutputComponentsByStateKey(initialUiGraph);
   const initialStateOverride = options.initialState ? { ...options.initialState } : undefined;
   let initialState = normalizeUiGraphDropdownState(
     initialUiGraph,
@@ -315,6 +316,18 @@ export function createUiGraphInteractionController(
       delete actionProgress[componentId];
     }
   };
+  const expandOutputsForUpdatedState = (
+    stateKeys: Iterable<string>,
+    nextState: Readonly<Record<string, unknown>>,
+  ): void => {
+    for (const stateKey of stateKeys) {
+      for (const component of outputComponentsByStateKey.get(stateKey) ?? []) {
+        if (getUiGraphOutputRenderModel(nextState, stateKey, component.renderAs ?? 'text').hasValue) {
+          collapsedOutputComponentIds.delete(component.id);
+        }
+      }
+    }
+  };
 
   updateSnapshot();
 
@@ -381,7 +394,9 @@ export function createUiGraphInteractionController(
 
         const statePatch = actionController.resolveStatePatch(execution, result.statePatch);
         if (statePatch) {
-          state = applyUiGraphStatePatch(state, statePatch);
+          const nextState = applyUiGraphStatePatch(state, statePatch);
+          expandOutputsForUpdatedState(Object.keys(statePatch), nextState);
+          state = nextState;
         }
       } catch (error) {
         if (!abortController.signal.aborted && actionController.isCurrent(execution)) {
@@ -411,6 +426,7 @@ export function createUiGraphInteractionController(
         actionErrors = {};
         actionProgress = {};
         outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
+        outputComponentsByStateKey = getUiGraphOutputComponentsByStateKey(nextUiGraph);
         collapsedOutputComponentIds.clear();
         publish('graph');
         return;
@@ -427,6 +443,7 @@ export function createUiGraphInteractionController(
       }
 
       outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
+      outputComponentsByStateKey = getUiGraphOutputComponentsByStateKey(nextUiGraph);
       const collapsedOutputIdsBeforeCleanup = collapsedOutputComponentIds.size;
       for (const componentId of collapsedOutputComponentIds) {
         if (!outputComponentIds.has(componentId)) {
@@ -479,14 +496,18 @@ export function createUiGraphInteractionController(
     },
     updateState(stateKey, value) {
       actionController.noteStateWrite(stateKey);
-      state = { ...state, [stateKey]: value };
+      const nextState = { ...state, [stateKey]: value };
+      expandOutputsForUpdatedState([stateKey], nextState);
+      state = nextState;
       publish('state');
     },
     updateStatePatch(statePatch) {
       for (const stateKey of Object.keys(statePatch)) {
         actionController.noteStateWrite(stateKey);
       }
-      state = applyUiGraphStatePatch(state, statePatch);
+      const nextState = applyUiGraphStatePatch(state, statePatch);
+      expandOutputsForUpdatedState(Object.keys(statePatch), nextState);
+      state = nextState;
       publish('state');
     },
   };
@@ -496,6 +517,19 @@ function getUiGraphOutputComponentIds(uiGraph: UiGraph): Set<UiComponentId> {
   return new Set(
     uiGraph.components.filter((component) => component.type === 'output').map((component) => component.id),
   );
+}
+
+function getUiGraphOutputComponentsByStateKey(
+  uiGraph: UiGraph,
+): Map<string, Extract<UiGraphComponent, { type: 'output' }>[]> {
+  const componentsByStateKey = new Map<string, Extract<UiGraphComponent, { type: 'output' }>[]>();
+  for (const component of uiGraph.components) {
+    if (component.type !== 'output') continue;
+    const components = componentsByStateKey.get(component.stateKey) ?? [];
+    components.push(component);
+    componentsByStateKey.set(component.stateKey, components);
+  }
+  return componentsByStateKey;
 }
 
 function normalizeUiGraphDropdownState(

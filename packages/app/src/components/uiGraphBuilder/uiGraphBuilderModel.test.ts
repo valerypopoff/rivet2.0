@@ -27,7 +27,12 @@ import {
   UI_GRAPH_COMPONENT_PALETTE,
   UI_GRAPH_COMPONENT_PALETTE_GROUPS,
 } from './uiGraphComponentModel.js';
-import { collectUiGraphDataKeyUsages, getUniqueDataKeyOptions, isDataKeyAlreadyUsedEarlier } from './dataKeys.js';
+import {
+  collectUiGraphDataKeyUsages,
+  getUniqueDataKeyOptions,
+  isDataKeyAlreadyUsedEarlier,
+  isUiGraphDataKeyMissing,
+} from './dataKeys.js';
 import { canRunDesktopWebAppPreview } from './uiGraphBuilderPolicy.js';
 
 const graphId = 'graph' as GraphId;
@@ -265,6 +270,9 @@ test('data-key indexing reports only later producers as duplicates and exposes c
   const usages = collectUiGraphDataKeyUsages(uiGraph);
 
   assert.deepEqual(getUniqueDataKeyOptions(usages), ['question', 'result']);
+  assert.equal(isUiGraphDataKeyMissing('', ['question']), false);
+  assert.equal(isUiGraphDataKeyMissing('question', ['question']), false);
+  assert.equal(isUiGraphDataKeyMissing('removed-key', ['question']), true);
   assert.equal(isDataKeyAlreadyUsedEarlier(usages, 'question', { componentId: firstInput.id }), false);
   assert.equal(isDataKeyAlreadyUsedEarlier(usages, 'question', { componentId: secondInput.id }), true);
   assert.deepEqual(getUiGraphComponentDataKeys(button), {

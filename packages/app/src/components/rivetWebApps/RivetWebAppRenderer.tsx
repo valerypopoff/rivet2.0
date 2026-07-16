@@ -47,6 +47,7 @@ export type RivetWebAppActionResult = {
 
 export type RivetWebAppRendererProps = {
   interactionController?: UiGraphInteractionController;
+  interactionUiGraph?: UiGraph;
   renderComponentFrame?(props: RivetWebAppComponentFrameProps): ReactNode;
   onComponentSelectionChange?(componentId: UiComponentId, mode: 'replace' | 'toggle'): void;
   onRootPointerDownCapture?(event: PointerEvent<HTMLDivElement>): void;
@@ -71,6 +72,7 @@ export type RivetWebAppComponentFrameProps = {
 
 export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   interactionController: interactionControllerProp,
+  interactionUiGraph,
   renderComponentFrame,
   onComponentSelectionChange,
   onRootPointerDownCapture,
@@ -80,11 +82,15 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   uiGraph,
 }) => {
   const normalizedUiGraph = useMemo(() => normalizeUiGraph(uiGraph), [uiGraph]);
+  const normalizedInteractionUiGraph = useMemo(
+    () => normalizeUiGraph(interactionUiGraph ?? uiGraph),
+    [interactionUiGraph, uiGraph],
+  );
   const ownedInteractionControllerRef = useRef<UiGraphInteractionController | null>(null);
   const interactionController =
     interactionControllerProp ??
     ownedInteractionControllerRef.current ??
-    (ownedInteractionControllerRef.current = createUiGraphInteractionController(normalizedUiGraph));
+    (ownedInteractionControllerRef.current = createUiGraphInteractionController(normalizedInteractionUiGraph));
   const interaction = useSyncExternalStore(
     interactionController.subscribe,
     interactionController.getSnapshot,
@@ -92,8 +98,8 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   );
 
   useLayoutEffect(() => {
-    interactionController.setUiGraph(normalizedUiGraph);
-  }, [interactionController, normalizedUiGraph]);
+    interactionController.setUiGraph(normalizedInteractionUiGraph);
+  }, [interactionController, normalizedInteractionUiGraph]);
 
   useEffect(() => {
     const abortActions = () => interactionController.abortActions();

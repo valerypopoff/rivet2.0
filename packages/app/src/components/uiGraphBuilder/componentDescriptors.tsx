@@ -33,6 +33,7 @@ import {
   type UiGraphDataKeyWrite,
   type UiGraphSelectOption,
 } from './uiGraphComponentModel.js';
+import { isUiGraphDataKeyMissing } from './dataKeys.js';
 import { Tooltip } from '../Tooltip.js';
 
 export {
@@ -67,12 +68,13 @@ type UiGraphComponentDescriptorMap = {
 
 const UiGraphSelect: FC<{
   ariaLabel?: string;
+  hasMissingDataKey?: boolean;
   isDisabled?: boolean;
   onChange(value: string): void;
   options: readonly UiGraphSelectOption[];
   placeholder?: string;
   value: string | undefined;
-}> = ({ ariaLabel, isDisabled, onChange, options, placeholder, value }) => {
+}> = ({ ariaLabel, hasMissingDataKey, isDisabled, onChange, options, placeholder, value }) => {
   const [menuPortalTarget, setMenuPortalTarget] = useState<HTMLDivElement | null>(null);
   const selectedOption = options.find((option) => option.value === value) ?? null;
 
@@ -87,6 +89,19 @@ const UiGraphSelect: FC<{
         menuShouldScrollIntoView={false}
         options={options}
         placeholder={placeholder}
+        styles={
+          hasMissingDataKey
+            ? {
+                control: (base) => ({
+                  ...base,
+                  '&:hover': { borderColor: 'var(--error)' },
+                  borderColor: 'var(--error)',
+                  boxShadow: '0 0 0 1px var(--error)',
+                }),
+                singleValue: (base) => ({ ...base, color: 'var(--error)' }),
+              }
+            : undefined
+        }
         value={selectedOption}
         onChange={(selected) => selected && onChange(selected.value)}
       />
@@ -598,6 +613,7 @@ const ChatAdditionalInputsEditor: FC<{
             <ActionMappingField label="Data key to send" showLabel={showLabels}>
               <UiGraphSelect
                 ariaLabel={showLabels ? undefined : `Data key to send for additional input ${index + 1}`}
+                hasMissingDataKey={isUiGraphDataKeyMissing(row.stateKey, dataKeyOptions)}
                 isDisabled={dataKeyOptions.length === 0}
                 options={getDataKeySelectOptions(row.stateKey, dataKeyOptions)}
                 placeholder="Select data key..."
@@ -692,6 +708,7 @@ const OutputSettings: FC<UiGraphComponentSettingsProps> = ({ component, dataKeyO
       <label className="ui-graph-builder-field">
         Data key
         <UiGraphSelect
+          hasMissingDataKey={isUiGraphDataKeyMissing(component.stateKey, dataKeyOptions)}
           isDisabled={dataKeyOptions.length === 0}
           options={getDataKeySelectOptions(component.stateKey, dataKeyOptions)}
           value={component.stateKey}
@@ -747,6 +764,7 @@ const ButtonInputMappingsEditor: FC<{
             <ActionMappingField label="Data key to send" showLabel={showLabels}>
               <UiGraphSelect
                 ariaLabel={showLabels ? undefined : `Data key to send for ${row.inputKey}`}
+                hasMissingDataKey={isUiGraphDataKeyMissing(row.stateKey, dataKeyOptions)}
                 isDisabled={dataKeyOptions.length === 0}
                 options={getDataKeySelectOptions(row.stateKey, dataKeyOptions)}
                 value={row.stateKey}

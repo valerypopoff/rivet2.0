@@ -25,6 +25,10 @@ export function getUniqueDataKeyOptions(usages: readonly UiGraphDataKeyUsage[]):
   return Array.from(new Set(usages.map((usage) => usage.key)));
 }
 
+export function isUiGraphDataKeyMissing(key: string, dataKeyOptions: readonly string[]): boolean {
+  return Boolean(key) && !dataKeyOptions.includes(key);
+}
+
 export function isDataKeyAlreadyUsedEarlier(
   usages: readonly UiGraphDataKeyUsage[],
   key: string,

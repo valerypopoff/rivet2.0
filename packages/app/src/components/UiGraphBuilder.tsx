@@ -545,13 +545,13 @@ const styles = css`
     background: var(--primary-5percent);
   }
 
-  .ui-graph-preview-palette-drop-indicator {
-    position: fixed;
-    z-index: 2;
-    height: 2px;
-    border-radius: 1px;
-    background: var(--primary);
+  .ui-graph-preview-sortable-row.palette-placeholder {
     pointer-events: none;
+  }
+
+  .ui-graph-preview-palette-placeholder-content {
+    display: contents;
+    visibility: hidden;
   }
 `;
 
@@ -567,7 +567,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const hostUiConfig = useRivetAppHostUiConfig();
   const canRunDesktopPreview = canRunDesktopWebAppPreview(hostUiConfig);
   const [selectedComponentIds, setSelectedComponentIds] = useState<UiComponentId[]>([]);
-  const [activePaletteComponentType, setActivePaletteComponentType] = useState<UiGraphComponent['type']>();
+  const [activePaletteComponent, setActivePaletteComponent] = useState<UiGraphComponent>();
   const [paletteInsertionIndex, setPaletteInsertionIndex] = useState<number>();
   const [pendingComponentDeletion, setPendingComponentDeletion] = useState<
     PendingUiGraphComponentDeletion | undefined
@@ -591,7 +591,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     setPendingComponentDeletion(undefined);
   }, [project.metadata.id, selectedUiGraphId]);
 
-  const addComponent = useStableCallback((type: UiGraphComponent['type'], index?: number) => {
+  const createComponent = useStableCallback((type: UiGraphComponent['type']) => {
     const boundary = getGraphBoundary(project, project.metadata.mainGraphId);
     const component = createUiGraphComponent(type, boundary ? project.metadata.mainGraphId : undefined);
     if (component.type === 'button') {
@@ -600,10 +600,18 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       component.action = initializeUiGraphChatActionBindings(component.action, boundary);
     }
 
+    return component;
+  });
+
+  const insertComponent = useStableCallback((component: UiGraphComponent, index?: number) => {
     updateUiGraph((draft) => {
       draft.components.splice(index === undefined ? draft.components.length : index, 0, component);
     });
     setSelectedComponentIds([component.id]);
+  });
+
+  const addComponent = useStableCallback((type: UiGraphComponent['type'], index?: number) => {
+    insertComponent(createComponent(type), index);
   });
 
   const confirmDeleteComponent = useStableCallback(() => {
@@ -652,7 +660,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const handleComponentDragStart = useStableCallback((event: DragStartEvent) => {
     const componentType = getPaletteComponentType(event);
     if (componentType) {
-      setActivePaletteComponentType(componentType);
+      setActivePaletteComponent(createComponent(componentType));
       setPaletteInsertionIndex(uiGraph?.components.length ?? 0);
     }
   });
@@ -677,14 +685,14 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     );
   });
   const clearPaletteDrag = useStableCallback(() => {
-    setActivePaletteComponentType(undefined);
+    setActivePaletteComponent(undefined);
     setPaletteInsertionIndex(undefined);
   });
   const handleComponentDragEnd = useStableCallback((event: DragEndEvent) => {
     const paletteComponentType = getPaletteComponentType(event);
     if (paletteComponentType) {
-      if (event.over) {
-        addComponent(paletteComponentType, paletteInsertionIndex ?? uiGraph?.components.length);
+      if (event.over && activePaletteComponent?.type === paletteComponentType) {
+        insertComponent(activePaletteComponent, paletteInsertionIndex ?? uiGraph?.components.length);
       }
       clearPaletteDrag();
       return;
@@ -977,7 +985,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
             interactionController={previewInteractionController}
             onComponentSelectionChange={selectPreviewComponent}
             onComponentSelectionSetChange={setPreviewComponentSelection}
-            paletteInsertionIndex={activePaletteComponentType ? paletteInsertionIndex : undefined}
+            paletteComponent={activePaletteComponent}
+            paletteInsertionIndex={activePaletteComponent ? paletteInsertionIndex : undefined}
             scrollContainerRef={previewScrollRef}
             selectedComponentIds={selectedComponentIdSet}
             uiGraph={uiGraph}
@@ -987,9 +996,9 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
           />
         </section>
         <DragOverlay dropAnimation={null}>
-          {activePaletteComponentType ? (
+          {activePaletteComponent ? (
             <div className="ui-graph-builder-palette-drag-overlay">
-              {getUiGraphComponentLabel(activePaletteComponentType)}
+              {getUiGraphComponentLabel(activePaletteComponent.type)}
             </div>
           ) : null}
         </DragOverlay>

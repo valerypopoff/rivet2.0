@@ -3,7 +3,13 @@ import test from 'node:test';
 import { act } from 'react-dom/test-utils';
 import { createRoot } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
-import type { GraphProgress, UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
+import {
+  createUiGraphInteractionController,
+  type GraphProgress,
+  type UiComponentId,
+  type UiGraph,
+  type UiGraphId,
+} from '@valerypopoff/rivet2-core';
 import { RivetWebAppRenderer, type RivetWebAppActionResult } from './RivetWebAppRenderer.js';
 
 test('React web app actions keep independent loading, reject stale patches, and reset after cancellation', async () => {
@@ -62,6 +68,9 @@ test('React web app actions keep independent loading, reject stale patches, and 
       const buttons = rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button');
       buttons[0]?.click();
       buttons[1]?.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
     });
 
     let buttons = rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button');
@@ -160,6 +169,14 @@ test('editor component frames expose multi-selection modifier clicks without cha
     id: 'ui-graph' as UiGraphId,
     name: 'Test app',
   };
+  const interactionController = createUiGraphInteractionController(uiGraph);
+  const displayUiGraph: UiGraph = {
+    ...uiGraph,
+    components: [
+      ...uiGraph.components,
+      { defaultValue: 'unsaved', id: 'unsaved' as UiComponentId, label: 'Unsaved', stateKey: 'unsaved', type: 'input' },
+    ],
+  };
   const selectionChanges: Array<[UiComponentId, 'replace' | 'toggle']> = [];
   const rootElement = dom.window.document.getElementById('root')!;
   const root = createRoot(rootElement);
@@ -168,7 +185,9 @@ test('editor component frames expose multi-selection modifier clicks without cha
     await act(async () => {
       root.render(
         <RivetWebAppRenderer
-          uiGraph={uiGraph}
+          interactionController={interactionController}
+          interactionUiGraph={uiGraph}
+          uiGraph={displayUiGraph}
           selectedComponentIds={new Set([firstComponentId])}
           onComponentSelectionChange={(componentId, mode) => selectionChanges.push([componentId, mode])}
           onRunAction={async () => ({ outputs: {} })}
@@ -179,6 +198,7 @@ test('editor component frames expose multi-selection modifier clicks without cha
     const frames = rootElement.querySelectorAll<HTMLElement>('.rivet-web-app-component-frame');
     assert.equal(frames[0]?.classList.contains('active'), true);
     assert.equal(frames[1]?.classList.contains('active'), false);
+    assert.equal(Object.hasOwn(interactionController.getSnapshot().state, 'unsaved'), false);
 
     await act(async () => {
       frames[1]?.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true, shiftKey: true }));
