@@ -364,16 +364,16 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-  opacity: 0.35;
-  animation: rivet-web-app-chat-thinking 1.1s ease-in-out infinite;
+  opacity: 0.2;
+  animation: rivet-web-app-chat-thinking 0.9s ease-in-out infinite;
 }
 
 .rivet-web-app-chat-thinking span:nth-child(2) {
-  animation-delay: 0.14s;
+  animation-delay: 0.13s;
 }
 
 .rivet-web-app-chat-thinking span:nth-child(3) {
-  animation-delay: 0.28s;
+  animation-delay: 0.26s;
 }
 
 .rivet-web-app-chat-error {
@@ -440,20 +440,17 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 
 @keyframes rivet-web-app-chat-thinking {
   0%,
-  60%,
   100% {
-    transform: translateY(0);
-    opacity: 0.35;
+    opacity: 0.2;
+    box-shadow: 0 0 0 transparent;
   }
   30% {
-    transform: translateY(-3px);
-    opacity: 0.9;
+    opacity: 1;
+    box-shadow: 0 0 6px currentColor;
   }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .rivet-web-app-chat-thinking span {
-    animation: none;
+  55% {
+    opacity: 0.2;
+    box-shadow: 0 0 0 transparent;
   }
 }
 

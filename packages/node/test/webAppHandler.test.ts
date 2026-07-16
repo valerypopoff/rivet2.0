@@ -993,6 +993,14 @@ void describe('createRivetWebAppHandler', () => {
     );
     assert.match(
       RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-thinking span\s*\{[\s\S]*animation: rivet-web-app-chat-thinking 0\.9s ease-in-out infinite;/,
+    );
+    assert.doesNotMatch(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.rivet-web-app-chat-thinking span/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
       /\.rivet-web-app-component-frame\[data-rivet-web-app-component-type='chat'\][\s\S]*flex: 1 0/,
     );
     assert.match(
