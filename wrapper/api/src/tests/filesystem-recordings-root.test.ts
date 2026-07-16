@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
@@ -69,6 +70,26 @@ test('workflow and recordings roots initialize separately', async () => {
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.published')), true);
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.recordings')), false);
   assert.equal(await workflowFs.pathExists(recordingsRoot), true);
+});
+
+test('recording index migrates from WAL to volume-compatible rollback journaling', async () => {
+  const databasePath = path.join(appDataRoot, 'recordings.sqlite');
+  await fs.mkdir(appDataRoot, { recursive: true });
+
+  const legacyDatabase = new DatabaseSync(databasePath);
+  legacyDatabase.exec('PRAGMA journal_mode = WAL; CREATE TABLE legacy_recordings (id TEXT PRIMARY KEY);');
+  legacyDatabase.close();
+
+  await workflowRecordings.initializeWorkflowRecordingStorage(workflowsRoot);
+
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const journalMode = database.prepare('PRAGMA journal_mode').get<{ journal_mode: string }>();
+    assert.ok(journalMode);
+    assert.equal(journalMode.journal_mode, 'delete');
+  } finally {
+    database.close();
+  }
 });
 
 test('filesystem recording persistence writes bundles under the configured recordings root', async () => {

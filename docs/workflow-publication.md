@@ -27,7 +27,7 @@ In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In s
   - in `filesystem` mode: replayable bundles under `<RIVET_WORKFLOW_RECORDINGS_ROOT>/<workflowId>/<recordingId>/`
   - in `managed` mode: replayable blobs in managed object storage, keyed from Postgres metadata
 - **Recording metadata index**
-  - in `filesystem` mode: SQLite metadata index under `<RIVET_APP_DATA_ROOT>/recordings.sqlite`
+  - in `filesystem` mode: SQLite metadata index under `<RIVET_APP_DATA_ROOT>/recordings.sqlite`; it uses rollback journaling rather than WAL so Docker volumes and Kubernetes PVCs do not need SQLite shared-memory support
   - in `managed` mode: metadata rows in Postgres `workflow_recordings`
 
 Projects live under the workflow root configured by `RIVET_WORKFLOWS_ROOT` in the API container and backed by `RIVET_WORKFLOWS_HOST_PATH` on the host in Docker modes.

@@ -72,6 +72,35 @@ Newly rendered web-app pages use `${RIVET_PUBLISHED_APPS_BASE_PATH}/:slug/action
 
 The wrapper authorizes an upgrade before resolving the project. It requires a same-origin `Origin` header even for `No gate` and trusted-host web apps, then applies the same UI-key or OAuth policy and per-app OAuth email allowlist as the HTML route. Its owner scope includes the route kind, app slug, pinned revision, and an HMAC-derived OAuth user key when OAuth is active. A socket can therefore resume or cancel only runs in its own authorization scope.
 
+If a public deployment puts another nginx, load balancer, or CDN in front of the wrapper proxy, that outer layer must preserve HTTP/1.1 WebSocket upgrades for the web-app route families. The outer proxy must also allow long-lived idle connections; Cloudflare deployments must have WebSockets enabled. When the wrapper works at `localhost` but web-app buttons reconnect forever through a public hostname, inspect this outer hop before changing API or web-app code.
+
+For an Ubuntu nginx host that forwards the public site to the Docker proxy on `127.0.0.1:8080`, add this dedicated location above its generic `location /` block:
+
+```nginx
+location ~ ^/[^/]+/[^/]+/actions/ws$ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+    proxy_buffering off;
+}
+```
+
+The pattern deliberately accepts any one-segment published/latest route family and app slug, so it keeps working if App Settings changes `/apps` or `/apps-latest`. The dedicated location is necessary when the generic proxy block clears `Connection`, such as `proxy_set_header Connection "";`; without it, nginx strips the browser's upgrade request and the generated web-app client reconnects forever.
+
+The outer proxy must set `Host`, `X-Forwarded-Host`, and `X-Forwarded-Proto` itself rather than passing browser-supplied forwarded headers through unchanged. This is required when `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true`: the wrapper then uses those headers for the browser origin, secure OAuth cookies, callback URLs, and same-origin action checks. Enable that setting only when the outer layer is trusted and overwrites the headers as in the example. Validate and apply the host configuration with `sudo nginx -t && sudo systemctl reload nginx`.
+
+For a quick production diagnosis, open the failing `wss://.../:slug/actions/ws` request in browser DevTools and inspect the handshake status. A reconnect loop with no successful `101 Switching Protocols` response usually means the outer proxy/CDN is not forwarding `Upgrade` and `Connection`. A `403` with `origin_forbidden` points to a public host/protocol forwarding mismatch; a `401` or `403` with an auth code means the socket reached Rivet and the relevant key/OAuth/allowlist policy rejected it. Check both the outer proxy error log and `docker logs compose-proxy-1` / `docker logs compose-api-1` before changing application code.
+
 Published sockets are routed to the execution plane; latest sockets are routed to the control plane and receive the same optional latest Remote Debugger attachment as latest HTTP actions. Both transports use the same project resolver, datasets, references, `ManagedCodeRunner`, request-header sanitization, and Run recordings metadata.
 
 ## `/api/*` route families

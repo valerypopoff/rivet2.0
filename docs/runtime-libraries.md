@@ -280,7 +280,7 @@ If activation fails after moving the previous `current/` aside, the runtime-libr
 Both execution paths resolve managed libraries from `current/node_modules`:
 
 - the API uses `ManagedCodeRunner`
-- the executor image sets `RIVET_CODE_RUNNER_REQUIRE_ROOT` to the same runtime-library root and relies on Rivet 2.0's app-executor `CodeRunner` seam instead of patching Rivet source
+- the production and local-development executor images set `RIVET_CODE_RUNNER_REQUIRE_ROOT` to `.../current/node_modules` and rely on Rivet 2.0's app-executor `CodeRunner` seam instead of patching Rivet source; this keeps `require('package-name')` in editor Node runs pointed at the same UI-installed libraries as headless endpoint runs
 - the shared proxy bootstrap also applies UI-managed Node executor proxy settings before installing Undici's proxy dispatcher: it clears process proxy env first, API processes read `settings/node-executor-proxy.json` under `RIVET_APP_DATA_ROOT` for headless endpoint execution, and the editor executor reads the same relative file from its desktop-style app-data mount
 - the API image links `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-core`, and Rivet 2's `@rivet2/*` runtime aliases to the built embedded `rivet/` packages before compiling the API, so hosted endpoint execution and editor-side execution use the same Rivet 2.0 runtime behavior
 
