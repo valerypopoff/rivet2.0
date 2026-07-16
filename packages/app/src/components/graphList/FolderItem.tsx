@@ -96,7 +96,8 @@ export const FolderItem: FC<{
       onRenameItem(fullPath, fullPath.replace(/[^/]+$/, newName));
     });
 
-    const isComparisonRemovedGraph = item.type === 'graph' && item.isComparisonGhost && item.compareChangeKind === 'removed';
+    const isComparisonRemovedGraph =
+      item.type === 'graph' && item.isComparisonGhost && item.compareChangeKind === 'removed';
 
     const {
       attributes,
@@ -179,7 +180,9 @@ export const FolderItem: FC<{
               'contains-open-graph': isCollapsedOpenGraphFolder,
               'compare-removed-graph': isComparisonRemovedGraph,
             })}
-            data-contextmenutype={isComparisonRemovedGraph ? undefined : item.type === 'folder' ? 'graph-folder' : 'graph-item'}
+            data-contextmenutype={
+              isComparisonRemovedGraph ? undefined : item.type === 'folder' ? 'graph-folder' : 'graph-item'
+            }
             data-graphid={savedGraph?.metadata?.id}
             data-folderpath={item.type === 'folder' ? item.fullPath : item.graph.metadata?.name}
           >
@@ -224,7 +227,7 @@ export const FolderItem: FC<{
               )}
               {shouldShowUnreachableIndicator && (
                 <Tooltip
-                  content="This graph is unreachable from the Main Graph."
+                  content="This graph is not reachable from the Main Graph or a web app."
                   placement="right"
                   tag="span"
                   className="unreachable-indicator-tooltip"
@@ -286,9 +289,7 @@ function getFolderCompareKind(
     const childKind =
       child.type === 'graph'
         ? child.compareChangeKind ??
-          (child.graph.metadata?.id
-            ? graphCompareKindByGraphId[child.graph.metadata.id]
-            : undefined)
+          (child.graph.metadata?.id ? graphCompareKindByGraphId[child.graph.metadata.id] : undefined)
         : getFolderCompareKind(child, graphCompareKindByGraphId);
 
     if (childKind === 'changed') {
@@ -327,36 +328,26 @@ const OpenFolderIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
 );
 
 const UnreachableGraphIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
-<svg viewBox="0 0 28 22" fill="none" {...props}>
-  {/* Existing connection */}
-  <path
-    d="M9.5 17.5 H19.5"
-    stroke="currentColor"
-    strokeWidth="1"
-    strokeLinecap="round"
-  />
+  <svg viewBox="0 0 28 22" fill="none" {...props}>
+    {/* Existing connection */}
+    <path d="M9.5 17.5 H19.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
 
-  <circle cx="5" cy="17.5" r="3.5" fill="currentColor" />
-  <circle cx="24" cy="17.5" r="3.5" fill="currentColor" />
+    <circle cx="5" cy="17.5" r="3.5" fill="currentColor" />
+    <circle cx="24" cy="17.5" r="3.5" fill="currentColor" />
 
-  {/* Failed connection attempt — begins with a gap */}
-  <path
-    d="M6 13 C8 6.5 14 3.5 19 4"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeDasharray="2.5 5"
-    strokeDashoffset="3.5"
-  />
+    {/* Failed connection attempt — begins with a gap */}
+    <path
+      d="M6 13 C8 6.5 14 3.5 19 4"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeDasharray="2.5 5"
+      strokeDashoffset="3.5"
+    />
 
-  {/* Larger 45-degree cross */}
-  <path
-    d="M20.5 1.5 L26.5 7.5 M26.5 1.5 L20.5 7.5"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-  />
-</svg>
+    {/* Larger 45-degree cross */}
+    <path d="M20.5 1.5 L26.5 7.5 M26.5 1.5 L20.5 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  </svg>
 );
 
 const FolderItemRename: FC<{

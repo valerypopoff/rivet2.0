@@ -1,7 +1,7 @@
 # Unreachable Graph Detection Investigation
 
 > Internal investigation notes for classifying graphs as definitely reachable,
-> dynamically reachable, or unreachable from a project's configured main graph.
+> dynamically reachable, or unreachable from a project's configured main graph and web-app action entry points.
 
 ## Summary
 
@@ -13,6 +13,7 @@ Current same-project execution reachability comes from a mix of:
 - dynamic graph dispatch through `Call Graph`
 - explicit `Delegate Tool Call` handler/fallback graph IDs
 - bundled plugin nodes that store graph handlers (`openaiRunThread`)
+- declarative web-app Button and Chat actions with stored same-project `graphId` values
 
 The main implementation seam added for this investigation is:
 
@@ -24,11 +25,13 @@ The template-duplication graph-ID remap surface was also centralized in:
 
 ## Root Set
 
-Feature semantics should stay rooted at `project.metadata.mainGraphId`.
+Feature semantics are rooted at `project.metadata.mainGraphId` plus every valid
+same-project graph selected by a web-app Button or Chat action.
 
 Why:
 
 - that matches the product request for "graphs that can be run when the main graph is running"
+- Button and Chat actions execute their selected same-project graph directly, so each valid stored target is another static entry point
 - the Project Info UI explicitly exposes `Main Graph`
 - app-side project-run flows already use `project.metadata.mainGraphId`
 
@@ -44,7 +47,7 @@ That runtime inconsistency is now surfaced as a warning in the reachability help
 
 - `definitely reachable`: graph identity is statically known from serialized project data
 - `dynamically reachable`: the graph can be executed, but the graph identity is resolved at runtime
-- `unreachable`: not reachable from the configured main graph under the supported analysis rules
+- `unreachable`: not reachable from the configured Main Graph or a web-app action under the supported analysis rules
 
 Important interpretation:
 
@@ -68,6 +71,7 @@ Important interpretation:
 | `ListGraphsNode`                                        | Reference carrier   | none by itself                        | N/A            | Exposes all graphs for downstream runtime selection               | No             | Only matters when feeding dynamic dispatch                                                                                |
 | `RunThreadNode` tool handlers                           | Executor            | `direct-static`                       | Yes            | Tool name chooses among a static set                              | No             | Bundled OpenAI plugin surface                                                                                             |
 | `RunThreadNode` on-message hook                         | Executor            | `direct-static`                       | Yes            | No                                                                | No             | Bundled OpenAI plugin surface                                                                                             |
+| Web-app `Button` / `Chat` action                        | Project entry point | `direct-static`                       | Yes            | No                                                                | No             | Stored `action.graphId`; target and its supported dependencies are definitely reachable                                   |
 | `ReferencedGraphAliasNode`                              | Executor            | `cross-project`                       | Yes            | No                                                                | Yes            | Must not mark current-project graphs as used                                                                              |
 | `NodeTestGroup.evaluatorGraphId`                        | Test-only reference | excluded from reachability            | Yes            | No                                                                | No             | Relevant for template duplication, not main-graph reachability                                                            |
 
@@ -162,7 +166,7 @@ When the graph-list feature is implemented, use:
 
 - `definitely reachable`: normal graph styling
 - `dynamically reachable`: ambiguous styling / badge / tooltip, not "unreachable"
-- `unreachable`: the only bucket that should be visually marked with the muted uniform-stroke single broken-thread icon, whose tooltip explains that the graph is unreachable from the Main Graph
+- `unreachable`: the only bucket that should be visually marked with the muted uniform-stroke single broken-thread icon, whose tooltip explains that the graph is not reachable from the Main Graph or a web app
 
 That preserves the three-bucket model without collapsing dynamic `Call Graph` dispatch into a false negative.
 `Delegate Tool Call` auto-delegate name matching is the exception: graph-list reachability intentionally ignores it because
@@ -171,8 +175,9 @@ still count as definite edges.
 
 The graph list also uses the same dependency-edge collector in reverse for local context: when a graph is open,
 every other graph with a supported same-project dependency edge to the open graph gets a small active-color dot beside
-its name. This is source-reference visibility, not reachability from Main, so it can mark direct static callers and
-Call Graph dynamic-dispatch callers even if those source graphs are themselves unreachable. `Delegate Tool Call` nodes
+its name, and every web app with a Button or Chat action targeting it gets the same dot. This is source-reference visibility,
+not reachability from Main, so it can mark direct static callers and Call Graph dynamic-dispatch callers even if those source
+graphs are themselves unreachable. `Delegate Tool Call` nodes
 are intentionally excluded from this reverse marker entirely, including manual handler and fallback edges, because
 auto-delegate can theoretically route to any named graph and would make one delegate node appear to reference almost
 every graph in the sidebar.

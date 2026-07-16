@@ -45,7 +45,7 @@ export const GraphsSettingsPage: FC = () => {
             isChecked={showUnreachableGraphTags}
             onChange={setShowUnreachableGraphTags}
             label="Show unreachable graph indicators"
-            helperMessage="Marks graphs that are not reachable from the project's Main Graph."
+            helperMessage="Marks graphs that are not reachable from the project's Main Graph or a web app action."
             className="settings-toggle-field"
           />
         )}
@@ -57,7 +57,7 @@ export const GraphsSettingsPage: FC = () => {
             isChecked={showGraphReferenceIndicators}
             onChange={setShowGraphReferenceIndicators}
             label="Show graph reference indicators"
-            helperMessage="Shows which graphs directly reference the currently open graph."
+            helperMessage="Shows graphs and web apps that directly reference the currently open graph."
             className="settings-toggle-field"
           />
         )}

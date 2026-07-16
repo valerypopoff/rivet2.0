@@ -4,7 +4,7 @@ title: 'Rivet Web Apps'
 
 Rivet web apps are small project-contained user interfaces that can call graphs in the same project. They are useful when you want a simple form, chat, button, and result view for a workflow without building and hosting a separate frontend.
 
-Web apps are saved in the `.rivet-project` file, but they are not workflow graphs. They cannot be selected as the Main Graph, they do not have nodes or connections, and they are not run by the normal graph executor.
+Web apps are saved in the `.rivet-project` file, but they are not workflow graphs. They cannot be selected as the Main Graph, they do not have nodes or connections, and they are not run by the normal graph executor. A graph directly selected by a Button or Chat action is treated as a reachable project entry point in the graph tree, alongside the Main Graph.
 
 Rivet validates every saved web-app component and workflow-bound action when the project opens. Older projects with missing or duplicate component IDs are repaired automatically. If a project file was edited manually and contains an unknown component or is missing a required field, Rivet rejects it with a message that identifies the web app, component index, and invalid field instead of opening a broken renderer.
 

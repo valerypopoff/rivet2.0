@@ -1,14 +1,28 @@
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
-import { type ChartNode, type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
+import {
+  type ChartNode,
+  type GraphId,
+  type NodeGraph,
+  type Project,
+  type ProjectId,
+  type UiComponentId,
+  type UiGraph,
+  type UiGraphId,
+} from '@valerypopoff/rivet2-core';
 import {
   getGraphIdsReferencingGraph,
   getGraphReachabilityReport,
+  getUiGraphIdsReferencingGraph,
   resolveSupportedBuiltInPluginIds,
   type GraphReachabilityRegistry,
 } from './graphReachability.js';
 
-function makeNode(type: string, data: Record<string, unknown>, options: { id?: string; disabled?: boolean } = {}): ChartNode {
+function makeNode(
+  type: string,
+  data: Record<string, unknown>,
+  options: { id?: string; disabled?: boolean } = {},
+): ChartNode {
   return {
     id: (options.id ?? `${type}-node`) as any,
     type,
@@ -28,7 +42,12 @@ function makeConnection(outputNodeId: string, inputNodeId: string, outputId: str
   };
 }
 
-function makeGraph(id: string, name: string, nodes: ChartNode[] = [], connections: NodeGraph['connections'] = []): NodeGraph {
+function makeGraph(
+  id: string,
+  name: string,
+  nodes: ChartNode[] = [],
+  connections: NodeGraph['connections'] = [],
+): NodeGraph {
   return {
     metadata: {
       id: id as GraphId,
@@ -40,7 +59,11 @@ function makeGraph(id: string, name: string, nodes: ChartNode[] = [], connection
   };
 }
 
-function makeProject(graphs: NodeGraph[], mainGraphId?: string): Pick<Project, 'metadata' | 'graphs'> {
+function makeProject(
+  graphs: NodeGraph[],
+  mainGraphId?: string,
+  uiGraphs?: Record<UiGraphId, UiGraph>,
+): Pick<Project, 'metadata' | 'graphs' | 'uiGraphs'> {
   return {
     metadata: {
       id: 'project-1' as ProjectId,
@@ -49,6 +72,32 @@ function makeProject(graphs: NodeGraph[], mainGraphId?: string): Pick<Project, '
       mainGraphId: mainGraphId as GraphId | undefined,
     },
     graphs: Object.fromEntries(graphs.map((graph) => [graph.metadata!.id!, graph])),
+    uiGraphs,
+  };
+}
+
+function makeUiGraph(id: string, components: UiGraph['components']): UiGraph {
+  return {
+    id: id as UiGraphId,
+    name: id,
+    components,
+  };
+}
+
+function makeButton(id: string, graphId: string): Extract<UiGraph['components'][number], { type: 'button' }> {
+  return {
+    id: id as UiComponentId,
+    type: 'button',
+    label: 'Run',
+    action: { type: 'runGraph', graphId: graphId as GraphId },
+  };
+}
+
+function makeChat(id: string, graphId: string): Extract<UiGraph['components'][number], { type: 'chat' }> {
+  return {
+    id: id as UiComponentId,
+    type: 'chat',
+    action: { type: 'runGraph', graphId: graphId as GraphId },
   };
 }
 
@@ -75,7 +124,7 @@ function makeRegistry(options: {
 }
 
 describe('graphReachability', () => {
-  test('roots reachability at mainGraphId only', () => {
+  test('uses the Main Graph as the default reachability root', () => {
     const main = makeGraph('main', 'Main');
     const spare = makeGraph('spare', 'Spare');
 
@@ -86,6 +135,36 @@ describe('graphReachability', () => {
     assert.deepEqual(sortGraphIds(report.unreachable), ['spare']);
     assert.equal(report.status, 'ready');
     assert.deepEqual(report.warnings, []);
+  });
+
+  test('treats Button and Chat web-app targets as definite reachability roots', () => {
+    const main = makeGraph('main', 'Main');
+    const appLeaf = makeGraph('app-leaf', 'App Leaf');
+    const buttonTarget = makeGraph('button-target', 'Button Target', [
+      makeNode('subGraph', { graphId: 'app-leaf' as GraphId }),
+    ]);
+    const chatTarget = makeGraph('chat-target', 'Chat Target');
+    const spare = makeGraph('spare', 'Spare');
+    const webApp = makeUiGraph('web-app', [makeButton('button', 'button-target'), makeChat('chat', 'chat-target')]);
+
+    const report = getGraphReachabilityReport(
+      makeProject([main, buttonTarget, appLeaf, chatTarget, spare], 'main', { [webApp.id]: webApp }),
+    );
+
+    assert.deepEqual(sortGraphIds(report.definite), ['app-leaf', 'button-target', 'chat-target', 'main']);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['spare']);
+  });
+
+  test('keeps reachability blocked without a valid Main Graph even when a web app has an action target', () => {
+    const target = makeGraph('target', 'Target');
+    const webApp = makeUiGraph('web-app', [makeButton('button', 'target')]);
+
+    const report = getGraphReachabilityReport(makeProject([target], undefined, { [webApp.id]: webApp }));
+
+    assert.equal(report.status, 'blocked');
+    assert.equal(report.blockedReason, 'missing-main-graph');
+    assert.deepEqual(sortGraphIds(report.definite), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['target']);
   });
 
   test('follows direct static executors transitively', () => {
@@ -129,7 +208,12 @@ describe('graphReachability', () => {
       { id: 'ref' },
     );
     const callGraph = makeNode('callGraph', {}, { id: 'call' });
-    const main = makeGraph('main', 'Main', [dynamicReference, callGraph], [makeConnection('ref', 'call', 'graph', 'graph')]);
+    const main = makeGraph(
+      'main',
+      'Main',
+      [dynamicReference, callGraph],
+      [makeConnection('ref', 'call', 'graph', 'graph')],
+    );
     const target = makeGraph('target', 'Target', [makeNode('subGraph', { graphId: 'leaf' as GraphId })]);
     const leaf = makeGraph('leaf', 'Leaf');
     const spare = makeGraph('spare', 'Spare');
@@ -183,10 +267,7 @@ describe('graphReachability', () => {
       'main',
       'Main',
       [staticReference, dynamicReference, callGraph],
-      [
-        makeConnection('static-ref', 'call', 'graph', 'graph'),
-        makeConnection('dynamic-ref', 'call', 'graph', 'graph'),
-      ],
+      [makeConnection('static-ref', 'call', 'graph', 'graph'), makeConnection('dynamic-ref', 'call', 'graph', 'graph')],
     );
     const target = makeGraph('target', 'Target');
     const spare = makeGraph('spare', 'Spare');
@@ -213,10 +294,7 @@ describe('graphReachability', () => {
       'main',
       'Main',
       [reference, callGraph],
-      [
-        makeConnection('missing-ref', 'call', 'graph', 'graph'),
-        makeConnection('ref', 'call', 'graph', 'graph'),
-      ],
+      [makeConnection('missing-ref', 'call', 'graph', 'graph'), makeConnection('ref', 'call', 'graph', 'graph')],
     );
     const target = makeGraph('target', 'Target');
 
@@ -425,6 +503,22 @@ describe('graphReachability', () => {
     const project = makeProject([target, directCaller, transitiveCaller, disabledCaller], 'target');
 
     assert.deepEqual(sortGraphIds(getGraphIdsReferencingGraph(project, 'target' as GraphId)), ['direct-caller']);
+  });
+
+  test('finds web apps that directly reference a graph', () => {
+    const buttonApp = makeUiGraph('button-app', [makeButton('button', 'target')]);
+    const chatApp = makeUiGraph('chat-app', [makeChat('chat', 'target')]);
+    const otherApp = makeUiGraph('other-app', [makeButton('button', 'other')]);
+    const project = makeProject([makeGraph('target', 'Target')], 'target', {
+      [buttonApp.id]: buttonApp,
+      [chatApp.id]: chatApp,
+      [otherApp.id]: otherApp,
+    });
+
+    assert.deepEqual([...getUiGraphIdsReferencingGraph(project, 'target' as GraphId)].sort(), [
+      'button-app',
+      'chat-app',
+    ]);
   });
 
   test('finds static and dynamic Call Graph references to a target graph', () => {

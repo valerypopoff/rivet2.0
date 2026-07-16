@@ -7,6 +7,9 @@ import {
   type PortId,
   type PluginLoadSpec,
   type Project,
+  type UiGraph,
+  type UiGraphActionComponent,
+  type UiGraphId,
   resolveBuiltInPlugin,
 } from '@valerypopoff/rivet2-core';
 
@@ -61,7 +64,7 @@ type CallGraphSourceResolution =
       warnings: string[];
     };
 
-type ProjectWithGraphs = Pick<Project, 'metadata' | 'graphs'>;
+type ReachabilityProject = Pick<Project, 'metadata' | 'graphs' | 'uiGraphs'>;
 
 type GetGraphReachabilityReportOptions = {
   registry?: GraphReachabilityRegistry;
@@ -119,7 +122,7 @@ export function resolveSupportedBuiltInPluginIds(pluginSpecs: PluginLoadSpec[] |
 }
 
 export function getGraphReachabilityReport(
-  project: ProjectWithGraphs,
+  project: ReachabilityProject,
   options: GetGraphReachabilityReportOptions = {},
 ): GraphReachabilityReport {
   const warnings = new Set<string>();
@@ -177,6 +180,9 @@ export function getGraphReachabilityReport(
   }
 
   enqueue(mainGraphId, 'definite');
+  for (const graphId of getUiGraphActionTargetGraphIds(project.uiGraphs)) {
+    enqueue(graphId, 'definite');
+  }
 
   while (queue.length > 0) {
     const current = queue.shift()!;
@@ -226,9 +232,7 @@ export function getGraphReachabilityReport(
     }
   }
 
-  const unreachable = new Set(
-    allGraphIds.filter((graphId) => !definite.has(graphId) && !dynamic.has(graphId)),
-  );
+  const unreachable = new Set(allGraphIds.filter((graphId) => !definite.has(graphId) && !dynamic.has(graphId)));
 
   return {
     status: unsupportedNodeTypes.size > 0 ? 'partial' : 'ready',
@@ -241,7 +245,7 @@ export function getGraphReachabilityReport(
   };
 }
 
-export function getGraphIdsReferencingGraph(project: ProjectWithGraphs, targetGraphId: GraphId): Set<GraphId> {
+export function getGraphIdsReferencingGraph(project: ReachabilityProject, targetGraphId: GraphId): Set<GraphId> {
   const referencingGraphIds = new Set<GraphId>();
   const graphEntries = Object.entries(project.graphs) as Array<[GraphId, NodeGraph]>;
   const allGraphIds = graphEntries.map(([graphId]) => graphId);
@@ -264,6 +268,45 @@ export function getGraphIdsReferencingGraph(project: ProjectWithGraphs, targetGr
   }
 
   return referencingGraphIds;
+}
+
+/** Returns web apps with a Button or Chat action that directly targets a graph. */
+export function getUiGraphIdsReferencingGraph(
+  project: Pick<Project, 'uiGraphs'>,
+  targetGraphId: GraphId,
+): Set<UiGraphId> {
+  const referencingUiGraphIds = new Set<UiGraphId>();
+
+  for (const [uiGraphId, uiGraph] of Object.entries(project.uiGraphs ?? {}) as Array<[UiGraphId, UiGraph]>) {
+    if (uiGraph.components.some((component) => getUiGraphActionTargetGraphId(component) === targetGraphId)) {
+      referencingUiGraphIds.add(uiGraphId);
+    }
+  }
+
+  return referencingUiGraphIds;
+}
+
+function getUiGraphActionTargetGraphIds(uiGraphs: Record<UiGraphId, UiGraph> | undefined): Set<GraphId> {
+  const graphIds = new Set<GraphId>();
+
+  for (const uiGraph of Object.values(uiGraphs ?? {})) {
+    for (const component of uiGraph.components) {
+      const graphId = getUiGraphActionTargetGraphId(component);
+      if (graphId) {
+        graphIds.add(graphId);
+      }
+    }
+  }
+
+  return graphIds;
+}
+
+function getUiGraphActionTargetGraphId(component: UiGraph['components'][number]): GraphId | undefined {
+  return isUiGraphActionComponent(component) ? component.action.graphId : undefined;
+}
+
+function isUiGraphActionComponent(component: UiGraph['components'][number]): component is UiGraphActionComponent {
+  return component.type === 'button' || component.type === 'chat';
 }
 
 function isReachableGraphDependencyEdge(edge: GraphDependencyEdge): boolean {
@@ -327,7 +370,7 @@ function collectGraphDependencyEdges(options: {
   allGraphIds: GraphId[];
   graph: NodeGraph;
   includeDelegateFunctionCallEdges?: boolean;
-  project: ProjectWithGraphs;
+  project: ReachabilityProject;
 }): GraphDependencyEdge[] {
   const { allGraphIds, graph, includeDelegateFunctionCallEdges = true, project } = options;
   const nodesById = Object.fromEntries(graph.nodes.map((node) => [node.id, node])) as Record<NodeId, ChartNode>;
@@ -486,7 +529,7 @@ function collectCallGraphEdges(options: {
   graph: NodeGraph;
   node: ChartNode;
   nodesById: Record<NodeId, ChartNode>;
-  project: ProjectWithGraphs;
+  project: ReachabilityProject;
 }): GraphDependencyEdge[] {
   const { allGraphIds, connectionsByInputNodeId, graph, node, nodesById, project } = options;
   const sourceResolution = resolveCallGraphSource({
@@ -573,7 +616,9 @@ function resolveCallGraphSource(options: {
   }
 
   if (validGraphInputConnections.length > 1) {
-    warnings.push(`${formatNodeContext(graph, node)} has multiple graph inputs; runtime uses the first connection and ignores the rest.`);
+    warnings.push(
+      `${formatNodeContext(graph, node)} has multiple graph inputs; runtime uses the first connection and ignores the rest.`,
+    );
   }
 
   const sourceConnection = validGraphInputConnections[0]!;

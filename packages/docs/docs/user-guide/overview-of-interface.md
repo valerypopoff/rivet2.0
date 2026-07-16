@@ -22,7 +22,7 @@ The graph tree is where you can navigate between all graphs in your project, fil
 
 Clicking on a graph in the list will open it in the main graph area. When the graph tree has focus, press **F2** to rename the currently open graph; press **Enter** to save the rename, or press **Escape** or click anywhere else, including the canvas, to cancel it. To add a new graph, right click in the blank space in the graph list and select "New Graph". To collapse or expand every folder without adding permanent toolbar buttons, right click the blank space in the graph list or right click a folder and choose **Collapse all folders** or **Expand all folders**.
 
-Rivet can show a broken-thread icon next to graphs that are unreachable from the project's configured Main Graph. Hover the icon to see the explanation. This is only a diagnostic marker: the graph is not deleted, disabled, or hidden, and you can still open and edit it.
+Rivet can show a broken-thread icon next to graphs that are unreachable from the project's configured Main Graph and are not called by a web app. Hover the icon to see the explanation. This is only a diagnostic marker: the graph is not deleted, disabled, or hidden, and you can still open and edit it. When a graph is open, a primary dot also marks graphs and web apps that directly call it.
 
 The **Web Apps** section below the graph tree lists the project's declarative web-app screens. Use **New web app** there to add one. Selecting a web app opens its builder instead of a workflow canvas; see [Rivet Web Apps](./rivet-web-apps.md) for the full building and serving guide.
 
