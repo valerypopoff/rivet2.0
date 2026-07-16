@@ -5,6 +5,7 @@ import {
   downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
+  getUiGraphProgressiveJsonOutputChunks,
   parseRivetWebAppServerMessage,
   RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
   type GraphProgress,
@@ -517,7 +518,9 @@ if (config && root) {
                         output.renderedValue,
                         'rivet-web-app-output-markdown markdown-body rivet-markdown-output',
                       )
-                    : createElement('pre', { text: output.renderedValue }),
+                    : output.renderAs === 'json'
+                      ? createProgressiveJsonOutput(output.renderedValue)
+                      : createElement('pre', { text: output.renderedValue }),
               ]),
             ]),
           );
@@ -577,9 +580,7 @@ if (config && root) {
   };
 
   interactionController.subscribe((change) => {
-    if (change !== 'state') {
-      render();
-    }
+    if (change !== 'state') render();
   });
   window.addEventListener('pagehide', () => {
     if (actionRunner.survivesPageDetach) {
@@ -890,6 +891,37 @@ function createStandaloneElement<TagName extends keyof HTMLElementTagNameMap>(
   }
   element.append(...children);
   return element;
+}
+
+function createProgressiveJsonOutput(value: string): HTMLPreElement {
+  const pre = createStandaloneElement('pre', { className: 'rivet-web-app-output-json' });
+  const chunks = getUiGraphProgressiveJsonOutputChunks(value);
+  if (!chunks) {
+    pre.textContent = value;
+    return pre;
+  }
+
+  pre.append(document.createTextNode(chunks[0]!));
+  let nextChunkIndex = 1;
+  const appendNextChunk = () => {
+    if (!pre.isConnected || nextChunkIndex >= chunks.length) {
+      return;
+    }
+
+    pre.append(document.createTextNode(chunks[nextChunkIndex]!));
+    nextChunkIndex += 1;
+    scheduleAnimationFrame(appendNextChunk);
+  };
+  scheduleAnimationFrame(appendNextChunk);
+  return pre;
+}
+
+function scheduleAnimationFrame(callback: () => void): void {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(callback);
+  } else {
+    window.setTimeout(callback, 0);
+  }
 }
 
 function readEmbeddedConfig(root: HTMLElement | null): WebAppClientConfig | undefined {

@@ -13,6 +13,7 @@ import {
   getUiGraphImageSource,
   getUiGraphJsonOutputFilename,
   getUiGraphOutputRenderModel,
+  getUiGraphProgressiveJsonOutputChunks,
   resolveUiGraphComponentActionInputs,
   resolveUiGraphComponentActionOutputStatePatch,
   type UiGraphComponent,
@@ -125,6 +126,23 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(output.hasValue, true);
     assert.equal(output.renderedValue, '{\n  "nested": [\n    "value"\n  ]\n}');
     assert.equal(output.jsonDownloadValue, output.renderedValue);
+  });
+
+  it('splits only large JSON output into lossless text chunks', () => {
+    const smallJson = '{"answer":"small"}';
+    const largeJson = `${'a'.repeat(16 * 1024 - 1)}\ud83d\ude00${'b'.repeat(128 * 1024)}`;
+    const chunks = getUiGraphProgressiveJsonOutputChunks(largeJson);
+
+    assert.equal(getUiGraphProgressiveJsonOutputChunks(smallJson), undefined);
+    assert.ok(chunks);
+    assert.equal(chunks.join(''), largeJson);
+    assert.equal(chunks.length > 1, true);
+    for (let index = 0; index < chunks.length - 1; index += 1) {
+      const chunk = chunks[index]!;
+      const nextChunk = chunks[index + 1]!;
+      assert.equal(isHighSurrogateCodeUnit(chunk.charCodeAt(chunk.length - 1)), false);
+      assert.equal(isLowSurrogateCodeUnit(nextChunk.charCodeAt(0)), false);
+    }
   });
 
   it('derives safe image sources from URLs and base64 image data', () => {
@@ -473,4 +491,12 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
     }),
     resolve,
   };
+}
+
+function isHighSurrogateCodeUnit(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogateCodeUnit(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
 }

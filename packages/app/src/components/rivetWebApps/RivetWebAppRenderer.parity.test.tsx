@@ -109,6 +109,18 @@ test('React and hosted renderers keep the same component and action behavior', a
       reactRootElement.querySelector('.rivet-web-app-output-content pre')?.textContent,
       '{\n  "answer": "Done"\n}',
     );
+    assert.equal(
+      reactRootElement
+        .querySelector('.rivet-web-app-output-content pre')
+        ?.classList.contains('rivet-web-app-output-json'),
+      true,
+    );
+    assert.equal(
+      hostedDom.window.document
+        .querySelector('.rivet-web-app-output-content pre')
+        ?.classList.contains('rivet-web-app-output-json'),
+      true,
+    );
     const firstExpandedOutput = reactRootElement.querySelector<HTMLElement>('.rivet-web-app-output');
     const outputHeader = firstExpandedOutput?.querySelector<HTMLElement>('.rivet-web-app-output-header');
     assert.equal(outputHeader?.tagName, 'BUTTON');

@@ -631,7 +631,7 @@ button.rivet-web-app-output-header:focus-visible {
 .rivet-web-app-output-action-button:focus-visible {
   color: var(--primary, #ff9e2c);
   outline: none;
-  background: color-mix(in srgb, var(--rivet-web-app-foreground) 8%, transparent);
+  background: color-mix(in srgb, #000 48%, transparent);
 }
 
 .rivet-web-app-output-content-body pre {
@@ -642,7 +642,12 @@ button.rivet-web-app-output-header:focus-visible {
   font-size: inherit;
   padding: 0;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.rivet-web-app-output-content-body pre.rivet-web-app-output-json {
+  overflow-wrap: normal;
+  word-break: break-all;
 }
 
 .rivet-web-app-output-image {

@@ -8,6 +8,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
 } from 'react';
 import {
@@ -23,6 +24,7 @@ import {
   createUiGraphChatSubmissionStatePatch,
   getUiGraphChatDraftStateKey,
   getUiGraphComponentRenderModel,
+  getUiGraphProgressiveJsonOutputChunks,
   normalizeUiGraph,
 } from '@valerypopoff/rivet2-core';
 import { copyUiGraphText, downloadUiGraphJsonOutput } from '@valerypopoff/rivet2-core/web-app-runtime';
@@ -190,7 +192,8 @@ const RivetWebAppComponent: FC<{
   state,
   uiGraphName,
 }) => {
-  const renderModel = getUiGraphComponentRenderModel(component, state);
+  const renderModel = useMemo(() => getUiGraphComponentRenderModel(component, state), [component, state]);
+
   const markdownText =
     renderModel.type === 'markdown'
       ? renderModel.markdown
@@ -346,6 +349,8 @@ const RivetWebAppComponent: FC<{
                     className="rivet-web-app-output-markdown markdown-body rivet-markdown-output"
                     dangerouslySetInnerHTML={markdownHtml}
                   />
+                ) : output.renderAs === 'json' ? (
+                  <ProgressiveJsonOutput value={output.renderedValue} />
                 ) : (
                   <pre>{output.renderedValue}</pre>
                 )}
@@ -357,6 +362,52 @@ const RivetWebAppComponent: FC<{
     }
   }
 };
+
+const ProgressiveJsonOutput: FC<{
+  value: string;
+}> = ({ value }) => {
+  const chunks = useMemo(() => getUiGraphProgressiveJsonOutputChunks(value), [value]);
+  const [visibleChunkState, setVisibleChunkState] = useState(() => ({ chunkCount: chunks ? 1 : 0, value }));
+  const visibleChunkCount = chunks && visibleChunkState.value === value ? visibleChunkState.chunkCount : 1;
+
+  useEffect(() => {
+    if (!chunks || chunks.length < 2) {
+      return;
+    }
+
+    let chunkCount = 1;
+    let cancelScheduledFrame = () => {};
+    setVisibleChunkState({ chunkCount, value });
+    const appendNextChunk = () => {
+      chunkCount += 1;
+      setVisibleChunkState({ chunkCount, value });
+      if (chunkCount < chunks.length) {
+        cancelScheduledFrame = scheduleAnimationFrame(appendNextChunk);
+      }
+    };
+    cancelScheduledFrame = scheduleAnimationFrame(appendNextChunk);
+
+    return () => cancelScheduledFrame();
+  }, [chunks, value]);
+
+  return (
+    <pre className="rivet-web-app-output-json">
+      {chunks
+        ? chunks.slice(0, visibleChunkCount).map((chunk, index) => <Fragment key={index}>{chunk}</Fragment>)
+        : value}
+    </pre>
+  );
+};
+
+function scheduleAnimationFrame(callback: () => void): () => void {
+  if (typeof requestAnimationFrame === 'function') {
+    const frameId = requestAnimationFrame(callback);
+    return () => cancelAnimationFrame(frameId);
+  }
+
+  const timeoutId = globalThis.setTimeout(callback, 0);
+  return () => globalThis.clearTimeout(timeoutId);
+}
 
 const RivetWebAppChat: FC<{
   actionError?: string;

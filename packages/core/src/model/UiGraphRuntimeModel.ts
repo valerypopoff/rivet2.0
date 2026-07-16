@@ -27,6 +27,9 @@ const IMAGE_DATA_URL_PATTERN = /^data:(image\/(?:avif|bmp|gif|jpe?g|png|webp));b
 const IMAGE_URL_PATTERN = /^(?:https?:\/\/|blob:|\/\/|\/|\.\.?\/)/i;
 const RELATIVE_IMAGE_PATH_PATTERN = /\.(?:avif|bmp|gif|jpe?g|png|webp)(?:[?#].*)?$/i;
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+const UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_THRESHOLD = 128 * 1024;
+const UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_INITIAL_CHARS = 16 * 1024;
+const UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_CHUNK_CHARS = 16 * 1024;
 
 export type UiGraphComponentRenderModel =
   | {
@@ -502,7 +505,7 @@ export function getUiGraphOutputRenderModel(
     hasValue,
     ...(imageErrorMessage ? { imageErrorMessage } : {}),
     ...(imageSource ? { imageSource } : {}),
-    ...(hasValue && renderAs === 'json' ? { jsonDownloadValue: stringifyUiGraphValue(value) } : {}),
+    ...(hasValue && renderAs === 'json' ? { jsonDownloadValue: renderedValue } : {}),
     renderedValue,
     renderAs,
   };
@@ -518,6 +521,44 @@ export function renderUiGraphOutputValue(value: unknown, renderAs: UiGraphOutput
   }
 
   return typeof value === 'string' ? value : value == null ? '' : stringifyUiGraphValue(value) ?? '';
+}
+
+/**
+ * Splits very large JSON output into append-only DOM text chunks. Appending the
+ * chunks lets browser renderers show the first screenful without blocking on
+ * layout for every visual line in one huge escaped JSON string.
+ */
+export function getUiGraphProgressiveJsonOutputChunks(value: string): readonly string[] | undefined {
+  if (value.length < UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_THRESHOLD) {
+    return undefined;
+  }
+
+  const chunks: string[] = [];
+  let offset = 0;
+  let chunkLength = UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_INITIAL_CHARS;
+  while (offset < value.length) {
+    let nextOffset = Math.min(value.length, offset + chunkLength);
+    if (
+      nextOffset < value.length &&
+      isHighSurrogate(value.charCodeAt(nextOffset - 1)) &&
+      isLowSurrogate(value.charCodeAt(nextOffset))
+    ) {
+      nextOffset += 1;
+    }
+    chunks.push(value.slice(offset, nextOffset));
+    offset = nextOffset;
+    chunkLength = UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_CHUNK_CHARS;
+  }
+
+  return chunks;
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
 }
 
 export function getUiGraphImageSource(value: unknown): string | undefined {
