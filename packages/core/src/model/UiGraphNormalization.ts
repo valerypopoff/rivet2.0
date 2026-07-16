@@ -1,13 +1,7 @@
+import type { z } from 'zod';
 import type { Project } from './Project.js';
-import {
-  UI_GRAPH_GAP_SIZES,
-  UI_GRAPH_OUTPUT_RENDER_MODES,
-  type UiGraphAction,
-  type UiGraph,
-  type UiGraphComponent,
-  type UiGraphId,
-  normalizeUiGraphComponentIds,
-} from './UiGraph.js';
+import { type UiGraph, type UiGraphId, normalizeUiGraphComponentIds } from './UiGraph.js';
+import { UI_GRAPH_COMPONENT_SCHEMA, UI_GRAPH_ENVELOPE_SCHEMA } from './UiGraphSchema.js';
 
 export type UiGraphNormalizationIssue = {
   message: string;
@@ -85,27 +79,17 @@ type InternalNormalizationOptions = UiGraphNormalizationOptions & { expectedId?:
 type UiGraphParseResult = { issues: UiGraphNormalizationIssue[]; uiGraph?: UiGraph };
 
 function parseUiGraph(value: unknown, options: InternalNormalizationOptions): UiGraphParseResult {
-  const issues: UiGraphNormalizationIssue[] = [];
-  const graphLabel = getUiGraphLabel(value, options.expectedId);
-  const graphPath = `UI graph "${graphLabel}"`;
-
+  const graphPath = `UI graph "${getUiGraphLabel(value, options.expectedId)}"`;
   if (!isRecord(value)) {
     return { issues: [{ message: 'must be an object', path: graphPath }] };
   }
 
-  requireNonEmptyString(value, 'id', graphPath, issues);
-  requireString(value, 'name', graphPath, issues);
-  optionalString(value, 'description', graphPath, issues);
-
+  const envelopeResult = UI_GRAPH_ENVELOPE_SCHEMA.safeParse(value);
+  const issues = envelopeResult.success ? [] : mapSchemaIssues(envelopeResult.error.issues, graphPath);
   if (options.expectedId !== undefined && typeof value.id === 'string' && value.id !== options.expectedId) {
-    issues.push({
-      message: `must match its project key "${options.expectedId}"`,
-      path: `${graphPath}.id`,
-    });
+    issues.push({ message: `must match its project key "${options.expectedId}"`, path: `${graphPath}.id` });
   }
-
   if (!Array.isArray(value.components)) {
-    issues.push({ message: 'must be an array', path: `${graphPath}.components` });
     return { issues };
   }
 
@@ -137,13 +121,15 @@ function validateComponents(
       continue;
     }
 
-    validateComponent(component, componentPath, issues);
-    const rawComponentId = component.id;
-    if (rawComponentId !== undefined && typeof rawComponentId !== 'string') {
-      issues.push({ message: 'must be a string', path: `${componentPath}.id` });
-      continue;
+    const result = UI_GRAPH_COMPONENT_SCHEMA.safeParse(component);
+    if (!result.success) {
+      issues.push(...mapComponentSchemaIssues(result.error.issues, componentPath, component.type));
     }
 
+    const rawComponentId = component.id;
+    if (rawComponentId !== undefined && typeof rawComponentId !== 'string') {
+      continue;
+    }
     const componentId = rawComponentId ?? '';
     if (!componentId.trim()) {
       if (!repairComponentIds) {
@@ -151,266 +137,50 @@ function validateComponents(
       }
       continue;
     }
-
     if (usedIds.has(componentId)) {
-      if (repairComponentIds) {
-        continue;
+      if (!repairComponentIds) {
+        issues.push({ message: `duplicates component id "${componentId}"`, path: `${componentPath}.id` });
       }
-      issues.push({
-        message: `duplicates component id "${componentId}"`,
-        path: `${componentPath}.id`,
-      });
       continue;
     }
-
     usedIds.add(componentId);
   }
 }
 
-function validateComponent(
-  component: Record<string, unknown>,
+function mapComponentSchemaIssues(
+  schemaIssues: readonly z.core.$ZodIssue[],
   path: string,
-  issues: UiGraphNormalizationIssue[],
-): void {
-  const componentType = component.type;
-  if (typeof componentType !== 'string' || !hasOwn(UI_GRAPH_COMPONENT_VALIDATORS, componentType)) {
-    issues.push({
-      message:
-        typeof componentType === 'string'
+  componentType: unknown,
+): UiGraphNormalizationIssue[] {
+  return schemaIssues.map((issue) => ({
+    message:
+      issue.path.length === 1 && issue.path[0] === 'type'
+        ? typeof componentType === 'string'
           ? `has unsupported type "${componentType}"`
-          : 'must have a supported string type',
-      path: `${path}.type`,
-    });
-    return;
-  }
-
-  UI_GRAPH_COMPONENT_VALIDATORS[componentType](component, path, issues);
+          : 'must have a supported string type'
+        : issue.message,
+    path: formatSchemaPath(path, issue.path),
+  }));
 }
 
-type ShapeValidator = (value: Record<string, unknown>, path: string, issues: UiGraphNormalizationIssue[]) => void;
-
-const UI_GRAPH_COMPONENT_VALIDATORS = {
-  text(component, path, issues) {
-    requireString(component, 'text', path, issues);
-  },
-  markdown(component, path, issues) {
-    requireString(component, 'markdown', path, issues);
-  },
-  gap(component, path, issues) {
-    requireEnum(component, 'size', UI_GRAPH_GAP_SIZES, path, issues);
-  },
-  input: validateInputComponent,
-  textarea: validateInputComponent,
-  dropdown: validateDropdownComponent,
-  button(component, path, issues) {
-    requireString(component, 'label', path, issues);
-    validateAction(component.action, `${path}.action`, issues);
-  },
-  chat(component, path, issues) {
-    optionalString(component, 'placeholder', path, issues);
-    validateChatAction(component.action, `${path}.action`, issues);
-  },
-  output(component, path, issues) {
-    optionalString(component, 'label', path, issues);
-    requireString(component, 'stateKey', path, issues);
-    optionalEnum(component, 'renderAs', UI_GRAPH_OUTPUT_RENDER_MODES, path, issues);
-  },
-} satisfies Record<UiGraphComponent['type'], ShapeValidator>;
-
-function validateInputComponent(
-  component: Record<string, unknown>,
-  path: string,
-  issues: UiGraphNormalizationIssue[],
-): void {
-  requireString(component, 'label', path, issues);
-  requireString(component, 'stateKey', path, issues);
-  optionalString(component, 'placeholder', path, issues);
-  optionalString(component, 'defaultValue', path, issues);
+function mapSchemaIssues(schemaIssues: readonly z.core.$ZodIssue[], path: string): UiGraphNormalizationIssue[] {
+  return schemaIssues.map((issue) => ({ message: issue.message, path: formatSchemaPath(path, issue.path) }));
 }
 
-function validateDropdownComponent(
-  component: Record<string, unknown>,
-  path: string,
-  issues: UiGraphNormalizationIssue[],
-): void {
-  requireString(component, 'label', path, issues);
-  requireString(component, 'stateKey', path, issues);
-
-  if (!Array.isArray(component.items)) {
-    issues.push({ message: 'must be an array', path: `${path}.items` });
-    return;
-  }
-
-  component.items.forEach((item, index) => {
-    const itemPath = `${path}.items[${index}]`;
-    if (!isRecord(item)) {
-      issues.push({ message: 'must be an object', path: itemPath });
-      return;
-    }
-    requireString(item, 'label', itemPath, issues);
-    requireString(item, 'value', itemPath, issues);
-  });
-}
-
-function validateAction(value: unknown, path: string, issues: UiGraphNormalizationIssue[]): void {
-  if (!isRecord(value)) {
-    issues.push({ message: 'must be an object', path });
-    return;
-  }
-  const actionType = value.type;
-  if (typeof actionType !== 'string' || !hasOwn(UI_GRAPH_ACTION_VALIDATORS, actionType)) {
-    issues.push({ message: 'must be "runGraph"', path: `${path}.type` });
-    return;
-  }
-
-  UI_GRAPH_ACTION_VALIDATORS[actionType](value, path, issues);
-}
-
-function validateChatAction(value: unknown, path: string, issues: UiGraphNormalizationIssue[]): void {
-  if (!isRecord(value)) {
-    issues.push({ message: 'must be an object', path });
-    return;
-  }
-  if (value.type !== 'runGraph') {
-    issues.push({ message: 'must be "runGraph"', path: `${path}.type` });
-  }
-  optionalString(value, 'graphId', path, issues);
-  optionalString(value, 'userInputId', path, issues);
-  optionalString(value, 'historyInputId', path, issues);
-  optionalString(value, 'responseOutputId', path, issues);
-  validateInputMappings(value.inputMappings, `${path}.inputMappings`, issues);
-}
-
-const UI_GRAPH_ACTION_VALIDATORS = {
-  runGraph(value, path, issues) {
-    optionalString(value, 'graphId', path, issues);
-    optionalString(value, 'outputKey', path, issues);
-    optionalString(value, 'outputStateKey', path, issues);
-    validateInputMappings(value.inputMappings, `${path}.inputMappings`, issues);
-    validateLegacyInputs(value.inputs, `${path}.inputs`, issues);
-    validateOutputMappings(value.outputs, `${path}.outputs`, issues);
-  },
-} satisfies Record<UiGraphAction['type'], ShapeValidator>;
-
-function validateInputMappings(value: unknown, path: string, issues: UiGraphNormalizationIssue[]): void {
-  if (value === undefined) {
-    return;
-  }
-  if (!Array.isArray(value)) {
-    issues.push({ message: 'must be an array', path });
-    return;
-  }
-  for (const [index, binding] of value.entries()) {
-    const bindingPath = `${path} at index ${index}`;
-    if (!isRecord(binding)) {
-      issues.push({ message: 'must be an object', path: bindingPath });
-      continue;
-    }
-    requireString(binding, 'inputKey', bindingPath, issues);
-    requireString(binding, 'stateKey', bindingPath, issues);
-  }
-}
-
-function validateLegacyInputs(value: unknown, path: string, issues: UiGraphNormalizationIssue[]): void {
-  if (value === undefined) {
-    return;
-  }
-  if (!isRecord(value)) {
-    issues.push({ message: 'must be an object', path });
-    return;
-  }
-  for (const [inputId, binding] of Object.entries(value)) {
-    const bindingPath = `${path}[${JSON.stringify(inputId)}]`;
-    if (!isRecord(binding)) {
-      issues.push({ message: 'must be an object', path: bindingPath });
-      continue;
-    }
-    if (binding.type === 'state') {
-      requireString(binding, 'key', bindingPath, issues);
-    } else if (binding.type === 'literal') {
-      if (!Object.prototype.hasOwnProperty.call(binding, 'value')) {
-        issues.push({ message: 'is required', path: `${bindingPath}.value` });
-      }
+function formatSchemaPath(basePath: string, schemaPath: PropertyKey[]): string {
+  let path = basePath;
+  for (let index = 0; index < schemaPath.length; index += 1) {
+    const segment = schemaPath[index]!;
+    const previous = schemaPath[index - 1];
+    if (typeof segment === 'number') {
+      path += previous === 'items' ? `[${segment}]` : ` at index ${segment}`;
+    } else if (typeof previous === 'string' && previous === 'inputs') {
+      path += `[${JSON.stringify(segment)}]`;
     } else {
-      issues.push({ message: 'must be "state" or "literal"', path: `${bindingPath}.type` });
+      path += `.${String(segment)}`;
     }
   }
-}
-
-function validateOutputMappings(value: unknown, path: string, issues: UiGraphNormalizationIssue[]): void {
-  if (value === undefined) {
-    return;
-  }
-  if (!Array.isArray(value)) {
-    issues.push({ message: 'must be an array', path });
-    return;
-  }
-  for (const [index, binding] of value.entries()) {
-    const bindingPath = `${path} at index ${index}`;
-    if (!isRecord(binding)) {
-      issues.push({ message: 'must be an object', path: bindingPath });
-      continue;
-    }
-    optionalString(binding, 'outputKey', bindingPath, issues);
-    requireString(binding, 'stateKey', bindingPath, issues);
-  }
-}
-
-function requireString(
-  value: Record<string, unknown>,
-  key: string,
-  path: string,
-  issues: UiGraphNormalizationIssue[],
-): void {
-  if (typeof value[key] !== 'string') {
-    issues.push({ message: 'must be a string', path: `${path}.${key}` });
-  }
-}
-
-function requireNonEmptyString(
-  value: Record<string, unknown>,
-  key: string,
-  path: string,
-  issues: UiGraphNormalizationIssue[],
-): void {
-  if (typeof value[key] !== 'string' || !value[key].trim()) {
-    issues.push({ message: 'must be a non-empty string', path: `${path}.${key}` });
-  }
-}
-
-function optionalString(
-  value: Record<string, unknown>,
-  key: string,
-  path: string,
-  issues: UiGraphNormalizationIssue[],
-): void {
-  if (value[key] !== undefined && typeof value[key] !== 'string') {
-    issues.push({ message: 'must be a string when provided', path: `${path}.${key}` });
-  }
-}
-
-function requireEnum<const T extends readonly string[]>(
-  value: Record<string, unknown>,
-  key: string,
-  allowed: T,
-  path: string,
-  issues: UiGraphNormalizationIssue[],
-): void {
-  if (typeof value[key] !== 'string' || !allowed.includes(value[key] as T[number])) {
-    issues.push({ message: `must be one of: ${allowed.join(', ')}`, path: `${path}.${key}` });
-  }
-}
-
-function optionalEnum<const T extends readonly string[]>(
-  value: Record<string, unknown>,
-  key: string,
-  allowed: T,
-  path: string,
-  issues: UiGraphNormalizationIssue[],
-): void {
-  if (value[key] !== undefined && (typeof value[key] !== 'string' || !allowed.includes(value[key] as T[number]))) {
-    issues.push({ message: `must be one of: ${allowed.join(', ')}`, path: `${path}.${key}` });
-  }
+  return path;
 }
 
 function getUiGraphLabel(value: unknown, expectedId: string | undefined): string {
@@ -422,8 +192,4 @@ function getUiGraphLabel(value: unknown, expectedId: string | undefined): string
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasOwn<T extends object>(value: T, key: PropertyKey): key is keyof T {
-  return Object.prototype.hasOwnProperty.call(value, key);
 }

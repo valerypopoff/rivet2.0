@@ -9,8 +9,6 @@ import {
   getRivetWebAppAssetManifest,
   getUiGraphChatMessagesStateKey,
   type DataValue,
-  type GraphId,
-  type NodeGraph,
   type Project,
   RIVET_WEB_APP_DOCUMENT_CSS,
   RIVET_WEB_APP_ASSET_CACHE_CONTROL,
@@ -23,111 +21,21 @@ import {
   prepareRivetWebAppAction,
   runRivetWebAppAction,
 } from '../src/index.js';
+import {
+  makeExternalStatusProject,
+  makeWebAppActionRequest,
+  makeWebAppProject,
+  TEST_GRAPH_ID,
+} from './webAppFixtures.js';
 
-const graphId = 'main-graph' as GraphId;
+const graphId = TEST_GRAPH_ID;
 const ACTION_LOADING_PRESENTATION_WAIT_MS = 350;
 
 function waitForActionLoadingPresentation(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ACTION_LOADING_PRESENTATION_WAIT_MS));
 }
 
-function makeProject(): Project {
-  const graph: NodeGraph = {
-    metadata: {
-      description: '',
-      id: graphId,
-      name: 'Main Graph',
-    },
-    nodes: [
-      {
-        id: 'input-node' as any,
-        type: 'graphInput',
-        title: 'Input',
-        visualData: { x: 0, y: 0 },
-        data: { dataType: 'string', id: 'input' },
-      },
-      {
-        id: 'output-node' as any,
-        type: 'graphOutput',
-        title: 'Output',
-        visualData: { x: 300, y: 0 },
-        data: { dataType: 'string', id: 'value' },
-      },
-    ],
-    connections: [
-      {
-        inputId: 'value' as any,
-        inputNodeId: 'output-node' as any,
-        outputId: 'data' as any,
-        outputNodeId: 'input-node' as any,
-      },
-    ],
-  };
-
-  return {
-    graphs: { [graphId]: graph },
-    metadata: {
-      description: '',
-      id: 'project' as any,
-      mainGraphId: graphId,
-      title: 'Project',
-    },
-    uiGraphs: {
-      'ui-graph': {
-        id: 'ui-graph' as any,
-        name: 'Test App',
-        components: [
-          {
-            id: 'run-button' as any,
-            type: 'button',
-            label: 'Run',
-            action: {
-              type: 'runGraph',
-              graphId,
-              inputs: {
-                input: { type: 'state', key: 'prompt' },
-              },
-              outputKey: 'value',
-              outputStateKey: 'result',
-            },
-          },
-        ],
-      },
-    },
-  } as Project;
-}
-
-function makeExternalStatusProject(): Project {
-  const project = makeProject();
-  project.graphs[graphId]!.nodes = [
-    {
-      data: { dataType: 'string', id: 'input' },
-      id: 'input-node',
-      title: 'Input',
-      type: 'graphInput',
-      visualData: { x: 0, y: 0 },
-    },
-    {
-      data: { functionName: 'setWebAppStatus', useErrorOutput: false, useFunctionNameInput: false },
-      id: 'status-node',
-      title: 'Set web app status',
-      type: 'externalCall',
-      visualData: { x: 200, y: 0 },
-    },
-    {
-      data: { dataType: 'string', id: 'value' },
-      id: 'output-node',
-      title: 'Output',
-      type: 'graphOutput',
-      visualData: { x: 400, y: 0 },
-    },
-  ];
-  project.graphs[graphId]!.connections = [
-    { inputId: 'arguments', inputNodeId: 'status-node', outputId: 'data', outputNodeId: 'input-node' },
-    { inputId: 'value', inputNodeId: 'output-node', outputId: 'result', outputNodeId: 'status-node' },
-  ];
-  return project;
-}
+const makeProject = makeWebAppProject;
 
 void describe('createRivetWebAppHandler', () => {
   void it('rejects malformed UI graphs before serving requests', () => {
@@ -708,6 +616,54 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
+  void it('recreates the WebSocket action transport after a back-forward cache restore', async () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const sockets: FakeBrowserWebSocket[] = [];
+    const dom = new JSDOM(
+      renderRivetWebAppHtml(uiGraph, {
+        actionTransport: { type: 'websocket', socketPath: '/app/actions/ws' },
+      }),
+      {
+        beforeParse(window) {
+          window.WebSocket = makeFakeBrowserWebSocketClass(window, sockets) as never;
+        },
+        runScripts: 'dangerously',
+        url: 'https://example.test/app',
+      },
+    );
+
+    (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const firstSocket = sockets[0]!;
+    const firstStart = firstSocket.sent.find((message) => message.type === 'action.start')!;
+    firstSocket.receive({
+      type: 'action.accepted',
+      requestId: firstStart.requestId,
+      runId: 'run-before-page-cache',
+      sequence: 1,
+    });
+    firstSocket.receive({
+      type: 'action.completed',
+      requestId: firstStart.requestId,
+      runId: 'run-before-page-cache',
+      sequence: 2,
+      statePatch: { result: 'First result' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    dom.window.dispatchEvent(new dom.window.PageTransitionEvent('pagehide', { persisted: true }));
+    assert.equal(firstSocket.readyState, 3);
+    dom.window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true }));
+
+    (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(sockets.length, 2);
+    assert.equal(sockets[1]?.sent.some((message) => message.type === 'action.start'), true);
+    dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+    dom.window.close();
+  });
+
   void it('preserves an absolute secure WebSocket action URL', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
@@ -1090,13 +1046,7 @@ void describe('createRivetWebAppHandler', () => {
 
   void it('runs bound graph actions and returns a state patch', async () => {
     const handler = createRivetWebAppHandler(makeProject(), { basePath: '/app', uiGraphId: 'ui-graph' });
-    const response = await handler.handleRequest(
-      new Request('https://example.test/app/actions/run', {
-        body: JSON.stringify({ componentId: 'run-button', state: { prompt: 'hello' } }),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-      }),
-    );
+    const response = await handler.handleRequest(makeWebAppActionRequest());
     const body = (await response.json()) as { outputs: Record<string, DataValue>; statePatch: Record<string, unknown> };
 
     assert.equal(response.status, 200);
@@ -1123,13 +1073,7 @@ void describe('createRivetWebAppHandler', () => {
     ];
 
     const handler = createRivetWebAppHandler(project, { basePath: '/app', uiGraphId: 'ui-graph' });
-    const response = await handler.handleRequest(
-      new Request('https://example.test/app/actions/run', {
-        body: JSON.stringify({ componentId: 'ui-graph-component-2', state: { prompt: 'hello' } }),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-      }),
-    );
+    const response = await handler.handleRequest(makeWebAppActionRequest({ componentId: 'ui-graph-component-2' }));
     const body = (await response.json()) as { statePatch: Record<string, unknown> };
 
     assert.equal(response.status, 200);
@@ -1144,13 +1088,7 @@ void describe('createRivetWebAppHandler', () => {
     graph.nodes[1]!.data = { dataType: 'string[]', id: 'value' };
 
     const handler = createRivetWebAppHandler(project, { basePath: '/app', uiGraphId: 'ui-graph' });
-    const response = await handler.handleRequest(
-      new Request('https://example.test/app/actions/run', {
-        body: JSON.stringify({ componentId: 'run-button', state: { prompt: ['one', 'two'] } }),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-      }),
-    );
+    const response = await handler.handleRequest(makeWebAppActionRequest({ state: { prompt: ['one', 'two'] } }));
     const body = (await response.json()) as { outputs: Record<string, DataValue>; statePatch: Record<string, unknown> };
 
     assert.equal(response.status, 200);
@@ -1164,13 +1102,7 @@ void describe('createRivetWebAppHandler', () => {
       createProcessorOptions: { graph: 'wrong-graph' as GraphId } as any,
       uiGraphId: 'ui-graph',
     });
-    const response = await handler.handleRequest(
-      new Request('https://example.test/app/actions/run', {
-        body: JSON.stringify({ componentId: 'run-button', state: { prompt: 'hello' } }),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-      }),
-    );
+    const response = await handler.handleRequest(makeWebAppActionRequest());
     const body = (await response.json()) as { outputs: Record<string, DataValue> };
 
     assert.equal(response.status, 200);
@@ -1281,8 +1213,34 @@ void describe('createRivetWebAppHandler', () => {
     ) as { revisionKey?: string };
     revisionDom.window.close();
     assert.equal(embeddedConfig.revisionKey, 'rev-1');
-    assert.match(html, /revisionKey: config\.revisionKey/);
-    assert.match(html, /credentials: "same-origin"/);
+
+    const clientRequests: Array<{ body: Record<string, unknown>; credentials?: RequestCredentials }> = [];
+    const clientDom = new JSDOM(html, {
+      beforeParse(window) {
+        window.fetch = async (_input, init) => {
+          clientRequests.push({
+            body: JSON.parse(`${init?.body ?? '{}'}`) as Record<string, unknown>,
+            credentials: init?.credentials,
+          });
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ outputs: {}, statePatch: {} }),
+          } as Response;
+        };
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+    clientDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    clientDom.window.close();
+    assert.deepEqual(clientRequests, [
+      {
+        body: { componentId: 'run-button', revisionKey: 'rev-1', state: {} },
+        credentials: 'same-origin',
+      },
+    ]);
 
     const accepted = await handler.handleRequest(
       new Request('https://example.test/app/actions/run', {
@@ -1304,14 +1262,31 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(rejected.status, 409);
     assert.equal(rejectedBody.error, 'Rivet web app revision mismatch.');
     assert.equal(rejectedBody.code, 'revision_mismatch');
-    assert.match(html, /error\.code === "revision_mismatch"/);
-    assert.match(html, /renderRevisionMismatchModal/);
-    assert.match(html, /role: "dialog"/);
-    assert.match(html, /"aria-modal": "true"/);
-    assert.match(html, /This app was updated\. Reload to continue\./);
-    assert.match(html, /text: "Reload"/);
+
+    const mismatchDom = new JSDOM(html, {
+      beforeParse(window) {
+        window.fetch = async () =>
+          ({
+            ok: false,
+            status: 409,
+            statusText: 'Conflict',
+            text: async () => JSON.stringify(rejectedBody),
+          }) as Response;
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+    mismatchDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const dialog = mismatchDom.window.document.querySelector<HTMLElement>('[role="dialog"]');
+    const reloadButton = dialog?.querySelector<HTMLButtonElement>('.rivet-web-app-modal-button');
+    assert.equal(dialog?.getAttribute('aria-modal'), 'true');
+    assert.match(dialog?.textContent ?? '', /This app was updated\. Reload to continue\./);
+    assert.equal(reloadButton?.textContent, 'Reload');
+    assert.equal(mismatchDom.window.document.activeElement, reloadButton);
+    mismatchDom.window.close();
+
     assert.match(html, /window\.location\.reload\(\)/);
-    assert.match(html, /root\.querySelector\("\.rivet-web-app-modal-button"\)\?\.focus\(\)/);
     assert.ok(RIVET_WEB_APP_RENDERER_CSS.includes('.rivet-web-app-modal-backdrop'));
     assert.ok(RIVET_WEB_APP_RENDERER_CSS.includes('.rivet-web-app-modal'));
     assert.match(RIVET_WEB_APP_RENDERER_CSS, /background: rgba\(0, 0, 0, 0\.46\);[\s\S]*background: color-mix/);

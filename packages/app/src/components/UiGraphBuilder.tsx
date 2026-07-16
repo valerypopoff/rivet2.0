@@ -1,35 +1,15 @@
 import { css } from '@emotion/react';
-import { type CSSProperties, type FC, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FC, useMemo } from 'react';
 import { useAtomValue, useStore } from 'jotai';
-import {
-  closestCenter,
-  type CollisionDetection,
-  DndContext,
-  DragOverlay,
-  type DragEndEvent,
-  type DragOverEvent,
-  type DragStartEvent,
-  PointerSensor,
-  pointerWithin,
-  useDraggable,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import { arrayMove } from '@dnd-kit/sortable';
+import { DndContext, DragOverlay, useDraggable } from '@dnd-kit/core';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
 import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
-import {
-  getGraphBoundary,
-  initializeUiGraphChatActionBindings,
-  type UiComponentId,
-  type UiGraphComponent,
-} from '@valerypopoff/rivet2-core';
+import type { UiGraphComponent } from '@valerypopoff/rivet2-core';
 import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
 import { leftSidebarLiveWidthState } from '../state/ui.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
-import { useGlobalHotkey } from '../hooks/useGlobalHotkey.js';
 import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { createWebviewWindowHandle } from '../utils/platform/window.js';
 import {
@@ -41,51 +21,20 @@ import {
 } from './rivetWebApps/RivetWebAppPreviewWindow.js';
 import { useRunUiGraphAction } from '../hooks/useRunUiGraphAction.js';
 import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
-import {
-  createUiGraphComponent,
-  getUiGraphComponentLabel,
-  UI_GRAPH_COMPONENT_PALETTE_GROUPS,
-} from './uiGraphBuilder/componentDescriptors.js';
-import {
-  getCurrentUiGraphComponentDeletionIds,
-  type PendingUiGraphComponentDeletion,
-} from './uiGraphBuilder/componentDeletion.js';
-import {
-  initializeButtonActionToGraphBoundary,
-  normalizeButtonActionToGraphBoundary,
-} from './uiGraphBuilder/buttonBindings.js';
+import { getUiGraphComponentLabel, UI_GRAPH_COMPONENT_PALETTE_GROUPS } from './uiGraphBuilder/componentDescriptors.js';
 import { UiGraphComponentEditor } from './uiGraphBuilder/UiGraphComponentEditor.js';
-import { UiGraphPreviewEditor, UI_GRAPH_PREVIEW_DROP_ZONE_ID } from './uiGraphBuilder/UiGraphPreviewEditor.js';
+import { UiGraphPreviewEditor } from './uiGraphBuilder/UiGraphPreviewEditor.js';
 import { canRunDesktopWebAppPreview } from './uiGraphBuilder/uiGraphBuilderPolicy.js';
 import { useUiGraphMutations } from './uiGraphBuilder/useUiGraphMutations.js';
 import { collectUiGraphDataKeyUsages } from './uiGraphBuilder/dataKeys.js';
 import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
 import { DeleteResourceConfirmModal } from './DeleteResourceConfirmModal.js';
-import { isUiGraphComponentEventTarget, revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
 import { getUiGraphPreviewInteractionController } from './rivetWebApps/uiGraphPreviewSession.js';
-import { selectUiGraphComponent, type UiGraphComponentSelectionMode } from './uiGraphBuilder/componentSelection.js';
-import { isMacOSPlatform } from '../utils/platform/os.js';
-import { getUiGraphComponentInsertionIndex } from './uiGraphBuilder/componentInsertion.js';
-
-const UI_GRAPH_PALETTE_DRAG_PREFIX = 'ui-graph-palette:';
-
-function getPaletteComponentType(
-  event: DragStartEvent | DragOverEvent | DragEndEvent,
-): UiGraphComponent['type'] | undefined {
-  const componentType = event.active.data.current?.componentType;
-  return typeof componentType === 'string' ? (componentType as UiGraphComponent['type']) : undefined;
-}
-
-const collisionDetection: CollisionDetection = (args) => {
-  const pointerCollisions = pointerWithin(args);
-  const pointerComponentCollisions = pointerCollisions.filter(({ id }) => id !== UI_GRAPH_PREVIEW_DROP_ZONE_ID);
-  if (pointerComponentCollisions.length > 0) {
-    return pointerComponentCollisions;
-  }
-
-  const closestComponentCollisions = closestCenter(args).filter(({ id }) => id !== UI_GRAPH_PREVIEW_DROP_ZONE_ID);
-  return closestComponentCollisions.length > 0 ? closestComponentCollisions : pointerCollisions;
-};
+import {
+  UI_GRAPH_PALETTE_DRAG_PREFIX,
+  uiGraphBuilderCollisionDetection,
+  useUiGraphBuilderController,
+} from './uiGraphBuilder/useUiGraphBuilderController.js';
 
 const styles = css`
   position: fixed;
@@ -580,199 +529,33 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const hostUiConfig = useRivetAppHostUiConfig();
   const canRunDesktopPreview = canRunDesktopWebAppPreview(hostUiConfig);
-  const [selectedComponentIds, setSelectedComponentIds] = useState<UiComponentId[]>([]);
-  const [activePaletteComponent, setActivePaletteComponent] = useState<UiGraphComponent>();
-  const [paletteInsertionIndex, setPaletteInsertionIndex] = useState<number>();
-  const [pendingComponentDeletion, setPendingComponentDeletion] = useState<
-    PendingUiGraphComponentDeletion | undefined
-  >();
-  const settingsScrollRef = useRef<HTMLDivElement>(null);
-  const previewScrollRef = useRef<HTMLDivElement>(null);
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
   const previewInteractionController = uiGraph
     ? getUiGraphPreviewInteractionController(project.metadata.id, uiGraph)
     : undefined;
   const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
-  const selectedComponentIdSet = useMemo(() => new Set(selectedComponentIds), [selectedComponentIds]);
-  const pendingDeleteComponentIds = getCurrentUiGraphComponentDeletionIds(
-    pendingComponentDeletion,
-    project.metadata.id,
-    uiGraph,
-  );
-
-  useEffect(() => {
-    setSelectedComponentIds([]);
-    setPendingComponentDeletion(undefined);
-  }, [project.metadata.id, selectedUiGraphId]);
-
-  const createComponent = useStableCallback((type: UiGraphComponent['type']) => {
-    const boundary = getGraphBoundary(project, project.metadata.mainGraphId);
-    const component = createUiGraphComponent(type, boundary ? project.metadata.mainGraphId : undefined);
-    if (component.type === 'button') {
-      initializeButtonActionToGraphBoundary(component, boundary);
-    } else if (component.type === 'chat') {
-      component.action = initializeUiGraphChatActionBindings(component.action, boundary);
-    }
-
-    return component;
-  });
-
-  const insertComponent = useStableCallback((component: UiGraphComponent, index?: number) => {
-    updateUiGraph((draft) => {
-      draft.components.splice(index === undefined ? draft.components.length : index, 0, component);
-    });
-    setSelectedComponentIds([component.id]);
-  });
-
-  const addComponent = useStableCallback((type: UiGraphComponent['type'], index?: number) => {
-    insertComponent(createComponent(type), index);
-  });
-
-  const confirmDeleteComponent = useStableCallback(() => {
-    const componentIds = getCurrentUiGraphComponentDeletionIds(pendingComponentDeletion, project.metadata.id, uiGraph);
-    if (componentIds.length === 0) {
-      setPendingComponentDeletion(undefined);
-      return;
-    }
-
-    setPendingComponentDeletion(undefined);
-    const deletedComponentIds = new Set(componentIds);
-    setSelectedComponentIds((selectedIds) =>
-      selectedIds.filter((componentId) => !deletedComponentIds.has(componentId)),
-    );
-    updateUiGraph((draft) => {
-      draft.components = draft.components.filter((component) => !deletedComponentIds.has(component.id));
-    });
-  });
-
-  const requestDeleteComponents = useStableCallback((componentIds: readonly UiComponentId[]) => {
-    if (!uiGraph) {
-      return;
-    }
-
-    const existingComponentIds = new Set(uiGraph.components.map((component) => component.id));
-    const idsToDelete = [...new Set(componentIds)].filter((componentId) => existingComponentIds.has(componentId));
-    if (idsToDelete.length > 0) {
-      setPendingComponentDeletion({ componentIds: idsToDelete, projectId: project.metadata.id, uiGraphId: uiGraph.id });
-    }
-  });
-
-  const requestDeleteSelectedComponents = useStableCallback(() => requestDeleteComponents(selectedComponentIds));
-
-  const reorderComponents = useStableCallback((draggedComponentId: UiComponentId, targetComponentId: UiComponentId) => {
-    updateUiGraph((draft) => {
-      const fromIndex = draft.components.findIndex((component) => component.id === draggedComponentId);
-      const toIndex = draft.components.findIndex((component) => component.id === targetComponentId);
-
-      if (fromIndex >= 0 && toIndex >= 0) {
-        draft.components = arrayMove(draft.components, fromIndex, toIndex);
-      }
-    });
-  });
-
-  const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
-  const handleComponentDragStart = useStableCallback((event: DragStartEvent) => {
-    const componentType = getPaletteComponentType(event);
-    if (componentType) {
-      setActivePaletteComponent(createComponent(componentType));
-      setPaletteInsertionIndex(uiGraph?.components.length ?? 0);
-    }
-  });
-  const handleComponentDragOver = useStableCallback((event: DragOverEvent) => {
-    if (!getPaletteComponentType(event) || !uiGraph) {
-      return;
-    }
-
-    if (event.over?.id === UI_GRAPH_PREVIEW_DROP_ZONE_ID) {
-      setPaletteInsertionIndex(uiGraph.components.length);
-      return;
-    }
-
-    const targetIndex = uiGraph.components.findIndex((component) => component.id === event.over?.id);
-    const activeRect = event.active.rect.current.translated;
-    if (targetIndex < 0 || !activeRect || !event.over) {
-      return;
-    }
-
-    setPaletteInsertionIndex(
-      getUiGraphComponentInsertionIndex(targetIndex, activeRect.top + activeRect.height / 2, event.over.rect),
-    );
-  });
-  const clearPaletteDrag = useStableCallback(() => {
-    setActivePaletteComponent(undefined);
-    setPaletteInsertionIndex(undefined);
-  });
-  const handleComponentDragEnd = useStableCallback((event: DragEndEvent) => {
-    const paletteComponentType = getPaletteComponentType(event);
-    if (paletteComponentType) {
-      if (event.over && activePaletteComponent?.type === paletteComponentType) {
-        insertComponent(activePaletteComponent, paletteInsertionIndex ?? uiGraph?.components.length);
-      }
-      clearPaletteDrag();
-      return;
-    }
-
-    const draggedComponentId = event.active.id as UiComponentId;
-    const targetComponentId = event.over?.id as UiComponentId | undefined;
-    if (
-      targetComponentId &&
-      targetComponentId !== UI_GRAPH_PREVIEW_DROP_ZONE_ID &&
-      draggedComponentId !== targetComponentId
-    ) {
-      reorderComponents(draggedComponentId, targetComponentId);
-    }
-    clearPaletteDrag();
-  });
-
-  const selectComponent = useStableCallback(
-    (
-      componentId: UiComponentId,
-      mode: UiGraphComponentSelectionMode,
-      counterpartScrollContainer: HTMLElement | null,
-    ) => {
-      const wasSelected = selectedComponentIdSet.has(componentId);
-      setSelectedComponentIds((selectedIds) => selectUiGraphComponent(selectedIds, componentId, mode));
-      if (mode === 'replace' || !wasSelected) {
-        revealUiGraphComponent(counterpartScrollContainer, componentId);
-      }
-    },
-  );
-  const activateSettingsComponent = useStableCallback((componentId: UiComponentId) =>
-    selectComponent(componentId, 'replace', previewScrollRef.current),
-  );
-  const selectPreviewComponent = useStableCallback((componentId: UiComponentId, mode: UiGraphComponentSelectionMode) =>
-    selectComponent(componentId, mode, settingsScrollRef.current),
-  );
-  const setPreviewComponentSelection = useStableCallback((componentIds: readonly UiComponentId[]) => {
-    setSelectedComponentIds((selectedIds) =>
-      selectedIds.length === componentIds.length &&
-      selectedIds.every((componentId) => componentIds.includes(componentId))
-        ? selectedIds
-        : [...componentIds],
-    );
-  });
-
-  const supportsBackspaceDeleteHotkey = isMacOSPlatform();
-  const deleteSelectedComponentsFromHotkey = useStableCallback((event: KeyboardEvent) => {
-    if (event.repeat || pendingComponentDeletion || selectedComponentIds.length === 0) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    requestDeleteSelectedComponents();
-  });
-
-  useGlobalHotkey('Delete', deleteSelectedComponentsFromHotkey, { notWhenInputFocused: true });
-  useGlobalHotkey(
-    'Backspace',
-    (event) => {
-      if (supportsBackspaceDeleteHotkey) {
-        deleteSelectedComponentsFromHotkey(event);
-      }
-    },
-    { notWhenInputFocused: true },
-  );
+  const builderController = useUiGraphBuilderController({ project, uiGraph, updateUiGraph });
+  const {
+    activePaletteComponent,
+    activateSettingsComponent,
+    addComponent,
+    clearPaletteDrag,
+    clearSelectionFromPointer,
+    closeDeleteConfirmation,
+    confirmDeleteComponents,
+    dragSensors,
+    handleComponentDragEnd,
+    handleComponentDragOver,
+    handleComponentDragStart,
+    paletteInsertionIndex,
+    pendingDeleteComponentIds,
+    previewScrollRef,
+    requestDeleteComponents,
+    selectPreviewComponent,
+    selectedComponentIdSet,
+    setPreviewComponentSelection,
+    settingsScrollRef,
+  } = builderController;
 
   const openPreviewWindow = useStableCallback(async () => {
     if (!uiGraph) {
@@ -906,15 +689,11 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     <div
       css={styles}
       style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}
-      onPointerDownCapture={(event) => {
-        if (!event.shiftKey && !isUiGraphComponentEventTarget(event.target)) {
-          setSelectedComponentIds([]);
-        }
-      }}
+      onPointerDownCapture={clearSelectionFromPointer}
     >
       <DndContext
         sensors={dragSensors}
-        collisionDetection={collisionDetection}
+        collisionDetection={uiGraphBuilderCollisionDetection}
         onDragCancel={clearPaletteDrag}
         onDragEnd={handleComponentDragEnd}
         onDragOver={handleComponentDragOver}
@@ -1029,8 +808,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
             ? 'Delete Component?'
             : `Delete ${pendingDeleteComponentIds.length} Components?`
         }
-        onClose={() => setPendingComponentDeletion(undefined)}
-        onConfirm={confirmDeleteComponent}
+        onClose={closeDeleteConfirmation}
+        onConfirm={confirmDeleteComponents}
       />
     </div>
   );

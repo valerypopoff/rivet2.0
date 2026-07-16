@@ -278,7 +278,9 @@ of waiting forever without disclosing whether another owner has that run ID. A c
 that races with a stored terminal event replays the terminal result. `drain()` rejects
 genuinely new starts while allowing existing runs to finish and idempotent request IDs
 to reattach. A start whose durable run reservation races with draining is finalized
-as interrupted and never reaches processor creation. `dispose({ interrupt: true })`
+as interrupted and never reaches processor creation. The reservation retains its owner
+scope until settlement, so that interruption is also published to clients already
+reattached through another gateway. `dispose({ interrupt: true })`
 marks unfinished stored runs owned by that gateway host as interrupted, broadcasts
 that terminal state, requests processor abort without waiting for a slow node to
 become cooperative, and closes every gateway-owned socket with service-restart code
@@ -295,6 +297,14 @@ persistence fails after a run was accepted, attached clients receive `run_unavai
 instead of remaining in a permanent running state. Hosts still own websocket origin
 policy, authentication, global rate limits, deployment draining order, and any
 durable-store retention policy.
+
+Disposal is a lifecycle barrier for gateway-owned setup work. Once disposal begins,
+queued start messages are rejected and `dispose(...)` waits for any durable run
+reservation already crossing `createRun(...)` before interrupting its lease and
+unregistering the coordinator. It also awaits an already-running lease-maintenance
+pass; that pass stops after its current store call and cannot recover runs or invoke
+lease-loss callbacks after disposal has begun. This ordering prevents a late durable
+row or maintenance callback from escaping graceful shutdown.
 
 The hosted renderer rebuilds its direct DOM presentation when action status or
 progress changes. It captures and restores the focused text control, selection, and
@@ -350,6 +360,11 @@ safely reuse a longer-lived cancellation signal without retaining completed proc
 Wrappers that adapt Express requests should bridge their
 disconnect/close event into that Fetch signal (or return an explicit signal) when
 they want abandoned browser actions to stop the underlying graph run.
+When browser navigation places a hosted page into the back/forward cache, `pagehide`
+still detaches active actions and closes the page's socket. A persisted `pageshow`
+creates a fresh transport while retaining the restored interaction state, so buttons
+remain usable after browser back/forward restoration instead of targeting a disposed
+WebSocket runner.
 
 ## Security
 

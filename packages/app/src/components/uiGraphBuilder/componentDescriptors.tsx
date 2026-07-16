@@ -156,39 +156,19 @@ function getDataKeySelectOptions(value: string, dataKeyOptions: readonly string[
   ];
 }
 
-const TextSettings: FC<UiGraphComponentSettingsProps> = ({ component, onUpdate }) => {
-  if (component.type !== 'text') {
+const TextLikeSettings: FC<UiGraphComponentSettingsProps> = ({ component, onUpdate }) => {
+  if (component.type !== 'text' && component.type !== 'markdown') {
     return null;
   }
-
   return (
     <label className="ui-graph-builder-field">
-      Text
+      {component.type === 'text' ? 'Text' : 'Markdown'}
       <textarea
-        value={component.text}
+        value={component.type === 'text' ? component.text : component.markdown}
         onChange={(event) =>
           onUpdate((draft) => {
-            (draft as typeof component).text = event.target.value;
-          })
-        }
-      />
-    </label>
-  );
-};
-
-const MarkdownSettings: FC<UiGraphComponentSettingsProps> = ({ component, onUpdate }) => {
-  if (component.type !== 'markdown') {
-    return null;
-  }
-
-  return (
-    <label className="ui-graph-builder-field">
-      Markdown
-      <textarea
-        value={component.markdown}
-        onChange={(event) =>
-          onUpdate((draft) => {
-            (draft as typeof component).markdown = event.target.value;
+            if (draft.type === 'text') draft.text = event.target.value;
+            else if (draft.type === 'markdown') draft.markdown = event.target.value;
           })
         }
       />
@@ -227,29 +207,7 @@ const InputLikeSettings: FC<UiGraphComponentSettingsProps> = ({ component, isDat
 
   return (
     <>
-      <label className="ui-graph-builder-field">
-        Label
-        <input
-          value={component.label}
-          onChange={(event) =>
-            onUpdate((draft) => {
-              (draft as typeof component).label = event.target.value;
-            })
-          }
-        />
-      </label>
-      <label className="ui-graph-builder-field">
-        Data key
-        <DataKeyInput
-          hasConflict={isDataKeyAlreadyUsed(component.stateKey, { componentId: component.id })}
-          value={component.stateKey}
-          onChange={(event) =>
-            onUpdate((draft) => {
-              (draft as typeof component).stateKey = event.target.value;
-            })
-          }
-        />
-      </label>
+      <StateProducerFields {...{ component, isDataKeyAlreadyUsed, onUpdate }} />
       <label className="ui-graph-builder-field">
         Placeholder
         <input
@@ -286,29 +244,7 @@ const DropdownSettings: FC<UiGraphComponentSettingsProps> = ({ component, isData
 
   return (
     <>
-      <label className="ui-graph-builder-field">
-        Label
-        <input
-          value={dropdown.label}
-          onChange={(event) =>
-            onUpdate((draft) => {
-              (draft as typeof component).label = event.target.value;
-            })
-          }
-        />
-      </label>
-      <label className="ui-graph-builder-field">
-        Data key
-        <DataKeyInput
-          hasConflict={isDataKeyAlreadyUsed(dropdown.stateKey, { componentId: dropdown.id })}
-          value={dropdown.stateKey}
-          onChange={(event) =>
-            onUpdate((draft) => {
-              (draft as typeof component).stateKey = event.target.value;
-            })
-          }
-        />
-      </label>
+      <StateProducerFields {...{ component, isDataKeyAlreadyUsed, onUpdate }} />
       <div className="ui-graph-dropdown-items">
         {dropdown.items.map((item, index) => (
           <div className="ui-graph-dropdown-item-row" key={`dropdown-item-${index}`}>
@@ -361,6 +297,38 @@ const DropdownSettings: FC<UiGraphComponentSettingsProps> = ({ component, isData
   );
 };
 
+const StateProducerFields: FC<
+  Pick<UiGraphComponentSettingsProps, 'isDataKeyAlreadyUsed' | 'onUpdate'> & {
+    component: Extract<UiGraphComponent, { type: 'input' | 'textarea' | 'dropdown' }>;
+  }
+> = ({ component, isDataKeyAlreadyUsed, onUpdate }) => (
+  <>
+    <label className="ui-graph-builder-field">
+      Label
+      <input
+        value={component.label}
+        onChange={(event) =>
+          onUpdate((draft) => {
+            if (draft.type === component.type) draft.label = event.target.value;
+          })
+        }
+      />
+    </label>
+    <label className="ui-graph-builder-field">
+      Data key
+      <DataKeyInput
+        hasConflict={isDataKeyAlreadyUsed(component.stateKey, { componentId: component.id })}
+        value={component.stateKey}
+        onChange={(event) =>
+          onUpdate((draft) => {
+            if (draft.type === component.type) draft.stateKey = event.target.value;
+          })
+        }
+      />
+    </label>
+  </>
+);
+
 function getNextDropdownItemNumber(items: readonly { value: string }[]): number {
   const values = new Set(items.map((item) => item.value));
   let itemNumber = 1;
@@ -384,34 +352,23 @@ const ButtonSettings: FC<UiGraphComponentSettingsProps> = ({
   }
 
   const boundary = getGraphBoundary(project, component.action.graphId);
-  const graphOptions = getUiGraphGraphOptions(project, component.action.graphId);
-  const hasSelectableGraph = graphOptions.some((option) => !option.isDisabled);
 
   return (
     <>
-      <label className="ui-graph-builder-field">
-        Graph to run
-        <UiGraphSelect
-          isDisabled={!hasSelectableGraph}
-          options={graphOptions}
-          placeholder={hasSelectableGraph ? 'Select graph...' : 'No graphs available'}
-          value={component.action.graphId}
-          onChange={(value) =>
-            onUpdate((draft) => {
-              const button = draft as UiGraphButtonComponent;
-              const graphId = value as GraphId;
-              const isInitialTarget = button.action.graphId == null;
-              button.action.graphId = graphId;
-              const boundary = getGraphBoundary(project, graphId);
-              if (isInitialTarget) {
-                initializeButtonActionToGraphBoundary(button, boundary);
-              } else {
-                normalizeButtonActionToGraphBoundary(button, boundary);
-              }
-            })
-          }
-        />
-      </label>
+      <GraphTargetField
+        graphId={component.action.graphId}
+        project={project}
+        onChange={(graphId) =>
+          onUpdate((draft) => {
+            const button = draft as UiGraphButtonComponent;
+            const isInitialTarget = button.action.graphId == null;
+            button.action.graphId = graphId;
+            const boundary = getGraphBoundary(project, graphId);
+            if (isInitialTarget) initializeButtonActionToGraphBoundary(button, boundary);
+            else normalizeButtonActionToGraphBoundary(button, boundary);
+          })
+        }
+      />
       <div className="ui-graph-builder-separator" />
       <ButtonInputMappingsEditor
         boundary={boundary}
@@ -450,8 +407,6 @@ const ChatSettings: FC<UiGraphComponentSettingsProps> = ({ component, dataKeyOpt
   }
 
   const boundary = getGraphBoundary(project, component.action.graphId);
-  const graphOptions = getUiGraphGraphOptions(project, component.action.graphId);
-  const hasSelectableGraph = graphOptions.some((option) => !option.isDisabled);
   const additionalInputs = component.action.inputMappings ?? [];
   const additionalInputIds = additionalInputs.map((binding) => binding.inputKey);
   const updateAction = (updater: (action: UiGraphChatRunGraphAction) => void) =>
@@ -459,25 +414,19 @@ const ChatSettings: FC<UiGraphComponentSettingsProps> = ({ component, dataKeyOpt
 
   return (
     <>
-      <label className="ui-graph-builder-field">
-        Graph to run
-        <UiGraphSelect
-          isDisabled={!hasSelectableGraph}
-          options={graphOptions}
-          placeholder={hasSelectableGraph ? 'Select graph...' : 'No graphs available'}
-          value={component.action.graphId}
-          onChange={(value) =>
-            onUpdate((draft) => {
-              const chat = draft as UiGraphChatComponent;
-              const graphId = value as GraphId;
-              chat.action = initializeUiGraphChatActionBindings(
-                { graphId, type: 'runGraph' },
-                getGraphBoundary(project, graphId),
-              );
-            })
-          }
-        />
-      </label>
+      <GraphTargetField
+        graphId={component.action.graphId}
+        project={project}
+        onChange={(graphId) =>
+          onUpdate((draft) => {
+            const chat = draft as UiGraphChatComponent;
+            chat.action = initializeUiGraphChatActionBindings(
+              { graphId, type: 'runGraph' },
+              getGraphBoundary(project, graphId),
+            );
+          })
+        }
+      />
       <div className="ui-graph-builder-separator" />
       <ChatPortField
         label="User message input"
@@ -556,6 +505,27 @@ const ChatPortField: FC<{
     />
   </label>
 );
+
+const GraphTargetField: FC<{
+  graphId: GraphId | undefined;
+  onChange(graphId: GraphId): void;
+  project: Project;
+}> = ({ graphId, onChange, project }) => {
+  const options = getUiGraphGraphOptions(project, graphId);
+  const hasSelectableGraph = options.some((option) => !option.isDisabled);
+  return (
+    <label className="ui-graph-builder-field">
+      Graph to run
+      <UiGraphSelect
+        isDisabled={!hasSelectableGraph}
+        options={options}
+        placeholder={hasSelectableGraph ? 'Select graph...' : 'No graphs available'}
+        value={graphId}
+        onChange={(value) => onChange(value as GraphId)}
+      />
+    </label>
+  );
+};
 
 function getGraphPortOptions(
   value: string | undefined,
@@ -837,11 +807,11 @@ const ButtonOutputMappingsEditor: FC<{
 export const UI_GRAPH_COMPONENT_DESCRIPTORS = {
   text: {
     ...UI_GRAPH_COMPONENT_MODELS.text,
-    Settings: TextSettings,
+    Settings: TextLikeSettings,
   },
   markdown: {
     ...UI_GRAPH_COMPONENT_MODELS.markdown,
-    Settings: MarkdownSettings,
+    Settings: TextLikeSettings,
   },
   gap: {
     ...UI_GRAPH_COMPONENT_MODELS.gap,
