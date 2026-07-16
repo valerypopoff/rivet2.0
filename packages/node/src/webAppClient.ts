@@ -502,10 +502,10 @@ if (config && root) {
           void runAction(renderModel.component);
         };
         const messageNodes = renderModel.messages.map((message) =>
-          createElement('div', {
-            className: `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role}`,
-            text: message.content,
-          }),
+          renderMarkdownElement(
+            message.content,
+            `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role} rivet-web-app-chat-message-markdown markdown-body`,
+          ),
         );
         if (messageNodes.length === 0) {
           messageNodes.push(

@@ -204,11 +204,11 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
       const textarea = reactRootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!;
       Object.getOwnPropertyDescriptor(reactDom.window.HTMLTextAreaElement.prototype, 'value')?.set?.call(
         textarea,
-        'Hello',
+        '**Hello**',
       );
       Simulate.change(textarea);
     });
-    setTextareaValue(hostedDom.window.document, 'Hello', hostedDom);
+    setTextareaValue(hostedDom.window.document, '**Hello**', hostedDom);
     focusReactControl(reactRootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!);
     hostedDom.window.document.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')?.focus();
     await act(async () => reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.click());
@@ -216,7 +216,7 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
 
     const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
     assert.deepEqual(reactActionState, {
-      [messagesKey]: [{ role: 'user', content: 'Hello' }],
+      [messagesKey]: [{ role: 'user', content: '**Hello**' }],
       tone: 'Friendly',
     });
     assert.deepEqual(hostedActionState, reactActionState);
@@ -231,8 +231,8 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
 
     const statePatch = {
       [messagesKey]: [
-        { role: 'user', content: 'Hello' },
-        { role: 'assistant', content: 'Hi!' },
+        { role: 'user', content: '**Hello**' },
+        { role: 'assistant', content: '**Hi!** <script>blocked()</script>' },
       ],
     };
     await act(async () => {
@@ -250,9 +250,15 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     assert.deepEqual(readChatState(reactRootElement), readChatState(hostedDom.window.document));
     assert.deepEqual(readChatState(reactRootElement), {
       disabled: true,
-      messages: ['Hello', 'Hi!'],
+      messages: ['Hello', 'Hi! <script>blocked()</script>'],
       status: 'Ready',
     });
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      const messages = root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message');
+      assert.equal(messages[0]?.querySelector('strong')?.textContent, 'Hello');
+      assert.equal(messages[1]?.querySelector('strong')?.textContent, 'Hi!');
+      assert.equal(messages[1]?.querySelector('script'), null);
+    }
     assert.equal(isChatComposerFocused(reactDom.window.document), true);
     assert.equal(isChatComposerFocused(hostedDom.window.document), true);
   } finally {
@@ -311,7 +317,7 @@ function readRenderedComponents(root: ParentNode): unknown[] {
           }
         : dropdown
           ? { tagName: 'dropdown', value: dropdown.dataset.rivetDropdownValue }
-        : undefined,
+          : undefined,
       disabled: button?.disabled,
       markdownHtml: markdown?.innerHTML,
       image: readRenderedImage(content),
@@ -351,8 +357,8 @@ function setTextareaValue(root: ParentNode, value: string, dom: JSDOM): void {
 function readChatState(root: ParentNode): { disabled: boolean; messages: string[]; status: string | null } {
   return {
     disabled: root.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.disabled ?? false,
-    messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map(
-      (message) => message.textContent ?? '',
+    messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map((message) =>
+      (message.textContent ?? '').trimEnd(),
     ),
     status: root.querySelector('.rivet-web-app-chat-status')?.textContent ?? null,
   };

@@ -448,26 +448,33 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-chat-message {
+  --rivet-web-app-chat-message-background: var(--rivet-web-app-control-background);
+  --rivet-web-app-chat-message-foreground: var(--rivet-web-app-foreground);
   width: fit-content;
   max-width: min(82%, 620px);
   border: 1px solid var(--rivet-web-app-card-border);
   border-radius: 14px;
+  background: var(--rivet-web-app-chat-message-background);
+  color: var(--rivet-web-app-chat-message-foreground);
   padding: 10px 13px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
+.rivet-web-app-chat-message-markdown {
+  white-space: normal;
+}
+
 .rivet-web-app-chat-message-user {
+  --rivet-web-app-chat-message-background: color-mix(in srgb, var(--rivet-web-app-button-background) 72%, var(--rivet-web-app-card-background));
+  --rivet-web-app-chat-message-foreground: var(--rivet-web-app-button-foreground);
   align-self: flex-end;
   border-bottom-right-radius: 5px;
-  background: color-mix(in srgb, var(--rivet-web-app-button-background) 72%, var(--rivet-web-app-card-background));
-  color: var(--rivet-web-app-button-foreground);
 }
 
 .rivet-web-app-chat-message-assistant {
   align-self: flex-start;
   border-bottom-left-radius: 5px;
-  background: var(--rivet-web-app-control-background);
 }
 
 .rivet-web-app-chat-thinking {
@@ -805,24 +812,28 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-markdown,
-.rivet-web-app-output-markdown {
+.rivet-web-app-output-markdown,
+.rivet-web-app-chat-message-markdown {
   word-break: break-word;
 }
 
-.rivet-web-app-markdown.markdown-body {
-  background: transparent;
-  font-family: inherit;
-  min-width: 0;
-}
-
+.rivet-web-app-markdown.markdown-body,
 .rivet-web-app-output-markdown.markdown-body {
   background: transparent;
   font-family: inherit;
   min-width: 0;
 }
 
+.rivet-web-app-chat-message-markdown.markdown-body {
+  min-width: 0;
+  background: var(--rivet-web-app-chat-message-background);
+  color: var(--rivet-web-app-chat-message-foreground);
+  font-family: inherit;
+}
+
 .rivet-web-app-markdown h1,
-.rivet-web-app-output-markdown h1 {
+.rivet-web-app-output-markdown h1,
+.rivet-web-app-chat-message-markdown h1 {
   margin: 0 0 12px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--rivet-web-app-card-border);
@@ -831,7 +842,8 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-markdown h2,
-.rivet-web-app-output-markdown h2 {
+.rivet-web-app-output-markdown h2,
+.rivet-web-app-chat-message-markdown h2 {
   margin: 0 0 10px;
   font-size: 20px;
   line-height: 1.25;
@@ -839,13 +851,16 @@ button.rivet-web-app-output-header:focus-visible {
 
 .rivet-web-app-markdown p,
 .rivet-web-app-output-markdown p,
+.rivet-web-app-chat-message-markdown p,
 .rivet-web-app-markdown ul,
-.rivet-web-app-output-markdown ul {
+.rivet-web-app-output-markdown ul,
+.rivet-web-app-chat-message-markdown ul {
   margin: 0 0 12px;
 }
 
 .rivet-web-app-markdown.markdown-body code,
-.rivet-web-app-output-markdown.markdown-body code {
+.rivet-web-app-output-markdown.markdown-body code,
+.rivet-web-app-chat-message-markdown.markdown-body code {
   border-radius: 4px;
   background: color-mix(in srgb, var(--rivet-web-app-control-background) 70%, var(--rivet-web-app-foreground) 6%);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -853,7 +868,8 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-markdown.markdown-body pre,
-.rivet-web-app-output-markdown.markdown-body pre {
+.rivet-web-app-output-markdown.markdown-body pre,
+.rivet-web-app-chat-message-markdown.markdown-body pre {
   background: transparent;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   padding: 0;
@@ -861,12 +877,14 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-markdown > :first-child,
-.rivet-web-app-output-markdown > :first-child {
+.rivet-web-app-output-markdown > :first-child,
+.rivet-web-app-chat-message-markdown > :first-child {
   margin-top: 0;
 }
 
 .rivet-web-app-markdown > :last-child,
-.rivet-web-app-output-markdown > :last-child {
+.rivet-web-app-output-markdown > :last-child,
+.rivet-web-app-chat-message-markdown > :last-child {
   margin-bottom: 0;
 }
 

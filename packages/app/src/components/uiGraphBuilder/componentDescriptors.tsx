@@ -344,15 +344,12 @@ const DropdownSettings: FC<UiGraphComponentSettingsProps> = ({ component, isData
         ))}
         <button
           type="button"
-          className="ui-graph-builder-button secondary ui-graph-dropdown-add-item"
+          className="ui-graph-builder-settings-action-button ui-graph-dropdown-add-item"
           onClick={() =>
             onUpdate((draft) => {
               const dropdown = draft as typeof component;
               const itemNumber = getNextDropdownItemNumber(dropdown.items);
-              dropdown.items = [
-                ...dropdown.items,
-                { label: `Option ${itemNumber}`, value: `option-${itemNumber}` },
-              ];
+              dropdown.items = [...dropdown.items, { label: `Option ${itemNumber}`, value: `option-${itemNumber}` }];
             })
           }
         >
@@ -652,7 +649,7 @@ const ChatAdditionalInputsEditor: FC<{
       })}
       <button
         type="button"
-        className="ui-graph-builder-button secondary ui-graph-chat-add-input"
+        className="ui-graph-builder-settings-action-button ui-graph-chat-add-input"
         title="Add another graph input mapping"
         onClick={() =>
           onUpdate((draft) => {

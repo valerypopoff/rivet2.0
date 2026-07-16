@@ -246,28 +246,42 @@ const styles = css`
     font-weight: 700;
   }
 
-  .ui-graph-builder-palette-add-button {
-    position: relative;
+  .ui-graph-builder-settings-action-button {
+    box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     width: fit-content;
-    min-height: 30px;
-    border: 1px solid color-mix(in srgb, var(--foreground) 18%, transparent);
+    height: calc(32px * var(--ui-font-scale, 1));
+    margin: 0;
+    border: 0;
     border-radius: var(--ui-button-radius);
-    background: color-mix(in srgb, var(--modal-surface-bg) 84%, var(--foreground) 10%);
+    background: var(--grey-dark-colorish);
     color: var(--foreground);
     cursor: pointer;
+    gap: 0.5rem;
     font: inherit;
-    font-weight: 600;
-    padding: 5px 21px 5px 10px;
-    text-align: left;
+    font-family: var(--font-family, Inter, system-ui, sans-serif);
+    font-size: var(--ui-font-size-base);
+    padding: 0.5rem 1rem;
+    corner-shape: squircle;
   }
 
-  .ui-graph-builder-palette-add-button:hover,
-  .ui-graph-builder-palette-add-button:focus-visible {
-    border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
-    background: color-mix(in srgb, var(--modal-surface-bg) 76%, var(--foreground) 16%);
+  .ui-graph-builder-settings-action-button:hover,
+  .ui-graph-builder-settings-action-button:focus-visible {
+    background: color-mix(in srgb, var(--grey-dark-colorish) 84%, var(--foreground) 12%);
     outline: none;
+  }
+
+  .ui-graph-builder-settings-action-button svg {
+    flex: 0 0 auto;
+    width: 1.15em;
+    height: 1.15em;
+  }
+
+  .ui-graph-builder-palette-add-button {
+    position: relative;
+    padding-right: 34px;
+    text-align: left;
   }
 
   .ui-graph-builder-add-arrow {
@@ -1042,7 +1056,7 @@ const PaletteComponentButton: FC<{
     <button
       ref={setNodeRef}
       type="button"
-      className={`ui-graph-builder-palette-add-button${isDragging ? ' dragging' : ''}`}
+      className={`ui-graph-builder-settings-action-button ui-graph-builder-palette-add-button${isDragging ? ' dragging' : ''}`}
       title="Drag into the preview to insert between components"
       onClick={onClick}
       {...attributes}

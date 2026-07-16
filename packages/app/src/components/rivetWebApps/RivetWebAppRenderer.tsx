@@ -526,12 +526,7 @@ const RivetWebAppChat: FC<{
           </div>
         )}
         {messages.map((message, index) => (
-          <div
-            key={`${index}-${message.role}`}
-            className={`rivet-web-app-chat-message rivet-web-app-chat-message-${message.role}`}
-          >
-            {message.content}
-          </div>
+          <RivetWebAppChatMessage key={`${index}-${message.role}`} content={message.content} role={message.role} />
         ))}
         {isRunning && (
           <div className="rivet-web-app-chat-message rivet-web-app-chat-message-assistant rivet-web-app-chat-thinking">
@@ -578,6 +573,17 @@ const RivetWebAppChat: FC<{
         </button>
       </form>
     </section>
+  );
+};
+
+const RivetWebAppChatMessage: FC<{ content: string; role: 'assistant' | 'user' }> = ({ content, role }) => {
+  const markdownHtml = useMarkdown(content, true, { allowHtml: false });
+
+  return (
+    <div
+      className={`rivet-web-app-chat-message rivet-web-app-chat-message-${role} rivet-web-app-chat-message-markdown markdown-body`}
+      dangerouslySetInnerHTML={markdownHtml}
+    />
   );
 };
 
