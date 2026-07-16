@@ -1,6 +1,5 @@
 
 - Сделать чтобы можно было стримить аутпут из ЛЛМ чат нода прям в веб апп в компонент чата
-- Контент должен обтекать кнопки в аутпуте
 
 - A main page for the github website that says that it is a yet another workflow builder for AI but: free, developer oriented (not for everyone) so there's no bullshit, it's for professional work, it's good and optimized for production use (not only for POCs)
 
