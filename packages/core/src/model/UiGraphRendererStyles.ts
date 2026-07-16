@@ -22,6 +22,15 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   --rivet-web-app-button-foreground: var(--grey-lightest, #ffffff);
   --rivet-web-app-output-title: var(--rivet-web-app-foreground, #ffffff);
   --rivet-web-app-error-color: var(--error, #ff6b5f);
+  --rivet-web-app-scrollbar-track: var(--scrollbar-track-bg, var(--modal-surface-bg, #252b34));
+  --rivet-web-app-scrollbar-thumb: var(
+    --scrollbar-thumb-bg,
+    color-mix(in srgb, var(--rivet-web-app-foreground) 28%, var(--rivet-web-app-scrollbar-track) 72%)
+  );
+  --rivet-web-app-scrollbar-thumb-hover: var(
+    --scrollbar-thumb-bg-hover,
+    color-mix(in srgb, var(--rivet-web-app-foreground) 42%, var(--rivet-web-app-scrollbar-track) 58%)
+  );
   --rivet-web-app-font-size: var(--rivet-web-app-host-font-size, 15px);
   --rivet-web-app-chat-min-height: clamp(360px, calc(100vh - 136px), 540px);
   box-sizing: border-box;
@@ -39,6 +48,31 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 .rivet-web-app-root *::before,
 .rivet-web-app-root *::after {
   box-sizing: border-box;
+}
+
+.rivet-web-app-root,
+.rivet-web-app-root * {
+  scrollbar-color: var(--rivet-web-app-scrollbar-thumb) var(--rivet-web-app-scrollbar-track);
+}
+
+.rivet-web-app-root::-webkit-scrollbar-track,
+.rivet-web-app-root ::-webkit-scrollbar-track {
+  background-color: var(--rivet-web-app-scrollbar-track);
+}
+
+.rivet-web-app-root::-webkit-scrollbar-corner,
+.rivet-web-app-root ::-webkit-scrollbar-corner {
+  background-color: var(--rivet-web-app-scrollbar-track);
+}
+
+.rivet-web-app-root::-webkit-scrollbar-thumb,
+.rivet-web-app-root ::-webkit-scrollbar-thumb {
+  background-color: var(--rivet-web-app-scrollbar-thumb);
+}
+
+.rivet-web-app-root::-webkit-scrollbar-thumb:hover,
+.rivet-web-app-root ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--rivet-web-app-scrollbar-thumb-hover);
 }
 
 .rivet-web-app-surface {
@@ -950,6 +984,7 @@ body {
 }
 
 #app {
+  height: 100%;
   min-height: 100vh;
 }
 `;

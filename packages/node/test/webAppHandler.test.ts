@@ -1009,11 +1009,20 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-chat-messages\s*\{[\s\S]*overflow-y: auto;/);
     assert.match(
       RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-root,\s*\.rivet-web-app-root \*\s*\{\s*scrollbar-color: var\(--rivet-web-app-scrollbar-thumb\) var\(--rivet-web-app-scrollbar-track\);/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-root::-webkit-scrollbar-thumb,[\s\S]*background-color: var\(--rivet-web-app-scrollbar-thumb\);/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
       /\.rivet-web-app-chat-messages > :first-child\s*\{[\s\S]*margin-top: auto;/,
     );
     assert.match(html, /\.markdown-body \{/);
     assert.ok(html.includes(RIVET_WEB_APP_DOCUMENT_CSS));
     assert.ok(html.includes(RIVET_WEB_APP_RENDERER_CSS));
+    assert.match(RIVET_WEB_APP_DOCUMENT_CSS, /#app\s*\{\s*height: 100%;\s*min-height: 100vh;/);
 
     const documentStyleIndex = html.indexOf(RIVET_WEB_APP_DOCUMENT_CSS);
     const markdownStyleIndex = html.indexOf('.markdown-body {');
