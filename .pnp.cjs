@@ -21912,7 +21912,7 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/faye-websocket-npm-0.11.4-1f0de76de9-22433c14c6.zip/node_modules/faye-websocket/",\
         "packageDependencies": [\
           ["faye-websocket", "npm:0.11.4"],\
-          ["websocket-driver", "npm:0.7.4"]\
+          ["websocket-driver", "npm:0.7.5"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -32126,7 +32126,7 @@ const RAW_RUNTIME_STATE =
           ["faye-websocket", "npm:0.11.4"],\
           ["sockjs", "npm:0.3.24"],\
           ["uuid", "npm:8.3.2"],\
-          ["websocket-driver", "npm:0.7.4"]\
+          ["websocket-driver", "npm:0.7.5"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -34628,12 +34628,12 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["websocket-driver", [\
-      ["npm:0.7.4", {\
-        "packageLocation": "./.yarn/cache/websocket-driver-npm-0.7.4-a72739da70-17197d265d.zip/node_modules/websocket-driver/",\
+      ["npm:0.7.5", {\
+        "packageLocation": "./.yarn/cache/websocket-driver-npm-0.7.5-6b2cf62650-0671fef8c7.zip/node_modules/websocket-driver/",\
         "packageDependencies": [\
           ["http-parser-js", "npm:0.5.8"],\
           ["safe-buffer", "npm:5.2.1"],\
-          ["websocket-driver", "npm:0.7.4"],\
+          ["websocket-driver", "npm:0.7.5"],\
           ["websocket-extensions", "npm:0.1.4"]\
         ],\
         "linkType": "HARD"\
