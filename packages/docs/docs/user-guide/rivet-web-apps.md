@@ -8,6 +8,20 @@ Web apps are saved in the `.rivet-project` file, but they are not workflow graph
 
 Rivet validates every saved web-app component and workflow-bound action when the project opens. Older projects with missing or duplicate component IDs are repaired automatically. If a project file was edited manually and contains an unknown component or is missing a required field, Rivet rejects it with a message that identifies the web app, component index, and invalid field instead of opening a broken renderer.
 
+## Before You Build
+
+Build the workflow first. A web app is the UI around an ordinary graph; it does not replace graph nodes, connections, or execution logic.
+
+Use **Graph Input** nodes for values the app should send into the graph, and **Graph Output** nodes for values the app should receive back. A graph can have no inputs or outputs when that is appropriate, but a Button or Chat can only exchange values that are exposed through those graph-boundary nodes.
+
+For a simple question-and-answer app, a good starting graph has:
+
+1. a Graph Input node with ID `question`
+2. the workflow that processes that question
+3. a Graph Output node with ID `answer`
+
+Run that graph from the canvas once before wiring it into a web app. This makes it much easier to distinguish workflow problems from UI mapping problems.
+
 ## Creating a Web App
 
 Open the left graph panel and use **New web app** in the **Web Apps** section. Right-click an existing web app to duplicate it or delete it. Delete asks for confirmation before removing the web app from the project.
@@ -26,15 +40,35 @@ A web app contains declarative components:
 
 The web app editor shows the component settings on the left and a live preview on the right.
 
-Use the bordered **Components** panel to add blocks. It groups choices into Layout, Input, Action, and Other; hover an add control to reveal its right-facing arrow, then click to add that component. In the live preview, drag the large handle to the right of a component to change the order shown in the web app. Hold **Shift** while clicking preview components to select or deselect several at once. You can also hold **Shift** and drag a rectangle across blank preview space to add components to the selection. Press **Delete** to remove the selection, or **Backspace** on macOS; Rivet asks for confirmation before deleting one or more components.
+Use the bordered **Components** panel to add blocks. It groups choices into Layout, Input, Action, and Other; hover an add control to reveal its right-facing arrow, then click to append that component. You can also drag a component from the palette into a specific position in the preview. Rivet shows the same highlighted component-sized placeholder that it uses while reordering existing components, then inserts the component when you drop it. In the live preview, drag the large handle to the right of a component to change the order shown in the web app. Hold **Shift** while clicking preview components to select or deselect several at once. You can also hold **Shift** and drag a rectangle across blank preview space to add components to the selection. Press **Delete** to remove the selection, or **Backspace** on macOS; Rivet asks for confirmation before deleting one or more components.
 
 A **Gap** adds empty vertical space between components. Choose **Small**, **Medium**, or **Large** in its settings. It has no visible card surface in the rendered web app, but it remains selectable and draggable in the editor preview.
 
-When a block is focused in the settings panel, Rivet highlights the matching component in the live preview. Focusing or clicking a component in the preview highlights the matching settings block. Text input, textarea, and Dropdown components save user-entered values into their **Data key**. For a Dropdown, add or remove items and give each item a visible **Label** plus the string **Value** stored in that data key. Rivet warns on later components if that key is already used by an earlier value source.
+When a block is focused in the settings panel, Rivet highlights and scrolls the matching component into view in the live preview. Focusing or clicking a component in the preview does the same for the matching settings block. Text input, textarea, and Dropdown components save user-entered values into their **Data key**. For a Dropdown, add or remove items and give each item a visible **Label** plus the string **Value** stored in that data key. Rivet warns on later components if that key is already used by an earlier value source.
+
+## Build Your First Form App
+
+With a graph that has `question` and `answer` boundary IDs, build the corresponding app in five small steps:
+
+1. Add a **Textarea** and set its label, placeholder, and **Data key** to `question`.
+2. Add a **Button** and choose the workflow under **Graph to run**.
+3. In the Button's input rows, confirm that Graph input ID `question` sends the `question` data key.
+4. In the Button's output rows, save Graph output ID `answer` to an app data key such as `answer`.
+5. Add an **Output** component, set its **Data key** to `answer`, and choose how it should render the result.
+
+Click the Button in the live preview. The Textarea value is sent to the graph, the graph result is saved into `answer`, and the Output component renders it. This same configuration is used by the detached desktop preview and by a served web app.
+
+## Understanding Data Keys
+
+Data keys are app-local names for values held while a user is using a web app. They are not Graph Input or Graph Output IDs. Inputs, Textareas, Dropdowns, and Button output mappings write data keys. Buttons, Chat additional inputs, and Output components read them.
+
+Map a data key to a Graph Input ID when a graph needs that value. Map a Graph Output ID to a data key when the app should keep the graph's result. The Button and Chat settings show graph-boundary IDs as read-only fields so the IDs come from the selected graph rather than being typed manually.
+
+If a consumer refers to a key that no current component produces, Rivet keeps the saved selection visible but marks the field red so you can repair it without losing the mapping. If more than one producer writes the same key, the later write replaces the earlier value. That can be intentional, but use distinct keys when two values must coexist.
 
 Text and Markdown components render without a surrounding card surface, but remain selectable and draggable in the editor preview. Markdown renders in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps.
 
-Set an Output component's **Render as** option to **Image** when its data key contains an image URL, a complete base64 image data URL, or raw PNG, JPEG, or GIF base64. HTTP(S), relative, and `blob:` image URLs are supported; unsupported values show a clear placeholder instead of being inserted as arbitrary markup. Output components start blank until the selected data key receives a value. Once populated, the Output header keeps its label and collapse control visible. Copy and, for JSON, Download overlay the top-right of the expanded content area while the value scrolls inside it. Large output cards can be resized vertically between one line and the rendered value's full height; short outputs stay naturally sized without a resize handle. Collapsing an output returns it to a compact header. The download button saves the displayed JSON as a `.json` file named from the web app and the current date/time. Collapsing an output hides only its value for the current app session; it is not saved into the project.
+Set an Output component's **Render as** option to **Image** when its data key contains an image URL, a complete base64 image data URL, or raw PNG, JPEG, or GIF base64. HTTP(S), relative, and `blob:` image URLs are supported; unsupported values show a clear placeholder instead of being inserted as arbitrary markup. Output components start blank until the selected data key receives a value. Once populated, the Output header keeps its label and collapse control visible. If an Output is collapsed when its data key receives a renderable new value, Rivet unfolds it automatically. Copy and, for JSON, Download overlay the top-right of the expanded content area while the value scrolls inside it. Large output cards can be resized vertically between one line and the rendered value's full height; short outputs stay naturally sized without a resize handle. Collapsing an output returns it to a compact header. The download button saves the displayed JSON as a `.json` file named from the web app and the current date/time. Collapsing an output hides only its value for the current app session; it is not saved into the project.
 
 ## Binding a Button to a Graph
 
@@ -79,15 +113,29 @@ Because preview actions are real editor graph runs, you can open the target grap
 
 Preview state is temporary and is not saved in the project YAML. Use the reset icon in the upper-left corner of the preview to clear fields, outputs, chat messages, errors, and progress and return to the initial app state. The in-editor preview keeps its state when you switch to another graph or web app builder and come back; opening the project again starts a fresh preview session. Editing the web app changes the project and can be saved like other project changes. The detached preview window stays open if you switch back to a workflow graph in the editor; close the preview window when you are done with it.
 
+## Serving Locally
+
+Use the CLI to run a saved web app outside the desktop editor:
+
+```bash
+# When the project contains one web app
+npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project
+
+# When it contains several web apps
+npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project "Question and answer"
+```
+
+The CLI serves the app at `http://localhost:3000` by default. Use `--dev` while editing a project file, `--base-path` to mount it below another path, and `--host 127.0.0.1` for local-only access. See the [serve-app command reference](../cli/serve-app.md) for dataset, API-key, auth, and deployment options.
+
 ## Serving From a Wrapper
 
 The `@valerypopoff/rivet2-node` package exports `createRivetWebAppHandler(...)`. A wrapper can load a project, choose a UI graph, and adapt the handler to its own HTTP server. Wrapper servers usually mount web apps under their own route family, for example `/apps/my-tool`, while Rivet serves the HTML renderer and graph-action endpoint under that base path.
 
 Button and Chat actions are ordinary same-project graph runs. A wrapper can provide request-scoped processor options so web app actions use the same code runner, runtime libraries, dataset provider, project reference loader, context, recordings, and telemetry policy as normal workflow endpoints.
 
-For graphs that can take minutes, a host can serve actions through Rivet's resumable WebSocket transport instead of keeping one POST request open. The page reconnects after a temporary network/proxy interruption and resumes the same server run rather than starting it again. The active Button or Chat shows its own **Stop** action. Closing or reloading the page detaches from a WebSocket run instead of cancelling it automatically; explicit **Stop** requests cancellation. Automatic resume covers connection loss while the page remains open. A full page reload needs host-provided run discovery to restore an earlier run in the new page session.
+For graphs that can take minutes, a host can serve actions through Rivet's resumable WebSocket transport instead of keeping one POST request open. The page reconnects after a temporary network/proxy interruption and resumes the same server run rather than starting it again. The active Button or Chat shows its own **Abort** action. Closing or reloading the page detaches from a WebSocket run instead of cancelling it automatically; explicit **Abort** requests cancellation. Automatic resume covers connection loss while the page remains open. A full page reload needs host-provided run discovery to restore an earlier run in the new page session.
 
-To show useful status while a graph works, put a **Report Progress** node on the workflow path. It passes its value through unchanged and can report a message, a percentage, or both. Progress appears only on the Button or Chat that started that run. It is temporary UI state, not a Graph Output and not project data.
+To show useful status while a graph works, put a **Report Progress** node on the workflow path. It passes its value through unchanged and can report a message, a percentage, or both. You can also use an **External Call** named `setWebAppStatus` and pass the message as its first argument. Progress appears only on the Button or Chat that started that run. It is temporary UI state, not a Graph Output and not project data.
 
 Wrappers can also use lower-level helpers:
 
