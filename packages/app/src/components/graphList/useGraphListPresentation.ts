@@ -17,6 +17,7 @@ import {
 import {
   getGraphIdsReferencingGraph,
   getGraphReachabilityReport,
+  getUiGraphIdsReferencingGraph,
   type GraphReachabilityBucket,
   type GraphReachabilityRegistry,
   resolveSupportedBuiltInPluginIds,
@@ -44,6 +45,7 @@ export type GraphListPresentation = {
   graphCompareKindByGraphId: Record<GraphId, ProjectComparisonChangeKind | undefined>;
   reachability: GraphListReachabilityPresentation;
   referencingSelectedGraphIds: ReadonlySet<GraphId>;
+  referencingSelectedUiGraphIds: ReadonlySet<UiGraphId>;
   visible: {
     folderedGraphs: NodeGraphFolderItem[];
     folderPaths: string[];
@@ -116,6 +118,13 @@ export function useGraphListPresentation(options: {
 
     return getGraphIdsReferencingGraph(liveProject, options.currentGraphId);
   }, [liveProject, options.currentGraphId, options.showGraphReferenceIndicators]);
+  const referencingSelectedUiGraphIds = useMemo(() => {
+    if (!options.showGraphReferenceIndicators || !options.currentGraphId) {
+      return new Set<UiGraphId>();
+    }
+
+    return getUiGraphIdsReferencingGraph(liveProject, options.currentGraphId);
+  }, [liveProject, options.currentGraphId, options.showGraphReferenceIndicators]);
   const graphCompareKindByGraphId = getGraphCompareKindByGraphId(options.activeComparison);
   const contextMenu = getGraphListContextMenuPresentation({
     contextMenuData: options.contextMenuData,
@@ -131,6 +140,7 @@ export function useGraphListPresentation(options: {
     graphCompareKindByGraphId,
     reachability,
     referencingSelectedGraphIds,
+    referencingSelectedUiGraphIds,
     visible,
   };
 }

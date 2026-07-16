@@ -50,6 +50,8 @@ test('React and hosted renderers keep the same component and action behavior', a
     });
 
     assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
+    assert.equal(reactRootElement.querySelectorAll('.rivet-web-app-output-toggle').length, 0);
+    assert.equal(hostedDom.window.document.querySelectorAll('.rivet-web-app-output-toggle').length, 0);
 
     await act(async () => {
       const input = reactRootElement.querySelector<HTMLInputElement>('.rivet-web-app-control')!;
@@ -68,9 +70,17 @@ test('React and hosted renderers keep the same component and action behavior', a
     });
     hostedDom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button')[0]?.click();
 
-    assert.deepEqual(reactActionState, { prompt: 'Edited' });
+    assert.deepEqual(reactActionState, { prompt: 'Edited', tone: '' });
     assert.deepEqual(hostedActionState, reactActionState);
     assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
+    assert.deepEqual(readButtonStates(reactRootElement), [
+      { disabled: false, hasSpinner: false, text: 'First' },
+      { disabled: false, hasSpinner: false, text: 'Second' },
+    ]);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
     assert.deepEqual(readButtonStates(reactRootElement), [
       { disabled: true, hasSpinner: true, text: 'First' },
       { disabled: false, hasSpinner: false, text: 'Second' },
@@ -186,15 +196,19 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
       return hostedAction.promise;
     });
 
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      assert.equal(root.querySelector('.rivet-web-app-chat-empty')?.textContent, 'Start a conversation');
+    }
+
     await act(async () => {
       const textarea = reactRootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!;
       Object.getOwnPropertyDescriptor(reactDom.window.HTMLTextAreaElement.prototype, 'value')?.set?.call(
         textarea,
-        'Hello',
+        '**Hello**',
       );
       Simulate.change(textarea);
     });
-    setTextareaValue(hostedDom.window.document, 'Hello', hostedDom);
+    setTextareaValue(hostedDom.window.document, '**Hello**', hostedDom);
     focusReactControl(reactRootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!);
     hostedDom.window.document.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')?.focus();
     await act(async () => reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.click());
@@ -202,7 +216,7 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
 
     const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
     assert.deepEqual(reactActionState, {
-      [messagesKey]: [{ role: 'user', content: 'Hello' }],
+      [messagesKey]: [{ role: 'user', content: '**Hello**' }],
       tone: 'Friendly',
     });
     assert.deepEqual(hostedActionState, reactActionState);
@@ -217,8 +231,8 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
 
     const statePatch = {
       [messagesKey]: [
-        { role: 'user', content: 'Hello' },
-        { role: 'assistant', content: 'Hi!' },
+        { role: 'user', content: '**Hello**' },
+        { role: 'assistant', content: '**Hi!** <script>blocked()</script>' },
       ],
     };
     await act(async () => {
@@ -236,9 +250,15 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     assert.deepEqual(readChatState(reactRootElement), readChatState(hostedDom.window.document));
     assert.deepEqual(readChatState(reactRootElement), {
       disabled: true,
-      messages: ['Hello', 'Hi!'],
+      messages: ['Hello', 'Hi! <script>blocked()</script>'],
       status: 'Ready',
     });
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      const messages = root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message');
+      assert.equal(messages[0]?.querySelector('strong')?.textContent, 'Hello');
+      assert.equal(messages[1]?.querySelector('strong')?.textContent, 'Hi!');
+      assert.equal(messages[1]?.querySelector('script'), null);
+    }
     assert.equal(isChatComposerFocused(reactDom.window.document), true);
     assert.equal(isChatComposerFocused(hostedDom.window.document), true);
   } finally {
@@ -279,6 +299,7 @@ function readRenderedComponents(root: ParentNode): unknown[] {
   return [...root.querySelectorAll<HTMLElement>('.rivet-web-app-component-frame')].map((frame) => {
     const content = frame.firstElementChild as HTMLElement;
     const control = content.querySelector<HTMLInputElement | HTMLTextAreaElement>('.rivet-web-app-control');
+    const dropdown = content.querySelector<HTMLElement>('[data-rivet-dropdown-value]');
     const markdown = content.matches('.rivet-web-app-markdown, .rivet-web-app-output-markdown')
       ? content
       : content.querySelector<HTMLElement>('.rivet-web-app-output-markdown');
@@ -289,8 +310,14 @@ function readRenderedComponents(root: ParentNode): unknown[] {
       className: content.className,
       componentType: frame.dataset.rivetWebAppComponentType,
       control: control
-        ? { placeholder: control.placeholder, tagName: control.tagName.toLowerCase(), value: control.value }
-        : undefined,
+        ? {
+            placeholder: 'placeholder' in control ? control.placeholder : undefined,
+            tagName: control.tagName.toLowerCase(),
+            value: control.value,
+          }
+        : dropdown
+          ? { tagName: 'dropdown', value: dropdown.dataset.rivetDropdownValue }
+          : undefined,
       disabled: button?.disabled,
       markdownHtml: markdown?.innerHTML,
       image: readRenderedImage(content),
@@ -298,7 +325,7 @@ function readRenderedComponents(root: ParentNode): unknown[] {
         (action) => ({ ariaLabel: action.ariaLabel, className: action.className, title: action.title }),
       ),
       tagName: content.tagName.toLowerCase(),
-      text: content.textContent,
+      text: dropdown ? `Dropdown:${dropdown.dataset.rivetDropdownValue ?? ''}` : content.textContent,
     };
   });
 }
@@ -330,8 +357,8 @@ function setTextareaValue(root: ParentNode, value: string, dom: JSDOM): void {
 function readChatState(root: ParentNode): { disabled: boolean; messages: string[]; status: string | null } {
   return {
     disabled: root.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.disabled ?? false,
-    messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map(
-      (message) => message.textContent ?? '',
+    messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map((message) =>
+      (message.textContent ?? '').trimEnd(),
     ),
     status: root.querySelector('.rivet-web-app-chat-status')?.textContent ?? null,
   };
@@ -363,7 +390,10 @@ function readButtonStates(root: ParentNode): Array<{ disabled: boolean; hasSpinn
 
 function makeParityUiGraph(): UiGraph {
   const action = {
-    inputMappings: [{ inputKey: 'prompt', stateKey: 'prompt' }],
+    inputMappings: [
+      { inputKey: 'prompt', stateKey: 'prompt' },
+      { inputKey: 'tone', stateKey: 'tone' },
+    ],
     outputs: [
       { outputKey: 'result', stateKey: 'result' },
       { outputKey: 'image', stateKey: 'image' },
@@ -376,7 +406,7 @@ function makeParityUiGraph(): UiGraph {
       { id: 'markdown' as UiComponentId, markdown: '## Markdown\n\n**Safe**', type: 'markdown' },
       { id: 'gap' as UiComponentId, size: 'small', type: 'gap' },
       {
-        defaultValue: 'Hello',
+        defaultValue: '',
         id: 'input' as UiComponentId,
         label: 'Prompt',
         placeholder: 'Type here',
@@ -384,10 +414,21 @@ function makeParityUiGraph(): UiGraph {
         type: 'input',
       },
       { id: 'textarea' as UiComponentId, label: 'Notes', stateKey: 'notes', type: 'textarea' },
+      {
+        id: 'dropdown' as UiComponentId,
+        items: [
+          { label: 'Friendly', value: 'friendly' },
+          { label: 'Direct', value: 'direct' },
+        ],
+        label: 'Tone',
+        stateKey: 'tone',
+        type: 'dropdown',
+      },
       { action, id: 'first-button' as UiComponentId, label: 'First', type: 'button' },
       { action, id: 'second-button' as UiComponentId, label: 'Second', type: 'button' },
       { id: 'output' as UiComponentId, label: 'Result', renderAs: 'json', stateKey: 'result', type: 'output' },
       { id: 'image' as UiComponentId, label: 'Image', renderAs: 'image', stateKey: 'image', type: 'output' },
+      { id: 'prompt-output' as UiComponentId, label: 'Prompt output', stateKey: 'prompt', type: 'output' },
     ],
     id: 'parity-app' as UiGraphId,
     name: 'Parity app',

@@ -1,38 +1,30 @@
 import { strict as assert } from 'node:assert';
-import { createServer, type Server } from 'node:http';
 import { afterEach, describe, it } from 'node:test';
-import WebSocket, { WebSocketServer } from 'ws';
+import WebSocket from 'ws';
 import {
   ExecutionRecorder,
   createInMemoryRivetWebAppRunCoordinator,
   createInMemoryRivetWebAppRunStore,
   createRivetWebAppWebSocketGateway,
-  type GraphId,
   type Project,
   type RivetWebAppServerMessage,
-  type RivetWebAppSocketSession,
-  type UiGraphId,
 } from '../src/index.js';
-
-const openServers: Server[] = [];
-const openSockets: WebSocket[] = [];
+import { makeExternalStatusProject, makeWebAppProject } from './webAppFixtures.js';
+import {
+  closeWebAppTestHarnesses,
+  collectWebAppSocketMessages as collectMessages,
+  createWebAppSocketHarness as createHarness,
+  makeWebAppStartMessage as makeStartMessage,
+  trackWebAppTestSocket,
+  waitForWebAppSocketClose as waitForClose,
+} from './webAppTestHarness.js';
 const TEST_LEASE_ID = 'test-lease';
 
 function activeLease(leaseId = TEST_LEASE_ID, leaseDurationMs = 60_000) {
   return { leaseDurationMs, leaseId };
 }
 
-afterEach(async () => {
-  for (const socket of openSockets.splice(0)) socket.close();
-  await Promise.all(
-    openServers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        }),
-    ),
-  );
-});
+afterEach(closeWebAppTestHarnesses);
 
 void describe('Rivet web app WebSocket gateway', () => {
   void it('rejects unsafe resource-limit and host identity configuration', () => {
@@ -403,6 +395,146 @@ void describe('Rivet web app WebSocket gateway', () => {
     assert.equal(stored?.status, 'interrupted');
     assert.equal(starts, 0);
     assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
+
+  void it('waits for an in-flight durable run reservation before interrupting during disposal', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    let releaseCreate!: () => void;
+    let createStarted!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const createStartedPromise = new Promise<void>((resolve) => {
+      createStarted = resolve;
+    });
+    const delayedStore = {
+      ...baseStore,
+      async createRun(...args: Parameters<typeof baseStore.createRun>) {
+        createStarted();
+        await createGate;
+        return baseStore.createRun(...args);
+      },
+    };
+    const harness = await createHarness(makeProject(), undefined, { runStore: delayedStore });
+    const client = await harness.connect();
+
+    client.send(JSON.stringify(makeStartMessage('request-racing-dispose')));
+    await createStartedPromise;
+    let disposeSettled = false;
+    const disposePromise = harness.gateway.dispose({ interrupt: true }).then(() => {
+      disposeSettled = true;
+    });
+    await delay(0);
+    assert.equal(disposeSettled, false);
+
+    releaseCreate();
+    await disposePromise;
+    const stored = await baseStore.getRunByRequestId('user:project:app:revision', 'request-racing-dispose');
+    assert.equal(stored?.status, 'interrupted');
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
+
+  void it('awaits an in-flight lease pass without recovering runs after disposal begins', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    let releaseRenewal!: () => void;
+    let renewalStarted!: () => void;
+    const renewalGate = new Promise<void>((resolve) => {
+      releaseRenewal = resolve;
+    });
+    const renewalStartedPromise = new Promise<void>((resolve) => {
+      renewalStarted = resolve;
+    });
+    let recoveryCalls = 0;
+    const delayedStore = {
+      ...baseStore,
+      async interruptExpiredRuns(...args: Parameters<typeof baseStore.interruptExpiredRuns>) {
+        recoveryCalls += 1;
+        return baseStore.interruptExpiredRuns(...args);
+      },
+      async renewRunLeases() {
+        renewalStarted();
+        await renewalGate;
+        return [];
+      },
+    };
+    const gateway = createRivetWebAppWebSocketGateway({ hostId: 'lease-disposal-host', runStore: delayedStore });
+
+    await renewalStartedPromise;
+    let disposeSettled = false;
+    const disposePromise = gateway.dispose().then(() => {
+      disposeSettled = true;
+    });
+    await delay(0);
+    assert.equal(disposeSettled, false);
+
+    releaseRenewal();
+    await disposePromise;
+    assert.equal(recoveryCalls, 0);
+  });
+
+  void it('publishes a drain-race interruption to a client reattached through another gateway', async () => {
+    const runStore = createInMemoryRivetWebAppRunStore();
+    const baseCoordinator = createInMemoryRivetWebAppRunCoordinator();
+    let releaseCreate!: () => void;
+    let runCreated!: () => void;
+    let remoteSubscribed!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const runCreatedPromise = new Promise<void>((resolve) => {
+      runCreated = resolve;
+    });
+    const remoteSubscribedPromise = new Promise<void>((resolve) => {
+      remoteSubscribed = resolve;
+    });
+    const delayedStore = {
+      ...runStore,
+      async createRun(...args: Parameters<typeof runStore.createRun>) {
+        const result = await runStore.createRun(...args);
+        runCreated();
+        await createGate;
+        return result;
+      },
+    };
+    const coordinator = {
+      ...baseCoordinator,
+      async subscribe(...args: Parameters<typeof baseCoordinator.subscribe>) {
+        const subscription = await baseCoordinator.subscribe(...args);
+        remoteSubscribed();
+        return subscription;
+      },
+    };
+    const owner = await createHarness(makeProject(), undefined, {
+      hostId: 'host-a',
+      runCoordinator: coordinator,
+      runStore: delayedStore,
+    });
+    const reconnect = await createHarness(makeProject(), undefined, {
+      hostId: 'host-b',
+      runCoordinator: coordinator,
+      runStore,
+    });
+    const ownerClient = await owner.connect();
+    const ownerMessages = collectMessages(ownerClient);
+
+    ownerClient.send(JSON.stringify(makeStartMessage('request-racing-remote')));
+    await runCreatedPromise;
+
+    const reconnectClient = await reconnect.connect();
+    const reconnectMessages = collectMessages(reconnectClient);
+    reconnectClient.send(JSON.stringify(makeStartMessage('request-racing-remote')));
+    await remoteSubscribedPromise;
+
+    owner.gateway.drain();
+    releaseCreate();
+
+    const [rejected, interrupted] = await Promise.all([
+      ownerMessages.next('action.rejected'),
+      reconnectMessages.next('action.interrupted'),
+    ]);
+    assert.equal(rejected.code, 'server_draining');
+    assert.match(interrupted.error, /setup failed/);
+    assert.equal((await runStore.getRun(interrupted.runId))?.status, 'interrupted');
   });
 
   void it('closes the read-subscribe race when an existing run finishes during attachment', async () => {
@@ -1331,8 +1463,7 @@ void describe('Rivet web app WebSocket gateway', () => {
     const harness = await createHarness(makeProject());
     await harness.gateway.dispose();
 
-    const client = new WebSocket(harness.url);
-    openSockets.push(client);
+    const client = trackWebAppTestSocket(new WebSocket(harness.url));
     const close = await waitForClose(client);
 
     assert.equal(close.code, 1012);
@@ -1384,244 +1515,7 @@ void describe('Rivet web app WebSocket gateway', () => {
   });
 });
 
-async function createHarness(
-  project: Project,
-  onActionStart?: () => void,
-  gatewayOptions: Parameters<typeof createRivetWebAppWebSocketGateway>[0] = {},
-  sessionOptions: Pick<
-    RivetWebAppSocketSession,
-    'createProcessorOptions' | 'onProcessorPrepared' | 'onRunFailed' | 'onRunFinished'
-  > = {},
-) {
-  const server = createServer();
-  const socketServer = new WebSocketServer({ server });
-  const gateway = createRivetWebAppWebSocketGateway({
-    heartbeatIntervalMs: 60_000,
-    heartbeatTimeoutMs: 60_000,
-    ...gatewayOptions,
-  });
-  const uiGraph = project.uiGraphs!['ui-graph' as UiGraphId]!;
-  socketServer.on('connection', (socket, request) => {
-    const ownerScope =
-      new URL(request.url ?? '/', 'http://rivet.local').searchParams.get('owner') ?? 'user:project:app:revision';
-    gateway.handleConnection(socket, {
-      ...sessionOptions,
-      onActionStart,
-      ownerScope,
-      project,
-      revisionKey: 'revision-1',
-      uiGraph,
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  openServers.push(server);
-  const address = server.address();
-  assert.ok(address && typeof address !== 'string');
-  const url = `ws://127.0.0.1:${address.port}`;
-
-  return {
-    gateway,
-    url,
-    async connect(ownerScope = 'user:project:app:revision', sendHello = true) {
-      const socket = new WebSocket(`${url}?owner=${encodeURIComponent(ownerScope)}`);
-      openSockets.push(socket);
-      await new Promise<void>((resolve, reject) => {
-        socket.once('open', resolve);
-        socket.once('error', reject);
-      });
-      if (sendHello) socket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
-      return socket;
-    },
-  };
-}
-
-function collectMessages(socket: WebSocket) {
-  const received: RivetWebAppServerMessage[] = [];
-  const waiters = new Set<() => void>();
-  socket.on('message', (raw) => {
-    received.push(JSON.parse(raw.toString()) as RivetWebAppServerMessage);
-    for (const wake of waiters) wake();
-    waiters.clear();
-  });
-
-  return {
-    async nextOf<Type extends RivetWebAppServerMessage['type']>(types: Type[], timeoutMs = 3_000) {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        const index = received.findIndex((message) => types.includes(message.type as Type));
-        if (index >= 0) {
-          return received.splice(index, 1)[0] as Extract<RivetWebAppServerMessage, { type: Type }>;
-        }
-        await waitForMessage(deadline);
-      }
-      throw new Error(`Timed out waiting for ${types.join(' or ')}.`);
-    },
-    async next<Type extends RivetWebAppServerMessage['type']>(type: Type, timeoutMs = 3_000) {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        const index = received.findIndex((message) => message.type === type);
-        if (index >= 0) {
-          return received.splice(index, 1)[0] as Extract<RivetWebAppServerMessage, { type: Type }>;
-        }
-        await waitForMessage(deadline);
-      }
-      throw new Error(`Timed out waiting for ${type}.`);
-    },
-  };
-
-  function waitForMessage(deadline: number): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => {
-          waiters.delete(wake);
-          reject(new Error('Timed out waiting for a WebSocket message.'));
-        },
-        Math.max(1, deadline - Date.now()),
-      );
-      const wake = () => {
-        clearTimeout(timeout);
-        resolve();
-      };
-      waiters.add(wake);
-    });
-  }
-}
-
-function makeStartMessage(requestId: string) {
-  return {
-    type: 'action.start',
-    componentId: 'run-button',
-    requestId,
-    revisionKey: 'revision-1',
-    state: { prompt: 'Hello' },
-  };
-}
-
-function makeProject(delay = 0): Project {
-  const graphId = 'main-graph' as GraphId;
-  const nodes: any[] = [
-    {
-      data: { dataType: 'string', id: 'input' },
-      id: 'input-node',
-      title: 'Input',
-      type: 'graphInput',
-      visualData: { x: 0, y: 0 },
-    },
-    {
-      data: { message: 'Preparing response', percent: 40, useMessageInput: false, usePercentInput: false },
-      id: 'progress-node',
-      title: 'Progress',
-      type: 'reportProgress',
-      visualData: { x: 200, y: 0 },
-    },
-  ];
-  const connections: any[] = [
-    { inputId: 'value', inputNodeId: 'progress-node', outputId: 'data', outputNodeId: 'input-node' },
-  ];
-  let outputSourceNodeId = 'progress-node';
-  let outputSourcePortId = 'value';
-  if (delay > 0) {
-    nodes.push({
-      data: { delay },
-      id: 'delay-node',
-      title: 'Delay',
-      type: 'delay',
-      visualData: { x: 400, y: 0 },
-    });
-    connections.push({
-      inputId: 'input1',
-      inputNodeId: 'delay-node',
-      outputId: 'value',
-      outputNodeId: 'progress-node',
-    });
-    outputSourceNodeId = 'delay-node';
-    outputSourcePortId = 'output1';
-  }
-  nodes.push({
-    data: { dataType: 'string', id: 'result' },
-    id: 'output-node',
-    title: 'Output',
-    type: 'graphOutput',
-    visualData: { x: 600, y: 0 },
-  });
-  connections.push({
-    inputId: 'value',
-    inputNodeId: 'output-node',
-    outputId: outputSourcePortId,
-    outputNodeId: outputSourceNodeId,
-  });
-
-  return {
-    graphs: {
-      [graphId]: {
-        connections,
-        metadata: { description: '', id: graphId, name: 'Main Graph' },
-        nodes,
-      },
-    },
-    metadata: { description: '', id: 'project' as never, mainGraphId: graphId, title: 'Project' },
-    uiGraphs: {
-      'ui-graph': {
-        components: [
-          {
-            action: {
-              graphId,
-              inputs: { input: { key: 'prompt', type: 'state' } },
-              outputKey: 'result',
-              outputStateKey: 'result',
-              type: 'runGraph',
-            },
-            id: 'run-button' as never,
-            label: 'Run',
-            type: 'button',
-          },
-        ],
-        id: 'ui-graph' as UiGraphId,
-        name: 'App',
-      },
-    },
-  } as Project;
-}
-
-function makeExternalStatusProject(): Project {
-  const project = makeProject();
-  const projectGraphId = Object.keys(project.graphs)[0] as GraphId;
-  const button = project.uiGraphs!['ui-graph' as UiGraphId]!.components[0];
-  if (button?.type === 'button') button.action.outputKey = 'value';
-  project.graphs[projectGraphId]!.nodes = [
-    {
-      data: { dataType: 'string', id: 'input' },
-      id: 'input-node',
-      title: 'Input',
-      type: 'graphInput',
-      visualData: { x: 0, y: 0 },
-    },
-    {
-      data: { functionName: 'setWebAppStatus', useErrorOutput: false, useFunctionNameInput: false },
-      id: 'status-node',
-      title: 'Set web app status',
-      type: 'externalCall',
-      visualData: { x: 200, y: 0 },
-    },
-    {
-      data: { dataType: 'string', id: 'value' },
-      id: 'output-node',
-      title: 'Output',
-      type: 'graphOutput',
-      visualData: { x: 400, y: 0 },
-    },
-  ];
-  project.graphs[projectGraphId]!.connections = [
-    { inputId: 'arguments', inputNodeId: 'status-node', outputId: 'data', outputNodeId: 'input-node' },
-    { inputId: 'value', inputNodeId: 'output-node', outputId: 'result', outputNodeId: 'status-node' },
-  ];
-  return project;
-}
-
-function waitForClose(socket: WebSocket): Promise<{ code: number; reason: Buffer }> {
-  if (socket.readyState === WebSocket.CLOSED) return Promise.resolve({ code: 1006, reason: Buffer.alloc(0) });
-  return new Promise((resolve) => socket.once('close', (code, reason) => resolve({ code, reason })));
-}
+const makeProject = (delay = 0): Project => makeWebAppProject({ delay, includeProgress: true });
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));

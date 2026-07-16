@@ -1,14 +1,10 @@
 import { css } from '@emotion/react';
-import { type CSSProperties, type FC, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type FC, useMemo } from 'react';
 import { useAtomValue, useStore } from 'jotai';
-import { arrayMove } from '@dnd-kit/sortable';
+import { DndContext, DragOverlay, useDraggable } from '@dnd-kit/core';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
-import {
-  getGraphBoundary,
-  initializeUiGraphChatActionBindings,
-  type UiComponentId,
-  type UiGraphComponent,
-} from '@valerypopoff/rivet2-core';
+import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
+import type { UiGraphComponent } from '@valerypopoff/rivet2-core';
 import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
@@ -25,15 +21,7 @@ import {
 } from './rivetWebApps/RivetWebAppPreviewWindow.js';
 import { useRunUiGraphAction } from '../hooks/useRunUiGraphAction.js';
 import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
-import { createUiGraphComponent, UI_GRAPH_COMPONENT_PALETTE } from './uiGraphBuilder/componentDescriptors.js';
-import {
-  getCurrentUiGraphComponentDeletionId,
-  type PendingUiGraphComponentDeletion,
-} from './uiGraphBuilder/componentDeletion.js';
-import {
-  initializeButtonActionToGraphBoundary,
-  normalizeButtonActionToGraphBoundary,
-} from './uiGraphBuilder/buttonBindings.js';
+import { getUiGraphComponentLabel, UI_GRAPH_COMPONENT_PALETTE_GROUPS } from './uiGraphBuilder/componentDescriptors.js';
 import { UiGraphComponentEditor } from './uiGraphBuilder/UiGraphComponentEditor.js';
 import { UiGraphPreviewEditor } from './uiGraphBuilder/UiGraphPreviewEditor.js';
 import { canRunDesktopWebAppPreview } from './uiGraphBuilder/uiGraphBuilderPolicy.js';
@@ -41,8 +29,12 @@ import { useUiGraphMutations } from './uiGraphBuilder/useUiGraphMutations.js';
 import { collectUiGraphDataKeyUsages } from './uiGraphBuilder/dataKeys.js';
 import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
 import { DeleteResourceConfirmModal } from './DeleteResourceConfirmModal.js';
-import { isUiGraphComponentEventTarget, revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
 import { getUiGraphPreviewInteractionController } from './rivetWebApps/uiGraphPreviewSession.js';
+import {
+  UI_GRAPH_PALETTE_DRAG_PREFIX,
+  uiGraphBuilderCollisionDetection,
+  useUiGraphBuilderController,
+} from './uiGraphBuilder/useUiGraphBuilderController.js';
 
 const styles = css`
   position: fixed;
@@ -73,7 +65,7 @@ const styles = css`
   .ui-graph-builder-add {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
   }
 
   .ui-graph-builder-scroll {
@@ -133,7 +125,8 @@ const styles = css`
   }
 
   .ui-graph-builder-field > input,
-  .ui-graph-builder-field > textarea {
+  .ui-graph-builder-field > textarea,
+  .ui-graph-data-key-input > input {
     min-width: 0;
     border: 1px solid var(--form-control-border);
     border-radius: 7px;
@@ -150,39 +143,122 @@ const styles = css`
     resize: vertical;
   }
 
+  .ui-graph-data-key-input {
+    position: relative;
+  }
+
+  .ui-graph-data-key-input > input {
+    width: 100%;
+    padding-right: 34px;
+  }
+
+  .ui-graph-data-key-warning-tooltip {
+    position: absolute;
+    top: 50%;
+    right: 9px;
+    display: inline-flex;
+    color: var(--warning);
+    cursor: help;
+    transform: translateY(-50%);
+  }
+
+  .ui-graph-data-key-warning-icon {
+    width: 16px;
+    height: 16px;
+  }
+
   .ui-graph-builder-palette {
     display: grid;
-    gap: 8px;
+    overflow: hidden;
+    border: 1px solid var(--foldable-section-border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--modal-surface-bg) 88%, var(--foreground) 4%);
   }
 
   .ui-graph-builder-palette-title {
     color: var(--foreground-muted);
     font-size: var(--ui-font-size-sm);
     font-weight: 800;
+    padding: 11px 12px;
   }
 
-  .ui-graph-builder-add .ui-graph-builder-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+  .ui-graph-builder-palette-group {
+    display: grid;
+    gap: 8px;
+    border-top: 1px solid var(--foldable-section-border);
+    padding: 10px 12px;
   }
 
-  .ui-graph-builder-add-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 12px;
+  .ui-graph-builder-palette-group-title {
     color: var(--foreground-muted);
-    opacity: 0;
-    transform: translateX(-2px);
-    transition:
-      opacity 120ms ease,
-      transform 120ms ease;
+    font-size: var(--ui-font-size-sm);
+    font-weight: 700;
   }
 
-  .ui-graph-builder-add .ui-graph-builder-button:hover .ui-graph-builder-add-icon {
+  .ui-graph-builder-settings-action-button {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    height: calc(32px * var(--ui-font-scale, 1));
+    margin: 0;
+    border: 0;
+    border-radius: var(--ui-button-radius);
+    background: var(--grey-dark-colorish);
+    color: var(--foreground);
+    cursor: pointer;
+    gap: 0.5rem;
+    font: inherit;
+    font-family: var(--font-family, Inter, system-ui, sans-serif);
+    font-size: var(--ui-font-size-base);
+    padding: 0.5rem 1rem;
+    corner-shape: squircle;
+  }
+
+  .ui-graph-builder-settings-action-button:hover,
+  .ui-graph-builder-settings-action-button:focus-visible {
+    background: color-mix(in srgb, var(--grey-dark-colorish) 84%, var(--foreground) 12%);
+    outline: none;
+  }
+
+  .ui-graph-builder-settings-action-button svg {
+    flex: 0 0 auto;
+    width: 1.15em;
+    height: 1.15em;
+  }
+
+  .ui-graph-builder-palette-add-button {
+    position: relative;
+    padding-right: 34px;
+    text-align: left;
+  }
+
+  .ui-graph-builder-add-arrow {
+    position: absolute;
+    right: 8px;
+    width: 14px;
+    height: 14px;
+    color: var(--foreground);
+    opacity: 0;
+  }
+
+  .ui-graph-builder-palette-add-button:hover .ui-graph-builder-add-arrow,
+  .ui-graph-builder-palette-add-button:focus-visible .ui-graph-builder-add-arrow {
     opacity: 1;
-    transform: translateX(0);
+  }
+
+  .ui-graph-builder-palette-add-button.dragging {
+    opacity: 0.45;
+  }
+
+  .ui-graph-builder-palette-drag-overlay {
+    border: 1px solid color-mix(in srgb, var(--foreground) 30%, transparent);
+    border-radius: var(--ui-button-radius);
+    background: color-mix(in srgb, var(--modal-surface-bg) 72%, var(--foreground) 18%);
+    box-shadow: 0 8px 20px color-mix(in srgb, #000 32%, transparent);
+    color: var(--foreground);
+    font-weight: 600;
+    padding: 5px 10px;
   }
 
   .ui-graph-components {
@@ -301,7 +377,20 @@ const styles = css`
     align-items: end;
   }
 
-  .ui-graph-chat-input-remove {
+  .ui-graph-dropdown-items {
+    display: grid;
+    gap: 8px;
+  }
+
+  .ui-graph-dropdown-item-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
+    gap: 8px;
+    align-items: end;
+  }
+
+  .ui-graph-chat-input-remove,
+  .ui-graph-dropdown-item-remove {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -330,7 +419,8 @@ const styles = css`
     height: 18px;
   }
 
-  .ui-graph-chat-add-input {
+  .ui-graph-chat-add-input,
+  .ui-graph-dropdown-add-item {
     justify-self: start;
   }
 
@@ -379,14 +469,6 @@ const styles = css`
     -webkit-text-fill-color: var(--foreground-muted);
   }
 
-  .ui-graph-data-key-warning {
-    display: block;
-    color: var(--warning);
-    font-size: var(--ui-font-size-xs);
-    font-weight: 600;
-    line-height: 1.25;
-  }
-
   .ui-graph-builder-separator {
     height: 1px;
     background: var(--foldable-section-border);
@@ -398,12 +480,41 @@ const styles = css`
     overflow: hidden;
   }
 
+  .ui-graph-preview-drop-surface {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    min-height: 0;
+  }
+
+  .ui-graph-preview-drop-surface > .rivet-web-app-root {
+    flex: 1;
+    min-height: 0;
+  }
+
   .ui-graph-builder-preview-action {
     position: absolute;
     top: 16px;
     right: 16px;
     z-index: 3;
     box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+  }
+
+  .ui-graph-preview-selection-rectangle {
+    position: fixed;
+    z-index: 2;
+    pointer-events: none;
+    border: 2px dashed var(--primary);
+    background: var(--primary-5percent);
+  }
+
+  .ui-graph-preview-sortable-row.palette-placeholder {
+    pointer-events: none;
+  }
+
+  .ui-graph-preview-palette-placeholder-content {
+    display: contents;
+    visibility: hidden;
   }
 `;
 
@@ -418,87 +529,33 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const hostUiConfig = useRivetAppHostUiConfig();
   const canRunDesktopPreview = canRunDesktopWebAppPreview(hostUiConfig);
-  const [activeComponentId, setActiveComponentId] = useState<UiComponentId | undefined>();
-  const [pendingComponentDeletion, setPendingComponentDeletion] = useState<
-    PendingUiGraphComponentDeletion | undefined
-  >();
-  const settingsScrollRef = useRef<HTMLDivElement>(null);
-  const previewScrollRef = useRef<HTMLDivElement>(null);
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
   const previewInteractionController = uiGraph
     ? getUiGraphPreviewInteractionController(project.metadata.id, uiGraph)
     : undefined;
   const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
-  const pendingDeleteComponentId = getCurrentUiGraphComponentDeletionId(
-    pendingComponentDeletion,
-    project.metadata.id,
-    uiGraph,
-  );
-
-  useEffect(() => {
-    setActiveComponentId(undefined);
-    setPendingComponentDeletion(undefined);
-  }, [project.metadata.id, selectedUiGraphId]);
-
-  const addComponent = useStableCallback((type: UiGraphComponent['type']) => {
-    updateUiGraph((draft) => {
-      const boundary = getGraphBoundary(project, project.metadata.mainGraphId);
-      const component = createUiGraphComponent(type, boundary ? project.metadata.mainGraphId : undefined);
-      if (component.type === 'button') {
-        initializeButtonActionToGraphBoundary(component, boundary);
-      } else if (component.type === 'chat') {
-        component.action = initializeUiGraphChatActionBindings(component.action, boundary);
-      }
-
-      draft.components.push(component);
-    });
-  });
-
-  const confirmDeleteComponent = useStableCallback(() => {
-    const componentId = getCurrentUiGraphComponentDeletionId(pendingComponentDeletion, project.metadata.id, uiGraph);
-    if (componentId == null) {
-      setPendingComponentDeletion(undefined);
-      return;
-    }
-
-    setPendingComponentDeletion(undefined);
-    setActiveComponentId((activeComponentId) => (activeComponentId === componentId ? undefined : activeComponentId));
-    updateUiGraph((draft) => {
-      draft.components = draft.components.filter((component) => component.id !== componentId);
-    });
-  });
-
-  const requestDeleteComponent = useStableCallback((componentId: UiComponentId) => {
-    if (!uiGraph) {
-      return;
-    }
-
-    setPendingComponentDeletion({ componentId, projectId: project.metadata.id, uiGraphId: uiGraph.id });
-  });
-
-  const reorderComponents = useStableCallback((draggedComponentId: UiComponentId, targetComponentId: UiComponentId) => {
-    updateUiGraph((draft) => {
-      const fromIndex = draft.components.findIndex((component) => component.id === draggedComponentId);
-      const toIndex = draft.components.findIndex((component) => component.id === targetComponentId);
-
-      if (fromIndex >= 0 && toIndex >= 0) {
-        draft.components = arrayMove(draft.components, fromIndex, toIndex);
-      }
-    });
-  });
-
-  const activateComponent = useStableCallback(
-    (componentId: UiComponentId, counterpartScrollContainer: HTMLElement | null) => {
-      setActiveComponentId(componentId);
-      revealUiGraphComponent(counterpartScrollContainer, componentId);
-    },
-  );
-  const activateSettingsComponent = useStableCallback((componentId: UiComponentId) =>
-    activateComponent(componentId, previewScrollRef.current),
-  );
-  const activatePreviewComponent = useStableCallback((componentId: UiComponentId) =>
-    activateComponent(componentId, settingsScrollRef.current),
-  );
+  const builderController = useUiGraphBuilderController({ project, uiGraph, updateUiGraph });
+  const {
+    activePaletteComponent,
+    activateSettingsComponent,
+    addComponent,
+    clearPaletteDrag,
+    clearSelectionFromPointer,
+    closeDeleteConfirmation,
+    confirmDeleteComponents,
+    dragSensors,
+    handleComponentDragEnd,
+    handleComponentDragOver,
+    handleComponentDragStart,
+    paletteInsertionIndex,
+    pendingDeleteComponentIds,
+    previewScrollRef,
+    requestDeleteComponents,
+    selectPreviewComponent,
+    selectedComponentIdSet,
+    setPreviewComponentSelection,
+    settingsScrollRef,
+  } = builderController;
 
   const openPreviewWindow = useStableCallback(async () => {
     if (!uiGraph) {
@@ -632,102 +689,127 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     <div
       css={styles}
       style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}
-      onPointerDownCapture={(event) => {
-        if (!isUiGraphComponentEventTarget(event.target)) {
-          setActiveComponentId(undefined);
-        }
-      }}
+      onPointerDownCapture={clearSelectionFromPointer}
     >
-      <section className="ui-graph-builder-panel">
-        <div ref={settingsScrollRef} className="ui-graph-builder-scroll">
-          <div className="ui-graph-builder-fields">
-            <label className="ui-graph-builder-field">
-              Name
-              <input
-                value={uiGraph.name}
-                onChange={(event) =>
-                  updateUiGraph((draft) => {
-                    draft.name = event.target.value;
-                  })
-                }
-              />
-            </label>
-            <label className="ui-graph-builder-field">
-              Description
-              <textarea
-                value={uiGraph.description ?? ''}
-                onChange={(event) =>
-                  updateUiGraph((draft) => {
-                    draft.description = event.target.value;
-                  })
-                }
-              />
-            </label>
-          </div>
-          <div className="ui-graph-builder-palette">
-            <div className="ui-graph-builder-palette-title">Components</div>
-            <div className="ui-graph-builder-add">
-              {UI_GRAPH_COMPONENT_PALETTE.map(({ label, type }) => (
-                <button
-                  key={type}
-                  type="button"
-                  className="ui-graph-builder-button secondary"
-                  onClick={() => addComponent(type)}
-                >
-                  <span className="ui-graph-builder-add-icon" aria-hidden="true">
-                    +
-                  </span>
-                  <span>{label}</span>
-                </button>
+      <DndContext
+        sensors={dragSensors}
+        collisionDetection={uiGraphBuilderCollisionDetection}
+        onDragCancel={clearPaletteDrag}
+        onDragEnd={handleComponentDragEnd}
+        onDragOver={handleComponentDragOver}
+        onDragStart={handleComponentDragStart}
+      >
+        <section className="ui-graph-builder-panel">
+          <div ref={settingsScrollRef} className="ui-graph-builder-scroll">
+            <div className="ui-graph-builder-fields">
+              <label className="ui-graph-builder-field">
+                Name
+                <input
+                  value={uiGraph.name}
+                  onChange={(event) =>
+                    updateUiGraph((draft) => {
+                      draft.name = event.target.value;
+                    })
+                  }
+                />
+              </label>
+              <label className="ui-graph-builder-field">
+                Description
+                <textarea
+                  value={uiGraph.description ?? ''}
+                  onChange={(event) =>
+                    updateUiGraph((draft) => {
+                      draft.description = event.target.value;
+                    })
+                  }
+                />
+              </label>
+            </div>
+            <div className="ui-graph-builder-palette">
+              <div className="ui-graph-builder-palette-title">Components</div>
+              {UI_GRAPH_COMPONENT_PALETTE_GROUPS.map((group) => (
+                <section key={group.label} className="ui-graph-builder-palette-group" aria-label={group.label}>
+                  <div className="ui-graph-builder-palette-group-title">{group.label}</div>
+                  <div className="ui-graph-builder-add">
+                    {group.types.map((type) => {
+                      const label = getUiGraphComponentLabel(type);
+                      return (
+                        <PaletteComponentButton
+                          key={type}
+                          label={label}
+                          componentType={type}
+                          onClick={() => addComponent(type)}
+                        />
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+            <div className="ui-graph-components">
+              {uiGraph.components.map((component) => (
+                <UiGraphComponentEditor
+                  key={component.id}
+                  component={component}
+                  dataKeyUsages={dataKeyUsages}
+                  project={project}
+                  onActivate={activateSettingsComponent}
+                  onDelete={() => requestDeleteComponents([component.id])}
+                  onUpdate={(updater) => updateComponent(component.id, updater)}
+                  selectedComponentIds={selectedComponentIdSet}
+                />
               ))}
             </div>
           </div>
-          <div className="ui-graph-components">
-            {uiGraph.components.map((component) => (
-              <UiGraphComponentEditor
-                key={component.id}
-                activeComponentId={activeComponentId}
-                component={component}
-                dataKeyUsages={dataKeyUsages}
-                project={project}
-                onActivate={activateSettingsComponent}
-                onDelete={() => requestDeleteComponent(component.id)}
-                onUpdate={(updater) => updateComponent(component.id, updater)}
-              />
-            ))}
-          </div>
-        </div>
-      </section>
-      <section className="ui-graph-builder-preview">
-        {canRunDesktopPreview ? (
-          <button
-            type="button"
-            className="ui-graph-builder-button ui-graph-builder-preview-action"
-            onClick={() => void openPreviewWindow()}
-          >
-            <BrowserIcon aria-hidden="true" />
-            <span>Run detached</span>
-          </button>
-        ) : null}
-        <UiGraphPreviewEditor
-          key={`${project.metadata.id}:${uiGraph.id}`}
-          activeComponentId={activeComponentId}
-          interactionController={previewInteractionController}
-          onActiveComponentChange={activatePreviewComponent}
-          onReorder={reorderComponents}
-          scrollContainerRef={previewScrollRef}
-          uiGraph={uiGraph}
-          onRunAction={(componentId, state, abortSignal, onProgress) =>
-            runUiGraphAction(uiGraph, componentId, state, abortSignal, onProgress)
-          }
-        />
-      </section>
+        </section>
+        <section className="ui-graph-builder-preview">
+          {canRunDesktopPreview ? (
+            <button
+              type="button"
+              className="ui-graph-builder-button ui-graph-builder-preview-action"
+              onClick={() => void openPreviewWindow()}
+            >
+              <BrowserIcon aria-hidden="true" />
+              <span>Run detached</span>
+            </button>
+          ) : null}
+          <UiGraphPreviewEditor
+            key={`${project.metadata.id}:${uiGraph.id}`}
+            interactionController={previewInteractionController}
+            onComponentSelectionChange={selectPreviewComponent}
+            onComponentSelectionSetChange={setPreviewComponentSelection}
+            paletteComponent={activePaletteComponent}
+            paletteInsertionIndex={activePaletteComponent ? paletteInsertionIndex : undefined}
+            scrollContainerRef={previewScrollRef}
+            selectedComponentIds={selectedComponentIdSet}
+            uiGraph={uiGraph}
+            onRunAction={(componentId, state, abortSignal, onProgress) =>
+              runUiGraphAction(uiGraph, componentId, state, abortSignal, onProgress)
+            }
+          />
+        </section>
+        <DragOverlay dropAnimation={null}>
+          {activePaletteComponent ? (
+            <div className="ui-graph-builder-palette-drag-overlay">
+              {getUiGraphComponentLabel(activePaletteComponent.type)}
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
       <DeleteResourceConfirmModal
-        isOpen={pendingDeleteComponentId != null}
-        resourceName="this component"
-        title="Delete Component?"
-        onClose={() => setPendingComponentDeletion(undefined)}
-        onConfirm={confirmDeleteComponent}
+        isOpen={pendingDeleteComponentIds.length > 0}
+        resourceName={
+          pendingDeleteComponentIds.length === 1
+            ? 'this component'
+            : `these ${pendingDeleteComponentIds.length} components`
+        }
+        title={
+          pendingDeleteComponentIds.length === 1
+            ? 'Delete Component?'
+            : `Delete ${pendingDeleteComponentIds.length} Components?`
+        }
+        onClose={closeDeleteConfirmation}
+        onConfirm={confirmDeleteComponents}
       />
     </div>
   );
@@ -738,3 +820,29 @@ function getUiGraphBuilderStyle(sidebarOpen: boolean, leftSidebarWidth: number):
     '--ui-graph-left-offset': sidebarOpen ? `${leftSidebarWidth}px` : '0px',
   } as CSSProperties;
 }
+
+const PaletteComponentButton: FC<{
+  componentType: UiGraphComponent['type'];
+  label: string;
+  onClick(): void;
+}> = ({ componentType, label, onClick }) => {
+  const { attributes, isDragging, listeners, setNodeRef } = useDraggable({
+    data: { componentType },
+    id: `${UI_GRAPH_PALETTE_DRAG_PREFIX}${componentType}`,
+  });
+
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      className={`ui-graph-builder-settings-action-button ui-graph-builder-palette-add-button${isDragging ? ' dragging' : ''}`}
+      title="Drag into the preview to insert between components"
+      onClick={onClick}
+      {...attributes}
+      {...listeners}
+    >
+      <span>{label}</span>
+      <ChevronRightIcon className="ui-graph-builder-add-arrow" aria-hidden="true" />
+    </button>
+  );
+};

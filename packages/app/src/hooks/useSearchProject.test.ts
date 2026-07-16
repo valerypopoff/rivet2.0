@@ -70,6 +70,13 @@ test('buildProjectSearchItems indexes graph nodes and library nodes', () => {
               type: 'gap',
             },
             {
+              id: 'tone' as UiComponentId,
+              items: [{ label: 'Friendly', value: 'friendly' }],
+              label: 'Tone',
+              stateKey: 'tone',
+              type: 'dropdown',
+            },
+            {
               action: {
                 graphId,
                 historyInputId: 'conversationHistory',
@@ -104,6 +111,7 @@ test('buildProjectSearchItems indexes graph nodes and library nodes', () => {
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /reviewInput/);
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /reviewOutput/);
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /large/);
+  assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /friendly/);
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /conversationHistory/);
   assert.match(items.find((item) => item.id === 'ui-app')?.joinedData ?? '', /assistantReply/);
 });

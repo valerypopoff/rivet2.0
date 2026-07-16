@@ -31,4 +31,8 @@ export {
   parseRivetWebAppServerMessage,
   RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
 } from './model/UiGraphActionProtocol.js';
-export { copyUiGraphText, downloadUiGraphJsonOutput } from './model/UiGraphBrowserRuntime.js';
+export {
+  copyUiGraphText,
+  downloadUiGraphJsonOutput,
+  observeUiGraphOutputResizeBounds,
+} from './model/UiGraphBrowserRuntime.js';

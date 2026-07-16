@@ -57,6 +57,7 @@ const styles = css`
   display: flex;
   flex-direction: column;
   flex-shrink: 1;
+  min-width: 0;
   min-height: 100%;
   padding: 16px 8px 0;
   color: var(--grey-light);
@@ -65,6 +66,7 @@ const styles = css`
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
+    min-width: 0;
     min-height: 0;
 
     &:focus {
@@ -267,10 +269,12 @@ const styles = css`
 
   .ui-graph-entry,
   .ui-graph-create {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 6px;
     width: 100%;
+    min-width: 0;
     min-height: calc(34px * var(--ui-font-scale));
     margin: 0 0 12px;
     padding: 8px 10px;
@@ -309,7 +313,8 @@ const styles = css`
   .ui-graph-list {
     display: grid;
     gap: 4px;
-    margin: 0 0 12px;
+    min-width: 0;
+    margin: 0 0 34px;
   }
 
   .ui-graph-entry,
@@ -319,6 +324,7 @@ const styles = css`
   }
 
   .ui-graph-entry-name {
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -467,7 +473,7 @@ const styles = css`
 
   .graph-reference-dot {
     position: absolute;
-    left: -3px;
+    left: 0;
     top: 50%;
     width: 6px;
     height: 6px;
@@ -723,6 +729,7 @@ export const GraphList: FC = memo(() => {
     graphCompareKindByGraphId,
     reachability: graphListReachability,
     referencingSelectedGraphIds,
+    referencingSelectedUiGraphIds,
     visible: graphListVisible,
   } = useGraphListPresentation({
     activeComparison,
@@ -1022,6 +1029,7 @@ export const GraphList: FC = memo(() => {
         tabIndex={-1}
       >
         <UiGraphResourceSection
+          referencingSelectedUiGraphIds={referencingSelectedUiGraphIds}
           selectedUiGraphId={selectedUiGraphId}
           uiGraphs={Object.values(project.uiGraphs ?? {})}
           onCreate={handleCreateUiGraph}

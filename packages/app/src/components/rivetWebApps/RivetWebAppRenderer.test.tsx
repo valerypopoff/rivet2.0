@@ -3,7 +3,13 @@ import test from 'node:test';
 import { act } from 'react-dom/test-utils';
 import { createRoot } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
-import type { GraphProgress, UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
+import {
+  createUiGraphInteractionController,
+  type GraphProgress,
+  type UiComponentId,
+  type UiGraph,
+  type UiGraphId,
+} from '@valerypopoff/rivet2-core';
 import { RivetWebAppRenderer, type RivetWebAppActionResult } from './RivetWebAppRenderer.js';
 
 test('React web app actions keep independent loading, reject stale patches, and reset after cancellation', async () => {
@@ -62,6 +68,9 @@ test('React web app actions keep independent loading, reject stale patches, and 
       const buttons = rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button');
       buttons[0]?.click();
       buttons[1]?.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
     });
 
     let buttons = rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button');
@@ -123,6 +132,86 @@ test('React web app actions keep independent loading, reject stale patches, and 
     await act(async () => root.unmount());
     assert.equal(unmountSignal?.aborted, true);
   } finally {
+    dom.window.close();
+    Object.defineProperties(globalThis, {
+      document: { configurable: true, value: previousGlobals.document },
+      HTMLElement: { configurable: true, value: previousGlobals.HTMLElement },
+      navigator: { configurable: true, value: previousGlobals.navigator },
+      window: { configurable: true, value: previousGlobals.window },
+    });
+    delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+  }
+});
+
+test('editor component frames expose multi-selection modifier clicks without changing hosted behavior', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/app' });
+  const previousGlobals = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    navigator: globalThis.navigator,
+    window: globalThis.window,
+  };
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: dom.window.document },
+    HTMLElement: { configurable: true, value: dom.window.HTMLElement },
+    navigator: { configurable: true, value: dom.window.navigator },
+    window: { configurable: true, value: dom.window },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  const firstComponentId = 'first' as UiComponentId;
+  const secondComponentId = 'second' as UiComponentId;
+  const uiGraph: UiGraph = {
+    components: [
+      { id: firstComponentId, text: 'First', type: 'text' },
+      { id: secondComponentId, text: 'Second', type: 'text' },
+    ],
+    id: 'ui-graph' as UiGraphId,
+    name: 'Test app',
+  };
+  const interactionController = createUiGraphInteractionController(uiGraph);
+  const displayUiGraph: UiGraph = {
+    ...uiGraph,
+    components: [
+      ...uiGraph.components,
+      { defaultValue: 'unsaved', id: 'unsaved' as UiComponentId, label: 'Unsaved', stateKey: 'unsaved', type: 'input' },
+    ],
+  };
+  const selectionChanges: Array<[UiComponentId, 'replace' | 'toggle']> = [];
+  const rootElement = dom.window.document.getElementById('root')!;
+  const root = createRoot(rootElement);
+
+  try {
+    await act(async () => {
+      root.render(
+        <RivetWebAppRenderer
+          interactionController={interactionController}
+          interactionUiGraph={uiGraph}
+          uiGraph={displayUiGraph}
+          selectedComponentIds={new Set([firstComponentId])}
+          onComponentSelectionChange={(componentId, mode) => selectionChanges.push([componentId, mode])}
+          onRunAction={async () => ({ outputs: {} })}
+        />,
+      );
+    });
+
+    const frames = rootElement.querySelectorAll<HTMLElement>('.rivet-web-app-component-frame');
+    assert.equal(frames[0]?.classList.contains('active'), true);
+    assert.equal(frames[1]?.classList.contains('active'), false);
+    assert.equal(Object.hasOwn(interactionController.getSnapshot().state, 'unsaved'), false);
+
+    await act(async () => {
+      frames[1]?.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true, shiftKey: true }));
+    });
+    assert.deepEqual(selectionChanges, [[secondComponentId, 'toggle']]);
+
+    selectionChanges.length = 0;
+    await act(async () => {
+      frames[1]?.dispatchEvent(new dom.window.FocusEvent('focusin', { bubbles: true }));
+    });
+    assert.deepEqual(selectionChanges, [[secondComponentId, 'replace']]);
+  } finally {
+    await act(async () => root.unmount());
     dom.window.close();
     Object.defineProperties(globalThis, {
       document: { configurable: true, value: previousGlobals.document },

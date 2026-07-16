@@ -18,6 +18,7 @@ const approvedHtmlSinkFiles = new Set([
   'packages/app/src/components/trivet/NoTestCasesSplash.tsx',
   'packages/app/src/components/trivet/NoTestSuitesSplash.tsx',
   'packages/node/src/webAppClient.ts',
+  'packages/node/src/webAppClientRenderer.ts',
 ]);
 
 const sourceFiles = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {

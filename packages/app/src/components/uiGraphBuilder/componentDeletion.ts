@@ -1,25 +1,25 @@
 import type { ProjectId, UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
 
 export type PendingUiGraphComponentDeletion = {
-  componentId: UiComponentId;
+  componentIds: readonly UiComponentId[];
   projectId: ProjectId;
   uiGraphId: UiGraphId;
 };
 
-export function getCurrentUiGraphComponentDeletionId(
+export function getCurrentUiGraphComponentDeletionIds(
   pendingDeletion: PendingUiGraphComponentDeletion | undefined,
   projectId: ProjectId,
   uiGraph: UiGraph | undefined,
-): UiComponentId | undefined {
+): UiComponentId[] {
   if (
     pendingDeletion == null ||
     uiGraph == null ||
     pendingDeletion.projectId !== projectId ||
-    pendingDeletion.uiGraphId !== uiGraph.id ||
-    !uiGraph.components.some((component) => component.id === pendingDeletion.componentId)
+    pendingDeletion.uiGraphId !== uiGraph.id
   ) {
-    return undefined;
+    return [];
   }
 
-  return pendingDeletion.componentId;
+  const existingComponentIds = new Set(uiGraph.components.map((component) => component.id));
+  return [...new Set(pendingDeletion.componentIds)].filter((componentId) => existingComponentIds.has(componentId));
 }

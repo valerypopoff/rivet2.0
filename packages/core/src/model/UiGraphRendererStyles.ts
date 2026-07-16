@@ -6,12 +6,31 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   --rivet-web-app-card-border: var(--foldable-section-border, rgba(255, 255, 255, 0.04));
   --rivet-web-app-control-background: var(--form-control-bg, #20252d);
   --rivet-web-app-control-border: var(--form-control-border, rgba(255, 255, 255, 0.14));
+  --rivet-web-app-control-hover-background: var(--form-control-bg-hover, #252b34);
+  --rivet-web-app-control-focus-background: var(--form-control-bg-focus, #252b34);
+  --rivet-web-app-control-focus-border: var(--form-control-border-focus, #788294);
+  --rivet-web-app-select-menu-background: var(--modal-surface-bg, #252b34);
+  --rivet-web-app-select-selected-background: var(--form-control-selected-bg, color-mix(in srgb, var(--primary, #ff9e2c) 14%, #252b34));
+  --rivet-web-app-select-selected-hover-background: var(--form-control-selected-bg-hover, color-mix(in srgb, var(--primary, #ff9e2c) 18%, #252b34));
+  --rivet-web-app-select-height: var(--form-control-select-height, 34px);
+  --rivet-web-app-select-option-min-height: var(--form-control-select-option-min-height, 30px);
+  --rivet-web-app-select-option-padding-block: var(--form-control-select-option-padding-block, 5px);
+  --rivet-web-app-select-option-padding-inline: var(--form-control-select-option-padding-inline, 10px);
   --rivet-web-app-button-radius: var(--rivet-web-app-host-button-radius, var(--ui-button-radius, 6px));
   --rivet-web-app-button-height: calc(32px * var(--ui-font-scale, 1));
   --rivet-web-app-button-background: var(--success, #3ba85b);
   --rivet-web-app-button-foreground: var(--grey-lightest, #ffffff);
   --rivet-web-app-output-title: var(--rivet-web-app-foreground, #ffffff);
   --rivet-web-app-error-color: var(--error, #ff6b5f);
+  --rivet-web-app-scrollbar-track: var(--scrollbar-track-bg, var(--modal-surface-bg, #252b34));
+  --rivet-web-app-scrollbar-thumb: var(
+    --scrollbar-thumb-bg,
+    color-mix(in srgb, var(--rivet-web-app-foreground) 28%, var(--rivet-web-app-scrollbar-track) 72%)
+  );
+  --rivet-web-app-scrollbar-thumb-hover: var(
+    --scrollbar-thumb-bg-hover,
+    color-mix(in srgb, var(--rivet-web-app-foreground) 42%, var(--rivet-web-app-scrollbar-track) 58%)
+  );
   --rivet-web-app-font-size: var(--rivet-web-app-host-font-size, 15px);
   --rivet-web-app-chat-min-height: clamp(360px, calc(100vh - 136px), 540px);
   box-sizing: border-box;
@@ -29,6 +48,31 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 .rivet-web-app-root *::before,
 .rivet-web-app-root *::after {
   box-sizing: border-box;
+}
+
+.rivet-web-app-root,
+.rivet-web-app-root * {
+  scrollbar-color: var(--rivet-web-app-scrollbar-thumb) var(--rivet-web-app-scrollbar-track);
+}
+
+.rivet-web-app-root::-webkit-scrollbar-track,
+.rivet-web-app-root ::-webkit-scrollbar-track {
+  background-color: var(--rivet-web-app-scrollbar-track);
+}
+
+.rivet-web-app-root::-webkit-scrollbar-corner,
+.rivet-web-app-root ::-webkit-scrollbar-corner {
+  background-color: var(--rivet-web-app-scrollbar-track);
+}
+
+.rivet-web-app-root::-webkit-scrollbar-thumb,
+.rivet-web-app-root ::-webkit-scrollbar-thumb {
+  background-color: var(--rivet-web-app-scrollbar-thumb);
+}
+
+.rivet-web-app-root::-webkit-scrollbar-thumb:hover,
+.rivet-web-app-root ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--rivet-web-app-scrollbar-thumb-hover);
 }
 
 .rivet-web-app-surface {
@@ -98,11 +142,11 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-gap-medium {
-  height: 24px;
+  height: 32px;
 }
 
 .rivet-web-app-gap-large {
-  height: 48px;
+  height: 96px;
 }
 
 .rivet-web-app-component-frame {
@@ -142,6 +186,115 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   font: inherit;
   font-weight: 400;
   padding: 10px 12px;
+}
+
+.rivet-web-app-dropdown {
+  position: relative;
+}
+
+.rivet-web-app-hosted-dropdown-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: var(--rivet-web-app-select-height);
+  box-sizing: border-box;
+  border: 1px solid var(--rivet-web-app-control-border);
+  border-radius: var(--form-control-radius, 8px);
+  background: var(--rivet-web-app-control-background);
+  color: var(--rivet-web-app-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 400;
+  padding: 4px var(--rivet-web-app-select-option-padding-inline);
+  text-align: left;
+}
+
+.rivet-web-app-hosted-dropdown-button:hover:not(:disabled) {
+  background: var(--rivet-web-app-control-hover-background);
+}
+
+.rivet-web-app-hosted-dropdown-button:focus-visible,
+.rivet-web-app-hosted-dropdown.open .rivet-web-app-hosted-dropdown-button {
+  border-color: var(--rivet-web-app-control-focus-border);
+  background: var(--rivet-web-app-control-focus-background);
+  outline: none;
+}
+
+.rivet-web-app-hosted-dropdown-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.rivet-web-app-hosted-dropdown-chevron {
+  width: 0;
+  height: 0;
+  margin-left: 8px;
+  border-top: 5px solid var(--rivet-web-app-foreground-muted);
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+  flex: 0 0 auto;
+}
+
+.rivet-web-app-hosted-dropdown.open .rivet-web-app-hosted-dropdown-chevron {
+  transform: rotate(180deg);
+}
+
+.rivet-web-app-hosted-dropdown-menu {
+  display: none;
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  overflow: auto;
+  max-height: 220px;
+  border: 1px solid var(--rivet-web-app-control-border);
+  border-radius: var(--form-control-radius, 8px);
+  background: var(--rivet-web-app-select-menu-background);
+  box-shadow: 0 4px 8px color-mix(in srgb, #000 28%, transparent);
+  padding: 4px;
+}
+
+.rivet-web-app-hosted-dropdown.open .rivet-web-app-hosted-dropdown-menu {
+  display: block;
+}
+
+.rivet-web-app-hosted-dropdown.menu-open-up .rivet-web-app-hosted-dropdown-menu {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.rivet-web-app-hosted-dropdown-option {
+  display: block;
+  width: 100%;
+  border: 0;
+  min-height: var(--rivet-web-app-select-option-min-height);
+  border-radius: var(--form-control-option-radius, 6px);
+  background: transparent;
+  color: var(--rivet-web-app-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 400;
+  padding-block: var(--rivet-web-app-select-option-padding-block);
+  padding-inline: var(--rivet-web-app-select-option-padding-inline);
+  text-align: left;
+}
+
+.rivet-web-app-hosted-dropdown-option:hover,
+.rivet-web-app-hosted-dropdown-option:focus-visible,
+.rivet-web-app-hosted-dropdown-option.is-focused {
+  background: var(--rivet-web-app-control-hover-background);
+  outline: none;
+}
+
+.rivet-web-app-hosted-dropdown-option[aria-selected='true'] {
+  background: var(--rivet-web-app-select-selected-background);
+}
+
+.rivet-web-app-hosted-dropdown-option[aria-selected='true']:hover,
+.rivet-web-app-hosted-dropdown-option[aria-selected='true'].is-focused {
+  background: var(--rivet-web-app-select-selected-hover-background);
 }
 
 .rivet-web-app-field textarea {
@@ -329,26 +482,33 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-chat-message {
+  --rivet-web-app-chat-message-background: var(--rivet-web-app-control-background);
+  --rivet-web-app-chat-message-foreground: var(--rivet-web-app-foreground);
   width: fit-content;
   max-width: min(82%, 620px);
   border: 1px solid var(--rivet-web-app-card-border);
   border-radius: 14px;
+  background: var(--rivet-web-app-chat-message-background);
+  color: var(--rivet-web-app-chat-message-foreground);
   padding: 10px 13px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
+.rivet-web-app-chat-message-markdown {
+  white-space: normal;
+}
+
 .rivet-web-app-chat-message-user {
+  --rivet-web-app-chat-message-background: color-mix(in srgb, var(--rivet-web-app-button-background) 72%, var(--rivet-web-app-card-background));
+  --rivet-web-app-chat-message-foreground: var(--rivet-web-app-button-foreground);
   align-self: flex-end;
   border-bottom-right-radius: 5px;
-  background: color-mix(in srgb, var(--rivet-web-app-button-background) 72%, var(--rivet-web-app-card-background));
-  color: var(--rivet-web-app-button-foreground);
 }
 
 .rivet-web-app-chat-message-assistant {
   align-self: flex-start;
   border-bottom-left-radius: 5px;
-  background: var(--rivet-web-app-control-background);
 }
 
 .rivet-web-app-chat-thinking {
@@ -478,6 +638,11 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-output-has-value:not(.rivet-web-app-output-collapsed) {
+  min-height: var(--rivet-web-app-output-resize-min-height, 48px);
+  max-height: min(80vh, 800px, var(--rivet-web-app-output-resize-max-height, 800px));
+}
+
+.rivet-web-app-output-resizable:not(.rivet-web-app-output-collapsed) {
   resize: vertical;
 }
 
@@ -491,6 +656,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   align-items: center;
   gap: 8px;
   min-height: 48px;
+  border-bottom: 1px solid transparent;
   border-radius: 9px;
   padding: 8px 18px;
 }
@@ -498,6 +664,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 button.rivet-web-app-output-header {
   width: 100%;
   border: 0;
+  border-bottom: 1px solid transparent;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -541,6 +708,9 @@ button.rivet-web-app-output-header:focus-visible {
 
 .rivet-web-app-output-action-button {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
   border: 0;
@@ -561,7 +731,7 @@ button.rivet-web-app-output-header:focus-visible {
 .rivet-web-app-output-content-actions {
   position: absolute;
   top: 10px;
-  right: calc(10px + 1em);
+  right: 10px;
   z-index: 1;
   display: flex;
   gap: 2px;
@@ -573,6 +743,14 @@ button.rivet-web-app-output-header:focus-visible {
   min-height: 0;
   overflow: auto;
   padding: 0;
+  scrollbar-gutter: auto;
+}
+
+.rivet-web-app-output-scrollable .rivet-web-app-output-content-actions {
+  right: calc(10px + 1em);
+}
+
+.rivet-web-app-output-scrollable .rivet-web-app-output-content-body {
   scrollbar-gutter: stable;
 }
 
@@ -587,13 +765,13 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-output-copy-button::before {
-  top: 5px;
-  left: 8px;
+  top: 7px;
+  left: 10px;
 }
 
 .rivet-web-app-output-copy-button::after {
-  top: 8px;
-  left: 5px;
+  top: 10px;
+  left: 7px;
   background: var(--rivet-web-app-card-background);
 }
 
@@ -604,8 +782,8 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-output-download-button::before {
-  top: 5px;
-  left: 8px;
+  top: 7px;
+  left: 10px;
   width: 8px;
   height: 8px;
   border-right: 1.5px solid currentColor;
@@ -614,8 +792,8 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-output-download-button::after {
-  top: 16px;
-  left: 6px;
+  top: 18px;
+  left: 8px;
   width: 12px;
   height: 4px;
   border-right: 1.5px solid currentColor;
@@ -626,7 +804,7 @@ button.rivet-web-app-output-header:focus-visible {
 
 .rivet-web-app-output-action-button:hover,
 .rivet-web-app-output-action-button:focus-visible {
-  color: var(--primary, #ff9e2c);
+  color: var(--rivet-web-app-foreground);
   outline: none;
   background: color-mix(in srgb, #000 48%, transparent);
 }
@@ -668,24 +846,28 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-markdown,
-.rivet-web-app-output-markdown {
+.rivet-web-app-output-markdown,
+.rivet-web-app-chat-message-markdown {
   word-break: break-word;
 }
 
-.rivet-web-app-markdown.markdown-body {
-  background: transparent;
-  font-family: inherit;
-  min-width: 0;
-}
-
+.rivet-web-app-markdown.markdown-body,
 .rivet-web-app-output-markdown.markdown-body {
   background: transparent;
   font-family: inherit;
   min-width: 0;
 }
 
+.rivet-web-app-chat-message-markdown.markdown-body {
+  min-width: 0;
+  background: var(--rivet-web-app-chat-message-background);
+  color: var(--rivet-web-app-chat-message-foreground);
+  font-family: inherit;
+}
+
 .rivet-web-app-markdown h1,
-.rivet-web-app-output-markdown h1 {
+.rivet-web-app-output-markdown h1,
+.rivet-web-app-chat-message-markdown h1 {
   margin: 0 0 12px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--rivet-web-app-card-border);
@@ -694,7 +876,8 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-markdown h2,
-.rivet-web-app-output-markdown h2 {
+.rivet-web-app-output-markdown h2,
+.rivet-web-app-chat-message-markdown h2 {
   margin: 0 0 10px;
   font-size: 20px;
   line-height: 1.25;
@@ -702,13 +885,16 @@ button.rivet-web-app-output-header:focus-visible {
 
 .rivet-web-app-markdown p,
 .rivet-web-app-output-markdown p,
+.rivet-web-app-chat-message-markdown p,
 .rivet-web-app-markdown ul,
-.rivet-web-app-output-markdown ul {
+.rivet-web-app-output-markdown ul,
+.rivet-web-app-chat-message-markdown ul {
   margin: 0 0 12px;
 }
 
 .rivet-web-app-markdown.markdown-body code,
-.rivet-web-app-output-markdown.markdown-body code {
+.rivet-web-app-output-markdown.markdown-body code,
+.rivet-web-app-chat-message-markdown.markdown-body code {
   border-radius: 4px;
   background: color-mix(in srgb, var(--rivet-web-app-control-background) 70%, var(--rivet-web-app-foreground) 6%);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -716,7 +902,8 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-markdown.markdown-body pre,
-.rivet-web-app-output-markdown.markdown-body pre {
+.rivet-web-app-output-markdown.markdown-body pre,
+.rivet-web-app-chat-message-markdown.markdown-body pre {
   background: transparent;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   padding: 0;
@@ -724,12 +911,14 @@ button.rivet-web-app-output-header:focus-visible {
 }
 
 .rivet-web-app-markdown > :first-child,
-.rivet-web-app-output-markdown > :first-child {
+.rivet-web-app-output-markdown > :first-child,
+.rivet-web-app-chat-message-markdown > :first-child {
   margin-top: 0;
 }
 
 .rivet-web-app-markdown > :last-child,
-.rivet-web-app-output-markdown > :last-child {
+.rivet-web-app-output-markdown > :last-child,
+.rivet-web-app-chat-message-markdown > :last-child {
   margin-bottom: 0;
 }
 
@@ -795,6 +984,7 @@ body {
 }
 
 #app {
+  height: 100%;
   min-height: 100vh;
 }
 `;

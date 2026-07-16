@@ -14,6 +14,7 @@ import type {
 import {
   alignInputRowsToBoundary,
   alignOutputRowsToBoundary,
+  getButtonOutputRows,
   normalizeButtonActionToGraphBoundary,
   type UiGraphButtonComponent,
 } from './buttonBindings.js';
@@ -24,8 +25,14 @@ import {
   getUiGraphGraphOptions,
   UI_GRAPH_COMPONENT_MODELS,
   UI_GRAPH_COMPONENT_PALETTE,
+  UI_GRAPH_COMPONENT_PALETTE_GROUPS,
 } from './uiGraphComponentModel.js';
-import { collectUiGraphDataKeyUsages, getUniqueDataKeyOptions, isDataKeyAlreadyUsedEarlier } from './dataKeys.js';
+import {
+  collectUiGraphDataKeyUsages,
+  getUniqueDataKeyOptions,
+  isDataKeyAlreadyUsedEarlier,
+  isUiGraphDataKeyMissing,
+} from './dataKeys.js';
 import { canRunDesktopWebAppPreview } from './uiGraphBuilderPolicy.js';
 
 const graphId = 'graph' as GraphId;
@@ -102,6 +109,21 @@ test('button normalization migrates legacy bindings without changing mapped stat
   assert.equal(button.action.outputStateKey, undefined);
 });
 
+test('button settings show an empty persisted output mapping instead of a render-time default', () => {
+  const button: UiGraphButtonComponent = {
+    action: {
+      graphId,
+      outputs: [{ outputKey: 'answer', stateKey: '' }],
+      type: 'runGraph',
+    },
+    id: 'button' as UiComponentId,
+    label: 'Run',
+    type: 'button',
+  };
+
+  assert.deepEqual(getButtonOutputRows(button, makeBoundary([], ['answer'])), [{ outputKey: 'answer', stateKey: '' }]);
+});
+
 test('component models exhaustively own labels, defaults, and data-key policy', () => {
   const expectedTypes: UiGraphComponent['type'][] = [
     'text',
@@ -109,6 +131,7 @@ test('component models exhaustively own labels, defaults, and data-key policy', 
     'gap',
     'input',
     'textarea',
+    'dropdown',
     'button',
     'chat',
     'output',
@@ -117,6 +140,10 @@ test('component models exhaustively own labels, defaults, and data-key policy', 
   assert.deepEqual(Object.keys(UI_GRAPH_COMPONENT_MODELS), expectedTypes);
   assert.deepEqual(
     UI_GRAPH_COMPONENT_PALETTE.map(({ type }) => type),
+    expectedTypes,
+  );
+  assert.deepEqual(
+    UI_GRAPH_COMPONENT_PALETTE_GROUPS.flatMap(({ types }) => types),
     expectedTypes,
   );
 
@@ -131,6 +158,10 @@ test('component models exhaustively own labels, defaults, and data-key policy', 
     if (component.type === 'gap') {
       assert.equal(component.size, 'medium');
       assert.deepEqual(getUiGraphComponentDataKeys(component), { reads: [], writes: [] });
+    }
+    if (component.type === 'dropdown') {
+      assert.deepEqual(component.items, [{ label: 'Option 1', value: 'option-1' }]);
+      assert.deepEqual(getUiGraphComponentDataKeys(component), { reads: [], writes: [{ key: 'selection' }] });
     }
   }
 });
@@ -239,6 +270,9 @@ test('data-key indexing reports only later producers as duplicates and exposes c
   const usages = collectUiGraphDataKeyUsages(uiGraph);
 
   assert.deepEqual(getUniqueDataKeyOptions(usages), ['question', 'result']);
+  assert.equal(isUiGraphDataKeyMissing('', ['question']), false);
+  assert.equal(isUiGraphDataKeyMissing('question', ['question']), false);
+  assert.equal(isUiGraphDataKeyMissing('removed-key', ['question']), true);
   assert.equal(isDataKeyAlreadyUsedEarlier(usages, 'question', { componentId: firstInput.id }), false);
   assert.equal(isDataKeyAlreadyUsedEarlier(usages, 'question', { componentId: secondInput.id }), true);
   assert.deepEqual(getUiGraphComponentDataKeys(button), {

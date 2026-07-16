@@ -9,6 +9,7 @@ import {
   type UiGraphActionComponent,
   type UiGraphChatMessage,
   type UiGraphComponent,
+  type UiGraphDropdownItem,
   type UiGraphGapSize,
   type UiGraphOutputRenderMode,
 } from './UiGraph.js';
@@ -54,6 +55,13 @@ export type UiGraphComponentRenderModel =
       value: string;
     }
   | {
+      component: Extract<UiGraphComponent, { type: 'dropdown' }>;
+      items: readonly UiGraphDropdownItem[];
+      label: string;
+      type: 'dropdown';
+      value: string;
+    }
+  | {
       component: Extract<UiGraphComponent, { type: 'button' }>;
       label: string;
       type: 'button';
@@ -95,6 +103,7 @@ export type UiGraphInteractionSnapshot = Readonly<{
   actionErrors: Readonly<Record<string, string>>;
   actionProgress: Readonly<Record<string, GraphProgress>>;
   collapsedOutputComponentIds: ReadonlySet<UiComponentId>;
+  loadingComponentIds: ReadonlySet<UiComponentId>;
   runningComponentIds: ReadonlySet<UiComponentId>;
   state: Readonly<Record<string, unknown>>;
 }>;
@@ -135,6 +144,8 @@ type ActiveUiGraphAction = Readonly<{
   abortController: AbortController;
   execution: UiGraphActionExecution;
 }>;
+
+const ACTION_LOADING_DELAY_MS = 300;
 
 /**
  * Coordinates independent web-app actions without allowing older completions to
@@ -208,8 +219,12 @@ export function createUiGraphInteractionController(
 ): UiGraphInteractionController {
   let uiGraphId = initialUiGraph.id;
   let outputComponentIds = getUiGraphOutputComponentIds(initialUiGraph);
+  let outputComponentsByStateKey = getUiGraphOutputComponentsByStateKey(initialUiGraph);
   const initialStateOverride = options.initialState ? { ...options.initialState } : undefined;
-  let initialState = initialStateOverride ?? getUiGraphInitialState(initialUiGraph);
+  let initialState = normalizeUiGraphDropdownState(
+    initialUiGraph,
+    initialStateOverride ?? getUiGraphInitialState(initialUiGraph),
+  );
   let state = { ...initialState };
   let actionErrors: Record<string, string> = {};
   let actionProgress: Record<string, GraphProgress> = {};
@@ -217,6 +232,8 @@ export function createUiGraphInteractionController(
   let snapshot: UiGraphInteractionSnapshot;
   const actionController = createUiGraphActionExecutionController();
   const activeActions = new Map<number, ActiveUiGraphAction>();
+  const loadingActionIds = new Set<number>();
+  const loadingDelayTimers = new Map<number, ReturnType<typeof setTimeout>>();
   const listeners = new Set<(change: UiGraphInteractionChange) => void>();
 
   const updateSnapshot = (): void => {
@@ -224,6 +241,11 @@ export function createUiGraphInteractionController(
       actionErrors,
       actionProgress,
       collapsedOutputComponentIds: new Set(collapsedOutputComponentIds),
+      loadingComponentIds: new Set(
+        [...activeActions].flatMap(([executionId, { execution }]) =>
+          loadingActionIds.has(executionId) ? [execution.componentId] : [],
+        ),
+      ),
       runningComponentIds: new Set([...activeActions.values()].map(({ execution }) => execution.componentId)),
       state,
     };
@@ -233,6 +255,25 @@ export function createUiGraphInteractionController(
     for (const listener of listeners) {
       listener(change);
     }
+  };
+  const clearActionLoadingPresentation = (executionId: number): void => {
+    const timer = loadingDelayTimers.get(executionId);
+    if (timer != null) {
+      clearTimeout(timer);
+      loadingDelayTimers.delete(executionId);
+    }
+    loadingActionIds.delete(executionId);
+  };
+  const delayActionLoadingPresentation = (execution: UiGraphActionExecution): void => {
+    loadingDelayTimers.set(
+      execution.id,
+      setTimeout(() => {
+        loadingDelayTimers.delete(execution.id);
+        if (!activeActions.has(execution.id) || !actionController.isCurrent(execution)) return;
+        loadingActionIds.add(execution.id);
+        publish('action');
+      }, ACTION_LOADING_DELAY_MS),
+    );
   };
   const abortMatchingActions = (
     predicate: (activeAction: ActiveUiGraphAction, executionId: number) => boolean,
@@ -245,6 +286,7 @@ export function createUiGraphInteractionController(
       }
       activeAction.abortController.abort();
       activeActions.delete(executionId);
+      clearActionLoadingPresentation(executionId);
       actionController.finish(activeAction.execution);
       changed = true;
     }
@@ -274,6 +316,18 @@ export function createUiGraphInteractionController(
       delete actionProgress[componentId];
     }
   };
+  const expandOutputsForUpdatedState = (
+    stateKeys: Iterable<string>,
+    nextState: Readonly<Record<string, unknown>>,
+  ): void => {
+    for (const stateKey of stateKeys) {
+      for (const component of outputComponentsByStateKey.get(stateKey) ?? []) {
+        if (getUiGraphOutputRenderModel(nextState, stateKey, component.renderAs ?? 'text').hasValue) {
+          collapsedOutputComponentIds.delete(component.id);
+        }
+      }
+    }
+  };
 
   updateSnapshot();
 
@@ -288,6 +342,9 @@ export function createUiGraphInteractionController(
       }
     },
     detachActions() {
+      for (const executionId of activeActions.keys()) {
+        clearActionLoadingPresentation(executionId);
+      }
       activeActions.clear();
       actionController.reset();
       actionProgress = {};
@@ -312,6 +369,7 @@ export function createUiGraphInteractionController(
 
       const abortController = new AbortController();
       activeActions.set(execution.id, { abortController, execution });
+      delayActionLoadingPresentation(execution);
       removeActionPresentation(component.id);
       publish('action');
 
@@ -336,7 +394,9 @@ export function createUiGraphInteractionController(
 
         const statePatch = actionController.resolveStatePatch(execution, result.statePatch);
         if (statePatch) {
-          state = applyUiGraphStatePatch(state, statePatch);
+          const nextState = applyUiGraphStatePatch(state, statePatch);
+          expandOutputsForUpdatedState(Object.keys(statePatch), nextState);
+          state = nextState;
         }
       } catch (error) {
         if (!abortController.signal.aborted && actionController.isCurrent(execution)) {
@@ -347,6 +407,7 @@ export function createUiGraphInteractionController(
         }
       } finally {
         if (activeActions.delete(execution.id)) {
+          clearActionLoadingPresentation(execution.id);
           actionController.finish(execution);
           if (Object.prototype.hasOwnProperty.call(actionProgress, component.id)) {
             actionProgress = { ...actionProgress };
@@ -365,6 +426,7 @@ export function createUiGraphInteractionController(
         actionErrors = {};
         actionProgress = {};
         outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
+        outputComponentsByStateKey = getUiGraphOutputComponentsByStateKey(nextUiGraph);
         collapsedOutputComponentIds.clear();
         publish('graph');
         return;
@@ -374,7 +436,14 @@ export function createUiGraphInteractionController(
         initialState = getUiGraphInitialState(nextUiGraph);
       }
 
+      const normalizedState = normalizeUiGraphDropdownState(nextUiGraph, state);
+      const stateChanged = normalizedState !== state;
+      if (stateChanged) {
+        state = normalizedState;
+      }
+
       outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
+      outputComponentsByStateKey = getUiGraphOutputComponentsByStateKey(nextUiGraph);
       const collapsedOutputIdsBeforeCleanup = collapsedOutputComponentIds.size;
       for (const componentId of collapsedOutputComponentIds) {
         if (!outputComponentIds.has(componentId)) {
@@ -389,6 +458,7 @@ export function createUiGraphInteractionController(
       );
       let changed =
         collapsedOutputComponentIds.size !== collapsedOutputIdsBeforeCleanup ||
+        stateChanged ||
         abortMatchingActions(({ execution }) => !actionComponentIds.has(execution.componentId), false);
       const remainingErrors = Object.fromEntries(
         Object.entries(actionErrors).filter(([componentId]) => actionComponentIds.has(componentId as UiComponentId)),
@@ -426,14 +496,18 @@ export function createUiGraphInteractionController(
     },
     updateState(stateKey, value) {
       actionController.noteStateWrite(stateKey);
-      state = { ...state, [stateKey]: value };
+      const nextState = { ...state, [stateKey]: value };
+      expandOutputsForUpdatedState([stateKey], nextState);
+      state = nextState;
       publish('state');
     },
     updateStatePatch(statePatch) {
       for (const stateKey of Object.keys(statePatch)) {
         actionController.noteStateWrite(stateKey);
       }
-      state = applyUiGraphStatePatch(state, statePatch);
+      const nextState = applyUiGraphStatePatch(state, statePatch);
+      expandOutputsForUpdatedState(Object.keys(statePatch), nextState);
+      state = nextState;
       publish('state');
     },
   };
@@ -443,6 +517,42 @@ function getUiGraphOutputComponentIds(uiGraph: UiGraph): Set<UiComponentId> {
   return new Set(
     uiGraph.components.filter((component) => component.type === 'output').map((component) => component.id),
   );
+}
+
+function getUiGraphOutputComponentsByStateKey(
+  uiGraph: UiGraph,
+): Map<string, Extract<UiGraphComponent, { type: 'output' }>[]> {
+  const componentsByStateKey = new Map<string, Extract<UiGraphComponent, { type: 'output' }>[]>();
+  for (const component of uiGraph.components) {
+    if (component.type !== 'output') continue;
+    const components = componentsByStateKey.get(component.stateKey) ?? [];
+    components.push(component);
+    componentsByStateKey.set(component.stateKey, components);
+  }
+  return componentsByStateKey;
+}
+
+function normalizeUiGraphDropdownState(
+  uiGraph: UiGraph,
+  state: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  let normalizedState: Record<string, unknown> | undefined;
+
+  for (const component of uiGraph.components) {
+    if (component.type !== 'dropdown') {
+      continue;
+    }
+
+    const selectedValue = `${state[component.stateKey] ?? ''}`;
+    if (selectedValue === '' || component.items.some((item) => item.value === selectedValue)) {
+      continue;
+    }
+
+    normalizedState ??= { ...state };
+    normalizedState[component.stateKey] = '';
+  }
+
+  return normalizedState ?? (state as Record<string, unknown>);
 }
 
 export function getUiGraphComponentRenderModel(
@@ -464,6 +574,16 @@ export function getUiGraphComponentRenderModel(
         type: component.type,
         value: `${state[component.stateKey] ?? component.defaultValue ?? ''}`,
       };
+    case 'dropdown': {
+      const selectedValue = `${state[component.stateKey] ?? ''}`;
+      return {
+        component,
+        items: component.items,
+        label: getUiGraphComponentLabel(component),
+        type: 'dropdown',
+        value: component.items.some((item) => item.value === selectedValue) ? selectedValue : '',
+      };
+    }
     case 'button':
       return { component, label: component.label, type: 'button' };
     case 'chat':
@@ -484,7 +604,7 @@ export function getUiGraphComponentRenderModel(
 }
 
 export function getUiGraphComponentLabel(
-  component: Extract<UiGraphComponent, { type: 'input' | 'textarea' | 'output' }>,
+  component: Extract<UiGraphComponent, { type: 'input' | 'textarea' | 'dropdown' | 'output' }>,
 ): string {
   return component.label || component.stateKey;
 }
@@ -495,11 +615,14 @@ export function getUiGraphOutputRenderModel(
   renderAs: UiGraphOutputRenderMode,
 ): UiGraphOutputRenderModel {
   const value = state[stateKey];
-  const hasValue = hasUiGraphStateValue(state, stateKey);
   const renderedValue = renderUiGraphOutputValue(value, renderAs);
-  const imageSource = hasValue && renderAs === 'image' ? getUiGraphImageSource(value) : undefined;
+  const hasStateValue = hasUiGraphStateValue(state, stateKey);
+  const hasImageValue = hasStateValue && value != null && value !== '';
+  const imageSource = hasImageValue && renderAs === 'image' ? getUiGraphImageSource(value) : undefined;
   const imageErrorMessage =
-    hasValue && renderAs === 'image' && !imageSource ? 'Expected an image URL or base64 image.' : undefined;
+    hasImageValue && renderAs === 'image' && !imageSource ? 'Expected an image URL or base64 image.' : undefined;
+  const hasValue =
+    renderAs === 'image' ? imageSource != null || imageErrorMessage != null : renderedValue.trim().length > 0;
 
   return {
     hasValue,

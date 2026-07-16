@@ -71,6 +71,20 @@ export const UI_GRAPH_COMPONENT_MODELS = {
         : noDataKeys(),
     label: 'Textarea',
   },
+  dropdown: {
+    create: ({ id }) => ({
+      id,
+      items: [{ label: 'Option 1', value: 'option-1' }],
+      label: 'Dropdown',
+      stateKey: 'selection',
+      type: 'dropdown',
+    }),
+    getDataKeys: (component) =>
+      component.type === 'dropdown' && component.stateKey
+        ? { reads: [], writes: [{ key: component.stateKey }] }
+        : noDataKeys(),
+    label: 'Dropdown',
+  },
   button: {
     create: ({ graphId, id }) => ({
       action: {
@@ -126,6 +140,13 @@ export const UI_GRAPH_COMPONENT_MODELS = {
 export const UI_GRAPH_COMPONENT_PALETTE = (Object.keys(UI_GRAPH_COMPONENT_MODELS) as UiGraphComponent['type'][]).map(
   (type) => ({ label: UI_GRAPH_COMPONENT_MODELS[type].label, type }),
 );
+
+export const UI_GRAPH_COMPONENT_PALETTE_GROUPS = [
+  { label: 'Layout', types: ['text', 'markdown', 'gap'] },
+  { label: 'Input', types: ['input', 'textarea', 'dropdown'] },
+  { label: 'Action', types: ['button'] },
+  { label: 'Other', types: ['chat', 'output'] },
+] as const satisfies readonly { label: string; types: readonly UiGraphComponent['type'][] }[];
 
 export function createUiGraphComponent(type: UiGraphComponent['type'], graphId: GraphId | undefined): UiGraphComponent {
   return UI_GRAPH_COMPONENT_MODELS[type].create({ graphId, id: newId<UiComponentId>() });

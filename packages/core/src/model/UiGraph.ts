@@ -10,6 +10,10 @@ export const UI_GRAPH_GAP_SIZES = ['small', 'medium', 'large'] as const;
 export type UiGraphGapSize = (typeof UI_GRAPH_GAP_SIZES)[number];
 export const UI_GRAPH_OUTPUT_RENDER_MODES = ['text', 'json', 'markdown', 'image'] as const;
 export type UiGraphOutputRenderMode = (typeof UI_GRAPH_OUTPUT_RENDER_MODES)[number];
+export type UiGraphDropdownItem = {
+  label: string;
+  value: string;
+};
 
 export type UiGraphValueBinding =
   | {
@@ -88,6 +92,13 @@ export type UiGraphComponent =
       stateKey: string;
       placeholder?: string;
       defaultValue?: string;
+    }
+  | {
+      id: UiComponentId;
+      type: 'dropdown';
+      label: string;
+      stateKey: string;
+      items: UiGraphDropdownItem[];
     }
   | {
       id: UiComponentId;
@@ -230,6 +241,8 @@ export function getUiGraphInitialState(uiGraph: UiGraph): Record<string, unknown
   for (const component of uiGraph.components) {
     if (component.type === 'input' || component.type === 'textarea') {
       state[component.stateKey] = component.defaultValue ?? '';
+    } else if (component.type === 'dropdown') {
+      state[component.stateKey] = '';
     } else if (component.type === 'chat') {
       state[getUiGraphChatDraftStateKey(component.id)] = '';
       state[getUiGraphChatMessagesStateKey(component.id)] = [];

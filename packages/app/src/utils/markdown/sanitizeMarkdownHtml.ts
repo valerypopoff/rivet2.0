@@ -11,11 +11,14 @@ const sanitizerConfig: Config = {
 };
 
 let browserSanitizer: DOMPurify | undefined;
+let browserSanitizerRoot: WindowLike | undefined;
 
 function getBrowserSanitizer(): DOMPurify {
-  if (browserSanitizer) return browserSanitizer;
   if (typeof window === 'undefined') throw new Error('Markdown HTML sanitization requires a DOM window.');
-  browserSanitizer = createDOMPurify(window);
+  const root = window as unknown as WindowLike;
+  if (browserSanitizer && browserSanitizerRoot === root) return browserSanitizer;
+  browserSanitizer = createDOMPurify(root);
+  browserSanitizerRoot = root;
   return browserSanitizer;
 }
 

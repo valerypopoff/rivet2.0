@@ -7,8 +7,9 @@ export const UiGraphResourceSection: FC<{
   onCreate(): void;
   onOpen(uiGraphId: UiGraphId): void;
   selectedUiGraphId?: UiGraphId;
+  referencingSelectedUiGraphIds: ReadonlySet<UiGraphId>;
   uiGraphs: readonly UiGraph[];
-}> = ({ onCreate, onOpen, selectedUiGraphId, uiGraphs }) => (
+}> = ({ onCreate, onOpen, referencingSelectedUiGraphIds, selectedUiGraphId, uiGraphs }) => (
   <>
     <div className="graph-list-heading">Web Apps</div>
     <div className="ui-graph-list">
@@ -21,6 +22,7 @@ export const UiGraphResourceSection: FC<{
           data-uigraphid={uiGraph.id}
           onClick={() => onOpen(uiGraph.id)}
         >
+          {referencingSelectedUiGraphIds.has(uiGraph.id) && <span className="graph-reference-dot" aria-hidden="true" />}
           <span className="project-tree-panel-icon project-tree-panel-icon-web-app">
             <WebAppIcon />
           </span>
