@@ -50,6 +50,8 @@ test('React and hosted renderers keep the same component and action behavior', a
     });
 
     assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
+    assert.equal(reactRootElement.querySelectorAll('.rivet-web-app-output-toggle').length, 0);
+    assert.equal(hostedDom.window.document.querySelectorAll('.rivet-web-app-output-toggle').length, 0);
 
     await act(async () => {
       const input = reactRootElement.querySelector<HTMLInputElement>('.rivet-web-app-control')!;
@@ -376,7 +378,7 @@ function makeParityUiGraph(): UiGraph {
       { id: 'markdown' as UiComponentId, markdown: '## Markdown\n\n**Safe**', type: 'markdown' },
       { id: 'gap' as UiComponentId, size: 'small', type: 'gap' },
       {
-        defaultValue: 'Hello',
+        defaultValue: '',
         id: 'input' as UiComponentId,
         label: 'Prompt',
         placeholder: 'Type here',
@@ -388,6 +390,7 @@ function makeParityUiGraph(): UiGraph {
       { action, id: 'second-button' as UiComponentId, label: 'Second', type: 'button' },
       { id: 'output' as UiComponentId, label: 'Result', renderAs: 'json', stateKey: 'result', type: 'output' },
       { id: 'image' as UiComponentId, label: 'Image', renderAs: 'image', stateKey: 'image', type: 'output' },
+      { id: 'prompt-output' as UiComponentId, label: 'Prompt output', stateKey: 'prompt', type: 'output' },
     ],
     id: 'parity-app' as UiGraphId,
     name: 'Parity app',

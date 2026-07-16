@@ -10,14 +10,14 @@ import {
 import { getUniqueDataKeyOptions, isDataKeyAlreadyUsedEarlier, type UiGraphDataKeyUsage } from './dataKeys.js';
 
 export const UiGraphComponentEditor: FC<{
-  activeComponentId: UiComponentId | undefined;
   component: UiGraphComponent;
   dataKeyUsages: readonly UiGraphDataKeyUsage[];
   onActivate(componentId: UiComponentId): void;
   onDelete(): void;
   onUpdate(updater: (component: UiGraphComponent) => void): void;
   project: Project;
-}> = ({ activeComponentId, component, dataKeyUsages, onActivate, onDelete, onUpdate, project }) => {
+  selectedComponentIds: ReadonlySet<UiComponentId>;
+}> = ({ component, dataKeyUsages, onActivate, onDelete, onUpdate, project, selectedComponentIds }) => {
   const Settings = getUiGraphComponentDescriptor(component.type).Settings;
   const settingsProps: UiGraphComponentSettingsProps = {
     component,
@@ -29,7 +29,7 @@ export const UiGraphComponentEditor: FC<{
 
   return (
     <div
-      className={`ui-graph-component-card${activeComponentId === component.id ? ' active' : ''}`}
+      className={`ui-graph-component-card${selectedComponentIds.has(component.id) ? ' active' : ''}`}
       data-ui-graph-component-id={component.id}
       onFocusCapture={() => onActivate(component.id)}
       onPointerDownCapture={() => onActivate(component.id)}

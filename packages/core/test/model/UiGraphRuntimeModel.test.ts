@@ -120,6 +120,24 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(imageOutput.imageSource, undefined);
   });
 
+  it('keeps blank text output empty even when an initialized input owns the same state key', () => {
+    const textOutput = getUiGraphOutputRenderModel({ result: '' }, 'result', 'text');
+    const markdownOutput = getUiGraphOutputRenderModel({ result: null }, 'result', 'markdown');
+    const imageOutput = getUiGraphOutputRenderModel({ result: '' }, 'result', 'image');
+
+    assert.equal(textOutput.hasValue, false);
+    assert.equal(markdownOutput.hasValue, false);
+    assert.equal(imageOutput.hasValue, false);
+    assert.equal(imageOutput.imageErrorMessage, undefined);
+  });
+
+  it('keeps displayable false, zero, JSON, and invalid image output values visible', () => {
+    assert.equal(getUiGraphOutputRenderModel({ result: false }, 'result', 'text').hasValue, true);
+    assert.equal(getUiGraphOutputRenderModel({ result: 0 }, 'result', 'markdown').hasValue, true);
+    assert.equal(getUiGraphOutputRenderModel({ result: '' }, 'result', 'json').hasValue, true);
+    assert.equal(getUiGraphOutputRenderModel({ result: 'not an image' }, 'result', 'image').hasValue, true);
+  });
+
   it('makes JSON output download and display use the same serialized value', () => {
     const output = getUiGraphOutputRenderModel({ result: { nested: ['value'] } }, 'result', 'json');
 

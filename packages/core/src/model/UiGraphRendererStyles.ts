@@ -98,11 +98,11 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-gap-medium {
-  height: 24px;
+  height: 32px;
 }
 
 .rivet-web-app-gap-large {
-  height: 48px;
+  height: 96px;
 }
 
 .rivet-web-app-component-frame {

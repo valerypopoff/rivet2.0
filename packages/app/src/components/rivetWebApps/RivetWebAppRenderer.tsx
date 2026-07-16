@@ -1,6 +1,7 @@
 import {
   Fragment,
   type FC,
+  type PointerEvent,
   type ReactNode,
   type RefObject,
   useCallback,
@@ -36,10 +37,10 @@ export type RivetWebAppActionResult = {
 };
 
 export type RivetWebAppRendererProps = {
-  activeComponentId?: UiComponentId;
   interactionController?: UiGraphInteractionController;
   renderComponentFrame?(props: RivetWebAppComponentFrameProps): ReactNode;
-  onActiveComponentChange?(componentId: UiComponentId): void;
+  onComponentSelectionChange?(componentId: UiComponentId, mode: 'replace' | 'toggle'): void;
+  onRootPointerDownCapture?(event: PointerEvent<HTMLDivElement>): void;
   onRunAction(
     componentId: UiComponentId,
     state: Record<string, unknown>,
@@ -47,6 +48,7 @@ export type RivetWebAppRendererProps = {
     onProgress: (progress: GraphProgress) => void,
   ): Promise<RivetWebAppActionResult>;
   rootRef?: RefObject<HTMLDivElement>;
+  selectedComponentIds?: ReadonlySet<UiComponentId>;
   uiGraph: UiGraph;
 };
 
@@ -55,16 +57,17 @@ export type RivetWebAppComponentFrameProps = {
   className: string;
   component: UiGraphComponent;
   onFocusCapture(): void;
-  onPointerDownCapture(): void;
+  onPointerDownCapture(event: PointerEvent<HTMLDivElement>): void;
 };
 
 export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
-  activeComponentId,
   interactionController: interactionControllerProp,
   renderComponentFrame,
-  onActiveComponentChange,
+  onComponentSelectionChange,
+  onRootPointerDownCapture,
   onRunAction,
   rootRef,
+  selectedComponentIds,
   uiGraph,
 }) => {
   const normalizedUiGraph = useMemo(() => normalizeUiGraph(uiGraph), [uiGraph]);
@@ -101,7 +104,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   );
 
   return (
-    <div ref={rootRef} className="rivet-web-app-root">
+    <div ref={rootRef} className="rivet-web-app-root" onPointerDownCapture={onRootPointerDownCapture}>
       <style>{RIVET_WEB_APP_RENDERER_CSS}</style>
       <main className="rivet-web-app-surface">
         <div className="rivet-web-app-toolbar">
@@ -115,10 +118,14 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
         </div>
         {normalizedUiGraph.components.map((component) => {
           const frameProps: RivetWebAppComponentFrameProps = {
-            className: `rivet-web-app-component-frame${activeComponentId === component.id ? ' active' : ''}`,
+            className: `rivet-web-app-component-frame${selectedComponentIds?.has(component.id) ? ' active' : ''}`,
             component,
-            onFocusCapture: () => onActiveComponentChange?.(component.id),
-            onPointerDownCapture: () => onActiveComponentChange?.(component.id),
+            onFocusCapture: () => onComponentSelectionChange?.(component.id, 'replace'),
+            onPointerDownCapture: (event) =>
+              onComponentSelectionChange?.(
+                component.id,
+                event.shiftKey || event.metaKey || event.ctrlKey ? 'toggle' : 'replace',
+              ),
             children: (
               <RivetWebAppComponent
                 component={component}

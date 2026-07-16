@@ -14,6 +14,7 @@ import { projectState } from '../state/savedGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
 import { leftSidebarLiveWidthState } from '../state/ui.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
+import { useGlobalHotkey } from '../hooks/useGlobalHotkey.js';
 import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { createWebviewWindowHandle } from '../utils/platform/window.js';
 import {
@@ -27,7 +28,7 @@ import { useRunUiGraphAction } from '../hooks/useRunUiGraphAction.js';
 import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
 import { createUiGraphComponent, UI_GRAPH_COMPONENT_PALETTE } from './uiGraphBuilder/componentDescriptors.js';
 import {
-  getCurrentUiGraphComponentDeletionId,
+  getCurrentUiGraphComponentDeletionIds,
   type PendingUiGraphComponentDeletion,
 } from './uiGraphBuilder/componentDeletion.js';
 import {
@@ -43,6 +44,8 @@ import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js
 import { DeleteResourceConfirmModal } from './DeleteResourceConfirmModal.js';
 import { isUiGraphComponentEventTarget, revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
 import { getUiGraphPreviewInteractionController } from './rivetWebApps/uiGraphPreviewSession.js';
+import { selectUiGraphComponent, type UiGraphComponentSelectionMode } from './uiGraphBuilder/componentSelection.js';
+import { isMacOSPlatform } from '../utils/platform/os.js';
 
 const styles = css`
   position: fixed;
@@ -405,6 +408,14 @@ const styles = css`
     z-index: 3;
     box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
   }
+
+  .ui-graph-preview-selection-rectangle {
+    position: fixed;
+    z-index: 2;
+    pointer-events: none;
+    border: 2px dashed var(--primary);
+    background: var(--primary-5percent);
+  }
 `;
 
 export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => {
@@ -418,7 +429,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const hostUiConfig = useRivetAppHostUiConfig();
   const canRunDesktopPreview = canRunDesktopWebAppPreview(hostUiConfig);
-  const [activeComponentId, setActiveComponentId] = useState<UiComponentId | undefined>();
+  const [selectedComponentIds, setSelectedComponentIds] = useState<UiComponentId[]>([]);
   const [pendingComponentDeletion, setPendingComponentDeletion] = useState<
     PendingUiGraphComponentDeletion | undefined
   >();
@@ -429,14 +440,15 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     ? getUiGraphPreviewInteractionController(project.metadata.id, uiGraph)
     : undefined;
   const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
-  const pendingDeleteComponentId = getCurrentUiGraphComponentDeletionId(
+  const selectedComponentIdSet = useMemo(() => new Set(selectedComponentIds), [selectedComponentIds]);
+  const pendingDeleteComponentIds = getCurrentUiGraphComponentDeletionIds(
     pendingComponentDeletion,
     project.metadata.id,
     uiGraph,
   );
 
   useEffect(() => {
-    setActiveComponentId(undefined);
+    setSelectedComponentIds([]);
     setPendingComponentDeletion(undefined);
   }, [project.metadata.id, selectedUiGraphId]);
 
@@ -455,26 +467,35 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   });
 
   const confirmDeleteComponent = useStableCallback(() => {
-    const componentId = getCurrentUiGraphComponentDeletionId(pendingComponentDeletion, project.metadata.id, uiGraph);
-    if (componentId == null) {
+    const componentIds = getCurrentUiGraphComponentDeletionIds(pendingComponentDeletion, project.metadata.id, uiGraph);
+    if (componentIds.length === 0) {
       setPendingComponentDeletion(undefined);
       return;
     }
 
     setPendingComponentDeletion(undefined);
-    setActiveComponentId((activeComponentId) => (activeComponentId === componentId ? undefined : activeComponentId));
+    const deletedComponentIds = new Set(componentIds);
+    setSelectedComponentIds((selectedIds) =>
+      selectedIds.filter((componentId) => !deletedComponentIds.has(componentId)),
+    );
     updateUiGraph((draft) => {
-      draft.components = draft.components.filter((component) => component.id !== componentId);
+      draft.components = draft.components.filter((component) => !deletedComponentIds.has(component.id));
     });
   });
 
-  const requestDeleteComponent = useStableCallback((componentId: UiComponentId) => {
+  const requestDeleteComponents = useStableCallback((componentIds: readonly UiComponentId[]) => {
     if (!uiGraph) {
       return;
     }
 
-    setPendingComponentDeletion({ componentId, projectId: project.metadata.id, uiGraphId: uiGraph.id });
+    const existingComponentIds = new Set(uiGraph.components.map((component) => component.id));
+    const idsToDelete = [...new Set(componentIds)].filter((componentId) => existingComponentIds.has(componentId));
+    if (idsToDelete.length > 0) {
+      setPendingComponentDeletion({ componentIds: idsToDelete, projectId: project.metadata.id, uiGraphId: uiGraph.id });
+    }
   });
+
+  const requestDeleteSelectedComponents = useStableCallback(() => requestDeleteComponents(selectedComponentIds));
 
   const reorderComponents = useStableCallback((draggedComponentId: UiComponentId, targetComponentId: UiComponentId) => {
     updateUiGraph((draft) => {
@@ -487,17 +508,54 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     });
   });
 
-  const activateComponent = useStableCallback(
-    (componentId: UiComponentId, counterpartScrollContainer: HTMLElement | null) => {
-      setActiveComponentId(componentId);
-      revealUiGraphComponent(counterpartScrollContainer, componentId);
+  const selectComponent = useStableCallback(
+    (
+      componentId: UiComponentId,
+      mode: UiGraphComponentSelectionMode,
+      counterpartScrollContainer: HTMLElement | null,
+    ) => {
+      const wasSelected = selectedComponentIdSet.has(componentId);
+      setSelectedComponentIds((selectedIds) => selectUiGraphComponent(selectedIds, componentId, mode));
+      if (mode === 'replace' || !wasSelected) {
+        revealUiGraphComponent(counterpartScrollContainer, componentId);
+      }
     },
   );
   const activateSettingsComponent = useStableCallback((componentId: UiComponentId) =>
-    activateComponent(componentId, previewScrollRef.current),
+    selectComponent(componentId, 'replace', previewScrollRef.current),
   );
-  const activatePreviewComponent = useStableCallback((componentId: UiComponentId) =>
-    activateComponent(componentId, settingsScrollRef.current),
+  const selectPreviewComponent = useStableCallback((componentId: UiComponentId, mode: UiGraphComponentSelectionMode) =>
+    selectComponent(componentId, mode, settingsScrollRef.current),
+  );
+  const setPreviewComponentSelection = useStableCallback((componentIds: readonly UiComponentId[]) => {
+    setSelectedComponentIds((selectedIds) =>
+      selectedIds.length === componentIds.length &&
+      selectedIds.every((componentId) => componentIds.includes(componentId))
+        ? selectedIds
+        : [...componentIds],
+    );
+  });
+
+  const supportsBackspaceDeleteHotkey = isMacOSPlatform();
+  const deleteSelectedComponentsFromHotkey = useStableCallback((event: KeyboardEvent) => {
+    if (event.repeat || pendingComponentDeletion || selectedComponentIds.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    requestDeleteSelectedComponents();
+  });
+
+  useGlobalHotkey('Delete', deleteSelectedComponentsFromHotkey, { notWhenInputFocused: true });
+  useGlobalHotkey(
+    'Backspace',
+    (event) => {
+      if (supportsBackspaceDeleteHotkey) {
+        deleteSelectedComponentsFromHotkey(event);
+      }
+    },
+    { notWhenInputFocused: true },
   );
 
   const openPreviewWindow = useStableCallback(async () => {
@@ -633,8 +691,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       css={styles}
       style={getUiGraphBuilderStyle(sidebarOpen, leftSidebarWidth)}
       onPointerDownCapture={(event) => {
-        if (!isUiGraphComponentEventTarget(event.target)) {
-          setActiveComponentId(undefined);
+        if (!event.shiftKey && !isUiGraphComponentEventTarget(event.target)) {
+          setSelectedComponentIds([]);
         }
       }}
     >
@@ -686,13 +744,13 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
             {uiGraph.components.map((component) => (
               <UiGraphComponentEditor
                 key={component.id}
-                activeComponentId={activeComponentId}
                 component={component}
                 dataKeyUsages={dataKeyUsages}
                 project={project}
                 onActivate={activateSettingsComponent}
-                onDelete={() => requestDeleteComponent(component.id)}
+                onDelete={() => requestDeleteComponents([component.id])}
                 onUpdate={(updater) => updateComponent(component.id, updater)}
+                selectedComponentIds={selectedComponentIdSet}
               />
             ))}
           </div>
@@ -711,11 +769,12 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
         ) : null}
         <UiGraphPreviewEditor
           key={`${project.metadata.id}:${uiGraph.id}`}
-          activeComponentId={activeComponentId}
           interactionController={previewInteractionController}
-          onActiveComponentChange={activatePreviewComponent}
+          onComponentSelectionChange={selectPreviewComponent}
+          onComponentSelectionSetChange={setPreviewComponentSelection}
           onReorder={reorderComponents}
           scrollContainerRef={previewScrollRef}
+          selectedComponentIds={selectedComponentIdSet}
           uiGraph={uiGraph}
           onRunAction={(componentId, state, abortSignal, onProgress) =>
             runUiGraphAction(uiGraph, componentId, state, abortSignal, onProgress)
@@ -723,9 +782,17 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
         />
       </section>
       <DeleteResourceConfirmModal
-        isOpen={pendingDeleteComponentId != null}
-        resourceName="this component"
-        title="Delete Component?"
+        isOpen={pendingDeleteComponentIds.length > 0}
+        resourceName={
+          pendingDeleteComponentIds.length === 1
+            ? 'this component'
+            : `these ${pendingDeleteComponentIds.length} components`
+        }
+        title={
+          pendingDeleteComponentIds.length === 1
+            ? 'Delete Component?'
+            : `Delete ${pendingDeleteComponentIds.length} Components?`
+        }
         onClose={() => setPendingComponentDeletion(undefined)}
         onConfirm={confirmDeleteComponent}
       />

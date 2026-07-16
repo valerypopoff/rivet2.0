@@ -133,3 +133,72 @@ test('React web app actions keep independent loading, reject stale patches, and 
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+test('editor component frames expose multi-selection modifier clicks without changing hosted behavior', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/app' });
+  const previousGlobals = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    navigator: globalThis.navigator,
+    window: globalThis.window,
+  };
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: dom.window.document },
+    HTMLElement: { configurable: true, value: dom.window.HTMLElement },
+    navigator: { configurable: true, value: dom.window.navigator },
+    window: { configurable: true, value: dom.window },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  const firstComponentId = 'first' as UiComponentId;
+  const secondComponentId = 'second' as UiComponentId;
+  const uiGraph: UiGraph = {
+    components: [
+      { id: firstComponentId, text: 'First', type: 'text' },
+      { id: secondComponentId, text: 'Second', type: 'text' },
+    ],
+    id: 'ui-graph' as UiGraphId,
+    name: 'Test app',
+  };
+  const selectionChanges: Array<[UiComponentId, 'replace' | 'toggle']> = [];
+  const rootElement = dom.window.document.getElementById('root')!;
+  const root = createRoot(rootElement);
+
+  try {
+    await act(async () => {
+      root.render(
+        <RivetWebAppRenderer
+          uiGraph={uiGraph}
+          selectedComponentIds={new Set([firstComponentId])}
+          onComponentSelectionChange={(componentId, mode) => selectionChanges.push([componentId, mode])}
+          onRunAction={async () => ({ outputs: {} })}
+        />,
+      );
+    });
+
+    const frames = rootElement.querySelectorAll<HTMLElement>('.rivet-web-app-component-frame');
+    assert.equal(frames[0]?.classList.contains('active'), true);
+    assert.equal(frames[1]?.classList.contains('active'), false);
+
+    await act(async () => {
+      frames[1]?.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true, shiftKey: true }));
+    });
+    assert.deepEqual(selectionChanges, [[secondComponentId, 'toggle']]);
+
+    selectionChanges.length = 0;
+    await act(async () => {
+      frames[1]?.dispatchEvent(new dom.window.FocusEvent('focusin', { bubbles: true }));
+    });
+    assert.deepEqual(selectionChanges, [[secondComponentId, 'replace']]);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    Object.defineProperties(globalThis, {
+      document: { configurable: true, value: previousGlobals.document },
+      HTMLElement: { configurable: true, value: previousGlobals.HTMLElement },
+      navigator: { configurable: true, value: previousGlobals.navigator },
+      window: { configurable: true, value: previousGlobals.window },
+    });
+    delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+  }
+});

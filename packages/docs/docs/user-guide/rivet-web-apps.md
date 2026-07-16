@@ -25,7 +25,7 @@ A web app contains declarative components:
 
 The web app editor shows the component settings on the left and a live preview on the right.
 
-Use the **Components** palette to add blocks. Hover a component type to reveal the plus icon, then click to add it. In the live preview, drag the large handle to the right of a component to change the order shown in the web app.
+Use the **Components** palette to add blocks. Hover a component type to reveal the plus icon, then click to add it. In the live preview, drag the large handle to the right of a component to change the order shown in the web app. Hold **Shift** while clicking preview components to select or deselect several at once. You can also hold **Shift** and drag a rectangle across blank preview space to add components to the selection. Press **Delete** to remove the selection, or **Backspace** on macOS; Rivet asks for confirmation before deleting one or more components.
 
 A **Gap** adds empty vertical space between components. Choose **Small**, **Medium**, or **Large** in its settings. It has no visible card surface in the rendered web app, but it remains selectable and draggable in the editor preview.
 

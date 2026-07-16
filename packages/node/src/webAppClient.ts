@@ -274,6 +274,7 @@ if (config && root) {
         control.value = renderModel.value;
         control.addEventListener('input', () => {
           interactionController.updateState(renderModel.component.stateKey, control.value);
+          refreshOutputComponents(renderModel.component.stateKey);
         });
         content = createElement('label', { className: 'rivet-web-app-field' }, [
           createElement('span', { text: renderModel.label }),
@@ -546,10 +547,25 @@ if (config && root) {
       'div',
       {
         className: 'rivet-web-app-component-frame',
+        'data-rivet-web-app-component-id': component.id,
         'data-rivet-web-app-component-type': component.type,
       },
       [content],
     );
+  };
+
+  const refreshOutputComponents = (stateKey: string): void => {
+    const interaction = interactionController.getSnapshot();
+    const frames = [...root.querySelectorAll<HTMLElement>('[data-rivet-web-app-component-id]')];
+
+    for (const component of config.uiGraph.components) {
+      if (component.type !== 'output' || component.stateKey !== stateKey) continue;
+
+      const frame = frames.find((candidate) => candidate.dataset.rivetWebAppComponentId === component.id);
+      if (frame) {
+        frame.replaceWith(renderComponent(component, interaction));
+      }
+    }
   };
 
   const render = (): void => {

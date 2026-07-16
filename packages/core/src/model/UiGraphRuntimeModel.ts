@@ -495,11 +495,14 @@ export function getUiGraphOutputRenderModel(
   renderAs: UiGraphOutputRenderMode,
 ): UiGraphOutputRenderModel {
   const value = state[stateKey];
-  const hasValue = hasUiGraphStateValue(state, stateKey);
   const renderedValue = renderUiGraphOutputValue(value, renderAs);
-  const imageSource = hasValue && renderAs === 'image' ? getUiGraphImageSource(value) : undefined;
+  const hasStateValue = hasUiGraphStateValue(state, stateKey);
+  const hasImageValue = hasStateValue && value != null && value !== '';
+  const imageSource = hasImageValue && renderAs === 'image' ? getUiGraphImageSource(value) : undefined;
   const imageErrorMessage =
-    hasValue && renderAs === 'image' && !imageSource ? 'Expected an image URL or base64 image.' : undefined;
+    hasImageValue && renderAs === 'image' && !imageSource ? 'Expected an image URL or base64 image.' : undefined;
+  const hasValue =
+    renderAs === 'image' ? imageSource != null || imageErrorMessage != null : renderedValue.trim().length > 0;
 
   return {
     hasValue,

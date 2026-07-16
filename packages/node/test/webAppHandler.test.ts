@@ -1044,8 +1044,8 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(gap.getAttribute('aria-hidden'), 'true');
     assert.equal(dom.window.document.querySelector('.rivet-web-app-card'), null);
     assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-gap-small\s*\{\s*height: 8px;/);
-    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-gap-medium\s*\{\s*height: 24px;/);
-    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-gap-large\s*\{\s*height: 48px;/);
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-gap-medium\s*\{\s*height: 32px;/);
+    assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-gap-large\s*\{\s*height: 96px;/);
     dom.window.close();
   });
 
