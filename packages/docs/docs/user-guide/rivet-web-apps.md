@@ -105,6 +105,10 @@ Use **Add input** when the Chat graph also needs values from other Input or Text
 
 Press **Enter** to send and **Shift+Enter** for a new line. Only the selected Chat block enters its responding state. The conversation is browser/preview session state and is not saved into the project YAML. Messages stay in chronological order from oldest to newest. Both user and assistant messages render Markdown, including links, lists, and code; raw HTML stays escaped. A short conversation sits at the bottom of the message area beside the composer; as it grows, the conversation scrolls inside the Chat block while the composer stays visible. The Chat block grows to use the page's remaining viewport height while preserving its minimum height; if surrounding components plus the Chat minimum exceed the viewport, the page itself can still scroll normally.
 
+While a response is running, the composer’s green Send control becomes a neutral **Stop** control. It cancels that Chat action without changing the conversation already shown.
+
+Once the conversation has messages, the Chat header includes **Search chat**. Use it, or press `Ctrl+F` on Windows/Linux or `Cmd+F` on macOS while focus is inside the Chat, to search the rendered conversation text. Rivet highlights every visible match, shows the current result as `n/m`, and the previous/next controls keep the active result in view inside the chat history.
+
 ## Previewing Locally
 
 In the desktop app, click **Run detached** in the preview area to open a separate preview window named after the web app. Hosted/server Rivet shells can hide this desktop-preview action when web apps are meant to run only after being published as endpoints. The preview uses the same declarative renderer as hosted web apps. When you click a button in the preview, Rivet runs the target graph through the editor's normal graph-run path with the editor's current providers, context values, settings, attached data, plugins, and project references.

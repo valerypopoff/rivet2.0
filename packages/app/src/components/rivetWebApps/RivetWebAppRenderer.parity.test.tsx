@@ -171,6 +171,7 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
   const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
   const hostedDom = new JSDOM('<div id="app"></div>', { runScripts: 'outside-only', url: 'https://example.test/app' });
   const restoreGlobals = installDomGlobals(reactDom);
+  enableLegacyReactInputFocus(reactDom);
   const uiGraph = makeChatUiGraph();
   const reactAction = deferred<RivetWebAppActionResult>();
   const hostedAction = deferred<Response>();
@@ -198,6 +199,7 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
 
     for (const root of [reactRootElement, hostedDom.window.document]) {
       assert.equal(root.querySelector('.rivet-web-app-chat-empty')?.textContent, 'Start a conversation');
+      assert.equal(root.querySelector('.rivet-web-app-chat-search-button'), null);
     }
 
     await act(async () => {
@@ -222,9 +224,9 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     assert.deepEqual(hostedActionState, reactActionState);
     assert.deepEqual(readChatState(reactRootElement), readChatState(hostedDom.window.document));
     assert.deepEqual(readChatState(reactRootElement), {
-      disabled: true,
+      disabled: false,
+      isStopControl: true,
       messages: ['Hello', ''],
-      status: 'Responding',
     });
     assert.equal(isChatComposerFocused(reactDom.window.document), true);
     assert.equal(isChatComposerFocused(hostedDom.window.document), true);
@@ -250,8 +252,8 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     assert.deepEqual(readChatState(reactRootElement), readChatState(hostedDom.window.document));
     assert.deepEqual(readChatState(reactRootElement), {
       disabled: true,
+      isStopControl: false,
       messages: ['Hello', 'Hi! <script>blocked()</script>'],
-      status: 'Ready',
     });
     for (const root of [reactRootElement, hostedDom.window.document]) {
       const messages = root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message');
@@ -261,6 +263,72 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     }
     assert.equal(isChatComposerFocused(reactDom.window.document), true);
     assert.equal(isChatComposerFocused(hostedDom.window.document), true);
+
+    await act(async () =>
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-search-button')?.click(),
+    );
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-search-button')?.click();
+    await act(async () => {
+      const input = reactRootElement.querySelector<HTMLInputElement>('.rivet-web-app-chat-search-input')!;
+      Object.getOwnPropertyDescriptor(reactDom.window.HTMLInputElement.prototype, 'value')?.set?.call(input, 'h');
+      Simulate.change(input);
+    });
+    setInputValue(
+      hostedDom.window.document.querySelector<HTMLInputElement>('.rivet-web-app-chat-search-input')!,
+      'h',
+      hostedDom,
+    );
+    assert.deepEqual(readChatSearchState(reactRootElement), readChatSearchState(hostedDom.window.document));
+    assert.deepEqual(readChatSearchState(reactRootElement), {
+      activeCount: 1,
+      count: '1\u2009/\u20092',
+      matchCount: 2,
+    });
+
+    await act(async () =>
+      reactRootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-search-navigation-button')[1]?.click(),
+    );
+    hostedDom.window.document
+      .querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-search-navigation-button')[1]
+      ?.click();
+    assert.deepEqual(readChatSearchState(reactRootElement), readChatSearchState(hostedDom.window.document));
+    assert.deepEqual(readChatSearchState(reactRootElement), {
+      activeCount: 1,
+      count: '2\u2009/\u20092',
+      matchCount: 2,
+    });
+
+    await act(async () =>
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-search-close-button')?.click(),
+    );
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-search-close-button')?.click();
+    assert.equal(reactRootElement.querySelector('.rivet-web-app-chat-search'), null);
+    assert.equal(hostedDom.window.document.querySelector('.rivet-web-app-chat-search'), null);
+
+    const reactSearchShortcut = new reactDom.window.KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: 'f',
+    });
+    await act(async () => {
+      reactRootElement
+        .querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')
+        ?.dispatchEvent(reactSearchShortcut);
+    });
+    const hostedSearchShortcut = new hostedDom.window.KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: 'f',
+    });
+    hostedDom.window.document
+      .querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')
+      ?.dispatchEvent(hostedSearchShortcut);
+    assert.equal(reactSearchShortcut.defaultPrevented, true);
+    assert.equal(hostedSearchShortcut.defaultPrevented, true);
+    assert.ok(reactRootElement.querySelector('.rivet-web-app-chat-search'));
+    assert.ok(hostedDom.window.document.querySelector('.rivet-web-app-chat-search'));
   } finally {
     await act(async () => reactRoot.unmount());
     restoreGlobals();
@@ -354,13 +422,22 @@ function setTextareaValue(root: ParentNode, value: string, dom: JSDOM): void {
   textarea.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 }
 
-function readChatState(root: ParentNode): { disabled: boolean; messages: string[]; status: string | null } {
+function readChatState(root: ParentNode): { disabled: boolean; isStopControl: boolean; messages: string[] } {
+  const sendButton = root.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send');
   return {
-    disabled: root.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.disabled ?? false,
+    disabled: sendButton?.disabled ?? false,
+    isStopControl: sendButton?.classList.contains('rivet-web-app-chat-stop') ?? false,
     messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map((message) =>
       (message.textContent ?? '').trimEnd(),
     ),
-    status: root.querySelector('.rivet-web-app-chat-status')?.textContent ?? null,
+  };
+}
+
+function readChatSearchState(root: ParentNode): { activeCount: number; count: string | null; matchCount: number } {
+  return {
+    activeCount: root.querySelectorAll('.rivet-web-app-chat-search-match-active').length,
+    count: root.querySelector('.rivet-web-app-chat-search-count')?.textContent ?? null,
+    matchCount: root.querySelectorAll('.rivet-web-app-chat-search-match').length,
   };
 }
 
@@ -376,6 +453,15 @@ function focusReactControl(element: HTMLElement): void {
   legacyFocusElement.attachEvent ??= () => undefined;
   legacyFocusElement.detachEvent ??= () => undefined;
   element.focus();
+}
+
+function enableLegacyReactInputFocus(dom: JSDOM): void {
+  const prototype = dom.window.HTMLInputElement.prototype as HTMLInputElement & {
+    attachEvent?: () => void;
+    detachEvent?: () => void;
+  };
+  prototype.attachEvent ??= () => undefined;
+  prototype.detachEvent ??= () => undefined;
 }
 
 function readButtonStates(root: ParentNode): Array<{ disabled: boolean; hasSpinner: boolean; text: string | null }> {

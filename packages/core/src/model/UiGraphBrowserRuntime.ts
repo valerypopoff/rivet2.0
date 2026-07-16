@@ -4,6 +4,10 @@ const OUTPUT_MAX_HEIGHT_PX = 800;
 const OUTPUT_MAX_VIEWPORT_HEIGHT_RATIO = 0.8;
 const OUTPUT_RESIZE_MIN_HEIGHT_PROPERTY = '--rivet-web-app-output-resize-min-height';
 const OUTPUT_RESIZE_MAX_HEIGHT_PROPERTY = '--rivet-web-app-output-resize-max-height';
+const CHAT_SEARCH_MATCH_CLASS = 'rivet-web-app-chat-search-match';
+const CHAT_SEARCH_ACTIVE_MATCH_CLASS = 'rivet-web-app-chat-search-match-active';
+
+const escapeRegularExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const getPixelValue = (value: string, fallback: number): number => {
   const parsed = Number.parseFloat(value);
@@ -43,10 +47,11 @@ export function observeUiGraphOutputResizeBounds(output: HTMLElement): () => voi
     const bodyStyle = ownerWindow.getComputedStyle(body);
     const lineHeight = getPixelValue(bodyStyle.lineHeight, getPixelValue(bodyStyle.fontSize, 16) * 1.5);
     const contentStyle = ownerWindow.getComputedStyle(content);
-    const contentPadding =
-      getPixelValue(contentStyle.paddingTop, 0) + getPixelValue(contentStyle.paddingBottom, 0);
+    const contentPadding = getPixelValue(contentStyle.paddingTop, 0) + getPixelValue(contentStyle.paddingBottom, 0);
     const verticalBorder = Math.max(0, output.offsetHeight - output.clientHeight);
-    const minimumHeight = Math.ceil(header.getBoundingClientRect().height + contentPadding + lineHeight + verticalBorder);
+    const minimumHeight = Math.ceil(
+      header.getBoundingClientRect().height + contentPadding + lineHeight + verticalBorder,
+    );
     const naturalHeight = Math.ceil(
       header.getBoundingClientRect().height + contentPadding + Math.max(body.scrollHeight, lineHeight) + verticalBorder,
     );
@@ -122,4 +127,95 @@ export function downloadUiGraphJsonOutput(value: string, appName: string): void 
   } finally {
     globalThis.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
+}
+
+/**
+ * Replaces visible chat-message text matches with safe `<mark>` elements. This
+ * operates on rendered Markdown DOM rather than source Markdown, so search
+ * follows what the user can actually read.
+ */
+export function highlightUiGraphChatSearchMatches(
+  messagesElement: HTMLElement,
+  query: string,
+  requestedActiveIndex = 0,
+): { activeIndex: number; matches: HTMLElement[] } {
+  clearUiGraphChatSearchMatches(messagesElement);
+
+  const searchText = query.trim();
+  if (!searchText) {
+    return { activeIndex: -1, matches: [] };
+  }
+
+  const document = messagesElement.ownerDocument;
+  const textNodes: Text[] = [];
+  const walker = document.createTreeWalker(messagesElement, 4);
+  let node = walker.nextNode();
+  while (node) {
+    if (node.parentElement?.closest('script, style, textarea')) {
+      node = walker.nextNode();
+      continue;
+    }
+
+    textNodes.push(node as Text);
+    node = walker.nextNode();
+  }
+
+  const matches: HTMLElement[] = [];
+  for (const textNode of textNodes) {
+    const value = textNode.data;
+    const ranges: Array<{ end: number; start: number }> = [];
+    const expression = new RegExp(escapeRegularExpression(searchText), 'gi');
+    for (const match of value.matchAll(expression)) {
+      if (match.index != null && match[0]) {
+        ranges.push({ start: match.index, end: match.index + match[0].length });
+      }
+    }
+
+    if (ranges.length === 0 || !textNode.parentNode) {
+      continue;
+    }
+
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    for (const range of ranges) {
+      fragment.append(value.slice(cursor, range.start));
+      const match = document.createElement('mark');
+      match.className = CHAT_SEARCH_MATCH_CLASS;
+      match.textContent = value.slice(range.start, range.end);
+      fragment.append(match);
+      matches.push(match);
+      cursor = range.end;
+    }
+    fragment.append(value.slice(cursor));
+    textNode.parentNode.replaceChild(fragment, textNode);
+  }
+
+  if (matches.length === 0) {
+    return { activeIndex: -1, matches };
+  }
+
+  const activeIndex = ((requestedActiveIndex % matches.length) + matches.length) % matches.length;
+  matches[activeIndex]?.classList.add(CHAT_SEARCH_ACTIVE_MATCH_CLASS);
+  return { activeIndex, matches };
+}
+
+/** Removes transient chat-search markup without changing the rendered message text. */
+export function clearUiGraphChatSearchMatches(messagesElement: HTMLElement): void {
+  for (const match of messagesElement.querySelectorAll<HTMLElement>(`.${CHAT_SEARCH_MATCH_CLASS}`)) {
+    match.replaceWith(messagesElement.ownerDocument.createTextNode(match.textContent ?? ''));
+  }
+  messagesElement.normalize();
+}
+
+/** Centers the active chat-search match inside the chat's own scroll region. */
+export function revealUiGraphChatSearchMatch(messagesElement: HTMLElement, match: HTMLElement | undefined): void {
+  if (!match || !messagesElement.contains(match)) {
+    return;
+  }
+
+  const containerRect = messagesElement.getBoundingClientRect();
+  const matchRect = match.getBoundingClientRect();
+  const maxScrollTop = Math.max(0, messagesElement.scrollHeight - messagesElement.clientHeight);
+  const offset = matchRect.top - containerRect.top - (messagesElement.clientHeight - matchRect.height) / 2;
+  messagesElement.scrollTop = Math.max(0, Math.min(maxScrollTop, messagesElement.scrollTop + offset));
 }

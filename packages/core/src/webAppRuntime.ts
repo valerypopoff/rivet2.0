@@ -33,6 +33,9 @@ export {
 } from './model/UiGraphActionProtocol.js';
 export {
   copyUiGraphText,
+  clearUiGraphChatSearchMatches,
   downloadUiGraphJsonOutput,
+  highlightUiGraphChatSearchMatches,
   observeUiGraphOutputResizeBounds,
+  revealUiGraphChatSearchMatch,
 } from './model/UiGraphBrowserRuntime.js';
