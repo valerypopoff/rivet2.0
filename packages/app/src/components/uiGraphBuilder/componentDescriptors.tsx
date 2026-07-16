@@ -1,8 +1,9 @@
 import Portal from '@atlaskit/portal';
 import Select from '@atlaskit/select';
-import { type FC, type ReactNode, useState } from 'react';
+import { type ComponentProps, type FC, type ReactNode, useState } from 'react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import DeleteIcon from 'majesticons/line/delete-bin-line.svg?react';
+import AlertCircleIcon from 'majesticons/line/alert-circle-line.svg?react';
 import {
   type GraphId,
   getGraphBoundary,
@@ -32,6 +33,7 @@ import {
   type UiGraphDataKeyWrite,
   type UiGraphSelectOption,
 } from './uiGraphComponentModel.js';
+import { Tooltip } from '../Tooltip.js';
 
 export {
   createChatAdditionalInputBinding,
@@ -100,6 +102,23 @@ const OUTPUT_RENDER_OPTIONS: UiGraphSelectOption[] = [
   { label: 'Markdown', value: 'markdown' },
   { label: 'Image', value: 'image' },
 ];
+
+const DATA_KEY_CONFLICT_TOOLTIP =
+  'This data key is also written by an earlier component. Running this component still works and replaces the value.';
+
+const DataKeyInput: FC<ComponentProps<'input'> & { hasConflict?: boolean }> = ({
+  hasConflict = false,
+  ...inputProps
+}) => (
+  <div className="ui-graph-data-key-input">
+    <input {...inputProps} />
+    {hasConflict ? (
+      <Tooltip content={DATA_KEY_CONFLICT_TOOLTIP} tag="span" className="ui-graph-data-key-warning-tooltip">
+        <AlertCircleIcon className="ui-graph-data-key-warning-icon" aria-label="Data key is already used" />
+      </Tooltip>
+    ) : null}
+  </div>
+);
 
 function getDataKeySelectOptions(value: string, dataKeyOptions: readonly string[]): UiGraphSelectOption[] {
   const options = dataKeyOptions.map((key) => ({ label: key, value: key }));
@@ -205,7 +224,8 @@ const InputLikeSettings: FC<UiGraphComponentSettingsProps> = ({ component, isDat
       </label>
       <label className="ui-graph-builder-field">
         Data key
-        <input
+        <DataKeyInput
+          hasConflict={isDataKeyAlreadyUsed(component.stateKey, { componentId: component.id })}
           value={component.stateKey}
           onChange={(event) =>
             onUpdate((draft) => {
@@ -213,9 +233,6 @@ const InputLikeSettings: FC<UiGraphComponentSettingsProps> = ({ component, isDat
             })
           }
         />
-        {isDataKeyAlreadyUsed(component.stateKey, { componentId: component.id }) && (
-          <span className="ui-graph-data-key-warning">This data key is already used.</span>
-        )}
       </label>
       <label className="ui-graph-builder-field">
         Placeholder
@@ -600,7 +617,7 @@ const ButtonInputMappingsEditor: FC<{
 
   return (
     <div className="ui-graph-action-section">
-      {boundary && rows.length === 0 && <div className="ui-graph-action-empty">The selected graph has no inputs.</div>}
+      {boundary?.inputs.length === 0 && <div className="ui-graph-action-empty">The selected graph has no inputs.</div>}
       {rows.map((row, index) => {
         const showLabels = index === 0;
 
@@ -649,7 +666,9 @@ const ButtonOutputMappingsEditor: FC<{
 
   return (
     <div className="ui-graph-action-section">
-      {boundary && rows.length === 0 && <div className="ui-graph-action-empty">The selected graph has no outputs.</div>}
+      {boundary?.outputs.length === 0 && (
+        <div className="ui-graph-action-empty">The selected graph has no outputs.</div>
+      )}
       {rows.map((row, index) => {
         const showLabels = index === 0;
 
@@ -667,8 +686,9 @@ const ButtonOutputMappingsEditor: FC<{
                 />
               </ActionMappingField>
               <ActionMappingField label="Data key to save to" showLabel={showLabels}>
-                <input
+                <DataKeyInput
                   aria-label={showLabels ? undefined : `Data key to save for ${row.outputKey ?? ''}`}
+                  hasConflict={isDataKeyAlreadyUsed(row.stateKey, { componentId: component.id, outputIndex: index })}
                   value={row.stateKey}
                   onChange={(event) =>
                     onUpdate((draft) => {
@@ -681,9 +701,6 @@ const ButtonOutputMappingsEditor: FC<{
                 />
               </ActionMappingField>
             </div>
-            {isDataKeyAlreadyUsed(row.stateKey, { componentId: component.id, outputIndex: index }) && (
-              <div className="ui-graph-data-key-warning">This data key is already used.</div>
-            )}
           </div>
         );
       })}

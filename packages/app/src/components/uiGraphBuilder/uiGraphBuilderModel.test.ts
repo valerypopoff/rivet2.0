@@ -14,6 +14,7 @@ import type {
 import {
   alignInputRowsToBoundary,
   alignOutputRowsToBoundary,
+  getButtonOutputRows,
   normalizeButtonActionToGraphBoundary,
   type UiGraphButtonComponent,
 } from './buttonBindings.js';
@@ -100,6 +101,21 @@ test('button normalization migrates legacy bindings without changing mapped stat
   assert.equal(button.action.inputs, undefined);
   assert.equal(button.action.outputKey, undefined);
   assert.equal(button.action.outputStateKey, undefined);
+});
+
+test('button settings show an empty persisted output mapping instead of a render-time default', () => {
+  const button: UiGraphButtonComponent = {
+    action: {
+      graphId,
+      outputs: [{ outputKey: 'answer', stateKey: '' }],
+      type: 'runGraph',
+    },
+    id: 'button' as UiComponentId,
+    label: 'Run',
+    type: 'button',
+  };
+
+  assert.deepEqual(getButtonOutputRows(button, makeBoundary([], ['answer'])), [{ outputKey: 'answer', stateKey: '' }]);
 });
 
 test('component models exhaustively own labels, defaults, and data-key policy', () => {

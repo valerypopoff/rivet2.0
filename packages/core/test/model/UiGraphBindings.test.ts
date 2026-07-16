@@ -234,6 +234,40 @@ void describe('UI graph button bindings', () => {
     ]);
   });
 
+  void it('allows separate buttons to write the same UI data key', () => {
+    const project = makeProject(makeBoundaryGraph({ input: 'prompt', output: 'answer' }));
+    const uiGraph = project.uiGraphs![uiGraphId]!;
+    const firstButton = uiGraph.components[0]!;
+    assert.equal(firstButton.type, 'button');
+    uiGraph.components.push({
+      ...firstButton,
+      id: 'second-button' as any,
+      action: structuredClone(firstButton.action),
+    });
+
+    assert.deepEqual(validateUiGraphActionBindings(project, uiGraph), []);
+  });
+
+  void it('reports a blank saved output mapping without treating another button key as the cause', () => {
+    const project = makeProject(makeBoundaryGraph({ input: 'prompt', output: 'answer' }));
+    const uiGraph = project.uiGraphs![uiGraphId]!;
+    const firstButton = uiGraph.components[0]!;
+    assert.equal(firstButton.type, 'button');
+    uiGraph.components.push({
+      ...firstButton,
+      id: 'broken-button' as any,
+      action: {
+        ...firstButton.action,
+        outputs: [{ outputKey: 'answer', stateKey: '' }],
+      },
+    });
+
+    assert.deepEqual(
+      validateUiGraphActionBindings(project, uiGraph, 'broken-button' as any).map((issue) => issue.code),
+      ['empty-output-state-key'],
+    );
+  });
+
   void it('preserves data keys for exact IDs and proven same-node renames', () => {
     const previous = makeProject(makeBoundaryGraph({ input: 'prompt', output: 'answer' }));
     const next = makeProject(makeBoundaryGraph({ input: 'question', output: 'response' }));

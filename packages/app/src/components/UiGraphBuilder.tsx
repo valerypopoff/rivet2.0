@@ -136,7 +136,8 @@ const styles = css`
   }
 
   .ui-graph-builder-field > input,
-  .ui-graph-builder-field > textarea {
+  .ui-graph-builder-field > textarea,
+  .ui-graph-data-key-input > input {
     min-width: 0;
     border: 1px solid var(--form-control-border);
     border-radius: 7px;
@@ -151,6 +152,30 @@ const styles = css`
     appearance: none;
     min-height: 78px;
     resize: vertical;
+  }
+
+  .ui-graph-data-key-input {
+    position: relative;
+  }
+
+  .ui-graph-data-key-input > input {
+    width: 100%;
+    padding-right: 34px;
+  }
+
+  .ui-graph-data-key-warning-tooltip {
+    position: absolute;
+    top: 50%;
+    right: 9px;
+    display: inline-flex;
+    color: var(--warning);
+    cursor: help;
+    transform: translateY(-50%);
+  }
+
+  .ui-graph-data-key-warning-icon {
+    width: 16px;
+    height: 16px;
   }
 
   .ui-graph-builder-palette {
@@ -380,14 +405,6 @@ const styles = css`
     cursor: default;
     opacity: 0.72;
     -webkit-text-fill-color: var(--foreground-muted);
-  }
-
-  .ui-graph-data-key-warning {
-    display: block;
-    color: var(--warning);
-    font-size: var(--ui-font-size-xs);
-    font-weight: 600;
-    line-height: 1.25;
   }
 
   .ui-graph-builder-separator {
