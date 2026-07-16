@@ -42,6 +42,7 @@ import { collectUiGraphDataKeyUsages } from './uiGraphBuilder/dataKeys.js';
 import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
 import { DeleteResourceConfirmModal } from './DeleteResourceConfirmModal.js';
 import { isUiGraphComponentEventTarget, revealUiGraphComponent } from './uiGraphBuilder/revealUiGraphComponent.js';
+import { getUiGraphPreviewInteractionController } from './rivetWebApps/uiGraphPreviewSession.js';
 
 const styles = css`
   position: fixed;
@@ -424,6 +425,9 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
   const settingsScrollRef = useRef<HTMLDivElement>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
   const uiGraph = selectedUiGraphId ? project.uiGraphs?.[selectedUiGraphId] : undefined;
+  const previewInteractionController = uiGraph
+    ? getUiGraphPreviewInteractionController(project.metadata.id, uiGraph)
+    : undefined;
   const dataKeyUsages = useMemo(() => (uiGraph ? collectUiGraphDataKeyUsages(uiGraph) : []), [uiGraph]);
   const pendingDeleteComponentId = getCurrentUiGraphComponentDeletionId(
     pendingComponentDeletion,
@@ -708,6 +712,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
         <UiGraphPreviewEditor
           key={`${project.metadata.id}:${uiGraph.id}`}
           activeComponentId={activeComponentId}
+          interactionController={previewInteractionController}
           onActiveComponentChange={activatePreviewComponent}
           onReorder={reorderComponents}
           scrollContainerRef={previewScrollRef}

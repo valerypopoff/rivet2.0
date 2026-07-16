@@ -24,6 +24,7 @@ export {
   createUiGraphInteractionController,
   getUiGraphComponentRenderModel,
   getUiGraphJsonOutputFilename,
+  getUiGraphProgressiveJsonOutputChunks,
 } from './model/UiGraphRuntimeModel.js';
 export {
   parseRivetWebAppClientMessage,

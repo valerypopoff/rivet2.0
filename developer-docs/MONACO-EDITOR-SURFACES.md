@@ -19,7 +19,11 @@ editor teardown.
 [`editors/CodeEditor.tsx`](../packages/app/src/components/editors/CodeEditor.tsx)
 owns node/project model keys, node-specific validation, footer actions/stats/font
 controls, AI-assist entry, and app theme selection. Product behavior belongs here,
-not in the low-level editor.
+not in the low-level editor. Compact, non-resizable node fields must provide an
+explicit `height` in their core editor definition; the app resolves that value to
+a fixed viewport height instead of letting the node-settings flex layout stretch
+it. Fields without an explicit height use the 500px fallback. JSONPath node
+settings editors are resizable alongside JavaScript and JSON editors.
 
 Model/view state is session-only and project-scoped. Folding state survives panel
 close/reopen while the project remains open, but is never written to project YAML.

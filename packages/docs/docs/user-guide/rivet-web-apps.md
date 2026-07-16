@@ -33,7 +33,7 @@ When a block is focused in the settings panel, Rivet highlights the matching com
 
 Text and Markdown components render without a surrounding card surface, but remain selectable and draggable in the editor preview. Markdown renders in the editor preview and hosted web app instead of showing raw Markdown source. Output components can also render stored state as Markdown by setting **Render as** to **Markdown**. Rivet uses the same Markdown engine in the editor preview and in server-hosted web apps, so headings, lists, emphasis, and code blocks should render consistently in both places. Raw HTML inside Markdown is escaped in web apps.
 
-Set an Output component's **Render as** option to **Image** when its data key contains an image URL, a complete base64 image data URL, or raw PNG, JPEG, or GIF base64. HTTP(S), relative, and `blob:` image URLs are supported; unsupported values show a clear placeholder instead of being inserted as arbitrary markup. Output components start blank until the selected data key receives a value. After an output has a value, its top-right copy button copies the original output value. JSON output blocks also show a download button that saves the displayed JSON as a `.json` file named from the web app and the current date/time.
+Set an Output component's **Render as** option to **Image** when its data key contains an image URL, a complete base64 image data URL, or raw PNG, JPEG, or GIF base64. HTTP(S), relative, and `blob:` image URLs are supported; unsupported values show a clear placeholder instead of being inserted as arbitrary markup. Output components start blank until the selected data key receives a value. Once populated, the Output header keeps its label and collapse control visible. Copy and, for JSON, Download overlay the top-right of the expanded content area while the value scrolls inside it. The expanded card can be resized vertically; collapsing it returns it to a compact header. The download button saves the displayed JSON as a `.json` file named from the web app and the current date/time. Collapsing an output hides only its value for the current app session; it is not saved into the project.
 
 ## Binding a Button to a Graph
 
@@ -76,7 +76,7 @@ In the desktop app, click **Run detached** in the preview area to open a separat
 
 Because preview actions are real editor graph runs, you can open the target graph after clicking a web app button and inspect the generated node outputs, run history, durations, errors, and graph outputs just like you can after clicking **Run project**.
 
-Preview state is temporary. Editing the web app changes the project and can be saved like other project changes. The preview window stays open if you switch back to a workflow graph in the editor; close the preview window when you are done with it.
+Preview state is temporary and is not saved in the project YAML. Use the reset icon in the upper-left corner of the preview to clear fields, outputs, chat messages, errors, and progress and return to the initial app state. The in-editor preview keeps its state when you switch to another graph or web app builder and come back; opening the project again starts a fresh preview session. Editing the web app changes the project and can be saved like other project changes. The detached preview window stays open if you switch back to a workflow graph in the editor; close the preview window when you are done with it.
 
 ## Serving From a Wrapper
 

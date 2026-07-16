@@ -1,5 +1,11 @@
 import { coerceType, coerceTypeOptional } from '../../utils/coerceType.js';
-import { getScalarTypeOf, isArrayDataValue, type ChatMessage, type ScalarDataValue, type DataValue } from '../DataValue.js';
+import {
+  getScalarTypeOf,
+  isArrayDataValue,
+  type ChatMessage,
+  type ScalarDataValue,
+  type DataValue,
+} from '../DataValue.js';
 
 export function coercePromptToChatMessages(prompt: unknown, options: { requirePrompt?: boolean } = {}): ChatMessage[] {
   if (!prompt) {
@@ -48,20 +54,14 @@ export function coercePromptToChatMessages(prompt: unknown, options: { requirePr
   }
 
   const coercedString = coerceTypeOptional(value, 'string');
-  return coercedString != null ? [{ type: 'user', message: coerceType(value, 'string') }] : [];
+  return coercedString != null ? [{ type: 'user', message: coercedString }] : [];
 }
 
 export function prependSystemPrompt(messages: ChatMessage[], systemPrompt: unknown): ChatMessage[] {
-  if (!systemPrompt) {
+  const systemMessage = coerceTypeOptional(systemPrompt as DataValue | undefined, 'string');
+  if (!systemMessage) {
     return messages;
   }
 
-  const systemMessage = coerceType(systemPrompt as never, 'string');
-  const nextMessages = [...messages];
-
-  if (nextMessages.length > 0 && nextMessages[0]!.type === 'system') {
-    nextMessages.splice(0, 1);
-  }
-
-  return [{ type: 'system', message: systemMessage }, ...nextMessages];
+  return [{ type: 'system', message: systemMessage }, ...messages];
 }

@@ -101,6 +101,53 @@ test('React and hosted renderers keep the same component and action behavior', a
       { disabled: false, hasSpinner: false, text: 'First' },
       { disabled: false, hasSpinner: false, text: 'Second' },
     ]);
+    assert.equal(
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-output-toggle')?.ariaExpanded,
+      'true',
+    );
+    assert.equal(
+      reactRootElement.querySelector('.rivet-web-app-output-content pre')?.textContent,
+      '{\n  "answer": "Done"\n}',
+    );
+    assert.equal(
+      reactRootElement
+        .querySelector('.rivet-web-app-output-content pre')
+        ?.classList.contains('rivet-web-app-output-json'),
+      true,
+    );
+    assert.equal(
+      hostedDom.window.document
+        .querySelector('.rivet-web-app-output-content pre')
+        ?.classList.contains('rivet-web-app-output-json'),
+      true,
+    );
+    const firstExpandedOutput = reactRootElement.querySelector<HTMLElement>('.rivet-web-app-output');
+    const outputHeader = firstExpandedOutput?.querySelector<HTMLElement>('.rivet-web-app-output-header');
+    assert.equal(outputHeader?.tagName, 'BUTTON');
+    assert.equal(outputHeader?.lastElementChild?.classList.contains('rivet-web-app-output-toggle-icon'), true);
+    assert.equal(outputHeader?.querySelector('.rivet-web-app-output-action-button'), null);
+    assert.equal(firstExpandedOutput?.querySelectorAll('.rivet-web-app-output-content-actions button').length, 2);
+
+    await act(async () => {
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-output-toggle')?.click();
+    });
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-output-toggle')?.click();
+    assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
+    assert.equal(
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-output-toggle')?.ariaExpanded,
+      'false',
+    );
+    const firstReactOutput = reactRootElement.querySelector<HTMLElement>('.rivet-web-app-output');
+    assert.equal(firstReactOutput?.querySelector('.rivet-web-app-output-content'), null);
+    assert.equal(firstReactOutput?.querySelectorAll('.rivet-web-app-output-action-button').length, 0);
+
+    await act(async () => {
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-reset-button')?.click();
+    });
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-reset-button')?.click();
+    assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
+    assert.equal(reactRootElement.querySelector('.rivet-web-app-output-content'), null);
+    assert.equal(hostedDom.window.document.querySelector('.rivet-web-app-output-content'), null);
   } finally {
     await act(async () => reactRoot.unmount());
     restoreGlobals();

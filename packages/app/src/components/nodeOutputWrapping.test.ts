@@ -13,6 +13,7 @@ function readComponent(...parts: string[]): string {
 test('fullscreen object output uses foldable searchable JSON with stable display metrics', () => {
   const scalarRenderers = readComponent('renderDataValue', 'createScalarRenderers.tsx');
   const foldingCodeBlock = readComponent('renderDataValue', 'FoldingCodeBlock.tsx');
+  const fullscreenOutput = readComponent('nodeOutput', 'NodeFullscreenOutput.tsx');
 
   assert.match(scalarRenderers, /<FoldingCodeBlock text=\{stringified\} language="json"/);
   assert.match(foldingCodeBlock, /useFullscreenOutputSearchContext/);
@@ -22,10 +23,15 @@ test('fullscreen object output uses foldable searchable JSON with stable display
   assert.match(foldingCodeBlock, /wordWrap=\{wrapLines \? 'on' : 'off'\}/);
   assert.match(foldingCodeBlock, /fontSizeScope="fullscreen-output"/);
   assert.match(foldingCodeBlock, /vertical: 'hidden'/);
+  assert.match(foldingCodeBlock, /ScrollType\.Immediate/);
+  assert.match(foldingCodeBlock, /scheduleFullscreenOutputSearchTargetReveal/);
+  assert.match(fullscreenOutput, /findFullscreenOutputScrollContainer/);
+  assert.doesNotMatch(fullscreenOutput, /function findScrollContainer/);
 });
 
 test('large stored JSON previews preserve safe wrapping and external search ownership', () => {
   const source = readComponent('renderDataValue', 'LargeStoredValuePreview.tsx');
+  const searchSource = readComponent('renderDataValue', 'useLargeStoredValueFullscreenSearch.ts');
   const wrapStyles =
     /\.fullscreen-output-body\.wrap-lines & \.json-preview-content pre \{(?<styles>[\s\S]*?)\n  \}/.exec(source)?.groups
       ?.styles;
@@ -34,6 +40,7 @@ test('large stored JSON previews preserve safe wrapping and external search owne
   assert.match(wrapStyles, /overflow-wrap: break-word;/);
   assert.doesNotMatch(wrapStyles, /overflow-wrap:\s*anywhere;/);
   assert.match(source, /highlightMode: usesFoldingJsonPreview \? 'external' : 'dom'/);
+  assert.match(searchSource, /scheduleFullscreenOutputSearchTargetReveal/);
 });
 
 test('decoded JSON string preview has separated range, geometry, state, and view owners', () => {

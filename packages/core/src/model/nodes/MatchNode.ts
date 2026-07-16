@@ -28,7 +28,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
   static create(): MatchNode {
     const chartNode: MatchNode = {
       type: 'match',
-      title: 'Match',
+      title: 'Regex Match',
       id: nanoid() as NodeId,
       visualData: {
         x: 0,
@@ -134,14 +134,15 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
       infoBoxBody: dedent`
         Any number of regular expressions can be configured, each corresponding to an output of the node. The output port of the first matching regex will be ran, and all other output ports will not be ran.
       `,
-      infoBoxTitle: 'Match Node',
-      contextMenuTitle: 'Match',
+      infoBoxTitle: 'Regex Match Node',
+      contextMenuTitle: 'Regex Match',
       group: ['Logic'],
     };
   }
 
   async process(inputs: Inputs): Promise<Outputs> {
-    const inputString = coerceType(inputs['input' as PortId], 'string');
+    const inputValue = inputs['input' as PortId];
+    const inputString = inputValue?.value == null ? undefined : coerceType(inputValue, 'string');
     const value = inputs['value' as PortId];
     const portIds = resolveStoredOrderedPortIds(this.data.cases.length, this.data.casePortIds, {
       kind: 'prefix',
@@ -157,8 +158,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
     const output: Outputs = {};
 
     for (let i = 0; i < cases.length; i++) {
-      const regExp = new RegExp(cases[i]!);
-      const match = regExp.test(inputString);
+      const match = inputString !== undefined && new RegExp(cases[i]!).test(inputString);
 
       const canMatch = !this.data.exclusive || !matched;
       if (match && canMatch) {
@@ -191,4 +191,4 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
   }
 }
 
-export const matchNode = nodeDefinition(MatchNodeImpl, 'Match');
+export const matchNode = nodeDefinition(MatchNodeImpl, 'Regex Match');

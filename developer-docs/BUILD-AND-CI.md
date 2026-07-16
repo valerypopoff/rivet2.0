@@ -528,6 +528,12 @@ validates policy rather than a frozen advisory count, so a newly published high
 finding or a new unreviewed dependent fails CI even when lower-severity counts
 change.
 
+When a transitive finding has a compatible upstream fix, prefer refreshing that
+resolution with `node .yarn/releases/yarn-4.17.1.cjs up -R <package>` instead of
+adding an exception. Commit the resulting `yarn.lock`, `.pnp.cjs`, and
+replacement `.yarn/cache` archive together so zero-install CI resolves the same
+patched dependency as local development.
+
 The build workflow runs that JavaScript audit immediately after dependency
 installation. A separate `rustsec/audit-check` job scans
 `packages/app/src-tauri/Cargo.lock`; keeping it separate avoids adding Rust setup

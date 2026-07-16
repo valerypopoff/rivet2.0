@@ -73,6 +73,17 @@ paths and should not be used as the primary target for new provider refactors.
   by tests before moving normalization code.
 - Streaming output must preserve response text, all messages, request status,
   request body, usage, reasoning, and response-error ports.
+- `Prompt` and `Assemble Prompt` system messages remain system messages through
+  Rivet's provider-neutral AI SDK request. The captured `LLM request body` is
+  intentionally the provider's actual wire body, not a normalized Rivet view:
+  OpenAI Responses uses `input` and represents system instructions as
+  `developer` items, while OpenAI-compatible chat-completions providers keep
+  them as `system` entries in `messages`. Do not rewrite either transport merely
+  to make the diagnostic shape uniform.
+- System messages supplied through the `Prompt` input are additive. An empty
+  `System Prompt` input leaves them untouched; a non-empty dedicated system
+  prompt is prepended without replacing any of them. The merge checks the
+  coerced string value, not the truthiness of its `DataValue` wrapper.
 - Provider errors must stay normalized and secret-safe; do not log raw provider
   payloads or credentials.
 - Editor cache keys must keep secret fingerprints and provider/model identity

@@ -27,6 +27,9 @@ const IMAGE_DATA_URL_PATTERN = /^data:(image\/(?:avif|bmp|gif|jpe?g|png|webp));b
 const IMAGE_URL_PATTERN = /^(?:https?:\/\/|blob:|\/\/|\/|\.\.?\/)/i;
 const RELATIVE_IMAGE_PATH_PATTERN = /\.(?:avif|bmp|gif|jpe?g|png|webp)(?:[?#].*)?$/i;
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+const UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_THRESHOLD = 128 * 1024;
+const UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_INITIAL_CHARS = 16 * 1024;
+const UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_CHUNK_CHARS = 16 * 1024;
 
 export type UiGraphComponentRenderModel =
   | {
@@ -86,11 +89,12 @@ export type UiGraphActionExecutionController = {
   reset(): void;
 };
 
-export type UiGraphInteractionChange = 'action' | 'graph' | 'state';
+export type UiGraphInteractionChange = 'action' | 'graph' | 'presentation' | 'state';
 
 export type UiGraphInteractionSnapshot = Readonly<{
   actionErrors: Readonly<Record<string, string>>;
   actionProgress: Readonly<Record<string, GraphProgress>>;
+  collapsedOutputComponentIds: ReadonlySet<UiComponentId>;
   runningComponentIds: ReadonlySet<UiComponentId>;
   state: Readonly<Record<string, unknown>>;
 }>;
@@ -114,9 +118,11 @@ export type UiGraphInteractionController = {
   cancelAction(componentId: UiComponentId): void;
   detachActions(): void;
   getSnapshot(): UiGraphInteractionSnapshot;
+  reset(): void;
   runAction(component: UiGraphActionComponent, runner: UiGraphActionRunner): Promise<void>;
   setUiGraph(uiGraph: UiGraph): void;
   subscribe(listener: (change: UiGraphInteractionChange) => void): () => void;
+  toggleOutputCollapsed(componentId: UiComponentId): void;
   updateState(stateKey: string, value: unknown): void;
   updateStatePatch(statePatch: Record<string, unknown>): void;
 };
@@ -201,9 +207,13 @@ export function createUiGraphInteractionController(
   options: UiGraphInteractionControllerOptions = {},
 ): UiGraphInteractionController {
   let uiGraphId = initialUiGraph.id;
-  let state = options.initialState ? { ...options.initialState } : getUiGraphInitialState(initialUiGraph);
+  let outputComponentIds = getUiGraphOutputComponentIds(initialUiGraph);
+  const initialStateOverride = options.initialState ? { ...options.initialState } : undefined;
+  let initialState = initialStateOverride ?? getUiGraphInitialState(initialUiGraph);
+  let state = { ...initialState };
   let actionErrors: Record<string, string> = {};
   let actionProgress: Record<string, GraphProgress> = {};
+  const collapsedOutputComponentIds = new Set<UiComponentId>();
   let snapshot: UiGraphInteractionSnapshot;
   const actionController = createUiGraphActionExecutionController();
   const activeActions = new Map<number, ActiveUiGraphAction>();
@@ -213,6 +223,7 @@ export function createUiGraphInteractionController(
     snapshot = {
       actionErrors,
       actionProgress,
+      collapsedOutputComponentIds: new Set(collapsedOutputComponentIds),
       runningComponentIds: new Set([...activeActions.values()].map(({ execution }) => execution.componentId)),
       state,
     };
@@ -285,6 +296,14 @@ export function createUiGraphInteractionController(
     getSnapshot() {
       return snapshot;
     },
+    reset() {
+      abortAllActions(false);
+      state = { ...initialState };
+      actionErrors = {};
+      actionProgress = {};
+      collapsedOutputComponentIds.clear();
+      publish('state');
+    },
     async runAction(component, runner) {
       const execution = actionController.begin(component);
       if (!execution) {
@@ -341,11 +360,26 @@ export function createUiGraphInteractionController(
       if (nextUiGraph.id !== uiGraphId) {
         abortAllActions(false);
         uiGraphId = nextUiGraph.id;
-        state = getUiGraphInitialState(nextUiGraph);
+        initialState = initialStateOverride ?? getUiGraphInitialState(nextUiGraph);
+        state = { ...initialState };
         actionErrors = {};
         actionProgress = {};
+        outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
+        collapsedOutputComponentIds.clear();
         publish('graph');
         return;
+      }
+
+      if (!initialStateOverride) {
+        initialState = getUiGraphInitialState(nextUiGraph);
+      }
+
+      outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
+      const collapsedOutputIdsBeforeCleanup = collapsedOutputComponentIds.size;
+      for (const componentId of collapsedOutputComponentIds) {
+        if (!outputComponentIds.has(componentId)) {
+          collapsedOutputComponentIds.delete(componentId);
+        }
       }
 
       const actionComponentIds = new Set(
@@ -353,7 +387,9 @@ export function createUiGraphInteractionController(
           .filter((component) => component.type === 'button' || component.type === 'chat')
           .map((component) => component.id),
       );
-      let changed = abortMatchingActions(({ execution }) => !actionComponentIds.has(execution.componentId), false);
+      let changed =
+        collapsedOutputComponentIds.size !== collapsedOutputIdsBeforeCleanup ||
+        abortMatchingActions(({ execution }) => !actionComponentIds.has(execution.componentId), false);
       const remainingErrors = Object.fromEntries(
         Object.entries(actionErrors).filter(([componentId]) => actionComponentIds.has(componentId as UiComponentId)),
       );
@@ -376,6 +412,18 @@ export function createUiGraphInteractionController(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    toggleOutputCollapsed(componentId) {
+      if (!outputComponentIds.has(componentId)) {
+        return;
+      }
+
+      if (collapsedOutputComponentIds.has(componentId)) {
+        collapsedOutputComponentIds.delete(componentId);
+      } else {
+        collapsedOutputComponentIds.add(componentId);
+      }
+      publish('presentation');
+    },
     updateState(stateKey, value) {
       actionController.noteStateWrite(stateKey);
       state = { ...state, [stateKey]: value };
@@ -389,6 +437,12 @@ export function createUiGraphInteractionController(
       publish('state');
     },
   };
+}
+
+function getUiGraphOutputComponentIds(uiGraph: UiGraph): Set<UiComponentId> {
+  return new Set(
+    uiGraph.components.filter((component) => component.type === 'output').map((component) => component.id),
+  );
 }
 
 export function getUiGraphComponentRenderModel(
@@ -451,7 +505,7 @@ export function getUiGraphOutputRenderModel(
     hasValue,
     ...(imageErrorMessage ? { imageErrorMessage } : {}),
     ...(imageSource ? { imageSource } : {}),
-    ...(hasValue && renderAs === 'json' ? { jsonDownloadValue: stringifyUiGraphValue(value) } : {}),
+    ...(hasValue && renderAs === 'json' ? { jsonDownloadValue: renderedValue } : {}),
     renderedValue,
     renderAs,
   };
@@ -467,6 +521,44 @@ export function renderUiGraphOutputValue(value: unknown, renderAs: UiGraphOutput
   }
 
   return typeof value === 'string' ? value : value == null ? '' : stringifyUiGraphValue(value) ?? '';
+}
+
+/**
+ * Splits very large JSON output into append-only DOM text chunks. Appending the
+ * chunks lets browser renderers show the first screenful without blocking on
+ * layout for every visual line in one huge escaped JSON string.
+ */
+export function getUiGraphProgressiveJsonOutputChunks(value: string): readonly string[] | undefined {
+  if (value.length < UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_THRESHOLD) {
+    return undefined;
+  }
+
+  const chunks: string[] = [];
+  let offset = 0;
+  let chunkLength = UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_INITIAL_CHARS;
+  while (offset < value.length) {
+    let nextOffset = Math.min(value.length, offset + chunkLength);
+    if (
+      nextOffset < value.length &&
+      isHighSurrogate(value.charCodeAt(nextOffset - 1)) &&
+      isLowSurrogate(value.charCodeAt(nextOffset))
+    ) {
+      nextOffset += 1;
+    }
+    chunks.push(value.slice(offset, nextOffset));
+    offset = nextOffset;
+    chunkLength = UI_GRAPH_PROGRESSIVE_JSON_OUTPUT_CHUNK_CHARS;
+  }
+
+  return chunks;
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
 }
 
 export function getUiGraphImageSource(value: unknown): string | undefined {

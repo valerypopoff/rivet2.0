@@ -63,6 +63,7 @@ import {
   getProjectWorkspaceLeavePolicy,
   resolveProjectWorkspaceTarget,
 } from '../domain/workspace/projectWorkspaceTarget.js';
+import { clearUiGraphPreviewSessions } from '../components/rivetWebApps/uiGraphPreviewSession.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -291,6 +292,9 @@ export function useWorkspaceTransitions() {
         await applyStaticData(projectInfo.data);
         setLoadedProject(transition.loadedProject);
         setTrivetState(createDefaultTrivetState(projectInfo.testSuites ?? []));
+        if (!targetProjectHasOpenTab) {
+          clearUiGraphPreviewSessions(targetProjectId);
+        }
         return true;
       } catch (err) {
         hostCallbacks.onOpenError?.({

@@ -4,15 +4,17 @@ import { codeEditorHeightsByStorageKeyState } from '../../state/ui.js';
 
 type ResizeHandleMouseEvent = globalThis.MouseEvent;
 
-// Keep this aligned with the static `.node-editor-static-code-editor` fallback
-// min-height in `DefaultNodeEditor.tsx` so resizable and non-resizable paths
-// stay visually consistent by default.
+// Keep the shared defaults aligned between resizable and non-resizable editors.
 export const DEFAULT_HEIGHT = 500;
 export const MIN_HEIGHT = 200;
-export const RESIZABLE_LANGUAGES = new Set(['javascript', 'json', 'prompt-interpolation-markdown']);
+export const RESIZABLE_LANGUAGES = new Set(['javascript', 'json', 'jsonpath', 'prompt-interpolation-markdown']);
 
 export function isValidHeight(height: number | undefined): height is number {
   return typeof height === 'number' && Number.isFinite(height) && height > 0;
+}
+
+export function resolveStaticViewportHeight(defaultHeight: number | undefined): number {
+  return isValidHeight(defaultHeight) ? Math.max(MIN_HEIGHT, Math.round(defaultHeight)) : DEFAULT_HEIGHT;
 }
 
 export function buildCodeEditorHeightStorageKey({
@@ -99,7 +101,10 @@ export function useNodeEditorCodeViewportHeight({
       return;
     }
 
-    const nextViewportHeight = Math.max(MIN_HEIGHT, Math.round(dragStartHeight.current + (event.clientY - dragStartClientY.current)));
+    const nextViewportHeight = Math.max(
+      MIN_HEIGHT,
+      Math.round(dragStartHeight.current + (event.clientY - dragStartClientY.current)),
+    );
     currentViewportHeightRef.current = nextViewportHeight;
     setViewportHeight(nextViewportHeight);
   };
@@ -108,9 +113,10 @@ export function useNodeEditorCodeViewportHeight({
     event.preventDefault();
 
     const dragStart = dragStartHeight.current;
-    const finalViewportHeight = dragStart == null
-      ? currentViewportHeightRef.current
-      : Math.max(MIN_HEIGHT, Math.round(dragStart + (event.clientY - dragStartClientY.current)));
+    const finalViewportHeight =
+      dragStart == null
+        ? currentViewportHeightRef.current
+        : Math.max(MIN_HEIGHT, Math.round(dragStart + (event.clientY - dragStartClientY.current)));
 
     currentViewportHeightRef.current = finalViewportHeight;
     setViewportHeight(finalViewportHeight);

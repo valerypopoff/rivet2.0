@@ -18,11 +18,13 @@ import {
   type UiGraph,
   type UiGraphActionComponent,
   type UiGraphComponent,
+  type UiGraphInteractionController,
   RIVET_WEB_APP_RENDERER_CSS,
   createUiGraphInteractionController,
   createUiGraphChatSubmissionStatePatch,
   getUiGraphChatDraftStateKey,
   getUiGraphComponentRenderModel,
+  getUiGraphProgressiveJsonOutputChunks,
   normalizeUiGraph,
 } from '@valerypopoff/rivet2-core';
 import { copyUiGraphText, downloadUiGraphJsonOutput } from '@valerypopoff/rivet2-core/web-app-runtime';
@@ -35,6 +37,7 @@ export type RivetWebAppActionResult = {
 
 export type RivetWebAppRendererProps = {
   activeComponentId?: UiComponentId;
+  interactionController?: UiGraphInteractionController;
   renderComponentFrame?(props: RivetWebAppComponentFrameProps): ReactNode;
   onActiveComponentChange?(componentId: UiComponentId): void;
   onRunAction(
@@ -57,6 +60,7 @@ export type RivetWebAppComponentFrameProps = {
 
 export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   activeComponentId,
+  interactionController: interactionControllerProp,
   renderComponentFrame,
   onActiveComponentChange,
   onRunAction,
@@ -64,7 +68,11 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   uiGraph,
 }) => {
   const normalizedUiGraph = useMemo(() => normalizeUiGraph(uiGraph), [uiGraph]);
-  const [interactionController] = useState(() => createUiGraphInteractionController(normalizedUiGraph));
+  const ownedInteractionControllerRef = useRef<UiGraphInteractionController | null>(null);
+  const interactionController =
+    interactionControllerProp ??
+    ownedInteractionControllerRef.current ??
+    (ownedInteractionControllerRef.current = createUiGraphInteractionController(normalizedUiGraph));
   const interaction = useSyncExternalStore(
     interactionController.subscribe,
     interactionController.getSnapshot,
@@ -96,6 +104,15 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     <div ref={rootRef} className="rivet-web-app-root">
       <style>{RIVET_WEB_APP_RENDERER_CSS}</style>
       <main className="rivet-web-app-surface">
+        <div className="rivet-web-app-toolbar">
+          <button
+            type="button"
+            className="rivet-web-app-reset-button"
+            aria-label="Reset app"
+            title="Reset app"
+            onClick={() => interactionController.reset()}
+          />
+        </div>
         {normalizedUiGraph.components.map((component) => {
           const frameProps: RivetWebAppComponentFrameProps = {
             className: `rivet-web-app-component-frame${activeComponentId === component.id ? ' active' : ''}`,
@@ -108,10 +125,12 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
                 actionError={interaction.actionErrors[component.id]}
                 actionProgress={interaction.actionProgress[component.id]}
                 isRunning={interaction.runningComponentIds.has(component.id)}
+                isOutputCollapsed={interaction.collapsedOutputComponentIds.has(component.id)}
                 uiGraphName={normalizedUiGraph.name}
                 state={interaction.state}
                 onRunAction={runAction}
                 onCancelAction={interactionController.cancelAction}
+                onToggleOutputCollapsed={interactionController.toggleOutputCollapsed}
                 onStateChange={interactionController.updateState}
                 onStatePatch={interactionController.updateStatePatch}
               />
@@ -151,10 +170,12 @@ const RivetWebAppComponent: FC<{
   actionProgress?: GraphProgress;
   component: UiGraphComponent;
   isRunning: boolean;
+  isOutputCollapsed: boolean;
   uiGraphName: string;
   state: Readonly<Record<string, unknown>>;
   onRunAction(component: UiGraphActionComponent): Promise<void> | void;
   onCancelAction(componentId: UiComponentId): void;
+  onToggleOutputCollapsed(componentId: UiComponentId): void;
   onStateChange(key: string, value: unknown): void;
   onStatePatch(patch: Record<string, unknown>): void;
 }> = ({
@@ -162,14 +183,17 @@ const RivetWebAppComponent: FC<{
   actionProgress,
   component,
   isRunning,
+  isOutputCollapsed,
   onCancelAction,
   onRunAction,
+  onToggleOutputCollapsed,
   onStateChange,
   onStatePatch,
   state,
   uiGraphName,
 }) => {
-  const renderModel = getUiGraphComponentRenderModel(component, state);
+  const renderModel = useMemo(() => getUiGraphComponentRenderModel(component, state), [component, state]);
+
   const markdownText =
     renderModel.type === 'markdown'
       ? renderModel.markdown
@@ -252,64 +276,138 @@ const RivetWebAppComponent: FC<{
     case 'output': {
       const { output } = renderModel;
       const jsonDownloadValue = output.jsonDownloadValue;
+      const isCollapsed = output.hasValue && isOutputCollapsed;
 
       return (
         <section
-          className={`rivet-web-app-card rivet-web-app-output${
-            output.jsonDownloadValue != null ? ' rivet-web-app-output-has-download' : ''
+          className={`rivet-web-app-card rivet-web-app-output${output.hasValue ? ' rivet-web-app-output-has-value' : ''}${
+            isCollapsed ? ' rivet-web-app-output-collapsed' : ''
           }`}
         >
-          <div className="rivet-web-app-output-title">{renderModel.label}</div>
-          {output.hasValue && (
+          {output.hasValue ? (
             <button
               type="button"
-              className="rivet-web-app-output-action-button rivet-web-app-output-copy-button"
-              title="Copy output"
-              aria-label="Copy output"
-              onClick={(event) => {
-                event.stopPropagation();
-                void copyUiGraphText(output.renderedValue);
-              }}
-            />
-          )}
-          {jsonDownloadValue != null && (
-            <button
-              type="button"
-              className="rivet-web-app-output-action-button rivet-web-app-output-download-button"
-              title="Download JSON"
-              aria-label="Download JSON"
-              onClick={(event) => {
-                event.stopPropagation();
-                downloadUiGraphJsonOutput(jsonDownloadValue, uiGraphName);
-              }}
-            />
-          )}
-          {output.renderAs === 'image' ? (
-            output.imageSource ? (
-              <img
-                alt={renderModel.label}
-                className="rivet-web-app-output-image"
-                decoding="async"
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                src={output.imageSource}
+              aria-expanded={!isCollapsed}
+              aria-label={isCollapsed ? `Expand ${renderModel.label}` : `Collapse ${renderModel.label}`}
+              className="rivet-web-app-output-header rivet-web-app-output-toggle"
+              title={isCollapsed ? 'Expand output' : 'Collapse output'}
+              onClick={() => onToggleOutputCollapsed(renderModel.component.id)}
+            >
+              <span className="rivet-web-app-output-title">{renderModel.label}</span>
+              <span
+                aria-hidden="true"
+                className={`rivet-web-app-output-toggle-icon${isCollapsed ? ' collapsed' : ''}`}
               />
-            ) : (
-              <div className="rivet-web-app-output-image-placeholder">{output.imageErrorMessage}</div>
-            )
-          ) : output.renderAs === 'markdown' ? (
-            <div
-              className="rivet-web-app-output-markdown markdown-body rivet-markdown-output"
-              dangerouslySetInnerHTML={markdownHtml}
-            />
+            </button>
           ) : (
-            <pre>{output.renderedValue}</pre>
+            <div className="rivet-web-app-output-header">
+              <div className="rivet-web-app-output-title">{renderModel.label}</div>
+            </div>
+          )}
+          {output.hasValue && !isCollapsed && (
+            <div className="rivet-web-app-output-content">
+              <div className="rivet-web-app-output-content-actions">
+                <button
+                  type="button"
+                  className="rivet-web-app-output-action-button rivet-web-app-output-copy-button"
+                  title="Copy output"
+                  aria-label="Copy output"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void copyUiGraphText(output.renderedValue);
+                  }}
+                />
+                {jsonDownloadValue != null && (
+                  <button
+                    type="button"
+                    className="rivet-web-app-output-action-button rivet-web-app-output-download-button"
+                    title="Download JSON"
+                    aria-label="Download JSON"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      downloadUiGraphJsonOutput(jsonDownloadValue, uiGraphName);
+                    }}
+                  />
+                )}
+              </div>
+              <div className="rivet-web-app-output-content-body">
+                {output.renderAs === 'image' ? (
+                  output.imageSource ? (
+                    <img
+                      alt={renderModel.label}
+                      className="rivet-web-app-output-image"
+                      decoding="async"
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      src={output.imageSource}
+                    />
+                  ) : (
+                    <div className="rivet-web-app-output-image-placeholder">{output.imageErrorMessage}</div>
+                  )
+                ) : output.renderAs === 'markdown' ? (
+                  <div
+                    className="rivet-web-app-output-markdown markdown-body rivet-markdown-output"
+                    dangerouslySetInnerHTML={markdownHtml}
+                  />
+                ) : output.renderAs === 'json' ? (
+                  <ProgressiveJsonOutput value={output.renderedValue} />
+                ) : (
+                  <pre>{output.renderedValue}</pre>
+                )}
+              </div>
+            </div>
           )}
         </section>
       );
     }
   }
 };
+
+const ProgressiveJsonOutput: FC<{
+  value: string;
+}> = ({ value }) => {
+  const chunks = useMemo(() => getUiGraphProgressiveJsonOutputChunks(value), [value]);
+  const [visibleChunkState, setVisibleChunkState] = useState(() => ({ chunkCount: chunks ? 1 : 0, value }));
+  const visibleChunkCount = chunks && visibleChunkState.value === value ? visibleChunkState.chunkCount : 1;
+
+  useEffect(() => {
+    if (!chunks || chunks.length < 2) {
+      return;
+    }
+
+    let chunkCount = 1;
+    let cancelScheduledFrame = () => {};
+    setVisibleChunkState({ chunkCount, value });
+    const appendNextChunk = () => {
+      chunkCount += 1;
+      setVisibleChunkState({ chunkCount, value });
+      if (chunkCount < chunks.length) {
+        cancelScheduledFrame = scheduleAnimationFrame(appendNextChunk);
+      }
+    };
+    cancelScheduledFrame = scheduleAnimationFrame(appendNextChunk);
+
+    return () => cancelScheduledFrame();
+  }, [chunks, value]);
+
+  return (
+    <pre className="rivet-web-app-output-json">
+      {chunks
+        ? chunks.slice(0, visibleChunkCount).map((chunk, index) => <Fragment key={index}>{chunk}</Fragment>)
+        : value}
+    </pre>
+  );
+};
+
+function scheduleAnimationFrame(callback: () => void): () => void {
+  if (typeof requestAnimationFrame === 'function') {
+    const frameId = requestAnimationFrame(callback);
+    return () => cancelAnimationFrame(frameId);
+  }
+
+  const timeoutId = globalThis.setTimeout(callback, 0);
+  return () => globalThis.clearTimeout(timeoutId);
+}
 
 const RivetWebAppChat: FC<{
   actionError?: string;

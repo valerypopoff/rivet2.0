@@ -13,6 +13,7 @@ import {
   getUiGraphImageSource,
   getUiGraphJsonOutputFilename,
   getUiGraphOutputRenderModel,
+  getUiGraphProgressiveJsonOutputChunks,
   resolveUiGraphComponentActionInputs,
   resolveUiGraphComponentActionOutputStatePatch,
   type UiGraphComponent,
@@ -125,6 +126,23 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(output.hasValue, true);
     assert.equal(output.renderedValue, '{\n  "nested": [\n    "value"\n  ]\n}');
     assert.equal(output.jsonDownloadValue, output.renderedValue);
+  });
+
+  it('splits only large JSON output into lossless text chunks', () => {
+    const smallJson = '{"answer":"small"}';
+    const largeJson = `${'a'.repeat(16 * 1024 - 1)}\ud83d\ude00${'b'.repeat(128 * 1024)}`;
+    const chunks = getUiGraphProgressiveJsonOutputChunks(largeJson);
+
+    assert.equal(getUiGraphProgressiveJsonOutputChunks(smallJson), undefined);
+    assert.ok(chunks);
+    assert.equal(chunks.join(''), largeJson);
+    assert.equal(chunks.length > 1, true);
+    for (let index = 0; index < chunks.length - 1; index += 1) {
+      const chunk = chunks[index]!;
+      const nextChunk = chunks[index + 1]!;
+      assert.equal(isHighSurrogateCodeUnit(chunk.charCodeAt(chunk.length - 1)), false);
+      assert.equal(isLowSurrogateCodeUnit(nextChunk.charCodeAt(0)), false);
+    }
   });
 
   it('derives safe image sources from URLs and base64 image data', () => {
@@ -380,6 +398,60 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(controller.getSnapshot().state.result, undefined);
   });
 
+  it('resets renderer state, errors, progress, and active actions to the initial state', async () => {
+    const button = makeButton('run-button', { type: 'runGraph' });
+    const uiGraph = makeUiGraph([
+      { defaultValue: 'Initial', id: 'input' as UiComponentId, label: 'Input', stateKey: 'input', type: 'input' },
+      button,
+    ]);
+    const controller = createUiGraphInteractionController(uiGraph);
+    const run = deferred<{ statePatch?: Record<string, unknown> }>();
+    let signal: AbortSignal | undefined;
+
+    controller.updateState('input', 'Edited');
+    const runPromise = controller.runAction(button, (context) => {
+      signal = context.signal;
+      context.reportProgress({ message: 'Working' });
+      return run.promise;
+    });
+    assert.equal(controller.getSnapshot().runningComponentIds.has(button.id), true);
+    assert.equal(controller.getSnapshot().actionProgress[button.id]?.message, 'Working');
+
+    controller.reset();
+
+    assert.equal(signal?.aborted, true);
+    assert.deepEqual(controller.getSnapshot().state, { input: 'Initial' });
+    assert.deepEqual(controller.getSnapshot().actionErrors, {});
+    assert.deepEqual(controller.getSnapshot().actionProgress, {});
+    assert.equal(controller.getSnapshot().runningComponentIds.size, 0);
+
+    run.resolve({ statePatch: { result: 'ignored' } });
+    await runPromise;
+    assert.equal(controller.getSnapshot().state.result, undefined);
+  });
+
+  it('keeps output collapse state transient and scopes it to current output components', () => {
+    const output = { id: 'result' as UiComponentId, label: 'Result', stateKey: 'result', type: 'output' as const };
+    const controller = createUiGraphInteractionController(makeUiGraph([output]));
+
+    controller.toggleOutputCollapsed(output.id);
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(output.id), true);
+
+    controller.setUiGraph(makeUiGraph([output]));
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.has(output.id), true);
+
+    controller.setUiGraph(makeUiGraph([]));
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.size, 0);
+
+    controller.toggleOutputCollapsed(output.id);
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.size, 0);
+
+    controller.setUiGraph(makeUiGraph([output]));
+    controller.toggleOutputCollapsed(output.id);
+    controller.reset();
+    assert.equal(controller.getSnapshot().collapsedOutputComponentIds.size, 0);
+  });
+
   it('detaches in-flight hosted actions without aborting their remote run', async () => {
     const button = makeButton('run-button', { type: 'runGraph' });
     const controller = createUiGraphInteractionController(makeUiGraph([button]));
@@ -419,4 +491,12 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
     }),
     resolve,
   };
+}
+
+function isHighSurrogateCodeUnit(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogateCodeUnit(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
 }

@@ -15,9 +15,11 @@ import { deriveLargeStoredValuePreviewFullText } from './largeStoredValuePreview
 import { useLargeStoredValueFullscreenSearch } from './useLargeStoredValueFullscreenSearch.js';
 
 const styles = css`
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: block;
+
+  > * + * {
+    margin-top: 8px;
+  }
 
   .preview-meta {
     color: var(--grey-lighter);

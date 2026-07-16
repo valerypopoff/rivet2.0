@@ -89,7 +89,7 @@ test('React web app actions keep independent loading, reject stale patches, and 
     buttons = rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button');
     assert.equal(buttons[0]?.textContent, 'First');
     assert.equal(buttons[1]?.textContent, 'Second');
-    assert.equal(rootElement.querySelector('.rivet-web-app-output pre')?.textContent, '');
+    assert.equal(rootElement.querySelector('.rivet-web-app-output-content'), null);
 
     await act(async () => {
       pendingActions.get('second-button' as UiComponentId)?.resolve({
@@ -98,6 +98,11 @@ test('React web app actions keep independent loading, reject stale patches, and 
       });
     });
     assert.equal(rootElement.querySelector('.rivet-web-app-output pre')?.textContent, 'current');
+
+    await act(async () => {
+      rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-reset-button')?.click();
+    });
+    assert.equal(rootElement.querySelector('.rivet-web-app-output-content'), null);
 
     await act(async () => {
       rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();

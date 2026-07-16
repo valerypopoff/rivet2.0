@@ -5,6 +5,7 @@ import {
   downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
+  getUiGraphProgressiveJsonOutputChunks,
   parseRivetWebAppServerMessage,
   RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
   type GraphProgress,
@@ -213,6 +214,12 @@ if (config && root) {
         ),
       ]),
     ];
+  };
+
+  const resetApp = (): void => {
+    revisionMismatch = false;
+    interactionController.reset();
+    render();
   };
 
   const runAction = async (component: UiGraphActionComponent): Promise<void> => {
@@ -437,11 +444,32 @@ if (config && root) {
       }
       case 'output': {
         const { output } = renderModel;
-        const children: Node[] = [
-          createElement('div', { className: 'rivet-web-app-output-title', text: renderModel.label }),
-        ];
-        if (output.hasValue) {
-          children.push(
+        const isCollapsed = output.hasValue && interaction.collapsedOutputComponentIds.has(renderModel.component.id);
+        const header = output.hasValue
+          ? createElement(
+              'button',
+              {
+                'aria-expanded': `${!isCollapsed}`,
+                'aria-label': `${isCollapsed ? 'Expand' : 'Collapse'} ${renderModel.label}`,
+                className: 'rivet-web-app-output-header rivet-web-app-output-toggle',
+                onClick: () => interactionController.toggleOutputCollapsed(renderModel.component.id),
+                title: isCollapsed ? 'Expand output' : 'Collapse output',
+                type: 'button',
+              },
+              [
+                createElement('span', { className: 'rivet-web-app-output-title', text: renderModel.label }),
+                createElement('span', {
+                  'aria-hidden': 'true',
+                  className: `rivet-web-app-output-toggle-icon${isCollapsed ? ' collapsed' : ''}`,
+                }),
+              ],
+            )
+          : createElement('div', { className: 'rivet-web-app-output-header' }, [
+              createElement('div', { className: 'rivet-web-app-output-title', text: renderModel.label }),
+            ]);
+        const children: Node[] = [header];
+        if (output.hasValue && !isCollapsed) {
+          const contentActions: Node[] = [
             createElement('button', {
               'aria-label': 'Copy output',
               className: 'rivet-web-app-output-action-button rivet-web-app-output-copy-button',
@@ -452,49 +480,56 @@ if (config && root) {
               title: 'Copy output',
               type: 'button',
             }),
-          );
-        }
-        if (output.jsonDownloadValue != null) {
+          ];
+          if (output.jsonDownloadValue != null) {
+            contentActions.push(
+              createElement('button', {
+                'aria-label': 'Download JSON',
+                className: 'rivet-web-app-output-action-button rivet-web-app-output-download-button',
+                onClick: (event: Event) => {
+                  event.stopPropagation();
+                  downloadUiGraphJsonOutput(output.jsonDownloadValue!, config.uiGraph.name);
+                },
+                title: 'Download JSON',
+                type: 'button',
+              }),
+            );
+          }
           children.push(
-            createElement('button', {
-              'aria-label': 'Download JSON',
-              className: 'rivet-web-app-output-action-button rivet-web-app-output-download-button',
-              onClick: (event: Event) => {
-                event.stopPropagation();
-                downloadUiGraphJsonOutput(output.jsonDownloadValue!, config.uiGraph.name);
-              },
-              title: 'Download JSON',
-              type: 'button',
-            }),
+            createElement('div', { className: 'rivet-web-app-output-content' }, [
+              createElement('div', { className: 'rivet-web-app-output-content-actions' }, contentActions),
+              createElement('div', { className: 'rivet-web-app-output-content-body' }, [
+                output.renderAs === 'image'
+                  ? output.imageSource
+                    ? createElement('img', {
+                        alt: renderModel.label,
+                        className: 'rivet-web-app-output-image',
+                        decoding: 'async',
+                        loading: 'lazy',
+                        referrerpolicy: 'no-referrer',
+                        src: output.imageSource,
+                      })
+                    : createElement('div', {
+                        className: 'rivet-web-app-output-image-placeholder',
+                        text: output.imageErrorMessage ?? '',
+                      })
+                  : output.renderAs === 'markdown'
+                    ? renderMarkdownElement(
+                        output.renderedValue,
+                        'rivet-web-app-output-markdown markdown-body rivet-markdown-output',
+                      )
+                    : output.renderAs === 'json'
+                      ? createProgressiveJsonOutput(output.renderedValue)
+                      : createElement('pre', { text: output.renderedValue }),
+              ]),
+            ]),
           );
         }
-        children.push(
-          output.renderAs === 'image'
-            ? output.imageSource
-              ? createElement('img', {
-                  alt: renderModel.label,
-                  className: 'rivet-web-app-output-image',
-                  decoding: 'async',
-                  loading: 'lazy',
-                  referrerpolicy: 'no-referrer',
-                  src: output.imageSource,
-                })
-              : createElement('div', {
-                  className: 'rivet-web-app-output-image-placeholder',
-                  text: output.imageErrorMessage ?? '',
-                })
-            : output.renderAs === 'markdown'
-              ? renderMarkdownElement(
-                  output.renderedValue,
-                  'rivet-web-app-output-markdown markdown-body rivet-markdown-output',
-                )
-              : createElement('pre', { text: output.renderedValue }),
-        );
         content = createElement(
           'section',
           {
-            className: `rivet-web-app-card rivet-web-app-output${
-              output.jsonDownloadValue != null ? ' rivet-web-app-output-has-download' : ''
+            className: `rivet-web-app-card rivet-web-app-output${output.hasValue ? ' rivet-web-app-output-has-value' : ''}${
+              isCollapsed ? ' rivet-web-app-output-collapsed' : ''
             }`,
           },
           children,
@@ -521,6 +556,15 @@ if (config && root) {
     const focusedControl = captureFocusedTextControl(root);
     const interaction = interactionController.getSnapshot();
     const surface = createElement('main', { className: 'rivet-web-app-surface' }, [
+      createElement('div', { className: 'rivet-web-app-toolbar' }, [
+        createElement('button', {
+          'aria-label': 'Reset app',
+          className: 'rivet-web-app-reset-button',
+          onClick: resetApp,
+          title: 'Reset app',
+          type: 'button',
+        }),
+      ]),
       ...config.uiGraph.components.map((component) => renderComponent(component, interaction)),
       ...renderErrors(),
     ]);
@@ -536,9 +580,7 @@ if (config && root) {
   };
 
   interactionController.subscribe((change) => {
-    if (change !== 'state') {
-      render();
-    }
+    if (change !== 'state') render();
   });
   window.addEventListener('pagehide', () => {
     if (actionRunner.survivesPageDetach) {
@@ -849,6 +891,37 @@ function createStandaloneElement<TagName extends keyof HTMLElementTagNameMap>(
   }
   element.append(...children);
   return element;
+}
+
+function createProgressiveJsonOutput(value: string): HTMLPreElement {
+  const pre = createStandaloneElement('pre', { className: 'rivet-web-app-output-json' });
+  const chunks = getUiGraphProgressiveJsonOutputChunks(value);
+  if (!chunks) {
+    pre.textContent = value;
+    return pre;
+  }
+
+  pre.append(document.createTextNode(chunks[0]!));
+  let nextChunkIndex = 1;
+  const appendNextChunk = () => {
+    if (!pre.isConnected || nextChunkIndex >= chunks.length) {
+      return;
+    }
+
+    pre.append(document.createTextNode(chunks[nextChunkIndex]!));
+    nextChunkIndex += 1;
+    scheduleAnimationFrame(appendNextChunk);
+  };
+  scheduleAnimationFrame(appendNextChunk);
+  return pre;
+}
+
+function scheduleAnimationFrame(callback: () => void): void {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(callback);
+  } else {
+    window.setTimeout(callback, 0);
+  }
 }
 
 function readEmbeddedConfig(root: HTMLElement | null): WebAppClientConfig | undefined {

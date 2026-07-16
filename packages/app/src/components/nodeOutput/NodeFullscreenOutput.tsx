@@ -12,13 +12,17 @@ import { promptDesignerAttachedChatNodeState } from '../../state/promptDesigner.
 import { graphMetadataState, nodesByIdState } from '../../state/graph.js';
 import { lastRunDataState, resolvedGraphSelectionState, selectedProcessPageState } from '../../state/dataFlow.js';
 import { showNodeRunDurationsState } from '../../state/settings.js';
-import { filterProcessDataForSelection, getSelectedProcessPageIndex } from '../../state/selectors/executionSelectors.js';
+import {
+  filterProcessDataForSelection,
+  getSelectedProcessPageIndex,
+} from '../../state/selectors/executionSelectors.js';
 import { fullscreenOutputNodeState, hoveringNodeState } from '../../state/graphBuilder.js';
 import { fullscreenOutputModalBoundsState, overlayOpenState } from '../../state/ui.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { FullScreenModal } from '../FullScreenModal.js';
 import { CodeNodeErrorOutput } from '../nodes/CodeNode.js';
 import { MATCH_ACTIVE_CLASS, MATCH_CLASS } from './fullscreenOutputSearch.js';
+import { findFullscreenOutputScrollContainer } from './fullscreenOutputSearchViewport.js';
 import { FullscreenNodeOutputToolbar } from './FullscreenNodeOutputToolbar.js';
 import { FullscreenOutputSearchContext } from './FullscreenOutputSearchContext.js';
 import { copyOutputJson, copyOutputValue } from './nodeOutputCopyActions.js';
@@ -233,25 +237,6 @@ const fullscreenOutputCss = css`
   }
 `;
 
-function isScrollableOverflow(overflowValue: string): boolean {
-  return overflowValue === 'auto' || overflowValue === 'scroll' || overflowValue === 'overlay';
-}
-
-function findScrollContainer(element: HTMLElement): HTMLElement | Window {
-  let current: HTMLElement | null = element.parentElement;
-
-  while (current && current !== document.body) {
-    const style = window.getComputedStyle(current);
-    if (isScrollableOverflow(style.overflowY)) {
-      return current;
-    }
-
-    current = current.parentElement;
-  }
-
-  return window;
-}
-
 function isWindowScrollContainer(scrollContainer: HTMLElement | Window): scrollContainer is Window {
   return scrollContainer === window;
 }
@@ -279,7 +264,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   );
   const selectedPageIndex = getSelectedProcessPageIndex(filteredOutput, selectedPage);
   const displaySelectedPage: number | 'latest' =
-    selectedPage === 'latest' ? 'latest' : (selectedPageIndex ?? selectedPage);
+    selectedPage === 'latest' ? 'latest' : selectedPageIndex ?? selectedPage;
 
   const { FullscreenOutput, Output, OutputSimple, FullscreenOutputSimple, defaultRenderMarkdown, getCopyValueData } =
     useUnknownNodeComponentDescriptorFor(node);
@@ -366,7 +351,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       return;
     }
 
-    const scrollContainer = findScrollContainer(rootElement);
+    const scrollContainer = findFullscreenOutputScrollContainer(rootElement);
     let animationFrame: number | undefined;
 
     const updateHeaderElevation = () => {

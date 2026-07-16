@@ -327,28 +327,36 @@ const OpenFolderIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
 );
 
 const UnreachableGraphIcon: FC<SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 28 22" fill="none" {...props}>
-    <path
-      d="M6.8 15.2 L14.2 8.8"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-    />
+<svg viewBox="0 0 28 22" fill="none" {...props}>
+  {/* Existing connection */}
+  <path
+    d="M9.5 17.5 H19.5"
+    stroke="currentColor"
+    strokeWidth="1"
+    strokeLinecap="round"
+  />
 
-    <circle
-      cx="5"
-      cy="17"
-      r="3.3"
-      fill="currentColor"
-    />
+  <circle cx="5" cy="17.5" r="3.5" fill="currentColor" />
+  <circle cx="24" cy="17.5" r="3.5" fill="currentColor" />
 
-    <circle
-      cx="20"
-      cy="17"
-      r="3.3"
-      fill="currentColor"
-    />
-  </svg>
+  {/* Failed connection attempt — begins with a gap */}
+  <path
+    d="M6 13 C8 6.5 14 3.5 19 4"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeDasharray="2.5 5"
+    strokeDashoffset="3.5"
+  />
+
+  {/* Larger 45-degree cross */}
+  <path
+    d="M20.5 1.5 L26.5 7.5 M26.5 1.5 L20.5 7.5"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+  />
+</svg>
 );
 
 const FolderItemRename: FC<{

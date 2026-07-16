@@ -87,7 +87,10 @@ test('node output content fade only replays for unseen output content', () => {
 
 test('node output rendering does not fall back to stale all-run data after graph-run filtering', () => {
   const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
-  const nodeFullscreenOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeFullscreenOutput.tsx'), 'utf8');
+  const nodeFullscreenOutputSource = readFileSync(
+    join(componentsDir, 'nodeOutput', 'NodeFullscreenOutput.tsx'),
+    'utf8',
+  );
   const portInfoSource = readFileSync(join(componentsDir, 'PortInfo.tsx'), 'utf8');
 
   assert.match(
@@ -100,7 +103,10 @@ test('node output rendering does not fall back to stale all-run data after graph
   );
   assert.doesNotMatch(nodeInlineOutputSource, /filterProcessDataForSelection\([\s\S]*?\)\s*\?\?\s*output/);
   assert.doesNotMatch(nodeFullscreenOutputSource, /filterProcessDataForSelection\([\s\S]*?\)\s*\?\?\s*output/);
-  assert.match(portInfoSource, /filterProcessDataForSelection\(\{ \.\.\.graphSelectionOptions, processData: lastRun \}\)/);
+  assert.match(
+    portInfoSource,
+    /filterProcessDataForSelection\(\{ \.\.\.graphSelectionOptions, processData: lastRun \}\)/,
+  );
 });
 
 test('inline node output replacement grace is scoped to the selected graph run', () => {
@@ -120,7 +126,10 @@ test('inline node output replacement grace is scoped to the selected graph run',
 
 test('node output pagers clamp stale process page selections to the filtered process list', () => {
   const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
-  const nodeFullscreenOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeFullscreenOutput.tsx'), 'utf8');
+  const nodeFullscreenOutputSource = readFileSync(
+    join(componentsDir, 'nodeOutput', 'NodeFullscreenOutput.tsx'),
+    'utf8',
+  );
   const portInfoSource = readFileSync(join(componentsDir, 'PortInfo.tsx'), 'utf8');
 
   assert.match(nodeInlineOutputSource, /const selectedPageIndex = getSelectedProcessPageIndex\(data, selectedPage\);/);
@@ -128,16 +137,16 @@ test('node output pagers clamp stale process page selections to the filtered pro
     nodeFullscreenOutputSource,
     /const selectedPageIndex = getSelectedProcessPageIndex\(filteredOutput, selectedPage\);/,
   );
-  assert.match(portInfoSource, /const selectedPageIndex = getSelectedProcessPageIndex\(filteredLastRun, selectedPage\);/);
+  assert.match(
+    portInfoSource,
+    /const selectedPageIndex = getSelectedProcessPageIndex\(filteredLastRun, selectedPage\);/,
+  );
 });
 
 test('inline node output actions reserve flow space without moving their hit targets', () => {
   const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
-  const renderDataOutputsSource = readFileSync(
-    join(componentsDir, 'nodeOutput', 'RenderDataOutputs.tsx'),
-    'utf8',
-  );
+  const renderDataOutputsSource = readFileSync(join(componentsDir, 'nodeOutput', 'RenderDataOutputs.tsx'), 'utf8');
   const renderDataValueStylesSource = readFileSync(
     join(componentsDir, 'renderDataValue', 'renderDataValueStyles.ts'),
     'utf8',
@@ -147,6 +156,10 @@ test('inline node output actions reserve flow space without moving their hit tar
     'utf8',
   );
   const structuredNodeOutputSource = readFileSync(join(componentsDir, 'nodes', 'StructuredNodeOutput.tsx'), 'utf8');
+  const largeStoredValuePreviewSource = readFileSync(
+    join(componentsDir, 'renderDataValue', 'LargeStoredValuePreview.tsx'),
+    'utf8',
+  );
   const renderedDataOutputsStylesBlock = /export const renderedDataOutputsStyles = css`(?<styles>[\s\S]*?)`;/u.exec(
     renderDataValueStylesSource,
   )?.groups?.styles;
@@ -156,6 +169,10 @@ test('inline node output actions reserve flow space without moving their hit tar
 
   assert.ok(renderedDataOutputsStylesBlock);
   assert.ok(structuredNodeOutputStylesBlock);
+  assert.match(
+    largeStoredValuePreviewSource,
+    /const styles = css`\s*display: block;[\s\S]*?> \* \+ \* \{[\s\S]*?margin-top: 8px;/,
+  );
 
   assert.match(nodeInlineOutputSource, /const hasPromptDesignerAction = node\.type === 'chat';/);
   assert.match(nodeInlineOutputSource, /'node-output-inner has-output-actions has-prompt-designer-action'/);
@@ -221,7 +238,10 @@ test('inline node output actions reserve flow space without moving their hit tar
     /\.expand-button svg \{[\s\S]*?width: var\(--node-output-fullscreen-icon-size\);[\s\S]*?height: var\(--node-output-fullscreen-icon-size\);[\s\S]*?transform: translate\(var\(--node-output-fullscreen-icon-offset-x\), var\(--node-output-fullscreen-icon-offset-y\)\);/,
   );
   assert.match(renderedDataOutputsStylesBlock.trimStart(), /^display: block;/);
-  assert.match(renderDataValueStylesSource, /export const outputSectionGroupGap = 'calc\(18px \* var\(--ui-font-scale\)\)';/);
+  assert.match(
+    renderDataValueStylesSource,
+    /export const outputSectionGroupGap = 'calc\(18px \* var\(--ui-font-scale\)\)';/,
+  );
   assert.match(
     renderDataValueStylesSource,
     /export const outputSectionFullscreenGroupGap = 'calc\(28px \* var\(--ui-font-scale\)\)';/,
@@ -234,7 +254,10 @@ test('inline node output actions reserve flow space without moving their hit tar
     renderedDataOutputsStylesBlock,
     /\.port-value \+ \.port-value \{[\s\S]*?margin-top: var\(--output-section-group-gap, \$\{outputSectionGroupGap\}\);/,
   );
-  assert.match(renderDataValueStylesSource, /export const outputSectionLabelStyles = css`[\s\S]*?font-size: var\(--ui-font-size-sm\);/);
+  assert.match(
+    renderDataValueStylesSource,
+    /export const outputSectionLabelStyles = css`[\s\S]*?font-size: var\(--ui-font-size-sm\);/,
+  );
   assert.match(
     renderDataValueStylesSource,
     /export const outputSectionFullscreenLabelStyles = css`[\s\S]*?font-size: var\(--ui-font-size-lg\);/,

@@ -6,6 +6,7 @@ import {
   isValidHeight,
   MIN_HEIGHT,
   RESIZABLE_LANGUAGES,
+  resolveStaticViewportHeight,
   resolveViewportHeight,
 } from './useNodeEditorCodeViewportHeight.js';
 
@@ -28,7 +29,12 @@ test('resolveViewportHeight prefers persisted height and falls back through defa
     420,
   );
   assert.equal(
-    resolveViewportHeight({ nodeType: 'object', editorKey: 'jsonTemplate', defaultHeight: undefined, persistedHeights: {} }),
+    resolveViewportHeight({
+      nodeType: 'object',
+      editorKey: 'jsonTemplate',
+      defaultHeight: undefined,
+      persistedHeights: {},
+    }),
     DEFAULT_HEIGHT,
   );
 });
@@ -43,6 +49,12 @@ test('resolveViewportHeight ignores invalid persisted heights', () => {
     }),
     360,
   );
+});
+
+test('resolveStaticViewportHeight returns a fixed clamped height for non-resizable editors', () => {
+  assert.equal(resolveStaticViewportHeight(200), 200);
+  assert.equal(resolveStaticViewportHeight(120), MIN_HEIGHT);
+  assert.equal(resolveStaticViewportHeight(undefined), DEFAULT_HEIGHT);
 });
 
 test('resolveViewportHeight keeps same-language editors independent within one node type', () => {
@@ -99,5 +111,6 @@ test('buildCodeEditorHeightStorageKey namespaces persisted heights by editor ide
 test('resizable node-editor languages include text-node prompt interpolation', () => {
   assert.equal(RESIZABLE_LANGUAGES.has('javascript'), true);
   assert.equal(RESIZABLE_LANGUAGES.has('json'), true);
+  assert.equal(RESIZABLE_LANGUAGES.has('jsonpath'), true);
   assert.equal(RESIZABLE_LANGUAGES.has('prompt-interpolation-markdown'), true);
 });

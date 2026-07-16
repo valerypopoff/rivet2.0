@@ -442,7 +442,7 @@ void describe('createRivetWebAppHandler', () => {
       url: 'https://example.test/app',
     });
 
-    dom.window.document.querySelector('button')?.click();
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     dom.window.close();
 
@@ -479,8 +479,8 @@ void describe('createRivetWebAppHandler', () => {
       url: 'https://example.test/app',
     });
 
-    dom.window.document.querySelectorAll('button')[1]?.click();
-    const buttons = [...dom.window.document.querySelectorAll('button')] as HTMLButtonElement[];
+    dom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button')[1]?.click();
+    const buttons = [...dom.window.document.querySelectorAll('.rivet-web-app-button')] as HTMLButtonElement[];
 
     assert.deepEqual(requests, [{ componentId: 'ui-graph-component-2', state: {} }]);
     assert.equal(buttons[0]?.textContent, 'Run');
@@ -552,7 +552,7 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(buttons[1]?.textContent, 'Second');
     assert.ok(buttons[1]?.querySelector('.rivet-web-app-running-indicator'));
     assert.equal(buttons[1]?.disabled, true);
-    assert.equal(dom.window.document.querySelector('.rivet-web-app-output pre')?.textContent, '');
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-output pre'), null);
 
     resolveAction.get('second-button')?.({
       ok: true,
@@ -582,7 +582,7 @@ void describe('createRivetWebAppHandler', () => {
       url: 'https://example.test/app',
     });
 
-    dom.window.document.querySelector('button')?.click();
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
     dom.window.dispatchEvent(new dom.window.Event('pagehide'));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -927,7 +927,7 @@ void describe('createRivetWebAppHandler', () => {
       url: 'https://example.test/app',
     });
 
-    dom.window.document.querySelector('button')?.click();
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const renderedError = dom.window.document.querySelector('.rivet-web-app-error')?.textContent;
@@ -990,6 +990,14 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(
       RIVET_WEB_APP_RENDERER_CSS,
       /--rivet-web-app-chat-min-height: clamp\(320px, calc\(100vh - 64px\), 540px\);/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-thinking span\s*\{[\s\S]*animation: rivet-web-app-chat-thinking 0\.9s ease-in-out infinite;/,
+    );
+    assert.doesNotMatch(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.rivet-web-app-chat-thinking span/,
     );
     assert.match(
       RIVET_WEB_APP_RENDERER_CSS,

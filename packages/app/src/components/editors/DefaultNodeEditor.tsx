@@ -347,8 +347,7 @@ export const defaultEditorContainerStyles = css`
   }
 
   .node-editor-static-code-editor {
-    min-height: 500px;
-    flex: 1 1 auto;
+    flex: 0 0 auto;
   }
 
   .node-editor-static-code-editor .editor-container {
