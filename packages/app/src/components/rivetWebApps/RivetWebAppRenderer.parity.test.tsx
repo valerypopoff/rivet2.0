@@ -70,9 +70,17 @@ test('React and hosted renderers keep the same component and action behavior', a
     });
     hostedDom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button')[0]?.click();
 
-    assert.deepEqual(reactActionState, { prompt: 'Edited' });
+    assert.deepEqual(reactActionState, { prompt: 'Edited', tone: '' });
     assert.deepEqual(hostedActionState, reactActionState);
     assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
+    assert.deepEqual(readButtonStates(reactRootElement), [
+      { disabled: false, hasSpinner: false, text: 'First' },
+      { disabled: false, hasSpinner: false, text: 'Second' },
+    ]);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
     assert.deepEqual(readButtonStates(reactRootElement), [
       { disabled: true, hasSpinner: true, text: 'First' },
       { disabled: false, hasSpinner: false, text: 'Second' },
@@ -188,6 +196,10 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
       return hostedAction.promise;
     });
 
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      assert.equal(root.querySelector('.rivet-web-app-chat-empty')?.textContent, 'Start a conversation');
+    }
+
     await act(async () => {
       const textarea = reactRootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!;
       Object.getOwnPropertyDescriptor(reactDom.window.HTMLTextAreaElement.prototype, 'value')?.set?.call(
@@ -281,6 +293,7 @@ function readRenderedComponents(root: ParentNode): unknown[] {
   return [...root.querySelectorAll<HTMLElement>('.rivet-web-app-component-frame')].map((frame) => {
     const content = frame.firstElementChild as HTMLElement;
     const control = content.querySelector<HTMLInputElement | HTMLTextAreaElement>('.rivet-web-app-control');
+    const dropdown = content.querySelector<HTMLElement>('[data-rivet-dropdown-value]');
     const markdown = content.matches('.rivet-web-app-markdown, .rivet-web-app-output-markdown')
       ? content
       : content.querySelector<HTMLElement>('.rivet-web-app-output-markdown');
@@ -291,7 +304,13 @@ function readRenderedComponents(root: ParentNode): unknown[] {
       className: content.className,
       componentType: frame.dataset.rivetWebAppComponentType,
       control: control
-        ? { placeholder: control.placeholder, tagName: control.tagName.toLowerCase(), value: control.value }
+        ? {
+            placeholder: 'placeholder' in control ? control.placeholder : undefined,
+            tagName: control.tagName.toLowerCase(),
+            value: control.value,
+          }
+        : dropdown
+          ? { tagName: 'dropdown', value: dropdown.dataset.rivetDropdownValue }
         : undefined,
       disabled: button?.disabled,
       markdownHtml: markdown?.innerHTML,
@@ -300,7 +319,7 @@ function readRenderedComponents(root: ParentNode): unknown[] {
         (action) => ({ ariaLabel: action.ariaLabel, className: action.className, title: action.title }),
       ),
       tagName: content.tagName.toLowerCase(),
-      text: content.textContent,
+      text: dropdown ? `Dropdown:${dropdown.dataset.rivetDropdownValue ?? ''}` : content.textContent,
     };
   });
 }
@@ -365,7 +384,10 @@ function readButtonStates(root: ParentNode): Array<{ disabled: boolean; hasSpinn
 
 function makeParityUiGraph(): UiGraph {
   const action = {
-    inputMappings: [{ inputKey: 'prompt', stateKey: 'prompt' }],
+    inputMappings: [
+      { inputKey: 'prompt', stateKey: 'prompt' },
+      { inputKey: 'tone', stateKey: 'tone' },
+    ],
     outputs: [
       { outputKey: 'result', stateKey: 'result' },
       { outputKey: 'image', stateKey: 'image' },
@@ -386,6 +408,16 @@ function makeParityUiGraph(): UiGraph {
         type: 'input',
       },
       { id: 'textarea' as UiComponentId, label: 'Notes', stateKey: 'notes', type: 'textarea' },
+      {
+        id: 'dropdown' as UiComponentId,
+        items: [
+          { label: 'Friendly', value: 'friendly' },
+          { label: 'Direct', value: 'direct' },
+        ],
+        label: 'Tone',
+        stateKey: 'tone',
+        type: 'dropdown',
+      },
       { action, id: 'first-button' as UiComponentId, label: 'First', type: 'button' },
       { action, id: 'second-button' as UiComponentId, label: 'Second', type: 'button' },
       { id: 'output' as UiComponentId, label: 'Result', renderAs: 'json', stateKey: 'result', type: 'output' },

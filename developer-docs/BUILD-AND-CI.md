@@ -256,6 +256,13 @@ Do not remove these files during cleanup or include their deletion in a broad
 `git add -A`. They are part of the repository's install contract, not disposable
 build output.
 
+The root `.yarnrc.yml` may also contain narrowly scoped `packageExtensions` for
+upstream packages with undeclared runtime peers. `react-node-resolver` must
+declare `react` and `react-dom` as peers because Atlaskit Select loads both at
+runtime; keep that extension while Rivet uses Atlaskit Select under strict PnP.
+After changing an extension, rerun Yarn install and commit the resulting tracked
+PnP loader update.
+
 ### `yarn lint`
 
 Runs lint across:

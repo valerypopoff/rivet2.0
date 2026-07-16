@@ -25,6 +25,11 @@ import {
 } from '../src/index.js';
 
 const graphId = 'main-graph' as GraphId;
+const ACTION_LOADING_PRESENTATION_WAIT_MS = 350;
+
+function waitForActionLoadingPresentation(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ACTION_LOADING_PRESENTATION_WAIT_MS));
+}
 
 function makeProject(): Project {
   const graph: NodeGraph = {
@@ -480,6 +485,7 @@ void describe('createRivetWebAppHandler', () => {
     });
 
     dom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button')[1]?.click();
+    await waitForActionLoadingPresentation();
     const buttons = [...dom.window.document.querySelectorAll('.rivet-web-app-button')] as HTMLButtonElement[];
 
     assert.deepEqual(requests, [{ componentId: 'ui-graph-component-2', state: {} }]);
@@ -526,6 +532,7 @@ void describe('createRivetWebAppHandler', () => {
 
     dom.window.document.querySelectorAll('.rivet-web-app-action-stack > .rivet-web-app-button')[0]?.click();
     dom.window.document.querySelectorAll('.rivet-web-app-action-stack > .rivet-web-app-button')[1]?.click();
+    await waitForActionLoadingPresentation();
 
     let buttons = [
       ...dom.window.document.querySelectorAll('.rivet-web-app-action-stack > .rivet-web-app-button'),
@@ -623,6 +630,7 @@ void describe('createRivetWebAppHandler', () => {
     const runButton = dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement;
     runButton.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForActionLoadingPresentation();
     const socket = sockets[0]!;
     const start = socket.sent.find((message) => message.type === 'action.start')!;
     assert.equal(socket.url, 'wss://example.test/app/actions/ws');
@@ -662,6 +670,7 @@ void describe('createRivetWebAppHandler', () => {
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForActionLoadingPresentation();
     const cancelCountBeforeDetach = socket.sent.filter((message) => message.type === 'action.cancel').length;
     dom.window.dispatchEvent(new dom.window.Event('pagehide'));
     assert.equal(socket.sent.filter((message) => message.type === 'action.cancel').length, cancelCountBeforeDetach);

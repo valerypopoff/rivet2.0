@@ -12,6 +12,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import AtlaskitSelect from '@atlaskit/select';
 import {
   type DataValue,
   type GraphProgress,
@@ -28,8 +29,16 @@ import {
   getUiGraphProgressiveJsonOutputChunks,
   normalizeUiGraph,
 } from '@valerypopoff/rivet2-core';
-import { copyUiGraphText, downloadUiGraphJsonOutput } from '@valerypopoff/rivet2-core/web-app-runtime';
+import {
+  copyUiGraphText,
+  downloadUiGraphJsonOutput,
+  observeUiGraphOutputResizeBounds,
+} from '@valerypopoff/rivet2-core/web-app-runtime';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
+
+// Vite resolves this CommonJS compatibility export directly, while tsx exposes
+// the same component beneath `default` during source-level tests.
+const Select = (AtlaskitSelect as unknown as { default?: typeof AtlaskitSelect }).default ?? AtlaskitSelect;
 
 export type RivetWebAppActionResult = {
   outputs: Record<string, DataValue>;
@@ -131,6 +140,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
                 component={component}
                 actionError={interaction.actionErrors[component.id]}
                 actionProgress={interaction.actionProgress[component.id]}
+                isLoading={interaction.loadingComponentIds.has(component.id)}
                 isRunning={interaction.runningComponentIds.has(component.id)}
                 isOutputCollapsed={interaction.collapsedOutputComponentIds.has(component.id)}
                 uiGraphName={normalizedUiGraph.name}
@@ -176,6 +186,7 @@ const RivetWebAppComponent: FC<{
   actionError?: string;
   actionProgress?: GraphProgress;
   component: UiGraphComponent;
+  isLoading: boolean;
   isRunning: boolean;
   isOutputCollapsed: boolean;
   uiGraphName: string;
@@ -189,6 +200,7 @@ const RivetWebAppComponent: FC<{
   actionError,
   actionProgress,
   component,
+  isLoading,
   isRunning,
   isOutputCollapsed,
   onCancelAction,
@@ -200,6 +212,18 @@ const RivetWebAppComponent: FC<{
   uiGraphName,
 }) => {
   const renderModel = useMemo(() => getUiGraphComponentRenderModel(component, state), [component, state]);
+  const outputResizeCleanupRef = useRef<(() => void) | undefined>(undefined);
+  const outputResizeRef = useCallback((element: HTMLElement | null) => {
+    outputResizeCleanupRef.current?.();
+    outputResizeCleanupRef.current = element ? observeUiGraphOutputResizeBounds(element) : undefined;
+  }, []);
+
+  useEffect(
+    () => () => {
+      outputResizeCleanupRef.current?.();
+    },
+    [],
+  );
 
   const markdownText =
     renderModel.type === 'markdown'
@@ -240,21 +264,34 @@ const RivetWebAppComponent: FC<{
           />
         </label>
       );
+    case 'dropdown':
+      return (
+        <div className="rivet-web-app-field">
+          <span>{renderModel.label}</span>
+          <RivetWebAppDropdown
+            componentId={renderModel.component.id}
+            items={renderModel.items}
+            label={renderModel.label}
+            value={renderModel.value}
+            onChange={(value) => onStateChange(renderModel.component.stateKey, value)}
+          />
+        </div>
+      );
     case 'button':
       return (
-        <div className={`rivet-web-app-action-stack${isRunning ? ' rivet-web-app-action-stack-running' : ''}`}>
+        <div className={`rivet-web-app-action-stack${isLoading ? ' rivet-web-app-action-stack-running' : ''}`}>
           <button
-            aria-busy={isRunning}
-            aria-label={isRunning ? `${renderModel.label} (running)` : undefined}
+            aria-busy={isLoading}
+            aria-label={isLoading ? `${renderModel.label} (running)` : undefined}
             className="rivet-web-app-button"
-            disabled={isRunning}
+            disabled={isLoading}
             onClick={() => void onRunAction(renderModel.component)}
             type="button"
           >
             {renderModel.label}
-            {isRunning && <span aria-hidden="true" className="rivet-web-app-running-indicator" />}
+            {isLoading && <span aria-hidden="true" className="rivet-web-app-running-indicator" />}
           </button>
-          {isRunning && (
+          {isLoading && (
             <button
               type="button"
               className="rivet-web-app-abort-button"
@@ -287,6 +324,7 @@ const RivetWebAppComponent: FC<{
 
       return (
         <section
+          ref={outputResizeRef}
           className={`rivet-web-app-card rivet-web-app-output${output.hasValue ? ' rivet-web-app-output-has-value' : ''}${
             isCollapsed ? ' rivet-web-app-output-collapsed' : ''
           }`}
@@ -479,7 +517,6 @@ const RivetWebAppChat: FC<{
         {messages.length === 0 && (
           <div className="rivet-web-app-chat-empty">
             <strong>Start a conversation</strong>
-            <span>Send a message to run the connected Rivet graph.</span>
           </div>
         )}
         {messages.map((message, index) => (
@@ -535,6 +572,40 @@ const RivetWebAppChat: FC<{
         </button>
       </form>
     </section>
+  );
+};
+
+const RivetWebAppDropdown: FC<{
+  componentId: UiComponentId;
+  items: readonly { label: string; value: string }[];
+  label: string;
+  onChange(value: string): void;
+  value: string;
+}> = ({ componentId, items, label, onChange, value }) => {
+  const [menuPortalTarget, setMenuPortalTarget] = useState<HTMLDivElement | null>(null);
+  const selectedItem = items.find((item) => item.value === value) ?? null;
+
+  return (
+    <div
+      className="rivet-web-app-dropdown"
+      data-rivet-dropdown-value={value}
+      data-rivet-focus-component-id={componentId}
+    >
+      <Select
+        aria-label={label}
+        isDisabled={items.length === 0}
+        menuPlacement="auto"
+        menuPortalTarget={menuPortalTarget}
+        menuPosition="fixed"
+        menuShouldScrollIntoView={false}
+        noOptionsMessage={() => 'No options available'}
+        options={items}
+        placeholder="Select an option"
+        value={selectedItem}
+        onChange={(item) => item && onChange(item.value)}
+      />
+      <div ref={setMenuPortalTarget} data-ui-graph-builder-owned-portal />
+    </div>
   );
 };
 

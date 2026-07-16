@@ -201,6 +201,7 @@ const UI_GRAPH_COMPONENT_VALIDATORS = {
   },
   input: validateInputComponent,
   textarea: validateInputComponent,
+  dropdown: validateDropdownComponent,
   button(component, path, issues) {
     requireString(component, 'label', path, issues);
     validateAction(component.action, `${path}.action`, issues);
@@ -225,6 +226,30 @@ function validateInputComponent(
   requireString(component, 'stateKey', path, issues);
   optionalString(component, 'placeholder', path, issues);
   optionalString(component, 'defaultValue', path, issues);
+}
+
+function validateDropdownComponent(
+  component: Record<string, unknown>,
+  path: string,
+  issues: UiGraphNormalizationIssue[],
+): void {
+  requireString(component, 'label', path, issues);
+  requireString(component, 'stateKey', path, issues);
+
+  if (!Array.isArray(component.items)) {
+    issues.push({ message: 'must be an array', path: `${path}.items` });
+    return;
+  }
+
+  component.items.forEach((item, index) => {
+    const itemPath = `${path}.items[${index}]`;
+    if (!isRecord(item)) {
+      issues.push({ message: 'must be an object', path: itemPath });
+      return;
+    }
+    requireString(item, 'label', itemPath, issues);
+    requireString(item, 'value', itemPath, issues);
+  });
 }
 
 function validateAction(value: unknown, path: string, issues: UiGraphNormalizationIssue[]): void {

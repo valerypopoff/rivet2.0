@@ -111,6 +111,9 @@ void describe('UI graph normalization', () => {
           { id: 'input-state', label: 'Input', type: 'input' },
           { id: 'textarea-label', stateKey: 'input', type: 'textarea' },
           { id: 'textarea-state', label: 'Input', type: 'textarea' },
+          { id: 'dropdown-label', items: [], stateKey: 'choice', type: 'dropdown' },
+          { id: 'dropdown-state', items: [], label: 'Choice', type: 'dropdown' },
+          { id: 'dropdown-items', label: 'Choice', stateKey: 'choice', type: 'dropdown' },
           { action: { type: 'runGraph' }, id: 'button-label', type: 'button' },
           { id: 'button-action', label: 'Run', type: 'button' },
           { id: 'chat-action', type: 'chat' },
@@ -132,10 +135,39 @@ void describe('UI graph normalization', () => {
         'UI graph "required-fields" component at index 4.label',
         'UI graph "required-fields" component at index 5.stateKey',
         'UI graph "required-fields" component at index 6.label',
-        'UI graph "required-fields" component at index 7.action',
-        'UI graph "required-fields" component at index 8.action',
-        'UI graph "required-fields" component at index 9.action.type',
-        'UI graph "required-fields" component at index 10.stateKey',
+        'UI graph "required-fields" component at index 7.stateKey',
+        'UI graph "required-fields" component at index 8.items',
+        'UI graph "required-fields" component at index 9.label',
+        'UI graph "required-fields" component at index 10.action',
+        'UI graph "required-fields" component at index 11.action',
+        'UI graph "required-fields" component at index 12.action.type',
+        'UI graph "required-fields" component at index 13.stateKey',
+      ],
+    );
+  });
+
+  void it('validates every dropdown item label and stored value', () => {
+    const error = captureNormalizationError(() =>
+      normalizeUiGraph({
+        components: [
+          {
+            id: 'dropdown',
+            items: [{ label: 'Choice' }, 'not-an-item'],
+            label: 'Choice',
+            stateKey: 'choice',
+            type: 'dropdown',
+          },
+        ],
+        id: 'dropdown-items',
+        name: 'Dropdown items',
+      }),
+    );
+
+    assert.deepEqual(
+      error.issues.map((issue) => issue.path),
+      [
+        'UI graph "dropdown-items" component at index 0.items[0].value',
+        'UI graph "dropdown-items" component at index 0.items[1]',
       ],
     );
   });
@@ -365,6 +397,13 @@ function makeUiGraph(): UiGraph {
         type: 'input',
       },
       { id: 'textarea' as never, label: 'Prompt', stateKey: 'prompt', type: 'textarea' },
+      {
+        id: 'dropdown' as never,
+        items: [{ label: 'Friendly', value: 'friendly' }],
+        label: 'Tone',
+        stateKey: 'tone',
+        type: 'dropdown',
+      },
       {
         action: {
           graphId: 'graph' as GraphId,

@@ -35,6 +35,13 @@ describe('UiGraphRuntimeModel', () => {
       { id: componentId, size: 'large', type: 'gap' },
       { id: componentId, label: 'Prompt', stateKey: 'prompt', type: 'input' },
       { id: componentId, label: '', stateKey: 'prompt', type: 'textarea' },
+      {
+        id: componentId,
+        items: [{ label: 'Friendly', value: 'friendly' }],
+        label: 'Tone',
+        stateKey: 'tone',
+        type: 'dropdown',
+      },
       { id: componentId, label: 'Run', action: { type: 'runGraph' }, type: 'button' },
       { id: componentId, action: { type: 'runGraph' }, type: 'chat' },
       { id: componentId, label: 'Answer', stateKey: 'answer', renderAs: 'json', type: 'output' },
@@ -44,13 +51,57 @@ describe('UiGraphRuntimeModel', () => {
 
     assert.deepEqual(
       models.map((model) => model.type),
-      ['text', 'markdown', 'gap', 'input', 'textarea', 'button', 'chat', 'output'],
+      ['text', 'markdown', 'gap', 'input', 'textarea', 'dropdown', 'button', 'chat', 'output'],
     );
     assert.equal(models[2]?.type === 'gap' && models[2].size, 'large');
     assert.equal(models[3]?.type === 'input' && models[3].value, 'Hello');
     assert.equal(models[4]?.type === 'textarea' && models[4].label, 'prompt');
-    assert.equal(models[6]?.type === 'chat' && models[6].messages.length, 0);
-    assert.equal(models[7]?.type === 'output' && models[7].output.renderedValue, '{\n  "value": 42\n}');
+    assert.equal(models[5]?.type === 'dropdown' && models[5].value, '');
+    assert.equal(models[7]?.type === 'chat' && models[7].messages.length, 0);
+    assert.equal(models[8]?.type === 'output' && models[8].output.renderedValue, '{\n  "value": 42\n}');
+  });
+
+  it('keeps dropdown state within its declared option values', () => {
+    const dropdown: UiGraphComponent = {
+      id: componentId,
+      items: [
+        { label: 'Friendly', value: 'friendly' },
+        { label: 'Direct', value: 'direct' },
+      ],
+      label: 'Tone',
+      stateKey: 'tone',
+      type: 'dropdown',
+    };
+
+    const selected = getUiGraphComponentRenderModel(dropdown, { tone: 'direct' });
+    const stale = getUiGraphComponentRenderModel(dropdown, { tone: 'removed' });
+
+    assert.equal(selected.type === 'dropdown' && selected.value, 'direct');
+    assert.equal(stale.type === 'dropdown' && stale.value, '');
+  });
+
+  it('clears a removed dropdown value before a later action can use stale state', () => {
+    const dropdown = {
+      id: componentId,
+      items: [
+        { label: 'Friendly', value: 'friendly' },
+        { label: 'Direct', value: 'direct' },
+      ],
+      label: 'Tone',
+      stateKey: 'tone',
+      type: 'dropdown' as const,
+    };
+    const uiGraph: UiGraph = {
+      components: [dropdown],
+      id: 'dropdown-app' as UiGraphId,
+      name: 'Dropdown app',
+    };
+    const controller = createUiGraphInteractionController(uiGraph);
+
+    controller.updateState('tone', 'direct');
+    controller.setUiGraph({ ...uiGraph, components: [{ ...dropdown, items: [dropdown.items[0]!] }] });
+
+    assert.equal(controller.getSnapshot().state.tone, '');
   });
 
   it('submits Chat state as a current string, prior native history, and explicitly mapped page data', () => {
@@ -351,6 +402,26 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(changes[0], 'state');
     assert.equal(changes.includes('action'), true);
     unsubscribe();
+  });
+
+  it('delays visible Button loading presentation without delaying the action itself', async () => {
+    const button = makeButton('run-button', { type: 'runGraph' });
+    const controller = createUiGraphInteractionController(makeUiGraph([button]));
+
+    await controller.runAction(button, async () => ({ statePatch: { result: 'fast' } }));
+    assert.equal(controller.getSnapshot().loadingComponentIds.size, 0);
+
+    const run = deferred<{ statePatch?: Record<string, unknown> }>();
+    const runPromise = controller.runAction(button, () => run.promise);
+    assert.equal(controller.getSnapshot().runningComponentIds.has(button.id), true);
+    assert.equal(controller.getSnapshot().loadingComponentIds.has(button.id), false);
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    assert.equal(controller.getSnapshot().loadingComponentIds.has(button.id), true);
+
+    run.resolve({});
+    await runPromise;
+    assert.equal(controller.getSnapshot().loadingComponentIds.size, 0);
   });
 
   it('aborts removed actions and resets state when the rendered UI graph changes', async () => {

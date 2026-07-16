@@ -25,6 +25,7 @@ import {
   getUiGraphGraphOptions,
   UI_GRAPH_COMPONENT_MODELS,
   UI_GRAPH_COMPONENT_PALETTE,
+  UI_GRAPH_COMPONENT_PALETTE_GROUPS,
 } from './uiGraphComponentModel.js';
 import { collectUiGraphDataKeyUsages, getUniqueDataKeyOptions, isDataKeyAlreadyUsedEarlier } from './dataKeys.js';
 import { canRunDesktopWebAppPreview } from './uiGraphBuilderPolicy.js';
@@ -125,6 +126,7 @@ test('component models exhaustively own labels, defaults, and data-key policy', 
     'gap',
     'input',
     'textarea',
+    'dropdown',
     'button',
     'chat',
     'output',
@@ -133,6 +135,10 @@ test('component models exhaustively own labels, defaults, and data-key policy', 
   assert.deepEqual(Object.keys(UI_GRAPH_COMPONENT_MODELS), expectedTypes);
   assert.deepEqual(
     UI_GRAPH_COMPONENT_PALETTE.map(({ type }) => type),
+    expectedTypes,
+  );
+  assert.deepEqual(
+    UI_GRAPH_COMPONENT_PALETTE_GROUPS.flatMap(({ types }) => types),
     expectedTypes,
   );
 
@@ -147,6 +153,10 @@ test('component models exhaustively own labels, defaults, and data-key policy', 
     if (component.type === 'gap') {
       assert.equal(component.size, 'medium');
       assert.deepEqual(getUiGraphComponentDataKeys(component), { reads: [], writes: [] });
+    }
+    if (component.type === 'dropdown') {
+      assert.deepEqual(component.items, [{ label: 'Option 1', value: 'option-1' }]);
+      assert.deepEqual(getUiGraphComponentDataKeys(component), { reads: [], writes: [{ key: 'selection' }] });
     }
   }
 });

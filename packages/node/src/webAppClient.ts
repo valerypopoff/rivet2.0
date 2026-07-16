@@ -6,6 +6,7 @@ import {
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
   getUiGraphProgressiveJsonOutputChunks,
+  observeUiGraphOutputResizeBounds,
   parseRivetWebAppServerMessage,
   RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
   type GraphProgress,
@@ -102,10 +103,27 @@ const config = window.__RIVET_WEB_APP__ ?? readEmbeddedConfig(root);
 
 if (config && root) {
   let revisionMismatch = false;
+  let disposeOutputResizeObservers = () => {};
   const interactionController = createUiGraphInteractionController(config.uiGraph, {
     initialState: config.initialState,
   });
   const actionRunner = createHostedActionRunner(config);
+
+  root.addEventListener(
+    'pointerdown',
+    (event) => {
+      for (const dropdown of root.querySelectorAll<HTMLElement>('.rivet-web-app-hosted-dropdown.open')) {
+        if (!dropdown.contains(event.target as Node)) {
+          dropdown.classList.remove('open', 'menu-open-up');
+          dropdown.querySelector('.rivet-web-app-hosted-dropdown-menu')?.remove();
+          const button = dropdown.querySelector<HTMLButtonElement>('.rivet-web-app-hosted-dropdown-button');
+          button?.setAttribute('aria-expanded', 'false');
+          button?.removeAttribute('aria-activedescendant');
+        }
+      }
+    },
+    true,
+  );
 
   const createElement = <TagName extends keyof HTMLElementTagNameMap>(
     tagName: TagName,
@@ -282,28 +300,176 @@ if (config && root) {
         ]);
         break;
       }
+      case 'dropdown': {
+        const wrapper = createElement('div', {
+          className: 'rivet-web-app-dropdown rivet-web-app-hosted-dropdown',
+          'data-rivet-dropdown-value': renderModel.value,
+        });
+        const menuId = `rivet-web-app-dropdown-${renderModel.component.id}`;
+        const button = createElement('button', {
+          'aria-controls': menuId,
+          'aria-expanded': 'false',
+          'aria-haspopup': 'listbox',
+          'aria-label': renderModel.label,
+          className: 'rivet-web-app-hosted-dropdown-button',
+          'data-rivet-focus-component-id': renderModel.component.id,
+          'data-value': renderModel.value,
+          type: 'button',
+        }) as HTMLButtonElement;
+        const selectedItem = renderModel.items.find((item) => item.value === renderModel.value);
+        button.append(
+          createElement('span', {
+            text: selectedItem?.label ?? (renderModel.items.length === 0 ? 'No options available' : 'Select an option'),
+          }),
+          createElement('span', { 'aria-hidden': 'true', className: 'rivet-web-app-dropdown-chevron' }),
+        );
+        button.disabled = renderModel.items.length === 0;
+        const menu = createElement('div', {
+          'aria-label': renderModel.label,
+          className: 'rivet-web-app-hosted-dropdown-menu',
+          id: menuId,
+          role: 'listbox',
+        });
+        const selectedIndex = Math.max(0, renderModel.items.findIndex((item) => item.value === renderModel.value));
+        let activeIndex = selectedIndex;
+        const optionButtons: HTMLButtonElement[] = [];
+        const updateActiveOption = (index: number, focus = false): void => {
+          activeIndex = Math.max(0, Math.min(index, optionButtons.length - 1));
+          optionButtons.forEach((option, optionIndex) => option.classList.toggle('is-focused', optionIndex === activeIndex));
+          button.setAttribute('aria-activedescendant', `${menuId}-option-${activeIndex}`);
+          const activeOption = optionButtons[activeIndex];
+          if (focus) {
+            activeOption?.focus();
+          }
+          if (typeof activeOption?.scrollIntoView === 'function') {
+            activeOption.scrollIntoView({ block: 'nearest' });
+          }
+        };
+        const updatePlacement = (): void => {
+          const rect = wrapper.getBoundingClientRect();
+          const availableBelow = window.innerHeight - rect.bottom;
+          const availableAbove = rect.top;
+          const menuHeight = Math.min(220, renderModel.items.length * 30 + 8);
+          wrapper.classList.toggle(
+            'menu-open-up',
+            availableBelow < Math.min(menuHeight, 160) && availableAbove > availableBelow,
+          );
+        };
+        const setOpen = (isOpen: boolean, nextActiveIndex = selectedIndex, focus = false): void => {
+          wrapper.classList.toggle('open', isOpen);
+          button.setAttribute('aria-expanded', `${isOpen}`);
+          if (isOpen) {
+            wrapper.append(menu);
+            updatePlacement();
+            updateActiveOption(nextActiveIndex, focus);
+          } else {
+            wrapper.classList.remove('menu-open-up');
+            button.removeAttribute('aria-activedescendant');
+            menu.remove();
+          }
+        };
+        const selectOption = (index: number): void => {
+          const item = renderModel.items[index];
+          if (!item) return;
+          interactionController.updateState(renderModel.component.stateKey, item.value);
+          refreshOutputComponents(renderModel.component.stateKey);
+          setOpen(false);
+          button.focus();
+        };
+        button.addEventListener('click', () => {
+          const wasOpen = wrapper.classList.contains('open');
+          setOpen(!wasOpen, activeIndex, !wasOpen);
+        });
+        button.addEventListener('keydown', (event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setOpen(true, wrapper.classList.contains('open') ? activeIndex + 1 : selectedIndex + 1, true);
+          } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setOpen(true, wrapper.classList.contains('open') ? activeIndex - 1 : selectedIndex - 1, true);
+          } else if (event.key === 'Home') {
+            event.preventDefault();
+            setOpen(true, 0, true);
+          } else if (event.key === 'End') {
+            event.preventDefault();
+            setOpen(true, optionButtons.length - 1, true);
+          } else if (event.key === 'Escape') {
+            setOpen(false);
+          }
+        });
+        renderModel.items.forEach((item, index) => {
+          const option = createElement('button', {
+            'aria-selected': `${item.value === renderModel.value}`,
+            className: 'rivet-web-app-hosted-dropdown-option',
+            'data-value': item.value,
+            id: `${menuId}-option-${index}`,
+            role: 'option',
+            text: item.label,
+            type: 'button',
+          });
+          option.addEventListener('focus', () => {
+            updateActiveOption(index);
+          });
+          option.addEventListener('mousemove', () => {
+            updateActiveOption(index);
+          });
+          option.addEventListener('click', () => {
+            selectOption(index);
+          });
+          option.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              updateActiveOption(activeIndex + 1, true);
+            } else if (event.key === 'ArrowUp') {
+              event.preventDefault();
+              updateActiveOption(activeIndex - 1, true);
+            } else if (event.key === 'Home') {
+              event.preventDefault();
+              updateActiveOption(0, true);
+            } else if (event.key === 'End') {
+              event.preventDefault();
+              updateActiveOption(optionButtons.length - 1, true);
+            } else if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              selectOption(index);
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              setOpen(false);
+              button.focus();
+            }
+          });
+          optionButtons.push(option);
+          menu.append(option);
+        });
+        wrapper.append(button);
+        content = createElement('div', { className: 'rivet-web-app-field' }, [
+          createElement('span', { text: renderModel.label }),
+          wrapper,
+        ]);
+        break;
+      }
       case 'button': {
-        const isRunning = interaction.runningComponentIds.has(renderModel.component.id);
+        const isLoading = interaction.loadingComponentIds.has(renderModel.component.id);
         const button = createElement(
           'button',
           {
-            'aria-busy': isRunning,
-            'aria-label': isRunning ? `${renderModel.label} (running)` : undefined,
+            'aria-busy': isLoading,
+            'aria-label': isLoading ? `${renderModel.label} (running)` : undefined,
             className: 'rivet-web-app-button',
             onClick: () => void runAction(renderModel.component),
-            text: isRunning ? renderModel.label : undefined,
+            text: isLoading ? renderModel.label : undefined,
             type: 'button',
           },
-          isRunning
+          isLoading
             ? [createElement('span', { 'aria-hidden': 'true', className: 'rivet-web-app-running-indicator' })]
             : [],
         );
-        if (!isRunning) {
+        if (!isLoading) {
           button.textContent = renderModel.label;
         }
-        (button as HTMLButtonElement).disabled = isRunning;
+        (button as HTMLButtonElement).disabled = isLoading;
         const actionChildren: Node[] = [button];
-        if (isRunning) {
+        if (isLoading) {
           actionChildren.push(
             createElement('button', {
               className: 'rivet-web-app-abort-button',
@@ -318,7 +484,7 @@ if (config && root) {
         if (progressElement) actionChildren.push(progressElement);
         content = createElement(
           'div',
-          { className: `rivet-web-app-action-stack${isRunning ? ' rivet-web-app-action-stack-running' : ''}` },
+          { className: `rivet-web-app-action-stack${isLoading ? ' rivet-web-app-action-stack-running' : ''}` },
           actionChildren,
         );
         break;
@@ -345,7 +511,6 @@ if (config && root) {
           messageNodes.push(
             createElement('div', { className: 'rivet-web-app-chat-empty' }, [
               createElement('strong', { text: 'Start a conversation' }),
-              createElement('span', { text: 'Send a message to run the connected Rivet graph.' }),
             ]),
           );
         }
@@ -566,6 +731,16 @@ if (config && root) {
         frame.replaceWith(renderComponent(component, interaction));
       }
     }
+
+    disposeOutputResizeObservers();
+    disposeOutputResizeObservers = observeOutputResizeBounds(root);
+  };
+
+  const observeOutputResizeBounds = (container: ParentNode): (() => void) => {
+    const disposers = [...container.querySelectorAll<HTMLElement>('.rivet-web-app-output')].map(
+      observeUiGraphOutputResizeBounds,
+    );
+    return () => disposers.forEach((dispose) => dispose());
   };
 
   const render = (): void => {
@@ -584,7 +759,9 @@ if (config && root) {
       ...config.uiGraph.components.map((component) => renderComponent(component, interaction)),
       ...renderErrors(),
     ]);
+    disposeOutputResizeObservers();
     root.replaceChildren(surface, ...renderRevisionMismatchModal());
+    disposeOutputResizeObservers = observeOutputResizeBounds(root);
     root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-messages').forEach((messages) => {
       messages.scrollTop = messages.scrollHeight;
     });
@@ -605,6 +782,7 @@ if (config && root) {
       interactionController.abortActions();
     }
     actionRunner.dispose();
+    disposeOutputResizeObservers();
   });
   render();
 }

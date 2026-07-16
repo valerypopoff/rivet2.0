@@ -95,6 +95,13 @@ function getUiGraphSearchData(uiGraph: UiGraph): string {
         case 'input':
         case 'textarea':
           return [component.type, component.label, component.placeholder, component.stateKey];
+        case 'dropdown':
+          return [
+            component.type,
+            component.label,
+            component.stateKey,
+            ...component.items.flatMap((item) => [item.label, item.value]),
+          ];
         case 'output':
           return [component.type, component.label, component.stateKey, component.renderAs];
         case 'button':

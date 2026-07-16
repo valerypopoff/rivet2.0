@@ -313,7 +313,11 @@ they are opened or reloaded.
 
 Output components use the shared renderer styles and have a responsive maximum
 height with internal vertical scrolling, so large output values do not expand the
-entire web-app page.
+entire web-app page. The browser-runtime resize observer enables the native vertical
+handle only when an expanded value exceeds that responsive cap, then bounds it from
+one rendered content line through the value's natural rendered height. Both the
+React preview and generated hosted client install the same observer; do not add
+host-specific resize calculations.
 
 `renderRivetWebAppHtml(...)` validates transport configuration at runtime as well as
 through TypeScript: HTTP `actionPath` and WebSocket `socketPath` values must be

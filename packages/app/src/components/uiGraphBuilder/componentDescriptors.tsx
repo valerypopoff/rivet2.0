@@ -42,6 +42,7 @@ export {
   getUiGraphComponentLabel,
   getUiGraphGraphOptions,
   UI_GRAPH_COMPONENT_PALETTE,
+  UI_GRAPH_COMPONENT_PALETTE_GROUPS,
 } from './uiGraphComponentModel.js';
 export type { UiGraphComponentDataKeys, UiGraphDataKeyWrite, UiGraphSelectOption } from './uiGraphComponentModel.js';
 
@@ -248,6 +249,116 @@ const InputLikeSettings: FC<UiGraphComponentSettingsProps> = ({ component, isDat
     </>
   );
 };
+
+const DropdownSettings: FC<UiGraphComponentSettingsProps> = ({ component, isDataKeyAlreadyUsed, onUpdate }) => {
+  if (component.type !== 'dropdown') {
+    return null;
+  }
+
+  const dropdown = component;
+
+  const updateItem = (index: number, updater: (item: (typeof dropdown.items)[number]) => void) =>
+    onUpdate((draft) => {
+      const dropdown = draft as typeof component;
+      const items = dropdown.items.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        const nextItem = { ...item };
+        updater(nextItem);
+        return nextItem;
+      });
+      dropdown.items = items;
+    });
+
+  return (
+    <>
+      <label className="ui-graph-builder-field">
+        Label
+        <input
+          value={dropdown.label}
+          onChange={(event) =>
+            onUpdate((draft) => {
+              (draft as typeof component).label = event.target.value;
+            })
+          }
+        />
+      </label>
+      <label className="ui-graph-builder-field">
+        Data key
+        <DataKeyInput
+          hasConflict={isDataKeyAlreadyUsed(dropdown.stateKey, { componentId: dropdown.id })}
+          value={dropdown.stateKey}
+          onChange={(event) =>
+            onUpdate((draft) => {
+              (draft as typeof component).stateKey = event.target.value;
+            })
+          }
+        />
+      </label>
+      <div className="ui-graph-dropdown-items">
+        {dropdown.items.map((item, index) => (
+          <div className="ui-graph-dropdown-item-row" key={`dropdown-item-${index}`}>
+            <ActionMappingField label="Label" showLabel={index === 0}>
+              <input
+                aria-label={index === 0 ? undefined : `Label for item ${index + 1}`}
+                value={item.label}
+                onChange={(event) => updateItem(index, (draft) => (draft.label = event.target.value))}
+              />
+            </ActionMappingField>
+            <ActionMappingField label="Value" showLabel={index === 0}>
+              <input
+                aria-label={index === 0 ? undefined : `Value for item ${index + 1}`}
+                value={item.value}
+                onChange={(event) => updateItem(index, (draft) => (draft.value = event.target.value))}
+              />
+            </ActionMappingField>
+            <button
+              type="button"
+              className="ui-graph-dropdown-item-remove"
+              aria-label={`Remove ${item.label || `item ${index + 1}`}`}
+              title="Remove item"
+              onClick={() =>
+                onUpdate((draft) => {
+                  const dropdown = draft as typeof component;
+                  dropdown.items = dropdown.items.filter((_, itemIndex) => itemIndex !== index);
+                })
+              }
+            >
+              <DeleteIcon aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="ui-graph-builder-button secondary ui-graph-dropdown-add-item"
+          onClick={() =>
+            onUpdate((draft) => {
+              const dropdown = draft as typeof component;
+              const itemNumber = getNextDropdownItemNumber(dropdown.items);
+              dropdown.items = [
+                ...dropdown.items,
+                { label: `Option ${itemNumber}`, value: `option-${itemNumber}` },
+              ];
+            })
+          }
+        >
+          <PlusIcon aria-hidden="true" />
+          <span>Add item</span>
+        </button>
+      </div>
+    </>
+  );
+};
+
+function getNextDropdownItemNumber(items: readonly { value: string }[]): number {
+  const values = new Set(items.map((item) => item.value));
+  let itemNumber = 1;
+
+  while (values.has(`option-${itemNumber}`)) {
+    itemNumber += 1;
+  }
+
+  return itemNumber;
+}
 
 const ButtonSettings: FC<UiGraphComponentSettingsProps> = ({
   component,
@@ -728,6 +839,10 @@ export const UI_GRAPH_COMPONENT_DESCRIPTORS = {
   textarea: {
     ...UI_GRAPH_COMPONENT_MODELS.textarea,
     Settings: InputLikeSettings,
+  },
+  dropdown: {
+    ...UI_GRAPH_COMPONENT_MODELS.dropdown,
+    Settings: DropdownSettings,
   },
   button: {
     ...UI_GRAPH_COMPONENT_MODELS.button,

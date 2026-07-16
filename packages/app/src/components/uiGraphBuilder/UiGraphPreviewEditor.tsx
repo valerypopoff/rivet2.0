@@ -4,10 +4,11 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
-import { DndContext, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
+import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import type { GraphProgress, UiComponentId, UiGraph, UiGraphInteractionController } from '@valerypopoff/rivet2-core';
 import {
@@ -23,6 +24,8 @@ import {
   type UiGraphComponentSelectionRectangle,
 } from './componentSelection.js';
 
+export const UI_GRAPH_PREVIEW_DROP_ZONE_ID = 'ui-graph-preview-drop-zone';
+
 type ActiveSelectionRectangle = UiGraphComponentSelectionRectangle & {
   baseSelectedComponentIds: readonly UiComponentId[];
   pointerId: number;
@@ -32,13 +35,13 @@ export const UiGraphPreviewEditor: FC<{
   interactionController?: UiGraphInteractionController;
   onComponentSelectionChange(componentId: UiComponentId, mode: 'replace' | 'toggle'): void;
   onComponentSelectionSetChange(componentIds: readonly UiComponentId[]): void;
-  onReorder(draggedComponentId: UiComponentId, targetComponentId: UiComponentId): void;
   onRunAction(
     componentId: UiComponentId,
     state: Record<string, unknown>,
     abortSignal: AbortSignal,
     onProgress: (progress: GraphProgress) => void,
   ): Promise<RivetWebAppActionResult>;
+  paletteInsertionIndex?: number;
   scrollContainerRef: RefObject<HTMLDivElement>;
   selectedComponentIds: ReadonlySet<UiComponentId>;
   uiGraph: UiGraph;
@@ -46,16 +49,17 @@ export const UiGraphPreviewEditor: FC<{
   interactionController,
   onComponentSelectionChange,
   onComponentSelectionSetChange,
-  onReorder,
   onRunAction,
+  paletteInsertionIndex,
   scrollContainerRef,
   selectedComponentIds,
   uiGraph,
 }) => {
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const { setNodeRef: setDropZoneRef } = useDroppable({ id: UI_GRAPH_PREVIEW_DROP_ZONE_ID });
   const pointerSelectedComponentIdRef = useRef<UiComponentId | undefined>();
   const activeSelectionRectangleRef = useRef<ActiveSelectionRectangle>();
   const [selectionRectangle, setSelectionRectangle] = useState<UiGraphComponentSelectionRectangle>();
+  const [paletteDropIndicator, setPaletteDropIndicator] = useState<{ left: number; top: number; width: number }>();
 
   const selectComponentFromPointer = (componentId: UiComponentId, mode: 'replace' | 'toggle') => {
     pointerSelectedComponentIdRef.current = componentId;
@@ -67,15 +71,6 @@ export const UiGraphPreviewEditor: FC<{
       pointerSelectedComponentIdRef.current = undefined;
     } else if (!selectedComponentIds.has(componentId)) {
       onComponentSelectionChange(componentId, 'replace');
-    }
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const draggedComponentId = event.active.id as UiComponentId;
-    const targetComponentId = event.over?.id as UiComponentId | undefined;
-
-    if (targetComponentId && draggedComponentId !== targetComponentId) {
-      onReorder(draggedComponentId, targetComponentId);
     }
   };
 
@@ -130,6 +125,40 @@ export const UiGraphPreviewEditor: FC<{
     };
   }, [updateSelectionRectangle]);
 
+  useLayoutEffect(() => {
+    if (paletteInsertionIndex === undefined) {
+      setPaletteDropIndicator(undefined);
+      return;
+    }
+
+    const preview = scrollContainerRef.current;
+    if (!preview) {
+      return;
+    }
+
+    const updatePaletteDropIndicator = () => {
+      const previewBounds = preview.getBoundingClientRect();
+      const componentBounds = [...preview.querySelectorAll<HTMLElement>('[data-ui-graph-component-id]')].map(
+        (element) => element.getBoundingClientRect(),
+      );
+      const top =
+        componentBounds[paletteInsertionIndex]?.top ?? componentBounds.at(-1)?.bottom ?? previewBounds.top + 24;
+      setPaletteDropIndicator({
+        left: previewBounds.left + 12,
+        top: Math.min(Math.max(top, previewBounds.top + 12), previewBounds.bottom - 12),
+        width: Math.max(0, previewBounds.width - 24),
+      });
+    };
+
+    updatePaletteDropIndicator();
+    window.addEventListener('resize', updatePaletteDropIndicator);
+    preview.addEventListener('scroll', updatePaletteDropIndicator);
+    return () => {
+      window.removeEventListener('resize', updatePaletteDropIndicator);
+      preview.removeEventListener('scroll', updatePaletteDropIndicator);
+    };
+  }, [paletteInsertionIndex, scrollContainerRef, uiGraph.components.length]);
+
   const startSelectionRectangle = (event: ReactPointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     if (
@@ -154,33 +183,40 @@ export const UiGraphPreviewEditor: FC<{
   };
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <SortableContext items={uiGraph.components.map(({ id }) => id)} strategy={verticalListSortingStrategy}>
-        <RivetWebAppRenderer
-          interactionController={interactionController}
-          onComponentSelectionChange={selectComponentFromPointer}
-          onRootPointerDownCapture={startSelectionRectangle}
-          renderComponentFrame={(frameProps) => (
-            <SortablePreviewComponentFrame
-              {...frameProps}
-              onFocusCapture={() => selectComponentFromFocus(frameProps.component.id)}
-            />
-          )}
-          rootRef={scrollContainerRef}
-          selectedComponentIds={selectedComponentIds}
-          uiGraph={uiGraph}
-          onRunAction={onRunAction}
-        />
-      </SortableContext>
+    <>
+      <div ref={setDropZoneRef} className="ui-graph-preview-drop-surface">
+        <SortableContext items={uiGraph.components.map(({ id }) => id)} strategy={verticalListSortingStrategy}>
+          <RivetWebAppRenderer
+            interactionController={interactionController}
+            onComponentSelectionChange={selectComponentFromPointer}
+            onRootPointerDownCapture={startSelectionRectangle}
+            renderComponentFrame={(frameProps) => (
+              <SortablePreviewComponentFrame
+                {...frameProps}
+                onFocusCapture={() => selectComponentFromFocus(frameProps.component.id)}
+              />
+            )}
+            rootRef={scrollContainerRef}
+            selectedComponentIds={selectedComponentIds}
+            uiGraph={uiGraph}
+            onRunAction={onRunAction}
+          />
+        </SortableContext>
+      </div>
       {selectionRectangle ? (
         <SelectionRectangle
           rectangle={selectionRectangle}
           bounds={scrollContainerRef.current?.getBoundingClientRect()}
         />
       ) : null}
-    </DndContext>
+      {paletteDropIndicator ? <PaletteDropIndicator {...paletteDropIndicator} /> : null}
+    </>
   );
 };
+
+const PaletteDropIndicator: FC<{ left: number; top: number; width: number }> = ({ left, top, width }) => (
+  <div className="ui-graph-preview-palette-drop-indicator" style={{ left, top, width }} />
+);
 
 const SelectionRectangle: FC<{ bounds: DOMRect | undefined; rectangle: UiGraphComponentSelectionRectangle }> = ({
   bounds,
