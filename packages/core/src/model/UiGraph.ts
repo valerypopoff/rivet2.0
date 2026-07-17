@@ -341,6 +341,14 @@ export function createUiGraphChatPinStatePatch(
   };
 }
 
+/** Clears a Chat's conversation and pins without discarding an unsent draft. */
+export function createUiGraphChatHistoryFlushStatePatch(componentId: UiComponentId): Record<string, unknown> {
+  return {
+    [getUiGraphChatMessagesStateKey(componentId)]: [],
+    [getUiGraphChatPinsStateKey(componentId)]: [],
+  };
+}
+
 export function createUiGraphChatSubmissionStatePatch(
   componentId: UiComponentId,
   state: Readonly<Record<string, unknown>>,

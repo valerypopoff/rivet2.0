@@ -17,6 +17,7 @@ import AtlaskitSelect from '@atlaskit/select';
 import ChevronLeftIcon from 'majesticons/line/chevron-left-line.svg?react';
 import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
+import MoreMenuIcon from 'majesticons/line/more-menu-line.svg?react';
 import PinIcon from 'majesticons/line/pin-line.svg?react';
 import SearchIcon from 'majesticons/line/search-line.svg?react';
 import {
@@ -29,6 +30,7 @@ import {
   type UiGraphComponent,
   type UiGraphInteractionController,
   RIVET_WEB_APP_RENDERER_CSS,
+  createUiGraphChatHistoryFlushStatePatch,
   createUiGraphInteractionController,
   createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
@@ -42,10 +44,14 @@ import {
   clearUiGraphChatSearchMatches,
   copyUiGraphText,
   downloadUiGraphJsonOutput,
+  hasUiGraphChatPersistentStateChanged,
+  getUiGraphChatPersistentState,
   highlightUiGraphChatSearchMatches,
+  loadUiGraphChatPersistentState,
   observeUiGraphOutputResizeBounds,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
+  saveUiGraphChatPersistentState,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
 
@@ -83,6 +89,47 @@ export type RivetWebAppComponentFrameProps = {
   onPointerDownCapture(event: PointerEvent<HTMLDivElement>): void;
 };
 
+function useUiGraphChatBrowserPersistence(
+  interactionController: UiGraphInteractionController,
+  uiGraph: UiGraph,
+): () => void {
+  const isRestoringRef = useRef(false);
+
+  useLayoutEffect(() => {
+    interactionController.setUiGraph(uiGraph);
+
+    if (Object.keys(getUiGraphChatPersistentState(uiGraph, interactionController.getSnapshot().state)).length === 0) {
+      const storedState = loadUiGraphChatPersistentState(uiGraph);
+      if (Object.keys(storedState).length > 0) {
+        isRestoringRef.current = true;
+        interactionController.updateStatePatch(storedState);
+        isRestoringRef.current = false;
+      }
+    }
+
+    let previousState = interactionController.getSnapshot().state;
+    saveUiGraphChatPersistentState(uiGraph, previousState);
+    return interactionController.subscribe(() => {
+      const nextState = interactionController.getSnapshot().state;
+      if (!isRestoringRef.current && hasUiGraphChatPersistentStateChanged(uiGraph, previousState, nextState)) {
+        saveUiGraphChatPersistentState(uiGraph, nextState);
+      }
+      previousState = nextState;
+    });
+  }, [interactionController, uiGraph]);
+
+  return useCallback(() => {
+    const chatState = getUiGraphChatPersistentState(uiGraph, interactionController.getSnapshot().state);
+    isRestoringRef.current = true;
+    interactionController.reset();
+    if (Object.keys(chatState).length > 0) {
+      interactionController.updateStatePatch(chatState);
+    }
+    isRestoringRef.current = false;
+    saveUiGraphChatPersistentState(uiGraph, interactionController.getSnapshot().state);
+  }, [interactionController, uiGraph]);
+}
+
 export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   interactionController: interactionControllerProp,
   interactionUiGraph,
@@ -110,9 +157,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     interactionController.getSnapshot,
   );
 
-  useLayoutEffect(() => {
-    interactionController.setUiGraph(normalizedInteractionUiGraph);
-  }, [interactionController, normalizedInteractionUiGraph]);
+  const resetApp = useUiGraphChatBrowserPersistence(interactionController, normalizedInteractionUiGraph);
 
   useEffect(() => {
     const abortActions = () => interactionController.abortActions();
@@ -141,7 +186,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             className="rivet-web-app-reset-button"
             aria-label="Reset app"
             title="Reset app"
-            onClick={() => interactionController.reset()}
+            onClick={resetApp}
           />
         </div>
         {normalizedUiGraph.components.map((component) => {
@@ -169,6 +214,9 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
                 onToggleOutputCollapsed={interactionController.toggleOutputCollapsed}
                 onStateChange={interactionController.updateState}
                 onStatePatch={interactionController.updateStatePatch}
+                onFlushChatHistory={(componentId) =>
+                  interactionController.updateStatePatch(createUiGraphChatHistoryFlushStatePatch(componentId))
+                }
               />
             ),
           };
@@ -215,6 +263,7 @@ const RivetWebAppComponent: FC<{
   onToggleOutputCollapsed(componentId: UiComponentId): void;
   onStateChange(key: string, value: unknown): void;
   onStatePatch(patch: Record<string, unknown>): void;
+  onFlushChatHistory(componentId: UiComponentId): void;
 }> = ({
   actionError,
   actionProgress,
@@ -227,6 +276,7 @@ const RivetWebAppComponent: FC<{
   onToggleOutputCollapsed,
   onStateChange,
   onStatePatch,
+  onFlushChatHistory,
   state,
   uiGraphName,
 }) => {
@@ -333,6 +383,7 @@ const RivetWebAppComponent: FC<{
           onCancelAction={onCancelAction}
           onStateChange={onStateChange}
           onStatePatch={onStatePatch}
+          onFlushChatHistory={onFlushChatHistory}
           state={state}
         />
       );
@@ -479,6 +530,7 @@ const RivetWebAppChat: FC<{
   isRunning: boolean;
   onRunAction(component: Extract<UiGraphComponent, { type: 'chat' }>): Promise<void> | void;
   onCancelAction(componentId: UiComponentId): void;
+  onFlushChatHistory(componentId: UiComponentId): void;
   onStateChange(key: string, value: unknown): void;
   onStatePatch(patch: Record<string, unknown>): void;
   renderModel: Extract<ReturnType<typeof getUiGraphComponentRenderModel>, { type: 'chat' }>;
@@ -488,6 +540,7 @@ const RivetWebAppChat: FC<{
   actionProgress,
   isRunning,
   onCancelAction,
+  onFlushChatHistory,
   onRunAction,
   onStateChange,
   onStatePatch,
@@ -497,6 +550,8 @@ const RivetWebAppChat: FC<{
   const messagesRef = useRef<HTMLDivElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const overflowMenuRef = useRef<HTMLSpanElement>(null);
+  const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
   const [isPinsOpen, setIsPinsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -532,6 +587,25 @@ const RivetWebAppChat: FC<{
     }
   }, [isPinsOpen, pins.length]);
 
+  useEffect(() => {
+    if (!isOverflowMenuOpen) return;
+
+    const closeMenuOnPointerDown = (event: globalThis.PointerEvent) => {
+      if (!overflowMenuRef.current?.contains(event.target as Node)) {
+        setIsOverflowMenuOpen(false);
+      }
+    };
+    const closeMenuOnKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setIsOverflowMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeMenuOnPointerDown);
+    document.addEventListener('keydown', closeMenuOnKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', closeMenuOnPointerDown);
+      document.removeEventListener('keydown', closeMenuOnKeyDown);
+    };
+  }, [isOverflowMenuOpen]);
+
   useLayoutEffect(() => {
     const messagesElement = messagesRef.current;
     if (!messagesElement) return;
@@ -557,6 +631,7 @@ const RivetWebAppChat: FC<{
 
   const openSearch = () => {
     if (messages.length === 0) return;
+    setIsOverflowMenuOpen(false);
     setIsPinsOpen(false);
     setIsSearchOpen(true);
     setRequestedSearchMatchIndex(0);
@@ -564,8 +639,21 @@ const RivetWebAppChat: FC<{
   };
 
   const togglePins = () => {
+    setIsOverflowMenuOpen(false);
     setIsSearchOpen(false);
     setIsPinsOpen((isOpen) => !isOpen);
+  };
+
+  const toggleOverflowMenu = () => {
+    setIsPinsOpen(false);
+    setIsSearchOpen(false);
+    setIsOverflowMenuOpen((isOpen) => !isOpen);
+  };
+
+  const flushChatHistory = () => {
+    setIsOverflowMenuOpen(false);
+    setIsPinsOpen(false);
+    onFlushChatHistory(component.id);
   };
 
   const togglePin = (messageIndex: number) => {
@@ -605,7 +693,29 @@ const RivetWebAppChat: FC<{
   return (
     <section className="rivet-web-app-chat" onKeyDownCapture={handleSearchShortcut}>
       <div className="rivet-web-app-chat-header">
-        <span>Chat</span>
+        <span className="rivet-web-app-chat-title">
+          <span>Chat</span>
+          <span ref={overflowMenuRef} className="rivet-web-app-chat-menu-anchor">
+            <button
+              type="button"
+              className="rivet-web-app-chat-menu-button"
+              aria-expanded={isOverflowMenuOpen}
+              aria-haspopup="menu"
+              aria-label="Chat options"
+              title="Chat options"
+              onClick={toggleOverflowMenu}
+            >
+              <MoreMenuIcon aria-hidden="true" />
+            </button>
+            {isOverflowMenuOpen && (
+              <span className="rivet-web-app-chat-menu" role="menu">
+                <button type="button" role="menuitem" onClick={flushChatHistory}>
+                  Flush chat history
+                </button>
+              </span>
+            )}
+          </span>
+        </span>
         <span className="rivet-web-app-chat-header-actions">
           {pins.length > 0 && (
             <button

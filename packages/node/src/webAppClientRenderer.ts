@@ -1,15 +1,20 @@
 import {
   clearUiGraphChatSearchMatches,
   copyUiGraphText,
+  createUiGraphChatHistoryFlushStatePatch,
   createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   createUiGraphInteractionController,
   downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
+  getUiGraphChatPersistentState,
+  hasUiGraphChatPersistentStateChanged,
   highlightUiGraphChatSearchMatches,
+  loadUiGraphChatPersistentState,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
+  saveUiGraphChatPersistentState,
   type UiGraphActionComponent,
   type UiGraphComponent,
   type UiGraphInteractionSnapshot,
@@ -41,6 +46,7 @@ type DomPurifyApi = {
 
 type ChatPresentationState = {
   activeMatchIndex: number;
+  isMenuOpen: boolean;
   isPinsOpen: boolean;
   isSearchOpen: boolean;
   query: string;
@@ -57,6 +63,7 @@ const CHEVRON_LEFT_ICON_PATH = 'm14 7-5 5 5 5';
 const CHEVRON_RIGHT_ICON_PATH = 'm10 7 5 5-5 5';
 const PIN_ICON_PATH =
   'm4 20 5-5m0 0 3.956 3.956a1 1 0 0 0 1.626-.314l2.255-5.261a1 1 0 0 1 .548-.535l3.207-1.283a1 1 0 0 0 .336-1.635l-6.856-6.856a1 1 0 0 0-1.635.336l-1.283 3.207a1 1 0 0 1-.535.548L5.358 9.418a1 1 0 0 0-.314 1.626L9 15z';
+const MORE_MENU_ICON_PATH = 'M5 12h.01M12 12h.01M19 12h.01';
 
 function createLineIcon(pathData: string): SVGSVGElement {
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -79,15 +86,16 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
   let disposeOutputResizeObservers = () => {};
   const chatPresentationStates = new Map<string, ChatPresentationState>();
   const interactionController = createUiGraphInteractionController(config.uiGraph, {
-    initialState: config.initialState,
+    initialState: { ...config.initialState, ...loadUiGraphChatPersistentState(config.uiGraph) },
   });
   let actionRunner = createHostedActionRunner(config);
+  let isRestoringChatState = false;
   let restoreActionRunnerFromPageCache = false;
 
   const getChatPresentationState = (componentId: string): ChatPresentationState => {
     let state = chatPresentationStates.get(componentId);
     if (!state) {
-      state = { activeMatchIndex: 0, isPinsOpen: false, isSearchOpen: false, query: '' };
+      state = { activeMatchIndex: 0, isMenuOpen: false, isPinsOpen: false, isSearchOpen: false, query: '' };
       chatPresentationStates.set(componentId, state);
     }
     return state;
@@ -133,6 +141,16 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           const button = dropdown.querySelector<HTMLButtonElement>('.rivet-web-app-hosted-dropdown-button');
           button?.setAttribute('aria-expanded', 'false');
           button?.removeAttribute('aria-activedescendant');
+        }
+      }
+      for (const menu of root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-menu-anchor')) {
+        if (menu.contains(event.target as Node)) continue;
+        const componentId = menu.dataset.rivetChatMenuComponentId;
+        const chatState = componentId ? chatPresentationStates.get(componentId) : undefined;
+        if (chatState?.isMenuOpen) {
+          chatState.isMenuOpen = false;
+          menu.querySelector('.rivet-web-app-chat-menu')?.remove();
+          menu.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.setAttribute('aria-expanded', 'false');
         }
       }
     },
@@ -230,7 +248,14 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
   const resetApp = (): void => {
     revisionMismatch = false;
     chatPresentationStates.clear();
+    const chatState = getUiGraphChatPersistentState(config.uiGraph, interactionController.getSnapshot().state);
+    isRestoringChatState = true;
     interactionController.reset();
+    if (Object.keys(chatState).length > 0) {
+      interactionController.updateStatePatch(chatState);
+    }
+    isRestoringChatState = false;
+    saveUiGraphChatPersistentState(config.uiGraph, interactionController.getSnapshot().state);
     render();
   };
 
@@ -601,6 +626,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         };
         const openSearch = () => {
           if (!hasMessages) return;
+          searchState.isMenuOpen = false;
           searchState.isPinsOpen = false;
           searchState.isSearchOpen = true;
           searchState.activeMatchIndex = 0;
@@ -608,8 +634,21 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           focusChatSearchInput(componentId);
         };
         const togglePins = () => {
+          searchState.isMenuOpen = false;
           searchState.isSearchOpen = false;
           searchState.isPinsOpen = !searchState.isPinsOpen;
+          render();
+        };
+        const toggleMenu = () => {
+          searchState.isPinsOpen = false;
+          searchState.isSearchOpen = false;
+          searchState.isMenuOpen = !searchState.isMenuOpen;
+          render();
+        };
+        const flushChatHistory = () => {
+          searchState.isMenuOpen = false;
+          searchState.isPinsOpen = false;
+          interactionController.updateStatePatch(createUiGraphChatHistoryFlushStatePatch(renderModel.component.id));
           render();
         };
         const moveSearchMatch = (direction: -1 | 1) => {
@@ -804,7 +843,43 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         }
         const chatChildren: Node[] = [
           createElement('div', { className: 'rivet-web-app-chat-header' }, [
-            createElement('span', { text: 'Chat' }),
+            createElement('span', { className: 'rivet-web-app-chat-title' }, [
+              createElement('span', { text: 'Chat' }),
+              createElement(
+                'span',
+                {
+                  className: 'rivet-web-app-chat-menu-anchor',
+                  'data-rivet-chat-menu-component-id': componentId,
+                },
+                [
+                  createElement(
+                    'button',
+                    {
+                      'aria-expanded': `${searchState.isMenuOpen}`,
+                      'aria-haspopup': 'menu',
+                      'aria-label': 'Chat options',
+                      className: 'rivet-web-app-chat-menu-button',
+                      onClick: toggleMenu,
+                      title: 'Chat options',
+                      type: 'button',
+                    },
+                    [createLineIcon(MORE_MENU_ICON_PATH)],
+                  ),
+                  ...(searchState.isMenuOpen
+                    ? [
+                        createElement('span', { className: 'rivet-web-app-chat-menu', role: 'menu' }, [
+                          createElement('button', {
+                            onClick: flushChatHistory,
+                            role: 'menuitem',
+                            text: 'Flush chat history',
+                            type: 'button',
+                          }),
+                        ]),
+                      ]
+                    : []),
+                ],
+              ),
+            ]),
             createElement('span', { className: 'rivet-web-app-chat-header-actions' }, headerActions),
           ]),
           createElement('div', { className: 'rivet-web-app-chat-history' }, [
@@ -822,9 +897,16 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         chatChildren.push(composer);
         const chat = createElement('section', { className: 'rivet-web-app-chat' }, chatChildren);
         chat.addEventListener('keydown', (event) => {
-          if (!hasMessages || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'f') return;
-          event.preventDefault();
-          openSearch();
+          if (event.key === 'Escape' && searchState.isMenuOpen) {
+            event.preventDefault();
+            searchState.isMenuOpen = false;
+            render();
+            return;
+          }
+          if (hasMessages && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+            event.preventDefault();
+            openSearch();
+          }
         });
         content = chat;
         break;
@@ -995,7 +1077,14 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     }
   };
 
+  let persistedChatState = interactionController.getSnapshot().state;
+  saveUiGraphChatPersistentState(config.uiGraph, persistedChatState);
   interactionController.subscribe((change) => {
+    const nextState = interactionController.getSnapshot().state;
+    if (!isRestoringChatState && hasUiGraphChatPersistentStateChanged(config.uiGraph, persistedChatState, nextState)) {
+      saveUiGraphChatPersistentState(config.uiGraph, nextState);
+    }
+    persistedChatState = nextState;
     if (change !== 'state') render();
   });
   window.addEventListener('pagehide', (event) => {

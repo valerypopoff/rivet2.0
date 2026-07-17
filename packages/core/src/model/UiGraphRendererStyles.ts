@@ -442,8 +442,23 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   gap: 10px;
 }
 
+.rivet-web-app-chat-title,
+.rivet-web-app-chat-menu-anchor {
+  display: inline-flex;
+  align-items: center;
+}
+
+.rivet-web-app-chat-title {
+  gap: 3px;
+}
+
+.rivet-web-app-chat-menu-anchor {
+  position: relative;
+}
+
 .rivet-web-app-chat-pins-button,
 .rivet-web-app-chat-search-button,
+.rivet-web-app-chat-menu-button,
 .rivet-web-app-chat-search-close-button,
 .rivet-web-app-chat-search-navigation-button {
   display: inline-grid;
@@ -456,7 +471,8 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-chat-pins-button,
-.rivet-web-app-chat-search-button {
+.rivet-web-app-chat-search-button,
+.rivet-web-app-chat-menu-button {
   width: 28px;
   height: 28px;
   border-radius: 6px;
@@ -471,6 +487,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 
 .rivet-web-app-chat-pins-button svg,
 .rivet-web-app-chat-search-button svg,
+.rivet-web-app-chat-menu-button svg,
 .rivet-web-app-chat-search-close-button svg,
 .rivet-web-app-chat-search-navigation-button svg {
   width: 17px;
@@ -481,12 +498,47 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 .rivet-web-app-chat-pins-button:focus-visible,
 .rivet-web-app-chat-search-button:hover,
 .rivet-web-app-chat-search-button:focus-visible,
+.rivet-web-app-chat-menu-button:hover,
+.rivet-web-app-chat-menu-button:focus-visible,
 .rivet-web-app-chat-search-close-button:hover,
 .rivet-web-app-chat-search-close-button:focus-visible,
 .rivet-web-app-chat-search-navigation-button:hover:not(:disabled),
 .rivet-web-app-chat-search-navigation-button:focus-visible:not(:disabled) {
   background: var(--rivet-web-app-control-hover-background);
   color: var(--rivet-web-app-foreground);
+  outline: none;
+}
+
+.rivet-web-app-chat-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 4;
+  min-width: 170px;
+  border: 1px solid var(--rivet-web-app-control-border);
+  border-radius: 6px;
+  background: var(--rivet-web-app-control-background);
+  box-shadow: 0 8px 18px rgb(0 0 0 / 24%);
+  padding: 4px;
+}
+
+.rivet-web-app-chat-menu button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--rivet-web-app-foreground);
+  cursor: pointer;
+  font: inherit;
+  padding: 7px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.rivet-web-app-chat-menu button:hover,
+.rivet-web-app-chat-menu button:focus-visible {
+  background: var(--rivet-web-app-control-hover-background);
   outline: none;
 }
 

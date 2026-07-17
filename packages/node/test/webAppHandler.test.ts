@@ -6,8 +6,10 @@ import { marked } from 'marked';
 import { JSDOM, ResourceLoader } from 'jsdom';
 import {
   createRivetWebAppHandler,
+  getUiGraphChatDraftStateKey,
   getRivetWebAppAssetManifest,
   getUiGraphChatMessagesStateKey,
+  getUiGraphChatPinsStateKey,
   type DataValue,
   type Project,
   RIVET_WEB_APP_DOCUMENT_CSS,
@@ -16,6 +18,7 @@ import {
   RIVET_WEB_APP_RENDERER_CSS,
   RivetWebAppActionHttpError,
   type UiGraphComponent,
+  type UiComponentId,
   type UiGraphId,
   renderRivetWebAppHtml,
   prepareRivetWebAppAction,
@@ -362,6 +365,50 @@ void describe('createRivetWebAppHandler', () => {
     assert.deepEqual(requests, [{ componentId: 'run-button', state: { prompt: 'hello', genre: 'fiction' } }]);
   });
 
+  void it('restores hosted Chat state from browser storage and flushes only its history', () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const chatId = 'chat' as UiComponentId;
+    uiGraph.components = [{ action: { type: 'runGraph' }, id: chatId, type: 'chat' }];
+    const draftKey = getUiGraphChatDraftStateKey(chatId);
+    const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+    const pinsKey = getUiGraphChatPinsStateKey(chatId);
+    const storageKey = 'rivet-web-app-chat-state:v1:https%3A%2F%2Fexample.test:%2Fapp:ui-graph';
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        window.localStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            [draftKey]: 'Unsaved draft',
+            [messagesKey]: [
+              { content: 'Question', role: 'user' },
+              { content: 'Response', role: 'assistant' },
+            ],
+            [pinsKey]: [1],
+          }),
+        );
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    assert.equal(dom.window.document.querySelectorAll('.rivet-web-app-chat-message').length, 2);
+    assert.equal(
+      dom.window.document.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')?.value,
+      'Unsaved draft',
+    );
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-reset-button')?.click();
+    assert.equal(dom.window.document.querySelectorAll('.rivet-web-app-chat-message').length, 2);
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-chat-menu')?.textContent, 'Flush chat history');
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu button')?.click();
+    assert.equal(dom.window.document.querySelectorAll('.rivet-web-app-chat-message').length, 0);
+    assert.deepEqual(JSON.parse(dom.window.localStorage.getItem(storageKey)!), { [draftKey]: 'Unsaved draft' });
+    dom.window.close();
+  });
+
   void it('repairs duplicate button IDs before scoping hosted loading state', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
@@ -659,7 +706,10 @@ void describe('createRivetWebAppHandler', () => {
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(sockets.length, 2);
-    assert.equal(sockets[1]?.sent.some((message) => message.type === 'action.start'), true);
+    assert.equal(
+      sockets[1]?.sent.some((message) => message.type === 'action.start'),
+      true,
+    );
     dom.window.dispatchEvent(new dom.window.Event('pagehide'));
     dom.window.close();
   });

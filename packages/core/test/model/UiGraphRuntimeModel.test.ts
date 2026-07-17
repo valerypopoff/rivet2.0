@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   applyUiGraphStatePatch,
+  createUiGraphChatHistoryFlushStatePatch,
   createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   createUiGraphActionExecutionController,
@@ -26,11 +27,86 @@ import {
   type UiGraphRunGraphAction,
   type UiComponentId,
 } from '../../src/index.js';
-import { revealUiGraphChatElement } from '../../src/model/UiGraphBrowserRuntime.js';
+import {
+  getUiGraphChatStorageKey,
+  hasUiGraphChatPersistentStateChanged,
+  loadUiGraphChatPersistentState,
+  revealUiGraphChatElement,
+  saveUiGraphChatPersistentState,
+} from '../../src/model/UiGraphBrowserRuntime.js';
 
 const componentId = 'component' as UiComponentId;
 
 describe('UiGraphRuntimeModel', () => {
+  it('persists only valid Chat state per browser app URL and preserves drafts when flushing history', () => {
+    const chatId = 'chat' as UiComponentId;
+    const uiGraph: UiGraph = {
+      components: [{ action: { type: 'runGraph' }, id: chatId, type: 'chat' }],
+      id: 'chat-app' as UiGraphId,
+      name: 'Chat app',
+    };
+    const storageValues = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      removeItem: (key: string) => storageValues.delete(key),
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+    };
+    const location = { origin: 'https://example.test', pathname: '/apps/chat/' };
+    const draftKey = getUiGraphChatDraftStateKey(chatId);
+    const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+    const pinsKey = getUiGraphChatPinsStateKey(chatId);
+    const state = {
+      [draftKey]: 'Unsaved question',
+      [messagesKey]: [
+        { content: 'First question', role: 'user' },
+        { content: 'First response', role: 'assistant' },
+      ],
+      [pinsKey]: [1, 3, 'invalid'],
+      unrelatedPageField: 'do not persist this',
+    };
+
+    saveUiGraphChatPersistentState(uiGraph, state, storage, location);
+    const storageKey = getUiGraphChatStorageKey(uiGraph, location)!;
+    assert.deepEqual(JSON.parse(storageValues.get(storageKey)!), {
+      [draftKey]: 'Unsaved question',
+      [messagesKey]: state[messagesKey],
+      [pinsKey]: [1],
+    });
+    assert.deepEqual(loadUiGraphChatPersistentState(uiGraph, storage, location), {
+      [draftKey]: 'Unsaved question',
+      [messagesKey]: state[messagesKey],
+      [pinsKey]: [1],
+    });
+    assert.notEqual(getUiGraphChatStorageKey(uiGraph, { ...location, pathname: '/apps/another-chat' }), storageKey);
+    assert.notEqual(
+      getUiGraphChatStorageKey({ ...uiGraph, id: 'another-chat-app' as UiGraphId }, location),
+      storageKey,
+    );
+
+    storageValues.set(storageKey, '{not valid JSON');
+    assert.deepEqual(loadUiGraphChatPersistentState(uiGraph, storage, location), {});
+    assert.deepEqual(createUiGraphChatHistoryFlushStatePatch(chatId), {
+      [messagesKey]: [],
+      [pinsKey]: [],
+    });
+    assert.equal(
+      hasUiGraphChatPersistentStateChanged(
+        uiGraph,
+        { [messagesKey]: state[messagesKey] },
+        { [messagesKey]: state[messagesKey], unrelatedPageField: 'updated' },
+      ),
+      false,
+    );
+    assert.equal(
+      hasUiGraphChatPersistentStateChanged(
+        uiGraph,
+        { [messagesKey]: state[messagesKey] },
+        { [messagesKey]: [...state[messagesKey]] },
+      ),
+      true,
+    );
+  });
+
   it('creates one render model for every supported component kind', () => {
     const state = { answer: { value: 42 }, prompt: 'Hello' };
     const components: UiGraphComponent[] = [

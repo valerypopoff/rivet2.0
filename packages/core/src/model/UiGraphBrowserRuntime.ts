@@ -1,3 +1,11 @@
+import {
+  getUiGraphChatDraftStateKey,
+  getUiGraphChatMessages,
+  getUiGraphChatMessagesStateKey,
+  getUiGraphChatPins,
+  getUiGraphChatPinsStateKey,
+  type UiGraph,
+} from './UiGraph.js';
 import { getUiGraphJsonOutputFilename } from './UiGraphRuntimeModel.js';
 
 const OUTPUT_MAX_HEIGHT_PX = 800;
@@ -6,6 +14,10 @@ const OUTPUT_RESIZE_MIN_HEIGHT_PROPERTY = '--rivet-web-app-output-resize-min-hei
 const OUTPUT_RESIZE_MAX_HEIGHT_PROPERTY = '--rivet-web-app-output-resize-max-height';
 const CHAT_SEARCH_MATCH_CLASS = 'rivet-web-app-chat-search-match';
 const CHAT_SEARCH_ACTIVE_MATCH_CLASS = 'rivet-web-app-chat-search-match-active';
+const UI_GRAPH_CHAT_STORAGE_PREFIX = 'rivet-web-app-chat-state:v1';
+
+type UiGraphChatStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
+type UiGraphStorageLocation = Pick<Location, 'origin' | 'pathname'>;
 
 const escapeRegularExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -19,6 +31,149 @@ const setStyleProperty = (element: HTMLElement, property: string, value: string)
     element.style.setProperty(property, value);
   }
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const getDefaultUiGraphChatStorage = (): UiGraphChatStorage | undefined => {
+  try {
+    return globalThis.localStorage ?? globalThis.window?.localStorage;
+  } catch {
+    // Embedded, private, and restricted browser contexts can reject storage.
+    return undefined;
+  }
+};
+
+const getDefaultUiGraphStorageLocation = (): UiGraphStorageLocation | undefined => {
+  try {
+    return globalThis.location ?? globalThis.window?.location;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Returns the browser-local key for one app URL and one persisted UI graph. */
+export function getUiGraphChatStorageKey(
+  uiGraph: UiGraph,
+  location: UiGraphStorageLocation | undefined = getDefaultUiGraphStorageLocation(),
+): string | undefined {
+  if (!location?.origin) {
+    return undefined;
+  }
+
+  const pathname = location.pathname.replace(/\/+$/, '') || '/';
+  return [
+    UI_GRAPH_CHAT_STORAGE_PREFIX,
+    encodeURIComponent(location.origin),
+    encodeURIComponent(pathname),
+    encodeURIComponent(uiGraph.id),
+  ].join(':');
+}
+
+/** Selects and validates the private browser-persisted state of Chat components only. */
+export function getUiGraphChatPersistentState(
+  uiGraph: UiGraph,
+  state: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const persistentState: Record<string, unknown> = {};
+
+  for (const component of uiGraph.components) {
+    if (component.type !== 'chat') continue;
+
+    const draftStateKey = getUiGraphChatDraftStateKey(component.id);
+    const messagesStateKey = getUiGraphChatMessagesStateKey(component.id);
+    const pinsStateKey = getUiGraphChatPinsStateKey(component.id);
+    const draft = state[draftStateKey];
+    const messages = getUiGraphChatMessages(component.id, state);
+    const pins = getUiGraphChatPins(component.id, state).map((pin) => pin.messageIndex);
+
+    if (typeof draft === 'string' && draft) {
+      persistentState[draftStateKey] = draft;
+    }
+    if (messages.length > 0) {
+      persistentState[messagesStateKey] = messages;
+    }
+    if (pins.length > 0) {
+      persistentState[pinsStateKey] = pins;
+    }
+  }
+
+  return persistentState;
+}
+
+/**
+ * Reports whether a state transition changed the browser-persisted portion of
+ * any Chat. Runtime state updates are immutable, so reference comparison keeps
+ * action progress and unrelated form edits from serializing a large history.
+ */
+export function hasUiGraphChatPersistentStateChanged(
+  uiGraph: UiGraph,
+  previousState: Readonly<Record<string, unknown>>,
+  nextState: Readonly<Record<string, unknown>>,
+): boolean {
+  return uiGraph.components.some((component) => {
+    if (component.type !== 'chat') return false;
+
+    return (
+      previousState[getUiGraphChatDraftStateKey(component.id)] !== nextState[getUiGraphChatDraftStateKey(component.id)] ||
+      previousState[getUiGraphChatMessagesStateKey(component.id)] !==
+        nextState[getUiGraphChatMessagesStateKey(component.id)] ||
+      previousState[getUiGraphChatPinsStateKey(component.id)] !== nextState[getUiGraphChatPinsStateKey(component.id)]
+    );
+  });
+}
+
+/** Loads valid Chat-only state without allowing malformed local storage to affect rendering. */
+export function loadUiGraphChatPersistentState(
+  uiGraph: UiGraph,
+  storage: UiGraphChatStorage | undefined = getDefaultUiGraphChatStorage(),
+  location?: UiGraphStorageLocation,
+): Record<string, unknown> {
+  const key = getUiGraphChatStorageKey(uiGraph, location);
+  if (!key || !storage) {
+    return {};
+  }
+
+  try {
+    const serializedState = storage.getItem(key);
+    if (!serializedState) {
+      return {};
+    }
+
+    const storedState: unknown = JSON.parse(serializedState);
+    return isRecord(storedState) ? getUiGraphChatPersistentState(uiGraph, storedState) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Persists only Chat draft, conversation, and pins for the current browser app URL. */
+export function saveUiGraphChatPersistentState(
+  uiGraph: UiGraph,
+  state: Readonly<Record<string, unknown>>,
+  storage: UiGraphChatStorage | undefined = getDefaultUiGraphChatStorage(),
+  location?: UiGraphStorageLocation,
+): void {
+  const key = getUiGraphChatStorageKey(uiGraph, location);
+  if (!key || !storage) {
+    return;
+  }
+
+  try {
+    const persistentState = getUiGraphChatPersistentState(uiGraph, state);
+    if (Object.keys(persistentState).length === 0) {
+      storage.removeItem(key);
+      return;
+    }
+
+    const serializedState = JSON.stringify(persistentState);
+    if (storage.getItem(key) !== serializedState) {
+      storage.setItem(key, serializedState);
+    }
+  } catch {
+    // Storage can be unavailable, full, or blocked; Chat itself still works.
+  }
+}
 
 /**
  * Limits an expanded Output card's native resize range to one visible content
