@@ -111,7 +111,7 @@ describe('UiGraphRuntimeModel', () => {
   });
 
   it('isolates graph-managed browser storage by app URL and UI graph ID', () => {
-    const uiGraph: UiGraph = { components: [], id: 'book-app' as UiGraphId, name: 'Book app' };
+    const uiGraph: UiGraph = { components: [], id: 'settings-app' as UiGraphId, name: 'Settings app' };
     const otherUiGraph: UiGraph = { ...uiGraph, id: 'other-app' as UiGraphId };
     const storageValues = new Map<string, string>();
     const storage = {
@@ -119,19 +119,19 @@ describe('UiGraphRuntimeModel', () => {
       removeItem: (key: string) => storageValues.delete(key),
       setItem: (key: string, value: string) => storageValues.set(key, value),
     };
-    const location = { origin: 'https://example.test', pathname: '/apps/books/' };
+    const location = { origin: 'https://example.test', pathname: '/apps/settings/' };
 
     const stored = applyUiGraphWebAppStoragePatch(
       uiGraph,
       { existing: 'kept' },
-      { 'book-analysis:573310': { summary: 'Compact summary' } },
+      { preferences: { density: 'compact', sidebarOpen: false } },
       storage,
       location,
     );
 
     assert.deepEqual(stored, {
       existing: 'kept',
-      'book-analysis:573310': { summary: 'Compact summary' },
+      preferences: { density: 'compact', sidebarOpen: false },
     });
     assert.deepEqual(loadUiGraphWebAppStorage(uiGraph, storage, location), stored);
     assert.deepEqual(loadUiGraphWebAppStorage(otherUiGraph, storage, location), {});

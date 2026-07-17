@@ -147,9 +147,11 @@ and successful HTTP responses or WebSocket completion events return a
 `storagePatch` for the browser to merge. Failed actions persist nothing. Generated
 and React renderers both suppress older late completions from overwriting a newer
 completed write to the same key and merge disjoint keys into the latest persisted
-app record. Desktop preview passes the same action-scoped
-functions through local editor execution; the browser-storage functions are not
-available through remote editor execution.
+app record. Desktop preview passes the same action-scoped functions through local
+Browser execution or the internal Node sidecar. The sidecar receives the action
+snapshot through its request-scoped debugger protocol and returns the changed-key
+patch before the terminal result. External Remote Debugger sessions do not run
+editor-originated web-app actions, so they have no browser-storage bridge.
 
 For long-running hosted actions, `renderRivetWebAppHtml(...)` accepts
 `actionTransport: { type: 'websocket', socketPath }`, and

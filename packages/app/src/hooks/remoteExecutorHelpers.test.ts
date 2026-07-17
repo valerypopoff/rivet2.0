@@ -123,21 +123,15 @@ test('getEditorRunFromPlan preloads only direct boundary inputs for a selected l
 });
 
 test('getEditorRunToPlan preserves frozen nodes outside the run-to dependency slice', () => {
-  const plan = getEditorRunToPlan(
-    makeProject(makeRunFromGraph()),
-    graphId,
-    ['downstream' as NodeId],
-    registry,
-    {
-      frozenNodeOutputs: {
-        [graphId]: {
-          ['source' as NodeId]: [{ ['output' as PortId]: { type: 'string', value: 'runs again' } }],
-          ['unrelated-source' as NodeId]: [{ ['output' as PortId]: { type: 'string', value: 'keep me visible' } }],
-          ['unrelated-sink' as NodeId]: [],
-        },
+  const plan = getEditorRunToPlan(makeProject(makeRunFromGraph()), graphId, ['downstream' as NodeId], registry, {
+    frozenNodeOutputs: {
+      [graphId]: {
+        ['source' as NodeId]: [{ ['output' as PortId]: { type: 'string', value: 'runs again' } }],
+        ['unrelated-source' as NodeId]: [{ ['output' as PortId]: { type: 'string', value: 'keep me visible' } }],
+        ['unrelated-sink' as NodeId]: [],
       },
     },
-  );
+  });
 
   assert.deepEqual(plan.nodesToRun, ['source', 'selected', 'downstream', 'side']);
   assert.deepEqual(plan.preserveNodeIds, ['unrelated-source']);
@@ -495,6 +489,16 @@ test('shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent only flushes on first a
     shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({
       alreadyFlushed: false,
       message: 'trace',
+      shouldDispatchExecutionEvent: true,
+      target: externalTarget,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({
+      alreadyFlushed: false,
+      message: 'webAppStoragePatch',
       shouldDispatchExecutionEvent: true,
       target: externalTarget,
     }),

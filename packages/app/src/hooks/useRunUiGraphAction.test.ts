@@ -52,7 +52,8 @@ test('web app actions run through the editor graph runner and wait for outputs',
       const getStorage = options?.externalFunctions?.getWebAppStorage;
       const setStorage = options?.externalFunctions?.setWebAppStorage;
       assert.deepEqual(await getStorage?.({} as never, 'existing'), { type: 'any', value: 'old' });
-      await setStorage?.({} as never, 'analysis', { summary: 'Saved in preview storage' });
+      await setStorage?.({} as never, 'preferences', { density: 'compact' });
+      options?.onWebAppStoragePatch?.({ sessionCache: { lastPage: 'dashboard' } });
       options?.onProgress?.(progress);
       return outputs;
     },
@@ -62,8 +63,9 @@ test('web app actions run through the editor graph runner and wait for outputs',
   });
 
   assert.equal(calls.length, 1);
-  const { externalFunctions, ...runCall } = calls[0]!;
+  const { externalFunctions, onWebAppStoragePatch, ...runCall } = calls[0]!;
   assert.deepEqual(Object.keys(externalFunctions ?? {}).sort(), ['getWebAppStorage', 'setWebAppStorage']);
+  assert.equal(typeof onWebAppStoragePatch, 'function');
   assert.deepEqual(runCall, {
     graphId,
     inputs: {
@@ -74,13 +76,17 @@ test('web app actions run through the editor graph runner and wait for outputs',
     onProgress,
     throwOnError: true,
     waitForResults: true,
+    webAppStorage: { existing: 'old' },
   });
   assert.deepEqual(result, {
     outputs,
     statePatch: {
       lastResult: outputs,
     },
-    storagePatch: { analysis: { summary: 'Saved in preview storage' } },
+    storagePatch: {
+      preferences: { density: 'compact' },
+      sessionCache: { lastPage: 'dashboard' },
+    },
   });
 });
 

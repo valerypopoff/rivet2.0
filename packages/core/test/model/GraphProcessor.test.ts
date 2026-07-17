@@ -3,6 +3,7 @@ import { strict as assert } from 'node:assert';
 import {
   GraphProcessor,
   NodeImpl,
+  createRivetWebAppStorageExternalFunctions,
   createBuiltInRegistry,
   createFrozenNodeOutputResolver,
   globalRivetNodeRegistry,
@@ -313,11 +314,7 @@ function makeExtractObjectPathNode(overrides: Partial<ChartNode> = {}) {
 
 function createTrackedSplitGraph(
   registry: ReturnType<typeof createTrackedRegistry>,
-  {
-    graphId,
-    splitRunMax,
-    splitRunConcurrency,
-  }: { graphId: string; splitRunMax: number; splitRunConcurrency?: number },
+  { graphId, splitRunMax, splitRunConcurrency }: { graphId: string; splitRunMax: number; splitRunConcurrency?: number },
 ) {
   const inputNode = registry.create('graphInput');
   inputNode.id = 'input-node' as NodeId;
@@ -460,6 +457,74 @@ void describe('GraphProcessor', () => {
     assert.deepEqual(progress, [{ message: 'Working...' }]);
   });
 
+  void it('inherits web-app storage functions into nested action graphs', async () => {
+    const parentGraph = {
+      metadata: {
+        id: 'parent-web-app-storage-graph',
+        name: 'Parent web app storage graph',
+        description: '',
+      },
+      nodes: [
+        {
+          id: 'storage-subgraph-node',
+          type: 'subGraph',
+          title: 'Read web app storage',
+          data: {
+            graphId: 'child-web-app-storage-graph',
+            useAsGraphPartialOutput: false,
+            useErrorOutput: false,
+          },
+          visualData: { x: 0, y: 0, width: 200 },
+        },
+        makeGraphOutputNode('result', 'object'),
+      ],
+      connections: [
+        {
+          inputId: 'value',
+          inputNodeId: 'result-output-node',
+          outputId: 'result',
+          outputNodeId: 'storage-subgraph-node',
+        },
+      ],
+    };
+    const childGraph = {
+      metadata: {
+        id: 'child-web-app-storage-graph',
+        name: 'Child web app storage graph',
+        description: '',
+      },
+      nodes: [
+        {
+          id: 'storage-read-node',
+          type: 'externalCall',
+          title: 'Get web app storage',
+          data: { functionName: 'getWebAppStorage', useErrorOutput: false, useFunctionNameInput: false },
+          visualData: { x: 0, y: 0, width: 200 },
+        },
+        makeGraphOutputNode('result', 'object'),
+      ],
+      connections: [
+        {
+          inputId: 'value',
+          inputNodeId: 'result-output-node',
+          outputId: 'result',
+          outputNodeId: 'storage-read-node',
+        },
+      ],
+    };
+    const project = makeProject(parentGraph);
+    project.graphs[childGraph.metadata.id] = childGraph;
+    const processor = new GraphProcessor(project, parentGraph.metadata.id, globalRivetNodeRegistry);
+    const webAppStorage = createRivetWebAppStorageExternalFunctions({ preferences: { density: 'compact' } });
+    for (const [name, fn] of Object.entries(webAppStorage.externalFunctions)) {
+      processor.setExternalFunction(name, fn);
+    }
+
+    const outputs = await processor.processGraph(testProcessContext());
+
+    assert.deepEqual(outputs.result, { type: 'object', value: { preferences: { density: 'compact' } } });
+  });
+
   void it('Can run passthrough graph', async () => {
     const processor = await loadTestGraphInProcessor('Passthrough');
 
@@ -512,7 +577,11 @@ void describe('GraphProcessor', () => {
   });
 
   void it('coerces Expression any array output to the declared Graph Output object array type', async () => {
-    const result = await runGraphOutputFromNode(makeExpressionNode('([{ foo: "bar" }])'), 'output' as PortId, 'object[]');
+    const result = await runGraphOutputFromNode(
+      makeExpressionNode('([{ foo: "bar" }])'),
+      'output' as PortId,
+      'object[]',
+    );
 
     assert.deepStrictEqual(result, {
       type: 'object[]',
@@ -1427,12 +1496,20 @@ void describe('GraphProcessor', () => {
 
     const processor = new GraphProcessor(makeProject(graph), graph.metadata.id, globalRivetNodeRegistry);
 
-    const firstOutputs = await processor.processGraph(testProcessContext(), {}, {
-      greeting: { type: 'string', value: 'hello' },
-    });
-    const secondOutputs = await processor.processGraph(testProcessContext(), {}, {
-      greeting: { type: 'string', value: 'goodbye' },
-    });
+    const firstOutputs = await processor.processGraph(
+      testProcessContext(),
+      {},
+      {
+        greeting: { type: 'string', value: 'hello' },
+      },
+    );
+    const secondOutputs = await processor.processGraph(
+      testProcessContext(),
+      {},
+      {
+        greeting: { type: 'string', value: 'goodbye' },
+      },
+    );
 
     assert.deepEqual(firstOutputs.output, { type: 'string', value: 'hello' });
     assert.deepEqual(secondOutputs.output, { type: 'string', value: 'goodbye' });
@@ -1718,7 +1795,12 @@ void describe('GraphProcessor', () => {
         name: 'Bounded Node Concurrency',
         description: '',
       },
-      nodes: [makeTrackedNode('node-a'), makeTrackedNode('node-b'), makeTrackedNode('node-c'), makeTrackedNode('node-d')],
+      nodes: [
+        makeTrackedNode('node-a'),
+        makeTrackedNode('node-b'),
+        makeTrackedNode('node-c'),
+        makeTrackedNode('node-d'),
+      ],
       connections: [],
     };
 

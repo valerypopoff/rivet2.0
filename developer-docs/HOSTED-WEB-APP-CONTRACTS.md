@@ -162,6 +162,21 @@ carry the same `storagePatch`. Storage never enters component UI state, graph in
 mapping, or lifecycle-hook state projection. It is JSON-only, browser-local,
 quota-bound, non-secret storage rather than a durable host database.
 
+The editor's Browser executor installs these functions directly. Its internal Node
+executor sends the same action snapshot over the request-scoped debugger protocol,
+installs the functions in the sidecar processor, and returns the changed-key patch
+before the successful terminal result. The browser then applies that patch through
+the same action lifecycle as a Browser-executor run. External Remote Debugger
+sessions do not permit editor-originated web-app actions, so they never receive a
+browser-storage bridge.
+
+The functions belong to the web-app action scope, rather than to one executor
+implementation. The action-root processor supplies them once; normal processor
+inheritance makes the same storage view available to nested graphs and delegated
+tool graphs. A standalone processor without a web-app action has no browser-storage
+identity or persistence target, so it is intentionally not given an unrelated
+global storage store.
+
 ### Long-running WebSocket actions
 
 HTTP actions remain the compatibility/default path. A host opts a rendered page

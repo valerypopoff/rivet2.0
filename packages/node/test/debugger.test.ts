@@ -147,7 +147,7 @@ function makeUploadedProject(id: string, title: string): Project {
   };
 }
 
-it('forwards frozen node outputs from internal run messages to the dynamic graph runner', async () => {
+it('forwards internal run state to the dynamic graph runner', async () => {
   const server = new FakeWebSocketServer();
   const socket = new FakeWebSocket();
   const frozenNodeOutputs = {
@@ -179,10 +179,12 @@ it('forwards frozen node outputs from internal run messages to the dynamic graph
     },
   };
   let receivedFrozenNodeOutputs: unknown;
+  let receivedWebAppStorage: unknown;
   startDebuggerServer({
     server: server as unknown as WebSocketServer,
     dynamicGraphRun: async (options) => {
       receivedFrozenNodeOutputs = options.frozenNodeOutputs;
+      receivedWebAppStorage = options.webAppStorage;
     },
   });
 
@@ -199,6 +201,7 @@ it('forwards frozen node outputs from internal run messages to the dynamic graph
           contextValues: {},
           projectPath: undefined,
           frozenNodeOutputs: transportFrozenNodeOutputs,
+          webAppStorage: { analysis: { summary: 'Browser-local overview' } },
         },
       }),
     ),
@@ -206,6 +209,7 @@ it('forwards frozen node outputs from internal run messages to the dynamic graph
 
   await waitFor(() => {
     assert.deepEqual(receivedFrozenNodeOutputs, frozenNodeOutputs);
+    assert.deepEqual(receivedWebAppStorage, { analysis: { summary: 'Browser-local overview' } });
   });
 
   socket.close();
@@ -441,10 +445,7 @@ function makeCircularExpressionGraph(graphId: GraphId): NodeGraph {
     'subgraph2-circular-expression',
     '(() => { const value = {}; value.self = value; return value; })()',
   );
-  const downstreamExpressionNode = makeExpressionNode(
-    'subgraph2-downstream-expression',
-    '{{input}} === {{input}}',
-  );
+  const downstreamExpressionNode = makeExpressionNode('subgraph2-downstream-expression', '{{input}} === {{input}}');
   const outputNode = makeGraphOutputNode('subgraph2-output', 'result', 'any');
 
   return {
@@ -775,10 +776,7 @@ describe('startDebuggerServer broadcast', () => {
     const nodeFinish = decodeDebuggerTransportSentinels(getSentDebuggerMessage(socket, 'nodeFinish'));
     assert.equal(nodeFinish.data.node.id, 'expression-1');
     assert.equal(nodeFinish.data.outputs.output.value.bigint, '[Unserializable bigint: 1]');
-    assert.equal(
-      nodeFinish.data.outputs.output.value.self,
-      '[Unserializable value: circular reference]',
-    );
+    assert.equal(nodeFinish.data.outputs.output.value.self, '[Unserializable value: circular reference]');
     assert.equal(nodeFinish.data.outputs.output.value.undefinedValue, undefined);
   });
 
@@ -821,7 +819,11 @@ describe('startDebuggerServer broadcast', () => {
 
     const originalStringify = JSON.stringify;
     let shouldThrow = true;
-    JSON.stringify = ((value: unknown, replacer?: Parameters<typeof JSON.stringify>[1], space?: Parameters<typeof JSON.stringify>[2]) => {
+    JSON.stringify = ((
+      value: unknown,
+      replacer?: Parameters<typeof JSON.stringify>[1],
+      space?: Parameters<typeof JSON.stringify>[2],
+    ) => {
       if (shouldThrow) {
         shouldThrow = false;
         throw new Error('synthetic serializer failure');
@@ -1187,10 +1189,7 @@ describe('startDebuggerServer broadcast', () => {
     const circularFinish = nodeFinishMessages.find(
       (message) => message.data.node.id === 'subgraph2-circular-expression',
     )!;
-    assert.equal(
-      circularFinish.data.outputs.output.value.self,
-      '[Unserializable value: circular reference]',
-    );
+    assert.equal(circularFinish.data.outputs.output.value.self, '[Unserializable value: circular reference]');
   });
 
   it('sends nested nodeError events before done when a subgraph catches the graph error', async () => {
@@ -1326,9 +1325,7 @@ describe('startDebuggerServer broadcast', () => {
 
     const outputTerminalCount = messages.filter(
       (message) =>
-        (message.message === 'nodeFinish' ||
-          message.message === 'nodeError' ||
-          message.message === 'nodeExcluded') &&
+        (message.message === 'nodeFinish' || message.message === 'nodeError' || message.message === 'nodeExcluded') &&
         message.data.node.id === 'successful-abort-leaf-output',
     ).length;
     assert.equal(outputTerminalCount, 0, 'late successful-abort finishes should not queue dependents');

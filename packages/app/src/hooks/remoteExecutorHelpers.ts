@@ -97,7 +97,7 @@ export function getFrozenNodeOptionsForExecutorTarget(
   return canUseFrozenNodeOutputsForExecutorTarget(target) ? { frozenNodeOutputs, graphId } : undefined;
 }
 
-const REMOTE_DEBUGGER_NON_RUN_EVENT_MESSAGES = new Set<keyof ProcessEventMessageMap>(['trace']);
+const REMOTE_DEBUGGER_NON_RUN_EVENT_MESSAGES = new Set<keyof ProcessEventMessageMap>(['trace', 'webAppStoragePatch']);
 
 export function shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent(options: {
   alreadyFlushed: boolean;

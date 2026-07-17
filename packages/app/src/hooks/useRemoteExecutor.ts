@@ -7,6 +7,7 @@ import {
   type Outputs,
   type ProcessEventMessageMap,
   type RemoteRunRequestId,
+  type RivetWebAppStorage,
   type StringArrayDataValue,
   type GraphId,
 } from '@valerypopoff/rivet2-core';
@@ -73,6 +74,9 @@ export function useRemoteExecutor() {
   const environmentProvider = useEnvironmentProvider();
   const store = useStore();
   const activeGraphRequestIdRef = useRef<RemoteRunRequestId | null>(null);
+  const webAppStoragePatchCallbacksByRequestIdRef = useRef(
+    new Map<RemoteRunRequestId, (storagePatch: RivetWebAppStorage) => void>(),
+  );
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
   const unscopedEventRoutingRef = useRef(createUnscopedRemoteExecutionRoutingState());
@@ -239,6 +243,17 @@ export function useRemoteExecutor() {
             eventDispatcher.done(data);
           }
           break;
+        case 'webAppStoragePatch': {
+          const callback = requestId ? webAppStoragePatchCallbacksByRequestIdRef.current.get(requestId) : undefined;
+          if (callback) {
+            try {
+              callback((data as ProcessEventMessageMap['webAppStoragePatch']).storagePatch);
+            } catch (error) {
+              handleError(error, 'Failed to apply web app storage returned by the executor.');
+            }
+          }
+          break;
+        }
         case 'abort':
           executorSession.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
@@ -421,6 +436,7 @@ export function useRemoteExecutor() {
         projectPath: loadedProject.path,
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
+        ...(options.webAppStorage === undefined ? {} : { webAppStorage: options.webAppStorage }),
       };
 
       if (options.waitForResults) {
@@ -431,8 +447,12 @@ export function useRemoteExecutor() {
           onRequestCreated: (requestId) => {
             activeGraphRequestIdRef.current = requestId;
             executorSession.setActiveGraphRunRequestId(requestId);
+            if (options.onWebAppStoragePatch) {
+              webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
+            }
           },
           onRequestSettled: (requestId) => {
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
             clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
             if (requestId === executorSession.getActiveGraphRunRequestId()) {
               executorSession.setActiveGraphRunRequestId(null);

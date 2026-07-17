@@ -12,6 +12,7 @@ import {
   type Outputs,
   type FrozenNodeOutputsByGraph,
   type RemoteRunRequestId,
+  type RivetWebAppStorage,
   decodeDebuggerTransportSentinels,
 } from '@valerypopoff/rivet2-core';
 import { match } from 'ts-pattern';
@@ -63,6 +64,7 @@ export type DynamicGraphRunOptions = {
   projectPath: string | undefined;
   useEditorCache?: boolean;
   captureNodeTimings?: boolean;
+  webAppStorage?: RivetWebAppStorage;
 };
 
 export type DynamicGraphRun = (data: DynamicGraphRunOptions) => Promise<void>;
@@ -179,6 +181,7 @@ export function startDebuggerServer(
               projectPath: string | undefined;
               useEditorCache?: boolean;
               captureNodeTimings?: boolean;
+              webAppStorage?: RivetWebAppStorage;
             };
             const {
               requestId,
@@ -191,6 +194,7 @@ export function startDebuggerServer(
               projectPath,
               useEditorCache,
               captureNodeTimings,
+              webAppStorage,
             } = runData;
             const decodedFrozenNodeOutputs = frozenNodeOutputs
               ? decodeDebuggerTransportSentinels(frozenNodeOutputs)
@@ -208,6 +212,7 @@ export function startDebuggerServer(
               projectPath,
               useEditorCache,
               captureNodeTimings,
+              webAppStorage,
             });
           })
           .with({ type: 'set-dynamic-data' }, async () => {

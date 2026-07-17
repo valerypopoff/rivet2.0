@@ -14,7 +14,7 @@ To create a new project, choose **New Project** in the top-bar **Menu** dropdown
 
 Use **Project settings** at the top of the graph tree panel to give your project a new name and optionally a description. This is simply metadata and does not affect the execution of the project.
 
-The Main Graph setting controls where Rivet starts its unreachable-graph analysis. A graph that is called by a Button or Chat in a web app also counts as reachable, along with the graphs it calls. Graphs that are reachable from neither the Main Graph nor a web app can show a broken-thread icon in the graph tree. To hide those markers, turn off **Show unreachable graph indicators** in **Rivet settings** > **Graphs**.
+The Main Graph setting controls where Rivet starts its unreachable-graph analysis. A graph that is called by a Button or Chat in a web app also counts as reachable, along with the graphs it calls. Rivet also checks enabled Tool-to-**Delegate Tool Call** paths across the project: manual delegation uses its configured handler, while Auto delegate uses the matching name of a connected Tool with a stored name. Graphs that are reachable from none of those paths can show a broken-thread icon in the graph tree. To hide those markers, turn off **Show unreachable graph indicators** in **Rivet settings** > **Graphs**.
 
 ### Comparing Projects
 

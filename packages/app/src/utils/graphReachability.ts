@@ -93,6 +93,20 @@ type DelegateFunctionCallNodeData = {
   unknownHandler?: GraphId;
 };
 
+type GptFunctionNodeData = {
+  name?: string;
+  useNameInput?: boolean;
+};
+
+type LLMChatV2NodeData = {
+  useToolCalling?: boolean;
+};
+
+type LegacyChatNodeData = {
+  enableFunctionUse?: boolean;
+  parallelFunctionCalling?: boolean;
+};
+
 type RunThreadNodeData = {
   toolCallHandlers?: Array<{ key: string; value: GraphId }>;
   onMessageCreationSubgraphId?: GraphId;
@@ -100,6 +114,9 @@ type RunThreadNodeData = {
 
 const CALL_GRAPH_INPUT_ID = 'graph' as PortId;
 const GRAPH_REFERENCE_OUTPUT_ID = 'graph' as PortId;
+const DELEGATE_FUNCTION_CALL_INPUT_ID = 'function-call' as PortId;
+const FUNCTION_CALL_OUTPUT_ID = 'function-call' as PortId;
+const FUNCTION_CALLS_OUTPUT_ID = 'function-calls' as PortId;
 
 export function resolveSupportedBuiltInPluginIds(pluginSpecs: PluginLoadSpec[] | undefined): Set<string> {
   const supportedIds = new Set<string>();
@@ -181,6 +198,9 @@ export function getGraphReachabilityReport(
 
   enqueue(mainGraphId, 'definite');
   for (const graphId of getUiGraphActionTargetGraphIds(project.uiGraphs)) {
+    enqueue(graphId, 'definite');
+  }
+  for (const graphId of getDelegateToolTargetGraphIds(project, allGraphIds)) {
     enqueue(graphId, 'definite');
   }
 
@@ -301,6 +321,25 @@ function getUiGraphActionTargetGraphIds(uiGraphs: Record<UiGraphId, UiGraph> | u
   return graphIds;
 }
 
+function getDelegateToolTargetGraphIds(project: ReachabilityProject, allGraphIds: GraphId[]): Set<GraphId> {
+  const graphIds = new Set<GraphId>();
+
+  for (const graph of Object.values(project.graphs) as NodeGraph[]) {
+    for (const edge of collectGraphDependencyEdges({
+      allGraphIds,
+      graph,
+      onlyDelegateFunctionCallEdges: true,
+      project,
+    })) {
+      if (isReachableGraphDependencyEdge(edge)) {
+        edge.targets.forEach((graphId) => graphIds.add(graphId));
+      }
+    }
+  }
+
+  return graphIds;
+}
+
 function getUiGraphActionTargetGraphId(component: UiGraph['components'][number]): GraphId | undefined {
   return isUiGraphActionComponent(component) ? component.action.graphId : undefined;
 }
@@ -370,13 +409,25 @@ function collectGraphDependencyEdges(options: {
   allGraphIds: GraphId[];
   graph: NodeGraph;
   includeDelegateFunctionCallEdges?: boolean;
+  onlyDelegateFunctionCallEdges?: boolean;
   project: ReachabilityProject;
 }): GraphDependencyEdge[] {
-  const { allGraphIds, graph, includeDelegateFunctionCallEdges = true, project } = options;
+  const {
+    allGraphIds,
+    graph,
+    includeDelegateFunctionCallEdges = true,
+    onlyDelegateFunctionCallEdges = false,
+    project,
+  } = options;
   const nodesById = Object.fromEntries(graph.nodes.map((node) => [node.id, node])) as Record<NodeId, ChartNode>;
   const connectionsByInputNodeId = graph.connections.reduce((accumulator, connection) => {
     accumulator[connection.inputNodeId] ??= [];
     accumulator[connection.inputNodeId]!.push(connection);
+    return accumulator;
+  }, {} as ConnectionIndex);
+  const connectionsByOutputNodeId = graph.connections.reduce((accumulator, connection) => {
+    accumulator[connection.outputNodeId] ??= [];
+    accumulator[connection.outputNodeId]!.push(connection);
     return accumulator;
   }, {} as ConnectionIndex);
 
@@ -414,6 +465,10 @@ function collectGraphDependencyEdges(options: {
 
   for (const node of graph.nodes) {
     if (node.disabled) {
+      continue;
+    }
+
+    if (onlyDelegateFunctionCallEdges && node.type !== 'delegateFunctionCall') {
       continue;
     }
 
@@ -456,22 +511,62 @@ function collectGraphDependencyEdges(options: {
         }
 
         const data = node.data as DelegateFunctionCallNodeData;
-        if (!data.autoDelegate) {
+        if (!hasActiveDelegateFunctionCallInput(node, connectionsByInputNodeId, nodesById)) {
+          break;
+        }
+
+        if (data.autoDelegate) {
+          const connectedToolNames = getConnectedStaticToolNames({
+            connectionsByOutputNodeId,
+            connectionsByInputNodeId,
+            delegateNode: node,
+            graph,
+            nodesById,
+          });
+
+          let hasUnmatchedConnectedTool = false;
+          for (const toolName of connectedToolNames) {
+            // Match the runtime resolver exactly: it delegates to the first graph whose
+            // name contains the function name, rather than treating every similarly
+            // named graph as a possible target.
+            const targetGraph = (Object.entries(project.graphs) as Array<[GraphId, NodeGraph]>).find(
+              ([, candidateGraph]) => candidateGraph.metadata?.name?.includes(toolName),
+            );
+
+            if (targetGraph) {
+              edges.push({ kind: 'direct-static', targets: [targetGraph[0]] });
+            } else {
+              hasUnmatchedConnectedTool = true;
+            }
+          }
+
+          if (data.unknownHandler && hasUnmatchedConnectedTool) {
+            addStoredTarget('direct-static', {
+              graphId: data.unknownHandler,
+              description: 'delegate fallback graph',
+              node,
+            });
+          }
+        } else {
           for (const handler of data.handlers ?? []) {
+            if (!handler.key) {
+              continue;
+            }
+
             addStoredTarget('direct-static', {
               graphId: handler.value,
               description: `delegate handler graph for "${handler.key || 'unknown'}"`,
               node,
             });
           }
-        }
 
-        if (data.unknownHandler) {
-          addStoredTarget('direct-static', {
-            graphId: data.unknownHandler,
-            description: 'delegate fallback graph',
-            node,
-          });
+          if (data.unknownHandler) {
+            addStoredTarget('direct-static', {
+              graphId: data.unknownHandler,
+              description: 'delegate fallback graph',
+              node,
+            });
+          }
         }
         break;
       }
@@ -521,6 +616,143 @@ function collectGraphDependencyEdges(options: {
   }
 
   return edges;
+}
+
+function hasActiveDelegateFunctionCallInput(
+  delegateNode: ChartNode,
+  connectionsByInputNodeId: ConnectionIndex,
+  nodesById: Record<NodeId, ChartNode>,
+): boolean {
+  const sourceConnection = getFirstValidInputConnection({
+    connectionsByInputNodeId,
+    inputId: DELEGATE_FUNCTION_CALL_INPUT_ID,
+    inputNodeId: delegateNode.id,
+    nodesById,
+  });
+  if (!sourceConnection) {
+    return false;
+  }
+
+  const sourceNode = nodesById[sourceConnection.outputNodeId]!;
+  return !sourceNode.disabled && isEnabledToolCallOutput(sourceNode, sourceConnection.outputId);
+}
+
+function getConnectedStaticToolNames(options: {
+  connectionsByOutputNodeId: ConnectionIndex;
+  connectionsByInputNodeId: ConnectionIndex;
+  delegateNode: ChartNode;
+  graph: NodeGraph;
+  nodesById: Record<NodeId, ChartNode>;
+}): Set<string> {
+  const { connectionsByOutputNodeId, connectionsByInputNodeId, delegateNode, graph, nodesById } = options;
+  const toolNames = new Set<string>();
+
+  for (const node of graph.nodes) {
+    if (node.disabled || node.type !== 'gptFunction') {
+      continue;
+    }
+
+    const data = node.data as GptFunctionNodeData;
+    const toolName = data.useNameInput ? '' : data.name?.trim() ?? '';
+    if (!toolName) {
+      continue;
+    }
+
+    if (
+      hasActiveConnectionPathToDelegate({
+        connectionsByOutputNodeId,
+        connectionsByInputNodeId,
+        delegateNode,
+        sourceNodeId: node.id,
+        nodesById,
+      })
+    ) {
+      toolNames.add(toolName);
+    }
+  }
+
+  return toolNames;
+}
+
+function hasActiveConnectionPathToDelegate(options: {
+  connectionsByOutputNodeId: ConnectionIndex;
+  connectionsByInputNodeId: ConnectionIndex;
+  delegateNode: ChartNode;
+  sourceNodeId: NodeId;
+  nodesById: Record<NodeId, ChartNode>;
+}): boolean {
+  const { connectionsByOutputNodeId, connectionsByInputNodeId, delegateNode, sourceNodeId, nodesById } = options;
+  const visited = new Set<NodeId>([sourceNodeId]);
+  const queue = [sourceNodeId];
+
+  while (queue.length > 0) {
+    const currentNodeId = queue.shift()!;
+
+    for (const connection of connectionsByOutputNodeId[currentNodeId] ?? []) {
+      if (!isFirstValidInputConnection(connection, connectionsByInputNodeId, nodesById)) {
+        continue;
+      }
+
+      if (connection.inputNodeId === delegateNode.id && connection.inputId === DELEGATE_FUNCTION_CALL_INPUT_ID) {
+        return true;
+      }
+
+      const nextNode = nodesById[connection.inputNodeId];
+      if (!nextNode || nextNode.disabled || visited.has(nextNode.id)) {
+        continue;
+      }
+
+      visited.add(nextNode.id);
+      queue.push(nextNode.id);
+    }
+  }
+
+  return false;
+}
+
+function getFirstValidInputConnection(options: {
+  connectionsByInputNodeId: ConnectionIndex;
+  inputId: PortId;
+  inputNodeId: NodeId;
+  nodesById: Record<NodeId, ChartNode>;
+}): NodeConnection | undefined {
+  const { connectionsByInputNodeId, inputId, inputNodeId, nodesById } = options;
+  return (connectionsByInputNodeId[inputNodeId] ?? []).find(
+    (connection) => connection.inputId === inputId && nodesById[connection.outputNodeId] != null,
+  );
+}
+
+function isFirstValidInputConnection(
+  connection: NodeConnection,
+  connectionsByInputNodeId: ConnectionIndex,
+  nodesById: Record<NodeId, ChartNode>,
+): boolean {
+  return (
+    getFirstValidInputConnection({
+      connectionsByInputNodeId,
+      inputId: connection.inputId,
+      inputNodeId: connection.inputNodeId,
+      nodesById,
+    }) === connection
+  );
+}
+
+function isEnabledToolCallOutput(node: ChartNode, outputId: PortId): boolean {
+  if (node.type === 'llmChatV2') {
+    const data = node.data as LLMChatV2NodeData;
+    return data.useToolCalling === true && outputId === FUNCTION_CALLS_OUTPUT_ID;
+  }
+
+  if (node.type === 'chat') {
+    const data = node.data as LegacyChatNodeData;
+    return (
+      data.enableFunctionUse === true &&
+      outputId === (data.parallelFunctionCalling ? FUNCTION_CALLS_OUTPUT_ID : FUNCTION_CALL_OUTPUT_ID)
+    );
+  }
+
+  // Other node types can intentionally produce a Delegate Tool Call-compatible object.
+  return true;
 }
 
 function collectCallGraphEdges(options: {
