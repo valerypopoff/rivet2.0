@@ -327,6 +327,12 @@ adding a button-shaped background, while all three controls keep larger hit
 areas for reliable pointer and keyboard use. React preview and hosted DOM
 rendering both consume this CSS from `UiGraphRendererStyles.ts`.
 
+Text Input, Textarea, Chat composer, and Chat search controls also share an
+explicit renderer-owned interaction style: hover uses the control hover
+background, and focus uses a subtle foreground-mixed border with no outline or
+box shadow. This prevents browser or host form-control focus styles from
+creating different colors or weights across preview and hosted pages.
+
 Output components use the shared renderer styles and have a responsive maximum
 height with internal vertical scrolling, so large output values do not expand the
 entire web-app page. The browser-runtime resize observer enables the native vertical

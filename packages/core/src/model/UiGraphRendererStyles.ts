@@ -303,6 +303,22 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   resize: vertical;
 }
 
+.rivet-web-app-field input:hover,
+.rivet-web-app-field textarea:hover,
+.rivet-web-app-chat-search-input:hover,
+.rivet-web-app-chat-composer textarea:hover {
+  background: var(--rivet-web-app-control-hover-background);
+}
+
+.rivet-web-app-field input:focus,
+.rivet-web-app-field textarea:focus,
+.rivet-web-app-chat-search-input:focus,
+.rivet-web-app-chat-composer textarea:focus {
+  border-color: color-mix(in srgb, var(--rivet-web-app-foreground) 34%, transparent);
+  box-shadow: none;
+  outline: none;
+}
+
 .rivet-web-app-button {
   width: fit-content;
   border: 0;
@@ -686,10 +702,6 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   padding: 6px 9px;
 }
 
-.rivet-web-app-chat-search-input:focus {
-  border-color: color-mix(in srgb, var(--rivet-web-app-foreground) 34%, transparent);
-}
-
 .rivet-web-app-chat-search-count {
   min-width: 32px;
   color: var(--rivet-web-app-foreground-muted);
@@ -929,10 +941,6 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   line-height: 1.35;
   padding: 10px 12px;
   resize: none;
-}
-
-.rivet-web-app-chat-composer textarea:focus {
-  border-color: color-mix(in srgb, var(--rivet-web-app-foreground) 34%, transparent);
 }
 
 .rivet-web-app-chat-send {
