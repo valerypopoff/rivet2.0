@@ -16,6 +16,7 @@ void describe('UiGraphActionProtocol', () => {
         requestId: 'request',
         revisionKey: 'revision',
         state: { prompt: 'Hello' },
+        storage: { analysis: 'Summary' },
       }),
       {
         type: 'action.start',
@@ -23,6 +24,7 @@ void describe('UiGraphActionProtocol', () => {
         requestId: 'request',
         revisionKey: 'revision',
         state: { prompt: 'Hello' },
+        storage: { analysis: 'Summary' },
       },
     );
     assert.deepEqual(
@@ -36,6 +38,16 @@ void describe('UiGraphActionProtocol', () => {
       },
     );
     assert.equal(parseRivetWebAppClientMessage({ type: 'action.start', requestId: 'request', state: {} }), undefined);
+    assert.equal(
+      parseRivetWebAppClientMessage({
+        type: 'action.start',
+        componentId: 'button',
+        requestId: 'request',
+        state: {},
+        storage: [],
+      }),
+      undefined,
+    );
     assert.equal(parseRivetWebAppClientMessage({ type: 'run.resume', runId: 'run', lastSequence: -1 }), undefined);
   });
 
@@ -93,6 +105,7 @@ void describe('UiGraphActionProtocol', () => {
       runId: 'run',
       sequence: 3,
       statePatch: { result: 'Done' },
+      storagePatch: { analysis: 'Updated' },
     });
     const accepted = parseRivetWebAppServerMessage({
       type: 'action.accepted',

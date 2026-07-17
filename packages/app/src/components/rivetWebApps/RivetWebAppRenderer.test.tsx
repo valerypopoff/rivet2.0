@@ -147,6 +147,130 @@ test('React web app actions keep independent loading, reject stale patches, and 
   }
 });
 
+test('persistent editor previews keep an in-flight action through unmount and reattach its result', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/app' });
+  const previousGlobals = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    navigator: globalThis.navigator,
+    window: globalThis.window,
+  };
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: dom.window.document },
+    HTMLElement: { configurable: true, value: dom.window.HTMLElement },
+    navigator: { configurable: true, value: dom.window.navigator },
+    window: { configurable: true, value: dom.window },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  const button = {
+    action: { outputs: [{ outputKey: 'value', stateKey: 'result' }], type: 'runGraph' as const },
+    id: 'run-button' as UiComponentId,
+    label: 'Run',
+    type: 'button' as const,
+  };
+  const uiGraph = {
+    components: [
+      button,
+      { id: 'result-output' as UiComponentId, label: 'Result', stateKey: 'result', type: 'output' as const },
+    ],
+    id: 'persistent-preview' as UiGraphId,
+    name: 'Persistent preview',
+  } satisfies UiGraph;
+  const interactionController = createUiGraphInteractionController(uiGraph);
+  let abortSignal: AbortSignal | undefined;
+  let resolveAction!: (result: RivetWebAppActionResult) => void;
+  const actionResult = new Promise<RivetWebAppActionResult>((resolve) => {
+    resolveAction = resolve;
+  });
+  const rootElement = dom.window.document.getElementById('root')!;
+  const root = createRoot(rootElement);
+  let initialRootUnmounted = false;
+  let resumedRoot: ReturnType<typeof createRoot> | undefined;
+  let resumedStorage: Record<string, unknown> | undefined;
+
+  try {
+    await act(async () => {
+      root.render(
+        <RivetWebAppRenderer
+          interactionController={interactionController}
+          preserveActionsOnUnmount
+          uiGraph={uiGraph}
+          onRunAction={(_componentId, _state, signal) => {
+            abortSignal = signal;
+            return actionResult;
+          }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
+    });
+    assert.equal(abortSignal?.aborted, false);
+
+    await act(async () => root.unmount());
+    initialRootUnmounted = true;
+    assert.equal(abortSignal?.aborted, false);
+    assert.equal(interactionController.getSnapshot().runningComponentIds.has(button.id), true);
+
+    const resumedElement = dom.window.document.createElement('div');
+    dom.window.document.body.append(resumedElement);
+    resumedRoot = createRoot(resumedElement);
+    await act(async () => {
+      resumedRoot?.render(
+        <RivetWebAppRenderer
+          interactionController={interactionController}
+          preserveActionsOnUnmount
+          uiGraph={uiGraph}
+          onRunAction={async (_componentId, _state, _signal, _onProgress, storage) => {
+            resumedStorage = storage;
+            return { outputs: {} };
+          }}
+        />,
+      );
+    });
+
+    const actionCompleted = new Promise<void>((resolve) => {
+      const unsubscribe = interactionController.subscribe(() => {
+        if (interactionController.getSnapshot().state.result === 'finished') {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+    await act(async () => {
+      resolveAction({
+        outputs: {},
+        statePatch: { result: 'finished' },
+        storagePatch: { analysis: { summary: 'finished' } },
+      });
+      await actionCompleted;
+    });
+    assert.equal(interactionController.getSnapshot().state.result, 'finished');
+    assert.equal(interactionController.getSnapshot().runningComponentIds.size, 0);
+
+    await act(async () => {
+      resumedElement.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
+    });
+    assert.equal(resumedElement.querySelector('.rivet-web-app-output pre')?.textContent, 'finished');
+    assert.deepEqual(resumedStorage, { analysis: { summary: 'finished' } });
+  } finally {
+    if (!initialRootUnmounted) {
+      await act(async () => root.unmount());
+    }
+    await act(async () => resumedRoot?.unmount());
+    dom.window.close();
+    Object.defineProperties(globalThis, {
+      document: { configurable: true, value: previousGlobals.document },
+      HTMLElement: { configurable: true, value: previousGlobals.HTMLElement },
+      navigator: { configurable: true, value: previousGlobals.navigator },
+      window: { configurable: true, value: previousGlobals.window },
+    });
+    delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+  }
+});
+
 test('editor component frames expose multi-selection modifier clicks without changing hosted behavior', async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/app' });
   const previousGlobals = {

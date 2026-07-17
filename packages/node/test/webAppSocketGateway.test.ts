@@ -9,7 +9,7 @@ import {
   type Project,
   type RivetWebAppServerMessage,
 } from '../src/index.js';
-import { makeExternalStatusProject, makeWebAppProject } from './webAppFixtures.js';
+import { makeExternalStatusProject, makeExternalStorageProject, makeWebAppProject } from './webAppFixtures.js';
 import {
   closeWebAppTestHarnesses,
   collectWebAppSocketMessages as collectMessages,
@@ -107,6 +107,24 @@ void describe('Rivet web app WebSocket gateway', () => {
 
     assert.deepEqual(progress.progress, { message: 'Hello' });
     assert.deepEqual(completed.statePatch, { result: 'Hello' });
+  });
+
+  void it('returns web-app storage changes through replayable WebSocket completion events', async () => {
+    const harness = await createHarness(makeExternalStorageProject('set'));
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(
+      JSON.stringify({
+        ...makeStartMessage('request-storage'),
+        state: { prompt: 'Updated summary' },
+        storage: { analysis: 'Old summary' },
+      }),
+    );
+    await messages.next('action.accepted');
+    const completed = await messages.next('action.completed');
+
+    assert.deepEqual(completed.storagePatch, { analysis: 'Updated summary' });
   });
 
   void it('exposes the prepared processor before execution so hosts can attach complete recordings', async () => {

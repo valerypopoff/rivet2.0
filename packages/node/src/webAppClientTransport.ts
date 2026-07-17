@@ -9,6 +9,7 @@ type WebAppActionResponse = {
   code?: string;
   error?: string;
   statePatch?: Record<string, unknown>;
+  storagePatch?: Record<string, unknown>;
 };
 
 export type HostedActionRunner = {
@@ -20,7 +21,8 @@ export type HostedActionRunner = {
     revisionKey?: string;
     signal: AbortSignal;
     state: Record<string, unknown>;
-  }): Promise<{ statePatch?: Record<string, unknown> }>;
+    storage: Record<string, unknown>;
+  }): Promise<{ statePatch?: Record<string, unknown>; storagePatch?: Record<string, unknown> }>;
 };
 
 export class HostedActionError extends Error {
@@ -54,9 +56,9 @@ function createHttpActionRunner(actionPath: string): HostedActionRunner {
   return {
     survivesPageDetach: false,
     dispose: () => undefined,
-    async run({ componentId, revisionKey, signal, state }) {
+    async run({ componentId, revisionKey, signal, state, storage }) {
       const response = await fetch(actionPath, {
-        body: JSON.stringify({ componentId, revisionKey, state }),
+        body: JSON.stringify({ componentId, revisionKey, state, storage }),
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         method: 'POST',
@@ -66,7 +68,7 @@ function createHttpActionRunner(actionPath: string): HostedActionRunner {
       if (!response.ok) {
         throw new HostedActionError(result.error || 'Action failed.', result.code);
       }
-      return { statePatch: result.statePatch };
+      return { statePatch: result.statePatch, storagePatch: result.storagePatch };
     },
   };
 }
@@ -81,10 +83,11 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       componentId: string;
       revisionKey?: string;
       state: Record<string, unknown>;
+      storage: Record<string, unknown>;
     };
     onProgress(progress: GraphProgress): void;
     reject(error: unknown): void;
-    resolve(result: { statePatch?: Record<string, unknown> }): void;
+    resolve(result: { statePatch?: Record<string, unknown>; storagePatch?: Record<string, unknown> }): void;
     runId?: string;
     signal: AbortSignal;
     startSent: boolean;
@@ -188,7 +191,9 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       } else if (message.type === 'action.progress') {
         pending.onProgress(message.progress);
       } else if (message.type === 'action.completed') {
-        settlePending(pending, () => pending.resolve({ statePatch: message.statePatch }));
+        settlePending(pending, () =>
+          pending.resolve({ statePatch: message.statePatch, storagePatch: message.storagePatch }),
+        );
       } else if (message.type === 'action.failed') {
         settlePending(pending, () => pending.reject(new HostedActionError(message.error, message.code)));
       } else if (message.type === 'action.cancelled') {
@@ -223,7 +228,7 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
         settlePending(pending, () => pending.reject(error));
       }
     },
-    run({ componentId, onProgress, revisionKey, signal, state }) {
+    run({ componentId, onProgress, revisionKey, signal, state, storage }) {
       if (disposed) return Promise.reject(new Error('The web app action transport is closed.'));
       signal.throwIfAborted();
       const requestId = globalThis.crypto?.randomUUID?.() ?? `rivet-${Date.now()}-${Math.random()}`;
@@ -239,6 +244,7 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
             requestId,
             componentId,
             state,
+            storage,
             ...(revisionKey == null ? {} : { revisionKey }),
           },
           onProgress,

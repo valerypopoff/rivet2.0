@@ -12,6 +12,7 @@ import {
   resolveUiGraphComponentActionInputs,
   resolveUiGraphComponentActionOutputStatePatch,
   validateUiGraphActionBindings,
+  createRivetWebAppStorageExternalFunctions,
 } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import { useStableCallback } from './useStableCallback.js';
@@ -28,8 +29,18 @@ export function useRunUiGraphAction(tryRunGraph: EditorGraphRun) {
       state: Record<string, unknown>,
       abortSignal?: AbortSignal,
       onProgress?: (progress: GraphProgress) => void,
+      storage?: Record<string, unknown>,
     ) => {
-      return await runUiGraphAction({ abortSignal, componentId, onProgress, project, state, tryRunGraph, uiGraph });
+      return await runUiGraphAction({
+        abortSignal,
+        componentId,
+        onProgress,
+        project,
+        state,
+        storage,
+        tryRunGraph,
+        uiGraph,
+      });
     },
   );
 }
@@ -40,9 +51,14 @@ export async function runUiGraphAction(options: {
   onProgress?: (progress: GraphProgress) => void;
   project: Project;
   state: Record<string, unknown>;
+  storage?: Record<string, unknown>;
   tryRunGraph: EditorGraphRun;
   uiGraph: UiGraph;
-}): Promise<{ outputs: GraphOutputs; statePatch: Record<string, unknown> }> {
+}): Promise<{
+  outputs: GraphOutputs;
+  statePatch: Record<string, unknown>;
+  storagePatch: Record<string, unknown>;
+}> {
   const uiGraph = normalizeUiGraph(options.uiGraph);
   const component = getUiGraphActionComponent(uiGraph, options.componentId);
   if (!component) {
@@ -63,9 +79,11 @@ export async function runUiGraphAction(options: {
   }
 
   options.abortSignal?.throwIfAborted();
+  const webAppStorage = createRivetWebAppStorageExternalFunctions(options.storage ?? {});
   const rawInputs = resolveUiGraphComponentActionInputs(component, options.state);
   const runOptions = {
     graphId: component.action.graphId,
+    externalFunctions: webAppStorage.externalFunctions,
     inputs: toGraphInputs(rawInputs),
     onProgress: options.onProgress,
     requireLiveRun: true,
@@ -83,6 +101,7 @@ export async function runUiGraphAction(options: {
   return {
     outputs,
     statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, options.state),
+    storagePatch: webAppStorage.getStoragePatch(),
   };
 }
 

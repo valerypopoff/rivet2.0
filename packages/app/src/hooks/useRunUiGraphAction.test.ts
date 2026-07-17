@@ -49,15 +49,22 @@ test('web app actions run through the editor graph runner and wait for outputs',
     state: { prompt: 'hello' },
     tryRunGraph: async (options) => {
       calls.push(options ?? {});
+      const getStorage = options?.externalFunctions?.getWebAppStorage;
+      const setStorage = options?.externalFunctions?.setWebAppStorage;
+      assert.deepEqual(await getStorage?.({} as never, 'existing'), { type: 'any', value: 'old' });
+      await setStorage?.({} as never, 'analysis', { summary: 'Saved in preview storage' });
       options?.onProgress?.(progress);
       return outputs;
     },
     onProgress,
+    storage: { existing: 'old' },
     uiGraph,
   });
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], {
+  const { externalFunctions, ...runCall } = calls[0]!;
+  assert.deepEqual(Object.keys(externalFunctions ?? {}).sort(), ['getWebAppStorage', 'setWebAppStorage']);
+  assert.deepEqual(runCall, {
     graphId,
     inputs: {
       input: { type: 'string', value: 'hello' },
@@ -73,6 +80,7 @@ test('web app actions run through the editor graph runner and wait for outputs',
     statePatch: {
       lastResult: outputs,
     },
+    storagePatch: { analysis: { summary: 'Saved in preview storage' } },
   });
 });
 
@@ -129,6 +137,7 @@ test('web app actions can map multiple inputs and outputs', async () => {
       lastAnswer: 'done',
       lastScore: 7,
     },
+    storagePatch: {},
   });
 });
 
@@ -270,6 +279,7 @@ test('web app actions can store one unwrapped graph output value', async () => {
     statePatch: {
       lastResult: 'hello from graph',
     },
+    storagePatch: {},
   });
 });
 

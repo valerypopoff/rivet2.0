@@ -15,8 +15,9 @@ const OUTPUT_RESIZE_MAX_HEIGHT_PROPERTY = '--rivet-web-app-output-resize-max-hei
 const CHAT_SEARCH_MATCH_CLASS = 'rivet-web-app-chat-search-match';
 const CHAT_SEARCH_ACTIVE_MATCH_CLASS = 'rivet-web-app-chat-search-match-active';
 const UI_GRAPH_CHAT_STORAGE_PREFIX = 'rivet-web-app-chat-state:v1';
+const UI_GRAPH_APP_STORAGE_PREFIX = 'rivet-web-app-storage:v1';
 
-type UiGraphChatStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
+type UiGraphBrowserStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
 type UiGraphStorageLocation = Pick<Location, 'origin' | 'pathname'>;
 
 const escapeRegularExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -35,7 +36,7 @@ const setStyleProperty = (element: HTMLElement, property: string, value: string)
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const getDefaultUiGraphChatStorage = (): UiGraphChatStorage | undefined => {
+const getDefaultUiGraphBrowserStorage = (): UiGraphBrowserStorage | undefined => {
   try {
     return globalThis.localStorage ?? globalThis.window?.localStorage;
   } catch {
@@ -68,6 +69,69 @@ export function getUiGraphChatStorageKey(
     encodeURIComponent(pathname),
     encodeURIComponent(uiGraph.id),
   ].join(':');
+}
+
+/** Returns the browser-local key for graph-managed storage owned by one web app. */
+export function getUiGraphWebAppStorageKey(
+  uiGraph: UiGraph,
+  location: UiGraphStorageLocation | undefined = getDefaultUiGraphStorageLocation(),
+): string | undefined {
+  if (!location?.origin) {
+    return undefined;
+  }
+
+  const pathname = location.pathname.replace(/\/+$/, '') || '/';
+  return [
+    UI_GRAPH_APP_STORAGE_PREFIX,
+    encodeURIComponent(location.origin),
+    encodeURIComponent(pathname),
+    encodeURIComponent(uiGraph.id),
+  ].join(':');
+}
+
+/** Loads the JSON object visible to getWebAppStorage for this one browser app. */
+export function loadUiGraphWebAppStorage(
+  uiGraph: UiGraph,
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
+  location?: UiGraphStorageLocation,
+): Record<string, unknown> {
+  const key = getUiGraphWebAppStorageKey(uiGraph, location);
+  if (!key || !storage) return {};
+
+  try {
+    const serialized = storage.getItem(key);
+    if (!serialized) return {};
+    const value: unknown = JSON.parse(serialized);
+    return isRecord(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Merges a successful action's changed keys and persists the complete app-local record. */
+export function applyUiGraphWebAppStoragePatch(
+  uiGraph: UiGraph,
+  currentStorage: Readonly<Record<string, unknown>>,
+  patch: Readonly<Record<string, unknown>>,
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
+  location?: UiGraphStorageLocation,
+): Record<string, unknown> {
+  const key = getUiGraphWebAppStorageKey(uiGraph, location);
+  if (!key || !storage) {
+    throw new Error('Browser storage is unavailable for this web app.');
+  }
+
+  const nextStorage = { ...currentStorage, ...patch };
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(nextStorage);
+    storage.setItem(key, serialized);
+  } catch (error) {
+    throw new Error('Web app storage could not be saved. Browser storage may be unavailable or full.', {
+      cause: error,
+    });
+  }
+  return nextStorage;
 }
 
 /** Selects and validates the private browser-persisted state of Chat components only. */
@@ -115,7 +179,8 @@ export function hasUiGraphChatPersistentStateChanged(
     if (component.type !== 'chat') return false;
 
     return (
-      previousState[getUiGraphChatDraftStateKey(component.id)] !== nextState[getUiGraphChatDraftStateKey(component.id)] ||
+      previousState[getUiGraphChatDraftStateKey(component.id)] !==
+        nextState[getUiGraphChatDraftStateKey(component.id)] ||
       previousState[getUiGraphChatMessagesStateKey(component.id)] !==
         nextState[getUiGraphChatMessagesStateKey(component.id)] ||
       previousState[getUiGraphChatPinsStateKey(component.id)] !== nextState[getUiGraphChatPinsStateKey(component.id)]
@@ -126,7 +191,7 @@ export function hasUiGraphChatPersistentStateChanged(
 /** Loads valid Chat-only state without allowing malformed local storage to affect rendering. */
 export function loadUiGraphChatPersistentState(
   uiGraph: UiGraph,
-  storage: UiGraphChatStorage | undefined = getDefaultUiGraphChatStorage(),
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
   location?: UiGraphStorageLocation,
 ): Record<string, unknown> {
   const key = getUiGraphChatStorageKey(uiGraph, location);
@@ -151,7 +216,7 @@ export function loadUiGraphChatPersistentState(
 export function saveUiGraphChatPersistentState(
   uiGraph: UiGraph,
   state: Readonly<Record<string, unknown>>,
-  storage: UiGraphChatStorage | undefined = getDefaultUiGraphChatStorage(),
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
   location?: UiGraphStorageLocation,
 ): void {
   const key = getUiGraphChatStorageKey(uiGraph, location);

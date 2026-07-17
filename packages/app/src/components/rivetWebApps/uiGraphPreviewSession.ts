@@ -22,6 +22,21 @@ export function getUiGraphPreviewInteractionController(
   return controller;
 }
 
+/** Aborts and removes one editor-only preview session, for example when its UI graph is deleted. */
+export function clearUiGraphPreviewSession(projectId: ProjectId, uiGraphId: UiGraphId): void {
+  const sessions = sessionsByProjectId.get(projectId);
+  const controller = sessions?.get(uiGraphId);
+  if (!sessions || !controller) {
+    return;
+  }
+
+  controller.abortActions();
+  sessions.delete(uiGraphId);
+  if (sessions.size === 0) {
+    sessionsByProjectId.delete(projectId);
+  }
+}
+
 export function clearUiGraphPreviewSessions(projectId: ProjectId): void {
   const sessions = sessionsByProjectId.get(projectId);
   if (!sessions) {

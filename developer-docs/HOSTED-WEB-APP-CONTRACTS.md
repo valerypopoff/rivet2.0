@@ -146,6 +146,22 @@ event, but only a host with a web-app progress surface displays it. Other
 host-supplied external functions are preserved, and no web-app-specific executor
 marker is needed.
 
+Web-app actions additionally reserve `getWebAppStorage` and `setWebAppStorage`.
+The browser owns persistence; the server never reads browser `localStorage`
+directly. Each HTTP or WebSocket action carries a JSON-object snapshot scoped by
+origin, normalized app pathname, and UI graph ID. The action processor installs an
+action-local storage controller after host external functions, so hosts cannot
+replace the reserved behavior accidentally. `getWebAppStorage(key)` reads the
+snapshot, `getWebAppStorage()` returns the whole app object, and
+`setWebAppStorage(key, value)` updates the action-local view plus a changed-key
+patch. Later calls in the same run observe earlier writes. Only successful actions
+return the patch; the browser merges it into the current app record without
+replacing disjoint keys, including when another action completed while it was
+running. HTTP responses and replayable WebSocket completion events
+carry the same `storagePatch`. Storage never enters component UI state, graph input
+mapping, or lifecycle-hook state projection. It is JSON-only, browser-local,
+quota-bound, non-secret storage rather than a durable host database.
+
 ### Long-running WebSocket actions
 
 HTTP actions remain the compatibility/default path. A host opts a rendered page
@@ -316,10 +332,13 @@ Reset is session-only: it aborts active actions, clears action errors/progress, 
 restores the UI graph's initial state without changing the project or YAML. The
 desktop editor preview keeps its interaction controller in an in-memory registry
 keyed by open project and UI graph, so switching to another graph or UI graph does
-not lose entered fields, outputs, or chat messages. The app clears those controllers
-when the project is closed or a project is opened as a new session. Detached previews
-and hosted pages own their own controller and therefore start a fresh session when
-they are opened or reloaded.
+not lose entered fields, outputs, chat messages, or an in-flight action. An action
+started in that embedded preview keeps running while its renderer is temporarily
+unmounted by workspace navigation; reopening the preview reattaches the same
+controller and shows its progress or completed result. Explicit Abort, Reset,
+page unload, deleting that UI graph, and closing the project still abort its action.
+Detached previews and hosted pages own their own controller and therefore start a
+fresh session when they are opened or reloaded.
 
 The Chat header uses the shared icon-only styling for its overflow, pins, and
 search controls. Their hover and focus states change the icon color without

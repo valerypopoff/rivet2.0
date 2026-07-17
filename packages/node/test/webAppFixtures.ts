@@ -166,3 +166,91 @@ export function makeExternalStatusProject(): Project {
   ];
   return project;
 }
+
+export function makeExternalStorageProject(mode: 'get' | 'set'): Project {
+  const project = makeWebAppProject({ outputId: 'value' });
+  const externalNode = {
+    data: {
+      functionName: mode === 'get' ? 'getWebAppStorage' : 'setWebAppStorage',
+      useErrorOutput: false,
+      useFunctionNameInput: false,
+    },
+    id: 'storage-node' as never,
+    title: mode === 'get' ? 'Get web app storage' : 'Set web app storage',
+    type: 'externalCall' as const,
+    visualData: { x: 400, y: 0 },
+  };
+  project.graphs[TEST_GRAPH_ID]!.nodes = [
+    {
+      data: { dataType: 'string', id: 'input' },
+      id: 'input-node' as never,
+      title: 'Input',
+      type: 'graphInput',
+      visualData: { x: 0, y: 0 },
+    },
+    ...(mode === 'set'
+      ? [
+          {
+            data: { normalizeLineEndings: true, text: 'analysis' },
+            id: 'key-node' as never,
+            title: 'Storage key',
+            type: 'text' as const,
+            visualData: { x: 0, y: 160 },
+          },
+          {
+            data: { flatten: false, flattenDeep: false },
+            id: 'arguments-node' as never,
+            title: 'Arguments',
+            type: 'array' as const,
+            visualData: { x: 200, y: 0 },
+          },
+        ]
+      : []),
+    externalNode,
+    {
+      data: { dataType: 'any', id: 'value' },
+      id: 'output-node' as never,
+      title: 'Output',
+      type: 'graphOutput',
+      visualData: { x: 600, y: 0 },
+    },
+  ];
+  project.graphs[TEST_GRAPH_ID]!.connections = [
+    ...(mode === 'set'
+      ? [
+          {
+            inputId: 'input1' as never,
+            inputNodeId: 'arguments-node' as never,
+            outputId: 'output' as never,
+            outputNodeId: 'key-node' as never,
+          },
+          {
+            inputId: 'input2' as never,
+            inputNodeId: 'arguments-node' as never,
+            outputId: 'data' as never,
+            outputNodeId: 'input-node' as never,
+          },
+          {
+            inputId: 'arguments' as never,
+            inputNodeId: 'storage-node' as never,
+            outputId: 'output' as never,
+            outputNodeId: 'arguments-node' as never,
+          },
+        ]
+      : [
+          {
+            inputId: 'arguments' as never,
+            inputNodeId: 'storage-node' as never,
+            outputId: 'data' as never,
+            outputNodeId: 'input-node' as never,
+          },
+        ]),
+    {
+      inputId: 'value' as never,
+      inputNodeId: 'output-node' as never,
+      outputId: 'result' as never,
+      outputNodeId: 'storage-node' as never,
+    },
+  ];
+  return project;
+}

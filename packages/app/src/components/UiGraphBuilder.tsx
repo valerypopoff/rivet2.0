@@ -636,6 +636,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
               } satisfies PreviewActionResponse);
             }
           },
+          event.data.storage,
         );
         if (cleaned) {
           return;
@@ -783,8 +784,8 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
             scrollContainerRef={previewScrollRef}
             selectedComponentIds={selectedComponentIdSet}
             uiGraph={uiGraph}
-            onRunAction={(componentId, state, abortSignal, onProgress) =>
-              runUiGraphAction(uiGraph, componentId, state, abortSignal, onProgress)
+            onRunAction={(componentId, state, abortSignal, onProgress, storage) =>
+              runUiGraphAction(uiGraph, componentId, state, abortSignal, onProgress, storage)
             }
           />
         </section>

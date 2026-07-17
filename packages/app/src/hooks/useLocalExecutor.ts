@@ -370,6 +370,9 @@ export function useLocalExecutor() {
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
+      for (const [name, externalFunction] of Object.entries(options.externalFunctions ?? {})) {
+        processor.setExternalFunction(name, externalFunction);
+      }
       if (options.onProgress) {
         processor.on('progress', ({ progress }) => options.onProgress?.(progress));
       }

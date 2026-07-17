@@ -14,6 +14,7 @@ type PreviewActionRequest =
       componentId: UiComponentId;
       requestId: string;
       state: Record<string, unknown>;
+      storage: Record<string, unknown>;
       type: 'runAction';
     }
   | {
@@ -147,13 +148,14 @@ export const RivetWebAppPreviewWindow: FC = () => {
     state: Record<string, unknown>,
     abortSignal: AbortSignal,
     onProgress: (progress: GraphProgress) => void,
+    storage: Record<string, unknown>,
   ): Promise<RivetWebAppActionResult> => {
     if (!channel) {
       return Promise.reject(new Error('Preview channel is not available.'));
     }
 
     const requestId = crypto.randomUUID();
-    const request: PreviewActionRequest = { componentId, requestId, state, type: 'runAction' };
+    const request: PreviewActionRequest = { componentId, requestId, state, storage, type: 'runAction' };
 
     return new Promise((resolve, reject) => {
       const cleanup = () => {

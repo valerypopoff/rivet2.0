@@ -42,12 +42,15 @@ import {
 } from '@valerypopoff/rivet2-core';
 import {
   clearUiGraphChatSearchMatches,
+  applyUiGraphWebAppStoragePatch,
   copyUiGraphText,
   downloadUiGraphJsonOutput,
   hasUiGraphChatPersistentStateChanged,
   getUiGraphChatPersistentState,
+  getUiGraphWebAppStorageKey,
   highlightUiGraphChatSearchMatches,
   loadUiGraphChatPersistentState,
+  loadUiGraphWebAppStorage,
   observeUiGraphOutputResizeBounds,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
@@ -59,9 +62,33 @@ import { useMarkdown } from '../../hooks/useMarkdown.js';
 // the same component beneath `default` during source-level tests.
 const Select = (AtlaskitSelect as unknown as { default?: typeof AtlaskitSelect }).default ?? AtlaskitSelect;
 
+type WebAppStorageActionState = {
+  appliedActionByKey: Map<string, number>;
+  nextAction: number;
+};
+
+// An editor preview can unmount while its action keeps running. Keep ordering
+// metadata by browser storage key, rather than by the temporary React tree.
+const storageActionStatesByStorageKey = new Map<string, WebAppStorageActionState>();
+
+function getWebAppStorageActionState(uiGraph: UiGraph): WebAppStorageActionState {
+  const storageKey = getUiGraphWebAppStorageKey(uiGraph);
+  if (!storageKey) {
+    return { appliedActionByKey: new Map(), nextAction: 0 };
+  }
+
+  let actionState = storageActionStatesByStorageKey.get(storageKey);
+  if (!actionState) {
+    actionState = { appliedActionByKey: new Map(), nextAction: 0 };
+    storageActionStatesByStorageKey.set(storageKey, actionState);
+  }
+  return actionState;
+}
+
 export type RivetWebAppActionResult = {
   outputs: Record<string, DataValue>;
   statePatch?: Record<string, unknown>;
+  storagePatch?: Record<string, unknown>;
 };
 
 export type RivetWebAppRendererProps = {
@@ -75,7 +102,14 @@ export type RivetWebAppRendererProps = {
     state: Record<string, unknown>,
     abortSignal: AbortSignal,
     onProgress: (progress: GraphProgress) => void,
+    storage: Record<string, unknown>,
   ): Promise<RivetWebAppActionResult>;
+  /**
+   * Keeps active actions alive if React temporarily removes this renderer.
+   * Page unload still aborts them. This is for the desktop editor's persistent
+   * UI-graph preview session; detached and hosted renderers keep the default.
+   */
+  preserveActionsOnUnmount?: boolean;
   rootRef?: RefObject<HTMLDivElement>;
   selectedComponentIds?: ReadonlySet<UiComponentId>;
   uiGraph: UiGraph;
@@ -137,6 +171,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   onComponentSelectionChange,
   onRootPointerDownCapture,
   onRunAction,
+  preserveActionsOnUnmount = false,
   rootRef,
   selectedComponentIds,
   uiGraph,
@@ -156,7 +191,6 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     interactionController.getSnapshot,
     interactionController.getSnapshot,
   );
-
   const resetApp = useUiGraphChatBrowserPersistence(interactionController, normalizedInteractionUiGraph);
 
   useEffect(() => {
@@ -164,16 +198,44 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     window.addEventListener('pagehide', abortActions);
     return () => {
       window.removeEventListener('pagehide', abortActions);
-      interactionController.abortActions();
+      if (!preserveActionsOnUnmount) {
+        interactionController.abortActions();
+      }
     };
-  }, [interactionController]);
+  }, [interactionController, preserveActionsOnUnmount]);
 
   const runAction = useCallback(
     (component: UiGraphActionComponent) =>
-      interactionController.runAction(component, ({ componentId, reportProgress, signal, state }) =>
-        onRunAction(componentId, state, signal, reportProgress),
-      ),
-    [interactionController, onRunAction],
+      interactionController.runAction(component, async ({ componentId, reportProgress, signal, state }) => {
+        const storageActionState = getWebAppStorageActionState(normalizedInteractionUiGraph);
+        const actionNumber = ++storageActionState.nextAction;
+        const result = await onRunAction(
+          componentId,
+          state,
+          signal,
+          reportProgress,
+          loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
+        );
+        signal.throwIfAborted();
+        if (result.storagePatch && Object.keys(result.storagePatch).length > 0) {
+          const applicablePatch = Object.fromEntries(
+            Object.entries(result.storagePatch).filter(([key]) => {
+              const latestAppliedAction = storageActionState.appliedActionByKey.get(key) ?? 0;
+              if (actionNumber < latestAppliedAction) return false;
+              storageActionState.appliedActionByKey.set(key, actionNumber);
+              return true;
+            }),
+          );
+          if (Object.keys(applicablePatch).length === 0) return { statePatch: result.statePatch };
+          applyUiGraphWebAppStoragePatch(
+            normalizedInteractionUiGraph,
+            loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
+            applicablePatch,
+          );
+        }
+        return { statePatch: result.statePatch };
+      }),
+    [interactionController, normalizedInteractionUiGraph, onRunAction],
   );
 
   return (

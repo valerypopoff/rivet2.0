@@ -37,13 +37,16 @@ export {
 } from './model/UiGraphActionProtocol.js';
 export {
   copyUiGraphText,
+  applyUiGraphWebAppStoragePatch,
   clearUiGraphChatSearchMatches,
   downloadUiGraphJsonOutput,
   hasUiGraphChatPersistentStateChanged,
   getUiGraphChatPersistentState,
   getUiGraphChatStorageKey,
+  getUiGraphWebAppStorageKey,
   highlightUiGraphChatSearchMatches,
   loadUiGraphChatPersistentState,
+  loadUiGraphWebAppStorage,
   observeUiGraphOutputResizeBounds,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,

@@ -477,6 +477,7 @@ export function createRivetWebAppWebSocketGateway(
           resolveContext: session.resolveContext,
           revisionKey: session.revisionKey,
           state: message.state,
+          storage: message.storage,
           uiGraph: session.uiGraph,
         });
         try {
@@ -532,6 +533,7 @@ export function createRivetWebAppWebSocketGateway(
                 requestId: message.requestId,
                 runId,
                 statePatch: result.statePatch,
+                storagePatch: result.storagePatch,
               });
             },
             (error) => {

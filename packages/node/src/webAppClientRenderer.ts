@@ -1,5 +1,6 @@
 import {
   clearUiGraphChatSearchMatches,
+  applyUiGraphWebAppStoragePatch,
   copyUiGraphText,
   createUiGraphChatHistoryFlushStatePatch,
   createUiGraphChatPinStatePatch,
@@ -13,6 +14,7 @@ import {
   hasUiGraphChatPersistentStateChanged,
   highlightUiGraphChatSearchMatches,
   loadUiGraphChatPersistentState,
+  loadUiGraphWebAppStorage,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
@@ -100,6 +102,8 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     initialState: { ...config.initialState, ...loadUiGraphChatPersistentState(config.uiGraph) },
   });
   let actionRunner = createHostedActionRunner(config);
+  let nextStorageAction = 0;
+  const appliedStorageActionByKey = new Map<string, number>();
   let isRestoringChatState = false;
   let restoreActionRunnerFromPageCache = false;
 
@@ -278,14 +282,34 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     await interactionController.runAction(
       component,
       async ({ abortOtherActions, componentId, reportProgress, signal, state }) => {
+        const storageAction = ++nextStorageAction;
         try {
-          return await actionRunner.run({
+          const result = await actionRunner.run({
             componentId,
             onProgress: reportProgress,
             revisionKey: config.revisionKey,
             signal,
             state,
+            storage: loadUiGraphWebAppStorage(config.uiGraph),
           });
+          signal.throwIfAborted();
+          if (result.storagePatch && Object.keys(result.storagePatch).length > 0) {
+            const applicablePatch = Object.fromEntries(
+              Object.entries(result.storagePatch).filter(([key]) => {
+                const latestAppliedAction = appliedStorageActionByKey.get(key) ?? 0;
+                if (storageAction < latestAppliedAction) return false;
+                appliedStorageActionByKey.set(key, storageAction);
+                return true;
+              }),
+            );
+            if (Object.keys(applicablePatch).length === 0) return { statePatch: result.statePatch };
+            applyUiGraphWebAppStoragePatch(
+              config.uiGraph,
+              loadUiGraphWebAppStorage(config.uiGraph),
+              applicablePatch,
+            );
+          }
+          return { statePatch: result.statePatch };
         } catch (error) {
           if (error instanceof HostedActionError && error.code === 'revision_mismatch') {
             revisionMismatch = true;
