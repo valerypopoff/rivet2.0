@@ -321,6 +321,12 @@ when the project is closed or a project is opened as a new session. Detached pre
 and hosted pages own their own controller and therefore start a fresh session when
 they are opened or reloaded.
 
+The Chat header uses the shared icon-only styling for its overflow, pins, and
+search controls. Their hover and focus states change the icon color without
+adding a button-shaped background, while all three controls keep larger hit
+areas for reliable pointer and keyboard use. React preview and hosted DOM
+rendering both consume this CSS from `UiGraphRendererStyles.ts`.
+
 Output components use the shared renderer styles and have a responsive maximum
 height with internal vertical scrolling, so large output values do not expand the
 entire web-app page. The browser-runtime resize observer enables the native vertical

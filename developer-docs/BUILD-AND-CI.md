@@ -127,7 +127,11 @@ to Tauri and Cargo metadata:
 
 The app package manifest is the source of truth. Tauri uses
 `tauri.conf.json` `package.version` for installer filenames, so this sync is
-what makes Windows bundle names follow `packages/app/package.json`.
+what makes Windows bundle names follow `packages/app/package.json`. On Windows,
+the sync retries a small set of transient write errors because Tauri or Rust
+tooling can briefly hold `Cargo.toml` open during a development restart. A
+persistent failure still surfaces normally; close the process holding the file
+and rerun the command rather than manually editing generated metadata.
 
 ### `yarn verify:desktop-version`
 

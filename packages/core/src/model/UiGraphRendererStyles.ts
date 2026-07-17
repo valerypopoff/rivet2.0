@@ -432,14 +432,14 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   justify-content: space-between;
   min-height: 52px;
   border-bottom: 1px solid var(--rivet-web-app-card-border);
-  padding: 0 18px;
+  padding: 0 10px 0 18px;
   font-weight: 700;
 }
 
 .rivet-web-app-chat-header-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
 }
 
 .rivet-web-app-chat-title,
@@ -471,18 +471,26 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-chat-pins-button,
-.rivet-web-app-chat-search-button,
+.rivet-web-app-chat-search-button {
+  width: 40px;
+  height: 56px;
+  border-radius: 8px;
+}
+
 .rivet-web-app-chat-menu-button {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
 }
 
 .rivet-web-app-chat-pins-button {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: auto;
+  min-width: 40px;
   gap: 4px;
-  padding: 0 7px;
+  padding: 0 6px;
 }
 
 .rivet-web-app-chat-pins-button svg,
@@ -494,17 +502,28 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   height: 17px;
 }
 
-.rivet-web-app-chat-pins-button:hover,
-.rivet-web-app-chat-pins-button:focus-visible,
-.rivet-web-app-chat-search-button:hover,
-.rivet-web-app-chat-search-button:focus-visible,
-.rivet-web-app-chat-menu-button:hover,
-.rivet-web-app-chat-menu-button:focus-visible,
+.rivet-web-app-chat-menu-button svg {
+  width: 34px;
+  height: 34px;
+  transform: translate(-4px, 1px);
+}
+
 .rivet-web-app-chat-search-close-button:hover,
 .rivet-web-app-chat-search-close-button:focus-visible,
 .rivet-web-app-chat-search-navigation-button:hover:not(:disabled),
 .rivet-web-app-chat-search-navigation-button:focus-visible:not(:disabled) {
   background: var(--rivet-web-app-control-hover-background);
+  color: var(--rivet-web-app-foreground);
+  outline: none;
+}
+
+.rivet-web-app-chat-pins-button:hover,
+.rivet-web-app-chat-pins-button:focus-visible,
+.rivet-web-app-chat-search-button:hover,
+.rivet-web-app-chat-search-button:focus-visible,
+.rivet-web-app-chat-menu-button:hover,
+.rivet-web-app-chat-menu-button:focus-visible {
+  background: transparent;
   color: var(--rivet-web-app-foreground);
   outline: none;
 }
