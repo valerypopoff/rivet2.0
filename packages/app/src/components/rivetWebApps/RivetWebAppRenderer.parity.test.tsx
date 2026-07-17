@@ -264,6 +264,35 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     assert.equal(isChatComposerFocused(reactDom.window.document), true);
     assert.equal(isChatComposerFocused(hostedDom.window.document), true);
 
+    await act(async () => reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click());
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      assert.equal(root.querySelector('.rivet-web-app-chat-pins-button')?.textContent, '1');
+      assert.equal(root.querySelector('.rivet-web-app-chat-pin-button')?.getAttribute('aria-pressed'), 'true');
+    }
+
+    await act(async () =>
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click(),
+    );
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      assert.equal(root.querySelector('.rivet-web-app-chat-pin-exchange:first-child strong')?.textContent, 'You asked');
+      assert.equal(root.querySelector('.rivet-web-app-chat-pins')?.textContent?.includes('Hello'), true);
+      assert.equal(root.querySelector('.rivet-web-app-chat-pins')?.textContent?.includes('Hi!'), true);
+    }
+
+    await act(async () =>
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click(),
+    );
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
+
+    await act(async () => reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click());
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      assert.equal(root.querySelector('.rivet-web-app-chat-pins-button'), null);
+      assert.equal(root.querySelector('.rivet-web-app-chat-pin-button')?.getAttribute('aria-label'), 'Pin response');
+    }
+
     await act(async () =>
       reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-search-button')?.click(),
     );

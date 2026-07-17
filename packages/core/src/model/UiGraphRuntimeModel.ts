@@ -1,6 +1,7 @@
 import {
   getUiGraphChatDraftStateKey,
   getUiGraphChatMessages,
+  getUiGraphChatPins,
   getUiGraphComponentActionOutputStateKeys,
   getUiGraphComponentActionState,
   getUiGraphInitialState,
@@ -8,6 +9,7 @@ import {
   type UiGraph,
   type UiGraphActionComponent,
   type UiGraphChatMessage,
+  type UiGraphChatPin,
   type UiGraphComponent,
   type UiGraphDropdownItem,
   type UiGraphGapSize,
@@ -70,6 +72,7 @@ export type UiGraphComponentRenderModel =
       component: Extract<UiGraphComponent, { type: 'chat' }>;
       draft: string;
       messages: UiGraphChatMessage[];
+      pins: UiGraphChatPin[];
       type: 'chat';
     }
   | {
@@ -591,6 +594,7 @@ export function getUiGraphComponentRenderModel(
         component,
         draft: `${state[getUiGraphChatDraftStateKey(component.id)] ?? ''}`,
         messages: getUiGraphChatMessages(component.id, state),
+        pins: getUiGraphChatPins(component.id, state),
         type: 'chat',
       };
     case 'output':

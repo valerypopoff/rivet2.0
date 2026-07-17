@@ -1,12 +1,14 @@
 import {
   clearUiGraphChatSearchMatches,
   copyUiGraphText,
+  createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   createUiGraphInteractionController,
   downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
   highlightUiGraphChatSearchMatches,
+  revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
   type UiGraphActionComponent,
   type UiGraphComponent,
@@ -37,9 +39,10 @@ type DomPurifyApi = {
   sanitize?: (value: string, options: Record<string, unknown>) => string;
 };
 
-type ChatSearchState = {
+type ChatPresentationState = {
   activeMatchIndex: number;
-  isOpen: boolean;
+  isPinsOpen: boolean;
+  isSearchOpen: boolean;
   query: string;
 };
 
@@ -52,6 +55,8 @@ const CHAT_SEARCH_ICON_PATH = 'm20 20-4.05-4.05m0 0a7 7 0 1 0-9.9-9.9 7 7 0 0 0 
 const CROSS_ICON_PATH = 'M12 12 6 6m6 6 6 6m-6-6 6-6m-6 6-6 6';
 const CHEVRON_LEFT_ICON_PATH = 'm14 7-5 5 5 5';
 const CHEVRON_RIGHT_ICON_PATH = 'm10 7 5 5-5 5';
+const PIN_ICON_PATH =
+  'm4 20 5-5m0 0 3.956 3.956a1 1 0 0 0 1.626-.314l2.255-5.261a1 1 0 0 1 .548-.535l3.207-1.283a1 1 0 0 0 .336-1.635l-6.856-6.856a1 1 0 0 0-1.635.336l-1.283 3.207a1 1 0 0 1-.535.548L5.358 9.418a1 1 0 0 0-.314 1.626L9 15z';
 
 function createLineIcon(pathData: string): SVGSVGElement {
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -72,18 +77,18 @@ function createLineIcon(pathData: string): SVGSVGElement {
 export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig): void {
   let revisionMismatch = false;
   let disposeOutputResizeObservers = () => {};
-  const chatSearchStates = new Map<string, ChatSearchState>();
+  const chatPresentationStates = new Map<string, ChatPresentationState>();
   const interactionController = createUiGraphInteractionController(config.uiGraph, {
     initialState: config.initialState,
   });
   let actionRunner = createHostedActionRunner(config);
   let restoreActionRunnerFromPageCache = false;
 
-  const getChatSearchState = (componentId: string): ChatSearchState => {
-    let state = chatSearchStates.get(componentId);
+  const getChatPresentationState = (componentId: string): ChatPresentationState => {
+    let state = chatPresentationStates.get(componentId);
     if (!state) {
-      state = { activeMatchIndex: 0, isOpen: false, query: '' };
-      chatSearchStates.set(componentId, state);
+      state = { activeMatchIndex: 0, isPinsOpen: false, isSearchOpen: false, query: '' };
+      chatPresentationStates.set(componentId, state);
     }
     return state;
   };
@@ -224,7 +229,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
 
   const resetApp = (): void => {
     revisionMismatch = false;
-    chatSearchStates.clear();
+    chatPresentationStates.clear();
     interactionController.reset();
     render();
   };
@@ -487,11 +492,15 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         const componentId = String(renderModel.component.id);
         const isRunning = interaction.runningComponentIds.has(renderModel.component.id);
         const hasMessages = renderModel.messages.length > 0;
-        const searchState = getChatSearchState(componentId);
+        const searchState = getChatPresentationState(componentId);
         if (!hasMessages) {
-          searchState.isOpen = false;
+          searchState.isSearchOpen = false;
+          searchState.isPinsOpen = false;
           searchState.query = '';
           searchState.activeMatchIndex = 0;
+        }
+        if (renderModel.pins.length === 0) {
+          searchState.isPinsOpen = false;
         }
         const submit = () => {
           const statePatch = createUiGraphChatSubmissionStatePatch(
@@ -503,12 +512,50 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           interactionController.updateStatePatch(statePatch);
           void runAction(renderModel.component);
         };
-        const messageNodes = renderModel.messages.map((message) =>
-          renderMarkdownElement(
+        const pinnedMessageIndexes = new Set(renderModel.pins.map((pin) => pin.messageIndex));
+        const togglePin = (messageIndex: number) => {
+          const statePatch = createUiGraphChatPinStatePatch(
+            renderModel.component.id,
+            interactionController.getSnapshot().state,
+            messageIndex,
+          );
+          if (statePatch) {
+            interactionController.updateStatePatch(statePatch);
+            render();
+          }
+        };
+        const messageNodes = renderModel.messages.map((message, messageIndex) => {
+          const messageElement = renderMarkdownElement(
             message.content,
             `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role} rivet-web-app-chat-message-markdown markdown-body`,
-          ),
-        );
+          );
+          if (message.role === 'user') {
+            messageElement.dataset.rivetChatMessageIndex = String(messageIndex);
+            return messageElement;
+          }
+
+          const pinned = pinnedMessageIndexes.has(messageIndex);
+          const pinButton = createElement(
+            'button',
+            {
+              'aria-label': pinned ? 'Unpin response' : 'Pin response',
+              'aria-pressed': `${pinned}`,
+              className: `rivet-web-app-chat-pin-button${pinned ? ' active' : ''}`,
+              onClick: () => togglePin(messageIndex),
+              title: pinned ? 'Unpin response' : 'Pin response',
+              type: 'button',
+            },
+            [createLineIcon(PIN_ICON_PATH)],
+          );
+          return createElement(
+            'div',
+            {
+              className: 'rivet-web-app-chat-message-row',
+              'data-rivet-chat-message-index': String(messageIndex),
+            },
+            [messageElement, pinButton],
+          );
+        });
         if (messageNodes.length === 0) {
           messageNodes.push(
             createElement('div', { className: 'rivet-web-app-chat-empty' }, [
@@ -540,13 +587,13 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           },
           messageNodes,
         );
-        const searchResult = searchState.isOpen
+        const searchResult = searchState.isSearchOpen
           ? highlightUiGraphChatSearchMatches(messagesElement, searchState.query, searchState.activeMatchIndex)
           : (clearUiGraphChatSearchMatches(messagesElement), { activeIndex: -1, matches: [] as HTMLElement[] });
         searchState.activeMatchIndex = searchResult.activeIndex < 0 ? 0 : searchResult.activeIndex;
 
         const closeSearch = () => {
-          searchState.isOpen = false;
+          searchState.isSearchOpen = false;
           searchState.query = '';
           searchState.activeMatchIndex = 0;
           render();
@@ -554,10 +601,16 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         };
         const openSearch = () => {
           if (!hasMessages) return;
-          searchState.isOpen = true;
+          searchState.isPinsOpen = false;
+          searchState.isSearchOpen = true;
           searchState.activeMatchIndex = 0;
           render();
           focusChatSearchInput(componentId);
+        };
+        const togglePins = () => {
+          searchState.isSearchOpen = false;
+          searchState.isPinsOpen = !searchState.isPinsOpen;
+          render();
         };
         const moveSearchMatch = (direction: -1 | 1) => {
           if (searchResult.matches.length === 0) return;
@@ -578,7 +631,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           button.disabled = searchResult.matches.length === 0;
           return button;
         };
-        const searchPanel = searchState.isOpen
+        const searchPanel = searchState.isSearchOpen
           ? createElement('div', { className: 'rivet-web-app-chat-search', role: 'search' }, [
               createElement('input', {
                 'aria-label': 'Search chat messages',
@@ -629,6 +682,45 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           }
         });
 
+        const pinsPanel = searchState.isPinsOpen
+          ? createElement(
+              'div',
+              { 'aria-label': 'Pinned responses', className: 'rivet-web-app-chat-pins', role: 'region' },
+              renderModel.pins.map((pin) => {
+                const exchanges: Node[] = [];
+                if (pin.prompt) {
+                  exchanges.push(
+                    createElement('div', { className: 'rivet-web-app-chat-pin-exchange' }, [
+                      createElement('strong', { text: 'You asked' }),
+                      renderMarkdownElement(pin.prompt.content, 'rivet-web-app-chat-pin-markdown markdown-body'),
+                    ]),
+                  );
+                }
+                exchanges.push(
+                  createElement('div', { className: 'rivet-web-app-chat-pin-exchange' }, [
+                    createElement('strong', { text: 'Response' }),
+                    renderMarkdownElement(pin.response.content, 'rivet-web-app-chat-pin-markdown markdown-body'),
+                  ]),
+                );
+                return createElement(
+                  'button',
+                  {
+                    className: 'rivet-web-app-chat-pin',
+                    onClick: () => {
+                      const messageIndex = pin.promptMessageIndex ?? pin.messageIndex;
+                      const message = messagesElement.querySelector<HTMLElement>(
+                        `[data-rivet-chat-message-index="${messageIndex}"]`,
+                      );
+                      revealUiGraphChatElement(messagesElement, message ?? undefined, 'start');
+                    },
+                    type: 'button',
+                  },
+                  exchanges,
+                );
+              }),
+            )
+          : undefined;
+
         const textarea = createElement('textarea', {
           'aria-label': 'Message',
           'data-rivet-chat-component-id': renderModel.component.id,
@@ -677,17 +769,33 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         );
         const actionError = interaction.actionErrors[renderModel.component.id];
         const headerActions: Node[] = [];
+        if (renderModel.pins.length > 0) {
+          headerActions.push(
+            createElement(
+              'button',
+              {
+                'aria-label': `${searchState.isPinsOpen ? 'Hide' : 'Show'} ${renderModel.pins.length} pinned ${renderModel.pins.length === 1 ? 'response' : 'responses'}`,
+                'aria-pressed': `${searchState.isPinsOpen}`,
+                className: 'rivet-web-app-chat-pins-button',
+                onClick: togglePins,
+                title: searchState.isPinsOpen ? 'Hide pinned responses' : 'Show pinned responses',
+                type: 'button',
+              },
+              [createLineIcon(PIN_ICON_PATH), createElement('span', { text: String(renderModel.pins.length) })],
+            ),
+          );
+        }
         if (hasMessages) {
           headerActions.push(
             createElement(
               'button',
               {
-                'aria-label': searchState.isOpen ? 'Close chat search' : 'Search chat',
-                'aria-pressed': `${searchState.isOpen}`,
+                'aria-label': searchState.isSearchOpen ? 'Close chat search' : 'Search chat',
+                'aria-pressed': `${searchState.isSearchOpen}`,
                 className: 'rivet-web-app-chat-search-button',
                 'data-rivet-chat-search-component-id': componentId,
-                onClick: () => (searchState.isOpen ? closeSearch() : openSearch()),
-                title: searchState.isOpen ? 'Close chat search' : 'Search chat',
+                onClick: () => (searchState.isSearchOpen ? closeSearch() : openSearch()),
+                title: searchState.isSearchOpen ? 'Close chat search' : 'Search chat',
                 type: 'button',
               },
               [createLineIcon(CHAT_SEARCH_ICON_PATH)],
@@ -700,7 +808,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             createElement('span', { className: 'rivet-web-app-chat-header-actions' }, headerActions),
           ]),
           createElement('div', { className: 'rivet-web-app-chat-history' }, [
-            ...(searchPanel ? [searchPanel] : []),
+            ...(pinsPanel ? [pinsPanel] : searchPanel ? [searchPanel] : []),
             messagesElement,
           ]),
         ];
@@ -870,8 +978,8 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     disposeOutputResizeObservers = observeOutputResizeBounds(root);
     root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-messages').forEach((messages) => {
       const componentId = messages.dataset.rivetChatComponentId;
-      const searchState = componentId ? chatSearchStates.get(componentId) : undefined;
-      if (searchState?.isOpen && searchState.query.trim()) {
+      const searchState = componentId ? chatPresentationStates.get(componentId) : undefined;
+      if (searchState?.isSearchOpen && searchState.query.trim()) {
         revealUiGraphChatSearchMatch(
           messages,
           messages.querySelector<HTMLElement>('.rivet-web-app-chat-search-match-active') ?? undefined,

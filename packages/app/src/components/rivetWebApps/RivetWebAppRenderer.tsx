@@ -17,6 +17,7 @@ import AtlaskitSelect from '@atlaskit/select';
 import ChevronLeftIcon from 'majesticons/line/chevron-left-line.svg?react';
 import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
+import PinIcon from 'majesticons/line/pin-line.svg?react';
 import SearchIcon from 'majesticons/line/search-line.svg?react';
 import {
   type DataValue,
@@ -24,10 +25,12 @@ import {
   type UiComponentId,
   type UiGraph,
   type UiGraphActionComponent,
+  type UiGraphChatPin,
   type UiGraphComponent,
   type UiGraphInteractionController,
   RIVET_WEB_APP_RENDERER_CSS,
   createUiGraphInteractionController,
+  createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   getUiGraphChatDraftStateKey,
   getUiGraphChatMessagesStateKey,
@@ -41,6 +44,7 @@ import {
   downloadUiGraphJsonOutput,
   highlightUiGraphChatSearchMatches,
   observeUiGraphOutputResizeBounds,
+  revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
@@ -493,11 +497,13 @@ const RivetWebAppChat: FC<{
   const messagesRef = useRef<HTMLDivElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const [isPinsOpen, setIsPinsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [requestedSearchMatchIndex, setRequestedSearchMatchIndex] = useState(0);
   const [searchMatchState, setSearchMatchState] = useState({ activeIndex: -1, count: 0 });
-  const { component, draft, messages } = renderModel;
+  const { component, draft, messages, pins } = renderModel;
+  const pinnedMessageIndexes = new Set(pins.map((pin) => pin.messageIndex));
   const chatMessagesState = state[getUiGraphChatMessagesStateKey(component.id)];
 
   useEffect(() => {
@@ -519,6 +525,12 @@ const RivetWebAppChat: FC<{
     setSearchQuery('');
     setRequestedSearchMatchIndex(0);
   }, [isSearchOpen, messages.length]);
+
+  useEffect(() => {
+    if (pins.length === 0 && isPinsOpen) {
+      setIsPinsOpen(false);
+    }
+  }, [isPinsOpen, pins.length]);
 
   useLayoutEffect(() => {
     const messagesElement = messagesRef.current;
@@ -545,9 +557,31 @@ const RivetWebAppChat: FC<{
 
   const openSearch = () => {
     if (messages.length === 0) return;
+    setIsPinsOpen(false);
     setIsSearchOpen(true);
     setRequestedSearchMatchIndex(0);
     globalThis.setTimeout(() => searchInputRef.current?.focus(), 0);
+  };
+
+  const togglePins = () => {
+    setIsSearchOpen(false);
+    setIsPinsOpen((isOpen) => !isOpen);
+  };
+
+  const togglePin = (messageIndex: number) => {
+    const statePatch = createUiGraphChatPinStatePatch(component.id, state, messageIndex);
+    if (statePatch) {
+      onStatePatch(statePatch);
+    }
+  };
+
+  const revealPinnedMessage = (pin: UiGraphChatPin) => {
+    const messagesElement = messagesRef.current;
+    const messageIndex = pin.promptMessageIndex ?? pin.messageIndex;
+    const message = messagesElement?.querySelector<HTMLElement>(`[data-rivet-chat-message-index="${messageIndex}"]`);
+    if (messagesElement && message) {
+      revealUiGraphChatElement(messagesElement, message, 'start');
+    }
   };
 
   const handleSearchShortcut = (event: KeyboardEvent<HTMLElement>) => {
@@ -573,6 +607,19 @@ const RivetWebAppChat: FC<{
       <div className="rivet-web-app-chat-header">
         <span>Chat</span>
         <span className="rivet-web-app-chat-header-actions">
+          {pins.length > 0 && (
+            <button
+              type="button"
+              className="rivet-web-app-chat-pins-button"
+              aria-label={`${isPinsOpen ? 'Hide' : 'Show'} ${pins.length} pinned ${pins.length === 1 ? 'response' : 'responses'}`}
+              aria-pressed={isPinsOpen}
+              title={isPinsOpen ? 'Hide pinned responses' : 'Show pinned responses'}
+              onClick={togglePins}
+            >
+              <PinIcon aria-hidden="true" />
+              <span>{pins.length}</span>
+            </button>
+          )}
           {messages.length > 0 && (
             <button
               ref={searchButtonRef}
@@ -589,7 +636,13 @@ const RivetWebAppChat: FC<{
         </span>
       </div>
       <div className="rivet-web-app-chat-history">
-        {isSearchOpen && (
+        {isPinsOpen ? (
+          <div className="rivet-web-app-chat-pins" aria-label="Pinned responses" role="region">
+            {pins.map((pin) => (
+              <RivetWebAppChatPin key={pin.messageIndex} pin={pin} onReveal={revealPinnedMessage} />
+            ))}
+          </div>
+        ) : isSearchOpen ? (
           <div className="rivet-web-app-chat-search" role="search">
             <input
               ref={searchInputRef}
@@ -647,7 +700,7 @@ const RivetWebAppChat: FC<{
               <CrossIcon aria-hidden="true" />
             </button>
           </div>
-        )}
+        ) : null}
         <div
           ref={messagesRef}
           className="rivet-web-app-chat-messages"
@@ -661,7 +714,14 @@ const RivetWebAppChat: FC<{
             </div>
           )}
           {messages.map((message, index) => (
-            <RivetWebAppChatMessage key={`${index}-${message.role}`} content={message.content} role={message.role} />
+            <RivetWebAppChatMessage
+              key={`${index}-${message.role}`}
+              content={message.content}
+              messageIndex={index}
+              pinned={pinnedMessageIndexes.has(index)}
+              role={message.role}
+              onTogglePin={togglePin}
+            />
           ))}
           {isRunning && (
             <div className="rivet-web-app-chat-message rivet-web-app-chat-message-assistant rivet-web-app-chat-thinking">
@@ -713,14 +773,60 @@ const RivetWebAppChat: FC<{
   );
 };
 
-const RivetWebAppChatMessage: FC<{ content: string; role: 'assistant' | 'user' }> = ({ content, role }) => {
+const RivetWebAppChatMessage: FC<{
+  content: string;
+  messageIndex: number;
+  pinned: boolean;
+  role: 'assistant' | 'user';
+  onTogglePin(messageIndex: number): void;
+}> = ({ content, messageIndex, pinned, role, onTogglePin }) => {
   const markdownHtml = useMarkdown(content, true, { allowHtml: false });
-
-  return (
+  const message = (
     <div
       className={`rivet-web-app-chat-message rivet-web-app-chat-message-${role} rivet-web-app-chat-message-markdown markdown-body`}
+      data-rivet-chat-message-index={role === 'user' ? messageIndex : undefined}
       dangerouslySetInnerHTML={markdownHtml}
     />
+  );
+
+  if (role === 'user') {
+    return message;
+  }
+
+  return (
+    <div className="rivet-web-app-chat-message-row" data-rivet-chat-message-index={messageIndex}>
+      {message}
+      <button
+        type="button"
+        className={`rivet-web-app-chat-pin-button${pinned ? ' active' : ''}`}
+        aria-label={pinned ? 'Unpin response' : 'Pin response'}
+        aria-pressed={pinned}
+        title={pinned ? 'Unpin response' : 'Pin response'}
+        onClick={() => onTogglePin(messageIndex)}
+      >
+        <PinIcon aria-hidden="true" />
+      </button>
+    </div>
+  );
+};
+
+const RivetWebAppChatPin: FC<{ pin: UiGraphChatPin; onReveal(pin: UiGraphChatPin): void }> = ({ pin, onReveal }) => {
+  const promptHtml = useMarkdown(pin.prompt?.content ?? '', true, { allowHtml: false });
+  const responseHtml = useMarkdown(pin.response.content, true, { allowHtml: false });
+
+  return (
+    <button type="button" className="rivet-web-app-chat-pin" onClick={() => onReveal(pin)}>
+      {pin.prompt && (
+        <div className="rivet-web-app-chat-pin-exchange">
+          <strong>You asked</strong>
+          <div className="rivet-web-app-chat-pin-markdown markdown-body" dangerouslySetInnerHTML={promptHtml} />
+        </div>
+      )}
+      <div className="rivet-web-app-chat-pin-exchange">
+        <strong>Response</strong>
+        <div className="rivet-web-app-chat-pin-markdown markdown-body" dangerouslySetInnerHTML={responseHtml} />
+      </div>
+    </button>
   );
 };
 

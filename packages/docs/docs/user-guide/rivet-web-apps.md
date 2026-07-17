@@ -109,6 +109,8 @@ While a response is running, the composer’s green Send control becomes a neutr
 
 Once the conversation has messages, the Chat header includes **Search chat**. Use it, or press `Ctrl+F` on Windows/Linux or `Cmd+F` on macOS while focus is inside the Chat, to search the rendered conversation text. Rivet highlights every visible match, shows the current result as `n/m`, and the previous/next controls keep the active result in view inside the chat history.
 
+Hover an assistant response and use its pin icon to keep it handy during a long conversation. When at least one response is pinned, the Chat header shows the pin count. Open it to review each pinned response together with the user message that preceded it, then select an entry to bring that question to the top of the conversation. Pins belong to the current app session: **Reset app** clears them, and they are not saved to project YAML or sent to the backing graph.
+
 ## Previewing Locally
 
 In the desktop app, click **Run detached** in the preview area to open a separate preview window named after the web app. Hosted/server Rivet shells can hide this desktop-preview action when web apps are meant to run only after being published as endpoints. The preview uses the same declarative renderer as hosted web apps. When you click a button in the preview, Rivet runs the target graph through the editor's normal graph-run path with the editor's current providers, context values, settings, attached data, plugins, and project references.

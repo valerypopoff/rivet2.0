@@ -3,6 +3,7 @@ export type {
   UiGraph,
   UiGraphActionComponent,
   UiGraphChatMessage,
+  UiGraphChatPin,
   UiGraphComponent,
 } from './model/UiGraph.js';
 export type { UiGraphInteractionSnapshot } from './model/UiGraphRuntimeModel.js';
@@ -14,6 +15,7 @@ export type {
 export type { GraphProgress } from './model/GraphProgress.js';
 export type { RivetMarkdownSanitizerPolicy } from './model/MarkdownSanitizationPolicy.js';
 export {
+  createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   getUiGraphActionState,
   getUiGraphChatDraftStateKey,
@@ -37,5 +39,6 @@ export {
   downloadUiGraphJsonOutput,
   highlightUiGraphChatSearchMatches,
   observeUiGraphOutputResizeBounds,
+  revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
 } from './model/UiGraphBrowserRuntime.js';

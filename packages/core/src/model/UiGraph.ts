@@ -49,6 +49,13 @@ export type UiGraphChatMessage = {
   content: string;
 };
 
+export type UiGraphChatPin = {
+  messageIndex: number;
+  promptMessageIndex?: number;
+  prompt?: UiGraphChatMessage;
+  response: UiGraphChatMessage;
+};
+
 export type UiGraphInputBinding = {
   inputKey: string;
   stateKey: string;
@@ -246,6 +253,7 @@ export function getUiGraphInitialState(uiGraph: UiGraph): Record<string, unknown
     } else if (component.type === 'chat') {
       state[getUiGraphChatDraftStateKey(component.id)] = '';
       state[getUiGraphChatMessagesStateKey(component.id)] = [];
+      state[getUiGraphChatPinsStateKey(component.id)] = [];
     }
   }
 
@@ -270,12 +278,67 @@ export function getUiGraphChatMessagesStateKey(componentId: UiComponentId): stri
   return `__rivet_chat_${componentId}_messages`;
 }
 
+export function getUiGraphChatPinsStateKey(componentId: UiComponentId): string {
+  return `__rivet_chat_${componentId}_pins`;
+}
+
 export function getUiGraphChatMessages(
   componentId: UiComponentId,
   state: Readonly<Record<string, unknown>>,
 ): UiGraphChatMessage[] {
   const messages = state[getUiGraphChatMessagesStateKey(componentId)];
   return Array.isArray(messages) ? messages.filter(isUiGraphChatMessage) : [];
+}
+
+export function getUiGraphChatPins(
+  componentId: UiComponentId,
+  state: Readonly<Record<string, unknown>>,
+): UiGraphChatPin[] {
+  const messages = getUiGraphChatMessages(componentId, state);
+  const storedPins = state[getUiGraphChatPinsStateKey(componentId)];
+  const messageIndexes = Array.isArray(storedPins)
+    ? [
+        ...new Set(
+          storedPins.filter(
+            (value): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0,
+          ),
+        ),
+      ].sort((left, right) => left - right)
+    : [];
+  const pinnedIndexes = new Set(messageIndexes);
+  const pins: UiGraphChatPin[] = [];
+  let prompt: UiGraphChatMessage | undefined;
+  let promptMessageIndex: number | undefined;
+
+  messages.forEach((message, messageIndex) => {
+    if (message.role === 'user') {
+      prompt = message;
+      promptMessageIndex = messageIndex;
+    } else if (pinnedIndexes.has(messageIndex)) {
+      pins.push({ messageIndex, prompt, promptMessageIndex, response: message });
+    }
+  });
+
+  return pins;
+}
+
+export function createUiGraphChatPinStatePatch(
+  componentId: UiComponentId,
+  state: Readonly<Record<string, unknown>>,
+  messageIndex: number,
+): Record<string, unknown> | undefined {
+  const messages = getUiGraphChatMessages(componentId, state);
+  if (messages[messageIndex]?.role !== 'assistant') {
+    return undefined;
+  }
+
+  const pinsStateKey = getUiGraphChatPinsStateKey(componentId);
+  const pinnedIndexes = getUiGraphChatPins(componentId, state).map((pin) => pin.messageIndex);
+  return {
+    [pinsStateKey]: pinnedIndexes.includes(messageIndex)
+      ? pinnedIndexes.filter((index) => index !== messageIndex)
+      : [...pinnedIndexes, messageIndex].sort((left, right) => left - right),
+  };
 }
 
 export function createUiGraphChatSubmissionStatePatch(

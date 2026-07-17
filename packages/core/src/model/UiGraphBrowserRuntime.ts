@@ -207,15 +207,25 @@ export function clearUiGraphChatSearchMatches(messagesElement: HTMLElement): voi
   messagesElement.normalize();
 }
 
-/** Centers the active chat-search match inside the chat's own scroll region. */
-export function revealUiGraphChatSearchMatch(messagesElement: HTMLElement, match: HTMLElement | undefined): void {
-  if (!match || !messagesElement.contains(match)) {
+/** Reveals a rendered message or search match inside the chat's own scroll region. */
+export function revealUiGraphChatElement(
+  messagesElement: HTMLElement,
+  element: HTMLElement | undefined,
+  alignment: 'center' | 'start' = 'center',
+): void {
+  if (!element || !messagesElement.contains(element)) {
     return;
   }
 
   const containerRect = messagesElement.getBoundingClientRect();
-  const matchRect = match.getBoundingClientRect();
+  const elementRect = element.getBoundingClientRect();
   const maxScrollTop = Math.max(0, messagesElement.scrollHeight - messagesElement.clientHeight);
-  const offset = matchRect.top - containerRect.top - (messagesElement.clientHeight - matchRect.height) / 2;
+  const offset =
+    elementRect.top -
+    containerRect.top -
+    (alignment === 'center' ? (messagesElement.clientHeight - elementRect.height) / 2 : 0);
   messagesElement.scrollTop = Math.max(0, Math.min(maxScrollTop, messagesElement.scrollTop + offset));
 }
+
+/** Centers the active chat-search match inside the chat's own scroll region. */
+export const revealUiGraphChatSearchMatch = revealUiGraphChatElement;
