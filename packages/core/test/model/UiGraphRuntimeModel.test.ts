@@ -2,12 +2,16 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   applyUiGraphStatePatch,
+  createUiGraphChatHistoryFlushStatePatch,
+  createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   createUiGraphActionExecutionController,
   createUiGraphInteractionController,
   getUiGraphActionState,
   getUiGraphChatDraftStateKey,
   getUiGraphChatMessagesStateKey,
+  getUiGraphChatPins,
+  getUiGraphChatPinsStateKey,
   getUiGraphComponentActionState,
   getUiGraphComponentRenderModel,
   getUiGraphImageSource,
@@ -23,10 +27,86 @@ import {
   type UiGraphRunGraphAction,
   type UiComponentId,
 } from '../../src/index.js';
+import {
+  getUiGraphChatStorageKey,
+  hasUiGraphChatPersistentStateChanged,
+  loadUiGraphChatPersistentState,
+  revealUiGraphChatElement,
+  saveUiGraphChatPersistentState,
+} from '../../src/model/UiGraphBrowserRuntime.js';
 
 const componentId = 'component' as UiComponentId;
 
 describe('UiGraphRuntimeModel', () => {
+  it('persists only valid Chat state per browser app URL and preserves drafts when flushing history', () => {
+    const chatId = 'chat' as UiComponentId;
+    const uiGraph: UiGraph = {
+      components: [{ action: { type: 'runGraph' }, id: chatId, type: 'chat' }],
+      id: 'chat-app' as UiGraphId,
+      name: 'Chat app',
+    };
+    const storageValues = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      removeItem: (key: string) => storageValues.delete(key),
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+    };
+    const location = { origin: 'https://example.test', pathname: '/apps/chat/' };
+    const draftKey = getUiGraphChatDraftStateKey(chatId);
+    const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+    const pinsKey = getUiGraphChatPinsStateKey(chatId);
+    const state = {
+      [draftKey]: 'Unsaved question',
+      [messagesKey]: [
+        { content: 'First question', role: 'user' },
+        { content: 'First response', role: 'assistant' },
+      ],
+      [pinsKey]: [1, 3, 'invalid'],
+      unrelatedPageField: 'do not persist this',
+    };
+
+    saveUiGraphChatPersistentState(uiGraph, state, storage, location);
+    const storageKey = getUiGraphChatStorageKey(uiGraph, location)!;
+    assert.deepEqual(JSON.parse(storageValues.get(storageKey)!), {
+      [draftKey]: 'Unsaved question',
+      [messagesKey]: state[messagesKey],
+      [pinsKey]: [1],
+    });
+    assert.deepEqual(loadUiGraphChatPersistentState(uiGraph, storage, location), {
+      [draftKey]: 'Unsaved question',
+      [messagesKey]: state[messagesKey],
+      [pinsKey]: [1],
+    });
+    assert.notEqual(getUiGraphChatStorageKey(uiGraph, { ...location, pathname: '/apps/another-chat' }), storageKey);
+    assert.notEqual(
+      getUiGraphChatStorageKey({ ...uiGraph, id: 'another-chat-app' as UiGraphId }, location),
+      storageKey,
+    );
+
+    storageValues.set(storageKey, '{not valid JSON');
+    assert.deepEqual(loadUiGraphChatPersistentState(uiGraph, storage, location), {});
+    assert.deepEqual(createUiGraphChatHistoryFlushStatePatch(chatId), {
+      [messagesKey]: [],
+      [pinsKey]: [],
+    });
+    assert.equal(
+      hasUiGraphChatPersistentStateChanged(
+        uiGraph,
+        { [messagesKey]: state[messagesKey] },
+        { [messagesKey]: state[messagesKey], unrelatedPageField: 'updated' },
+      ),
+      false,
+    );
+    assert.equal(
+      hasUiGraphChatPersistentStateChanged(
+        uiGraph,
+        { [messagesKey]: state[messagesKey] },
+        { [messagesKey]: [...state[messagesKey]] },
+      ),
+      true,
+    );
+  });
+
   it('creates one render model for every supported component kind', () => {
     const state = { answer: { value: 42 }, prompt: 'Hello' };
     const components: UiGraphComponent[] = [
@@ -158,6 +238,97 @@ describe('UiGraphRuntimeModel', () => {
         ],
       },
     );
+  });
+
+  it('keeps Chat pins in session state without exposing stale or non-assistant entries', () => {
+    const messagesKey = getUiGraphChatMessagesStateKey(componentId);
+    const pinsKey = getUiGraphChatPinsStateKey(componentId);
+    const state = {
+      [messagesKey]: [
+        { role: 'user', content: 'First question' },
+        { role: 'assistant', content: 'First answer' },
+        { role: 'user', content: 'Second question' },
+        { role: 'assistant', content: 'Second answer' },
+        { role: 'assistant', content: 'Second follow-up' },
+      ],
+      [pinsKey]: [4, 3, 1, 3, 2, 99, -1, 'invalid'],
+    };
+
+    assert.deepEqual(getUiGraphChatPins(componentId, state), [
+      {
+        messageIndex: 1,
+        prompt: { role: 'user', content: 'First question' },
+        promptMessageIndex: 0,
+        response: { role: 'assistant', content: 'First answer' },
+      },
+      {
+        messageIndex: 3,
+        prompt: { role: 'user', content: 'Second question' },
+        promptMessageIndex: 2,
+        response: { role: 'assistant', content: 'Second answer' },
+      },
+      {
+        messageIndex: 4,
+        prompt: { role: 'user', content: 'Second question' },
+        promptMessageIndex: 2,
+        response: { role: 'assistant', content: 'Second follow-up' },
+      },
+    ]);
+    assert.deepEqual(createUiGraphChatPinStatePatch(componentId, state, 1), { [pinsKey]: [3, 4] });
+    assert.deepEqual(createUiGraphChatPinStatePatch(componentId, state, 2), undefined);
+    assert.deepEqual(createUiGraphChatPinStatePatch(componentId, { ...state, [pinsKey]: [1] }, 3), {
+      [pinsKey]: [1, 3],
+    });
+    assert.deepEqual(
+      getUiGraphComponentActionState(
+        { action: { type: 'runGraph' }, id: componentId, type: 'chat' },
+        { ...state, tone: 'Friendly' },
+      ),
+      { [messagesKey]: state[messagesKey] },
+    );
+  });
+
+  it('top-aligns a pinned Chat question without changing the shared default alignment', () => {
+    const messagesElement = {
+      clientHeight: 300,
+      contains: () => true,
+      getBoundingClientRect: () => ({ top: 100 }),
+      scrollHeight: 1_200,
+      scrollTop: 100,
+    } as unknown as HTMLElement;
+    const messageElement = {
+      getBoundingClientRect: () => ({ height: 80, top: 400 }),
+    } as unknown as HTMLElement;
+
+    revealUiGraphChatElement(messagesElement, messageElement, 'start');
+
+    assert.equal(messagesElement.scrollTop, 400);
+
+    messagesElement.scrollTop = 100;
+    revealUiGraphChatElement(messagesElement, messageElement);
+
+    assert.equal(messagesElement.scrollTop, 290);
+  });
+
+  it('clears Chat pins with the rest of the app session state', () => {
+    const chat = { action: { type: 'runGraph' as const }, id: componentId, type: 'chat' as const };
+    const uiGraph = { components: [chat], id: 'chat-app' as UiGraphId, name: 'Chat app' };
+    const pinsKey = getUiGraphChatPinsStateKey(componentId);
+    const controller = createUiGraphInteractionController(uiGraph);
+
+    controller.updateStatePatch({
+      [getUiGraphChatMessagesStateKey(componentId)]: [
+        { role: 'user', content: 'Question' },
+        { role: 'assistant', content: 'Answer' },
+      ],
+      [pinsKey]: [1],
+    });
+    assert.equal(getUiGraphChatPins(componentId, controller.getSnapshot().state).length, 1);
+
+    controller.reset();
+
+    assert.deepEqual(controller.getSnapshot().state[pinsKey], []);
+    assert.deepEqual(getUiGraphChatPins(componentId, controller.getSnapshot().state), []);
   });
 
   it('keeps empty output blocks empty until the action stores a value', () => {

@@ -1,10 +1,20 @@
 import {
+  clearUiGraphChatSearchMatches,
   copyUiGraphText,
+  createUiGraphChatHistoryFlushStatePatch,
+  createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   createUiGraphInteractionController,
   downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
+  getUiGraphChatPersistentState,
+  hasUiGraphChatPersistentStateChanged,
+  highlightUiGraphChatSearchMatches,
+  loadUiGraphChatPersistentState,
+  revealUiGraphChatElement,
+  revealUiGraphChatSearchMatch,
+  saveUiGraphChatPersistentState,
   type UiGraphActionComponent,
   type UiGraphComponent,
   type UiGraphInteractionSnapshot,
@@ -34,19 +44,92 @@ type DomPurifyApi = {
   sanitize?: (value: string, options: Record<string, unknown>) => string;
 };
 
+type ChatPresentationState = {
+  activeMatchIndex: number;
+  isMenuOpen: boolean;
+  isPinsOpen: boolean;
+  isSearchOpen: boolean;
+  query: string;
+};
+
 const browserGlobals = globalThis as typeof globalThis & {
   DOMPurify?: DomPurifyApi;
   marked?: MarkedApi;
 };
 
+const CHAT_SEARCH_ICON_PATH = 'm20 20-4.05-4.05m0 0a7 7 0 1 0-9.9-9.9 7 7 0 0 0 9.9 9.9z';
+const CROSS_ICON_PATH = 'M12 12 6 6m6 6 6 6m-6-6 6-6m-6 6-6 6';
+const CHEVRON_LEFT_ICON_PATH = 'm14 7-5 5 5 5';
+const CHEVRON_RIGHT_ICON_PATH = 'm10 7 5 5-5 5';
+const PIN_ICON_PATH =
+  'm4 20 5-5m0 0 3.956 3.956a1 1 0 0 0 1.626-.314l2.255-5.261a1 1 0 0 1 .548-.535l3.207-1.283a1 1 0 0 0 .336-1.635l-6.856-6.856a1 1 0 0 0-1.635.336l-1.283 3.207a1 1 0 0 1-.535.548L5.358 9.418a1 1 0 0 0-.314 1.626L9 15z';
+const MORE_MENU_ICON_PATH = 'M5 12h.01M12 12h.01M19 12h.01';
+
+function createLineIcon(pathData: string): SVGSVGElement {
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.setAttribute('fill', 'none');
+  icon.setAttribute('focusable', 'false');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', pathData);
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('stroke-width', '2');
+  icon.append(path);
+  return icon;
+}
+
 export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig): void {
   let revisionMismatch = false;
   let disposeOutputResizeObservers = () => {};
+  const chatPresentationStates = new Map<string, ChatPresentationState>();
   const interactionController = createUiGraphInteractionController(config.uiGraph, {
-    initialState: config.initialState,
+    initialState: { ...config.initialState, ...loadUiGraphChatPersistentState(config.uiGraph) },
   });
   let actionRunner = createHostedActionRunner(config);
+  let isRestoringChatState = false;
   let restoreActionRunnerFromPageCache = false;
+
+  const getChatPresentationState = (componentId: string): ChatPresentationState => {
+    let state = chatPresentationStates.get(componentId);
+    if (!state) {
+      state = { activeMatchIndex: 0, isMenuOpen: false, isPinsOpen: false, isSearchOpen: false, query: '' };
+      chatPresentationStates.set(componentId, state);
+    }
+    return state;
+  };
+
+  const schedule = (callback: () => void): void => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(callback);
+    } else {
+      window.setTimeout(callback, 0);
+    }
+  };
+
+  const focusChatSearchInput = (componentId: string): void => {
+    schedule(() => {
+      for (const input of root.querySelectorAll<HTMLInputElement>('.rivet-web-app-chat-search-input')) {
+        if (input.dataset.rivetFocusComponentId === `chat-search-${componentId}`) {
+          input.focus();
+          return;
+        }
+      }
+    });
+  };
+
+  const focusChatSearchButton = (componentId: string): void => {
+    schedule(() => {
+      for (const button of root.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-search-button')) {
+        if (button.dataset.rivetChatSearchComponentId === componentId) {
+          button.focus();
+          return;
+        }
+      }
+    });
+  };
 
   root.addEventListener(
     'pointerdown',
@@ -58,6 +141,16 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           const button = dropdown.querySelector<HTMLButtonElement>('.rivet-web-app-hosted-dropdown-button');
           button?.setAttribute('aria-expanded', 'false');
           button?.removeAttribute('aria-activedescendant');
+        }
+      }
+      for (const menu of root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-menu-anchor')) {
+        if (menu.contains(event.target as Node)) continue;
+        const componentId = menu.dataset.rivetChatMenuComponentId;
+        const chatState = componentId ? chatPresentationStates.get(componentId) : undefined;
+        if (chatState?.isMenuOpen) {
+          chatState.isMenuOpen = false;
+          menu.querySelector('.rivet-web-app-chat-menu')?.remove();
+          menu.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.setAttribute('aria-expanded', 'false');
         }
       }
     },
@@ -154,7 +247,15 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
 
   const resetApp = (): void => {
     revisionMismatch = false;
+    chatPresentationStates.clear();
+    const chatState = getUiGraphChatPersistentState(config.uiGraph, interactionController.getSnapshot().state);
+    isRestoringChatState = true;
     interactionController.reset();
+    if (Object.keys(chatState).length > 0) {
+      interactionController.updateStatePatch(chatState);
+    }
+    isRestoringChatState = false;
+    saveUiGraphChatPersistentState(config.uiGraph, interactionController.getSnapshot().state);
     render();
   };
 
@@ -413,7 +514,19 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         break;
       }
       case 'chat': {
+        const componentId = String(renderModel.component.id);
         const isRunning = interaction.runningComponentIds.has(renderModel.component.id);
+        const hasMessages = renderModel.messages.length > 0;
+        const searchState = getChatPresentationState(componentId);
+        if (!hasMessages) {
+          searchState.isSearchOpen = false;
+          searchState.isPinsOpen = false;
+          searchState.query = '';
+          searchState.activeMatchIndex = 0;
+        }
+        if (renderModel.pins.length === 0) {
+          searchState.isPinsOpen = false;
+        }
         const submit = () => {
           const statePatch = createUiGraphChatSubmissionStatePatch(
             renderModel.component.id,
@@ -424,12 +537,50 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           interactionController.updateStatePatch(statePatch);
           void runAction(renderModel.component);
         };
-        const messageNodes = renderModel.messages.map((message) =>
-          renderMarkdownElement(
+        const pinnedMessageIndexes = new Set(renderModel.pins.map((pin) => pin.messageIndex));
+        const togglePin = (messageIndex: number) => {
+          const statePatch = createUiGraphChatPinStatePatch(
+            renderModel.component.id,
+            interactionController.getSnapshot().state,
+            messageIndex,
+          );
+          if (statePatch) {
+            interactionController.updateStatePatch(statePatch);
+            render();
+          }
+        };
+        const messageNodes = renderModel.messages.map((message, messageIndex) => {
+          const messageElement = renderMarkdownElement(
             message.content,
             `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role} rivet-web-app-chat-message-markdown markdown-body`,
-          ),
-        );
+          );
+          if (message.role === 'user') {
+            messageElement.dataset.rivetChatMessageIndex = String(messageIndex);
+            return messageElement;
+          }
+
+          const pinned = pinnedMessageIndexes.has(messageIndex);
+          const pinButton = createElement(
+            'button',
+            {
+              'aria-label': pinned ? 'Unpin response' : 'Pin response',
+              'aria-pressed': `${pinned}`,
+              className: `rivet-web-app-chat-pin-button${pinned ? ' active' : ''}`,
+              onClick: () => togglePin(messageIndex),
+              title: pinned ? 'Unpin response' : 'Pin response',
+              type: 'button',
+            },
+            [createLineIcon(PIN_ICON_PATH)],
+          );
+          return createElement(
+            'div',
+            {
+              className: 'rivet-web-app-chat-message-row',
+              'data-rivet-chat-message-index': String(messageIndex),
+            },
+            [messageElement, pinButton],
+          );
+        });
         if (messageNodes.length === 0) {
           messageNodes.push(
             createElement('div', { className: 'rivet-web-app-chat-empty' }, [
@@ -450,6 +601,165 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           );
         }
 
+        const messagesElement = createElement(
+          'div',
+          {
+            'aria-live': 'polite',
+            'aria-relevant': 'additions text',
+            className: 'rivet-web-app-chat-messages',
+            'data-rivet-chat-component-id': componentId,
+            role: 'log',
+          },
+          messageNodes,
+        );
+        const searchResult = searchState.isSearchOpen
+          ? highlightUiGraphChatSearchMatches(messagesElement, searchState.query, searchState.activeMatchIndex)
+          : (clearUiGraphChatSearchMatches(messagesElement), { activeIndex: -1, matches: [] as HTMLElement[] });
+        searchState.activeMatchIndex = searchResult.activeIndex < 0 ? 0 : searchResult.activeIndex;
+
+        const closeSearch = () => {
+          searchState.isSearchOpen = false;
+          searchState.query = '';
+          searchState.activeMatchIndex = 0;
+          render();
+          focusChatSearchButton(componentId);
+        };
+        const openSearch = () => {
+          if (!hasMessages) return;
+          searchState.isMenuOpen = false;
+          searchState.isPinsOpen = false;
+          searchState.isSearchOpen = true;
+          searchState.activeMatchIndex = 0;
+          render();
+          focusChatSearchInput(componentId);
+        };
+        const togglePins = () => {
+          searchState.isMenuOpen = false;
+          searchState.isSearchOpen = false;
+          searchState.isPinsOpen = !searchState.isPinsOpen;
+          render();
+        };
+        const toggleMenu = () => {
+          searchState.isPinsOpen = false;
+          searchState.isSearchOpen = false;
+          searchState.isMenuOpen = !searchState.isMenuOpen;
+          render();
+        };
+        const flushChatHistory = () => {
+          searchState.isMenuOpen = false;
+          searchState.isPinsOpen = false;
+          interactionController.updateStatePatch(createUiGraphChatHistoryFlushStatePatch(renderModel.component.id));
+          render();
+        };
+        const moveSearchMatch = (direction: -1 | 1) => {
+          if (searchResult.matches.length === 0) return;
+          searchState.activeMatchIndex += direction;
+          render();
+        };
+        const createSearchNavigationButton = (label: string, direction: -1 | 1, iconPath: string) => {
+          const button = createElement(
+            'button',
+            {
+              'aria-label': label,
+              className: 'rivet-web-app-chat-search-navigation-button',
+              onClick: () => moveSearchMatch(direction),
+              type: 'button',
+            },
+            [createLineIcon(iconPath)],
+          ) as HTMLButtonElement;
+          button.disabled = searchResult.matches.length === 0;
+          return button;
+        };
+        const searchPanel = searchState.isSearchOpen
+          ? createElement('div', { className: 'rivet-web-app-chat-search', role: 'search' }, [
+              createElement('input', {
+                'aria-label': 'Search chat messages',
+                className: 'rivet-web-app-chat-search-input',
+                'data-rivet-focus-component-id': `chat-search-${componentId}`,
+                placeholder: 'Search chat',
+                type: 'search',
+                value: searchState.query,
+              }),
+              createElement('span', {
+                'aria-live': 'polite',
+                className: 'rivet-web-app-chat-search-count',
+                text:
+                  searchResult.matches.length === 0
+                    ? '0\u2009/\u20090'
+                    : `${searchResult.activeIndex + 1}\u2009/\u2009${searchResult.matches.length}`,
+              }),
+              createElement('span', { className: 'rivet-web-app-chat-search-navigation' }, [
+                createSearchNavigationButton('Previous chat search result', -1, CHEVRON_LEFT_ICON_PATH),
+                createSearchNavigationButton('Next chat search result', 1, CHEVRON_RIGHT_ICON_PATH),
+              ]),
+              createElement(
+                'button',
+                {
+                  'aria-label': 'Close chat search',
+                  className: 'rivet-web-app-chat-search-close-button',
+                  onClick: closeSearch,
+                  title: 'Close chat search',
+                  type: 'button',
+                },
+                [createLineIcon(CROSS_ICON_PATH)],
+              ),
+            ])
+          : undefined;
+        const searchInput = searchPanel?.querySelector<HTMLInputElement>('.rivet-web-app-chat-search-input');
+        searchInput?.addEventListener('input', () => {
+          searchState.query = searchInput.value;
+          searchState.activeMatchIndex = 0;
+          render();
+        });
+        searchInput?.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            closeSearch();
+          } else if (event.key === 'Enter' && searchState.query.trim()) {
+            event.preventDefault();
+            moveSearchMatch(event.shiftKey ? -1 : 1);
+          }
+        });
+
+        const pinsPanel = searchState.isPinsOpen
+          ? createElement(
+              'div',
+              { 'aria-label': 'Pinned responses', className: 'rivet-web-app-chat-pins', role: 'region' },
+              renderModel.pins.map((pin) => {
+                const exchanges: Node[] = [];
+                if (pin.prompt) {
+                  exchanges.push(
+                    createElement('div', { className: 'rivet-web-app-chat-pin-exchange' }, [
+                      createElement('strong', { text: 'You asked' }),
+                      renderMarkdownElement(pin.prompt.content, 'rivet-web-app-chat-pin-markdown markdown-body'),
+                    ]),
+                  );
+                }
+                exchanges.push(
+                  createElement('div', { className: 'rivet-web-app-chat-pin-exchange' }, [
+                    createElement('strong', { text: 'Response' }),
+                    renderMarkdownElement(pin.response.content, 'rivet-web-app-chat-pin-markdown markdown-body'),
+                  ]),
+                );
+                return createElement(
+                  'button',
+                  {
+                    className: 'rivet-web-app-chat-pin',
+                    onClick: () => {
+                      const messageIndex = pin.promptMessageIndex ?? pin.messageIndex;
+                      const message = messagesElement.querySelector<HTMLElement>(
+                        `[data-rivet-chat-message-index="${messageIndex}"]`,
+                      );
+                      revealUiGraphChatElement(messagesElement, message ?? undefined, 'start');
+                    },
+                    type: 'button',
+                  },
+                  exchanges,
+                );
+              }),
+            )
+          : undefined;
+
         const textarea = createElement('textarea', {
           'aria-label': 'Message',
           'data-rivet-chat-component-id': renderModel.component.id,
@@ -459,16 +769,25 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         });
         textarea.value = renderModel.draft;
         const sendButton = createElement('button', {
-          'aria-label': 'Send message',
-          className: 'rivet-web-app-chat-send',
-          text: String.fromCodePoint(8593),
-          title: 'Send message',
-          type: 'submit',
+          'aria-label': isRunning ? 'Stop response' : 'Send message',
+          className: `rivet-web-app-chat-send${isRunning ? ' rivet-web-app-chat-stop' : ''}`,
+          title: isRunning ? 'Stop response' : 'Send message',
+          type: isRunning ? 'button' : 'submit',
         });
-        sendButton.disabled = isRunning || !renderModel.draft.trim();
+        if (isRunning) {
+          sendButton.append(
+            createElement('span', { 'aria-hidden': 'true', className: 'rivet-web-app-chat-stop-icon' }),
+          );
+          sendButton.addEventListener('click', () => interactionController.cancelAction(renderModel.component.id));
+        } else {
+          sendButton.textContent = String.fromCodePoint(8593);
+          sendButton.disabled = !renderModel.draft.trim();
+        }
         textarea.addEventListener('input', () => {
           interactionController.updateState(getUiGraphChatDraftStateKey(renderModel.component.id), textarea.value);
-          sendButton.disabled = isRunning || !textarea.value.trim();
+          if (!isRunning) {
+            sendButton.disabled = !textarea.value.trim();
+          }
         });
         textarea.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -488,37 +807,85 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           [textarea, sendButton],
         );
         const actionError = interaction.actionErrors[renderModel.component.id];
-        const headerActions: Node[] = [
-          createElement('span', {
-            className: 'rivet-web-app-chat-status',
-            text: isRunning ? 'Responding' : 'Ready',
-          }),
-        ];
-        if (isRunning) {
+        const headerActions: Node[] = [];
+        if (renderModel.pins.length > 0) {
           headerActions.push(
-            createElement('button', {
-              className: 'rivet-web-app-abort-button',
-              onClick: () => interactionController.cancelAction(renderModel.component.id),
-              text: 'Abort',
-              type: 'button',
-            }),
+            createElement(
+              'button',
+              {
+                'aria-label': `${searchState.isPinsOpen ? 'Hide' : 'Show'} ${renderModel.pins.length} pinned ${renderModel.pins.length === 1 ? 'response' : 'responses'}`,
+                'aria-pressed': `${searchState.isPinsOpen}`,
+                className: 'rivet-web-app-chat-pins-button',
+                onClick: togglePins,
+                title: searchState.isPinsOpen ? 'Hide pinned responses' : 'Show pinned responses',
+                type: 'button',
+              },
+              [createLineIcon(PIN_ICON_PATH), createElement('span', { text: String(renderModel.pins.length) })],
+            ),
+          );
+        }
+        if (hasMessages) {
+          headerActions.push(
+            createElement(
+              'button',
+              {
+                'aria-label': searchState.isSearchOpen ? 'Close chat search' : 'Search chat',
+                'aria-pressed': `${searchState.isSearchOpen}`,
+                className: 'rivet-web-app-chat-search-button',
+                'data-rivet-chat-search-component-id': componentId,
+                onClick: () => (searchState.isSearchOpen ? closeSearch() : openSearch()),
+                title: searchState.isSearchOpen ? 'Close chat search' : 'Search chat',
+                type: 'button',
+              },
+              [createLineIcon(CHAT_SEARCH_ICON_PATH)],
+            ),
           );
         }
         const chatChildren: Node[] = [
           createElement('div', { className: 'rivet-web-app-chat-header' }, [
-            createElement('span', { text: 'Chat' }),
+            createElement('span', { className: 'rivet-web-app-chat-title' }, [
+              createElement('span', { text: 'Chat' }),
+              createElement(
+                'span',
+                {
+                  className: 'rivet-web-app-chat-menu-anchor',
+                  'data-rivet-chat-menu-component-id': componentId,
+                },
+                [
+                  createElement(
+                    'button',
+                    {
+                      'aria-expanded': `${searchState.isMenuOpen}`,
+                      'aria-haspopup': 'menu',
+                      'aria-label': 'Chat options',
+                      className: 'rivet-web-app-chat-menu-button',
+                      onClick: toggleMenu,
+                      title: 'Chat options',
+                      type: 'button',
+                    },
+                    [createLineIcon(MORE_MENU_ICON_PATH)],
+                  ),
+                  ...(searchState.isMenuOpen
+                    ? [
+                        createElement('span', { className: 'rivet-web-app-chat-menu', role: 'menu' }, [
+                          createElement('button', {
+                            onClick: flushChatHistory,
+                            role: 'menuitem',
+                            text: 'Flush chat history',
+                            type: 'button',
+                          }),
+                        ]),
+                      ]
+                    : []),
+                ],
+              ),
+            ]),
             createElement('span', { className: 'rivet-web-app-chat-header-actions' }, headerActions),
           ]),
-          createElement(
-            'div',
-            {
-              'aria-live': 'polite',
-              'aria-relevant': 'additions text',
-              className: 'rivet-web-app-chat-messages',
-              role: 'log',
-            },
-            messageNodes,
-          ),
+          createElement('div', { className: 'rivet-web-app-chat-history' }, [
+            ...(pinsPanel ? [pinsPanel] : searchPanel ? [searchPanel] : []),
+            messagesElement,
+          ]),
         ];
         if (actionError) {
           chatChildren.push(
@@ -528,7 +895,20 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         const chatProgress = renderActionProgress(interaction.actionProgress[renderModel.component.id]);
         if (chatProgress) chatChildren.push(chatProgress);
         chatChildren.push(composer);
-        content = createElement('section', { className: 'rivet-web-app-chat' }, chatChildren);
+        const chat = createElement('section', { className: 'rivet-web-app-chat' }, chatChildren);
+        chat.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && searchState.isMenuOpen) {
+            event.preventDefault();
+            searchState.isMenuOpen = false;
+            render();
+            return;
+          }
+          if (hasMessages && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+            event.preventDefault();
+            openSearch();
+          }
+        });
+        content = chat;
         break;
       }
       case 'output': {
@@ -679,7 +1059,16 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     root.replaceChildren(surface, ...renderRevisionMismatchModal());
     disposeOutputResizeObservers = observeOutputResizeBounds(root);
     root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-messages').forEach((messages) => {
-      messages.scrollTop = messages.scrollHeight;
+      const componentId = messages.dataset.rivetChatComponentId;
+      const searchState = componentId ? chatPresentationStates.get(componentId) : undefined;
+      if (searchState?.isSearchOpen && searchState.query.trim()) {
+        revealUiGraphChatSearchMatch(
+          messages,
+          messages.querySelector<HTMLElement>('.rivet-web-app-chat-search-match-active') ?? undefined,
+        );
+      } else {
+        messages.scrollTop = messages.scrollHeight;
+      }
     });
     if (revisionMismatch) {
       root.querySelector<HTMLButtonElement>('.rivet-web-app-modal-button')?.focus();
@@ -688,7 +1077,14 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     }
   };
 
+  let persistedChatState = interactionController.getSnapshot().state;
+  saveUiGraphChatPersistentState(config.uiGraph, persistedChatState);
   interactionController.subscribe((change) => {
+    const nextState = interactionController.getSnapshot().state;
+    if (!isRestoringChatState && hasUiGraphChatPersistentStateChanged(config.uiGraph, persistedChatState, nextState)) {
+      saveUiGraphChatPersistentState(config.uiGraph, nextState);
+    }
+    persistedChatState = nextState;
     if (change !== 'state') render();
   });
   window.addEventListener('pagehide', (event) => {
