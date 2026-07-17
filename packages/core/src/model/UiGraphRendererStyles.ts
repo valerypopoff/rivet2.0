@@ -803,7 +803,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-chat-message-row:hover .rivet-web-app-chat-pin-button,
-.rivet-web-app-chat-message-row:focus-within .rivet-web-app-chat-pin-button,
+.rivet-web-app-chat-pin-button:focus-visible,
 .rivet-web-app-chat-pin-button.active {
   opacity: 1;
   pointer-events: auto;

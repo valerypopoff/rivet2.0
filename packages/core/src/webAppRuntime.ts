@@ -20,6 +20,7 @@ export {
   createUiGraphChatSubmissionStatePatch,
   getUiGraphActionState,
   getUiGraphChatDraftStateKey,
+  getUiGraphChatMessagesStateKey,
 } from './model/UiGraph.js';
 export {
   applyUiGraphStatePatch,

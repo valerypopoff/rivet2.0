@@ -409,6 +409,91 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
+  void it('keeps hosted Chat history in place for menu and pin presentation changes', () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const chatId = 'chat' as UiComponentId;
+    uiGraph.components = [{ action: { type: 'runGraph' }, id: chatId, type: 'chat' }];
+    const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+    const storageKey = 'rivet-web-app-chat-state:v1:https%3A%2F%2Fexample.test:%2Fapp:ui-graph';
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        Object.defineProperties(window.HTMLElement.prototype, {
+          clientHeight: {
+            configurable: true,
+            get() {
+              return this.classList.contains('rivet-web-app-chat-messages') ? 200 : 0;
+            },
+          },
+          scrollHeight: {
+            configurable: true,
+            get() {
+              return this.classList.contains('rivet-web-app-chat-messages') ? 1_000 : 0;
+            },
+          },
+        });
+        window.localStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            [messagesKey]: [
+              { content: 'Question', role: 'user' },
+              { content: 'Response', role: 'assistant' },
+            ],
+          }),
+        );
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    const messages = dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')!;
+    messages.scrollTop = 280;
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+
+    assert.equal(
+      dom.window.document.querySelector('.rivet-web-app-chat-pin-button')?.getAttribute('aria-pressed'),
+      'true',
+    );
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
+
+    assert.ok(dom.window.document.querySelector('.rivet-web-app-chat-pins'));
+    assert.ok(dom.window.document.querySelector('.rivet-web-app-chat-menu'));
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+
+    assert.equal(
+      dom.window.document.querySelector('.rivet-web-app-chat-pin-button')?.getAttribute('aria-pressed'),
+      'false',
+    );
+    assert.equal(
+      dom.window.document.querySelector('.rivet-web-app-chat-pin-button')?.classList.contains('active'),
+      false,
+    );
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-chat-pins'), null);
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-search-button')?.click();
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+    const searchInput = dom.window.document.querySelector<HTMLInputElement>('.rivet-web-app-chat-search-input')!;
+    searchInput.value = 'Response';
+    searchInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const searchedMessages = dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')!;
+    searchedMessages.scrollTop = 280;
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+    dom.window.close();
+  });
+
   void it('repairs duplicate button IDs before scoping hosted loading state', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;

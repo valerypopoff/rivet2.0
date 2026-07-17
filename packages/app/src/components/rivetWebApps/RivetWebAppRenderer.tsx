@@ -563,10 +563,10 @@ const RivetWebAppChat: FC<{
 
   useEffect(() => {
     const messagesElement = messagesRef.current;
-    if (messagesElement && (!isSearchOpen || !searchQuery.trim())) {
+    if (messagesElement) {
       messagesElement.scrollTop = messagesElement.scrollHeight;
     }
-  }, [isRunning, isSearchOpen, messages.length, searchQuery]);
+  }, [isRunning, messages.length]);
 
   useEffect(() => {
     if (isSearchOpen) {
@@ -645,7 +645,6 @@ const RivetWebAppChat: FC<{
   };
 
   const toggleOverflowMenu = () => {
-    setIsPinsOpen(false);
     setIsSearchOpen(false);
     setIsOverflowMenuOpen((isOpen) => !isOpen);
   };
@@ -746,7 +745,7 @@ const RivetWebAppChat: FC<{
         </span>
       </div>
       <div className="rivet-web-app-chat-history">
-        {isPinsOpen ? (
+        {isPinsOpen && pins.length > 0 ? (
           <div className="rivet-web-app-chat-pins" aria-label="Pinned responses" role="region">
             {pins.map((pin) => (
               <RivetWebAppChatPin key={pin.messageIndex} pin={pin} onReveal={revealPinnedMessage} />
