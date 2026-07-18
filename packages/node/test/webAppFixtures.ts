@@ -167,17 +167,16 @@ export function makeExternalStatusProject(): Project {
   return project;
 }
 
-export function makeExternalStorageProject(mode: 'get' | 'set'): Project {
+export function makeStoredValueProject(mode: 'get' | 'set'): Project {
   const project = makeWebAppProject({ outputId: 'value' });
-  const externalNode = {
-    data: {
-      functionName: mode === 'get' ? 'getWebAppStorage' : 'setWebAppStorage',
-      useErrorOutput: false,
-      useFunctionNameInput: false,
-    },
+  const storedValueNode = {
+    data:
+      mode === 'get'
+        ? { dataType: 'any', key: 'analysis', onDemand: false, useKeyInput: false, wait: false }
+        : { dataType: 'any', key: 'analysis', useKeyInput: false },
     id: 'storage-node' as never,
-    title: mode === 'get' ? 'Get web app storage' : 'Set web app storage',
-    type: 'externalCall' as const,
+    title: mode === 'get' ? 'Get Stored Value' : 'Set Stored Value',
+    type: (mode === 'get' ? 'getStoredValue' : 'setStoredValue') as 'getStoredValue' | 'setStoredValue',
     visualData: { x: 400, y: 0 },
   };
   project.graphs[TEST_GRAPH_ID]!.nodes = [
@@ -188,25 +187,7 @@ export function makeExternalStorageProject(mode: 'get' | 'set'): Project {
       type: 'graphInput',
       visualData: { x: 0, y: 0 },
     },
-    ...(mode === 'set'
-      ? [
-          {
-            data: { normalizeLineEndings: true, text: 'analysis' },
-            id: 'key-node' as never,
-            title: 'Storage key',
-            type: 'text' as const,
-            visualData: { x: 0, y: 160 },
-          },
-          {
-            data: { flatten: false, flattenDeep: false },
-            id: 'arguments-node' as never,
-            title: 'Arguments',
-            type: 'array' as const,
-            visualData: { x: 200, y: 0 },
-          },
-        ]
-      : []),
-    externalNode,
+    storedValueNode,
     {
       data: { dataType: 'any', id: 'value' },
       id: 'output-node' as never,
@@ -219,36 +200,17 @@ export function makeExternalStorageProject(mode: 'get' | 'set'): Project {
     ...(mode === 'set'
       ? [
           {
-            inputId: 'input1' as never,
-            inputNodeId: 'arguments-node' as never,
-            outputId: 'output' as never,
-            outputNodeId: 'key-node' as never,
-          },
-          {
-            inputId: 'input2' as never,
-            inputNodeId: 'arguments-node' as never,
+            inputId: 'value' as never,
+            inputNodeId: 'storage-node' as never,
             outputId: 'data' as never,
             outputNodeId: 'input-node' as never,
-          },
-          {
-            inputId: 'arguments' as never,
-            inputNodeId: 'storage-node' as never,
-            outputId: 'output' as never,
-            outputNodeId: 'arguments-node' as never,
           },
         ]
-      : [
-          {
-            inputId: 'arguments' as never,
-            inputNodeId: 'storage-node' as never,
-            outputId: 'data' as never,
-            outputNodeId: 'input-node' as never,
-          },
-        ]),
+      : []),
     {
       inputId: 'value' as never,
       inputNodeId: 'output-node' as never,
-      outputId: 'result' as never,
+      outputId: (mode === 'get' ? 'value' : 'saved-value') as never,
       outputNodeId: 'storage-node' as never,
     },
   ];

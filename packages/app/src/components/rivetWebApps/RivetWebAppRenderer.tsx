@@ -42,6 +42,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import {
   clearUiGraphChatSearchMatches,
+  applyUiGraphWebAppStorageActionPatch,
   applyUiGraphWebAppStoragePatch,
   copyUiGraphText,
   downloadUiGraphJsonOutput,
@@ -230,24 +231,22 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
         );
         signal.throwIfAborted();
         if (result.storagePatch && Object.keys(result.storagePatch).length > 0) {
-          const applicablePatch = Object.fromEntries(
-            Object.entries(result.storagePatch).filter(([key]) => {
-              const latestAppliedAction = storageActionState.appliedActionByKey.get(key) ?? 0;
-              if (actionNumber < latestAppliedAction) return false;
-              storageActionState.appliedActionByKey.set(key, actionNumber);
-              return true;
-            }),
+          applyUiGraphWebAppStorageActionPatch(
+            result.storagePatch,
+            actionNumber,
+            storageActionState.appliedActionByKey,
+            (applicablePatch) => {
+              if (storageAdapter) {
+                storageAdapter.applyPatch(applicablePatch);
+              } else {
+                applyUiGraphWebAppStoragePatch(
+                  normalizedInteractionUiGraph,
+                  loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
+                  applicablePatch,
+                );
+              }
+            },
           );
-          if (Object.keys(applicablePatch).length === 0) return { statePatch: result.statePatch };
-          if (storageAdapter) {
-            storageAdapter.applyPatch(applicablePatch);
-          } else {
-            applyUiGraphWebAppStoragePatch(
-              normalizedInteractionUiGraph,
-              loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
-              applicablePatch,
-            );
-          }
         }
         return { statePatch: result.statePatch };
       }),

@@ -5,7 +5,11 @@ import { DndContext, DragOverlay, useDraggable } from '@dnd-kit/core';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
 import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import type { UiGraphComponent } from '@valerypopoff/rivet2-core';
-import { applyUiGraphWebAppStoragePatch, loadUiGraphWebAppStorage } from '@valerypopoff/rivet2-core/web-app-runtime';
+import {
+  applyUiGraphWebAppStorageActionPatch,
+  applyUiGraphWebAppStoragePatch,
+  loadUiGraphWebAppStorage,
+} from '@valerypopoff/rivet2-core/web-app-runtime';
 import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
@@ -646,18 +650,13 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
         }
 
         const applicableStoragePatch = result.storagePatch
-          ? Object.fromEntries(
-              Object.entries(result.storagePatch).filter(([key]) => {
-                const latestAppliedAction = storageActionState.appliedActionByKey.get(key) ?? 0;
-                if (storageActionNumber < latestAppliedAction) return false;
-                storageActionState.appliedActionByKey.set(key, storageActionNumber);
-                return true;
-              }),
+          ? applyUiGraphWebAppStorageActionPatch(
+              result.storagePatch,
+              storageActionNumber,
+              storageActionState.appliedActionByKey,
+              (patch) => applyUiGraphWebAppStoragePatch(uiGraph, loadUiGraphWebAppStorage(uiGraph), patch),
             )
           : undefined;
-        if (applicableStoragePatch && Object.keys(applicableStoragePatch).length > 0) {
-          applyUiGraphWebAppStoragePatch(uiGraph, loadUiGraphWebAppStorage(uiGraph), applicableStoragePatch);
-        }
 
         channel.postMessage({
           requestId: event.data.requestId,

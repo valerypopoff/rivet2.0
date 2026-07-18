@@ -37,6 +37,7 @@ export {
 } from './model/UiGraphActionProtocol.js';
 export {
   copyUiGraphText,
+  applyUiGraphWebAppStorageActionPatch,
   applyUiGraphWebAppStoragePatch,
   clearUiGraphChatSearchMatches,
   downloadUiGraphJsonOutput,

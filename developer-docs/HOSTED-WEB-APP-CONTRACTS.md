@@ -146,29 +146,40 @@ event, but only a host with a web-app progress surface displays it. Other
 host-supplied external functions are preserved, and no web-app-specific executor
 marker is needed.
 
-Web-app actions additionally reserve `getWebAppStorage` and `setWebAppStorage`.
-The browser owns persistence; the server never reads browser `localStorage`
-directly. Each HTTP or WebSocket action carries a JSON-object snapshot scoped by
-origin, normalized app pathname, and UI graph ID. The action processor installs an
-action-local storage controller after host external functions, so hosts cannot
-replace the reserved behavior accidentally. `getWebAppStorage(key)` reads the
-snapshot, `getWebAppStorage()` returns the whole app object, and
-`setWebAppStorage(key, value)` updates the action-local view plus a changed-key
-patch. Later calls in the same run observe earlier writes. Only successful actions
-return the patch; the browser merges it into the current app record without
-replacing disjoint keys, including when another action completed while it was
-running. HTTP responses and replayable WebSocket completion events
-carry the same `storagePatch`. Storage never enters component UI state, graph input
-mapping, or lifecycle-hook state projection. It is JSON-only, browser-local,
-quota-bound, non-secret storage rather than a durable host database.
+Persistent workflow state uses the built-in `Set Stored Value` and `Get Stored
+Value` nodes. One controller belongs to the root graph run and is shared with
+subgraphs and delegated tool graphs. It is read-through/write-through, loads a key
+at most once per run, serializes same-key operations, and updates its synchronous
+cache only after a successful backing-store write. The portable value contract is
+strict JSON: `null`, booleans, finite numbers, strings, arrays, and plain objects.
+Undefined values, functions, cycles, binary/media values, and malformed callback
+results fail the node. Missing values remain distinct from stored `null` through
+the Get node's `Found` output.
 
-The editor's Browser executor installs these functions directly. Its internal Node
-executor sends the same action snapshot over the request-scoped debugger protocol,
-installs the functions in the sidecar processor, and returns the changed-key patch
-before the successful terminal result. The browser then applies that patch through
-the same action lifecycle as a Browser-executor run. External Remote Debugger
-sessions do not permit editor-originated web-app actions, so they never receive a
-browser-storage bridge.
+Web-app persistence defaults to the browser. The server never reads browser
+`localStorage` directly. Each HTTP or WebSocket action carries a JSON-object
+snapshot scoped by origin, normalized app pathname, and UI graph ID. The action
+uses that snapshot as its controller's backing store and returns successful
+changed-key writes in `storagePatch`; the browser merges the patch into the latest
+app record without replacing disjoint keys. Per-key action ordering advances only
+after that merge is persisted, so a failed newer write cannot suppress an older
+successful action that completes later. Storage never enters component UI
+state, graph input mapping, or lifecycle-hook state projection.
+
+Hosts can provide `storedValueStore` to `runGraph(...)`, `createProcessor(...)`,
+`runRivetWebAppAction(...)`, a web-app handler, or a WebSocket session. A
+request-scoped store returned by `createProcessorOptions(context)` overrides a
+static web-app store. Either host store overrides the browser snapshot. In
+callback-backed mode Rivet sends no writes back to browser storage; switching modes
+does not migrate or erase either store. Callback errors fail the action without a
+fallback. Hosts own tenancy, authentication, namespacing, authorization, and
+cross-request concurrency.
+
+The editor's Browser executor supplies a snapshot-backed store directly. Its
+internal Node executor sends the same snapshot over the request-scoped debugger
+protocol, creates the store in the sidecar, and returns the changed-key patch before
+the successful terminal result. External Remote Debugger sessions do not permit
+editor-originated web-app actions, so they never receive a browser-storage bridge.
 
 The desktop **Run detached** preview keeps the durable app-local record in the
 parent Rivet window rather than relying on its Tauri child webview's browser
@@ -180,14 +191,14 @@ webview. Its temporary bootstrap payload is best-effort browser storage only: if
 either webview cannot access it, the child requests the same payload from the parent
 over its token-scoped `BroadcastChannel`.
 
-The functions belong to the web-app action scope, rather than to one executor
-implementation. The action-root processor supplies its persisted storage view once;
-normal processor inheritance makes the same view available to nested graphs and
-delegated tool graphs. Every processor also has an empty run-local fallback view, so
-ordinary Browser/Node editor runs can call the same functions without an undefined
-External Call. That fallback lasts only for the processor's lifetime: it has no user,
-app, browser, or endpoint persistence identity. Hosts that need durable storage must
-override it with an action or endpoint-specific storage view.
+Ordinary Browser, Node, core, and headless runs create a fresh memory controller for
+every top-level run. Reusing a processor therefore does not retain values by itself;
+only a browser or host store persists across runs. Frozen Set Stored Value replay
+seeds the run cache for downstream nodes without repeating the durable write.
+
+`getWebAppStorage` and `setWebAppStorage` are no longer built-in External Calls.
+This is an intentional breaking change; existing workflows must use the dedicated
+nodes.
 
 ### Long-running WebSocket actions
 

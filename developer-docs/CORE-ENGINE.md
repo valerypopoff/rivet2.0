@@ -859,6 +859,27 @@ This is how the app bridges execution to the user-input modal.
 
 These are shared across subgraphs because subprocessors inherit the same root structures.
 
+Persistent-capable run state is separate from globals. `Set Stored Value` and `Get
+Stored Value` use one `RivetStoredValueController` created for each root run and
+shared with every subprocessor. The controller provides strict portable-JSON
+validation, read-through/write-through caching, one successful backend load per key,
+same-key serialization, in-run Wait notification, and cache-only frozen Set replay.
+The nodes' editor type selector exposes only JSON-compatible Rivet types; binary,
+media, document, chat-message, and function types remain unavailable there.
+`GraphProcessor.setStoredValueStore(...)` configures the optional backing store;
+without one, a new run-local memory view is created even when the processor instance
+is reused. Core and Node `RunGraphOptions.storedValueStore` configure the same seam.
+
+Get Stored Value's On Demand mode still executes an async backend load when the node
+runs, then returns a synchronous function backed by the run cache so later Sets in
+that run are visible when downstream nodes consume it. Wait defaults off and waits
+only for a successful Set in the same root run. Missing keys return the selected
+type default plus `Found: false`; stored `null` remains `Found: true`.
+An existing value that is incompatible with the node's selected type also returns
+that type's default, but `Found` (or Set's `Had Previous Value`) remains true. This
+keeps key schema changes deterministic without mutating persisted values or relying
+on permissive cross-type coercion.
+
 `Get Global` and `Set Global` runtime semantics are unchanged by editor conveniences. The app-side Get Global variable selector scans static `Set Global` node IDs in the current project, overlays the live open graph over the saved project graph list so unsaved Set Global edits are searchable immediately, and writes a selected ID into the normal `id` node data field; dynamic IDs supplied through the `Set Global` ID input port are runtime values and cannot be discovered safely by the editor. Variable ID input ports stay string-typed regardless of the selected global value data type, `Get Global` emits its `Variable ID` output even when `On Demand` returns a function value, and `Set Global` resolves `Previous Value` from the same static or dynamic ID that it is about to write. New Get Global nodes default to `wait: true` and `onDemand: false`, and their editor metadata makes those two toggles mutually exclusive in the UI.
 
 ## Split-Run Execution

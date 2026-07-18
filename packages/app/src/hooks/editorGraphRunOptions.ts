@@ -6,6 +6,7 @@ import type {
   GraphProgress,
   NodeId,
   RivetWebAppStorage,
+  RivetStoredValueStore,
 } from '@valerypopoff/rivet2-core';
 
 export type EditorGraphRunOptions = {
@@ -16,6 +17,7 @@ export type EditorGraphRunOptions = {
   inputs?: GraphInputs;
   onProgress?: (progress: GraphProgress) => void;
   onWebAppStoragePatch?: (storagePatch: RivetWebAppStorage) => void;
+  storedValueStore?: RivetStoredValueStore;
   requireLiveRun?: boolean;
   throwOnError?: boolean;
   to?: NodeId[];

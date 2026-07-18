@@ -13,6 +13,7 @@ export * from './model/UiGraphBindings.js';
 export * from './model/UiGraphRuntimeModel.js';
 export * from './model/UiGraphWebAppStatus.js';
 export * from './model/UiGraphWebAppStorage.js';
+export * from './model/StoredValueStore.js';
 export * from './model/UiGraphActionProtocol.js';
 export * from './model/GraphProgress.js';
 export * from './model/UiGraphRendererStyles.js';

@@ -6,6 +6,7 @@ import {
   type Project,
   type RivetWebAppActionStartMessage,
   type RivetWebAppRunEvent,
+  type RivetStoredValueStore,
   type UiGraph,
 } from '@valerypopoff/rivet2-core';
 import {
@@ -40,6 +41,7 @@ export type RivetWebAppSocketSession = {
   request?: Request;
   resolveContext?: RivetWebAppHandlerOptions['resolveContext'];
   revisionKey?: string;
+  storedValueStore?: RivetStoredValueStore;
   uiGraph: UiGraph;
 };
 
@@ -477,6 +479,7 @@ export function createRivetWebAppWebSocketGateway(
           resolveContext: session.resolveContext,
           revisionKey: session.revisionKey,
           state: message.state,
+          storedValueStore: session.storedValueStore,
           storage: message.storage,
           uiGraph: session.uiGraph,
         });

@@ -73,7 +73,7 @@ import { emitDetached } from '../utils/emitDetached.js';
 import { GraphRunLifecycle } from './GraphRunLifecycle.js';
 import { normalizeGraphProgress, type GraphProgress } from './GraphProgress.js';
 import { RIVET_WEB_APP_STATUS_FUNCTION_NAME, rivetWebAppStatusExternalFunction } from './UiGraphWebAppStatus.js';
-import { createRivetWebAppStorageExternalFunctions } from './UiGraphWebAppStorage.js';
+import { RivetStoredValueController, type RivetStoredValueStore } from './StoredValueStore.js';
 import {
   createExcludedNodeOutputs,
   getControlFlowExclusionDecision,
@@ -440,6 +440,7 @@ export class GraphProcessor {
   readonly #runtimeProfiler: GraphProcessorRuntimeProfiler | undefined;
   readonly #captureNodeTimings: boolean;
   #frozenNodeOutputResolver: FrozenNodeOutputResolver | undefined;
+  #storedValueStore: RivetStoredValueStore | undefined;
   #useSeededExecutionPlanOnNextRun = false;
   id = nanoid();
 
@@ -489,6 +490,7 @@ export class GraphProcessor {
   #subprocessors: Set<GraphProcessor> = undefined!;
   #contextValues: Record<string, DataValue> = undefined!;
   #globals: Map<string, ScalarOrArrayDataValue> = undefined!;
+  #storedValueController: RivetStoredValueController = undefined!;
   #attachedNodeData: Map<NodeId, AttachedNodeData> = undefined!;
   #successfulAbortTerminalProcessIds: Set<ProcessId> = undefined!;
   #totalCost: number = 0;
@@ -605,11 +607,6 @@ export class GraphProcessor {
 
     this.setExternalFunction('echo', async (value) => ({ type: 'any', value }) satisfies DataValue);
     this.setExternalFunction(RIVET_WEB_APP_STATUS_FUNCTION_NAME, rivetWebAppStatusExternalFunction);
-    for (const [name, externalFunction] of Object.entries(
-      createRivetWebAppStorageExternalFunctions().externalFunctions,
-    )) {
-      this.setExternalFunction(name, externalFunction);
-    }
 
     this.#emitter.on('globalSet', ({ id, value }: ProcessEvents['globalSet']) => {
       emitDetached(this.#emitter, `globalSet:${id}`, value);
@@ -810,6 +807,13 @@ export class GraphProcessor {
     this.#externalFunctions[name] = fn;
   }
 
+  setStoredValueStore(store: RivetStoredValueStore | undefined): void {
+    if (this.#lifecycle.isRunning) {
+      throw new Error('Cannot change the stored value store while the graph is running.');
+    }
+    this.#storedValueStore = store;
+  }
+
   async abort(successful: boolean = false, error?: Error | string): Promise<void> {
     if (!this.#lifecycle.requestAbort(successful, error)) {
       return Promise.resolve();
@@ -999,6 +1003,9 @@ export class GraphProcessor {
     this.#subprocessors = new Set();
     this.#attachedNodeData = new Map();
     this.#globals ??= new Map();
+    if (!this.#isSubProcessor) {
+      this.#storedValueController = new RivetStoredValueController(this.#storedValueStore);
+    }
     this.#ignoreNodes = new Set();
     this.#nodeProcessContextBase = undefined!;
     this.#runToRelevantNodeIds = undefined;
@@ -1105,6 +1112,8 @@ export class GraphProcessor {
       executionCache: this.#executionCache,
       executor: this.executor ?? 'nodejs',
       getGlobal: (id) => this.#globals.get(id),
+      getCachedStoredValue: (key) => this.#storedValueController.getCached(key),
+      getStoredValue: (key) => this.#storedValueController.get(key),
       getGraphBoundary: (project, graphId) => this.#getGraphBoundary(project, graphId),
       graphInputNodeValues: this.#graphInputNodeValues,
       graphInputs: this.#graphInputs,
@@ -1118,6 +1127,7 @@ export class GraphProcessor {
       trace: (message) => {
         this.#emitTraceEvent(message);
       },
+      setStoredValue: (key, value) => this.#storedValueController.set(key, value),
       waitForGlobal: async (id) => {
         if (this.#globals.has(id)) {
           return this.#globals.get(id)!;
@@ -1125,6 +1135,7 @@ export class GraphProcessor {
         await this.getRootProcessor().#emitter.once(`globalSet:${id}`);
         return this.#globals.get(id)!;
       },
+      waitForStoredValue: (key, signal) => this.#storedValueController.waitForSet(key, signal),
     };
   }
 
@@ -1886,7 +1897,7 @@ export class GraphProcessor {
     this.#nodeResults.set(node.id, outputValues);
     this.#visitedNodes.add(node.id);
     this.#accumulateCost(outputValues);
-    this.#applyFrozenNodeDataflowEffects(node, outputValues, processId);
+    await this.#applyFrozenNodeDataflowEffects(node, outputValues, processId);
 
     await this.#emitter.emit(
       'nodeFinish',
@@ -1903,17 +1914,22 @@ export class GraphProcessor {
     );
   }
 
-  #applyFrozenNodeDataflowEffects(node: ChartNode, outputValues: Outputs, processId: ProcessId): void {
-    const setGlobalEffect = applyFrozenGraphBoundaryEffects(this.#graphOutputs, node, outputValues);
-    if (!setGlobalEffect) {
+  async #applyFrozenNodeDataflowEffects(node: ChartNode, outputValues: Outputs, processId: ProcessId): Promise<void> {
+    const effect = applyFrozenGraphBoundaryEffects(this.#graphOutputs, node, outputValues);
+    if (!effect) {
       return;
     }
 
-    this.#globals.set(setGlobalEffect.variableId, setGlobalEffect.value);
+    if (effect.type === 'setStoredValue') {
+      await this.#storedValueController.seed(effect.key, effect.value);
+      return;
+    }
+
+    this.#globals.set(effect.variableId, effect.value);
     emitDetached(
       this.#emitter,
       'globalSet',
-      this.#withExecution({ id: setGlobalEffect.variableId, value: setGlobalEffect.value, processId }),
+      this.#withExecution({ id: effect.variableId, value: effect.value, processId }),
     );
   }
 
@@ -2322,6 +2338,7 @@ export class GraphProcessor {
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
     processor.#globals = this.#globals;
+    processor.#storedValueController = this.#storedValueController;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = {
       nodeId: node.id,

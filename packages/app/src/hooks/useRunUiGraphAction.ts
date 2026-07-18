@@ -5,6 +5,7 @@ import {
   type UiComponentId,
   type UiGraph,
   type GraphProgress,
+  type RivetWebAppStorage,
   formatUiGraphActionBindingIssues,
   getUiGraphActionComponent,
   jsonValueToDataValue,
@@ -12,7 +13,7 @@ import {
   resolveUiGraphComponentActionInputs,
   resolveUiGraphComponentActionOutputStatePatch,
   validateUiGraphActionBindings,
-  createRivetWebAppStorageExternalFunctions,
+  createRivetStoredValueSnapshotStore,
 } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import { useStableCallback } from './useStableCallback.js';
@@ -79,12 +80,11 @@ export async function runUiGraphAction(options: {
   }
 
   options.abortSignal?.throwIfAborted();
-  const webAppStorage = createRivetWebAppStorageExternalFunctions(options.storage ?? {});
+  const browserStoredValues = createRivetStoredValueSnapshotStore(options.storage ?? {});
   let remoteStoragePatch: Record<string, unknown> = {};
   const rawInputs = resolveUiGraphComponentActionInputs(component, options.state);
   const runOptions = {
     graphId: component.action.graphId,
-    externalFunctions: webAppStorage.externalFunctions,
     inputs: toGraphInputs(rawInputs),
     onProgress: options.onProgress,
     onWebAppStoragePatch: (storagePatch: Record<string, unknown>) => {
@@ -93,7 +93,8 @@ export async function runUiGraphAction(options: {
     requireLiveRun: true,
     throwOnError: true,
     waitForResults: true,
-    webAppStorage: options.storage ?? {},
+    storedValueStore: browserStoredValues.store,
+    webAppStorage: (options.storage ?? {}) as RivetWebAppStorage,
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
   };
   const outputs = await options.tryRunGraph(runOptions);
@@ -106,7 +107,7 @@ export async function runUiGraphAction(options: {
   return {
     outputs,
     statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, options.state),
-    storagePatch: { ...webAppStorage.getStoragePatch(), ...remoteStoragePatch },
+    storagePatch: { ...browserStoredValues.getPatch(), ...remoteStoragePatch },
   };
 }
 

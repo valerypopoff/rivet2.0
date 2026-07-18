@@ -316,7 +316,7 @@ const rivetDebugger = startDebuggerServer({
       const webAppStorage =
         initialWebAppStorage === undefined
           ? undefined
-          : Rivet.createRivetWebAppStorageExternalFunctions(initialWebAppStorage);
+          : Rivet.createRivetStoredValueSnapshotStore(initialWebAppStorage);
       const processor = createProcessor(project, {
         graph: graphId,
         inputs,
@@ -332,7 +332,7 @@ const rivetDebugger = startDebuggerServer({
           logRuntimeDebug('Graph trace', { trace });
         },
         context: contextValues,
-        externalFunctions: webAppStorage?.externalFunctions,
+        storedValueStore: webAppStorage?.store,
         projectPath,
         projectReferenceLoader: new NodeProjectReferenceLoader(),
       });
@@ -343,7 +343,7 @@ const rivetDebugger = startDebuggerServer({
             if (event.execution.parentGraphRunId != null) {
               return;
             }
-            const storagePatch = webAppStorage.getStoragePatch();
+            const storagePatch = webAppStorage.getPatch();
             if (Object.keys(storagePatch).length === 0) {
               return;
             }

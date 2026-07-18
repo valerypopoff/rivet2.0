@@ -38,6 +38,7 @@ type RunGraphOptions = {
   projectPath?: string;
   projectReferenceLoader?: ProjectReferenceLoader;
   editorExecutionCache?: ProcessContext['editorExecutionCache'];
+  storedValueStore?: RivetStoredValueStore;
 } & {
   [P in keyof ProcessEvents as `on${PascalCase<P>}`]?: (params: ProcessEvents[P]) => void;
 } & Settings;
@@ -180,6 +181,21 @@ Type: `ProcessContext['editorExecutionCache']`
 
 Passes the editor execution cache used by app/editor runs.
 
+### storedValueStore
+
+Type: `RivetStoredValueStore`
+
+Optional persistence callbacks used by [Set Stored Value](../../node-reference/set-stored-value) and [Get Stored Value](../../node-reference/get-stored-value):
+
+```typescript
+interface RivetStoredValueStore {
+  get(key: string): RivetStoredValue | undefined | Promise<RivetStoredValue | undefined>;
+  set(key: string, value: RivetStoredValue): void | Promise<void>;
+}
+```
+
+Without this option each top-level run receives fresh in-memory storage. Subgraphs and delegated tool graphs share the root run's controller. A reused processor starts with a fresh cache on its next top-level run, while the host store can preserve values between runs. Callback errors fail the node and do not fall back to another store.
+
 ### remoteDebugger
 
 Type: `RivetDebuggerServer`
@@ -215,14 +231,14 @@ For LLM keys, new programmatic code should use `openAiApiKey`, `anthropicApiKey`
 When using `@valerypopoff/rivet2-node`, `createProcessor` and `runGraph`
 provide these defaults when the corresponding option is omitted:
 
-| Option                   | Node default                                                                                                                                    |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nativeApi`              | `NodeNativeApi`                                                                                                                                 |
-| `mcpProvider`            | `NodeMCPProvider`                                                                                                                               |
-| `tokenizer`              | fallback character-count tokenizer                                                                                                              |
-| `codeRunner`             | `NodeCodeRunner` for `runGraph` and compatible `createProcessor`; omitted-default `createProcessor` may use a run-scoped cached Node CodeRunner |
-| `projectReferenceLoader` | `NodeProjectReferenceLoader`                                                                                                                    |
-| `pluginEnv`              | plugin environment values read from `process.env`                                                                                               |
+| Option                   | Node default                                                                                                                                                                                                                                                                             |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nativeApi`              | `NodeNativeApi`                                                                                                                                                                                                                                                                          |
+| `mcpProvider`            | `NodeMCPProvider`                                                                                                                                                                                                                                                                        |
+| `tokenizer`              | fallback character-count tokenizer                                                                                                                                                                                                                                                       |
+| `codeRunner`             | `NodeCodeRunner` for `runGraph` and compatible `createProcessor`; omitted-default `createProcessor` may use a run-scoped cached Node CodeRunner                                                                                                                                          |
+| `projectReferenceLoader` | `NodeProjectReferenceLoader`                                                                                                                                                                                                                                                             |
+| `pluginEnv`              | plugin environment values read from `process.env`                                                                                                                                                                                                                                        |
 | LLM settings             | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, canonical `CUSTOM_PROVIDER_API_KEY`, legacy `CUSTOM_AI_API_KEY`, and `OPENAI_ORG_ID` when unset. `OPENAI_ENDPOINT` is not read automatically; pass `openAiEndpoint` explicitly only for legacy Chat compatibility |
 
 `createGraphRunner` resolves the same Node defaults once at runner creation and

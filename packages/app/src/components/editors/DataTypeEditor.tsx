@@ -7,6 +7,7 @@ import {
   type DataTypeSelectorEditorDefinition,
   type ChartNode,
   type DataType,
+  type ScalarDataType,
   getScalarTypeOf,
   isArrayDataType,
   dataTypeDisplayNames,
@@ -29,6 +30,7 @@ export const DefaultDataTypeSelector: FC<
   return (
     <DataTypeSelector
       value={dataType}
+      allowedDataTypes={editor.allowedDataTypes}
       onChange={(newValue) => {
         onChange({
           ...node,
@@ -47,15 +49,17 @@ export const DefaultDataTypeSelector: FC<
 
 export const DataTypeSelector: FC<{
   value: DataType | undefined;
+  allowedDataTypes?: ScalarDataType[];
   onChange: (value: DataType | undefined) => void;
   isDisabled: boolean;
   isReadonly: boolean;
   helperMessage?: string;
-}> = ({ value, onChange, isReadonly, isDisabled, helperMessage }) => {
+}> = ({ value, allowedDataTypes, onChange, isReadonly, isDisabled, helperMessage }) => {
   const scalarType = value ? getScalarTypeOf(value) : undefined;
   const isArray = value ? isArrayDataType(value) : undefined;
 
-  const dataTypeOptions = validSelectableDataTypes.map((type) => ({
+  const selectableDataTypes = allowedDataTypes ?? validSelectableDataTypes;
+  const dataTypeOptions = selectableDataTypes.map((type) => ({
     label: dataTypeDisplayNames[type],
     value: type,
   }));

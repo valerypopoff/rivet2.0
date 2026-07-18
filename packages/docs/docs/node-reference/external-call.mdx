@@ -54,35 +54,20 @@ functions continue to work normally, but a host-provided function with this name
 will be replaced for web-app runs. In ordinary runs it reports normal graph
 progress and does not require a host-provided external function.
 
-### Web app browser storage
+### Stored values
 
-Web-app actions also reserve two External Call functions for compact, persistent,
-JSON-serializable data owned by the current browser app:
-
-- `getWebAppStorage(key)` returns the value stored under `key`, or `null` when the
-  key is absent.
-- `getWebAppStorage()` returns the complete storage object for the current app.
-- `setWebAppStorage(key, value)` stores a JSON-serializable value and returns the
-  stored value. A later `getWebAppStorage` call in the same graph run sees it.
-
-Keys must be non-empty strings no longer than 512 characters. These functions are
-available only while a graph is running as a web-app action. In the desktop builder
-they require local editor execution; hosted HTTP and WebSocket actions both support
-them.
-
-Rivet stores one JSON object in browser `localStorage` for each combination of
-origin, app URL path, and UI graph ID. An app never receives another app's object.
-The browser sends the current app's snapshot with an action and applies changed keys
-only after a successful action. Storage is local to that browser profile: it is not
-server storage, does not synchronize across devices, can be cleared by the user,
-and is subject to the browser's storage quota. Do not use it for secrets because
-same-origin browser code can read local storage.
+Web-app and host-persisted key/value state now uses the dedicated [Set Stored
+Value](./set-stored-value.mdx) and [Get Stored Value](./get-stored-value.mdx)
+nodes. The former `setWebAppStorage` and `getWebAppStorage` External Calls are not
+installed automatically. This keeps storage behavior consistent in Browser, Node,
+headless, nested-graph, detached-preview, and published web-app runs while allowing
+API hosts to provide persistence callbacks.
 
 External functions are extremely powerful. They can only be used when running Rivet
 from a host application, and ordinary custom external functions are not available
 when running Rivet in the Rivet application. `setWebAppStatus` is the exception for
-ordinary editor runs: Rivet provides it locally for graph progress, and web-app
-actions can also use the reserved browser-storage functions described above. Use
+ordinary editor runs: Rivet provides it locally for graph progress. Stored Value
+nodes are also built in and do not require an external function. Use
 [Remote Debugging](../user-guide/remote-debugging.md)
 to run other External Call nodes in the Rivet application.
 

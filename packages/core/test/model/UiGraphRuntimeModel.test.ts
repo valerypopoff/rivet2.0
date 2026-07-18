@@ -28,6 +28,7 @@ import {
   type UiComponentId,
 } from '../../src/index.js';
 import {
+  applyUiGraphWebAppStorageActionPatch,
   applyUiGraphWebAppStoragePatch,
   getUiGraphChatStorageKey,
   getUiGraphWebAppStorageKey,
@@ -137,6 +138,45 @@ describe('UiGraphRuntimeModel', () => {
     assert.deepEqual(loadUiGraphWebAppStorage(otherUiGraph, storage, location), {});
     assert.deepEqual(loadUiGraphWebAppStorage(uiGraph, storage, { ...location, pathname: '/apps/another/' }), {});
     assert.notEqual(getUiGraphWebAppStorageKey(uiGraph, location), getUiGraphWebAppStorageKey(otherUiGraph, location));
+  });
+
+  it('commits action ordering only after a storage patch is persisted successfully', () => {
+    const appliedActionByKey = new Map<string, number>();
+    const persisted: Record<string, unknown>[] = [];
+
+    assert.throws(
+      () =>
+        applyUiGraphWebAppStorageActionPatch({ shared: 'newer' }, 2, appliedActionByKey, () => {
+          throw new Error('storage full');
+        }),
+      /storage full/,
+    );
+    assert.equal(appliedActionByKey.has('shared'), false);
+
+    assert.deepEqual(
+      applyUiGraphWebAppStorageActionPatch({ shared: 'older', unrelated: true }, 1, appliedActionByKey, (patch) => {
+        persisted.push(patch);
+      }),
+      { shared: 'older', unrelated: true },
+    );
+    assert.deepEqual(persisted, [{ shared: 'older', unrelated: true }]);
+    assert.deepEqual(
+      [...appliedActionByKey],
+      [
+        ['shared', 1],
+        ['unrelated', 1],
+      ],
+    );
+
+    assert.deepEqual(
+      applyUiGraphWebAppStorageActionPatch({ shared: 'stale', third: 3 }, 0, appliedActionByKey, (patch) => {
+        persisted.push(patch);
+      }),
+      { third: 3 },
+    );
+    assert.deepEqual(persisted[1], { third: 3 });
+    assert.equal(appliedActionByKey.get('shared'), 1);
+    assert.equal(appliedActionByKey.get('third'), 0);
   });
 
   it('creates one render model for every supported component kind', () => {

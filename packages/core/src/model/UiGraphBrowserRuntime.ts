@@ -89,7 +89,7 @@ export function getUiGraphWebAppStorageKey(
   ].join(':');
 }
 
-/** Loads the JSON object visible to getWebAppStorage for this one browser app. */
+/** Loads the browser snapshot used by Stored Value nodes for this one web app. */
 export function loadUiGraphWebAppStorage(
   uiGraph: UiGraph,
   storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
@@ -132,6 +132,28 @@ export function applyUiGraphWebAppStoragePatch(
     });
   }
   return nextStorage;
+}
+
+/**
+ * Applies the keys from one completed action that have not already been superseded.
+ * Ordering metadata is committed only after persistence succeeds, so a failed newer
+ * write cannot suppress an older successful action that completes later.
+ */
+export function applyUiGraphWebAppStorageActionPatch(
+  patch: Readonly<Record<string, unknown>>,
+  actionNumber: number,
+  appliedActionByKey: Map<string, number>,
+  persist: (applicablePatch: Record<string, unknown>) => void,
+): Record<string, unknown> {
+  const applicablePatch = Object.fromEntries(
+    Object.entries(patch).filter(([key]) => actionNumber >= (appliedActionByKey.get(key) ?? 0)),
+  );
+  const applicableKeys = Object.keys(applicablePatch);
+  if (applicableKeys.length === 0) return applicablePatch;
+
+  persist(applicablePatch);
+  for (const key of applicableKeys) appliedActionByKey.set(key, actionNumber);
+  return applicablePatch;
 }
 
 /** Selects and validates the private browser-persisted state of Chat components only. */

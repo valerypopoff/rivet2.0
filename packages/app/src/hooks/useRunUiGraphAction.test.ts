@@ -49,10 +49,8 @@ test('web app actions run through the editor graph runner and wait for outputs',
     state: { prompt: 'hello' },
     tryRunGraph: async (options) => {
       calls.push(options ?? {});
-      const getStorage = options?.externalFunctions?.getWebAppStorage;
-      const setStorage = options?.externalFunctions?.setWebAppStorage;
-      assert.deepEqual(await getStorage?.({} as never, 'existing'), { type: 'any', value: 'old' });
-      await setStorage?.({} as never, 'preferences', { density: 'compact' });
+      assert.equal(await options?.storedValueStore?.get('existing'), 'old');
+      await options?.storedValueStore?.set('preferences', { density: 'compact' });
       options?.onWebAppStoragePatch?.({ sessionCache: { lastPage: 'dashboard' } });
       options?.onProgress?.(progress);
       return outputs;
@@ -63,8 +61,8 @@ test('web app actions run through the editor graph runner and wait for outputs',
   });
 
   assert.equal(calls.length, 1);
-  const { externalFunctions, onWebAppStoragePatch, ...runCall } = calls[0]!;
-  assert.deepEqual(Object.keys(externalFunctions ?? {}).sort(), ['getWebAppStorage', 'setWebAppStorage']);
+  const { onWebAppStoragePatch, storedValueStore, ...runCall } = calls[0]!;
+  assert.equal(typeof storedValueStore?.get, 'function');
   assert.equal(typeof onWebAppStoragePatch, 'function');
   assert.deepEqual(runCall, {
     graphId,

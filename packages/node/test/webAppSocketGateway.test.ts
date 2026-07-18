@@ -9,7 +9,7 @@ import {
   type Project,
   type RivetWebAppServerMessage,
 } from '../src/index.js';
-import { makeExternalStatusProject, makeExternalStorageProject, makeWebAppProject } from './webAppFixtures.js';
+import { makeExternalStatusProject, makeStoredValueProject, makeWebAppProject } from './webAppFixtures.js';
 import {
   closeWebAppTestHarnesses,
   collectWebAppSocketMessages as collectMessages,
@@ -110,7 +110,7 @@ void describe('Rivet web app WebSocket gateway', () => {
   });
 
   void it('returns web-app storage changes through replayable WebSocket completion events', async () => {
-    const harness = await createHarness(makeExternalStorageProject('set'));
+    const harness = await createHarness(makeStoredValueProject('set'));
     const client = await harness.connect();
     const messages = collectMessages(client);
 
@@ -125,6 +125,31 @@ void describe('Rivet web app WebSocket gateway', () => {
     const completed = await messages.next('action.completed');
 
     assert.deepEqual(completed.storagePatch, { analysis: 'Updated summary' });
+  });
+
+  void it('uses a session Stored Value store instead of the WebSocket browser snapshot', async () => {
+    const harness = await createHarness(
+      makeStoredValueProject('get'),
+      undefined,
+      {},
+      {
+        storedValueStore: { get: () => 'Host summary', set() {} },
+      },
+    );
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(
+      JSON.stringify({
+        ...makeStartMessage('request-host-storage'),
+        storage: { analysis: 'Browser summary' },
+      }),
+    );
+    await messages.next('action.accepted');
+    const completed = await messages.next('action.completed');
+
+    assert.deepEqual(completed.statePatch, { result: 'Host summary' });
+    assert.deepEqual(completed.storagePatch, {});
   });
 
   void it('exposes the prepared processor before execution so hosts can attach complete recordings', async () => {

@@ -373,6 +373,7 @@ export function useLocalExecutor() {
       for (const [name, externalFunction] of Object.entries(options.externalFunctions ?? {})) {
         processor.setExternalFunction(name, externalFunction);
       }
+      processor.setStoredValueStore(options.storedValueStore);
       if (options.onProgress) {
         processor.on('progress', ({ progress }) => options.onProgress?.(progress));
       }

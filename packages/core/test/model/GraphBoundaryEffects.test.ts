@@ -44,10 +44,28 @@ void describe('GraphBoundaryEffects', () => {
     const effect = applyFrozenGraphBoundaryEffects(graphOutputs, node, outputValues);
 
     assert.deepEqual(effect, {
+      type: 'setGlobal',
       variableId: 'global-name',
       value: { type: 'string', value: 'stored' },
     });
     assert.deepEqual(graphOutputs, {});
+  });
+
+  void it('returns frozen Set Stored Value cache effects', () => {
+    const effect = applyFrozenGraphBoundaryEffects(
+      {},
+      { type: 'setStoredValue' } as ChartNode,
+      {
+        'saved-value': { type: 'object', value: { summary: 'frozen' } },
+        key: { type: 'string', value: 'analysis' },
+      } as Outputs,
+    );
+
+    assert.deepEqual(effect, {
+      type: 'setStoredValue',
+      key: 'analysis',
+      value: { summary: 'frozen' },
+    });
   });
 
   void it('ignores set-global frozen outputs without a usable variable id', () => {

@@ -30,6 +30,7 @@ import type { Tokenizer } from '../integrations/Tokenizer.js';
 import { looseDataValuesToDataValues, type LooseDataValue } from './looseDataValue.js';
 import type { ProjectReferenceLoader } from '../model/ProjectReferenceLoader.js';
 import { resolveProcessSettings } from './processSettings.js';
+import type { RivetStoredValueStore } from '../model/StoredValueStore.js';
 
 export type RunGraphOptions = {
   graph?: string;
@@ -56,6 +57,7 @@ export type RunGraphOptions = {
   projectPath?: string;
   projectReferenceLoader?: ProjectReferenceLoader;
   editorExecutionCache?: ProcessContext['editorExecutionCache'];
+  storedValueStore?: RivetStoredValueStore;
 } & {
   [P in keyof ProcessEvents as `on${PascalCase<P>}`]?: (params: ProcessEvents[P]) => void;
 } & Settings &
@@ -172,6 +174,8 @@ export function coreCreateProcessor(
       processor.setExternalFunction(name, fn);
     }
   }
+
+  processor.setStoredValueStore(options.storedValueStore);
 
   if (options.onUserEvent) {
     for (const [name, fn] of Object.entries(options.onUserEvent)) {

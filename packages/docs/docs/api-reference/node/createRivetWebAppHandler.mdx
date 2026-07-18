@@ -21,7 +21,9 @@ Markdown components and Markdown-rendered outputs are rendered by the built-in c
 ## Syntax
 
 ```typescript
-type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
+type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'> & {
+  storedValueStore?: RivetStoredValueStore;
+};
 
 type RivetWebAppActionContext = {
   request: Request;
@@ -50,12 +52,14 @@ type RivetWebAppHandlerOptions = {
     context: RivetWebAppActionContext & {
       outputs: Record<string, DataValue>;
       statePatch: Record<string, unknown>;
+      storagePatch: Record<string, unknown>;
     },
   ) => Promise<void> | void;
   onActionStart?: (context: RivetWebAppActionContext) => Promise<void> | void;
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
   resolveCspNonce?: (request: Request) => Promise<string | undefined> | string | undefined;
   revisionKey?: string;
+  storedValueStore?: RivetStoredValueStore;
   uiGraphId?: UiGraphId | string;
 };
 
@@ -80,11 +84,13 @@ Handler construction validates the project's complete `uiGraphs` collection thro
 
 `resolveContext` lets wrappers derive Rivet context values from the incoming HTTP request, for example authenticated user IDs or request headers.
 
+`storedValueStore` supplies persistence for Set/Get Stored Value nodes. A store returned by request-scoped `createProcessorOptions(context)` overrides the static handler store; either one overrides the browser snapshot. Callback-backed actions ignore browser storage and return an empty `storagePatch`. Without a host store, the generated client keeps app-scoped values in browser `localStorage`. Rivet does not coordinate independent requests transactionally: the host callbacks own tenancy, authorization, namespacing, and concurrent-write policy.
+
 `revisionKey` is an opaque host-owned consistency token. Rivet embeds it in the served HTML and the browser sends it back with action requests. If a handler was configured with a `revisionKey` and an action request sends a different key, the handler returns `409` with `{ "error": "Rivet web app revision mismatch.", "code": "revision_mismatch" }`. The embedded client shows a blocking reload dialog for that code so users explicitly refresh before running actions against the updated app. Rivet does not use revision keys as authentication.
 
 The action lifecycle hooks are for observability only. Use wrapper route middleware for auth, endpoint ownership, and final response policy.
 
-Actions return both raw graph `outputs` and a `statePatch` for the client renderer. Button actions can define several `inputMappings` and output bindings. Chat actions select one user-message input, one prior-history input, and one assistant-response output, and can define additional `inputMappings` for other web-app data keys; Rivet appends the unwrapped response to that Chat component's session-only message state. If the target graph does not return a configured output key, the action endpoint returns an error response.
+Actions return raw graph `outputs`, a component `statePatch`, and a successful Stored Value `storagePatch` for the client renderer. Button actions can define several `inputMappings` and output bindings. Chat actions select one user-message input, one prior-history input, one assistant-response output, and optional additional `inputMappings` for other web-app data keys; Rivet appends the unwrapped response to that Chat component's session-only message state. If the target graph does not return a configured output key, the action endpoint returns an error response.
 
 Before dispatch, `runRivetWebAppAction(...)` runs core's non-mutating binding preflight. Invalid Button mappings fail with status `400` and code `invalid_button_bindings`; missing, stale, or overlapping Chat role IDs fail with `invalid_chat_bindings`. Hosts can call `validateProjectUiGraphActionBindings(project)` before publishing to inspect all Button and Chat diagnostics without running or modifying the project.
 
@@ -184,24 +190,31 @@ const webApp = createRivetWebAppHandler(project, {
   basePath: '/apps/story-helper',
   revisionKey: publishedRevisionId,
   uiGraphId: 'story-helper-ui',
-  createProcessorOptions: async ({ actionInput, request }) => ({
-    codeRunner: new ManagedCodeRunner(runtimeLibrariesRoot),
-    datasetProvider,
-    projectPath,
-    projectReferenceLoader,
-    context: {
-      headers: {
-        type: 'any',
-        value: normalizeHeaders(request.headers),
+  createProcessorOptions: async ({ actionInput, request }) => {
+    const tenantId = await authenticateTenant(request);
+    return {
+      codeRunner: new ManagedCodeRunner(runtimeLibrariesRoot),
+      datasetProvider,
+      projectPath,
+      projectReferenceLoader,
+      storedValueStore: {
+        get: (key) => database.getStoredValue(tenantId, key),
+        set: (key, value) => database.setStoredValue(tenantId, key, value),
       },
-    },
-    inputs: {
-      input: {
-        type: 'any',
-        value: actionInput,
+      context: {
+        headers: {
+          type: 'any',
+          value: normalizeHeaders(request.headers),
+        },
       },
-    },
-  }),
+      inputs: {
+        input: {
+          type: 'any',
+          value: actionInput,
+        },
+      },
+    };
+  },
 });
 ```
 

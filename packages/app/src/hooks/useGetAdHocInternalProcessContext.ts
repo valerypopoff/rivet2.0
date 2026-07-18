@@ -69,6 +69,8 @@ export function useGetAdHocInternalProcessContext() {
         executionCache: new Map(),
         externalFunctions: {},
         getGlobal: undefined!,
+        getCachedStoredValue: undefined!,
+        getStoredValue: undefined!,
         getGraphBoundary: undefined!,
 
         graphInputs: {},
@@ -78,10 +80,12 @@ export function useGetAdHocInternalProcessContext() {
         raiseEvent: undefined!,
         reportProgress: () => undefined,
         setGlobal: undefined!,
+        setStoredValue: undefined!,
         signal: options?.signal ?? new AbortController().signal,
         trace: (trace: string) => logRuntimeDebug('Ad-hoc process trace', { trace }),
         waitEvent: undefined!,
         waitForGlobal: undefined!,
+        waitForStoredValue: undefined!,
         onPartialOutputs: (outputs: Outputs) => {
           const responsePartial = coerceTypeOptional(outputs['response' as PortId], 'string');
           if (responsePartial) {

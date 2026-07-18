@@ -1,4 +1,11 @@
-import { type ChartNode, type DataRef, type DataType, type DataValue, type DatasetId } from '../index.js';
+import {
+  type ChartNode,
+  type DataRef,
+  type DataType,
+  type DataValue,
+  type DatasetId,
+  type ScalarDataType,
+} from '../index.js';
 import type { LegacyOrderedPortIdPattern } from '../utils/orderedStringPortIds.js';
 
 type ExcludeNeverValues<T> = Pick<
@@ -55,6 +62,7 @@ export type DataTypeSelectorEditorDefinition<T extends ChartNode> = SharedEditor
   type: 'dataTypeSelector';
 
   dataKey: DataOfType<T, DataType>;
+  allowedDataTypes?: ScalarDataType[];
   useInputToggleDataKey?: DataOfType<T, boolean>;
 };
 

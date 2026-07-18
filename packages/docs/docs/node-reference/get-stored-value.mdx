@@ -1,0 +1,42 @@
+---
+id: get-stored-value
+title: Get Stored Value Node
+sidebar_label: Get Stored Value
+---
+
+## Overview
+
+Get Stored Value loads a value from the root run's shared cache and optional persistence store. A missing key returns the selected type's default and `Found: false`; an existing `null` value returns `Found: true`. If an existing value does not match the node's selected data type, Value returns that type's default while `Found` remains `true`.
+
+The search field lists static keys from enabled Set Stored Value nodes in the project. Manual and dynamic keys remain valid because a value can come from an earlier run or an external backend, so Rivet does not warn when no setter is present in the project.
+
+## Inputs
+
+| Title | Data Type | Description                                      |
+| ----- | --------- | ------------------------------------------------ |
+| Key   | `string`  | Available when **Use Input** is enabled for Key. |
+
+## Outputs
+
+| Title | Data Type  | Description                                                                                                                                                                           |
+| ----- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Value | Configured | Loaded value, or the selected type's default when missing or type-incompatible. With **On Demand**, this is a function value that reads the latest in-run cached value when consumed. |
+| Found | `boolean`  | Whether the key existed when this node loaded it.                                                                                                                                     |
+| Key   | `string`   | The key that was used.                                                                                                                                                                |
+
+## Settings
+
+| Setting   | Description                                                                                                                      | Default  |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Key       | Static storage key.                                                                                                              | `key`    |
+| Data Type | JSON-compatible type used for the Value output. Media, document, chat-message, and function types are intentionally unavailable. | `string` |
+| On Demand | Loads the backend when the node executes, then lets downstream consumers observe later Sets through the synchronous run cache.   | Off      |
+| Wait      | If the key is missing, waits for Set Stored Value in this same root run. It does not subscribe to changes made by other runs.    | Off      |
+
+**On Demand** and **Wait** are mutually exclusive.
+
+## See Also
+
+- [Set Stored Value](./set-stored-value.mdx)
+- [Get Global](./get-global.mdx)
+- [Rivet Web Apps](../user-guide/rivet-web-apps.md)

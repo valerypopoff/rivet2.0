@@ -1,5 +1,6 @@
 import {
   clearUiGraphChatSearchMatches,
+  applyUiGraphWebAppStorageActionPatch,
   applyUiGraphWebAppStoragePatch,
   copyUiGraphText,
   createUiGraphChatHistoryFlushStatePatch,
@@ -294,19 +295,16 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           });
           signal.throwIfAborted();
           if (result.storagePatch && Object.keys(result.storagePatch).length > 0) {
-            const applicablePatch = Object.fromEntries(
-              Object.entries(result.storagePatch).filter(([key]) => {
-                const latestAppliedAction = appliedStorageActionByKey.get(key) ?? 0;
-                if (storageAction < latestAppliedAction) return false;
-                appliedStorageActionByKey.set(key, storageAction);
-                return true;
-              }),
-            );
-            if (Object.keys(applicablePatch).length === 0) return { statePatch: result.statePatch };
-            applyUiGraphWebAppStoragePatch(
-              config.uiGraph,
-              loadUiGraphWebAppStorage(config.uiGraph),
-              applicablePatch,
+            applyUiGraphWebAppStorageActionPatch(
+              result.storagePatch,
+              storageAction,
+              appliedStorageActionByKey,
+              (applicablePatch) =>
+                applyUiGraphWebAppStoragePatch(
+                  config.uiGraph,
+                  loadUiGraphWebAppStorage(config.uiGraph),
+                  applicablePatch,
+                ),
             );
           }
           return { statePatch: result.statePatch };

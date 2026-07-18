@@ -106,6 +106,12 @@ export * from './nodes/SetGlobalNode.js';
 import { getGlobalNode } from './nodes/GetGlobalNode.js';
 export * from './nodes/GetGlobalNode.js';
 
+import { setStoredValueNode } from './nodes/SetStoredValueNode.js';
+export * from './nodes/SetStoredValueNode.js';
+
+import { getStoredValueNode } from './nodes/GetStoredValueNode.js';
+export * from './nodes/GetStoredValueNode.js';
+
 import { waitForEventNode } from './nodes/WaitForEventNode.js';
 export * from './nodes/WaitForEventNode.js';
 
@@ -312,6 +318,8 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(popNode)
     .register(setGlobalNode)
     .register(getGlobalNode)
+    .register(setStoredValueNode)
+    .register(getStoredValueNode)
     .register(waitForEventNode)
     .register(gptFunctionNode)
     .register(getEmbeddingNode)

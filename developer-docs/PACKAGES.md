@@ -136,22 +136,30 @@ HTTP actions cannot stream an intermediate update. Web-app handlers reserve the
 name after applying host options, so hosts should not replace it for web-app actions;
 other external functions are preserved. No transport-specific run marker is needed.
 
-Web-app actions also reserve `getWebAppStorage` and `setWebAppStorage` for compact
-JSON data persisted by the browser. [`UiGraphWebAppStorage.ts`](../packages/core/src/model/UiGraphWebAppStorage.ts)
-owns the action-local get/set semantics and changed-key patch, while
-[`UiGraphBrowserRuntime.ts`](../packages/core/src/model/UiGraphBrowserRuntime.ts)
+[`StoredValueStore.ts`](../packages/core/src/model/StoredValueStore.ts) owns the
+portable JSON contract, root-run read-through/write-through controller, same-key
+serialization, in-run Wait behavior, and snapshot backing-store adapter used by
+`Set Stored Value` / `Get Stored Value`. Every top-level processor run creates a
+fresh controller; subprocessors and delegated tool graphs inherit it. Ordinary
+editor and headless runs therefore behave like run-local globals unless the host
+passes `storedValueStore`.
+
+Web-app actions use the app-scoped browser snapshot as the backing store by default,
+while [`UiGraphBrowserRuntime.ts`](../packages/core/src/model/UiGraphBrowserRuntime.ts)
 owns the `localStorage` key derived from origin, normalized pathname, and UI graph
-ID. The client sends only that app's snapshot outside ordinary component state;
-`prepareRivetWebAppAction(...)` installs the reserved functions after host options;
-and successful HTTP responses or WebSocket completion events return a
-`storagePatch` for the browser to merge. Failed actions persist nothing. Generated
-and React renderers both suppress older late completions from overwriting a newer
-completed write to the same key and merge disjoint keys into the latest persisted
-app record. Desktop preview passes the same action-scoped functions through local
-Browser execution or the internal Node sidecar. The sidecar receives the action
-snapshot through its request-scoped debugger protocol and returns the changed-key
-patch before the terminal result. External Remote Debugger sessions do not run
-editor-originated web-app actions, so they have no browser-storage bridge.
+ID. Successful HTTP responses or WebSocket completion events return a
+`storagePatch`; failed browser-backed actions return no patch. A host-backed store
+writes when a `Set Stored Value` node succeeds, so hosts that need action-wide
+transactions or rollback must provide that behavior themselves. Generated and React
+renderers suppress older late completions from overwriting newer same-key writes and
+merge disjoint keys. Detached preview keeps parent-window storage ownership.
+
+Core and Node run options, `runRivetWebAppAction(...)`, handler options, and
+WebSocket sessions accept `storedValueStore`. A request-scoped store from
+`createProcessorOptions(context)` wins over a static handler/session store; either
+wins over browser storage and produces an empty browser patch. Hosts own persistence
+tenancy and cross-request concurrency. The former `getWebAppStorage` and
+`setWebAppStorage` External Calls were removed intentionally.
 
 For long-running hosted actions, `renderRivetWebAppHtml(...)` accepts
 `actionTransport: { type: 'websocket', socketPath }`, and

@@ -26,7 +26,7 @@ import {
 } from '../src/index.js';
 import {
   makeExternalStatusProject,
-  makeExternalStorageProject,
+  makeStoredValueProject,
   makeWebAppActionRequest,
   makeWebAppProject,
   TEST_GRAPH_ID,
@@ -1478,8 +1478,8 @@ void describe('createRivetWebAppHandler', () => {
     assert.deepEqual(result.outputs.value, { type: 'string', value: 'Preparing the answer' });
   });
 
-  void it('scopes getWebAppStorage and setWebAppStorage to the current action snapshot', async () => {
-    const getProject = makeExternalStorageProject('get');
+  void it('scopes Stored Value nodes to the current action snapshot', async () => {
+    const getProject = makeStoredValueProject('get');
     const getResult = await runRivetWebAppAction(getProject, {
       componentId: 'run-button',
       state: { prompt: 'analysis' },
@@ -1490,14 +1490,9 @@ void describe('createRivetWebAppHandler', () => {
     assert.deepEqual(getResult.outputs.value, { type: 'any', value: { summary: 'Existing summary' } });
     assert.deepEqual(getResult.storagePatch, {});
 
-    const setProject = makeExternalStorageProject('set');
+    const setProject = makeStoredValueProject('set');
     const setResult = await runRivetWebAppAction(setProject, {
       componentId: 'run-button',
-      createProcessorOptions: {
-        externalFunctions: {
-          setWebAppStorage: async () => ({ type: 'string', value: 'host override' }),
-        },
-      },
       state: { prompt: 'Updated summary' },
       storage: { analysis: 'Old summary' },
       uiGraph: setProject.uiGraphs?.['ui-graph' as UiGraphId]!,
@@ -1505,6 +1500,70 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.deepEqual(setResult.outputs.value, { type: 'any', value: 'Updated summary' });
     assert.deepEqual(setResult.storagePatch, { analysis: 'Updated summary' });
+  });
+
+  void it('uses host Stored Value callbacks instead of browser snapshots and returns no browser patch', async () => {
+    const values = new Map<string, unknown>([['analysis', 'Host summary']]);
+    const storedValueStore = {
+      async get(key: string) {
+        return values.get(key) as never;
+      },
+      async set(key: string, value: unknown) {
+        values.set(key, value);
+      },
+    };
+    const getProject = makeStoredValueProject('get');
+    const getResult = await runRivetWebAppAction(getProject, {
+      componentId: 'run-button',
+      state: { prompt: 'ignored' },
+      storage: { analysis: 'Browser summary' },
+      storedValueStore,
+      uiGraph: getProject.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+    assert.deepEqual(getResult.outputs.value, { type: 'any', value: 'Host summary' });
+    assert.deepEqual(getResult.storagePatch, {});
+
+    const setProject = makeStoredValueProject('set');
+    const setResult = await runRivetWebAppAction(setProject, {
+      componentId: 'run-button',
+      state: { prompt: 'Updated host summary' },
+      storage: { analysis: 'Browser summary' },
+      storedValueStore,
+      uiGraph: setProject.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+    assert.equal(values.get('analysis'), 'Updated host summary');
+    assert.deepEqual(setResult.storagePatch, {});
+  });
+
+  void it('does not validate an ignored browser snapshot when host Stored Value callbacks are configured', async () => {
+    const project = makeStoredValueProject('get');
+    const result = await runRivetWebAppAction(project, {
+      componentId: 'run-button',
+      state: { prompt: 'ignored' },
+      storage: [] as never,
+      storedValueStore: { get: () => 'Host summary', set() {} },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    assert.deepEqual(result.outputs.value, { type: 'any', value: 'Host summary' });
+    assert.deepEqual(result.storagePatch, {});
+  });
+
+  void it('prefers a request-scoped processor store over the static web-app store', async () => {
+    const project = makeStoredValueProject('get');
+    const result = await runRivetWebAppAction(project, {
+      componentId: 'run-button',
+      createProcessorOptions: () => ({
+        storedValueStore: { get: () => 'request scoped', set() {} },
+      }),
+      state: { prompt: 'ignored' },
+      storedValueStore: { get: () => 'static', set() {} },
+      storage: { analysis: 'browser' },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    assert.deepEqual(result.outputs.value, { type: 'any', value: 'request scoped' });
+    assert.deepEqual(result.storagePatch, {});
   });
 
   void it('prepares an inspectable action without starting it and runs it only once', async () => {

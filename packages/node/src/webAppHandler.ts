@@ -19,7 +19,8 @@ import {
   type UiGraphActionComponent,
   validateUiGraphActionBindings,
   RIVET_WEB_APP_STATUS_FUNCTION_NAME,
-  createRivetWebAppStorageExternalFunctions,
+  createRivetStoredValueSnapshotStore,
+  type RivetStoredValueStore,
   rivetWebAppStatusExternalFunction,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
@@ -30,7 +31,11 @@ import {
   type RivetWebAppAsset,
 } from './webAppAssets.js';
 
-export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
+// NodeCreateProcessorOptions has a general Record<string, unknown> index signature.
+// Re-declare this option so consumers retain the concrete store contract after omitting graph.
+export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'> & {
+  storedValueStore?: RivetStoredValueStore;
+};
 
 export type RivetWebAppActionContext = {
   actionInput: Record<string, unknown>;
@@ -66,6 +71,7 @@ export type RivetWebAppHandlerOptions = {
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
   resolveCspNonce?: (request: Request) => Promise<string | undefined> | string | undefined;
   revisionKey?: string;
+  storedValueStore?: RivetStoredValueStore;
   uiGraphId?: UiGraphId | string;
 };
 
@@ -107,6 +113,7 @@ export type RunRivetWebAppActionOptions = {
   resolveContext?: RivetWebAppHandlerOptions['resolveContext'];
   revisionKey?: string;
   state?: Record<string, unknown>;
+  storedValueStore?: RivetStoredValueStore;
   storage?: Record<string, unknown>;
   uiGraph: UiGraph;
 };
@@ -198,6 +205,7 @@ export function createRivetWebAppHandler(
             resolveContext: options.resolveContext,
             revisionKey: options.revisionKey,
             state: body.state,
+            storedValueStore: options.storedValueStore,
             storage: body.storage,
             uiGraph,
           });
@@ -246,13 +254,13 @@ export async function prepareRivetWebAppAction(
     resolveContext,
     revisionKey,
     state = {},
+    storedValueStore,
     storage = {},
     uiGraph,
   }: RunRivetWebAppActionOptions,
 ): Promise<PreparedRivetWebAppAction> {
   const actionRequest = request ?? new Request('https://rivet.local/web-app-action');
   const receivedState = normalizeActionState(state);
-  const receivedStorage = normalizeActionStorage(storage);
   const normalizedUiGraph = normalizeUiGraph(uiGraph);
 
   if (revisionKey != null && requestRevisionKey !== revisionKey) {
@@ -311,7 +319,11 @@ export async function prepareRivetWebAppAction(
     const sourceAbortSignal = (processorOptions as { abortSignal?: AbortSignal }).abortSignal ?? actionRequest.signal;
     sourceAbortSignal.throwIfAborted();
     const actionAbortController = new AbortController();
-    const webAppStorage = createRivetWebAppStorageExternalFunctions(receivedStorage);
+    const hostStoredValueStore = processorOptions.storedValueStore ?? storedValueStore;
+    // A host store fully replaces browser persistence, including the untrusted browser snapshot.
+    const browserStoredValues = hostStoredValueStore
+      ? undefined
+      : createRivetStoredValueSnapshotStore(normalizeActionStorage(storage));
     const processorRunner = createProcessor(project, {
       ...processorOptions,
       abortSignal: actionAbortController.signal,
@@ -319,10 +331,10 @@ export async function prepareRivetWebAppAction(
       externalFunctions: {
         ...(processorOptions.externalFunctions ?? {}),
         [RIVET_WEB_APP_STATUS_FUNCTION_NAME]: rivetWebAppStatusExternalFunction,
-        ...webAppStorage.externalFunctions,
       },
       graph: component.action.graphId,
       inputs,
+      storedValueStore: hostStoredValueStore ?? browserStoredValues!.store,
     });
     let started = false;
     let disposed = false;
@@ -356,7 +368,7 @@ export async function prepareRivetWebAppAction(
           const result = {
             outputs,
             statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, actionState),
-            storagePatch: webAppStorage.getStoragePatch(),
+            storagePatch: browserStoredValues?.getPatch() ?? {},
           };
           await callActionHook(onActionFinish, { ...actionContext, ...result });
           return result;

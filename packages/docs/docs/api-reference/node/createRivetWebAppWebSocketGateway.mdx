@@ -83,6 +83,10 @@ httpServer.on('upgrade', async (request, socket, head) => {
         datasetProvider: resolved.datasetProvider,
         projectPath: resolved.projectVirtualPath,
         projectReferenceLoader: resolved.projectReferenceLoader,
+        storedValueStore: {
+          get: (key) => resolved.storedValues.get(key),
+          set: (key, value) => resolved.storedValues.set(key, value),
+        },
         context: await resolveRivetContext(actionContext.request),
       }),
     });
@@ -97,6 +101,8 @@ httpServer.on('upgrade', async (request, socket, head) => {
 Add a **Report Progress** node to the running graph. It is a value passthrough and reports an optional status message and/or percentage. The event crosses subgraphs, Browser/Node/Remote Debugger execution, desktop preview, recordings, and the hosted WebSocket transport.
 
 The gateway delegates action validation, state projection, graph selection, processor options, outputs, and lifecycle hooks to `prepareRivetWebAppAction(...)`. Hosts do not need to reconstruct Button or Chat mappings.
+
+`RivetWebAppSocketSession.storedValueStore` supplies a static session store. A store returned from the session's request-scoped `createProcessorOptions(actionContext)` takes precedence. In either callback-backed mode the browser snapshot is ignored and completion events contain an empty `storagePatch`; without callbacks the browser-local snapshot/patch path remains the default.
 
 `onProcessorPrepared(...)` is session-scoped and awaited after the real processor is created but before `run()` and `onActionStart`. It receives `{ processor, actionContext, requestId, runId }`, allowing the host to attach `ExecutionRecorder`, timing instrumentation, or other processor observers. If the hook fails, the processor is not run, the original exception is sent to gateway `onError`, and the browser receives the generic `action_unavailable` code. Rivet disposes the prepared action in that failure path, including cancellation while an asynchronous hook is pending, so pre-run Remote Debugger attachments are released.
 

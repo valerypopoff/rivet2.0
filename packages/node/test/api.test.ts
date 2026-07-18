@@ -60,6 +60,72 @@ function makeCodeProject(code: string): Project {
   } as Project;
 }
 
+function makeStoredValueProject(mode: 'get' | 'set'): Project {
+  const graphId = `stored-value-${mode}-graph` as GraphId;
+  const storedNode: ChartNode =
+    mode === 'set'
+      ? ({
+          type: 'setStoredValue',
+          title: 'Set Stored Value',
+          id: 'stored-node' as NodeId,
+          visualData: { x: 200, y: 0 },
+          data: { dataType: 'string', key: 'shared', useKeyInput: false },
+        } as ChartNode)
+      : ({
+          type: 'getStoredValue',
+          title: 'Get Stored Value',
+          id: 'stored-node' as NodeId,
+          visualData: { x: 200, y: 0 },
+          data: { dataType: 'string', key: 'shared', onDemand: false, useKeyInput: false, wait: false },
+        } as ChartNode);
+  const graph: NodeGraph = {
+    metadata: { description: '', id: graphId, name: `Stored Value ${mode}` },
+    nodes: [
+      ...(mode === 'set'
+        ? [
+            {
+              type: 'graphInput' as const,
+              title: 'Input',
+              id: 'input-node' as NodeId,
+              visualData: { x: 0, y: 0 },
+              data: { dataType: 'string', id: 'input' },
+            },
+          ]
+        : []),
+      storedNode,
+      {
+        type: 'graphOutput',
+        title: 'Output',
+        id: 'output-node' as NodeId,
+        visualData: { x: 400, y: 0 },
+        data: { dataType: 'string', id: 'result' },
+      },
+    ],
+    connections: [
+      ...(mode === 'set'
+        ? [
+            {
+              inputId: 'value' as PortId,
+              inputNodeId: storedNode.id,
+              outputId: 'data' as PortId,
+              outputNodeId: 'input-node' as NodeId,
+            },
+          ]
+        : []),
+      {
+        inputId: 'value' as PortId,
+        inputNodeId: 'output-node' as NodeId,
+        outputId: (mode === 'set' ? 'saved-value' : 'value') as PortId,
+        outputNodeId: storedNode.id,
+      },
+    ],
+  };
+  return {
+    graphs: { [graphId]: graph },
+    metadata: { id: 'stored-value-project' as never, mainGraphId: graphId, title: 'Stored Value Project' },
+  } as Project;
+}
+
 function createCountingRegistry(): {
   getDefinitionCalls: () => number;
   registry: NodeRegistration<any, any>;
@@ -171,6 +237,34 @@ async function assertRunGraphMatchesCompatible(
 }
 
 describe('api', () => {
+  it('persists Stored Value nodes across separate runGraph calls through synchronous host callbacks', async () => {
+    const values = new Map<string, string>();
+    const storedValueStore = {
+      get: (key: string) => values.get(key),
+      set: (key: string, value: unknown) => values.set(key, value as string),
+    };
+
+    await runGraph(makeStoredValueProject('set'), { inputs: { input: 'persisted' }, storedValueStore });
+    const outputs = await runGraph(makeStoredValueProject('get'), { storedValueStore });
+    assert.deepEqual(outputs.result, { type: 'string', value: 'persisted' });
+  });
+
+  it('supports asynchronous stores and gives reused processors a fresh per-run read cache', async () => {
+    let reads = 0;
+    const processor = createProcessor(makeStoredValueProject('get'), {
+      storedValueStore: {
+        async get() {
+          reads += 1;
+          return 'persisted';
+        },
+        async set() {},
+      },
+    });
+
+    assert.deepEqual((await processor.run()).result, { type: 'string', value: 'persisted' });
+    assert.deepEqual((await processor.run()).result, { type: 'string', value: 'persisted' });
+    assert.equal(reads, 2);
+  });
   it('can stream processor events', async () => {
     const processor = createProcessor(await loadTestGraphs(), {
       graph: 'Passthrough',

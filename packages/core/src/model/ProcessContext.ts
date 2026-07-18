@@ -24,6 +24,12 @@ import type { CodeRunner } from '../integrations/CodeRunner.js';
 import type { ProjectReferenceLoader } from './ProjectReferenceLoader.js';
 import type { GraphBoundary } from './GraphBoundaryCache.js';
 import type { GraphProgress } from './GraphProgress.js';
+import type {
+  RivetStoredValue,
+  RivetStoredValueCacheResult,
+  RivetStoredValueReadResult,
+  RivetStoredValueSetResult,
+} from './StoredValueStore.js';
 
 export type ProcessContext = {
   settings: RuntimeSettings;
@@ -171,6 +177,18 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
   setGlobal: (id: string, value: ScalarOrArrayDataValue) => void;
 
   waitForGlobal: (id: string) => Promise<ScalarOrArrayDataValue>;
+
+  /** Reads through the root run's stored-value cache and optional persistence store. */
+  getStoredValue: (key: string) => Promise<RivetStoredValueReadResult>;
+
+  /** Returns only the current root run's synchronous stored-value cache state. */
+  getCachedStoredValue: (key: string) => RivetStoredValueCacheResult;
+
+  /** Writes through the root run's cache and optional persistence store. */
+  setStoredValue: (key: string, value: RivetStoredValue) => Promise<RivetStoredValueSetResult>;
+
+  /** Waits only for a successful Set Stored Value in this root run. */
+  waitForStoredValue: (key: string, signal?: AbortSignal) => Promise<RivetStoredValue>;
 
   /** Logs to GraphProcessor's trace event. */
   trace: (message: string) => void;
