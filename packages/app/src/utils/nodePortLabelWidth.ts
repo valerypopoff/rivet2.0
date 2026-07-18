@@ -1,4 +1,8 @@
-import { isBuiltInInputDefinition, type NodeInputDefinition, type NodeOutputDefinition } from '@valerypopoff/rivet2-core';
+import {
+  isBuiltInInputDefinition,
+  type NodeInputDefinition,
+  type NodeOutputDefinition,
+} from '@valerypopoff/rivet2-core';
 
 import { MIN_NODE_WIDTH } from './nodeResize.js';
 
@@ -18,11 +22,14 @@ export type NodePortLabelWidthOptions = {
   uiFontScale?: number;
 };
 
-export function getRenderedPortLabel(title: string, preservePortCase: boolean) {
-  return preservePortCase ? title : title.toUpperCase();
+export function getRenderedPortLabel(title: unknown, preservePortCase: boolean) {
+  // Persisted projects and third-party plugins are untrusted at this UI boundary.
+  // Keep the port visible with no label instead of allowing malformed data to crash the canvas.
+  const normalizedTitle = typeof title === 'string' ? title : '';
+  return preservePortCase ? normalizedTitle : normalizedTitle.toUpperCase();
 }
 
-export function estimatePortLabelWidth(title: string, preservePortCase: boolean, uiFontScale = 1) {
+export function estimatePortLabelWidth(title: unknown, preservePortCase: boolean, uiFontScale = 1) {
   const renderedLabel = getRenderedPortLabel(title, preservePortCase).trim();
 
   if (!renderedLabel) {
@@ -40,7 +47,7 @@ export function estimatePortLabelWidth(title: string, preservePortCase: boolean,
   );
 }
 
-function estimatePortRowWidth(title: string, preservePortCase: boolean, uiFontScale: number) {
+function estimatePortRowWidth(title: unknown, preservePortCase: boolean, uiFontScale: number) {
   const labelWidth = estimatePortLabelWidth(title, preservePortCase, uiFontScale);
 
   if (labelWidth === 0) {
@@ -50,8 +57,8 @@ function estimatePortRowWidth(title: string, preservePortCase: boolean, uiFontSc
   return labelWidth + PORT_CIRCLE_VISIBLE_WIDTH_PX;
 }
 
-function getMaxPortRowWidth(portTitles: readonly string[], preservePortCase: boolean, uiFontScale: number) {
-  return portTitles.reduce((maxWidth, title) => {
+function getMaxPortRowWidth(portTitles: readonly unknown[], preservePortCase: boolean, uiFontScale: number) {
+  return portTitles.reduce<number>((maxWidth, title) => {
     return Math.max(maxWidth, estimatePortRowWidth(title, preservePortCase, uiFontScale));
   }, 0);
 }

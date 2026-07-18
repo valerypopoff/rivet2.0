@@ -31,6 +31,19 @@ test('getRenderedPortLabel follows the port label case setting', () => {
   assert.equal(getRenderedPortLabel('Request error', true), 'Request error');
 });
 
+test('treats a malformed port title as blank instead of crashing canvas layout', () => {
+  assert.equal(getRenderedPortLabel(undefined, false), '');
+  assert.equal(estimatePortLabelWidth(undefined, false), 0);
+  assert.equal(
+    getMinimumNodeWidthForPortLabels({
+      inputDefinitions: [inputDefinition(undefined as never)],
+      outputDefinitions: [],
+      preservePortCase: false,
+    }),
+    MIN_NODE_WIDTH,
+  );
+});
+
 test('estimatePortLabelWidth only includes letter spacing for capitalized labels', () => {
   assert.equal(estimatePortLabelWidth('Status', false), estimatePortLabelWidth('Status', true) + 'Status'.length - 1);
 });

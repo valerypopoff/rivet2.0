@@ -428,6 +428,7 @@ Current responsibilities:
 - context menu display and dispatch
 - hotkeys for delete, copy/cut/paste, search, graph history navigation, graph-tree toggling, and canvas actions
 - port-position tracking for wire rendering
+- defensive port-label sizing: persisted projects and plugin node definitions are untrusted at the canvas boundary, so a missing port title renders as a blank label while retaining its port circle instead of crashing the entire editor; built-in and plugin node definitions must still provide string titles
 - zoomed-out rendering decisions
 - drag overlay rendering
 
