@@ -91,6 +91,16 @@ export type RivetWebAppActionResult = {
   storagePatch?: Record<string, unknown>;
 };
 
+/**
+ * Lets a host provide an action-scoped storage view without exposing its
+ * persistence mechanism to UI components. Detached desktop previews use this
+ * because their Tauri webview can have isolated browser storage.
+ */
+export type RivetWebAppStorageAdapter = {
+  applyPatch(patch: Record<string, unknown>): void;
+  load(): Record<string, unknown>;
+};
+
 export type RivetWebAppRendererProps = {
   interactionController?: UiGraphInteractionController;
   interactionUiGraph?: UiGraph;
@@ -112,6 +122,7 @@ export type RivetWebAppRendererProps = {
   preserveActionsOnUnmount?: boolean;
   rootRef?: RefObject<HTMLDivElement>;
   selectedComponentIds?: ReadonlySet<UiComponentId>;
+  storageAdapter?: RivetWebAppStorageAdapter;
   uiGraph: UiGraph;
 };
 
@@ -174,6 +185,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
   preserveActionsOnUnmount = false,
   rootRef,
   selectedComponentIds,
+  storageAdapter,
   uiGraph,
 }) => {
   const normalizedUiGraph = useMemo(() => normalizeUiGraph(uiGraph), [uiGraph]);
@@ -214,7 +226,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
           state,
           signal,
           reportProgress,
-          loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
+          storageAdapter?.load() ?? loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
         );
         signal.throwIfAborted();
         if (result.storagePatch && Object.keys(result.storagePatch).length > 0) {
@@ -227,15 +239,19 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             }),
           );
           if (Object.keys(applicablePatch).length === 0) return { statePatch: result.statePatch };
-          applyUiGraphWebAppStoragePatch(
-            normalizedInteractionUiGraph,
-            loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
-            applicablePatch,
-          );
+          if (storageAdapter) {
+            storageAdapter.applyPatch(applicablePatch);
+          } else {
+            applyUiGraphWebAppStoragePatch(
+              normalizedInteractionUiGraph,
+              loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
+              applicablePatch,
+            );
+          }
         }
         return { statePatch: result.statePatch };
       }),
-    [interactionController, normalizedInteractionUiGraph, onRunAction],
+    [interactionController, normalizedInteractionUiGraph, onRunAction, storageAdapter],
   );
 
   return (

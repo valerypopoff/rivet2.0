@@ -457,6 +457,68 @@ void describe('GraphProcessor', () => {
     assert.deepEqual(progress, [{ message: 'Working...' }]);
   });
 
+  void it('provides run-local web-app storage external functions to every graph processor', async () => {
+    const graph = {
+      metadata: {
+        id: 'web-app-storage-graph',
+        name: 'Web app storage graph',
+        description: '',
+      },
+      nodes: [
+        {
+          id: 'function-name-input-node',
+          type: 'graphInput',
+          title: 'Function Name',
+          data: { dataType: 'string', id: 'functionName' },
+          visualData: { x: 0, y: 0, width: 200 },
+        },
+        {
+          id: 'arguments-input-node',
+          type: 'graphInput',
+          title: 'Arguments',
+          data: { dataType: 'any[]', id: 'arguments' },
+          visualData: { x: 0, y: 100, width: 200 },
+        },
+        {
+          id: 'storage-node',
+          type: 'externalCall',
+          title: 'Web app storage',
+          data: { functionName: '', useErrorOutput: false, useFunctionNameInput: true },
+          visualData: { x: 250, y: 0, width: 200 },
+        },
+        makeGraphOutputNode('result', 'any'),
+      ],
+      connections: [
+        {
+          inputId: 'functionName',
+          inputNodeId: 'storage-node',
+          outputId: 'data',
+          outputNodeId: 'function-name-input-node',
+        },
+        {
+          inputId: 'arguments',
+          inputNodeId: 'storage-node',
+          outputId: 'data',
+          outputNodeId: 'arguments-input-node',
+        },
+        { inputId: 'value', inputNodeId: 'result-output-node', outputId: 'result', outputNodeId: 'storage-node' },
+      ],
+    };
+    const processor = new GraphProcessor(makeProject(graph), graph.metadata.id, globalRivetNodeRegistry);
+
+    const setOutputs = await processor.processGraph(testProcessContext(), {
+      arguments: { type: 'any[]', value: ['preferences', { density: 'compact' }] },
+      functionName: { type: 'string', value: 'setWebAppStorage' },
+    });
+    const getOutputs = await processor.processGraph(testProcessContext(), {
+      arguments: { type: 'any[]', value: ['preferences'] },
+      functionName: { type: 'string', value: 'getWebAppStorage' },
+    });
+
+    assert.deepEqual(setOutputs.result, { type: 'any', value: { density: 'compact' } });
+    assert.deepEqual(getOutputs.result, { type: 'any', value: { density: 'compact' } });
+  });
+
   void it('inherits web-app storage functions into nested action graphs', async () => {
     const parentGraph = {
       metadata: {

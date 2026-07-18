@@ -11,7 +11,10 @@ export type RivetWebAppStorageExternalFunctions = {
   getStoragePatch(): RivetWebAppStorage;
 };
 
-/** Creates one action-scoped storage view shared by get/set calls in the same graph run. */
+/**
+ * Creates one storage view shared by get/set calls in the same processor.
+ * Web-app actions seed this from, and persist its patch to, their app-local browser storage.
+ */
 export function createRivetWebAppStorageExternalFunctions(
   initialStorage: Readonly<RivetWebAppStorage> = {},
 ): RivetWebAppStorageExternalFunctions {

@@ -170,12 +170,24 @@ the same action lifecycle as a Browser-executor run. External Remote Debugger
 sessions do not permit editor-originated web-app actions, so they never receive a
 browser-storage bridge.
 
+The desktop **Run detached** preview keeps the durable app-local record in the
+parent Rivet window rather than relying on its Tauri child webview's browser
+storage. The parent sends that record when the preview starts (or requests its
+payload), supplies the latest record to every action, and persists each successful
+patch before replying. The detached renderer keeps the same record in memory between
+actions, which makes storage work even when Tauri isolates `localStorage` per
+webview. Its temporary bootstrap payload is best-effort browser storage only: if
+either webview cannot access it, the child requests the same payload from the parent
+over its token-scoped `BroadcastChannel`.
+
 The functions belong to the web-app action scope, rather than to one executor
-implementation. The action-root processor supplies them once; normal processor
-inheritance makes the same storage view available to nested graphs and delegated
-tool graphs. A standalone processor without a web-app action has no browser-storage
-identity or persistence target, so it is intentionally not given an unrelated
-global storage store.
+implementation. The action-root processor supplies its persisted storage view once;
+normal processor inheritance makes the same view available to nested graphs and
+delegated tool graphs. Every processor also has an empty run-local fallback view, so
+ordinary Browser/Node editor runs can call the same functions without an undefined
+External Call. That fallback lasts only for the processor's lifetime: it has no user,
+app, browser, or endpoint persistence identity. Hosts that need durable storage must
+override it with an action or endpoint-specific storage view.
 
 ### Long-running WebSocket actions
 

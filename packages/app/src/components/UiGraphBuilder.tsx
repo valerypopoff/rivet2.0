@@ -5,6 +5,7 @@ import { DndContext, DragOverlay, useDraggable } from '@dnd-kit/core';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
 import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import type { UiGraphComponent } from '@valerypopoff/rivet2-core';
+import { applyUiGraphWebAppStoragePatch, loadUiGraphWebAppStorage } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
@@ -13,6 +14,7 @@ import { useStableCallback } from '../hooks/useStableCallback.js';
 import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { createWebviewWindowHandle } from '../utils/platform/window.js';
 import {
+  clearRivetWebAppPreviewPayload,
   createRivetWebAppPreviewUrl,
   type PreviewActionRequest,
   type PreviewActionResponse,
@@ -564,10 +566,10 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
 
     const token = crypto.randomUUID();
     const previewProjectId = project.metadata.id;
-    const storageKey = `${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`;
-    writeRivetWebAppPreviewPayload(token, { uiGraph });
+    writeRivetWebAppPreviewPayload(token, { storage: loadUiGraphWebAppStorage(uiGraph), uiGraph });
     const channel = new BroadcastChannel(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`);
     const actionAbortControllers = new Map<string, AbortController>();
+    const storageActionState = { appliedActionByKey: new Map<string, number>(), nextAction: 0 };
     let previewWindow: Awaited<ReturnType<typeof createWebviewWindowHandle>> | undefined;
     let unlistenClose: (() => unknown) | undefined;
     let cleaned = false;
@@ -584,7 +586,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
       actionAbortControllers.clear();
       channel.removeEventListener('message', handleMessage);
       channel.close();
-      localStorage.removeItem(storageKey);
+      clearRivetWebAppPreviewPayload(token);
       void unlistenClose?.();
 
       if (options.closeWindow) {
@@ -597,7 +599,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
     const handlePreviewAction = async (event: MessageEvent<PreviewActionRequest>) => {
       if (event.data.type === 'requestPayload') {
         channel.postMessage({
-          payload: { uiGraph },
+          payload: { storage: loadUiGraphWebAppStorage(uiGraph), uiGraph },
           requestId: event.data.requestId,
           type: 'previewPayload',
         } satisfies PreviewActionResponse);
@@ -609,6 +611,7 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
         return;
       }
 
+      const storageActionNumber = ++storageActionState.nextAction;
       const abortController = new AbortController();
       actionAbortControllers.set(event.data.requestId, abortController);
       try {
@@ -636,15 +639,29 @@ export const UiGraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) =
               } satisfies PreviewActionResponse);
             }
           },
-          event.data.storage,
+          loadUiGraphWebAppStorage(uiGraph),
         );
         if (cleaned) {
           return;
         }
 
+        const applicableStoragePatch = result.storagePatch
+          ? Object.fromEntries(
+              Object.entries(result.storagePatch).filter(([key]) => {
+                const latestAppliedAction = storageActionState.appliedActionByKey.get(key) ?? 0;
+                if (storageActionNumber < latestAppliedAction) return false;
+                storageActionState.appliedActionByKey.set(key, storageActionNumber);
+                return true;
+              }),
+            )
+          : undefined;
+        if (applicableStoragePatch && Object.keys(applicableStoragePatch).length > 0) {
+          applyUiGraphWebAppStoragePatch(uiGraph, loadUiGraphWebAppStorage(uiGraph), applicableStoragePatch);
+        }
+
         channel.postMessage({
           requestId: event.data.requestId,
-          result,
+          result: { ...result, storagePatch: applicableStoragePatch },
           type: 'actionResult',
         } satisfies PreviewActionResponse);
       } catch (error) {

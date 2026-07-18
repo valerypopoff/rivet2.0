@@ -5,40 +5,62 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import type { UiComponentId, UiGraph, UiGraphId } from '@valerypopoff/rivet2-core';
 import {
+  clearRivetWebAppPreviewPayload,
   RIVET_WEB_APP_PREVIEW_PARAM,
-  RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX,
   RivetWebAppPreviewWindow,
   type PreviewActionRequest,
   type PreviewActionResponse,
+  writeRivetWebAppPreviewPayload,
 } from './RivetWebAppPreviewWindow.js';
 
-test('detached preview loads its payload, runs actions, and cancels pending work on close', async () => {
+test('detached preview requests the parent payload, retains its storage snapshot, and cancels pending work on close', async () => {
   const token = 'preview-token';
   const dom = new JSDOM(`<div id="root"></div>`, {
     url: `https://example.test/?${RIVET_WEB_APP_PREVIEW_PARAM}=${token}`,
   });
   const restoreGlobals = installPreviewGlobals(dom);
   const uiGraph = makeUiGraph();
-  dom.window.localStorage.setItem(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`, JSON.stringify({ uiGraph }));
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem() {
+        throw new Error('Browser storage is unavailable.');
+      },
+    },
+  });
+  assert.doesNotThrow(() => writeRivetWebAppPreviewPayload(token, { storage: { foo: 'seeded' }, uiGraph }));
+  assert.doesNotThrow(() => clearRivetWebAppPreviewPayload(token));
   const rootElement = dom.window.document.getElementById('root')!;
   const root = createRoot(rootElement);
   let unmounted = false;
 
   try {
     await act(async () => root.render(<RivetWebAppPreviewWindow />));
+    const channel = MockBroadcastChannel.instances[0]!;
+    const payloadRequest = channel.messages.find(
+      (message): message is Extract<PreviewActionRequest, { type: 'requestPayload' }> =>
+        message.type === 'requestPayload',
+    )!;
+    await act(async () => {
+      channel.emit({
+        payload: { storage: { foo: 'seeded' }, uiGraph },
+        requestId: payloadRequest.requestId,
+        type: 'previewPayload',
+      });
+    });
     assert.equal(dom.window.document.title, 'Preview app');
 
     await act(async () => rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click());
-    const channel = MockBroadcastChannel.instances[0]!;
     const runRequest = channel.messages.find(
       (message): message is Extract<PreviewActionRequest, { type: 'runAction' }> => message.type === 'runAction',
     )!;
     assert.deepEqual(runRequest.state, { prompt: 'Hello' });
+    assert.deepEqual(runRequest.storage, { foo: 'seeded' });
 
     await act(async () => {
       channel.emit({
         requestId: runRequest.requestId,
-        result: { outputs: {}, statePatch: { result: 'Done' } },
+        result: { outputs: {}, statePatch: { result: 'Done' }, storagePatch: { foo: 'updated' } },
         type: 'actionResult',
       });
     });
@@ -48,6 +70,7 @@ test('detached preview loads its payload, runs actions, and cancels pending work
     const pendingRequest = channel.messages.findLast(
       (message): message is Extract<PreviewActionRequest, { type: 'runAction' }> => message.type === 'runAction',
     )!;
+    assert.deepEqual(pendingRequest.storage, { foo: 'updated' });
     await act(async () => root.unmount());
     unmounted = true;
     assert.equal(
