@@ -40,7 +40,8 @@ Chat uses its internal tool delegation.
 
 The Delegate exposes normal text that the assistant produced alongside its tool
 calls as **Message (fires before the tool call is invoked)**. This port activates
-automatically, and Rivet runs its branch before dispatching the tool batch.
+automatically once for every tool call, and Rivet runs those branch invocations
+before dispatching the shared tool batch.
 **Output** and **Tool Result Message** follow ordinary left-to-right execution
 after the Delegate finishes. Whitespace-only messages do not activate the
 pre-tool branch.

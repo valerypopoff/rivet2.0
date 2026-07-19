@@ -95,7 +95,9 @@ const wiresStyles = css`
     opacity: 0.75;
   }
 
-  .wire.tool-continuation:not(.compare-added):not(.compare-changed):not(.compare-removed) {
+  .wire.tool-continuation:not(.tool-continuation-paired):not(.compare-added):not(.compare-changed):not(
+      .compare-removed
+    ) {
     stroke: var(--primary);
     stroke-width: 2px;
   }
@@ -111,8 +113,12 @@ const wiresStyles = css`
     stroke-dasharray: 5 4;
   }
 
+  .wire.tool-continuation-paired {
+    stroke-width: 1px;
+  }
+
   .tool-continuation-marker-default {
-    fill: var(--primary);
+    fill: gray;
     stroke: none;
   }
 
@@ -769,7 +775,6 @@ const StaticWireContents = memo(
       () => (highlightedNodes ? new Set(highlightedNodes) : undefined),
       [highlightedNodes],
     );
-
     return (
       <>
         {compareRemovedConnections.map((connection) => (

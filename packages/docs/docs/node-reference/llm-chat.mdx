@@ -126,8 +126,9 @@ result cannot safely stand for multiple parallel split indexes.
 
 If the model includes normal assistant text in a response that also contains
 tool calls, the connected Delegate exposes it on **Message (fires before the
-tool call is invoked)**. That output activates automatically before tool
-dispatch, and its ordinary branch must settle before the tools start. Normal
+tool call is invoked)**. That output activates once for every tool call before
+the shared batch is dispatched, and its ordinary branch must settle before the
+tools start. Normal
 tool-result branches start after the Delegate finishes. Put a **Start Async
 Branch** node immediately after the message output when that work should overlap
 the tools and later LLM rounds; the async trigger returns immediately, while the

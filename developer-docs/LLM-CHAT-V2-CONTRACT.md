@@ -78,12 +78,13 @@ paths and should not be used as the primary target for new provider refactors.
   `Tool Result Message`, and adds `assistant-message`, displayed as
   `Message (fires before the tool call is invoked)`, for nonblank assistant text
   emitted alongside that tool-call round. This output is intrinsically pre-tool:
-  the processor runs its branch before dispatching the tool batch, with no
-  Delegate setting or persisted mode flag. An ordinary pre-tool branch must
-  settle before tools begin. Placing `Start Async Branch` at its boundary makes
-  that node return immediately so the rest of the branch can overlap tool work,
-  while keeping it owned by the root run. Normal tool-result downstream branches
-  run only after the Delegate finishes.
+  when the round has several calls, the processor runs its branch once per call
+  before dispatching their shared tool batch, with no Delegate setting or
+  persisted mode flag. Each run receives the same assistant text. An ordinary
+  pre-tool branch must settle before tools begin. Placing `Start Async Branch`
+  at its boundary makes that node return immediately so the rest of the branch
+  can overlap tool work, while keeping it owned by the root run. Normal
+  tool-result downstream branches run only after the Delegate finishes.
 - Early and final Delegate branches may converge within the same tool round:
   outputs completed by the early pre-tool message branch are available to the
   final tool-result branch for that round. Do not treat prior-round branch

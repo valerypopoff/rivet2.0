@@ -1,4 +1,4 @@
-import { type FC, type MouseEvent, memo } from 'react';
+import { Fragment, type FC, type MouseEvent, memo } from 'react';
 import {
   type ChartNode,
   type NodeConnection,
@@ -11,7 +11,7 @@ import clsx from 'clsx';
 import { ErrorBoundary } from 'react-error-boundary';
 import { nodeByIdState } from '../state/graph';
 import { type PortPositions } from './NodeCanvas';
-import { getWirePath, getWireSegments } from './nodeCanvas/wireGeometry.js';
+import { getNormalOffsetWirePath, getWirePath, getWireSegments } from './nodeCanvas/wireGeometry.js';
 
 type WireProps = {
   connection: NodeConnection;
@@ -76,26 +76,54 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
     end,
     start,
   });
+  const isBidirectionalToolContinuation = toolContinuation?.kind === 'connected';
 
   return (
     <ErrorBoundary fallback={<></>}>
-      {wireSegments.map((segment, index) => (
-        <Wire
-          key={`wire-segment-${index}`}
-          sx={segment.start.x}
-          sy={segment.start.y}
-          ex={segment.end.x}
-          ey={segment.end.y}
-          selected={selected}
-          highlighted={highlighted}
-          isNotRan={isNotRan}
-          compareChangeKind={compareChangeKind}
-          toolContinuationKind={toolContinuation?.kind}
-          toolContinuationActive={toolContinuation?.active}
-          markerStart={index === 0 ? toolContinuation?.markerId : undefined}
-          markerEnd={index === wireSegments.length - 1 ? toolContinuation?.markerId : undefined}
-        />
-      ))}
+      {wireSegments.map((segment, index) => {
+        const wireProps = {
+          sx: segment.start.x,
+          sy: segment.start.y,
+          ex: segment.end.x,
+          ey: segment.end.y,
+          selected,
+          highlighted,
+          isNotRan,
+          compareChangeKind,
+          toolContinuationKind: toolContinuation?.kind,
+          toolContinuationActive: toolContinuation?.active,
+        };
+
+        if (isBidirectionalToolContinuation) {
+          return (
+            <Fragment key={`tool-continuation-wire-segment-${index}`}>
+              <Wire
+                {...wireProps}
+                normalOffset={-2}
+                normalOffsetPath
+                toolContinuationPaired
+                markerEnd={index === wireSegments.length - 1 ? toolContinuation?.markerId : undefined}
+              />
+              <Wire
+                {...wireProps}
+                normalOffset={2}
+                normalOffsetPath
+                toolContinuationPaired
+                markerStart={index === 0 ? toolContinuation?.markerId : undefined}
+              />
+            </Fragment>
+          );
+        }
+
+        return (
+          <Wire
+            {...wireProps}
+            key={`wire-segment-${index}`}
+            markerStart={index === 0 ? toolContinuation?.markerId : undefined}
+            markerEnd={index === wireSegments.length - 1 ? toolContinuation?.markerId : undefined}
+          />
+        );
+      })}
       {interactive && (
         <>
           {wireSegments.map((segment, index) => (
@@ -152,8 +180,11 @@ export const Wire: FC<{
   compareChangeKind?: ProjectComparisonChangeKind;
   markerStart?: string;
   markerEnd?: string;
+  normalOffset?: number;
+  normalOffsetPath?: boolean;
   toolContinuationActive?: boolean;
   toolContinuationKind?: 'connected' | 'ambiguous';
+  toolContinuationPaired?: boolean;
 }> = memo(
   ({
     sx,
@@ -166,11 +197,16 @@ export const Wire: FC<{
     compareChangeKind,
     markerStart,
     markerEnd,
+    normalOffset = 0,
+    normalOffsetPath = false,
     toolContinuationActive,
     toolContinuationKind,
+    toolContinuationPaired,
   }) => {
     const isBackwards = sx > ex;
-    const wirePath = getWirePath({ sx, sy, ex, ey });
+    const wirePath = normalOffsetPath
+      ? getNormalOffsetWirePath({ sx, sy, ex, ey, offset: normalOffset })
+      : getWirePath({ sx, sy, ex, ey });
 
     return (
       <path
@@ -182,6 +218,7 @@ export const Wire: FC<{
           'tool-continuation': toolContinuationKind != null,
           'tool-continuation-active': toolContinuationActive,
           'tool-continuation-ambiguous': toolContinuationKind === 'ambiguous',
+          'tool-continuation-paired': toolContinuationPaired,
           [`compare-${compareChangeKind}`]: compareChangeKind && compareChangeKind !== 'unchanged',
         })}
         d={wirePath}

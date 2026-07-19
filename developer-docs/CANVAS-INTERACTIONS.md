@@ -31,14 +31,24 @@ Rivet versions ignore them while still rendering the underlying connection.
 [`toolContinuationWireState.ts`](../packages/app/src/components/nodeCanvas/toolContinuationWireState.ts)
 uses core's graph-level `resolveToolContinuationConnections(...)` result to decorate the
 ordinary persisted connection from LLM Chat `Tool Calls` (`function-calls`) to
-Delegate Tool Call `Tool Call` (`function-call`). A valid continuation wire has
-arrowheads at both ends to communicate the runtime request/response relationship;
-it animates only while the selected Delegate process page is running. Respect
+Delegate Tool Call `Tool Call` (`function-call`). A valid continuation wire uses
+two thin, parallel lanes to communicate the runtime request/response relationship:
+the forward lane has an arrowhead at the Delegate end and the return lane has one
+at the LLM end. It animates only while the selected Delegate process page is
+running. Idle lanes and arrowheads retain the ordinary wire color; hover and
+active execution apply the normal primary highlight to the lanes. Respect
 `prefers-reduced-motion`, and for bent connections put markers only on the two
 outer segment endpoints. Project Compare remains visible on valid continuation
-wires: added, changed, and removed wire colors and widths also color the matching
-arrowheads. Ambiguous continuation styling has higher priority and stays red and
-dashed in every comparison state.
+wires: added, changed, and removed wire colors also color the matching arrowheads
+while the two lanes remain thin. Ambiguous continuation styling has higher
+priority and stays red and dashed in every comparison state.
+
+Paired lanes are normal-offset from samples of the same wire geometry; do not
+translate their endpoints. Endpoint translation makes the two Bézier curves
+converge and diverge, while normal offsets keep their separation constant along
+the rendered route. The first and last normals follow the wire's horizontal
+port tangents exactly, so a steep or short route still begins and ends on its
+own port.
 
 Ambiguous eligible connections are red and dashed rather than silently choosing
 a Delegate. The hover title explains that auto-continuation requires exactly one

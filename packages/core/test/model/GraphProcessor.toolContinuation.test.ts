@@ -770,6 +770,96 @@ describe('GraphProcessor connected tool continuation', () => {
     }
   });
 
+  it('records a distinct Message-branch consumer run for every tool call in a nonblank round', async () => {
+    const llm = makeLLM([
+      {
+        assistantMessage: 'I am checking both items now.',
+        toolCalls: [makeToolCall('call-1', 'lookup'), makeToolCall('call-2', 'lookup')],
+      },
+    ]);
+    const delegate = makeDelegate();
+    const probe = makeProbe('message-history');
+    const processor = new GraphProcessor(
+      makeProject(
+        [llm, delegate, probe],
+        [
+          connect('llm', 'function-calls', 'delegate', 'function-call'),
+          connect('delegate', 'assistant-message', probe.id, 'message'),
+        ],
+      ),
+      graphId,
+      createRegistry(),
+    );
+    const probeStarts: ProcessId[] = [];
+    const probeFinishes: ProcessId[] = [];
+    const receivedMessages: string[] = [];
+
+    AssistantMessageProbeNodeImpl.handlers.set('message-history', async (message) => {
+      receivedMessages.push(message);
+    });
+    processor.setExternalFunction('lookup', async () => ({ type: 'string', value: 'lookup result' }));
+    processor.on('nodeStart', (event: ProcessEvents['nodeStart']) => {
+      if (event.node.id === probe.id) {
+        probeStarts.push(event.processId);
+      }
+    });
+    processor.on('nodeFinish', (event: ProcessEvents['nodeFinish']) => {
+      if (event.node.id === probe.id) {
+        probeFinishes.push(event.processId);
+      }
+    });
+
+    await withTimeout(processor.processGraph(testProcessContext()), 'Message-branch history across a tool batch');
+
+    assert.deepEqual(receivedMessages, ['I am checking both items now.', 'I am checking both items now.']);
+    assert.equal(probeStarts.length, 2);
+    assert.equal(probeFinishes.length, 2);
+    assert.notEqual(probeStarts[0], probeStarts[1]);
+    assert.deepEqual(probeFinishes, probeStarts);
+  });
+
+  it('records distinct async Message descendants for every tool call in a nonblank round', async () => {
+    const llm = makeLLM([
+      {
+        assistantMessage: 'I am checking both items now.',
+        toolCalls: [makeToolCall('call-1', 'lookup'), makeToolCall('call-2', 'lookup')],
+      },
+    ]);
+    const delegate = makeDelegate();
+    const asyncTrigger = makeStartAsync();
+    const probe = makeProbe('async-message-history');
+    const processor = new GraphProcessor(
+      makeProject(
+        [llm, delegate, asyncTrigger, probe],
+        [
+          connect('llm', 'function-calls', 'delegate', 'function-call'),
+          connect('delegate', 'assistant-message', asyncTrigger.id, 'input1'),
+          connect(asyncTrigger.id, 'output1', probe.id, 'message'),
+        ],
+      ),
+      graphId,
+      createRegistry(),
+    );
+    const probeStarts: ProcessId[] = [];
+    const receivedMessages: string[] = [];
+
+    AssistantMessageProbeNodeImpl.handlers.set('async-message-history', async (message) => {
+      receivedMessages.push(message);
+    });
+    processor.setExternalFunction('lookup', async () => ({ type: 'string', value: 'lookup result' }));
+    processor.on('nodeStart', (event: ProcessEvents['nodeStart']) => {
+      if (event.node.id === probe.id) {
+        probeStarts.push(event.processId);
+      }
+    });
+
+    await withTimeout(processor.processGraph(testProcessContext()), 'async Message-branch history across a tool batch');
+
+    assert.deepEqual(receivedMessages, ['I am checking both items now.', 'I am checking both items now.']);
+    assert.equal(probeStarts.length, 2);
+    assert.notEqual(probeStarts[0], probeStarts[1]);
+  });
+
   it('fails before running the LLM or either Delegate when continuation wiring is ambiguous', async () => {
     const llm = makeLLM([{ assistantMessage: '', toolCalls: [makeToolCall('call-1', 'lookup')] }]);
     const firstDelegate = { ...makeDelegate(), id: 'delegate-a' as NodeId };

@@ -26,7 +26,10 @@ test('wire hover uses transparent rendered-wire hit paths instead of global curv
   assert.match(wireStyles, /pointer-events:\s*stroke;/);
   assert.match(wireStyles, /stroke:\s*transparent;/);
   assert.match(wireStyles, /vector-effect:\s*non-scaling-stroke;/);
-  assert.match(wireLayerSource, /const \[hoveredConnectionKey, setHoveredConnectionKey\] = useState<string \| undefined>\(\);/);
+  assert.match(
+    wireLayerSource,
+    /const \[hoveredConnectionKey, setHoveredConnectionKey\] = useState<string \| undefined>\(\);/,
+  );
   assert.match(wireLayerSource, /getProjectConnectionComparisonKey\(connection\) === hoveredConnectionKey/);
   assert.match(wireLayerSource, /hoveredConnectionKey === connectionKey/);
   assert.match(wireLayerSource, /interactive=\{allowConnectionHover\}/);
@@ -65,7 +68,10 @@ test('wire bend handles are local rendered-wire affordances with persisted conne
   assert.match(wireLayerSource, /editable: allowConnectionBendEditing/);
   assert.match(wireLayerSource, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*setConnectionBendPoint/s);
   assert.match(wireLayerSource, /onDoubleClick=\{\(event\) => onConnectionBendDoubleClick\(connection, event\)\}/);
-  assert.match(wireLayerSource, /onMouseDown=\{\(event\) => onConnectionBendMouseDown\(connection, connectionKey, event\)\}/);
+  assert.match(
+    wireLayerSource,
+    /onMouseDown=\{\(event\) => onConnectionBendMouseDown\(connection, connectionKey, event\)\}/,
+  );
   assert.match(wireLayerSource, /bendPoint=\{bendPoint\}/);
 });
 

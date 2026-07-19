@@ -2855,17 +2855,25 @@ export class GraphProcessor {
             `Delegate Tool Call "${delegateNode.title}" cannot fire its pre-tool Message branch because the LLM/Delegate continuation is inside an unsupported cycle, race, or loop.`,
           );
         }
-        const preToolBranchOutputs = await this.#runContinuationOutputBranch(
-          delegateNode,
-          assistantOutputs,
-          preToolOutputPorts,
-          nodeAbortController.signal,
-          roundOutputs,
-          continuationBranchBoundaries,
-          branchContext,
-          true,
-        );
-        rememberBranchOutputs(preToolBranchOutputs);
+
+        // One model response can contain several tool calls. The assistant text
+        // is shared by those calls, but this port fires once for each call. Run
+        // every branch before dispatching the shared tool batch.
+        // Keep each run's temporary results isolated; otherwise a completed
+        // branch for an earlier call can make a later call look already ready.
+        for (let toolCallIndex = 0; toolCallIndex < toolCalls.length; toolCallIndex += 1) {
+          const preToolBranchOutputs = await this.#runContinuationOutputBranch(
+            delegateNode,
+            assistantOutputs,
+            preToolOutputPorts,
+            nodeAbortController.signal,
+            new Map(),
+            continuationBranchBoundaries,
+            branchContext,
+            true,
+          );
+          rememberBranchOutputs(preToolBranchOutputs);
+        }
       }
 
       if (nodeAbortController.signal.aborted) {

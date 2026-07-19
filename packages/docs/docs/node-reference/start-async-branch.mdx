@@ -68,6 +68,10 @@ Delegate invoke its tools without waiting for that branch to finish. The whole
 root lifecycle still owns both paths, but a web-app Chat can display the final
 foreground reply before the async status branch finishes.
 
+If one model response requests multiple tools alongside nonblank assistant text,
+the status branch runs once per requested tool. Each run receives that same
+assistant text.
+
 Without Start Async Branch, the pre-tool message branch runs normally and the
 Delegate waits for it before invoking the tool.
 
