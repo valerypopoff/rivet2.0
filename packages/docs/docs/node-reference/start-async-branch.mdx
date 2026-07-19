@@ -7,9 +7,10 @@ sidebar_label: Start Async Branch
 # Start Async Branch Node
 
 The Start Async Branch node lets the foreground path continue without waiting
-for one downstream branch. Rivet still owns that branch and waits for it before
-the root graph run ends, so execution events, cancellation, costs, and errors
-remain part of the same run.
+for one downstream branch. Rivet still owns that branch until the root graph run
+ends, so execution events, cancellation, and errors remain part of the same run.
+Web-app actions return an already-ready graph result without waiting for the
+async branch, while the processor remains running until that branch settles.
 
 Use this node for side effects that should overlap the foreground work, such as
 publishing a progress status while an AI tool is running. It is not a detached
@@ -43,7 +44,14 @@ payload visible at the scheduling boundary.
 
 If an async-branch node fails, the foreground path is not retroactively
 stopped. The root graph run reports the error when all foreground and async work
-has settled. Stopping the root run also stops its async branches.
+has settled. If a web app already displayed its foreground result, a later async
+error cannot retract that reply. Stopping the root run also stops its async
+branches.
+
+Browser-backed Stored Value patches are returned with the web-app action result,
+so a Set Stored Value that runs later in an async branch cannot be persisted by
+that response. Keep browser-backed persistence on the foreground path, or use a
+host-provided Stored Value store that writes through directly.
 
 **Run from here** is available on the Start Async Branch node itself, but not on
 nodes inside its async subtree. Replaying a descendant would otherwise require
@@ -57,7 +65,8 @@ Connect **Delegate Tool Call**'s **Message (fires before the tool call is
 invoked)** output to Start Async Branch, then connect the corresponding async
 output to a status-reporting node. Rivet launches the status branch and lets the
 Delegate invoke its tools without waiting for that branch to finish. The whole
-root run still waits for both paths before returning.
+root lifecycle still owns both paths, but a web-app Chat can display the final
+foreground reply before the async status branch finishes.
 
 Without Start Async Branch, the pre-tool message branch runs normally and the
 Delegate waits for it before invoking the tool.

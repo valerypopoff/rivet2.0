@@ -179,11 +179,15 @@ it('forwards internal run state to the dynamic graph runner', async () => {
     },
   };
   let receivedFrozenNodeOutputs: unknown;
+  let receivedProjectPath: unknown;
+  let receivedReturnWhenGraphOutputsReady: unknown;
   let receivedWebAppStorage: unknown;
   startDebuggerServer({
     server: server as unknown as WebSocketServer,
     dynamicGraphRun: async (options) => {
       receivedFrozenNodeOutputs = options.frozenNodeOutputs;
+      receivedProjectPath = options.projectPath;
+      receivedReturnWhenGraphOutputsReady = options.returnWhenGraphOutputsReady;
       receivedWebAppStorage = options.webAppStorage;
     },
   });
@@ -199,8 +203,9 @@ it('forwards internal run state to the dynamic graph runner', async () => {
           graphId: 'graph-1',
           inputs: {},
           contextValues: {},
-          projectPath: undefined,
+          projectPath: null,
           frozenNodeOutputs: transportFrozenNodeOutputs,
+          returnWhenGraphOutputsReady: true,
           webAppStorage: { analysis: { summary: 'Browser-local overview' } },
         },
       }),
@@ -209,6 +214,8 @@ it('forwards internal run state to the dynamic graph runner', async () => {
 
   await waitFor(() => {
     assert.deepEqual(receivedFrozenNodeOutputs, frozenNodeOutputs);
+    assert.equal(receivedProjectPath, undefined);
+    assert.equal(receivedReturnWhenGraphOutputsReady, true);
     assert.deepEqual(receivedWebAppStorage, { analysis: { summary: 'Browser-local overview' } });
   });
 
@@ -855,6 +862,45 @@ describe('startDebuggerServer broadcast', () => {
     assert.equal(nodeFinish.data.outputs[WarningsPort].type, 'string[]');
     assert.match(nodeFinish.data.outputs[WarningsPort].value[0], /could not serialize/);
     await waitFor(() => assert.equal(errors.length, 1));
+  });
+
+  it('keeps the early graph-output boundary when its original payload cannot be serialized', async () => {
+    const server = new FakeWebSocketServer();
+    const socket = new FakeWebSocket();
+    const debuggerServer = startDebuggerServer({
+      server: server as unknown as WebSocketServer,
+      heartbeatIntervalMs: 0,
+    });
+    server.connect(socket);
+
+    const originalStringify = JSON.stringify;
+    let shouldThrow = true;
+    JSON.stringify = ((
+      value: unknown,
+      replacer?: Parameters<typeof JSON.stringify>[1],
+      space?: Parameters<typeof JSON.stringify>[2],
+    ) => {
+      if (shouldThrow) {
+        shouldThrow = false;
+        throw new Error('synthetic early-output serializer failure');
+      }
+
+      return originalStringify(value, replacer, space);
+    }) as typeof JSON.stringify;
+
+    try {
+      debuggerServer.broadcast(fakeProcessor(), 'graphOutputsReady', {
+        execution: makeExecution(),
+        graph: { metadata: { id: 'graph-1' } },
+        outputs: { result: { type: 'string', value: 'ready' } },
+      });
+    } finally {
+      JSON.stringify = originalStringify;
+    }
+
+    const outputsReady = getSentDebuggerMessage(socket, 'graphOutputsReady');
+    assert.equal(outputsReady.data.outputs[WarningsPort].type, 'string[]');
+    assert.match(outputsReady.data.outputs[WarningsPort].value[0], /could not serialize/);
   });
 
   it('sends downstream events whose inputs include non-JSON-safe values', () => {

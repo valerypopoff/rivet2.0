@@ -130,6 +130,21 @@ Button actions write the same UI data key, the latest-started action owns that k
 disjoint state patches still apply, and a newer direct form edit prevents an older
 action from overwriting it. Chat message keys are component-specific.
 
+Web-app actions use the processor's early-output mode. If normal foreground
+scheduling has completed and only managed Start Async Branch work remains,
+`graphOutputsReady` releases the mapped Button/Chat result while the processor
+continues Running. The terminal `graphFinish`/`done` events, resource cleanup, and
+late async failures remain tied to `waitForRunCompletion()`. HTTP returns the JSON
+action response at the early boundary. WebSocket publishes `action.completed` at
+that boundary but retains the processor in its local active-run capacity until it
+fully settles. The durable row is already terminal, so it is removed from lease
+renewal at publication instead of being misclassified as a lost running lease.
+It also defers `onRunFinished` until then, so a recorder attached through
+`onProcessorPrepared` includes the async tail when the host persists it.
+Request- or session-scoped abort forwarding also remains attached through that
+full lifecycle, so returning the foreground result does not make the async tail
+uncancellable.
+
 Core graph processors provide the External Call function `setWebAppStatus`,
 including desktop Node processors and nested graphs. The function receives the first
 External Call argument, converts strings directly and other values to JSON/string
@@ -165,6 +180,10 @@ app record without replacing disjoint keys. Per-key action ordering advances onl
 after that merge is persisted, so a failed newer write cannot suppress an older
 successful action that completes later. Storage never enters component UI
 state, graph input mapping, or lifecycle-hook state projection.
+The patch is response-bound: writes performed only after an early web-app result
+cannot be delivered in that HTTP/WebSocket completion payload. Put browser-backed
+Set Stored Value nodes on the foreground path. A host callback-backed store writes
+through directly and is the supported persistence mechanism for async branches.
 
 Hosts can provide `storedValueStore` to `runGraph(...)`, `createProcessor(...)`,
 `runRivetWebAppAction(...)`, a web-app handler, or a WebSocket session. A

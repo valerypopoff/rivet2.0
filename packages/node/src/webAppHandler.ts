@@ -334,6 +334,7 @@ export async function prepareRivetWebAppAction(
       },
       graph: component.action.graphId,
       inputs,
+      returnWhenGraphOutputsReady: true,
       storedValueStore: hostStoredValueStore ?? browserStoredValues!.store,
     });
     let started = false;
@@ -358,6 +359,7 @@ export async function prepareRivetWebAppAction(
         started = true;
         let processorRunStarted = false;
         const forwardAbort = () => actionAbortController.abort(sourceAbortSignal.reason);
+        const removeAbortForwarding = () => sourceAbortSignal.removeEventListener('abort', forwardAbort);
         sourceAbortSignal.addEventListener('abort', forwardAbort, { once: true });
 
         try {
@@ -376,9 +378,18 @@ export async function prepareRivetWebAppAction(
           await callActionHook(onActionError, { ...actionContext, error });
           throw error;
         } finally {
-          sourceAbortSignal.removeEventListener('abort', forwardAbort);
           if (!processorRunStarted) {
+            removeAbortForwarding();
             processorRunner.dispose();
+          } else if (processorRunner.processor.isRunning) {
+            // An early web-app result does not end the processor lifecycle. Keep
+            // request/session cancellation wired until its async branches settle.
+            void processorRunner.processor
+              .waitForRunCompletion()
+              .catch(() => undefined)
+              .finally(removeAbortForwarding);
+          } else {
+            removeAbortForwarding();
           }
         }
       },

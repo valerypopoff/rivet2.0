@@ -23,6 +23,7 @@ const FALLBACK_DEBUGGER_MESSAGES = new Set([
   'progress',
   'graphStart',
   'graphFinish',
+  'graphOutputsReady',
   'graphError',
   'graphAbort',
   'done',

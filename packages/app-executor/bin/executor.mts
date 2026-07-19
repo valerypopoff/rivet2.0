@@ -234,6 +234,7 @@ const rivetDebugger = startDebuggerServer({
     projectPath,
     useEditorCache,
     captureNodeTimings,
+    returnWhenGraphOutputsReady,
     webAppStorage: initialWebAppStorage,
   }) => {
     logRuntimeInfo(`Running graph ${graphId}`, {
@@ -317,6 +318,20 @@ const rivetDebugger = startDebuggerServer({
         initialWebAppStorage === undefined
           ? undefined
           : Rivet.createRivetStoredValueSnapshotStore(initialWebAppStorage);
+      let webAppStorageBoundaryPublished = false;
+      const publishWebAppStoragePatch = webAppStorage
+        ? (event: Rivet.ProcessEvents['graphFinish'] | Rivet.ProcessEvents['graphOutputsReady']) => {
+            if (event.execution.parentGraphRunId != null || webAppStorageBoundaryPublished) {
+              return;
+            }
+            webAppStorageBoundaryPublished = true;
+            const storagePatch = webAppStorage.getPatch();
+            if (Object.keys(storagePatch).length === 0 || !processorForConsole) {
+              return;
+            }
+            clientScopedDebugger.broadcast(processorForConsole, 'webAppStoragePatch', { storagePatch }, requestId);
+          }
+        : undefined;
       const processor = createProcessor(project, {
         graph: graphId,
         inputs,
@@ -324,10 +339,13 @@ const rivetDebugger = startDebuggerServer({
         remoteDebugger: clientScopedDebugger,
         remoteDebuggerRequestId: requestId,
         captureNodeTimings: captureNodeTimings ?? false,
+        returnWhenGraphOutputsReady,
         registry,
         datasetProvider: getDatasetProviderForClient(client),
         codeRunner,
         editorExecutionCache: useEditorCache ? getEditorExecutionCache(client, project) : undefined,
+        onGraphFinish: publishWebAppStoragePatch,
+        onGraphOutputsReady: publishWebAppStoragePatch,
         onTrace: (trace) => {
           logRuntimeDebug('Graph trace', { trace });
         },
@@ -337,19 +355,6 @@ const rivetDebugger = startDebuggerServer({
         projectReferenceLoader: new NodeProjectReferenceLoader(),
       });
       processorForConsole = processor.processor;
-
-      const removeWebAppStoragePatchListener = webAppStorage
-        ? processor.processor.on('graphFinish', (event) => {
-            if (event.execution.parentGraphRunId != null) {
-              return;
-            }
-            const storagePatch = webAppStorage.getPatch();
-            if (Object.keys(storagePatch).length === 0) {
-              return;
-            }
-            clientScopedDebugger.broadcast(processor.processor, 'webAppStoragePatch', { storagePatch }, requestId);
-          })
-        : undefined;
 
       if (runToNodeIds) {
         processor.processor.runToNodeIds = runToNodeIds;
@@ -364,7 +369,9 @@ const rivetDebugger = startDebuggerServer({
       try {
         await processor.run();
       } finally {
-        removeWebAppStoragePatchListener?.();
+        if (processor.processor.isRunning) {
+          await processor.processor.waitForRunCompletion().catch(() => undefined);
+        }
       }
     } catch (err) {
       logRuntimeError(`Graph ${graphId} failed.`, err, { requestId });

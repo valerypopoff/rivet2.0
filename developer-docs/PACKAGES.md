@@ -126,6 +126,16 @@ features remain because the app uses those APIs.
 
 `createRivetWebAppHandler(...)` is the minimal HTTP web-app serving seam. It takes a loaded `Project`, selects one `Project.uiGraphs` entry, serves a small declarative renderer, and exposes a Fetch-style action endpoint that runs ordinary same-project graphs through `createProcessor(...)`. Wrappers can also use `renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` directly when they need Express-owned timing, recording metadata, debug headers, or error envelopes. `prepareRivetWebAppAction(...)` is the shared one-shot preparation boundary used by long-running transports: it validates and maps the action, resolves processor options, and returns the actual processor plus `run()` so a host can attach progress/recording listeners without reimplementing action semantics. `createProcessorOptions` can be static for simple hosts or a request-scoped resolver that receives the `Request`, UI graph, Button or Chat component, current action-scoped UI state, mapped action input, and optional revision key; the selected component graph always overrides any supplied `graph` value. Resolver-provided `inputs` and `context` win, otherwise Rivet uses the component's UI mappings and `resolveContext(request)`. Raw UI state values are converted into Rivet Data Values consistently in desktop preview and Node-hosted actions. Chat maps the current turn to `string`, only preceding user/assistant turns to native `chat-message[]`, and optional explicitly mapped page data to additional graph inputs, so wrapper integrations do not need a separate chat protocol. Action lifecycle hooks are observability-only and are not an auth or route-policy seam.
 
+Web-app graph actions set `returnWhenGraphOutputsReady` on their processors. If
+foreground scheduling has produced the graph outputs while a managed Start Async
+Branch is still pending, the action returns those outputs immediately and the
+Chat/Button interaction settles. The processor remains Running and retains its
+run-scoped resources until `waitForRunCompletion()` observes the async drain and
+terminal lifecycle. Internal/remote Node execution forwards a distinct
+`graphOutputsReady` event so the editor result waiter can settle without treating
+the run as finished; `graphFinish` and `done` remain terminal. Late async failures
+are observable processor errors but cannot replace an action response already sent.
+
 The reserved External Call function `setWebAppStatus` is installed by core on every
 `GraphProcessor`, including ordinary editor runs and nested graphs. Calling it with
 a graph value emits normal `GraphProgress`; the shared normalizer caps the visible
@@ -153,6 +163,11 @@ writes when a `Set Stored Value` node succeeds, so hosts that need action-wide
 transactions or rollback must provide that behavior themselves. Generated and React
 renderers suppress older late completions from overwriting newer same-key writes and
 merge disjoint keys. Detached preview keeps parent-window storage ownership.
+Because a browser snapshot patch travels with the foreground action result, a
+browser-backed Set Stored Value that runs only after early output publication is not
+included in that response. Persistent writes in an async branch therefore require a
+host callback-backed store; browser-backed persistence should remain on the
+foreground path.
 
 Core and Node run options, `runRivetWebAppAction(...)`, handler options, and
 WebSocket sessions accept `storedValueStore`. A request-scoped store from
@@ -208,6 +223,12 @@ Chat pins retain both the pinned assistant-response index and, when available, t
 Node web-app gateway internals are split by lifecycle rather than by protocol message: the public facade stays in `webAppSocketGateway.ts`, ordered persistence and terminal callbacks live in `webAppRunJournal.ts`, active scope ownership in `webAppActiveRuns.ts`, lease recovery in `webAppLeaseManager.ts`, remote reconnect subscriptions in `webAppRemoteRunSubscriptions.ts`, handshake/dispatch in `webAppSocketSession.ts`, and the local bounded store in `webAppRunStore.ts`. Node web-app tests reuse typed project/action fixtures from `test/webAppFixtures.ts` and the real socket server/message harness from `test/webAppTestHarness.ts`; unusual coordinator, persistence, timing, and failure behavior remains explicit in each scenario. The same shared renderer stylesheet owns web-app scrollbars and Chat composer controls: it inherits Rivet's existing scrollbar tokens in the builder and uses matching dark fallbacks in detached/hosted contexts, so wrapper CSS must not restyle them. The hosted document shell gives `#app` a real height, ensuring the web-app root, not the browser page, owns overflow too.
 
 The runtime model exports `createUiGraphInteractionController(...)` as the shared mutable interaction owner for React preview and the generated hosted client. It wraps the lower-level `createUiGraphActionExecutionController(...)` and owns local state, per-component loading, progress and errors, abort controllers, graph replacement cleanup, and stale-patch protection. Renderers subscribe to the interaction controller and must not keep parallel pending-action maps or call the lower-level execution controller directly. Direct form edits supersede older action writes to the same key, while distinct Button or Chat components may run independently. The desktop editor preview passes `preserveActionsOnUnmount` because graph navigation only removes its React surface temporarily: its project/UI-graph session keeps the action and result until explicit cancellation, UI-graph deletion, project close, or page unload. Detached previews retain the default abort-on-unmount behavior. The direct-DOM hosted renderer preserves the focused text control, selection, and control scroll position across action/progress renders. Hosted HTTP actions abort outstanding fetches on page unload; hosted WebSocket actions detach so the server run can continue across navigation, while explicit Abort still requests cancellation. `runRivetWebAppAction(...)` uses `createProcessorOptions.abortSignal` when supplied, otherwise it forwards the provided Fetch `Request.signal` through an action-scoped signal to `createProcessor(...)`; its forwarding listener is removed when the action settles so long-lived host signals do not retain completed processors. Express adapters that synthesize a Fetch `Request` should connect that signal to the underlying response/request close event if they want abandoned HTTP actions to stop the underlying graph run.
+
+For an early async result, action settlement means the response is available, not
+that the processor lifecycle has ended. The HTTP processor promise remains owned
+internally until completion. The WebSocket gateway may publish
+`action.completed` at that foreground boundary, but it retains the active run and
+processor in local capacity until `waitForRunCompletion()` settles.
 
 Keep the stale-revision modal CSS fallback-safe inside `RIVET_WEB_APP_RENDERER_CSS`: hosted web-app pages may run outside the desktop shell and should still show an opaque blocking modal backdrop even when a browser lacks newer CSS color functions.
 

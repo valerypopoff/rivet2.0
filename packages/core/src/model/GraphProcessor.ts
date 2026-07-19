@@ -156,6 +156,9 @@ export type ProcessEvents = {
   /** Called when a graph or a subgraph has finished. */
   graphFinish: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;
 
+  /** Called when root graph outputs are ready while managed async branches are still settling. */
+  graphOutputsReady: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;
+
   /** Called when a graph has been aborted. */
   graphAbort: WithExecution<{ successful: boolean; graph: NodeGraph; error?: Error | string }>;
 
@@ -576,6 +579,7 @@ export class GraphProcessor {
   #runToRelevantNodeIds: Set<NodeId> | undefined;
   #managedAsyncBranches: ManagedAsyncBranches | undefined;
   #managedAsyncBranchFailures: ManagedAsyncBranchFailure[] = [];
+  #runCompletionPromise: Promise<GraphOutputs> | undefined;
 
   #nodesNotInCycle: ChartNode[] = undefined!;
 
@@ -592,6 +596,15 @@ export class GraphProcessor {
 
   get isRunning() {
     return this.#lifecycle.isRunning;
+  }
+
+  /** Waits for the current run's full lifecycle, including managed async branches. */
+  async waitForRunCompletion(): Promise<GraphOutputs> {
+    if (!this.#runCompletionPromise) {
+      throw new Error('No graph run has been started.');
+    }
+
+    return await this.#runCompletionPromise;
   }
 
   #startNodeTiming(): NodeTimingStart {
@@ -1128,48 +1141,102 @@ export class GraphProcessor {
 
     /** Contextual data available to all graphs and subgraphs. Kind of like react context, avoids drilling down data into subgraphs. Be careful when using it. */
     contextValues: Record<string, DataValue> = {},
+
+    /** Allows callers such as web apps to receive root outputs while managed async branches continue settling. */
+    options: { returnWhenGraphOutputsReady?: boolean } = {},
   ): Promise<GraphOutputs> {
     if (this.#lifecycle.isRunning) {
       throw new Error('Cannot process graph while already processing');
     }
 
-    try {
-      this.#profileRuntimeSync('initializeGraphRun', () => this.#initializeGraphRun(context, inputs, contextValues));
-      await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
-      this.#profileRuntimeSync('prepareNodeProcessContextBase', () => this.#prepareNodeProcessContextBase());
+    let resolveOutputsReady: ((outputs: GraphOutputs) => void) | undefined;
+    let rejectOutputsReady: ((error: unknown) => void) | undefined;
+    const outputsReadyPromise =
+      options.returnWhenGraphOutputsReady === true
+        ? new Promise<GraphOutputs>((resolve, reject) => {
+            resolveOutputsReady = resolve;
+            rejectOutputsReady = reject;
+          })
+        : undefined;
+    let outputsWerePublishedEarly = false;
 
-      const shouldUseSeededExecutionPlan = this.#seededExecutionPlanForNextRun() != null;
-      this.#useSeededExecutionPlanOnNextRun = false;
-      if (!shouldUseSeededExecutionPlan) {
-        this.#preprocessGraph();
+    const completionPromise = (async () => {
+      try {
+        this.#profileRuntimeSync('initializeGraphRun', () => this.#initializeGraphRun(context, inputs, contextValues));
+        await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
+        this.#profileRuntimeSync('prepareNodeProcessContextBase', () => this.#prepareNodeProcessContextBase());
+
+        const shouldUseSeededExecutionPlan = this.#seededExecutionPlanForNextRun() != null;
+        this.#useSeededExecutionPlanOnNextRun = false;
+        if (!shouldUseSeededExecutionPlan) {
+          this.#preprocessGraph();
+        }
+        this.#prepareAsyncBranchTopology();
+
+        await this.#profileRuntimeAsync('emitGraphStart', () => this.#emitGraphStart());
+        await this.#profileRuntimeAsync('emitPreloadedNodeResults', () => this.#emitPreloadedNodeResults());
+        await this.#profileRuntimeAsync('waitUntilUnpaused', () => this.#waitUntilUnpaused());
+
+        if (this.#canUseFastAcyclicScheduler()) {
+          await this.#profileRuntimeAsync('processFastAcyclicGraph', () => this.#processFastAcyclicGraph());
+        } else {
+          await this.#profileRuntimeAsync('processCompatibleGraph', () => this.#processCompatibleGraph());
+        }
+
+        if (
+          options.returnWhenGraphOutputsReady === true &&
+          !this.#isSubProcessor &&
+          this.#managedAsyncBranches!.hasPending
+        ) {
+          await this.#profileRuntimeAsync('throwIfGraphErrored', () => this.#throwIfGraphErrored(false));
+          // Publish a snapshot instead of the live root output object. In particular,
+          // the provisional cost must not occupy the root cost port before managed
+          // async branches contribute their cost during finalization.
+          const outputsReady = { ...this.#graphOutputs };
+          ensureGraphCostOutput(outputsReady, this.#totalCost);
+          await this.#emitter.emit(
+            'graphOutputsReady',
+            this.#withExecution({ graph: this.#graph, outputs: outputsReady }),
+          );
+          outputsWerePublishedEarly = true;
+          resolveOutputsReady?.(outputsReady);
+        }
+
+        if (!this.#isSubProcessor) {
+          await this.#profileRuntimeAsync('drainManagedAsyncBranches', () => this.#managedAsyncBranches!.drain());
+        }
+
+        await this.#profileRuntimeAsync('throwIfGraphErrored', () => this.#throwIfGraphErrored());
+        return await this.#profileRuntimeAsync('finalizeGraphRun', () => this.#finalizeGraphRun());
+      } finally {
+        if (!this.#isSubProcessor) {
+          await this.#managedAsyncBranches?.drain();
+        }
+        this.#lifecycle.complete();
+        this.#cleanupTokenizerErrorListener();
+
+        await this.#profileRuntimeAsync('emitFinish', () => this.#emitFinishIfNeeded());
       }
-      this.#prepareAsyncBranchTopology();
+    })();
 
-      await this.#profileRuntimeAsync('emitGraphStart', () => this.#emitGraphStart());
-      await this.#profileRuntimeAsync('emitPreloadedNodeResults', () => this.#emitPreloadedNodeResults());
-      await this.#profileRuntimeAsync('waitUntilUnpaused', () => this.#waitUntilUnpaused());
+    this.#runCompletionPromise = completionPromise;
 
-      if (this.#canUseFastAcyclicScheduler()) {
-        await this.#profileRuntimeAsync('processFastAcyclicGraph', () => this.#processFastAcyclicGraph());
-      } else {
-        await this.#profileRuntimeAsync('processCompatibleGraph', () => this.#processCompatibleGraph());
-      }
-
-      if (!this.#isSubProcessor) {
-        await this.#profileRuntimeAsync('drainManagedAsyncBranches', () => this.#managedAsyncBranches!.drain());
-      }
-
-      await this.#profileRuntimeAsync('throwIfGraphErrored', () => this.#throwIfGraphErrored());
-      return await this.#profileRuntimeAsync('finalizeGraphRun', () => this.#finalizeGraphRun());
-    } finally {
-      if (!this.#isSubProcessor) {
-        await this.#managedAsyncBranches?.drain();
-      }
-      this.#lifecycle.complete();
-      this.#cleanupTokenizerErrorListener();
-
-      await this.#profileRuntimeAsync('emitFinish', () => this.#emitFinishIfNeeded());
+    if (outputsReadyPromise) {
+      // Without a real early publication, preserve ordinary processGraph semantics:
+      // resolve or reject only after terminal cleanup and finish listeners settle.
+      // The rejection callback also observes late failures after early publication.
+      void completionPromise.then(
+        (outputs) => {
+          if (!outputsWerePublishedEarly) resolveOutputsReady?.(outputs);
+        },
+        (error) => {
+          if (!outputsWerePublishedEarly) rejectOutputsReady?.(error);
+        },
+      );
+      return await outputsReadyPromise;
     }
+
+    return await completionPromise;
   }
 
   async #emitFinishIfNeeded(): Promise<void> {
@@ -1504,9 +1571,9 @@ export class GraphProcessor {
     );
   }
 
-  async #throwIfGraphErrored(): Promise<void> {
+  async #throwIfGraphErrored(includeManagedAsyncFailures = true): Promise<void> {
     const erroredNodes = this.#getUnhandledErroredNodes();
-    const managedAsyncFailures = this.#managedAsyncBranchFailures;
+    const managedAsyncFailures = includeManagedAsyncFailures ? this.#managedAsyncBranchFailures : [];
     if ((!erroredNodes.length && !managedAsyncFailures.length) || this.#lifecycle.abortSuccessful) {
       return;
     }

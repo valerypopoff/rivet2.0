@@ -40,6 +40,9 @@ export type RecordedEventsMap = OverrideProperties<
     /** Called when a graph or a subgraph has finished. */
     graphFinish: WithOptionalExecution<{ graphId: GraphId; outputs: GraphOutputs }>;
 
+    /** Called when root outputs are available before managed async branches finish. */
+    graphOutputsReady: WithOptionalExecution<{ graphId: GraphId; outputs: GraphOutputs }>;
+
     /** Called when a graph or subgraph has been aborted. */
     graphAbort: WithOptionalExecution<{ graphId: GraphId; error?: string; successful: boolean }>;
 

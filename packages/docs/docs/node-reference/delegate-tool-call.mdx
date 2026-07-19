@@ -62,9 +62,11 @@ waits for it to settle. Put a **Start Async Branch** node immediately after the
 message output when the message should only trigger that work. The async node
 returns immediately; its downstream work can overlap the tools and later LLM
 rounds. The async branch remains owned by the root run, so Rivet still waits for
-it before the whole graph returns. Desktop web-app previews and hosted WebSocket
-actions can display a status sent by this branch while work continues; a regular
-HTTP action cannot display it before the action response arrives.
+it before the root lifecycle finishes. A web-app action can return its final
+foreground response before that branch settles. Desktop web-app previews and
+hosted WebSocket actions can display a status sent by this branch while work
+continues; a regular HTTP action cannot stream the intermediate status, but its
+final response is no longer held behind the async branch.
 
 Within one tool round, an early message branch can feed a later node
 that also consumes the final tool result. If a consumer is still waiting for the

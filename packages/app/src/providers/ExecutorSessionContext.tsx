@@ -212,7 +212,9 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
           runtime.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
         }
         if (shouldSettlePendingRequest) {
-          if (message === 'done') {
+          if (message === 'graphOutputsReady') {
+            runtime.resolvePendingGraphExecution(requestId, (data as { outputs: unknown }).outputs as any);
+          } else if (message === 'done') {
             runtime.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
           } else if (message === 'abort') {
             runtime.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));

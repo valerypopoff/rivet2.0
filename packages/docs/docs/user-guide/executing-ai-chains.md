@@ -49,8 +49,9 @@ An ordinary pre-tool branch must finish before tool dispatch. Put a **Start Asyn
 Branch** node directly after the message output when the message should only
 trigger work such as `setWebAppStatus`. The async node returns immediately, so
 its downstream work can overlap the tools and later LLM rounds. The branch
-remains managed by the root run, so the whole graph waits for it before returning
-even though the Delegate does not.
+remains managed by the root run. In a web app, the final foreground response is
+returned as soon as it is ready even if that async branch is still running; the
+processor keeps owning the branch until the full run settles.
 Desktop previews and hosted WebSocket actions can show the intermediate status
 while work continues; a regular HTTP action cannot display it before the action
 response arrives.

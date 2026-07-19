@@ -215,6 +215,180 @@ void describe('GraphProcessor managed async branches', () => {
     assert.equal(runSettled, true);
   });
 
+  void it('returns foreground graph outputs early while the root lifecycle still owns the async branch', async () => {
+    const source = makeTestNode('source');
+    const trigger = makeAsyncNode();
+    const asyncLeaf = makeTestNode('async-leaf');
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'async-outputs-ready',
+      [source, trigger, asyncLeaf, graphOutput],
+      [
+        connect(source.id, trigger.id, 'input1'),
+        connect(trigger.id, asyncLeaf.id, 'input', 'output1'),
+        connect(source.id, graphOutput.id, 'value'),
+      ],
+    );
+    const branchStarted = deferred();
+    const releaseBranch = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({
+      cost: { type: 'number', value: 2 },
+      output: { type: 'string', value: 'ready' },
+    }));
+    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async (inputs) => {
+      branchStarted.resolve();
+      await releaseBranch.promise;
+      return {
+        cost: { type: 'number', value: 3 },
+        output: inputs['input' as PortId]!,
+      };
+    });
+
+    const processor = createProcessor(graph);
+    const lifecycleEvents: string[] = [];
+    let publishedOutputs: Outputs | undefined;
+    let completedOutputs: Outputs | undefined;
+    processor.on('graphOutputsReady', ({ outputs }) => {
+      lifecycleEvents.push('outputs-ready');
+      publishedOutputs = outputs;
+    });
+    processor.on('graphFinish', () => lifecycleEvents.push('graph-finish'));
+    processor.on('done', ({ results }) => {
+      lifecycleEvents.push('done');
+      completedOutputs = results;
+    });
+
+    const outputsPromise = processor.processGraph(testProcessContext(), {}, {}, { returnWhenGraphOutputsReady: true });
+    await branchStarted.promise;
+    const outputs = await withTimeout(outputsPromise, 'foreground graph outputs');
+
+    assert.equal(outputs.result?.value, 'ready');
+    assert.equal(outputs.cost?.value, 2);
+    assert.equal(publishedOutputs, outputs);
+    assert.equal(processor.isRunning, true);
+    assert.deepEqual(lifecycleEvents, ['outputs-ready']);
+
+    releaseBranch.resolve();
+    await withTimeout(processor.waitForRunCompletion(), 'managed async branch completion');
+
+    assert.equal(processor.isRunning, false);
+    assert.equal(outputs.cost?.value, 2);
+    assert.equal(completedOutputs?.cost?.value, 5);
+    assert.notEqual(completedOutputs, outputs);
+    assert.deepEqual(lifecycleEvents, ['outputs-ready', 'graph-finish', 'done']);
+  });
+
+  void it('keeps the full lifecycle boundary when early-output mode has no pending async work', async () => {
+    const source = makeTestNode('source');
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'no-async-outputs-ready',
+      [source, graphOutput],
+      [connect(source.id, graphOutput.id, 'value')],
+    );
+    const finishStarted = deferred();
+    const releaseFinish = deferred();
+    const processor = createProcessor(graph);
+    processor.on('finish', async () => {
+      finishStarted.resolve();
+      await releaseFinish.promise;
+    });
+
+    let runSettled = false;
+    const run = processor
+      .processGraph(testProcessContext(), {}, {}, { returnWhenGraphOutputsReady: true })
+      .finally(() => {
+        runSettled = true;
+      });
+
+    await withTimeout(finishStarted.promise, 'the normal finish boundary');
+    await Promise.resolve();
+    assert.equal(runSettled, false);
+
+    releaseFinish.resolve();
+    const outputs = await withTimeout(run, 'the full graph lifecycle');
+    assert.equal(outputs.result?.value, 'source');
+    assert.equal(runSettled, true);
+  });
+
+  void it('keeps the full lifecycle boundary when foreground work fails before early publication', async () => {
+    const source = makeTestNode('failing-source');
+    const graph = makeGraph('foreground-error-before-outputs-ready', [source], []);
+    AsyncTestNodeImpl.handlers.set(source.id, () => {
+      throw new Error('foreground exploded');
+    });
+    const finishStarted = deferred();
+    const releaseFinish = deferred();
+    const processor = createProcessor(graph);
+    processor.on('finish', async () => {
+      finishStarted.resolve();
+      await releaseFinish.promise;
+    });
+
+    let runSettled = false;
+    const run = processor
+      .processGraph(testProcessContext(), {}, {}, { returnWhenGraphOutputsReady: true })
+      .then(
+        (outputs) => ({ outputs, status: 'fulfilled' as const }),
+        (error: unknown) => ({ error, status: 'rejected' as const }),
+      )
+      .finally(() => {
+        runSettled = true;
+      });
+
+    await withTimeout(finishStarted.promise, 'the failed graph finish boundary');
+    await Promise.resolve();
+    assert.equal(runSettled, false);
+
+    releaseFinish.resolve();
+    const outcome = await withTimeout(run, 'the failed full graph lifecycle');
+    assert.equal(outcome.status, 'rejected');
+    assert.match(
+      String('error' in outcome ? outcome.error : ''),
+      /foreground-error-before-outputs-ready.*failing-source/s,
+    );
+    assert.equal(runSettled, true);
+  });
+
+  void it('reports a late async failure through completion without retracting published outputs', async () => {
+    const source = makeTestNode('source');
+    const trigger = makeAsyncNode();
+    const asyncLeaf = makeTestNode('async-leaf');
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'async-late-error',
+      [source, trigger, asyncLeaf, graphOutput],
+      [
+        connect(source.id, trigger.id, 'input1'),
+        connect(trigger.id, asyncLeaf.id, 'input', 'output1'),
+        connect(source.id, graphOutput.id, 'value'),
+      ],
+    );
+    const branchStarted = deferred();
+    const releaseBranch = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'ready' } }));
+    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async () => {
+      branchStarted.resolve();
+      await releaseBranch.promise;
+      throw new Error('late async failure');
+    });
+
+    const processor = createProcessor(graph);
+    const lifecycleEvents: string[] = [];
+    processor.on('graphError', () => lifecycleEvents.push('graph-error'));
+    processor.on('error', () => lifecycleEvents.push('error'));
+    processor.on('graphFinish', () => lifecycleEvents.push('graph-finish'));
+
+    const outputsPromise = processor.processGraph(testProcessContext(), {}, {}, { returnWhenGraphOutputsReady: true });
+    await branchStarted.promise;
+    const outputs = await outputsPromise;
+    assert.equal(outputs.result?.value, 'ready');
+
+    releaseBranch.resolve();
+    await assert.rejects(processor.waitForRunCompletion(), /async-late-error.*async-leaf/s);
+    assert.deepEqual(lifecycleEvents, ['graph-error', 'error']);
+  });
+
   void it('attributes async node failures to the failing node without failing the trigger node', async () => {
     const source = makeTestNode('source');
     const trigger = makeAsyncNode();

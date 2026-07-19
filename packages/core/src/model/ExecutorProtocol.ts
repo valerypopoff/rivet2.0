@@ -35,6 +35,7 @@ export type SerializedProcessEventMap = {
   graphError: WithExecution<{ graph: NodeGraph; error: Error | string }>;
   webAppStoragePatch: { storagePatch: RivetWebAppStorage };
   graphFinish: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;
+  graphOutputsReady: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;
   graphAbort: WithExecution<{ successful: boolean; graph: NodeGraph; error?: Error | string }>;
   nodeStart: WithExecution<{ node: ChartNode; inputs: Inputs; processId: ProcessId }>;
   nodeFinish: WithExecution<{
@@ -100,6 +101,7 @@ export type ProcessEventMessageMap = {
   graphStart: SerializedProcessEventMap['graphStart'];
   webAppStoragePatch: SerializedProcessEventMap['webAppStoragePatch'];
   graphFinish: SerializedProcessEventMap['graphFinish'];
+  graphOutputsReady: SerializedProcessEventMap['graphOutputsReady'];
   partialOutput: SerializedProcessEventMap['partialOutput'];
   progress: SerializedProcessEventMap['progress'];
   nodeOutputsCleared: SerializedProcessEventMap['nodeOutputsCleared'];
@@ -152,6 +154,7 @@ export type OutgoingMessageMap = {
     projectPath?: string | null;
     useEditorCache?: boolean;
     captureNodeTimings?: boolean;
+    returnWhenGraphOutputsReady?: boolean;
     webAppStorage?: RivetWebAppStorage;
   };
   abort: { requestId?: RemoteRunRequestId } | undefined;

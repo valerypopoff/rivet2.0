@@ -131,7 +131,8 @@ dispatch, and its ordinary branch must settle before the tools start. Normal
 tool-result branches start after the Delegate finishes. Put a **Start Async
 Branch** node immediately after the message output when that work should overlap
 the tools and later LLM rounds; the async trigger returns immediately, while the
-root graph still waits for all managed async work before returning.
+root lifecycle still owns all managed async work. In a web app, the final
+foreground Chat response can be displayed before that async work finishes.
 Consumers still waiting for the final LLM response or another late input remain
 in ordinary post-LLM scheduling. If an already-ready pre-tool path itself enters
 a cycle, Loop Controller, Race Inputs, or a foreground rejoin, Rivet reports the

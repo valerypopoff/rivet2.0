@@ -74,6 +74,7 @@ export function useRemoteExecutor() {
   const environmentProvider = useEnvironmentProvider();
   const store = useStore();
   const activeGraphRequestIdRef = useRef<RemoteRunRequestId | null>(null);
+  const earlyResultRequestIdsRef = useRef(new Set<RemoteRunRequestId>());
   const webAppStoragePatchCallbacksByRequestIdRef = useRef(
     new Map<RemoteRunRequestId, (storagePatch: RivetWebAppStorage) => void>(),
   );
@@ -110,6 +111,8 @@ export function useRemoteExecutor() {
   const remoteDebugger = useRemoteDebugger({
     onDisconnect: () => {
       clearActiveRemoteRunRequest(activeGraphRequestIdRef);
+      earlyResultRequestIdsRef.current.clear();
+      webAppStoragePatchCallbacksByRequestIdRef.current.clear();
       executorSession.setActiveGraphRunRequestId(null);
       if (store.get(projectState).metadata.id !== project.metadata.id) {
         return;
@@ -235,6 +238,10 @@ export function useRemoteExecutor() {
           break;
         case 'done':
           executorSession.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
+          if (requestId) {
+            earlyResultRequestIdsRef.current.delete(requestId);
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
             executorSession.setActiveGraphRunRequestId(null);
@@ -242,6 +249,13 @@ export function useRemoteExecutor() {
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.done(data);
           }
+          break;
+        case 'graphOutputsReady':
+          if (requestId) {
+            earlyResultRequestIdsRef.current.add(requestId);
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          }
+          executorSession.resolvePendingGraphExecution(requestId, (data as { outputs: GraphOutputs }).outputs);
           break;
         case 'webAppStoragePatch': {
           const callback = requestId ? webAppStoragePatchCallbacksByRequestIdRef.current.get(requestId) : undefined;
@@ -256,6 +270,10 @@ export function useRemoteExecutor() {
         }
         case 'abort':
           executorSession.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
+          if (requestId) {
+            earlyResultRequestIdsRef.current.delete(requestId);
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
             executorSession.setActiveGraphRunRequestId(null);
@@ -314,6 +332,10 @@ export function useRemoteExecutor() {
           break;
         case 'error':
           executorSession.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
+          if (requestId) {
+            earlyResultRequestIdsRef.current.delete(requestId);
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
             executorSession.setActiveGraphRunRequestId(null);
@@ -436,6 +458,7 @@ export function useRemoteExecutor() {
         projectPath: loadedProject.path,
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
+        returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady,
         ...(options.webAppStorage === undefined ? {} : { webAppStorage: options.webAppStorage }),
       };
 
@@ -452,6 +475,9 @@ export function useRemoteExecutor() {
             }
           },
           onRequestSettled: (requestId) => {
+            if (earlyResultRequestIdsRef.current.has(requestId)) {
+              return;
+            }
             webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
             clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
             if (requestId === executorSession.getActiveGraphRunRequestId()) {

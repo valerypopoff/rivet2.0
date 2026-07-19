@@ -91,6 +91,7 @@ export async function runUiGraphAction(options: {
       remoteStoragePatch = { ...remoteStoragePatch, ...storagePatch };
     },
     requireLiveRun: true,
+    returnWhenGraphOutputsReady: true,
     throwOnError: true,
     waitForResults: true,
     storedValueStore: browserStoredValues.store,

@@ -105,8 +105,25 @@ that accompanied a tool-call round. Its persisted output id remains
 batch, without a Delegate setting or persisted execution-mode flag. An ordinary
 branch must settle before tools begin. A `Start Async Branch` node at that
 boundary returns immediately and lets the remaining branch work overlap the
-tools, while the root run continues to own and await it. The normal `Output` and
-`Tool Result Message` branches activate only after the Delegate finishes.
+tools, while the root run continues to own it. Web-app actions opt into the
+processor's two-phase result contract: when foreground scheduling produces the
+graph outputs first, `graphOutputsReady` releases the action result while the
+processor stays Running; `graphFinish`, `done`, cleanup, and late async errors
+remain behind `waitForRunCompletion()`. The normal `Output` and `Tool Result
+Message` branches activate only after the Delegate finishes.
+
+The debugger server derives its dynamic-run options from the canonical `run`
+protocol type and forwards the payload structurally, normalizing only transport
+fields such as frozen outputs and a nullable project path. Do not reconstruct
+that payload as a second handwritten field list. `graphOutputsReady` is also a
+fallback-safe lifecycle message: if its original outputs cannot be serialized,
+the transport sends warning outputs instead of dropping the early boundary and
+making the client wait for `done`.
+
+The early `graphOutputsReady` payload is a snapshot. Its derived `cost` reflects
+work completed at that boundary and does not mutate afterward. The processor's
+canonical output object remains unseeded until finalization, so `graphFinish`
+and `done` include cost from managed async branches that settle later.
 
 Root ownership keeps an async branch alive when its source processor finishes
 normally, but it does not detach the branch from source cancellation. Managed

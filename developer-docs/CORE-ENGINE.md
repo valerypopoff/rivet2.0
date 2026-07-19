@@ -743,13 +743,35 @@ foreground immediately. Graphs containing this node deliberately fall back from
 the fast acyclic scheduler until that scheduler has equivalent managed-branch
 coverage.
 
-The root processor owns a per-run managed-task registry. Root `processGraph(...)`
-drains it to a fixed point before graph errors, `graphFinish`, `done`, `finish`,
-and the returned promise settle. A task may encounter another Start Async Branch
-and register more work during that drain. Work launched repeatedly by the same
-graph/node trigger is serialized in invocation order; independent triggers may
-overlap. Background is intentionally not the user-facing term because these
-branches remain observable async work in the current run:
+The root processor owns a per-run managed-task registry and drains it to a fixed
+point before `graphFinish`, `done`, and `finish`. A task may encounter another
+Start Async Branch and register more work during that drain. Work launched
+repeatedly by the same graph/node trigger is serialized in invocation order;
+independent triggers may overlap. Background is intentionally not the
+user-facing term because these branches remain observable async work in the
+current run.
+
+Ordinary `processGraph(...)` callers keep the full-lifecycle behavior. Callers
+that set `returnWhenGraphOutputsReady` receive a two-phase run when foreground
+scheduling completes while managed work is still pending: core fills the
+foreground-derived `cost`, emits root `graphOutputsReady`, and resolves the
+result promise without emitting terminal lifecycle events. The processor stays
+Running. `waitForRunCompletion()` observes the later drain, errors,
+`graphFinish`, `done`, and `finish`. Web-app action paths enable this mode so a
+Chat response is not held behind a side-effect-only branch. Local/Node executor
+owners defer abort-listener, recorder, debugger, code-runner, cache, and active
+processor cleanup until `waitForRunCompletion()` settles. Remote execution
+transports forward `graphOutputsReady` separately from `done`; the result waiter
+settles on either event while run routing remains active until the real terminal
+event. If no managed work remains, or foreground processing fails before an
+early publication, the result promise retains ordinary full-lifecycle semantics
+and settles only after terminal cleanup and `finish` listeners. An async failure
+after early publication is reported through normal processor error events and
+the completion promise, but cannot retract an action result already delivered.
+Costs added only by later async work are therefore not part of an
+already-serialized early result.
+
+The ownership rules are:
 
 - root-graph async slices reuse the still-running root graph-run identity and
   suppress synthetic graph lifecycle events; a branch originating in a

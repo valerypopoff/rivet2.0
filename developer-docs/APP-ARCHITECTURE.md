@@ -342,6 +342,20 @@ The global Go To search indexes UI graph names, descriptions, and component text
 
 Web-app component selection is cross-pane: selecting a settings card highlights its preview frame, and selecting one or more preview frames highlights their settings cards. The builder reveals a newly selected preview component in the settings pane, or a settings-card selection in the preview pane, without moving focus or using `scrollIntoView`, so the current pane, fixed editor shell, and browser viewport stay put.
 
+Web-app editor runs pass `returnWhenGraphOutputsReady` through the shared
+`EditorGraphRunOptions`. Local execution returns the foreground output when core
+emits that boundary but keeps the processor registered, its abort listener
+attached, recording open, and execution chrome Running until
+`waitForRunCompletion()` settles. Remote execution resolves only the requesting
+web-app action on `graphOutputsReady`; it keeps request routing alive until
+`done`, `abort`, or `error`, but closes the response-bound browser-storage patch
+callback at the early boundary because the returned action result can no longer
+be amended. The remote app executor snapshots foreground browser-backed Stored
+Value changes before broadcasting `graphOutputsReady`, with root `graphFinish`
+as the fallback when there is no early boundary. Persistent writes from a later
+async branch require a host-backed stored-value store. Ordinary manual editor
+runs do not opt into the early-result contract.
+
 ### `OverlayTabs`
 
 Acts as the switchboard for overlay-like product areas such as prompt designer, Trivet, chat viewer, Data Studio, and other auxiliary workspace surfaces.

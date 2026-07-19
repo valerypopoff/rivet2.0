@@ -19,6 +19,7 @@ export type EditorGraphRunOptions = {
   onWebAppStoragePatch?: (storagePatch: RivetWebAppStorage) => void;
   storedValueStore?: RivetStoredValueStore;
   requireLiveRun?: boolean;
+  returnWhenGraphOutputsReady?: boolean;
   throwOnError?: boolean;
   to?: NodeId[];
   waitForResults?: boolean;

@@ -24,5 +24,8 @@ void test('app executor carries Stored Value snapshots and patches across remote
   assert.match(source, /storedValueStore: webAppStorage\?\.store/);
   assert.match(source, /webAppStorage\.getPatch\(\)/);
   assert.match(source, /'webAppStoragePatch'/);
+  assert.match(source, /onGraphOutputsReady: publishWebAppStoragePatch/);
+  assert.match(source, /onGraphFinish: publishWebAppStoragePatch/);
+  assert.match(source, /webAppStorageBoundaryPublished = true/);
   assert.doesNotMatch(source, /setWebAppStorage|getWebAppStorage/);
 });

@@ -1461,6 +1461,78 @@ void describe('createRivetWebAppHandler', () => {
     assert.deepEqual(result.statePatch, { result: 'hello' });
   });
 
+  void it('returns a web-app action result before its managed async branch settles', async () => {
+    const project = makeProject();
+    project.graphs[graphId]!.nodes.push(
+      {
+        data: {},
+        id: 'async-trigger' as never,
+        title: 'Start Async Branch',
+        type: 'startBackgroundBranch',
+        visualData: { x: 200, y: 120 },
+      } as never,
+      {
+        data: { functionName: 'waitForRelease', useErrorOutput: false, useFunctionNameInput: false },
+        id: 'async-call' as never,
+        title: 'Async side effect',
+        type: 'externalCall',
+        visualData: { x: 400, y: 120 },
+      } as never,
+    );
+    project.graphs[graphId]!.connections.push(
+      {
+        inputId: 'input1' as never,
+        inputNodeId: 'async-trigger' as never,
+        outputId: 'data' as never,
+        outputNodeId: 'input-node' as never,
+      },
+      {
+        inputId: 'arguments' as never,
+        inputNodeId: 'async-call' as never,
+        outputId: 'output1' as never,
+        outputNodeId: 'async-trigger' as never,
+      },
+    );
+    let releaseBranch!: () => void;
+    let reportBranchStarted!: () => void;
+    const branchRelease = new Promise<void>((resolve) => {
+      releaseBranch = resolve;
+    });
+    const branchStarted = new Promise<void>((resolve) => {
+      reportBranchStarted = resolve;
+    });
+    const actionAbortController = new AbortController();
+    const prepared = await prepareRivetWebAppAction(project, {
+      componentId: 'run-button',
+      createProcessorOptions: {
+        abortSignal: actionAbortController.signal,
+        externalFunctions: {
+          waitForRelease: async (value) => {
+            reportBranchStarted();
+            await branchRelease;
+            return value;
+          },
+        },
+      },
+      state: { prompt: 'hello' },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    const actionResultPromise = prepared.run();
+    await branchStarted;
+    const result = await actionResultPromise;
+
+    assert.deepEqual(result.statePatch, { result: 'hello' });
+    assert.equal(prepared.processor.isRunning, true);
+    assert.equal(getEventListeners(actionAbortController.signal, 'abort').length, 1);
+
+    releaseBranch();
+    await prepared.processor.waitForRunCompletion();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(prepared.processor.isRunning, false);
+    assert.equal(getEventListeners(actionAbortController.signal, 'abort').length, 0);
+  });
+
   void it('exposes setWebAppStatus to the action graph and forwards its message as progress', async () => {
     const project = makeExternalStatusProject();
     const progress: unknown[] = [];

@@ -2,6 +2,10 @@ export class ManagedAsyncBranches {
   readonly #pending = new Set<Promise<void>>();
   readonly #tailByKey = new Map<string, Promise<void>>();
 
+  get hasPending(): boolean {
+    return this.#pending.size > 0;
+  }
+
   enqueue(key: string, run: () => Promise<void>, onError: (error: unknown) => void): void {
     const previous = this.#tailByKey.get(key) ?? Promise.resolve();
     const tracked = previous
