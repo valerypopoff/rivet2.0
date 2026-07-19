@@ -6,29 +6,97 @@ sidebar_label: Delegate Tool Call
 
 # Delegate Tool Call Node
 
-The Delegate Tool Call node routes a tool call object to a handler graph.
+The Delegate Tool Call node routes tool calls to handler graphs or registered
+external functions.
 
 It is useful after an LLM returns a tool call and each tool should be implemented by a Rivet graph.
 
+When an [LLM Chat](./llm-chat.mdx) node has both **Tool use** and
+**Auto-continue after toolcalls run** enabled, connecting its **Tool Calls**
+output directly to one Delegate Tool Call **Tool Call** input creates a tool
+continuation connection automatically. The same wire carries calls to the
+Delegate and results back to the still-running LLM Chat node; you do not add a
+return wire or choose a separate execution mode.
+
+This automatic upgrade does not apply when the LLM Chat node uses **Run per
+item**. In that mode the wire stays ordinary and each split LLM invocation keeps
+the internal auto-continuation path. A single connected Delegate result cannot
+safely represent multiple parallel split indexes.
+
 ## Inputs
 
-| Title     | Data Type | Description                   |
-| --------- | --------- | ----------------------------- |
-| Tool Call | `object`  | Tool call object to delegate. |
+| Title     | Data Type              | Description                                                                                                         |
+| --------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Tool Call | `object` or `object[]` | Tool call data to delegate. Connected LLM auto-continuation handles every call in a model round through this input. |
 
 ## Outputs
 
-| Title          | Data Type                          | Description                                        |
-| -------------- | ---------------------------------- | -------------------------------------------------- |
-| Output         | `string` or `string[]`             | Output returned by the delegated handler.          |
-| Message Output | `chat-message`, `object`, or array | Handler output shaped for prompt/message assembly. |
+| Title                                           | Data Type                          | Description                                                                                                                   |
+| ----------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Output                                          | `string` or `string[]`             | Output returned by the delegated handler or handlers.                                                                         |
+| Tool Result Message                             | `chat-message`, `object`, or array | Handler output shaped as function-result messages for prompt assembly or LLM continuation.                                    |
+| Message (fires before the tool call is invoked) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. The output activates before tool dispatch. |
 
 ## Settings
 
-| Setting                    | Description                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------ |
-| Auto Delegate              | Finds a subgraph whose name matches the tool name.                             |
-| Fall Back To External Call | If no graph matches, attempts host external functions before unknown handling. |
-| Passthrough Errors         | Returns external-function errors as output strings instead of aborting.        |
-| Handlers                   | Manual mapping from tool name to graph when auto delegate is off.              |
-| Unknown Handler            | Graph to run when no specific handler is found.                                |
+| Setting                    | Description                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Auto Delegate              | Prefers an exact subgraph-name match, then uses the first name containing the tool name for compatibility.                     |
+| Fall Back To External Call | If no graph matches, attempts host external functions before unknown handling.                                                 |
+| Passthrough Errors         | Returns external-function errors as output strings instead of aborting.                                                        |
+| Handlers                   | Manual mapping from tool name to graph when auto delegate is off.                                                              |
+| Unknown Handler            | Graph to run when no specific handler is found.                                                                                |
+
+When this node is the connected auto-continuation Delegate, **Message (fires
+before the tool call is invoked)** activates automatically for nonblank text.
+Rivet runs that output branch before dispatching the tool batch. **Output** and
+**Tool Result Message** still start only after the Delegate finishes. Empty or
+whitespace-only text does not activate the pre-tool branch.
+
+Costs reported by live handler graphs or external functions contribute to the
+Delegate and root graph cost. Cached delegated records do not retain that cost,
+so surfacing a previously completed tool result does not charge it again.
+
+An ordinary pre-tool branch remains part of the Delegate round, so tool dispatch
+waits for it to settle. Put a **Start Async Branch** node immediately after the
+message output when the message should only trigger that work. The async node
+returns immediately; its downstream work can overlap the tools and later LLM
+rounds. The async branch remains owned by the root run, so Rivet still waits for
+it before the whole graph returns. Desktop web-app previews and hosted WebSocket
+actions can display a status sent by this branch while work continues; a regular
+HTTP action cannot display it before the action response arrives.
+
+Within one tool round, an early message branch can feed a later node
+that also consumes the final tool result. If a consumer is still waiting for the
+LLM's final output or another late input, Rivet reuses completed continuation
+branch outputs after the LLM finishes and runs that consumer once. An output
+from an earlier tool round is not treated as a fresh dependency of the current
+round.
+
+## Connected Auto-Continuation Behavior
+
+- Both LLM Chat and Delegate Tool Call remain **Running** while a tool round is
+  in progress. No extra waiting state is used.
+- The Delegate runs once per model tool-call round. Multiple calls from one
+  round are handled together, and each round appears as a separate run page on
+  the Delegate node.
+- If no eligible Delegate is connected, LLM Chat keeps its built-in internal
+  auto-delegation behavior.
+- Connecting more than one eligible Delegate is an error. The canvas shows the
+  ambiguous continuation wires in red and dashed styling.
+- Unknown tool calls, or raw calls returned after the maximum tool-round limit,
+  fall through to ordinary downstream handling rather than being swallowed. If
+  that raw output contains multiple calls, enable **Run per item** on this node
+  or select one call before it; a normal single run accepts one raw call.
+- A Delegate that is actively used for this continuation relationship cannot be
+  frozen or supplied as a preloaded run boundary, because every round must
+  execute its real handler work. If stale frozen/preloaded output reaches the
+  runtime, the run stops before tool side effects and asks you to clear it.
+
+Consumers that are still waiting for the final LLM response, a tool result, or
+another late input stay with ordinary post-LLM scheduling. A pre-tool branch
+that is already ready cannot be partially moved through a cycle, Loop
+Controller, Race Inputs, or a foreground rejoin: Rivet stops before invoking
+the tools and reports the unsupported branch. Put a **Start Async Branch**
+boundary before an independently runnable, closed side-effect subtree when it
+should overlap the tools.

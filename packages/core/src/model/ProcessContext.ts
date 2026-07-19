@@ -30,6 +30,7 @@ import type {
   RivetStoredValueReadResult,
   RivetStoredValueSetResult,
 } from './StoredValueStore.js';
+import type { ToolCallContinuation } from './ToolCallContinuation.js';
 
 export type ProcessContext = {
   settings: RuntimeSettings;
@@ -116,6 +117,12 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
 
   /** Output ports with at least one active immediate downstream consumer in this graph run. */
   activeOutputPortIds: ReadonlySet<PortId>;
+
+  /**
+   * Executes the uniquely connected Delegate Tool Call node for one LLM tool round.
+   * Present only for an auto-continuing LLM Chat node with one eligible continuation connection.
+   */
+  toolCallContinuation?: ToolCallContinuation;
 
   /** True when this exact node is the direct terminal selected by run-to execution. */
   isDirectRunTarget: boolean;

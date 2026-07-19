@@ -269,6 +269,7 @@ const sidebars = {
         'node-reference/regex-match',
         'node-reference/passthrough',
         'node-reference/race-inputs',
+        'node-reference/start-async-branch',
       ],
     },
     {

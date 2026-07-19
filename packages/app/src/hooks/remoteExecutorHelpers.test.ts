@@ -40,6 +40,13 @@ function makeTextNode(nodeId: string, text = 'value'): ChartNode {
   return node;
 }
 
+function makeStartAsyncBranchNode(nodeId: string): ChartNode {
+  const node = registry.createDynamic('startBackgroundBranch');
+  node.id = nodeId as NodeId;
+  node.title = nodeId;
+  return node;
+}
+
 function makeConnection(outputNodeId: string, inputNodeId: string, inputId = 'input'): NodeConnection {
   return {
     outputNodeId: outputNodeId as NodeId,
@@ -120,6 +127,98 @@ test('getEditorRunFromPlan preloads only direct boundary inputs for a selected l
   assert.deepEqual(plan.preserveNodeIds, ['source', 'selected', 'side', 'unrelated-source', 'unrelated-sink']);
   assert.deepEqual(plan.preloadNodeIds, ['selected', 'side']);
   assert.deepEqual(plan.runToNodeIds, ['downstream']);
+});
+
+test('getEditorRunFromPlan rejects descendants whose async trigger would otherwise be preloaded', () => {
+  const source = makeTextNode('source');
+  const trigger = makeStartAsyncBranchNode('async-trigger');
+  const descendant = makeTextNode('async-descendant', '{{input}}');
+  const graph: NodeGraph = {
+    metadata: { id: graphId, name: 'Graph' },
+    nodes: [source, trigger, descendant],
+    connections: [
+      {
+        outputNodeId: source.id,
+        outputId: 'output' as PortId,
+        inputNodeId: trigger.id,
+        inputId: 'input1' as PortId,
+      },
+      {
+        outputNodeId: trigger.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: descendant.id,
+        inputId: 'input' as PortId,
+      },
+    ],
+  };
+
+  assert.throws(
+    () => getEditorRunFromPlan(makeProject(graph), graphId, descendant.id, registry),
+    /inside the async branch started by async-trigger/,
+  );
+
+  const triggerPlan = getEditorRunFromPlan(makeProject(graph), graphId, trigger.id, registry);
+  assert.deepEqual(triggerPlan.nodesToRun, [trigger.id, descendant.id]);
+  assert.deepEqual(triggerPlan.preloadNodeIds, [source.id]);
+  assert.deepEqual(triggerPlan.runToNodeIds, [descendant.id]);
+});
+
+test('getEditorRunFromPlan permits descendants of a disabled async trigger', () => {
+  const trigger = makeStartAsyncBranchNode('async-trigger');
+  trigger.disabled = true;
+  const descendant = makeTextNode('async-descendant', '{{input}}');
+  const graph: NodeGraph = {
+    metadata: { id: graphId, name: 'Graph' },
+    nodes: [trigger, descendant],
+    connections: [
+      {
+        outputNodeId: trigger.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: descendant.id,
+        inputId: 'input' as PortId,
+      },
+    ],
+  };
+
+  const plan = getEditorRunFromPlan(makeProject(graph), graphId, descendant.id, registry);
+  assert.deepEqual(plan.nodesToRun, [descendant.id]);
+  assert.deepEqual(plan.preloadNodeIds, []);
+});
+
+test('getEditorRunFromPlan rejects a nested async trigger whose outer trigger would be preloaded', () => {
+  const source = makeTextNode('source');
+  const outerTrigger = makeStartAsyncBranchNode('outer-trigger');
+  const innerTrigger = makeStartAsyncBranchNode('inner-trigger');
+  const descendant = makeTextNode('async-descendant', '{{input}}');
+  const graph: NodeGraph = {
+    metadata: { id: graphId, name: 'Graph' },
+    nodes: [source, outerTrigger, innerTrigger, descendant],
+    connections: [
+      {
+        outputNodeId: source.id,
+        outputId: 'output' as PortId,
+        inputNodeId: outerTrigger.id,
+        inputId: 'input1' as PortId,
+      },
+      {
+        outputNodeId: outerTrigger.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: innerTrigger.id,
+        inputId: 'input1' as PortId,
+      },
+      {
+        outputNodeId: innerTrigger.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: descendant.id,
+        inputId: 'input' as PortId,
+      },
+    ],
+  };
+
+  assert.throws(
+    () => getEditorRunFromPlan(makeProject(graph), graphId, innerTrigger.id, registry),
+    /inside the async branch started by outer-trigger/,
+  );
 });
 
 test('getEditorRunToPlan preserves frozen nodes outside the run-to dependency slice', () => {

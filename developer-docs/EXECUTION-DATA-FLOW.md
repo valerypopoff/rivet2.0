@@ -67,13 +67,92 @@ Frozen entries are scoped by graph id and node id inside each project execution 
 
 The concrete `FrozenNodeOutputsByGraph` shape is graph id -> node id -> `Outputs[]`, and each `Outputs` map is keyed by a real port id (`PortId`). Tests and helpers should build frozen fixtures with branded port ids such as `['output' as PortId]`; using an unbranded object key like `output` can pass loose runtime checks but fails the TypeScript project build because it is not a typed `Outputs` map.
 
-The app only offers new freezes for replayable data-producing nodes. It blocks Comment, Abort Graph, Graph Output, Create Dataset, Append to Dataset, Replace Dataset, Raise Event, and Play Audio because those nodes either have no meaningful replayable output, define graph boundaries, or depend on graph aborts, dataset mutations, or host side effects that frozen replay intentionally does not perform. Unfreeze should remain available for any stale frozen entry so the user can clear in-memory state.
+The app only offers new freezes for replayable data-producing nodes. It blocks Comment, Abort Graph, Graph Output, Create Dataset, Append to Dataset, Replace Dataset, Raise Event, Play Audio, and Start Async Branch because those nodes either have no meaningful replayable output, define graph/scheduling boundaries, or depend on graph aborts, dataset mutations, or host side effects that frozen replay intentionally does not perform. Unfreeze should remain available for any stale frozen entry so the user can clear in-memory state.
 
 Browser execution can replay any frozen value that `structuredClone(...)` can clone. Internal Node executor runs must additionally send the frozen snapshot through the app-to-executor JSON run message, so Node-mode freezes and internal executor run payloads validate that frozen outputs are transport-safe. Explicit JavaScript `undefined` values are encoded with debugger transport sentinels and decoded by the internal Node executor before replay, including optional `undefined` fields inside LLM message objects. Values such as `BigInt`, circular references, `NaN`, infinities, functions, symbols, typed arrays, and class instances should fail before the run message is sent instead of breaking or lossy-serializing through the executor websocket path.
 
 Replay is not `preloadNodeData(...)`. A frozen node still receives its real current inputs in `nodeStart`, emits a normal `nodeFinish`, uses a normal process id, writes `nodeResults`, and schedules downstream nodes exactly like a computed node. The core frozen-output resolver resets its replay counter per graph run and keys lookup by the processor's current graph id plus node id. If a node is invoked more times within the same graph run than there are captured output instances, the resolver reuses the last captured output. A node inside a reusable subgraph is therefore frozen for every invocation of that graph node while the project remains open.
 
 The Browser and internal Node live run-from paths treat frozen boundary outputs as available preload data. If a boundary dependency has both previous execution history and frozen output data, the frozen output wins. Preload event suppression remains unchanged; frozen boundary data is only used to seed the run boundary and must not create duplicate output pages. Live `Run to here` also preserves visible execution data for frozen nodes that are outside the selected target's dependency slice, so a frozen node does not visually lose its output when the user runs to an unrelated node. Frozen nodes inside the run-to slice are allowed to replay normally and update through the ordinary node lifecycle. External Remote Debugger runs, recording playback, and Trivet/test execution do not consult frozen outputs, even for run-from preload planning or run-to visual preservation. While an external Remote Debugger target is selected, `VisualNode` hides frozen presentation state without clearing it; if the user disconnects before any accepted remote execution event arrives, the same frozen outputs become visible again. Once an accepted external Remote Debugger run event arrives, the active `useRemoteExecutor` subscriber clears visible `frozenNodeOutputsState`, and `ExecutorSessionProvider` applies the same flush to inactive project execution snapshots so stale local frozen data cannot reappear after remote execution has replaced that project's run history.
+
+## Connected Tool Continuation Execution
+
+An ordinary persisted connection from an eligible LLM Chat `function-calls`
+output to exactly one Delegate Tool Call `function-call` input is interpreted as
+a request/response continuation edge while tool use and auto-continuation are
+enabled. The edge is not rewritten and no reverse connection is stored. With no
+eligible Delegate, LLM Chat uses its internal delegation path; multiple eligible
+Delegate targets are an execution error.
+
+`isSplitRun` / **Run per item** LLM Chat nodes are not eligible for this upgrade.
+Their connection remains ordinary and every split invocation keeps internal
+auto-continuation. A shared connected Delegate completion cannot be assigned
+safely to multiple parallel split indexes.
+
+The LLM Chat node keeps its original running process while the processor invokes
+the connected Delegate once per model tool-call round. Each Delegate invocation
+has its own process id and emits normal `nodeStart` / `nodeFinish` events, so the
+existing per-node process pages show repeated tool rounds. Partial outputs from
+the live handler or external function are emitted against that same Delegate
+process id. No additional waiting state is introduced. If auto-continuation ends
+on raw calls because the round limit was reached or a tool is unknown, the
+reservation is released and the ordinary downstream Delegate scheduling path
+receives those calls.
+
+`Message (fires before the tool call is invoked)` is the nonblank model text
+that accompanied a tool-call round. Its persisted output id remains
+`assistant-message`. The processor runs this branch before dispatching the tool
+batch, without a Delegate setting or persisted execution-mode flag. An ordinary
+branch must settle before tools begin. A `Start Async Branch` node at that
+boundary returns immediately and lets the remaining branch work overlap the
+tools, while the root run continues to own and await it. The normal `Output` and
+`Tool Result Message` branches activate only after the Delegate finishes.
+
+Root ownership keeps an async branch alive when its source processor finishes
+normally, but it does not detach the branch from source cancellation. Managed
+branches subscribe to both the source processor run's abort signal and the root
+run's abort signal. In particular, if a parent `Race Inputs` node cancels a
+losing subgraph invocation after that subgraph has launched async work, the
+managed branch is cancelled with the same race-loser reason and the root drain
+does not wait for an orphaned side effect. A temporary continuation slice uses
+its real same-graph owner as that source, not the temporary processor that may
+already have settled after firing the async trigger.
+
+Continuation branches reuse the current root/graph execution identity and emit
+their real downstream node events into the same execution stream. Their helper
+processors suppress synthetic graph start/finish and preload events, inherit
+shared run state and cancellation, and detach all temporary event/lifecycle
+subscriptions when the branch ends. This is not ordinary subgraph lineage and
+must not create an extra graph-run entry for every tool round. Successful Graph
+Output writes merge through the same first-value boundary policy, including an
+explicit output named `cost`; the derived total cost only fills that boundary
+when no graph output supplied it.
+
+Each round keeps its own fresh branch-output set. That lets a pre-tool message
+branch supply a dependency to the same round's final tool-result branch,
+but a previous round's output is not treated as newly completed in a later
+round. After the owning LLM node finishes, the processor promotes the latest
+completed continuation nodes into the parent scheduler. A downstream node that
+was deferred because it also needs the final LLM result or another late input can
+then run once, while continuation nodes that already ran are propagated rather
+than executed again.
+
+An active continuation Delegate is not a valid frozen or preloaded-output
+target. Its output represents one side of an in-progress request/response
+exchange and must be recomputed for each round. The runtime rejects either
+boundary before starting tool side effects instead of silently ignoring an
+editor/run-from decision.
+
+Temporary continuation processors do not partially take ownership of nodes
+whose execution semantics belong to a cycle, loop/race attachment, Loop
+Controller, Race Inputs, self-loop, or foreground rejoin. A candidate still
+waiting on the final LLM/tool result, another late input, or an unsafe completed
+dependency remains for normal parent scheduling, and the unsafe dependency is
+not preloaded. If an already-ready pre-tool candidate is itself unsafe, or the
+owning LLM/Delegate is unsafe, the round fails before tool side effects. A Start
+Async Branch trigger is an unconditional traversal boundary: its complete
+closed subtree is handed to the root-owned async scheduler instead of being
+partially sliced by the continuation processor.
 
 ## Node library and Execution Identity
 
@@ -957,7 +1036,7 @@ Persisted app-side execution payloads now share one storage/preview utility laye
 - inline and fullscreen output surfaces use `nodeOutputViewModel.ts` as the app-level view-model boundary for selected process data, output/error/custom-error state, warning sections, generic output-section metadata, body-source selection, display-copy text, and JSON-copy payloads. `NodeRunDataWithRefs.status.error` may coexist with `outputData` or `splitOutputData` when a node emitted partial/stored output before failing, so rendering and copy treat error status as additive whenever visible outputs exist. Error banners render above preserved output bodies with their own spacing; only error-only runs with no visible stored outputs use the error-only body/copy path. The view model treats absent wrappers and hidden-only output maps as empty body content while keeping warnings as dedicated warning sections. It also owns generic output-section policy: visible-port filtering, compact first-port selection, definition-title/fallback labels, and header visibility/sizing. Its generic section helper returns an ordered section list; renderer-only details such as React keys, counter calculation, and per-section fullscreen copy buttons stay in [`RenderDataOutputs`](../packages/app/src/components/nodeOutput/RenderDataOutputs.tsx) and [`OutputSectionHeader`](../packages/app/src/components/renderDataValue/OutputSectionHeader.tsx). Per-section copy buttons use the same display-copy projection rules as the main `Copy value` action but serialize only the selected port/structured section body, without prepending the section label. `NodeInlineOutput.tsx` and `NodeFullscreenOutput.tsx` should stay focused on React layout and controls, while `renderNodeOutputBody.tsx` and `RenderDataOutputs` should render the body and sections chosen by the view model instead of recomputing split-output or section-label policy. Keep generic [`RenderDataValue`](../packages/app/src/components/RenderDataValue.tsx) focused on data-type rendering; it should not import node-output policy.
 - nodes whose visible output shape differs from the raw output port map use `getCopyValueData` projectors from `nodeOutputCopyValueProjectors.ts` so copy behavior stays aligned with the custom output UI
 - fullscreen node-output search also depends on the same restore/payload model: generic rendered text is searched from the current fullscreen page DOM through `fullscreenOutputSearch.ts`, while large ref-backed text/JSON-like previews participate through `LargeStoredValuePreview` search providers so search can target the full restored text instead of only the currently visible excerpt
-- preload/run-from paths therefore restore ref-backed values back into full `DataValue` payloads through the shared reader layer before passing them to the executor, instead of each consumer hand-rolling `restoreStoredInputsOrOutputs(...)` calls. The selected run-from node is intentionally not preloaded, because the editor contract is to rerun the selected node and downstream nodes while reusing only boundary inputs from prior results.
+- preload/run-from paths therefore restore ref-backed values back into full `DataValue` payloads through the shared reader layer before passing them to the executor, instead of each consumer hand-rolling `restoreStoredInputsOrOutputs(...)` calls. The selected run-from node is intentionally not preloaded, because the editor contract is to rerun the selected node and downstream nodes while reusing only boundary inputs from prior results. The planner rejects a selected node inside a Start Async Branch subtree: its non-replayable trigger would otherwise become one of those preloaded boundaries. Running from the owning Start Async Branch remains valid and makes replaying the full async subtree explicit.
 
 ## Browser vs Remote: Event Delivery and React Rendering
 

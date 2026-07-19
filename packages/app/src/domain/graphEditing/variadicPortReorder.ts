@@ -31,6 +31,11 @@ export const VARIADIC_PORT_REORDER_SPECS: Partial<Record<ChartNode['type'], Vari
   join: { inputPrefix: 'input', kind: 'input-only' },
   passthrough: { inputPrefix: 'input', kind: 'input-output-pair', outputPrefix: 'output' },
   raceInputs: { inputPrefix: 'input', kind: 'input-only' },
+  startBackgroundBranch: {
+    inputPrefix: 'input',
+    kind: 'input-output-pair',
+    outputPrefix: 'output',
+  },
 };
 
 export function getVariadicPortReorderSpec(node: Pick<ChartNode, 'type'>): VariadicPortReorderSpec | undefined {
@@ -222,11 +227,7 @@ export function buildVariadicPortReorderMappings(options: {
   }
 
   return {
-    inputPortMapping: mapVariadicPairPortIdMapping(
-      primaryMapping,
-      options.spec.outputPrefix,
-      options.spec.inputPrefix,
-    ),
+    inputPortMapping: mapVariadicPairPortIdMapping(primaryMapping, options.spec.outputPrefix, options.spec.inputPrefix),
     outputPortMapping: primaryMapping,
   };
 }
@@ -241,8 +242,7 @@ export function reorderVariadicNodeConnections(options: {
   const outputPortMapping = options.outputPortMapping ?? {};
 
   return options.connections.map((connection) => {
-    const nextInputId =
-      connection.inputNodeId === options.nodeId ? inputPortMapping[connection.inputId] : undefined;
+    const nextInputId = connection.inputNodeId === options.nodeId ? inputPortMapping[connection.inputId] : undefined;
     const nextOutputId =
       connection.outputNodeId === options.nodeId ? outputPortMapping[connection.outputId] : undefined;
 

@@ -9,7 +9,12 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import { coerceType } from '../../utils/coerceType.js';
-import { delegateToolCall, isDelegatedToolCallRecord, type DelegatedToolCallRecord } from './toolCallDelegation.js';
+import {
+  buildDelegatedToolCallOutputs,
+  delegateToolCall,
+  isDelegatedToolCallRecord,
+  type DelegatedToolCallRecord,
+} from './toolCallDelegation.js';
 
 export type DelegateFunctionCallNode = ChartNode<'delegateFunctionCall', DelegateFunctionCallNodeData>;
 
@@ -49,7 +54,7 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
 
     inputs.push({
       id: 'function-call' as PortId,
-      dataType: 'object',
+      dataType: ['object', 'object[]'] as const,
       title: 'Tool Call',
       coerced: true,
       required: true,
@@ -72,8 +77,16 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     outputs.push({
       id: 'message' as PortId,
       dataType: ['chat-message', 'chat-message[]', 'object', 'object[]'] as const,
-      title: 'Message Output',
-      description: 'Maps the output for use directly with an Assemble Prompt node and GPT.',
+      title: 'Tool Result Message',
+      description: 'Maps the tool result into a chat message for a later LLM request.',
+    });
+
+    outputs.push({
+      id: 'assistant-message' as PortId,
+      dataType: 'string',
+      title: 'Message (fires before the tool call is invoked)',
+      description:
+        'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
     });
 
     return outputs;
@@ -96,7 +109,8 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
         type: 'toggle',
         label: 'Auto Delegate',
         dataKey: 'autoDelegate',
-        helperMessage: 'Automatically delegates tool calls to the subgraph containing the same name as the tool.',
+        helperMessage:
+          'Prefers a subgraph whose name exactly matches the tool, then falls back to the first name containing it.',
       },
       {
         type: 'toggle',
@@ -166,16 +180,7 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
 
     const result = await delegateToolCall(functionCallInput, context, this.data);
 
-    return {
-      ['output' as PortId]: {
-        type: 'string',
-        value: result.outputString,
-      },
-      ['message' as PortId]: {
-        type: 'chat-message',
-        value: result.message,
-      },
-    };
+    return buildDelegatedToolCallOutputs([result.record], undefined, result.cost);
   }
 }
 
@@ -185,34 +190,6 @@ function getDelegatedToolCallRecords(input: object): DelegatedToolCallRecord[] {
   }
 
   return isDelegatedToolCallRecord(input) ? [input] : [];
-}
-
-function buildDelegatedToolCallOutputs(records: DelegatedToolCallRecord[]): Outputs {
-  if (records.length === 1) {
-    const [record] = records;
-
-    return {
-      ['output' as PortId]: {
-        type: 'string',
-        value: record!.output,
-      },
-      ['message' as PortId]: {
-        type: 'chat-message',
-        value: record!.message,
-      },
-    };
-  }
-
-  return {
-    ['output' as PortId]: {
-      type: 'string[]',
-      value: records.map((record) => record.output),
-    },
-    ['message' as PortId]: {
-      type: 'chat-message[]',
-      value: records.map((record) => record.message),
-    },
-  };
 }
 
 export const delegateFunctionCallNode = nodeDefinition(DelegateFunctionCallNodeImpl, 'Delegate Tool Call');

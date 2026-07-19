@@ -97,6 +97,9 @@ export * from './nodes/DidRunNode.js';
 import { passthroughNode } from './nodes/PassthroughNode.js';
 export * from './nodes/PassthroughNode.js';
 
+import { startBackgroundBranchNode } from './nodes/StartBackgroundBranchNode.js';
+export * from './nodes/StartBackgroundBranchNode.js';
+
 import { popNode } from './nodes/PopNode.js';
 export * from './nodes/PopNode.js';
 
@@ -315,6 +318,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(coalesceNode)
     .register(didRunNode)
     .register(passthroughNode)
+    .register(startBackgroundBranchNode)
     .register(popNode)
     .register(setGlobalNode)
     .register(getGlobalNode)

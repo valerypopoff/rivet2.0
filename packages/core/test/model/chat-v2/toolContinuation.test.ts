@@ -236,6 +236,48 @@ describe('runChatV2PipelineWithToolContinuation', () => {
     assert.equal((secondPromptMessages.at(-1) as any).toolName, 'bar');
   });
 
+  it('delegates a complete model round through the connected Delegate callback', async () => {
+    const fooCall = makeToolCall('call_foo', 'foo');
+    const barCall = makeToolCall('call_bar', 'bar');
+    const rounds: Array<{ calls: StreamedFunctionCall[]; preToolMessage: string }> = [];
+    let pipelineRunCount = 0;
+    let singleCallFallbackCount = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        functions: [makeFunction('foo'), makeFunction('bar')],
+        runPipeline: async (options: RunChatV2PipelineOptions) => {
+          pipelineRunCount++;
+          return pipelineRunCount === 1
+            ? makePipelineResult('I will run both tools.', [fooCall, barCall])
+            : makePipelineResult('final answer', [], (options.prompt as any).value);
+        },
+        delegateToolCall: async (toolCall) => {
+          singleCallFallbackCount++;
+          return makeDelegatedToolResultMessage(toolCall, 'fallback');
+        },
+        delegateToolCallRound: async (calls, preToolMessage) => {
+          rounds.push({ calls, preToolMessage });
+          return calls.map((call) => makeDelegatedToolResultMessage(call, `${call.name} result`));
+        },
+      }),
+    );
+
+    assert.equal(singleCallFallbackCount, 0);
+    assert.equal(rounds.length, 1);
+    assert.deepEqual(
+      rounds[0]!.calls.map((call) => call.id),
+      ['call_foo', 'call_bar'],
+    );
+    assert.equal(rounds[0]!.preToolMessage, 'I will run both tools.');
+    assert.equal(result.response, 'final answer');
+    const secondPromptMessages = result.requestMessages;
+    assert.equal(secondPromptMessages.at(-2)?.type, 'function');
+    assert.equal((secondPromptMessages.at(-2) as any).toolName, 'foo');
+    assert.equal(secondPromptMessages.at(-1)?.type, 'function');
+    assert.equal((secondPromptMessages.at(-1) as any).toolName, 'bar');
+  });
+
   it('emits delegated tool call records when auto-continue reaches a final answer', async () => {
     const fooCall = makeToolCall('call_foo', 'foo');
     const barCall = makeToolCall('call_bar', 'bar');
@@ -287,7 +329,13 @@ describe('runChatV2PipelineWithToolContinuation', () => {
 
           return runCount === 1
             ? makePipelineResult('', [fooCall], undefined, toolRoundUsage, options.outputUsage)
-            : makePipelineResult('final answer', [], (options.prompt as any).value, finalRoundUsage, options.outputUsage);
+            : makePipelineResult(
+                'final answer',
+                [],
+                (options.prompt as any).value,
+                finalRoundUsage,
+                options.outputUsage,
+              );
         },
         delegateToolCall: async (toolCall) => makeToolResultMessage(toolCall, `${toolCall.name} result`),
       }),

@@ -3,6 +3,7 @@ import { strict as assert } from 'node:assert';
 import {
   DelegateFunctionCallNodeImpl,
   type DelegateFunctionCallNode,
+  type GraphId,
   type InternalProcessContext,
   type Outputs,
   type PortId,
@@ -19,7 +20,7 @@ function createNode(data: Partial<DelegateFunctionCallNode['data']> = {}) {
   });
 }
 
-function createContext(onExternalFunction: (argumentsValue: Record<string, unknown>) => string) {
+function createContext(onExternalFunction: (argumentsValue: Record<string, unknown>) => unknown) {
   return {
     project: {
       graphs: {},
@@ -29,6 +30,32 @@ function createContext(onExternalFunction: (argumentsValue: Record<string, unkno
         onExternalFunction(argumentsValue),
     },
     signal: new AbortController().signal,
+  } as unknown as InternalProcessContext;
+}
+
+function createSubgraphContext(
+  graphs: Array<{ id: GraphId; name: string }>,
+  onProcessGraph: (graphId: GraphId) => Outputs,
+) {
+  return {
+    project: {
+      graphs: Object.fromEntries(
+        graphs.map(({ id, name }) => [
+          id,
+          {
+            metadata: { id, name },
+            nodes: [],
+            connections: [],
+          },
+        ]),
+      ),
+    },
+    externalFunctions: {},
+    signal: new AbortController().signal,
+    contextValues: {},
+    createSubProcessor: (graphId: GraphId) => ({
+      processGraph: async () => onProcessGraph(graphId),
+    }),
   } as unknown as InternalProcessContext;
 }
 
@@ -49,6 +76,21 @@ function delegatedToolCallRecord(name: string, output: string, id = `call_${name
 }
 
 describe('DelegateFunctionCallNodeImpl', () => {
+  it('does not require a setting to enable its pre-tool message output', () => {
+    const node = DelegateFunctionCallNodeImpl.create();
+    const editors = createNode().getEditors();
+
+    assert.equal('runAssistantMessageImmediately' in node.data, false);
+    assert.equal(
+      editors.some((editor) => 'dataKey' in editor && editor.dataKey === 'autoDelegate'),
+      true,
+    );
+    assert.equal(
+      editors.some((editor) => 'dataKey' in editor && editor.dataKey === 'runAssistantMessageImmediately'),
+      false,
+    );
+  });
+
   it('delegates a direct function call object', async () => {
     const node = createNode();
     let receivedArguments: Record<string, unknown> | undefined;
@@ -78,6 +120,78 @@ describe('DelegateFunctionCallNodeImpl', () => {
       name: 'call_1',
       toolName: 'foo',
     });
+    assert.deepEqual(result['assistant-message' as PortId], {
+      type: 'control-flow-excluded',
+      value: undefined,
+    });
+  });
+
+  it('preserves the cost returned by an external-function fallback', async () => {
+    const result = await createNode().process(
+      {
+        ['function-call' as PortId]: {
+          type: 'object',
+          value: { name: 'foo', arguments: {}, id: 'call_1' },
+        },
+      },
+      createContext(() => ({ type: 'string', value: 'ok', cost: 0.75 })),
+    );
+
+    assert.deepEqual(result['cost' as PortId], { type: 'number', value: 0.75 });
+  });
+
+  it('prefers an exact auto-delegate graph name and preserves its derived cost', async () => {
+    const partialGraphId = 'partial-handler' as GraphId;
+    const exactGraphId = 'exact-handler' as GraphId;
+    let selectedGraphId: GraphId | undefined;
+
+    const result = await createNode().process(
+      {
+        ['function-call' as PortId]: {
+          type: 'object',
+          value: { name: 'foo', arguments: {}, id: 'call_1' },
+        },
+      },
+      createSubgraphContext(
+        [
+          { id: partialGraphId, name: 'foo helper' },
+          { id: exactGraphId, name: 'foo' },
+        ],
+        (graphId) => {
+          selectedGraphId = graphId;
+          return {
+            ['output' as PortId]: { type: 'string', value: 'exact output' },
+            ['cost' as PortId]: { type: 'number', value: 1.25 },
+          };
+        },
+      ),
+    );
+
+    assert.equal(selectedGraphId, exactGraphId);
+    assert.equal(result.output?.value, 'exact output');
+    assert.deepEqual(result['cost' as PortId], { type: 'number', value: 1.25 });
+  });
+
+  it('retains the containing-name auto-delegate fallback when no exact graph exists', async () => {
+    const matchingGraphId = 'compatible-handler' as GraphId;
+    let selectedGraphId: GraphId | undefined;
+
+    await createNode().process(
+      {
+        ['function-call' as PortId]: {
+          type: 'object',
+          value: { name: 'foo', arguments: {}, id: 'call_1' },
+        },
+      },
+      createSubgraphContext([{ id: matchingGraphId, name: 'legacy foo handler' }], (graphId) => {
+        selectedGraphId = graphId;
+        return {
+          ['output' as PortId]: { type: 'string', value: 'fallback output' },
+        };
+      }),
+    );
+
+    assert.equal(selectedGraphId, matchingGraphId);
   });
 
   it('delegates the legacy Chat function-call output object', async () => {
@@ -87,7 +201,17 @@ describe('DelegateFunctionCallNodeImpl', () => {
 
     applyStreamedFunctionCallOutputs(
       legacyChatOutputs,
-      [[{ type: 'function', id: 'call_1', name: 'foo', arguments: '{"value":123}', lastParsedArguments: { value: 123 } }]],
+      [
+        [
+          {
+            type: 'function',
+            id: 'call_1',
+            name: 'foo',
+            arguments: '{"value":123}',
+            lastParsedArguments: { value: 123 },
+          },
+        ],
+      ],
       false,
       false,
     );
@@ -113,7 +237,17 @@ describe('DelegateFunctionCallNodeImpl', () => {
 
     applyStreamedFunctionCallOutputs(
       legacyChatOutputs,
-      [[{ type: 'function', id: 'call_1', name: 'foo', arguments: '{"value":123}', lastParsedArguments: { value: 123 } }]],
+      [
+        [
+          {
+            type: 'function',
+            id: 'call_1',
+            name: 'foo',
+            arguments: '{"value":123}',
+            lastParsedArguments: { value: 123 },
+          },
+        ],
+      ],
       false,
       true,
     );
@@ -162,8 +296,18 @@ describe('DelegateFunctionCallNodeImpl', () => {
   it('keeps the message output compatible with old object-based wiring', () => {
     const node = createNode();
     const messageOutput = node.getOutputDefinitions().find((output) => output.id === 'message');
+    const assistantMessageOutput = node.getOutputDefinitions().find((output) => output.id === 'assistant-message');
 
     assert.deepEqual(messageOutput?.dataType, ['chat-message', 'chat-message[]', 'object', 'object[]']);
+    assert.equal(messageOutput?.title, 'Tool Result Message');
+    assert.deepEqual(assistantMessageOutput, {
+      id: 'assistant-message',
+      dataType: 'string',
+      title: 'Message (fires before the tool call is invoked)',
+      description:
+        'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
+    });
+    assert.equal(node.getOutputDefinitions().some((output) => output.id === ('cost' as PortId)), false);
   });
 
   it('surfaces a single already-delegated tool call record without running it again', async () => {
@@ -187,6 +331,7 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.equal(result.output?.type, 'string');
     assert.equal(result.output?.value, 'stored output');
     assert.deepEqual(result.message?.value, delegatedToolCallRecord('foo', 'stored output').message);
+    assert.equal(result['cost' as PortId], undefined);
   });
 
   it('surfaces multiple already-delegated tool call records as arrays without running them again', async () => {

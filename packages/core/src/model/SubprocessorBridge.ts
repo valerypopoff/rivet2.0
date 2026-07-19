@@ -33,29 +33,32 @@ export function wireSubprocessorEvents(
   processor: GraphProcessor,
   parentEmitter: Emittery<ProcessEvents>,
   parentState: {
+    autoCleanup?: boolean;
     isPaused: () => boolean;
     pause: () => void;
     resume: () => void;
   },
-): void {
+): () => void {
   // Some successful graph-abort paths can emit node terminals just after their
   // graph-level terminal event. Keep passive forwarding alive for the
   // subprocessor object lifetime so remote-debugger/recorder consumers do not
   // miss those node terminals.
-  processor.on('nodeError', (event) => parentEmitter.emit('nodeError', event));
-  processor.on('nodeFinish', (event) => parentEmitter.emit('nodeFinish', event));
-  processor.on('partialOutput', (event) => parentEmitter.emit('partialOutput', event));
-  processor.on('progress', (event) => parentEmitter.emit('progress', event));
-  processor.on('nodeExcluded', (event) => parentEmitter.emit('nodeExcluded', event));
-  processor.on('nodeStart', (event) => parentEmitter.emit('nodeStart', event));
-  processor.on('graphAbort', (event) => parentEmitter.emit('graphAbort', event));
-  processor.on('graphError', (event) => parentEmitter.emit('graphError', event));
-  processor.on('userInput', (event) => parentEmitter.emit('userInput', event));
-  processor.on('graphStart', (event) => parentEmitter.emit('graphStart', event));
-  processor.on('graphFinish', (event) => parentEmitter.emit('graphFinish', event));
-  processor.on('nodeOutputsCleared', (event) => parentEmitter.emit('nodeOutputsCleared', event));
-  processor.on('globalSet', (event) => parentEmitter.emit('globalSet', event));
-  processor.on('newAbortController', (event) => parentEmitter.emit('newAbortController', event));
+  const passiveUnsubscribers = [
+    processor.on('nodeError', (event) => parentEmitter.emit('nodeError', event)),
+    processor.on('nodeFinish', (event) => parentEmitter.emit('nodeFinish', event)),
+    processor.on('partialOutput', (event) => parentEmitter.emit('partialOutput', event)),
+    processor.on('progress', (event) => parentEmitter.emit('progress', event)),
+    processor.on('nodeExcluded', (event) => parentEmitter.emit('nodeExcluded', event)),
+    processor.on('nodeStart', (event) => parentEmitter.emit('nodeStart', event)),
+    processor.on('graphAbort', (event) => parentEmitter.emit('graphAbort', event)),
+    processor.on('graphError', (event) => parentEmitter.emit('graphError', event)),
+    processor.on('userInput', (event) => parentEmitter.emit('userInput', event)),
+    processor.on('graphStart', (event) => parentEmitter.emit('graphStart', event)),
+    processor.on('graphFinish', (event) => parentEmitter.emit('graphFinish', event)),
+    processor.on('nodeOutputsCleared', (event) => parentEmitter.emit('nodeOutputsCleared', event)),
+    processor.on('globalSet', (event) => parentEmitter.emit('globalSet', event)),
+    processor.on('newAbortController', (event) => parentEmitter.emit('newAbortController', event)),
+  ];
 
   const controlUnsubscribers: Array<() => void> = [
     processor.on('pause', () => {
@@ -70,7 +73,7 @@ export function wireSubprocessorEvents(
     }),
   ];
 
-  processor.onAny((event, data) => {
+  const unsubscribeAny = processor.onAny((event, data) => {
     if (event.startsWith('globalSet:')) {
       void parentEmitter.emit(event, data);
     }
@@ -86,25 +89,47 @@ export function wireSubprocessorEvents(
     controlUnsubscribers.forEach((unsubscribe) => unsubscribe());
   };
 
-  controlUnsubscribers.push(subscribeOwnGraphRunLifecycle(processor, cleanupControls));
+  if (parentState.autoCleanup !== false) {
+    controlUnsubscribers.push(subscribeOwnGraphRunLifecycle(processor, cleanupControls));
+  }
+
+  return () => {
+    cleanupControls();
+    passiveUnsubscribers.forEach((unsubscribe) => unsubscribe());
+    unsubscribeAny();
+  };
 }
 
 export function wireSubprocessorLifecycle(
   processor: GraphProcessor,
   options: {
+    autoCleanup?: boolean;
     signal?: AbortSignal;
     parentAbortSignal: AbortSignal;
     onParentPause: (listener: () => void) => () => void;
     onParentResume: (listener: () => void) => () => void;
   },
-): void {
+): () => void {
+  let unsubscribePendingAbort: (() => void) | undefined;
+  const abortProcessor = (successful: boolean, error?: Error | string) => {
+    if (processor.isRunning) {
+      void processor.abort(successful, error);
+      return;
+    }
+
+    unsubscribePendingAbort ??= processor.on('graphStart', () => {
+      unsubscribePendingAbort?.();
+      unsubscribePendingAbort = undefined;
+      void processor.abort(successful, error);
+    });
+  };
   const abortFromSignal = () => {
     const abortReason = getGraphAbortReasonFromSignal(options.signal);
-    void processor.abort(abortReason?.successful ?? false, abortReason?.error);
+    abortProcessor(abortReason?.successful ?? false, abortReason?.error);
   };
   const abortFromParent = () => {
     const abortReason = getGraphAbortReasonFromSignal(options.parentAbortSignal);
-    void processor.abort(abortReason?.successful ?? false, abortReason?.error);
+    abortProcessor(abortReason?.successful ?? false, abortReason?.error);
   };
   const pauseProcessor = () => {
     void processor.pause();
@@ -119,6 +144,7 @@ export function wireSubprocessorLifecycle(
   const unsubscribers: Array<() => void> = [
     () => options.signal?.removeEventListener('abort', abortFromSignal),
     () => options.parentAbortSignal.removeEventListener('abort', abortFromParent),
+    () => unsubscribePendingAbort?.(),
     options.onParentPause(pauseProcessor),
     options.onParentResume(resumeProcessor),
   ];
@@ -133,5 +159,13 @@ export function wireSubprocessorLifecycle(
     unsubscribers.forEach((unsubscribe) => unsubscribe());
   };
 
-  unsubscribers.push(subscribeOwnGraphRunLifecycle(processor, cleanup));
+  if (options.autoCleanup !== false) {
+    unsubscribers.push(subscribeOwnGraphRunLifecycle(processor, cleanup));
+  }
+  if (options.signal?.aborted) {
+    abortFromSignal();
+  } else if (options.parentAbortSignal.aborted) {
+    abortFromParent();
+  }
+  return cleanup;
 }

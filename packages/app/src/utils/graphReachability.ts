@@ -526,12 +526,12 @@ function collectGraphDependencyEdges(options: {
 
           let hasUnmatchedConnectedTool = false;
           for (const toolName of connectedToolNames) {
-            // Match the runtime resolver exactly: it delegates to the first graph whose
-            // name contains the function name, rather than treating every similarly
-            // named graph as a possible target.
-            const targetGraph = (Object.entries(project.graphs) as Array<[GraphId, NodeGraph]>).find(
-              ([, candidateGraph]) => candidateGraph.metadata?.name?.includes(toolName),
-            );
+            // Match the runtime resolver exactly: prefer an exact graph-name match,
+            // then fall back to the first graph whose name contains the tool name.
+            const graphEntries = Object.entries(project.graphs) as Array<[GraphId, NodeGraph]>;
+            const targetGraph =
+              graphEntries.find(([, candidateGraph]) => candidateGraph.metadata?.name === toolName) ??
+              graphEntries.find(([, candidateGraph]) => candidateGraph.metadata?.name?.includes(toolName));
 
             if (targetGraph) {
               edges.push({ kind: 'direct-static', targets: [targetGraph[0]] });

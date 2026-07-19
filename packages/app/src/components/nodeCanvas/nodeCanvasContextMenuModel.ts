@@ -1,6 +1,7 @@
 import {
   getNodePrefabInstancePrefabId,
   isNodePrefabInstanceNode,
+  resolveToolContinuationConnections,
   resolveNodePrefabInstance,
   type ChartNode,
   type FrozenNodeOutputsByGraph,
@@ -10,10 +11,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import type { ContextMenuContext } from '../ContextMenu.js';
 import type { ContextMenuData } from '../../hooks/useContextMenu.js';
-import {
-  canPreloadEditorRunFromPlan,
-  getEditorRunFromPlan,
-} from '../../hooks/remoteExecutorHelpers.js';
+import { canPreloadEditorRunFromPlan, getEditorRunFromPlan } from '../../hooks/remoteExecutorHelpers.js';
 import type { GraphRunRecord, GraphRunSelection, RunDataByNodeId } from '../../state/dataFlow.js';
 import { canFreezeNodeOutputs, canNodeTypeBeFrozen } from '../../utils/frozenNodeOutputs.js';
 import { canRearrangeVariadicNodePorts } from '../../domain/graphEditing/variadicPortReorder.js';
@@ -28,6 +26,7 @@ type NodeContextMenuTarget = {
 
 type FreezeTargetEligibility = NodeContextMenuTarget & {
   canFreeze: boolean;
+  freezeBlockedByToolContinuation: boolean;
   hasRetainedSuccessfulOutput: boolean;
   isAlreadyFrozen: boolean;
   isFreezableNodeType: boolean;
@@ -86,12 +85,32 @@ export function getNodeCanvasContextMenuContext({
     ? { nodeId: target.nodeId, nodeType: resolvedTargetNode!.type }
     : target;
   const isFrozen = Boolean(selectedGraphId && frozenNodeOutputs[selectedGraphId]?.[target.nodeId]?.length);
-  const scopedTargets = getNodeCanvasContextMenuScopedTargets({ nodesById, project, selectedNodeIds, target: effectiveTarget });
+  const scopedTargets = getNodeCanvasContextMenuScopedTargets({
+    nodesById,
+    project,
+    selectedNodeIds,
+    target: effectiveTarget,
+  });
   const frozenOutputsByNode = selectedGraphId ? frozenNodeOutputs[selectedGraphId] : undefined;
+  const selectedGraph = selectedGraphId ? project.graphs[selectedGraphId] : undefined;
+  const effectiveSelectedGraph = selectedGraph
+    ? {
+        ...selectedGraph,
+        nodes: selectedGraph.nodes.map((node) => resolveNodePrefabInstance(project, node)),
+      }
+    : undefined;
+  const toolContinuationDelegateNodeIds = new Set(
+    effectiveSelectedGraph
+      ? [...resolveToolContinuationConnections(effectiveSelectedGraph).values()].flatMap((resolution) =>
+          resolution.kind === 'connected' ? [resolution.delegateNode.id] : [],
+        )
+      : [],
+  );
   const freezeTargetEligibility = selectedGraphId
     ? scopedTargets.map((scopedTarget): FreezeTargetEligibility => {
         const isFreezableNodeType = canNodeTypeBeFrozen(scopedTarget.nodeType);
         const isAlreadyFrozen = Boolean(frozenOutputsByNode?.[scopedTarget.nodeId]?.length);
+        const freezeBlockedByToolContinuation = toolContinuationDelegateNodeIds.has(scopedTarget.nodeId);
         const hasRetainedSuccessfulOutput = canFreezeNodeOutputs({
           graphId: selectedGraphId,
           processData: lastRunPerNode[scopedTarget.nodeId],
@@ -100,7 +119,9 @@ export function getNodeCanvasContextMenuContext({
 
         return {
           ...scopedTarget,
-          canFreeze: isFreezableNodeType && !isAlreadyFrozen && hasRetainedSuccessfulOutput,
+          canFreeze:
+            isFreezableNodeType && !freezeBlockedByToolContinuation && !isAlreadyFrozen && hasRetainedSuccessfulOutput,
+          freezeBlockedByToolContinuation,
           hasRetainedSuccessfulOutput,
           isAlreadyFrozen,
           isFreezableNodeType,
@@ -231,6 +252,10 @@ function shouldHideDisabledFreezeForMissingOrFrozenOutputs(targets: FreezeTarget
 }
 
 function getSingleNodeFreezeDisabledReason(target: FreezeTargetEligibility): string | undefined {
+  if (target.freezeBlockedByToolContinuation) {
+    return 'A Delegate Tool Call used for auto-continuation cannot be frozen';
+  }
+
   if (!target.isFreezableNodeType) {
     return 'This node type cannot be frozen';
   }
@@ -239,6 +264,14 @@ function getSingleNodeFreezeDisabledReason(target: FreezeTargetEligibility): str
 }
 
 function getMultiNodeFreezeDisabledReason(targets: FreezeTargetEligibility[]): string | undefined {
+  if (targets.every((target) => target.freezeBlockedByToolContinuation)) {
+    return 'Auto-continuation Delegate Tool Call nodes cannot be frozen';
+  }
+
+  if (targets.some((target) => target.freezeBlockedByToolContinuation)) {
+    return 'Some selected Delegate Tool Call nodes are active auto-continuation handlers and cannot be frozen';
+  }
+
   if (targets.every((target) => !target.isFreezableNodeType)) {
     return 'None of the selected node types can be frozen';
   }
@@ -280,9 +313,7 @@ function getNodeCanvasContextMenuScopedTargets({
   return selectedTargets.length > 0 ? selectedTargets : [target];
 }
 
-export function getNodeCanvasContextMenuTarget(
-  target: ContextMenuData['data'],
-): NodeContextMenuTarget | undefined {
+export function getNodeCanvasContextMenuTarget(target: ContextMenuData['data']): NodeContextMenuTarget | undefined {
   const nodeType = target?.type.startsWith(NODE_CONTEXT_MENU_TYPE_PREFIX)
     ? target.type.slice(NODE_CONTEXT_MENU_TYPE_PREFIX.length)
     : '';

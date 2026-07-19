@@ -326,7 +326,9 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
         getOptionalNumberBodyLine('Frequency penalty', this.data.frequencyPenalty, this.data.useFrequencyPenaltyInput),
         getStopSequencesBodyLine(this.data),
         getOptionalNumberBodyLine('Seed', this.data.seed, this.data.useSeedInput),
-      ].filter((line): line is string => line !== undefined).join('\n'),
+      ]
+        .filter((line): line is string => line !== undefined)
+        .join('\n'),
     };
   }
 
@@ -337,6 +339,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       inputs,
       context,
     });
+    const toolCallContinuation = context.toolCallContinuation;
 
     if (runtime.cachedOutputs != null) {
       return runtime.cachedOutputs;
@@ -348,6 +351,16 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
           autoContinue: true,
           maxToolRounds: runtime.maxToolRounds,
           functions: runtime.functions,
+          delegateToolCallRound: toolCallContinuation
+            ? async (toolCalls, preToolMessage) => {
+                const results = await toolCallContinuation.run(toolCalls, preToolMessage);
+                return results.map((result) => ({
+                  type: 'chat-message' as const,
+                  value: result.message,
+                  delegatedToolCall: result.record,
+                }));
+              }
+            : undefined,
           delegateToolCall: async (toolCall) => {
             const delegated = await delegateToolCall(toolCall, context, {
               handlers: [],
@@ -365,6 +378,10 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
           },
         })
       : await runChatV2Pipeline(runtime.runOptions);
+
+    if (toolCallContinuation && result.functionCalls.length > 0) {
+      toolCallContinuation.release();
+    }
 
     if (runtime.cacheKey != null && runtime.editorCache != null) {
       runtime.editorCache.set(runtime.cacheKey, cloneLLMChatV2EditorCacheOutputs(result.commonOutputs));

@@ -42,6 +42,8 @@ Rivet reruns the selected node and the nodes downstream from it. Upstream and un
 
 If **Run from here** is unavailable, run the graph first so Rivet has the upstream outputs it needs to reuse.
 
+For nodes inside a **Start Async Branch** subtree, run from the owning Start Async Branch node instead; Rivet does not preload or partially replay an async trigger.
+
 ## Graph Inputs
 
 A graph has a set of inputs that can be thought of as the "arguments" to the graph. When calling the graph as a subgraph, or when calling the graph from your integrated code, you can pass in these inputs, which will be available to the nodes in the graph.

@@ -30,6 +30,7 @@ const UNFREEZABLE_NODE_TYPES = new Set<ChartNode['type']>([
   'replaceDataset',
   'raiseEvent',
   'playAudio',
+  'startBackgroundBranch',
 ]);
 
 export function canNodeTypeBeFrozen(nodeType: ChartNode['type']): boolean {

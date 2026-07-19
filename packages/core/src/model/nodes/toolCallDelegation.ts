@@ -3,6 +3,7 @@ import type { DataValue, ParsedAssistantChatMessageFunctionCall, ChatMessage } f
 import type { GraphId } from '../NodeGraph.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { PortId } from '../NodeBase.js';
+import type { Outputs } from '../GraphProcessor.js';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
 import { getError } from '../../utils/errors.js';
 
@@ -18,6 +19,8 @@ export type ToolCallDelegationResult = {
   outputString: string;
   message: ChatMessage;
   record: DelegatedToolCallRecord;
+  /** Cost from this live delegation. Kept out of the replay record so replay cannot charge it again. */
+  cost?: number;
 };
 
 export type DelegatedToolCallRecord = {
@@ -49,6 +52,54 @@ export function isDelegatedToolCallRecord(input: unknown): input is DelegatedToo
     typeof maybeMessage.name === 'string' &&
     (maybeMessage.toolName == null || typeof maybeMessage.toolName === 'string')
   );
+}
+
+export function buildDelegatedToolCallOutputs(
+  records: DelegatedToolCallRecord[],
+  preToolMessage?: string,
+  cost?: number,
+): Outputs {
+  const preToolMessageOutput =
+    preToolMessage == null
+      ? {
+          type: 'control-flow-excluded' as const,
+          value: undefined,
+        }
+      : {
+          type: 'string' as const,
+          value: preToolMessage,
+        };
+
+  const outputs: Outputs =
+    records.length === 1
+      ? {
+          ['output' as PortId]: {
+            type: 'string',
+            value: records[0]!.output,
+          },
+          ['message' as PortId]: {
+            type: 'chat-message',
+            value: records[0]!.message,
+          },
+          ['assistant-message' as PortId]: preToolMessageOutput,
+        }
+      : {
+          ['output' as PortId]: {
+            type: 'string[]',
+            value: records.map((record) => record.output),
+          },
+          ['message' as PortId]: {
+            type: 'chat-message[]',
+            value: records.map((record) => record.message),
+          },
+          ['assistant-message' as PortId]: preToolMessageOutput,
+        };
+
+  if (cost != null) {
+    outputs['cost' as PortId] = { type: 'number', value: cost };
+  }
+
+  return outputs;
 }
 
 export function normalizeFunctionCallInput(input: unknown): ParsedAssistantChatMessageFunctionCall {
@@ -144,9 +195,10 @@ export async function delegateToolCall(
   let handler: { key: string | undefined; value: GraphId } | undefined;
 
   if (config.autoDelegate) {
-    const matchingGraph = Object.values(context.project.graphs).find((graph) =>
-      graph.metadata?.name?.includes(functionCall.name),
-    );
+    const graphs = Object.values(context.project.graphs);
+    const matchingGraph =
+      graphs.find((graph) => graph.metadata?.name === functionCall.name) ??
+      graphs.find((graph) => graph.metadata?.name?.includes(functionCall.name));
     if (matchingGraph) {
       handler = { key: undefined, value: matchingGraph.metadata!.id! };
     }
@@ -167,6 +219,7 @@ export async function delegateToolCall(
             outputString,
             message: buildToolResultMessage(functionCall, outputString),
             record: buildDelegatedToolCallRecord(functionCall, outputString),
+            cost: result.cost,
           };
         } catch (error) {
           if (config.passthroughErrors) {
@@ -217,10 +270,12 @@ export async function delegateToolCall(
   const subprocessor = context.createSubProcessor(handler.value, { signal: context.signal });
   const outputs = await subprocessor.processGraph(context, subgraphInputs, context.contextValues);
   const outputString = coerceTypeOptional(outputs['output' as PortId], 'string') ?? '';
+  const cost = coerceTypeOptional(outputs['cost' as PortId], 'number');
 
   return {
     outputString,
     message: buildToolResultMessage(functionCall, outputString),
     record: buildDelegatedToolCallRecord(functionCall, outputString),
+    cost,
   };
 }

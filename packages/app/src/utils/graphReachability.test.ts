@@ -502,7 +502,7 @@ describe('graphReachability', () => {
     assert.deepEqual(sortGraphIds(report.unreachable), ['time-handler']);
   });
 
-  test('treats the runtime-selected auto-delegate tool graph as definite', () => {
+  test('prefers an exact auto-delegate graph name before the contains fallback', () => {
     const tool = makeNode('gptFunction', { name: 'weather' }, { id: 'tool' });
     const tools = makeNode('array', {}, { id: 'tools' });
     const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
@@ -527,13 +527,16 @@ describe('graphReachability', () => {
     );
     const matchingName = makeGraph('matching-name', 'Tools/weather');
     const laterMatchingName = makeGraph('later-matching-name', 'Archive/weather');
+    const exactName = makeGraph('exact-name', 'weather');
     const otherNamed = makeGraph('other-named', 'Other Named Graph');
 
-    const report = getGraphReachabilityReport(makeProject([main, matchingName, laterMatchingName, otherNamed], 'main'));
+    const report = getGraphReachabilityReport(
+      makeProject([main, matchingName, laterMatchingName, exactName, otherNamed], 'main'),
+    );
 
-    assert.deepEqual(sortGraphIds(report.definite), ['main', 'matching-name']);
+    assert.deepEqual(sortGraphIds(report.definite), ['exact-name', 'main']);
     assert.deepEqual(sortGraphIds(report.dynamic), []);
-    assert.deepEqual(sortGraphIds(report.unreachable), ['later-matching-name', 'other-named']);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['later-matching-name', 'matching-name', 'other-named']);
   });
 
   test('uses active Tool-to-Delegate paths as reachability roots outside the Main Graph flow', () => {

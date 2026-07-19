@@ -300,7 +300,7 @@ Current `Random number` behavior lives on the existing `randomNumber` node type 
 
 `Coalesce` is the control-flow merge node for "first usable input wins" graphs. It can consume `control-flow-excluded` inputs instead of being excluded by the processor, then scans its dynamic `Input N` ports in order and returns the first connected value that is not `control-flow-excluded`; the `Conditional` port only gates whether Coalesce itself ran and is not a candidate output. `null` and `undefined` are treated as real values by default for compatibility with existing graphs; the `Ignore 'null'` and `Ignore 'undefined'` settings opt into treating those payloads as skipped values so Coalesce continues to the next input. New Coalesce nodes default to a 190px canvas width so the app's inline ignore toggles have room without making the node large by default. The desktop app renders these settings as inline canvas toggles that write the same node data as the settings panel; core still keeps the active-setting text fallback for callers that render node bodies through `getBody()`.
 
-Numbered variadic ports derive their connected range through [`variadicPortIndex.ts`](../packages/core/src/model/nodes/variadicPortIndex.ts). `getNextVariadicPortIndex(...)` returns the highest matching connected index plus one for the trailing editable slot; Array, Did Run, Delay, Join, Passthrough, Race Inputs, Coalesce, Assemble Prompt, and Assemble Message use that policy. Loop Controller deliberately uses `getHighestVariadicPortIndex(...)` because it builds its own trailing input/default pair. The explicit policy literal retains existing parsing rather than normalizing serialized connections: `legacy` for Array, Assemble Prompt, Assemble Message, and Loop Controller keeps no-radix parsing; `decimal` for Did Run, Delay, Join, Passthrough, and Race Inputs keeps decimal parsing; `strict-positive` for Coalesce accepts only exact, positive, safe `inputN` ids. Do not silently make these policies stricter or more uniform without an explicit graph-compatibility change.
+Numbered variadic ports derive their connected range through [`variadicPortIndex.ts`](../packages/core/src/model/nodes/variadicPortIndex.ts). `getNextVariadicPortIndex(...)` returns the highest matching connected index plus one for the trailing editable slot; Array, Did Run, Delay, Join, Passthrough, Start Async Branch, Race Inputs, Coalesce, Assemble Prompt, and Assemble Message use that policy. Loop Controller deliberately uses `getHighestVariadicPortIndex(...)` because it builds its own trailing input/default pair. The explicit policy literal retains existing parsing rather than normalizing serialized connections: `legacy` for Array, Assemble Prompt, Assemble Message, and Loop Controller keeps no-radix parsing; `decimal` for Did Run, Delay, Join, Passthrough, Start Async Branch, and Race Inputs keeps decimal parsing; `strict-positive` for Coalesce accepts only exact, positive, safe `inputN` ids. Do not silently make these policies stricter or more uniform without an explicit graph-compatibility change.
 
 `Did Run` is a small control-flow adapter node. It has Coalesce-style dynamic `Input N` ports and one boolean `Ran` output. `GraphProcessor` already prevents normal node processing when any connected upstream value is `control-flow-excluded`, so the node implementation deliberately does not re-check payload truthiness or data type. If the processor invokes it with at least one dynamic input entry, it outputs `true`; if no dynamic inputs are connected, it outputs `control-flow-excluded`. This keeps the node's meaning focused on "did every connected branch run at all?" rather than "what values did those branches produce?" Its explanatory copy belongs in the settings panel through a read-only `info` editor; the node body intentionally stays empty and new nodes default to a compact 167px width.
 
@@ -500,7 +500,30 @@ intentionally split under
 - `chatV2Retry.ts` owns `Retry on non-200` defaults, repeat/cooldown normalization, and abort-safe repeat waits for LLM provider retries, including the zero-cooldown path before a repeat starts.
 - `chatV2Outputs.ts` owns provider-neutral output assembly: `Response` typing for structured formats, assistant/function-call outputs, usage/cost normalization, reusable control-flow exclusion for absent optional outputs, reasoning exclusion, request-status/request-error/request-body outputs, retry-attempt status/error arrays, and provider-failure output shape.
 - `chatV2Pipeline.ts` executes `ChatV2RequestPlan` and stays focused on provider-neutral orchestration, retry outcomes, provider-error decisions, and output assembly; `toolContinuation.ts` owns continuation. `aiSdkBridge.ts` adapts the planned request to Vercel AI SDK call signatures and retains a defensive zero-retry default for direct bridge callers. Rivet's request plan/retry loop is the single source of retry behavior and per-attempt status/error outputs. For structured response formats with an SDK output descriptor, `aiSdkBridge.ts` resolves the AI SDK's parsed `output` promise on a best-effort basis and `chatV2Outputs.ts` uses that parsed value for the `Response` output while keeping the assistant message text unchanged for chat history. Parsed-output failures fall back to the response text as a string instead of failing the node. Structured-output calls also ask `consumeAiSdkStream(...)` to collapse exact duplicate text blocks and normalize repeated parseable JSON text before partial-output updates or fallback parsing, because some AI SDK/provider combinations expose the same final JSON object more than once.
+- `toolContinuationConnection.ts` derives the optional connected-Delegate continuation relationship from ordinary graph data. It is eligible only for an enabled `llmChatV2` node with tool use and auto-continuation enabled, an exact `function-calls -> function-call` connection, and one enabled `delegateFunctionCall` target. Core execution and app presentation must consume this resolver instead of reimplementing endpoint checks.
 - `providerOptions.ts` keeps Custom provider requests on the conservative OpenAI-compatible path. Custom JSON object mode is represented by the raw `response_format: { type: "json_object" }` provider option instead of an SDK output descriptor, and the Custom provider factory does not request streamed usage via `stream_options.include_usage`; compatible providers can still return usage naturally, but Rivet does not force optional OpenAI stream metadata onto every custom endpoint. Provider factories also own the parsed request-body hook used by LLM Chat request diagnostics: the hook wraps the provider fetch function, records the body handed to the actual provider HTTP call, parses it for the `LLM request body` output, and deliberately omits request headers / Rivet-managed API key headers so the normal error formatter can remain payload-free while the explicit diagnostic remains a truthful body inspector.
+
+#### Connected Delegate tool continuation
+
+`GraphProcessor` supplies an optional owning-processor `ToolCallContinuation` through the LLM Chat process context. Its `run(...)` method delegates one whole model tool-call round and its `release()` method restores ordinary downstream scheduling for unresolved raw calls. This preserves the normal node boundary: `toolContinuation.ts` asks for a round to be delegated, while the processor owns graph scheduling, node lifecycle events, cancellation, cost aggregation, and downstream branches. When there is no eligible connected Delegate, the continuation object is absent and LLM Chat keeps the existing internal delegation path. More than one eligible connected Delegate is a hard graph error.
+
+Split-run LLM Chat nodes are intentionally excluded by `resolveToolContinuationConnection(...)`. Each split index keeps the internal continuation path and the persisted edge remains ordinary, because one connected Delegate completion cannot safely be shared across parallel indexes.
+
+For each model tool-call round, the processor emits a distinct Delegate `nodeStart`, starts every call in the round as one concurrent batch, and emits one Delegate `nodeFinish` with results kept in the model's original call order as scalar-or-array outputs. The LLM Chat process remains running while these Delegate invocations occur, and every Delegate round receives a new process id so existing execution-history paging can show repeated calls without inventing a `Waiting for tools` state. Partial outputs reported by a live handler or external function use that same Delegate process id instead of disappearing inside the continuation callback. The persisted graph edge remains a normal one-way `NodeConnection`; bidirectionality is a runtime interpretation and must not introduce a second return edge or serialized mode.
+
+Auto-delegation prefers a graph whose metadata name exactly equals the tool name. If no exact match exists, it preserves the legacy behavior by selecting the first graph whose name contains the tool name. Keep editor reachability analysis aligned with this exact-first, contains-fallback order so it marks the same graph that runtime dispatch will execute.
+
+Each live handler-subgraph or external-function cost is carried only on `ToolCallDelegationResult`, copied to the Delegate's hidden `cost` output, and accumulated into the owning graph. Parallel calls in one connected continuation round sum those live costs before the Delegate finishes. `DelegatedToolCallRecord` intentionally excludes cost: cached or replayed records expose their stored tool result without charging an earlier execution again.
+
+The Delegate's persisted `message` output id is retained and displayed as `Tool Result Message`. Its persisted `assistant-message` output is displayed as `Message (fires before the tool call is invoked)` and carries nonblank assistant text emitted in the same model response as the tool calls. This output is intrinsically pre-tool: the processor runs its branch before dispatching the tool batch, with no Delegate setting or persisted mode flag. An ordinary branch must settle before tools begin. A `Start Async Branch` boundary returns immediately and registers its remaining work with the root run, allowing that work to overlap the tool batch without letting it outlive root completion. After `nodeFinish`, ordinary `output` and `message` branches execute with normal left-to-right semantics. Whitespace-only assistant text does not activate the pre-tool branch.
+
+Continuation output branches use temporary same-graph processors that inherit the root run and graph execution identity, original project and loaded-reference context, original-graph active-output-port view, globals, Stored Values controller, execution cache, external functions, credentials, cancellation, and event stream. The active-output view matters for nodes such as Subgraph and Referenced Graph Alias: a branch slice may omit a consumer that is waiting for the final LLM or another late input, but the already-running producer must still compute the output that consumer will need later. Temporary processors suppress synthetic graph lifecycle and preload events while forwarding real downstream node events, and their event/lifecycle subscriptions must be removed after each branch. Graph Outputs use a branch-local overlay: reads can see values already written by the owning graph, successful branch writes merge back under the ordinary first-value policy, and a failed branch does not expose a partial Graph Output patch. An explicit Graph Output named `cost` follows that same policy; derived run cost only fills a missing `cost` boundary and must not replace it. This lets an early status branch and ordinary tool-result branches execute as graph nodes without creating nested graph-run records, replacing the public project with a synthetic slice, or leaking listeners across many tool rounds.
+
+The temporary scheduler must not preload unsafe dependency boundaries, because doing so would lose their cycle/loop/race attached-data semantics. Candidates that still need those boundaries or other late inputs remain with the parent scheduler. An already-ready pre-tool candidate that is itself unsafe, or a pre-tool continuation whose owning LLM/Delegate is unsafe, fails before tool side effects instead of being silently deferred. Self-loop safety checks include every definition-valid persisted edge, including secondary input edges, but ignore stale edges whose ports no longer exist. `Start Async Branch` is the explicit exception boundary: continuation traversal stops at the trigger and injects its complete closed subtree into the root-owned async scheduler.
+
+Branch readiness is round-scoped. Outputs produced by the pre-tool message branch may satisfy inputs for the same round's final tool-result branch, but `roundOutputs` is fresh for every round and earlier-round outputs are not offered as new dependencies. The invocation retains only the latest completed outputs for parent scheduling. Once the owning LLM process finishes successfully, `#finalizeToolCallContinuation(...)` promotes those completions and records their LLM owner; `#propagateCompletedContinuationNode(...)` then queues their consumers without rerunning the completed nodes. This is what lets consumers that also require final-LLM or independently late inputs run exactly once.
+
+When auto-continuation stops with unresolved raw calls because the maximum round count was reached or a call is not one of the LLM node's declared Rivet tools, LLM Chat releases the processor's continuation reservation. The ordinary downstream connection is then scheduled normally so the raw calls remain observable. Connected continuation Delegate nodes cannot be frozen in the editor, and direct continuation execution rejects frozen or preloaded outputs before tool work begins; replaying a captured request/response round would omit required tool work.
 
 Keep future Chat v2 changes inside the smallest relevant seam. Do not add provider
 option parsing, cache-key fingerprinting, or credential-source behavior back into
@@ -710,6 +733,56 @@ Do not broaden the scheduler into one of those classes without first adding
 golden event, recording, abort, and pause/resume characterization for that exact
 class plus a benchmark proving the expansion is worth the risk.
 
+#### Root-owned async branches
+
+`Start Async Branch` is an explicit scheduler boundary, not a detached job. It
+processes like a variadic Passthrough after all connected inputs are ready, but
+its downstream slice is registered with the root processor instead of being
+queued on the foreground path. The compatible scheduler therefore resumes the
+foreground immediately. Graphs containing this node deliberately fall back from
+the fast acyclic scheduler until that scheduler has equivalent managed-branch
+coverage.
+
+The root processor owns a per-run managed-task registry. Root `processGraph(...)`
+drains it to a fixed point before graph errors, `graphFinish`, `done`, `finish`,
+and the returned promise settle. A task may encounter another Start Async Branch
+and register more work during that drain. Work launched repeatedly by the same
+graph/node trigger is serialized in invocation order; independent triggers may
+overlap. Background is intentionally not the user-facing term because these
+branches remain observable async work in the current run:
+
+- root-graph async slices reuse the still-running root graph-run identity and
+  suppress synthetic graph lifecycle events; a branch originating in a
+  subgraph receives a fresh managed graph-run identity parented to that
+  subgraph, so its node events never arrive after its own `graphFinish`
+- globals, Stored Values, graph inputs, execution cache, external functions,
+  loaded references, and cost accounting remain shared
+- root pause, resume, abort, and user-input routing continue through the branch;
+  each branch also retains its source graph processor's run-abort signal, so
+  async work launched inside a subgraph is cancelled if that subgraph loses a
+  parent race. When a temporary continuation processor reaches the trigger,
+  source ownership remains the real same-graph processor rather than that
+  already-finished temporary slice
+- a branch failure is attributed to its failing node and fails the root at the
+  terminal boundary without rewriting an already-finished trigger or Delegate
+  as failed
+
+The async subtree must be closed and side-effect-only. Runtime topology
+validation rejects Graph Output descendants, a path back to its own trigger,
+and nodes with required incoming connections from outside the subtree. Values
+needed by the branch must cross the trigger's paired variadic ports. Disabled
+boundaries and invalid/stale port connections are not treated as runnable async
+descendants. Frozen trigger replay is rejected because it would make external
+side-effect repetition implicit.
+
+Async descendants are excluded from ordinary parent scheduling. A same-graph
+processor receives the trigger outputs as a suppressed preload, stops again at
+nested async boundaries, forwards real node events, and is explicitly unwired
+when its slice settles. It is attached to the true root lifecycle even when the
+trigger was reached inside a subgraph or a synthetic LLM continuation processor;
+attaching it to that temporary processor would let its work escape after the
+temporary owner returns.
+
 ### Control-flow model
 
 Control flow is implemented through data propagation rather than separate wire types.
@@ -768,7 +841,7 @@ Important current behavior:
   nodes, execution metadata, or reused `NodeImpl` objects
 - node events emitted inside a subgraph reference that subgraph invocation's `graphRunId`
 - split-sequential subgraph calls preserve executor `splitIndex` in execution metadata so app-side consumers can distinguish sibling invocations that share the same graph definition
-- `SubprocessorBridge` intentionally separates passive event forwarding from control lifecycle cleanup. Passive process-event forwarding stays subscribed for the subprocessor object lifetime so late `nodeFinish`, `nodeError`, and `nodeExcluded` events from successful graph-abort paths are not dropped after a child `graphFinish`. Control listeners such as parent/child pause, resume, and abort use a run-scoped lifecycle subscription keyed by the child processor's own `graphRunId`, so those controls clean up when the child graph run reaches its terminal event.
+- `SubprocessorBridge` intentionally separates passive event forwarding from control lifecycle cleanup. Ordinary subgraphs keep passive process-event forwarding for the subprocessor object lifetime so late `nodeFinish`, `nodeError`, and `nodeExcluded` events from successful graph-abort paths are not dropped after a child `graphFinish`. Control listeners such as parent/child pause, resume, and abort use a run-scoped lifecycle subscription keyed by the child processor's own `graphRunId`, so those controls clean up when the child graph run reaches its terminal event. Synthetic same-graph continuation processors opt out of automatic terminal cleanup and explicitly dispose both passive and control subscriptions in their own `finally` boundary; otherwise a nested child graph terminal could be mistaken for the synthetic processor's suppressed lifecycle. Lifecycle wiring also preserves an abort that arrives before `processGraph(...)` starts and applies it at the child's own `graphStart`.
 - Successful graph-abort paths treat abort-caused cancellation as exclusion, not failure. `Abort Graph` successful early exits and `Race Inputs` losing-branch cancellation propagate an internal successful-abort reason through active node controllers and nested subprocessors. A node that already produced outputs after a successful non-race abort emits its normal `nodeFinish`, but its dependents are not queued from that late finish because the graph is already terminal. A node whose work is actually interrupted emits `nodeExcluded` with reason `Graph aborted successfully`, and that successful-abort exclusion also does not queue dependents; race losers keep the more specific reason `Race branch lost`. Split-run workers must check the shared abort state before processing each item so a successful graph abort cannot launch additional split item work after the graph is already terminal. Do not surface these successful cancellations as `nodeError`: the graph already has a valid successful terminal path, and Remote Debugger/replay should clear spinners without showing false failed Expression/Subgraph nodes.
 - `GraphProcessor` awaits `nodeError` terminal emissions just like normal `nodeFinish` emissions. Do not make node errors fire-and-forget: caught subgraph failures can let the root graph finish successfully, and remote debugger/replay consumers still need the inner node's terminal error event before subgraph bridge cleanup.
 

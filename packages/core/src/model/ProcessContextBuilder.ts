@@ -21,6 +21,7 @@ export type NodeProcessContextBase = Omit<
   | 'isDirectRunTarget'
   | 'setGlobal'
   | 'signal'
+  | 'toolCallContinuation'
   | 'waitEvent'
 >;
 
@@ -43,6 +44,7 @@ export function buildNodeProcessContext(options: {
   requestUserInput: (inputStrings: string[], renderingType: 'text' | 'markdown') => Promise<StringArrayDataValue>;
   reportProgress: InternalProcessContext['reportProgress'];
   setGlobal: (id: string, value: ScalarOrArrayDataValue) => void;
+  toolCallContinuation?: InternalProcessContext['toolCallContinuation'];
   waitEvent: (event: string) => Promise<DataValue | undefined>;
 }): InternalProcessContext {
   const {
@@ -61,6 +63,7 @@ export function buildNodeProcessContext(options: {
     requestUserInput,
     reportProgress,
     setGlobal,
+    toolCallContinuation,
     waitEvent,
   } = options;
 
@@ -80,6 +83,7 @@ export function buildNodeProcessContext(options: {
     getPluginConfig,
     requestUserInput,
     reportProgress,
+    toolCallContinuation,
     execution,
   };
 }

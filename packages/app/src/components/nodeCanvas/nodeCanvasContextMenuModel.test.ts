@@ -584,6 +584,7 @@ test('canNodeTypeBeFrozen blocks non-replayable node categories', () => {
     'replaceDataset',
     'raiseEvent',
     'playAudio',
+    'startBackgroundBranch',
   ] as const) {
     assert.equal(canNodeTypeBeFrozen(nodeType), false, `${nodeType} should not be freezable`);
   }
@@ -616,6 +617,181 @@ test('getNodeCanvasContextMenuContext disables Freeze for Graph Output nodes wit
   assert.equal(context.data.freezeMenuTargetCount, 1);
   assert.equal(context.data.freezeDisabledReason, 'This node type cannot be frozen');
   assert.deepEqual(context.data.unfreezeNodeIds, []);
+});
+
+test('getNodeCanvasContextMenuContext disables Freeze for an active tool-continuation Delegate', () => {
+  const llmNode = makeNode('llmChatV2', 'llm-node' as NodeId, 'LLM Chat');
+  llmNode.data = {
+    ...(llmNode.data as Record<string, unknown>),
+    useToolCalling: true,
+    autoContinueToolCalls: true,
+  };
+  const delegateNode = makeNode('delegateFunctionCall', nodeId, 'Delegate Tool Call');
+  const continuationProject: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [llmNode, delegateNode],
+        connections: [
+          {
+            outputNodeId: llmNode.id,
+            outputId: 'function-calls' as PortId,
+            inputNodeId: delegateNode.id,
+            inputId: 'function-call' as PortId,
+          },
+        ],
+      },
+    },
+  };
+
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-delegateFunctionCall'),
+    nodesById: {
+      [llmNode.id]: llmNode,
+      [delegateNode.id]: delegateNode,
+    },
+    project: continuationProject,
+    lastRunPerNode: {
+      [delegateNode.id]: [
+        {
+          graphId,
+          processId: 'process-1' as any,
+          data: {
+            status: { type: 'ok' },
+            outputData: {
+              output: { type: 'string', storage: 'inline', value: 'tool output' },
+            },
+          },
+        },
+      ],
+    } as any,
+  });
+
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.canFreeze, false);
+  assert.deepEqual(context.data.freezeNodeTargets, []);
+  assert.equal(context.data.freezeDisabledReason, 'A Delegate Tool Call used for auto-continuation cannot be frozen');
+});
+
+test('getNodeCanvasContextMenuContext resolves a linked LLM before applying the continuation Freeze policy', () => {
+  const prefabId = 'linked-llm-prefab' as NodePrefabId;
+  const linkedLLM = makeNode('nodePrefabInstance', 'linked-llm' as NodeId, 'Linked LLM');
+  linkedLLM.data = { prefabId };
+  const sourceLLM = makeNode('llmChatV2', 'source-llm' as NodeId, 'Library LLM');
+  sourceLLM.data = {
+    ...(sourceLLM.data as Record<string, unknown>),
+    useToolCalling: true,
+    autoContinueToolCalls: true,
+  };
+  const delegateNode = makeNode('delegateFunctionCall', nodeId, 'Delegate Tool Call');
+  const continuationProject: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [linkedLLM, delegateNode],
+        connections: [
+          {
+            outputNodeId: linkedLLM.id,
+            outputId: 'function-calls' as PortId,
+            inputNodeId: delegateNode.id,
+            inputId: 'function-call' as PortId,
+          },
+        ],
+      },
+    },
+    nodePrefabs: {
+      [prefabId]: { id: prefabId, sourceNode: sourceLLM },
+    },
+  };
+
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-delegateFunctionCall'),
+    nodesById: {
+      [linkedLLM.id]: linkedLLM,
+      [delegateNode.id]: delegateNode,
+    },
+    project: continuationProject,
+    lastRunPerNode: {
+      [delegateNode.id]: [
+        {
+          graphId,
+          processId: 'process-1' as any,
+          data: {
+            status: { type: 'ok' },
+            outputData: { output: { type: 'string', storage: 'inline', value: 'tool output' } },
+          },
+        },
+      ],
+    } as any,
+  });
+
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.canFreeze, false);
+  assert.equal(context.data.freezeDisabledReason, 'A Delegate Tool Call used for auto-continuation cannot be frozen');
+});
+
+test('getNodeCanvasContextMenuContext resolves a linked Delegate before applying the continuation Freeze policy', () => {
+  const prefabId = 'linked-delegate-prefab' as NodePrefabId;
+  const llmNode = makeNode('llmChatV2', 'llm-node' as NodeId, 'LLM Chat');
+  llmNode.data = {
+    ...(llmNode.data as Record<string, unknown>),
+    useToolCalling: true,
+    autoContinueToolCalls: true,
+  };
+  const linkedDelegate = makeNode('nodePrefabInstance', nodeId, 'Linked Delegate');
+  linkedDelegate.data = { prefabId };
+  const sourceDelegate = makeNode('delegateFunctionCall', 'source-delegate' as NodeId, 'Library Delegate');
+  const continuationProject: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [llmNode, linkedDelegate],
+        connections: [
+          {
+            outputNodeId: llmNode.id,
+            outputId: 'function-calls' as PortId,
+            inputNodeId: linkedDelegate.id,
+            inputId: 'function-call' as PortId,
+          },
+        ],
+      },
+    },
+    nodePrefabs: {
+      [prefabId]: { id: prefabId, sourceNode: sourceDelegate },
+    },
+  };
+
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-nodePrefabInstance'),
+    nodesById: {
+      [llmNode.id]: llmNode,
+      [linkedDelegate.id]: linkedDelegate,
+    },
+    project: continuationProject,
+    lastRunPerNode: {
+      [linkedDelegate.id]: [
+        {
+          graphId,
+          processId: 'process-1' as any,
+          data: {
+            status: { type: 'ok' },
+            outputData: { output: { type: 'string', storage: 'inline', value: 'tool output' } },
+          },
+        },
+      ],
+    } as any,
+  });
+
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.isLinkedNode, true);
+  assert.equal(context.data.canFreeze, false);
+  assert.equal(context.data.freezeDisabledReason, 'A Delegate Tool Call used for auto-continuation cannot be frozen');
 });
 
 test('getNodeCanvasContextMenuContext enables Unfreeze for frozen nodes', () => {
@@ -769,7 +945,10 @@ test('getNodeCanvasContextMenuContext keeps disabled Freeze visible for mode blo
   assert.equal(context.data.canFreeze, false);
   assert.deepEqual(context.data.freezeNodeTargets, []);
   assert.equal(context.data.freezeMenuTargetCount, 1);
-  assert.equal(context.data.freezeDisabledReason, 'Freeze node output is unavailable while the Remote Debugger is active.');
+  assert.equal(
+    context.data.freezeDisabledReason,
+    'Freeze node output is unavailable while the Remote Debugger is active.',
+  );
 });
 
 test('getNodeCanvasContextMenuContext ignores frozen preload boundaries when frozen nodes are disabled', () => {
@@ -820,6 +999,59 @@ test('canRunNodeCanvasContextMenuFromHere is false when editor runs are unavaila
     canRunNodeCanvasContextMenuFromHere({
       ...contextModelOptions,
       nodeId: 'missing-node' as NodeId,
+    }),
+    false,
+  );
+});
+
+test('canRunNodeCanvasContextMenuFromHere hides partial replay inside an async subtree', () => {
+  const source = makeNode('text', 'source' as NodeId, 'Source');
+  const trigger = makeNode('startBackgroundBranch', 'async-trigger' as NodeId, 'Start Async Branch');
+  const descendant = makeNode('text', 'async-descendant' as NodeId, 'Async Descendant');
+  descendant.data = { ...(descendant.data as Record<string, unknown>), text: '{{input}}' };
+  const asyncProject: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [source, trigger, descendant],
+        connections: [
+          {
+            outputNodeId: source.id,
+            outputId: 'output' as PortId,
+            inputNodeId: trigger.id,
+            inputId: 'input1' as PortId,
+          },
+          {
+            outputNodeId: trigger.id,
+            outputId: 'output1' as PortId,
+            inputNodeId: descendant.id,
+            inputId: 'input' as PortId,
+          },
+        ],
+      },
+    },
+  };
+
+  assert.equal(
+    canRunNodeCanvasContextMenuFromHere({
+      ...contextModelOptions,
+      lastRunPerNode: {
+        [trigger.id]: [
+          {
+            graphId,
+            processId: 'process-1' as any,
+            data: {
+              status: { type: 'ok' },
+              outputData: {
+                output1: { type: 'string', storage: 'inline', value: 'status' },
+              },
+            },
+          },
+        ],
+      } as any,
+      nodeId: descendant.id,
+      project: asyncProject,
     }),
     false,
   );
