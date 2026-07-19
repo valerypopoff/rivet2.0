@@ -35,7 +35,7 @@ safely represent multiple parallel split indexes.
 | ----------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | Output                                          | `string` or `string[]`             | Output returned by the delegated handler or handlers.                                                                         |
 | Tool Result Message                             | `chat-message`, `object`, or array | Handler output shaped as function-result messages for prompt assembly or LLM continuation.                                    |
-| Message (fires before the tool call is invoked) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It activates once for every tool call before the batch is dispatched. |
+| Message (fires before tool call invocation) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It activates once for every tool call before the batch is dispatched. |
 
 ## Settings
 
@@ -48,7 +48,7 @@ safely represent multiple parallel split indexes.
 | Unknown Handler            | Graph to run when no specific handler is found.                                                                                |
 
 When this node is the connected auto-continuation Delegate, **Message (fires
-before the tool call is invoked)** activates automatically for nonblank text.
+before tool call invocation)** activates automatically for nonblank text.
 When one model response contains multiple tool calls, Rivet runs that branch once
 per call before dispatching their shared tool batch. **Output** and
 **Tool Result Message** still start only after the Delegate finishes. Empty or

@@ -303,7 +303,7 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.deepEqual(assistantMessageOutput, {
       id: 'assistant-message',
       dataType: 'string',
-      title: 'Message (fires before the tool call is invoked)',
+      title: 'Message (fires before tool call invocation)',
       description:
         'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
     });

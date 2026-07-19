@@ -76,7 +76,7 @@ paths and should not be used as the primary target for new provider refactors.
   waiting state.
 - `Delegate Tool Call` keeps the persisted `message` output id, now displayed as
   `Tool Result Message`, and adds `assistant-message`, displayed as
-  `Message (fires before the tool call is invoked)`, for nonblank assistant text
+  `Message (fires before tool call invocation)`, for nonblank assistant text
   emitted alongside that tool-call round. This output is intrinsically pre-tool:
   when the round has several calls, the processor runs its branch once per call
   before dispatching their shared tool batch, with no Delegate setting or

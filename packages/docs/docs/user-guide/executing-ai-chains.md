@@ -39,7 +39,7 @@ red and dashed and reports an ambiguity error. With no connected Delegate, LLM
 Chat uses its internal tool delegation.
 
 The Delegate exposes normal text that the assistant produced alongside its tool
-calls as **Message (fires before the tool call is invoked)**. This port activates
+calls as **Message (fires before tool call invocation)**. This port activates
 automatically once for every tool call, and Rivet runs those branch invocations
 before dispatching the shared tool batch.
 **Output** and **Tool Result Message** follow ordinary left-to-right execution

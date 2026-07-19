@@ -26,6 +26,15 @@ Wire hit testing uses a wider invisible interaction path rather than expensive
 geometry work in JavaScript. Bend points are graph connection metadata and older
 Rivet versions ignore them while still rendering the underlying connection.
 
+Before a wire is created or rewired, `useDraggingWire` validates the complete
+proposed topology. It rejects any connection that would leave an enabled
+**Start Async Branch** subtree invalid: a Graph Output in the subtree, a route
+back into the trigger, or an input from outside the subtree. It shows the
+matching runtime-style warning instead of saving the wire. The pure traversal
+lives in `domain/graphEditing/connectionValidation.ts`. Disconnect the invalid
+wire first when repairing a malformed graph. Runtime validation remains the
+defense in depth for serialized graphs and non-editor callers.
+
 ## Tool Continuation Connections
 
 [`toolContinuationWireState.ts`](../packages/app/src/components/nodeCanvas/toolContinuationWireState.ts)
@@ -59,7 +68,7 @@ on LLM Chat also keeps the wire ordinary because split-run continuation is not
 upgraded in this iteration.
 
 The connected Delegate's persisted `assistant-message` output is presented as
-`Message (fires before the tool call is invoked)` and requires no editor toggle.
+`Message (fires before tool call invocation)` and requires no editor toggle.
 The context-menu freeze policy uses the same continuation resolution and
 disables freezing that Delegate, because frozen replay cannot participate in the
 live request/response loop. Keep wire styling, freeze eligibility, and runtime

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { type ChartNode, type NodeConnection, type NodeId, type PortId } from '@valerypopoff/rivet2-core';
 import { useAtom, useStore } from 'jotai';
+import { toast } from 'react-toastify';
 import { ioDefinitionsForNodeState } from '../state/graph.js';
 import { draggingWireClosestPortState, draggingWireState, type DraggingWireDef } from '../state/graphBuilder.js';
 import { useMakeConnectionCommand } from '../commands/makeConnectionCommand';
@@ -11,6 +12,8 @@ import {
   shouldFinalizeWireDragFromGlobalMouseUp,
   shouldKeepWireConnectionModeAfterAction,
 } from '../domain/graphEditing/wireDragActions.js';
+import { createConnectionChange, createRewireConnectionChange } from '../domain/graphEditing/connectionActions.js';
+import { getAsyncBranchTopologyViolation } from '../domain/graphEditing/connectionValidation.js';
 import { canvasIoDefinitionsForNodeState } from '../state/selectors/canvasGraphSelectors.js';
 import { resolveClosestWireDropTargetFromPoint } from '../utils/wireDropTarget.js';
 
@@ -104,7 +107,9 @@ export const useDraggingWire = ({
             clientX,
             clientY,
             getInputDefinition: (nodeId, portId) =>
-              store.get(canvasIoDefinitionsForNodeState(nodeId))?.inputDefinitions.find((definition) => definition.id === portId),
+              store
+                .get(canvasIoDefinitionsForNodeState(nodeId))
+                ?.inputDefinitions.find((definition) => definition.id === portId),
           })
         : undefined,
     [enabled, store],
@@ -194,6 +199,25 @@ export const useDraggingWire = ({
         dropTarget: validatedDropTarget,
       });
 
+      const nextConnections =
+        action.type === 'makeConnection'
+          ? createConnectionChange([...connections], action.params).connections
+          : action.type === 'rewireConnection'
+            ? createRewireConnectionChange([...connections], action.originalConnection, action.params).connections
+            : undefined;
+      const asyncBranchViolation = nextConnections
+        ? getAsyncBranchTopologyViolation({
+            connections: nextConnections,
+            nodesById,
+          })
+        : undefined;
+
+      if (asyncBranchViolation) {
+        toast.warn(`Cannot create connection: ${asyncBranchViolation.message}`);
+        clearDraggingWire();
+        return;
+      }
+
       if (action.type === 'makeConnection') {
         makeConnection(action.params);
       } else if (action.type === 'rewireConnection') {
@@ -220,10 +244,12 @@ export const useDraggingWire = ({
     [
       breakConnection,
       clearDraggingWire,
+      connections,
       continueDraggingWire,
       getValidatedDropTarget,
       latestDraggingWire,
       makeConnection,
+      nodesById,
       rewireConnection,
     ],
   );
@@ -246,12 +272,16 @@ export const useDraggingWire = ({
       }
 
       if (isInput) {
-        const existingConnection = connections.find((conn) => conn.inputNodeId === startNodeId && conn.inputId === startPortId);
+        const existingConnection = connections.find(
+          (conn) => conn.inputNodeId === startNodeId && conn.inputId === startPortId,
+        );
 
         if (existingConnection) {
           const { outputId, outputNodeId } = existingConnection;
 
-          const def = store.get(ioDefinitionsForNodeState(outputNodeId))?.outputDefinitions.find((o) => o.id === outputId);
+          const def = store
+            .get(ioDefinitionsForNodeState(outputNodeId))
+            ?.outputDefinitions.find((o) => o.id === outputId);
 
           if (!def?.dataType) {
             clearDraggingWire();
@@ -275,7 +305,9 @@ export const useDraggingWire = ({
         return;
       }
 
-      const def = store.get(ioDefinitionsForNodeState(startNodeId))?.outputDefinitions.find((o) => o.id === startPortId);
+      const def = store
+        .get(ioDefinitionsForNodeState(startNodeId))
+        ?.outputDefinitions.find((o) => o.id === startPortId);
       if (!def?.dataType) {
         clearDraggingWire();
         return;
