@@ -37,6 +37,10 @@ safely represent multiple parallel split indexes.
 | Output                                      | `string` or `string[]`             | Output returned by the delegated handler. Connected auto-continuation emits a scalar value from each separate tool-call invocation.     |
 | Tool Result Message                         | `chat-message`, `object`, or array | Handler output shaped as a function-result message. Connected auto-continuation emits one scalar message from each separate invocation. |
 
+The rendered **Tool Result Message** identifies the human-readable tool name and,
+when it differs, the provider tool-call ID. The same label appears in the node's
+inline run output and in the full-output modal.
+
 ## Settings
 
 | Setting                    | Description                                                                                                |
