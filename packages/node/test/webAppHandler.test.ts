@@ -1157,6 +1157,10 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-chat-messages\s*\{[\s\S]*overflow-y: auto;/);
     assert.match(
       RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat > \.rivet-web-app-progress\s*\{[\s\S]*font-size: inherit;/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
       /\.rivet-web-app-root,\s*\.rivet-web-app-root \*\s*\{\s*scrollbar-color: var\(--rivet-web-app-scrollbar-thumb\) var\(--rivet-web-app-scrollbar-track\);/,
     );
     assert.match(

@@ -734,6 +734,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 
 .rivet-web-app-chat > .rivet-web-app-progress {
   border-top: 1px solid var(--rivet-web-app-card-border);
+  font-size: inherit;
   padding: 10px 14px 0;
 }
 

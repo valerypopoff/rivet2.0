@@ -68,6 +68,14 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     const outputs: NodeOutputDefinition[] = [];
 
     outputs.push({
+      id: 'assistant-message' as PortId,
+      dataType: 'string',
+      title: 'Message (fires before tool call invocation)',
+      description:
+        'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
+    });
+
+    outputs.push({
       id: 'output' as PortId,
       dataType: ['string', 'string[]'] as const,
       title: 'Output',
@@ -79,14 +87,6 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
       dataType: ['chat-message', 'chat-message[]', 'object', 'object[]'] as const,
       title: 'Tool Result Message',
       description: 'Maps the tool result into a chat message for a later LLM request.',
-    });
-
-    outputs.push({
-      id: 'assistant-message' as PortId,
-      dataType: 'string',
-      title: 'Message (fires before tool call invocation)',
-      description:
-        'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
     });
 
     return outputs;

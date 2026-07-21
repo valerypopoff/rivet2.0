@@ -183,6 +183,19 @@ export function getSelectedProcessRun(
   return getSelectedProcessData(processData, selectedPage, options)?.data;
 }
 
+export function hasRunningProcessData(
+  processData: ProcessDataForNode[] | undefined,
+  options?: { graphRuns?: GraphRunRecord[]; selectedGraphRun?: GraphRunSelection },
+): boolean {
+  return (
+    filterProcessDataForSelection({
+      graphRuns: options?.graphRuns,
+      processData,
+      selectedGraphRun: options?.selectedGraphRun,
+    })?.some((process) => process.data.status?.type === 'running') ?? false
+  );
+}
+
 export function resolveCanvasExecutionProcessPage(selectedPage: PageValue | undefined): PageValue {
   return selectedPage ?? 'latest';
 }

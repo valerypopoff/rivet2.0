@@ -43,9 +43,13 @@ ordinary persisted connection from LLM Chat `Tool Calls` (`function-calls`) to
 Delegate Tool Call `Tool Call` (`function-call`). A valid continuation wire uses
 two thin, parallel lanes to communicate the runtime request/response relationship:
 the forward lane has an arrowhead at the Delegate end and the return lane has one
-at the LLM end. It animates only while the selected Delegate process page is
-running. Idle lanes and arrowheads retain the ordinary wire color; hover and
-active execution apply the normal primary highlight to the lanes. Respect
+at the LLM end. It animates while any Delegate process in the selected graph run
+is running; the selected process page still owns the displayed inputs, outputs,
+and success/error styling. This aggregate running rule also drives node-header
+running chrome, so a faster last-started parallel call cannot make the Delegate
+look idle while an earlier sibling is still active. Idle lanes and arrowheads
+retain the ordinary wire color; hover and active execution apply the normal
+primary highlight to the lanes. Respect
 `prefers-reduced-motion`, and for bent connections put markers only on the two
 outer segment endpoints. Project Compare remains visible on valid continuation
 wires: added, changed, and removed wire colors also color the matching arrowheads

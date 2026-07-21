@@ -295,9 +295,11 @@ describe('DelegateFunctionCallNodeImpl', () => {
 
   it('keeps the message output compatible with old object-based wiring', () => {
     const node = createNode();
-    const messageOutput = node.getOutputDefinitions().find((output) => output.id === 'message');
-    const assistantMessageOutput = node.getOutputDefinitions().find((output) => output.id === 'assistant-message');
+    const outputs = node.getOutputDefinitions();
+    const messageOutput = outputs.find((output) => output.id === 'message');
+    const assistantMessageOutput = outputs.find((output) => output.id === 'assistant-message');
 
+    assert.equal(outputs[0]?.id, 'assistant-message');
     assert.deepEqual(messageOutput?.dataType, ['chat-message', 'chat-message[]', 'object', 'object[]']);
     assert.equal(messageOutput?.title, 'Tool Result Message');
     assert.deepEqual(assistantMessageOutput, {

@@ -34,7 +34,11 @@ import {
 } from '../state/dataFlow';
 import { useStableCallback } from '../hooks/useStableCallback';
 import { useAtom, useAtomValue, useStore } from 'jotai';
-import { getSelectedProcessData, resolveCanvasExecutionProcessPage } from '../state/selectors/executionSelectors.js';
+import {
+  getSelectedProcessData,
+  hasRunningProcessData,
+  resolveCanvasExecutionProcessPage,
+} from '../state/selectors/executionSelectors.js';
 import { canvasIoDefinitionsForNodeState } from '../state/selectors/canvasGraphSelectors.js';
 import { resolveClosestWireDropTargetFromPoint } from '../utils/wireDropTarget.js';
 import { useRenderableWires } from './nodeCanvas/useRenderableWires.js';
@@ -373,19 +377,13 @@ export const WireLayer: FC<WireLayerProps> = ({
     const nextRunningNodeIdSet = new Set<NodeId>();
 
     for (const [nodeId, processData] of Object.entries(lastRunDataByNode) as Array<[NodeId, RunDataByNodeId[NodeId]]>) {
-      const selectedProcessData = getSelectedProcessData(
-        processData,
-        resolveCanvasExecutionProcessPage(selectedProcessPageNodes[nodeId]),
-        graphSelectionOptions,
-      );
-
-      if (selectedProcessData?.data.status?.type === 'running') {
+      if (hasRunningProcessData(processData, graphSelectionOptions)) {
         nextRunningNodeIdSet.add(nodeId);
       }
     }
 
     return nextRunningNodeIdSet;
-  }, [graphSelectionOptions, lastRunDataByNode, selectedProcessPageNodes]);
+  }, [graphSelectionOptions, lastRunDataByNode]);
 
   const renderableWires = useRenderableWires({
     canvasToClientPosition,

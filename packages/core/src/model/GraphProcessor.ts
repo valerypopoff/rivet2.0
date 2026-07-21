@@ -118,6 +118,10 @@ type ContinuationBranchContext = {
   connections: NodeConnection[];
   unsafeNodeIds: Set<NodeId>;
 };
+type ContinuationBranchRunResult = {
+  graphOutputWrites: GraphOutputs;
+  nodeOutputs: Map<NodeId, Outputs>;
+};
 type ToolCallContinuationInvocation = {
   delegateNode: DelegateFunctionCallNode;
   latestOutputs: Map<NodeId, Outputs>;
@@ -2759,61 +2763,41 @@ export class GraphProcessor {
     }
 
     const { delegateNode } = invocation;
-    const processId = nanoid() as ProcessId;
-    const inputValues: Inputs = {
-      [DELEGATE_TOOL_CALL_INPUT_ID]: {
-        type: 'object[]',
-        value: toolCalls,
-      },
-    };
-    const nodeAbortController = this.#newAbortController();
-    this.#registerNodeAbortController(delegateNode.id, nodeAbortController);
-    const abortFromLLM = () => {
-      if (!nodeAbortController.signal.aborted) {
-        nodeAbortController.abort(getAbortSignalReason(llmSignal));
+    const processIds = toolCalls.map(() => nanoid() as ProcessId);
+    const inputValuesByCall = toolCalls.map(
+      (toolCall): Inputs => ({
+        [DELEGATE_TOOL_CALL_INPUT_ID]: {
+          type: 'object',
+          value: toolCall,
+        },
+      }),
+    );
+    const nodeAbortControllers = toolCalls.map(() => this.#newAbortController());
+    nodeAbortControllers.forEach((controller) => this.#registerNodeAbortController(delegateNode.id, controller));
+    const abortAllCalls = (reason: unknown) => {
+      for (const controller of nodeAbortControllers) {
+        if (!controller.signal.aborted) {
+          controller.abort(reason);
+        }
       }
+    };
+    const abortFromLLM = () => {
+      abortAllCalls(getAbortSignalReason(llmSignal));
     };
     llmSignal.addEventListener('abort', abortFromLLM, { once: true });
     if (this.#abortController.signal.aborted) {
-      nodeAbortController.abort(getAbortSignalReason(this.#abortController.signal));
+      abortAllCalls(getAbortSignalReason(this.#abortController.signal));
     } else if (llmSignal.aborted) {
       abortFromLLM();
     }
 
-    let timingStart: NodeTimingStart;
-    let delegateStarted = false;
-    let delegateFinished = false;
-
     try {
       await this.#waitUntilUnpaused();
-      if (nodeAbortController.signal.aborted) {
-        throw createGraphAbortErrorFromSignal(nodeAbortController.signal, 'Delegate Tool Call aborted');
+      const abortedController = nodeAbortControllers.find((controller) => controller.signal.aborted);
+      if (abortedController) {
+        throw createGraphAbortErrorFromSignal(abortedController.signal, 'Delegate Tool Call aborted');
       }
 
-      await this.#emitter.emit(
-        'nodeStart',
-        this.#withExecution({ node: delegateNode, inputs: inputValues, processId }),
-      );
-      delegateStarted = true;
-      timingStart = this.#startNodeTiming();
-
-      if (
-        this.#nodeResults.has(delegateNode.id) ||
-        this.#resolveFrozenNodeOutputs(delegateNode, inputValues, processId)
-      ) {
-        throw new Error(
-          `Delegate Tool Call "${delegateNode.title}" is the active auto-continuation handler and cannot use preloaded or frozen outputs. Clear its preload or unfreeze it before running this graph.`,
-        );
-      }
-
-      const delegateContext = this.#createNodeProcessContext(
-        delegateNode,
-        inputValues,
-        0,
-        processId,
-        nodeAbortController,
-        (node, partialOutputs, index) => this.#emitNodePartialOutput(node, partialOutputs, index, processId),
-      );
       const hasAssistantMessage = assistantMessage.trim().length > 0;
       const branchContext = this.#createContinuationBranchContext();
       const canRunContinuationBranches =
@@ -2827,57 +2811,45 @@ export class GraphProcessor {
       const preToolOutputPorts = new Set<PortId>(['assistant-message' as PortId]);
       const hasActivePreToolBranch =
         hasAssistantMessage && this.#getActiveOutputPortIds(delegateNode).has('assistant-message' as PortId);
-      const roundOutputs = new Map<NodeId, Outputs>();
       const continuationBranchBoundaries = new Set<NodeId>([llmNode.id, ...this.#currentlyProcessing]);
-      const rememberBranchOutputs = (branchOutputs: ReadonlyMap<NodeId, Outputs>) => {
-        for (const [nodeId, outputs] of branchOutputs) {
-          roundOutputs.set(nodeId, outputs);
-          invocation.latestOutputs.set(nodeId, outputs);
-        }
-      };
 
-      if (hasAssistantMessage) {
-        emitDetached(
-          this.#emitter,
-          'partialOutput',
-          this.#withExecution({
-            node: delegateNode,
-            outputs: assistantOutputs,
-            index: 0,
-            processId,
-          }),
-        );
-      }
-
-      if (hasActivePreToolBranch) {
-        if (!canRunContinuationBranches) {
+      // Validate round-level configuration before any of the parallel calls can
+      // start side effects. Preserve one real Delegate error run for diagnostics.
+      try {
+        if (
+          this.#nodeResults.has(delegateNode.id) ||
+          this.#resolveFrozenNodeOutputs(delegateNode, inputValuesByCall[0]!, processIds[0]!)
+        ) {
           throw new Error(
-            `Delegate Tool Call "${delegateNode.title}" cannot fire its pre-tool Message branch because the LLM/Delegate continuation is inside an unsupported cycle, race, or loop.`,
+            `Delegate Tool Call "${delegateNode.title}" is the active auto-continuation handler and cannot use preloaded or frozen outputs. Clear its preload or unfreeze it before running this graph.`,
           );
         }
-
-        // One model response can contain several tool calls. The assistant text
-        // is shared by those calls, but this port fires once for each call. Run
-        // every branch before dispatching the shared tool batch.
-        // Keep each run's temporary results isolated; otherwise a completed
-        // branch for an earlier call can make a later call look already ready.
-        for (let toolCallIndex = 0; toolCallIndex < toolCalls.length; toolCallIndex += 1) {
-          const preToolBranchOutputs = await this.#runContinuationOutputBranch(
+        if (hasActivePreToolBranch) {
+          if (!canRunContinuationBranches) {
+            throw new Error(
+              `Delegate Tool Call "${delegateNode.title}" cannot fire its pre-tool Message branch because the LLM/Delegate continuation is inside an unsupported cycle, race, or loop.`,
+            );
+          }
+          this.#buildContinuationBranchPlan(
             delegateNode,
             assistantOutputs,
             preToolOutputPorts,
-            nodeAbortController.signal,
             new Map(),
             continuationBranchBoundaries,
             branchContext,
             true,
           );
-          rememberBranchOutputs(preToolBranchOutputs);
         }
-      }
-
-      if (nodeAbortController.signal.aborted) {
-        throw createGraphAbortErrorFromSignal(nodeAbortController.signal, 'Delegate Tool Call aborted');
+      } catch (error) {
+        const processId = processIds[0]!;
+        const inputValues = inputValuesByCall[0]!;
+        await this.#emitter.emit(
+          'nodeStart',
+          this.#withExecution({ node: delegateNode, inputs: inputValues, processId }),
+        );
+        const timingStart = this.#startNodeTiming();
+        await this.#nodeErrored(delegateNode, error, processId, this.#finishNodeTiming(timingStart));
+        throw error;
       }
 
       let firstFailure: unknown;
@@ -2890,88 +2862,165 @@ export class GraphProcessor {
             hasFailure = true;
             firstFailure = error;
           }
-          if (!nodeAbortController.signal.aborted) {
-            nodeAbortController.abort(error);
+          abortAllCalls(error);
+          throw error;
+        }
+      };
+
+      const runInvocation = async (toolCall: StreamedFunctionCall, toolCallIndex: number) => {
+        const processId = processIds[toolCallIndex]!;
+        const inputValues = inputValuesByCall[toolCallIndex]!;
+        const nodeAbortController = nodeAbortControllers[toolCallIndex]!;
+        let timingStart: NodeTimingStart;
+        let delegateStarted = false;
+        let delegateFinished = false;
+
+        try {
+          await this.#waitUntilUnpaused();
+          if (nodeAbortController.signal.aborted) {
+            throw createGraphAbortErrorFromSignal(nodeAbortController.signal, 'Delegate Tool Call aborted');
+          }
+
+          await this.#emitter.emit(
+            'nodeStart',
+            this.#withExecution({ node: delegateNode, inputs: inputValues, processId }),
+          );
+          delegateStarted = true;
+          timingStart = this.#startNodeTiming();
+
+          const delegateContext = this.#createNodeProcessContext(
+            delegateNode,
+            inputValues,
+            0,
+            processId,
+            nodeAbortController,
+            (node, partialOutputs, index) => this.#emitNodePartialOutput(node, partialOutputs, index, processId),
+          );
+
+          if (hasAssistantMessage) {
+            emitDetached(
+              this.#emitter,
+              'partialOutput',
+              this.#withExecution({
+                node: delegateNode,
+                outputs: assistantOutputs,
+                index: 0,
+                processId,
+              }),
+            );
+          }
+
+          let preToolBranchPromise: Promise<ContinuationBranchRunResult> | undefined;
+          if (hasActivePreToolBranch) {
+            preToolBranchPromise = this.#runContinuationOutputBranch(
+              delegateNode,
+              assistantOutputs,
+              preToolOutputPorts,
+              nodeAbortController.signal,
+              new Map(),
+              continuationBranchBoundaries,
+              branchContext,
+              true,
+              true,
+            );
+          }
+
+          // Start tool work without waiting for the early Message branch. The
+          // branch and every sibling Delegate invocation remain independent.
+          const invocationWork = await Promise.allSettled([
+            abortSiblingOnFailure(delegateToolCall(toolCall, delegateContext, delegateNode.data)),
+            abortSiblingOnFailure(
+              preToolBranchPromise ?? Promise.resolve({ graphOutputWrites: {}, nodeOutputs: new Map() }),
+            ),
+          ]);
+          const toolOutcome = invocationWork[0]!;
+          const preToolBranchOutcome = invocationWork[1]!;
+          if (toolOutcome.status === 'rejected') throw toolOutcome.reason;
+          if (preToolBranchOutcome.status === 'rejected') throw preToolBranchOutcome.reason;
+          const toolResult = toolOutcome.value;
+          const preToolBranch = preToolBranchOutcome.value;
+
+          if (nodeAbortController.signal.aborted) {
+            throw createGraphAbortErrorFromSignal(nodeAbortController.signal, 'Delegate Tool Call aborted');
+          }
+
+          const outputs = buildDelegatedToolCallOutputs(
+            [toolResult.record],
+            hasAssistantMessage ? assistantMessage : undefined,
+            toolResult.cost,
+          );
+          this.#accumulateCost(outputs);
+
+          await this.#emitter.emit(
+            'nodeFinish',
+            this.#withExecution(
+              withOptionalDuration(
+                {
+                  node: delegateNode,
+                  outputs,
+                  processId,
+                },
+                this.#finishNodeTiming(timingStart),
+              ),
+            ),
+          );
+          delegateFinished = true;
+
+          const finalOutputPorts = new Set<PortId>(['output' as PortId, 'message' as PortId]);
+          const finalBranch = canRunContinuationBranches
+            ? await this.#runContinuationOutputBranch(
+                delegateNode,
+                outputs,
+                finalOutputPorts,
+                nodeAbortController.signal,
+                preToolBranch.nodeOutputs,
+                continuationBranchBoundaries,
+                branchContext,
+                false,
+                true,
+              )
+            : { graphOutputWrites: {}, nodeOutputs: new Map<NodeId, Outputs>() };
+
+          return { finalBranch, outputs, preToolBranch, toolResult };
+        } catch (error) {
+          if (delegateStarted && !delegateFinished) {
+            await this.#nodeErrored(delegateNode, error, processId, this.#finishNodeTiming(timingStart));
           }
           throw error;
         }
       };
+
       const toolWorkOutcomes = await Promise.allSettled(
-        toolCalls.map((toolCall) =>
-          abortSiblingOnFailure(delegateToolCall(toolCall, delegateContext, delegateNode.data)),
-        ),
+        toolCalls.map((toolCall, toolCallIndex) => abortSiblingOnFailure(runInvocation(toolCall, toolCallIndex))),
       );
 
       if (hasFailure) {
         throw firstFailure;
       }
-      if (nodeAbortController.signal.aborted) {
-        throw createGraphAbortErrorFromSignal(nodeAbortController.signal, 'Delegate Tool Call aborted');
-      }
-
-      const toolResults: Awaited<ReturnType<typeof delegateToolCall>>[] = toolWorkOutcomes.map((outcome) => {
+      const invocationResults = toolWorkOutcomes.map((outcome) => {
         if (outcome.status === 'rejected') {
           throw outcome.reason;
         }
         return outcome.value;
       });
-      const toolCost = toolResults.reduce<number | undefined>(
-        (total, result) => (result.cost == null ? total : (total ?? 0) + result.cost),
-        undefined,
-      );
 
-      const outputs = buildDelegatedToolCallOutputs(
-        toolResults.map((result) => result.record),
-        hasAssistantMessage ? assistantMessage : undefined,
-        toolCost,
-      );
-      invocation.latestOutputs.set(delegateNode.id, outputs);
-      this.#accumulateCost(outputs);
-
-      await this.#emitter.emit(
-        'nodeFinish',
-        this.#withExecution(
-          withOptionalDuration(
-            {
-              node: delegateNode,
-              outputs,
-              processId,
-            },
-            this.#finishNodeTiming(timingStart),
-          ),
-        ),
-      );
-      delegateFinished = true;
-
-      const finalOutputPorts = new Set<PortId>(['output' as PortId, 'message' as PortId]);
-      const finalBranchOutputs = canRunContinuationBranches
-        ? await this.#runContinuationOutputBranch(
-            delegateNode,
-            outputs,
-            finalOutputPorts,
-            nodeAbortController.signal,
-            roundOutputs,
-            continuationBranchBoundaries,
-            branchContext,
-          )
-        : new Map<NodeId, Outputs>();
-      rememberBranchOutputs(finalBranchOutputs);
-
-      return toolResults.map((result) => ({
-        message: result.message,
-        record: result.record,
-      }));
-    } catch (error) {
-      // A normal downstream branch starts only after Delegate Tool Call has
-      // finished. If that branch fails, its own node error is already emitted;
-      // do not produce an impossible finish-then-error history for Delegate.
-      if (delegateStarted && !delegateFinished) {
-        await this.#nodeErrored(delegateNode, error, processId, this.#finishNodeTiming(timingStart));
+      for (const result of invocationResults) {
+        invocation.latestOutputs.set(delegateNode.id, result.outputs);
+        for (const branch of [result.preToolBranch, result.finalBranch]) {
+          this.#commitContinuationGraphOutputs(branch.graphOutputWrites);
+          for (const [nodeId, outputs] of branch.nodeOutputs) {
+            invocation.latestOutputs.set(nodeId, outputs);
+          }
+        }
       }
-      throw error;
+
+      return invocationResults.map(({ toolResult }) => ({
+        message: toolResult.message,
+        record: toolResult.record,
+      }));
     } finally {
       llmSignal.removeEventListener('abort', abortFromLLM);
-      this.#unregisterNodeAbortController(delegateNode.id, nodeAbortController);
+      nodeAbortControllers.forEach((controller) => this.#unregisterNodeAbortController(delegateNode.id, controller));
     }
   }
 
@@ -2984,7 +3033,8 @@ export class GraphProcessor {
     excludedNodeIds: ReadonlySet<NodeId>,
     branchContext: ContinuationBranchContext,
     failOnUnsafeReadyNode = false,
-  ): Promise<Map<NodeId, Outputs>> {
+    deferGraphOutputCommit = false,
+  ): Promise<ContinuationBranchRunResult> {
     if (signal.aborted) {
       throw createGraphAbortErrorFromSignal(signal, 'Tool continuation branch aborted');
     }
@@ -2999,7 +3049,7 @@ export class GraphProcessor {
       failOnUnsafeReadyNode,
     );
     if (!branchPlan) {
-      return new Map();
+      return { graphOutputWrites: {}, nodeOutputs: new Map() };
     }
 
     const graphId = branchPlan.graph.metadata?.id;
@@ -3090,18 +3140,27 @@ export class GraphProcessor {
         throw createGraphAbortErrorFromSignal(signal, 'Tool continuation branch aborted');
       }
       await processor.processGraph(this.#context, this.#graphInputs, this.#contextValues);
-      for (const [outputId, value] of Object.entries(branchGraphOutputs.writes)) {
-        const existingValue = this.#graphOutputs[outputId];
-        if (existingValue == null || existingValue.type === 'control-flow-excluded') {
-          this.#graphOutputs[outputId] = value;
-        }
+      if (!deferGraphOutputCommit) {
+        this.#commitContinuationGraphOutputs(branchGraphOutputs.writes);
       }
-      return this.#getContinuationBranchResults(processor, branchPlan);
+      return {
+        graphOutputWrites: branchGraphOutputs.writes,
+        nodeOutputs: this.#getContinuationBranchResults(processor, branchPlan),
+      };
     } finally {
       this.#totalCost += processor.#totalCost;
       unwireLifecycle();
       unwireEvents();
       this.#subprocessors.delete(processor);
+    }
+  }
+
+  #commitContinuationGraphOutputs(writes: GraphOutputs): void {
+    for (const [outputId, value] of Object.entries(writes)) {
+      const existingValue = this.#graphOutputs[outputId];
+      if (existingValue == null || existingValue.type === 'control-flow-excluded') {
+        this.#graphOutputs[outputId] = value;
+      }
     }
   }
 

@@ -63,6 +63,7 @@ type AssistantMessageProbeHandler = (
 
 class FakeLLMNodeImpl extends NodeImpl<FakeLLMNode> {
   static processCount = 0;
+  static continuationRecords: DelegatedToolCallRecord[] = [];
 
   static create(): FakeLLMNode {
     return {
@@ -118,6 +119,7 @@ class FakeLLMNodeImpl extends NodeImpl<FakeLLMNode> {
     const records = [];
     for (const round of this.data.rounds) {
       const results = await context.toolCallContinuation.run(round.toolCalls, round.assistantMessage);
+      FakeLLMNodeImpl.continuationRecords.push(...results.map((result) => result.record));
       records.push(...results.map((result) => result.record));
     }
 
@@ -696,6 +698,7 @@ function delay(ms: number): Promise<void> {
 
 afterEach(() => {
   FakeLLMNodeImpl.processCount = 0;
+  FakeLLMNodeImpl.continuationRecords = [];
   AssistantMessageProbeNodeImpl.handlers.clear();
   IndependentValueNodeImpl.handlers.clear();
   CombinedFinalConsumerNodeImpl.handlers.clear();
@@ -1197,8 +1200,10 @@ describe('GraphProcessor connected tool continuation', () => {
     assert.equal(FakeLLMNodeImpl.processCount, 1);
   });
 
-  it('finishes an ordinary Message branch before invoking tools', async () => {
+  it('starts an ordinary Message branch and tool work without serializing them', async () => {
     const events: string[] = [];
+    const probeStarted = deferred();
+    const toolStarted = deferred();
     const llm = makeLLM([{ assistantMessage: 'I will check.', toolCalls: [makeToolCall('call-1', 'lookup')] }]);
     const delegate = makeDelegate();
     const probe = makeProbe('deferred');
@@ -1216,17 +1221,22 @@ describe('GraphProcessor connected tool continuation', () => {
 
     AssistantMessageProbeNodeImpl.handlers.set('deferred', async () => {
       events.push('probe:start');
+      probeStarted.resolve();
+      await withTimeout(toolStarted.promise, 'tool to start alongside ordinary Message branch');
+      events.push('probe:finish');
     });
     processor.setExternalFunction('lookup', async () => {
       events.push('tool:start');
-      await delay(20);
+      toolStarted.resolve();
+      await withTimeout(probeStarted.promise, 'ordinary Message branch to start alongside tool');
       events.push('tool:finish');
       return { type: 'string', value: 'lookup result' };
     });
 
     await withTimeout(processor.processGraph(testProcessContext()), 'deferred Assistant Message branch');
 
-    assert.deepEqual(events, ['probe:start', 'tool:start', 'tool:finish']);
+    assert.ok(events.indexOf('probe:start') < events.indexOf('tool:finish'), events.join(', '));
+    assert.ok(events.indexOf('tool:start') < events.indexOf('probe:finish'), events.join(', '));
   });
 
   it('does not activate the Assistant Message branch for empty or whitespace-only round text', async () => {
@@ -1604,7 +1614,7 @@ describe('GraphProcessor connected tool continuation', () => {
     assert.ok(events.indexOf('slow:settled') < events.indexOf('graph:finish'), events.join(', '));
   });
 
-  it('fails the Delegate before invoking tools when an ordinary Message branch fails', async () => {
+  it('fails the Delegate after concurrently started tool work when an ordinary Message branch fails', async () => {
     const delegateStarts: ProcessId[] = [];
     const delegateFinishes: ProcessId[] = [];
     const delegateErrors: ProcessId[] = [];
@@ -1659,7 +1669,7 @@ describe('GraphProcessor connected tool continuation', () => {
 
     await assert.rejects(withTimeout(processor.processGraph(testProcessContext()), 'failing pre-tool Message branch'));
 
-    assert.equal(toolRunCount, 0);
+    assert.equal(toolRunCount, 1);
     assert.equal(delegateStarts.length, 1);
     assert.deepEqual(delegateErrors, delegateStarts);
     assert.deepEqual(delegateFinishes, []);
@@ -2172,12 +2182,16 @@ describe('GraphProcessor connected tool continuation', () => {
     });
   });
 
-  it('preserves model tool-call order in a parallel Delegate batch', async () => {
+  it('runs parallel tool calls as distinct scalar Delegate invocations in model order', async () => {
     const completionOrder: string[] = [];
     const llm = makeLLM([
       {
         assistantMessage: '',
-        toolCalls: [makeToolCall('call-slow', 'slow'), makeToolCall('call-fast', 'fast')],
+        toolCalls: [
+          makeToolCall('call-slow', 'slow'),
+          makeToolCall('call-fast', 'fast'),
+          makeToolCall('call-medium', 'medium'),
+        ],
       },
     ]);
     const delegate = makeDelegate();
@@ -2186,7 +2200,8 @@ describe('GraphProcessor connected tool continuation', () => {
       graphId,
       createRegistry(),
     );
-    let delegateOutputs: Outputs | undefined;
+    const delegateStarts: Array<{ processId: ProcessId; toolCallId: string }> = [];
+    const delegateFinishes = new Map<ProcessId, Outputs>();
 
     processor.setExternalFunction('slow', async () => {
       await delay(30);
@@ -2198,24 +2213,127 @@ describe('GraphProcessor connected tool continuation', () => {
       completionOrder.push('fast');
       return { type: 'string', value: 'fast result' };
     });
+    processor.setExternalFunction('medium', async () => {
+      await delay(10);
+      completionOrder.push('medium');
+      return { type: 'string', value: 'medium result' };
+    });
+    processor.on('nodeStart', (event: ProcessEvents['nodeStart']) => {
+      if (event.node.id !== delegate.id) return;
+      const input = event.inputs['function-call' as PortId];
+      assert.ok(input && input.type === 'object' && !Array.isArray(input.value));
+      delegateStarts.push({
+        processId: event.processId,
+        toolCallId: String((input.value as { id?: unknown }).id),
+      });
+    });
     processor.on('nodeFinish', (event: ProcessEvents['nodeFinish']) => {
       if (event.node.id === delegate.id) {
-        delegateOutputs = event.outputs;
+        delegateFinishes.set(event.processId, event.outputs);
       }
     });
 
     await withTimeout(processor.processGraph(testProcessContext()), 'parallel tool batch');
 
-    assert.deepEqual(completionOrder, ['fast', 'slow']);
-    const orderedOutputs = delegateOutputs?.['output' as PortId];
-    assert.ok(orderedOutputs && orderedOutputs.type === 'string[]');
+    assert.deepEqual(completionOrder, ['fast', 'medium', 'slow']);
     assert.deepEqual(
-      orderedOutputs.value.map((output) => (JSON.parse(output) as { value: string }).value),
-      ['slow result', 'fast result'],
+      delegateStarts.map((run) => run.toolCallId),
+      ['call-slow', 'call-fast', 'call-medium'],
+    );
+    assert.equal(new Set(delegateStarts.map((run) => run.processId)).size, 3);
+    assert.equal(delegateFinishes.size, 3);
+    const outputsInModelOrder = delegateStarts.map((run) => {
+      const output = delegateFinishes.get(run.processId)?.['output' as PortId];
+      assert.ok(output && output.type === 'string');
+      return (JSON.parse(output.value) as { value: string }).value;
+    });
+    assert.deepEqual(outputsInModelOrder, ['slow result', 'fast result', 'medium result']);
+    assert.deepEqual(
+      FakeLLMNodeImpl.continuationRecords.map((record) => record.id),
+      ['call-slow', 'call-fast', 'call-medium'],
     );
   });
 
-  it('aggregates live parallel tool costs into the hidden Delegate output and graph cost', async () => {
+  it('runs scalar result branches once per parallel Delegate invocation', async () => {
+    const llm = makeLLM([
+      {
+        assistantMessage: '',
+        toolCalls: [makeToolCall('call-one', 'one'), makeToolCall('call-two', 'two')],
+      },
+    ]);
+    const delegate = makeDelegate();
+    const probe = makeProbe('per-call-results');
+    const processor = new GraphProcessor(
+      makeProject(
+        [llm, delegate, probe],
+        [
+          connect('llm', 'function-calls', 'delegate', 'function-call'),
+          connect('delegate', 'output', probe.id, 'message'),
+        ],
+      ),
+      graphId,
+      createRegistry(),
+    );
+    const probeStarts: ProcessId[] = [];
+    const resultValues: string[] = [];
+
+    AssistantMessageProbeNodeImpl.handlers.set('per-call-results', async (message) => {
+      resultValues.push((JSON.parse(message) as { value: string }).value);
+    });
+    processor.setExternalFunction('one', async () => ({ type: 'string', value: 'one result' }));
+    processor.setExternalFunction('two', async () => ({ type: 'string', value: 'two result' }));
+    processor.on('nodeStart', (event: ProcessEvents['nodeStart']) => {
+      if (event.node.id === probe.id) probeStarts.push(event.processId);
+    });
+
+    await withTimeout(processor.processGraph(testProcessContext()), 'per-call Delegate result branches');
+
+    assert.deepEqual([...resultValues].sort(), ['one result', 'two result']);
+    assert.equal(probeStarts.length, 2);
+    assert.notEqual(probeStarts[0], probeStarts[1]);
+  });
+
+  it('commits concurrent result-branch Graph Outputs in model-call order', async () => {
+    const llm = makeLLM([
+      {
+        assistantMessage: '',
+        toolCalls: [makeToolCall('call-slow', 'slow'), makeToolCall('call-fast', 'fast')],
+      },
+    ]);
+    const delegate = makeDelegate();
+    const graphOutput = makeGraphOutput('delegatedResult');
+    const processor = new GraphProcessor(
+      makeProject(
+        [llm, delegate, graphOutput],
+        [
+          connect('llm', 'function-calls', 'delegate', 'function-call'),
+          connect('delegate', 'output', graphOutput.id, 'value'),
+        ],
+      ),
+      graphId,
+      createRegistry(),
+    );
+
+    processor.setExternalFunction('slow', async () => {
+      await delay(30);
+      return { type: 'string', value: 'first model call' };
+    });
+    processor.setExternalFunction('fast', async () => ({ type: 'string', value: 'second model call' }));
+
+    const outputs = await withTimeout(
+      processor.processGraph(testProcessContext()),
+      'ordered continuation Graph Output commits',
+    );
+
+    const delegatedResult = outputs['delegatedResult'];
+    assert.ok(delegatedResult && delegatedResult.type === 'string');
+    assert.deepEqual(JSON.parse(delegatedResult.value), {
+      type: 'string',
+      value: 'first model call',
+    });
+  });
+
+  it('keeps per-call Delegate costs and aggregates them once into the graph cost', async () => {
     const llm = makeLLM([
       {
         assistantMessage: '',
@@ -2228,19 +2346,21 @@ describe('GraphProcessor connected tool continuation', () => {
       graphId,
       createRegistry(),
     );
-    let delegateOutputs: Outputs | undefined;
+    const delegateCosts: number[] = [];
 
     processor.setExternalFunction('one', async () => ({ type: 'string', value: 'one result', cost: 2 }));
     processor.setExternalFunction('two', async () => ({ type: 'string', value: 'two result', cost: 3 }));
     processor.on('nodeFinish', (event: ProcessEvents['nodeFinish']) => {
       if (event.node.id === delegate.id) {
-        delegateOutputs = event.outputs;
+        const cost = event.outputs['cost' as PortId];
+        assert.ok(cost && cost.type === 'number');
+        delegateCosts.push(cost.value);
       }
     });
 
     const outputs = await withTimeout(processor.processGraph(testProcessContext()), 'parallel tool cost aggregation');
 
-    assert.deepEqual(delegateOutputs?.['cost' as PortId], { type: 'number', value: 5 });
+    assert.deepEqual(delegateCosts, [2, 3]);
     assert.deepEqual(outputs['cost' as PortId], { type: 'number', value: 5 });
   });
 });

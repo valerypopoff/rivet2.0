@@ -8,6 +8,7 @@ import {
   getActionBarExecutionState,
   getExecutorProductState,
   getGraphRunsForView,
+  hasRunningProcessData,
   getNodeExecutionClassFlags,
   getSelectedGraphRunId,
   getSelectedProcessData,
@@ -50,6 +51,42 @@ describe('executionSelectors', () => {
     assert.equal(getSelectedProcessRun(processData, 'latest')?.status?.type, 'running');
     assert.equal(getSelectedProcessPageIndex(processData, 'latest'), 1);
     assert.equal(getSelectedProcessPageIndex(processData, 50), 1);
+  });
+
+  test('running-state aggregation does not stop when the latest parallel process finishes first', () => {
+    const processData = [
+      { processId: 'p-slow', graphRunId: 'graph-run-a' as GraphRunId, data: { status: { type: 'running' } } },
+      { processId: 'p-fast', graphRunId: 'graph-run-a' as GraphRunId, data: { status: { type: 'ok' } } },
+    ] as ProcessDataForNode[];
+
+    assert.equal(getSelectedProcessRun(processData, 'latest')?.status?.type, 'ok');
+    assert.equal(hasRunningProcessData(processData), true);
+  });
+
+  test('running-state aggregation respects the selected graph run', () => {
+    const processData = [
+      { processId: 'p-old', graphRunId: 'graph-run-a' as GraphRunId, data: { status: { type: 'ok' } } },
+      { processId: 'p-live', graphRunId: 'graph-run-b' as GraphRunId, data: { status: { type: 'running' } } },
+    ] as ProcessDataForNode[];
+    const graphRuns = [
+      { graphRunId: 'graph-run-a' as GraphRunId, rootRunId: 'root-1' as RootRunId, graphId: 'g-1' as GraphId },
+      { graphRunId: 'graph-run-b' as GraphRunId, rootRunId: 'root-1' as RootRunId, graphId: 'g-1' as GraphId },
+    ];
+
+    assert.equal(
+      hasRunningProcessData(processData, {
+        graphRuns,
+        selectedGraphRun: 'graph-run-a' as GraphRunId,
+      }),
+      false,
+    );
+    assert.equal(
+      hasRunningProcessData(processData, {
+        graphRuns,
+        selectedGraphRun: 'graph-run-b' as GraphRunId,
+      }),
+      true,
+    );
   });
 
   test('canvas execution chrome treats missing process pages as latest without overriding explicit pages', () => {

@@ -90,23 +90,24 @@ auto-continuation. A shared connected Delegate completion cannot be assigned
 safely to multiple parallel split indexes.
 
 The LLM Chat node keeps its original running process while the processor invokes
-the connected Delegate once per model tool-call round. Each Delegate invocation
-has its own process id and emits normal `nodeStart` / `nodeFinish` events, so the
-existing per-node process pages show repeated tool rounds. Partial outputs from
-the live handler or external function are emitted against that same Delegate
-process id. No additional waiting state is introduced. If auto-continuation ends
+the connected Delegate once per tool call. Calls from the same model round get
+distinct process ids, scalar inputs and outputs, and normal `nodeStart` /
+`nodeFinish` events. They run concurrently and appear as separate per-node
+process pages; the LLM joins their results in model order before continuing.
+Partial outputs from a live handler or external function use that call's
+Delegate process id. No additional waiting state is introduced. If auto-continuation ends
 on raw calls because the round limit was reached or a tool is unknown, the
 reservation is released and the ordinary downstream Delegate scheduling path
 receives those calls.
 
 `Message (fires before tool call invocation)` is the nonblank model text
 that accompanied a tool-call round. Its persisted output id remains
-`assistant-message`. For a round with multiple calls, the processor invokes the
-branch once per call before dispatching their shared tool batch, without a
-Delegate setting or persisted execution-mode flag. Each branch run receives the
-same model text. An ordinary branch must settle before tools begin. A `Start
-Async Branch` node at that boundary returns immediately and lets the remaining
-branch work overlap the tools, while the root run continues to own it. Web-app
+`assistant-message`. For a round with multiple calls, every Delegate invocation
+fires that branch with the same model text under its own process id. The branch
+and corresponding tool handler start in parallel, without a Delegate setting or
+persisted execution-mode flag. A `Start Async Branch` node at that boundary
+returns immediately when the remaining branch must not hold the foreground path
+open, while the root run continues to own it. Web-app
 actions opt into the processor's two-phase result contract: when foreground
 scheduling produces the graph outputs first, `graphOutputsReady` releases the
 action result while the
