@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import { Router, type Request, type Response } from 'express';
 import {
   createProcessor,
+  createRivetStoredValueSnapshotStore,
   ExecutionRecorder,
   getUiGraphActionComponent,
   jsonValueToDataValue,
@@ -901,6 +902,19 @@ function getWebAppActionState(body: Record<string, unknown>): Record<string, unk
   throw new RivetWebAppActionHttpError('Invalid action state.', 400);
 }
 
+function getWebAppActionStorage(body: Record<string, unknown>): Record<string, unknown> {
+  const storage = body.storage;
+  if (storage == null) {
+    return {};
+  }
+
+  if (isJsonObjectRecord(storage)) {
+    return storage;
+  }
+
+  throw new RivetWebAppActionHttpError('Invalid action storage.', 400);
+}
+
 function validateWebAppActionRevisionKey(requestRevisionKey: string | undefined, revisionKey: string | undefined): void {
   if (revisionKey != null && requestRevisionKey !== revisionKey) {
     throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
@@ -919,6 +933,7 @@ async function runRecordedWebAppAction(
   const componentId = getWebAppActionComponentId(req.body);
   const requestRevisionKey = getOptionalWebAppActionRevisionKey(req.body);
   const actionState = getWebAppActionState(req.body);
+  const actionStorage = getWebAppActionStorage(req.body);
   validateWebAppActionRevisionKey(requestRevisionKey, executionProject.revisionKey);
 
   const resolvedComponentId = componentId as UiComponentId;
@@ -946,10 +961,14 @@ async function runRecordedWebAppAction(
     Object.fromEntries(
       Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]),
     )) as Record<string, LooseDataValue>;
+  const browserStoredValues = processorOptions.storedValueStore
+    ? undefined
+    : createRivetStoredValueSnapshotStore(actionStorage);
   const processor = createProcessor(executionProject.project, {
     ...processorOptions,
     graph: component.action.graphId,
     inputs,
+    storedValueStore: processorOptions.storedValueStore ?? browserStoredValues!.store,
   });
   const recorder = isWorkflowRecordingEnabled()
     ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
@@ -969,6 +988,7 @@ async function runRecordedWebAppAction(
     result = {
       outputs,
       statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
+      storagePatch: browserStoredValues?.getPatch() ?? {},
     };
   } catch (error) {
     status = 'failed';
