@@ -957,6 +957,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   align-items: flex-end;
   gap: 10px;
   border-top: 1px solid var(--rivet-web-app-card-border);
+  margin: 0;
   padding: 14px;
 }
 
@@ -993,11 +994,13 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   background: var(--rivet-web-app-button-background);
   color: var(--rivet-web-app-button-foreground);
   cursor: pointer;
-  font: inherit;
-  font-size: 21px;
-  font-weight: 700;
-  line-height: 1;
   padding: 0;
+}
+
+.rivet-web-app-chat-send > svg {
+  width: 18px;
+  height: 18px;
+  transform: translateY(-1px);
 }
 
 .rivet-web-app-chat-send:hover:not(:disabled),

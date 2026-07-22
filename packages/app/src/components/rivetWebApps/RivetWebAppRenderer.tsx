@@ -65,6 +65,18 @@ import { useMarkdown } from '../../hooks/useMarkdown.js';
 // the same component beneath `default` during source-level tests.
 const Select = (AtlaskitSelect as unknown as { default?: typeof AtlaskitSelect }).default ?? AtlaskitSelect;
 
+const ChatSendIcon: FC = () => (
+  <svg aria-hidden="true" fill="none" focusable="false" viewBox="0 0 24 24">
+    <path
+      d="M12 19V5m0 0 5 5m-5-5-5 5"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+    />
+  </svg>
+);
+
 type WebAppStorageActionState = {
   appliedActionByKey: Map<string, number>;
   nextAction: number;
@@ -969,7 +981,7 @@ const RivetWebAppChat: FC<{
           disabled={!isRunning && !draft.trim()}
           onClick={isRunning ? () => onCancelAction(component.id) : undefined}
         >
-          {isRunning ? <span aria-hidden="true" className="rivet-web-app-chat-stop-icon" /> : '\u2191'}
+          {isRunning ? <span aria-hidden="true" className="rivet-web-app-chat-stop-icon" /> : <ChatSendIcon />}
         </button>
       </form>
     </section>

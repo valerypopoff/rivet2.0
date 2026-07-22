@@ -201,6 +201,7 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     for (const root of [reactRootElement, hostedDom.window.document]) {
       assert.equal(root.querySelector('.rivet-web-app-chat-empty')?.textContent, 'Start a conversation');
       assert.equal(root.querySelector('.rivet-web-app-chat-search-button'), null);
+      assert.equal(root.querySelector('.rivet-web-app-chat-send svg')?.getAttribute('viewBox'), '0 0 24 24');
     }
 
     await act(async () => {

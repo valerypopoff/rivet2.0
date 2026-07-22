@@ -76,6 +76,7 @@ const CHAT_SEARCH_ICON_PATH = 'm20 20-4.05-4.05m0 0a7 7 0 1 0-9.9-9.9 7 7 0 0 0 
 const CROSS_ICON_PATH = 'M12 12 6 6m6 6 6 6m-6-6 6-6m-6 6-6 6';
 const CHEVRON_LEFT_ICON_PATH = 'm14 7-5 5 5 5';
 const CHEVRON_RIGHT_ICON_PATH = 'm10 7 5 5-5 5';
+const CHAT_SEND_ICON_PATH = 'M12 19V5m0 0 5 5m-5-5-5 5';
 const PIN_ICON_PATH =
   'm4 20 5-5m0 0 3.956 3.956a1 1 0 0 0 1.626-.314l2.255-5.261a1 1 0 0 1 .548-.535l3.207-1.283a1 1 0 0 0 .336-1.635l-6.856-6.856a1 1 0 0 0-1.635.336l-1.283 3.207a1 1 0 0 1-.535.548L5.358 9.418a1 1 0 0 0-.314 1.626L9 15z';
 const MORE_MENU_ICON_PATH = 'M5 12h.01M12 12h.01M19 12h.01';
@@ -850,7 +851,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           );
           sendButton.addEventListener('click', () => interactionController.cancelAction(renderModel.component.id));
         } else {
-          sendButton.textContent = String.fromCodePoint(8593);
+          sendButton.append(createLineIcon(CHAT_SEND_ICON_PATH));
           sendButton.disabled = !renderModel.draft.trim();
         }
         textarea.addEventListener('input', () => {
