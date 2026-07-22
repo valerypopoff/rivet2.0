@@ -13,6 +13,7 @@ import type {
   ChatV2ToolSet,
   RunChatV2PipelineOptions,
 } from './chatV2Types.js';
+import { applyLLMChatV2ParallelToolCallProviderOptions } from './parallelToolCalls.js';
 import type { LLMChatV2NodeData } from './llmChatV2NodeData.js';
 
 export type LLMChatV2GenerationParameters = Pick<
@@ -178,16 +179,14 @@ export function resolveLLMChatV2RuntimeProviderOptions(
   data: LLMChatV2NodeData,
   inputs: Inputs,
 ): ChatV2ProviderOptions | undefined {
-  const providerOptions = resolveProviderOptions(data, inputs) ?? {};
+  const providerOptions = applyLLMChatV2ParallelToolCallProviderOptions({
+    provider: data.provider,
+    useToolCalling: data.useToolCalling,
+    parallelToolCalls: data.parallelToolCalls,
+    providerOptions: resolveProviderOptions(data, inputs),
+  });
 
-  if (data.provider === 'openai' && data.useToolCalling) {
-    providerOptions.openai = {
-      ...(providerOptions.openai ?? {}),
-      parallelToolCalls: !!data.parallelToolCalls,
-    };
-  }
-
-  return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
+  return providerOptions != null && Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
 }
 
 export function resolveLLMChatV2ToolChoice(data: LLMChatV2NodeData): ChatV2ToolChoice | undefined {

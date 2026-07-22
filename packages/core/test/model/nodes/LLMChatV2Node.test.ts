@@ -632,7 +632,7 @@ describe('LLMChatV2NodeImpl', () => {
     );
     assert.equal(
       toolsGroup.editors.find((editor: any) => editor.dataKey === 'parallelToolCalls')?.helperMessage,
-      undefined,
+      'Supported by OpenAI, Anthropic, and compatible Custom providers. Custom providers receive parallel_tool_calls only when enabled; otherwise their default applies unless Extra provider options supplies the field.',
     );
     assert.equal(
       toolsGroup.editors
@@ -641,7 +641,7 @@ describe('LLMChatV2NodeImpl', () => {
           provider: 'custom',
           useToolCalling: true,
         }),
-      true,
+      false,
     );
     assert.equal(
       toolsGroup.editors
@@ -651,6 +651,33 @@ describe('LLMChatV2NodeImpl', () => {
           useToolCalling: true,
         }),
       false,
+    );
+    assert.equal(
+      toolsGroup.editors
+        .find((editor: any) => editor.dataKey === 'parallelToolCalls')
+        ?.hideIf({
+          provider: 'anthropic',
+          useToolCalling: true,
+        }),
+      false,
+    );
+    assert.equal(
+      toolsGroup.editors
+        .find((editor: any) => editor.dataKey === 'parallelToolCalls')
+        ?.hideIf({
+          provider: 'google',
+          useToolCalling: true,
+        }),
+      true,
+    );
+    assert.equal(
+      toolsGroup.editors
+        .find((editor: any) => editor.dataKey === 'parallelToolCalls')
+        ?.hideIf({
+          provider: 'openai',
+          useToolCalling: false,
+        }),
+      true,
     );
     assert.match(
       toolsGroup.editors.find((editor: any) => editor.dataKey === 'autoContinueToolCalls')?.helperMessage,
@@ -881,6 +908,133 @@ describe('LLMChatV2NodeImpl', () => {
         },
       },
     );
+  });
+
+  it('maps parallel tool-call controls to the selected provider without changing default Custom requests', () => {
+    assert.deepEqual(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'openai',
+          useToolCalling: true,
+          parallelToolCalls: false,
+          extraProviderOptions: '{ "parallelToolCalls": true, "customFlag": true }',
+        }).data,
+        {},
+      ),
+      { openai: { parallelToolCalls: false, customFlag: true } },
+    );
+    assert.deepEqual(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'openai',
+          useToolCalling: true,
+          parallelToolCalls: true,
+        }).data,
+        {},
+      ),
+      { openai: { parallelToolCalls: true } },
+    );
+    assert.deepEqual(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'anthropic',
+          useToolCalling: true,
+          parallelToolCalls: false,
+          extraProviderOptions: '{ "disableParallelToolUse": false, "customFlag": true }',
+        }).data,
+        {},
+      ),
+      { anthropic: { disableParallelToolUse: true, customFlag: true } },
+    );
+    assert.deepEqual(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'anthropic',
+          useToolCalling: true,
+          parallelToolCalls: true,
+        }).data,
+        {},
+      ),
+      { anthropic: { disableParallelToolUse: false } },
+    );
+    assert.equal(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'custom',
+          useToolCalling: true,
+          parallelToolCalls: false,
+        }).data,
+        {},
+      ),
+      undefined,
+    );
+    assert.deepEqual(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'custom',
+          useToolCalling: true,
+          parallelToolCalls: true,
+        }).data,
+        {},
+      ),
+      { custom: { parallel_tool_calls: true } },
+    );
+    assert.equal(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'custom',
+          useToolCalling: false,
+          parallelToolCalls: true,
+        }).data,
+        {},
+      ),
+      undefined,
+    );
+    assert.equal(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'google',
+          useToolCalling: true,
+          parallelToolCalls: true,
+        }).data,
+        {},
+      ),
+      undefined,
+    );
+  });
+
+  it('preserves Custom provider advanced overrides until the parallel tool-call control is enabled', () => {
+    const disabled = resolveLLMChatV2RuntimeProviderOptions(
+      createNode({
+        provider: 'custom',
+        useToolCalling: true,
+        parallelToolCalls: false,
+        extraProviderOptions: '{ "parallel_tool_calls": false, "customFlag": true }',
+      }).data,
+      {},
+    );
+    const enabled = resolveLLMChatV2RuntimeProviderOptions(
+      createNode({
+        provider: 'custom',
+        useToolCalling: true,
+        parallelToolCalls: true,
+        extraProviderOptions: '{ "parallel_tool_calls": false, "customFlag": true }',
+      }).data,
+      {},
+    );
+
+    assert.deepEqual(disabled, {
+      custom: {
+        parallel_tool_calls: false,
+        customFlag: true,
+      },
+    });
+    assert.deepEqual(enabled, {
+      custom: {
+        parallel_tool_calls: true,
+        customFlag: true,
+      },
+    });
   });
 
   it('resolves extra provider options from an input port', () => {

@@ -104,6 +104,8 @@ Response format supports Default, Text, JSON object, and JSON schema. JSON objec
 
 Tool use enables the Tools input and optional tool-choice controls. Auto-continue mode lets Rivet execute tool calls, send tool results back to the model, and repeat until a normal answer is produced or the max tool-round limit is reached.
 
+**Allow parallel toolcalls** is available for OpenAI, Anthropic, and Custom providers. It permits a supported model to return more than one tool call in a response; it does not require the model to do so. OpenAI and Anthropic receive an explicit provider setting for either switch state. For a Custom OpenAI-compatible provider, Rivet sends `parallel_tool_calls: true` only when the switch is enabled. When disabled, Rivet leaves the field out so the endpoint's default applies; an explicit `parallel_tool_calls` value in **Extra provider options** is still respected. Some partially compatible Custom endpoints may ignore or reject the field when it is enabled. Google does not show this switch because its current adapter has no equivalent control.
+
 To make tool work visible and configurable in the graph:
 
 1. Enable **Tool use** and **Auto-continue after toolcalls run**.

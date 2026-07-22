@@ -1,0 +1,58 @@
+import type { ChatV2Provider, ChatV2ProviderOptions } from './chatV2Types.js';
+
+export const LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE =
+  'Supported by OpenAI, Anthropic, and compatible Custom providers. Custom providers receive parallel_tool_calls only when enabled; otherwise their default applies unless Extra provider options supplies the field.';
+
+export function supportsLLMChatV2ParallelToolCalls(provider: ChatV2Provider): boolean {
+  return provider === 'openai' || provider === 'anthropic' || provider === 'custom';
+}
+
+function mergeProviderOptions(
+  providerOptions: ChatV2ProviderOptions | undefined,
+  provider: ChatV2Provider,
+  options: Record<string, unknown>,
+): ChatV2ProviderOptions {
+  return {
+    ...providerOptions,
+    [provider]: {
+      ...(providerOptions?.[provider] ?? {}),
+      ...options,
+    },
+  } as ChatV2ProviderOptions;
+}
+
+export function applyLLMChatV2ParallelToolCallProviderOptions(params: {
+  provider: ChatV2Provider;
+  useToolCalling: boolean | undefined;
+  parallelToolCalls: boolean | undefined;
+  providerOptions: ChatV2ProviderOptions | undefined;
+}): ChatV2ProviderOptions | undefined {
+  const { provider, useToolCalling, parallelToolCalls, providerOptions } = params;
+
+  if (!useToolCalling) {
+    return providerOptions;
+  }
+
+  switch (provider) {
+    case 'openai':
+      return mergeProviderOptions(providerOptions, provider, {
+        parallelToolCalls: !!parallelToolCalls,
+      });
+
+    case 'anthropic':
+      return mergeProviderOptions(providerOptions, provider, {
+        disableParallelToolUse: !parallelToolCalls,
+      });
+
+    case 'custom':
+      // OpenAI-compatible endpoints vary widely. Do not send an unsupported
+      // field to existing/default Custom-provider graphs unless the user
+      // explicitly opts in to requesting parallel calls.
+      return parallelToolCalls
+        ? mergeProviderOptions(providerOptions, provider, { parallel_tool_calls: true })
+        : providerOptions;
+
+    case 'google':
+      return providerOptions;
+  }
+}

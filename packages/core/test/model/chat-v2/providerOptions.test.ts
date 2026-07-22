@@ -136,6 +136,43 @@ describe('createChatV2Model', () => {
     });
   });
 
+  it('forwards the raw OpenAI-compatible parallel tool-call request field', async () => {
+    const model = createChatV2Model(
+      'custom',
+      'gpt-oss-120b',
+      {
+        settings: {},
+        getPluginConfig: () => undefined,
+      } as any,
+      {
+        apiKey: 'test-key',
+        baseURL: 'https://api.example.test/v1',
+      },
+    ) as {
+      getArgs(options: unknown): Promise<{ args: { parallel_tool_calls?: unknown }; warnings: unknown[] }>;
+    };
+
+    const { args, warnings } = await model.getArgs({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'Use both tools.' }] }],
+      providerOptions: {
+        custom: {
+          parallel_tool_calls: true,
+        },
+      },
+      tools: [
+        {
+          type: 'function',
+          name: 'lookup',
+          description: 'Look up a value.',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+    });
+
+    assert.deepEqual(warnings, []);
+    assert.equal(args.parallel_tool_calls, true);
+  });
+
   it('does not request OpenAI stream usage options from custom-compatible providers', () => {
     const model = createChatV2Model(
       'custom',
