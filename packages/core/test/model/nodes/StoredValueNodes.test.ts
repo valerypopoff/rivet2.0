@@ -23,7 +23,20 @@ function createContext(
 
 describe('Set Stored Value', () => {
   it('offers only portable JSON-compatible data types in both node editors', () => {
-    const expected = ['any', 'boolean', 'string', 'number', 'date', 'time', 'datetime', 'object', 'vector'];
+    const expected = [
+      'any',
+      'boolean',
+      'string',
+      'number',
+      'date',
+      'time',
+      'datetime',
+      'object',
+      'vector',
+      'knowledge-source',
+      'knowledge-document',
+      'knowledge-evidence',
+    ];
     const getAllowedTypes = (editors: Array<{ type: string; allowedDataTypes?: readonly string[] }>) =>
       editors.find((candidate) => candidate.type === 'dataTypeSelector')?.allowedDataTypes;
 

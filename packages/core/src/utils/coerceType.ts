@@ -11,6 +11,11 @@ import {
 } from '../model/DataValue.js';
 import { expectTypeOptional } from './expectType.js';
 import type { GraphId } from '../index.js';
+import {
+  normalizeKnowledgeDocument,
+  normalizeKnowledgeEvidence,
+  normalizeKnowledgeSourceReference,
+} from '../integrations/KnowledgeStoreValidation.js';
 
 export function coerceTypeOptional<T extends DataType>(
   wrapped: DataValue | undefined,
@@ -48,6 +53,9 @@ export function coerceTypeOptional<T extends DataType>(
     .with('object', () => coerceToObject(value))
     .with('binary', () => coerceToBinary(value))
     .with('graph-reference', () => coerceToGraphReference(value))
+    .with('knowledge-source', () => coerceKnowledgeValue(value, normalizeKnowledgeSourceReference))
+    .with('knowledge-document', () => coerceKnowledgeValue(value, normalizeKnowledgeDocument))
+    .with('knowledge-evidence', () => coerceKnowledgeValue(value, normalizeKnowledgeEvidence))
     .otherwise(() => {
       if (!value) {
         return value;
@@ -400,6 +408,15 @@ function coerceToGraphReference(value: DataValue | undefined): { graphName: stri
   return undefined;
 }
 
+function coerceKnowledgeValue<T>(value: DataValue | undefined, normalize: (value: unknown) => T): T | undefined {
+  if (!value || value.value == null || isArrayDataValue(value)) return undefined;
+  try {
+    return normalize(value.value);
+  } catch {
+    return undefined;
+  }
+}
+
 export function canBeCoercedAny(from: DataType | Readonly<DataType[]>, to: DataType | Readonly<DataType[]>) {
   for (const fromType of Array.isArray(from) ? from : [from]) {
     for (const toType of Array.isArray(to) ? to : [to]) {
@@ -433,8 +450,19 @@ export function canBeCoerced(from: DataType, to: DataType) {
     return from === 'object';
   }
 
-  if (to === 'audio' || to === 'binary' || to === 'image') {
-    return false;
+  if (
+    to === 'audio' ||
+    to === 'binary' ||
+    to === 'image' ||
+    to === 'knowledge-source' ||
+    to === 'knowledge-document' ||
+    to === 'knowledge-evidence'
+  ) {
+    return from === to || from === 'object';
+  }
+
+  if (from === 'knowledge-source' || from === 'knowledge-document' || from === 'knowledge-evidence') {
+    return to === 'object' || to === 'string';
   }
 
   return true;

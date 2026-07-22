@@ -133,6 +133,24 @@ export * from './nodes/VectorStoreNode.js';
 import { vectorNearestNeighborsNode } from './nodes/VectorNearestNeighborsNode.js';
 export * from './nodes/VectorNearestNeighborsNode.js';
 
+import { knowledgeSourceNode } from './nodes/KnowledgeSourceNode.js';
+export * from './nodes/KnowledgeSourceNode.js';
+
+import { knowledgeDocumentNode } from './nodes/KnowledgeDocumentNode.js';
+export * from './nodes/KnowledgeDocumentNode.js';
+
+import { syncKnowledgeSourceNode } from './nodes/SyncKnowledgeSourceNode.js';
+export * from './nodes/SyncKnowledgeSourceNode.js';
+
+import { getKnowledgeSourceStatusNode } from './nodes/GetKnowledgeSourceStatusNode.js';
+export * from './nodes/GetKnowledgeSourceStatusNode.js';
+
+import { searchKnowledgeNode } from './nodes/SearchKnowledgeNode.js';
+export * from './nodes/SearchKnowledgeNode.js';
+
+import { buildKnowledgeContextNode } from './nodes/BuildKnowledgeContextNode.js';
+export * from './nodes/BuildKnowledgeContextNode.js';
+
 import { hashNode } from './nodes/HashNode.js';
 export * from './nodes/HashNode.js';
 
@@ -329,6 +347,12 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(getEmbeddingNode)
     .register(vectorStoreNode)
     .register(vectorNearestNeighborsNode)
+    .register(knowledgeSourceNode)
+    .register(knowledgeDocumentNode)
+    .register(syncKnowledgeSourceNode)
+    .register(getKnowledgeSourceStatusNode)
+    .register(searchKnowledgeNode)
+    .register(buildKnowledgeContextNode)
     .register(hashNode)
     .register(abortGraphNode)
     .register(raceInputsNode)

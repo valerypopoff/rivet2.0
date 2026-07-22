@@ -94,3 +94,11 @@ test('LLM settings page explains where provider keys are used', () => {
   assert.doesNotMatch(source, /Chat node headers/);
   assert.doesNotMatch(source, /Configure For LM Studio/);
 });
+
+test('Knowledge Store modal gives each labeled field a visible vertical rhythm', () => {
+  const source = readFileSync(join(componentsDir, 'ProjectKnowledgeStoresConfiguration.tsx'), 'utf8');
+
+  assert.match(source, /const modalStyles = css`[\s\S]*display: flex;[\s\S]*flex-direction: column;[\s\S]*gap: 16px;/);
+  assert.match(source, /\.knowledge-store-field \{[\s\S]*display: flex;[\s\S]*flex-direction: column;[\s\S]*gap: 6px;/);
+  assert.doesNotMatch(source, /\.knowledge-store-form \{[\s\S]*gap: 14px;/);
+});

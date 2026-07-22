@@ -26,12 +26,12 @@ The search field lists static keys from enabled Set Stored Value nodes in the pr
 
 ## Settings
 
-| Setting   | Description                                                                                                                      | Default  |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| Key       | Static storage key.                                                                                                              | `key`    |
-| Data Type | JSON-compatible type used for the Value output. Media, document, chat-message, and function types are intentionally unavailable. | `string` |
-| On Demand | Loads the backend when the node executes, then lets downstream consumers observe later Sets through the synchronous run cache.   | Off      |
-| Wait      | If the key is missing, waits for Set Stored Value in this same root run. It does not subscribe to changes made by other runs.    | Off      |
+| Setting   | Description                                                                                                                                                                                     | Default  |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Key       | Static storage key.                                                                                                                                                                             | `key`    |
+| Data Type | JSON-compatible type used for the Value output. Knowledge source/document/evidence types are supported; media, binary document, chat-message, and function types are intentionally unavailable. | `string` |
+| On Demand | Loads the backend when the node executes, then lets downstream consumers observe later Sets through the synchronous run cache.                                                                  | Off      |
+| Wait      | If the key is missing, waits for Set Stored Value in this same root run. It does not subscribe to changes made by other runs.                                                                   | Off      |
 
 **On Demand** and **Wait** are mutually exclusive.
 

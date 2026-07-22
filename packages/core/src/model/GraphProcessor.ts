@@ -92,6 +92,8 @@ import {
 } from './nodes/toolCallDelegation.js';
 import type { ToolCallContinuation, ToolCallContinuationResult } from './ToolCallContinuation.js';
 import { ManagedAsyncBranches } from './ManagedAsyncBranches.js';
+import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
+import { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
 
 // eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
@@ -520,6 +522,7 @@ export class GraphProcessor {
   readonly #captureNodeTimings: boolean;
   #frozenNodeOutputResolver: FrozenNodeOutputResolver | undefined;
   #storedValueStore: RivetStoredValueStore | undefined;
+  #knowledgeStores: RivetKnowledgeStoreRegistry | undefined;
   #useSeededExecutionPlanOnNextRun = false;
   id = nanoid();
 
@@ -570,6 +573,7 @@ export class GraphProcessor {
   #contextValues: Record<string, DataValue> = undefined!;
   #globals: Map<string, ScalarOrArrayDataValue> = undefined!;
   #storedValueController: RivetStoredValueController = undefined!;
+  #knowledgeStoreController: KnowledgeStoreController = undefined!;
   #attachedNodeData: Map<NodeId, AttachedNodeData> = undefined!;
   #successfulAbortTerminalProcessIds: Set<ProcessId> = undefined!;
   #totalCost: number = 0;
@@ -908,6 +912,13 @@ export class GraphProcessor {
     this.#storedValueStore = store;
   }
 
+  setKnowledgeStores(stores: RivetKnowledgeStoreRegistry | undefined): void {
+    if (this.#lifecycle.isRunning) {
+      throw new Error('Cannot change knowledge stores while the graph is running.');
+    }
+    this.#knowledgeStores = stores;
+  }
+
   async abort(successful: boolean = false, error?: Error | string): Promise<void> {
     if (!this.#lifecycle.requestAbort(successful, error)) {
       return Promise.resolve();
@@ -1110,6 +1121,7 @@ export class GraphProcessor {
     this.#globals ??= new Map();
     if (!this.#isSubProcessor) {
       this.#storedValueController = new RivetStoredValueController(this.#storedValueStore);
+      this.#knowledgeStoreController = new KnowledgeStoreController(this.#knowledgeStores);
     }
     this.#ignoreNodes = new Set();
     this.#nodeProcessContextBase = undefined!;
@@ -1293,6 +1305,8 @@ export class GraphProcessor {
       getGlobal: (id) => this.#globals.get(id),
       getCachedStoredValue: (key) => this.#storedValueController.getCached(key),
       getStoredValue: (key) => this.#storedValueController.get(key),
+      getKnowledgeStore: (connectionId) =>
+        this.#knowledgeStoreController.resolve(connectionId, this.#nodeProcessContextBase),
       getGraphBoundary: (project, graphId) => this.#getGraphBoundary(project, graphId),
       graphInputNodeValues: this.#graphInputNodeValues,
       graphInputs: this.#graphInputs,
@@ -2142,6 +2156,7 @@ export class GraphProcessor {
     processor.#suppressGraphPartialOutputs = true;
     processor.#globals = this.#globals;
     processor.#storedValueController = this.#storedValueController;
+    processor.#knowledgeStoreController = this.#knowledgeStoreController;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = this.#executor;
     processor.#suppressGraphLifecycleEvents = isRootGraphOrigin;
@@ -3084,6 +3099,7 @@ export class GraphProcessor {
     processor.#sameGraphRunOwnerOverride = this.#sameGraphRunOwnerOverride ?? this;
     processor.#globals = this.#globals;
     processor.#storedValueController = this.#storedValueController;
+    processor.#knowledgeStoreController = this.#knowledgeStoreController;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = this.#executor;
     processor.#suppressGraphLifecycleEvents = true;
@@ -3710,6 +3726,7 @@ export class GraphProcessor {
     processor.#parent = this;
     processor.#globals = this.#globals;
     processor.#storedValueController = this.#storedValueController;
+    processor.#knowledgeStoreController = this.#knowledgeStoreController;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = {
       nodeId: node.id,

@@ -109,7 +109,8 @@ export const pluginInfos: PluginInfo[] = [
     id: 'pinecone',
     name: 'Pinecone',
     description: dedent`
-      Adds an integration so that Pinecone's vector database can be used for the
+      Adds Pinecone as a Knowledge Store provider for synchronizing and searching
+      durable sources with Rivet's Knowledge nodes. Also supports the legacy
       Vector Store and Vector KNN nodes.
     `,
     author: 'Rivet Team',

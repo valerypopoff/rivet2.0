@@ -14,6 +14,7 @@ It owns:
 - node registration and built-in nodes
 - built-in provider plugins
 - runtime integration contracts
+- provider-neutral knowledge-source contracts, lifecycle, and typed nodes
 - serialization/deserialization
 - recording/playback support
 - public programmatic execution APIs
@@ -98,6 +99,8 @@ Only use debug logging for details that would be too noisy or too sensitive for 
 Provider stream JSON parsing should use [`parseProviderJsonChunk(...)`](../packages/core/src/utils/providerStreamParsing.ts). That helper preserves parse failures while avoiding raw chunk logging. If a provider needs richer parse diagnostics, extend the helper rather than adding a provider-local raw `console.error(chunk)`.
 
 Provider SSE transport belongs in [`fetchEventSource.ts`](../packages/core/src/utils/fetchEventSource.ts). Legacy OpenAI and Anthropic streaming both use this single reader so event splitting, `data:` / `event:` parsing, response-body isolation, header handling, and timeout cleanup stay consistent. Providers that need a timeout different from the shared chat default must pass it explicitly to the helper rather than cloning the transport.
+
+Durable retrieval uses the [Provider-neutral Knowledge Source API](./KNOWLEDGE-SOURCE-API.md). Keep provider-neutral documents, evidence, filters, manifests, and root-run resolution in core. Provider-specific request shapes belong in plugin adapters.
 
 ## GraphProcessor Loop-Control Boundary
 

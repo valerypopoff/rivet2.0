@@ -1,0 +1,33 @@
+---
+title: 'Knowledge Document'
+---
+
+# Knowledge Document Node
+
+## Overview
+
+Knowledge Document packages searchable text with an optional stable document ID, title, and flat portable metadata. Use an Array node to collect multiple documents before synchronization.
+
+## Inputs
+
+| Title       | Data Type | Description                                                        |
+| ----------- | --------- | ------------------------------------------------------------------ |
+| Text        | `string`  | Required document text.                                            |
+| Document ID | `string`  | Stable source-side ID. Rivet derives one when omitted.             |
+| Title       | `string`  | Human-readable title that can be included in chunks and citations. |
+| Metadata    | `object`  | Flat portable metadata for filtering and attribution.              |
+
+## Outputs
+
+| Title    | Data Type            | Description                             |
+| -------- | -------------------- | --------------------------------------- |
+| Document | `knowledge-document` | Normalized document ready to be synced. |
+
+Portable metadata supports null, finite numbers, booleans, strings, and homogeneous scalar arrays. Individual providers may support a narrower subset and return a clear error when a value cannot be stored.
+
+Enter static Metadata as a JSON object in the node settings. Leave it as `{}` when the document has no metadata, or enable the input port to supply the object dynamically.
+
+## See Also
+
+- [Sync Knowledge Source](./sync-knowledge-source.mdx)
+- [Knowledge Sources](../user-guide/knowledge-sources.md)

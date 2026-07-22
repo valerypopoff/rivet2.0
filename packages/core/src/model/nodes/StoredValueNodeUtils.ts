@@ -7,6 +7,11 @@ import {
   isArrayDataType,
 } from '../DataValue.js';
 import type { RivetStoredValue } from '../StoredValueStore.js';
+import {
+  isKnowledgeDocument,
+  isKnowledgeEvidence,
+  isKnowledgeSourceReference,
+} from '../../integrations/KnowledgeStoreValidation.js';
 
 export const portableStoredValueScalarTypes = [
   'any',
@@ -18,6 +23,9 @@ export const portableStoredValueScalarTypes = [
   'datetime',
   'object',
   'vector',
+  'knowledge-source',
+  'knowledge-document',
+  'knowledge-evidence',
 ] satisfies ScalarDataType[];
 
 export function storedValueToDataValue(value: RivetStoredValue, dataType: ScalarOrArrayDataType): DataValue {
@@ -57,6 +65,12 @@ function isStoredValueCompatibleWithScalarType(value: RivetStoredValue, dataType
       return typeof value === 'object' && value !== null && !Array.isArray(value);
     case 'vector':
       return Array.isArray(value) && value.every((item) => typeof item === 'number' && Number.isFinite(item));
+    case 'knowledge-source':
+      return isKnowledgeSourceReference(value);
+    case 'knowledge-document':
+      return isKnowledgeDocument(value);
+    case 'knowledge-evidence':
+      return isKnowledgeEvidence(value);
     default:
       return false;
   }

@@ -19,6 +19,7 @@ contracts, or source layout. User-facing docs live under `packages/docs/docs`.
 - [Canvas Interactions](./CANVAS-INTERACTIONS.md)
 - [Execution Identity And Snapshots](./EXECUTION-IDENTITY-AND-SNAPSHOTS.md)
 - [Hosted And Web App Contracts](./HOSTED-WEB-APP-CONTRACTS.md)
+- [Provider-neutral Knowledge Source API](./KNOWLEDGE-SOURCE-API.md)
 - [LLM Chat V2 Contract](./LLM-CHAT-V2-CONTRACT.md)
 - [Plugin System](./PLUGIN-SYSTEM.md)
 - [Unreachable Graph Detection](./UNREACHABLE-GRAPH-DETECTION.md)

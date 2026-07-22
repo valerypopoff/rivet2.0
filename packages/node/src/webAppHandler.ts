@@ -21,6 +21,7 @@ import {
   RIVET_WEB_APP_STATUS_FUNCTION_NAME,
   createRivetStoredValueSnapshotStore,
   type RivetStoredValueStore,
+  type RivetKnowledgeStoreRegistry,
   rivetWebAppStatusExternalFunction,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
@@ -35,6 +36,7 @@ import {
 // Re-declare this option so consumers retain the concrete store contract after omitting graph.
 export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'> & {
   storedValueStore?: RivetStoredValueStore;
+  knowledgeStores?: RivetKnowledgeStoreRegistry;
 };
 
 export type RivetWebAppActionContext = {
@@ -72,6 +74,7 @@ export type RivetWebAppHandlerOptions = {
   resolveCspNonce?: (request: Request) => Promise<string | undefined> | string | undefined;
   revisionKey?: string;
   storedValueStore?: RivetStoredValueStore;
+  knowledgeStores?: RivetKnowledgeStoreRegistry;
   uiGraphId?: UiGraphId | string;
 };
 
@@ -114,6 +117,7 @@ export type RunRivetWebAppActionOptions = {
   revisionKey?: string;
   state?: Record<string, unknown>;
   storedValueStore?: RivetStoredValueStore;
+  knowledgeStores?: RivetKnowledgeStoreRegistry;
   storage?: Record<string, unknown>;
   uiGraph: UiGraph;
 };
@@ -206,6 +210,7 @@ export function createRivetWebAppHandler(
             revisionKey: options.revisionKey,
             state: body.state,
             storedValueStore: options.storedValueStore,
+            knowledgeStores: options.knowledgeStores,
             storage: body.storage,
             uiGraph,
           });
@@ -255,6 +260,7 @@ export async function prepareRivetWebAppAction(
     revisionKey,
     state = {},
     storedValueStore,
+    knowledgeStores,
     storage = {},
     uiGraph,
   }: RunRivetWebAppActionOptions,
@@ -320,6 +326,7 @@ export async function prepareRivetWebAppAction(
     sourceAbortSignal.throwIfAborted();
     const actionAbortController = new AbortController();
     const hostStoredValueStore = processorOptions.storedValueStore ?? storedValueStore;
+    const hostKnowledgeStores = processorOptions.knowledgeStores ?? knowledgeStores;
     // A host store fully replaces browser persistence, including the untrusted browser snapshot.
     const browserStoredValues = hostStoredValueStore
       ? undefined
@@ -336,6 +343,7 @@ export async function prepareRivetWebAppAction(
       inputs,
       returnWhenGraphOutputsReady: true,
       storedValueStore: hostStoredValueStore ?? browserStoredValues!.store,
+      knowledgeStores: hostKnowledgeStores,
     });
     let started = false;
     let disposed = false;

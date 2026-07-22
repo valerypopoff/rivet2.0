@@ -95,6 +95,7 @@ export type RunGraphOptions = {
   codeRunner?: ProcessContext['codeRunner'];
   projectPath?: string;
   projectReferenceLoader?: ProjectReferenceLoader;
+  knowledgeStores?: RivetKnowledgeStoreRegistry;
 } & {
   [P in keyof ProcessEvents as `on${PascalCase<P>}`]?: (params: ProcessEvents[P]) => void;
 } & Settings;
@@ -112,6 +113,7 @@ Let's break down the important fields:
 - `context`: Similar to `inputs`, but these values are available to every graph and subgraph.
 - `externalFunctions`: This is how you define integration points that you can call from inside Rivet graphs.
 - `registry`: Use this when running custom plugin nodes.
+- `knowledgeStores`: Optional named host implementations for Knowledge Source nodes. A host entry overrides project provider configuration with the same connection ID.
 - `remoteDebugger`: Node-only. Attach a debugger server so the Rivet app can inspect the run.
 - `openAiApiKey` / `anthropicApiKey` / `googleApiKey` / `customAiApiKey`: Shared provider keys used by LLM Chat when API key source is Configured key. `openAiKey` remains a legacy alias for `openAiApiKey`.
 - Named custom-provider keys: If a custom-provider LLM Chat node sets `Alternative programmatic key name`, pass a top-level run option with that exact name.
@@ -158,6 +160,8 @@ await runGraphInFile('./myProject.rivet', {
 
 If the graph uses LLM Chat with `API key source` set to `Input port`, pass the key through the graph input connected to that node's API Key port instead of relying on settings.
 For multiple custom providers in one project, set each custom-provider LLM Chat node's `Alternative programmatic key name`, then pass matching top-level run options.
+
+For authenticated or multi-tenant knowledge retrieval, provide a request-scoped `knowledgeStores` registry. The same option is available on `createProcessor`, `runRivetWebAppAction`, web-app handlers, and WebSocket sessions. See [Knowledge Sources](../user-guide/knowledge-sources.md).
 
 ## Reusing a Loaded Graph
 

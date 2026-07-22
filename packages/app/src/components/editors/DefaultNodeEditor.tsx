@@ -72,7 +72,8 @@ export const defaultEditorContainerStyles = css`
     align-items: flex-start;
   }
 
-  .row.code .use-input-toggle {
+  .row.code .use-input-toggle,
+  .row.jsonObject .use-input-toggle {
     align-self: start;
     margin-top: calc(36px * var(--ui-font-scale));
     margin-bottom: 0;
@@ -338,11 +339,13 @@ export const defaultEditorContainerStyles = css`
     font-size: var(--ui-font-size-normal);
   }
 
-  .row.code {
+  .row.code,
+  .row.jsonObject {
     align-items: start;
   }
 
-  .row.code > :first-child {
+  .row.code > :first-child,
+  .row.jsonObject > :first-child {
     min-width: 0;
   }
 
@@ -638,7 +641,8 @@ export const DefaultNodeEditor: FC<
                 e.type === 'code' ||
                 e.type === 'number' ||
                 e.type === 'dropdown' ||
-                e.type === 'anyData',
+                e.type === 'anyData' ||
+                e.type === 'jsonObject',
             );
             if (firstStringOrCodeEditor) {
               firstStringOrCodeEditor.autoFocus = true;

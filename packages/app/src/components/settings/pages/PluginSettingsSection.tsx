@@ -46,6 +46,7 @@ export const PluginSettingsSection: FC<{
   configSpec: RivetPluginConfigSpecs | undefined;
 }> = ({ pluginId, label, configSpec }) => {
   const [settings, setSettings] = useAtom(settingsState);
+  const pluginSettings = readOwnRecord(settings.pluginSettings, pluginId);
 
   return (
     <section css={pluginSettingsSectionStyles} aria-labelledby={`plugin-settings-${pluginId}`}>
@@ -64,7 +65,7 @@ export const PluginSettingsSection: FC<{
                     <>
                       {typedConfig.helperText && <FieldHelperMessage>{typedConfig.helperText}</FieldHelperMessage>}
                       <TextField
-                        value={(settings.pluginSettings?.[pluginId]?.[key] as string | undefined) ?? ''}
+                        value={(readOwnProperty(pluginSettings, key) as string | undefined) ?? ''}
                         type={typedConfig.type === 'secret' ? 'password' : 'text'}
                         onChange={(event) =>
                           setSettings((state) => ({
@@ -72,7 +73,7 @@ export const PluginSettingsSection: FC<{
                             pluginSettings: {
                               ...state.pluginSettings,
                               [pluginId]: {
-                                ...state.pluginSettings?.[pluginId],
+                                ...readOwnRecord(state.pluginSettings, pluginId),
                                 [key]: (event.target as HTMLInputElement).value,
                               },
                             },
@@ -90,3 +91,15 @@ export const PluginSettingsSection: FC<{
     </section>
   );
 };
+
+function readOwnProperty(value: unknown, key: string): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return Object.prototype.hasOwnProperty.call(value, key) ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+function readOwnRecord(value: unknown, key: string): Record<string, unknown> | undefined {
+  const property = readOwnProperty(value, key);
+  return property && typeof property === 'object' && !Array.isArray(property)
+    ? (property as Record<string, unknown>)
+    : undefined;
+}

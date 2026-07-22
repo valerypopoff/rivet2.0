@@ -1,0 +1,28 @@
+---
+title: 'Get Knowledge Source Status'
+---
+
+# Get Knowledge Source Status Node
+
+## Overview
+
+Get Knowledge Source Status reads the provider's durable active-source manifest. It is the authoritative way to determine whether a source exists and which version is active.
+
+A missing source is normal output, not a graph error. Provider, authentication, and transport failures still fail the node.
+
+## Inputs
+
+| Title            | Data Type          | Description                                                                                            |
+| ---------------- | ------------------ | ------------------------------------------------------------------------------------------------------ |
+| Source           | `knowledge-source` | Source to inspect. Its exact version, when present, is used as the expectation.                        |
+| Expected Version | `string`           | Optional explicit version to compare with the active one; it overrides the source reference's version. |
+
+## Outputs
+
+Resolved Source, Exists, Active Version, Matches Expected Version, Document Count, Chunk Count, Updated At, Metadata, and Status Message.
+
+## See Also
+
+- [Knowledge Source](./knowledge-source.mdx)
+- [Sync Knowledge Source](./sync-knowledge-source.mdx)
+- [Search Knowledge](./search-knowledge.mdx)

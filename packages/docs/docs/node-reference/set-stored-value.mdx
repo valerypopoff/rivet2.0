@@ -28,10 +28,10 @@ Ordinary editor and headless graph runs use fresh in-memory storage. Reusing a p
 
 ## Settings
 
-| Setting   | Description                                                                                                                                 |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Key       | Static storage key. Static keys appear in Get Stored Value's search field.                                                                  |
-| Data Type | JSON-compatible type used for the Value input and outputs. Media, document, chat-message, and function types are intentionally unavailable. |
+| Setting   | Description                                                                                                                                                                                                |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key       | Static storage key. Static keys appear in Get Stored Value's search field.                                                                                                                                 |
+| Data Type | JSON-compatible type used for the Value input and outputs. Knowledge source/document/evidence types are supported; media, binary document, chat-message, and function types are intentionally unavailable. |
 
 Writes update the root-run cache immediately after the persistence callback succeeds. A callback error fails the node and Rivet does not fall back to browser or memory storage.
 

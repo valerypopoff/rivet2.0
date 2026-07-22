@@ -34,6 +34,17 @@ The following is all of the nodes built-in to the core of Rivet.
 | [Get Embedding](./get-embedding.mdx)           | Generates a vector embedding for a given input text, allowing text to be converted into a numerical representation for operations such as K-nearest neighbor search. Requires an integration, such as OpenAI, to generate the embedding.                                                                    |
 | [Trim Chat Messages](./trim-chat-messages.mdx) | Manages the length of chat message chains in terms of tokens. Trims messages from either the beginning or the end of the list until the total length of the messages is under the configured token length. Ideal for setting up infinite message chains that stay under the language model's context limit. |
 
+## Knowledge
+
+| Node                                                             | Description                                                                            |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [Knowledge Source](./knowledge-source.mdx)                       | References one logical source in a named project or host-provided knowledge store.     |
+| [Knowledge Document](./knowledge-document.mdx)                   | Packages text, identity, title, and portable searchable metadata.                      |
+| [Sync Knowledge Source](./sync-knowledge-source.mdx)             | Idempotently chunks, uploads, and activates a complete immutable source version.       |
+| [Get Knowledge Source Status](./get-knowledge-source-status.mdx) | Reads the authoritative durable manifest and returns missing sources as normal output. |
+| [Search Knowledge](./search-knowledge.mdx)                       | Runs one or several provider-neutral searches and fuses normalized evidence.           |
+| [Build Knowledge Context](./build-knowledge-context.mdx)         | Packs evidence into a bounded prompt context with citation labels and a citation map.  |
+
 ## MCP
 
 | Node                                        | Description                                                                                         |
@@ -99,7 +110,7 @@ The following is all of the nodes built-in to the core of Rivet.
 | [Regex Match](./regex-match.mdx)               | Matches a string input against a series of regular expressions, routing control flow based on the content of the string. Executes the output port for each matching regular expression and the `Unmatched` output port if no match is found.                                                     |
 | [Passthrough](./passthrough.mdx)               | Transfers the input value directly to the output without modification. Useful for grouping values from different branches of your graph or controlling wire flow without altering the value.                                                                                                     |
 | [Race Inputs](./race-inputs.mdx)               | Manages multiple inputs, outputting the value of the first input to complete while cancelling the remaining inputs. Especially useful when dealing with multiple operations that could satisfy the same requirement, allowing for the use of the result from the operation that concludes first. |
-| [Start Async Branch](./start-async-branch.mdx) | Starts a root-owned side-effect branch without making the foreground path wait for it. Web apps can return ready graph outputs while the async work continues.                                                                                                                                |
+| [Start Async Branch](./start-async-branch.mdx) | Starts a root-owned side-effect branch without making the foreground path wait for it. Web apps can return ready graph outputs while the async work continues.                                                                                                                                   |
 
 ## Input/Output
 

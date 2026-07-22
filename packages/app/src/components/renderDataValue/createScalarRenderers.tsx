@@ -277,6 +277,41 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
         <div>(Reference to graph &quot;{getStringProperty(value.value, 'graphName') ?? 'unknown graph'}&quot;)</div>
       );
     },
+    'knowledge-source': ({ value }) => (
+      <div>
+        Knowledge source <em>{value.value.sourceId}</em> in <em>{value.value.connectionId}</em>
+        {value.value.version ? ` (${value.value.version})` : ' (active version)'}
+      </div>
+    ),
+    'knowledge-document': ({ value, isCompact }) => {
+      const text = isCompact
+        ? buildTextPreviewExcerpt(value.value.text, {
+            maxChars: COMPACT_PREVIEW_MAX_CHARS,
+            maxLines: COMPACT_PREVIEW_MAX_LINES,
+          }).text
+        : value.value.text;
+      return (
+        <div>
+          <strong>{value.value.title || value.value.id || 'Knowledge document'}</strong>
+          <pre className="pre-wrap">{text}</pre>
+        </div>
+      );
+    },
+    'knowledge-evidence': ({ value, isCompact }) => {
+      const text = isCompact
+        ? buildTextPreviewExcerpt(value.value.text, {
+            maxChars: COMPACT_PREVIEW_MAX_CHARS,
+            maxLines: COMPACT_PREVIEW_MAX_LINES,
+          }).text
+        : value.value.text;
+      return (
+        <div>
+          <strong>{value.value.title || value.value.documentId}</strong>
+          {value.value.relevanceScore != null && <div>Score: {value.value.relevanceScore}</div>}
+          <pre className="pre-wrap">{text}</pre>
+        </div>
+      );
+    },
     document: ({ value }) => {
       const documentValue = value as DocumentDataValue;
       const documentData = getMediaData(documentValue.value);

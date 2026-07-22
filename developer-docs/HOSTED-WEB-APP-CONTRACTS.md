@@ -105,6 +105,13 @@ auth, revision, storage, recordings, headers, and error-envelope ownership.
 return the machine-readable `revision_mismatch` conflict used by the shared reload
 modal.
 
+Knowledge Source nodes use the same host seam across HTTP and WebSocket actions. A
+static handler/session can provide `knowledgeStores`; request-scoped
+`createProcessorOptions(context)` takes precedence. The registry contains live store
+callbacks and is not browser state. Authenticated and multi-tenant hosts should build
+it after resolving the request identity. See
+[Provider-neutral Knowledge Source API](./KNOWLEDGE-SOURCE-API.md).
+
 The generated browser client reads every action response body as text once before
 attempting to parse the JSON action protocol. JSON errors continue to use their
 `error` and `code` fields, including the `revision_mismatch` reload flow. A failed

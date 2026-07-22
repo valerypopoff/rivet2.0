@@ -14,6 +14,10 @@ The plugin system spans multiple packages:
 
 Because of that, plugin work is cross-package by default.
 
+Plugins can also register named knowledge-store providers. See [Provider-neutral Knowledge Source API](./KNOWLEDGE-SOURCE-API.md) for the connection/credential split, provider factory contract, runtime precedence, and managed lifecycle.
+
+Plugin catalog descriptions must name every major capability that causes projects to depend on the plugin. Provider plugins should identify their Knowledge Store role separately from any legacy node or integration support bundled under the same plugin ID.
+
 ## Core Contracts
 
 The main type definitions live in:
@@ -73,7 +77,7 @@ That helper is populated by `GraphProcessor` using:
 
 ### App integration
 
-The app also hydrates some plugin settings from environment variables through Tauri-side helpers when available.
+The app also hydrates some plugin settings from environment variables through Tauri-side helpers when available. Plugin IDs, configuration keys, and environment fallback names are read as own record properties in both the editor and core runtime; names matching inherited `Object.prototype` members must never resolve implicit values.
 
 That means config fallback behavior is partly a core concern and partly an app/platform concern.
 
@@ -300,6 +304,7 @@ That means:
 
 - config resolution is based on node type ownership in the registry
 - incorrect registry registration can break execution-time config lookup even if the node renders fine
+- provider-neutral Knowledge nodes do not own provider plugins; named knowledge-store connections carry `pluginId` and count as project plugin usage instead
 
 ## Current Refactor Seams
 

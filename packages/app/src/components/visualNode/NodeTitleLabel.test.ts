@@ -33,9 +33,26 @@ test('NodeTitleLabel uses the same directional cues for Stored Value nodes', () 
   assert.match(renderNodeTitle('setStoredValue', 'Set Stored Value'), /global-node-title-icon-set/);
 });
 
+test('NodeTitleLabel gives every Knowledge node a database icon', () => {
+  for (const type of [
+    'knowledgeSource',
+    'knowledgeDocument',
+    'syncKnowledgeSource',
+    'getKnowledgeSourceStatus',
+    'searchKnowledge',
+    'buildKnowledgeContext',
+  ]) {
+    const html = renderNodeTitle(type, 'Knowledge node');
+    assert.match(html, /knowledge-node-title-icon/);
+    assert.match(html, /<ellipse/);
+    assert.match(html, /aria-hidden="true"/);
+  }
+});
+
 test('NodeTitleLabel leaves other node titles plain', () => {
   const html = renderNodeTitle('text', 'Text');
 
   assert.doesNotMatch(html, /global-node-title-icon/);
+  assert.doesNotMatch(html, /knowledge-node-title-icon/);
   assert.match(html, /^<span class="title-text-label">Text<\/span>$/);
 });

@@ -17,6 +17,7 @@ import {
   type Outputs,
   type PortId,
   type Project,
+  type RivetKnowledgeStore,
 } from '../src/index.js';
 import {
   makeCallGraphFanInProject,
@@ -124,6 +125,76 @@ function makeStoredValueProject(mode: 'get' | 'set'): Project {
     graphs: { [graphId]: graph },
     metadata: { id: 'stored-value-project' as never, mainGraphId: graphId, title: 'Stored Value Project' },
   } as Project;
+}
+
+function makeKnowledgeStatusProject(): Project {
+  const graphId = 'knowledge-status-graph' as GraphId;
+  const graph: NodeGraph = {
+    metadata: { description: '', id: graphId, name: 'Knowledge Status' },
+    nodes: [
+      {
+        type: 'knowledgeSource',
+        title: 'Knowledge Source',
+        id: 'source-node' as NodeId,
+        visualData: { x: 0, y: 0 },
+        data: {
+          connectionId: 'primary',
+          useConnectionIdInput: false,
+          sourceId: 'handbook',
+          useSourceIdInput: false,
+          version: '',
+          useVersionInput: false,
+        },
+      },
+      {
+        type: 'getKnowledgeSourceStatus',
+        title: 'Get Knowledge Source Status',
+        id: 'status-node' as NodeId,
+        visualData: { x: 200, y: 0 },
+        data: { expectedVersion: '', useExpectedVersionInput: false },
+      },
+      {
+        type: 'graphOutput',
+        title: 'Output',
+        id: 'output-node' as NodeId,
+        visualData: { x: 400, y: 0 },
+        data: { dataType: 'string', id: 'result' },
+      },
+    ],
+    connections: [
+      {
+        inputId: 'source' as PortId,
+        inputNodeId: 'status-node' as NodeId,
+        outputId: 'source' as PortId,
+        outputNodeId: 'source-node' as NodeId,
+      },
+      {
+        inputId: 'value' as PortId,
+        inputNodeId: 'output-node' as NodeId,
+        outputId: 'message' as PortId,
+        outputNodeId: 'status-node' as NodeId,
+      },
+    ],
+  };
+  return {
+    graphs: { [graphId]: graph },
+    metadata: { id: 'knowledge-status-project' as never, mainGraphId: graphId, title: 'Knowledge Status Project' },
+  } as Project;
+}
+
+function makeKnowledgeStore(message: string): RivetKnowledgeStore {
+  return {
+    capabilities: {},
+    async getSourceStatus({ source }) {
+      return { exists: true, source, activeVersion: 'v1', message };
+    },
+    async syncSource() {
+      throw new Error('not used');
+    },
+    async search() {
+      throw new Error('not used');
+    },
+  };
 }
 
 function createCountingRegistry(): {
@@ -265,6 +336,20 @@ describe('api', () => {
     assert.deepEqual((await processor.run()).result, { type: 'string', value: 'persisted' });
     assert.equal(reads, 2);
   });
+
+  it('accepts host-provided knowledge stores in runGraph and createProcessor options', async () => {
+    const project = makeKnowledgeStatusProject();
+    const outputs = await runGraph(project, {
+      knowledgeStores: { primary: makeKnowledgeStore('runGraph store') },
+    });
+    assert.deepEqual(outputs.result, { type: 'string', value: 'runGraph store' });
+
+    const processor = createProcessor(project, {
+      knowledgeStores: { primary: makeKnowledgeStore('processor store') },
+    });
+    assert.deepEqual((await processor.run()).result, { type: 'string', value: 'processor store' });
+  });
+
   it('can stream processor events', async () => {
     const processor = createProcessor(await loadTestGraphs(), {
       graph: 'Passthrough',

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { getPluginConfig, plugins } from '../../src/index.js';
+import { getPluginConfig, plugins, type RivetPlugin } from '../../src/index.js';
 
 describe('getPluginConfig', () => {
   it('uses explicit plugin settings before shared LLM settings', () => {
@@ -89,5 +89,36 @@ describe('getPluginConfig', () => {
       ),
       'env-anthropic-key',
     );
+  });
+
+  it('reads prototype-named plugin and configuration keys only when explicitly stored', () => {
+    const plugin = {
+      id: 'toString',
+      name: 'Prototype names',
+      register() {},
+      configSpec: {
+        valueOf: {
+          type: 'secret',
+          label: 'Prototype-named key',
+          pullEnvironmentVariable: 'PROTOTYPE_NAMED_KEY',
+        },
+      },
+    } as RivetPlugin;
+
+    assert.equal(
+      getPluginConfig(plugin, { pluginEnv: { PROTOTYPE_NAMED_KEY: 'environment-value' } }, 'valueOf'),
+      'environment-value',
+    );
+    assert.equal(
+      getPluginConfig(
+        plugin,
+        {
+          pluginSettings: Object.fromEntries([['toString', Object.fromEntries([['valueOf', 'stored-value']])]]),
+        },
+        'valueOf',
+      ),
+      'stored-value',
+    );
+    assert.equal(getPluginConfig(plugin, {}, 'valueOf'), undefined);
   });
 });

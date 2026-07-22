@@ -71,6 +71,7 @@ export function useGetAdHocInternalProcessContext() {
         getGlobal: undefined!,
         getCachedStoredValue: undefined!,
         getStoredValue: undefined!,
+        getKnowledgeStore: undefined!,
         getGraphBoundary: undefined!,
 
         graphInputs: {},

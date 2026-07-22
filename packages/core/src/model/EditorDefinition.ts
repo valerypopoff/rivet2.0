@@ -80,6 +80,14 @@ export type AnyDataEditorDefinition<T extends ChartNode> = SharedEditorDefinitio
   useInputToggleDataKey?: DataOfType<T, boolean>;
 };
 
+export type JsonObjectEditorDefinition<T extends ChartNode> = SharedEditorDefinitionProps<T> & {
+  type: 'jsonObject';
+
+  dataKey: DataOfType<T, Record<string, unknown>>;
+  useInputToggleDataKey?: DataOfType<T, boolean>;
+  height?: number;
+};
+
 export type DropdownEditorDefinition<T extends ChartNode> = SharedEditorDefinitionProps<T> & {
   type: 'dropdown';
 
@@ -263,6 +271,7 @@ export type EditorDefinition<T extends ChartNode> =
   | ToggleEditorDefinition<T>
   | DataTypeSelectorEditorDefinition<T>
   | AnyDataEditorDefinition<T>
+  | JsonObjectEditorDefinition<T>
   | DropdownEditorDefinition<T>
   | SegmentedEditorDefinition<T>
   | NumberEditorDefinition<T>

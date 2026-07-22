@@ -12,6 +12,7 @@ import {
   getUiGraphChatPinsStateKey,
   type DataValue,
   type Project,
+  type RivetKnowledgeStore,
   RIVET_WEB_APP_DOCUMENT_CSS,
   RIVET_WEB_APP_ASSET_CACHE_CONTROL,
   RIVET_WEB_APP_ASSET_ROUTE,
@@ -26,6 +27,7 @@ import {
 } from '../src/index.js';
 import {
   makeExternalStatusProject,
+  makeKnowledgeStatusProject,
   makeStoredValueProject,
   makeWebAppActionRequest,
   makeWebAppProject,
@@ -37,6 +39,21 @@ const ACTION_LOADING_PRESENTATION_WAIT_MS = 350;
 
 function waitForActionLoadingPresentation(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ACTION_LOADING_PRESENTATION_WAIT_MS));
+}
+
+function makeKnowledgeStore(message: string): RivetKnowledgeStore {
+  return {
+    capabilities: {},
+    async getSourceStatus({ source }) {
+      return { exists: true, source, activeVersion: 'v1', message };
+    },
+    async syncSource() {
+      throw new Error('not used');
+    },
+    async search() {
+      throw new Error('not used');
+    },
+  };
 }
 
 const makeProject = makeWebAppProject;
@@ -1227,6 +1244,19 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(body.statePatch.result, 'hello');
   });
 
+  void it('forwards a static handler knowledge-store registry to HTTP actions', async () => {
+    const handler = createRivetWebAppHandler(makeKnowledgeStatusProject(), {
+      basePath: '/app',
+      knowledgeStores: { primary: makeKnowledgeStore('handler store') },
+      uiGraphId: 'ui-graph',
+    });
+    const response = await handler.handleRequest(makeWebAppActionRequest());
+    const body = (await response.json()) as { outputs: Record<string, DataValue> };
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.outputs.value, { type: 'string', value: 'handler store' });
+  });
+
   void it('dispatches an action through a repaired duplicate component ID', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
@@ -1652,6 +1682,27 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.deepEqual(result.outputs.value, { type: 'any', value: 'request scoped' });
     assert.deepEqual(result.storagePatch, {});
+  });
+
+  void it('uses static knowledge stores and lets request-scoped processor options override them', async () => {
+    const project = makeKnowledgeStatusProject();
+
+    const staticResult = await runRivetWebAppAction(project, {
+      componentId: 'run-button',
+      knowledgeStores: { primary: makeKnowledgeStore('static store') },
+      state: { prompt: 'ignored' },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+    assert.deepEqual(staticResult.outputs.value, { type: 'string', value: 'static store' });
+
+    const scopedResult = await runRivetWebAppAction(project, {
+      componentId: 'run-button',
+      createProcessorOptions: () => ({ knowledgeStores: { primary: makeKnowledgeStore('request scoped') } }),
+      knowledgeStores: { primary: makeKnowledgeStore('static store') },
+      state: { prompt: 'ignored' },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+    assert.deepEqual(scopedResult.outputs.value, { type: 'string', value: 'request scoped' });
   });
 
   void it('prepares an inspectable action without starting it and runs it only once', async () => {
