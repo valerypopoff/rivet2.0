@@ -599,13 +599,14 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-chat-pin {
+  position: relative;
   display: grid;
   width: 100%;
   gap: 4px;
   border: 0;
   background: transparent;
   color: var(--rivet-web-app-foreground);
-  cursor: pointer;
+  cursor: default;
   font: inherit;
   padding: 8px 14px;
   text-align: left;
@@ -620,19 +621,33 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   background: var(--rivet-web-app-control-hover-background);
 }
 
-.rivet-web-app-chat-pin:focus-visible {
+.rivet-web-app-chat-pin:focus-within {
   border-radius: 6px;
   background: var(--rivet-web-app-control-hover-background);
   outline: 1px solid color-mix(in srgb, var(--rivet-web-app-foreground) 42%, transparent);
   outline-offset: -2px;
 }
 
+.rivet-web-app-chat-pin-reveal {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
 .rivet-web-app-chat-pin-exchange {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   column-gap: 6px;
   align-items: start;
   min-width: 0;
+  pointer-events: none;
 }
 
 .rivet-web-app-chat-pin-exchange + .rivet-web-app-chat-pin-exchange {
@@ -1348,6 +1363,53 @@ button.rivet-web-app-output-header:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   padding: 0;
   white-space: pre-wrap;
+}
+
+.rivet-web-app-chat-json-block {
+  --rivet-web-app-chat-json-background: color-mix(
+    in srgb,
+    var(--rivet-web-app-control-background) 78%,
+    var(--rivet-web-app-chat-message-foreground) 5%
+  );
+  position: relative;
+  min-width: 0;
+  margin: 8px 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 8px;
+  background: var(--rivet-web-app-chat-json-background);
+}
+
+.rivet-web-app-chat-message-markdown.markdown-body .rivet-web-app-chat-json-block > pre {
+  margin: 0;
+  overflow: auto;
+  max-height: calc(20 * 1.45em + 24px);
+  padding: 12px 72px 12px 12px;
+  line-height: 1.45;
+}
+
+.rivet-web-app-chat-message-markdown.markdown-body .rivet-web-app-chat-json-block > pre > code {
+  display: block;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.rivet-web-app-chat-json-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+}
+
+.rivet-web-app-chat-json-block-scrollable .rivet-web-app-chat-json-actions {
+  right: calc(4px + 1em);
+}
+
+.rivet-web-app-chat-json-block .rivet-web-app-output-copy-button::after {
+  background: var(--rivet-web-app-chat-json-background);
 }
 
 .rivet-web-app-markdown > :first-child,

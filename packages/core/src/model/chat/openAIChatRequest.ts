@@ -75,7 +75,8 @@ export function resolveAdditionalHeaders(data: ChatNodeData, inputs: Inputs) {
   );
 
   return data.useHeadersInput
-    ? (coerceTypeOptional(inputs['headers' as PortId], 'object') as Record<string, string> | undefined) ?? headersFromData
+    ? (coerceTypeOptional(inputs['headers' as PortId], 'object') as Record<string, string> | undefined) ??
+        headersFromData
     : headersFromData;
 }
 
@@ -98,7 +99,12 @@ export function resolveChatTools(inputs: Inputs): ChatCompletionTool[] {
   const functions = coerceTypeOptional(inputs['functions' as PortId], 'gpt-function[]');
   return (functions ?? []).map(
     (fn): ChatCompletionTool => ({
-      function: fn,
+      function: {
+        name: fn.name,
+        description: fn.description,
+        parameters: fn.parameters,
+        strict: fn.strict,
+      },
       type: 'function',
     }),
   );

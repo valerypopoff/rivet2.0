@@ -451,6 +451,67 @@ export function downloadUiGraphJsonOutput(value: string, appName: string): void 
 }
 
 /**
+ * Adds Rivet-owned Copy and Download controls to sanitized fenced JSON blocks.
+ * The Markdown renderer must run first: this helper never accepts or inserts
+ * author-provided interactive markup.
+ */
+export function enhanceUiGraphChatJsonCodeBlocks(root: HTMLElement, appName: string): void {
+  const codeBlocks = root.querySelectorAll<HTMLElement>('pre > code.language-json');
+  root.classList.toggle('rivet-web-app-chat-markdown-has-json', codeBlocks.length > 0);
+
+  for (const code of codeBlocks) {
+    const pre = code.parentElement;
+    const existingWrapper = pre?.parentElement;
+    if (!pre) {
+      continue;
+    }
+    if (existingWrapper?.classList.contains('rivet-web-app-chat-json-block')) {
+      existingWrapper.dataset.rivetChatJsonAppName = appName;
+      continue;
+    }
+
+    const value = code.textContent ?? '';
+    const document = root.ownerDocument;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'rivet-web-app-chat-json-block';
+    wrapper.dataset.rivetChatJsonAppName = appName;
+    const actions = document.createElement('div');
+    actions.className = 'rivet-web-app-chat-json-actions';
+    actions.dataset.rivetChatSearchIgnore = 'true';
+
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.className = 'rivet-web-app-output-action-button rivet-web-app-output-copy-button';
+    copyButton.title = 'Copy JSON';
+    copyButton.setAttribute('aria-label', 'Copy JSON');
+    copyButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void copyUiGraphText(value);
+    });
+
+    const downloadButton = document.createElement('button');
+    downloadButton.type = 'button';
+    downloadButton.className = 'rivet-web-app-output-action-button rivet-web-app-output-download-button';
+    downloadButton.title = 'Download JSON';
+    downloadButton.setAttribute('aria-label', 'Download JSON');
+    downloadButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      downloadUiGraphJsonOutput(value, wrapper.dataset.rivetChatJsonAppName ?? appName);
+    });
+
+    actions.append(copyButton, downloadButton);
+    pre.replaceWith(wrapper);
+    wrapper.append(pre, actions);
+
+    const syncScrollableState = () => {
+      wrapper.classList.toggle('rivet-web-app-chat-json-block-scrollable', pre.scrollHeight > pre.clientHeight);
+    };
+    syncScrollableState();
+    root.ownerDocument.defaultView?.requestAnimationFrame(syncScrollableState);
+  }
+}
+
+/**
  * Replaces visible chat-message text matches with safe `<mark>` elements. This
  * operates on rendered Markdown DOM rather than source Markdown, so search
  * follows what the user can actually read.

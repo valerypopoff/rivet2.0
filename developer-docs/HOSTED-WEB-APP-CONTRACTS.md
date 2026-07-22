@@ -481,6 +481,25 @@ Markdown and rich content use the shared sanitization policy. Action routes shou
 be same-origin and wrapper-authenticated. Do not put credentials, request headers,
 or secrets in UI-graph state, HTML payloads, cache keys, or lifecycle hooks.
 
+After sanitized Chat Markdown is inserted, both renderer adapters call
+`enhanceUiGraphChatJsonCodeBlocks(...)` from the narrow core web-app-runtime
+export. It decorates only `pre > code.language-json` blocks with Rivet-created
+Copy JSON and Download JSON buttons. Button markup can never come from authored
+Markdown. Each action closes over that code element's decoded `textContent`, so
+prose, fences, neighboring blocks, and later DOM controls are excluded without
+parsing or reformatting JSON. The helper applies to ordinary user and assistant
+messages; compact pinned previews retain their usual Markdown-text rendering.
+Non-JSON fences and inline code are untouched. Downloads reuse
+the Output component's application/json filename utility. The original Markdown
+source remains the browser-persisted Chat message and is sent unchanged through
+later history inputs.
+
+Chat JSON cards preserve their full-width code area and their top-right controls.
+The shared post-render helper measures each code panel after it is inserted and
+adds a scrollbar class only when it overflows vertically. That class applies the
+same 1em safe inset used by the regular Output component; short JSON cards keep
+their original control position.
+
 ## Parity Tests
 
 Core runtime-model tests define component/action semantics. Node client tests execute

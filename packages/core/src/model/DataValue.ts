@@ -111,6 +111,8 @@ export type DocumentDataValue = DataValueDef<
   }
 >;
 
+export type GptFunctionResultHandling = 'continue' | 'return-direct';
+
 /** GPT function definition */
 export type GptFunction = {
   name: string;
@@ -118,6 +120,8 @@ export type GptFunction = {
   description: string;
   parameters: object;
   strict: boolean;
+  /** Rivet-only handling for the function result. This is not sent to the model provider. */
+  resultHandling?: GptFunctionResultHandling;
 };
 
 export type GptFunctionDataValue = DataValueDef<'gpt-function', GptFunction>;

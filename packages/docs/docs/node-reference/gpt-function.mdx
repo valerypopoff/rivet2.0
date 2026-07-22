@@ -1,25 +1,25 @@
 ---
 id: gpt-function
-title: GPT Function Node
-sidebar_label: GPT Function
+title: Tool Node
+sidebar_label: Tool
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-![GPT Function Node Screenshot](./assets/gpt-function-node.png)
+![Tool Node Screenshot](./assets/gpt-function-node.png)
 
 ## Overview
 
-The GPT Function Node defines a JSON-schema-backed tool/function that an LLM can call in its response.
+The Tool node defines a JSON-schema-backed tool/function that an LLM can call in its response.
 
-The output of the GPT Function Node can be passed into the **Tools** port of the [LLM Chat Node](./llm-chat.mdx). To enable this, turn on tool use in the LLM Chat node's **Tools** section.
+The output of the Tool node can be passed into the **Tools** port of the [LLM Chat Node](./llm-chat.mdx). To enable this, turn on tool use in the LLM Chat node's **Tools** section.
 
 If you want to pass multiple functions into an LLM Chat node, collect the functions with an [Array Node](./array.mdx), then connect that array to the LLM Chat node's **Tools** port.
 
 A function is defined using JSON Schema, which is a vocabulary that allows you to annotate and validate JSON documents. For more information on JSON Schema, see the [official website](https://json-schema.org/).
 
-You may use interpolation values in the GPT Function schema the same way you can use them in the Text and Prompt nodes. Wrap your interpolation values in double curly braces, e.g. `{{value}}`.
+You may use interpolation values in the Tool schema the same way you can use them in the Text and Prompt nodes. Wrap your interpolation values in double curly braces, e.g. `{{value}}`.
 
 The Schema editor recognizes those placeholders as Rivet template syntax. JSON validation still applies to the rest of the schema, but syntax markers caused only by interpolation tokens are ignored while you edit.
 
@@ -54,19 +54,55 @@ The Schema editor recognizes those placeholders as Rivet template syntax. JSON v
 
 ## Editor Settings
 
-| Setting     | Description                                                                                                         | Default Value | Use Input Toggle | Input Data Type |
-| ----------- | ------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
-| Name        | The name of the function. This is the name that GPT will use to call the function in its responses.                 | `newFunction` | Yes              | `string`        |
-| Description | A description of the function. This is used for documentation purposes and does not affect the function's behavior. | (empty)       | Yes              | `string`        |
-| Schema      | The JSON Schema that defines the function's parameters.                                                             | (empty)       | Yes              | `object`        |
+| Setting         | Description                                                                                                                                                                           | Default Value             | Use Input Toggle | Input Data Type |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ---------------- | --------------- |
+| Name            | The name the model uses to call the tool.                                                                                                                                             | `newTool`                 | Yes              | `string`        |
+| Description     | Explains to the model when and how to use the tool.                                                                                                                                   | `No description provided` | Yes              | `string`        |
+| Result handling | **Continue with LLM** sends the handler result back to the model. **Return directly** can use the handler's exact string output as the final LLM Chat response under the rules below. | Continue with LLM         | No               |                 |
+| Schema          | The JSON Schema that defines the tool parameters.                                                                                                                                     | Empty object schema       | Yes              | `object`        |
+| Strict          | Legacy Chat only. Requests strict Structured Outputs-compatible tool arguments from supported OpenAI models. LLM Chat does not use this setting.                                      | Off                       | No               |                 |
 
 </TabItem>
 
 </Tabs>
 
+## Returning a Handler Result Directly
+
+Choose **Result handling: Return directly** when a deterministic handler already
+produces the complete user-facing Markdown and another model request would only
+repeat it. This takes effect only when LLM Chat has **Auto-continue after
+toolcalls run** enabled and the model returns this one declared Rivet tool as the
+only call in that round. The handler still runs through the configured or
+connected [Delegate Tool Call](./delegate-tool-call.mdx) path. Its exact string
+output becomes LLM Chat's final **Response**, with no follow-up provider request.
+
+If a model round contains two or more calls, Rivet uses normal continuation for
+the entire round, even if every called Tool is set to Return directly. Missing
+settings from older projects behave as **Continue with LLM**. Return directly has
+no special effect in legacy Chat, manual Delegate execution, or LLM Chat without
+auto-continuation.
+
+For example, a handler graph can return this complete Markdown string through a
+string Graph Output named `output`:
+
+````markdown
+Dear user, here is your JSON:
+
+```json
+{
+  "example": true
+}
+```
+````
+
+The full string remains in LLM Chat's messages and, when used by a web-app Chat,
+is stored as the ordinary assistant message and sent back in later conversation
+history. Fenced `json` blocks in web-app Chat receive Copy JSON and Download JSON
+controls automatically.
+
 ## Example 1: Define a function that takes a single string parameter
 
-1. Create a GPT Function Node.
+1. Create a Tool node.
 2. Set the `Name` to `greet`.
 3. Set the `Description` to `A function that greets a user`.
 4. Set the `Schema` to the following:
@@ -85,7 +121,7 @@ The Schema editor recognizes those placeholders as Rivet template syntax. JSON v
    ```
 
 5. Create an [LLM Chat Node](./llm-chat.mdx) and enable tool use in its **Tools** section.
-6. Connect the `Function` output of the GPT Function Node to the `Tools` input of the LLM Chat Node.
+6. Connect the `Function` output of the Tool node to the `Tools` input of the LLM Chat Node.
 7. Set the `Prompt` of the LLM Chat Node to the following, using a [Text Node](./text.mdx) or [Prompt Node](./prompt.mdx):
 
    ```
@@ -96,7 +132,7 @@ The Schema editor recognizes those placeholders as Rivet template syntax. JSON v
 
 ## Error Handling
 
-The GPT Function Node will error if the `Schema` is not a valid JSON string or if it does not represent a valid JSON Schema.
+The Tool node will error if the `Schema` is not valid JSON.
 
 ## FAQ
 
@@ -112,9 +148,9 @@ A: Yes, you can define a function that takes an array or an object as a paramete
 
 A: Yes, you can define a function that does not take any parameters by setting the `Schema` to an empty object (`{}`).
 
-**Q: Can I use the GPT Function Node to define a function that returns a value?**
+**Q: Can I use the Tool node to define a function that returns a value?**
 
-A: No, the GPT Function Node only defines the function's name and parameters. The function's behavior is determined by the rest of the graph.
+A: The Tool node defines the call contract and result-handling policy. The handler graph or host external function determines the returned string.
 
 **Q: How can I connect multiple functions to an LLM Chat Node?**
 

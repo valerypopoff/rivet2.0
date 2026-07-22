@@ -46,6 +46,7 @@ export {
   applyUiGraphWebAppStoragePatch,
   clearUiGraphChatSearchMatches,
   downloadUiGraphJsonOutput,
+  enhanceUiGraphChatJsonCodeBlocks,
   hasUiGraphChatPersistentStateChanged,
   getUiGraphChatPersistentState,
   getUiGraphChatMessagePresentations,
