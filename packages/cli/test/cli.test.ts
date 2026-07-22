@@ -488,6 +488,7 @@ test('createWebAppServeApp serves app JSON and rejects stale revision keys', asy
     statePatch: {
       result: 'hello',
     },
+    storagePatch: {},
   });
 
   const staleActionResponse = await app.fetch(
