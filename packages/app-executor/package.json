@@ -2,7 +2,7 @@
   "name": "@valerypopoff/rivet-app-executor",
   "license": "MIT",
   "repository": "https://github.com/valerypopoff/rivet2.0",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "bin": "./bin/executor-bundle.cjs",
   "type": "module",
   "scripts": {
