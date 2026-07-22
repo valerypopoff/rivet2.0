@@ -403,6 +403,10 @@ adding a button-shaped background, while all three controls keep larger hit
 areas for reliable pointer and keyboard use. React preview and hosted DOM
 rendering both consume this CSS from `UiGraphRendererStyles.ts`.
 
+Chat bubbles keep Markdown blockquote text and its rule in the bubble foreground
+color. Their sender-facing bottom corner is deliberately square: right for user
+messages and left for assistant messages.
+
 Text Input, Textarea, Chat composer, and Chat search controls also share an
 explicit renderer-owned interaction style: hover uses the control hover
 background, and focus uses a subtle foreground-mixed border with no outline or

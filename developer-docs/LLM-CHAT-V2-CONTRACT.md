@@ -32,7 +32,10 @@ paths and should not be used as the primary target for new provider refactors.
 - [`chatV2Outputs.ts`](../packages/core/src/model/chat-v2/chatV2Outputs.ts)
   owns output DataValue construction and output-port compatibility.
 - [`chatV2Errors.ts`](../packages/core/src/model/chat-v2/chatV2Errors.ts) owns
-  provider-error normalization and secret-safe messages.
+  provider-error normalization and secret-safe messages. For observable API-call
+  failures it preserves the provider's original response message, preferring the
+  HTTP response body over generic SDK metadata and following nested error causes;
+  Rivet guidance supplements that message instead of replacing or deduplicating it.
 - [`chatV2ResponseFormat.ts`](../packages/core/src/model/chat-v2/chatV2ResponseFormat.ts)
   owns structured-output/schema normalization.
 - [`providerOptions.ts`](../packages/core/src/model/chat-v2/providerOptions.ts)

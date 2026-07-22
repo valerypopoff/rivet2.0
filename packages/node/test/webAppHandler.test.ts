@@ -1157,6 +1157,18 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-chat-messages\s*\{[\s\S]*overflow-y: auto;/);
     assert.match(
       RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-message-user\s*\{[\s\S]*border-bottom-right-radius: 0;/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-message-assistant\s*\{[\s\S]*border-bottom-left-radius: 0;/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-message-markdown\.markdown-body blockquote\s*\{[\s\S]*border-left-color: var\(--rivet-web-app-chat-message-foreground\);[\s\S]*color: var\(--rivet-web-app-chat-message-foreground\);/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
       /\.rivet-web-app-chat > \.rivet-web-app-progress\s*\{[\s\S]*font-size: inherit;/,
     );
     assert.match(

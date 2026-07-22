@@ -789,12 +789,12 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   --rivet-web-app-chat-message-background: color-mix(in srgb, var(--rivet-web-app-button-background) 72%, var(--rivet-web-app-card-background));
   --rivet-web-app-chat-message-foreground: var(--rivet-web-app-button-foreground);
   align-self: flex-end;
-  border-bottom-right-radius: 5px;
+  border-bottom-right-radius: 0;
 }
 
 .rivet-web-app-chat-message-assistant {
   align-self: flex-start;
-  border-bottom-left-radius: 5px;
+  border-bottom-left-radius: 0;
 }
 
 .rivet-web-app-chat-message-row {
@@ -1257,6 +1257,12 @@ button.rivet-web-app-output-header:focus-visible {
   background: var(--rivet-web-app-chat-message-background);
   color: var(--rivet-web-app-chat-message-foreground);
   font-family: inherit;
+}
+
+.rivet-web-app-chat-message-markdown.markdown-body blockquote {
+  border-left-color: var(--rivet-web-app-chat-message-foreground);
+  background: transparent;
+  color: var(--rivet-web-app-chat-message-foreground);
 }
 
 .rivet-web-app-markdown h1,
