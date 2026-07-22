@@ -75,6 +75,63 @@ async function writeWebAppProject(projectPath: string, projectName: string, appN
   await fs.writeFile(projectPath, serializedProject, 'utf8');
 }
 
+async function writeStoredValueWebAppProject(projectPath: string, projectName: string, appName: string): Promise<void> {
+  const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
+  const project = createWebAppProject(rivetNode, blankProjectContents, appName);
+  const graph = project.graphs[project.metadata.mainGraphId!];
+
+  graph.nodes = [
+    {
+      type: 'graphInput',
+      title: 'Input',
+      id: 'input-node',
+      visualData: { x: 0, y: 0, width: 300 },
+      data: {
+        id: 'input',
+        dataType: 'string',
+      },
+    } as never,
+    {
+      type: 'setStoredValue',
+      title: 'Set Stored Value',
+      id: 'storage-node',
+      visualData: { x: 360, y: 0, width: 300 },
+      data: {
+        dataType: 'any',
+        key: 'analysis',
+        useKeyInput: false,
+      },
+    } as never,
+    {
+      type: 'graphOutput',
+      title: 'Output',
+      id: 'output-node',
+      visualData: { x: 720, y: 0, width: 300 },
+      data: {
+        id: 'value',
+        dataType: 'any',
+      },
+    } as never,
+  ];
+  graph.connections = [
+    {
+      outputNodeId: 'input-node',
+      outputId: 'data',
+      inputNodeId: 'storage-node',
+      inputId: 'value',
+    } as never,
+    {
+      outputNodeId: 'storage-node',
+      outputId: 'saved-value',
+      inputNodeId: 'output-node',
+      inputId: 'value',
+    } as never,
+  ];
+
+  const serializedProject = serializeWebAppProject(rivetNode, project);
+  await fs.writeFile(projectPath, serializedProject, 'utf8');
+}
+
 async function writeThrowingActionWebAppProject(projectPath: string, projectName: string, appName: string): Promise<void> {
   const blankProjectContents = workflowFs.createBlankProjectFile(projectName);
   const project = createWebAppProject(rivetNode, blankProjectContents, appName);
@@ -1037,11 +1094,45 @@ test('published filesystem web app actions run through the wrapper execution dep
     const actionBody = await actionResponse.json() as {
       outputs?: Record<string, unknown>;
       statePatch?: Record<string, unknown>;
+      storagePatch?: Record<string, unknown>;
     };
 
     assert.equal(actionResponse.status, 200);
     assert.deepEqual(actionBody.outputs?.value, { type: 'string', value: 'hello from web app' });
     assert.deepEqual(actionBody.statePatch, { result: 'hello from web app' });
+    assert.deepEqual(actionBody.storagePatch, {});
+  });
+});
+
+test('published filesystem web app HTTP actions return Stored Value patches', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppStorageAction');
+  await writeStoredValueWebAppProject(created.absolutePath, 'PublishedWebAppStorageAction', 'Published Storage App');
+  await publishWebApp(created.relativePath, 'published-web-app-storage-action');
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    const html = await (await fetch(`${webAppsBaseUrl}/published-web-app-storage-action`, {
+      signal: AbortSignal.timeout(5000),
+    })).text();
+    const revisionKey = extractWebAppRevisionKey(html);
+    const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-storage-action/actions/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+        revisionKey,
+        state: { prompt: 'updated summary' },
+        storage: { analysis: 'old summary' },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const actionBody = await actionResponse.json() as {
+      outputs?: Record<string, unknown>;
+      storagePatch?: Record<string, unknown>;
+    };
+
+    assert.equal(actionResponse.status, 200);
+    assert.deepEqual(actionBody.outputs?.value, { type: 'any', value: 'updated summary' });
+    assert.deepEqual(actionBody.storagePatch, { analysis: 'updated summary' });
   });
 });
 
