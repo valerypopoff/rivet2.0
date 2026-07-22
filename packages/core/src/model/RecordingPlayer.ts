@@ -211,6 +211,15 @@ export async function replayExecutionRecording(options: {
           });
           break;
         }
+        case 'graphOutputsReady': {
+          const { data } = event;
+          emitDetached(emitter, 'graphOutputsReady', {
+            graph: getGraph(data.graphId),
+            outputs: data.outputs,
+            execution: getExecution(data.graphId, data.execution),
+          });
+          break;
+        }
         case 'graphError': {
           const { data } = event;
           emitDetached(emitter, 'graphError', {

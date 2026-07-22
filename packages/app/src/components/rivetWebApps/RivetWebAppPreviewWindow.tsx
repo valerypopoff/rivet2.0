@@ -1,11 +1,16 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphProgress, UiComponentId, UiGraph } from '@valerypopoff/rivet2-core';
-import { RivetWebAppRenderer, type RivetWebAppActionResult } from './RivetWebAppRenderer.js';
+import {
+  RivetWebAppRenderer,
+  type RivetWebAppActionResult,
+  type RivetWebAppStorageAdapter,
+} from './RivetWebAppRenderer.js';
 
 export const RIVET_WEB_APP_PREVIEW_PARAM = 'rivet-web-app-preview';
 export const RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX = 'rivet-web-app-preview:';
 
 type PreviewPayload = {
+  storage?: Record<string, unknown>;
   uiGraph: UiGraph;
 };
 
@@ -14,6 +19,7 @@ type PreviewActionRequest =
       componentId: UiComponentId;
       requestId: string;
       state: Record<string, unknown>;
+      storage: Record<string, unknown>;
       type: 'runAction';
     }
   | {
@@ -65,13 +71,27 @@ export function createRivetWebAppPreviewUrl(token: string): string {
 }
 
 export function writeRivetWebAppPreviewPayload(token: string, payload: PreviewPayload): void {
-  localStorage.setItem(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`, JSON.stringify(payload));
+  try {
+    localStorage.setItem(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`, JSON.stringify(payload));
+  } catch {
+    // The preview requests the same payload over BroadcastChannel below when
+    // this webview cannot access browser storage.
+  }
+}
+
+export function clearRivetWebAppPreviewPayload(token: string): void {
+  try {
+    localStorage.removeItem(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`);
+  } catch {
+    // The temporary payload is already inaccessible and expires with its token.
+  }
 }
 
 export const RivetWebAppPreviewWindow: FC = () => {
   const token = new URLSearchParams(window.location.search).get(RIVET_WEB_APP_PREVIEW_PARAM);
   const [error, setError] = useState<string | undefined>();
   const [payload, setPayload] = useState<PreviewPayload | undefined>();
+  const storageRef = useRef<Record<string, unknown>>({});
   const channel = useMemo(
     () => (token ? new BroadcastChannel(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`) : undefined),
     [token],
@@ -86,12 +106,18 @@ export const RivetWebAppPreviewWindow: FC = () => {
     let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
     let removePayloadListener = () => {};
     const applyPayload = (nextPayload: PreviewPayload) => {
+      storageRef.current = isRecord(nextPayload.storage) ? nextPayload.storage : {};
       document.title = nextPayload.uiGraph.name;
       setPayload(nextPayload);
       setError(undefined);
     };
 
-    const storedPayload = localStorage.getItem(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`);
+    let storedPayload: string | null = null;
+    try {
+      storedPayload = localStorage.getItem(`${RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX}${token}`);
+    } catch {
+      // Fall through to the parent-window payload request.
+    }
 
     if (!storedPayload) {
       const requestId = crypto.randomUUID();
@@ -142,18 +168,29 @@ export const RivetWebAppPreviewWindow: FC = () => {
     };
   }, [channel, token]);
 
+  const storageAdapter = useMemo<RivetWebAppStorageAdapter>(
+    () => ({
+      applyPatch: (patch) => {
+        storageRef.current = { ...storageRef.current, ...patch };
+      },
+      load: () => storageRef.current,
+    }),
+    [],
+  );
+
   const runAction = (
     componentId: UiComponentId,
     state: Record<string, unknown>,
     abortSignal: AbortSignal,
     onProgress: (progress: GraphProgress) => void,
+    storage: Record<string, unknown>,
   ): Promise<RivetWebAppActionResult> => {
     if (!channel) {
       return Promise.reject(new Error('Preview channel is not available.'));
     }
 
     const requestId = crypto.randomUUID();
-    const request: PreviewActionRequest = { componentId, requestId, state, type: 'runAction' };
+    const request: PreviewActionRequest = { componentId, requestId, state, storage, type: 'runAction' };
 
     return new Promise((resolve, reject) => {
       const cleanup = () => {
@@ -205,7 +242,11 @@ export const RivetWebAppPreviewWindow: FC = () => {
     return <div>Loading Rivet web app preview...</div>;
   }
 
-  return <RivetWebAppRenderer uiGraph={payload.uiGraph} onRunAction={runAction} />;
+  return <RivetWebAppRenderer uiGraph={payload.uiGraph} onRunAction={runAction} storageAdapter={storageAdapter} />;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export type { PreviewActionRequest, PreviewActionResponse };

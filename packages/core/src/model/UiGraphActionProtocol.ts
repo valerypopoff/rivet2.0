@@ -9,6 +9,7 @@ export type RivetWebAppActionStartMessage = {
   componentId: UiComponentId;
   revisionKey?: string;
   state: Record<string, unknown>;
+  storage?: Record<string, unknown>;
 };
 
 export type RivetWebAppActionCancelMessage = {
@@ -46,7 +47,11 @@ export type RivetWebAppServerMessage =
     }
   | ({ type: 'action.accepted' } & RunEventBase)
   | ({ type: 'action.progress'; progress: GraphProgress } & RunEventBase)
-  | ({ type: 'action.completed'; statePatch: Record<string, unknown> } & RunEventBase)
+  | ({
+      type: 'action.completed';
+      statePatch: Record<string, unknown>;
+      storagePatch?: Record<string, unknown>;
+    } & RunEventBase)
   | ({ type: 'action.failed'; error: string; code?: string } & RunEventBase)
   | ({ type: 'action.cancelled' } & RunEventBase)
   | ({ type: 'action.interrupted'; error: string } & RunEventBase)
@@ -83,12 +88,14 @@ export function parseRivetWebAppClientMessage(value: unknown): RivetWebAppClient
       return isNonEmptyString(value.requestId) &&
         isNonEmptyString(value.componentId) &&
         isRecord(value.state) &&
+        (value.storage == null || isRecord(value.storage)) &&
         (value.revisionKey == null || typeof value.revisionKey === 'string')
         ? {
             type: value.type,
             requestId: value.requestId,
             componentId: value.componentId as UiComponentId,
             state: value.state,
+            ...(isRecord(value.storage) ? { storage: value.storage } : {}),
             ...(typeof value.revisionKey === 'string' ? { revisionKey: value.revisionKey } : {}),
           }
         : undefined;
@@ -155,7 +162,14 @@ export function parseRivetWebAppServerMessage(value: unknown): RivetWebAppServer
       return progress ? { type: value.type, ...base, progress } : undefined;
     }
     case 'action.completed':
-      return isRecord(value.statePatch) ? { type: value.type, ...base, statePatch: value.statePatch } : undefined;
+      return isRecord(value.statePatch) && (value.storagePatch == null || isRecord(value.storagePatch))
+        ? {
+            type: value.type,
+            ...base,
+            statePatch: value.statePatch,
+            ...(isRecord(value.storagePatch) ? { storagePatch: value.storagePatch } : {}),
+          }
+        : undefined;
     case 'action.failed':
       return isNonEmptyString(value.error)
         ? {

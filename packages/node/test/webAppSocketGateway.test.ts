@@ -3,13 +3,14 @@ import { afterEach, describe, it } from 'node:test';
 import WebSocket from 'ws';
 import {
   ExecutionRecorder,
+  type GraphProcessor,
   createInMemoryRivetWebAppRunCoordinator,
   createInMemoryRivetWebAppRunStore,
   createRivetWebAppWebSocketGateway,
   type Project,
   type RivetWebAppServerMessage,
 } from '../src/index.js';
-import { makeExternalStatusProject, makeWebAppProject } from './webAppFixtures.js';
+import { makeExternalStatusProject, makeStoredValueProject, makeWebAppProject } from './webAppFixtures.js';
 import {
   closeWebAppTestHarnesses,
   collectWebAppSocketMessages as collectMessages,
@@ -107,6 +108,166 @@ void describe('Rivet web app WebSocket gateway', () => {
 
     assert.deepEqual(progress.progress, { message: 'Hello' });
     assert.deepEqual(completed.statePatch, { result: 'Hello' });
+  });
+
+  void it('publishes foreground outputs before releasing an active async run slot', async () => {
+    const project = makeWebAppProject();
+    project.graphs[project.metadata.mainGraphId]!.nodes.push(
+      {
+        data: {},
+        id: 'async-trigger' as never,
+        title: 'Start Async Branch',
+        type: 'startBackgroundBranch',
+        visualData: { x: 200, y: 120 },
+      } as never,
+      {
+        data: { functionName: 'waitForRelease', useErrorOutput: false, useFunctionNameInput: false },
+        id: 'async-call' as never,
+        title: 'Async side effect',
+        type: 'externalCall',
+        visualData: { x: 400, y: 120 },
+      } as never,
+    );
+    project.graphs[project.metadata.mainGraphId]!.connections.push(
+      {
+        inputId: 'input1' as never,
+        inputNodeId: 'async-trigger' as never,
+        outputId: 'data' as never,
+        outputNodeId: 'input-node' as never,
+      },
+      {
+        inputId: 'arguments' as never,
+        inputNodeId: 'async-call' as never,
+        outputId: 'output1' as never,
+        outputNodeId: 'async-trigger' as never,
+      },
+    );
+    let releaseBranch!: () => void;
+    let reportBranchStarted!: () => void;
+    const branchRelease = new Promise<void>((resolve) => {
+      releaseBranch = resolve;
+    });
+    const branchStarted = new Promise<void>((resolve) => {
+      reportBranchStarted = resolve;
+    });
+    const baseRunStore = createInMemoryRivetWebAppRunStore();
+    let completedRunId: string | undefined;
+    let settleLeasePass!: (error?: Error) => void;
+    const postCompletionLeasePass = new Promise<void>((resolve, reject) => {
+      settleLeasePass = (error) => (error ? reject(error) : resolve());
+    });
+    let leasePassObserved = false;
+    const runStore = {
+      ...baseRunStore,
+      async renewRunLeases(...args: Parameters<typeof baseRunStore.renewRunLeases>) {
+        const terminalRunIdAtStart = completedRunId;
+        const renewed = await baseRunStore.renewRunLeases(...args);
+        if (terminalRunIdAtStart && !leasePassObserved) {
+          leasePassObserved = true;
+          settleLeasePass(
+            args[1].includes(terminalRunIdAtStart)
+              ? new Error('A terminal run was still submitted for lease renewal.')
+              : undefined,
+          );
+        }
+        return renewed;
+      },
+    };
+    let processor: GraphProcessor | undefined;
+    let runFinished = false;
+    const harness = await createHarness(
+      project,
+      undefined,
+      { leaseDurationMs: 30, leaseRenewIntervalMs: 5, runStore },
+      {
+        createProcessorOptions: {
+          externalFunctions: {
+            waitForRelease: async (value) => {
+              reportBranchStarted();
+              await branchRelease;
+              return value;
+            },
+          },
+        },
+        onProcessorPrepared(context) {
+          processor = context.processor;
+        },
+        onRunFinished() {
+          runFinished = true;
+        },
+      },
+    );
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('request-async-result')));
+    await messages.next('action.accepted');
+    await branchStarted;
+    const completed = await messages.next('action.completed');
+    completedRunId = completed.runId;
+
+    assert.deepEqual(completed.statePatch, { result: 'Hello' });
+    assert.equal(processor?.isRunning, true);
+    assert.equal(harness.gateway.getActiveRunCount(), 1);
+    assert.equal(runFinished, false);
+
+    await Promise.race([
+      postCompletionLeasePass,
+      delay(1_000).then(() => {
+        throw new Error('Timed out waiting for the post-completion lease pass.');
+      }),
+    ]);
+    assert.equal(processor?.isRunning, true);
+    assert.equal(harness.gateway.getActiveRunCount(), 1);
+
+    releaseBranch();
+    await processor?.waitForRunCompletion();
+    await delay(0);
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+    assert.equal(runFinished, true);
+  });
+
+  void it('returns web-app storage changes through replayable WebSocket completion events', async () => {
+    const harness = await createHarness(makeStoredValueProject('set'));
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(
+      JSON.stringify({
+        ...makeStartMessage('request-storage'),
+        state: { prompt: 'Updated summary' },
+        storage: { analysis: 'Old summary' },
+      }),
+    );
+    await messages.next('action.accepted');
+    const completed = await messages.next('action.completed');
+
+    assert.deepEqual(completed.storagePatch, { analysis: 'Updated summary' });
+  });
+
+  void it('uses a session Stored Value store instead of the WebSocket browser snapshot', async () => {
+    const harness = await createHarness(
+      makeStoredValueProject('get'),
+      undefined,
+      {},
+      {
+        storedValueStore: { get: () => 'Host summary', set() {} },
+      },
+    );
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(
+      JSON.stringify({
+        ...makeStartMessage('request-host-storage'),
+        storage: { analysis: 'Browser summary' },
+      }),
+    );
+    await messages.next('action.accepted');
+    const completed = await messages.next('action.completed');
+
+    assert.deepEqual(completed.statePatch, { result: 'Host summary' });
+    assert.deepEqual(completed.storagePatch, {});
   });
 
   void it('exposes the prepared processor before execution so hosts can attach complete recordings', async () => {

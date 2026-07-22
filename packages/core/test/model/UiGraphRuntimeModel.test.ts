@@ -28,9 +28,13 @@ import {
   type UiComponentId,
 } from '../../src/index.js';
 import {
+  applyUiGraphWebAppStorageActionPatch,
+  applyUiGraphWebAppStoragePatch,
   getUiGraphChatStorageKey,
+  getUiGraphWebAppStorageKey,
   hasUiGraphChatPersistentStateChanged,
   loadUiGraphChatPersistentState,
+  loadUiGraphWebAppStorage,
   revealUiGraphChatElement,
   saveUiGraphChatPersistentState,
 } from '../../src/model/UiGraphBrowserRuntime.js';
@@ -105,6 +109,74 @@ describe('UiGraphRuntimeModel', () => {
       ),
       true,
     );
+  });
+
+  it('isolates graph-managed browser storage by app URL and UI graph ID', () => {
+    const uiGraph: UiGraph = { components: [], id: 'settings-app' as UiGraphId, name: 'Settings app' };
+    const otherUiGraph: UiGraph = { ...uiGraph, id: 'other-app' as UiGraphId };
+    const storageValues = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      removeItem: (key: string) => storageValues.delete(key),
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+    };
+    const location = { origin: 'https://example.test', pathname: '/apps/settings/' };
+
+    const stored = applyUiGraphWebAppStoragePatch(
+      uiGraph,
+      { existing: 'kept' },
+      { preferences: { density: 'compact', sidebarOpen: false } },
+      storage,
+      location,
+    );
+
+    assert.deepEqual(stored, {
+      existing: 'kept',
+      preferences: { density: 'compact', sidebarOpen: false },
+    });
+    assert.deepEqual(loadUiGraphWebAppStorage(uiGraph, storage, location), stored);
+    assert.deepEqual(loadUiGraphWebAppStorage(otherUiGraph, storage, location), {});
+    assert.deepEqual(loadUiGraphWebAppStorage(uiGraph, storage, { ...location, pathname: '/apps/another/' }), {});
+    assert.notEqual(getUiGraphWebAppStorageKey(uiGraph, location), getUiGraphWebAppStorageKey(otherUiGraph, location));
+  });
+
+  it('commits action ordering only after a storage patch is persisted successfully', () => {
+    const appliedActionByKey = new Map<string, number>();
+    const persisted: Record<string, unknown>[] = [];
+
+    assert.throws(
+      () =>
+        applyUiGraphWebAppStorageActionPatch({ shared: 'newer' }, 2, appliedActionByKey, () => {
+          throw new Error('storage full');
+        }),
+      /storage full/,
+    );
+    assert.equal(appliedActionByKey.has('shared'), false);
+
+    assert.deepEqual(
+      applyUiGraphWebAppStorageActionPatch({ shared: 'older', unrelated: true }, 1, appliedActionByKey, (patch) => {
+        persisted.push(patch);
+      }),
+      { shared: 'older', unrelated: true },
+    );
+    assert.deepEqual(persisted, [{ shared: 'older', unrelated: true }]);
+    assert.deepEqual(
+      [...appliedActionByKey],
+      [
+        ['shared', 1],
+        ['unrelated', 1],
+      ],
+    );
+
+    assert.deepEqual(
+      applyUiGraphWebAppStorageActionPatch({ shared: 'stale', third: 3 }, 0, appliedActionByKey, (patch) => {
+        persisted.push(patch);
+      }),
+      { third: 3 },
+    );
+    assert.deepEqual(persisted[1], { third: 3 });
+    assert.equal(appliedActionByKey.get('shared'), 1);
+    assert.equal(appliedActionByKey.get('third'), 0);
   });
 
   it('creates one render model for every supported component kind', () => {
@@ -632,6 +704,47 @@ describe('UiGraphRuntimeModel', () => {
       name: 'Replacement',
     });
     assert.deepEqual(controller.getSnapshot().state, { input: 'Replacement' });
+  });
+
+  it('aborts an active action whose execution definition changes without interrupting a label edit', async () => {
+    const button = makeButton('run-button', {
+      outputs: [{ stateKey: 'old-result' }],
+      type: 'runGraph',
+    });
+    const controller = createUiGraphInteractionController(makeUiGraph([button]));
+    const outdatedRun = deferred<{ statePatch?: Record<string, unknown> }>();
+    let outdatedSignal: AbortSignal | undefined;
+    const outdatedPromise = controller.runAction(button, ({ reportProgress, signal }) => {
+      outdatedSignal = signal;
+      reportProgress({ message: 'Using old bindings' });
+      return outdatedRun.promise;
+    });
+
+    const editedButton = {
+      ...button,
+      action: { ...button.action, outputs: [{ stateKey: 'new-result' }] },
+    };
+    controller.setUiGraph(makeUiGraph([editedButton]));
+    assert.equal(outdatedSignal?.aborted, true);
+    assert.equal(controller.getSnapshot().runningComponentIds.size, 0);
+    assert.equal(controller.getSnapshot().actionProgress[button.id], undefined);
+
+    outdatedRun.resolve({ statePatch: { 'old-result': 'ignored' } });
+    await outdatedPromise;
+    assert.equal(controller.getSnapshot().state['old-result'], undefined);
+
+    const currentRun = deferred<{ statePatch?: Record<string, unknown> }>();
+    let currentSignal: AbortSignal | undefined;
+    const currentPromise = controller.runAction(editedButton, ({ signal }) => {
+      currentSignal = signal;
+      return currentRun.promise;
+    });
+    controller.setUiGraph(makeUiGraph([{ ...editedButton, label: 'Renamed button' }]));
+    assert.equal(currentSignal?.aborted, false);
+
+    currentRun.resolve({ statePatch: { 'new-result': 'kept' } });
+    await currentPromise;
+    assert.equal(controller.getSnapshot().state['new-result'], 'kept');
   });
 
   it('normalizes current action progress and drops stale reports after cancellation', async () => {

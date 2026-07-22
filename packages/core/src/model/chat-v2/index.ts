@@ -10,3 +10,4 @@ export * from './messageConverter.js';
 export * from './modelRegistry.js';
 export * from './providerOptions.js';
 export * from './toolConverter.js';
+export * from './toolContinuationConnection.js';

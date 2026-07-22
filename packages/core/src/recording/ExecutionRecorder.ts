@@ -44,6 +44,8 @@ const toRecordedEventMap: {
 } = {
   graphStart: ({ graph, inputs, execution }) => withExecution({ graphId: graph.metadata!.id!, inputs }, execution),
   graphFinish: ({ graph, outputs, execution }) => withExecution({ graphId: graph.metadata!.id!, outputs }, execution),
+  graphOutputsReady: ({ graph, outputs, execution }) =>
+    withExecution({ graphId: graph.metadata!.id!, outputs }, execution),
   graphError: ({ graph, error, execution }) =>
     withExecution(
       {

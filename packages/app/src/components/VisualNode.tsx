@@ -15,7 +15,11 @@ import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins';
 import { useHistoricalNodeChangeInfo } from '../hooks/useHistoricalNodeChangeInfo';
 import { useNodePortLabelMinWidth } from '../hooks/useNodePortLabelMinWidth';
 import { type ProcessDataForNode, frozenNodeOutputsState, resolvedGraphSelectionState } from '../state/dataFlow.js';
-import { getNodeExecutionClassFlags, getSelectedProcessRun } from '../state/selectors/executionSelectors.js';
+import {
+  getNodeExecutionClassFlags,
+  getSelectedProcessRun,
+  hasRunningProcessData,
+} from '../state/selectors/executionSelectors.js';
 import { getSplitStackGhostColors } from '../utils/nodeSplitStackColors.js';
 import {
   getNodeBorderReferenceColor,
@@ -149,7 +153,9 @@ const VisualNodeImpl = memo(
         ? getSelectedProcessRun(lastRun, processPage, graphSelectionOptions)
         : undefined;
       const executionClassFlags = getNodeExecutionClassFlags(selectedProcessRun);
-      const showRunningChrome = useDelayedRunningState(executionClassFlags.running);
+      const showRunningChrome = useDelayedRunningState(
+        graphStateOverlaysEnabled && hasRunningProcessData(lastRun, graphSelectionOptions),
+      );
       const showFrozenState = graphStateOverlaysEnabled && executorSession.target?.type !== 'external-debugger';
       const isFrozen = showFrozenState && Boolean(graphId && frozenNodeOutputs[graphId]?.[node.id]?.length);
       const nodeForEditing = editTargetNode ?? node;

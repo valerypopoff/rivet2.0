@@ -90,6 +90,48 @@ function parseResponseBodyMessage(responseBody: string | undefined): string | un
   }
 }
 
+function getProviderMessage(error: unknown, seen = new Set<unknown>()): string | undefined {
+  if (!isRecord(error) || seen.has(error)) {
+    return undefined;
+  }
+  seen.add(error);
+
+  const responseBodyMessage =
+    typeof error.responseBody === 'string' ? parseResponseBodyMessage(error.responseBody) : undefined;
+  if (responseBodyMessage) {
+    return responseBodyMessage;
+  }
+
+  const response = error.response;
+  if (isRecord(response)) {
+    const nestedResponseBody =
+      typeof response.responseBody === 'string'
+        ? response.responseBody
+        : typeof response.body === 'string'
+          ? response.body
+          : undefined;
+    const nestedResponseMessage =
+      parseResponseBodyMessage(nestedResponseBody) ??
+      findProviderMessage(response.data) ??
+      findProviderMessage(response);
+    if (nestedResponseMessage) {
+      return nestedResponseMessage;
+    }
+  }
+
+  const dataMessage = findProviderMessage(error.data);
+  if (dataMessage) {
+    return dataMessage;
+  }
+
+  const causeMessage = getProviderMessage(error.cause, seen);
+  if (causeMessage) {
+    return causeMessage;
+  }
+
+  return findProviderMessage(error);
+}
+
 function formatEndpoint(url: string): string {
   try {
     const parsed = new URL(url);
@@ -236,7 +278,7 @@ function formatApiCallError(error: ErrorLike, context: ChatV2ErrorContext): stri
   const statusCode = getChatV2ProviderErrorStatusCode(error);
   const statusLabel =
     statusCode == null ? 'request failed' : `${statusCode} ${STATUS_TEXT[statusCode] ?? 'HTTP error'}`;
-  const providerMessage = findProviderMessage(error.data) ?? parseResponseBodyMessage(error.responseBody);
+  const providerMessage = getProviderMessage(error);
   const lines = [
     `LLM provider request failed (${statusLabel}).`,
     `Provider: ${getChatV2ProviderLabel(context.provider)}`,
@@ -247,11 +289,11 @@ function formatApiCallError(error: ErrorLike, context: ChatV2ErrorContext): stri
     lines.push(`Endpoint: ${formatEndpoint(error.url)}`);
   }
 
-  lines.push(getApiCallRecommendation(statusCode, context));
-
-  if (providerMessage && providerMessage !== compact(error.message)) {
+  if (providerMessage) {
     lines.push(`Provider message: ${providerMessage}`);
   }
+
+  lines.push(getApiCallRecommendation(statusCode, context));
 
   return lines.join('\n');
 }

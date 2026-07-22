@@ -54,11 +54,21 @@ functions continue to work normally, but a host-provided function with this name
 will be replaced for web-app runs. In ordinary runs it reports normal graph
 progress and does not require a host-provided external function.
 
+### Stored values
+
+Web-app and host-persisted key/value state now uses the dedicated [Set Stored
+Value](./set-stored-value.mdx) and [Get Stored Value](./get-stored-value.mdx)
+nodes. The former `setWebAppStorage` and `getWebAppStorage` External Calls are not
+installed automatically. This keeps storage behavior consistent in Browser, Node,
+headless, nested-graph, detached-preview, and published web-app runs while allowing
+API hosts to provide persistence callbacks.
+
 External functions are extremely powerful. They can only be used when running Rivet
 from a host application, and ordinary custom external functions are not available
-when running Rivet in the Rivet application. The `setWebAppStatus` function is the
-exception: Rivet provides it locally for graph progress, and web-app actions can
-surface that progress in the preview. Use [Remote Debugging](../user-guide/remote-debugging.md)
+when running Rivet in the Rivet application. `setWebAppStatus` is the exception for
+ordinary editor runs: Rivet provides it locally for graph progress. Stored Value
+nodes are also built in and do not require an external function. Use
+[Remote Debugging](../user-guide/remote-debugging.md)
 to run other External Call nodes in the Rivet application.
 
 <Tabs

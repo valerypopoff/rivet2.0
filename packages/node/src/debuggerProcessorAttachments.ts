@@ -136,6 +136,11 @@ export function createDebuggerProcessorAttachments(options: {
         }),
       );
       cleanups.push(
+        processor.on('graphOutputsReady', (data) => {
+          options.broadcast(processor, 'graphOutputsReady', data);
+        }),
+      );
+      cleanups.push(
         processor.on('pause', () => {
           options.broadcast(processor, 'pause', null);
         }),

@@ -1,4 +1,14 @@
-import { type FC, type MouseEvent as ReactMouseEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type FC,
+  type MouseEvent as ReactMouseEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   getProjectConnectionComparisonKey,
   type ChartNode,
@@ -13,7 +23,7 @@ import { ConditionallyRenderWire, PartialWire } from './Wire.js';
 import { useCanvasPositioning } from '../hooks/useCanvasPositioning.js';
 import { ErrorBoundary } from 'react-error-boundary';
 import { draggingWireClosestPortState } from '../state/graphBuilder.js';
-import { isReadOnlyGraphState, nodesByIdState } from '../state/graph.js';
+import { effectiveNodesByIdState, isReadOnlyGraphState, nodesByIdState } from '../state/graph.js';
 import { type PortPositions } from './NodeCanvas';
 import {
   lastRunDataByNodeState,
@@ -24,7 +34,11 @@ import {
 } from '../state/dataFlow';
 import { useStableCallback } from '../hooks/useStableCallback';
 import { useAtom, useAtomValue, useStore } from 'jotai';
-import { getSelectedProcessData, resolveCanvasExecutionProcessPage } from '../state/selectors/executionSelectors.js';
+import {
+  getSelectedProcessData,
+  hasRunningProcessData,
+  resolveCanvasExecutionProcessPage,
+} from '../state/selectors/executionSelectors.js';
 import { canvasIoDefinitionsForNodeState } from '../state/selectors/canvasGraphSelectors.js';
 import { resolveClosestWireDropTargetFromPoint } from '../utils/wireDropTarget.js';
 import { useRenderableWires } from './nodeCanvas/useRenderableWires.js';
@@ -38,6 +52,11 @@ import {
   type ConnectionBendPoint,
   type DraggingConnectionBend,
 } from './nodeCanvas/connectionBendInteraction.js';
+import {
+  getToolContinuationWireStates,
+  type ToolContinuationWireState,
+} from './nodeCanvas/toolContinuationWireState.js';
+import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
 
 const wiresStyles = css`
   position: absolute;
@@ -63,6 +82,77 @@ const wiresStyles = css`
     transition: stroke 0.2s ease-out;
   }
 
+  .wire.compare-added {
+    stroke: var(--success);
+    stroke-width: 3px;
+  }
+
+  .wire.compare-changed {
+    stroke: var(--warning);
+    stroke-width: 3px;
+  }
+
+  .wire.compare-removed {
+    stroke: var(--error);
+    stroke-width: 3px;
+    stroke-dasharray: 8 5;
+    opacity: 0.75;
+  }
+
+  .wire.tool-continuation:not(.tool-continuation-paired):not(.compare-added):not(.compare-changed):not(
+      .compare-removed
+    ) {
+    stroke: var(--primary);
+    stroke-width: 2px;
+  }
+
+  .wire.tool-continuation-active {
+    animation: tool-continuation-wire-flow 0.8s linear infinite;
+    stroke-dasharray: 8 5;
+  }
+
+  .wire.tool-continuation.tool-continuation-ambiguous {
+    animation: none;
+    stroke: var(--error);
+    stroke-dasharray: 5 4;
+  }
+
+  .wire.tool-continuation-paired {
+    stroke-width: 1px;
+  }
+
+  .tool-continuation-marker-default {
+    fill: gray;
+    stroke: none;
+  }
+
+  .tool-continuation-marker-added {
+    fill: var(--success);
+    stroke: none;
+  }
+
+  .tool-continuation-marker-changed {
+    fill: var(--warning);
+    stroke: none;
+  }
+
+  .tool-continuation-marker-error {
+    fill: var(--error);
+    stroke: none;
+  }
+
+  @keyframes tool-continuation-wire-flow {
+    to {
+      stroke-dashoffset: -13;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wire.tool-continuation-active {
+      animation: none;
+    }
+  }
+
   .wire-hit-area {
     cursor: inherit;
     fill: none;
@@ -71,6 +161,13 @@ const wiresStyles = css`
     stroke-linecap: round;
     stroke-width: 16px;
     vector-effect: non-scaling-stroke;
+  }
+
+  .wire-hit-area:focus-visible {
+    outline: none;
+    stroke: var(--primary);
+    stroke-opacity: 0.35;
+    stroke-width: 4px;
   }
 
   .wire-bend-point {
@@ -98,23 +195,6 @@ const wiresStyles = css`
     pointer-events: none;
     stroke: var(--primary-dark);
   }
-
-  .wire.compare-added {
-    stroke: var(--success);
-    stroke-width: 3px;
-  }
-
-  .wire.compare-changed {
-    stroke: var(--warning);
-    stroke-width: 3px;
-  }
-
-  .wire.compare-removed {
-    stroke: var(--error);
-    stroke-width: 3px;
-    stroke-dasharray: 8 5;
-    opacity: 0.75;
-  }
 `;
 
 export type WireDef = {
@@ -124,6 +204,33 @@ export type WireDef = {
   endPortId?: PortId;
   startPortIsInput: boolean;
 };
+
+type ToolContinuationMarkerIds = {
+  default: string;
+  added: string;
+  changed: string;
+  error: string;
+};
+
+function getToolContinuationMarkerId(
+  kind: ToolContinuationWireState['kind'],
+  compareChangeKind: ProjectComparisonChangeKind | undefined,
+  markerIds: ToolContinuationMarkerIds,
+): string {
+  if (kind === 'ambiguous' || compareChangeKind === 'removed') {
+    return markerIds.error;
+  }
+
+  if (compareChangeKind === 'added') {
+    return markerIds.added;
+  }
+
+  if (compareChangeKind === 'changed') {
+    return markerIds.changed;
+  }
+
+  return markerIds.default;
+}
 
 type WireLayerProps = {
   connections: NodeConnection[];
@@ -158,6 +265,16 @@ export const WireLayer: FC<WireLayerProps> = ({
   visibleNodeIdSet,
   viewportClientRect,
 }) => {
+  const toolContinuationMarkerPrefix = `tool-continuation-${useId().replaceAll(':', '')}`;
+  const toolContinuationMarkerIds = useMemo<ToolContinuationMarkerIds>(
+    () => ({
+      default: toolContinuationMarkerPrefix,
+      added: `${toolContinuationMarkerPrefix}-added`,
+      changed: `${toolContinuationMarkerPrefix}-changed`,
+      error: `${toolContinuationMarkerPrefix}-error`,
+    }),
+    [toolContinuationMarkerPrefix],
+  );
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [hoveredConnectionKey, setHoveredConnectionKey] = useState<string | undefined>();
   const [hoveredConnectionPoint, setHoveredConnectionPoint] = useState<ConnectionBendPoint | undefined>();
@@ -194,7 +311,9 @@ export const WireLayer: FC<WireLayerProps> = ({
           clientX,
           clientY,
           getInputDefinition: (nodeId, portId) =>
-            store.get(canvasIoDefinitionsForNodeState(nodeId))?.inputDefinitions.find((definition) => definition.id === portId),
+            store
+              .get(canvasIoDefinitionsForNodeState(nodeId))
+              ?.inputDefinitions.find((definition) => definition.id === portId),
         });
 
         setClosestPort(dropTarget);
@@ -235,7 +354,17 @@ export const WireLayer: FC<WireLayerProps> = ({
   const { canvasPosition, clientToCanvasPosition, canvasToClientPosition } = useCanvasPositioning();
   const mousePositionCanvas = clientToCanvasPosition(mousePosition.x, mousePosition.y);
   const nodesById = useAtomValue(nodesByIdState);
+  const effectiveNodesById = useAtomValue(effectiveNodesByIdState);
+  const definitionValidConnections = useAtomValue(definitionValidConnectionsState);
   const renderNodesById = useMemo(() => ({ ...compareNodesById, ...nodesById }), [compareNodesById, nodesById]);
+  const toolContinuationWireStates = useMemo(
+    () =>
+      getToolContinuationWireStates({
+        connections: definitionValidConnections,
+        nodes: Object.values(effectiveNodesById),
+      }),
+    [definitionValidConnections, effectiveNodesById],
+  );
 
   const getConnectionPointFromMouseEvent = useStableCallback(
     (event: ReactMouseEvent<SVGElement> | MouseEvent): ConnectionBendPoint => {
@@ -248,19 +377,13 @@ export const WireLayer: FC<WireLayerProps> = ({
     const nextRunningNodeIdSet = new Set<NodeId>();
 
     for (const [nodeId, processData] of Object.entries(lastRunDataByNode) as Array<[NodeId, RunDataByNodeId[NodeId]]>) {
-      const selectedProcessData = getSelectedProcessData(
-        processData,
-        resolveCanvasExecutionProcessPage(selectedProcessPageNodes[nodeId]),
-        graphSelectionOptions,
-      );
-
-      if (selectedProcessData?.data.status?.type === 'running') {
+      if (hasRunningProcessData(processData, graphSelectionOptions)) {
         nextRunningNodeIdSet.add(nodeId);
       }
     }
 
     return nextRunningNodeIdSet;
-  }, [graphSelectionOptions, lastRunDataByNode, selectedProcessPageNodes]);
+  }, [graphSelectionOptions, lastRunDataByNode]);
 
   const renderableWires = useRenderableWires({
     canvasToClientPosition,
@@ -490,6 +613,29 @@ export const WireLayer: FC<WireLayerProps> = ({
 
   return (
     <svg css={wiresStyles}>
+      <defs>
+        {(
+          [
+            [toolContinuationMarkerIds.default, 'tool-continuation-marker-default'],
+            [toolContinuationMarkerIds.added, 'tool-continuation-marker-added'],
+            [toolContinuationMarkerIds.changed, 'tool-continuation-marker-changed'],
+            [toolContinuationMarkerIds.error, 'tool-continuation-marker-error'],
+          ] as const
+        ).map(([id, className]) => (
+          <marker
+            key={id}
+            id={id}
+            markerHeight="7"
+            markerUnits="userSpaceOnUse"
+            markerWidth="7"
+            orient="auto-start-reverse"
+            refX="6"
+            refY="3"
+          >
+            <path className={className} d="M 0 0 L 6 3 L 0 6 z" />
+          </marker>
+        ))}
+      </defs>
       <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
         {draggingWire && (
           <ErrorBoundary fallback={<></>} key="wire-inprogress">
@@ -544,14 +690,11 @@ export const WireLayer: FC<WireLayerProps> = ({
           renderableWires={renderableWires}
           runningNodeIdSet={runningNodeIdSet}
           selectedProcessPageNodes={selectedProcessPageNodes}
+          toolContinuationMarkerIds={toolContinuationMarkerIds}
+          toolContinuationWireStates={toolContinuationWireStates}
         />
         {ghostBendPoint && (
-          <circle
-            className="wire-bend-point wire-bend-point-ghost"
-            cx={ghostBendPoint.x}
-            cy={ghostBendPoint.y}
-            r={7}
-          />
+          <circle className="wire-bend-point wire-bend-point-ghost" cx={ghostBendPoint.x} cy={ghostBendPoint.y} r={7} />
         )}
       </g>
     </svg>
@@ -583,6 +726,8 @@ const StaticWireContents = memo(
     renderableWires,
     runningNodeIdSet,
     selectedProcessPageNodes,
+    toolContinuationMarkerIds,
+    toolContinuationWireStates,
   }: {
     allowConnectionHover: boolean;
     allowConnectionBendEditing: boolean;
@@ -601,10 +746,7 @@ const StaticWireContents = memo(
     hoveredConnectionKey: string | undefined;
     lastRunDataByNode: RunDataByNodeId;
     nodesById: Record<NodeId, ChartNode>;
-    onConnectionBendDoubleClick: (
-      connection: NodeConnection,
-      event: ReactMouseEvent<SVGCircleElement>,
-    ) => void;
+    onConnectionBendDoubleClick: (connection: NodeConnection, event: ReactMouseEvent<SVGCircleElement>) => void;
     onConnectionBendMouseEnter: (connectionKey: string) => void;
     onConnectionBendMouseDown: (
       connection: NodeConnection,
@@ -624,12 +766,13 @@ const StaticWireContents = memo(
     renderableWires: NodeConnection[];
     runningNodeIdSet: ReadonlySet<NodeId>;
     selectedProcessPageNodes: Record<NodeId, PageValue>;
+    toolContinuationMarkerIds: ToolContinuationMarkerIds;
+    toolContinuationWireStates: ReadonlyMap<NodeConnection, ToolContinuationWireState>;
   }) => {
     const highlightedNodeIdSet = useMemo(
       () => (highlightedNodes ? new Set(highlightedNodes) : undefined),
       [highlightedNodes],
     );
-
     return (
       <>
         {compareRemovedConnections.map((connection) => (
@@ -663,6 +806,24 @@ const StaticWireContents = memo(
 
           const isHoveredConnection = hoveredConnectionKey === connectionKey;
           const highlighted = isHighlightedNode || isCurrentlyRunning || isHighlightedPort || isHoveredConnection;
+          const toolContinuationWireState = toolContinuationWireStates.get(connection);
+          const toolContinuation = toolContinuationWireState
+            ? {
+                active:
+                  toolContinuationWireState.kind === 'connected' &&
+                  runningNodeIdSet.has(toolContinuationWireState.delegateNodeId),
+                kind: toolContinuationWireState.kind,
+                markerId: getToolContinuationMarkerId(
+                  toolContinuationWireState.kind,
+                  compareChangeKind,
+                  toolContinuationMarkerIds,
+                ),
+                title:
+                  toolContinuationWireState.kind === 'ambiguous'
+                    ? 'Invalid tool continuation: Auto-continue requires exactly one connected Delegate Tool Call node.'
+                    : 'Tool continuation: The LLM sends tool calls to this Delegate Tool Call node and resumes with its results.',
+              }
+            : undefined;
           const bendPoint =
             draggingBendPreview?.connectionKey === connectionKey ? draggingBendPreview.point : connection.bendPoint;
 
@@ -677,6 +838,7 @@ const StaticWireContents = memo(
                 bendPoint={bendPoint}
                 isNotRan={isNotRan}
                 compareChangeKind={compareChangeKind}
+                toolContinuation={toolContinuation}
                 interactive={allowConnectionHover}
                 onHoverStart={(event) => onConnectionHoverStart(connectionKey, event)}
                 onHoverMove={(event) => onConnectionHoverMove(connectionKey, event)}

@@ -28,6 +28,11 @@ test('NodeTitleLabel decorates Set Global canvas titles with the matching icon',
   assert.match(html, />Set Global<\/span>/);
 });
 
+test('NodeTitleLabel uses the same directional cues for Stored Value nodes', () => {
+  assert.match(renderNodeTitle('getStoredValue', 'Get Stored Value'), /global-node-title-icon-get/);
+  assert.match(renderNodeTitle('setStoredValue', 'Set Stored Value'), /global-node-title-icon-set/);
+});
+
 test('NodeTitleLabel leaves other node titles plain', () => {
   const html = renderNodeTitle('text', 'Text');
 

@@ -58,7 +58,7 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 | Messages Sent    | `chat-message[]`                                                          | Messages sent to the provider.                                                                                                                                                                                                                                                                                                 |
 | All Messages     | `chat-message[]`                                                          | Conversation messages including the response.                                                                                                                                                                                                                                                                                  |
 | Response Tokens  | `number`                                                                  | Response token count when available.                                                                                                                                                                                                                                                                                           |
-| Tool Calls       | `object[]`                                                                | Available when tool use or provider built-in tools are enabled.                                                                                                                                                                                                                                                                |
+| Tool Calls       | `object[]`                                                                | Available when tool use or provider built-in tools are enabled. With auto-continuation, completed Rivet calls are retained as delegated records for observability; unresolved raw calls remain when continuation stops. Connecting this port to one Delegate Tool Call enables graph-visible continuation automatically.       |
 | Usage            | `object`                                                                  | Available when Output usage details is enabled. Includes provider usage metadata when available.                                                                                                                                                                                                                               |
 | Reasoning        | `string` or `string[]`                                                    | Available when Output reasoning is enabled and the provider exposes reasoning/thinking output.                                                                                                                                                                                                                                 |
 | Response Status  | `number` or `number[]`                                                    | Available when Output request details is enabled. When Retry on non-200 is enabled, this is a per-attempt array.                                                                                                                                                                                                               |
@@ -73,14 +73,14 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ### Model
 
-| Setting                  | Description                                                                                                                            |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Provider                 | OpenAI, Anthropic, Google, or Custom provider.                                                                                         |
-| Provider base URL        | Custom provider only. OpenAI-compatible hosts belong here by choosing Custom provider, not by overriding built-in OpenAI.               |
-| Model                    | Provider model. For Custom provider, enter the model ID expected by that provider.                                                     |
-| API key source           | Use the configured provider key or expose an API Key input port.                                                                       |
+| Setting                           | Description                                                                                                                                          |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider                          | OpenAI, Anthropic, Google, or Custom provider.                                                                                                       |
+| Provider base URL                 | Custom provider only. OpenAI-compatible hosts belong here by choosing Custom provider, not by overriding built-in OpenAI.                            |
+| Model                             | Provider model. For Custom provider, enter the model ID expected by that provider.                                                                   |
+| API key source                    | Use the configured provider key or expose an API Key input port.                                                                                     |
 | Alternative programmatic key name | Custom provider only when using a configured key. Programmatic runs can pass this key as a top-level run option. If blank, `customAiApiKey` is used. |
-| Alternative API key env var       | Custom provider only when using a configured key. Defaults to `CUSTOM_PROVIDER_API_KEY`.                                               |
+| Alternative API key env var       | Custom provider only when using a configured key. Defaults to `CUSTOM_PROVIDER_API_KEY`.                                                             |
 
 ### Parameters
 
@@ -103,6 +103,57 @@ Response format supports Default, Text, JSON object, and JSON schema. JSON objec
 ### Tools
 
 Tool use enables the Tools input and optional tool-choice controls. Auto-continue mode lets Rivet execute tool calls, send tool results back to the model, and repeat until a normal answer is produced or the max tool-round limit is reached.
+
+To make tool work visible and configurable in the graph:
+
+1. Enable **Tool use** and **Auto-continue after toolcalls run**.
+2. Connect **Tool Calls** directly to the **Tool Call** input of one
+   [Delegate Tool Call](./delegate-tool-call.mdx) node.
+3. Configure that Delegate to auto-delegate by graph name, call registered
+   external functions, or use explicit handler graphs.
+
+That exact existing connection becomes bidirectional automatically for the
+duration of auto-continuation. The LLM sends each model tool-call round to the
+Delegate, receives its ordered results, and continues generating while both
+nodes stay **Running**. There is no extra execution mode, reverse wire, or
+waiting state to configure. Each model tool-call round appears as a separate run
+page on the Delegate.
+
+**Run per item** LLM Chat nodes are deliberately not upgraded to this connected
+continuation behavior. Their Tool Calls wire remains ordinary and each split
+invocation uses the internal auto-continuation path, because one shared Delegate
+result cannot safely stand for multiple parallel split indexes.
+
+If the model includes normal assistant text in a response that also contains
+tool calls, the connected Delegate exposes it on **Message (fires before tool
+call invocation)**. That output activates once for every tool call before
+the shared batch is dispatched, and its ordinary branch must settle before the
+tools start. Normal
+tool-result branches start after the Delegate finishes. Put a **Start Async
+Branch** node immediately after the message output when that work should overlap
+the tools and later LLM rounds; the async trigger returns immediately, while the
+root lifecycle still owns all managed async work. In a web app, the final
+foreground Chat response can be displayed before that async work finishes.
+Consumers still waiting for the final LLM response or another late input remain
+in ordinary post-LLM scheduling. If an already-ready pre-tool path itself enters
+a cycle, Loop Controller, Race Inputs, or a foreground rejoin, Rivet reports the
+unsupported branch before invoking tools. Use **Start Async Branch** as the
+explicit boundary for a closed side-effect subtree that should overlap tool
+work.
+
+Rivet can converge the pre-tool message and final tool-result branches within the
+same round. Consumers that also need the final LLM response or another late
+input are deferred; completed continuation branch outputs are promoted after the
+owning LLM finishes so the consumer runs once. Outputs from an earlier tool round
+are not considered fresh inputs for the current round.
+
+Exactly one eligible connected Delegate is required for this graph-visible
+continuation. With none, LLM Chat uses its built-in internal delegation path.
+With more than one, Rivet reports an ambiguity error. If auto-continuation stops
+because a tool is unknown or **Max tool rounds** is reached, unresolved raw calls
+remain available to the ordinary downstream graph path. A single-run Delegate
+accepts one raw call; use **Run per item** on the Delegate or select one call
+before it when the unresolved output can contain several calls.
 
 ### Provider Advanced
 

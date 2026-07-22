@@ -6,6 +6,7 @@ import {
   type Project,
   type RivetWebAppActionStartMessage,
   type RivetWebAppRunEvent,
+  type RivetStoredValueStore,
   type UiGraph,
 } from '@valerypopoff/rivet2-core';
 import {
@@ -40,6 +41,7 @@ export type RivetWebAppSocketSession = {
   request?: Request;
   resolveContext?: RivetWebAppHandlerOptions['resolveContext'];
   revisionKey?: string;
+  storedValueStore?: RivetStoredValueStore;
   uiGraph: UiGraph;
 };
 
@@ -331,13 +333,13 @@ export function createRivetWebAppWebSocketGateway(
     return interruptedRuns;
   };
   const leaseManager = createWebAppLeaseManager({
-    getActiveRunIds: () => [...activeRuns.keys()],
+    getActiveRunIds: activeRuns.leaseManagedRunIds,
     leaseDurationMs,
     leaseId,
     leaseRenewIntervalMs,
     async onLeaseLost(runId, recoveredAsInterrupted) {
       const active = activeRuns.get(runId);
-      if (!active) return;
+      if (!active || !active.durableLeaseActive) return;
       const error = 'Web app action ownership lease was lost.';
       active.interruptionError = error;
       active.abortController.abort(new Error(error));
@@ -448,7 +450,11 @@ export function createRivetWebAppWebSocketGateway(
       if (draining) throw createServerDrainingError();
 
       const abortController = new AbortController();
-      const activeRun: ActiveWebAppRun = { abortController, ownerScope: session.ownerScope };
+      const activeRun: ActiveWebAppRun = {
+        abortController,
+        durableLeaseActive: true,
+        ownerScope: session.ownerScope,
+      };
       activeRuns.activate(runId, activeRun);
       subscribe(socket, runId);
       const acceptedEvent = await appendAndBroadcast(runId, {
@@ -477,6 +483,8 @@ export function createRivetWebAppWebSocketGateway(
           resolveContext: session.resolveContext,
           revisionKey: session.revisionKey,
           state: message.state,
+          storedValueStore: session.storedValueStore,
+          storage: message.storage,
           uiGraph: session.uiGraph,
         });
         try {
@@ -524,15 +532,30 @@ export function createRivetWebAppWebSocketGateway(
         void prepared
           .run()
           .then(
-            (result) => {
+            async (result) => {
               const callbacks = journal.getCallbacks(runId);
               if (callbacks) callbacks.result = result;
-              return appendAndBroadcast(runId, {
-                type: 'action.completed',
-                requestId: message.requestId,
+              const completedEvent = await appendAndBroadcast(
                 runId,
-                statePatch: result.statePatch,
-              });
+                {
+                  type: 'action.completed',
+                  requestId: message.requestId,
+                  runId,
+                  statePatch: result.statePatch,
+                  storagePatch: result.storagePatch,
+                },
+                { deferTerminalNotification: true },
+              );
+              if (completedEvent) {
+                activeRun.durableLeaseActive = false;
+              }
+              if (prepared.processor.isRunning) {
+                await prepared.processor.waitForRunCompletion().catch(reportError);
+              }
+              if (completedEvent) {
+                await journal.notifyTerminal(runId, completedEvent);
+              }
+              return completedEvent;
             },
             (error) => {
               const callbacks = journal.getCallbacks(runId);

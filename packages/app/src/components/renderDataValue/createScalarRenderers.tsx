@@ -21,7 +21,7 @@ import { RenderChatMessagePart } from './RenderChatMessagePart.js';
 import { COMPACT_PREVIEW_MAX_CHARS, COMPACT_PREVIEW_MAX_LINES } from '../../utils/outputStorageLimits.js';
 import { getRenderedStringText } from './stringPreview.js';
 import { buildTextPreviewExcerpt } from '../../utils/textPreview.js';
-import { getRenderableAssistantFunctionCall } from './chatMessageRenderUtils.js';
+import { getFunctionResponseDisplayLabel, getRenderableAssistantFunctionCall } from './chatMessageRenderUtils.js';
 import {
   getByteLength,
   getMediaData,
@@ -146,7 +146,7 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
         .with({ type: 'function' }, (message) => (
           <div className="chat-message function">
             <header>
-              <em>function output for: {typeof message.name === 'string' ? message.name : 'unknown'}</em>
+              <em>function output for: {getFunctionResponseDisplayLabel(message)}</em>
             </header>
             {messageContent}
           </div>

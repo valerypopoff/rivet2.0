@@ -130,6 +130,21 @@ Button actions write the same UI data key, the latest-started action owns that k
 disjoint state patches still apply, and a newer direct form edit prevents an older
 action from overwriting it. Chat message keys are component-specific.
 
+Web-app actions use the processor's early-output mode. If normal foreground
+scheduling has completed and only managed Start Async Branch work remains,
+`graphOutputsReady` releases the mapped Button/Chat result while the processor
+continues Running. The terminal `graphFinish`/`done` events, resource cleanup, and
+late async failures remain tied to `waitForRunCompletion()`. HTTP returns the JSON
+action response at the early boundary. WebSocket publishes `action.completed` at
+that boundary but retains the processor in its local active-run capacity until it
+fully settles. The durable row is already terminal, so it is removed from lease
+renewal at publication instead of being misclassified as a lost running lease.
+It also defers `onRunFinished` until then, so a recorder attached through
+`onProcessorPrepared` includes the async tail when the host persists it.
+Request- or session-scoped abort forwarding also remains attached through that
+full lifecycle, so returning the foreground result does not make the async tail
+uncancellable.
+
 Core graph processors provide the External Call function `setWebAppStatus`,
 including desktop Node processors and nested graphs. The function receives the first
 External Call argument, converts strings directly and other values to JSON/string
@@ -145,6 +160,64 @@ is cancelled, or is interrupted. Ordinary graph runs may emit the same progress
 event, but only a host with a web-app progress surface displays it. Other
 host-supplied external functions are preserved, and no web-app-specific executor
 marker is needed.
+
+Persistent workflow state uses the built-in `Set Stored Value` and `Get Stored
+Value` nodes. One controller belongs to the root graph run and is shared with
+subgraphs and delegated tool graphs. It is read-through/write-through, loads a key
+at most once per run, serializes same-key operations, and updates its synchronous
+cache only after a successful backing-store write. The portable value contract is
+strict JSON: `null`, booleans, finite numbers, strings, arrays, and plain objects.
+Undefined values, functions, cycles, binary/media values, and malformed callback
+results fail the node. Missing values remain distinct from stored `null` through
+the Get node's `Found` output.
+
+Web-app persistence defaults to the browser. The server never reads browser
+`localStorage` directly. Each HTTP or WebSocket action carries a JSON-object
+snapshot scoped by origin, normalized app pathname, and UI graph ID. The action
+uses that snapshot as its controller's backing store and returns successful
+changed-key writes in `storagePatch`; the browser merges the patch into the latest
+app record without replacing disjoint keys. Per-key action ordering advances only
+after that merge is persisted, so a failed newer write cannot suppress an older
+successful action that completes later. Storage never enters component UI
+state, graph input mapping, or lifecycle-hook state projection.
+The patch is response-bound: writes performed only after an early web-app result
+cannot be delivered in that HTTP/WebSocket completion payload. Put browser-backed
+Set Stored Value nodes on the foreground path. A host callback-backed store writes
+through directly and is the supported persistence mechanism for async branches.
+
+Hosts can provide `storedValueStore` to `runGraph(...)`, `createProcessor(...)`,
+`runRivetWebAppAction(...)`, a web-app handler, or a WebSocket session. A
+request-scoped store returned by `createProcessorOptions(context)` overrides a
+static web-app store. Either host store overrides the browser snapshot. In
+callback-backed mode Rivet sends no writes back to browser storage; switching modes
+does not migrate or erase either store. Callback errors fail the action without a
+fallback. Hosts own tenancy, authentication, namespacing, authorization, and
+cross-request concurrency.
+
+The editor's Browser executor supplies a snapshot-backed store directly. Its
+internal Node executor sends the same snapshot over the request-scoped debugger
+protocol, creates the store in the sidecar, and returns the changed-key patch before
+the successful terminal result. External Remote Debugger sessions do not permit
+editor-originated web-app actions, so they never receive a browser-storage bridge.
+
+The desktop **Run detached** preview keeps the durable app-local record in the
+parent Rivet window rather than relying on its Tauri child webview's browser
+storage. The parent sends that record when the preview starts (or requests its
+payload), supplies the latest record to every action, and persists each successful
+patch before replying. The detached renderer keeps the same record in memory between
+actions, which makes storage work even when Tauri isolates `localStorage` per
+webview. Its temporary bootstrap payload is best-effort browser storage only: if
+either webview cannot access it, the child requests the same payload from the parent
+over its token-scoped `BroadcastChannel`.
+
+Ordinary Browser, Node, core, and headless runs create a fresh memory controller for
+every top-level run. Reusing a processor therefore does not retain values by itself;
+only a browser or host store persists across runs. Frozen Set Stored Value replay
+seeds the run cache for downstream nodes without repeating the durable write.
+
+`getWebAppStorage` and `setWebAppStorage` are no longer built-in External Calls.
+This is an intentional breaking change; existing workflows must use the dedicated
+nodes.
 
 ### Long-running WebSocket actions
 
@@ -316,10 +389,29 @@ Reset is session-only: it aborts active actions, clears action errors/progress, 
 restores the UI graph's initial state without changing the project or YAML. The
 desktop editor preview keeps its interaction controller in an in-memory registry
 keyed by open project and UI graph, so switching to another graph or UI graph does
-not lose entered fields, outputs, or chat messages. The app clears those controllers
-when the project is closed or a project is opened as a new session. Detached previews
-and hosted pages own their own controller and therefore start a fresh session when
-they are opened or reloaded.
+not lose entered fields, outputs, chat messages, or an in-flight action. An action
+started in that embedded preview keeps running while its renderer is temporarily
+unmounted by workspace navigation; reopening the preview reattaches the same
+controller and shows its progress or completed result. Explicit Abort, Reset,
+page unload, deleting that UI graph, and closing the project still abort its action.
+Detached previews and hosted pages own their own controller and therefore start a
+fresh session when they are opened or reloaded.
+
+The Chat header uses the shared icon-only styling for its overflow, pins, and
+search controls. Their hover and focus states change the icon color without
+adding a button-shaped background, while all three controls keep larger hit
+areas for reliable pointer and keyboard use. React preview and hosted DOM
+rendering both consume this CSS from `UiGraphRendererStyles.ts`.
+
+Chat bubbles keep Markdown blockquote text and its rule in the bubble foreground
+color. Their sender-facing bottom corner is deliberately square: right for user
+messages and left for assistant messages.
+
+Text Input, Textarea, Chat composer, and Chat search controls also share an
+explicit renderer-owned interaction style: hover uses the control hover
+background, and focus uses a subtle foreground-mixed border with no outline or
+box shadow. This prevents browser or host form-control focus styles from
+creating different colors or weights across preview and hosted pages.
 
 Output components use the shared renderer styles and have a responsive maximum
 height with internal vertical scrolling, so large output values do not expand the

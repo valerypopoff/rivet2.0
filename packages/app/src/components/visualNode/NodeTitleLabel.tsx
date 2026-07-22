@@ -25,7 +25,12 @@ const GlobalNodeTitleIcon: FC<{ direction: 'get' | 'set' }> = ({ direction }) =>
 );
 
 export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = ({ node }) => {
-  const globalIconDirection = node.type === 'getGlobal' ? 'get' : node.type === 'setGlobal' ? 'set' : undefined;
+  const globalIconDirection =
+    node.type === 'getGlobal' || node.type === 'getStoredValue'
+      ? 'get'
+      : node.type === 'setGlobal' || node.type === 'setStoredValue'
+        ? 'set'
+        : undefined;
 
   return (
     <span className="title-text-label">

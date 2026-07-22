@@ -97,6 +97,9 @@ export * from './nodes/DidRunNode.js';
 import { passthroughNode } from './nodes/PassthroughNode.js';
 export * from './nodes/PassthroughNode.js';
 
+import { startBackgroundBranchNode } from './nodes/StartBackgroundBranchNode.js';
+export * from './nodes/StartBackgroundBranchNode.js';
+
 import { popNode } from './nodes/PopNode.js';
 export * from './nodes/PopNode.js';
 
@@ -105,6 +108,12 @@ export * from './nodes/SetGlobalNode.js';
 
 import { getGlobalNode } from './nodes/GetGlobalNode.js';
 export * from './nodes/GetGlobalNode.js';
+
+import { setStoredValueNode } from './nodes/SetStoredValueNode.js';
+export * from './nodes/SetStoredValueNode.js';
+
+import { getStoredValueNode } from './nodes/GetStoredValueNode.js';
+export * from './nodes/GetStoredValueNode.js';
 
 import { waitForEventNode } from './nodes/WaitForEventNode.js';
 export * from './nodes/WaitForEventNode.js';
@@ -309,9 +318,12 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(coalesceNode)
     .register(didRunNode)
     .register(passthroughNode)
+    .register(startBackgroundBranchNode)
     .register(popNode)
     .register(setGlobalNode)
     .register(getGlobalNode)
+    .register(setStoredValueNode)
+    .register(getStoredValueNode)
     .register(waitForEventNode)
     .register(gptFunctionNode)
     .register(getEmbeddingNode)

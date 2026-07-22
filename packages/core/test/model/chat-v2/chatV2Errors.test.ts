@@ -38,6 +38,79 @@ describe('normalizeChatV2ProviderError', () => {
     assert.doesNotMatch(normalized.message, /AI_APICallError/);
   });
 
+  it('shows the original provider message when the SDK error message is identical', () => {
+    const providerMessage = 'Grammar error: Unimplemented keys: ["uniqueItems"]';
+    const normalized = normalizeChatV2ProviderError(
+      createApiError({
+        message: providerMessage,
+        statusCode: 400,
+        responseBody: JSON.stringify({
+          error: {
+            message: providerMessage,
+            type: 'BadRequestError',
+            code: 400,
+          },
+        }),
+      }),
+      {
+        provider: 'custom',
+        modelId: 'deepseek-ai/DeepSeek-V4-Flash',
+      },
+    );
+
+    assert.ok(normalized instanceof Error);
+    assert.match(normalized.message, /400 Bad Request/);
+    assert.match(normalized.message, /Provider message: Grammar error: Unimplemented keys/);
+  });
+
+  it('prefers the original response body message over generic SDK data', () => {
+    const normalized = normalizeChatV2ProviderError(
+      createApiError({
+        statusCode: 400,
+        data: { message: 'Request rejected.' },
+        responseBody: JSON.stringify({
+          error: {
+            message: 'Specific provider grammar failure.',
+          },
+        }),
+      }),
+      {
+        provider: 'custom',
+        modelId: 'custom-model',
+      },
+    );
+
+    assert.ok(normalized instanceof Error);
+    assert.match(normalized.message, /Provider message: Specific provider grammar failure/);
+    assert.doesNotMatch(normalized.message, /Provider message: Request rejected/);
+  });
+
+  it('finds the original provider response through nested SDK error causes', () => {
+    const nested = createApiError({
+      statusCode: 400,
+      responseBody: JSON.stringify({
+        error: {
+          message: 'Nested provider detail.',
+        },
+      }),
+    });
+    const outer = createApiError({
+      message: 'Provider request failed.',
+      statusCode: 400,
+      responseBody: undefined,
+      data: undefined,
+      cause: nested,
+    });
+
+    const normalized = normalizeChatV2ProviderError(outer, {
+      provider: 'custom',
+      modelId: 'custom-model',
+    });
+
+    assert.ok(normalized instanceof Error);
+    assert.match(normalized.message, /Provider message: Nested provider detail/);
+  });
+
   it('preserves the Vercel API status code on normalized provider errors', () => {
     const error = createApiError({
       statusCode: 503,

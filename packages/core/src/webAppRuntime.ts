@@ -20,6 +20,7 @@ export {
   createUiGraphChatSubmissionStatePatch,
   getUiGraphActionState,
   getUiGraphChatDraftStateKey,
+  getUiGraphChatMessagesStateKey,
 } from './model/UiGraph.js';
 export {
   applyUiGraphStatePatch,
@@ -36,13 +37,17 @@ export {
 } from './model/UiGraphActionProtocol.js';
 export {
   copyUiGraphText,
+  applyUiGraphWebAppStorageActionPatch,
+  applyUiGraphWebAppStoragePatch,
   clearUiGraphChatSearchMatches,
   downloadUiGraphJsonOutput,
   hasUiGraphChatPersistentStateChanged,
   getUiGraphChatPersistentState,
   getUiGraphChatStorageKey,
+  getUiGraphWebAppStorageKey,
   highlightUiGraphChatSearchMatches,
   loadUiGraphChatPersistentState,
+  loadUiGraphWebAppStorage,
   observeUiGraphOutputResizeBounds,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,

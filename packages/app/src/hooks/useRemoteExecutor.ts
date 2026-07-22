@@ -7,6 +7,7 @@ import {
   type Outputs,
   type ProcessEventMessageMap,
   type RemoteRunRequestId,
+  type RivetWebAppStorage,
   type StringArrayDataValue,
   type GraphId,
 } from '@valerypopoff/rivet2-core';
@@ -73,6 +74,10 @@ export function useRemoteExecutor() {
   const environmentProvider = useEnvironmentProvider();
   const store = useStore();
   const activeGraphRequestIdRef = useRef<RemoteRunRequestId | null>(null);
+  const earlyResultRequestIdsRef = useRef(new Set<RemoteRunRequestId>());
+  const webAppStoragePatchCallbacksByRequestIdRef = useRef(
+    new Map<RemoteRunRequestId, (storagePatch: RivetWebAppStorage) => void>(),
+  );
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
   const unscopedEventRoutingRef = useRef(createUnscopedRemoteExecutionRoutingState());
@@ -106,6 +111,8 @@ export function useRemoteExecutor() {
   const remoteDebugger = useRemoteDebugger({
     onDisconnect: () => {
       clearActiveRemoteRunRequest(activeGraphRequestIdRef);
+      earlyResultRequestIdsRef.current.clear();
+      webAppStoragePatchCallbacksByRequestIdRef.current.clear();
       executorSession.setActiveGraphRunRequestId(null);
       if (store.get(projectState).metadata.id !== project.metadata.id) {
         return;
@@ -231,6 +238,10 @@ export function useRemoteExecutor() {
           break;
         case 'done':
           executorSession.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
+          if (requestId) {
+            earlyResultRequestIdsRef.current.delete(requestId);
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
             executorSession.setActiveGraphRunRequestId(null);
@@ -239,8 +250,30 @@ export function useRemoteExecutor() {
             eventDispatcher.done(data);
           }
           break;
+        case 'graphOutputsReady':
+          if (requestId) {
+            earlyResultRequestIdsRef.current.add(requestId);
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          }
+          executorSession.resolvePendingGraphExecution(requestId, (data as { outputs: GraphOutputs }).outputs);
+          break;
+        case 'webAppStoragePatch': {
+          const callback = requestId ? webAppStoragePatchCallbacksByRequestIdRef.current.get(requestId) : undefined;
+          if (callback) {
+            try {
+              callback((data as ProcessEventMessageMap['webAppStoragePatch']).storagePatch);
+            } catch (error) {
+              handleError(error, 'Failed to apply web app storage returned by the executor.');
+            }
+          }
+          break;
+        }
         case 'abort':
           executorSession.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
+          if (requestId) {
+            earlyResultRequestIdsRef.current.delete(requestId);
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
             executorSession.setActiveGraphRunRequestId(null);
@@ -299,6 +332,10 @@ export function useRemoteExecutor() {
           break;
         case 'error':
           executorSession.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
+          if (requestId) {
+            earlyResultRequestIdsRef.current.delete(requestId);
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
             executorSession.setActiveGraphRunRequestId(null);
@@ -421,6 +458,8 @@ export function useRemoteExecutor() {
         projectPath: loadedProject.path,
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
+        returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady,
+        ...(options.webAppStorage === undefined ? {} : { webAppStorage: options.webAppStorage }),
       };
 
       if (options.waitForResults) {
@@ -431,8 +470,15 @@ export function useRemoteExecutor() {
           onRequestCreated: (requestId) => {
             activeGraphRequestIdRef.current = requestId;
             executorSession.setActiveGraphRunRequestId(requestId);
+            if (options.onWebAppStoragePatch) {
+              webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
+            }
           },
           onRequestSettled: (requestId) => {
+            if (earlyResultRequestIdsRef.current.has(requestId)) {
+              return;
+            }
+            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
             clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
             if (requestId === executorSession.getActiveGraphRunRequestId()) {
               executorSession.setActiveGraphRunRequestId(null);

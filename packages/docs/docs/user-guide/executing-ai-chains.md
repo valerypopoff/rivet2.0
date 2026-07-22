@@ -17,6 +17,64 @@ The following graph will _roughly_ execute in the order of these numbers. Every 
 
 ![Data Flow](assets/data-flow.png)
 
+## LLM Tool Continuation
+
+One connection has an intentional request/response interpretation. When an
+[LLM Chat Node](../node-reference/llm-chat) has **Tool use** and
+**Auto-continue after toolcalls run** enabled, connect its **Tool Calls** output
+to the **Tool Call** input of exactly one
+[Delegate Tool Call Node](../node-reference/delegate-tool-call). Rivet shows
+arrowheads at both ends of this wire because the LLM sends calls to the Delegate
+and receives its results before continuing. The connection is still stored as a
+normal graph wire; there is no return wire or special execution mode to add.
+If LLM Chat uses **Run per item**, Rivet leaves this wire ordinary and uses
+internal continuation for each split invocation; parallel split indexes cannot
+safely share one connected Delegate result.
+
+The LLM Chat node stays **Running** throughout the loop. The Delegate runs once
+for each model tool-call round and also stays **Running** while that round's
+handlers execute. Separate Delegate run pages let you inspect repeated rounds.
+If more than one eligible Delegate is connected, Rivet marks the candidate wires
+red and dashed and reports an ambiguity error. With no connected Delegate, LLM
+Chat uses its internal tool delegation.
+
+The Delegate exposes normal text that the assistant produced alongside its tool
+calls as **Message (fires before tool call invocation)**. This port activates
+automatically once for every tool call, and Rivet runs those branch invocations
+before dispatching the shared tool batch.
+**Output** and **Tool Result Message** follow ordinary left-to-right execution
+after the Delegate finishes. Whitespace-only messages do not activate the
+pre-tool branch.
+
+An ordinary pre-tool branch must finish before tool dispatch. Put a **Start Async
+Branch** node directly after the message output when the message should only
+trigger work such as `setWebAppStatus`. The async node returns immediately, so
+its downstream work can overlap the tools and later LLM rounds. The branch
+remains managed by the root run. In a web app, the final foreground response is
+returned as soon as it is ready even if that async branch is still running; the
+processor keeps owning the branch until the full run settles.
+Desktop previews and hosted WebSocket actions can show the intermediate status
+while work continues; a regular HTTP action cannot display it before the action
+response arrives.
+
+A consumer that is still waiting for the final LLM response or another late
+input stays in ordinary post-LLM execution. An already-ready pre-tool path
+cannot be partially executed through a cycle, Loop Controller, Race Inputs, or
+a foreground rejoin; Rivet reports that configuration before invoking tools.
+Place **Start Async Branch** before an independently runnable, closed
+side-effect subtree when it should overlap the tool work.
+
+Branches can converge on the pre-tool message and final tool-result values
+within the same round. Work that also needs the final LLM response or another
+late input is deferred and runs once after those inputs are available; an output
+from a previous tool round is not a fresh current-round dependency.
+
+If the maximum tool-round limit is reached or the model asks for an unknown
+tool, the unresolved raw calls continue through the ordinary downstream path so
+you can inspect or handle them. A single-run Delegate accepts one raw call; use
+**Run per item** on the Delegate or select one call before it when several raw
+calls may remain.
+
 ## Freeze Node Output While Editing
 
 When you are iterating on a graph in the editor, you can freeze a node's current output and reuse it during later editor runs. This is useful when a node is slow, expensive, random, or calls an external service, and you want downstream nodes to keep receiving the same value while you work.
@@ -41,7 +99,7 @@ Frozen execution still follows normal graph readiness rules. If a node would not
 
 Frozen outputs replace computation, not every possible side effect. Rivet restores global-variable writes for frozen **Set Global** nodes, but other side effects such as graph-output boundaries, dataset writes, raised events, audio playback, external calls, and graph aborts are not replayed.
 
-Some nodes cannot be frozen because their behavior is not useful or safe to replay as stored output data: **Comment**, **Abort Graph**, **Graph Output**, **Create Dataset**, **Append to Dataset**, **Replace Dataset**, **Raise Event**, and **Play Audio**.
+Some nodes cannot be frozen because their behavior is not useful or safe to replay as stored output data: **Comment**, **Abort Graph**, **Graph Output**, **Create Dataset**, **Append to Dataset**, **Replace Dataset**, **Raise Event**, **Play Audio**, and **Start Async Branch**. Replaying Start Async Branch could repeat its downstream side effects without executing the scheduling boundary normally. A **Delegate Tool Call** node that is currently the active LLM auto-continuation handler also cannot use frozen or preloaded output, because every tool round must execute its real handler work and return a fresh result to the running LLM. If stale output reaches the runtime anyway, the run fails before tool side effects and asks you to clear it.
 
 Freeze node output is available only for normal editor runs in Browser mode or the built-in Node executor. It is not available while using an external Remote Debugger session or while viewing a loaded recording. When you connect an external Remote Debugger, Rivet hides frozen-output markers because remote runs do not use local frozen outputs. If you disconnect before any remote run happens, the markers come back. After a remote run starts, Rivet clears the frozen outputs for that open project.
 

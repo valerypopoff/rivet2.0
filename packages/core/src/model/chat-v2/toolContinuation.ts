@@ -15,6 +15,10 @@ export type ToolContinuationOptions = RunChatV2PipelineOptions & {
   maxToolRounds: number;
   functions: GptFunction[] | undefined;
   delegateToolCall: (toolCall: StreamedFunctionCall) => Promise<ToolContinuationToolResult>;
+  delegateToolCallRound?: (
+    toolCalls: StreamedFunctionCall[],
+    preToolMessage: string,
+  ) => Promise<ToolContinuationToolResult[]>;
   runPipeline?: (options: RunChatV2PipelineOptions) => Promise<ChatV2PipelineResult>;
 };
 
@@ -49,9 +53,7 @@ function addUsage(
     cachedTokens: accumulated.cachedTokens + usage.cachedTokens,
     reasoningTokens: accumulated.reasoningTokens + usage.reasoningTokens,
     totalCost:
-      accumulated.totalCost == null || usage.totalCost == null
-        ? undefined
-        : accumulated.totalCost + usage.totalCost,
+      accumulated.totalCost == null || usage.totalCost == null ? undefined : accumulated.totalCost + usage.totalCost,
   };
 }
 
@@ -92,7 +94,11 @@ function appendReasoningRound(accumulated: string[], reasoning: ChatV2ReasoningO
   accumulated.push(...nonEmptyReasoning);
 }
 
-function applyAccumulatedReasoning(result: ChatV2PipelineResult, reasoningRounds: string[], outputReasoning: boolean | undefined) {
+function applyAccumulatedReasoning(
+  result: ChatV2PipelineResult,
+  reasoningRounds: string[],
+  outputReasoning: boolean | undefined,
+) {
   if (reasoningRounds.length === 0) {
     return;
   }
@@ -116,6 +122,7 @@ export async function runChatV2PipelineWithToolContinuation(
     maxToolRounds,
     functions,
     delegateToolCall,
+    delegateToolCallRound,
     runPipeline = runChatV2Pipeline,
     ...pipelineOptions
   } = options;
@@ -140,11 +147,7 @@ export async function runChatV2PipelineWithToolContinuation(
       appendReasoningRound(reasoningRounds, result.reasoning);
     }
 
-    if (
-      !autoContinue ||
-      completedRounds >= maxRounds ||
-      !canAutoContinue(result.functionCalls, toolNames)
-    ) {
+    if (!autoContinue || completedRounds >= maxRounds || !canAutoContinue(result.functionCalls, toolNames)) {
       if (result.functionCalls.length === 0 && delegatedToolCalls.length > 0 && pipelineOptions.includeFunctionCalls) {
         result.commonOutputs['function-calls' as PortId] = {
           type: 'object[]',
@@ -160,7 +163,9 @@ export async function runChatV2PipelineWithToolContinuation(
       return result;
     }
 
-    const toolResultMessages = await Promise.all(result.functionCalls.map(delegateToolCall));
+    const toolResultMessages = delegateToolCallRound
+      ? await delegateToolCallRound(result.functionCalls, result.response)
+      : await Promise.all(result.functionCalls.map(delegateToolCall));
     delegatedToolCalls.push(
       ...toolResultMessages
         .map((message) => message.delegatedToolCall)

@@ -331,6 +331,9 @@ function coerceToNumber(value: DataValue | undefined): number | undefined {
 
   if (value.type === 'any' || value.type === 'object') {
     const inferred = inferType(value.value);
+    if (inferred.type === 'any' || inferred.type === 'object') {
+      return undefined;
+    }
     return coerceTypeOptional(inferred, 'number');
   }
 

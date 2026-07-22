@@ -282,6 +282,20 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     }
 
     await act(async () =>
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click(),
+    );
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      assert.ok(root.querySelector('.rivet-web-app-chat-pins'));
+      assert.ok(root.querySelector('.rivet-web-app-chat-menu'));
+    }
+
+    await act(async () =>
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click(),
+    );
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
+
+    await act(async () =>
       reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click(),
     );
     hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
@@ -290,7 +304,9 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
     for (const root of [reactRootElement, hostedDom.window.document]) {
       assert.equal(root.querySelector('.rivet-web-app-chat-pins-button'), null);
+      assert.equal(root.querySelector('.rivet-web-app-chat-pins'), null);
       assert.equal(root.querySelector('.rivet-web-app-chat-pin-button')?.getAttribute('aria-label'), 'Pin response');
+      assert.equal(root.querySelector('.rivet-web-app-chat-pin-button')?.classList.contains('active'), false);
     }
 
     await act(async () =>

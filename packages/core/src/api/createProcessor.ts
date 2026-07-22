@@ -30,6 +30,7 @@ import type { Tokenizer } from '../integrations/Tokenizer.js';
 import { looseDataValuesToDataValues, type LooseDataValue } from './looseDataValue.js';
 import type { ProjectReferenceLoader } from '../model/ProjectReferenceLoader.js';
 import { resolveProcessSettings } from './processSettings.js';
+import type { RivetStoredValueStore } from '../model/StoredValueStore.js';
 
 export type RunGraphOptions = {
   graph?: string;
@@ -56,6 +57,9 @@ export type RunGraphOptions = {
   projectPath?: string;
   projectReferenceLoader?: ProjectReferenceLoader;
   editorExecutionCache?: ProcessContext['editorExecutionCache'];
+  storedValueStore?: RivetStoredValueStore;
+  /** Return root graph outputs before managed async branches settle. */
+  returnWhenGraphOutputsReady?: boolean;
 } & {
   [P in keyof ProcessEvents as `on${PascalCase<P>}`]?: (params: ProcessEvents[P]) => void;
 } & Settings &
@@ -135,6 +139,10 @@ export function coreCreateProcessor(
     processor.on('graphFinish', options.onGraphFinish);
   }
 
+  if (options.onGraphOutputsReady) {
+    processor.on('graphOutputsReady', options.onGraphOutputsReady);
+  }
+
   if (options.onPartialOutput) {
     processor.on('partialOutput', options.onPartialOutput);
   }
@@ -173,6 +181,8 @@ export function coreCreateProcessor(
     }
   }
 
+  processor.setStoredValueStore(options.storedValueStore);
+
   if (options.onUserEvent) {
     for (const [name, fn] of Object.entries(options.onUserEvent)) {
       processor.onUserEvent(name, fn);
@@ -210,6 +220,7 @@ export function coreCreateProcessor(
         },
         resolvedInputs,
         resolvedContextValues,
+        { returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady },
       );
 
       return outputs;

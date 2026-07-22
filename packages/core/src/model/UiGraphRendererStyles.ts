@@ -303,6 +303,22 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   resize: vertical;
 }
 
+.rivet-web-app-field input:hover,
+.rivet-web-app-field textarea:hover,
+.rivet-web-app-chat-search-input:hover,
+.rivet-web-app-chat-composer textarea:hover {
+  background: var(--rivet-web-app-control-hover-background);
+}
+
+.rivet-web-app-field input:focus,
+.rivet-web-app-field textarea:focus,
+.rivet-web-app-chat-search-input:focus,
+.rivet-web-app-chat-composer textarea:focus {
+  border-color: color-mix(in srgb, var(--rivet-web-app-foreground) 34%, transparent);
+  box-shadow: none;
+  outline: none;
+}
+
 .rivet-web-app-button {
   width: fit-content;
   border: 0;
@@ -432,14 +448,14 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   justify-content: space-between;
   min-height: 52px;
   border-bottom: 1px solid var(--rivet-web-app-card-border);
-  padding: 0 18px;
+  padding: 0 10px 0 18px;
   font-weight: 700;
 }
 
 .rivet-web-app-chat-header-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
 }
 
 .rivet-web-app-chat-title,
@@ -471,18 +487,26 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-chat-pins-button,
-.rivet-web-app-chat-search-button,
+.rivet-web-app-chat-search-button {
+  width: 40px;
+  height: 56px;
+  border-radius: 8px;
+}
+
 .rivet-web-app-chat-menu-button {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
 }
 
 .rivet-web-app-chat-pins-button {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: auto;
+  min-width: 40px;
   gap: 4px;
-  padding: 0 7px;
+  padding: 0 6px;
 }
 
 .rivet-web-app-chat-pins-button svg,
@@ -494,17 +518,28 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   height: 17px;
 }
 
-.rivet-web-app-chat-pins-button:hover,
-.rivet-web-app-chat-pins-button:focus-visible,
-.rivet-web-app-chat-search-button:hover,
-.rivet-web-app-chat-search-button:focus-visible,
-.rivet-web-app-chat-menu-button:hover,
-.rivet-web-app-chat-menu-button:focus-visible,
+.rivet-web-app-chat-menu-button svg {
+  width: 34px;
+  height: 34px;
+  transform: translate(-4px, 1px);
+}
+
 .rivet-web-app-chat-search-close-button:hover,
 .rivet-web-app-chat-search-close-button:focus-visible,
 .rivet-web-app-chat-search-navigation-button:hover:not(:disabled),
 .rivet-web-app-chat-search-navigation-button:focus-visible:not(:disabled) {
   background: var(--rivet-web-app-control-hover-background);
+  color: var(--rivet-web-app-foreground);
+  outline: none;
+}
+
+.rivet-web-app-chat-pins-button:hover,
+.rivet-web-app-chat-pins-button:focus-visible,
+.rivet-web-app-chat-search-button:hover,
+.rivet-web-app-chat-search-button:focus-visible,
+.rivet-web-app-chat-menu-button:hover,
+.rivet-web-app-chat-menu-button:focus-visible {
+  background: transparent;
   color: var(--rivet-web-app-foreground);
   outline: none;
 }
@@ -667,10 +702,6 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   padding: 6px 9px;
 }
 
-.rivet-web-app-chat-search-input:focus {
-  border-color: color-mix(in srgb, var(--rivet-web-app-foreground) 34%, transparent);
-}
-
 .rivet-web-app-chat-search-count {
   min-width: 32px;
   color: var(--rivet-web-app-foreground-muted);
@@ -703,6 +734,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 
 .rivet-web-app-chat > .rivet-web-app-progress {
   border-top: 1px solid var(--rivet-web-app-card-border);
+  font-size: inherit;
   padding: 10px 14px 0;
 }
 
@@ -757,12 +789,12 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   --rivet-web-app-chat-message-background: color-mix(in srgb, var(--rivet-web-app-button-background) 72%, var(--rivet-web-app-card-background));
   --rivet-web-app-chat-message-foreground: var(--rivet-web-app-button-foreground);
   align-self: flex-end;
-  border-bottom-right-radius: 5px;
+  border-bottom-right-radius: 0;
 }
 
 .rivet-web-app-chat-message-assistant {
   align-self: flex-start;
-  border-bottom-left-radius: 5px;
+  border-bottom-left-radius: 0;
 }
 
 .rivet-web-app-chat-message-row {
@@ -803,7 +835,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 }
 
 .rivet-web-app-chat-message-row:hover .rivet-web-app-chat-pin-button,
-.rivet-web-app-chat-message-row:focus-within .rivet-web-app-chat-pin-button,
+.rivet-web-app-chat-pin-button:focus-visible,
 .rivet-web-app-chat-pin-button.active {
   opacity: 1;
   pointer-events: auto;
@@ -910,10 +942,6 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   line-height: 1.35;
   padding: 10px 12px;
   resize: none;
-}
-
-.rivet-web-app-chat-composer textarea:focus {
-  border-color: color-mix(in srgb, var(--rivet-web-app-foreground) 34%, transparent);
 }
 
 .rivet-web-app-chat-send {
@@ -1229,6 +1257,12 @@ button.rivet-web-app-output-header:focus-visible {
   background: var(--rivet-web-app-chat-message-background);
   color: var(--rivet-web-app-chat-message-foreground);
   font-family: inherit;
+}
+
+.rivet-web-app-chat-message-markdown.markdown-body blockquote {
+  border-left-color: var(--rivet-web-app-chat-message-foreground);
+  background: transparent;
+  color: var(--rivet-web-app-chat-message-foreground);
 }
 
 .rivet-web-app-markdown h1,

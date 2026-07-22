@@ -224,15 +224,7 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
 
       const runScopedCodeRunner = runtimePolicy.useCachedDefaultCodeRunner ? new CachedNodeCodeRunner() : undefined;
 
-      try {
-        const outputs = await processor.processor.processGraph(
-          createNodeProcessContext(effectiveProcessorOptions, pluginEnv, { codeRunner: runScopedCodeRunner }),
-          processor.inputs,
-          processor.contextValues,
-        );
-
-        return outputs;
-      } finally {
+      const cleanupRunResources = () => {
         runScopedCodeRunner?.clearCache();
         if (shouldManageRunScopedRuntimeCache) {
           clearGraphProcessorRuntimeCache(runtimePolicy.runtimeCache!);
@@ -241,6 +233,26 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
         if (shouldManageRemoteDebugger) {
           detachAbortCleanup();
           detachRemoteDebugger();
+        }
+      };
+
+      try {
+        const outputs = await processor.processor.processGraph(
+          createNodeProcessContext(effectiveProcessorOptions, pluginEnv, { codeRunner: runScopedCodeRunner }),
+          processor.inputs,
+          processor.contextValues,
+          { returnWhenGraphOutputsReady: effectiveProcessorOptions.returnWhenGraphOutputsReady },
+        );
+
+        return outputs;
+      } finally {
+        if (processor.processor.isRunning) {
+          void processor.processor
+            .waitForRunCompletion()
+            .catch(() => undefined)
+            .finally(cleanupRunResources);
+        } else {
+          cleanupRunResources();
         }
       }
     },
@@ -272,21 +284,33 @@ export function createGraphRunner(project: Project, options: NodeGraphRunnerOpti
     activeProcessors.add(processor);
     const cleanupAbortSignal = bindAbortSignal(processor, runOptions.abortSignal);
 
+    const cleanup = () => {
+      cleanupAbortSignal();
+      activeProcessors.delete(processor);
+    };
     try {
       const outputsPromise = processor.processGraph(
         processContext,
         looseDataValuesToDataValues(runOptions.inputs ?? {}),
         looseDataValuesToDataValues(runOptions.context ?? {}),
+        { returnWhenGraphOutputsReady: processorOptions.returnWhenGraphOutputsReady === true },
       );
 
       if (runOptions.abortSignal?.aborted) {
         void processor.abort();
       }
 
-      return await outputsPromise;
+      const outputs = await outputsPromise;
+      return outputs;
     } finally {
-      cleanupAbortSignal();
-      activeProcessors.delete(processor);
+      if (processor.isRunning) {
+        void processor
+          .waitForRunCompletion()
+          .catch(() => undefined)
+          .finally(cleanup);
+      } else {
+        cleanup();
+      }
     }
   };
 

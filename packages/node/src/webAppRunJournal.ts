@@ -99,7 +99,11 @@ export function createWebAppRunJournal(options: {
   };
 
   return {
-    append(runId: string, event: RivetWebAppUnsequencedRunEvent): Promise<RivetWebAppRunEvent | undefined> {
+    append(
+      runId: string,
+      event: RivetWebAppUnsequencedRunEvent,
+      appendOptions: { deferTerminalNotification?: boolean } = {},
+    ): Promise<RivetWebAppRunEvent | undefined> {
       const operation = (appendChains.get(runId) ?? Promise.resolve()).then(async () => {
         const storedEvent = await options.store.appendEvent(runId, options.leaseId, event);
         if (!storedEvent) return undefined;
@@ -108,7 +112,9 @@ export function createWebAppRunJournal(options: {
         const ownerScope = options.getRunOwnerScope(runId);
         if (ownerScope) await publishCoordinatedEvent({ hostId: options.hostId, ownerScope, runId }, storedEvent);
         if (isRivetWebAppRunTerminalEvent(storedEvent)) {
-          await notifyTerminal(runId, storedEvent);
+          if (!appendOptions.deferTerminalNotification) {
+            await notifyTerminal(runId, storedEvent);
+          }
           subscribers.delete(runId);
         }
         return storedEvent;

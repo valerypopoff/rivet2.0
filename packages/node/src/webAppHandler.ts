@@ -19,6 +19,8 @@ import {
   type UiGraphActionComponent,
   validateUiGraphActionBindings,
   RIVET_WEB_APP_STATUS_FUNCTION_NAME,
+  createRivetStoredValueSnapshotStore,
+  type RivetStoredValueStore,
   rivetWebAppStatusExternalFunction,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
@@ -29,7 +31,11 @@ import {
   type RivetWebAppAsset,
 } from './webAppAssets.js';
 
-export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'>;
+// NodeCreateProcessorOptions has a general Record<string, unknown> index signature.
+// Re-declare this option so consumers retain the concrete store contract after omitting graph.
+export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'> & {
+  storedValueStore?: RivetStoredValueStore;
+};
 
 export type RivetWebAppActionContext = {
   actionInput: Record<string, unknown>;
@@ -52,6 +58,7 @@ export type RivetWebAppCreateProcessorOptions =
 export type RivetWebAppActionResult = {
   outputs: Record<string, DataValue>;
   statePatch: Record<string, unknown>;
+  storagePatch: Record<string, unknown>;
 };
 
 export type RivetWebAppHandlerOptions = {
@@ -64,6 +71,7 @@ export type RivetWebAppHandlerOptions = {
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
   resolveCspNonce?: (request: Request) => Promise<string | undefined> | string | undefined;
   revisionKey?: string;
+  storedValueStore?: RivetStoredValueStore;
   uiGraphId?: UiGraphId | string;
 };
 
@@ -91,6 +99,7 @@ type RunActionRequestBody = {
   componentId?: string;
   revisionKey?: string;
   state?: Record<string, unknown>;
+  storage?: Record<string, unknown>;
 };
 
 export type RunRivetWebAppActionOptions = {
@@ -104,6 +113,8 @@ export type RunRivetWebAppActionOptions = {
   resolveContext?: RivetWebAppHandlerOptions['resolveContext'];
   revisionKey?: string;
   state?: Record<string, unknown>;
+  storedValueStore?: RivetStoredValueStore;
+  storage?: Record<string, unknown>;
   uiGraph: UiGraph;
 };
 
@@ -194,6 +205,8 @@ export function createRivetWebAppHandler(
             resolveContext: options.resolveContext,
             revisionKey: options.revisionKey,
             state: body.state,
+            storedValueStore: options.storedValueStore,
+            storage: body.storage,
             uiGraph,
           });
 
@@ -241,6 +254,8 @@ export async function prepareRivetWebAppAction(
     resolveContext,
     revisionKey,
     state = {},
+    storedValueStore,
+    storage = {},
     uiGraph,
   }: RunRivetWebAppActionOptions,
 ): Promise<PreparedRivetWebAppAction> {
@@ -304,6 +319,11 @@ export async function prepareRivetWebAppAction(
     const sourceAbortSignal = (processorOptions as { abortSignal?: AbortSignal }).abortSignal ?? actionRequest.signal;
     sourceAbortSignal.throwIfAborted();
     const actionAbortController = new AbortController();
+    const hostStoredValueStore = processorOptions.storedValueStore ?? storedValueStore;
+    // A host store fully replaces browser persistence, including the untrusted browser snapshot.
+    const browserStoredValues = hostStoredValueStore
+      ? undefined
+      : createRivetStoredValueSnapshotStore(normalizeActionStorage(storage));
     const processorRunner = createProcessor(project, {
       ...processorOptions,
       abortSignal: actionAbortController.signal,
@@ -314,6 +334,8 @@ export async function prepareRivetWebAppAction(
       },
       graph: component.action.graphId,
       inputs,
+      returnWhenGraphOutputsReady: true,
+      storedValueStore: hostStoredValueStore ?? browserStoredValues!.store,
     });
     let started = false;
     let disposed = false;
@@ -337,6 +359,7 @@ export async function prepareRivetWebAppAction(
         started = true;
         let processorRunStarted = false;
         const forwardAbort = () => actionAbortController.abort(sourceAbortSignal.reason);
+        const removeAbortForwarding = () => sourceAbortSignal.removeEventListener('abort', forwardAbort);
         sourceAbortSignal.addEventListener('abort', forwardAbort, { once: true });
 
         try {
@@ -347,6 +370,7 @@ export async function prepareRivetWebAppAction(
           const result = {
             outputs,
             statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, actionState),
+            storagePatch: browserStoredValues?.getPatch() ?? {},
           };
           await callActionHook(onActionFinish, { ...actionContext, ...result });
           return result;
@@ -354,9 +378,18 @@ export async function prepareRivetWebAppAction(
           await callActionHook(onActionError, { ...actionContext, error });
           throw error;
         } finally {
-          sourceAbortSignal.removeEventListener('abort', forwardAbort);
           if (!processorRunStarted) {
+            removeAbortForwarding();
             processorRunner.dispose();
+          } else if (processorRunner.processor.isRunning) {
+            // An early web-app result does not end the processor lifecycle. Keep
+            // request/session cancellation wired until its async branches settle.
+            void processorRunner.processor
+              .waitForRunCompletion()
+              .catch(() => undefined)
+              .finally(removeAbortForwarding);
+          } else {
+            removeAbortForwarding();
           }
         }
       },
@@ -464,6 +497,7 @@ async function readActionRequestBody(request: Request): Promise<RunActionRequest
       componentId: componentId ?? undefined,
       revisionKey: revisionKey ?? undefined,
       state: normalizeActionState(body.state),
+      storage: normalizeActionStorage(body.storage),
     };
   } catch (error) {
     if (error instanceof RivetWebAppActionHttpError) {
@@ -484,6 +518,12 @@ function normalizeActionState(state: unknown): Record<string, unknown> {
   }
 
   throw new RivetWebAppActionHttpError('Invalid action state.', 400);
+}
+
+function normalizeActionStorage(storage: unknown): Record<string, unknown> {
+  if (storage == null) return {};
+  if (isRecord(storage)) return storage;
+  throw new RivetWebAppActionHttpError('Invalid action storage.', 400);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

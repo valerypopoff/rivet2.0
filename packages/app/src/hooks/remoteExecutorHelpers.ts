@@ -1,5 +1,6 @@
 import {
   GraphProcessor,
+  resolveNodePrefabInstance,
   type GraphId,
   type NodeId,
   type NodeRegistration,
@@ -97,7 +98,7 @@ export function getFrozenNodeOptionsForExecutorTarget(
   return canUseFrozenNodeOutputsForExecutorTarget(target) ? { frozenNodeOutputs, graphId } : undefined;
 }
 
-const REMOTE_DEBUGGER_NON_RUN_EVENT_MESSAGES = new Set<keyof ProcessEventMessageMap>(['trace']);
+const REMOTE_DEBUGGER_NON_RUN_EVENT_MESSAGES = new Set<keyof ProcessEventMessageMap>(['trace', 'webAppStoragePatch']);
 
 export function shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent(options: {
   alreadyFlushed: boolean;
@@ -151,6 +152,22 @@ export function getEditorRunFromPlan(
 
   for (const node of graph.nodes) {
     dependenciesByNodeId.set(node.id, new Set(processor.getDependencyNodesDeep(node.id)));
+  }
+
+  const asyncTriggerAncestor = graph.nodes.find((node) => {
+    const effectiveNode = resolveNodePrefabInstance(project, node);
+    return (
+      node.id !== from &&
+      effectiveNode.type === 'startBackgroundBranch' &&
+      !effectiveNode.disabled &&
+      dependenciesByNodeId.get(from)?.has(node.id)
+    );
+  });
+  if (asyncTriggerAncestor) {
+    throw new Error(
+      `Node ${from} is inside the async branch started by ${asyncTriggerAncestor.id}. ` +
+        'Run from the Start Async Branch node when you intend to replay that branch.',
+    );
   }
 
   const nodesToRunSet = new Set<NodeId>([from]);

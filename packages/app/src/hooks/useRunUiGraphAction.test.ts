@@ -49,15 +49,22 @@ test('web app actions run through the editor graph runner and wait for outputs',
     state: { prompt: 'hello' },
     tryRunGraph: async (options) => {
       calls.push(options ?? {});
+      assert.equal(await options?.storedValueStore?.get('existing'), 'old');
+      await options?.storedValueStore?.set('preferences', { density: 'compact' });
+      options?.onWebAppStoragePatch?.({ sessionCache: { lastPage: 'dashboard' } });
       options?.onProgress?.(progress);
       return outputs;
     },
     onProgress,
+    storage: { existing: 'old' },
     uiGraph,
   });
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], {
+  const { onWebAppStoragePatch, storedValueStore, ...runCall } = calls[0]!;
+  assert.equal(typeof storedValueStore?.get, 'function');
+  assert.equal(typeof onWebAppStoragePatch, 'function');
+  assert.deepEqual(runCall, {
     graphId,
     inputs: {
       input: { type: 'string', value: 'hello' },
@@ -65,13 +72,19 @@ test('web app actions run through the editor graph runner and wait for outputs',
     },
     requireLiveRun: true,
     onProgress,
+    returnWhenGraphOutputsReady: true,
     throwOnError: true,
     waitForResults: true,
+    webAppStorage: { existing: 'old' },
   });
   assert.deepEqual(result, {
     outputs,
     statePatch: {
       lastResult: outputs,
+    },
+    storagePatch: {
+      preferences: { density: 'compact' },
+      sessionCache: { lastPage: 'dashboard' },
     },
   });
 });
@@ -129,6 +142,7 @@ test('web app actions can map multiple inputs and outputs', async () => {
       lastAnswer: 'done',
       lastScore: 7,
     },
+    storagePatch: {},
   });
 });
 
@@ -270,6 +284,7 @@ test('web app actions can store one unwrapped graph output value', async () => {
     statePatch: {
       lastResult: 'hello from graph',
     },
+    storagePatch: {},
   });
 });
 

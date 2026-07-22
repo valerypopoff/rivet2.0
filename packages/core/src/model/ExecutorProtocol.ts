@@ -7,6 +7,7 @@ import type { Project, ProjectId } from './Project.js';
 import type { Settings } from './Settings.js';
 import type { FrozenNodeOutputsByGraph } from './GraphProcessor.js';
 import type { GraphProgress } from './GraphProgress.js';
+import type { RivetWebAppStorage } from './UiGraphWebAppStorage.js';
 
 export type GraphInputs = Record<string, DataValue>;
 export type GraphOutputs = Record<string, DataValue>;
@@ -32,7 +33,9 @@ export type SerializedProcessEventMap = {
   }>;
   graphStart: WithExecution<{ graph: NodeGraph; inputs: GraphInputs }>;
   graphError: WithExecution<{ graph: NodeGraph; error: Error | string }>;
+  webAppStoragePatch: { storagePatch: RivetWebAppStorage };
   graphFinish: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;
+  graphOutputsReady: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;
   graphAbort: WithExecution<{ successful: boolean; graph: NodeGraph; error?: Error | string }>;
   nodeStart: WithExecution<{ node: ChartNode; inputs: Inputs; processId: ProcessId }>;
   nodeFinish: WithExecution<{
@@ -96,7 +99,9 @@ export type ProcessEventMessageMap = {
   abort: SerializedProcessEventMap['abort'];
   graphAbort: SerializedProcessEventMap['graphAbort'];
   graphStart: SerializedProcessEventMap['graphStart'];
+  webAppStoragePatch: SerializedProcessEventMap['webAppStoragePatch'];
   graphFinish: SerializedProcessEventMap['graphFinish'];
+  graphOutputsReady: SerializedProcessEventMap['graphOutputsReady'];
   partialOutput: SerializedProcessEventMap['partialOutput'];
   progress: SerializedProcessEventMap['progress'];
   nodeOutputsCleared: SerializedProcessEventMap['nodeOutputsCleared'];
@@ -149,6 +154,8 @@ export type OutgoingMessageMap = {
     projectPath?: string | null;
     useEditorCache?: boolean;
     captureNodeTimings?: boolean;
+    returnWhenGraphOutputsReady?: boolean;
+    webAppStorage?: RivetWebAppStorage;
   };
   abort: { requestId?: RemoteRunRequestId } | undefined;
   pause: { requestId?: RemoteRunRequestId } | undefined;

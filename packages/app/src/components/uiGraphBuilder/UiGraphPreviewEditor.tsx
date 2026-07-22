@@ -46,6 +46,7 @@ export const UiGraphPreviewEditor: FC<{
     state: Record<string, unknown>,
     abortSignal: AbortSignal,
     onProgress: (progress: GraphProgress) => void,
+    storage: Record<string, unknown>,
   ): Promise<RivetWebAppActionResult>;
   paletteComponent?: UiGraphComponent;
   paletteInsertionIndex?: number;
@@ -186,6 +187,7 @@ export const UiGraphPreviewEditor: FC<{
             selectedComponentIds={selectedComponentIds}
             interactionUiGraph={uiGraph}
             uiGraph={previewUiGraph}
+            preserveActionsOnUnmount
             onRunAction={onRunAction}
           />
         </SortableContext>

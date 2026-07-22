@@ -127,7 +127,11 @@ to Tauri and Cargo metadata:
 
 The app package manifest is the source of truth. Tauri uses
 `tauri.conf.json` `package.version` for installer filenames, so this sync is
-what makes Windows bundle names follow `packages/app/package.json`.
+what makes Windows bundle names follow `packages/app/package.json`. On Windows,
+the sync retries a small set of transient write errors because Tauri or Rust
+tooling can briefly hold `Cargo.toml` open during a development restart. A
+persistent failure still surfaces normally; close the process holding the file
+and rerun the command rather than manually editing generated metadata.
 
 ### `yarn verify:desktop-version`
 
@@ -540,6 +544,12 @@ resolution with `node .yarn/releases/yarn-4.17.1.cjs up -R <package>` instead of
 adding an exception. Commit the resulting `yarn.lock`, `.pnp.cjs`, and
 replacement `.yarn/cache` archive together so zero-install CI resolves the same
 patched dependency as local development.
+
+For vulnerable descriptors that multiple upstream tools still constrain, a root
+`resolutions` override may be the safer refresh mechanism. Pin the reviewed
+fixed release (rather than a floating caret), then run `yarn install` and the
+audit. This keeps the zero-install lockfile deterministic while the owning
+upstream packages catch up.
 
 The build workflow runs that JavaScript audit immediately after dependency
 installation. A separate `rustsec/audit-check` job scans

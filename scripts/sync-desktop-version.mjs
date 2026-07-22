@@ -15,6 +15,8 @@ const cargoLockPath = path.join(repoRoot, 'packages', 'app', 'src-tauri', 'Cargo
 const appVersion = readJsonVersion(appPackagePath, ['version']);
 validateVersion(appVersion);
 
+const WINDOWS_WRITE_RETRY_DELAYS_MS = [50, 150, 350];
+
 const updates = [
   updateJsonVersion(tauriConfigPath, ['package', 'version'], appVersion),
   updateCargoPackageVersion(cargoTomlPath, appVersion),
@@ -24,7 +26,9 @@ const updates = [
 const changed = updates.filter((update) => update.changed);
 
 if (checkOnly && changed.length > 0) {
-  console.error(`Desktop version metadata is out of sync with ${path.relative(repoRoot, appPackagePath)} (${appVersion}):`);
+  console.error(
+    `Desktop version metadata is out of sync with ${path.relative(repoRoot, appPackagePath)} (${appVersion}):`,
+  );
   for (const update of changed) {
     console.error(`- ${path.relative(repoRoot, update.filePath)}: ${update.previousVersion}`);
   }
@@ -34,7 +38,7 @@ if (checkOnly && changed.length > 0) {
 
 if (!checkOnly) {
   for (const update of changed) {
-    writeFileSync(update.filePath, update.nextContents);
+    writeFileWithRetry(update.filePath, update.nextContents);
   }
 }
 
@@ -57,6 +61,45 @@ function validateVersion(version) {
   }
 }
 
+function writeFileWithRetry(filePath, contents) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      writeFileSync(filePath, contents);
+      return;
+    } catch (error) {
+      const retryDelay =
+        process.platform === 'win32' && isTransientWindowsWriteError(error)
+          ? WINDOWS_WRITE_RETRY_DELAYS_MS[attempt]
+          : undefined;
+
+      if (retryDelay === undefined) {
+        if (process.platform === 'win32' && isTransientWindowsWriteError(error)) {
+          throw new Error(
+            `Could not write ${filePath}. The file may be temporarily locked by Tauri or Rust tooling; close the related process and retry.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+
+      sleepSync(retryDelay);
+    }
+  }
+}
+
+function isTransientWindowsWriteError(error) {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    ['EACCES', 'EBUSY', 'EPERM', 'UNKNOWN'].includes(error.code)
+  );
+}
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
 function updateJsonVersion(filePath, keyPath, version) {
   const contents = readFileSync(filePath, 'utf8');
   const currentVersion = readJsonVersion(filePath, keyPath);
@@ -65,7 +108,9 @@ function updateJsonVersion(filePath, keyPath, version) {
     return { changed: false, filePath, previousVersion: currentVersion, nextContents: contents };
   }
 
-  const versionLinePattern = new RegExp(`("${escapeRegExp(keyPath.at(-1))}"\\s*:\\s*)"${escapeRegExp(currentVersion)}"`);
+  const versionLinePattern = new RegExp(
+    `("${escapeRegExp(keyPath.at(-1))}"\\s*:\\s*)"${escapeRegExp(currentVersion)}"`,
+  );
   const nextContents = contents.replace(versionLinePattern, `$1"${version}"`);
 
   if (nextContents === contents) {

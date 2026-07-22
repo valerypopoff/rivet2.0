@@ -2,6 +2,7 @@ import type { prepareRivetWebAppAction } from './webAppHandler.js';
 
 export type ActiveWebAppRun = {
   abortController: AbortController;
+  durableLeaseActive: boolean;
   interruptionError?: string;
   ownerScope: string;
   processor?: Awaited<ReturnType<typeof prepareRivetWebAppAction>>['processor'];
@@ -41,8 +42,8 @@ export function createWebAppActiveRunRegistry() {
     has(runId: string): boolean {
       return activeRuns.has(runId);
     },
-    keys(): IterableIterator<string> {
-      return activeRuns.keys();
+    leaseManagedRunIds(): string[] {
+      return [...activeRuns].flatMap(([runId, run]) => (run.durableLeaseActive ? [runId] : []));
     },
     release,
     reserve(ownerScope: string, runId: string, maxRuns: number): boolean {

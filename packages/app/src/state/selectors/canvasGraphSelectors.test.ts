@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createBuiltInRegistry, type NodeConnection, type NodePrefabId, type ProjectId } from '@valerypopoff/rivet2-core';
+import {
+  createBuiltInRegistry,
+  DelegateFunctionCallNodeImpl,
+  LLMChatV2NodeImpl,
+  type NodeConnection,
+  type NodePrefabId,
+  type ProjectId,
+} from '@valerypopoff/rivet2-core';
 import { createStore } from 'jotai/vanilla';
 import { graphState } from '../atoms/graph';
 import { draggingWireState } from '../graphBuilder';
 import { canvasIoDefinitionsForNodeState, canvasPreviewConnectionsState } from './canvasGraphSelectors';
 import { projectState } from '../savedGraphs';
+import { definitionValidConnectionsState } from './ioDefinitions.js';
 
 describe('canvasGraphSelectors', () => {
   it('keeps the source node dynamic ports stable during an input-origin rewire preview', () => {
@@ -71,5 +79,36 @@ describe('canvasGraphSelectors', () => {
     const io = store.get(canvasIoDefinitionsForNodeState(sourceNode.id));
 
     assert.ok(io.outputDefinitions.some((definition) => definition.id === 'output'));
+  });
+
+  it('removes stale port edges before connection-order-sensitive editor analysis', () => {
+    const store = createStore();
+    const registry = createBuiltInRegistry();
+    const staleSource = registry.createDynamic('text');
+    const llmNode = LLMChatV2NodeImpl.create();
+    const delegateNode = DelegateFunctionCallNodeImpl.create();
+    llmNode.data.useToolCalling = true;
+    llmNode.data.autoContinueToolCalls = true;
+
+    const staleConnection: NodeConnection = {
+      inputNodeId: delegateNode.id,
+      inputId: 'function-call' as any,
+      outputNodeId: staleSource.id,
+      outputId: 'function-calls' as any,
+    };
+    const validConnection: NodeConnection = {
+      inputNodeId: delegateNode.id,
+      inputId: 'function-call' as any,
+      outputNodeId: llmNode.id,
+      outputId: 'function-calls' as any,
+    };
+
+    store.set(graphState, {
+      metadata: { id: 'graph-1', name: 'Test Graph' },
+      nodes: [staleSource, llmNode, delegateNode],
+      connections: [staleConnection, validConnection],
+    } as any);
+
+    assert.deepEqual(store.get(definitionValidConnectionsState), [validConnection]);
   });
 });

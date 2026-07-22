@@ -26,6 +26,7 @@ import {
 } from '../src/index.js';
 import {
   makeExternalStatusProject,
+  makeStoredValueProject,
   makeWebAppActionRequest,
   makeWebAppProject,
   TEST_GRAPH_ID,
@@ -324,7 +325,7 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(clientScript ?? '', /browserGlobals\.DOMPurify\?\.sanitize/);
   });
 
-  void it("posts only a button's input-bound state from the generated client", async () => {
+  void it("posts only a button's input-bound state plus its app-scoped storage and merges returned storage", async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const button = uiGraph.components[0] as Extract<UiGraphComponent, { type: 'button' }>;
@@ -343,14 +344,17 @@ void describe('createRivetWebAppHandler', () => {
       button,
     ];
     const requests: Record<string, unknown>[] = [];
+    const storageKey = 'rivet-web-app-storage:v1:https%3A%2F%2Fexample.test:%2Fapp:ui-graph';
     const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
       beforeParse(window) {
+        window.localStorage.setItem(storageKey, JSON.stringify({ existing: 'preserved' }));
         window.fetch = async (_input, init) => {
           requests.push(JSON.parse(`${init?.body ?? '{}'}`) as Record<string, unknown>);
           return {
             ok: true,
             status: 200,
-            text: async () => JSON.stringify({ outputs: {}, statePatch: {} }),
+            text: async () =>
+              JSON.stringify({ outputs: {}, statePatch: {}, storagePatch: { analysis: { summary: 'Saved' } } }),
           } as Response;
         };
       },
@@ -360,9 +364,18 @@ void describe('createRivetWebAppHandler', () => {
 
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(requests, [
+      {
+        componentId: 'run-button',
+        state: { prompt: 'hello', genre: 'fiction' },
+        storage: { existing: 'preserved' },
+      },
+    ]);
+    assert.deepEqual(JSON.parse(dom.window.localStorage.getItem(storageKey)!), {
+      existing: 'preserved',
+      analysis: { summary: 'Saved' },
+    });
     dom.window.close();
-
-    assert.deepEqual(requests, [{ componentId: 'run-button', state: { prompt: 'hello', genre: 'fiction' } }]);
   });
 
   void it('restores hosted Chat state from browser storage and flushes only its history', () => {
@@ -409,6 +422,91 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
+  void it('keeps hosted Chat history in place for menu and pin presentation changes', () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const chatId = 'chat' as UiComponentId;
+    uiGraph.components = [{ action: { type: 'runGraph' }, id: chatId, type: 'chat' }];
+    const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+    const storageKey = 'rivet-web-app-chat-state:v1:https%3A%2F%2Fexample.test:%2Fapp:ui-graph';
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        Object.defineProperties(window.HTMLElement.prototype, {
+          clientHeight: {
+            configurable: true,
+            get() {
+              return this.classList.contains('rivet-web-app-chat-messages') ? 200 : 0;
+            },
+          },
+          scrollHeight: {
+            configurable: true,
+            get() {
+              return this.classList.contains('rivet-web-app-chat-messages') ? 1_000 : 0;
+            },
+          },
+        });
+        window.localStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            [messagesKey]: [
+              { content: 'Question', role: 'user' },
+              { content: 'Response', role: 'assistant' },
+            ],
+          }),
+        );
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    const messages = dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')!;
+    messages.scrollTop = 280;
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+
+    assert.equal(
+      dom.window.document.querySelector('.rivet-web-app-chat-pin-button')?.getAttribute('aria-pressed'),
+      'true',
+    );
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
+
+    assert.ok(dom.window.document.querySelector('.rivet-web-app-chat-pins'));
+    assert.ok(dom.window.document.querySelector('.rivet-web-app-chat-menu'));
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+
+    assert.equal(
+      dom.window.document.querySelector('.rivet-web-app-chat-pin-button')?.getAttribute('aria-pressed'),
+      'false',
+    );
+    assert.equal(
+      dom.window.document.querySelector('.rivet-web-app-chat-pin-button')?.classList.contains('active'),
+      false,
+    );
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-chat-pins'), null);
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-search-button')?.click();
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+    const searchInput = dom.window.document.querySelector<HTMLInputElement>('.rivet-web-app-chat-search-input')!;
+    searchInput.value = 'Response';
+    searchInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const searchedMessages = dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')!;
+    searchedMessages.scrollTop = 280;
+
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+
+    assert.equal(dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')?.scrollTop, 280);
+    dom.window.close();
+  });
+
   void it('repairs duplicate button IDs before scoping hosted loading state', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
@@ -443,7 +541,7 @@ void describe('createRivetWebAppHandler', () => {
     await waitForActionLoadingPresentation();
     const buttons = [...dom.window.document.querySelectorAll('.rivet-web-app-button')] as HTMLButtonElement[];
 
-    assert.deepEqual(requests, [{ componentId: 'ui-graph-component-2', state: {} }]);
+    assert.deepEqual(requests, [{ componentId: 'ui-graph-component-2', state: {}, storage: {} }]);
     assert.equal(buttons[0]?.textContent, 'Run');
     assert.equal(buttons[0]?.disabled, false);
     assert.equal(buttons[1]?.textContent, 'Second');
@@ -1059,6 +1157,22 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(RIVET_WEB_APP_RENDERER_CSS, /\.rivet-web-app-chat-messages\s*\{[\s\S]*overflow-y: auto;/);
     assert.match(
       RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-message-user\s*\{[\s\S]*border-bottom-right-radius: 0;/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-message-assistant\s*\{[\s\S]*border-bottom-left-radius: 0;/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat-message-markdown\.markdown-body blockquote\s*\{[\s\S]*border-left-color: var\(--rivet-web-app-chat-message-foreground\);[\s\S]*color: var\(--rivet-web-app-chat-message-foreground\);/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
+      /\.rivet-web-app-chat > \.rivet-web-app-progress\s*\{[\s\S]*font-size: inherit;/,
+    );
+    assert.match(
+      RIVET_WEB_APP_RENDERER_CSS,
       /\.rivet-web-app-root,\s*\.rivet-web-app-root \*\s*\{\s*scrollbar-color: var\(--rivet-web-app-scrollbar-thumb\) var\(--rivet-web-app-scrollbar-track\);/,
     );
     assert.match(
@@ -1296,7 +1410,7 @@ void describe('createRivetWebAppHandler', () => {
     clientDom.window.close();
     assert.deepEqual(clientRequests, [
       {
-        body: { componentId: 'run-button', revisionKey: 'rev-1', state: {} },
+        body: { componentId: 'run-button', revisionKey: 'rev-1', state: {}, storage: {} },
         credentials: 'same-origin',
       },
     ]);
@@ -1363,6 +1477,78 @@ void describe('createRivetWebAppHandler', () => {
     assert.deepEqual(result.statePatch, { result: 'hello' });
   });
 
+  void it('returns a web-app action result before its managed async branch settles', async () => {
+    const project = makeProject();
+    project.graphs[graphId]!.nodes.push(
+      {
+        data: {},
+        id: 'async-trigger' as never,
+        title: 'Start Async Branch',
+        type: 'startBackgroundBranch',
+        visualData: { x: 200, y: 120 },
+      } as never,
+      {
+        data: { functionName: 'waitForRelease', useErrorOutput: false, useFunctionNameInput: false },
+        id: 'async-call' as never,
+        title: 'Async side effect',
+        type: 'externalCall',
+        visualData: { x: 400, y: 120 },
+      } as never,
+    );
+    project.graphs[graphId]!.connections.push(
+      {
+        inputId: 'input1' as never,
+        inputNodeId: 'async-trigger' as never,
+        outputId: 'data' as never,
+        outputNodeId: 'input-node' as never,
+      },
+      {
+        inputId: 'arguments' as never,
+        inputNodeId: 'async-call' as never,
+        outputId: 'output1' as never,
+        outputNodeId: 'async-trigger' as never,
+      },
+    );
+    let releaseBranch!: () => void;
+    let reportBranchStarted!: () => void;
+    const branchRelease = new Promise<void>((resolve) => {
+      releaseBranch = resolve;
+    });
+    const branchStarted = new Promise<void>((resolve) => {
+      reportBranchStarted = resolve;
+    });
+    const actionAbortController = new AbortController();
+    const prepared = await prepareRivetWebAppAction(project, {
+      componentId: 'run-button',
+      createProcessorOptions: {
+        abortSignal: actionAbortController.signal,
+        externalFunctions: {
+          waitForRelease: async (value) => {
+            reportBranchStarted();
+            await branchRelease;
+            return value;
+          },
+        },
+      },
+      state: { prompt: 'hello' },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    const actionResultPromise = prepared.run();
+    await branchStarted;
+    const result = await actionResultPromise;
+
+    assert.deepEqual(result.statePatch, { result: 'hello' });
+    assert.equal(prepared.processor.isRunning, true);
+    assert.equal(getEventListeners(actionAbortController.signal, 'abort').length, 1);
+
+    releaseBranch();
+    await prepared.processor.waitForRunCompletion();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(prepared.processor.isRunning, false);
+    assert.equal(getEventListeners(actionAbortController.signal, 'abort').length, 0);
+  });
+
   void it('exposes setWebAppStatus to the action graph and forwards its message as progress', async () => {
     const project = makeExternalStatusProject();
     const progress: unknown[] = [];
@@ -1378,6 +1564,94 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.deepEqual(progress, [{ message: 'Preparing the answer' }]);
     assert.deepEqual(result.outputs.value, { type: 'string', value: 'Preparing the answer' });
+  });
+
+  void it('scopes Stored Value nodes to the current action snapshot', async () => {
+    const getProject = makeStoredValueProject('get');
+    const getResult = await runRivetWebAppAction(getProject, {
+      componentId: 'run-button',
+      state: { prompt: 'analysis' },
+      storage: { analysis: { summary: 'Existing summary' }, unrelated: 'same app only' },
+      uiGraph: getProject.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    assert.deepEqual(getResult.outputs.value, { type: 'any', value: { summary: 'Existing summary' } });
+    assert.deepEqual(getResult.storagePatch, {});
+
+    const setProject = makeStoredValueProject('set');
+    const setResult = await runRivetWebAppAction(setProject, {
+      componentId: 'run-button',
+      state: { prompt: 'Updated summary' },
+      storage: { analysis: 'Old summary' },
+      uiGraph: setProject.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    assert.deepEqual(setResult.outputs.value, { type: 'any', value: 'Updated summary' });
+    assert.deepEqual(setResult.storagePatch, { analysis: 'Updated summary' });
+  });
+
+  void it('uses host Stored Value callbacks instead of browser snapshots and returns no browser patch', async () => {
+    const values = new Map<string, unknown>([['analysis', 'Host summary']]);
+    const storedValueStore = {
+      async get(key: string) {
+        return values.get(key) as never;
+      },
+      async set(key: string, value: unknown) {
+        values.set(key, value);
+      },
+    };
+    const getProject = makeStoredValueProject('get');
+    const getResult = await runRivetWebAppAction(getProject, {
+      componentId: 'run-button',
+      state: { prompt: 'ignored' },
+      storage: { analysis: 'Browser summary' },
+      storedValueStore,
+      uiGraph: getProject.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+    assert.deepEqual(getResult.outputs.value, { type: 'any', value: 'Host summary' });
+    assert.deepEqual(getResult.storagePatch, {});
+
+    const setProject = makeStoredValueProject('set');
+    const setResult = await runRivetWebAppAction(setProject, {
+      componentId: 'run-button',
+      state: { prompt: 'Updated host summary' },
+      storage: { analysis: 'Browser summary' },
+      storedValueStore,
+      uiGraph: setProject.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+    assert.equal(values.get('analysis'), 'Updated host summary');
+    assert.deepEqual(setResult.storagePatch, {});
+  });
+
+  void it('does not validate an ignored browser snapshot when host Stored Value callbacks are configured', async () => {
+    const project = makeStoredValueProject('get');
+    const result = await runRivetWebAppAction(project, {
+      componentId: 'run-button',
+      state: { prompt: 'ignored' },
+      storage: [] as never,
+      storedValueStore: { get: () => 'Host summary', set() {} },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    assert.deepEqual(result.outputs.value, { type: 'any', value: 'Host summary' });
+    assert.deepEqual(result.storagePatch, {});
+  });
+
+  void it('prefers a request-scoped processor store over the static web-app store', async () => {
+    const project = makeStoredValueProject('get');
+    const result = await runRivetWebAppAction(project, {
+      componentId: 'run-button',
+      createProcessorOptions: () => ({
+        storedValueStore: { get: () => 'request scoped', set() {} },
+      }),
+      state: { prompt: 'ignored' },
+      storedValueStore: { get: () => 'static', set() {} },
+      storage: { analysis: 'browser' },
+      uiGraph: project.uiGraphs?.['ui-graph' as UiGraphId]!,
+    });
+
+    assert.deepEqual(result.outputs.value, { type: 'any', value: 'request scoped' });
+    assert.deepEqual(result.storagePatch, {});
   });
 
   void it('prepares an inspectable action without starting it and runs it only once', async () => {

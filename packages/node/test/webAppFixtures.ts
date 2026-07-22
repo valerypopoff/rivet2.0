@@ -166,3 +166,53 @@ export function makeExternalStatusProject(): Project {
   ];
   return project;
 }
+
+export function makeStoredValueProject(mode: 'get' | 'set'): Project {
+  const project = makeWebAppProject({ outputId: 'value' });
+  const storedValueNode = {
+    data:
+      mode === 'get'
+        ? { dataType: 'any', key: 'analysis', onDemand: false, useKeyInput: false, wait: false }
+        : { dataType: 'any', key: 'analysis', useKeyInput: false },
+    id: 'storage-node' as never,
+    title: mode === 'get' ? 'Get Stored Value' : 'Set Stored Value',
+    type: (mode === 'get' ? 'getStoredValue' : 'setStoredValue') as 'getStoredValue' | 'setStoredValue',
+    visualData: { x: 400, y: 0 },
+  };
+  project.graphs[TEST_GRAPH_ID]!.nodes = [
+    {
+      data: { dataType: 'string', id: 'input' },
+      id: 'input-node' as never,
+      title: 'Input',
+      type: 'graphInput',
+      visualData: { x: 0, y: 0 },
+    },
+    storedValueNode,
+    {
+      data: { dataType: 'any', id: 'value' },
+      id: 'output-node' as never,
+      title: 'Output',
+      type: 'graphOutput',
+      visualData: { x: 600, y: 0 },
+    },
+  ];
+  project.graphs[TEST_GRAPH_ID]!.connections = [
+    ...(mode === 'set'
+      ? [
+          {
+            inputId: 'value' as never,
+            inputNodeId: 'storage-node' as never,
+            outputId: 'data' as never,
+            outputNodeId: 'input-node' as never,
+          },
+        ]
+      : []),
+    {
+      inputId: 'value' as never,
+      inputNodeId: 'output-node' as never,
+      outputId: (mode === 'get' ? 'value' : 'saved-value') as never,
+      outputNodeId: 'storage-node' as never,
+    },
+  ];
+  return project;
+}

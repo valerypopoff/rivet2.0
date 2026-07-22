@@ -9,7 +9,12 @@ import {
   type Project,
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
-import { createAddedNode, createPastedNodes, duplicateNodeWithConnections, duplicateNodesWithConnections } from './nodeActions';
+import {
+  createAddedNode,
+  createPastedNodes,
+  duplicateNodeWithConnections,
+  duplicateNodesWithConnections,
+} from './nodeActions';
 
 test('createAddedNode applies configured default colors to supported node types', () => {
   const registry = createBuiltInRegistry();
@@ -49,6 +54,20 @@ test('createAddedNode applies configured default colors to supported node types'
     referencedProjects: {},
     applyDefaultColor: true,
   });
+  const getStoredValueNode = createAddedNode({
+    nodeType: 'getStoredValue',
+    position: { x: 100, y: 110 },
+    registry,
+    referencedProjects: {},
+    applyDefaultColor: true,
+  });
+  const setStoredValueNode = createAddedNode({
+    nodeType: 'setStoredValue',
+    position: { x: 105, y: 115 },
+    registry,
+    referencedProjects: {},
+    applyDefaultColor: true,
+  });
   const subGraphNode = createAddedNode({
     nodeType: 'subGraph',
     position: { x: 110, y: 120 },
@@ -62,6 +81,8 @@ test('createAddedNode applies configured default colors to supported node types'
   assert.deepEqual(httpCallNode.visualData.color, { bg: 'var(--node-color-6)', border: 'transparent' });
   assert.deepEqual(getGlobalNode.visualData.color, { bg: 'var(--node-color-7)', border: 'transparent' });
   assert.deepEqual(setGlobalNode.visualData.color, { bg: 'var(--node-color-7)', border: 'transparent' });
+  assert.deepEqual(getStoredValueNode.visualData.color, { bg: 'var(--node-color-7)', border: 'transparent' });
+  assert.deepEqual(setStoredValueNode.visualData.color, { bg: 'var(--node-color-7)', border: 'transparent' });
   assert.deepEqual(subGraphNode.visualData.color, { bg: 'var(--node-color-2)', border: 'transparent' });
 });
 

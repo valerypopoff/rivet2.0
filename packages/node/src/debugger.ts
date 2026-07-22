@@ -1,17 +1,15 @@
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import {
-  type GraphId,
   type GraphProcessor,
   type Project,
   type Settings,
-  type GraphInputs,
   type NodeId,
   type StringArrayDataValue,
   type DataId,
-  type DataValue,
   type Outputs,
   type FrozenNodeOutputsByGraph,
   type RemoteRunRequestId,
+  type OutgoingMessageMap,
   decodeDebuggerTransportSentinels,
 } from '@valerypopoff/rivet2-core';
 import { match } from 'ts-pattern';
@@ -51,18 +49,13 @@ export const currentDebuggerState = {
 
 export type DebuggerClientState = typeof currentDebuggerState;
 
-export type DynamicGraphRunOptions = {
+export type DynamicGraphRunOptions = Omit<
+  OutgoingMessageMap['run'],
+  'frozenNodeOutputs' | 'projectPath'
+> & {
   client: WebSocket;
-  requestId: RemoteRunRequestId;
-  graphId: GraphId;
-  inputs?: GraphInputs;
-  runToNodeIds?: NodeId[];
-  preloadData?: Record<NodeId, Outputs>;
   frozenNodeOutputs?: FrozenNodeOutputsByGraph;
-  contextValues: Record<string, DataValue>;
   projectPath: string | undefined;
-  useEditorCache?: boolean;
-  captureNodeTimings?: boolean;
 };
 
 export type DynamicGraphRun = (data: DynamicGraphRunOptions) => Promise<void>;
@@ -168,46 +161,17 @@ export function startDebuggerServer(
 
         await match(message)
           .with({ type: 'run' }, async () => {
-            const runData = message.data as {
-              requestId: RemoteRunRequestId;
-              graphId: GraphId;
-              inputs: GraphInputs;
-              runToNodeIds?: NodeId[];
-              preloadData?: Record<NodeId, Outputs>;
-              frozenNodeOutputs?: FrozenNodeOutputsByGraph;
-              contextValues: Record<string, DataValue>;
-              projectPath: string | undefined;
-              useEditorCache?: boolean;
-              captureNodeTimings?: boolean;
-            };
-            const {
-              requestId,
-              graphId,
-              inputs,
-              runToNodeIds,
-              contextValues,
-              preloadData,
-              frozenNodeOutputs,
-              projectPath,
-              useEditorCache,
-              captureNodeTimings,
-            } = runData;
+            const runData = message.data as OutgoingMessageMap['run'];
+            const { frozenNodeOutputs, projectPath, ...forwardedRunData } = runData;
             const decodedFrozenNodeOutputs = frozenNodeOutputs
               ? decodeDebuggerTransportSentinels(frozenNodeOutputs)
               : undefined;
 
             await options.dynamicGraphRun?.({
+              ...forwardedRunData,
               client: socket,
-              requestId,
-              graphId,
-              inputs,
-              runToNodeIds,
-              contextValues,
-              preloadData,
               frozenNodeOutputs: decodedFrozenNodeOutputs,
-              projectPath,
-              useEditorCache,
-              captureNodeTimings,
+              projectPath: projectPath ?? undefined,
             });
           })
           .with({ type: 'set-dynamic-data' }, async () => {

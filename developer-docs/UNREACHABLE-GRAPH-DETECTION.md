@@ -1,7 +1,7 @@
 # Unreachable Graph Detection Investigation
 
 > Internal investigation notes for classifying graphs as definitely reachable,
-> dynamically reachable, or unreachable from a project's configured main graph and web-app action entry points.
+> dynamically reachable, or unreachable from a project's configured main graph, web-app action entry points, and valid Tool-delegation targets.
 
 ## Summary
 
@@ -11,7 +11,7 @@ Current same-project execution reachability comes from a mix of:
 
 - direct graph executors with stored `GraphId` fields
 - dynamic graph dispatch through `Call Graph`
-- explicit `Delegate Tool Call` handler/fallback graph IDs
+- active, connected `Delegate Tool Call` handler/fallback graph IDs and auto-delegate Tool-name matches
 - bundled plugin nodes that store graph handlers (`openaiRunThread`)
 - declarative web-app Button and Chat actions with stored same-project `graphId` values
 
@@ -26,14 +26,24 @@ The template-duplication graph-ID remap surface was also centralized in:
 ## Root Set
 
 Feature semantics are rooted at `project.metadata.mainGraphId` plus every valid
-same-project graph selected by a web-app Button or Chat action.
+same-project graph selected by a web-app Button or Chat action, and concrete
+targets of enabled Tool-to-`Delegate Tool Call` paths anywhere in the project.
 
 Why:
 
 - that matches the product request for "graphs that can be run when the main graph is running"
 - Button and Chat actions execute their selected same-project graph directly, so each valid stored target is another static entry point
+- Tool delegation can execute a handler graph by name without a stored `GraphId` on the Tool node, so the analysis scans its active Tool-to-delegate paths as an additional entry surface
 - the Project Info UI explicitly exposes `Main Graph`
 - app-side project-run flows already use `project.metadata.mainGraphId`
+
+An eligible LLM Chat `Tool Calls -> Delegate Tool Call` connection may be
+interpreted bidirectionally by auto-continuation at runtime, but it remains an
+ordinary persisted connection and does not add a new graph-reachability edge
+kind. Reachability still starts from the connected Delegate's configured manual
+handlers/fallback or its provable auto-delegate Tool-name matches. The continuation
+return value goes back to the LLM node within the same graph run; it does not
+select another graph by itself.
 
 Important mismatch:
 
@@ -47,7 +57,7 @@ That runtime inconsistency is now surfaced as a warning in the reachability help
 
 - `definitely reachable`: graph identity is statically known from serialized project data
 - `dynamically reachable`: the graph can be executed, but the graph identity is resolved at runtime
-- `unreachable`: not reachable from the configured Main Graph or a web-app action under the supported analysis rules
+- `unreachable`: not reachable from the configured Main Graph, a web-app action, or a valid Tool-delegation target under the supported analysis rules
 
 Important interpretation:
 
@@ -58,22 +68,22 @@ Important interpretation:
 
 ## Source-Of-Truth Matrix
 
-| Mechanism                                               | Role                | Edge kind                             | Static target? | Dynamic behavior                                                  | Cross-project? | Notes                                                                                                                     |
-| ------------------------------------------------------- | ------------------- | ------------------------------------- | -------------- | ----------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `SubGraphNode`                                          | Executor            | `direct-static`                       | Yes            | No                                                                | No             | Stored `data.graphId`                                                                                                     |
-| `LoopUntilNode`                                         | Executor            | `direct-static`                       | Yes            | No                                                                | No             | Stored `data.targetGraph`                                                                                                 |
-| `CronNode`                                              | Executor            | `direct-static`                       | Yes            | UI suggests dynamic, runtime is static today                      | No             | `useTargetGraphInput` exists, but `process()` still uses stored `targetGraph`                                             |
-| `DelegateFunctionCallNode` manual handlers              | Executor            | `direct-static`                       | Yes            | Handler chosen at runtime from a static set                       | No             | `handlers[]` and `unknownHandler` are stored graph IDs                                                                    |
-| `DelegateFunctionCallNode` auto delegate                | Runtime name match  | excluded from graph-list reachability | No             | Picks graphs by `graph.metadata.name.includes(functionCall.name)` | No             | Ignored by unreachable-graph detection because treating every named graph as reachable makes the graph-tree tags unusable |
-| `CallGraphNode` + static immediate `GraphReferenceNode` | Executor            | `static-via-callgraph`                | Yes            | No                                                                | No             | Only the immediate static `GraphReferenceNode` case is treated as statically provable                                     |
-| `CallGraphNode` + any other input provenance            | Executor            | `dynamic-via-callgraph`               | No             | Graph identity resolved at runtime                                | No             | Includes dynamic `GraphReferenceNode`, generic object producers, code, and all nontrivial upstream chains                 |
-| `GraphReferenceNode`                                    | Reference carrier   | none by itself                        | N/A            | Can become dynamic when input-enabled                             | No             | Merely producing a reference does not imply execution                                                                     |
-| `ListGraphsNode`                                        | Reference carrier   | none by itself                        | N/A            | Exposes all graphs for downstream runtime selection               | No             | Only matters when feeding dynamic dispatch                                                                                |
-| `RunThreadNode` tool handlers                           | Executor            | `direct-static`                       | Yes            | Tool name chooses among a static set                              | No             | Bundled OpenAI plugin surface                                                                                             |
-| `RunThreadNode` on-message hook                         | Executor            | `direct-static`                       | Yes            | No                                                                | No             | Bundled OpenAI plugin surface                                                                                             |
-| Web-app `Button` / `Chat` action                        | Project entry point | `direct-static`                       | Yes            | No                                                                | No             | Stored `action.graphId`; target and its supported dependencies are definitely reachable                                   |
-| `ReferencedGraphAliasNode`                              | Executor            | `cross-project`                       | Yes            | No                                                                | Yes            | Must not mark current-project graphs as used                                                                              |
-| `NodeTestGroup.evaluatorGraphId`                        | Test-only reference | excluded from reachability            | Yes            | No                                                                | No             | Relevant for template duplication, not main-graph reachability                                                            |
+| Mechanism                                               | Role                | Edge kind                  | Static target? | Dynamic behavior                                           | Cross-project? | Notes                                                                                                                                                            |
+| ------------------------------------------------------- | ------------------- | -------------------------- | -------------- | ---------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SubGraphNode`                                          | Executor            | `direct-static`            | Yes            | No                                                         | No             | Stored `data.graphId`                                                                                                                                            |
+| `LoopUntilNode`                                         | Executor            | `direct-static`            | Yes            | No                                                         | No             | Stored `data.targetGraph`                                                                                                                                        |
+| `CronNode`                                              | Executor            | `direct-static`            | Yes            | UI suggests dynamic, runtime is static today               | No             | `useTargetGraphInput` exists, but `process()` still uses stored `targetGraph`                                                                                    |
+| `DelegateFunctionCallNode` manual handlers              | Executor            | `direct-static`            | Yes            | Handler chosen at runtime from a static set                | No             | Counts only when an enabled node has a live, runtime-selected `function-call` input; `handlers[]` and `unknownHandler` are stored graph IDs                      |
+| `DelegateFunctionCallNode` auto delegate                | Runtime name match  | `direct-static`            | Yes            | Prefers an exact graph name, then the first contains match | No             | Counts only static-name `Tool` (`gptFunction`) nodes with an enabled connection path to the runtime-selected delegate input; dynamic Tool names are not provable |
+| `CallGraphNode` + static immediate `GraphReferenceNode` | Executor            | `static-via-callgraph`     | Yes            | No                                                         | No             | Only the immediate static `GraphReferenceNode` case is treated as statically provable                                                                            |
+| `CallGraphNode` + any other input provenance            | Executor            | `dynamic-via-callgraph`    | No             | Graph identity resolved at runtime                         | No             | Includes dynamic `GraphReferenceNode`, generic object producers, code, and all nontrivial upstream chains                                                        |
+| `GraphReferenceNode`                                    | Reference carrier   | none by itself             | N/A            | Can become dynamic when input-enabled                      | No             | Merely producing a reference does not imply execution                                                                                                            |
+| `ListGraphsNode`                                        | Reference carrier   | none by itself             | N/A            | Exposes all graphs for downstream runtime selection        | No             | Only matters when feeding dynamic dispatch                                                                                                                       |
+| `RunThreadNode` tool handlers                           | Executor            | `direct-static`            | Yes            | Tool name chooses among a static set                       | No             | Bundled OpenAI plugin surface                                                                                                                                    |
+| `RunThreadNode` on-message hook                         | Executor            | `direct-static`            | Yes            | No                                                         | No             | Bundled OpenAI plugin surface                                                                                                                                    |
+| Web-app `Button` / `Chat` action                        | Project entry point | `direct-static`            | Yes            | No                                                         | No             | Stored `action.graphId`; target and its supported dependencies are definitely reachable                                                                          |
+| `ReferencedGraphAliasNode`                              | Executor            | `cross-project`            | Yes            | No                                                         | Yes            | Must not mark current-project graphs as used                                                                                                                     |
+| `NodeTestGroup.evaluatorGraphId`                        | Test-only reference | excluded from reachability | Yes            | No                                                         | No             | Relevant for template duplication, not main-graph reachability                                                                                                   |
 
 ## `Call Graph` Findings
 
@@ -168,10 +178,11 @@ When the graph-list feature is implemented, use:
 - `dynamically reachable`: ambiguous styling / badge / tooltip, not "unreachable"
 - `unreachable`: the only bucket that should be visually marked with the muted uniform-stroke single broken-thread icon, whose tooltip explains that the graph is not reachable from the Main Graph or a web app
 
-That preserves the three-bucket model without collapsing dynamic `Call Graph` dispatch into a false negative.
-`Delegate Tool Call` auto-delegate name matching is the exception: graph-list reachability intentionally ignores it because
-one auto-delegate node would otherwise make every named graph look reachable. Stored delegate handler and fallback graph IDs
-still count as definite edges.
+That preserves the three-bucket model without collapsing dynamic `Call Graph` dispatch into a false negative. `Delegate Tool
+Call` is handled from its connected Tool surface rather than by treating every graph name as callable: a manual delegate adds
+only its stored handler/fallback IDs, while auto-delegate adds the exact first graph selected by the runtime for each connected
+Tool node with a stored name. Selection prefers an exact graph-name match even if an earlier graph merely contains the Tool
+name, then falls back to the first contains match. Dynamic Tool names remain unproven and do not affect the indicator.
 
 The graph list also uses the same dependency-edge collector in reverse for local context: when a graph is open,
 every other graph with a supported same-project dependency edge to the open graph gets a small active-color dot beside

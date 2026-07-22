@@ -370,6 +370,10 @@ export function useLocalExecutor() {
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
+      for (const [name, externalFunction] of Object.entries(options.externalFunctions ?? {})) {
+        processor.setExternalFunction(name, externalFunction);
+      }
+      processor.setStoredValueStore(options.storedValueStore);
       if (options.onProgress) {
         processor.on('progress', ({ progress }) => options.onProgress?.(progress));
       }
@@ -439,11 +443,19 @@ export function useLocalExecutor() {
           },
           options.inputs ?? {},
           contextValues,
+          { returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady },
         );
       }
 
       if (recordExecutions) {
-        setLastRecordingForProject(runProjectId, recorder.serialize());
+        if (processor.isRunning) {
+          void processor
+            .waitForRunCompletion()
+            .then(() => setLastRecordingForProject(runProjectId, recorder.serialize()))
+            .catch(() => undefined);
+        } else {
+          setLastRecordingForProject(runProjectId, recorder.serialize());
+        }
       }
 
       return results;
@@ -472,14 +484,25 @@ export function useLocalExecutor() {
       }
       return undefined;
     } finally {
-      options.abortSignal?.removeEventListener('abort', handleAbort);
+      const cleanupProcessorRun = () => {
+        options.abortSignal?.removeEventListener('abort', handleAbort);
 
-      if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
-        dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
-      }
+        if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
+          dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
+        }
 
-      if (processor && runProjectId && currentProcessorsByProjectId.current.get(runProjectId) === processor) {
-        currentProcessorsByProjectId.current.delete(runProjectId);
+        if (processor && runProjectId && currentProcessorsByProjectId.current.get(runProjectId) === processor) {
+          currentProcessorsByProjectId.current.delete(runProjectId);
+        }
+      };
+
+      if (processor?.isRunning) {
+        void processor
+          .waitForRunCompletion()
+          .catch(() => undefined)
+          .finally(cleanupProcessorRun);
+      } else {
+        cleanupProcessorRun();
       }
 
       if (recordingToReplay) {

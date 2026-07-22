@@ -1,0 +1,44 @@
+---
+id: set-stored-value
+title: Set Stored Value Node
+sidebar_label: Set Stored Value
+---
+
+## Overview
+
+Set Stored Value saves a portable JSON value under a key. All graphs, subgraphs, and delegated tool graphs in the same root run share the saved value. In a Rivet web app the value is also persisted in the app's browser storage; API hosts can supply their own persistence callbacks.
+
+Ordinary editor and headless graph runs use fresh in-memory storage. Reusing a processor does not preserve values between top-level runs unless a host store is configured.
+
+## Inputs
+
+| Title | Data Type  | Description                                                                                             |
+| ----- | ---------- | ------------------------------------------------------------------------------------------------------- |
+| Key   | `string`   | Available when **Use Input** is enabled for Key.                                                        |
+| Value | Configured | Value to save. It must contain only strings, finite numbers, booleans, null, arrays, and plain objects. |
+
+## Outputs
+
+| Title              | Data Type  | Description                                                                                |
+| ------------------ | ---------- | ------------------------------------------------------------------------------------------ |
+| Saved Value        | Configured | The successfully saved value.                                                              |
+| Previous Value     | Configured | The previous value, or the selected type's default if it was missing or type-incompatible. |
+| Had Previous Value | `boolean`  | Distinguishes a missing key from an existing key, including one containing `null`.         |
+| Key                | `string`   | The key that was used.                                                                     |
+
+## Settings
+
+| Setting   | Description                                                                                                                                 |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key       | Static storage key. Static keys appear in Get Stored Value's search field.                                                                  |
+| Data Type | JSON-compatible type used for the Value input and outputs. Media, document, chat-message, and function types are intentionally unavailable. |
+
+Writes update the root-run cache immediately after the persistence callback succeeds. A callback error fails the node and Rivet does not fall back to browser or memory storage.
+
+Changing a key's selected data type does not rewrite its old value. When that old value is incompatible, Previous Value uses the newly selected type's default while Had Previous Value remains `true`.
+
+## See Also
+
+- [Get Stored Value](./get-stored-value.mdx)
+- [Set Global](./set-global.mdx)
+- [Rivet Web Apps](../user-guide/rivet-web-apps.md)

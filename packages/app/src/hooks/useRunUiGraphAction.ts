@@ -5,6 +5,7 @@ import {
   type UiComponentId,
   type UiGraph,
   type GraphProgress,
+  type RivetWebAppStorage,
   formatUiGraphActionBindingIssues,
   getUiGraphActionComponent,
   jsonValueToDataValue,
@@ -12,6 +13,7 @@ import {
   resolveUiGraphComponentActionInputs,
   resolveUiGraphComponentActionOutputStatePatch,
   validateUiGraphActionBindings,
+  createRivetStoredValueSnapshotStore,
 } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import { useStableCallback } from './useStableCallback.js';
@@ -28,8 +30,18 @@ export function useRunUiGraphAction(tryRunGraph: EditorGraphRun) {
       state: Record<string, unknown>,
       abortSignal?: AbortSignal,
       onProgress?: (progress: GraphProgress) => void,
+      storage?: Record<string, unknown>,
     ) => {
-      return await runUiGraphAction({ abortSignal, componentId, onProgress, project, state, tryRunGraph, uiGraph });
+      return await runUiGraphAction({
+        abortSignal,
+        componentId,
+        onProgress,
+        project,
+        state,
+        storage,
+        tryRunGraph,
+        uiGraph,
+      });
     },
   );
 }
@@ -40,9 +52,14 @@ export async function runUiGraphAction(options: {
   onProgress?: (progress: GraphProgress) => void;
   project: Project;
   state: Record<string, unknown>;
+  storage?: Record<string, unknown>;
   tryRunGraph: EditorGraphRun;
   uiGraph: UiGraph;
-}): Promise<{ outputs: GraphOutputs; statePatch: Record<string, unknown> }> {
+}): Promise<{
+  outputs: GraphOutputs;
+  statePatch: Record<string, unknown>;
+  storagePatch: Record<string, unknown>;
+}> {
   const uiGraph = normalizeUiGraph(options.uiGraph);
   const component = getUiGraphActionComponent(uiGraph, options.componentId);
   if (!component) {
@@ -63,14 +80,22 @@ export async function runUiGraphAction(options: {
   }
 
   options.abortSignal?.throwIfAborted();
+  const browserStoredValues = createRivetStoredValueSnapshotStore(options.storage ?? {});
+  let remoteStoragePatch: Record<string, unknown> = {};
   const rawInputs = resolveUiGraphComponentActionInputs(component, options.state);
   const runOptions = {
     graphId: component.action.graphId,
     inputs: toGraphInputs(rawInputs),
     onProgress: options.onProgress,
+    onWebAppStoragePatch: (storagePatch: Record<string, unknown>) => {
+      remoteStoragePatch = { ...remoteStoragePatch, ...storagePatch };
+    },
     requireLiveRun: true,
+    returnWhenGraphOutputsReady: true,
     throwOnError: true,
     waitForResults: true,
+    storedValueStore: browserStoredValues.store,
+    webAppStorage: (options.storage ?? {}) as RivetWebAppStorage,
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
   };
   const outputs = await options.tryRunGraph(runOptions);
@@ -83,6 +108,7 @@ export async function runUiGraphAction(options: {
   return {
     outputs,
     statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, options.state),
+    storagePatch: { ...browserStoredValues.getPatch(), ...remoteStoragePatch },
   };
 }
 

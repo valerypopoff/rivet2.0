@@ -150,6 +150,59 @@ type ActiveUiGraphAction = Readonly<{
 
 const ACTION_LOADING_DELAY_MS = 300;
 
+function getUiGraphActionComponentsById(uiGraph: UiGraph): Map<UiComponentId, UiGraphActionComponent> {
+  return new Map(
+    uiGraph.components
+      .filter(
+        (component): component is UiGraphActionComponent => component.type === 'button' || component.type === 'chat',
+      )
+      .map((component) => [component.id, component]),
+  );
+}
+
+/**
+ * Action data is persisted as JSON, so its execution contract is limited to
+ * primitives, arrays, and plain records. Compare the structure rather than
+ * serialized property order: a harmless project reserialization must not
+ * cancel an active action, but changing its target or bindings must.
+ */
+function areUiGraphActionValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => areUiGraphActionValuesEqual(value, right[index]))
+    );
+  }
+
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(rightRecord, key) &&
+        areUiGraphActionValuesEqual(leftRecord[key], rightRecord[key]),
+    )
+  );
+}
+
+function areUiGraphActionComponentsExecutionEquivalent(
+  left: UiGraphActionComponent,
+  right: UiGraphActionComponent,
+): boolean {
+  return left.type === right.type && areUiGraphActionValuesEqual(left.action, right.action);
+}
+
 /**
  * Coordinates independent web-app actions without allowing older completions to
  * clear newer loading states or overwrite newer writes to the same UI state key.
@@ -221,6 +274,7 @@ export function createUiGraphInteractionController(
   options: UiGraphInteractionControllerOptions = {},
 ): UiGraphInteractionController {
   let uiGraphId = initialUiGraph.id;
+  let actionComponentsById = getUiGraphActionComponentsById(initialUiGraph);
   let outputComponentIds = getUiGraphOutputComponentIds(initialUiGraph);
   let outputComponentsByStateKey = getUiGraphOutputComponentsByStateKey(initialUiGraph);
   const initialStateOverride = options.initialState ? { ...options.initialState } : undefined;
@@ -309,15 +363,19 @@ export function createUiGraphInteractionController(
       publish('action');
     }
   };
-  const removeActionPresentation = (componentId: UiComponentId): void => {
+  const removeActionPresentation = (componentId: UiComponentId): boolean => {
+    let changed = false;
     if (Object.prototype.hasOwnProperty.call(actionErrors, componentId)) {
       actionErrors = { ...actionErrors };
       delete actionErrors[componentId];
+      changed = true;
     }
     if (Object.prototype.hasOwnProperty.call(actionProgress, componentId)) {
       actionProgress = { ...actionProgress };
       delete actionProgress[componentId];
+      changed = true;
     }
+    return changed;
   };
   const expandOutputsForUpdatedState = (
     stateKeys: Iterable<string>,
@@ -430,6 +488,7 @@ export function createUiGraphInteractionController(
         actionProgress = {};
         outputComponentIds = getUiGraphOutputComponentIds(nextUiGraph);
         outputComponentsByStateKey = getUiGraphOutputComponentsByStateKey(nextUiGraph);
+        actionComponentsById = getUiGraphActionComponentsById(nextUiGraph);
         collapsedOutputComponentIds.clear();
         publish('graph');
         return;
@@ -454,15 +513,28 @@ export function createUiGraphInteractionController(
         }
       }
 
-      const actionComponentIds = new Set(
-        nextUiGraph.components
-          .filter((component) => component.type === 'button' || component.type === 'chat')
-          .map((component) => component.id),
+      const nextActionComponentsById = getUiGraphActionComponentsById(nextUiGraph);
+      const actionComponentIds = new Set(nextActionComponentsById.keys());
+      const changedActionComponentIds = new Set(
+        [...nextActionComponentsById].flatMap(([componentId, component]) => {
+          const previousComponent = actionComponentsById.get(componentId);
+          return previousComponent && !areUiGraphActionComponentsExecutionEquivalent(previousComponent, component)
+            ? [componentId]
+            : [];
+        }),
       );
       let changed =
         collapsedOutputComponentIds.size !== collapsedOutputIdsBeforeCleanup ||
         stateChanged ||
-        abortMatchingActions(({ execution }) => !actionComponentIds.has(execution.componentId), false);
+        abortMatchingActions(
+          ({ execution }) =>
+            !actionComponentIds.has(execution.componentId) || changedActionComponentIds.has(execution.componentId),
+          false,
+        );
+      for (const componentId of changedActionComponentIds) {
+        changed = removeActionPresentation(componentId) || changed;
+      }
+      actionComponentsById = nextActionComponentsById;
       const remainingErrors = Object.fromEntries(
         Object.entries(actionErrors).filter(([componentId]) => actionComponentIds.has(componentId as UiComponentId)),
       );

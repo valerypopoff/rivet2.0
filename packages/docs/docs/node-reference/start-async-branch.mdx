@@ -1,0 +1,88 @@
+---
+id: start-async-branch
+title: Start Async Branch Node
+sidebar_label: Start Async Branch
+---
+
+# Start Async Branch Node
+
+The Start Async Branch node lets the foreground path continue without waiting
+for one downstream branch. Rivet still owns that branch until the root graph run
+ends, so execution events, cancellation, and errors remain part of the same run.
+Web-app actions return an already-ready graph result without waiting for the
+async branch, while the processor remains running until that branch settles.
+
+Use this node for side effects that should overlap the foreground work, such as
+publishing a progress status while an AI tool is running. It is not a detached
+job that can outlive the graph run.
+
+## Inputs and outputs
+
+The node has paired variadic ports. Connecting another input adds another
+input/output pair.
+
+| Port             | Data Type | Description                                                                       |
+| ---------------- | --------- | --------------------------------------------------------------------------------- |
+| Async Input [i]  | `any`     | A value required before the node starts. The node waits for all connected inputs. |
+| Async Output [i] | `any`     | The unchanged value from the matching input.                                      |
+
+The foreground scheduler continues as soon as the Start Async Branch node has
+received its connected inputs and launched its downstream branch. All of the
+node's output ports are released together.
+
+## Wiring rules
+
+An async branch is a closed, side-effect-only subtree:
+
+- It cannot contain a Graph Output node.
+- It cannot rejoin the foreground path.
+- Nodes inside it cannot require additional values from outside the branch.
+
+The editor prevents a connection that would violate any of those rules and
+explains why. It also prevents a partial **Run from here** inside the subtree,
+and does not offer **Freeze** on Start Async Branch itself. Runtime validation
+still rejects invalid topology, frozen output, or preloaded descendants that
+come from a saved file or another execution host.
+
+If the branch needs several values, connect all of them to the Start Async
+Branch node and use its matching outputs. This makes the complete branch
+payload visible at the scheduling boundary.
+
+If an async-branch node fails, the foreground path is not retroactively
+stopped. The root graph run reports the error when all foreground and async work
+has settled. If a web app already displayed its foreground result, a later async
+error cannot retract that reply. Stopping the root run also stops its async
+branches.
+
+Browser-backed Stored Value patches are returned with the web-app action result,
+so a Set Stored Value that runs later in an async branch cannot be persisted by
+that response. Keep browser-backed persistence on the foreground path, or use a
+host-provided Stored Value store that writes through directly.
+
+**Run from here** is available on the Start Async Branch node itself, but not on
+nodes inside its async subtree. Replaying a descendant would otherwise require
+silently preloading the trigger and could repeat only part of an async side
+effect. Run from the owning Start Async Branch when you intend to replay that
+subtree.
+
+## Example: show an LLM tool status without delaying the tool
+
+Connect **Delegate Tool Call**'s **Message (fires before tool call
+invocation)** output to Start Async Branch, then connect the corresponding async
+output to a status-reporting node. Rivet launches the status branch and lets the
+Delegate invoke its tools without waiting for that branch to finish. The whole
+root lifecycle still owns both paths, but a web-app Chat can display the final
+foreground reply before the async status branch finishes.
+
+If one model response requests multiple tools alongside nonblank assistant text,
+the status branch runs once per requested tool. Each run receives that same
+assistant text.
+
+Without Start Async Branch, the pre-tool message branch runs normally and the
+Delegate waits for it before invoking the tool.
+
+## See also
+
+- [Delegate Tool Call](./delegate-tool-call.mdx)
+- [Passthrough](./passthrough.mdx)
+- [Report Progress](./report-progress.mdx)

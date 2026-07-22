@@ -1,9 +1,8 @@
-import { useState, type FC, useRef, useEffect } from 'react';
+import { type FC, useEffect, useRef } from 'react';
 import { css } from '@emotion/react';
 import { useTotalRunCost } from '../hooks/useTotalRunCost';
 import { useAtomValue } from 'jotai';
 import { graphRunningState, graphStartTimeState } from '../state/dataFlow';
-import { useLatest } from 'ahooks';
 import prettyMs from 'pretty-ms';
 
 const styles = css`
@@ -36,22 +35,33 @@ export const StatusBar: FC<{}> = () => {
   const graphStartTime = useAtomValue(graphStartTimeState);
 
   const runtimeRef = useRef<HTMLDivElement>(null);
-  const latestGraphRunning = useLatest(graphRunning);
-  const latestGraphStartTime = useLatest(graphStartTime);
 
   useEffect(() => {
-    const fn = () => {
-      if (latestGraphRunning.current && latestGraphStartTime.current != null) {
-        const duration = prettyMs(Date.now() - latestGraphStartTime.current, {
-          keepDecimalsOnWholeSeconds: true,
-          secondsDecimalDigits: 2,
-        });
-        runtimeRef.current!.innerText = duration;
-        requestAnimationFrame(fn);
+    if (!graphRunning || graphStartTime == null) {
+      return;
+    }
+
+    let animationFrameId: number | undefined;
+    const updateRuntime = () => {
+      const runtime = runtimeRef.current;
+      if (runtime == null) {
+        return;
+      }
+
+      runtime.innerText = prettyMs(Date.now() - graphStartTime, {
+        keepDecimalsOnWholeSeconds: true,
+        secondsDecimalDigits: 2,
+      });
+      animationFrameId = requestAnimationFrame(updateRuntime);
+    };
+
+    updateRuntime();
+    return () => {
+      if (animationFrameId != null) {
+        cancelAnimationFrame(animationFrameId);
       }
     };
-    requestAnimationFrame(fn);
-  }, [graphRunning, graphStartTime, latestGraphRunning, latestGraphStartTime]);
+  }, [graphRunning, graphStartTime]);
 
   return (
     <div css={styles}>

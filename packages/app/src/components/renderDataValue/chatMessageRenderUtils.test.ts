@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AssistantChatMessage } from '@valerypopoff/rivet2-core';
 
-import { getRenderableAssistantFunctionCall } from './chatMessageRenderUtils.js';
+import { getFunctionResponseDisplayLabel, getRenderableAssistantFunctionCall } from './chatMessageRenderUtils.js';
 
 test('assistant messages with empty function_calls have no renderable function call section', () => {
   assert.equal(
@@ -44,6 +44,32 @@ test('assistant messages with legacy function_call render the singular section',
       functionCall: { name: 'lookup', arguments: '{"query":"foo"}', id: 'call_1' },
     },
   );
+});
+
+test('function responses display the tool name alongside a distinct tool-call id', () => {
+  assert.equal(
+    getFunctionResponseDisplayLabel({
+      name: 'call_123',
+      toolName: 'initializeBookInPinecone',
+    }),
+    'initializeBookInPinecone (tool call ID: call_123)',
+  );
+});
+
+test('function response labels preserve legacy names and avoid duplicate identifiers', () => {
+  assert.equal(
+    getFunctionResponseDisplayLabel({ name: 'legacyTool' }),
+    'legacyTool',
+  );
+  assert.equal(
+    getFunctionResponseDisplayLabel({
+      name: 'sameName',
+      toolName: 'sameName',
+    }),
+    'sameName',
+  );
+  assert.equal(getFunctionResponseDisplayLabel({ name: '' }), 'unknown');
+  assert.equal(getFunctionResponseDisplayLabel({}), 'unknown');
 });
 
 function assistantMessage(

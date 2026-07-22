@@ -23,3 +23,12 @@ test('useRemoteExecutor restores runtime-owned active request id after project t
   assert.match(source, /remoteDebugger\.send\('pause', requestId \? \{ requestId \} : undefined\)/);
   assert.match(source, /remoteDebugger\.send\('resume', requestId \? \{ requestId \} : undefined\)/);
 });
+
+test('useRemoteExecutor closes response-bound storage patches at the early output boundary', async () => {
+  const source = await readFile(new URL('./useRemoteExecutor.ts', import.meta.url), 'utf8');
+
+  assert.match(
+    source,
+    /case 'graphOutputsReady':[\s\S]*?earlyResultRequestIdsRef\.current\.add\(requestId\);[\s\S]*?webAppStoragePatchCallbacksByRequestIdRef\.current\.delete\(requestId\);[\s\S]*?resolvePendingGraphExecution/,
+  );
+});

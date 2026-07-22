@@ -16,6 +16,7 @@ import { useLoadGraph } from './useLoadGraph.js';
 import { useOpenUiGraph } from './useOpenUiGraph.js';
 import { useProjectWorkspaceTarget } from './useProjectWorkspaceTarget.js';
 import { useStableCallback } from './useStableCallback.js';
+import { clearUiGraphPreviewSession } from '../components/rivetWebApps/uiGraphPreviewSession.js';
 
 export function useUiGraphOperations() {
   const project = useAtomValue(projectState);
@@ -44,6 +45,7 @@ export function useUiGraphOperations() {
   });
 
   const deleteUiGraph = useStableCallback((uiGraphId: UiGraphId) => {
+    clearUiGraphPreviewSession(project.metadata.id, uiGraphId);
     setProject((currentProject) =>
       produce(currentProject, (draft) => {
         delete draft.uiGraphs?.[uiGraphId];

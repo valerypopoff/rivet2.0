@@ -69,6 +69,7 @@ import {
   zoomSensitivityState,
 } from '../state/settings';
 import { canvasPreviewConnectionsState } from '../state/selectors/canvasGraphSelectors.js';
+import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
 import { canRunGraphFromEditor } from '../state/selectors/executionSelectors.js';
 import { MouseIcon } from './MouseIcon';
 import { type ContextMenuContext } from './ContextMenu.js';
@@ -215,6 +216,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const preservePortCase = useAtomValue(preservePortTextCaseState);
   const uiFontSize = useAtomValue(uiFontSizeState);
   const rawPreviewConnections = useAtomValue(canvasPreviewConnectionsState);
+  const definitionValidConnections = useAtomValue(definitionValidConnectionsState);
   const project = useAtomValue(projectState);
   const referencedProjects = useAtomValue(referencedProjectsState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
@@ -330,11 +332,11 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
         [selectedGraphMetadata.id]: {
           metadata: selectedGraphMetadata,
           nodes,
-          connections,
+          connections: disableConnections ? connections : definitionValidConnections,
         },
       },
     };
-  }, [connections, nodes, project, selectedGraphMetadata]);
+  }, [connections, definitionValidConnections, disableConnections, nodes, project, selectedGraphMetadata]);
 
   const { selectionBox, startSelectionBox, updateSelectionBox, endSelectionBox } = useSelectionBox();
   const {

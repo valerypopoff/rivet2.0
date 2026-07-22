@@ -1,5 +1,7 @@
 import {
   clearUiGraphChatSearchMatches,
+  applyUiGraphWebAppStorageActionPatch,
+  applyUiGraphWebAppStoragePatch,
   copyUiGraphText,
   createUiGraphChatHistoryFlushStatePatch,
   createUiGraphChatPinStatePatch,
@@ -8,10 +10,12 @@ import {
   downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
+  getUiGraphChatMessagesStateKey,
   getUiGraphChatPersistentState,
   hasUiGraphChatPersistentStateChanged,
   highlightUiGraphChatSearchMatches,
   loadUiGraphChatPersistentState,
+  loadUiGraphWebAppStorage,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
@@ -52,6 +56,15 @@ type ChatPresentationState = {
   query: string;
 };
 
+type ChatScrollRenderState = {
+  activeSearchMatchIndex: number;
+  isRunning: boolean;
+  isSearchOpen: boolean;
+  messageCount: number;
+  messagesState: unknown;
+  searchQuery: string;
+};
+
 const browserGlobals = globalThis as typeof globalThis & {
   DOMPurify?: DomPurifyApi;
   marked?: MarkedApi;
@@ -85,10 +98,13 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
   let revisionMismatch = false;
   let disposeOutputResizeObservers = () => {};
   const chatPresentationStates = new Map<string, ChatPresentationState>();
+  let chatScrollRenderStates = new Map<string, ChatScrollRenderState>();
   const interactionController = createUiGraphInteractionController(config.uiGraph, {
     initialState: { ...config.initialState, ...loadUiGraphChatPersistentState(config.uiGraph) },
   });
   let actionRunner = createHostedActionRunner(config);
+  let nextStorageAction = 0;
+  const appliedStorageActionByKey = new Map<string, number>();
   let isRestoringChatState = false;
   let restoreActionRunnerFromPageCache = false;
 
@@ -150,7 +166,9 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         if (chatState?.isMenuOpen) {
           chatState.isMenuOpen = false;
           menu.querySelector('.rivet-web-app-chat-menu')?.remove();
-          menu.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.setAttribute('aria-expanded', 'false');
+          menu
+            .querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')
+            ?.setAttribute('aria-expanded', 'false');
         }
       }
     },
@@ -248,6 +266,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
   const resetApp = (): void => {
     revisionMismatch = false;
     chatPresentationStates.clear();
+    chatScrollRenderStates.clear();
     const chatState = getUiGraphChatPersistentState(config.uiGraph, interactionController.getSnapshot().state);
     isRestoringChatState = true;
     interactionController.reset();
@@ -264,14 +283,31 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     await interactionController.runAction(
       component,
       async ({ abortOtherActions, componentId, reportProgress, signal, state }) => {
+        const storageAction = ++nextStorageAction;
         try {
-          return await actionRunner.run({
+          const result = await actionRunner.run({
             componentId,
             onProgress: reportProgress,
             revisionKey: config.revisionKey,
             signal,
             state,
+            storage: loadUiGraphWebAppStorage(config.uiGraph),
           });
+          signal.throwIfAborted();
+          if (result.storagePatch && Object.keys(result.storagePatch).length > 0) {
+            applyUiGraphWebAppStorageActionPatch(
+              result.storagePatch,
+              storageAction,
+              appliedStorageActionByKey,
+              (applicablePatch) =>
+                applyUiGraphWebAppStoragePatch(
+                  config.uiGraph,
+                  loadUiGraphWebAppStorage(config.uiGraph),
+                  applicablePatch,
+                ),
+            );
+          }
+          return { statePatch: result.statePatch };
         } catch (error) {
           if (error instanceof HostedActionError && error.code === 'revision_mismatch') {
             revisionMismatch = true;
@@ -640,7 +676,6 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           render();
         };
         const toggleMenu = () => {
-          searchState.isPinsOpen = false;
           searchState.isSearchOpen = false;
           searchState.isMenuOpen = !searchState.isMenuOpen;
           render();
@@ -1041,6 +1076,11 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
 
   const render = (): void => {
     const focusedControl = captureFocusedTextControl(root);
+    const previousChatScrollTops = new Map<string, number>();
+    root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-messages').forEach((messages) => {
+      const componentId = messages.dataset.rivetChatComponentId;
+      if (componentId) previousChatScrollTops.set(componentId, messages.scrollTop);
+    });
     const interaction = interactionController.getSnapshot();
     const surface = createElement('main', { className: 'rivet-web-app-surface' }, [
       createElement('div', { className: 'rivet-web-app-toolbar' }, [
@@ -1058,18 +1098,55 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     disposeOutputResizeObservers();
     root.replaceChildren(surface, ...renderRevisionMismatchModal());
     disposeOutputResizeObservers = observeOutputResizeBounds(root);
+    const chatMessagesByComponentId = new Map<string, HTMLElement>();
     root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-messages').forEach((messages) => {
       const componentId = messages.dataset.rivetChatComponentId;
-      const searchState = componentId ? chatPresentationStates.get(componentId) : undefined;
-      if (searchState?.isSearchOpen && searchState.query.trim()) {
+      if (componentId) chatMessagesByComponentId.set(componentId, messages);
+    });
+    const nextChatScrollRenderStates = new Map<string, ChatScrollRenderState>();
+    for (const component of config.uiGraph.components) {
+      if (component.type !== 'chat') continue;
+
+      const componentId = String(component.id);
+      const messages = chatMessagesByComponentId.get(componentId);
+      if (!messages) continue;
+
+      const renderModel = getUiGraphComponentRenderModel(component, interaction.state);
+      if (renderModel.type !== 'chat') continue;
+
+      const searchState = getChatPresentationState(componentId);
+      const nextState = {
+        activeSearchMatchIndex: searchState.activeMatchIndex,
+        isRunning: interaction.runningComponentIds.has(component.id),
+        isSearchOpen: searchState.isSearchOpen,
+        messageCount: renderModel.messages.length,
+        messagesState: interaction.state[getUiGraphChatMessagesStateKey(component.id)],
+        searchQuery: searchState.query,
+      };
+      const previousState = chatScrollRenderStates.get(componentId);
+      const searchTargetChanged =
+        !previousState ||
+        previousState.activeSearchMatchIndex !== nextState.activeSearchMatchIndex ||
+        previousState.isSearchOpen !== nextState.isSearchOpen ||
+        previousState.messagesState !== nextState.messagesState ||
+        previousState.searchQuery !== nextState.searchQuery;
+      const shouldFollowLatest =
+        !previousState ||
+        previousState.isRunning !== nextState.isRunning ||
+        previousState.messageCount !== nextState.messageCount;
+      if (searchState.isSearchOpen && searchState.query.trim() && searchTargetChanged) {
         revealUiGraphChatSearchMatch(
           messages,
           messages.querySelector<HTMLElement>('.rivet-web-app-chat-search-match-active') ?? undefined,
         );
-      } else {
+      } else if (shouldFollowLatest) {
         messages.scrollTop = messages.scrollHeight;
+      } else {
+        messages.scrollTop = previousChatScrollTops.get(componentId) ?? messages.scrollHeight;
       }
-    });
+      nextChatScrollRenderStates.set(componentId, nextState);
+    }
+    chatScrollRenderStates = nextChatScrollRenderStates;
     if (revisionMismatch) {
       root.querySelector<HTMLButtonElement>('.rivet-web-app-modal-button')?.focus();
     } else if (focusedControl) {

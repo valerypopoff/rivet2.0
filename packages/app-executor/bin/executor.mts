@@ -30,7 +30,9 @@ import {
 import { parseExecutorHostFromArgs, parseExecutorPortFromArgs } from './executorConfig.mjs';
 
 type AppExecutorDebugger = ReturnType<typeof startDebuggerServer>;
-type AppExecutorClient = Parameters<NonNullable<Parameters<typeof startDebuggerServer>[0]['dynamicGraphRun']>>[0]['client'];
+type AppExecutorClient = Parameters<
+  NonNullable<Parameters<typeof startDebuggerServer>[0]['dynamicGraphRun']>
+>[0]['client'];
 type AppExecutorProcessor = ReturnType<typeof createProcessor>['processor'];
 const processorsByClient = new WeakMap<AppExecutorClient, Set<AppExecutorProcessor>>();
 const clientByProcessor = new WeakMap<AppExecutorProcessor, AppExecutorClient>();
@@ -232,6 +234,8 @@ const rivetDebugger = startDebuggerServer({
     projectPath,
     useEditorCache,
     captureNodeTimings,
+    returnWhenGraphOutputsReady,
+    webAppStorage: initialWebAppStorage,
   }) => {
     logRuntimeInfo(`Running graph ${graphId}`, {
       requestId,
@@ -310,6 +314,24 @@ const rivetDebugger = startDebuggerServer({
       });
       const clientScopedDebugger = createClientScopedDebugger(client);
 
+      const webAppStorage =
+        initialWebAppStorage === undefined
+          ? undefined
+          : Rivet.createRivetStoredValueSnapshotStore(initialWebAppStorage);
+      let webAppStorageBoundaryPublished = false;
+      const publishWebAppStoragePatch = webAppStorage
+        ? (event: Rivet.ProcessEvents['graphFinish'] | Rivet.ProcessEvents['graphOutputsReady']) => {
+            if (event.execution.parentGraphRunId != null || webAppStorageBoundaryPublished) {
+              return;
+            }
+            webAppStorageBoundaryPublished = true;
+            const storagePatch = webAppStorage.getPatch();
+            if (Object.keys(storagePatch).length === 0 || !processorForConsole) {
+              return;
+            }
+            clientScopedDebugger.broadcast(processorForConsole, 'webAppStoragePatch', { storagePatch }, requestId);
+          }
+        : undefined;
       const processor = createProcessor(project, {
         graph: graphId,
         inputs,
@@ -317,14 +339,18 @@ const rivetDebugger = startDebuggerServer({
         remoteDebugger: clientScopedDebugger,
         remoteDebuggerRequestId: requestId,
         captureNodeTimings: captureNodeTimings ?? false,
+        returnWhenGraphOutputsReady,
         registry,
         datasetProvider: getDatasetProviderForClient(client),
         codeRunner,
         editorExecutionCache: useEditorCache ? getEditorExecutionCache(client, project) : undefined,
+        onGraphFinish: publishWebAppStoragePatch,
+        onGraphOutputsReady: publishWebAppStoragePatch,
         onTrace: (trace) => {
           logRuntimeDebug('Graph trace', { trace });
         },
         context: contextValues,
+        storedValueStore: webAppStorage?.store,
         projectPath,
         projectReferenceLoader: new NodeProjectReferenceLoader(),
       });
@@ -340,7 +366,13 @@ const rivetDebugger = startDebuggerServer({
         processor.processor.preloadNodeData(nodeId as Rivet.NodeId, outputs);
       }
 
-      await processor.run();
+      try {
+        await processor.run();
+      } finally {
+        if (processor.processor.isRunning) {
+          await processor.processor.waitForRunCompletion().catch(() => undefined);
+        }
+      }
     } catch (err) {
       logRuntimeError(`Graph ${graphId} failed.`, err, { requestId });
       sendGraphRunError(client, requestId, err);

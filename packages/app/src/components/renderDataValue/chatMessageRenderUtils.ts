@@ -1,4 +1,8 @@
-import type { AssistantChatMessage, AssistantChatMessageFunctionCall } from '@valerypopoff/rivet2-core';
+import type {
+  AssistantChatMessage,
+  AssistantChatMessageFunctionCall,
+  FunctionResponseChatMessage,
+} from '@valerypopoff/rivet2-core';
 
 export type RenderableAssistantFunctionCall =
   | {
@@ -28,4 +32,17 @@ export function getRenderableAssistantFunctionCall(
   }
 
   return undefined;
+}
+
+export function getFunctionResponseDisplayLabel(
+  message: Partial<Pick<FunctionResponseChatMessage, 'name' | 'toolName'>>,
+): string {
+  const toolName = typeof message.toolName === 'string' ? message.toolName.trim() : '';
+  const toolCallId = typeof message.name === 'string' ? message.name.trim() : '';
+
+  if (toolName && toolCallId && toolCallId !== toolName) {
+    return `${toolName} (tool call ID: ${toolCallId})`;
+  }
+
+  return toolName || toolCallId || 'unknown';
 }

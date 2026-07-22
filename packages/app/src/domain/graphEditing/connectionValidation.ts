@@ -8,10 +8,20 @@ import {
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
 
-type NodePortIds = {
-  inputPortIds: Set<PortId>;
-  outputPortIds: Set<PortId>;
-} | undefined;
+type NodePortIds =
+  | {
+      inputPortIds: Set<PortId>;
+      outputPortIds: Set<PortId>;
+    }
+  | undefined;
+
+export type AsyncBranchTopologyViolation = {
+  kind: 'cycle' | 'externalInput' | 'graphOutput';
+  triggerNodeId: NodeId;
+  nodeId: NodeId;
+  externalNodeId?: NodeId;
+  message: string;
+};
 
 function getConnectionsByNodeId(connections: readonly NodeConnection[]): Record<NodeId, NodeConnection[]> {
   const connectionsByNodeId: Record<NodeId, NodeConnection[]> = {};
@@ -131,4 +141,102 @@ export function filterValidSubGraphConnections({
   });
 
   return filteredConnections.length === connections.length ? (connections as NodeConnection[]) : filteredConnections;
+}
+
+/**
+ * Returns the first topology violation in an enabled Start Async Branch subtree.
+ *
+ * Async branches are root-owned side-effect work and must not participate in the
+ * graph's output boundary, loop back through their trigger, or depend on input
+ * from outside the subtree. Keep this check independent from port definitions so
+ * it can validate a proposed connection during a wire drag.
+ */
+export function getAsyncBranchTopologyViolation({
+  connections,
+  nodesById,
+}: {
+  connections: readonly NodeConnection[];
+  nodesById: Record<NodeId, ChartNode>;
+}): AsyncBranchTopologyViolation | undefined {
+  const outgoingByNodeId = new Map<NodeId, NodeId[]>();
+  const incomingByNodeId = new Map<NodeId, NodeConnection[]>();
+
+  for (const connection of connections) {
+    const outgoingNodeIds = outgoingByNodeId.get(connection.outputNodeId) ?? [];
+    outgoingNodeIds.push(connection.inputNodeId);
+    outgoingByNodeId.set(connection.outputNodeId, outgoingNodeIds);
+
+    const incomingConnections = incomingByNodeId.get(connection.inputNodeId) ?? [];
+    incomingConnections.push(connection);
+    incomingByNodeId.set(connection.inputNodeId, incomingConnections);
+  }
+
+  for (const triggerNode of Object.values(nodesById)) {
+    if (triggerNode.type !== 'startBackgroundBranch' || triggerNode.disabled) {
+      continue;
+    }
+
+    const visitedNodeIds = new Set<NodeId>();
+    const branchNodeIds = new Set<NodeId>();
+    const pendingNodeIds = [...(outgoingByNodeId.get(triggerNode.id) ?? [])];
+
+    while (pendingNodeIds.length > 0) {
+      const nodeId = pendingNodeIds.pop()!;
+      if (nodeId === triggerNode.id) {
+        return {
+          kind: 'cycle',
+          triggerNodeId: triggerNode.id,
+          nodeId,
+          message: `Start Async Branch "${triggerNode.title}" cannot be part of a cycle or reconnect to its own inputs.`,
+        };
+      }
+      if (visitedNodeIds.has(nodeId)) {
+        continue;
+      }
+      visitedNodeIds.add(nodeId);
+
+      const node = nodesById[nodeId];
+      if (!node || node.disabled) {
+        continue;
+      }
+
+      if (node.type === 'graphOutput') {
+        return {
+          kind: 'graphOutput',
+          triggerNodeId: triggerNode.id,
+          nodeId: node.id,
+          message:
+            `Start Async Branch "${triggerNode.title}" cannot contain Graph Output node "${node.title}". ` +
+            'Async branches are side-effect-only.',
+        };
+      }
+
+      branchNodeIds.add(nodeId);
+      pendingNodeIds.push(...(outgoingByNodeId.get(nodeId) ?? []));
+    }
+
+    for (const nodeId of branchNodeIds) {
+      const externalInput = (incomingByNodeId.get(nodeId) ?? []).find(
+        (connection) => connection.outputNodeId !== triggerNode.id && !branchNodeIds.has(connection.outputNodeId),
+      );
+      if (!externalInput) {
+        continue;
+      }
+
+      const node = nodesById[nodeId]!;
+      const externalNode = nodesById[externalInput.outputNodeId];
+      return {
+        kind: 'externalInput',
+        triggerNodeId: triggerNode.id,
+        nodeId,
+        externalNodeId: externalInput.outputNodeId,
+        message:
+          `Start Async Branch "${triggerNode.title}" cannot run "${node.title}" because it also depends on ` +
+          `"${externalNode?.title ?? externalInput.outputNodeId}" outside the async branch. ` +
+          'Assemble all required values before the async trigger.',
+      };
+    }
+  }
+
+  return undefined;
 }

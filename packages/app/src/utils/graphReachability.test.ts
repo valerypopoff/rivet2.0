@@ -305,45 +305,352 @@ describe('graphReachability', () => {
     assert.match(report.warnings.join('\n'), /wired from missing node missing-ref/i);
   });
 
-  test('treats delegate handler graphs as definite without marking auto-delegate name matches reachable', () => {
-    const delegateManual = makeNode('delegateFunctionCall', {
-      autoDelegate: false,
-      handlers: [{ key: 'weather', value: 'handler-a' as GraphId }],
-      unknownHandler: 'handler-b' as GraphId,
-    });
-    const delegateAuto = makeNode('delegateFunctionCall', {
-      autoDelegate: true,
-      handlers: [],
-      unknownHandler: 'fallback' as GraphId,
-    });
-    const main = makeGraph('main', 'Main', [delegateManual, delegateAuto]);
+  test('treats explicitly configured handlers of a connected manual delegate as definite', () => {
+    const delegateManual = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: false,
+        handlers: [{ key: 'weather', value: 'handler-a' as GraphId }],
+        unknownHandler: 'handler-b' as GraphId,
+      },
+      { id: 'delegate' },
+    );
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const main = makeGraph(
+      'main',
+      'Main',
+      [llm, delegateManual],
+      [makeConnection('llm', 'delegate', 'function-calls', 'function-call')],
+    );
     const handlerA = makeGraph('handler-a', 'Weather Handler');
     const handlerB = makeGraph('handler-b', 'Unknown Handler');
-    const fallback = makeGraph('fallback', 'Fallback Handler');
-    const named = makeGraph('named', 'Named Graph');
+    const named = makeGraph('named', 'Unrelated Graph');
 
-    const report = getGraphReachabilityReport(makeProject([main, handlerA, handlerB, fallback, named], 'main'));
+    const report = getGraphReachabilityReport(makeProject([main, handlerA, handlerB, named], 'main'));
 
-    assert.deepEqual(sortGraphIds(report.definite), ['fallback', 'handler-a', 'handler-b', 'main']);
+    assert.deepEqual(sortGraphIds(report.definite), ['handler-a', 'handler-b', 'main']);
     assert.deepEqual(sortGraphIds(report.dynamic), []);
     assert.deepEqual(sortGraphIds(report.unreachable), ['named']);
   });
 
-  test('does not let auto-delegate-only nodes make named graphs reachable', () => {
-    const delegateAuto = makeNode('delegateFunctionCall', {
-      autoDelegate: true,
-      handlers: [],
-      unknownHandler: undefined,
+  test('does not treat handlers of a disconnected Delegate Tool Call as reachable', () => {
+    const delegateManual = makeNode('delegateFunctionCall', {
+      autoDelegate: false,
+      handlers: [{ key: 'weather', value: 'handler' as GraphId }],
+      unknownHandler: 'fallback' as GraphId,
     });
-    const main = makeGraph('main', 'Main', [delegateAuto]);
-    const matchingName = makeGraph('matching-name', 'weather');
-    const otherNamed = makeGraph('other-named', 'Other Named Graph');
+    const main = makeGraph('main', 'Main', [delegateManual]);
+    const handler = makeGraph('handler', 'Weather Handler');
+    const fallback = makeGraph('fallback', 'Fallback Handler');
 
-    const report = getGraphReachabilityReport(makeProject([main, matchingName, otherNamed], 'main'));
+    const report = getGraphReachabilityReport(makeProject([main, handler, fallback], 'main'));
 
     assert.deepEqual(sortGraphIds(report.definite), ['main']);
     assert.deepEqual(sortGraphIds(report.dynamic), []);
-    assert.deepEqual(sortGraphIds(report.unreachable), ['matching-name', 'other-named']);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['fallback', 'handler']);
+  });
+
+  test('does not treat an inactive LLM Chat tool-call output as a Delegate Tool Call connection', () => {
+    const llm = makeNode('llmChatV2', { useToolCalling: false }, { id: 'llm' });
+    const delegateManual = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: false,
+        handlers: [{ key: 'weather', value: 'handler' as GraphId }],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [llm, delegateManual],
+      [makeConnection('llm', 'delegate', 'function-calls', 'function-call')],
+    );
+    const handler = makeGraph('handler', 'Weather Handler');
+
+    const report = getGraphReachabilityReport(makeProject([main, handler], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['handler']);
+  });
+
+  test('uses only the first valid Delegate Tool Call input connection, like runtime execution', () => {
+    const disabledLlm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'disabled-llm', disabled: true });
+    const activeLlm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'active-llm' });
+    const delegateManual = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: false,
+        handlers: [{ key: 'weather', value: 'handler' as GraphId }],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [disabledLlm, activeLlm, delegateManual],
+      [
+        makeConnection('disabled-llm', 'delegate', 'function-calls', 'function-call'),
+        makeConnection('active-llm', 'delegate', 'function-calls', 'function-call'),
+      ],
+    );
+    const handler = makeGraph('handler', 'Weather Handler');
+
+    const report = getGraphReachabilityReport(makeProject([main, handler], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['handler']);
+  });
+
+  test('recognizes legacy Chat function-call output when tool use is enabled', () => {
+    const tool = makeNode('gptFunction', { name: 'weather' }, { id: 'tool' });
+    const legacyChat = makeNode(
+      'chat',
+      { enableFunctionUse: true, parallelFunctionCalling: false },
+      { id: 'legacy-chat' },
+    );
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [tool, legacyChat, delegateAuto],
+      [
+        makeConnection('tool', 'legacy-chat', 'function', 'functions'),
+        makeConnection('legacy-chat', 'delegate', 'function-call', 'function-call'),
+      ],
+    );
+    const handler = makeGraph('handler', 'Tools/weather');
+
+    const report = getGraphReachabilityReport(makeProject([main, handler], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['handler', 'main']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+  });
+
+  test('does not infer an auto-delegate target from a Tool whose name is supplied at runtime', () => {
+    const tool = makeNode('gptFunction', { name: 'weather', useNameInput: true }, { id: 'tool' });
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [tool, llm, delegateAuto],
+      [
+        makeConnection('tool', 'llm', 'function', 'functions'),
+        makeConnection('llm', 'delegate', 'function-calls', 'function-call'),
+      ],
+    );
+    const handler = makeGraph('handler', 'Tools/weather');
+
+    const report = getGraphReachabilityReport(makeProject([main, handler], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['handler']);
+  });
+
+  test('uses only the runtime-selected Tool connection into an LLM Chat Tools port', () => {
+    const weatherTool = makeNode('gptFunction', { name: 'weather' }, { id: 'weather-tool' });
+    const timeTool = makeNode('gptFunction', { name: 'time' }, { id: 'time-tool' });
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [weatherTool, timeTool, llm, delegateAuto],
+      [
+        makeConnection('weather-tool', 'llm', 'function', 'functions'),
+        makeConnection('time-tool', 'llm', 'function', 'functions'),
+        makeConnection('llm', 'delegate', 'function-calls', 'function-call'),
+      ],
+    );
+    const weatherHandler = makeGraph('weather-handler', 'Tools/weather');
+    const timeHandler = makeGraph('time-handler', 'Tools/time');
+
+    const report = getGraphReachabilityReport(makeProject([main, weatherHandler, timeHandler], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main', 'weather-handler']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['time-handler']);
+  });
+
+  test('prefers an exact auto-delegate graph name before the contains fallback', () => {
+    const tool = makeNode('gptFunction', { name: 'weather' }, { id: 'tool' });
+    const tools = makeNode('array', {}, { id: 'tools' });
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [tool, tools, llm, delegateAuto],
+      [
+        makeConnection('tool', 'tools', 'function', 'input1'),
+        makeConnection('tools', 'llm', 'output', 'functions'),
+        makeConnection('llm', 'delegate', 'function-calls', 'function-call'),
+      ],
+    );
+    const matchingName = makeGraph('matching-name', 'Tools/weather');
+    const laterMatchingName = makeGraph('later-matching-name', 'Archive/weather');
+    const exactName = makeGraph('exact-name', 'weather');
+    const otherNamed = makeGraph('other-named', 'Other Named Graph');
+
+    const report = getGraphReachabilityReport(
+      makeProject([main, matchingName, laterMatchingName, exactName, otherNamed], 'main'),
+    );
+
+    assert.deepEqual(sortGraphIds(report.definite), ['exact-name', 'main']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['later-matching-name', 'matching-name', 'other-named']);
+  });
+
+  test('uses active Tool-to-Delegate paths as reachability roots outside the Main Graph flow', () => {
+    const main = makeGraph('main', 'Main');
+    const tool = makeNode('gptFunction', { name: 'weather' }, { id: 'tool' });
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const dormantToolFlow = makeGraph(
+      'dormant-tool-flow',
+      'Dormant Tool Flow',
+      [tool, llm, delegateAuto],
+      [
+        makeConnection('tool', 'llm', 'function', 'functions'),
+        makeConnection('llm', 'delegate', 'function-calls', 'function-call'),
+      ],
+    );
+    const matchingName = makeGraph('matching-name', 'Tools/weather');
+
+    const report = getGraphReachabilityReport(makeProject([main, dormantToolFlow, matchingName], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main', 'matching-name']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['dormant-tool-flow']);
+  });
+
+  test('uses explicit manual Delegate Tool Call handlers as reachability roots outside the Main Graph flow', () => {
+    const main = makeGraph('main', 'Main');
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegateManual = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: false,
+        handlers: [{ key: 'weather', value: 'handler' as GraphId }],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const dormantToolFlow = makeGraph(
+      'dormant-tool-flow',
+      'Dormant Tool Flow',
+      [llm, delegateManual],
+      [makeConnection('llm', 'delegate', 'function-calls', 'function-call')],
+    );
+    const handler = makeGraph('handler', 'Weather Handler');
+
+    const report = getGraphReachabilityReport(makeProject([main, dormantToolFlow, handler], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['handler', 'main']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['dormant-tool-flow']);
+  });
+
+  test('does not infer an auto-delegate target from a tool that is not connected to the delegate', () => {
+    const tool = makeNode('gptFunction', { name: 'weather' }, { id: 'tool' });
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [tool, llm, delegateAuto],
+      [makeConnection('llm', 'delegate', 'function-calls', 'function-call')],
+    );
+    const matchingName = makeGraph('matching-name', 'Tools/weather');
+
+    const report = getGraphReachabilityReport(makeProject([main, matchingName], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['matching-name']);
+  });
+
+  test('marks an auto-delegate fallback only when a connected static tool has no matching graph', () => {
+    const tool = makeNode('gptFunction', { name: 'time' }, { id: 'tool' });
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: 'fallback' as GraphId,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [tool, llm, delegateAuto],
+      [
+        makeConnection('tool', 'llm', 'function', 'functions'),
+        makeConnection('llm', 'delegate', 'function-calls', 'function-call'),
+      ],
+    );
+    const fallback = makeGraph('fallback', 'Fallback Handler');
+
+    const report = getGraphReachabilityReport(makeProject([main, fallback], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['fallback', 'main']);
+    assert.deepEqual(sortGraphIds(report.dynamic), []);
   });
 
   test('includes bundled Run Thread graph hooks as definite', () => {
