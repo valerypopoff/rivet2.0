@@ -10,6 +10,7 @@ import {
   downloadUiGraphJsonOutput,
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
+  getUiGraphChatMessagePresentations,
   getUiGraphChatMessagesStateKey,
   getUiGraphChatPersistentState,
   hasUiGraphChatPersistentStateChanged,
@@ -20,6 +21,7 @@ import {
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
   type UiGraphActionComponent,
+  type UiGraphChatMessageTimestampPresentation,
   type UiGraphComponent,
   type UiGraphInteractionSnapshot,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
@@ -92,6 +94,14 @@ function createLineIcon(pathData: string): SVGSVGElement {
   path.setAttribute('stroke-width', '2');
   icon.append(path);
   return icon;
+}
+
+function createChatDateSeparator(presentation: UiGraphChatMessageTimestampPresentation): HTMLDivElement {
+  return createElement(
+    'div',
+    { className: 'rivet-web-app-chat-date-separator', 'data-rivet-chat-search-ignore': 'true', role: 'separator' },
+    [createElement('time', { dateTime: presentation.dateTime, text: presentation.label })],
+  );
 }
 
 export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig): void {
@@ -585,14 +595,36 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             render();
           }
         };
+        const messagePresentations = getUiGraphChatMessagePresentations(renderModel.messages);
         const messageNodes = renderModel.messages.map((message, messageIndex) => {
-          const messageElement = renderMarkdownElement(
+          const messagePresentation = messagePresentations[messageIndex];
+          const messageContent = renderMarkdownElement(
             message.content,
-            `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role} rivet-web-app-chat-message-markdown markdown-body`,
+            'rivet-web-app-chat-message-markdown markdown-body',
+          );
+          const messageElement = createElement(
+            'div',
+            { className: `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role}` },
+            [
+              messageContent,
+              ...(messagePresentation?.timestamp
+                ? [
+                    createElement('time', {
+                      className: 'rivet-web-app-chat-message-time',
+                      'data-rivet-chat-search-ignore': 'true',
+                      dateTime: messagePresentation.timestamp.dateTime,
+                      text: messagePresentation.timestamp.label,
+                      title: messagePresentation.timestamp.dateTime,
+                    }),
+                  ]
+                : []),
+            ],
           );
           if (message.role === 'user') {
             messageElement.dataset.rivetChatMessageIndex = String(messageIndex);
-            return messageElement;
+            return messagePresentation?.dateSeparator
+              ? [createChatDateSeparator(messagePresentation.dateSeparator), messageElement]
+              : [messageElement];
           }
 
           const pinned = pinnedMessageIndexes.has(messageIndex);
@@ -608,7 +640,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             },
             [createLineIcon(PIN_ICON_PATH)],
           );
-          return createElement(
+          const messageRow = createElement(
             'div',
             {
               className: 'rivet-web-app-chat-message-row',
@@ -616,7 +648,10 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             },
             [messageElement, pinButton],
           );
-        });
+          return messagePresentation?.dateSeparator
+            ? [createChatDateSeparator(messagePresentation.dateSeparator), messageRow]
+            : [messageRow];
+        }).flat();
         if (messageNodes.length === 0) {
           messageNodes.push(
             createElement('div', { className: 'rivet-web-app-chat-empty' }, [

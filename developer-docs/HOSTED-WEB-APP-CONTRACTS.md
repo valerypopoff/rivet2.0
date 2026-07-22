@@ -119,6 +119,15 @@ by that button's graph input bindings. Chat projects its own validated user/assi
 conversation and any data keys named by its additional input mappings, excluding its
 draft and every unrelated app key. Action input resolution then sends the latest user
 turn separately and converts only earlier turns into the native history Data Value.
+Chat messages may additionally contain an optional browser-owned UTC ISO timestamp.
+The browser stamps a user turn when it is submitted and stamps an assistant turn when
+the completed action result arrives, so hosted HTTP and WebSocket responses use the
+actual browser receipt time rather than a server clock. Timestamp metadata persists
+with browser chat history and is formatted in the browser's locale and timezone, but
+is stripped when Rivet converts conversation history to graph `chat-message[]` input.
+Custom browser renderers can use `getUiGraphChatMessagePresentations(messages)` from
+`@valerypopoff/rivet2-core/web-app-runtime` to render the local times and the
+transition-only date separators without modifying Chat state.
 `runRivetWebAppAction(...)` repeats the projection for direct host calls, so
 lifecycle hooks and `createProcessorOptions` receive only action-relevant state.
 Unrelated form values and prior output state remain local to the web app.

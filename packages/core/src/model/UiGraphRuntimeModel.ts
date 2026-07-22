@@ -1,6 +1,7 @@
 import {
   getUiGraphChatDraftStateKey,
   getUiGraphChatMessages,
+  getUiGraphChatMessagesStateKey,
   getUiGraphChatPins,
   getUiGraphComponentActionOutputStateKeys,
   getUiGraphComponentActionState,
@@ -389,6 +390,38 @@ export function createUiGraphInteractionController(
       }
     }
   };
+  const stampChatResponseAtBrowserReceipt = (
+    component: UiGraphActionComponent,
+    statePatch: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | undefined => {
+    if (component.type !== 'chat' || !statePatch) {
+      return statePatch;
+    }
+
+    const messagesStateKey = getUiGraphChatMessagesStateKey(component.id);
+    const messages = statePatch[messagesStateKey];
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return statePatch;
+    }
+
+    const lastMessage = messages[messages.length - 1];
+    if (
+      !lastMessage ||
+      typeof lastMessage !== 'object' ||
+      (lastMessage as UiGraphChatMessage).role !== 'assistant' ||
+      typeof (lastMessage as UiGraphChatMessage).content !== 'string'
+    ) {
+      return statePatch;
+    }
+
+    return {
+      ...statePatch,
+      [messagesStateKey]: [
+        ...messages.slice(0, -1),
+        { ...(lastMessage as UiGraphChatMessage), timestamp: new Date().toISOString() },
+      ],
+    };
+  };
 
   updateSnapshot();
 
@@ -453,7 +486,10 @@ export function createUiGraphInteractionController(
           return;
         }
 
-        const statePatch = actionController.resolveStatePatch(execution, result.statePatch);
+        const statePatch = actionController.resolveStatePatch(
+          execution,
+          stampChatResponseAtBrowserReceipt(component, result.statePatch),
+        );
         if (statePatch) {
           const nextState = applyUiGraphStatePatch(state, statePatch);
           expandOutputsForUpdatedState(Object.keys(statePatch), nextState);

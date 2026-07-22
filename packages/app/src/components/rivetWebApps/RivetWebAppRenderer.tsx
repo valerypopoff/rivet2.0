@@ -48,6 +48,7 @@ import {
   downloadUiGraphJsonOutput,
   hasUiGraphChatPersistentStateChanged,
   getUiGraphChatPersistentState,
+  getUiGraphChatMessagePresentations,
   getUiGraphWebAppStorageKey,
   highlightUiGraphChatSearchMatches,
   loadUiGraphChatPersistentState,
@@ -56,6 +57,7 @@ import {
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
+  type UiGraphChatMessagePresentation,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
 
@@ -635,6 +637,7 @@ const RivetWebAppChat: FC<{
   const [requestedSearchMatchIndex, setRequestedSearchMatchIndex] = useState(0);
   const [searchMatchState, setSearchMatchState] = useState({ activeIndex: -1, count: 0 });
   const { component, draft, messages, pins } = renderModel;
+  const messagePresentations = useMemo(() => getUiGraphChatMessagePresentations(messages), [messages]);
   const pinnedMessageIndexes = new Set(pins.map((pin) => pin.messageIndex));
   const chatMessagesState = state[getUiGraphChatMessagesStateKey(component.id)];
 
@@ -899,16 +902,30 @@ const RivetWebAppChat: FC<{
               <strong>Start a conversation</strong>
             </div>
           )}
-          {messages.map((message, index) => (
-            <RivetWebAppChatMessage
-              key={`${index}-${message.role}`}
-              content={message.content}
-              messageIndex={index}
-              pinned={pinnedMessageIndexes.has(index)}
-              role={message.role}
-              onTogglePin={togglePin}
-            />
-          ))}
+          {messages.map((message, index) => {
+            const presentation = messagePresentations[index];
+            return (
+              <Fragment key={`${index}-${message.role}`}>
+                {presentation?.dateSeparator && (
+                  <div
+                    className="rivet-web-app-chat-date-separator"
+                    data-rivet-chat-search-ignore="true"
+                    role="separator"
+                  >
+                    <time dateTime={presentation.dateSeparator.dateTime}>{presentation.dateSeparator.label}</time>
+                  </div>
+                )}
+                <RivetWebAppChatMessage
+                  content={message.content}
+                  messageIndex={index}
+                  pinned={pinnedMessageIndexes.has(index)}
+                  presentation={presentation}
+                  role={message.role}
+                  onTogglePin={togglePin}
+                />
+              </Fragment>
+            );
+          })}
           {isRunning && (
             <div className="rivet-web-app-chat-message rivet-web-app-chat-message-assistant rivet-web-app-chat-thinking">
               <span />
@@ -963,16 +980,28 @@ const RivetWebAppChatMessage: FC<{
   content: string;
   messageIndex: number;
   pinned: boolean;
+  presentation?: UiGraphChatMessagePresentation;
   role: 'assistant' | 'user';
   onTogglePin(messageIndex: number): void;
-}> = ({ content, messageIndex, pinned, role, onTogglePin }) => {
+}> = ({ content, messageIndex, pinned, presentation, role, onTogglePin }) => {
   const markdownHtml = useMarkdown(content, true, { allowHtml: false });
   const message = (
     <div
-      className={`rivet-web-app-chat-message rivet-web-app-chat-message-${role} rivet-web-app-chat-message-markdown markdown-body`}
+      className={`rivet-web-app-chat-message rivet-web-app-chat-message-${role}`}
       data-rivet-chat-message-index={role === 'user' ? messageIndex : undefined}
-      dangerouslySetInnerHTML={markdownHtml}
-    />
+    >
+      <div className="rivet-web-app-chat-message-markdown markdown-body" dangerouslySetInnerHTML={markdownHtml} />
+      {presentation?.timestamp && (
+        <time
+          className="rivet-web-app-chat-message-time"
+          data-rivet-chat-search-ignore="true"
+          dateTime={presentation.timestamp.dateTime}
+          title={presentation.timestamp.dateTime}
+        >
+          {presentation.timestamp.label}
+        </time>
+      )}
+    </div>
   );
 
   if (role === 'user') {

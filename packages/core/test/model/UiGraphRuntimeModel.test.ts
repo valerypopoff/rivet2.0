@@ -25,6 +25,7 @@ import {
   type UiGraphActionRunContext,
   type UiGraphId,
   type UiGraphRunGraphAction,
+  type UiGraphChatMessage,
   type UiComponentId,
 } from '../../src/index.js';
 import {
@@ -32,6 +33,7 @@ import {
   applyUiGraphWebAppStoragePatch,
   getUiGraphChatStorageKey,
   getUiGraphWebAppStorageKey,
+  getUiGraphChatMessagePresentations,
   hasUiGraphChatPersistentStateChanged,
   loadUiGraphChatPersistentState,
   loadUiGraphWebAppStorage,
@@ -271,20 +273,22 @@ describe('UiGraphRuntimeModel', () => {
     };
     const draftKey = getUiGraphChatDraftStateKey(chat.id);
     const messagesKey = getUiGraphChatMessagesStateKey(chat.id);
+    const previousTimestamp = '2026-07-22T08:00:00.000Z';
+    const timestamp = '2026-07-22T08:15:00.000Z';
     const initialState = {
       [draftKey]: '  Hello  ',
-      [messagesKey]: [{ role: 'assistant', content: 'Welcome' }],
+      [messagesKey]: [{ role: 'assistant', content: 'Welcome', timestamp: previousTimestamp }],
       tone: 'Friendly',
     };
-    const submission = createUiGraphChatSubmissionStatePatch(chat.id, initialState)!;
+    const submission = createUiGraphChatSubmissionStatePatch(chat.id, initialState, timestamp)!;
     const submittedState = applyUiGraphStatePatch(initialState, submission);
     const actionState = getUiGraphComponentActionState(chat, submittedState);
 
     assert.deepEqual(submission, {
       [draftKey]: '',
       [messagesKey]: [
-        { role: 'assistant', content: 'Welcome' },
-        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: 'Welcome', timestamp: previousTimestamp },
+        { role: 'user', content: 'Hello', timestamp },
       ],
     });
     assert.deepEqual(actionState, { [messagesKey]: submission[messagesKey], tone: 'Friendly' });
@@ -304,12 +308,67 @@ describe('UiGraphRuntimeModel', () => {
       ),
       {
         [messagesKey]: [
-          { role: 'assistant', content: 'Welcome' },
-          { role: 'user', content: 'Hello' },
+          { role: 'assistant', content: 'Welcome', timestamp: previousTimestamp },
+          { role: 'user', content: 'Hello', timestamp },
           { role: 'assistant', content: 'Hi there' },
         ],
       },
     );
+  });
+
+  it('formats Chat timestamps locally, separates later dates, and keeps malformed legacy timestamps undated', () => {
+    const presentations = getUiGraphChatMessagePresentations(
+      [
+        { role: 'user', content: 'First', timestamp: '2026-07-20T23:45:00.000Z' },
+        { role: 'assistant', content: 'Second', timestamp: '2026-07-20T23:46:00.000Z' },
+        { role: 'user', content: 'Third', timestamp: '2026-07-21T00:05:00.000Z' },
+        { role: 'assistant', content: 'Legacy' },
+        { role: 'assistant', content: 'Malformed', timestamp: 'not-a-date' },
+      ],
+      { locales: 'en-GB', timeZone: 'UTC' },
+    );
+
+    assert.deepEqual(presentations[0]?.timestamp, { dateTime: '2026-07-20T23:45:00.000Z', label: '23:45' });
+    assert.equal(presentations[0]?.dateSeparator, undefined);
+    assert.equal(presentations[1]?.dateSeparator, undefined);
+    assert.deepEqual(presentations[2]?.dateSeparator, {
+      dateTime: '2026-07-21T00:05:00.000Z',
+      label: '21 July 2026',
+    });
+    assert.deepEqual(presentations[3], {});
+    assert.deepEqual(presentations[4], {});
+
+    const oneDatePresentations = getUiGraphChatMessagePresentations(
+      [
+        { role: 'user', content: 'One', timestamp: '2026-07-22T08:00:00.000Z' },
+        { role: 'assistant', content: 'Two', timestamp: '2026-07-22T18:00:00.000Z' },
+      ],
+      { locales: 'en-GB', timeZone: 'UTC' },
+    );
+    assert.equal(oneDatePresentations[0]?.dateSeparator, undefined);
+    assert.equal(oneDatePresentations[1]?.dateSeparator, undefined);
+  });
+
+  it('stamps a Chat response when the interaction controller receives its action result', async () => {
+    const chat = { action: { type: 'runGraph' as const }, id: componentId, type: 'chat' as const };
+    const uiGraph = { components: [chat], id: 'chat-app' as UiGraphId, name: 'Chat app' };
+    const messagesKey = getUiGraphChatMessagesStateKey(componentId);
+    const controller = createUiGraphInteractionController(uiGraph);
+    controller.updateStatePatch({ [messagesKey]: [{ role: 'user', content: 'Question' }] });
+
+    await controller.runAction(chat, async () => ({
+      statePatch: {
+        [messagesKey]: [
+          { role: 'user', content: 'Question' },
+          { role: 'assistant', content: 'Answer' },
+        ],
+      },
+    }));
+
+    const messages = controller.getSnapshot().state[messagesKey] as UiGraphChatMessage[];
+    assert.equal(messages[1]?.role, 'assistant');
+    assert.equal(typeof messages[1]?.timestamp, 'string');
+    assert.equal(Number.isNaN(new Date(messages[1]!.timestamp!).getTime()), false);
   });
 
   it('keeps Chat pins in session state without exposing stale or non-assistant entries', () => {

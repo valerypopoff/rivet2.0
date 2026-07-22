@@ -14,6 +14,11 @@ export type {
 } from './model/UiGraphActionProtocol.js';
 export type { GraphProgress } from './model/GraphProgress.js';
 export type { RivetMarkdownSanitizerPolicy } from './model/MarkdownSanitizationPolicy.js';
+export type {
+  UiGraphChatMessagePresentation,
+  UiGraphChatMessagePresentationOptions,
+  UiGraphChatMessageTimestampPresentation,
+} from './model/UiGraphBrowserRuntime.js';
 export {
   createUiGraphChatHistoryFlushStatePatch,
   createUiGraphChatPinStatePatch,
@@ -43,6 +48,7 @@ export {
   downloadUiGraphJsonOutput,
   hasUiGraphChatPersistentStateChanged,
   getUiGraphChatPersistentState,
+  getUiGraphChatMessagePresentations,
   getUiGraphChatStorageKey,
   getUiGraphWebAppStorageKey,
   highlightUiGraphChatSearchMatches,

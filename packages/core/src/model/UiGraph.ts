@@ -47,6 +47,8 @@ export type UiGraphChatRunGraphAction = {
 export type UiGraphChatMessage = {
   role: 'assistant' | 'user';
   content: string;
+  /** UTC ISO-8601 timestamp captured by the browser when the message is shown. */
+  timestamp?: string;
 };
 
 export type UiGraphChatPin = {
@@ -352,6 +354,7 @@ export function createUiGraphChatHistoryFlushStatePatch(componentId: UiComponent
 export function createUiGraphChatSubmissionStatePatch(
   componentId: UiComponentId,
   state: Readonly<Record<string, unknown>>,
+  timestamp = new Date().toISOString(),
 ): Record<string, unknown> | undefined {
   const draftStateKey = getUiGraphChatDraftStateKey(componentId);
   const content = `${state[draftStateKey] ?? ''}`.trim();
@@ -363,7 +366,7 @@ export function createUiGraphChatSubmissionStatePatch(
     [draftStateKey]: '',
     [getUiGraphChatMessagesStateKey(componentId)]: [
       ...getUiGraphChatMessages(componentId, state),
-      { role: 'user', content } satisfies UiGraphChatMessage,
+      { role: 'user', content, timestamp } satisfies UiGraphChatMessage,
     ],
   };
 }

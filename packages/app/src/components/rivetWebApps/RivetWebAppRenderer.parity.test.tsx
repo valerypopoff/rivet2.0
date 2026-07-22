@@ -6,6 +6,7 @@ import { marked, Renderer } from 'marked';
 import { createRoot } from 'react-dom/client';
 import { act, Simulate } from 'react-dom/test-utils';
 import {
+  createUiGraphInteractionController,
   getUiGraphInitialState,
   getUiGraphChatMessagesStateKey,
   RIVET_MARKDOWN_SANITIZER_POLICY,
@@ -217,11 +218,16 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.click();
 
     const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
-    assert.deepEqual(reactActionState, {
+    assert.deepEqual(removeChatMessageTimestamps(reactActionState), {
       [messagesKey]: [{ role: 'user', content: '**Hello**' }],
       tone: 'Friendly',
     });
-    assert.deepEqual(hostedActionState, reactActionState);
+    assert.deepEqual(removeChatMessageTimestamps(hostedActionState), removeChatMessageTimestamps(reactActionState));
+    for (const actionState of [reactActionState, hostedActionState]) {
+      const timestamp = (actionState?.[messagesKey] as Array<{ timestamp?: unknown }> | undefined)?.[0]?.timestamp;
+      assert.equal(typeof timestamp, 'string');
+      assert.equal(Number.isNaN(new Date(timestamp as string).getTime()), false);
+    }
     assert.deepEqual(readChatState(reactRootElement), readChatState(hostedDom.window.document));
     assert.deepEqual(readChatState(reactRootElement), {
       disabled: false,
@@ -260,6 +266,8 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
       assert.equal(messages[0]?.querySelector('strong')?.textContent, 'Hello');
       assert.equal(messages[1]?.querySelector('strong')?.textContent, 'Hi!');
       assert.equal(messages[1]?.querySelector('script'), null);
+      assert.equal(messages[0]?.querySelector('time')?.textContent?.match(/^\d{2}:\d{2}$/) != null, true);
+      assert.equal(messages[1]?.querySelector('time')?.textContent?.match(/^\d{2}:\d{2}$/) != null, true);
     }
     assert.equal(isChatComposerFocused(reactDom.window.document), true);
     assert.equal(isChatComposerFocused(hostedDom.window.document), true);
@@ -382,11 +390,69 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
   }
 });
 
+test('React and hosted Chat renderers keep timestamp and date-separator presentation in parity', async () => {
+  const hostedClientScript = await loadGeneratedHostedClient();
+  const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
+  const hostedDom = new JSDOM('<div id="app"></div>', { runScripts: 'outside-only', url: 'https://example.test/app' });
+  const restoreGlobals = installDomGlobals(reactDom);
+  const uiGraph = makeChatUiGraph();
+  const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
+  const initialState = {
+    ...getUiGraphInitialState(uiGraph),
+    [messagesKey]: [
+      { content: 'First', role: 'user', timestamp: '2026-07-20T12:00:00.000Z' },
+      { content: 'Second', role: 'assistant', timestamp: '2026-07-21T12:00:00.000Z' },
+      { content: 'Third', role: 'user', timestamp: '2026-07-22T12:00:00.000Z' },
+    ],
+  };
+  const interactionController = createUiGraphInteractionController(uiGraph, { initialState });
+  const reactRootElement = reactDom.window.document.getElementById('root')!;
+  const reactRoot = createRoot(reactRootElement);
+
+  try {
+    await act(async () => {
+      reactRoot.render(
+        <RivetWebAppRenderer
+          interactionController={interactionController}
+          uiGraph={uiGraph}
+          onRunAction={async () => {
+            throw new Error('Timestamp presentation does not run a graph action.');
+          }}
+        />,
+      );
+    });
+    configureHostedRenderer(
+      hostedDom,
+      hostedClientScript,
+      uiGraph,
+      async () => {
+        throw new Error('Timestamp presentation does not run a graph action.');
+      },
+      initialState,
+    );
+
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      assert.equal(root.querySelectorAll('.rivet-web-app-chat-message-time').length, 3);
+      assert.equal(root.querySelectorAll('.rivet-web-app-chat-date-separator').length, 2);
+    }
+    assert.deepEqual(
+      readChatTimestampPresentation(reactRootElement),
+      readChatTimestampPresentation(hostedDom.window.document),
+    );
+  } finally {
+    await act(async () => reactRoot.unmount());
+    restoreGlobals();
+    reactDom.window.close();
+    hostedDom.window.close();
+  }
+});
+
 function configureHostedRenderer(
   dom: JSDOM,
   clientScript: string,
   uiGraph: UiGraph,
   runAction: (state: Record<string, unknown>) => Promise<Response>,
+  initialState: Record<string, unknown> = getUiGraphInitialState(uiGraph),
 ): void {
   const hostedWindow = dom.window as typeof dom.window & {
     DOMPurify?: ReturnType<typeof createDOMPurify>;
@@ -397,7 +463,7 @@ function configureHostedRenderer(
   hostedWindow.marked = { Renderer, parse: marked };
   hostedWindow.__RIVET_WEB_APP__ = {
     actionPath: '/actions/run',
-    initialState: getUiGraphInitialState(uiGraph),
+    initialState,
     markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY,
     uiGraph,
   };
@@ -472,10 +538,36 @@ function readChatState(root: ParentNode): { disabled: boolean; isStopControl: bo
   return {
     disabled: sendButton?.disabled ?? false,
     isStopControl: sendButton?.classList.contains('rivet-web-app-chat-stop') ?? false,
-    messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map((message) =>
-      (message.textContent ?? '').trimEnd(),
+    messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map(
+      (message) => (message.querySelector('.rivet-web-app-chat-message-markdown')?.textContent ?? '').trimEnd(),
     ),
   };
+}
+
+function readChatTimestampPresentation(root: ParentNode): { dateSeparators: string[]; times: string[] } {
+  return {
+    dateSeparators: [...root.querySelectorAll('.rivet-web-app-chat-date-separator')].map(
+      (separator) => separator.textContent ?? '',
+    ),
+    times: [...root.querySelectorAll('.rivet-web-app-chat-message-time')].map((time) => time.textContent ?? ''),
+  };
+}
+
+function removeChatMessageTimestamps(state: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!state) return state;
+
+  return Object.fromEntries(
+    Object.entries(state).map(([key, value]) => [
+      key,
+      Array.isArray(value)
+        ? value.map((message) => {
+            if (!message || typeof message !== 'object') return message;
+            const { timestamp: _timestamp, ...rest } = message as Record<string, unknown>;
+            return rest;
+          })
+        : value,
+    ]),
+  );
 }
 
 function readChatSearchState(root: ParentNode): { activeCount: number; count: string | null; matchCount: number } {

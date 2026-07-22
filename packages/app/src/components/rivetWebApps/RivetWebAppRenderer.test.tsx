@@ -446,3 +446,68 @@ test('Chat restores browser state, preserves it through Reset, and flushes only 
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+test('Chat renders browser-local timestamps and date separators only across multiple dates', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/app' });
+  const previousGlobals = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    navigator: globalThis.navigator,
+    window: globalThis.window,
+  };
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: dom.window.document },
+    HTMLElement: { configurable: true, value: dom.window.HTMLElement },
+    navigator: { configurable: true, value: dom.window.navigator },
+    window: { configurable: true, value: dom.window },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  const chatId = 'chat' as UiComponentId;
+  const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+  const uiGraph: UiGraph = {
+    components: [{ action: { type: 'runGraph' }, id: chatId, type: 'chat' }],
+    id: 'timestamped-chat-app' as UiGraphId,
+    name: 'Timestamped chat app',
+  };
+  const interactionController = createUiGraphInteractionController(uiGraph);
+  interactionController.updateStatePatch({
+    [messagesKey]: [
+      { content: 'First', role: 'user', timestamp: '2026-07-20T12:00:00.000Z' },
+      { content: 'Second', role: 'assistant', timestamp: '2026-07-21T12:00:00.000Z' },
+      { content: 'Third', role: 'user', timestamp: '2026-07-22T12:00:00.000Z' },
+    ],
+  });
+  const rootElement = dom.window.document.getElementById('root')!;
+  const root = createRoot(rootElement);
+
+  try {
+    await act(async () => {
+      root.render(
+        <RivetWebAppRenderer
+          interactionController={interactionController}
+          uiGraph={uiGraph}
+          onRunAction={async () => ({ outputs: {} })}
+        />,
+      );
+    });
+
+    const messageTimes = rootElement.querySelectorAll<HTMLTimeElement>('.rivet-web-app-chat-message-time');
+    assert.equal(messageTimes.length, 3);
+    for (const messageTime of messageTimes) {
+      assert.match(messageTime.textContent ?? '', /^\d{2}:\d{2}$/);
+      assert.match(messageTime.dateTime, /^2026-07-2[0-2]T12:00:00\.000Z$/);
+    }
+    assert.equal(rootElement.querySelectorAll('.rivet-web-app-chat-date-separator').length, 2);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    Object.defineProperties(globalThis, {
+      document: { configurable: true, value: previousGlobals.document },
+      HTMLElement: { configurable: true, value: previousGlobals.HTMLElement },
+      navigator: { configurable: true, value: previousGlobals.navigator },
+      window: { configurable: true, value: previousGlobals.window },
+    });
+    delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+  }
+});
