@@ -58,14 +58,14 @@ const Container = styled.div`
 
   .user-input-modal-open {
     position: absolute;
-    top: calc(62px + var(--project-selector-height));
+    top: calc(62px + var(--project-selector-height) + var(--data-bus-full-row-height, 0px));
     right: 16px;
     z-index: 100;
   }
 
   .recording-border {
     position: absolute;
-    top: var(--project-selector-height);
+    top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px));
     left: 0;
     right: 0;
     bottom: 0;
@@ -76,7 +76,7 @@ const Container = styled.div`
 
   .read-only-border {
     position: absolute;
-    top: var(--project-selector-height);
+    top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px));
     left: 0;
     right: 0;
     bottom: 0;
@@ -87,7 +87,7 @@ const Container = styled.div`
 
   .project-compare-notice {
     position: absolute;
-    top: calc(var(--project-selector-height) + 12px);
+    top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px) + 12px);
     left: 50%;
     z-index: 450;
     display: flex;

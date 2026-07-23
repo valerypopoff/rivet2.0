@@ -43,6 +43,11 @@ import {
   getPortOrderFromPoint,
   type PortReorderDrag,
 } from './nodeCanvas/portReorderInteraction.js';
+import {
+  formatDataBusChannelLabel,
+  getDataBusPortChannelIndexKey,
+  type DataBusChannelReference,
+} from './nodeCanvas/dataBusModel.js';
 
 export type NodePortsProps = {
   node: ChartNode;
@@ -71,8 +76,10 @@ export const NodePorts: FC<NodePortsProps> = ({
   node,
   connections,
 }) => {
-  const { draggingWire, closestPortToDraggingWire } = useCanvasViewContext();
-  const { onPortMouseOut, onPortMouseOver, onWireEndDrag, onWireStartDrag } = useCanvasHandlersContext();
+  const { dataBusPortChannels, draggingWire, closestPortToDraggingWire, hoveredDataBusChannelKeys } =
+    useCanvasViewContext();
+  const { onDataBusChannelHoverChange, onPortMouseOut, onPortMouseOver, onWireEndDrag, onWireStartDrag } =
+    useCanvasHandlersContext();
   const { inputDefinitions, outputDefinitions } = useCanvasNodeIO(node.id)!;
   const preservePortTextCase = useAtomValue(preservePortTextCaseState);
   const projectId = useAtomValue(projectMetadataState).id;
@@ -86,6 +93,34 @@ export const NodePorts: FC<NodePortsProps> = ({
   const previewPortOrderRef = useRef<string[] | undefined>();
   const [draggedPort, setDraggedPort] = useState<PortReorderDrag | undefined>();
   const [previewPortOrder, setPreviewPortOrder] = useState<string[] | undefined>();
+  const hoveredDataBusChannelKeySet = useMemo(() => new Set(hoveredDataBusChannelKeys), [hoveredDataBusChannelKeys]);
+
+  const getDataBusAntenna = (input: boolean, portId: PortId) => {
+    const channels = dataBusPortChannels.get(
+      getDataBusPortChannelIndexKey({
+        input,
+        nodeId: node.id,
+        portId,
+      }),
+    );
+
+    if (!channels || channels.length === 0) {
+      return undefined;
+    }
+
+    return {
+      channels,
+      props: {
+        count: channels.length,
+        label: `Connected through ${channels.map(formatDataBusChannelLabel).join(', ')}`,
+        revealed: channels.some((channel) => hoveredDataBusChannelKeySet.has(channel.channelKey)),
+      },
+    };
+  };
+
+  const handleDataBusAntennaHoverChange = (channels: readonly DataBusChannelReference[], hovered: boolean) => {
+    onDataBusChannelHoverChange?.(hovered ? channels.map((channel) => channel.channelKey) : []);
+  };
 
   const isSubGraphNode = node.type === 'subGraph';
   const isRearrangingSubGraphPorts =
@@ -459,6 +494,7 @@ export const NodePorts: FC<NodePortsProps> = ({
       >
         <div className="input-ports">
           {displayedInputDefinitions.map((input) => {
+            const dataBusAntenna = getDataBusAntenna(true, input.id);
             const connected =
               connections.some((conn) => conn.inputNodeId === node.id && conn.inputId === input.id) ||
               (draggingWire?.endNodeId === node.id && draggingWire?.endPortId === input.id);
@@ -487,12 +523,17 @@ export const NodePorts: FC<NodePortsProps> = ({
                 reorderable={reorderable}
                 reorderDragging={draggedPort?.side === 'input' && draggedPort.portId === input.id}
                 onReorderMouseDown={handleReorderMouseDown}
+                dataBusAntenna={dataBusAntenna?.props}
+                onDataBusAntennaHoverChange={(hovered) =>
+                  dataBusAntenna && handleDataBusAntennaHoverChange(dataBusAntenna.channels, hovered)
+                }
               />
             );
           })}
         </div>
         <div className="output-ports">
           {displayedOutputDefinitions.map((output) => {
+            const dataBusAntenna = getDataBusAntenna(false, output.id);
             const connected =
               connections.some((conn) => conn.outputNodeId === node.id && conn.outputId === output.id) ||
               (draggingWire?.startNodeId === node.id && draggingWire?.startPortId === output.id);
@@ -523,6 +564,10 @@ export const NodePorts: FC<NodePortsProps> = ({
                 reorderable={reorderable}
                 reorderDragging={draggedPort?.side === 'output' && draggedPort.portId === output.id}
                 onReorderMouseDown={handleReorderMouseDown}
+                dataBusAntenna={dataBusAntenna?.props}
+                onDataBusAntennaHoverChange={(hovered) =>
+                  dataBusAntenna && handleDataBusAntennaHoverChange(dataBusAntenna.channels, hovered)
+                }
               />
             );
           })}

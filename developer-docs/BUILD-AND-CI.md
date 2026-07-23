@@ -551,6 +551,12 @@ fixed release (rather than a floating caret), then run `yarn install` and the
 audit. This keeps the zero-install lockfile deterministic while the owning
 upstream packages catch up.
 
+The root `postcss@npm:^8.4.21` resolution keeps the `rtlcss` documentation
+toolchain on the same patched PostCSS 8.x release used by the rest of the
+workspace. Keep that descriptor pinned until `rtlcss` or its owning Docusaurus
+dependency refreshes the transitive lock entry; do not replace it with an audit
+exception.
+
 The build workflow runs that JavaScript audit immediately after dependency
 installation. A separate `rustsec/audit-check` job scans
 `packages/app/src-tauri/Cargo.lock`; keeping it separate avoids adding Rust setup

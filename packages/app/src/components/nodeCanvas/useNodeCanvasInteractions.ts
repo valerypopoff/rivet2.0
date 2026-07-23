@@ -50,6 +50,7 @@ export function getWheelZoomFactor({
 export interface UseNodeCanvasInteractionsOptions {
   canvasPosition: CanvasPosition;
   clientToCanvasPosition: (x: number, y: number) => { x: number; y: number };
+  getCanvasPositionForZoomAtClientPoint: (newZoom: number, clientX: number, clientY: number) => CanvasPosition;
   dragStart: { x: number; y: number; canvasStartX: number; canvasStartY: number };
   endSelectionBox: () => void;
   isDraggingCanvas: boolean;
@@ -83,6 +84,7 @@ export interface UseNodeCanvasInteractionsOptions {
 export const useNodeCanvasInteractions = ({
   canvasPosition,
   clientToCanvasPosition,
+  getCanvasPositionForZoomAtClientPoint,
   dragStart,
   endSelectionBox,
   isDraggingCanvas,
@@ -197,7 +199,13 @@ export const useNodeCanvasInteractions = ({
       }
 
       if (selectionBox) {
-        const newSelectedNodeIds = updateSelectionBox(e.clientX, e.clientY, nodes, clientToCanvasPosition, selectedNodeIds);
+        const newSelectedNodeIds = updateSelectionBox(
+          e.clientX,
+          e.clientY,
+          nodes,
+          clientToCanvasPosition,
+          selectedNodeIds,
+        );
         if (newSelectedNodeIds) {
           setSelectedNodeIds(newSelectedNodeIds);
         }
@@ -222,18 +230,7 @@ export const useNodeCanvasInteractions = ({
 
       const zoomFactor = getWheelZoomFactor({ wheelDelta, zoomSensitivity, shiftKey });
       const newZoom = canvasPosition.zoom * zoomFactor;
-      const currentMousePosCanvas = clientToCanvasPosition(clientX, clientY);
-      const newX = clientX / newZoom - canvasPosition.x;
-      const newY = clientY / newZoom - canvasPosition.y;
-      const diff = {
-        x: newX - currentMousePosCanvas.x,
-        y: newY - currentMousePosCanvas.y,
-      };
-      const position: CanvasPosition = {
-        x: canvasPosition.x + diff.x,
-        y: canvasPosition.y + diff.y,
-        zoom: newZoom,
-      };
+      const position = getCanvasPositionForZoomAtClientPoint(newZoom, clientX, clientY);
 
       setCanvasPosition(position);
       schedulePersistCanvasPosition(position);
@@ -256,7 +253,13 @@ export const useNodeCanvasInteractions = ({
     const wasDraggingCanvas = isDraggingCanvas;
 
     if (selectionBox) {
-      const newSelectedNodeIds = updateSelectionBox(e.clientX, e.clientY, nodes, clientToCanvasPosition, selectedNodeIds);
+      const newSelectedNodeIds = updateSelectionBox(
+        e.clientX,
+        e.clientY,
+        nodes,
+        clientToCanvasPosition,
+        selectedNodeIds,
+      );
       if (newSelectedNodeIds) {
         setSelectedNodeIds(newSelectedNodeIds);
       }

@@ -165,7 +165,10 @@ test('canvas panning uses the same closed-hand cursor treatment as node dragging
   assert.match(nodeCanvasSource, /className=\{clsx\('node-canvas', \{/);
   assert.match(nodeCanvasSource, /'dragging-node': isDraggingNode/);
   assert.match(nodeCanvasSource, /'dragging-canvas': isDraggingCanvas/);
-  assert.match(nodeCanvasStylesSource, /&\.dragging-node,[\s\S]*&\.dragging-canvas,[\s\S]*cursor: grabbing !important;/);
+  assert.match(
+    nodeCanvasStylesSource,
+    /&\.dragging-node,[\s\S]*&\.dragging-canvas,[\s\S]*cursor: grabbing !important;/,
+  );
 });
 
 test('non-graph canvases keep drag, resize, and alignment commands out of graph state', () => {
@@ -187,10 +190,19 @@ test('non-graph canvases keep drag, resize, and alignment commands out of graph 
   );
   assert.match(nodeCanvasSource, /nodes=\{disableGraphCommands \? nodes : undefined\}/);
   assert.match(nodeCanvasSource, /onNodesChanged=\{disableGraphCommands \? onNodesChanged : undefined\}/);
-  assert.match(nodeCanvasSource, /if \(disableGraphCommands\) \{[\s\S]*onNodesDeleted\?\.\(selectedNodeIds\);[\s\S]*return;[\s\S]*\}/);
+  assert.match(
+    nodeCanvasSource,
+    /if \(disableGraphCommands\) \{[\s\S]*onNodesDeleted\?\.\(selectedNodeIds\);[\s\S]*return;[\s\S]*\}/,
+  );
   assert.match(nodeLibraryBuilderSource, /getCanvasPositionForNodes/);
-  assert.match(nodeLibraryBuilderSource, /setCanvasPosition\(getCanvasPositionForNodes\(\[editingPrefab\.sourceNode\], sidebarOpen\)\)/);
-  assert.match(nodeLibraryBuilderSource, /else if \(canUseNodeAsPrefabSource\(nextNode\)\)[\s\S]*buildNodePrefab\(nextNode\)/);
+  assert.match(
+    nodeLibraryBuilderSource,
+    /setCanvasPosition\(getCanvasPositionForNodes\(\[editingPrefab\.sourceNode\], sidebarOpen\)\)/,
+  );
+  assert.match(
+    nodeLibraryBuilderSource,
+    /else if \(canUseNodeAsPrefabSource\(nextNode\)\)[\s\S]*buildNodePrefab\(nextNode\)/,
+  );
   assert.match(nodeLibraryBuilderSource, /onCanvasClick=\{closeEditor\}/);
   assert.match(nodeLibraryBuilderSource, /onNodesDeleted=\{deletePrefabSources\}/);
   assert.match(nodeLibraryBuilderSource, /pasteCommandsEnabled/);
@@ -204,7 +216,10 @@ test('non-graph canvases keep drag, resize, and alignment commands out of graph 
     /const navigationShortcut = getCanvasNavigationShortcut\(e\);[\s\S]*if \(!graphCommandsEnabled\) \{[\s\S]*return;[\s\S]*\}/,
   );
   assert.match(canvasHotkeysSource, /nodeLibraryOpen \|\| graphMetadata\?\.id !== mainGraphId/);
-  assert.match(nodeCanvasSource, /useDraggingWire\(\{[\s\S]*connections,[\s\S]*enabled: !disableConnections,[\s\S]*nodesById: canvasEffectiveNodesById,[\s\S]*\}\)/);
+  assert.match(
+    nodeCanvasSource,
+    /useDraggingWire\(\{[\s\S]*connections,[\s\S]*enabled: !disableConnections,[\s\S]*nodesById: canvasEffectiveNodesById,[\s\S]*\}\)/,
+  );
   assert.doesNotMatch(readFileSync(join(hooksDir, 'useDraggingWire.ts'), 'utf8'), /connectionsState|nodesByIdState/);
   assert.match(nodeCanvasSource, /const shouldRenderWires = !disableConnections && canvasPosition\.zoom > 0\.15/);
 });
@@ -215,8 +230,14 @@ test('canvas deletion hotkeys support macOS Backspace through the same delete pa
 
   assert.match(nodeCanvasSource, /import \{ isMacOSPlatform \} from '\.\.\/utils\/platform\/os\.js';/);
   assert.match(nodeCanvasSource, /const supportsBackspaceDeleteHotkey = isMacOSPlatform\(\);/);
-  assert.match(nodeCanvasSource, /const deleteSelectedNodesFromHotkey = useStableCallback\(\(event: KeyboardEvent\) => \{/);
-  assert.match(nodeCanvasSource, /useGlobalHotkey\('Delete', deleteSelectedNodesFromHotkey, \{ notWhenInputFocused: true \}\)/);
+  assert.match(
+    nodeCanvasSource,
+    /const deleteSelectedNodesFromHotkey = useStableCallback\(\(event: KeyboardEvent\) => \{/,
+  );
+  assert.match(
+    nodeCanvasSource,
+    /useGlobalHotkey\('Delete', deleteSelectedNodesFromHotkey, \{ notWhenInputFocused: true \}\)/,
+  );
   assert.match(
     nodeCanvasSource,
     /useGlobalHotkey\(\s*'Backspace',[\s\S]*!supportsBackspaceDeleteHotkey \|\| selectedNodeIds\.length === 0[\s\S]*deleteSelectedNodesFromHotkey\(event\)/,
@@ -232,14 +253,17 @@ test('shift selection boxes snapshot selected nodes and do not fall through to c
   assert.match(interactionSource, /startSelectionBox\(e\.clientX, e\.clientY, selectedNodeIds\)/);
   assert.match(
     interactionSource,
-    /if \(selectionBox\) \{[\s\S]*updateSelectionBox\(e\.clientX, e\.clientY, nodes, clientToCanvasPosition, selectedNodeIds\)[\s\S]*endSelectionBox\(\);[\s\S]*return;[\s\S]*\} else if \(!isDraggingCanvas\)/,
+    /if \(selectionBox\) \{[\s\S]*updateSelectionBox\(\s*e\.clientX,\s*e\.clientY,\s*nodes,\s*clientToCanvasPosition,\s*selectedNodeIds,\s*\)[\s\S]*endSelectionBox\(\);[\s\S]*return;[\s\S]*\} else if \(!isDraggingCanvas\)/,
   );
 });
 
 test('connection mode has explicit keyboard, context-menu, and outside-click exits', () => {
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
 
-  assert.match(nodeCanvasSource, /handleCanvasContextMenuRequest[\s\S]*if \(visibleDraggingWire\)[\s\S]*cancelWireDrag\(\)/);
+  assert.match(
+    nodeCanvasSource,
+    /handleCanvasContextMenuRequest[\s\S]*if \(visibleDraggingWire\)[\s\S]*cancelWireDrag\(\)/,
+  );
   assert.match(
     nodeCanvasSource,
     /handleWindowKeyDown[\s\S]*event\.code !== 'Escape'[\s\S]*event\.preventDefault\(\)[\s\S]*event\.stopPropagation\(\)[\s\S]*event\.stopImmediatePropagation\(\)[\s\S]*cancelWireDrag\(\)/,

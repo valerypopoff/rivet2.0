@@ -42,6 +42,32 @@ test('resolveWireDragAction creates a make-connection action for a normal output
   });
 });
 
+test('resolveWireDragAction keeps a zero-movement output click pending even when a nearby input is detected', () => {
+  const draggingWire = {
+    startNodeId: 'output-a' as any,
+    startPortId: 'out-a' as any,
+    startPortIsInput: false,
+  };
+  const action = resolveWireDragAction({
+    draggingWire,
+    didMove: false,
+    dropTarget: {
+      nodeId: 'nearby-input' as any,
+      portId: 'nearby-in' as any,
+    },
+  });
+
+  assert.deepEqual(action, { type: 'none', reason: 'emptyCanvas' });
+  assert.equal(
+    shouldKeepWireConnectionModeAfterAction({
+      action,
+      draggingWire,
+      keepDragging: false,
+    }),
+    true,
+  );
+});
+
 test('resolveWireDragAction creates a rewire action for a connected-input drag to a new target', () => {
   const originalConnection = makeConnection({
     inputNodeId: 'input-a' as any,

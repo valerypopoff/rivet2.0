@@ -53,3 +53,22 @@ test('fitBoundsToViewport still zooms out when graph bounds are larger than the 
 
   assert.equal(position.zoom, 0.5);
 });
+
+test('fitBoundsToViewport centers within the canvas height remaining below a fixed top row', () => {
+  const { withInset, withoutInset } = withWindowSize(1000, 1000, () => {
+    const bounds = {
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 400,
+    };
+
+    return {
+      withoutInset: fitBoundsToViewport(bounds),
+      withInset: fitBoundsToViewport(bounds, { topInset: 40 }),
+    };
+  });
+
+  assert.equal(withInset.x, withoutInset.x);
+  assert.equal(withInset.y, withoutInset.y - 20);
+});

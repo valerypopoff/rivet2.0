@@ -8,7 +8,7 @@ import { projectState } from '../state/savedGraphs';
 
 const styles = css`
   position: fixed;
-  top: calc(var(--project-selector-height) + 80px);
+  top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px) + 80px);
   left: 50%;
   transform: translateX(-50%);
   background: var(--grey-darkish);

@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   getProjectConnectionComparisonKey,
   type ChartNode,
@@ -57,6 +58,7 @@ import {
   type ToolContinuationWireState,
 } from './nodeCanvas/toolContinuationWireState.js';
 import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
+import { connectionMatchesDataBusChannelKeys, shouldRenderDataBusConnection } from './nodeCanvas/dataBusModel.js';
 
 const wiresStyles = css`
   position: absolute;
@@ -197,6 +199,16 @@ const wiresStyles = css`
   }
 `;
 
+const hoverRevealedWiresStyles = css`
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  width: 100vw;
+  height: 100vh;
+  overflow: visible;
+  pointer-events: none;
+`;
+
 export type WireDef = {
   startNodeId: NodeId;
   startPortId: PortId;
@@ -211,6 +223,32 @@ type ToolContinuationMarkerIds = {
   changed: string;
   error: string;
 };
+
+const ToolContinuationMarkerDefinitions: FC<{ markerIds: ToolContinuationMarkerIds }> = ({ markerIds }) => (
+  <defs>
+    {(
+      [
+        [markerIds.default, 'tool-continuation-marker-default'],
+        [markerIds.added, 'tool-continuation-marker-added'],
+        [markerIds.changed, 'tool-continuation-marker-changed'],
+        [markerIds.error, 'tool-continuation-marker-error'],
+      ] as const
+    ).map(([id, className]) => (
+      <marker
+        key={id}
+        id={id}
+        markerHeight="7"
+        markerUnits="userSpaceOnUse"
+        markerWidth="7"
+        orient="auto-start-reverse"
+        refX="6"
+        refY="3"
+      >
+        <path className={className} d="M 0 0 L 6 3 L 0 6 z" />
+      </marker>
+    ))}
+  </defs>
+);
 
 function getToolContinuationMarkerId(
   kind: ToolContinuationWireState['kind'],
@@ -245,6 +283,7 @@ type WireLayerProps = {
     nodeId: NodeId;
     portId: PortId;
   };
+  hoveredDataBusChannelKeys?: readonly string[];
   nearViewportNodeIdSet: ReadonlySet<NodeId>;
   portPositions: PortPositions;
   visibleNodeIdSet: ReadonlySet<NodeId>;
@@ -260,6 +299,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   draggingNode,
   highlightedNodes,
   highlightedPort,
+  hoveredDataBusChannelKeys = [],
   nearViewportNodeIdSet,
   portPositions,
   visibleNodeIdSet,
@@ -272,6 +312,15 @@ export const WireLayer: FC<WireLayerProps> = ({
       added: `${toolContinuationMarkerPrefix}-added`,
       changed: `${toolContinuationMarkerPrefix}-changed`,
       error: `${toolContinuationMarkerPrefix}-error`,
+    }),
+    [toolContinuationMarkerPrefix],
+  );
+  const hoverOverlayToolContinuationMarkerIds = useMemo<ToolContinuationMarkerIds>(
+    () => ({
+      default: `${toolContinuationMarkerPrefix}-overlay`,
+      added: `${toolContinuationMarkerPrefix}-overlay-added`,
+      changed: `${toolContinuationMarkerPrefix}-overlay-changed`,
+      error: `${toolContinuationMarkerPrefix}-overlay-error`,
     }),
     [toolContinuationMarkerPrefix],
   );
@@ -351,7 +400,7 @@ export const WireLayer: FC<WireLayerProps> = ({
     };
   }, [handleMouseDown, handleMouseMove]);
 
-  const { canvasPosition, clientToCanvasPosition, canvasToClientPosition } = useCanvasPositioning();
+  const { canvasClientOffset, canvasPosition, clientToCanvasPosition, canvasToClientPosition } = useCanvasPositioning();
   const mousePositionCanvas = clientToCanvasPosition(mousePosition.x, mousePosition.y);
   const nodesById = useAtomValue(nodesByIdState);
   const effectiveNodesById = useAtomValue(effectiveNodesByIdState);
@@ -365,6 +414,47 @@ export const WireLayer: FC<WireLayerProps> = ({
       }),
     [definitionValidConnections, effectiveNodesById],
   );
+  const establishedConnectionKeySet = useMemo(
+    () => new Set(definitionValidConnections.map(getProjectConnectionComparisonKey)),
+    [definitionValidConnections],
+  );
+  const { hoverRevealedDataBusConnectionKeySet, visibleConnections } = useMemo(() => {
+    const hoveredDataBusChannelKeySet = new Set(hoveredDataBusChannelKeys);
+    const nextHoverRevealedDataBusConnectionKeySet = new Set<string>();
+    const nextVisibleConnections = connections.filter((connection) => {
+      const connectionKey = getProjectConnectionComparisonKey(connection);
+      const hoverRevealed =
+        hoveredDataBusChannelKeySet.size > 0 &&
+        establishedConnectionKeySet.has(connectionKey) &&
+        connectionMatchesDataBusChannelKeys({
+          connection,
+          nodesById: effectiveNodesById,
+          channelKeys: hoveredDataBusChannelKeySet,
+        });
+
+      if (hoverRevealed) {
+        nextHoverRevealedDataBusConnectionKeySet.add(connectionKey);
+      }
+
+      return shouldRenderDataBusConnection({
+        connection,
+        forceVisible: connectionCompareKindsByKey[connectionKey] != null || hoverRevealed,
+        isDefinitionValid: establishedConnectionKeySet.has(connectionKey),
+        nodesById: effectiveNodesById,
+      });
+    });
+
+    return {
+      hoverRevealedDataBusConnectionKeySet: nextHoverRevealedDataBusConnectionKeySet,
+      visibleConnections: nextVisibleConnections,
+    };
+  }, [
+    connectionCompareKindsByKey,
+    connections,
+    effectiveNodesById,
+    establishedConnectionKeySet,
+    hoveredDataBusChannelKeys,
+  ]);
 
   const getConnectionPointFromMouseEvent = useStableCallback(
     (event: ReactMouseEvent<SVGElement> | MouseEvent): ConnectionBendPoint => {
@@ -387,7 +477,7 @@ export const WireLayer: FC<WireLayerProps> = ({
 
   const renderableWires = useRenderableWires({
     canvasToClientPosition,
-    connections,
+    connections: visibleConnections,
     draggingNode,
     draggingWire: !!draggingWire,
     highlightedNodes,
@@ -403,6 +493,22 @@ export const WireLayer: FC<WireLayerProps> = ({
     () => new Set(renderableWires.map(getProjectConnectionComparisonKey)),
     [renderableWires],
   );
+  const { hoverOverlayRenderableWires, mainRenderableWires } = useMemo(() => {
+    const nextHoverOverlayRenderableWires: NodeConnection[] = [];
+    const nextMainRenderableWires: NodeConnection[] = [];
+
+    for (const connection of renderableWires) {
+      const target = hoverRevealedDataBusConnectionKeySet.has(getProjectConnectionComparisonKey(connection))
+        ? nextHoverOverlayRenderableWires
+        : nextMainRenderableWires;
+      target.push(connection);
+    }
+
+    return {
+      hoverOverlayRenderableWires: nextHoverOverlayRenderableWires,
+      mainRenderableWires: nextMainRenderableWires,
+    };
+  }, [hoverRevealedDataBusConnectionKeySet, renderableWires]);
 
   const allowConnectionBendEditing = !isReadOnlyGraph && !draggingNode && !draggingWire;
 
@@ -611,93 +717,105 @@ export const WireLayer: FC<WireLayerProps> = ({
     }
   });
 
+  const sharedStaticWireContentsProps = {
+    graphSelectionOptions,
+    allowConnectionBendEditing,
+    allowConnectionHover: !draggingNode && !draggingWire,
+    draggingBendPreview,
+    highlightedNodes,
+    highlightedPort,
+    hoverRevealedDataBusConnectionKeySet,
+    hoveredConnectionKey,
+    lastRunDataByNode,
+    onConnectionBendDoubleClick: handleConnectionBendDoubleClick,
+    onConnectionBendMouseEnter: handleConnectionBendMouseEnter,
+    onConnectionBendMouseDown: handleConnectionBendMouseDown,
+    onConnectionClick: handleConnectionClick,
+    onConnectionHoverEnd: handleConnectionHoverEnd,
+    onConnectionMouseDown: handleConnectionMouseDown,
+    onConnectionHoverMove: handleConnectionHoverMove,
+    onConnectionHoverStart: handleConnectionHoverStart,
+    connectionCompareKindsByKey,
+    nodesById: renderNodesById,
+    portPositions,
+    runningNodeIdSet,
+    selectedProcessPageNodes,
+    toolContinuationWireStates,
+  };
+  const hoverOverlayHost =
+    typeof document === 'undefined' ? undefined : (document.querySelector<HTMLElement>('.app') ?? document.body);
+
   return (
-    <svg css={wiresStyles}>
-      <defs>
-        {(
-          [
-            [toolContinuationMarkerIds.default, 'tool-continuation-marker-default'],
-            [toolContinuationMarkerIds.added, 'tool-continuation-marker-added'],
-            [toolContinuationMarkerIds.changed, 'tool-continuation-marker-changed'],
-            [toolContinuationMarkerIds.error, 'tool-continuation-marker-error'],
-          ] as const
-        ).map(([id, className]) => (
-          <marker
-            key={id}
-            id={id}
-            markerHeight="7"
-            markerUnits="userSpaceOnUse"
-            markerWidth="7"
-            orient="auto-start-reverse"
-            refX="6"
-            refY="3"
-          >
-            <path className={className} d="M 0 0 L 6 3 L 0 6 z" />
-          </marker>
-        ))}
-      </defs>
-      <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
-        {draggingWire && (
-          <ErrorBoundary fallback={<></>} key="wire-inprogress">
-            {draggingWire.endNodeId && draggingWire.endPortId ? (
-              <ConditionallyRenderWire
-                connection={{
-                  outputNodeId: draggingWire.startNodeId,
-                  outputId: draggingWire.startPortId,
-                  inputNodeId: draggingWire.endNodeId,
-                  inputId: draggingWire.endPortId,
-                }}
-                selected={false}
-                highlighted={!!(draggingWire.endNodeId && draggingWire.endPortId)}
-                nodesById={renderNodesById}
-                portPositions={portPositions}
-                isNotRan={false}
-              />
-            ) : (
-              <PartialWire
-                connection={{
-                  nodeId: draggingWire.startNodeId,
-                  portId: draggingWire.startPortId,
-                  toX: mousePositionCanvas.x,
-                  toY: mousePositionCanvas.y,
-                }}
-                portPositions={portPositions}
-              />
-            )}
-          </ErrorBoundary>
+    <>
+      <svg css={wiresStyles}>
+        <ToolContinuationMarkerDefinitions markerIds={toolContinuationMarkerIds} />
+        <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
+          {draggingWire && (
+            <ErrorBoundary fallback={<></>} key="wire-inprogress">
+              {draggingWire.endNodeId && draggingWire.endPortId ? (
+                <ConditionallyRenderWire
+                  connection={{
+                    outputNodeId: draggingWire.startNodeId,
+                    outputId: draggingWire.startPortId,
+                    inputNodeId: draggingWire.endNodeId,
+                    inputId: draggingWire.endPortId,
+                  }}
+                  selected={false}
+                  highlighted={!!(draggingWire.endNodeId && draggingWire.endPortId)}
+                  nodesById={renderNodesById}
+                  portPositions={portPositions}
+                  isNotRan={false}
+                />
+              ) : (
+                <PartialWire
+                  connection={{
+                    nodeId: draggingWire.startNodeId,
+                    portId: draggingWire.startPortId,
+                    toX: mousePositionCanvas.x,
+                    toY: mousePositionCanvas.y,
+                  }}
+                  portPositions={portPositions}
+                />
+              )}
+            </ErrorBoundary>
+          )}
+          <StaticWireContents
+            {...sharedStaticWireContentsProps}
+            compareRemovedConnections={compareRemovedConnections}
+            renderableWires={mainRenderableWires}
+            toolContinuationMarkerIds={toolContinuationMarkerIds}
+          />
+          {ghostBendPoint && (
+            <circle
+              className="wire-bend-point wire-bend-point-ghost"
+              cx={ghostBendPoint.x}
+              cy={ghostBendPoint.y}
+              r={7}
+            />
+          )}
+        </g>
+      </svg>
+      {hoverOverlayRenderableWires.length > 0 &&
+        hoverOverlayHost &&
+        createPortal(
+          <svg aria-hidden="true" className="data-bus-hover-wire-overlay" css={[wiresStyles, hoverRevealedWiresStyles]}>
+            <ToolContinuationMarkerDefinitions markerIds={hoverOverlayToolContinuationMarkerIds} />
+            <g transform={`translate(${canvasClientOffset.x}, ${canvasClientOffset.y})`}>
+              <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
+                <StaticWireContents
+                  {...sharedStaticWireContentsProps}
+                  allowConnectionBendEditing={false}
+                  allowConnectionHover={false}
+                  compareRemovedConnections={[]}
+                  renderableWires={hoverOverlayRenderableWires}
+                  toolContinuationMarkerIds={hoverOverlayToolContinuationMarkerIds}
+                />
+              </g>
+            </g>
+          </svg>,
+          hoverOverlayHost,
         )}
-        <StaticWireContents
-          graphSelectionOptions={graphSelectionOptions}
-          allowConnectionBendEditing={allowConnectionBendEditing}
-          allowConnectionHover={!draggingNode && !draggingWire}
-          draggingBendPreview={draggingBendPreview}
-          highlightedNodes={highlightedNodes}
-          highlightedPort={highlightedPort}
-          hoveredConnectionKey={hoveredConnectionKey}
-          lastRunDataByNode={lastRunDataByNode}
-          onConnectionBendDoubleClick={handleConnectionBendDoubleClick}
-          onConnectionBendMouseEnter={handleConnectionBendMouseEnter}
-          onConnectionBendMouseDown={handleConnectionBendMouseDown}
-          onConnectionClick={handleConnectionClick}
-          onConnectionHoverEnd={handleConnectionHoverEnd}
-          onConnectionMouseDown={handleConnectionMouseDown}
-          onConnectionHoverMove={handleConnectionHoverMove}
-          onConnectionHoverStart={handleConnectionHoverStart}
-          compareRemovedConnections={compareRemovedConnections}
-          connectionCompareKindsByKey={connectionCompareKindsByKey}
-          nodesById={renderNodesById}
-          portPositions={portPositions}
-          renderableWires={renderableWires}
-          runningNodeIdSet={runningNodeIdSet}
-          selectedProcessPageNodes={selectedProcessPageNodes}
-          toolContinuationMarkerIds={toolContinuationMarkerIds}
-          toolContinuationWireStates={toolContinuationWireStates}
-        />
-        {ghostBendPoint && (
-          <circle className="wire-bend-point wire-bend-point-ghost" cx={ghostBendPoint.x} cy={ghostBendPoint.y} r={7} />
-        )}
-      </g>
-    </svg>
+    </>
   );
 };
 
@@ -711,6 +829,7 @@ const StaticWireContents = memo(
     graphSelectionOptions,
     highlightedNodes,
     highlightedPort,
+    hoverRevealedDataBusConnectionKeySet,
     hoveredConnectionKey,
     lastRunDataByNode,
     nodesById,
@@ -743,6 +862,7 @@ const StaticWireContents = memo(
           portId: PortId;
         }
       | undefined;
+    hoverRevealedDataBusConnectionKeySet: ReadonlySet<string>;
     hoveredConnectionKey: string | undefined;
     lastRunDataByNode: RunDataByNodeId;
     nodesById: Record<NodeId, ChartNode>;
@@ -805,7 +925,13 @@ const StaticWireContents = memo(
           const isNotRan = getIsNotRan(connection, selectedProcessPageNodes, lastRunDataByNode, graphSelectionOptions);
 
           const isHoveredConnection = hoveredConnectionKey === connectionKey;
-          const highlighted = isHighlightedNode || isCurrentlyRunning || isHighlightedPort || isHoveredConnection;
+          const isHoverRevealedDataBusConnection = hoverRevealedDataBusConnectionKeySet.has(connectionKey);
+          const highlighted =
+            isHighlightedNode ||
+            isCurrentlyRunning ||
+            isHighlightedPort ||
+            isHoveredConnection ||
+            isHoverRevealedDataBusConnection;
           const toolContinuationWireState = toolContinuationWireStates.get(connection);
           const toolContinuation = toolContinuationWireState
             ? {
@@ -839,14 +965,14 @@ const StaticWireContents = memo(
                 isNotRan={isNotRan}
                 compareChangeKind={compareChangeKind}
                 toolContinuation={toolContinuation}
-                interactive={allowConnectionHover}
+                interactive={allowConnectionHover && !isHoverRevealedDataBusConnection}
                 onHoverStart={(event) => onConnectionHoverStart(connectionKey, event)}
                 onHoverMove={(event) => onConnectionHoverMove(connectionKey, event)}
                 onHoverEnd={() => onConnectionHoverEnd(connectionKey)}
                 onMouseDown={(event) => onConnectionMouseDown(connectionKey, event)}
                 onClick={(event) => onConnectionClick(connection, connectionKey, event)}
               />
-              {bendPoint && (
+              {bendPoint && !isHoverRevealedDataBusConnection && (
                 <circle
                   className={clsx('wire-bend-point', {
                     dragging: draggingBendPreview?.connectionKey === connectionKey,

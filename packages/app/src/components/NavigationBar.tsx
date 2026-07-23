@@ -91,13 +91,13 @@ const styles = css`
     display: flex;
     flex-direction: column;
     left: 50%;
-    max-height: calc(100vh - var(--project-selector-height) - 36px);
+    max-height: calc(100vh - var(--project-selector-height) - var(--data-bus-full-row-height, 0px) - 36px);
     max-width: calc(100vw - 32px);
     min-width: 360px;
     overflow: hidden;
     position: fixed;
     pointer-events: auto;
-    top: calc(var(--project-selector-height) + 20px);
+    top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px) + 20px);
     transform: translateX(-50%);
     width: 30vw;
 
@@ -831,7 +831,16 @@ const SearchResultItem: FC<{
 
       goToNode(entryItemId as NodeId);
     }
-  }, [selected, entryItemType, entryItemId, entryContainerGraph, entryUiGraphId, goToNode, openNodeLibrary, openUiGraph]);
+  }, [
+    selected,
+    entryItemType,
+    entryItemId,
+    entryContainerGraph,
+    entryUiGraphId,
+    goToNode,
+    openNodeLibrary,
+    openUiGraph,
+  ]);
 
   const containerName =
     entryItemType === 'uiGraph'
@@ -839,7 +848,7 @@ const SearchResultItem: FC<{
       : entryContainerGraph === NODE_LIBRARY_GRAPH_SEARCH_ID
         ? 'Node library'
         : entryContainerGraph
-          ? (project.graphs[entryContainerGraph]?.metadata?.name ?? 'Unknown Graph')
+          ? project.graphs[entryContainerGraph]?.metadata?.name ?? 'Unknown Graph'
           : 'Unknown Graph';
 
   return (

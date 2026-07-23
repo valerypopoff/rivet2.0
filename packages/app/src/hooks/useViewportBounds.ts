@@ -1,6 +1,7 @@
 import { type RefObject, useLayoutEffect, useMemo, useState } from 'react';
 import { useCanvasPositioning } from './useCanvasPositioning.js';
 import { type CanvasPosition } from '../state/graphBuilder.js';
+import type { CanvasClientOffset } from './useCanvasPositioning.js';
 
 interface ViewportClientRect {
   left: number;
@@ -28,7 +29,7 @@ function areViewportClientRectsEqual(previous: ViewportClientRect, next: Viewpor
   );
 }
 
-function getDocumentViewportRect(): ViewportClientRect {
+function getDocumentViewportRect(canvasClientOffset: CanvasClientOffset): ViewportClientRect {
   const width =
     typeof document !== 'undefined' && document.documentElement.clientWidth > 0
       ? document.documentElement.clientWidth
@@ -43,37 +44,41 @@ function getDocumentViewportRect(): ViewportClientRect {
         : 0;
 
   return {
-    left: 0,
-    top: 0,
+    left: canvasClientOffset.x,
+    top: canvasClientOffset.y,
     right: width,
     bottom: height,
   };
 }
 
-function getViewportClientRect(element: HTMLElement | null | undefined): ViewportClientRect {
+function getViewportClientRect(
+  element: HTMLElement | null | undefined,
+  canvasClientOffset: CanvasClientOffset,
+): ViewportClientRect {
   if (element) {
-    const width = element.clientWidth || element.getBoundingClientRect().width;
-    const height = element.clientHeight || element.getBoundingClientRect().height;
+    const bounds = element.getBoundingClientRect();
+    const width = element.clientWidth || bounds.width;
+    const height = element.clientHeight || bounds.height;
 
     if (width > 0 && height > 0) {
-      // Canvas positioning functions operate in canvas-root client pixels, not
-      // global window pixels, so only the observed size is used here.
       return {
-        left: 0,
-        top: 0,
-        right: width,
-        bottom: height,
+        left: bounds.left,
+        top: bounds.top,
+        right: bounds.left + width,
+        bottom: bounds.top + height,
       };
     }
   }
 
-  return getDocumentViewportRect();
+  return getDocumentViewportRect(canvasClientOffset);
 }
 
 export function useViewportBounds(viewportRootRef?: RefObject<HTMLElement | null>): ViewportBounds {
-  const { clientToCanvasPosition } = useCanvasPositioning();
+  const { canvasClientOffset, clientToCanvasPosition } = useCanvasPositioning();
 
-  const [clientRect, setClientRect] = useState(() => getViewportClientRect(viewportRootRef?.current));
+  const [clientRect, setClientRect] = useState(() =>
+    getViewportClientRect(viewportRootRef?.current, canvasClientOffset),
+  );
 
   useLayoutEffect(() => {
     let animationFrame: number | undefined;
@@ -81,7 +86,7 @@ export function useViewportBounds(viewportRootRef?: RefObject<HTMLElement | null
 
     const readAndStoreClientRect = () => {
       animationFrame = undefined;
-      const nextClientRect = getViewportClientRect(viewportRootRef?.current);
+      const nextClientRect = getViewportClientRect(viewportRootRef?.current, canvasClientOffset);
 
       setClientRect((previousClientRect) =>
         areViewportClientRectsEqual(previousClientRect, nextClientRect) ? previousClientRect : nextClientRect,
@@ -115,7 +120,7 @@ export function useViewportBounds(viewportRootRef?: RefObject<HTMLElement | null
       window.removeEventListener('resize', scheduleRead);
       window.visualViewport?.removeEventListener('resize', scheduleRead);
     };
-  }, [viewportRootRef]);
+  }, [canvasClientOffset, viewportRootRef]);
 
   const bounds = useMemo(() => {
     const topLeft = clientToCanvasPosition(clientRect.left, clientRect.top);
@@ -140,10 +145,10 @@ export function fitBoundsToViewport(
     width: number;
     height: number;
   },
-  options: { sidebarOpen?: boolean } = {},
+  options: { sidebarOpen?: boolean; topInset?: number } = {},
 ): CanvasPosition {
   const viewportWidth = options.sidebarOpen ? window.innerWidth - 300 : window.innerWidth;
-  const viewportHeight = window.innerHeight;
+  const viewportHeight = Math.max(1, window.innerHeight - Math.max(0, options.topInset ?? 0));
 
   // Calculate the required zoom level
   const zoomX = viewportWidth / nodeBounds.width;

@@ -3,8 +3,9 @@ import { nodeStyles } from '../nodeStyles.js';
 
 export const nodeCanvasStyles = css`
   width: 100vw;
-  height: 100vh;
+  height: calc(100vh - var(--data-bus-full-row-height, 0px));
   position: relative;
+  top: var(--data-bus-full-row-height, 0px);
   background-color: var(--canvas-background-color, var(--grey-darker));
   overflow: hidden;
   z-index: 0;

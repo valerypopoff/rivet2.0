@@ -7,6 +7,9 @@ const OBSERVED_PORT_LAYOUT_SELECTOR = [
   '.node:not(.overlayNode) .node-ports',
   '.node:not(.overlayNode) .input-ports',
   '.node:not(.overlayNode) .output-ports',
+  '.radio-data-bus-rail',
+  '.radio-data-bus-rail .data-bus-group',
+  '.radio-data-bus-rail .data-bus-channels',
 ].join(', ');
 
 const PORT_LAYOUT_MUTATION_SELECTOR = [
@@ -16,6 +19,8 @@ const PORT_LAYOUT_MUTATION_SELECTOR = [
   '.output-ports',
   '.port',
   '.port-circle',
+  '.radio-data-bus-rail',
+  '.data-bus-channels',
 ].join(', ');
 
 const OBSERVED_PORT_LAYOUT_ATTRIBUTE_FILTER = ['class', 'style'];
@@ -31,12 +36,14 @@ function isPortLayoutMutationElement(element: Element): boolean {
  * In the ideal case, no position will have changed, so the state does not update.
  */
 export function useNodePortPositions({
+  clientToCanvasPosition,
   enabled,
   isDraggingNode,
   isDraggingWire,
   nodes,
   visibleNodeIdSet,
 }: {
+  clientToCanvasPosition: (x: number, y: number) => { x: number; y: number };
   enabled: boolean;
   isDraggingNode: boolean;
   isDraggingWire: boolean;
@@ -53,6 +60,45 @@ export function useNodePortPositions({
     ChartNode
   >;
   const canvasRef = useRef<HTMLDivElement>(null);
+  const clientToCanvasPositionRef = useRef(clientToCanvasPosition);
+  clientToCanvasPositionRef.current = clientToCanvasPosition;
+
+  const collectDataBusPortPositions = useCallback(
+    (previousPositions: PortPositions, nextPositions: PortPositions, seen?: Set<string>): boolean => {
+      const dataBusPortElements = canvasRef.current?.querySelectorAll(
+        '.radio-data-bus-rail .port-circle',
+      ) as NodeListOf<HTMLDivElement>;
+      let changed = false;
+
+      for (const elem of dataBusPortElements) {
+        const portId = elem.dataset.portid! as PortId;
+        const nodeId = elem.dataset.nodeid! as NodeId;
+        const portType = elem.dataset.porttype! as 'input' | 'output';
+        const key = `${nodeId}-${portType}-${portId}`;
+        const bounds = elem.getBoundingClientRect();
+        const canvasPosition = clientToCanvasPositionRef.current(
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2,
+        );
+        const precision = 10;
+        const pos = {
+          x: Math.round(canvasPosition.x * precision) / precision,
+          y: Math.round(canvasPosition.y * precision) / precision,
+        };
+        const prevPos = previousPositions[key];
+
+        if (prevPos?.x !== pos.x || prevPos?.y !== pos.y) {
+          changed = true;
+          nextPositions[key] = pos;
+        }
+
+        seen?.add(key);
+      }
+
+      return changed;
+    },
+    [],
+  );
 
   const recalculate = useCallback(() => {
     if (!enabled) {
@@ -115,6 +161,8 @@ export function useNodePortPositions({
 
       seen.add(key);
     }
+
+    changed = collectDataBusPortPositions(previousPositions, newPositions, seen) || changed;
 
     // Fixes a rendering issue where when you drag a node, for one frame the node.visualData.x and node.visualData.y have been updated
     // to the new position, but the overlay is still active moving the node by the same amount, which causes the wires to flicker
@@ -185,7 +233,21 @@ export function useNodePortPositions({
       nodePortPositionsRef.current = newPositions;
       setNodePortPositions(newPositions);
     }
-  }, [enabled, isDraggingNode, nodesById]);
+  }, [collectDataBusPortPositions, enabled, isDraggingNode, nodesById]);
+
+  const recalculateDataBusPortPositions = useCallback(() => {
+    if (!enabled) {
+      return;
+    }
+
+    const previousPositions = nodePortPositionsRef.current;
+    const nextPositions = { ...previousPositions };
+
+    if (collectDataBusPortPositions(previousPositions, nextPositions)) {
+      nodePortPositionsRef.current = nextPositions;
+      setNodePortPositions(nextPositions);
+    }
+  }, [collectDataBusPortPositions, enabled]);
 
   const scheduleRecalculate = useCallback(() => {
     if (!enabled || scheduledRecalculateAnimationFrameRef.current !== undefined) {
@@ -199,10 +261,15 @@ export function useNodePortPositions({
   }, [enabled, recalculate]);
 
   useLayoutEffect(() => {
-    // Port positions are in canvas space, so viewport pan/zoom should not force a fresh DOM-measure pass.
+    // Normal port positions are already in canvas space, so idle viewport pan/zoom does not force a DOM-measure pass.
     // We do need to remeasure when the rendered node set changes, because visibility culling mounts and unmounts ports.
+    // Viewport-fixed data-bus ports are refreshed separately as the viewport changes.
     recalculate();
   }, [recalculate, visibleNodeIdSet]);
+
+  useLayoutEffect(() => {
+    recalculateDataBusPortPositions();
+  }, [clientToCanvasPosition, recalculateDataBusPortPositions]);
 
   useLayoutEffect(() => {
     if (!enabled || !canvasRef.current) {
@@ -232,6 +299,14 @@ export function useNodePortPositions({
 
     const mutationObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
+        if (
+          mutation.type === 'attributes' &&
+          mutation.target instanceof Element &&
+          mutation.target.closest('.radio-data-bus-rail')
+        ) {
+          continue;
+        }
+
         if (mutation.target instanceof HTMLElement && isPortLayoutMutationElement(mutation.target)) {
           refreshObservedPortLayoutElements();
           scheduleRecalculate();
@@ -255,6 +330,11 @@ export function useNodePortPositions({
         }
       }
     });
+    const handleDataBusRailScroll = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest('.radio-data-bus-rail')) {
+        scheduleRecalculate();
+      }
+    };
 
     mutationObserver.observe(canvasElement, {
       attributes: true,
@@ -262,8 +342,10 @@ export function useNodePortPositions({
       childList: true,
       subtree: true,
     });
+    canvasElement.addEventListener('scroll', handleDataBusRailScroll, true);
 
     return () => {
+      canvasElement.removeEventListener('scroll', handleDataBusRailScroll, true);
       mutationObserver.disconnect();
       resizeObserver.disconnect();
       observedPortLayoutElementsRef.current = [];
