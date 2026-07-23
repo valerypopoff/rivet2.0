@@ -20,6 +20,8 @@ export type DebuggerPanelAnchor = {
 
 export const debuggerPanelAnchorState = atom<DebuggerPanelAnchor | undefined>(undefined);
 
+export const dataBusFullRowCountState = atom<number>(0);
+
 export type OverlayKey = 'promptDesigner' | 'trivet' | 'chatViewer' | 'dataStudio';
 
 export const overlayOpenState = atom<OverlayKey | undefined>(undefined);

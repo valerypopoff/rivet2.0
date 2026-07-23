@@ -32,7 +32,7 @@ test('wire hover uses transparent rendered-wire hit paths instead of global curv
   );
   assert.match(wireLayerSource, /getProjectConnectionComparisonKey\(connection\) === hoveredConnectionKey/);
   assert.match(wireLayerSource, /hoveredConnectionKey === connectionKey/);
-  assert.match(wireLayerSource, /interactive=\{allowConnectionHover\}/);
+  assert.match(wireLayerSource, /interactive=\{allowConnectionHover && !isHoverRevealedDataBusConnection\}/);
   assert.match(wireLayerSource, /onHoverStart=\{\(event\) => onConnectionHoverStart\(connectionKey, event\)\}/);
   assert.match(wireLayerSource, /onHoverMove=\{\(event\) => onConnectionHoverMove\(connectionKey, event\)\}/);
   assert.match(wireSource, /from '\.\/nodeCanvas\/wireGeometry\.js';/);

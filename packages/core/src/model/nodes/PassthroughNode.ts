@@ -11,11 +11,54 @@ import {
 import { nanoid } from 'nanoid/non-secure';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { dedent } from 'ts-dedent';
-import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 
 export type PassthroughNode = ChartNode<'passthrough', PassthroughNodeData>;
 
-export type PassthroughNodeData = {};
+export type PassthroughNodeData = {
+  /**
+   * Canvas-only presentation mode. Runtime execution and serialized connections
+   * remain an ordinary Passthrough node.
+   */
+  renderAsDataBus?: boolean;
+};
+
+const INPUT_PORT_PATTERN = /^input(\d+)$/;
+const OUTPUT_PORT_PATTERN = /^output(\d+)$/;
+export const MAX_PASSTHROUGH_PORT_INDEX = 10_000;
+
+function parsePositivePortIndex(portId: string, pattern: RegExp): number | undefined {
+  const match = pattern.exec(portId);
+  const index = match ? Number(match[1]) : Number.NaN;
+  return Number.isSafeInteger(index) && index > 0 && index <= MAX_PASSTHROUGH_PORT_INDEX ? index : undefined;
+}
+
+function getHighestConnectedSlotIndex(connections: readonly NodeConnection[], nodeId: NodeId): number {
+  let highestIndex = 0;
+
+  for (const connection of connections) {
+    const inputIndex =
+      connection.inputNodeId === nodeId ? parsePositivePortIndex(connection.inputId, INPUT_PORT_PATTERN) : undefined;
+    const outputIndex =
+      connection.outputNodeId === nodeId ? parsePositivePortIndex(connection.outputId, OUTPUT_PORT_PATTERN) : undefined;
+
+    highestIndex = Math.max(highestIndex, inputIndex ?? 0, outputIndex ?? 0);
+  }
+
+  return highestIndex;
+}
+
+export function isPassthroughDataBusNode(node: ChartNode | undefined): node is PassthroughNode {
+  return node?.type === 'passthrough' && (node.data as PassthroughNodeData | undefined)?.renderAsDataBus === true;
+}
+
+/**
+ * Conditional and split-run Passthrough nodes have execution semantics that a
+ * hidden canvas rail cannot communicate. Malformed or hand-edited combinations
+ * therefore fall back to the normal visible node until the conflict is removed.
+ */
+export function canRenderPassthroughAsDataBus(node: ChartNode | undefined): node is PassthroughNode {
+  return isPassthroughDataBusNode(node) && !node.isConditional && !node.isSplitRun;
+}
 
 export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {
   static create = (): PassthroughNode => {
@@ -35,7 +78,10 @@ export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
-    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
+    const inputCount = Math.min(
+      getHighestConnectedSlotIndex(connections, this.chartNode.id) + 1,
+      MAX_PASSTHROUGH_PORT_INDEX,
+    );
 
     for (let i = 1; i <= inputCount; i++) {
       inputs.push({
@@ -50,9 +96,9 @@ export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {
 
   getOutputDefinitions(connections: NodeConnection[]): NodeOutputDefinition[] {
     const outputs: NodeOutputDefinition[] = [];
-    const inputCount = getNextVariadicPortIndex(connections, this.chartNode.id, 'input', 'decimal');
+    const outputCount = getHighestConnectedSlotIndex(connections, this.chartNode.id);
 
-    for (let i = 1; i <= inputCount - 1; i++) {
+    for (let i = 1; i <= outputCount; i++) {
       outputs.push({
         dataType: 'any',
         id: `output${i}` as PortId,
@@ -75,13 +121,14 @@ export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {
   }
 
   async process(inputData: Inputs): Promise<Outputs> {
-    const inputCount = Object.keys(inputData).filter((key) => key.startsWith('input')).length;
-
     const outputs: Outputs = {};
 
-    for (let i = 1; i <= inputCount; i++) {
-      const input = inputData[`input${i}` as PortId]!;
-      outputs[`output${i}` as PortId] = input;
+    for (const [portId, input] of Object.entries(inputData)) {
+      const index = parsePositivePortIndex(portId, INPUT_PORT_PATTERN);
+
+      if (index != null) {
+        outputs[`output${index}` as PortId] = input;
+      }
     }
 
     return outputs;

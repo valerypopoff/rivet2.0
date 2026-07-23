@@ -4,10 +4,12 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { canvasPositionState } from '../state/graphBuilder';
 import { graphState } from '../state/graph';
 import { fitBoundsToViewport } from './useViewportBounds';
+import { useCanvasPositioning } from './useCanvasPositioning.js';
 
 export function useFocusOnNodes() {
   const setPosition = useSetAtom(canvasPositionState);
   const graph = useAtomValue(graphState);
+  const { canvasClientOffset } = useCanvasPositioning();
 
   return useStableCallback((nodeIds: NodeId[]) => {
     const node = graph.nodes.filter((n) => nodeIds.includes(n.id))!;
@@ -26,7 +28,7 @@ export function useFocusOnNodes() {
       height: bounds.bottom - bounds.top,
     };
 
-    const newBounds = fitBoundsToViewport(boundsXY);
+    const newBounds = fitBoundsToViewport(boundsXY, { topInset: canvasClientOffset.y });
 
     setPosition(newBounds);
   });

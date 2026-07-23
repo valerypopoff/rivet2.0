@@ -35,6 +35,7 @@ type UseDraggingNodeOptions = {
   nodes?: ChartNode[];
   onNodesChanged?: (nodes: ChartNode[]) => void;
   graphCommandsEnabled?: boolean;
+  excludedNodeIds?: ReadonlySet<NodeId>;
 };
 
 function createDragStartPositionMap(nodes: ChartNode[]): DragStartPositionMap {
@@ -82,6 +83,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
   const graphCommandsEnabled = options.graphCommandsEnabled ?? true;
   const controlledCanvas = Boolean(controlledNodes && controlledOnNodesChanged);
   const duplicateDragEnabled = graphCommandsEnabled || controlledCanvas;
+  const excludedNodeIds = options.excludedNodeIds;
   const nodes = controlledNodes ?? graphNodes;
   const nodesById = useMemo(
     () =>
@@ -176,7 +178,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
         draggedNodeIds: baseDraggedNodeIds,
         includeEnclosedNodes,
         nodes,
-      });
+      }).filter((nodeId) => !excludedNodeIds?.has(nodeId));
       const { sourceNodeIds, sourceNodes } = resolveDraggedSourceNodes(nextDraggedNodeIds, nodesById);
 
       if (!areNodeIdsEqual(sourceNodeIds, draggedSourceNodeIdsRef.current)) {
@@ -201,6 +203,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
     [
       nodes,
       nodesById,
+      excludedNodeIds,
       setSessionPreviewNodes,
       setSessionSourceNodeIds,
       setSessionSourceNodes,

@@ -32,7 +32,7 @@ const styles = css`
   --action-bar-height: calc(32px * var(--ui-font-scale));
 
   position: fixed;
-  top: calc(20px + var(--project-selector-height));
+  top: calc(20px + var(--project-selector-height) + var(--data-bus-full-row-height, 0px));
   right: 20px;
   background: transparent;
   border: 0;

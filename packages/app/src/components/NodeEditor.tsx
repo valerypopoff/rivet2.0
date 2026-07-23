@@ -72,7 +72,7 @@ export const NodeEditorRenderer: FC = () => {
 
 const Container = styled.div`
   position: absolute;
-  top: var(--project-selector-height);
+  top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px));
   right: 0;
   bottom: 0;
   z-index: 210;

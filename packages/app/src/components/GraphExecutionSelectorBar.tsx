@@ -11,7 +11,7 @@ const styles = css`
   --action-bar-height: calc(32px * var(--ui-font-scale));
 
   position: fixed;
-  top: calc(20px + var(--project-selector-height));
+  top: calc(20px + var(--project-selector-height) + var(--data-bus-full-row-height, 0px));
   left: 50%;
   transform: translateX(-50%);
   background: var(--grey-darker);

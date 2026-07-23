@@ -74,6 +74,7 @@ export type ContextMenuContext = {
 export interface ContextMenuProps {
   x: number;
   y: number;
+  displayOffset?: { x: number; y: number };
   context: ContextMenuContext;
   disabled?: boolean;
   onMenuItemSelected?: (id: string, data: unknown, context: ContextMenuContext, meta: { x: number; y: number }) => void;
@@ -94,7 +95,7 @@ const getContextMenuItemDisabledReason = (item: ContextMenuConfigItem, contextDa
   typeof item.disabledReason === 'function' ? item.disabledReason(contextData) : item.disabledReason;
 
 export const ContextMenu = forwardRef<HTMLDivElement, ContextMenuProps>(
-  ({ x, y, context, disabled, onMenuItemSelected }, ref) => {
+  ({ x, y, displayOffset = { x: 0, y: 0 }, context, disabled, onMenuItemSelected }, ref) => {
     const canSearch = context.type !== 'node';
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedResultIndex, setSelectedResultIndex] = useState(0);
@@ -146,7 +147,7 @@ export const ContextMenu = forwardRef<HTMLDivElement, ContextMenuProps>(
       if (canSearch) {
         searchRef.current?.focus();
       }
-    }, [canSearch, update, x, y]);
+    }, [canSearch, displayOffset.x, displayOffset.y, update, x, y]);
 
     const handleMenuItemSelected = useStableCallback((id: string, data: unknown) => {
       onMenuItemSelected?.(id, data, context, { x, y });
@@ -157,10 +158,7 @@ export const ContextMenu = forwardRef<HTMLDivElement, ContextMenuProps>(
     const searchResults = useFuseSearch(searchItems, searchTerm, ['label', 'subLabel'], { max: 5 });
     const searchResultsItems = useMemo(() => searchResults.map((r) => r.item), [searchResults]);
 
-    const shownItemsNotSearching = useMemo(
-      () => items.filter((item) => !isHiddenUntilSearched(item)),
-      [items],
-    );
+    const shownItemsNotSearching = useMemo(() => items.filter((item) => !isHiddenUntilSearched(item)), [items]);
 
     const visibleSearchItems = useMemo(
       () => searchResultsItems.filter((item) => isContextMenuItemVisible(item, context.data)),
@@ -232,7 +230,7 @@ export const ContextMenu = forwardRef<HTMLDivElement, ContextMenuProps>(
       <div
         ref={anchorRef}
         css={menuReferenceStyles}
-        style={{ top: y + 4, left: x - 16 }}
+        style={{ top: y - displayOffset.y + 4, left: x - displayOffset.x - 16 }}
         className={clsx({ disabled })}
         onClick={(e) => e.stopPropagation()}
       >

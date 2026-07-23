@@ -44,6 +44,7 @@ export interface NodeCanvasViewportProps {
   draggingNodes: ChartNode[];
   draggingSourceNodeIds: NodeId[];
   heavyContentNodeIdSet: ReadonlySet<NodeId>;
+  hiddenNodeIdSet: ReadonlySet<NodeId>;
   hoveredNodeId: NodeId | undefined;
   lastRunPerNode: Record<NodeId, ProcessDataForNode[] | undefined>;
   layer: NodeCanvasLayer;
@@ -91,6 +92,7 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
     draggingNodes,
     draggingSourceNodeIds,
     heavyContentNodeIdSet,
+    hiddenNodeIdSet,
     hoveredNodeId,
     lastRunPerNode,
     layer,
@@ -119,8 +121,11 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
       [draggingNodeEntries, layer],
     );
     const foregroundDragEntries = useMemo(
-      () => (layer === 'nodes' ? draggingNodeEntries.filter(({ node }) => node.type !== 'comment') : []),
-      [draggingNodeEntries, layer],
+      () =>
+        layer === 'nodes'
+          ? draggingNodeEntries.filter(({ node }) => node.type !== 'comment' && !hiddenNodeIdSet.has(node.id))
+          : [],
+      [draggingNodeEntries, hiddenNodeIdSet, layer],
     );
     const draggingHoverControlSourceNodeIdSet = useMemo(
       () => new Set(draggingHoverControlSourceNodeIds),
@@ -193,6 +198,10 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
               }
 
               if (!visibleNodeIdSet.has(node.id) || draggingNodeIdSet.has(node.id)) {
+                return null;
+              }
+
+              if (hiddenNodeIdSet.has(node.id)) {
                 return null;
               }
 

@@ -49,6 +49,12 @@ export const Port: FC<{
     definition: NodeInputDefinition | NodeOutputDefinition,
   ) => void;
   onReorderMouseDown?: (event: MouseEvent<HTMLDivElement>, port: PortId, isInput: boolean, title: string) => void;
+  dataBusAntenna?: {
+    count: number;
+    label: string;
+    revealed: boolean;
+  };
+  onDataBusAntennaHoverChange?: (hovered: boolean) => void;
 }> = memo(
   ({
     input = false,
@@ -69,6 +75,8 @@ export const Port: FC<{
     onMouseOut,
     onReorderMouseDown,
     preservePortCase,
+    dataBusAntenna,
+    onDataBusAntennaHoverChange,
   }) => {
     const ref = useRef<HTMLDivElement>(null);
 
@@ -137,6 +145,9 @@ export const Port: FC<{
         data-reorder-nodeid={reorderable ? nodeId : undefined}
         data-reorder-portid={reorderable ? id : undefined}
         data-reorder-portside={reorderable ? (input ? 'input' : 'output') : undefined}
+        onMouseEnter={() => dataBusAntenna && onDataBusAntennaHoverChange?.(true)}
+        onMouseLeave={() => dataBusAntenna && onDataBusAntennaHoverChange?.(false)}
+        title={dataBusAntenna?.label}
       >
         <div
           ref={ref}
@@ -161,6 +172,18 @@ export const Port: FC<{
           data-porttype={input ? 'input' : 'output'}
           data-nodeid={nodeId}
         >
+          {dataBusAntenna && !dataBusAntenna.revealed && (
+            <>
+              <svg
+                aria-hidden="true"
+                className={clsx('data-bus-antenna', input ? 'input' : 'output')}
+                viewBox="0 0 24 24"
+              >
+                <path d={input ? 'M24 12H15L3 2' : 'M0 12H9L21 2'} />
+              </svg>
+              {dataBusAntenna.count > 1 && <span className="data-bus-antenna-count">{dataBusAntenna.count}</span>}
+            </>
+          )}
           {canDragTo && <div className={clsx('port-hover-area')} />}
         </div>
         {!hideLabel && (

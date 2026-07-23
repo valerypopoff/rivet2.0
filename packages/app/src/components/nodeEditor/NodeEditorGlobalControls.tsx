@@ -1,5 +1,9 @@
 import { type FC, type ReactNode } from 'react';
-import { DEFAULT_SPLIT_RUN_CONCURRENCY, type ChartNode } from '@valerypopoff/rivet2-core';
+import {
+  canRenderPassthroughAsDataBus,
+  DEFAULT_SPLIT_RUN_CONCURRENCY,
+  type ChartNode,
+} from '@valerypopoff/rivet2-core';
 import TextField from '@atlaskit/textfield';
 import Select from '@atlaskit/select';
 import Button from '@atlaskit/button';
@@ -16,12 +20,21 @@ type HeaderToggleFieldProps = {
   onChange: (isChecked: boolean) => void;
   children: ReactNode;
   className?: string;
+  isDisabled?: boolean;
 };
 
-const HeaderToggleField: FC<HeaderToggleFieldProps> = ({ id, isChecked, onChange, children, className }) => (
+const HeaderToggleField: FC<HeaderToggleFieldProps> = ({
+  id,
+  isChecked,
+  onChange,
+  children,
+  className,
+  isDisabled,
+}) => (
   <LabeledToggle
     id={id}
     isChecked={isChecked}
+    isDisabled={isDisabled}
     onChange={onChange}
     label={children}
     className={className ? `toggle-field ${className}` : 'toggle-field'}
@@ -49,12 +62,13 @@ function normalizePositiveInteger(value: number, min: number): number {
 const SplitModeChoiceControl: FC<{
   value: SplitModeChoice;
   onChange: (value: SplitModeChoice) => void;
-}> = ({ value, onChange }) => (
+  isDisabled?: boolean;
+}> = ({ value, onChange, isDisabled = false }) => (
   <SegmentedEditor
     value={value}
     onChange={(nextValue) => onChange(nextValue as SplitModeChoice)}
     isReadonly={false}
-    isDisabled={false}
+    isDisabled={isDisabled}
     label=""
     ariaLabel="Run mode"
     options={splitModeOptions}
@@ -120,6 +134,7 @@ export const NodeEditorGlobalControls: FC<{
   const conditionalToggleId = `node-conditional-${node.id}`;
   const splitMode = getSplitMode(node);
   const showSplitRunFields = splitMode !== 'once';
+  const isDataBus = canRenderPassthroughAsDataBus(node);
 
   return (
     <div className="section section-global-controls">
@@ -133,11 +148,16 @@ export const NodeEditorGlobalControls: FC<{
         </HeaderToggleField>
         <Tooltip
           className="node-type-tooltip"
-          content="Exposes a conditional input port to the node, allowing to be executed only if the condition is met."
+          content={
+            isDataBus
+              ? 'Conditional execution is unavailable while this Passthrough is rendered as a data bus.'
+              : 'Exposes a conditional input port to the node, allowing to be executed only if the condition is met.'
+          }
         >
           <HeaderToggleField
             id={conditionalToggleId}
             isChecked={node.isConditional ?? false}
+            isDisabled={isDataBus}
             onChange={(isConditional) => onUpdateNode({ ...node, isConditional })}
           >
             <span>Conditional node</span>
@@ -154,6 +174,7 @@ export const NodeEditorGlobalControls: FC<{
         <section className="split-controls">
           <SplitModeChoiceControl
             value={splitMode}
+            isDisabled={isDataBus}
             onChange={(nextSplitMode) =>
               onUpdateNode({
                 ...node,

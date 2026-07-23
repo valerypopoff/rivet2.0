@@ -840,6 +840,60 @@ export const nodeStyles = css`
     position: relative;
   }
 
+  .data-bus-antenna {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 24px;
+    height: 24px;
+    overflow: visible;
+    pointer-events: none;
+    transform: translateY(-50%);
+    z-index: 0;
+
+    path {
+      fill: none;
+      stroke: var(--node-port-border);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+      vector-effect: non-scaling-stroke;
+    }
+  }
+
+  .input-port .data-bus-antenna {
+    right: 50%;
+    left: auto;
+  }
+
+  .port:hover .data-bus-antenna path {
+    stroke: var(--primary);
+  }
+
+  .data-bus-antenna-count {
+    position: absolute;
+    left: 19px;
+    bottom: 10px;
+    min-width: 13px;
+    height: 13px;
+    padding: 0 3px;
+    box-sizing: border-box;
+    border-radius: 7px;
+    background: var(--primary);
+    color: var(--foreground-on-primary);
+    font-family: var(--font-family);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 13px;
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .input-port .data-bus-antenna-count {
+    right: 19px;
+    left: auto;
+  }
+
   .input-port,
   .output-port {
     background-color: var(--node-port-bg);

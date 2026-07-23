@@ -48,8 +48,8 @@ import { wrapAsync } from '../utils/errorHandling';
 import { useExecutorSessionCoordinator } from '../hooks/useExecutorSessionCoordinator';
 import { useRestorePersistedWorkspace } from '../hooks/useRestorePersistedWorkspace.js';
 import { DeleteGraphInputConfirmModalRenderer } from './DeleteGraphInputConfirmModal';
-import { overlayOpenState, uiFontSizeState } from '../state/ui.js';
-import { getUiFontSizeCssVariables } from '../utils/uiFontSize.js';
+import { dataBusFullRowCountState, leftSidebarLiveWidthState, overlayOpenState, uiFontSizeState } from '../state/ui.js';
+import { getUiFontScale, getUiFontSizeCssVariables } from '../utils/uiFontSize.js';
 import { useProjectPlugins } from '../hooks/useProjectPlugins.js';
 import { MissingAppPluginsModalRenderer } from './MissingAppPluginsModal.js';
 import { warmCodeEditor } from './LazyComponents.js';
@@ -57,6 +57,8 @@ import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 import type { EditorGraphRunOptions } from '../hooks/editorGraphRunOptions.js';
 import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
 import { getProjectWorkspaceTargetCapabilities } from '../domain/workspace/projectWorkspaceTarget.js';
+import { sidebarOpenState } from '../state/graphBuilder.js';
+import { getDataBusFullRowsHeight } from './nodeCanvas/dataBusRailLayout.js';
 
 const styles = css`
   position: fixed;
@@ -117,6 +119,9 @@ export const RivetApp: FC = () => {
   const customThemePrimaryColor = useAtomValue(customThemePrimaryColorState);
   const customThemeSecondaryColor = useAtomValue(customThemeSecondaryColorState);
   const uiFontSize = useAtomValue(uiFontSizeState);
+  const dataBusFullRowCount = useAtomValue(dataBusFullRowCountState);
+  const leftSidebarOpen = useAtomValue(sidebarOpenState);
+  const leftSidebarLiveWidth = useAtomValue(leftSidebarLiveWidthState);
   const openOverlay = useAtomValue(overlayOpenState);
   const workspaceVisibleTabCount = useAtomValue(workspaceVisibleTabCountState);
   const selectedOpeningProjectTabId = useAtomValue(selectedOpeningProjectTabIdState);
@@ -145,8 +150,24 @@ export const RivetApp: FC = () => {
     [customThemeCssVariables, themeContrastCssVariables],
   );
   const appCssVariables = useMemo(
-    () => ({ ...uiFontSizeCssVariables, ...rootThemeCssVariables }) as CSSProperties,
-    [rootThemeCssVariables, uiFontSizeCssVariables],
+    () =>
+      ({
+        ...uiFontSizeCssVariables,
+        ...rootThemeCssVariables,
+        '--data-bus-full-row-height': `${getDataBusFullRowsHeight({
+          rowCount: dataBusFullRowCount,
+          uiFontScale: getUiFontScale(uiFontSize),
+        })}px`,
+        '--data-bus-full-row-left': leftSidebarOpen ? `${leftSidebarLiveWidth}px` : '0px',
+      }) as CSSProperties,
+    [
+      dataBusFullRowCount,
+      leftSidebarLiveWidth,
+      leftSidebarOpen,
+      rootThemeCssVariables,
+      uiFontSize,
+      uiFontSizeCssVariables,
+    ],
   );
 
   const noProjectOpen = workspaceVisibleTabCount === 0;

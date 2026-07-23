@@ -50,7 +50,7 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
   const { enabled, graphCommandsEnabled } = resolveCanvasHotkeyOptions(options);
   const [canvasPosition, setCanvasPosition] = useAtom(canvasPositionState);
   const viewportBounds = useViewportBounds();
-  const { canvasToClientPosition } = useCanvasPositioning();
+  const { canvasToClientPosition, getCanvasPositionForZoomAtClientPoint } = useCanvasPositioning();
   const setSearching = useSetAtom(searchingGraphState);
   const graphSearch = useAtomValue(searchingGraphState);
   const setEditingNode = useSetAtom(editingNodeState);
@@ -144,21 +144,7 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
         centerOfScreenCanvasCoords.y,
       );
 
-      const newX = clientX / newZoom - canvasPosition.x;
-      const newY = clientY / newZoom - canvasPosition.y;
-
-      const diff = {
-        x: newX - centerOfScreenCanvasCoords.x,
-        y: newY - centerOfScreenCanvasCoords.y,
-      };
-
-      const position: CanvasPosition = {
-        x: canvasPosition.x + diff.x,
-        y: canvasPosition.y + diff.y,
-        zoom: newZoom,
-      };
-
-      setCanvasPosition(position);
+      setCanvasPosition(getCanvasPositionForZoomAtClientPoint(newZoom, clientX, clientY));
     }
 
     const isArrowKey = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key);

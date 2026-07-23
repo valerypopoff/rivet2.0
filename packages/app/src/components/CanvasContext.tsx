@@ -6,6 +6,7 @@ import type {
   NodeOutputDefinition,
   PortId,
 } from '@valerypopoff/rivet2-core';
+import type { DataBusPortChannelIndex } from './nodeCanvas/dataBusModel.js';
 import type { MouseEvent } from 'react';
 import type { HeightCache } from '../hooks/useNodeBodyHeight';
 import type { DraggingWireDef } from '../state/graphBuilder';
@@ -19,6 +20,8 @@ export type CanvasViewContextValue = {
   heightCache: HeightCache;
   isReallyZoomedOut: boolean;
   isZoomedOut: boolean;
+  dataBusPortChannels: DataBusPortChannelIndex;
+  hoveredDataBusChannelKeys: readonly string[];
 };
 
 export type CanvasHandlersContextValue = {
@@ -49,6 +52,7 @@ export type CanvasHandlersContextValue = {
     startPortId: PortId,
     isInput: boolean,
   ) => void;
+  onDataBusChannelHoverChange?: (channelKeys: readonly string[]) => void;
 };
 
 export const CanvasViewContext = createContext<CanvasViewContextValue | null>(null);

@@ -96,6 +96,10 @@ export function resolveWireDragAction(options: {
     return { type: 'none', reason: 'sameEndpoint' };
   }
 
+  if (!didMove && !draggingWire.originalConnection) {
+    return { type: 'none', reason: 'emptyCanvas' };
+  }
+
   const params = {
     outputNodeId: draggingWire.startNodeId,
     outputId: draggingWire.startPortId,
