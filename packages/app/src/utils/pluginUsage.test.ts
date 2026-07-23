@@ -28,9 +28,10 @@ function makeProject(
   graphs: NodeGraph[],
   plugins: PluginLoadSpec[] = [],
   nodePrefabs: Project['nodePrefabs'] = undefined,
-): Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'> {
+): Pick<Project, 'graphs' | 'metadata' | 'nodePrefabs' | 'plugins'> {
   return {
     graphs: Object.fromEntries(graphs.map((graph) => [graph.metadata!.id!, graph])),
+    metadata: { id: 'plugin-usage-project' as Project['metadata']['id'], title: 'Plugin usage', description: '' },
     nodePrefabs,
     plugins,
   };
@@ -221,6 +222,43 @@ describe('pluginUsage', () => {
       }),
       [pluginSpec],
     );
+  });
+
+  test('adds a provider plugin spec when a named knowledge-store connection uses it', () => {
+    const project = makeProject([makeGraph('main', [makeNode('knowledgeSource')])]);
+    project.metadata.knowledgeStores = {
+      primary: {
+        displayName: 'Primary',
+        provider: 'example-provider',
+        pluginId: 'runtime-plugin-id',
+        config: {},
+      },
+    };
+
+    assert.deepEqual(
+      deriveProjectPluginSpecsFromGraphs({
+        appPluginStates: [loadedPluginState(pluginSpec, 'runtime-plugin-id')],
+        project,
+        registry: makeRegistry({ knowledgeSource: undefined }),
+      }),
+      [pluginSpec],
+    );
+  });
+
+  test('preserves existing plugin specs while a knowledge-store provider owner is unresolved', () => {
+    const project = makeProject([makeGraph('main', [])], [pluginSpec]);
+    project.metadata.knowledgeStores = {
+      primary: {
+        displayName: 'Primary',
+        provider: 'example-provider',
+        pluginId: 'runtime-plugin-id',
+        config: {},
+      },
+    };
+
+    assert.deepEqual(deriveProjectPluginSpecsFromGraphs({ appPluginStates: [], project, registry: makeRegistry({}) }), [
+      pluginSpec,
+    ]);
   });
 
   test('preserves failed app plugin specs when unknown node types prevent proving usage', () => {

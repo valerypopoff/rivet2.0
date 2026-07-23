@@ -42,6 +42,9 @@ paths and should not be used as the primary target for new provider refactors.
   owns model/provider option resolution and model catalog integration.
 - [`toolContinuation.ts`](../packages/core/src/model/chat-v2/toolContinuation.ts)
   owns auto-continuation and tool-call follow-up behavior.
+- [`ToolNode.ts`](../packages/core/src/model/nodes/ToolNode.ts) owns Rivet-only
+  `GptFunction.resultHandling` metadata. Provider adapters must project only the
+  provider tool definition and must never forward this execution policy.
 - [`toolContinuationConnection.ts`](../packages/core/src/model/chat-v2/toolContinuationConnection.ts)
   is the shared core/app resolver for the special continuation relationship
   formed by an eligible `LLM Chat -> Delegate Tool Call` connection.
@@ -77,6 +80,21 @@ paths and should not be used as the primary target for new provider refactors.
   before returning them to the still-running LLM Chat node. Both nodes remain
   `Running`, and the existing multi-run UI exposes every call without a new
   waiting state.
+- `GptFunction.resultHandling` defaults to `continue` when absent. A value of
+  `return-direct` is terminal only when auto-continuation is enabled and the
+  current provider round contains exactly one call to that declared Rivet Tool.
+  The Delegate or internal handler still executes normally. After success,
+  `toolContinuation.ts` uses the exact string function result as `Response`,
+  appends the complete function-result message to `All Messages`, retains the
+  delegated record on `Tool Calls`, and skips the next provider request. It must
+  clear the raw call before GraphProcessor finalization so a connected Delegate
+  cannot run again through ordinary traversal. Multiple-call rounds always use
+  normal ordered continuation, including mixed and all-direct rounds.
+- Direct return does not fabricate provider accounting. `Messages Sent`, request
+  bodies, response tokens, usage, reasoning, and provider metadata describe only
+  requests that happened. Handler cost remains on the existing delegation/graph
+  path and is accumulated once. Legacy Chat, manual Delegate execution, and LLM
+  Chat without auto-continuation ignore this metadata.
 - `Delegate Tool Call` keeps the persisted `message` output id, now displayed as
   `Tool Result Message`, and adds `assistant-message`, displayed as
   `Message (fires before tool call invocation)`, for nonblank assistant text

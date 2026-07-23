@@ -14,6 +14,10 @@ import {
   openAIReasoningEffortOptions,
   openAIWebSearchContextSizeOptions,
 } from './providerOptions.js';
+import {
+  LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE,
+  supportsLLMChatV2ParallelToolCalls,
+} from './parallelToolCalls.js';
 import type { LLMChatV2Node, LLMChatV2NodeData } from './llmChatV2NodeData.js';
 
 type LLMChatV2EditorDefinition = EditorDefinition<LLMChatV2Node>;
@@ -436,7 +440,8 @@ function getToolEditors(): LLMChatV2EditorDefinition {
       type: 'toggle',
       label: 'Allow parallel toolcalls',
       dataKey: 'parallelToolCalls',
-      hideIf: (data) => !data.useToolCalling || data.provider === 'custom',
+      helperMessage: LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE,
+      hideIf: (data) => !data.useToolCalling || !supportsLLMChatV2ParallelToolCalls(data.provider),
     },
     {
       type: 'toggle',

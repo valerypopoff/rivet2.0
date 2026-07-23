@@ -103,7 +103,24 @@ When a Chat component is first connected, Rivet first prefers a `chat-message[]`
 
 Use **Add input** when the Chat graph also needs values from other Input or Textarea components. Each additional row maps one Graph Input ID to one existing web-app data key. You can add rows before those Graph Inputs exist; unfinished rows remain in the editor while you update the graph, but the Chat cannot run until every row is configured. If a mapped Graph Input is later removed, Rivet preserves the row and its data key so you can remap or remove it instead of silently dropping expected context. Rivet sends only explicitly mapped values with the Chat action; unrelated page state stays in the browser.
 
-Press **Enter** to send and **Shift+Enter** for a new line. Only the selected Chat block enters its responding state. Its draft, conversation, and pins are stored locally in the browser for that app's site and URL, so they survive reloads and **Reset app** without being saved into project YAML or sent to the backing graph. Messages stay in chronological order from oldest to newest. Both user and assistant messages render Markdown, including links, lists, and code; raw HTML stays escaped. A short conversation sits at the bottom of the message area beside the composer; as it grows, the conversation scrolls inside the Chat block while the composer stays visible. The Chat block grows to use the page's remaining viewport height while preserving its minimum height; if surrounding components plus the Chat minimum exceed the viewport, the page itself can still scroll normally.
+Press **Enter** to send and **Shift+Enter** for a new line. Only the selected Chat block enters its responding state. Its draft, conversation, and pins are stored locally in the browser for that app's site and URL, so they survive reloads and **Reset app** without being saved into project YAML. Rivet sends only the configured current turn, earlier conversation, and mapped inputs to the backing graph. The complete assistant message is retained and returned in later history, including large Markdown and JSON blocks. Messages stay in chronological order from oldest to newest. Each new message shows its browser-local 24-hour time in the lower-right bubble corner: user messages use the send time and responses use the time they arrive in the browser. When the timestamped history spans multiple local dates, Rivet inserts a date separator where a later date begins; a one-day conversation has no date separator. Both user and assistant messages render Markdown, including links, lists, and code; raw HTML stays escaped. Every fenced block whose language is exactly `json` receives **Copy JSON** and **Download JSON** controls in ordinary chat messages. The controls preserve the decoded code-block text exactly without validating or reformatting it; prose, fences, non-JSON blocks, and inline code are excluded. A JSON block in the compact pinned-messages panel stays ordinary Markdown text, without a card or actions. A short conversation sits at the bottom of the message area beside the composer; as it grows, the conversation scrolls inside the Chat block while the composer stays visible. The Chat block grows to use the page's remaining viewport height while preserving its minimum height; if surrounding components plus the Chat minimum exceed the viewport, the page itself can still scroll normally.
+
+For a deterministic JSON-producing tool, set its **Result handling** to **Return
+directly** and have its handler return complete Markdown, for example:
+
+````markdown
+Dear user, here is your JSON:
+
+```json
+{
+  "example": true
+}
+```
+````
+
+When this is the only tool call in an auto-continued LLM Chat round, the handler
+string becomes the assistant reply without another model request. If the round
+contains multiple calls, Rivet uses normal LLM continuation for every result.
 
 While a response is running, the composer’s green Send control becomes a neutral **Stop** control. It cancels that Chat action without changing the conversation already shown.
 
@@ -141,7 +158,7 @@ Button and Chat actions are ordinary same-project graph runs. A wrapper can prov
 
 For graphs that can take minutes, a host can serve actions through Rivet's resumable WebSocket transport instead of keeping one POST request open. The page reconnects after a temporary network/proxy interruption and resumes the same server run rather than starting it again. The active Button or Chat shows its own **Abort** action. Closing or reloading the page detaches from a WebSocket run instead of cancelling it automatically; explicit **Abort** requests cancellation. Automatic resume covers connection loss while the page remains open. A full page reload needs host-provided run discovery to restore an earlier run in the new page session.
 
-To show useful status while a graph works, put a **Report Progress** node on the workflow path. It passes its value through unchanged and can report a message, a percentage, or both. You can also use an **External Call** named `setWebAppStatus` and pass the message as its first argument. Progress appears only on the Button or Chat that started that run. In a Chat component, the separate progress panel uses the same text size as chat messages. It is temporary UI state, not a Graph Output and not project data.
+To show useful status while a graph works, put a **Report Progress** node on the workflow path. It passes its value through unchanged and can report a message, a percentage, or both. You can also use an **External Call** named `setWebAppStatus` and pass the message as its first argument. Progress appears only on the Button or Chat that started that run. In a Chat component, the separate progress panel uses the same text size as chat messages; wrapped status text keeps a slightly roomier bottom inset. It is temporary UI state, not a Graph Output and not project data.
 
 For compact data that should persist in the user's browser, use [Set Stored Value](../node-reference/set-stored-value.mdx) and [Get Stored Value](../node-reference/get-stored-value.mdx). Set a key such as `preferences` and connect an object like `{ density: "compact", sidebarOpen: false }`; a later action can read the complete value using the same key. This works for settings, short local drafts, client-side caches, or other compact JSON data. Rivet isolates browser persistence by origin, app URL path, and UI graph ID. Values may contain strings, finite numbers, booleans, null, arrays, and plain objects. They are limited by the browser's local-storage quota, stay on that browser profile, are not synchronized across devices, may be cleared by the user, and should not contain secrets.
 

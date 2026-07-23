@@ -35,6 +35,10 @@ export const addContextMenuGroups = [
     label: 'AI',
   },
   {
+    id: 'add-node-group:knowledge',
+    label: 'Knowledge',
+  },
+  {
     id: 'add-node-group:lists',
     label: 'Lists',
   },

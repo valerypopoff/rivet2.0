@@ -7,6 +7,7 @@ import {
   type RivetWebAppActionStartMessage,
   type RivetWebAppRunEvent,
   type RivetStoredValueStore,
+  type RivetKnowledgeStoreRegistry,
   type UiGraph,
 } from '@valerypopoff/rivet2-core';
 import {
@@ -42,6 +43,7 @@ export type RivetWebAppSocketSession = {
   resolveContext?: RivetWebAppHandlerOptions['resolveContext'];
   revisionKey?: string;
   storedValueStore?: RivetStoredValueStore;
+  knowledgeStores?: RivetKnowledgeStoreRegistry;
   uiGraph: UiGraph;
 };
 
@@ -484,6 +486,7 @@ export function createRivetWebAppWebSocketGateway(
           revisionKey: session.revisionKey,
           state: message.state,
           storedValueStore: session.storedValueStore,
+          knowledgeStores: session.knowledgeStores,
           storage: message.storage,
           uiGraph: session.uiGraph,
         });

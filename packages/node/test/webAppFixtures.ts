@@ -216,3 +216,54 @@ export function makeStoredValueProject(mode: 'get' | 'set'): Project {
   ];
   return project;
 }
+
+export function makeKnowledgeStatusProject(): Project {
+  const project = makeWebAppProject({ outputId: 'value' });
+  const actionComponent = project.uiGraphs?.[TEST_UI_GRAPH_ID]?.components[0];
+  if (actionComponent?.type === 'button') actionComponent.action.inputs = {};
+  project.graphs[TEST_GRAPH_ID]!.nodes = [
+    {
+      data: {
+        connectionId: 'primary',
+        useConnectionIdInput: false,
+        sourceId: 'handbook',
+        useSourceIdInput: false,
+        version: '',
+        useVersionInput: false,
+      },
+      id: 'source-node' as never,
+      title: 'Knowledge Source',
+      type: 'knowledgeSource',
+      visualData: { x: 0, y: 0 },
+    },
+    {
+      data: { expectedVersion: '', useExpectedVersionInput: false },
+      id: 'status-node' as never,
+      title: 'Get Knowledge Source Status',
+      type: 'getKnowledgeSourceStatus',
+      visualData: { x: 200, y: 0 },
+    },
+    {
+      data: { dataType: 'string', id: 'value' },
+      id: 'output-node' as never,
+      title: 'Output',
+      type: 'graphOutput',
+      visualData: { x: 400, y: 0 },
+    },
+  ];
+  project.graphs[TEST_GRAPH_ID]!.connections = [
+    {
+      inputId: 'source' as never,
+      inputNodeId: 'status-node' as never,
+      outputId: 'source' as never,
+      outputNodeId: 'source-node' as never,
+    },
+    {
+      inputId: 'value' as never,
+      inputNodeId: 'output-node' as never,
+      outputId: 'message' as never,
+      outputNodeId: 'status-node' as never,
+    },
+  ];
+  return project;
+}

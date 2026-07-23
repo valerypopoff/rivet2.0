@@ -31,6 +31,7 @@ import type {
   RivetStoredValueSetResult,
 } from './StoredValueStore.js';
 import type { ToolCallContinuation } from './ToolCallContinuation.js';
+import type { KnowledgeStoreConnectionId, RivetKnowledgeStore } from '../integrations/KnowledgeStore.js';
 
 export type ProcessContext = {
   settings: RuntimeSettings;
@@ -196,6 +197,9 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
 
   /** Waits only for a successful Set Stored Value in this root run. */
   waitForStoredValue: (key: string, signal?: AbortSignal) => Promise<RivetStoredValue>;
+
+  /** Resolves a named project or host-provided knowledge store for this execution. */
+  getKnowledgeStore: (connectionId: KnowledgeStoreConnectionId) => Promise<RivetKnowledgeStore>;
 
   /** Logs to GraphProcessor's trace event. */
   trace: (message: string) => void;

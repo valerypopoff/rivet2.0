@@ -22,6 +22,7 @@ const sidebars = {
         'user-guide/working-with-graphs',
         'user-guide/working-with-projects',
         'user-guide/rivet-web-apps',
+        'user-guide/knowledge-sources',
         'user-guide/executing-ai-chains',
         'user-guide/splitting',
         'user-guide/subgraphs',
@@ -193,6 +194,20 @@ const sidebars = {
         'node-reference/gpt-function',
         'node-reference/get-embedding',
         'node-reference/trim-chat-messages',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Knowledge',
+      collapsible: true,
+      collapsed: false,
+      items: [
+        'node-reference/knowledge-source',
+        'node-reference/knowledge-document',
+        'node-reference/sync-knowledge-source',
+        'node-reference/get-knowledge-source-status',
+        'node-reference/search-knowledge',
+        'node-reference/build-knowledge-context',
       ],
     },
     {

@@ -87,6 +87,10 @@ round.
   concurrently and appear as separate selectable run pages on the Delegate node.
 - The LLM waits for the whole call set, receives one result for every declared
   call in original model order, and then starts its next model round.
+- When the model round has one call and its declared Tool uses **Return
+  directly**, the Delegate still runs normally, but its exact string output
+  becomes LLM Chat's final Response without a follow-up provider call. Multiple
+  calls always continue through the LLM.
 - If no eligible Delegate is connected, LLM Chat keeps its built-in internal
   auto-delegation behavior.
 - Connecting more than one eligible Delegate is an error. The canvas shows the

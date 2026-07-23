@@ -145,12 +145,13 @@ function makeUsage(
   };
 }
 
-function makeFunction(name: string): GptFunction {
+function makeFunction(name: string, resultHandling: GptFunction['resultHandling'] = 'continue'): GptFunction {
   return {
     name,
     description: `${name} tool`,
     parameters: {},
     strict: false,
+    resultHandling,
   };
 }
 
@@ -234,6 +235,133 @@ describe('runChatV2PipelineWithToolContinuation', () => {
     assert.equal((secondPromptMessages.at(-2) as any).toolName, 'foo');
     assert.equal(secondPromptMessages.at(-1)?.type, 'function');
     assert.equal((secondPromptMessages.at(-1) as any).toolName, 'bar');
+  });
+
+  it('returns the exact sole direct tool result without another provider request', async () => {
+    const directMarkdown = 'Dear user, here is your JSON:\n\n```json\n{\n  "example": true\n}\n```';
+    const firstUsage = makeUsage(12, 3, 15, 2, 1, 0.002);
+    const toolCall = makeToolCall('call_direct', 'exportJson');
+    let pipelineRunCount = 0;
+    let delegationCount = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        functions: [makeFunction('exportJson', 'return-direct')],
+        includeFunctionCalls: true,
+        outputUsage: true,
+        outputReasoning: true,
+        runPipeline: async (options) => {
+          pipelineRunCount++;
+          return makePipelineResult(
+            'Preparing the export.',
+            [toolCall],
+            undefined,
+            firstUsage,
+            options.outputUsage,
+            'Use the deterministic exporter.',
+            options.outputReasoning,
+          );
+        },
+        delegateToolCall: async (call) => {
+          delegationCount++;
+          return makeDelegatedToolResultMessage(call, directMarkdown);
+        },
+      }),
+    );
+
+    assert.equal(pipelineRunCount, 1);
+    assert.equal(delegationCount, 1);
+    assert.equal(result.response, directMarkdown);
+    assert.deepEqual(result.functionCalls, []);
+    assert.equal(result.allMessages.at(-1)?.type, 'function');
+    assert.equal((result.allMessages.at(-1) as any).message, directMarkdown);
+    assert.equal(result.requestMessages.length, 1);
+    assert.deepEqual(result.commonOutputs.response, { type: 'string', value: directMarkdown });
+    assert.deepEqual(result.commonOutputs['in-messages'], {
+      type: 'chat-message[]',
+      value: result.requestMessages,
+    });
+    assert.deepEqual(result.commonOutputs.usage, { type: 'object', value: firstUsage });
+    assert.deepEqual(result.commonOutputs.responseTokens, { type: 'number', value: 3 });
+    assert.deepEqual(result.commonOutputs.reasoning, {
+      type: 'string[]',
+      value: ['Use the deterministic exporter.'],
+    });
+    assert.deepEqual(
+      (result.commonOutputs['function-calls']?.value as any[]).map(({ name, output }) => ({ name, output })),
+      [{ name: 'exportJson', output: directMarkdown }],
+    );
+  });
+
+  it('supports direct return through the connected Delegate round callback', async () => {
+    const toolCall = makeToolCall('call_direct', 'exportJson');
+    let pipelineRunCount = 0;
+    let fallbackCount = 0;
+    let roundCount = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        functions: [makeFunction('exportJson', 'return-direct')],
+        runPipeline: async () => {
+          pipelineRunCount++;
+          return makePipelineResult('Exporting.', [toolCall]);
+        },
+        delegateToolCall: async (call) => {
+          fallbackCount++;
+          return makeDelegatedToolResultMessage(call, 'fallback');
+        },
+        delegateToolCallRound: async (calls, preToolMessage) => {
+          roundCount++;
+          assert.equal(preToolMessage, 'Exporting.');
+          return [makeDelegatedToolResultMessage(calls[0]!, 'direct result')];
+        },
+      }),
+    );
+
+    assert.equal(pipelineRunCount, 1);
+    assert.equal(fallbackCount, 0);
+    assert.equal(roundCount, 1);
+    assert.equal(result.response, 'direct result');
+  });
+
+  it('uses normal continuation when a round contains multiple direct-return calls', async () => {
+    const calls = [makeToolCall('call_foo', 'foo'), makeToolCall('call_bar', 'bar')];
+    let pipelineRunCount = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        functions: [makeFunction('foo', 'return-direct'), makeFunction('bar', 'return-direct')],
+        runPipeline: async (options) => {
+          pipelineRunCount++;
+          return pipelineRunCount === 1
+            ? makePipelineResult('', calls)
+            : makePipelineResult('combined answer', [], (options.prompt as any).value);
+        },
+      }),
+    );
+
+    assert.equal(pipelineRunCount, 2);
+    assert.equal(result.response, 'combined answer');
+  });
+
+  it('uses normal continuation when a round mixes direct and continuing tools', async () => {
+    const calls = [makeToolCall('call_foo', 'foo'), makeToolCall('call_bar', 'bar')];
+    let pipelineRunCount = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        functions: [makeFunction('foo', 'return-direct'), makeFunction('bar')],
+        runPipeline: async (options) => {
+          pipelineRunCount++;
+          return pipelineRunCount === 1
+            ? makePipelineResult('', calls)
+            : makePipelineResult('combined answer', [], (options.prompt as any).value);
+        },
+      }),
+    );
+
+    assert.equal(pipelineRunCount, 2);
+    assert.equal(result.response, 'combined answer');
   });
 
   it('delegates a complete model round through the connected Delegate callback', async () => {

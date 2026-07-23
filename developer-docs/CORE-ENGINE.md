@@ -14,6 +14,7 @@ It owns:
 - node registration and built-in nodes
 - built-in provider plugins
 - runtime integration contracts
+- provider-neutral knowledge-source contracts, lifecycle, and typed nodes
 - serialization/deserialization
 - recording/playback support
 - public programmatic execution APIs
@@ -98,6 +99,8 @@ Only use debug logging for details that would be too noisy or too sensitive for 
 Provider stream JSON parsing should use [`parseProviderJsonChunk(...)`](../packages/core/src/utils/providerStreamParsing.ts). That helper preserves parse failures while avoiding raw chunk logging. If a provider needs richer parse diagnostics, extend the helper rather than adding a provider-local raw `console.error(chunk)`.
 
 Provider SSE transport belongs in [`fetchEventSource.ts`](../packages/core/src/utils/fetchEventSource.ts). Legacy OpenAI and Anthropic streaming both use this single reader so event splitting, `data:` / `event:` parsing, response-body isolation, header handling, and timeout cleanup stay consistent. Providers that need a timeout different from the shared chat default must pass it explicitly to the helper rather than cloning the transport.
+
+Durable retrieval uses the [Provider-neutral Knowledge Source API](./KNOWLEDGE-SOURCE-API.md). Keep provider-neutral documents, evidence, filters, manifests, and root-run resolution in core. Provider-specific request shapes belong in plugin adapters.
 
 ## GraphProcessor Loop-Control Boundary
 
@@ -501,6 +504,16 @@ intentionally split under
 - `chatV2Outputs.ts` owns provider-neutral output assembly: `Response` typing for structured formats, assistant/function-call outputs, usage/cost normalization, reusable control-flow exclusion for absent optional outputs, reasoning exclusion, request-status/request-error/request-body outputs, retry-attempt status/error arrays, and provider-failure output shape.
 - `chatV2Pipeline.ts` executes `ChatV2RequestPlan` and stays focused on provider-neutral orchestration, retry outcomes, provider-error decisions, and output assembly; `toolContinuation.ts` owns continuation. `aiSdkBridge.ts` adapts the planned request to Vercel AI SDK call signatures and retains a defensive zero-retry default for direct bridge callers. Rivet's request plan/retry loop is the single source of retry behavior and per-attempt status/error outputs. For structured response formats with an SDK output descriptor, `aiSdkBridge.ts` resolves the AI SDK's parsed `output` promise on a best-effort basis and `chatV2Outputs.ts` uses that parsed value for the `Response` output while keeping the assistant message text unchanged for chat history. Parsed-output failures fall back to the response text as a string instead of failing the node. Structured-output calls also ask `consumeAiSdkStream(...)` to collapse exact duplicate text blocks and normalize repeated parseable JSON text before partial-output updates or fallback parsing, because some AI SDK/provider combinations expose the same final JSON object more than once.
 - `toolContinuationConnection.ts` derives the optional connected-Delegate continuation relationship from ordinary graph data. It is eligible only for an enabled `llmChatV2` node with tool use and auto-continuation enabled, an exact `function-calls -> function-call` connection, and one enabled `delegateFunctionCall` target. Core execution and app presentation must consume this resolver instead of reimplementing endpoint checks.
+- Tool values may carry the optional Rivet-only `resultHandling` policy. Missing
+  values and `continue` preserve the normal tool-result follow-up. For a sole
+  declared `return-direct` call in an auto-continued round,
+  `toolContinuation.ts` completes delegation and downstream scheduling, then
+  returns the handler's exact string as the LLM Chat response without another
+  provider call. It keeps the function result in `All Messages`, keeps the
+  delegated record in `function-calls`, and leaves `in-messages` plus usage and
+  reasoning bound to real provider calls. Multiple calls always follow the
+  ordinary ordered continuation path. Provider converters must omit
+  `resultHandling` from provider tool definitions.
 - `providerOptions.ts` keeps Custom provider requests on the conservative OpenAI-compatible path. Custom JSON object mode is represented by the raw `response_format: { type: "json_object" }` provider option instead of an SDK output descriptor, and the Custom provider factory does not request streamed usage via `stream_options.include_usage`; compatible providers can still return usage naturally, but Rivet does not force optional OpenAI stream metadata onto every custom endpoint. Provider factories also own the parsed request-body hook used by LLM Chat request diagnostics: the hook wraps the provider fetch function, records the body handed to the actual provider HTTP call, parses it for the `LLM request body` output, and deliberately omits request headers / Rivet-managed API key headers so the normal error formatter can remain payload-free while the explicit diagnostic remains a truthful body inspector.
 
 #### Connected Delegate tool continuation
@@ -524,6 +537,12 @@ The temporary scheduler must not preload unsafe dependency boundaries, because d
 Branch readiness is invocation-scoped. Outputs produced by one call's pre-tool Message branch may satisfy inputs for that call's final tool-result branch, but sibling-call and earlier-round outputs are not offered as fresh dependencies. After all calls settle, completed branch results are folded into parent state in model order, retaining the latest call's value for nodes that ran repeatedly. Once the owning LLM process finishes successfully, `#finalizeToolCallContinuation(...)` promotes those completions and records their LLM owner; `#propagateCompletedContinuationNode(...)` then queues their remaining consumers without rerunning completed nodes.
 
 When auto-continuation stops with unresolved raw calls because the maximum round count was reached or a call is not one of the LLM node's declared Rivet tools, LLM Chat releases the processor's continuation reservation. The ordinary downstream connection is then scheduled normally so the raw calls remain observable. Connected continuation Delegate nodes cannot be frozen in the editor, and direct continuation execution rejects frozen or preloaded outputs before tool work begins; replaying a captured request/response round would omit required tool work.
+
+When a sole declared Tool uses direct result handling, the connected invocation
+is finalized through the same `latestOutputs` path as any completed continuation
+round. The LLM result exposes no unresolved raw function call, so
+`#finalizeToolCallContinuation(...)` marks the Delegate and completed branch
+nodes as scheduler-owned completions instead of releasing or replaying them.
 
 Keep future Chat v2 changes inside the smallest relevant seam. Do not add provider
 option parsing, cache-key fingerprinting, or credential-source behavior back into

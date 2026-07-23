@@ -31,6 +31,7 @@ import { looseDataValuesToDataValues, type LooseDataValue } from './looseDataVal
 import type { ProjectReferenceLoader } from '../model/ProjectReferenceLoader.js';
 import { resolveProcessSettings } from './processSettings.js';
 import type { RivetStoredValueStore } from '../model/StoredValueStore.js';
+import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
 
 export type RunGraphOptions = {
   graph?: string;
@@ -58,6 +59,7 @@ export type RunGraphOptions = {
   projectReferenceLoader?: ProjectReferenceLoader;
   editorExecutionCache?: ProcessContext['editorExecutionCache'];
   storedValueStore?: RivetStoredValueStore;
+  knowledgeStores?: RivetKnowledgeStoreRegistry;
   /** Return root graph outputs before managed async branches settle. */
   returnWhenGraphOutputsReady?: boolean;
 } & {
@@ -182,6 +184,7 @@ export function coreCreateProcessor(
   }
 
   processor.setStoredValueStore(options.storedValueStore);
+  processor.setKnowledgeStores(options.knowledgeStores);
 
   if (options.onUserEvent) {
     for (const [name, fn] of Object.entries(options.onUserEvent)) {

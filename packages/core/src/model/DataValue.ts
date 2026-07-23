@@ -1,6 +1,11 @@
 import type { GraphId } from '../index.js';
 import { exhaustiveTuple } from '../utils/genericUtilFunctions.js';
 import type { DataId } from './Project.js';
+import type {
+  RivetKnowledgeDocument,
+  RivetKnowledgeEvidence,
+  RivetKnowledgeSourceReference,
+} from '../integrations/KnowledgeStore.js';
 
 export type DataValueDef<Type extends string, RuntimeType> = {
   type: Type;
@@ -92,6 +97,9 @@ export type BinaryDataValue = DataValueDef<'binary', Uint8Array>;
 export type ImageDataValue = DataValueDef<'image', { mediaType: SupportedImageMediaTypes; data: Uint8Array }>;
 export type AudioDataValue = DataValueDef<'audio', { mediaType?: string; data: Uint8Array }>;
 export type GraphReferenceValue = DataValueDef<'graph-reference', { graphId: GraphId; graphName: string }>;
+export type KnowledgeSourceDataValue = DataValueDef<'knowledge-source', RivetKnowledgeSourceReference>;
+export type KnowledgeDocumentDataValue = DataValueDef<'knowledge-document', RivetKnowledgeDocument>;
+export type KnowledgeEvidenceDataValue = DataValueDef<'knowledge-evidence', RivetKnowledgeEvidence>;
 export type DocumentDataValue = DataValueDef<
   'document',
   {
@@ -103,6 +111,8 @@ export type DocumentDataValue = DataValueDef<
   }
 >;
 
+export type GptFunctionResultHandling = 'continue' | 'return-direct';
+
 /** GPT function definition */
 export type GptFunction = {
   name: string;
@@ -110,6 +120,8 @@ export type GptFunction = {
   description: string;
   parameters: object;
   strict: boolean;
+  /** Rivet-only handling for the function result. This is not sent to the model provider. */
+  resultHandling?: GptFunctionResultHandling;
 };
 
 export type GptFunctionDataValue = DataValueDef<'gpt-function', GptFunction>;
@@ -133,6 +145,9 @@ export type ScalarDataValue =
   | BinaryDataValue
   | AudioDataValue
   | GraphReferenceValue
+  | KnowledgeSourceDataValue
+  | KnowledgeDocumentDataValue
+  | KnowledgeEvidenceDataValue
   | DocumentDataValue;
 
 export type ScalarType = ScalarDataValue['type'];
@@ -233,6 +248,18 @@ export const dataTypes = exhaustiveTuple<DataType>()(
   'graph-reference[]',
   'fn<graph-reference>',
   'fn<graph-reference[]>',
+  'knowledge-source',
+  'knowledge-source[]',
+  'fn<knowledge-source>',
+  'fn<knowledge-source[]>',
+  'knowledge-document',
+  'knowledge-document[]',
+  'fn<knowledge-document>',
+  'fn<knowledge-document[]>',
+  'knowledge-evidence',
+  'knowledge-evidence[]',
+  'fn<knowledge-evidence>',
+  'fn<knowledge-evidence[]>',
   'document',
   'document[]',
   'fn<document>',
@@ -256,6 +283,9 @@ export const scalarTypes = exhaustiveTuple<ScalarType>()(
   'binary',
   'audio',
   'graph-reference',
+  'knowledge-source',
+  'knowledge-document',
+  'knowledge-evidence',
   'document',
 );
 
@@ -324,6 +354,18 @@ export const dataTypeDisplayNames: Record<DataType, string> = {
   'graph-reference[]': 'Graph Reference Array',
   'fn<graph-reference>': 'Function<Graph Reference>',
   'fn<graph-reference[]>': 'Function<Graph Reference Array>',
+  'knowledge-source': 'Knowledge Source',
+  'knowledge-source[]': 'Knowledge Source Array',
+  'fn<knowledge-source>': 'Function<Knowledge Source>',
+  'fn<knowledge-source[]>': 'Function<Knowledge Source Array>',
+  'knowledge-document': 'Knowledge Document',
+  'knowledge-document[]': 'Knowledge Document Array',
+  'fn<knowledge-document>': 'Function<Knowledge Document>',
+  'fn<knowledge-document[]>': 'Function<Knowledge Document Array>',
+  'knowledge-evidence': 'Knowledge Evidence',
+  'knowledge-evidence[]': 'Knowledge Evidence Array',
+  'fn<knowledge-evidence>': 'Function<Knowledge Evidence>',
+  'fn<knowledge-evidence[]>': 'Function<Knowledge Evidence Array>',
   document: 'Document',
   'document[]': 'Document Array',
   'fn<document>': 'Function<Document>',
@@ -453,6 +495,14 @@ export const scalarDefaults: { [P in ScalarDataType]: Extract<ScalarDataValue, {
   binary: new Uint8Array(),
   audio: { data: new Uint8Array() },
   'graph-reference': { graphId: '' as GraphId, graphName: '' },
+  'knowledge-source': { connectionId: '', sourceId: '' },
+  'knowledge-document': { text: '' },
+  'knowledge-evidence': {
+    id: '',
+    text: '',
+    source: { connectionId: '', sourceId: '' },
+    documentId: '',
+  },
   document: {
     mediaType: 'text/plain',
     data: new Uint8Array(),

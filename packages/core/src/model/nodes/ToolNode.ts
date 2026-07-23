@@ -17,6 +17,7 @@ import { keys } from '../../utils/typeSafety.js';
 import { coerceTypeOptional, coerceType } from '../../utils/coerceType.js';
 import { getInputOrData } from '../../utils/index.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
+import type { GptFunctionResultHandling } from '../DataValue.js';
 
 export type GptFunctionNode = ChartNode<'gptFunction', GptFunctionNodeData>;
 
@@ -26,6 +27,8 @@ export type GptFunctionNodeData = {
 
   description: string;
   useDescriptionInput?: boolean;
+
+  resultHandling?: GptFunctionResultHandling;
 
   schema: string;
   useSchemaInput?: boolean;
@@ -47,6 +50,7 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
       data: {
         name: 'newTool',
         description: 'No description provided',
+        resultHandling: 'continue',
         schema: dedent`
           {
             "type": "object",
@@ -138,6 +142,18 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
         height: 100,
       },
       {
+        type: 'dropdown',
+        label: 'Result handling',
+        dataKey: 'resultHandling',
+        defaultValue: 'continue',
+        options: [
+          { label: 'Continue with LLM', value: 'continue' },
+          { label: 'Return directly', value: 'return-direct' },
+        ],
+        helperMessage:
+          'Return directly uses the handler output as the final LLM Chat response when it is the only tool call in an auto-continued round.',
+      },
+      {
         type: 'code',
         label: 'Schema',
         dataKey: 'schema',
@@ -177,6 +193,8 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
   async process(inputs: Inputs): Promise<Outputs> {
     const name = getInputOrData(this.data, inputs, 'name');
     const description = getInputOrData(this.data, inputs, 'description');
+    const resultHandling: GptFunctionResultHandling =
+      this.data.resultHandling === 'return-direct' ? 'return-direct' : 'continue';
 
     let schema: unknown;
     if (this.data.useSchemaInput) {
@@ -208,6 +226,7 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
           description,
           parameters: schema as object,
           strict: this.data.strict ?? false,
+          resultHandling,
         },
       },
     };

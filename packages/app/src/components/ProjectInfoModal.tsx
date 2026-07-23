@@ -14,6 +14,7 @@ import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-
 import { AppModalHeader } from './AppModalHeader';
 import Button from '@atlaskit/button';
 import { ProjectContextConfiguration } from './ProjectContextConfiguration';
+import { ProjectKnowledgeStoresConfiguration } from './ProjectKnowledgeStoresConfiguration';
 import Collapsible from 'react-collapsible';
 import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
@@ -293,6 +294,10 @@ export const ProjectInfoPanel: FC = () => {
 
         <div className="project-info-item">
           <ProjectMCPConfiguration />
+        </div>
+
+        <div className="project-info-item">
+          <ProjectKnowledgeStoresConfiguration />
         </div>
 
         <div className="project-info-item">

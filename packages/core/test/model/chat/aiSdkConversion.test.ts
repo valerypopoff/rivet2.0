@@ -31,10 +31,7 @@ describe('rivetMessagesToAiSdk', () => {
     const messages: ChatMessage[] = [
       {
         type: 'user',
-        message: [
-          'Describe this image',
-          { type: 'image', mediaType: 'image/png', data: imageData },
-        ],
+        message: ['Describe this image', { type: 'image', mediaType: 'image/png', data: imageData }],
       },
     ];
     const result = await rivetMessagesToAiSdk(messages);
@@ -97,9 +94,7 @@ describe('rivetMessagesToAiSdk', () => {
         type: 'assistant',
         message: 'Let me look that up.',
         function_call: undefined,
-        function_calls: [
-          { id: 'call_1', name: 'search', arguments: '{"query":"test"}' },
-        ],
+        function_calls: [{ id: 'call_1', name: 'search', arguments: '{"query":"test"}' }],
       },
     ];
     const result = await rivetMessagesToAiSdk(messages);
@@ -167,6 +162,7 @@ describe('rivetToolsToAiSdk', () => {
           required: ['city'],
         },
         strict: false,
+        resultHandling: 'return-direct',
       },
     ];
 
@@ -175,6 +171,7 @@ describe('rivetToolsToAiSdk', () => {
     assert.ok('get_weather' in tools);
     assert.equal(tools['get_weather']!.description, 'Get weather for a city');
     assert.ok(tools['get_weather']!.inputSchema);
+    assert.equal('resultHandling' in tools['get_weather']!, false);
   });
 
   it('handles multiple functions', () => {

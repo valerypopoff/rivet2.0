@@ -1,0 +1,30 @@
+---
+title: 'Knowledge Source'
+---
+
+# Knowledge Source Node
+
+## Overview
+
+Knowledge Source creates a typed reference to one logical source in a named project knowledge store. The reference contains a connection ID and source ID. It can optionally pin an exact committed version; otherwise later nodes resolve the active version from the store.
+
+Configure any number of named stores under **Project Settings → Knowledge stores**. Credentials are kept out of the project file.
+
+## Inputs
+
+Connection ID, Source ID, and Exact Version become string inputs when their **Use Input** toggles are enabled.
+
+## Outputs
+
+| Title  | Data Type          | Description                                     |
+| ------ | ------------------ | ----------------------------------------------- |
+| Source | `knowledge-source` | Portable reference consumed by knowledge nodes. |
+
+An exact version is useful for reproducible runs. A missing or inactive exact version is returned as a normal not-found search result instead of silently falling back to another version.
+
+## See Also
+
+- [Sync Knowledge Source](./sync-knowledge-source.mdx)
+- [Get Knowledge Source Status](./get-knowledge-source-status.mdx)
+- [Search Knowledge](./search-knowledge.mdx)
+- [Knowledge Sources](../user-guide/knowledge-sources.md)

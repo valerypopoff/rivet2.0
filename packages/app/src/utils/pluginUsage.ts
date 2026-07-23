@@ -14,7 +14,7 @@ export type PluginUsageState = {
 type ProjectPluginUsageInput = {
   appPluginStates: PluginUsageState[];
   currentGraph?: NodeGraph;
-  project: Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'>;
+  project: Pick<Project, 'graphs' | 'metadata' | 'nodePrefabs' | 'plugins'>;
   registry: PluginUsageRegistry;
 };
 
@@ -108,6 +108,7 @@ export function deriveProjectPluginSpecsFromGraphs({
 
   const usedSpecsById = new Map<string, PluginLoadSpec>();
   let hasUnresolvedNodeTypes = false;
+  let hasUnresolvedKnowledgeStoreProviders = false;
 
   for (const node of getProjectNodes(project, currentGraph)) {
     const lookup = getPluginSpecForNode(node, registry, specByRuntimePluginId);
@@ -120,6 +121,15 @@ export function deriveProjectPluginSpecsFromGraphs({
     }
   }
 
+  for (const connection of Object.values(project.metadata.knowledgeStores ?? {})) {
+    const ownerPluginId = connection.pluginId ?? connection.provider;
+    const spec = specByRuntimePluginId.get(ownerPluginId);
+    if (spec) usedSpecsById.set(getPluginSpecId(spec), spec);
+    else hasUnresolvedKnowledgeStoreProviders = true;
+  }
+
+  const hasUnresolvedUsage = hasUnresolvedNodeTypes || hasUnresolvedKnowledgeStoreProviders;
+
   const nextSpecs: PluginLoadSpec[] = [];
   const seen = new Set<string>();
 
@@ -129,7 +139,7 @@ export function deriveProjectPluginSpecsFromGraphs({
 
     if (usedSpec) {
       pushSpec(nextSpecs, seen, usedSpec);
-    } else if (hasUnresolvedNodeTypes) {
+    } else if (hasUnresolvedUsage) {
       pushSpec(nextSpecs, seen, existingSpec);
     }
   }
@@ -144,10 +154,9 @@ export function deriveProjectPluginSpecsFromGraphs({
   return nextSpecs;
 }
 
-export function withDerivedProjectPluginSpecs<TProject extends Pick<Project, 'graphs' | 'nodePrefabs' | 'plugins'>>(
-  project: TProject,
-  options: Omit<ProjectPluginUsageInput, 'project'>,
-): TProject {
+export function withDerivedProjectPluginSpecs<
+  TProject extends Pick<Project, 'graphs' | 'metadata' | 'nodePrefabs' | 'plugins'>,
+>(project: TProject, options: Omit<ProjectPluginUsageInput, 'project'>): TProject {
   const plugins = deriveProjectPluginSpecsFromGraphs({
     ...options,
     project,

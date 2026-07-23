@@ -1,0 +1,40 @@
+---
+title: 'Search Knowledge'
+---
+
+# Search Knowledge Node
+
+## Overview
+
+Search Knowledge performs provider-neutral retrieval against the active committed source. It accepts one query or multiple query variants, removes empty and duplicate variants, runs independent queries concurrently, deduplicates the results with reciprocal-rank fusion, and returns typed evidence. String arrays from Code, Destructure, and other dynamically typed outputs remain separate queries when connected directly to **Query**. A failing provider query cancels unfinished sibling requests.
+
+## Inputs
+
+| Title           | Data Type              | Description                                     |
+| --------------- | ---------------------- | ----------------------------------------------- |
+| Source          | `knowledge-source`     | Source to search.                               |
+| Query           | `string` or `string[]` | One query or several complementary query forms. |
+| Metadata Filter | `object`               | Optional portable filter expression.            |
+
+## Outputs
+
+| Title           | Data Type              | Description                                                 |
+| --------------- | ---------------------- | ----------------------------------------------------------- |
+| Evidence        | `knowledge-evidence[]` | Final deduplicated evidence in fused relevance order.       |
+| Resolved Source | `knowledge-source`     | Source with the active version.                             |
+| Source Found    | `boolean`              | False when the source or requested exact version is absent. |
+| Query Results   | `object[]`             | Per-query evidence before fusion.                           |
+| Status Message  | `string`               | Human-readable normal result.                               |
+
+## Filters and Reranking
+
+Portable comparisons use `{ field, operator, value }`; logical forms use `{ and: [...] }`, `{ or: [...] }`, and `{ not: ... }`. Operators are `eq`, `neq`, `in`, `nin`, `gt`, `gte`, `lt`, `lte`, and `exists`. Rivet validates the selected provider's capabilities before querying.
+
+Enter a static filter as a JSON object in the node settings. Leave it as `{}` to search without a metadata filter, or enable the input port to construct the filter dynamically.
+
+Provider reranking can be Off, Connection Default, or Required. Connection Default gracefully does nothing for stores without reranking. Required fails when the provider or connection cannot honor it.
+
+## See Also
+
+- [Build Knowledge Context](./build-knowledge-context.mdx)
+- [Knowledge Sources](../user-guide/knowledge-sources.md)

@@ -3,7 +3,12 @@ import * as yaml from 'yaml';
 import { graphV3Deserializer, projectV3Deserializer } from './serialization_v3.js';
 import type { Project, NodeGraph, Dataset, DatasetMetadata, ChartNode } from '../../index.js';
 import { getError } from '../errors.js';
-import { type AttachedData, type SerializationVersion, yamlProblem } from './serializationUtils.js';
+import {
+  type AttachedData,
+  ProjectValidationError,
+  type SerializationVersion,
+  yamlProblem,
+} from './serializationUtils.js';
 import { prepareSerializedInput } from './serializationInput.js';
 import { UiGraphNormalizationError } from '../../model/UiGraphNormalization.js';
 import {
@@ -39,6 +44,9 @@ export function deserializeProject(serializedProject: unknown, path: string | nu
     }
     console.warn(`Failed to deserialize project v${version}: ${errMessage(err)}`);
     if (err instanceof UiGraphNormalizationError) {
+      throw new Error(`Could not deserialize project: ${err.message}`, { cause: err });
+    }
+    if (err instanceof ProjectValidationError) {
       throw new Error(`Could not deserialize project: ${err.message}`, { cause: err });
     }
     throw new Error('Could not deserialize project');

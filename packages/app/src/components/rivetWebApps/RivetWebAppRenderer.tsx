@@ -46,8 +46,10 @@ import {
   applyUiGraphWebAppStoragePatch,
   copyUiGraphText,
   downloadUiGraphJsonOutput,
+  enhanceUiGraphChatJsonCodeBlocks,
   hasUiGraphChatPersistentStateChanged,
   getUiGraphChatPersistentState,
+  getUiGraphChatMessagePresentations,
   getUiGraphWebAppStorageKey,
   highlightUiGraphChatSearchMatches,
   loadUiGraphChatPersistentState,
@@ -56,12 +58,25 @@ import {
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
+  type UiGraphChatMessagePresentation,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
 
 // Vite resolves this CommonJS compatibility export directly, while tsx exposes
 // the same component beneath `default` during source-level tests.
 const Select = (AtlaskitSelect as unknown as { default?: typeof AtlaskitSelect }).default ?? AtlaskitSelect;
+
+const ChatSendIcon: FC = () => (
+  <svg aria-hidden="true" fill="none" focusable="false" viewBox="0 0 24 24">
+    <path
+      d="M12 19V5m0 0 5 5m-5-5-5 5"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+    />
+  </svg>
+);
 
 type WebAppStorageActionState = {
   appliedActionByKey: Map<string, number>;
@@ -462,6 +477,7 @@ const RivetWebAppComponent: FC<{
           onStatePatch={onStatePatch}
           onFlushChatHistory={onFlushChatHistory}
           state={state}
+          uiGraphName={uiGraphName}
         />
       );
     case 'output': {
@@ -612,6 +628,7 @@ const RivetWebAppChat: FC<{
   onStatePatch(patch: Record<string, unknown>): void;
   renderModel: Extract<ReturnType<typeof getUiGraphComponentRenderModel>, { type: 'chat' }>;
   state: Readonly<Record<string, unknown>>;
+  uiGraphName: string;
 }> = ({
   actionError,
   actionProgress,
@@ -623,6 +640,7 @@ const RivetWebAppChat: FC<{
   onStatePatch,
   renderModel,
   state,
+  uiGraphName,
 }) => {
   const messagesRef = useRef<HTMLDivElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
@@ -635,6 +653,7 @@ const RivetWebAppChat: FC<{
   const [requestedSearchMatchIndex, setRequestedSearchMatchIndex] = useState(0);
   const [searchMatchState, setSearchMatchState] = useState({ activeIndex: -1, count: 0 });
   const { component, draft, messages, pins } = renderModel;
+  const messagePresentations = useMemo(() => getUiGraphChatMessagePresentations(messages), [messages]);
   const pinnedMessageIndexes = new Set(pins.map((pin) => pin.messageIndex));
   const chatMessagesState = state[getUiGraphChatMessagesStateKey(component.id)];
 
@@ -899,16 +918,31 @@ const RivetWebAppChat: FC<{
               <strong>Start a conversation</strong>
             </div>
           )}
-          {messages.map((message, index) => (
-            <RivetWebAppChatMessage
-              key={`${index}-${message.role}`}
-              content={message.content}
-              messageIndex={index}
-              pinned={pinnedMessageIndexes.has(index)}
-              role={message.role}
-              onTogglePin={togglePin}
-            />
-          ))}
+          {messages.map((message, index) => {
+            const presentation = messagePresentations[index];
+            return (
+              <Fragment key={`${index}-${message.role}`}>
+                {presentation?.dateSeparator && (
+                  <div
+                    className="rivet-web-app-chat-date-separator"
+                    data-rivet-chat-search-ignore="true"
+                    role="separator"
+                  >
+                    <time dateTime={presentation.dateSeparator.dateTime}>{presentation.dateSeparator.label}</time>
+                  </div>
+                )}
+                <RivetWebAppChatMessage
+                  content={message.content}
+                  messageIndex={index}
+                  pinned={pinnedMessageIndexes.has(index)}
+                  presentation={presentation}
+                  role={message.role}
+                  uiGraphName={uiGraphName}
+                  onTogglePin={togglePin}
+                />
+              </Fragment>
+            );
+          })}
           {isRunning && (
             <div className="rivet-web-app-chat-message rivet-web-app-chat-message-assistant rivet-web-app-chat-thinking">
               <span />
@@ -952,7 +986,7 @@ const RivetWebAppChat: FC<{
           disabled={!isRunning && !draft.trim()}
           onClick={isRunning ? () => onCancelAction(component.id) : undefined}
         >
-          {isRunning ? <span aria-hidden="true" className="rivet-web-app-chat-stop-icon" /> : '\u2191'}
+          {isRunning ? <span aria-hidden="true" className="rivet-web-app-chat-stop-icon" /> : <ChatSendIcon />}
         </button>
       </form>
     </section>
@@ -963,16 +997,32 @@ const RivetWebAppChatMessage: FC<{
   content: string;
   messageIndex: number;
   pinned: boolean;
+  presentation?: UiGraphChatMessagePresentation;
   role: 'assistant' | 'user';
+  uiGraphName: string;
   onTogglePin(messageIndex: number): void;
-}> = ({ content, messageIndex, pinned, role, onTogglePin }) => {
-  const markdownHtml = useMarkdown(content, true, { allowHtml: false });
+}> = ({ content, messageIndex, pinned, presentation, role, uiGraphName, onTogglePin }) => {
   const message = (
     <div
-      className={`rivet-web-app-chat-message rivet-web-app-chat-message-${role} rivet-web-app-chat-message-markdown markdown-body`}
+      className={`rivet-web-app-chat-message rivet-web-app-chat-message-${role}`}
       data-rivet-chat-message-index={role === 'user' ? messageIndex : undefined}
-      dangerouslySetInnerHTML={markdownHtml}
-    />
+    >
+      <RivetWebAppChatMarkdown
+        className="rivet-web-app-chat-message-markdown markdown-body"
+        content={content}
+        uiGraphName={uiGraphName}
+      />
+      {presentation?.timestamp && (
+        <time
+          className="rivet-web-app-chat-message-time"
+          data-rivet-chat-search-ignore="true"
+          dateTime={presentation.timestamp.dateTime}
+          title={presentation.timestamp.dateTime}
+        >
+          {presentation.timestamp.label}
+        </time>
+      )}
+    </div>
   );
 
   if (role === 'user') {
@@ -996,24 +1046,57 @@ const RivetWebAppChatMessage: FC<{
   );
 };
 
-const RivetWebAppChatPin: FC<{ pin: UiGraphChatPin; onReveal(pin: UiGraphChatPin): void }> = ({ pin, onReveal }) => {
-  const promptHtml = useMarkdown(pin.prompt?.content ?? '', true, { allowHtml: false });
-  const responseHtml = useMarkdown(pin.response.content, true, { allowHtml: false });
-
+const RivetWebAppChatPin: FC<{
+  pin: UiGraphChatPin;
+  onReveal(pin: UiGraphChatPin): void;
+}> = ({ pin, onReveal }) => {
   return (
-    <button type="button" className="rivet-web-app-chat-pin" onClick={() => onReveal(pin)}>
+    <div className="rivet-web-app-chat-pin">
+      <button
+        type="button"
+        className="rivet-web-app-chat-pin-reveal"
+        aria-label="Show pinned response in conversation"
+        title="Show pinned response in conversation"
+        onClick={() => onReveal(pin)}
+      />
       {pin.prompt && (
         <div className="rivet-web-app-chat-pin-exchange">
           <strong>You asked</strong>
-          <div className="rivet-web-app-chat-pin-markdown markdown-body" dangerouslySetInnerHTML={promptHtml} />
+          <RivetWebAppChatMarkdown
+            className="rivet-web-app-chat-pin-markdown markdown-body"
+            content={pin.prompt.content}
+            enhanceJsonBlocks={false}
+          />
         </div>
       )}
       <div className="rivet-web-app-chat-pin-exchange">
         <strong>Response</strong>
-        <div className="rivet-web-app-chat-pin-markdown markdown-body" dangerouslySetInnerHTML={responseHtml} />
+        <RivetWebAppChatMarkdown
+          className="rivet-web-app-chat-pin-markdown markdown-body"
+          content={pin.response.content}
+          enhanceJsonBlocks={false}
+        />
       </div>
-    </button>
+    </div>
   );
+};
+
+const RivetWebAppChatMarkdown: FC<{
+  className: string;
+  content: string;
+  enhanceJsonBlocks?: boolean;
+  uiGraphName?: string;
+}> = ({ className, content, enhanceJsonBlocks = true, uiGraphName }) => {
+  const markdownHtml = useMarkdown(content, true, { allowHtml: false });
+  const markdownRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (enhanceJsonBlocks && markdownRef.current && uiGraphName) {
+      enhanceUiGraphChatJsonCodeBlocks(markdownRef.current, uiGraphName);
+    }
+  }, [enhanceJsonBlocks, markdownHtml, uiGraphName]);
+
+  return <div ref={markdownRef} className={className} dangerouslySetInnerHTML={markdownHtml} />;
 };
 
 const RivetWebAppDropdown: FC<{

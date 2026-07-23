@@ -8,9 +8,15 @@ import {
   createInMemoryRivetWebAppRunStore,
   createRivetWebAppWebSocketGateway,
   type Project,
+  type RivetKnowledgeStore,
   type RivetWebAppServerMessage,
 } from '../src/index.js';
-import { makeExternalStatusProject, makeStoredValueProject, makeWebAppProject } from './webAppFixtures.js';
+import {
+  makeExternalStatusProject,
+  makeKnowledgeStatusProject,
+  makeStoredValueProject,
+  makeWebAppProject,
+} from './webAppFixtures.js';
 import {
   closeWebAppTestHarnesses,
   collectWebAppSocketMessages as collectMessages,
@@ -268,6 +274,35 @@ void describe('Rivet web app WebSocket gateway', () => {
 
     assert.deepEqual(completed.statePatch, { result: 'Host summary' });
     assert.deepEqual(completed.storagePatch, {});
+  });
+
+  void it('uses a session knowledge-store registry for WebSocket actions', async () => {
+    const store: RivetKnowledgeStore = {
+      capabilities: {},
+      async getSourceStatus({ source }) {
+        return { exists: true, source, activeVersion: 'v1', message: 'WebSocket store' };
+      },
+      async syncSource() {
+        throw new Error('not used');
+      },
+      async search() {
+        throw new Error('not used');
+      },
+    };
+    const harness = await createHarness(
+      makeKnowledgeStatusProject(),
+      undefined,
+      {},
+      { knowledgeStores: { primary: store } },
+    );
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('request-knowledge-store')));
+    await messages.next('action.accepted');
+    const completed = await messages.next('action.completed');
+
+    assert.deepEqual(completed.statePatch, { result: 'WebSocket store' });
   });
 
   void it('exposes the prepared processor before execution so hosts can attach complete recordings', async () => {

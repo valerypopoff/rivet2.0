@@ -5,6 +5,7 @@ import {
   getUiGraphChatPins,
   getUiGraphChatPinsStateKey,
   type UiGraph,
+  type UiGraphChatMessage,
 } from './UiGraph.js';
 import { getUiGraphJsonOutputFilename } from './UiGraphRuntimeModel.js';
 
@@ -16,6 +17,21 @@ const CHAT_SEARCH_MATCH_CLASS = 'rivet-web-app-chat-search-match';
 const CHAT_SEARCH_ACTIVE_MATCH_CLASS = 'rivet-web-app-chat-search-match-active';
 const UI_GRAPH_CHAT_STORAGE_PREFIX = 'rivet-web-app-chat-state:v1';
 const UI_GRAPH_APP_STORAGE_PREFIX = 'rivet-web-app-storage:v1';
+
+export type UiGraphChatMessageTimestampPresentation = Readonly<{
+  dateTime: string;
+  label: string;
+}>;
+
+export type UiGraphChatMessagePresentation = Readonly<{
+  dateSeparator?: UiGraphChatMessageTimestampPresentation;
+  timestamp?: UiGraphChatMessageTimestampPresentation;
+}>;
+
+export type UiGraphChatMessagePresentationOptions = Readonly<{
+  locales?: Intl.LocalesArgument;
+  timeZone?: string;
+}>;
 
 type UiGraphBrowserStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
 type UiGraphStorageLocation = Pick<Location, 'origin' | 'pathname'>;
@@ -51,6 +67,69 @@ const getDefaultUiGraphStorageLocation = (): UiGraphStorageLocation | undefined 
   } catch {
     return undefined;
   }
+};
+
+/**
+ * Formats persisted Chat timestamps in the current browser locale and timezone.
+ * Undated or malformed legacy messages deliberately remain present without time
+ * metadata rather than being assigned a fabricated date.
+ */
+export function getUiGraphChatMessagePresentations(
+  messages: readonly UiGraphChatMessage[],
+  options: UiGraphChatMessagePresentationOptions = {},
+): UiGraphChatMessagePresentation[] {
+  const { locales, timeZone } = options;
+  const timeFormatter = new Intl.DateTimeFormat(locales, {
+    hour: '2-digit',
+    hourCycle: 'h23',
+    minute: '2-digit',
+    ...(timeZone ? { timeZone } : {}),
+  });
+  const dateFormatter = new Intl.DateTimeFormat(locales, {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    ...(timeZone ? { timeZone } : {}),
+  });
+  const dateKeyFormatter = new Intl.DateTimeFormat('en-CA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    ...(timeZone ? { timeZone } : {}),
+  });
+  const entries = messages.map((message) => {
+    const timestamp = parseUiGraphChatTimestamp(message.timestamp);
+    if (!timestamp) return undefined;
+
+    return {
+      dateKey: dateKeyFormatter.format(timestamp),
+      dateTime: timestamp.toISOString(),
+      dateLabel: dateFormatter.format(timestamp),
+      timeLabel: timeFormatter.format(timestamp),
+    };
+  });
+  const hasMultipleDates = new Set(entries.flatMap((entry) => (entry ? [entry.dateKey] : []))).size > 1;
+  let previousDateKey: string | undefined;
+
+  return entries.map((entry) => {
+    if (!entry) return {};
+
+    const dateSeparator =
+      hasMultipleDates && previousDateKey != null && previousDateKey !== entry.dateKey
+        ? { dateTime: entry.dateTime, label: entry.dateLabel }
+        : undefined;
+    previousDateKey = entry.dateKey;
+    return {
+      ...(dateSeparator ? { dateSeparator } : {}),
+      timestamp: { dateTime: entry.dateTime, label: entry.timeLabel },
+    };
+  });
+}
+
+const parseUiGraphChatTimestamp = (value: unknown): Date | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? undefined : timestamp;
 };
 
 /** Returns the browser-local key for one app URL and one persisted UI graph. */
@@ -372,6 +451,67 @@ export function downloadUiGraphJsonOutput(value: string, appName: string): void 
 }
 
 /**
+ * Adds Rivet-owned Copy and Download controls to sanitized fenced JSON blocks.
+ * The Markdown renderer must run first: this helper never accepts or inserts
+ * author-provided interactive markup.
+ */
+export function enhanceUiGraphChatJsonCodeBlocks(root: HTMLElement, appName: string): void {
+  const codeBlocks = root.querySelectorAll<HTMLElement>('pre > code.language-json');
+  root.classList.toggle('rivet-web-app-chat-markdown-has-json', codeBlocks.length > 0);
+
+  for (const code of codeBlocks) {
+    const pre = code.parentElement;
+    const existingWrapper = pre?.parentElement;
+    if (!pre) {
+      continue;
+    }
+    if (existingWrapper?.classList.contains('rivet-web-app-chat-json-block')) {
+      existingWrapper.dataset.rivetChatJsonAppName = appName;
+      continue;
+    }
+
+    const value = code.textContent ?? '';
+    const document = root.ownerDocument;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'rivet-web-app-chat-json-block';
+    wrapper.dataset.rivetChatJsonAppName = appName;
+    const actions = document.createElement('div');
+    actions.className = 'rivet-web-app-chat-json-actions';
+    actions.dataset.rivetChatSearchIgnore = 'true';
+
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.className = 'rivet-web-app-output-action-button rivet-web-app-output-copy-button';
+    copyButton.title = 'Copy JSON';
+    copyButton.setAttribute('aria-label', 'Copy JSON');
+    copyButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void copyUiGraphText(value);
+    });
+
+    const downloadButton = document.createElement('button');
+    downloadButton.type = 'button';
+    downloadButton.className = 'rivet-web-app-output-action-button rivet-web-app-output-download-button';
+    downloadButton.title = 'Download JSON';
+    downloadButton.setAttribute('aria-label', 'Download JSON');
+    downloadButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      downloadUiGraphJsonOutput(value, wrapper.dataset.rivetChatJsonAppName ?? appName);
+    });
+
+    actions.append(copyButton, downloadButton);
+    pre.replaceWith(wrapper);
+    wrapper.append(pre, actions);
+
+    const syncScrollableState = () => {
+      wrapper.classList.toggle('rivet-web-app-chat-json-block-scrollable', pre.scrollHeight > pre.clientHeight);
+    };
+    syncScrollableState();
+    root.ownerDocument.defaultView?.requestAnimationFrame(syncScrollableState);
+  }
+}
+
+/**
  * Replaces visible chat-message text matches with safe `<mark>` elements. This
  * operates on rendered Markdown DOM rather than source Markdown, so search
  * follows what the user can actually read.
@@ -393,7 +533,7 @@ export function highlightUiGraphChatSearchMatches(
   const walker = document.createTreeWalker(messagesElement, 4);
   let node = walker.nextNode();
   while (node) {
-    if (node.parentElement?.closest('script, style, textarea')) {
+    if (node.parentElement?.closest('script, style, textarea, [data-rivet-chat-search-ignore]')) {
       node = walker.nextNode();
       continue;
     }

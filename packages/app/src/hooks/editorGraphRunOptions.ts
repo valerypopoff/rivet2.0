@@ -7,6 +7,7 @@ import type {
   NodeId,
   RivetWebAppStorage,
   RivetStoredValueStore,
+  RivetKnowledgeStoreRegistry,
 } from '@valerypopoff/rivet2-core';
 
 export type EditorGraphRunOptions = {
@@ -18,6 +19,7 @@ export type EditorGraphRunOptions = {
   onProgress?: (progress: GraphProgress) => void;
   onWebAppStoragePatch?: (storagePatch: RivetWebAppStorage) => void;
   storedValueStore?: RivetStoredValueStore;
+  knowledgeStores?: RivetKnowledgeStoreRegistry;
   requireLiveRun?: boolean;
   returnWhenGraphOutputsReady?: boolean;
   throwOnError?: boolean;

@@ -105,6 +105,13 @@ auth, revision, storage, recordings, headers, and error-envelope ownership.
 return the machine-readable `revision_mismatch` conflict used by the shared reload
 modal.
 
+Knowledge Source nodes use the same host seam across HTTP and WebSocket actions. A
+static handler/session can provide `knowledgeStores`; request-scoped
+`createProcessorOptions(context)` takes precedence. The registry contains live store
+callbacks and is not browser state. Authenticated and multi-tenant hosts should build
+it after resolving the request identity. See
+[Provider-neutral Knowledge Source API](./KNOWLEDGE-SOURCE-API.md).
+
 The generated browser client reads every action response body as text once before
 attempting to parse the JSON action protocol. JSON errors continue to use their
 `error` and `code` fields, including the `revision_mismatch` reload flow. A failed
@@ -119,6 +126,15 @@ by that button's graph input bindings. Chat projects its own validated user/assi
 conversation and any data keys named by its additional input mappings, excluding its
 draft and every unrelated app key. Action input resolution then sends the latest user
 turn separately and converts only earlier turns into the native history Data Value.
+Chat messages may additionally contain an optional browser-owned UTC ISO timestamp.
+The browser stamps a user turn when it is submitted and stamps an assistant turn when
+the completed action result arrives, so hosted HTTP and WebSocket responses use the
+actual browser receipt time rather than a server clock. Timestamp metadata persists
+with browser chat history and is formatted in the browser's locale and timezone, but
+is stripped when Rivet converts conversation history to graph `chat-message[]` input.
+Custom browser renderers can use `getUiGraphChatMessagePresentations(messages)` from
+`@valerypopoff/rivet2-core/web-app-runtime` to render the local times and the
+transition-only date separators without modifying Chat state.
 `runRivetWebAppAction(...)` repeats the projection for direct host calls, so
 lifecycle hooks and `createProcessorOptions` receive only action-relevant state.
 Unrelated form values and prior output state remain local to the web app.
@@ -464,6 +480,25 @@ Web apps are declarative: no project JavaScript or arbitrary HTML execution.
 Markdown and rich content use the shared sanitization policy. Action routes should
 be same-origin and wrapper-authenticated. Do not put credentials, request headers,
 or secrets in UI-graph state, HTML payloads, cache keys, or lifecycle hooks.
+
+After sanitized Chat Markdown is inserted, both renderer adapters call
+`enhanceUiGraphChatJsonCodeBlocks(...)` from the narrow core web-app-runtime
+export. It decorates only `pre > code.language-json` blocks with Rivet-created
+Copy JSON and Download JSON buttons. Button markup can never come from authored
+Markdown. Each action closes over that code element's decoded `textContent`, so
+prose, fences, neighboring blocks, and later DOM controls are excluded without
+parsing or reformatting JSON. The helper applies to ordinary user and assistant
+messages; compact pinned previews retain their usual Markdown-text rendering.
+Non-JSON fences and inline code are untouched. Downloads reuse
+the Output component's application/json filename utility. The original Markdown
+source remains the browser-persisted Chat message and is sent unchanged through
+later history inputs.
+
+Chat JSON cards preserve their full-width code area and their top-right controls.
+The shared post-render helper measures each code panel after it is inserted and
+adds a scrollbar class only when it overflows vertically. That class applies the
+same 1em safe inset used by the regular Output component; short JSON cards keep
+their original control position.
 
 ## Parity Tests
 

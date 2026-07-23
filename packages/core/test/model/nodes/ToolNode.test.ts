@@ -17,7 +17,7 @@ describe('GptFunctionNodeImpl', () => {
     const node = createNode({});
     const editors = node.getEditors();
 
-    assert.deepStrictEqual(editors[3], {
+    assert.deepStrictEqual(editors[4], {
       type: 'code',
       label: 'Schema',
       dataKey: 'schema',
@@ -25,6 +25,30 @@ describe('GptFunctionNodeImpl', () => {
       interpolationSyntax: 'json-template',
       useInputToggleDataKey: 'useSchemaInput',
       enableFolding: true,
+    });
+  });
+
+  it('defaults to continuing with the LLM and persists direct result handling in Rivet metadata', async () => {
+    const defaultNode = createNode({});
+    const legacyNode = createNode({ resultHandling: undefined });
+    const directNode = createNode({ resultHandling: 'return-direct' });
+    const malformedNode = createNode({ resultHandling: 'invalid' as any });
+
+    assert.equal(defaultNode.data.resultHandling, 'continue');
+    assert.equal((await legacyNode.process({})).function?.value.resultHandling, 'continue');
+    assert.equal((await directNode.process({})).function?.value.resultHandling, 'return-direct');
+    assert.equal((await malformedNode.process({})).function?.value.resultHandling, 'continue');
+    assert.deepEqual(defaultNode.getEditors()[3], {
+      type: 'dropdown',
+      label: 'Result handling',
+      dataKey: 'resultHandling',
+      defaultValue: 'continue',
+      options: [
+        { label: 'Continue with LLM', value: 'continue' },
+        { label: 'Return directly', value: 'return-direct' },
+      ],
+      helperMessage:
+        'Return directly uses the handler output as the final LLM Chat response when it is the only tool call in an auto-continued round.',
     });
   });
 

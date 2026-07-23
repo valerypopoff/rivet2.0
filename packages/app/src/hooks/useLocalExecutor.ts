@@ -374,6 +374,7 @@ export function useLocalExecutor() {
         processor.setExternalFunction(name, externalFunction);
       }
       processor.setStoredValueStore(options.storedValueStore);
+      processor.setKnowledgeStores(options.knowledgeStores);
       if (options.onProgress) {
         processor.on('progress', ({ progress }) => options.onProgress?.(progress));
       }

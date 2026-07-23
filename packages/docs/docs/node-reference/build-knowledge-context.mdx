@@ -1,0 +1,31 @@
+---
+title: 'Build Knowledge Context'
+---
+
+# Build Knowledge Context Node
+
+## Overview
+
+Build Knowledge Context converts typed evidence into bounded text for an LLM prompt. It assigns stable labels such as `[K1]`, includes selected metadata that actually exists on each evidence record, and never exceeds the configured character or token budget. Missing fields—including names inherited from JavaScript object prototypes—are ignored.
+
+## Inputs
+
+| Title    | Data Type                                      | Description                 |
+| -------- | ---------------------------------------------- | --------------------------- |
+| Evidence | `knowledge-evidence` or `knowledge-evidence[]` | Retrieved evidence to pack. |
+
+## Outputs
+
+| Title             | Data Type              | Description                                     |
+| ----------------- | ---------------------- | ----------------------------------------------- |
+| Context           | `string`               | Bounded prompt-ready evidence text.             |
+| Included Evidence | `knowledge-evidence[]` | Evidence represented in Context.                |
+| Citation Map      | `object`               | Citation label to source/document metadata map. |
+| Excluded Count    | `number`               | Items omitted by item or context limits.        |
+
+The budget includes citation labels, metadata, and separators. Oversized evidence is skipped so later shorter evidence may still fit.
+
+## See Also
+
+- [Search Knowledge](./search-knowledge.mdx)
+- [LLM Chat](./llm-chat.mdx)

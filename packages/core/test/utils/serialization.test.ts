@@ -229,6 +229,75 @@ describe('serialization compatibility', () => {
     assert.deepEqual(attachedDataV4, { pluginState: { enabled: true } });
   });
 
+  it('round-trips named knowledge-store connections as portable project metadata', () => {
+    const project: Project = {
+      ...baseProject,
+      metadata: {
+        ...baseProject.metadata,
+        knowledgeStores: {
+          primary: {
+            displayName: 'Primary knowledge',
+            provider: 'pinecone',
+            pluginId: 'pinecone',
+            config: {
+              indexHost: 'https://example-index.svc.example.io',
+              namespaceTemplate: 'source-{sourceId}',
+            },
+          },
+        },
+      },
+    };
+
+    const serialized = serializeProject(project) as string;
+    const [deserialized] = deserializeProject(serialized);
+
+    assert.deepEqual(deserialized.metadata.knowledgeStores, project.metadata.knowledgeStores);
+    assert.doesNotMatch(serialized, /apiKey|credential/i);
+  });
+
+  it('reports malformed knowledge-store project metadata before the editor or runtime consumes it', () => {
+    const invalidStores = [
+      [],
+      { __proto__: { displayName: 'Unsafe', provider: 'pinecone', config: {} } },
+      { ' padded ': { displayName: 'Padded', provider: 'pinecone', config: {} } },
+      { primary: { displayName: '', provider: 'pinecone', config: {} } },
+      { primary: { displayName: ' Padded ', provider: 'pinecone', config: {} } },
+      { primary: { displayName: 'Primary', provider: 'constructor', config: {} } },
+      { primary: { displayName: 'Primary', provider: 'pinecone', pluginId: '__proto__', config: {} } },
+      { primary: { displayName: 'Primary', provider: 'pinecone' } },
+      { primary: { displayName: 'Primary', provider: 'pinecone', config: { ' padded ': true } } },
+      { primary: { displayName: 'Primary', provider: 'pinecone', config: { nested: { unsafe: true } } } },
+    ];
+
+    for (const knowledgeStores of invalidStores) {
+      const result = validateProject({
+        metadata: { id: 'invalid-knowledge-project', title: 'Invalid knowledge project', knowledgeStores },
+        graphs: {},
+      });
+      assert.equal(result.valid, false);
+      assert.match(result.errors.join('\n'), /knowledgeStores|Knowledge store connection/);
+    }
+  });
+
+  it('preserves project validation diagnostics at the public deserialization boundary', () => {
+    const serialized = serializeProject({
+      ...baseProject,
+      metadata: {
+        ...baseProject.metadata,
+        knowledgeStores: {
+          ' padded ': { displayName: 'Primary', provider: 'pinecone', config: {} },
+        },
+      },
+    } as Project);
+    const originalWarn = console.warn;
+    console.warn = () => undefined;
+    try {
+      assert.throws(() => deserializeProject(serialized), /connection ID cannot be padded/);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   it('deserializes graph formats v1 through v4', () => {
     const graph1 = deserializeGraph(v1Graph);
     const graph2 = deserializeGraph(v2Graph);

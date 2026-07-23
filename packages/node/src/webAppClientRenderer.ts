@@ -8,8 +8,10 @@ import {
   createUiGraphChatSubmissionStatePatch,
   createUiGraphInteractionController,
   downloadUiGraphJsonOutput,
+  enhanceUiGraphChatJsonCodeBlocks,
   getUiGraphComponentRenderModel,
   getUiGraphChatDraftStateKey,
+  getUiGraphChatMessagePresentations,
   getUiGraphChatMessagesStateKey,
   getUiGraphChatPersistentState,
   hasUiGraphChatPersistentStateChanged,
@@ -20,6 +22,7 @@ import {
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
   type UiGraphActionComponent,
+  type UiGraphChatMessageTimestampPresentation,
   type UiGraphComponent,
   type UiGraphInteractionSnapshot,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
@@ -74,6 +77,7 @@ const CHAT_SEARCH_ICON_PATH = 'm20 20-4.05-4.05m0 0a7 7 0 1 0-9.9-9.9 7 7 0 0 0 
 const CROSS_ICON_PATH = 'M12 12 6 6m6 6 6 6m-6-6 6-6m-6 6-6 6';
 const CHEVRON_LEFT_ICON_PATH = 'm14 7-5 5 5 5';
 const CHEVRON_RIGHT_ICON_PATH = 'm10 7 5 5-5 5';
+const CHAT_SEND_ICON_PATH = 'M12 19V5m0 0 5 5m-5-5-5 5';
 const PIN_ICON_PATH =
   'm4 20 5-5m0 0 3.956 3.956a1 1 0 0 0 1.626-.314l2.255-5.261a1 1 0 0 1 .548-.535l3.207-1.283a1 1 0 0 0 .336-1.635l-6.856-6.856a1 1 0 0 0-1.635.336l-1.283 3.207a1 1 0 0 1-.535.548L5.358 9.418a1 1 0 0 0-.314 1.626L9 15z';
 const MORE_MENU_ICON_PATH = 'M5 12h.01M12 12h.01M19 12h.01';
@@ -92,6 +96,14 @@ function createLineIcon(pathData: string): SVGSVGElement {
   path.setAttribute('stroke-width', '2');
   icon.append(path);
   return icon;
+}
+
+function createChatDateSeparator(presentation: UiGraphChatMessageTimestampPresentation): HTMLDivElement {
+  return createElement(
+    'div',
+    { className: 'rivet-web-app-chat-date-separator', 'data-rivet-chat-search-ignore': 'true', role: 'separator' },
+    [createElement('time', { dateTime: presentation.dateTime, text: presentation.label })],
+  );
 }
 
 export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig): void {
@@ -211,9 +223,12 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     });
   };
 
-  const renderMarkdownElement = (value: string, className: string): HTMLDivElement => {
+  const renderMarkdownElement = (value: string, className: string, enhanceJsonBlocks = false): HTMLDivElement => {
     const element = createElement('div', { className });
     element.innerHTML = renderMarkdown(value);
+    if (enhanceJsonBlocks) {
+      enhanceUiGraphChatJsonCodeBlocks(element, config.uiGraph.name);
+    }
     return element;
   };
 
@@ -585,38 +600,66 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             render();
           }
         };
-        const messageNodes = renderModel.messages.map((message, messageIndex) => {
-          const messageElement = renderMarkdownElement(
-            message.content,
-            `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role} rivet-web-app-chat-message-markdown markdown-body`,
-          );
-          if (message.role === 'user') {
-            messageElement.dataset.rivetChatMessageIndex = String(messageIndex);
-            return messageElement;
-          }
+        const messagePresentations = getUiGraphChatMessagePresentations(renderModel.messages);
+        const messageNodes = renderModel.messages
+          .map((message, messageIndex) => {
+            const messagePresentation = messagePresentations[messageIndex];
+            const messageContent = renderMarkdownElement(
+              message.content,
+              'rivet-web-app-chat-message-markdown markdown-body',
+              true,
+            );
+            const messageElement = createElement(
+              'div',
+              { className: `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role}` },
+              [
+                messageContent,
+                ...(messagePresentation?.timestamp
+                  ? [
+                      createElement('time', {
+                        className: 'rivet-web-app-chat-message-time',
+                        'data-rivet-chat-search-ignore': 'true',
+                        dateTime: messagePresentation.timestamp.dateTime,
+                        text: messagePresentation.timestamp.label,
+                        title: messagePresentation.timestamp.dateTime,
+                      }),
+                    ]
+                  : []),
+              ],
+            );
+            if (message.role === 'user') {
+              messageElement.dataset.rivetChatMessageIndex = String(messageIndex);
+              return messagePresentation?.dateSeparator
+                ? [createChatDateSeparator(messagePresentation.dateSeparator), messageElement]
+                : [messageElement];
+            }
 
-          const pinned = pinnedMessageIndexes.has(messageIndex);
-          const pinButton = createElement(
-            'button',
-            {
-              'aria-label': pinned ? 'Unpin response' : 'Pin response',
-              'aria-pressed': `${pinned}`,
-              className: `rivet-web-app-chat-pin-button${pinned ? ' active' : ''}`,
-              onClick: () => togglePin(messageIndex),
-              title: pinned ? 'Unpin response' : 'Pin response',
-              type: 'button',
-            },
-            [createLineIcon(PIN_ICON_PATH)],
-          );
-          return createElement(
-            'div',
-            {
-              className: 'rivet-web-app-chat-message-row',
-              'data-rivet-chat-message-index': String(messageIndex),
-            },
-            [messageElement, pinButton],
-          );
-        });
+            const pinned = pinnedMessageIndexes.has(messageIndex);
+            const pinButton = createElement(
+              'button',
+              {
+                'aria-label': pinned ? 'Unpin response' : 'Pin response',
+                'aria-pressed': `${pinned}`,
+                className: `rivet-web-app-chat-pin-button${pinned ? ' active' : ''}`,
+                onClick: () => togglePin(messageIndex),
+                title: pinned ? 'Unpin response' : 'Pin response',
+                type: 'button',
+              },
+              [createLineIcon(PIN_ICON_PATH)],
+            );
+            const messageRow = createElement(
+              'div',
+              {
+                className: 'rivet-web-app-chat-message-row',
+                'data-rivet-chat-message-index': String(messageIndex),
+              },
+              [messageElement, pinButton],
+            );
+            return messagePresentation?.dateSeparator
+              ? [createChatDateSeparator(messagePresentation.dateSeparator), messageRow]
+              : [messageRow];
+          })
+          .flat();
         if (messageNodes.length === 0) {
           messageNodes.push(
             createElement('div', { className: 'rivet-web-app-chat-empty' }, [
@@ -776,10 +819,10 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
                     renderMarkdownElement(pin.response.content, 'rivet-web-app-chat-pin-markdown markdown-body'),
                   ]),
                 );
-                return createElement(
-                  'button',
-                  {
-                    className: 'rivet-web-app-chat-pin',
+                return createElement('div', { className: 'rivet-web-app-chat-pin' }, [
+                  createElement('button', {
+                    'aria-label': 'Show pinned response in conversation',
+                    className: 'rivet-web-app-chat-pin-reveal',
                     onClick: () => {
                       const messageIndex = pin.promptMessageIndex ?? pin.messageIndex;
                       const message = messagesElement.querySelector<HTMLElement>(
@@ -787,10 +830,11 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
                       );
                       revealUiGraphChatElement(messagesElement, message ?? undefined, 'start');
                     },
+                    title: 'Show pinned response in conversation',
                     type: 'button',
-                  },
-                  exchanges,
-                );
+                  }),
+                  ...exchanges,
+                ]);
               }),
             )
           : undefined;
@@ -815,7 +859,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           );
           sendButton.addEventListener('click', () => interactionController.cancelAction(renderModel.component.id));
         } else {
-          sendButton.textContent = String.fromCodePoint(8593);
+          sendButton.append(createLineIcon(CHAT_SEND_ICON_PATH));
           sendButton.disabled = !renderModel.draft.trim();
         }
         textarea.addEventListener('input', () => {

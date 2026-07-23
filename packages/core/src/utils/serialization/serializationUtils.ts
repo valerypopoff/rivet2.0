@@ -6,6 +6,11 @@ import {
   UiGraphNormalizationError,
 } from '../../model/UiGraphNormalization.js';
 import { prepareSerializedInput } from './serializationInput.js';
+import {
+  isReservedKnowledgeObjectKey,
+  normalizeKnowledgeConnectionId,
+  normalizeKnowledgeMetadata,
+} from '../../integrations/KnowledgeStoreValidation.js';
 
 /** Additional data that has been attached to a project/graph, for use by plugins, etc. */
 export type AttachedData = Record<string, unknown>;
@@ -15,6 +20,13 @@ export type ProjectValidationResult = {
   errors: string[];
   warnings: string[];
 };
+
+export class ProjectValidationError extends Error {
+  constructor(readonly validation: ProjectValidationResult) {
+    super(`Invalid project file: ${validation.errors.join('; ')}`);
+    this.name = 'ProjectValidationError';
+  }
+}
 
 /** Validates a deserialized project structure. Returns errors for structural problems. */
 export function validateProject(project: unknown): ProjectValidationResult {
@@ -34,6 +46,7 @@ export function validateProject(project: unknown): ProjectValidationResult {
     const meta = p.metadata as Record<string, unknown>;
     if (!meta.id) errors.push('Missing project metadata.id');
     if (!meta.title) errors.push('Missing project metadata.title');
+    if (meta.knowledgeStores != null) validateKnowledgeStores(meta.knowledgeStores, errors);
   }
 
   // Graphs checks
@@ -87,6 +100,51 @@ export function validateProject(project: unknown): ProjectValidationResult {
   return { valid: errors.length === 0, errors, warnings };
 }
 
+function validateKnowledgeStores(value: unknown, errors: string[]): void {
+  if (!isPlainRecord(value)) {
+    errors.push('Project metadata.knowledgeStores is not a plain object');
+    return;
+  }
+
+  for (const [connectionId, definition] of Object.entries(value)) {
+    try {
+      const normalizedId = normalizeKnowledgeConnectionId(connectionId);
+      if (normalizedId !== connectionId) throw new Error('connection ID cannot be padded');
+      if (!isPlainRecord(definition)) throw new Error('definition is not a plain object');
+      if (typeof definition.displayName !== 'string' || !definition.displayName.trim()) {
+        throw new Error('displayName must be a non-empty string');
+      }
+      if (definition.displayName !== definition.displayName.trim()) {
+        throw new Error('displayName cannot be padded');
+      }
+      validateKnowledgeProviderId(definition.provider, 'provider');
+      if (definition.pluginId != null) validateKnowledgeProviderId(definition.pluginId, 'pluginId');
+      if (!isPlainRecord(definition.config)) throw new Error('config must be a plain object');
+      for (const key of Object.keys(definition.config)) {
+        if (key !== key.trim()) throw new Error(`config field "${key}" cannot be padded`);
+      }
+      normalizeKnowledgeMetadata(definition.config, 'Knowledge store connection configuration');
+    } catch (error) {
+      errors.push(
+        `Knowledge store connection "${connectionId}": ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+}
+
+function validateKnowledgeProviderId(value: unknown, field: 'provider' | 'pluginId'): void {
+  if (typeof value !== 'string' || !value.trim() || value !== value.trim()) {
+    throw new Error(`${field} must be a non-empty, unpadded string`);
+  }
+  if (isReservedKnowledgeObjectKey(value)) throw new Error(`${field} "${value}" is reserved`);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function validateUiGraphs(uiGraphs: unknown, errors: string[]): void {
   try {
     normalizeUiGraphRecord(uiGraphs, { repairComponentIds: false });
@@ -103,7 +161,7 @@ function validateUiGraphs(uiGraphs: unknown, errors: string[]): void {
 export function doubleCheckProject(project: Project): void {
   const result = validateProject(project);
   if (!result.valid) {
-    throw new Error(`Invalid project file: ${result.errors.join('; ')}`);
+    throw new ProjectValidationError(result);
   }
 }
 

@@ -6,6 +6,7 @@ import { marked, Renderer } from 'marked';
 import { createRoot } from 'react-dom/client';
 import { act, Simulate } from 'react-dom/test-utils';
 import {
+  createUiGraphInteractionController,
   getUiGraphInitialState,
   getUiGraphChatMessagesStateKey,
   RIVET_MARKDOWN_SANITIZER_POLICY,
@@ -13,7 +14,40 @@ import {
   type UiGraph,
   type UiGraphId,
 } from '@valerypopoff/rivet2-core';
+import { enhanceUiGraphChatJsonCodeBlocks } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { RivetWebAppRenderer, type RivetWebAppActionResult } from './RivetWebAppRenderer.js';
+
+test('fenced JSON controls reserve a scrollbar inset only for vertically overflowing code', () => {
+  const dom = new JSDOM(
+    [
+      '<div id="short"><pre><code class="language-json">{}</code></pre></div>',
+      '<div id="long"><pre><code class="language-json">{}</code></pre></div>',
+    ].join(''),
+  );
+
+  try {
+    const shortRoot = dom.window.document.getElementById('short')!;
+    const longRoot = dom.window.document.getElementById('long')!;
+    const shortPre = shortRoot.querySelector('pre')!;
+    const longPre = longRoot.querySelector('pre')!;
+    Object.defineProperties(shortPre, {
+      clientHeight: { configurable: true, value: 40 },
+      scrollHeight: { configurable: true, value: 40 },
+    });
+    Object.defineProperties(longPre, {
+      clientHeight: { configurable: true, value: 40 },
+      scrollHeight: { configurable: true, value: 80 },
+    });
+
+    enhanceUiGraphChatJsonCodeBlocks(shortRoot, 'Chat app');
+    enhanceUiGraphChatJsonCodeBlocks(longRoot, 'Chat app');
+
+    assert.equal(shortRoot.querySelector('.rivet-web-app-chat-json-block-scrollable'), null);
+    assert.equal(longRoot.querySelector('.rivet-web-app-chat-json-block-scrollable')?.tagName, 'DIV');
+  } finally {
+    dom.window.close();
+  }
+});
 
 test('React and hosted renderers keep the same component and action behavior', async () => {
   const hostedClientScript = await loadGeneratedHostedClient();
@@ -200,6 +234,7 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     for (const root of [reactRootElement, hostedDom.window.document]) {
       assert.equal(root.querySelector('.rivet-web-app-chat-empty')?.textContent, 'Start a conversation');
       assert.equal(root.querySelector('.rivet-web-app-chat-search-button'), null);
+      assert.equal(root.querySelector('.rivet-web-app-chat-send svg')?.getAttribute('viewBox'), '0 0 24 24');
     }
 
     await act(async () => {
@@ -217,11 +252,16 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.click();
 
     const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
-    assert.deepEqual(reactActionState, {
+    assert.deepEqual(removeChatMessageTimestamps(reactActionState), {
       [messagesKey]: [{ role: 'user', content: '**Hello**' }],
       tone: 'Friendly',
     });
-    assert.deepEqual(hostedActionState, reactActionState);
+    assert.deepEqual(removeChatMessageTimestamps(hostedActionState), removeChatMessageTimestamps(reactActionState));
+    for (const actionState of [reactActionState, hostedActionState]) {
+      const timestamp = (actionState?.[messagesKey] as Array<{ timestamp?: unknown }> | undefined)?.[0]?.timestamp;
+      assert.equal(typeof timestamp, 'string');
+      assert.equal(Number.isNaN(new Date(timestamp as string).getTime()), false);
+    }
     assert.deepEqual(readChatState(reactRootElement), readChatState(hostedDom.window.document));
     assert.deepEqual(readChatState(reactRootElement), {
       disabled: false,
@@ -260,6 +300,8 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
       assert.equal(messages[0]?.querySelector('strong')?.textContent, 'Hello');
       assert.equal(messages[1]?.querySelector('strong')?.textContent, 'Hi!');
       assert.equal(messages[1]?.querySelector('script'), null);
+      assert.equal(messages[0]?.querySelector('time')?.textContent?.match(/^\d{2}:\d{2}$/) != null, true);
+      assert.equal(messages[1]?.querySelector('time')?.textContent?.match(/^\d{2}:\d{2}$/) != null, true);
     }
     assert.equal(isChatComposerFocused(reactDom.window.document), true);
     assert.equal(isChatComposerFocused(hostedDom.window.document), true);
@@ -382,11 +424,255 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
   }
 });
 
+test('React and hosted Chat renderers keep timestamp and date-separator presentation in parity', async () => {
+  const hostedClientScript = await loadGeneratedHostedClient();
+  const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
+  const hostedDom = new JSDOM('<div id="app"></div>', { runScripts: 'outside-only', url: 'https://example.test/app' });
+  const restoreGlobals = installDomGlobals(reactDom);
+  const uiGraph = makeChatUiGraph();
+  const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
+  const initialState = {
+    ...getUiGraphInitialState(uiGraph),
+    [messagesKey]: [
+      { content: 'First', role: 'user', timestamp: '2026-07-20T12:00:00.000Z' },
+      { content: 'Second', role: 'assistant', timestamp: '2026-07-21T12:00:00.000Z' },
+      { content: 'Third', role: 'user', timestamp: '2026-07-22T12:00:00.000Z' },
+    ],
+  };
+  const interactionController = createUiGraphInteractionController(uiGraph, { initialState });
+  const reactRootElement = reactDom.window.document.getElementById('root')!;
+  const reactRoot = createRoot(reactRootElement);
+
+  try {
+    await act(async () => {
+      reactRoot.render(
+        <RivetWebAppRenderer
+          interactionController={interactionController}
+          uiGraph={uiGraph}
+          onRunAction={async () => {
+            throw new Error('Timestamp presentation does not run a graph action.');
+          }}
+        />,
+      );
+    });
+    configureHostedRenderer(
+      hostedDom,
+      hostedClientScript,
+      uiGraph,
+      async () => {
+        throw new Error('Timestamp presentation does not run a graph action.');
+      },
+      initialState,
+    );
+
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      assert.equal(root.querySelectorAll('.rivet-web-app-chat-message-time').length, 3);
+      assert.equal(root.querySelectorAll('.rivet-web-app-chat-date-separator').length, 2);
+    }
+    assert.deepEqual(
+      readChatTimestampPresentation(reactRootElement),
+      readChatTimestampPresentation(hostedDom.window.document),
+    );
+  } finally {
+    await act(async () => reactRoot.unmount());
+    restoreGlobals();
+    reactDom.window.close();
+    hostedDom.window.close();
+  }
+});
+
+test('React and hosted Chat renderers add safe independent controls to every fenced JSON block', async () => {
+  const hostedClientScript = await loadGeneratedHostedClient();
+  const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
+  const hostedDom = new JSDOM('<div id="app"></div>', { runScripts: 'outside-only', url: 'https://example.test/app' });
+  const reactCopies: string[] = [];
+  const hostedCopies: string[] = [];
+  const reactDownloads: Array<{ download: string; href: string }> = [];
+  const hostedDownloads: Array<{ download: string; href: string }> = [];
+  let reactActionState: Record<string, unknown> | undefined;
+  let hostedActionState: Record<string, unknown> | undefined;
+  Object.defineProperty(reactDom.window.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (value: string) => reactCopies.push(value) },
+  });
+  Object.defineProperty(hostedDom.window.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (value: string) => hostedCopies.push(value) },
+  });
+  const originalGlobalCreateObjectUrl = globalThis.URL.createObjectURL;
+  const originalGlobalRevokeObjectUrl = globalThis.URL.revokeObjectURL;
+  const originalHostedCreateObjectUrl = hostedDom.window.URL.createObjectURL;
+  const originalHostedRevokeObjectUrl = hostedDom.window.URL.revokeObjectURL;
+  const originalReactAnchorClick = reactDom.window.HTMLAnchorElement.prototype.click;
+  const originalHostedAnchorClick = hostedDom.window.HTMLAnchorElement.prototype.click;
+  globalThis.URL.createObjectURL = () => 'blob:react-json';
+  globalThis.URL.revokeObjectURL = () => undefined;
+  hostedDom.window.URL.createObjectURL = () => 'blob:hosted-json';
+  hostedDom.window.URL.revokeObjectURL = () => undefined;
+  reactDom.window.HTMLAnchorElement.prototype.click = function () {
+    reactDownloads.push({ download: this.download, href: this.href });
+  };
+  hostedDom.window.HTMLAnchorElement.prototype.click = function () {
+    hostedDownloads.push({ download: this.download, href: this.href });
+  };
+  const restoreGlobals = installDomGlobals(reactDom);
+  const uiGraph = makeChatUiGraph();
+  const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
+  const unicodeName = '\u0416\u0435\u043d\u044f';
+  const userJson = ['User data:', '', '```json', '{', `  "name": "${unicodeName}"`, '}', '```'].join('\n');
+  const assistantJson = [
+    'Generated files:',
+    '',
+    '```json',
+    '{',
+    '  "html": "<button onclick=\\"bad()\\">not interactive</button>"',
+    '}',
+    '```',
+    '',
+    '```javascript',
+    'console.log("ordinary code");',
+    '```',
+    '',
+    '```json',
+    '[1, 2, 3]',
+    '```',
+    '',
+    '<button onclick="bad()">author button</button>',
+  ].join('\n');
+  const initialState = {
+    ...getUiGraphInitialState(uiGraph),
+    [messagesKey]: [
+      { content: userJson, role: 'user' },
+      { content: assistantJson, role: 'assistant' },
+    ],
+  };
+  const interactionController = createUiGraphInteractionController(uiGraph, { initialState });
+  const reactRootElement = reactDom.window.document.getElementById('root')!;
+  const reactRoot = createRoot(reactRootElement);
+
+  try {
+    await act(async () => {
+      reactRoot.render(
+        <RivetWebAppRenderer
+          interactionController={interactionController}
+          uiGraph={uiGraph}
+          onRunAction={async (_componentId, state) => {
+            reactActionState = state;
+            return { outputs: {} };
+          }}
+        />,
+      );
+    });
+    configureHostedRenderer(
+      hostedDom,
+      hostedClientScript,
+      uiGraph,
+      async (state) => {
+        hostedActionState = state;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ outputs: {} }),
+        } as Response;
+      },
+      initialState,
+    );
+
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      const messages = root.querySelectorAll('.rivet-web-app-chat-message-markdown');
+      assert.equal(messages[0]?.querySelectorAll('.rivet-web-app-chat-json-block').length, 1);
+      assert.equal(messages[1]?.querySelectorAll('.rivet-web-app-chat-json-block').length, 2);
+      assert.equal(messages[1]?.querySelectorAll('pre > code.language-javascript').length, 1);
+      assert.equal(messages[1]?.querySelectorAll('.rivet-web-app-chat-json-actions button').length, 4);
+      assert.equal(messages[1]?.querySelector('button:not(.rivet-web-app-output-action-button)'), null);
+      assert.deepEqual(
+        [...messages[1]!.querySelectorAll('.rivet-web-app-chat-json-actions button')].map((button) =>
+          button.getAttribute('aria-label'),
+        ),
+        ['Copy JSON', 'Download JSON', 'Copy JSON', 'Download JSON'],
+      );
+      assert.equal(
+        messages[1]?.querySelector('pre > code.language-json')?.textContent,
+        '{\n  "html": "<button onclick=\\"bad()\\">not interactive</button>"\n}\n',
+      );
+    }
+
+    await act(async () => {
+      reactRootElement.querySelector<HTMLButtonElement>('[aria-label="Copy JSON"]')?.click();
+      await Promise.resolve();
+    });
+    hostedDom.window.document.querySelector<HTMLButtonElement>('[aria-label="Copy JSON"]')?.click();
+    await Promise.resolve();
+    assert.deepEqual(reactCopies, [`{\n  "name": "${unicodeName}"\n}\n`]);
+    assert.deepEqual(hostedCopies, reactCopies);
+
+    reactRootElement.querySelector<HTMLButtonElement>('[aria-label="Download JSON"]')?.click();
+    hostedDom.window.document.querySelector<HTMLButtonElement>('[aria-label="Download JSON"]')?.click();
+    assert.equal(reactDownloads.length, 1);
+    assert.equal(hostedDownloads.length, 1);
+    assert.match(reactDownloads[0]!.download, /^Chat app \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.json$/);
+    assert.match(hostedDownloads[0]!.download, /^Chat app \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.json$/);
+    assert.equal(reactDownloads[0]!.href, 'blob:react-json');
+    assert.equal(hostedDownloads[0]!.href, 'blob:hosted-json');
+
+    await act(async () => reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click());
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pin-button')?.click();
+    await act(async () =>
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click(),
+    );
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
+
+    for (const root of [reactRootElement, hostedDom.window.document]) {
+      const pin = root.querySelector('.rivet-web-app-chat-pin');
+      assert.equal(pin?.querySelectorAll('.rivet-web-app-chat-json-block').length, 0);
+      assert.equal(pin?.querySelectorAll('pre > code.language-json').length, 3);
+      assert.equal(pin?.querySelectorAll('.rivet-web-app-chat-json-actions').length, 0);
+      assert.equal(pin?.querySelector(':scope > .rivet-web-app-chat-pin-reveal')?.tagName, 'BUTTON');
+    }
+
+    await act(async () => {
+      const textarea = reactRootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')!;
+      Object.getOwnPropertyDescriptor(reactDom.window.HTMLTextAreaElement.prototype, 'value')?.set?.call(
+        textarea,
+        'Please revise it',
+      );
+      Simulate.change(textarea);
+    });
+    await act(async () => {
+      reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.click();
+      await Promise.resolve();
+    });
+    setTextareaValue(hostedDom.window.document, 'Please revise it', hostedDom);
+    hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-send')?.click();
+    await Promise.resolve();
+
+    const expectedHistory = [
+      { content: userJson, role: 'user' },
+      { content: assistantJson, role: 'assistant' },
+      { content: 'Please revise it', role: 'user' },
+    ];
+    assert.deepEqual(removeChatMessageTimestamps(reactActionState)?.[messagesKey], expectedHistory);
+    assert.deepEqual(removeChatMessageTimestamps(hostedActionState)?.[messagesKey], expectedHistory);
+  } finally {
+    await act(async () => reactRoot.unmount());
+    globalThis.URL.createObjectURL = originalGlobalCreateObjectUrl;
+    globalThis.URL.revokeObjectURL = originalGlobalRevokeObjectUrl;
+    hostedDom.window.URL.createObjectURL = originalHostedCreateObjectUrl;
+    hostedDom.window.URL.revokeObjectURL = originalHostedRevokeObjectUrl;
+    reactDom.window.HTMLAnchorElement.prototype.click = originalReactAnchorClick;
+    hostedDom.window.HTMLAnchorElement.prototype.click = originalHostedAnchorClick;
+    restoreGlobals();
+    reactDom.window.close();
+    hostedDom.window.close();
+  }
+});
+
 function configureHostedRenderer(
   dom: JSDOM,
   clientScript: string,
   uiGraph: UiGraph,
   runAction: (state: Record<string, unknown>) => Promise<Response>,
+  initialState: Record<string, unknown> = getUiGraphInitialState(uiGraph),
 ): void {
   const hostedWindow = dom.window as typeof dom.window & {
     DOMPurify?: ReturnType<typeof createDOMPurify>;
@@ -397,7 +683,7 @@ function configureHostedRenderer(
   hostedWindow.marked = { Renderer, parse: marked };
   hostedWindow.__RIVET_WEB_APP__ = {
     actionPath: '/actions/run',
-    initialState: getUiGraphInitialState(uiGraph),
+    initialState,
     markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY,
     uiGraph,
   };
@@ -473,9 +759,35 @@ function readChatState(root: ParentNode): { disabled: boolean; isStopControl: bo
     disabled: sendButton?.disabled ?? false,
     isStopControl: sendButton?.classList.contains('rivet-web-app-chat-stop') ?? false,
     messages: [...root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message')].map((message) =>
-      (message.textContent ?? '').trimEnd(),
+      (message.querySelector('.rivet-web-app-chat-message-markdown')?.textContent ?? '').trimEnd(),
     ),
   };
+}
+
+function readChatTimestampPresentation(root: ParentNode): { dateSeparators: string[]; times: string[] } {
+  return {
+    dateSeparators: [...root.querySelectorAll('.rivet-web-app-chat-date-separator')].map(
+      (separator) => separator.textContent ?? '',
+    ),
+    times: [...root.querySelectorAll('.rivet-web-app-chat-message-time')].map((time) => time.textContent ?? ''),
+  };
+}
+
+function removeChatMessageTimestamps(state: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!state) return state;
+
+  return Object.fromEntries(
+    Object.entries(state).map(([key, value]) => [
+      key,
+      Array.isArray(value)
+        ? value.map((message) => {
+            if (!message || typeof message !== 'object') return message;
+            const { timestamp: _timestamp, ...rest } = message as Record<string, unknown>;
+            return rest;
+          })
+        : value,
+    ]),
+  );
 }
 
 function readChatSearchState(root: ParentNode): { activeCount: number; count: string | null; matchCount: number } {

@@ -1,0 +1,38 @@
+---
+title: 'Sync Knowledge Source'
+---
+
+# Sync Knowledge Source Node
+
+## Overview
+
+Sync Knowledge Source synchronizes a complete logical source. Rivet normalizes and chunks the documents, computes a deterministic content version, uploads that immutable version, and activates it only after all chunks succeed.
+
+Running the same content and settings again returns `unchanged` without re-uploading. Document IDs must be unique within the source; duplicates fail before any write. An update activates the new version before guarded cleanup of the old one.
+
+## Inputs
+
+| Title           | Data Type                                                             | Description                                      |
+| --------------- | --------------------------------------------------------------------- | ------------------------------------------------ |
+| Source          | `knowledge-source`                                                    | Target named connection and logical source ID.   |
+| Documents       | `string`, `string[]`, `knowledge-document`, or `knowledge-document[]` | Complete current source contents.                |
+| Source Metadata | `object`                                                              | Optional source-level metadata.                  |
+| Force Refresh   | `boolean`                                                             | Rewrites an otherwise unchanged content version. |
+
+## Outputs
+
+Resolved Source, Result (`created`, `updated`, or `unchanged`), Document Count, Chunk Count, Previous Version, and Warnings.
+
+## Chunking Settings
+
+Chunk sizes can use characters or tokens. Token chunking uses the active Rivet tokenizer. Target size, overlap, minimum boundary size, and title inclusion are part of the deterministic source version, so changing them creates a new version.
+
+Synchronization is serialized per source within a managed store. Providers with an operation scope also coordinate their store instances across root runs in the same JavaScript runtime. Cancellation is honored while waiting, chunking, uploading, and committing. Separate server processes still require provider- or host-level write coordination.
+
+Enter static Source Metadata as a JSON object in the node settings. Leave it as `{}` when the source has no metadata, or enable the input port to supply the object dynamically.
+
+## See Also
+
+- [Knowledge Source](./knowledge-source.mdx)
+- [Knowledge Document](./knowledge-document.mdx)
+- [Get Knowledge Source Status](./get-knowledge-source-status.mdx)

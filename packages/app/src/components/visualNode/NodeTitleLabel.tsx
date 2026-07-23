@@ -24,6 +24,23 @@ const GlobalNodeTitleIcon: FC<{ direction: 'get' | 'set' }> = ({ direction }) =>
   </svg>
 );
 
+const knowledgeNodeTypes = new Set([
+  'knowledgeSource',
+  'knowledgeDocument',
+  'syncKnowledgeSource',
+  'getKnowledgeSourceStatus',
+  'searchKnowledge',
+  'buildKnowledgeContext',
+]);
+
+const KnowledgeNodeTitleIcon: FC = () => (
+  <svg className="knowledge-node-title-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <ellipse cx="12" cy="5.5" rx="7.5" ry="3.5" />
+    <path d="M4.5 5.5v6.5c0 1.9 3.36 3.5 7.5 3.5s7.5-1.6 7.5-3.5V5.5" />
+    <path d="M4.5 12v6.5C4.5 20.4 7.86 22 12 22s7.5-1.6 7.5-3.5V12" />
+  </svg>
+);
+
 export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = ({ node }) => {
   const globalIconDirection =
     node.type === 'getGlobal' || node.type === 'getStoredValue'
@@ -31,10 +48,12 @@ export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = (
       : node.type === 'setGlobal' || node.type === 'setStoredValue'
         ? 'set'
         : undefined;
+  const hasKnowledgeIcon = knowledgeNodeTypes.has(node.type);
 
   return (
     <span className="title-text-label">
       {globalIconDirection && <GlobalNodeTitleIcon direction={globalIconDirection} />}
+      {hasKnowledgeIcon && <KnowledgeNodeTitleIcon />}
       {node.title}
     </span>
   );

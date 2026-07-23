@@ -34,6 +34,24 @@ function canAutoContinue(functionCalls: StreamedFunctionCall[], toolNames: Set<s
   return functionCalls.length > 0 && functionCalls.every((call) => toolNames.has(call.name));
 }
 
+function shouldReturnToolResultDirectly(
+  functionCalls: StreamedFunctionCall[],
+  functions: GptFunction[] | undefined,
+): boolean {
+  if (functionCalls.length !== 1) {
+    return false;
+  }
+
+  let tool: GptFunction | undefined;
+  for (const candidate of functions ?? []) {
+    if (candidate.name === functionCalls[0]!.name) {
+      // Provider tool maps use the last declaration for duplicate names.
+      tool = candidate;
+    }
+  }
+  return tool?.resultHandling === 'return-direct';
+}
+
 function addUsage(
   accumulated: ChatV2NormalizedUsage | undefined,
   usage: ChatV2NormalizedUsage | undefined,
@@ -171,6 +189,36 @@ export async function runChatV2PipelineWithToolContinuation(
         .map((message) => message.delegatedToolCall)
         .filter((record): record is DelegatedToolCallRecord => record != null),
     );
+
+    if (shouldReturnToolResultDirectly(result.functionCalls, functions)) {
+      const directResultMessage = toolResultMessages[0]?.value;
+      if (directResultMessage?.type !== 'function' || typeof directResultMessage.message !== 'string') {
+        throw new Error('Return directly requires the delegated tool handler to return a string output.');
+      }
+
+      result.response = directResultMessage.message;
+      result.allMessages = [...result.allMessages, directResultMessage];
+      result.functionCalls = [];
+      result.commonOutputs['response' as PortId] = {
+        type: 'string',
+        value: result.response,
+      };
+      result.commonOutputs['all-messages' as PortId] = {
+        type: 'chat-message[]',
+        value: result.allMessages,
+      };
+
+      if (pipelineOptions.includeFunctionCalls) {
+        result.commonOutputs['function-calls' as PortId] = {
+          type: 'object[]',
+          value: delegatedToolCalls,
+        };
+      }
+
+      applyAccumulatedUsage(result, accumulatedUsage, pipelineOptions.outputUsage);
+      applyAccumulatedReasoning(result, reasoningRounds, pipelineOptions.outputReasoning);
+      return result;
+    }
 
     currentPrompt = {
       type: 'chat-message[]',

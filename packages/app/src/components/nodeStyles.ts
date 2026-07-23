@@ -369,7 +369,8 @@ export const nodeStyles = css`
     text-transform: uppercase;
   }
 
-  .global-node-title-icon {
+  .global-node-title-icon,
+  .knowledge-node-title-icon {
     display: inline-block;
     width: 1em;
     height: 1em;

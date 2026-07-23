@@ -26,6 +26,7 @@ import { DefaultDynamicEditor } from './DynamicEditor';
 import { Tooltip } from '../Tooltip';
 import { DefaultDirectoryBrowserEditor } from './DirectoryBrowserEditor';
 import { InfoEditor } from './InfoEditor';
+import { JsonObjectEditor } from './JsonObjectEditor';
 
 export const DefaultNodeEditorField: FC<
   SharedEditorProps & {
@@ -55,6 +56,7 @@ export const DefaultNodeEditorField: FC<
     .with({ type: 'toggle' }, (editor) => <DefaultToggleEditor {...sharedProps} editor={editor} />)
     .with({ type: 'dataTypeSelector' }, (editor) => <DefaultDataTypeSelector {...sharedProps} editor={editor} />)
     .with({ type: 'anyData' }, (editor) => <DefaultAnyDataEditor {...sharedProps} editor={editor} />)
+    .with({ type: 'jsonObject' }, (editor) => <JsonObjectEditor {...sharedProps} editor={editor} />)
     .with({ type: 'dropdown' }, (editor) => <DefaultDropdownEditor {...sharedProps} editor={editor} />)
     .with({ type: 'segmented' }, (editor) => <DefaultSegmentedEditor {...sharedProps} editor={editor} />)
     .with({ type: 'number' }, (editor) => <DefaultNumberEditor {...sharedProps} editor={editor} />)
