@@ -84,6 +84,7 @@
     "node-gyp@npm:latest": "12.4.0",
     "path-to-regexp@npm:^8.0.0": "^8.4.2",
     "picomatch@npm:^2.0.0": "^2.3.2",
+    "postcss@npm:^8.4.21": "8.5.16",
     "shell-quote": "^1.9.0",
     "socks": "^2.8.9",
     "svgo@npm:^3.0.2": "3.3.4",

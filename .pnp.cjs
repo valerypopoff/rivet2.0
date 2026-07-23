@@ -27538,16 +27538,6 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["postcss", [\
-      ["npm:8.4.38", {\
-        "packageLocation": "./.yarn/cache/postcss-npm-8.4.38-495621b279-6e44a7ed83.zip/node_modules/postcss/",\
-        "packageDependencies": [\
-          ["nanoid", "npm:3.3.7"],\
-          ["picocolors", "npm:1.0.0"],\
-          ["postcss", "npm:8.4.38"],\
-          ["source-map-js", "npm:1.2.0"]\
-        ],\
-        "linkType": "HARD"\
-      }],\
       ["npm:8.5.16", {\
         "packageLocation": "./.yarn/cache/postcss-npm-8.5.16-086b209555-b39408900a.zip/node_modules/postcss/",\
         "packageDependencies": [\
@@ -31064,7 +31054,7 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["escalade", "npm:3.1.1"],\
           ["picocolors", "npm:1.0.0"],\
-          ["postcss", "npm:8.4.38"],\
+          ["postcss", "npm:8.5.16"],\
           ["rtlcss", "npm:4.3.0"],\
           ["strip-json-comments", "npm:3.1.1"]\
         ],\
@@ -31777,13 +31767,6 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["source-map-js", [\
-      ["npm:1.2.0", {\
-        "packageLocation": "./.yarn/cache/source-map-js-npm-1.2.0-6e63f357e5-74f331cfd2.zip/node_modules/source-map-js/",\
-        "packageDependencies": [\
-          ["source-map-js", "npm:1.2.0"]\
-        ],\
-        "linkType": "HARD"\
-      }],\
       ["npm:1.2.1", {\
         "packageLocation": "./.yarn/cache/source-map-js-npm-1.2.1-b9a47d7e1a-ff9d8c8bf0.zip/node_modules/source-map-js/",\
         "packageDependencies": [\
