@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 import {
   DelegateFunctionCallNodeImpl,
+  findAutoDelegateGraphCandidate,
   type DelegateFunctionCallNode,
   type GraphId,
   type InternalProcessContext,
@@ -76,6 +77,31 @@ function delegatedToolCallRecord(name: string, output: string, id = `call_${name
 }
 
 describe('DelegateFunctionCallNodeImpl', () => {
+  it('resolves ordered auto-delegate candidates through exact then containing name matches', () => {
+    const candidates = [
+      { id: 'partial-first', name: 'weather helper' },
+      { id: 'exact-later', name: 'weather' },
+      { id: 'partial-later', name: 'weather fallback' },
+    ];
+
+    assert.equal(
+      findAutoDelegateGraphCandidate(candidates, 'weather', (candidate) => candidate.name)?.id,
+      'exact-later',
+    );
+    assert.equal(
+      findAutoDelegateGraphCandidate(candidates, 'unknown', (candidate) => candidate.name),
+      undefined,
+    );
+    assert.equal(
+      findAutoDelegateGraphCandidate(
+        candidates.filter((candidate) => candidate.name !== 'weather'),
+        'weather',
+        (candidate) => candidate.name,
+      )?.id,
+      'partial-first',
+    );
+  });
+
   it('does not require a setting to enable its pre-tool message output', () => {
     const node = DelegateFunctionCallNodeImpl.create();
     const editors = createNode().getEditors();
@@ -194,6 +220,42 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.equal(selectedGraphId, matchingGraphId);
   });
 
+  it('keeps runtime auto-delegate selection on graph metadata IDs rather than project map keys', async () => {
+    const metadataGraphId = 'runtime-metadata-id' as GraphId;
+    let selectedGraphId: GraphId | undefined;
+
+    await createNode().process(
+      {
+        ['function-call' as PortId]: {
+          type: 'object',
+          value: { name: 'foo', arguments: {}, id: 'call_1' },
+        },
+      },
+      {
+        project: {
+          graphs: {
+            ['serialized-map-key' as GraphId]: {
+              metadata: { id: metadataGraphId, name: 'foo' },
+              nodes: [],
+              connections: [],
+            },
+          },
+        },
+        externalFunctions: {},
+        signal: new AbortController().signal,
+        contextValues: {},
+        createSubProcessor: (graphId: GraphId) => ({
+          processGraph: async () => {
+            selectedGraphId = graphId;
+            return { ['output' as PortId]: { type: 'string', value: 'ok' } };
+          },
+        }),
+      } as unknown as InternalProcessContext,
+    );
+
+    assert.equal(selectedGraphId, metadataGraphId);
+  });
+
   it('delegates the legacy Chat function-call output object', async () => {
     const node = createNode();
     const legacyChatOutputs: Outputs = {};
@@ -309,7 +371,10 @@ describe('DelegateFunctionCallNodeImpl', () => {
       description:
         'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
     });
-    assert.equal(node.getOutputDefinitions().some((output) => output.id === ('cost' as PortId)), false);
+    assert.equal(
+      node.getOutputDefinitions().some((output) => output.id === ('cost' as PortId)),
+      false,
+    );
   });
 
   it('surfaces a single already-delegated tool call record without running it again', async () => {

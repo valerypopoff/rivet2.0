@@ -32,6 +32,25 @@ export type DelegatedToolCallRecord = {
   message: ChatMessage;
 };
 
+/**
+ * Finds an Auto Delegate handler from an ordered set of graph-like candidates.
+ *
+ * Candidate identity belongs to the caller. Runtime execution passes graph
+ * objects and uses their metadata IDs; editor analysis passes project-map
+ * entries and uses their map keys. Keeping that distinction here preserves the
+ * existing behavior for malformed projects where those identities disagree.
+ */
+export function findAutoDelegateGraphCandidate<T>(
+  candidates: readonly T[],
+  toolName: string,
+  getGraphName: (candidate: T) => string | undefined,
+): T | undefined {
+  return (
+    candidates.find((candidate) => getGraphName(candidate) === toolName) ??
+    candidates.find((candidate) => getGraphName(candidate)?.includes(toolName))
+  );
+}
+
 export function isDelegatedToolCallRecord(input: unknown): input is DelegatedToolCallRecord {
   const maybeRecord = input as Partial<DelegatedToolCallRecord> | undefined;
   const maybeMessage = maybeRecord?.message as Partial<ChatMessage> | undefined;
@@ -196,9 +215,7 @@ export async function delegateToolCall(
 
   if (config.autoDelegate) {
     const graphs = Object.values(context.project.graphs);
-    const matchingGraph =
-      graphs.find((graph) => graph.metadata?.name === functionCall.name) ??
-      graphs.find((graph) => graph.metadata?.name?.includes(functionCall.name));
+    const matchingGraph = findAutoDelegateGraphCandidate(graphs, functionCall.name, (graph) => graph.metadata?.name);
     if (matchingGraph) {
       handler = { key: undefined, value: matchingGraph.metadata!.id! };
     }

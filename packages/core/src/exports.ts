@@ -79,6 +79,7 @@ export * from './integrations/CodeRunner.js';
 export * from './integrations/Tokenizer.js';
 export * from './integrations/GptTokenizerTokenizer.js';
 export { JS_LIST_CALLBACK_LOCAL_NAMES, interpolateJSListCallbackBody } from './model/nodes/jsListCallbackHelpers.js';
+export { findAutoDelegateGraphCandidate } from './model/nodes/toolCallDelegation.js';
 export {
   extractInterpolationVariables,
   findInterpolationTokenSpans,

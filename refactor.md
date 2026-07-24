@@ -81,7 +81,7 @@ ranking: begin with the smaller policy consolidations and leave the
 
 ---
 
-## Phase 1: Make Data Coercion a Single Declarative Policy
+## Phase 1: Make Data Coercion a Single Declarative Policy - DONE
 
 ### Status
 
@@ -223,7 +223,7 @@ There is also no focused exhaustive test that records the complete
 
 ---
 
-## Phase 2: Centralize Knowledge Store Field and Credential Normalization
+## Phase 2: Centralize Knowledge Store Field and Credential Normalization - DONE
 
 ### Status
 
@@ -382,7 +382,24 @@ that need to understand its nested settings shape.
 
 ---
 
-## Phase 3: Separate Graph Dependency Discovery from Reachability Traversal
+## Phase 3: Separate Graph Dependency Discovery from Reachability Traversal - DONE
+
+### Status
+
+- Added `graphDependencyDiscovery.ts` as the ordered, per-graph connection
+  index and closed built-in dependency-resolver owner. It now covers the
+  existing Subgraph, Loop Until, Cron, Delegate Tool Call, Run Thread, Call
+  Graph/Graph Reference, and cross-project alias rules without changing their
+  serialized inputs or reachability semantics.
+- Kept `graphReachability.ts` focused on roots, traversal mode propagation,
+  plugin diagnostics, blocked/partial/ready status, and final buckets. The
+  reverse-reference query still excludes Delegate edges.
+- Added the shared generic core auto-delegate matcher. Runtime retains metadata
+  IDs; editor analysis retains serialized project-map keys, including malformed
+  projects where those values differ.
+- Characterization now proves exact/contains/missing matching, first-connection
+  behavior, Delegate root/reference distinctions, and both malformed identity
+  behaviors.
 
 ### Problem
 

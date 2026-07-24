@@ -17,6 +17,7 @@ import {
   resolveSupportedBuiltInPluginIds,
   type GraphReachabilityRegistry,
 } from './graphReachability.js';
+import { createGraphDependencyDiscovery, getGraphDependencyIndex } from './graphDependencyDiscovery.js';
 
 function makeNode(
   type: string,
@@ -124,6 +125,34 @@ function makeRegistry(options: {
 }
 
 describe('graphReachability', () => {
+  test('caches ordered dependency indexes and records the first valid input connection per port', () => {
+    const missingConnection = makeConnection('missing-source', 'target', 'output', 'input');
+    const firstValidConnection = makeConnection('first-source', 'target', 'output', 'input');
+    const laterValidConnection = makeConnection('later-source', 'target', 'output', 'input');
+    const main = makeGraph(
+      'main',
+      'Main',
+      [
+        makeNode('text', {}, { id: 'first-source' }),
+        makeNode('text', {}, { id: 'later-source' }),
+        makeNode('passthrough', {}, { id: 'target' }),
+      ],
+      [missingConnection, firstValidConnection, laterValidConnection],
+    );
+    const discovery = createGraphDependencyDiscovery(makeProject([main], 'main'));
+
+    const firstIndex = getGraphDependencyIndex(discovery, 'main' as GraphId)!;
+    const cachedIndex = getGraphDependencyIndex(discovery, 'main' as GraphId)!;
+
+    assert.equal(cachedIndex, firstIndex);
+    assert.deepEqual(firstIndex.connectionsByInputNodeId.get('target' as any), [
+      missingConnection,
+      firstValidConnection,
+      laterValidConnection,
+    ]);
+    assert.equal(firstIndex.firstValidInputConnections.get('target' as any)?.get('input' as any), firstValidConnection);
+  });
+
   test('uses the Main Graph as the default reachability root', () => {
     const main = makeGraph('main', 'Main');
     const spare = makeGraph('spare', 'Spare');
@@ -537,6 +566,29 @@ describe('graphReachability', () => {
     assert.deepEqual(sortGraphIds(report.definite), ['exact-name', 'main']);
     assert.deepEqual(sortGraphIds(report.dynamic), []);
     assert.deepEqual(sortGraphIds(report.unreachable), ['later-matching-name', 'matching-name', 'other-named']);
+  });
+
+  test('keeps analysis auto-delegate targets on serialized graph map keys rather than metadata IDs', () => {
+    const tool = makeNode('gptFunction', { name: 'weather' }, { id: 'tool' });
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegate = makeNode('delegateFunctionCall', { autoDelegate: true }, { id: 'delegate' });
+    const main = makeGraph(
+      'main',
+      'Main',
+      [tool, llm, delegate],
+      [
+        makeConnection('tool', 'llm', 'function', 'functions'),
+        makeConnection('llm', 'delegate', 'function-calls', 'function-call'),
+      ],
+    );
+    const handler = makeGraph('runtime-metadata-id', 'weather');
+    const project = makeProject([main], 'main');
+    project.graphs['serialized-map-key' as GraphId] = handler;
+
+    const report = getGraphReachabilityReport(project);
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main', 'serialized-map-key']);
+    assert.deepEqual(sortGraphIds(report.unreachable), []);
   });
 
   test('uses active Tool-to-Delegate paths as reachability roots outside the Main Graph flow', () => {
