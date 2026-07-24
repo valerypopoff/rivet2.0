@@ -35,6 +35,7 @@ export * from './integrations/integrations.js';
 import './integrations/enableIntegrations.js';
 export * from './integrations/VectorDatabase.js';
 export * from './integrations/KnowledgeStore.js';
+export * from './integrations/KnowledgeStoreFieldPolicy.js';
 export * from './integrations/KnowledgeStoreProvider.js';
 export * from './integrations/KnowledgeStoreValidation.js';
 export * from './integrations/ManagedKnowledgeStore.js';

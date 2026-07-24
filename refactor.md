@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 1 completed and verified on 2026-07-24. Phases 2-5 remain planned
+**Phases 1-2 completed and verified by 2026-07-25. Phases 3-5 remain planned
 and are not yet implemented.**
 
 This plan was prepared after reassessing the current repository and the 134
@@ -224,6 +224,55 @@ There is also no focused exhaustive test that records the complete
 ---
 
 ## Phase 2: Centralize Knowledge Store Field and Credential Normalization
+
+### Status
+
+**Completed on 2026-07-25.**
+
+The implementation added
+`packages/core/src/integrations/KnowledgeStoreFieldPolicy.ts` as the single
+provider-neutral owner of draft defaults, structured field issues, permissive
+draft normalization, strict persisted-definition normalization, and the nested
+credential settings tree. Provider registration, runtime connection
+resolution, editor save/test, and local credential persistence now consume
+that shared policy through the normal core package export.
+
+Editor-only workflow behavior moved into the small tested
+`projectKnowledgeStoreDraft.ts` model. Existing drafts cannot change provider,
+new-provider selection resets configuration and credentials, duplicate names
+remain deterministic and case-insensitive, duplication never copies
+credentials, and Save/Test Connection normalize the same unsaved data. React
+continues to own modal state, confirmation, notifications, and aborting
+superseded connection tests.
+
+The policy deliberately preserves distinct draft/runtime behavior for both
+connections and credentials. Unknown editor-draft properties are dropped,
+while unknown persisted project configuration is rejected. Structured issues
+contain only code, field key, and field label; rejected values and
+credential-bearing field objects never enter errors or metadata. Ordinary,
+malformed, and prototype-less settings records, false, zero, whitespace,
+explicit null/undefined, defaults, select options, and empty credential-parent
+behavior are characterized.
+
+The post-implementation reassessment made the public boundary harder to misuse:
+single-field normalization now requires one of the four explicit modes,
+definition and editor-draft normalization reject a mismatched provider,
+credential-draft naming is consistently plural, and dynamic settings keys are
+created and read back as own data properties instead of going through object
+prototype setters. The credential-only field contract is now named and accepts
+readonly specifications, string-only defaults, and no select-only options,
+matching registry snapshots and registration rules. Editor issue formatting is
+exhaustive over the shared issue-code union. The shared declared-field loop was
+also simplified to one default-selection helper plus an entry list.
+
+The expected production deletion did not materialize. The two former private
+implementations were smaller because neither exposed the complete reusable
+policy surface or isolated the editor workflow. Across the affected production
+files this phase is a net `+242` physical lines: the core policy and app draft
+model add 447 lines, the existing core/app call sites and export move
+`+70/-275`. This is an intentional ownership trade: the settings-shape and
+field policy now each have one auditable owner, while the main React component
+and provider/controller file both shrink substantially.
 
 ### Problem
 

@@ -7,7 +7,9 @@ import {
   getKnowledgeStoreProvider,
   getKnowledgeStoreProviders,
   normalizeKnowledgeConnectionId,
-  type KnowledgeMetadata,
+  readKnowledgeStoreConnectionCredentialsDraft,
+  removeKnowledgeStoreConnectionCredentials,
+  writeKnowledgeStoreConnectionCredentials,
   type KnowledgeStoreConnectionDefinition,
   type KnowledgeStoreProviderConfigField,
   type Settings,
@@ -19,6 +21,14 @@ import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
 import { settingsState } from '../state/settings.js';
 import { AppModalHeader } from './AppModalHeader.js';
+import {
+  createExistingKnowledgeStoreDraft,
+  createNewKnowledgeStoreDraft,
+  duplicateKnowledgeStoreDraft,
+  normalizeProjectKnowledgeStoreDraftFields,
+  switchNewKnowledgeStoreDraftProvider,
+  type ProjectKnowledgeStoreDraft,
+} from './projectKnowledgeStoreDraft.js';
 
 const styles = css`
   .knowledge-store-heading,
@@ -81,19 +91,10 @@ const modalStyles = css`
   }
 `;
 
-type EditingConnection = {
-  connectionId: string;
-  displayName: string;
-  providerId: string;
-  config: Record<string, unknown>;
-  credentials: Record<string, string>;
-  isNew: boolean;
-};
-
 export const ProjectKnowledgeStoresConfiguration: FC = () => {
   const [project, setProject] = useAtom(projectState);
   const [settings, setSettings] = useAtom(settingsState);
-  const [editing, setEditing] = useState<EditingConnection>();
+  const [editing, setEditing] = useState<ProjectKnowledgeStoreDraft>();
   const providers = getKnowledgeStoreProviders();
   const connections = Object.entries(project.metadata.knowledgeStores ?? {}).sort(([, left], [, right]) =>
     left.displayName.localeCompare(right.displayName),
@@ -105,41 +106,28 @@ export const ProjectKnowledgeStoresConfiguration: FC = () => {
       toast.error('Enable a plugin that provides a knowledge store before adding a connection.');
       return;
     }
-    setEditing({
-      connectionId: nanoid(),
-      displayName: '',
-      providerId: provider.id,
-      config: defaultsFor(provider.connectionConfigSpec),
-      credentials: {},
-      isNew: true,
-    });
+    setEditing(createNewKnowledgeStoreDraft(nanoid(), provider));
   };
 
   const openExisting = (connectionId: string, definition: KnowledgeStoreConnectionDefinition) => {
-    setEditing({
-      connectionId,
-      displayName: definition.displayName,
-      providerId: definition.provider,
-      config: { ...definition.config },
-      credentials: readConnectionCredentials(readOwnRecord(settings.pluginSettings, definition.provider), connectionId),
-      isNew: false,
-    });
+    const provider = getKnowledgeStoreProvider(definition.provider);
+    setEditing(
+      createExistingKnowledgeStoreDraft(
+        connectionId,
+        definition,
+        provider ? readKnowledgeStoreConnectionCredentialsDraft(settings, provider, connectionId) : {},
+      ),
+    );
   };
 
   const duplicate = (definition: KnowledgeStoreConnectionDefinition) => {
-    const usedNames = new Set(connections.map(([, value]) => value.displayName.toLocaleLowerCase()));
-    const baseName = `${definition.displayName} copy`;
-    let displayName = baseName;
-    let suffix = 2;
-    while (usedNames.has(displayName.toLocaleLowerCase())) displayName = `${baseName} ${suffix++}`;
-    setEditing({
-      connectionId: nanoid(),
-      displayName,
-      providerId: definition.provider,
-      config: { ...definition.config },
-      credentials: {},
-      isNew: true,
-    });
+    setEditing(
+      duplicateKnowledgeStoreDraft(
+        nanoid(),
+        definition,
+        connections.map(([, value]) => value.displayName),
+      ),
+    );
   };
 
   const remove = (connectionId: string, definition: KnowledgeStoreConnectionDefinition) => {
@@ -166,7 +154,7 @@ export const ProjectKnowledgeStoresConfiguration: FC = () => {
       delete knowledgeStores[connectionId];
       return { ...current, metadata: { ...current.metadata, knowledgeStores } };
     });
-    setSettings((current) => removeConnectionCredentials(current, definition.provider, connectionId));
+    setSettings((current) => removeKnowledgeStoreConnectionCredentials(current, definition.provider, connectionId));
   };
 
   return (
@@ -234,8 +222,7 @@ export const ProjectKnowledgeStoresConfiguration: FC = () => {
               ) {
                 throw new Error(`A knowledge store named "${displayName}" already exists.`);
               }
-              const config = normalizeFields(provider.connectionConfigSpec, next.config);
-              const credentials = normalizeCredentialFields(provider.credentialConfigSpec ?? [], next.credentials);
+              const { config, credentials } = normalizeProjectKnowledgeStoreDraftFields(next, provider);
               setProject((current) => ({
                 ...current,
                 metadata: {
@@ -251,7 +238,9 @@ export const ProjectKnowledgeStoresConfiguration: FC = () => {
                   },
                 },
               }));
-              setSettings((current) => writeConnectionCredentials(current, next.providerId, connectionId, credentials));
+              setSettings((current) =>
+                writeKnowledgeStoreConnectionCredentials(current, next.providerId, connectionId, credentials),
+              );
               setEditing(undefined);
             }}
           />
@@ -262,11 +251,11 @@ export const ProjectKnowledgeStoresConfiguration: FC = () => {
 };
 
 const KnowledgeStoreModal: FC<{
-  editing: EditingConnection;
+  editing: ProjectKnowledgeStoreDraft;
   providers: ReturnType<typeof getKnowledgeStoreProviders>;
   settings: Settings;
   onCancel(): void;
-  onSave(editing: EditingConnection): void;
+  onSave(editing: ProjectKnowledgeStoreDraft): void;
 }> = ({ editing: initial, providers, settings, onCancel, onSave }) => {
   const [editing, setEditing] = useState(initial);
   const [testing, setTesting] = useState(false);
@@ -286,13 +275,13 @@ const KnowledgeStoreModal: FC<{
     testAbortController.current = abortController;
     setTesting(true);
     try {
+      const { config, credentials } = normalizeProjectKnowledgeStoreDraftFields(editing, provider);
       const definition: KnowledgeStoreConnectionDefinition = {
         displayName: editing.displayName.trim() || 'Unsaved connection',
         provider: editing.providerId,
         pluginId: provider.pluginId ?? provider.id,
-        config: normalizeFields(provider.connectionConfigSpec, editing.config),
+        config,
       };
-      const credentials = normalizeCredentialFields(provider.credentialConfigSpec ?? [], editing.credentials);
       await provider.testConnection(definition, credentials, abortController.signal, { settings });
       if (!abortController.signal.aborted) toast.success('Knowledge store connection succeeded.');
     } catch (error) {
@@ -329,12 +318,7 @@ const KnowledgeStoreModal: FC<{
               onChange={(selected) => {
                 if (!selected) return;
                 const nextProvider = getKnowledgeStoreProvider(selected.value);
-                setEditing({
-                  ...editing,
-                  providerId: selected.value,
-                  config: defaultsFor(nextProvider?.connectionConfigSpec ?? []),
-                  credentials: {},
-                });
+                if (nextProvider) setEditing(switchNewKnowledgeStoreDraftProvider(editing, nextProvider));
               }}
             />
           </ConfigField>
@@ -439,117 +423,6 @@ const ProviderField: FC<{
   );
 };
 
-function defaultsFor(fields: KnowledgeStoreProviderConfigField[]): Record<string, unknown> {
-  return Object.fromEntries(
-    fields.map((field) => [field.key, field.default ?? (field.type === 'boolean' ? false : '')]),
-  );
-}
-
-function normalizeFields(
-  fields: KnowledgeStoreProviderConfigField[],
-  values: Record<string, unknown>,
-): KnowledgeMetadata {
-  const output: KnowledgeMetadata = {};
-  for (const field of fields) {
-    const value = hasOwnProperty(values, field.key) ? values[field.key] : field.default;
-    if (field.required && (value == null || String(value).trim() === '')) {
-      throw new Error(`${field.label} is required.`);
-    }
-    if (value === undefined || value === '') continue;
-    if (field.type === 'boolean') {
-      if (typeof value !== 'boolean') throw new Error(`${field.label} must be a boolean.`);
-      output[field.key] = value;
-      continue;
-    }
-    if (field.type === 'number') {
-      if (typeof value !== 'number' || !Number.isFinite(value))
-        throw new Error(`${field.label} must be a finite number.`);
-      output[field.key] = value;
-      continue;
-    }
-    if (typeof value !== 'string') throw new Error(`${field.label} must be a string.`);
-    if (field.type === 'select' && field.options && !field.options.some((option) => option.value === value)) {
-      throw new Error(`${field.label} has an unsupported value.`);
-    }
-    output[field.key] = value;
-  }
-  return output;
-}
-
-function normalizeCredentialFields(
-  fields: NonNullable<ReturnType<typeof getKnowledgeStoreProvider>>['credentialConfigSpec'],
-  values: Record<string, string>,
-): Record<string, string> {
-  const output: Record<string, string> = {};
-  for (const field of fields ?? []) {
-    const value = hasOwnProperty(values, field.key)
-      ? values[field.key]
-      : typeof field.default === 'string'
-        ? field.default
-        : '';
-    if (typeof value !== 'string') throw new Error(`${field.label} must be a string.`);
-    if (field.required && !value.trim()) throw new Error(`${field.label} is required.`);
-    if (value) output[field.key] = value;
-  }
-  return output;
-}
-
-function readConnectionCredentials(
-  pluginSettings: Record<string, unknown> | undefined,
-  connectionId: string,
-): Record<string, string> {
-  const sets = readOwnProperty(pluginSettings, 'knowledgeStoreCredentials');
-  if (!sets || typeof sets !== 'object' || Array.isArray(sets)) return {};
-  const value = readOwnProperty(sets, connectionId);
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(
-    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  );
-}
-
-function writeConnectionCredentials(
-  settings: Settings,
-  providerId: string,
-  connectionId: string,
-  credentials: Record<string, string>,
-): Settings {
-  const providerSettings = readOwnRecord(settings.pluginSettings, providerId) ?? {};
-  const existingSets = readOwnProperty(providerSettings, 'knowledgeStoreCredentials');
-  const sets =
-    existingSets && typeof existingSets === 'object' && !Array.isArray(existingSets)
-      ? (existingSets as Record<string, unknown>)
-      : {};
-  const nextSets = { ...sets };
-  if (Object.keys(credentials).length > 0) nextSets[connectionId] = credentials;
-  else delete nextSets[connectionId];
-  return {
-    ...settings,
-    pluginSettings: {
-      ...(settings.pluginSettings ?? {}),
-      [providerId]: {
-        ...providerSettings,
-        knowledgeStoreCredentials: nextSets,
-      },
-    },
-  };
-}
-
-function removeConnectionCredentials(settings: Settings, providerId: string, connectionId: string): Settings {
-  const providerSettings = readOwnRecord(settings.pluginSettings, providerId);
-  if (!providerSettings) return settings;
-  const sets = readOwnProperty(providerSettings, 'knowledgeStoreCredentials');
-  if (!sets || typeof sets !== 'object' || Array.isArray(sets)) return settings;
-  const nextSets = { ...(sets as Record<string, unknown>) };
-  delete nextSets[connectionId];
-  return {
-    ...settings,
-    pluginSettings: {
-      ...(settings.pluginSettings ?? {}),
-      [providerId]: { ...providerSettings, knowledgeStoreCredentials: nextSets },
-    },
-  };
-}
-
 function readOwnProperty(value: unknown, key: string): unknown {
   return hasOwnProperty(value, key) ? value[key] : undefined;
 }
@@ -558,11 +431,4 @@ function hasOwnProperty(value: unknown, key: string): value is Record<string, un
   return (
     !!value && typeof value === 'object' && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, key)
   );
-}
-
-function readOwnRecord(value: unknown, key: string): Record<string, unknown> | undefined {
-  const property = readOwnProperty(value, key);
-  return property && typeof property === 'object' && !Array.isArray(property)
-    ? (property as Record<string, unknown>)
-    : undefined;
 }

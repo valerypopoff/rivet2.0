@@ -3,6 +3,11 @@ import type { KnowledgeStoreConnectionId, RivetKnowledgeStore, RivetKnowledgeSto
 import type { KnowledgeStoreConnectionDefinition } from '../model/Project.js';
 import type { Settings } from '../model/Settings.js';
 import { isReservedKnowledgeObjectKey, normalizeKnowledgeConnectionId } from './KnowledgeStoreValidation.js';
+import {
+  isKnowledgeStoreProviderFieldDefaultValid,
+  normalizeKnowledgeStoreConnectionDefinition,
+  readKnowledgeStoreConnectionCredentials,
+} from './KnowledgeStoreFieldPolicy.js';
 
 export type KnowledgeStoreProviderConfigField = {
   key: string;
@@ -14,13 +19,22 @@ export type KnowledgeStoreProviderConfigField = {
   options?: Array<{ label: string; value: string }>;
 };
 
+export type KnowledgeStoreProviderCredentialField = Omit<
+  KnowledgeStoreProviderConfigField,
+  'type' | 'default' | 'options'
+> & {
+  type: 'string' | 'secret';
+  default?: string;
+  options?: never;
+};
+
 export type KnowledgeStoreProviderDefinition = {
   id: string;
   displayName: string;
   /** Rivet plugin that owns this provider. Defaults to the provider ID. */
   pluginId?: string;
   connectionConfigSpec: KnowledgeStoreProviderConfigField[];
-  credentialConfigSpec?: Array<KnowledgeStoreProviderConfigField & { type: 'string' | 'secret' }>;
+  credentialConfigSpec?: KnowledgeStoreProviderCredentialField[];
   supportedExecutors: Array<'browser' | 'nodejs'>;
   createStore(
     connectionId: KnowledgeStoreConnectionId,
@@ -139,7 +153,7 @@ export class KnowledgeStoreController {
         `Knowledge store provider "${providerId}" for connection "${definition.displayName}" is not installed.`,
       );
     }
-    const normalizedDefinition = normalizeConnectionDefinition(normalizedId, definition, provider);
+    const normalizedDefinition = normalizeKnowledgeStoreConnectionDefinition(normalizedId, definition, provider);
 
     const executor = context.executor;
     if (!provider.supportedExecutors.includes(executor)) {
@@ -160,7 +174,7 @@ export class KnowledgeStoreController {
         executor: context.executor,
         project: context.project,
         settings: context.settings,
-        credentials: readProviderCredentials(context.settings, provider, normalizedId),
+        credentials: resolveProviderCredentials(context.settings, provider, normalizedId),
       };
       pending = Promise.resolve(provider.createStore(normalizedId, normalizedDefinition, providerContext)).then(
         (store) => validateResolvedStore(store, normalizedId, context.executor),
@@ -197,38 +211,18 @@ function validateResolvedStore(
   return store;
 }
 
-function readProviderCredentials(
+function resolveProviderCredentials(
   settings: Settings,
   provider: KnowledgeStoreProviderDefinition,
   connectionId: string,
 ): Record<string, string> {
-  const providerSettings = readOwnProperty(settings.pluginSettings, provider.id);
-  const credentialSets = isRecord(providerSettings)
-    ? readOwnProperty(providerSettings, 'knowledgeStoreCredentials')
-    : undefined;
-  const storedCredentials = isRecord(credentialSets) ? readOwnProperty(credentialSets, connectionId) : undefined;
-  const storedValues = isRecord(storedCredentials) ? storedCredentials : {};
-
-  const credentials: Record<string, string> = {};
-  for (const field of provider.credentialConfigSpec ?? []) {
-    const value = hasOwnProperty(storedValues, field.key) ? storedValues[field.key] : field.default;
-    if (value === undefined || value === '') {
-      if (field.required) {
-        throw new Error(`Knowledge store connection "${connectionId}" requires ${field.label}.`);
-      }
-      continue;
-    }
-    if (typeof value !== 'string') {
-      throw new Error(
-        `Knowledge store connection "${connectionId}" has invalid stored credentials for ${field.label}.`,
-      );
-    }
-    if (field.required && !value.trim()) {
-      throw new Error(`Knowledge store connection "${connectionId}" requires ${field.label}.`);
-    }
-    credentials[field.key] = value;
-  }
-  return credentials;
+  const result = readKnowledgeStoreConnectionCredentials(settings, provider, connectionId);
+  if (result.ok) return result.value;
+  throw new Error(
+    result.issue.code === 'required'
+      ? `Knowledge store connection "${connectionId}" requires ${result.issue.fieldLabel}.`
+      : `Knowledge store connection "${connectionId}" has invalid stored credentials for ${result.issue.fieldLabel}.`,
+  );
 }
 
 function validateStoreCapabilities(capabilities: RivetKnowledgeStore['capabilities'], connectionId: string): void {
@@ -294,6 +288,11 @@ function validateProviderFields(
         `Knowledge store provider "${providerId}" credential field "${field.key}" must be a string or secret.`,
       );
     }
+    if (kind === 'credential' && field.options !== undefined) {
+      throw new Error(
+        `Knowledge store provider "${providerId}" credential field "${field.key}" cannot declare select options.`,
+      );
+    }
     if (field.type === 'select') {
       const options = field.options;
       if (
@@ -314,7 +313,7 @@ function validateProviderFields(
         );
       }
     }
-    if (field.default !== undefined && !isProviderFieldValue(field, field.default)) {
+    if (field.default !== undefined && !isKnowledgeStoreProviderFieldDefaultValid(field, field.default)) {
       throw new Error(`Knowledge store provider "${providerId}" field "${field.key}" has an invalid default value.`);
     }
   }
@@ -339,75 +338,4 @@ function snapshotProviderDefinition(provider: KnowledgeStoreProviderDefinition):
     ...(provider.credentialConfigSpec ? { credentialConfigSpec: snapshotFields(provider.credentialConfigSpec) } : {}),
     supportedExecutors: Object.freeze([...provider.supportedExecutors]) as unknown as Array<'browser' | 'nodejs'>,
   });
-}
-
-function normalizeConnectionDefinition(
-  connectionId: string,
-  definition: KnowledgeStoreConnectionDefinition,
-  provider: KnowledgeStoreProviderDefinition,
-): KnowledgeStoreConnectionDefinition {
-  const displayName = typeof definition.displayName === 'string' ? definition.displayName.trim() : '';
-  if (!displayName) throw new Error(`Knowledge store connection "${connectionId}" has no display name.`);
-  if (!isRecord(definition.config)) {
-    throw new Error(`Knowledge store connection "${displayName}" has invalid provider configuration.`);
-  }
-
-  const fieldsByKey = new Map(provider.connectionConfigSpec.map((field) => [field.key, field]));
-  for (const key of Object.keys(definition.config)) {
-    if (!fieldsByKey.has(key)) {
-      throw new Error(`Knowledge store connection "${displayName}" contains unknown configuration field "${key}".`);
-    }
-  }
-
-  const config: KnowledgeStoreConnectionDefinition['config'] = {};
-  for (const field of provider.connectionConfigSpec) {
-    const value = hasOwnProperty(definition.config, field.key) ? definition.config[field.key] : field.default;
-    if (field.required && (value == null || (typeof value === 'string' && !value.trim()))) {
-      throw new Error(`Knowledge store connection "${displayName}" requires ${field.label}.`);
-    }
-    if (value === undefined || value === '') continue;
-    if (!isProviderFieldValue(field, value)) {
-      throw new Error(`Knowledge store connection "${displayName}" has an invalid value for ${field.label}.`);
-    }
-    config[field.key] = value;
-  }
-
-  const pluginId = typeof definition.pluginId === 'string' ? definition.pluginId.trim() : '';
-  if (definition.pluginId != null && (!pluginId || pluginId !== definition.pluginId)) {
-    throw new Error(`Knowledge store connection "${displayName}" has an invalid owning plugin ID.`);
-  }
-  const providerPluginId = provider.pluginId ?? provider.id;
-  if (pluginId && pluginId !== providerPluginId) {
-    throw new Error(`Knowledge store connection "${displayName}" names the wrong owning plugin.`);
-  }
-  return {
-    displayName,
-    provider: provider.id,
-    pluginId: providerPluginId,
-    config,
-  };
-}
-
-function isProviderFieldValue(
-  field: KnowledgeStoreProviderConfigField,
-  value: unknown,
-): value is string | number | boolean {
-  if (field.type === 'boolean') return typeof value === 'boolean';
-  if (field.type === 'number') return typeof value === 'number' && Number.isFinite(value);
-  if (typeof value !== 'string') return false;
-  return field.type !== 'select' || (field.options ?? []).some((option) => option.value === value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function readOwnProperty(value: unknown, key: string): unknown {
-  return hasOwnProperty(value, key) ? value[key] : undefined;
-}
-
-function hasOwnProperty(value: unknown, key: string): value is Record<string, unknown> {
-  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, key);
 }
