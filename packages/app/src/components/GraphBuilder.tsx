@@ -55,6 +55,7 @@ import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
 
 const Container = styled.div`
   position: relative;
+  height: 100vh;
 
   .user-input-modal-open {
     position: absolute;

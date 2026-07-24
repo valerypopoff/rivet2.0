@@ -150,8 +150,11 @@ reserved rows, and `getDataBusFullRowsHeight` is the shared height calculation
 used by both root layout CSS and canvas coordinate conversion. The complete
 stack reserves real vertical space: the canvas surface, node editor, borders,
 notices, and top controls all move down and the usable canvas height shrinks by
-one fixed row height per bus. The left sidebar remains beside the rows instead
-of moving below them. In this mode, each full-width row is the panel surface;
+one fixed row height per bus. `GraphBuilder` itself keeps the full viewport
+height while the canvas is shifted and shortened inside it; this ensures
+absolutely positioned sibling panels use the window bottom and do not subtract
+the bus-row stack a second time. The left sidebar remains beside the rows
+instead of moving below them. In this mode, each full-width row is the panel surface;
 the centered bus content has no independent card border, radius, shadow, or
 background. Detection uses
 the summed intrinsic header and channel widths plus inter-shelf gaps rather than
