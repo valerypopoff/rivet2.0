@@ -235,6 +235,9 @@ Current scalar types include:
 - `binary`
 - `audio`
 - `graph-reference`
+- `knowledge-source`
+- `knowledge-document`
+- `knowledge-evidence`
 - `document`
 
 ### Composite value families
@@ -251,6 +254,8 @@ Important utilities defined in `DataValue.ts`:
 - `isScalarDataValue`
 - `isArrayDataValue`
 - `isFunctionDataValue`
+- `functionTypeToReturnType`
+- `functionTypeToScalarType`
 - `getScalarTypeOf`
 - `unwrapDataValue`
 - `arrayizeDataValue`
@@ -268,6 +273,68 @@ This type system is not just validation metadata. It is used directly in:
 - output rendering and serialization
 
 The `control-flow-excluded` type in particular is a core execution mechanism, not just a marker type.
+
+### Coercion policy
+
+Runtime conversion and editor port compatibility share one policy owner in
+[`coerceType.ts`](../packages/core/src/utils/coerceType.ts). The exhaustive
+`scalarCoercionRules` registry is keyed by every scalar target type and records:
+
+- its specialized runtime coercer, when it has one;
+- the type-level `canAttempt` compatibility rule.
+
+`coerceTypeOptional(...)` uses the runtime side of that registry, while
+`canBeCoerced(...)` and `canBeCoercedAny(...)` use its compatibility side.
+Compatibility remains intentionally permissive: it means a conversion may be
+attempted for a type pair, not that every runtime value succeeds. A permitted
+pair can still return `undefined`, produce `NaN`, or throw for a particular
+value.
+
+Array recursion, function-value unwrapping, and `any` dispatch are structural
+wrappers around the scalar registry. Preserve their order when changing
+coercion:
+
+1. resolve a compatible deferred target without eager evaluation; otherwise
+   evaluate a deferred source value;
+2. wrap a scalar for an array target or map an array to a different scalar
+   family;
+3. dispatch the scalar target through the registry;
+4. use exact-type / `any` fallback behavior when no specialized coercer exists.
+
+Deferred values must also preserve the `DataValue` contract when evaluated.
+An `any` value containing a function unwraps to another valid `any` value, and
+`getDefaultValue('fn<T[]>')` returns a function whose result is a fresh empty
+array. Scalar function defaults continue to return their scalar type's default.
+All reference-valued defaults are cloned from the canonical templates, so a
+consumer cannot mutate a later node or run's missing-value fallback. Get/Set
+Global use this same default owner rather than reading the templates directly.
+
+Function type helpers have deliberately different contracts:
+
+- `functionTypeToReturnType('fn<T[]>')` returns `T[]` for labels and deferred
+  result construction;
+- `functionTypeToScalarType('fn<T[]>')` and
+  `getScalarTypeOf('fn<T[]>')` return `T` for classification.
+
+An exact deferred value coerced to the same `fn<T>` type keeps its function
+identity and is not evaluated. Compatible deferred values also preserve their
+callback identity when either return type is `any`. A concrete `T` accepted for
+`fn<T>` is wrapped in a deferred function; runtime-`any` values follow the same
+rule rather than leaking a raw scalar or nesting an existing callback. Runtime
+arrays carried by `any` or `object` values stay flat when consumed as the
+matching array type; they are not wrapped as a nested array.
+
+`inferType(...)` remains adjacent to coercion but is not part of the registry.
+It infers arrays from their first element and deliberately preserves the
+original array value. Some conversions also preserve identity or mutation:
+object and same-type array values can be returned by reference, and assistant
+chat-message coercion normalizes non-string legacy `function_call.arguments`
+in place.
+
+When adding a scalar `DataType`, add its registry entry in the same change.
+The mapped registry type makes omission a TypeScript error, while
+[`coerceType.test.ts`](../packages/core/test/utils/coerceType.test.ts) locks
+the full compatibility matrix and representative value semantics.
 
 ## Node System
 

@@ -351,6 +351,10 @@ test('projectDataValue preserves circular any arrays without recursive expansion
   assert.equal((projected as unknown[])[1], projected);
 });
 
+test('projectDataValue preserves array return types in deferred value labels', () => {
+  assert.equal(projectDataValue({ type: 'fn<string[]>', value: () => ['value'] }), 'Function<string[]>');
+});
+
 test('serializeDisplayedOutputs tolerates circular projected values', () => {
   const value: unknown[] = [undefined];
   value.push(value);

@@ -1,1277 +1,783 @@
-# Refactor Plan: Security, Reliability, And Maintainability
+# Behavior-Preserving Refactor Plan
 
-Status: Completed
+## Status
 
-Audit date: 2026-07-10
+**Phase 1 completed and verified on 2026-07-24. Phases 2-5 remain planned
+and are not yet implemented.**
 
-Completion date: 2026-07-10
+This plan was prepared after reassessing the current repository and the 134
+completed refactors recorded in `refactor-history.md`.
 
-Baseline: `6dfa1273 Add JSON downloads for web app outputs`
+The plan received a second live-code audit after its initial draft. That audit
+checked the current callers, package boundaries, test coverage, mutation and
+identity behavior, editor/runtime differences, graph-order dependencies, DOM
+measurement ownership, and execution-event contracts. The corrections from
+that audit are incorporated below.
 
-Completion record: `refactor-history.md` item 133
+The repository has already received broad decompositions of `GraphProcessor`,
+NodeCanvas, GraphList, Chat V2, UI Graph Builder, JSON previews, executor
+sessions, and hosted web-app infrastructure. This plan does not repeat those
+efforts. It targets five narrower ownership problems that remain in the current
+code, primarily in features added after the latest history entry.
 
-## Purpose
+## Goals
 
-This completed plan identifies the ten highest-value refactors for making Rivet safer, more
-reliable, easier to understand, and easier to extend. It is based on the current
-code, current dependency graph, `refactor-history.md`, the deleted previous
-`refactor.md`, and the feature work added after the June 2026 ownership refactor.
+- Preserve all runtime behavior and user-visible behavior.
+- Make policy ownership explicit and easier to audit.
+- Reduce the chance that editor, runtime, and provider behavior drift apart.
+- Make high-risk execution code easier to test and safely change.
+- Reduce production lines where doing so does not introduce denser or more
+  abstract code.
 
-The goals are, in order:
+## Non-goals
 
-1. Remove known security hazards and make security regressions difficult to add.
-2. Reduce bug-prone duplicated policy and implicit state.
-3. Give each important behavior one clear owner with behavioral tests.
-4. Make the codebase easier to navigate and change without knowing its history.
-5. Reduce production code where removal also improves clarity.
+- No persisted project, graph, or settings format changes.
+- No public behavior changes or opportunistic bug fixes.
+- No redesign of NodeCanvas, GraphList, UI Graph Builder, hosted web apps,
+  legacy Chat providers, or unrelated `GraphProcessor` policies.
+- No new general-purpose framework solely to make files smaller.
+- No line-count target that takes priority over clear ownership.
 
-This is a refactor plan, not a promise that a single pass can prove the entire
-repository bug-free or vulnerability-free forever. The durable target is a codebase
-that has explicit trust boundaries, current dependencies, strong regression tests,
-and automated checks that keep those properties from silently degrading.
+## Required Working Method
 
-## Historical Reconciliation
+Each phase must:
 
-`refactor-history.md` is the source of truth for completed work. In particular,
-history item 132 records the completed ten-item ownership refactor after
-`f11847c5 PRE-refactor`. That work already covered:
+1. Add or confirm characterization coverage before moving behavior.
+2. Preserve errors, event order, output shapes, cancellation, costs, and
+   serialization where applicable.
+3. Land as an independent commit that can be reviewed or reverted separately.
+4. Update the owning developer documentation.
+5. Append a completed entry to `refactor-history.md` only after the phase is
+   implemented and verified.
 
-- graph-tree presentation models;
-- node-output rendering and fullscreen output ownership;
-- project comparison;
-- theme tokens;
-- project tabs and the main strip;
-- hosted workspace APIs;
-- canvas connection and port interactions;
-- node-canvas command glue;
-- executor-session ownership;
-- the first pass over brittle source-contract tests.
+The recommended implementation order is deliberately different from the value
+ranking: begin with the smaller policy consolidations and leave the
+`GraphProcessor` extraction until its boundary is fully characterized.
 
-Those areas should not be broadly rewritten again. This plan only returns to a
-previously refactored area where later features added new responsibility or current
-evidence shows that the original boundary has regrown.
+## Reassessment Decisions And Invariants
 
-The deleted previous `refactor.md` contained five planned items. They were reassessed
-as follows:
+- LOC estimates are directional planning aids, not acceptance criteria. A phase
+  must not compress policy into harder-to-read code to meet an estimate.
+- "No behavior change" includes error messages, object identity and mutation
+  where observable, graph connection-order semantics, execution events,
+  recording/debugger data, and browser layout behavior.
+- Pure helpers needed across the app/core package boundary may be added to the
+  existing exported core Knowledge Store and delegation surfaces. Those
+  helpers become supported additive API and must be typed and documented; no
+  internal source deep import is allowed.
+- Characterization fixtures must use both valid and malformed-but-currently
+  tolerated inputs. A refactor must not silently turn validation tightening
+  into an unplanned behavior change.
+- The current graph/project object and connection insertion order remain
+  authoritative where runtime code currently relies on them.
+- DOM geometry stays owned by DOM measurement. Pure Data Bus models may
+  describe topology and presentation state, but must not attempt to predict
+  live port coordinates.
+- Specialized execution coordination may move out of `GraphProcessor`, but
+  root mutable run state must not be exposed through a broad mutable adapter.
+- Existing benchmark and LOC baselines must be measured again immediately
+  before implementation; the numbers in this document are not treated as
+  current test assertions.
 
-- **MCP provider safety** remains valid and is promoted to item 1 because the exact
-  logging, environment, and lifecycle gaps still exist.
-- **LLM Chat V2 request planning** remains valid, but now also needs to include the
-  newer Generate using AI path and model-catalog ownership. It is item 8.
-- **Execution event routing** is not repeated as a standalone item. The completed
-  executor-session refactor and `projectExecutionSnapshotRouting` already own that
-  seam, and post-refactor churn there is lower than the new hotspots in this plan.
-- **Canvas wire/port geometry** is not repeated. The completed canvas interaction
-  helpers remain the right owners, and no current evidence justifies another broad
-  rewrite.
-- **GraphProcessor lifecycle ownership** remains valid and is item 9, but its scope
-  is narrowed to one extraction at a time to preserve runtime event order and speed.
+---
 
-## Baseline Evidence Snapshot
+## Phase 1: Make Data Coercion a Single Declarative Policy
 
-The plan was grounded in the following pre-refactor observations. They are retained
-as baseline evidence and must not be read as descriptions of the completed code:
+### Status
 
-- `packages/core/src/model/GraphProcessor.ts` is approximately 2,532 physical lines
-  and still owns run lifecycle, abort/pause state, node processing, loops, races,
-  frozen output replay, subprocessors, user input, and scheduling coordination.
-- `packages/app/src/components/renderDataValue/JsonStringPreviewAffordance.tsx` is
-  approximately 1,379 physical lines. It was added after the last refactor and owns
-  Monaco hit detection, coordinate conversion, hover state, popover placement,
-  resizing, persistence, editing, keyboard behavior, and modal rendering.
-- `packages/app/src/components/UiGraphBuilder.tsx` is approximately 1,203 physical
-  lines and duplicates component knowledge across creation, settings rendering,
-  graph-boundary normalization, key validation, drag/drop, and preview orchestration.
-- `packages/app/src/components/GraphList.tsx` is approximately 1,403 physical lines.
-  It grew again after the graph-tree refactor as Node library and web-app resource
-  operations were added directly to the shell.
-- `packages/node/src/webAppHandler.ts` is approximately 741 physical lines and embeds
-  a second web-app renderer as a `String.raw` client program. The React preview and
-  hosted client duplicate component rendering, output formatting, copy/download
-  behavior, Markdown policy, state mutation, and action state.
-- The app currently has 53 test files that read production source files. The style
-  checker reports these but does not prevent new ones. Several recent feature tests
-  assert exact source strings and CSS fragments instead of behavior.
-- `useMarkdown(...)` currently defaults `allowHtml` to `true`, and multiple project-
-  or runtime-controlled surfaces pass its output to `dangerouslySetInnerHTML`.
-  `AiAssistEditorBase.tsx` also calls `marked(...)` directly before rendering HTML.
-- `NodeMCPProvider.ts` logs the complete stdio server config, does not pass the
-  already-supported `config.env` to `StdioClientTransport`, and closes clients only
-  on successful operations.
-- A recursive Yarn audit on 2026-07-10 reported 2 critical, 92 high, 142 moderate,
-  and 17 low entries before runtime/build/exploitability triage. Directly relevant
-  outdated surfaces include Hono in the CLI, the MCP SDK in the Node package, `ws`,
-  `yaml`, Vite/Rollup, and other workspace dependencies. The repository currently
-  has no dependency-audit workflow or Dependabot configuration.
-- Workspace content selection is represented by a current graph plus independent
-  `nodeLibraryOpenState` and `selectedUiGraphIdState` values. Transitions repeatedly
-  clear and set those values manually, which makes impossible mixed states possible
-  and duplicates save/snapshot/viewport logic.
+**Completed on 2026-07-24.**
 
-These numbers are diagnostics, not line-count targets. A smaller file is useful only
-when the resulting owners are clearer and the total system has fewer concepts.
+The implementation added one exhaustive `scalarCoercionRules` registry that
+owns both specialized runtime dispatch and type-level `canAttempt`
+compatibility. Array recursion, function unwrapping, and `any` behavior remain
+explicit structural wrappers so the existing order and permissive compatibility
+semantics did not change.
 
-## Completion Evidence
+The characterization baseline contains 80 data types and all 6,400 ordered
+type pairs. It locks the existing 2,270 incompatible pairs with both an
+independent legacy-policy comparison and a stable matrix digest. Value-level
+coverage records nullish and falsy handling, `parseFloat` / `NaN`, array
+mapping and failures, identity preservation, first-element inference, function
+evaluation, media and graph-reference behavior, Knowledge value normalization,
+and in-place legacy chat-message mutation.
 
-- All ten numbered items below are implemented and marked `DONE`; durable ownership
-  and reassessment details are recorded in `refactor-history.md` item 133.
-- The final audit fixed additional integration gaps found only by broad verification:
-  package-owned generated-client tooling, ancestry-scoped dependency exceptions,
-  browser-safe Gentrace imports, a public core web-app runtime entrypoint, and
-  Windows-safe app test discovery.
-- Full build, aggregate tests, lint, docs typecheck, style/boundary checks, file-tree
-  checks, formatting, JavaScript and Rust audits, runtime equivalence/benchmarks, and
-  diff hygiene pass. A clean temporary workspace also passes the exact immutable
-  cache install used by CI while the developer's live `yarn dev` process remains
-  untouched.
-- Legacy source-reading tests and long relative imports are no longer open-ended:
-  57 reviewed source-reading tests and 154 long-relative imports remain on shrinking
-  baselines, while new entries and package source deep imports fail immediately.
+The expected production deletion did not materialize. `coerceType.ts` grew by
+65 physical lines because the previous compact `ts-pattern` dispatch and separate
+compatibility conditions were replaced with an explicit entry for every scalar
+type and structural array/function boundaries were made explicit. That trade is
+intentional: the mapped registry makes a missing future scalar policy a
+compile-time error and is easier to audit than compressing the matrix behind
+implicit defaults.
 
-## Priority Order
+Three reassessment passes removed a redundant target field, activated the
+registry's `any` compatibility rule, and fixed concrete `DataValue` contract
+violations. Deferred `any` values no longer create invalid empty data types;
+`fn<T[]>` defaults return arrays; scalar extraction always returns a scalar
+even for `fn<T[]>`; mutable defaults are isolated; dynamic `any`/`object`
+arrays stay flat; matching concrete values can populate deferred ports; exact
+deferred values keep their function identity; deferred `any` values never leak
+raw scalars or nested callbacks; and missing values no longer pass the negative
+function-value guard. Get/Set Global now use the shared default owner, while
+app render/copy paths use the separate full return-type helper so
+`Function<T[]>` labels remain accurate.
 
-| Order | Refactor                                                | Primary value                        | Relative risk | Expected production LOC                           |
-| ----- | ------------------------------------------------------- | ------------------------------------ | ------------- | ------------------------------------------------- |
-| 1     | MCP transport, environment, and client lifecycle safety | Security and reliability             | Low-medium    | Decrease                                          |
-| 2     | Default-safe Markdown and HTML rendering boundary       | Security                             | Medium        | Neutral or decrease                               |
-| 3     | Dependency and toolchain security baseline              | Security and release hygiene         | Medium-high   | Small increase in checks, dependency code removed |
-| 4     | Shared Minimal Web App runtime model                    | Correctness and maintainability      | Medium        | Decrease                                          |
-| 5     | Schema-driven UI graph builder                          | Maintainability and feature velocity | Medium        | Decrease or neutral                               |
-| 6     | Monaco feature and JSON-preview architecture            | Reliability and maintainability      | Medium-high   | Decrease or neutral                               |
-| 7     | Project workspace target and navigator ownership        | Correctness and maintainability      | Medium-high   | Decrease                                          |
-| 8     | LLM Chat V2 and AI-assist request contract              | Provider correctness and security    | High          | Neutral                                           |
-| 9     | GraphProcessor run-lifecycle extraction                 | Runtime correctness                  | High          | Neutral or small increase                         |
-| 10    | Behavioral test, boundary, and documentation contracts  | Maintainability and transparency     | Medium        | Test code decreases; small guardrail increase     |
+Across the affected production files, the phase is a net `+123` physical
+lines: `coerceType.ts` `+64`, `DataValue.ts` `+17`, `expectType.ts` `+50`, the
+two Global nodes `-9`, and app consumers `+1`. The focused characterization
+file contains 359 lines.
 
-The order favors high benefit with a small blast radius first. Items 4 and 5 are
-adjacent intentionally: establish shared web-app runtime policy before simplifying
-the editor that creates that policy. Item 10 should also be applied incrementally
-inside every earlier item rather than postponed entirely to the end.
+### Problem
 
-## Global Refactor Rules
+`packages/core/src/utils/coerceType.ts` contains both runtime conversion logic
+and a separately maintained `canBeCoerced(...)` compatibility function. The
+file explicitly warns that the two are hard to keep synchronized.
 
-- Preserve `.rivet-project`, `.rivet-data`, recording, and hosted-wrapper formats
-  unless a section explicitly calls out a security-driven compatibility change.
-- Preserve public package APIs unless the item names a migration and compatibility
-  layer.
-- Add characterization tests before moving runtime or UI policy.
-- Prefer pure functions and small lifecycle owners over new generic frameworks.
-- Do not add an abstraction only to make a large file look smaller.
-- Do not introduce a second compatibility path after establishing one owner.
-- Measure production line deltas for every item, but reject line savings that make
-  code denser or less testable.
-- Update the owning developer documentation in the same commit as each code move.
-- Keep `refactor-history.md` unchanged until an item is actually complete; then add
-  one durable completion entry with scope, outcome, verification, and line delta.
-- Run focused tests first, then package typecheck/lint/build according to blast radius.
-- Use `git diff --check` for every item.
+Port compatibility therefore depends on a second hand-maintained model of what
+runtime coercion can do. Adding a data type or conversion can update one path
+without updating the other.
 
-## 1. MCP Transport, Environment, And Client Lifecycle Safety — DONE
+There is also no focused exhaustive test that records the complete
+`DataType x DataType` compatibility matrix.
 
-### Why This Is A Priority
+### Implementation
 
-MCP is a high-trust integration: it can connect to network servers, start local
-processes, and pass environment variables. The current implementation is small but
-unsafe in ways that are easy to fix without touching project data or node behavior.
+- Add characterization tests for the current complete compatibility matrix
+  before changing the implementation.
+- Add representative value-level tests for every special coercion family:
+  - scalar-to-scalar;
+  - scalar-to-array;
+  - array-to-array;
+  - array-to-string and array-to-object;
+  - `any`;
+  - function values;
+  - binary and media values;
+  - graph references;
+  - Knowledge Source values.
+- Characterize non-obvious observable behavior before extraction:
+  - `parseFloat(...)` results, including `NaN`;
+  - array conversion order and failure behavior;
+  - first-element array inference in `inferType(...)`;
+  - `undefined`, `null`, empty string, zero, and false handling;
+  - object and array identity preservation;
+  - on-demand function unwrapping;
+  - in-place normalization of assistant `function_call.arguments`.
+- Introduce declarative scalar coercion rules containing:
+  - the target scalar type;
+  - the runtime coercer, when the target has specialized conversion behavior;
+  - a separate `canAttempt` type predicate describing compatibility.
+- Keep runtime conversion and type-level compatibility as distinct operations
+  in the same exhaustive rule. Do not infer compatibility merely by invoking a
+  coercer against a synthetic value.
+- Centralize array, function, and `any` dispatch around those rules while
+  preserving the existing recursive conversion order.
+- Derive `canBeCoerced(...)` from the `canAttempt` side of the same rules used
+  to select runtime conversion.
+- Preserve the current permissive meaning of compatibility: it means that a
+  conversion is possible for that pair of types, not that every possible
+  runtime value will successfully convert.
+- Preserve existing thrown errors and `undefined` results exactly.
+- Keep `inferType(...)` behavior in the same module but outside the coercion
+  rule registry; inference and conversion are related utilities, not the same
+  policy.
 
-### Current Problem
+### Expected Result
 
-`packages/node/src/native/NodeMCPProvider.ts` currently:
+- One owner for runtime coercion and editor compatibility.
+- The synchronization TODO is removed.
+- Future data types cannot silently omit compatibility policy.
+- Expected production reduction: approximately 40-100 lines.
 
-- logs `serverConfig` directly, which can disclose command arguments and environment
-  secrets;
-- ignores `serverConfig.config.env`, even though the core MCP contract already
-  exposes it;
-- repeats open/operation/close code for tools and prompts;
-- closes clients only after successful operations, so an exception after connect can
-  leave a transport or child process alive;
-- reuses the same SDK `Client` after a failed Streamable HTTP connection when trying
-  SSE fallback, leaving fallback behavior dependent on SDK internal state;
-- contains catch-and-rethrow blocks that add no context and obscure cleanup;
-- has no focused tests around fallback, cleanup, or secret handling.
+### Risks
 
-The current dependency audit also reports known issues in the pinned MCP SDK. The SDK
-upgrade belongs to item 3, while this item fixes Rivet-owned lifecycle policy.
-
-### Target Ownership
-
-`NodeMCPProvider` should be a thin adapter over two explicit owners:
-
-1. transport creation (`http` with clean Streamable HTTP -> SSE fallback, and
-   `stdio` with command/args/env); and
-2. `withMcpClient(...)`, which runs one operation and guarantees close in `finally`.
-
-No raw server configuration should reach logs. Diagnostics may identify transport
-kind and server id, but never command arguments, headers, environment values, or tool
-arguments.
-
-### Detailed Change Plan
-
-1. Add an internal `McpClientFactory`/transport helper under
-   `packages/node/src/native/mcp/` or keep a few private functions in
-   `NodeMCPProvider.ts` if the final code is still short.
-2. Create a fresh client for each HTTP transport attempt. Dispose the failed
-   Streamable HTTP attempt before constructing the SSE attempt.
-3. Add one `withMcpClient(createClient, operation)` helper with `try/finally` cleanup.
-   If both the operation and close fail, preserve the operation error and attach the
-   close failure as a cause/diagnostic rather than replacing the useful error.
-4. Pass `serverConfig.config.env` into `StdioClientTransport`. Preserve the current
-   environment inheritance semantics required by the SDK; merge only if the SDK
-   contract requires an explicit full environment.
-5. Remove `console.log(serverConfig)` and all redundant catch/rethrow blocks.
-6. Deduplicate tool/prompt response mapping in small pure mappers.
-7. Decide and document whether each call intentionally creates a short-lived client.
-   Do not add connection pooling in this refactor.
-8. Add abort/time-limit support only if the existing provider interface already
-   carries a signal. Otherwise record it as future functionality rather than widening
-   the public contract here.
-
-### Files To Change
-
-- `packages/node/src/native/NodeMCPProvider.ts`
-- optional new files under `packages/node/src/native/mcp/`
-- `packages/core/src/integrations/mcp/MCPProvider.ts` only for clarified comments or
-  an internal type correction; keep the public shape compatible
-- new focused tests under `packages/node/test/`
-- `developer-docs/PACKAGES.md`
-- `developer-docs/CORE-ENGINE.md`
+- **Compatibility can be mistaken for guaranteed conversion.** Several
+  type-pairs are allowed even though particular values return `undefined`,
+  produce `NaN`, or throw. The registry must retain separate type-level and
+  value-level decisions.
+- **Existing coercion mutates some inputs.** Chat-message normalization can
+  stringify function-call arguments in place. Copying values during the
+  refactor would be an observable change even if the returned data is equal.
+- **`any` and function values recurse through inference and unwrapping.**
+  Reordering the generic wrappers can change which coercer receives the value.
+- **Array coercion is not uniformly all-or-nothing.** Mapping order, thrown
+  errors, and retained `undefined` values must be characterized rather than
+  "cleaned up."
+- **This utility has a very large caller surface.** A small semantic change can
+  alter node defaults, comparison, conditionals, port wiring, provider
+  requests, and execution-data rendering. Full core and app coverage is
+  required, not only the new focused tests.
+- **An exhaustive table can become harder to read than the existing code.**
+  Stop if the descriptor shape needs target-specific escape hatches that hide
+  rather than clarify conversion behavior.
 
 ### Verification
 
-- Streamable HTTP success does not construct SSE.
-- Streamable HTTP failure closes its attempt and retries with a fresh SSE client.
-- Tool, list-tools, list-prompts, and get-prompt operations close on success and
-  failure.
-- Stdio receives command, args, and env exactly once.
-- No config/env/tool payload appears in captured logs or normalized errors.
-- Existing MCP nodes still map SDK responses to the same Rivet data shapes.
-- Node package tests, typecheck/build, lint, and `git diff --check` pass.
+- Exhaustive compatibility-matrix test.
+- Representative runtime coercion tests.
+- Identity and mutation assertions for object, array, chat-message, and
+  function values.
+- Compile-time exhaustiveness check against `dataTypes`/scalar type ownership
+  so a newly added type cannot bypass the policy.
+- Existing graph connection-validation tests.
+- Core tests and typecheck.
+- App tests that exercise port compatibility.
 
-### Risks And Mitigations
+---
 
-- **SDK fallback semantics may differ after upgrade.** Characterize current accepted
-  Streamable HTTP and SSE behavior before changing the dependency.
-- **Environment merging can drop `PATH`.** Test inherited and explicit env behavior
-  on Windows, macOS, and Linux-compatible inputs.
-- **Close failures can mask operation failures.** Preserve the first failure.
-- **Pooling could look attractive while refactoring.** Keep clients short-lived until
-  a separate performance requirement proves pooling is worth its lifecycle cost.
+## Phase 2: Centralize Knowledge Store Field and Credential Normalization
 
-### Result After Refactor
+### Problem
 
-MCP calls have one cleanup path, configured stdio env works, secrets are not logged,
-and the adapter is shorter. Public node/YAML behavior remains unchanged.
+Knowledge Store configuration policy is duplicated between:
 
-## 2. Default-Safe Markdown And HTML Rendering Boundary — DONE
+- `packages/core/src/integrations/KnowledgeStoreProvider.ts`;
+- `packages/app/src/components/ProjectKnowledgeStoresConfiguration.tsx`.
 
-### Why This Is A Priority
+Both paths independently implement defaults, required-field validation, type
+checks, select-option validation, credential lookup, and manipulation of the
+`knowledgeStoreCredentials` settings tree.
 
-Rivet renders project-authored text, plugin descriptions, LLM output, user-input
-questions, comments, and AI-assist errors. These are untrusted content surfaces even
-inside a desktop app. A permissive shared default plus `dangerouslySetInnerHTML`
-creates an avoidable script/unsafe-link injection boundary.
+The editor can therefore accept or serialize a value differently from the
+runtime that later consumes it. Credential storage also has multiple owners
+that need to understand its nested settings shape.
 
-### Current Problem
+### Implementation
 
-`packages/app/src/hooks/useMarkdown.ts` defaults `allowHtml` to `true`. Callers that
-do not pass options therefore render raw Markdown HTML. Current sinks include:
+- Add a focused core provider-field policy module with pure helpers for:
+  - constructing provider-field draft defaults;
+  - validating and normalizing one declared field value;
+  - normalizing UI draft connection fields;
+  - strictly normalizing a persisted connection definition;
+  - normalizing provider credential fields;
+  - reading credentials for one provider connection;
+  - immutably writing or removing credentials for one provider connection.
+- Use the registered provider field specifications as the only schema.
+- Preserve the two intentional normalization modes:
+  - UI draft normalization iterates declared fields and drops unknown draft
+    properties, matching the current save/test behavior;
+  - runtime definition normalization rejects unknown persisted configuration
+    fields, matching the current controller behavior.
+- Have the shared field validator return a typed field issue rather than
+  hard-coding one universal error sentence. The UI and runtime format the same
+  issue with their existing context and exact current messages.
+- Reuse the helpers in both `KnowledgeStoreController` and the project settings
+  UI.
+- Export the helpers through the existing core Knowledge Store API because the
+  app consumes core through its package boundary. Do not create a source deep
+  import or an additional package subpath.
+- Keep React responsible only for modal state, controls, confirmation, and
+  notifications.
+- Preserve:
+  - `Settings.pluginSettings` storage shape;
+  - local-only credential behavior;
+  - unknown-field rejection;
+  - provider and plugin ownership checks;
+  - default application;
+  - exact outward validation messages.
+- Preserve UI workflow details that are separate from field normalization:
+  - an existing connection cannot switch provider;
+  - changing provider on a new draft resets config and credentials;
+  - duplicating a connection copies configuration but not credentials;
+  - removing a connection clears only its credential entry;
+  - testing a connection aborts the previous test and uses the unsaved draft.
+- Do not expose credential values through project metadata, graph data, logs,
+  or error metadata.
 
-- `NodeBody.tsx` and `nodes/CommentNode.tsx` for project content;
-- `renderDataValue/createScalarRenderers.tsx` for runtime/LLM output;
-- `UserInputModal.tsx` for graph-provided questions;
-- `ContextMenu.tsx` and `pluginsOverlay/PluginCatalogItem.tsx` for node/plugin metadata;
-- `AiAssistEditorBase.tsx`, which bypasses the shared helper and calls `marked(...)`
-  directly before `dangerouslySetInnerHTML`;
-- other static Trivet and modal surfaces.
+### Expected Result
 
-Escaping raw HTML tokens is also not a complete sanitizer: Markdown links/images and
-future renderer extensions need an explicit URL/attribute policy. The existing web-
-app renderer is safer because it passes `allowHtml: false`, but its hosted client has
-a separate Markdown implementation.
+- One owner for provider-field semantics.
+- One owner for the credential settings shape.
+- The settings UI loses its low-level credential-tree manipulation code.
+- Expected net production reduction: approximately 30-80 lines.
 
-### Target Ownership
+### Risks
 
-Introduce one safe rich-text boundary with explicit trust modes:
-
-- `untrusted`: sanitize generated Markdown HTML, reject active content and unsafe URL
-  schemes, and use this as the default;
-- `trusted-static`: allowed only for checked-in constant content, with an explicit
-  call-site annotation; and
-- `plain`: no HTML rendering.
-
-No component should call `marked(...)` or assign generated HTML directly. Every
-`dangerouslySetInnerHTML` sink should receive a branded/specially named sanitized
-result or be documented as static compile-time HTML.
-
-### Detailed Change Plan
-
-1. Replace `allowHtml?: boolean` with an explicit rendering policy, or keep it as a
-   deprecated adapter while making the default safe.
-2. Use a maintained sanitizer rather than writing an ad hoc regex sanitizer. Define a
-   narrow allowlist for headings, paragraphs, emphasis, lists, blockquotes, tables,
-   code/pre, and safe links.
-3. Allow only intended protocols (`http`, `https`, `mailto`, and relative/hash links
-   if required). Strip `javascript:`, event handlers, style injection, iframes,
-   objects, and SVG active content.
-4. Route `AiAssistEditorBase.tsx` through the same helper and remove its direct
-   `marked` import.
-5. Inventory every `dangerouslySetInnerHTML` and `innerHTML` use. Keep YAML diff HTML
-   only if its generator is proven to escape content; otherwise sanitize it too.
-6. Make plugin-supplied and project-supplied metadata untrusted by definition.
-7. Keep a small trusted-static path only where needed for checked-in prose. Prefer
-   using the untrusted path everywhere if visual output is identical.
-8. Add a repository check that rejects new unapproved raw HTML sinks and direct
-   `marked(...)` calls outside the renderer owner.
-9. Coordinate the hosted web-app sanitizer with item 4 so the desktop preview and
-   hosted client use the same policy and fixtures.
-
-### Files To Change
-
-- `packages/app/src/hooks/useMarkdown.ts`
-- new Markdown/sanitization helpers under `packages/app/src/utils/markdown/` or a
-  shared runtime location selected by item 4
-- `packages/app/src/components/NodeBody.tsx`
-- `packages/app/src/components/nodes/CommentNode.tsx`
-- `packages/app/src/components/renderDataValue/createScalarRenderers.tsx`
-- `packages/app/src/components/UserInputModal.tsx`
-- `packages/app/src/components/ContextMenu.tsx`
-- `packages/app/src/components/pluginsOverlay/PluginCatalogItem.tsx`
-- `packages/app/src/components/editors/custom/AiAssistEditorBase.tsx`
-- `packages/app/src/components/NodeChangesModal.tsx`
-- `packages/node/src/webAppHandler.ts` or the generated client owner from item 4
-- app/node package manifests and `yarn.lock` for the sanitizer dependency
-- `scripts/checks/` for the sink guard
-- `developer-docs/APP-ARCHITECTURE.md`
-- `developer-docs/PACKAGES.md`
+- **UI and runtime validation are deliberately different at the boundary.**
+  Reusing one strict function for both would make the editor reject stale draft
+  properties that it currently discards.
+- **Error wording is user-visible behavior.** A shared validator must report
+  structured issues so each caller can retain its existing connection-specific
+  or field-only wording.
+- **Credential data is sensitive.** Generic debugging, thrown metadata, test
+  snapshots, or accidental placement in project metadata could expose secrets.
+- **The credential tree is provider-scoped.** Confusing provider ID with owning
+  plugin ID would make saved credentials appear missing or attach them to the
+  wrong plugin settings.
+- **Empty credential behavior is subtle.** The current code may retain empty
+  parent settings objects while deleting the connection entry. Normalizing the
+  surrounding tree more aggressively would change persisted settings.
+- **Defaults and empty values are type-specific.** Boolean `false`, numeric
+  zero, empty optional strings, required whitespace strings, and select values
+  must retain current treatment.
+- **New core exports become supported API.** Names and types must be narrow and
+  provider-neutral; React draft types and UI-only wording must not leak into
+  core.
+- **Store instance caching is unrelated.** This phase must not alter
+  `KnowledgeStoreController`'s project-object cache, host-store precedence, or
+  provider factory lifecycle.
 
 ### Verification
 
-- Script tags, event attributes, unsafe URLs, SVG payloads, malformed tags, and nested
-  encoded payloads do not execute or survive sanitization.
-- Ordinary Markdown, fenced code, tables, links, and existing styling remain stable.
-- LLM output and user-input questions use the safe path.
-- Web-app desktop and hosted Markdown produce equivalent sanitized DOM.
-- No direct `marked(...)` + `dangerouslySetInnerHTML` pair remains outside the owner.
-- App tests/typecheck/lint/build and hosted renderer tests pass.
+- Characterize current editor and runtime normalization against the same field
+  specifications.
+- Test required, optional, boolean, number, select, string, and secret fields.
+- Test malformed and prototype-less settings objects.
+- Test write, replace, clear, duplicate, provider switch, and connection
+  removal behavior.
+- Assert that duplicate never copies credentials and that provider changes are
+  only possible for new drafts.
+- Assert that UI mode drops unknown draft fields while runtime mode rejects
+  unknown persisted fields.
+- Assert that no credential value appears in errors or serialized project
+  metadata.
+- Run Knowledge Store provider, controller, settings-modal, and Pinecone tests.
 
-### Risks And Mitigations
+---
 
-- **Some users may rely on raw HTML in Comment/Text output.** This is an intentional
-  security hardening. Document it clearly and consider a future sandboxed component
-  instead of preserving unsafe inline HTML execution.
-- **Sanitization can change Markdown output.** Lock the supported tag/attribute
-  contract with fixtures before switching all callers.
-- **Browser and Node sanitizer behavior can drift.** Share policy and fixture tests;
-  do not maintain two handwritten allowlists.
+## Phase 3: Separate Graph Dependency Discovery from Reachability Traversal
 
-### Result After Refactor
+### Problem
 
-Untrusted Markdown is safe by default, raw HTML sinks are auditable, and components
-lose repeated rendering choices. The only visible changes should be removal of unsafe
-HTML/URL behavior.
+`packages/app/src/utils/graphReachability.ts` combines:
 
-## 3. Dependency And Toolchain Security Baseline — DONE
+- graph traversal and definite/dynamic classification;
+- connection indexing;
+- runtime-specific interpretation of many node types;
+- Call Graph provenance;
+- Delegate Tool Call reachability;
+- UI Graph roots;
+- plugin support diagnostics;
+- warning construction.
 
-### Why This Is A Priority
+Its auto-delegate graph-name resolution also duplicates runtime logic in
+`packages/core/src/model/nodes/toolCallDelegation.ts`, including exact-name
+matching followed by the `includes(...)` fallback.
 
-Code-level hardening cannot compensate for known vulnerable runtime libraries. The
-current lockfile contains old direct dependencies and no automated audit gate, so
-fixed advisories can remain indefinitely or reappear during unrelated installs.
+This creates a concrete safety risk: runtime graph resolution can change while
+unreachable-graph analysis continues using an older rule.
 
-### Current Problem
+### Implementation
 
-The 2026-07-10 recursive audit found a large advisory backlog. Not every entry ships
-in every artifact, but several are directly connected to Rivet runtime surfaces:
+- Extract the auto-delegate name matcher into a shared generic pure core
+  helper used by both execution and reachability analysis. It accepts ordered
+  candidates plus a graph-name accessor and returns the original candidate.
+- Runtime passes ordered graph objects; analysis passes ordered
+  `[projectMapKey, graph]` entries. The helper must not impose a graph-ID source,
+  so both callers retain their existing malformed-input behavior.
+- Preserve `Object.values(...)`/`Object.entries(...)` insertion order: first
+  exact-name match wins; only then does the first contains-name match win.
+- Build one per-graph dependency index containing:
+  - nodes by ID;
+  - graph-order input and output connection lists;
+  - effective first valid input connections where a resolver needs runtime
+    first-connection semantics;
+  - outgoing connections;
+  - graph IDs and graph-name lookup data.
+- Move node-specific dependency discovery into focused resolvers for:
+  - Subgraph;
+  - Loop Until;
+  - Cron;
+  - Delegate Tool Call;
+  - Run Thread;
+  - Call Graph and Graph Reference;
+  - cross-project graph aliases.
+- Keep `getGraphReachabilityReport(...)` responsible for:
+  - reachability roots;
+  - definite versus dynamic propagation;
+  - unsupported-node reporting;
+  - blocked/partial/ready status;
+  - final unreachable buckets.
+- Keep the two other public queries behaviorally distinct:
+  - `getGraphIdsReferencingGraph(...)` must continue excluding Delegate Tool
+    Call edges rather than treating every possible delegated handler as a
+    direct reference;
+  - UI Graph reference discovery remains limited to direct Button and Chat
+    action targets.
+- Preserve:
+  - first-valid-input runtime semantics;
+  - disabled-node behavior;
+  - exact-name-before-contains auto-delegate matching;
+  - fallback-handler rules;
+  - static versus dynamic Call Graph classification;
+  - warning text and ordering;
+  - third-party plugin partial-analysis behavior.
+- Preserve the current conservative analysis boundary for unknown and
+  third-party node types. This refactor does not add a plugin dependency
+  descriptor API.
 
-- CLI HTTP serving uses old `hono` and `@hono/node-server` versions with routing,
-  static-file, auth, CORS, and denial-of-service advisories.
-- Node MCP support uses an old `@modelcontextprotocol/sdk` with ReDoS, cross-client
-  state, and DNS-rebinding advisories.
-- app/node WebSocket dependencies are below patched `ws` releases.
-- app/core YAML and JSONPath dependencies need advisory-specific review because they
-  parse user/project-controlled expressions and data.
-- Vite/Rollup and related development servers/build tools have file-read/write and
-  dev-server advisories relevant to local development.
-- old packaging/build chains (`pkg`, pnpm embedded as an app dependency, old CRA/
-  Docusaurus ancestry) pull in many vulnerable or abandoned transitive packages.
-- Tauri/Rust dependencies have no automated `cargo audit`/`cargo deny` gate.
-- root metadata disagrees about toolchain ownership (`packageManager` uses Yarn 4.6,
-  while `volta.yarn` still names Yarn 3.5).
+### Expected Result
 
-### Target Ownership
+- Traversal is independent from node-specific dependency policy.
+- Runtime and analysis share the most fragile resolution rule.
+- New graph-executing nodes have an obvious dependency-resolver seam.
+- Expected reduction in the main reachability module: approximately 250-350
+  lines. Total production LOC may remain near neutral because named resolvers
+  replace a monolithic switch.
 
-Create a repeatable dependency-security process with three classified graphs:
+### Risks
 
-1. shipped runtime dependencies;
-2. build/release dependencies that process repository or untrusted inputs; and
-3. docs/test-only dependencies.
-
-CI should fail on new unreviewed high/critical findings in each relevant artifact,
-not merely dump an untriaged monorepo report.
-
-### Detailed Change Plan
-
-1. Add a script that records audit output as structured data and maps findings to
-   workspaces/artifacts. Do not parse human-formatted text.
-2. Upgrade direct runtime dependencies first: Hono, MCP SDK, `ws`, `yaml`,
-   `jsonpath-plus`, and any directly exploitable HTTP/parser package.
-3. Upgrade Vite/Rollup and plugins as one tested build-tool batch. Verify desktop dev,
-   browser-hosted app, Monaco workers, and release bundles.
-4. Remove obsolete type stubs already supplied by their packages.
-5. Review whether `pnpm` and `pkg` must remain app dependencies. If they are only
-   build tools, isolate them from shipped runtime dependencies; if `pkg` is no longer
-   supportable, plan a sidecar packaging replacement without changing it silently.
-6. Upgrade or isolate old docs tooling so documentation-only vulnerabilities do not
-   block runtime releases forever, while still keeping a separate docs audit.
-7. Add Rust auditing for `packages/app/src-tauri/Cargo.lock`. Review the broad Tauri 1
-   capability set (`http-all`, `fs-all`, `shell-execute`, etc.) separately; remove
-   capabilities that the app no longer uses.
-8. Add `.github/dependabot.yml` (or an equivalent update bot) for Yarn and Cargo with
-   grouped, reviewable updates rather than noisy one-package PRs.
-9. Add a checked-in, expiry-based exception file only for advisories that cannot yet
-   be removed. Every exception must name scope, exploitability, owner, and expiry.
-10. Add a CI job that uses the same Yarn binary and immutable cache policy as normal
-    workflows. Cache audit metadata where possible without weakening freshness.
-11. Align Node/Yarn version declarations across `package.json`, Volta, workflows,
-    docs, and release scripts.
-
-### Files To Change
-
-- root `package.json`, `.yarnrc.yml`, and `yarn.lock`
-- `packages/*/package.json`, especially app, core, node, CLI, app-executor, and docs
-- `packages/app/src-tauri/Cargo.toml` and `Cargo.lock`
-- `.github/dependabot.yml`
-- `.github/workflows/build.yml` and release/publish workflows through a shared audit
-  job or reusable workflow
-- new scripts/config under `scripts/checks/`
-- `developer-docs/BUILD-AND-CI.md`
-- `developer-docs/PACKAGES.md`
-- root `README.md` if supported toolchain requirements change
-
-### Verification
-
-- Zero unreviewed critical/high findings in shipped runtime artifacts.
-- Any temporary exception has a reason and expiry and is checked by CI.
-- `yarn install --immutable --immutable-cache` passes on Linux, Windows, macOS, x64,
-  and arm64 workflow variants without inflating every job unnecessarily.
-- Root build, test, lint, docs typecheck, CLI smoke tests, app dev startup, desktop
-  sidecar preparation, and Tauri release builds pass.
-- `cargo audit`/chosen Rust gate passes or produces only explicit exceptions.
-- Published package smoke tests still load CJS/ESM exports.
-
-### Risks And Mitigations
-
-- **Large dependency jumps can hide behavior changes.** Upgrade by runtime group and
-  commit separately, with focused compatibility tests.
-- **A monorepo-wide zero-warning gate can be impractical initially.** Gate new and
-  high-impact findings immediately, then burn down reviewed lower-severity debt.
-- **Tauri major migration is large.** Do not combine a Tauri 2 migration with routine
-  dependency patching unless an unpatchable security issue forces it.
-- **Audit output changes over time.** Store policy, not a frozen count.
-
-### Result After Refactor
-
-Rivet has a current, coherent toolchain; known runtime vulnerabilities are removed or
-explicitly time-bounded; and CI prevents silent reintroduction.
-
-## 4. Shared Minimal Web App Runtime Model — DONE
-
-### Why This Is A Priority
-
-Minimal Web Apps now run in the desktop preview, detached Tauri window, Node handler,
-CLI, and wrapper servers. The feature works, but the same six components are rendered
-by both React and a large embedded JavaScript string. Every new action currently has
-to be implemented and tested twice.
-
-### Current Problem
-
-Behavior is split across:
-
-- `packages/app/src/components/rivetWebApps/RivetWebAppRenderer.tsx`;
-- the `WEB_APP_CLIENT_JS` string in `packages/node/src/webAppHandler.ts`;
-- shared CSS in `packages/core/src/model/UiGraphRendererStyles.ts`;
-- action/state helpers in `packages/core/src/model/UiGraph.ts`;
-- source-reading parity tests in `UiGraphBuilderLayout.test.ts`.
-
-The two renderers duplicate:
-
-- output formatting and missing-value handling;
-- copy and JSON-download behavior/filenames;
-- Markdown conversion and safety policy;
-- button pending/error state;
-- component labels and state reads/writes;
-- revision-mismatch UI;
-- DOM class names and accessibility labels.
-
-The embedded string previously broke because normal template-string escaping changed
-its regex/string contents. This is a structural warning: production browser code
-should be compiled and tested as code, not maintained as a handwritten string.
-
-### Target Ownership
-
-Create a framework-neutral `UiGraphRuntimeModel` that owns state transitions,
-component render data, output actions, action payloads, and error/revision states.
-Keep two thin view adapters only where necessary:
-
-- React adapter for editor preview/cross-highlighting/drag handles;
-- DOM adapter for hosted HTML.
-
-The hosted client must be authored as normal TypeScript/JavaScript and bundled into
-an embeddable asset at build time. `webAppHandler.ts` should own HTTP routing and HTML
-assembly, not client implementation details.
-
-### Detailed Change Plan
-
-1. Move pure output formatting, value-presence checks, JSON download serialization,
-   filename generation, action request construction, and state patch reduction into
-   core/shared helpers.
-2. Define an exhaustive component-to-render-model function. Adding a new
-   `UiGraphComponent` should fail TypeScript until the model and both adapters handle
-   it.
-3. Extract hosted client code from `webAppHandler.ts` into a normal source file.
-4. Add a small build step that bundles that client to a deterministic string/asset
-   consumed by the Node package. Verify that package publishing includes it.
-5. Keep `renderRivetWebAppHtml(...)` synchronous if the public API requires it by
-   loading a generated module constant, not by reading mutable source files at
-   request time.
-6. Put Markdown sanitization behind item 2's shared policy and fixtures.
-7. Keep CSS tokens in `UiGraphRendererStyles.ts`, but move document reset, runtime
-   classes, and component classes into clearly named exports if that improves asset
-   assembly.
-8. Convert desktop and hosted parity tests from source regexes to shared runtime-model
-   fixtures and DOM/HTML assertions.
-9. Preserve `createRivetWebAppHandler`, `renderRivetWebAppHtml`, and
-   `runRivetWebAppAction` API behavior.
-10. Add a generated-asset freshness check similar to the graph-creator data check so
-    a source edit cannot ship with a stale embedded client.
-
-### Files To Change
-
-- `packages/core/src/model/UiGraph.ts`
-- `packages/core/src/model/UiGraphRendererStyles.ts`
-- new shared runtime-model files near `UiGraph.ts`
-- `packages/app/src/components/rivetWebApps/RivetWebAppRenderer.tsx`
-- `packages/app/src/components/rivetWebApps/RivetWebAppPreviewWindow.tsx`
-- `packages/node/src/webAppHandler.ts`
-- new Node/browser client source and generated-asset module
-- Node/core/app bundle scripts and package `files` lists as needed
-- CLI `serve-app` tests that consume the public Node API
-- `scripts/checks/` for generated client freshness
-- `developer-docs/CORE-ENGINE.md`
-- `developer-docs/PACKAGES.md`
-- `developer-docs/APP-ARCHITECTURE.md`
+- **Static analysis intentionally approximates runtime.** "Improving" a
+  conservative dynamic edge into a static edge can incorrectly mark graphs
+  safe to delete.
+- **Connection array order is observable.** Runtime and analysis use the first
+  valid connection in several paths. Sorting or indexing through an unordered
+  structure would change results.
+- **Project map keys and `graph.metadata.id` are normally equal but are not
+  interchangeable for malformed projects.** The shared name resolver must not
+  silently choose one identity representation for both callers.
+- **Delegate reachability has two roles.** Connected delegate handlers can act
+  as reachability roots, while the "graphs referencing this graph" query
+  intentionally excludes those broad edges. A generic traversal helper must
+  not collapse the distinction.
+- **Disabled and unsupported nodes are diagnostic policy, not just filtering.**
+  Moving resolvers must retain when analysis is `partial`, when warnings are
+  emitted, and when unsupported nodes in unreachable graphs are ignored.
+- **Warning order is user-visible and test-visible.** Replacing ordered loops
+  with unordered set/map projection can produce unstable reports.
+- **A resolver registry can become an unnecessary framework.** Keep the
+  built-in resolver set closed and explicit in this phase; plugin-extensible
+  dependency metadata would be separate functionality.
 
 ### Verification
 
-- One fixture suite covers all component types in both adapters.
-- Desktop preview and hosted HTML have identical state/output/label/action behavior.
-- Markdown attack fixtures are safe in both adapters.
-- Copy/download filenames and payloads match.
-- Revision mismatch and non-revision errors render consistently.
-- Wrapper-facing and CLI handler tests remain compatible.
-- Generated asset freshness is enforced in local style checks and release workflows.
+- Preserve the existing reachability suite as characterization coverage.
+- Add direct shared-resolver tests proving runtime and analysis choose the same
+  graph for exact, partial, missing, and fallback cases.
+- Test malformed connections, disabled providers, multiple candidate inputs,
+  dynamic Tool names, and missing graphs.
+- Add malformed graph identity fixtures where the project map key and metadata
+  ID disagree, and assert that execution-facing and analysis-facing callers
+  preserve their current ID behavior.
+- Assert stable edge/warning order and the intentional Delegate exclusion from
+  `getGraphIdsReferencingGraph(...)`.
+- Run app reachability, core delegation, project loading, and unreachable-graph
+  diagnostics tests.
 
-### Risks And Mitigations
+---
 
-- **A shared runtime can become an abstract UI framework.** Limit it to the current
-  declarative component contract and pure state/render data.
-- **Generated assets can go stale.** Make generation deterministic and checked.
-- **Desktop editor needs wrappers not present in hosted mode.** Keep drag handles and
-  active-component frames in the React adapter, outside the shared runtime.
-- **Public HTML output can change.** Characterize route, payload, class, and
-  accessibility contracts first.
+## Phase 4: Centralize Data Bus Topology And Presentation Derivation
 
-### Result After Refactor
+### Problem
 
-New web-app behavior is implemented once, hosted client code is normal testable
-source, `webAppHandler.ts` becomes smaller, and wrapper/desktop parity stops relying
-on regex tests and human synchronization.
+`packages/app/src/components/nodeCanvas/DataBusRail.tsx` currently combines:
 
-## 5. Schema-Driven UI Graph Builder — DONE
+- responsive rail measurement;
+- compact versus full-row state;
+- global row-height publication;
+- connection grouping;
+- passthrough channel pairing;
+- provider labels;
+- consumer counts;
+- related hover-channel discovery;
+- settings and port interactions;
+- a large CSS surface;
+- rendered markup.
 
-### Why This Is A Priority
+At the same time, `dataBusModel.ts`, NodeCanvas, NodePorts, and WireLayer build
+related connection indexes independently. `DataBusGroup` scans all connections
+again for every bus.
 
-`UiGraphBuilder.tsx` was added after the previous refactor and already exceeds 1,200
-physical lines. Minimal Web Apps are likely to gain components, so duplicating every
-component rule across switches will compound quickly.
+The feature works, but its presentation state has several owners. This is
+especially risky for multiple buses, responsive full-width rows, hover-revealed
+wires, and connection dragging.
 
-### Current Problem
+### Implementation
 
-The file currently owns:
+- Extend the existing pure Data Bus model into one shared connection-topology
+  index built per canvas from effective nodes and preview connections.
+- The topology index must contain:
+  - connections grouped by input and output node/port;
+  - connection-to-bus-channel relationships;
+  - normal-node port-to-channel relationships;
+  - active channel keys;
+  - enough information for WireLayer to decide hidden versus hover-revealed
+    connections without rescanning the graph.
+- Keep live node input/output definitions subscribed through
+  `useCanvasNodeIO(...)` in each `DataBusGroup`. Those definitions can change
+  with node data and plugins and cannot safely be snapshotted by a one-time
+  canvas builder.
+- Add a pure per-group presentation builder that combines current live
+  definitions with the shared topology index and returns:
+  - ordered channels;
+  - paired input/output definitions;
+  - provider connections and provider labels;
+  - consumer counts;
+  - missing/multiple-provider state;
+  - related hover-channel keys.
+- Reuse the shared topology index in NodePorts and WireLayer; reuse the
+  per-group presentation builder in DataBusRail.
+- Extract compact/full-row DOM measurement and observer ownership into a
+  dedicated hook that delegates arithmetic to the existing pure layout
+  helpers.
+- Move rail styling to a focused style owner so the component primarily
+  expresses structure and events.
+- Keep port coordinates in `useNodePortPositions(...)`, measured from actual
+  rendered `.port-circle` elements. The topology model must not synthesize
+  coordinates or replace DOM observation.
+- Preserve the distinction between persisted/effective connections, preview
+  connections, and comparison-only removed connections.
+- Preserve:
+  - compact/full-row thresholds and geometry;
+  - one full-width row per bus;
+  - sidebar offset and canvas-height behavior;
+  - fixed header and Connect Provider sections;
+  - horizontal scrolling;
+  - port drag behavior;
+  - antenna and hover-revealed wire behavior;
+  - selection, comparison, search, and disabled presentation;
+  - context-menu suppression.
 
-- the entire settings/preview layout and most CSS;
-- component palette and creation defaults;
-- per-component settings fields;
-- drag/drop and active-component synchronization;
-- graph selection and Graph Input/Output boundary synchronization;
-- data-key producer/consumer discovery and duplicate warnings;
-- read-only graph port rows;
-- desktop preview availability and launching;
-- direct project mutation for every field.
+### Expected Result
 
-Component knowledge appears in multiple switches (`renderComponentFields`,
-`createUiComponent`, type-name formatting) and in separate data-key/boundary helpers.
-This makes a new component easy to implement incompletely.
+- Connection topology is interpreted once.
+- Rail rendering becomes mostly declarative while retaining reactive IO
+  subscriptions.
+- Multiple-bus and hover behavior become testable without reproducing DOM
+  calculations.
+- Expected net production reduction: approximately 50-120 lines, primarily by
+  removing repeated indexing and channel derivation.
 
-### Target Ownership
+### Risks
 
-Use a typed, finite component descriptor table. Each descriptor should own only:
-
-- display name and palette metadata;
-- default construction;
-- settings editor component;
-- declared data-key reads/writes;
-- optional validation.
-
-Graph action binding normalization should remain a separate pure model because it is
-specific to button/graph boundaries, not a generic component concern.
-
-### Detailed Change Plan
-
-1. Extract pure graph-boundary synchronization (`normalizeButtonAction...`, row
-   alignment/equality) to `uiGraphBuilder/buttonBindings.ts`.
-2. Extract data-key usage/indexing and duplicate detection to
-   `uiGraphBuilder/dataKeys.ts`.
-3. Add an exhaustive descriptor map keyed by `UiGraphComponent['type']` with typed
-   constructors and labels.
-4. Split component settings into focused components under
-   `components/uiGraphBuilder/settings/`. Keep small components together; do not
-   create one file per trivial field.
-5. Add one `updateUiGraph`/`updateComponent` mutation boundary so nested field editors
-   do not each know how to clone and write `project.uiGraphs`.
-6. Ensure graph changes reconcile button mappings through the pure binding owner.
-7. Keep preview drag/drop in a dedicated `UiGraphPreviewEditor` component and keep
-   hosted rendering in the renderer from item 4.
-8. Move large builder CSS to a colocated style module only if it improves navigation;
-   avoid splitting CSS solely to lower the main file count.
-9. Keep project YAML and existing UI component types unchanged.
-10. Add descriptor exhaustiveness tests so every component has defaults, settings,
-    and data-key policy.
-
-### Files To Change
-
-- `packages/app/src/components/UiGraphBuilder.tsx`
-- new files under `packages/app/src/components/uiGraphBuilder/`
-- `packages/core/src/model/UiGraph.ts` only for shared type helpers, not editor UI
-- `packages/core/src/model/GraphBoundaryCache.ts` consumers as needed
-- `packages/app/src/state/uiGraphs.ts`
-- UI graph builder tests, replacing large source contracts with pure/model tests
-- `developer-docs/APP-ARCHITECTURE.md`
-- `developer-docs/CORE-ENGINE.md`
-
-### Verification
-
-- Every current component creates the same serialized data and renders the same
-  settings.
-- Selecting a graph creates exactly the rows represented by its Graph Input/Output
-  boundary and preserves existing compatible data-key mappings.
-- Duplicate producer warnings and consumer dropdown options remain correct after
-  reorder/delete/type changes.
-- Dragging remains vertical-only and preview cross-highlighting remains bidirectional.
-- Desktop preview gating and detached launch remain unchanged.
-- Serialization round trips are byte/semantic equivalent for unchanged projects.
-
-### Risks And Mitigations
-
-- **Descriptor tables can hide React complexity in configuration.** Keep actual field
-  rendering in normal components; use the table for ownership/exhaustiveness.
-- **Mutation helper can capture stale project state.** Use functional atom updates and
-  pure recipes.
-- **Boundary reconciliation can erase user keys.** Characterize current preservation
-  rules before extraction.
-
-### Result After Refactor
-
-The builder shell is substantially smaller, adding a component has one obvious path,
-and graph-binding/data-key correctness is testable without rendering the full editor.
-
-## 6. Monaco Feature And JSON-Preview Architecture — DONE
-
-### Why This Is A Priority
-
-Monaco now supports model/view-state caching, folding, interpolation diagnostics,
-Markdown folding, schema navigation, spellcheck, text tools, font sizing, fullscreen
-search, and editable decoded JSON strings. The features are valuable, but lifecycle
-and overlay behavior are concentrated in broad components that have already required
-many bug-fix iterations.
-
-### Current Problem
-
-There are two broad owners:
-
-- low-level `packages/app/src/components/CodeEditor.tsx` creates Monaco and manually
-  installs/disposes every feature;
-- node-settings `packages/app/src/components/editors/CodeEditor.tsx` owns field UI,
-  footer, AI assist, resizing, validation, Escape priority, and decoded-string wiring.
-
-`JsonStringPreviewAffordance.tsx` alone owns geometry, hover/focus lookup, refs mirroring
-state, button portals, popover portals, scroll revalidation, resize listeners,
-persistent size, edit-modal resize, Monaco edits, and CSS. Coordinate bugs have
-recurred because detection, placement, and view rendering are interleaved.
-
-### Target Ownership
-
-Define an explicit editor capability/lifecycle model:
-
-- low-level Monaco owner: create/dispose/model/view state/layout;
-- feature installers: each returns one `IDisposable` and declares its language/
-  read-only requirements;
-- node-editor chrome: footer, validation, AI assist, field sizing;
-- decoded-string controller: pure active-range and placement decisions;
-- decoded-string views: button/popover and editor-only edit modal.
-
-### Detailed Change Plan
-
-1. Introduce a `CodeEditorCapabilities` object instead of adding more unrelated
-   booleans. Preserve current props through an adapter during migration.
-2. Build one disposer collection for spellcheck, text tools, definition navigation,
-   interpolation, comment highlighting, keyboard hooks, and model listeners.
-3. Move text-tool action registration and spellcheck action ownership out of the
-   React component into focused installers.
-4. Keep global language/provider registration idempotent and separate from per-editor
-   registration.
-5. Split `JsonStringPreviewAffordance` into:
-   - pure geometry/clamping functions;
-   - a Monaco range/viewport adapter;
-   - a small interaction controller/hook;
-   - `JsonStringPreviewPopover`;
-   - `EditJsonStringModal`.
-6. Use one coordinate system per rendered surface and convert only at the portal
-   boundary. Represent anchor rectangles explicitly instead of passing ambiguous
-   `left`/`top` values.
-7. Centralize outside-click, Escape, scroll, text-change, and unmount close reasons in
-   a small state machine/reducer. Avoid parallel booleans and refs for the same state.
-8. Keep persistent width/height preferences in Jotai but move clamp/default logic next
-   to the stored state schema.
-9. Keep Monaco replacement via `executeEdits` and validate that a stale range/model
-   cannot overwrite newly edited text.
-10. Preserve model cache/folding state behavior and separate editable/fullscreen font
-    sizes.
-11. Add a minimal browser-level interaction harness only for portal coordinates,
-    pointer activation, and resize behavior that pure tests cannot prove.
-
-### Files To Change
-
-- `packages/app/src/components/CodeEditor.tsx`
-- `packages/app/src/components/editors/CodeEditor.tsx`
-- `packages/app/src/components/editors/DefaultNodeEditor.tsx`
-- `packages/app/src/components/renderDataValue/JsonStringPreviewAffordance.tsx`
-- `packages/app/src/components/renderDataValue/FoldingCodeBlock.tsx`
-- new modules under `packages/app/src/utils/monaco/` and
-  `packages/app/src/components/renderDataValue/jsonStringPreview/`
-- `packages/app/src/state/ui.ts` or a focused editor-preferences state module
-- focused Monaco/JSON preview tests
-- `developer-docs/APP-ARCHITECTURE.md`
+- **Live port definitions are reactive.** Building one immutable canvas-wide
+  presentation object from definitions would become stale when node data,
+  plugins, referenced projects, or variadic ports change.
+- **Topology and geometry have different owners.** Replacing DOM port
+  measurement with calculated positions would break fixed/full-row rails,
+  zoom, sidebar offsets, font scaling, and detached-window rendering.
+- **There are several connection views.** Persisted connections, filtered
+  effective connections, drag preview connections, and compare-removed
+  connections must not be merged into one ambiguous collection.
+- **Context identity can cause canvas-wide rerenders.** The topology index and
+  derived sets must be memoized from stable inputs, and context values must not
+  be recreated on unrelated node execution updates.
+- **ResizeObserver feedback is easy to reintroduce.** Measuring constrained
+  full-row widths instead of intrinsic compact widths can make the rail
+  oscillate between modes.
+- **Multiple bus rows publish global layout state.** Unmount cleanup, graph
+  switches, zero-bus transitions, sidebar resizing, and one-row-per-bus height
+  accounting must remain exact.
+- **Hover wires use a fixed overlay and real DOM port positions.** Changing
+  z-index, portal ownership, or when antennas are suppressed can render wires
+  under the rail or make them start from stale coordinates.
+- **Invalid and multiple-provider states are intentionally representable.**
+  The model must describe them rather than normalizing them away.
+- **Moving CSS alone is not a refactor benefit.** The style extraction only
+  pays rent if it leaves layout ownership and selectors easier to audit; it
+  must not create a second token or geometry source.
 
 ### Verification
 
-- Editor mount/unmount leaves no Monaco model markers, listeners, DOM portals, or
-  window resize listeners behind.
-- Folding and cursor/scroll state restore only for the correct project/node/editor.
-- Escape closes suggest/find/preview UI before node settings.
-- Preview buttons stay at string ends, never create panel overflow, and hide when the
-  anchor is outside the Monaco viewport.
-- Popovers open beside the clicked button and remain stable during valid scrolling.
-- Resize preferences and edit-modal size persist without jump/dead-zone behavior.
-- Fullscreen remains read-only; node settings can edit with undo/redo.
-- Search decorations, selection, wrapping, and clipboard behavior remain unchanged.
+- Pure presentation-model tests for empty, missing, single, multiple, and
+  pathological provider configurations.
+- Component behavior tests for:
+  - compact and full-row transitions;
+  - multiple pinned bus rows;
+  - sidebar resizing;
+  - scrollable channels with fixed ends;
+  - provider and receiver drag starts;
+  - hover wire replacement and highlighting;
+  - settings selection;
+  - context-menu suppression.
+- Reactivity tests where a bus node's variadic definitions or effective node
+  data changes after the initial render.
+- Tests that compare-removed connections remain visible without becoming
+  active topology and that preview connections drive drag-time presentation.
+- Tests that topology memoization does not change on execution-only state
+  updates.
+- Observer cleanup tests for graph changes, bus removal, and component
+  unmount.
+- Existing wire geometry, port positioning, canvas interaction, and data-bus
+  layout tests.
 
-### Risks And Mitigations
+---
 
-- **Monaco lifecycle bugs are subtle.** Preserve current feature tests and add cleanup
-  tests before moving installers.
-- **Ref reduction can introduce stale closures.** The controller should consume an
-  explicit current snapshot and event, not hide mutable state in many callbacks.
-- **Portal tests can be brittle.** Test pure geometry broadly and keep only a few real
-  browser interaction tests.
+## Phase 5: Extract Tool-Call Continuation from `GraphProcessor`
 
-### Result After Refactor
+### Problem
 
-Monaco features become composable and disposable, decoded-string UI has clear
-geometry/controller/view ownership, and future editor features do not enlarge one
-mount effect or one 1,300-line overlay component.
+`packages/core/src/model/GraphProcessor.ts` remains the largest production
+module. Earlier refactors correctly extracted individual policies rather than
+rewriting its scheduler.
 
-## 7. Project Workspace Target And Navigator Ownership — DONE
+Since the latest refactor-history entry, the processor has gained a new
+coherent responsibility: connected LLM tool-call continuation. The relevant
+code now owns:
 
-### Why This Is A Priority
+- continuation invocation registration and finalization;
+- one real Delegate invocation per model tool call;
+- parallel tool execution and ordered joining;
+- early Assistant Message branches;
+- final result branches;
+- continuation-specific child processors;
+- branch topology and unsafe-node detection;
+- cancellation and sibling failure;
+- cost aggregation;
+- Graph Output overlays;
+- replay and normal-traversal suppression.
 
-Graphs, Node library, and web apps are three mutually exclusive workspace targets,
-but the app represents them through independent state. Historical bugs where graphs
-or linked nodes appeared/disappeared on alternating navigation demonstrate how easy
-it is for snapshot and selection policy to drift.
+This is now large enough to be a subsystem, while remaining tightly embedded
+in the general graph scheduler.
 
-### Current Problem
+### Implementation
 
-- A graph is always present in `graphState`.
-- Node library selection is a separate boolean (`nodeLibraryOpenState`).
-- Web-app selection is a separate optional id (`selectedUiGraphIdState`).
-- `RivetApp`, `GraphList`, hotkeys, context menus, workspace transitions, and run
-  gating each reconstruct which target is actually active.
-- `switchGraph`, `switchToNodeLibrary`, and `switchToUiGraph` repeat persistence,
-  current-graph merge, viewport save, snapshot update, selection reset, and modal
-  cleanup logic.
-- `GraphList.tsx` directly owns UI graph create/duplicate/delete, graph/folder menus,
-  confirmation modals, header actions, sections, filtering, and drag/drop.
+- Do not perform a general `GraphProcessor` decomposition.
+- Treat connected tool-call continuation as one policy boundary.
+- Extract a pure continuation-branch planner responsible for:
+  - effective connection indexes;
+  - reachable continuation nodes;
+  - boundary/preloaded nodes;
+  - unsafe cycle/race/loop rejection;
+  - async-branch inclusion;
+  - the branch graph and preload plan.
+- Extract a `ToolCallContinuationCoordinator` responsible for:
+  - allocating model-order invocation records;
+  - starting scalar Delegate invocations concurrently;
+  - coordinating early and final branches;
+  - cancelling siblings on the first failure while still awaiting every
+    started invocation to settle;
+  - ordered result joining;
+  - returning completed outputs and Graph Output writes to the processor.
+- Give the coordinator a narrow explicit adapter for operations that must
+  remain owned by `GraphProcessor`:
+  - node lifecycle event emission;
+  - process-context creation;
+  - child processor creation and wiring;
+  - pause and abort signals;
+  - cost accumulation;
+  - committed node/graph result state.
+- The adapter must expose operations, not mutable processor maps or private
+  fields. The coordinator returns an immutable round result containing ordered
+  tool results, per-call outputs, branch node outputs, and deferred Graph
+  Output writes.
+- Keep continuation child-processor construction and private
+  `GraphProcessor` state transfer behind the processor-owned branch-run
+  adapter. Do not duplicate subprocessor setup in the coordinator.
+- Commit per-call branch results in original model-call order after all calls
+  settle, matching the current behavior even when completion order differs.
+- Keep `GraphProcessor` responsible for:
+  - root-run lifecycle;
+  - scheduler state;
+  - shared globals and stored values;
+  - subprocess ownership;
+  - final graph outputs;
+  - recording and debugger event transport.
+- Preserve exactly:
+  - one scalar Delegate run per tool call;
+  - process ID allocation order;
+  - parallel start and model-order join;
+  - early Message/tool overlap;
+  - normal versus async downstream completion;
+  - fail-fast cancellation and passthrough errors;
+  - nodeStart, partialOutput, nodeFinish, and nodeError ordering;
+  - Run To behavior;
+  - direct-return tools;
+  - replay, preload, and frozen-output restrictions;
+  - cost attribution and graph-level aggregation;
+  - Graph Output conflict order;
+  - no ordinary traversal replay of consumed continuation nodes.
+- Preserve the current `latestOutputs` semantics for a node with multiple real
+  Delegate invocations; editor run history remains event-backed while the
+  processor's node-result map retains the same final round value it does now.
+- Use a two-step implementation inside this phase:
+  1. extract and verify the pure branch planner;
+  2. extract the invocation coordinator against the stable planner contract.
+     Do not combine both moves in one uncharacterized rewrite.
 
-Independent values permit impossible states such as Node library and a UI graph both
-being selected. Current functions usually clear them correctly, but correctness
-depends on every caller remembering every atom.
+### Expected Result
 
-### Target Ownership
+- `GraphProcessor.ts` becomes approximately 500-700 lines smaller.
+- Tool continuation has a named, testable owner.
+- The general scheduler no longer contains the complete specialized
+  continuation scheduler inline.
+- Total production LOC may remain neutral or increase slightly; clarity and
+  execution safety take priority for this phase.
 
-Introduce a project-scoped transient workspace target:
+### Risks
 
-```ts
-type ProjectWorkspaceTarget =
-  | { type: 'graph'; graphView: GraphViewContext }
-  | { type: 'nodeLibrary'; editingPrefabId?: NodePrefabId }
-  | { type: 'uiGraph'; uiGraphId: UiGraphId };
-```
-
-One transition coordinator should persist the target being left, commit the live
-graph when needed, switch the target atomically, restore target-local view state, and
-update navigation history. Project YAML remains unchanged.
-
-### Detailed Change Plan
-
-1. Characterize all entry points: sidebar, graph history, subgraph links, Node library
-   links, search, context menus, project-tab switching, opening/closing projects, and
-   hosted workspace replacement.
-2. Add a pure transition plan that separates `leave current target`, `commit live
-graph`, `enter target`, and `restore viewport/selection` effects.
-3. Introduce the discriminated target as transient per-project editor state. Keep
-   adapters for old atoms while consumers migrate; remove adapters at completion.
-4. Deduplicate the repeated graph-save/snapshot/viewport block in
-   `useWorkspaceTransitions.ts`.
-5. Make run/save/menu eligibility derive from the target, not ad hoc booleans.
-6. Extract explicit `useUiGraphOperations` and Node library operations instead of
-   mutating project resources inside `GraphList.tsx`.
-7. Split `GraphList` into header actions, web-app resource section, graph/folder
-   section, context-menu dispatch, and dialogs. Keep `useGraphListPresentation` as
-   the existing graph-row presentation owner.
-8. Preserve graph navigation history semantics for Page Up/Page Down/Home and decide
-   explicitly whether UI graphs participate. Do not infer behavior from stale graph
-   state.
-9. Store target-local canvas state only where meaningful: graphs and Node library use
-   canvas view state; UI graphs use builder state.
-10. Add invariant checks in development/tests that exactly one target is active.
-
-### Files To Change
-
-- `packages/app/src/hooks/useWorkspaceTransitions.ts`
-- `packages/app/src/hooks/useLoadGraph.ts`
-- `packages/app/src/hooks/useOpenNodeLibrary.ts`
-- `packages/app/src/hooks/useOpenUiGraph.ts`
-- `packages/app/src/state/nodeLibrary.ts`
-- `packages/app/src/state/uiGraphs.ts`
-- project editor/snapshot state under `packages/app/src/state/` and `utils/`
-- `packages/app/src/components/RivetApp.tsx`
-- `packages/app/src/components/GraphList.tsx`
-- existing/new components under `packages/app/src/components/graphList/`
-- `packages/app/src/hooks/useCanvasHotkeys.ts`
-- search/navigation/context-menu consumers
-- `developer-docs/APP-ARCHITECTURE.md`
-- `developer-docs/EXECUTION-DATA-FLOW.md`
-
-### Verification
-
-- Switching graph -> Node library -> graph never alternates between stale snapshots.
-- Unsaved graph edits survive switching to Node library/UI graph and project tabs.
-- Node library selection cannot also select a graph folder or UI graph.
-- Deleting the active UI graph chooses the same fallback graph as today.
-- History keys and viewport restore remain deterministic.
-- Run commands are unavailable only for non-executable targets.
-- Hosted open/replace/close and dirty baselines remain unchanged.
-- GraphList behavioral tests replace target-related source assertions.
-
-### Risks And Mitigations
-
-- **This touches persistence-sensitive transitions.** Build pure transition tests and
-  replay the known historical bug scenarios before changing atoms.
-- **Adapters can become permanent duplication.** Add a completion gate that removes
-  old independent selection atoms.
-- **Graph history may mix target kinds unexpectedly.** Specify and test the intended
-  history contract before implementation.
-
-### Result After Refactor
-
-Workspace selection has one valid state, transition code is shorter, `GraphList` is a
-shell again, and adding another project resource no longer requires new booleans in
-every app subsystem.
-
-## 8. LLM Chat V2 And AI-Assist Request Contract — DONE
-
-### Why This Is A Priority
-
-Provider request behavior is externally visible and expensive to debug. Recent issues
-included hidden retries, accidental streaming, structured-output compatibility,
-custom-provider keys, model listing, Azure endpoint leakage, tool continuation, and
-AI generation using stale helper nodes. The Vercel SDK-powered path is now the product
-path; legacy Chat must remain isolated.
-
-### Current Problem
-
-Policy is spread across:
-
-- `llmChatV2NodeRuntime.ts` and `chatV2RuntimeOptions.ts`;
-- `chatV2Pipeline.ts`, `aiSdkBridge.ts`, response-format/provider-option/tool/retry
-  helpers;
-- `llmChatV2NodeEditors.ts` and app model-catalog editors;
-- `LlmSettingsPage.tsx`, which keeps module-level refresh maps;
-- `aiAssistModelSettings.ts` and `aiAssistVercelGenerator.ts`;
-- hidden graph-based AI assist and graph-builder orchestration.
-
-AI assist reuses `runChatV2Pipeline`, which is good, but it creates an app-owned
-dynamic node implementation and has its own provider/model/credential selection
-layer. The final request cannot be explained by one serializable, secret-free object.
-
-### Target Ownership
-
-Add two explicit contracts:
-
-1. `ChatV2ProviderProfile`: provider, model, normalized base URL, capability flags,
-   and a credential reference/result that is never logged; and
-2. `ChatV2RequestPlan`: transport mode, retry policy, messages, tools, response
-   format, provider options, generation parameters, and output policy.
-
-`LLM Chat`, Generate using AI, and AI graph builder should consume the same profile
-and request planner. They may supply different prompts/tools/output policies, but
-must not rebuild provider transport decisions.
-
-### Detailed Change Plan
-
-1. Add pure `buildChatV2RequestPlan(...)` with no network calls and no raw secret
-   value in its debug/inspection representation.
-2. Move stream-vs-generate, max retries, response-format compatibility, structured
-   output, tool choice, and provider options into the plan.
-3. Make `chatV2Pipeline` execute the plan and assemble outputs; do not let it infer
-   the same policy again.
-4. Consolidate provider/model/base-URL/credential resolution so app settings,
-   programmatic settings, env fallback, input-port keys, and named custom keys have
-   one precedence table.
-5. Keep request-body capture tied to the actual AI SDK transport callback, not a
-   reconstructed artifact.
-6. Extract model-catalog fetch/cache/status ownership from `LlmSettingsPage.tsx` and
-   `LLMChatV2ModelCatalogEditor.tsx` into one service keyed by provider + base URL +
-   credential identity. Avoid module-level mutable maps in view components.
-7. Replace `graphApi` compatibility naming in AI-assist settings with provider-native
-   terms after proving no persisted consumer depends on it.
-8. Decide whether the AI-assist generator node definition belongs in core as an
-   internal reusable node or whether a direct shared service is simpler. Keep the
-   graph builder's tool-loop semantics unchanged.
-9. Add an enforcement test that app AI generation cannot import/use legacy Chat or
-   Azure configuration.
-10. Keep legacy Chat compatibility code isolated and frozen. Do not refactor legacy
-    provider files into the new contract unless deleting them becomes a separately
-    approved breaking change.
-
-### Files To Change
-
-- `packages/core/src/model/chat-v2/chatV2Pipeline.ts`
-- `packages/core/src/model/chat-v2/aiSdkBridge.ts`
-- `packages/core/src/model/chat-v2/chatV2RuntimeOptions.ts`
-- `packages/core/src/model/chat-v2/providerOptions.ts`
-- `packages/core/src/model/chat-v2/chatV2ResponseFormat.ts`
-- `packages/core/src/model/chat-v2/chatV2Types.ts`
-- `packages/core/src/model/chat-v2/llmChatV2NodeRuntime.ts`
-- `packages/core/src/model/chat-v2/llmChatV2NodeEditors.ts`
-- `packages/app/src/utils/aiAssistModelSettings.ts`
-- `packages/app/src/utils/aiAssistVercelGenerator.ts`
-- `packages/app/src/components/settings/pages/LlmSettingsPage.tsx`
-- `packages/app/src/components/editors/custom/LLMChatV2ModelCatalogEditor.tsx`
-- `packages/app/src/hooks/useAiGraphBuilder.ts`
-- `packages/app/src/components/editors/custom/AiAssistEditorBase.tsx`
-- focused core/app tests
-- `developer-docs/LLM-CHAT-V2-CONTRACT.md`
-- `developer-docs/CORE-ENGINE.md`
-- `developer-docs/APP-ARCHITECTURE.md`
+- **Execution events are externally observable.** Editor run pages,
+  recordings, debugger transports, and remote executors depend on process IDs,
+  event order, partial outputs, timings, and finish/error attribution.
+- **"Fail fast" still waits for settlement.** Throwing as soon as the first
+  call rejects can leak sibling events or child processors after the parent
+  round has failed.
+- **Completion order must not become commit order.** Tool-result messages,
+  Graph Output conflict resolution, `latestOutputs`, and the next LLM request
+  use original model-call order.
+- **Cost has several accumulation paths.** Delegate outputs, branch
+  subprocessors, and graph-level totals can be lost or counted twice if
+  ownership is not explicit.
+- **Early Message branches overlap tool work.** Accidentally awaiting the early
+  branch before invoking the tool would reintroduce the latency behavior this
+  subsystem was designed to remove.
+- **Async branches have split completion semantics.** Logical graph completion,
+  managed async lifetime, web-app response timing, and cancellation must retain
+  their current relationship.
+- **A broad adapter would only hide `GraphProcessor` coupling.** If the
+  coordinator needs arbitrary access to processor maps or lifecycle flags, the
+  boundary is wrong; keep that operation in the processor instead.
+- **Child processors inherit substantial root state.** Stored values, Knowledge
+  Stores, globals, graph inputs, execution identity, frozen outputs, loaded
+  projects, pause state, and abort ownership must continue to be wired by the
+  same owner.
+- **Replay and normal traversal interact with continuation completion.**
+  Incorrectly marking descendants complete can either repeat side effects or
+  suppress legitimate downstream execution.
+- **Extraction can affect hot paths.** Extra copies of branch graphs, outputs,
+  or connection indexes may regress parallel tool rounds even when semantics
+  remain correct.
 
 ### Verification
 
-- Request-plan fixtures cover every provider and transport mode without live calls.
-- Stream response off always chooses generate mode, including tools.
-- AI SDK retries remain disabled; Rivet retries exactly match node settings.
-- JSON object and JSON Schema modes omit unsupported options consistently.
-- Tool continuation, usage, partial output, and request-body outputs are unchanged.
-- Settings and node editor model catalogs share refresh/error/cache behavior.
-- Every credential source precedence is tested, including named custom programmatic
-  keys, and no secret appears in plan snapshots/errors/cache logs.
-- Generate using AI and AI graph builder run through Chat V2 only.
+- Keep the existing tool-continuation suite as the primary characterization
+  contract.
+- Add focused planner tests that do not instantiate a full processor.
+- Test single, parallel, mixed, direct-return, failed, cancelled, replayed,
+  frozen, Run To, cycle, race, loop, async, and Graph Output cases.
+- Assert exact node event sequences and process IDs for successful,
+  completion-out-of-order, and first-failure rounds.
+- Assert that all started siblings settle before the round rejects and that no
+  child processor or abort listener remains registered.
+- Assert model-order commit when completion order is reversed, including
+  Graph Output conflicts and `latestOutputs`.
+- Assert exact per-invocation and graph-level costs for normal, error
+  passthrough, and branch-subgraph cases.
+- Verify Browser, internal Node, remote Node, editor web apps, detached Tauri,
+  hosted HTTP, and hosted WebSocket execution.
+- Run runtime equivalence and benchmark suites to ensure the extraction does
+  not introduce scheduler regressions.
 
-### Risks And Mitigations
+---
 
-- **Request shape changes can break providers.** Snapshot normalized request plans and
-  transport calls before switching execution.
-- **Secret-free plans can accidentally omit runtime credentials.** Separate the
-  inspectable plan from a non-serializable execution credential reference.
-- **Provider capabilities change with AI SDK versions.** Keep capability policy
-  explicit and version-tested, not inferred from warnings.
-- **AI graph builder has tool-loop-specific behavior.** Preserve its graph and tool
-  semantics while replacing only provider/request ownership.
+## Final Repository Verification
 
-### Result After Refactor
+After all five phases:
 
-One request plan explains what Rivet sends, all Vercel SDK consumers share provider
-policy, model fetching leaves view components, and legacy Chat cannot silently leak
-back into new features.
+- Run focused suites after each commit.
+- Run the aggregate repository test command.
+- Run all affected workspace typechecks.
+- Run lint and formatting checks.
+- Run developer-document validation and link checks.
+- Run file-tree and architecture-boundary checks.
+- Run generated hosted-client and graph-creator freshness checks.
+- Run the production build.
+- Run the runtime equivalence and benchmark matrix.
+- Run dependency security checks.
+- Run `git diff --check`.
 
-## 9. GraphProcessor Run-Lifecycle Extraction — DONE
+The final review must compare behavior and ownership against this plan, then
+record the actual line movement and verification evidence in
+`refactor-history.md`.
 
-### Why This Is A Priority
+## Success Criteria
 
-`GraphProcessor` is Rivet's runtime heart and the largest production TypeScript file.
-It has already benefited from targeted extractions, characterization tests, and
-runtime-speed work. A broad rewrite would be reckless, but leaving all remaining
-mutable lifecycle policy in one class keeps every runtime feature expensive to
-change.
+The refactor program is complete only when:
 
-### Current Problem
-
-The class still owns, among other concerns:
-
-- run initialization/finalization and finish-once behavior;
-- abort, pause, resume, and per-node abort-controller bookkeeping;
-- graph/node event metadata and timing;
-- compatible and fast scheduling coordination;
-- node readiness, exclusion, loops, races, and downstream queueing;
-- normal, split, frozen, and preloaded node execution;
-- project references and subprocessors;
-- user input and globals.
-
-History explicitly warns to extract one policy at a time. The runtime-speed work also
-means any refactor must preserve allocations and hot-path complexity, not only output
-equivalence.
-
-### Target Ownership
-
-The first extraction should be `GraphRunLifecycle` (or an equally narrow name) that
-owns pure state transitions and finish/abort bookkeeping. `GraphProcessor` should
-continue emitting events and orchestrating scheduling until tests prove another move
-safe.
-
-### Detailed Change Plan
-
-1. Extend existing characterization tests before moving code. Record event order,
-   metadata, errors, abort reasons, and finish count for normal/error/abort/subgraph/
-   frozen/recording cases.
-2. Define a small lifecycle state object with explicit states such as idle, running,
-   paused, aborting, and finished. Avoid an elaborate generic state-machine library.
-3. Move initialization/reset decisions currently spread across `#initProcessState`,
-   `#initializeGraphRun`, finish guards, and abort flags into the lifecycle owner.
-4. Let the owner return effects/decisions; keep actual emitter calls in
-   `GraphProcessor` during the first phase so event order remains visible.
-5. Move node abort-controller registration/unregistration/abort-all into a focused
-   registry only if it can be tested independently without changing signal timing.
-6. Do not move scheduler selection, ready queues, loops, races, or subprocessors in
-   the same commit.
-7. Benchmark before/after using the existing runtime matrix. Reject extra per-node
-   allocations in hot paths.
-8. After the first extraction, reassess the file. A second extraction is allowed only
-   if a distinct responsibility and test boundary remain obvious.
-9. Keep constructor/public API and all process event types unchanged.
-
-### Files To Change
-
-- `packages/core/src/model/GraphProcessor.ts`
-- new `packages/core/src/model/GraphRunLifecycle.ts`
-- optional focused abort-controller registry only if justified
-- `packages/core/test/model/GraphProcessor.characterization.test.ts`
-- new focused lifecycle tests
-- Node runtime equivalence tests and runtime benchmarks
-- `developer-docs/CORE-ENGINE.md`
-- `developer-docs/EXECUTION-DATA-FLOW.md`
-
-### Verification
-
-- Exact event order and count for start/graphStart/nodeStart/nodeFinish/nodeError/
-  nodeExcluded/graphFinish/graphError/abort/finish/done.
-- `rootRunId`, `graphRunId`, `parentGraphRunId`, process id, and executor metadata are
-  unchanged.
-- Pause/resume and abort settle all waits and controllers once.
-- Successful graph abort, failed abort, race-loser abort, nested subgraphs, recording
-  replay, frozen nodes, user input, split runs, and reference graphs match baseline.
-- Compatible/default-safe/headless-fast runtime profiles remain equivalent where
-  promised.
-- Runtime benchmark has no regression beyond the documented noise gate.
-
-### Risks And Mitigations
-
-- **Event order can change while outputs stay correct.** Assert ordered event traces.
-- **State object can become a second GraphProcessor.** Limit it to lifecycle state and
-  decisions; no graph traversal or node execution.
-- **Aborts are race-sensitive.** Add repeated/concurrent characterization, not only a
-  single deterministic case.
-- **Extra indirection can hurt cheap graphs.** Measure allocation and latency.
-
-### Result After Refactor
-
-`GraphProcessor` loses one meaningful responsibility, lifecycle invariants become
-explicit and testable, and runtime behavior/performance remain unchanged.
-
-## 10. Behavioral Tests, Architecture Boundaries, And Navigable Contracts — DONE
-
-### Why This Is A Priority
-
-Tests are part of the architecture. The repository has strong pure/runtime coverage,
-but app UI regressions are still frequently protected by reading source files and
-matching implementation text. This makes harmless refactors expensive and can pass
-while real behavior is broken.
-
-### Current Problem
-
-- 53 app test files currently call `readFileSync` on production source.
-- `check-test-style.mjs` reports source-reading tests but allows the count to grow.
-- `UiGraphBuilderLayout.test.ts`, `NodeEditorMetadataLayout.test.ts`,
-  `ProjectSelector.test.ts`, and other suites contain large regex contracts for JSX,
-  CSS, function names, and call order.
-- Several files verify desktop/hosted parity by asserting that matching strings exist
-  in two implementations instead of executing a shared contract.
-- `check-file-tree.mjs` reports import-boundary issues but does not enforce settled
-  boundaries.
-- `APP-ARCHITECTURE.md` and `EXECUTION-DATA-FLOW.md` have grown into very long
-  chronological rule collections, making ownership facts difficult to find and easy
-  to contradict.
-
-Some source contracts are appropriate for static assets or intentional forbidden
-imports. The problem is using them as the default UI test technique.
-
-### Target Ownership
-
-Use the cheapest reliable test at each level:
-
-- pure unit tests for models, geometry, selectors, serializers, and policies;
-- component/browser tests for actual interaction and layout ownership;
-- source checks only for static repository invariants that cannot be expressed by
-  TypeScript, lint, or behavior;
-- generated-asset freshness checks for generated code/data;
-- concise domain contract docs linked from an architecture index.
-
-### Detailed Change Plan
-
-1. Inventory all source-reading tests and classify each as behavioral candidate,
-   static repository invariant, visual contract, or obsolete duplication.
-2. Make `check-test-style.mjs` reject new source-reading tests immediately using an
-   explicit shrinking baseline/allowlist. Remove the allowlist as tests migrate.
-3. Start with the highest-churn suites from items 4-8. Export pure owners rather than
-   parsing their call sites.
-4. Replace CSS regex tests with semantic token tests for generated style strings or a
-   small number of browser screenshots at stable desktop/mobile sizes.
-5. Add a minimal browser component harness only for interactions that Node tests
-   cannot prove: portals, focus/Escape priority, drag/drop, resize, and web-app DOM.
-6. Keep browser tests focused and deterministic; do not build a large slow end-to-end
-   suite before the first critical workflows are stable.
-7. Convert settled package boundaries from report-only to enforced rules. Keep an
-   explicit review queue for genuinely ambiguous legacy imports.
-8. Add ownership checks for direct `marked`, raw HTML sinks, generated web-app client
-   freshness, and legacy Chat use from new features.
-9. Split very large developer docs by stable domain, not by date:
-   - editor/workspace state;
-   - Monaco/editor surfaces;
-   - canvas interactions;
-   - execution identity and snapshots;
-   - hosted/web-app contracts.
-     Keep `APP-ARCHITECTURE.md` and `EXECUTION-DATA-FLOW.md` as short indexes and core
-     invariants rather than dumping grounds.
-10. Update `refactor-history.md` only when an implementation item completes; do not
-    copy active plans into history.
-
-### Files To Change
-
-- `scripts/checks/check-test-style.mjs`
-- `scripts/checks/check-file-tree.mjs`
-- new focused checks under `scripts/checks/`
-- source-reading tests under `packages/app/src/**/*.test.ts(x)`, beginning with:
-  - `components/UiGraphBuilderLayout.test.ts`
-  - `components/NodeEditorMetadataLayout.test.ts`
-  - `components/ProjectSelector.test.ts`
-  - `components/GraphListLayout.test.ts`
-  - `components/nodeOutputWrapping.test.ts`
-- package test configuration/dependencies if a browser harness is introduced
-- `.github/workflows/build.yml` and shared release verification jobs
-- `developer-docs/APP-ARCHITECTURE.md`
-- `developer-docs/EXECUTION-DATA-FLOW.md`
-- new domain pages under `developer-docs/`
-- `developer-docs/README.md` and docs-link checks
-
-### Verification
-
-- Source-reading test count cannot increase and materially decreases during each
-  refactor item.
-- Migrated tests fail when behavior breaks and stay green after implementation-only
-  renames/reformatting.
-- Critical browser interactions have deterministic component/browser coverage.
-- Import/security/generated-asset checks fail locally and in CI.
-- Developer doc links pass and every major owner has one canonical page.
-- Full test time remains reasonable; track and cap added browser-suite duration.
-
-### Risks And Mitigations
-
-- **Replacing source tests can reduce coverage accidentally.** Map each old assertion
-  to behavior or an intentional static invariant before deletion.
-- **Browser tests can become slow/flaky.** Use pure tests first and browser tests only
-  for browser behavior.
-- **Strict boundary checks can block unrelated work.** Enforce only settled rules and
-  use a shrinking reviewed baseline for legacy cases.
-- **Docs splitting can create duplication.** Give each domain one canonical page and
-  use links instead of copied paragraphs.
-
-### Result After Refactor
-
-Tests protect behavior instead of spelling, architecture violations become enforceable,
-developer docs become navigable, and future refactors require less test churn and less
-historical knowledge.
-
-## Cross-Item Delivery Strategy
-
-Each item should be implemented as its own commit or short commit series. Do not mix
-unrelated visual polish or product features into these changes.
-
-For every item:
-
-1. capture baseline behavior and line counts;
-2. add or strengthen characterization tests;
-3. move one owner at a time;
-4. remove the superseded path immediately;
-5. update developer docs;
-6. run focused verification, then package-wide verification;
-7. record production/test/doc line deltas;
-8. reassess for unnecessary abstractions;
-9. append a completion entry to `refactor-history.md` only after the item is done.
-
-Suggested broad verification after the entire plan:
-
-```text
-yarn install --immutable --immutable-cache
-yarn test
-yarn lint
-yarn prettier:check
-yarn test:docs
-yarn test:style
-yarn check:file-tree
-yarn build
-git diff --check
-```
-
-Add dependency/Rust security commands from item 3 once their stable scripts exist.
-Runtime-sensitive items must also run the existing runtime equivalence and benchmark
-matrix. UI interaction items must include focused browser verification at the
-viewports they affect.
-
-## Completion Definition
-
-The plan is complete only when:
-
-- all ten items have implementation evidence in `refactor-history.md`;
-- no superseded compatibility adapters or duplicate owners remain;
-- all high/critical shipped-runtime dependency findings are removed or covered by a
-  reviewed, expiring exception;
-- untrusted rich text is sanitized by default;
-- MCP env/lifecycle/diagnostic tests pass;
-- desktop and hosted web-app behavior derive from shared runtime policy;
-- workspace target state is mutually exclusive by construction;
-- LLM Chat V2 and AI assist share one request/profile contract;
-- `GraphProcessor` has lost a tested lifecycle responsibility with no speed or event
-  regression;
-- source-reading tests are a small, enforced exception rather than the default;
-- developer docs identify one owner for every moved behavior;
-- production code is no larger unless the added lines buy a clear tested boundary.
+- all five policies have one clear owner;
+- editor/runtime policy duplication identified by this plan is removed;
+- persisted formats and public behavior remain unchanged;
+- existing characterization tests pass without weakening assertions;
+- new focused policy tests cover the extracted seams;
+- developer documentation names the new owners;
+- the repository passes its full verification pipeline;
+- actual LOC movement is reported honestly, including phases where safer
+  ownership increases total lines.

@@ -1,6 +1,7 @@
 import {
   arrayizeDataValue,
   dataTypes,
+  functionTypeToReturnType,
   getScalarTypeOf,
   isArrayDataType,
   isFunctionDataType,
@@ -87,7 +88,7 @@ export function createDataValueRendererMap(options: {
         }
 
         if (isFunctionDataType(dataType)) {
-          const type = getScalarTypeOf(value.type);
+          const type = functionTypeToReturnType(dataType);
           return (
             <div>
               <em>Function{`<${type}>`}</em>

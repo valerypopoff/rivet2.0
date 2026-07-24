@@ -1,12 +1,15 @@
-import { match } from 'ts-pattern';
 import {
   type ChatMessage,
   type DataType,
   type DataValue,
   type GetDataValue,
+  type ScalarDataType,
+  type ScalarOrArrayDataValue,
   getScalarTypeOf,
   isArrayDataType,
   isArrayDataValue,
+  isFunctionDataType,
+  isScalarDataType,
   unwrapDataValue,
 } from '../model/DataValue.js';
 import { expectTypeOptional } from './expectType.js';
@@ -17,10 +20,85 @@ import {
   normalizeKnowledgeSourceReference,
 } from '../integrations/KnowledgeStoreValidation.js';
 
+type ScalarCoercer = (value: ScalarOrArrayDataValue | undefined) => unknown;
+
+type ScalarCoercionRule = {
+  readonly coerce?: ScalarCoercer;
+  readonly canAttempt: (from: DataType) => boolean;
+};
+
+type ScalarCoercionRuleRegistry = {
+  readonly [T in ScalarDataType]: ScalarCoercionRule;
+};
+
+function isKnowledgeValueType(type: DataType): boolean {
+  return type === 'knowledge-source' || type === 'knowledge-document' || type === 'knowledge-evidence';
+}
+
+function canAttemptGeneralCoercion(from: DataType, to: DataType): boolean {
+  return !isKnowledgeValueType(from) || to === 'object' || to === 'string';
+}
+
+function generalScalarRule(target: ScalarDataType, coerce?: ScalarCoercer): ScalarCoercionRule {
+  return {
+    ...(coerce ? { coerce } : {}),
+    canAttempt: (from) => canAttemptGeneralCoercion(from, target),
+  };
+}
+
+function sameTypeOrObjectScalarRule(target: ScalarDataType, coerce?: ScalarCoercer): ScalarCoercionRule {
+  return {
+    ...(coerce ? { coerce } : {}),
+    canAttempt: (from) => from === target || from === 'object',
+  };
+}
+
+/**
+ * The single scalar coercion policy used by both runtime conversion and
+ * type-level port compatibility. Array, function, and `any` wrappers are
+ * handled once around this registry because their behavior is structural.
+ */
+const scalarCoercionRules: ScalarCoercionRuleRegistry = {
+  any: {
+    canAttempt: () => true,
+  },
+  boolean: generalScalarRule('boolean', coerceToBoolean),
+  string: generalScalarRule('string', coerceToString),
+  number: generalScalarRule('number', coerceToNumber),
+  date: generalScalarRule('date'),
+  time: generalScalarRule('time'),
+  datetime: generalScalarRule('datetime'),
+  'chat-message': generalScalarRule('chat-message', coerceToChatMessage),
+  'control-flow-excluded': generalScalarRule('control-flow-excluded'),
+  object: generalScalarRule('object', coerceToObject),
+  'gpt-function': {
+    canAttempt: (from) => from === 'object',
+  },
+  vector: generalScalarRule('vector'),
+  image: sameTypeOrObjectScalarRule('image'),
+  binary: sameTypeOrObjectScalarRule('binary', coerceToBinary),
+  audio: sameTypeOrObjectScalarRule('audio'),
+  'graph-reference': generalScalarRule('graph-reference', coerceToGraphReference),
+  'knowledge-source': sameTypeOrObjectScalarRule('knowledge-source', (value) =>
+    coerceKnowledgeValue(value, normalizeKnowledgeSourceReference),
+  ),
+  'knowledge-document': sameTypeOrObjectScalarRule('knowledge-document', (value) =>
+    coerceKnowledgeValue(value, normalizeKnowledgeDocument),
+  ),
+  'knowledge-evidence': sameTypeOrObjectScalarRule('knowledge-evidence', (value) =>
+    coerceKnowledgeValue(value, normalizeKnowledgeEvidence),
+  ),
+  document: generalScalarRule('document'),
+};
+
 export function coerceTypeOptional<T extends DataType>(
   wrapped: DataValue | undefined,
   type: T,
 ): GetDataValue<T>['value'] | undefined {
+  if (wrapped && isFunctionDataType(type)) {
+    return expectTypeOptional(wrapped, type) as GetDataValue<T>['value'] | undefined;
+  }
+
   const value = wrapped ? unwrapDataValue(wrapped) : undefined;
 
   // Coerce 'true' to [true] for example
@@ -35,8 +113,14 @@ export function coerceTypeOptional<T extends DataType>(
     return coercedArray as GetDataValue<T>['value'];
   }
 
-  // Coerce foo[] to bar[]
-  if (isArrayDataType(type) && isArrayDataValue(value) && getScalarTypeOf(type) !== getScalarTypeOf(value.type)) {
+  // Preserve arrays whose runtime shape is carried by an any/object wrapper,
+  // or coerce each item when the scalar families differ.
+  if (isArrayDataType(type) && isArrayDataValue(value)) {
+    if (getScalarTypeOf(type) === getScalarTypeOf(value.type)) {
+      // @ts-expect-error Generic T is not narrowed to its array subtype within this runtime-guarded branch.
+      return value.value as unknown as GetDataValue<T>['value'];
+    }
+
     const coercedArray = value.value.map((v) =>
       coerceTypeOptional({ type: getScalarTypeOf(value.type), value: v } as DataValue, getScalarTypeOf(type)),
     ) as unknown;
@@ -45,30 +129,22 @@ export function coerceTypeOptional<T extends DataType>(
     return coercedArray as GetDataValue<T>['value'];
   }
 
-  const result = match(type as DataType)
-    .with('string', () => coerceToString(value))
-    .with('boolean', () => coerceToBoolean(value))
-    .with('chat-message', () => coerceToChatMessage(value))
-    .with('number', () => coerceToNumber(value))
-    .with('object', () => coerceToObject(value))
-    .with('binary', () => coerceToBinary(value))
-    .with('graph-reference', () => coerceToGraphReference(value))
-    .with('knowledge-source', () => coerceKnowledgeValue(value, normalizeKnowledgeSourceReference))
-    .with('knowledge-document', () => coerceKnowledgeValue(value, normalizeKnowledgeDocument))
-    .with('knowledge-evidence', () => coerceKnowledgeValue(value, normalizeKnowledgeEvidence))
-    .otherwise(() => {
-      if (!value) {
-        return value;
-      }
-
-      if (getScalarTypeOf(value.type) === 'any' || getScalarTypeOf(type) === 'any') {
-        return value.value;
-      }
-
-      return expectTypeOptional(value, type);
-    });
+  const scalarRule = isScalarDataType(type) ? scalarCoercionRules[type] : undefined;
+  const result = scalarRule?.coerce ? scalarRule.coerce(value) : coerceWithoutSpecializedRule(value, type);
 
   return result as GetDataValue<T>['value'] | undefined;
+}
+
+function coerceWithoutSpecializedRule(value: ScalarOrArrayDataValue | undefined, type: DataType): unknown {
+  if (!value) {
+    return value;
+  }
+
+  if (getScalarTypeOf(value.type) === 'any' || getScalarTypeOf(type) === 'any') {
+    return value.value;
+  }
+
+  return expectTypeOptional(value, type);
 }
 
 export function coerceType<T extends DataType>(value: DataValue | undefined, type: T): GetDataValue<T>['value'] {
@@ -428,9 +504,12 @@ export function canBeCoercedAny(from: DataType | Readonly<DataType[]>, to: DataT
   return false;
 }
 
-// TODO hard to keep in sync with coerceType
 export function canBeCoerced(from: DataType, to: DataType) {
-  if (to === 'any' || from === 'any') {
+  if (to === 'any') {
+    return scalarCoercionRules.any.canAttempt(from);
+  }
+
+  if (from === 'any') {
     return true;
   }
 
@@ -446,24 +525,9 @@ export function canBeCoerced(from: DataType, to: DataType) {
     return to === 'string' || to === 'object';
   }
 
-  if (to === 'gpt-function') {
-    return from === 'object';
+  if (isScalarDataType(to)) {
+    return scalarCoercionRules[to].canAttempt(from);
   }
 
-  if (
-    to === 'audio' ||
-    to === 'binary' ||
-    to === 'image' ||
-    to === 'knowledge-source' ||
-    to === 'knowledge-document' ||
-    to === 'knowledge-evidence'
-  ) {
-    return from === to || from === 'object';
-  }
-
-  if (from === 'knowledge-source' || from === 'knowledge-document' || from === 'knowledge-evidence') {
-    return to === 'object' || to === 'string';
-  }
-
-  return true;
+  return canAttemptGeneralCoercion(from, to);
 }

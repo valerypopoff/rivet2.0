@@ -40,6 +40,12 @@ test('array-like renderers tolerate malformed array payloads', () => {
   assert.equal(countOccurrences(malformedArrayMarkup, 'class="multi-output-item"'), 0);
 });
 
+test('function renderers preserve array return types in their labels', () => {
+  const markup = renderDataValue({ type: 'fn<string[]>', value: () => ['value'] });
+
+  assert.match(markup, /Function&lt;string\[\]&gt;/);
+});
+
 function renderDataValue(value: DataValue): string {
   const Renderer = rendererMap[value.type];
 

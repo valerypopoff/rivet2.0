@@ -9,11 +9,9 @@ import { nanoid } from 'nanoid/non-secure';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import {
-  type DataType,
-  type ScalarDataValue,
-  isArrayDataType,
-  isScalarDataType,
-  scalarDefaults,
+  type ScalarOrArrayDataType,
+  type ScalarOrArrayDataValue,
+  getDefaultValue,
   unwrapDataValue,
 } from '../DataValue.js';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
@@ -28,7 +26,7 @@ export type SetGlobalNode = ChartNode<'setGlobal', SetGlobalNodeData>;
 export type SetGlobalNodeData = {
   id: string;
   useIdInput: boolean;
-  dataType: DataType;
+  dataType: ScalarOrArrayDataType;
 };
 
 export class SetGlobalNodeImpl extends NodeImpl<SetGlobalNode> {
@@ -57,7 +55,7 @@ export class SetGlobalNodeImpl extends NodeImpl<SetGlobalNode> {
       {
         id: 'value' as PortId,
         title: 'Value',
-        dataType: this.chartNode.data.dataType as DataType,
+        dataType: this.chartNode.data.dataType,
       },
     ];
 
@@ -141,10 +139,11 @@ export class SetGlobalNodeImpl extends NodeImpl<SetGlobalNode> {
     }
 
     let previousValue = context.getGlobal(id);
-    if (!previousValue && isArrayDataType(this.data.dataType)) {
-      previousValue = { type: this.data.dataType, value: [] };
-    } else if (!previousValue && isScalarDataType(this.data.dataType)) {
-      previousValue = { type: this.data.dataType, value: scalarDefaults[this.data.dataType] } as ScalarDataValue;
+    if (!previousValue) {
+      previousValue = {
+        type: this.data.dataType,
+        value: getDefaultValue(this.data.dataType),
+      } as ScalarOrArrayDataValue;
     }
 
     const value = unwrapDataValue(rawValue);

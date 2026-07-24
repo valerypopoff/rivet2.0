@@ -1,4 +1,4 @@
-import { type DataValue, getScalarTypeOf, inferType, isFunctionDataType } from '@valerypopoff/rivet2-core';
+import { type DataValue, functionTypeToReturnType, inferType, isFunctionDataType } from '@valerypopoff/rivet2-core';
 import prettyBytes from 'pretty-bytes';
 import { getByteLength, getStringProperty, isRecord, stringifyUninferredAnyValue } from '../dataValuePayloads.js';
 
@@ -52,7 +52,7 @@ export function projectDataValue(value: DataValue): unknown {
       return value.value;
     default:
       if (isFunctionDataType(value.type)) {
-        return `Function<${getScalarTypeOf(value.type)}>`;
+        return `Function<${functionTypeToReturnType(value.type)}>`;
       }
 
       return value.value;
