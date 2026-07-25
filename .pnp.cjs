@@ -15412,9 +15412,11 @@ const RAW_RUNTIME_STATE =
           ["eslint-plugin-react", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:7.37.4"],\
           ["eslint-plugin-react-hooks", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:5.2.0-canary-cd90a4d8-20250210"],\
           ["execa", "npm:8.0.1"],\
+          ["fake-indexeddb", "npm:6.2.5"],\
           ["fast-deep-equal", "npm:3.1.3"],\
           ["fuse.js", "npm:6.6.2"],\
           ["github-markdown-css", "npm:5.9.0"],\
+          ["idb", "npm:8.0.3"],\
           ["immer", "npm:10.0.3"],\
           ["jest-diff", "npm:29.7.0"],\
           ["jotai", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:2.11.0"],\
@@ -21714,6 +21716,15 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["fake-indexeddb", [\
+      ["npm:6.2.5", {\
+        "packageLocation": "./.yarn/cache/fake-indexeddb-npm-6.2.5-c91bfb8bf4-a0b6a81413.zip/node_modules/fake-indexeddb/",\
+        "packageDependencies": [\
+          ["fake-indexeddb", "npm:6.2.5"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["fast-deep-equal", [\
       ["npm:3.1.3", {\
         "packageLocation": "./.yarn/cache/fast-deep-equal-npm-3.1.3-790edcfcf5-e21a9d8d84.zip/node_modules/fast-deep-equal/",\
@@ -23431,6 +23442,15 @@ const RAW_RUNTIME_STATE =
         "packagePeers": [\
           "@types/postcss",\
           "postcss"\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["idb", [\
+      ["npm:8.0.3", {\
+        "packageLocation": "./.yarn/cache/idb-npm-8.0.3-e9b0a844f6-e2beccb0be.zip/node_modules/idb/",\
+        "packageDependencies": [\
+          ["idb", "npm:8.0.3"]\
         ],\
         "linkType": "HARD"\
       }]\

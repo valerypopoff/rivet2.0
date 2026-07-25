@@ -1508,7 +1508,12 @@ running state correctly.
 
 Recordings are serialized to `.rivet-recording` files with asset deduplication
 (Uint8Arrays -> base64) and string deduplication (long strings -> FNV-1a hash
-references).
+references). The 32-bit FNV-1a output is part of serialized recording version
+1: changing it changes `$STRING:<hash>` keys. Rivet therefore keeps the small,
+licensed implementation vendored in core instead of externalizing the ESM-only
+upstream package into the published CommonJS build. ASCII, Unicode,
+lone-surrogate, byte-array, reusable-buffer, and serialized-recording golden
+tests protect this persisted hash contract.
 
 ### Replay (`replayExecutionRecording`)
 

@@ -937,6 +937,39 @@ Important nuance:
 - Library nodes live in `projectState.nodePrefabs`, not in `graphState`. The selected Node library resource and its canvas position are transient, project-keyed state owned by [`state/workspaceTarget.ts`](../packages/app/src/state/workspaceTarget.ts). Closing a project clears that project's resource state, while tab restoration may return to the same project's last resource without leaking Node library selection into another project. Library nodes are serialized with the project through core `Project.nodePrefabs`, while the Node library editor itself is not a graph and should not be added to graph lists, reachability, main-graph selection, execution, or graph-history restoration.
 - when replacing the current project, `projectDataState` is replaced for the new project and the IndexedDB static-data cache is cleared before loading the new project's data
 
+### App-owned IndexedDB databases
+
+The desktop/browser app uses the app-local `idb` dependency for its three
+IndexedDB owners. Their persisted identities are compatibility contracts:
+
+- [`state/storage/indexedDB.ts`](../packages/app/src/state/storage/indexedDB.ts)
+  owns `jotai-store` version 1 and its `state` object store. Missing values
+  remain `null`, and the memory fallback remains active when IndexedDB is not
+  available.
+- [`hooks/useStaticDataDatabase.ts`](../packages/app/src/hooks/useStaticDataDatabase.ts)
+  owns `rivet_static_data` version 2 and its `data` object store. Inserts use
+  `add`, not `put`, so duplicate static-data IDs continue to fail instead of
+  overwriting.
+- [`io/BrowserDatasetProvider.ts`](../packages/app/src/io/BrowserDatasetProvider.ts)
+  owns `datasets` version 2 and its `datasets` and `data` object stores. The
+  provider caches one internal connection, resets it after blocking or
+  termination, and continues returning a fresh native `IDBDatabase` from the
+  public `getDatasetDatabase()` compatibility method.
+
+Do not rename these databases/stores, change their versions or key shapes, make
+`deleteDataset` atomic across its currently separate transactions, or split
+the existing multi-store import transaction without a separately reviewed data
+migration. Dataset methods intentionally update their in-memory cache before
+the persistence request, matching the existing failure behavior.
+
+These owners resolve their public methods when the individual IndexedDB request
+settles rather than awaiting transaction completion.
+[`utils/indexedDb.ts`](../packages/app/src/utils/indexedDb.ts) observes `idb`'s
+additional transaction promise to prevent a request failure from also becoming
+an unhandled rejection; it must not be replaced with `await tx.done` as an
+incidental cleanup. `fake-indexeddb` migration tests open the exact legacy
+schemas before exercising the current owners.
+
 Per-project editor-view persistence now lives in [`packages/app/src/state/projectEditor.ts`](../packages/app/src/state/projectEditor.ts).
 
 That layer owns:

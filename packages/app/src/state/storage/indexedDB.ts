@@ -1,3 +1,6 @@
+import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { preserveIndexedDbRequestTiming } from '../../utils/indexedDb.js';
+
 export interface AsyncStorageBackend {
   getItem: (key: string) => Promise<string | null>;
   setItem: (key: string, value: string) => Promise<void>;
@@ -20,53 +23,40 @@ export class MemoryAsyncStorage implements AsyncStorageBackend {
   }
 }
 
+interface JotaiStorageDatabase extends DBSchema {
+  state: {
+    key: string;
+    value: string;
+  };
+}
+
 export class IndexedDBStorage implements AsyncStorageBackend {
-  private dbName = 'jotai-store';
-  private storeName = 'state';
-  private dbPromise: Promise<IDBDatabase>;
+  private dbPromise: Promise<IDBPDatabase<JotaiStorageDatabase>>;
 
   constructor() {
-    this.dbPromise = this.initDB();
-  }
-
-  private initDB(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, 1);
-
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        db.createObjectStore(this.storeName);
-      };
+    this.dbPromise = openDB<JotaiStorageDatabase>('jotai-store', 1, {
+      upgrade(database) {
+        database.createObjectStore('state');
+      },
     });
   }
 
   async getItem(key: string): Promise<string | null> {
     const db = await this.dbPromise;
-    return new Promise((resolve, reject) => {
-      const request = db.transaction(this.storeName, 'readonly').objectStore(this.storeName).get(key);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-    });
+    const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readonly'));
+    return (await transaction.store.get(key)) ?? null;
   }
 
   async setItem(key: string, value: string): Promise<void> {
     const db = await this.dbPromise;
-    return new Promise((resolve, reject) => {
-      const request = db.transaction(this.storeName, 'readwrite').objectStore(this.storeName).put(value, key);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve();
-    });
+    const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readwrite'));
+    await transaction.store.put(value, key);
   }
 
   async removeItem(key: string): Promise<void> {
     const db = await this.dbPromise;
-    return new Promise((resolve, reject) => {
-      const request = db.transaction(this.storeName, 'readwrite').objectStore(this.storeName).delete(key);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve();
-    });
+    const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readwrite'));
+    await transaction.store.delete(key);
   }
 }
 

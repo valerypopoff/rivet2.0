@@ -15,6 +15,17 @@ function createStream(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function createByteStream(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+  });
+}
+
 async function collectEvents(response: EventSourceResponse): Promise<string[]> {
   const events: string[] = [];
   for await (const event of response.events()) {
@@ -62,5 +73,108 @@ void describe('fetchEventSource', () => {
         // The test stream deliberately never produces an event.
       }
     }, /Timeout: API response took too long\./);
+  });
+
+  void it('preserves the legacy line-tokenizer contract across chunk and UTF-8 boundaries', async () => {
+    const encoded = new TextEncoder().encode('event: content\ndata: {"text":"Привет"}\n');
+    const unicodeBoundary = encoded.indexOf(0xd0);
+    const response = new EventSourceResponse(
+      createByteStream([
+        encoded.slice(0, 4),
+        encoded.slice(4, unicodeBoundary + 1),
+        encoded.slice(unicodeBoundary + 1),
+      ]),
+    );
+
+    assert.deepEqual(await collectEvents(response), ['[content]', '{"text":"Привет"}']);
+  });
+
+  void it('keeps CRLF, multiline data, comments, final-line, and strict field-prefix behavior stable', async () => {
+    const response = new EventSourceResponse(
+      createStream([
+        ': comment\r\n',
+        'event: update\r\n',
+        'data: first\r\n',
+        'data: second\r\n',
+        'data:ignored-without-space\r\n',
+        'id: ignored\r\n',
+        '\r\n',
+        'data: [DONE]',
+      ]),
+    );
+
+    assert.deepEqual(await collectEvents(response), ['[update]', 'first', 'second', '[DONE]']);
+  });
+
+  void it('preserves event-only records and ignores unrecognized fields', async () => {
+    const response = new EventSourceResponse(
+      createStream(['event: ping\nretry: 1000\nunknown: value\n\n', 'event: complete\n']),
+    );
+
+    assert.deepEqual(await collectEvents(response), ['[ping]', '[complete]']);
+  });
+
+  void it('pins the legacy bare-CR and BOM behavior instead of silently adopting record-level SSE parsing', async () => {
+    const response = new EventSourceResponse(
+      createStream(['event: update\rdata: combined\r', '\n\uFEFFdata: ignored\n', 'data: accepted\n']),
+    );
+
+    assert.deepEqual(await collectEvents(response), ['[update\rdata: combined]', 'accepted']);
+  });
+
+  void it('passes the caller abort signal through to fetch unchanged', async () => {
+    const originalFetch = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | null | undefined;
+
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        receivedSignal = init?.signal;
+        return new Response(null);
+      },
+    });
+
+    try {
+      await fetchEventSource('https://example.test/stream', { signal: controller.signal });
+      assert.equal(receivedSignal, controller.signal);
+    } finally {
+      if (originalFetch == null) {
+        delete (globalThis as { fetch?: typeof fetch }).fetch;
+      } else {
+        Object.defineProperty(globalThis, 'fetch', originalFetch);
+      }
+    }
+  });
+
+  void it('retains the raw response branch for fallback JSON and response metadata', async () => {
+    const originalFetch = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: async () =>
+        new Response(JSON.stringify({ error: { message: 'provider failure' } }), {
+          headers: { 'content-type': 'application/json', 'x-request-id': 'request-id' },
+          status: 429,
+          statusText: 'Too Many Requests',
+        }),
+    });
+
+    try {
+      const response = await fetchEventSource('https://example.test/error');
+
+      assert.equal(response.status, 429);
+      assert.equal(response.statusText, 'Too Many Requests');
+      assert.equal(response.headers.get('x-request-id'), 'request-id');
+      assert.deepEqual(await response.json(), { error: { message: 'provider failure' } });
+    } finally {
+      if (originalFetch == null) {
+        delete (globalThis as { fetch?: typeof fetch }).fetch;
+      } else {
+        Object.defineProperty(globalThis, 'fetch', originalFetch);
+      }
+    }
   });
 });

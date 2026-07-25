@@ -100,6 +100,18 @@ Provider stream JSON parsing should use [`parseProviderJsonChunk(...)`](../packa
 
 Provider SSE transport belongs in [`fetchEventSource.ts`](../packages/core/src/utils/fetchEventSource.ts). Legacy OpenAI and Anthropic streaming both use this single reader so event splitting, `data:` / `event:` parsing, response-body isolation, header handling, and timeout cleanup stay consistent. Providers that need a timeout different from the shared chat default must pass it explicitly to the helper rather than cloning the transport.
 
+The reader intentionally remains Rivet's legacy line tokenizer rather than a
+standards-level SSE record parser. Its compatibility contract recognizes only
+`event: ` and `data: ` with a literal space, emits named-event markers and each
+data line independently, splits on LF (with CRLF handled by trimming), emits a
+recognized unterminated final line, and retains the raw `Response` branch for
+provider JSON errors. The focused characterization tests pin chunk and UTF-8
+boundaries, strict prefixes, comments/unknown fields, event-only records,
+`[DONE]`, response metadata, fallback JSON, and per-read timeout behavior.
+Replacing this tokenizer with `eventsource-parser` would deliberately change
+multiline, no-space, bare-CR, record-boundary, and timeout semantics; treat that
+as a protocol-hardening change, not a behavior-neutral LOC refactor.
+
 Durable retrieval uses the [Provider-neutral Knowledge Source API](./KNOWLEDGE-SOURCE-API.md). Keep provider-neutral documents, evidence, filters, manifests, and root-run resolution in core. Provider-specific request shapes belong in plugin adapters.
 
 ## GraphProcessor Loop-Control Boundary

@@ -7,71 +7,68 @@ import {
   type Dataset,
   type CombinedDataset,
 } from '@valerypopoff/rivet2-core';
+import { openDB, unwrap, type DBSchema, type IDBPDatabase } from 'idb';
 import { cloneDeep } from 'lodash-es';
+import { preserveIndexedDbRequestTiming } from '../utils/indexedDb.js';
+
+interface DatasetDatabase extends DBSchema {
+  datasets: {
+    key: string;
+    value: DatasetMetadata;
+  };
+  data: {
+    key: string;
+    value: Dataset;
+  };
+}
 
 export class BrowserDatasetProvider implements DatasetProvider {
   currentProjectId: ProjectId | undefined;
   #currentProjectDatasets: CombinedDataset[] = [];
+  #databasePromise: Promise<IDBPDatabase<DatasetDatabase>> | undefined;
 
   async getDatasetDatabase(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const openRequest = window.indexedDB.open('datasets', 2);
+    return unwrap(await openDatasetDatabase());
+  }
 
-      openRequest.onupgradeneeded = () => {
-        const database = openRequest.result;
-        if (!database.objectStoreNames.contains('datasets')) {
-          database.createObjectStore('datasets');
+  #getDatasetDatabase(): Promise<IDBPDatabase<DatasetDatabase>> {
+    if (this.#databasePromise == null) {
+      const guarded = openDatasetDatabase(() => {
+        if (this.#databasePromise === guarded) {
+          this.#databasePromise = undefined;
         }
-
-        if (!database.objectStoreNames.contains('data')) {
-          database.createObjectStore('data');
+      }).catch((error: unknown) => {
+        if (this.#databasePromise === guarded) {
+          this.#databasePromise = undefined;
         }
-      };
+        throw error;
+      });
+      this.#databasePromise = guarded;
+    }
 
-      openRequest.onerror = () => {
-        reject(openRequest.error);
-      };
-
-      openRequest.onsuccess = () => {
-        resolve(openRequest.result);
-      };
-    });
+    return this.#databasePromise;
   }
 
   async loadDatasets(projectId: ProjectId): Promise<void> {
-    const db = await this.getDatasetDatabase();
+    const db = await this.#getDatasetDatabase();
 
-    const store = db.transaction('datasets', 'readonly').objectStore('datasets');
+    const metadataTransaction = preserveIndexedDbRequestTiming(db.transaction('datasets', 'readonly'));
+    const store = metadataTransaction.store;
 
     const metadata: DatasetMetadata[] = [];
 
-    await new Promise<void>((resolve, reject) => {
-      const cursorRequest = store.openCursor();
-      cursorRequest.onerror = () => {
-        reject(cursorRequest.error);
-      };
-      cursorRequest.onsuccess = () => {
-        const cursor = cursorRequest.result;
-        if (cursor?.value) {
-          const dataset = cursor.value as DatasetMetadata;
-          if (dataset.projectId === projectId) {
-            metadata.push(dataset);
-          }
-          cursor.continue();
-        } else {
-          resolve();
-        }
-      };
-    });
+    let cursor = await store.openCursor();
+    while (cursor) {
+      if (cursor.value.projectId === projectId) {
+        metadata.push(cursor.value);
+      }
+      cursor = await cursor.continue();
+    }
 
-    const dataStore = db.transaction('data', 'readonly').objectStore('data');
+    const dataTransaction = preserveIndexedDbRequestTiming(db.transaction('data', 'readonly'));
+    const dataStore = dataTransaction.store;
 
-    const data = await Promise.all(
-      metadata.map(async (meta) => {
-        const dataset = await toPromise<Dataset | undefined>(dataStore.get(meta.id));
-        return dataset;
-      }),
-    );
+    const data = await Promise.all(metadata.map((meta) => dataStore.get(meta.id)));
 
     this.currentProjectId = projectId;
     this.#currentProjectDatasets = metadata.map(
@@ -115,11 +112,10 @@ export class BrowserDatasetProvider implements DatasetProvider {
     dataset.data = data;
 
     // Sync the database
-    const dataStore = await this.getDatasetDatabase();
+    const dataStore = await this.#getDatasetDatabase();
 
-    const transaction = dataStore.transaction('data', 'readwrite');
-    const store = transaction.objectStore('data');
-    await toPromise(store.put(data, id));
+    const transaction = preserveIndexedDbRequestTiming(dataStore.transaction('data', 'readwrite'));
+    await transaction.store.put(data, id);
   }
 
   async putDatasetRow(id: DatasetId, row: DatasetRow): Promise<void> {
@@ -137,11 +133,10 @@ export class BrowserDatasetProvider implements DatasetProvider {
     }
 
     // Sync the database
-    const dataStore = await this.getDatasetDatabase();
+    const dataStore = await this.#getDatasetDatabase();
 
-    const transaction = dataStore.transaction('data', 'readwrite');
-    const store = transaction.objectStore('data');
-    await toPromise(store.put(dataset.data, id));
+    const transaction = preserveIndexedDbRequestTiming(dataStore.transaction('data', 'readwrite'));
+    await transaction.store.put(dataset.data, id);
   }
 
   async putDatasetMetadata(metadata: DatasetMetadata): Promise<void> {
@@ -160,11 +155,10 @@ export class BrowserDatasetProvider implements DatasetProvider {
     }
 
     // Sync the database
-    const metadataStore = await this.getDatasetDatabase();
+    const metadataStore = await this.#getDatasetDatabase();
 
-    const transaction = metadataStore.transaction('datasets', 'readwrite');
-    const store = transaction.objectStore('datasets');
-    await toPromise(store.put(metadata, metadata.id));
+    const transaction = preserveIndexedDbRequestTiming(metadataStore.transaction('datasets', 'readwrite'));
+    await transaction.store.put(metadata, metadata.id);
   }
 
   async clearDatasetData(id: DatasetId): Promise<void> {
@@ -179,11 +173,10 @@ export class BrowserDatasetProvider implements DatasetProvider {
     };
 
     // Sync the database
-    const dataStore = await this.getDatasetDatabase();
+    const dataStore = await this.#getDatasetDatabase();
 
-    const transaction = dataStore.transaction('data', 'readwrite');
-    const store = transaction.objectStore('data');
-    await toPromise(store.delete(id));
+    const transaction = preserveIndexedDbRequestTiming(dataStore.transaction('data', 'readwrite'));
+    await transaction.store.delete(id);
   }
 
   async deleteDataset(id: DatasetId): Promise<void> {
@@ -195,17 +188,15 @@ export class BrowserDatasetProvider implements DatasetProvider {
     this.#currentProjectDatasets.splice(index, 1);
 
     // Sync the database
-    const metadataStore = await this.getDatasetDatabase();
+    const metadataStore = await this.#getDatasetDatabase();
 
-    const metaTxn = metadataStore.transaction('datasets', 'readwrite');
-    const store = metaTxn.objectStore('datasets');
-    await toPromise(store.delete(id));
+    const metaTxn = preserveIndexedDbRequestTiming(metadataStore.transaction('datasets', 'readwrite'));
+    await metaTxn.store.delete(id);
 
-    const dataStore = await this.getDatasetDatabase();
+    const dataStore = await this.#getDatasetDatabase();
 
-    const dataTxn = dataStore.transaction('data', 'readwrite');
-    const dataStoreStore = dataTxn.objectStore('data');
-    await toPromise(dataStoreStore.delete(id));
+    const dataTxn = preserveIndexedDbRequestTiming(dataStore.transaction('data', 'readwrite'));
+    await dataTxn.store.delete(id);
   }
 
   async knnDatasetRows(
@@ -234,8 +225,8 @@ export class BrowserDatasetProvider implements DatasetProvider {
     this.#currentProjectDatasets = datasets;
     this.currentProjectId = projectId;
 
-    const db = await this.getDatasetDatabase();
-    const transaction = db.transaction(['datasets', 'data'], 'readwrite');
+    const db = await this.#getDatasetDatabase();
+    const transaction = preserveIndexedDbRequestTiming(db.transaction(['datasets', 'data'], 'readwrite'));
 
     const metadataStore = transaction.objectStore('datasets');
     const dataStore = transaction.objectStore('data');
@@ -243,8 +234,8 @@ export class BrowserDatasetProvider implements DatasetProvider {
     await Promise.all(
       datasets.map(async (dataset) => {
         await Promise.all([
-          toPromise(metadataStore.put(dataset.meta, dataset.meta.id)),
-          toPromise(dataStore.put(dataset.data, dataset.data.id)),
+          metadataStore.put(dataset.meta, dataset.meta.id),
+          dataStore.put(dataset.data, dataset.data.id),
         ]);
       }),
     );
@@ -256,9 +247,28 @@ const dotProductSimilarity = (a: number[], b: number[]): number => {
   return a.reduce((acc, val, i) => acc + val * b[i]!, 0);
 };
 
-function toPromise<T = unknown>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+function openDatasetDatabase(onUnavailable?: () => void): Promise<IDBPDatabase<DatasetDatabase>> {
+  let database: IDBPDatabase<DatasetDatabase> | undefined;
+
+  return openDB<DatasetDatabase>('datasets', 2, {
+    upgrade(upgradeDatabase) {
+      if (!upgradeDatabase.objectStoreNames.contains('datasets')) {
+        upgradeDatabase.createObjectStore('datasets');
+      }
+
+      if (!upgradeDatabase.objectStoreNames.contains('data')) {
+        upgradeDatabase.createObjectStore('data');
+      }
+    },
+    blocking() {
+      database?.close();
+      onUnavailable?.();
+    },
+    terminated() {
+      onUnavailable?.();
+    },
+  }).then((openedDatabase) => {
+    database = openedDatabase;
+    return openedDatabase;
   });
 }

@@ -173,6 +173,27 @@ void describe('ExecutionRecorder', () => {
     }
   });
 
+  void it('keeps serialized long-string recording keys stable', async () => {
+    const value = 'stable recording string over thirty characters';
+    const recorder = new ExecutionRecorder();
+    const emitter = new Emittery<ProcessEvents>();
+    recorder.record(emitter as unknown as GraphProcessor);
+
+    await emitter.emit('done', {
+      results: {
+        output: { type: 'string', value },
+      },
+    });
+
+    const serialized = JSON.parse(recorder.serialize()) as {
+      recording: unknown;
+      strings: Record<string, string>;
+    };
+
+    assert.equal(serialized.strings['2085944468'], value);
+    assert.match(JSON.stringify(serialized.recording), /\$STRING:2085944468/);
+  });
+
   void it('persists execution metadata and replays partialOutput/nodeOutputsCleared with parity', async () => {
     const recorder = new ExecutionRecorder({ includePartialOutputs: true });
     await addEvents(recorder, { includeIntermediateEvents: true });

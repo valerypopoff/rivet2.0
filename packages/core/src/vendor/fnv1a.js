@@ -76,7 +76,7 @@ function fnv1aEncodeInto(string, size, utf8Buffer) {
 /**
  * @param {string} value
  * @param {{ size?: 32 | 64 | 128 | 256 | 512 | 1024, utf8Buffer?: Uint8Array }} options
- * @returns {string}
+ * @returns {bigint}
  */
 export default function fnv1a(value, { size = 32, utf8Buffer } = {}) {
   if (!FNV_PRIMES[size]) {
