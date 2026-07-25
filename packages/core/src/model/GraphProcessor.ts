@@ -4,6 +4,7 @@ import {
   type ControlFlowExcludedDataValue,
   type ScalarOrArrayDataValue,
 } from './DataValue.js';
+import type { NodeInputs, NodeOutputs } from './NodeIO.js';
 import {
   type ChartNode,
   type NodeConnection,
@@ -80,17 +81,21 @@ import {
   getMissingRequiredInputExclusion,
 } from './NodeExclusionPolicy.js';
 import type { StreamedFunctionCall } from './chat/streamChatResponse.js';
-import {
-  DELEGATE_TOOL_CALL_INPUT_ID,
-  resolveToolContinuationConnection,
-} from './chat-v2/toolContinuationConnection.js';
+import { resolveToolContinuationConnection } from './chat-v2/toolContinuationConnection.js';
 import type { DelegateFunctionCallNode } from './nodes/DelegateFunctionCallNode.js';
-import {
-  buildDelegatedToolCallOutputs,
-  delegateToolCall,
-  isDelegatedToolCallRecord,
-} from './nodes/toolCallDelegation.js';
+import { buildDelegatedToolCallOutputs, isDelegatedToolCallRecord } from './nodes/toolCallDelegation.js';
 import type { ToolCallContinuation, ToolCallContinuationResult } from './ToolCallContinuation.js';
+import {
+  ToolCallContinuationCoordinator,
+  type ToolCallContinuationBranchRunResult,
+  type ToolCallContinuationCoordinatorAdapter,
+} from './ToolCallContinuationCoordinator.js';
+import {
+  createToolCallContinuationBranchPlanner,
+  type ToolCallContinuationAsyncBranchPlan,
+  type ToolCallContinuationBranchPlan,
+  type ToolCallContinuationBranchPlanner,
+} from './ToolCallContinuationBranchPlanner.js';
 import { ManagedAsyncBranches } from './ManagedAsyncBranches.js';
 import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
 import { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
@@ -103,26 +108,10 @@ type NodeTimingStart = number | undefined;
 type NodeAbortControllerEntry = AbortController | Set<AbortController>;
 const graphProcessorGraphOverride = Symbol('graphProcessorGraphOverride');
 const consumedAsyncBranchTriggerOverride = Symbol('consumedAsyncBranchTriggerOverride');
-type ContinuationBranchPlan = {
-  graph: NodeGraph;
-  preloadedOutputs: Map<NodeId, Outputs>;
-};
-type AsyncBranchPlan = {
-  graph: NodeGraph;
-  nodeIds: Set<NodeId>;
-};
 type ManagedAsyncBranchFailure = {
   error: Error;
   triggerNode: ChartNode;
   nodeErrors: Array<{ error: Error | string; node: ChartNode }>;
-};
-type ContinuationBranchContext = {
-  connections: NodeConnection[];
-  unsafeNodeIds: Set<NodeId>;
-};
-type ContinuationBranchRunResult = {
-  graphOutputWrites: GraphOutputs;
-  nodeOutputs: Map<NodeId, Outputs>;
 };
 type ToolCallContinuationInvocation = {
   delegateNode: DelegateFunctionCallNode;
@@ -262,8 +251,8 @@ export type GraphOutputs = Record<string, DataValue>;
 export type GraphInputs = Record<string, DataValue>;
 
 export type NodeResults = Map<NodeId, Outputs>;
-export type Inputs = Record<PortId, DataValue | undefined>;
-export type Outputs = Record<PortId, DataValue | undefined>;
+export type Inputs = NodeInputs;
+export type Outputs = NodeOutputs;
 
 export type FrozenNodeOutputsByGraph = Record<GraphId, Record<NodeId, Outputs[] | undefined> | undefined>;
 
@@ -510,7 +499,7 @@ export class GraphProcessor {
   #toolCallContinuationInvocations = new Map<string, ToolCallContinuationInvocation>();
   #continuationCompletionOwnerByNodeId = new Map<NodeId, NodeId>();
   #effectiveConnectionsForRun: NodeConnection[] | undefined;
-  #asyncBranchPlansByTriggerNodeId = new Map<NodeId, AsyncBranchPlan>();
+  #asyncBranchPlansByTriggerNodeId = new Map<NodeId, ToolCallContinuationAsyncBranchPlan>();
   readonly #consumedAsyncBranchTriggerNodeId: NodeId | undefined;
   readonly #registry: NodeRegistration<any, any>;
   readonly #concurrency: Required<GraphProcessorConcurrency>;
@@ -2113,7 +2102,7 @@ export class GraphProcessor {
   async #runManagedAsyncBranch(
     triggerNode: ChartNode,
     triggerOutputs: Outputs,
-    plan: AsyncBranchPlan,
+    plan: ToolCallContinuationAsyncBranchPlan,
     onProcessorCreated: (processor: GraphProcessor) => void,
   ): Promise<void> {
     const root = this.getRootProcessor();
@@ -2769,276 +2758,102 @@ export class GraphProcessor {
     assistantMessage: string,
     llmSignal: AbortSignal,
   ): Promise<ToolCallContinuationResult[]> {
-    if (toolCalls.length === 0) {
-      return [];
+    const round = await new ToolCallContinuationCoordinator(this.#createToolCallContinuationCoordinatorAdapter()).run({
+      assistantMessage,
+      delegateNode: invocation.delegateNode,
+      llmNode,
+      llmSignal,
+      toolCalls,
+    });
+
+    for (const result of round.invocations) {
+      invocation.latestOutputs.set(invocation.delegateNode.id, result.outputs);
+      for (const branch of [result.preToolBranch, result.finalBranch]) {
+        this.#commitContinuationGraphOutputs(branch.graphOutputWrites);
+        for (const [nodeId, outputs] of branch.nodeOutputs) {
+          invocation.latestOutputs.set(nodeId, outputs);
+        }
+      }
     }
 
-    if (this.#abortController.signal.aborted) {
-      throw createGraphAbortErrorFromSignal(this.#abortController.signal);
-    }
-
-    const { delegateNode } = invocation;
-    const processIds = toolCalls.map(() => nanoid() as ProcessId);
-    const inputValuesByCall = toolCalls.map(
-      (toolCall): Inputs => ({
-        [DELEGATE_TOOL_CALL_INPUT_ID]: {
-          type: 'object',
-          value: toolCall,
-        },
-      }),
-    );
-    const nodeAbortControllers = toolCalls.map(() => this.#newAbortController());
-    nodeAbortControllers.forEach((controller) => this.#registerNodeAbortController(delegateNode.id, controller));
-    const abortAllCalls = (reason: unknown) => {
-      for (const controller of nodeAbortControllers) {
-        if (!controller.signal.aborted) {
-          controller.abort(reason);
-        }
-      }
-    };
-    const abortFromLLM = () => {
-      abortAllCalls(getAbortSignalReason(llmSignal));
-    };
-    llmSignal.addEventListener('abort', abortFromLLM, { once: true });
-    if (this.#abortController.signal.aborted) {
-      abortAllCalls(getAbortSignalReason(this.#abortController.signal));
-    } else if (llmSignal.aborted) {
-      abortFromLLM();
-    }
-
-    try {
-      await this.#waitUntilUnpaused();
-      const abortedController = nodeAbortControllers.find((controller) => controller.signal.aborted);
-      if (abortedController) {
-        throw createGraphAbortErrorFromSignal(abortedController.signal, 'Delegate Tool Call aborted');
-      }
-
-      const hasAssistantMessage = assistantMessage.trim().length > 0;
-      const branchContext = this.#createContinuationBranchContext();
-      const canRunContinuationBranches =
-        !branchContext.unsafeNodeIds.has(llmNode.id) && !branchContext.unsafeNodeIds.has(delegateNode.id);
-      const assistantOutputs: Outputs = {
-        ['assistant-message' as PortId]: {
-          type: 'string',
-          value: assistantMessage,
-        },
-      };
-      const preToolOutputPorts = new Set<PortId>(['assistant-message' as PortId]);
-      const hasActivePreToolBranch =
-        hasAssistantMessage && this.#getActiveOutputPortIds(delegateNode).has('assistant-message' as PortId);
-      const continuationBranchBoundaries = new Set<NodeId>([llmNode.id, ...this.#currentlyProcessing]);
-
-      // Validate round-level configuration before any of the parallel calls can
-      // start side effects. Preserve one real Delegate error run for diagnostics.
-      try {
-        if (
-          this.#nodeResults.has(delegateNode.id) ||
-          this.#resolveFrozenNodeOutputs(delegateNode, inputValuesByCall[0]!, processIds[0]!)
-        ) {
-          throw new Error(
-            `Delegate Tool Call "${delegateNode.title}" is the active auto-continuation handler and cannot use preloaded or frozen outputs. Clear its preload or unfreeze it before running this graph.`,
-          );
-        }
-        if (hasActivePreToolBranch) {
-          if (!canRunContinuationBranches) {
-            throw new Error(
-              `Delegate Tool Call "${delegateNode.title}" cannot fire its pre-tool Message branch because the LLM/Delegate continuation is inside an unsupported cycle, race, or loop.`,
-            );
-          }
-          this.#buildContinuationBranchPlan(
-            delegateNode,
-            assistantOutputs,
-            preToolOutputPorts,
-            new Map(),
-            continuationBranchBoundaries,
-            branchContext,
-            true,
-          );
-        }
-      } catch (error) {
-        const processId = processIds[0]!;
-        const inputValues = inputValuesByCall[0]!;
-        await this.#emitter.emit(
-          'nodeStart',
-          this.#withExecution({ node: delegateNode, inputs: inputValues, processId }),
-        );
-        const timingStart = this.#startNodeTiming();
-        await this.#nodeErrored(delegateNode, error, processId, this.#finishNodeTiming(timingStart));
-        throw error;
-      }
-
-      let firstFailure: unknown;
-      let hasFailure = false;
-      const abortSiblingOnFailure = async <T>(work: Promise<T>): Promise<T> => {
-        try {
-          return await work;
-        } catch (error) {
-          if (!hasFailure) {
-            hasFailure = true;
-            firstFailure = error;
-          }
-          abortAllCalls(error);
-          throw error;
-        }
-      };
-
-      const runInvocation = async (toolCall: StreamedFunctionCall, toolCallIndex: number) => {
-        const processId = processIds[toolCallIndex]!;
-        const inputValues = inputValuesByCall[toolCallIndex]!;
-        const nodeAbortController = nodeAbortControllers[toolCallIndex]!;
-        let timingStart: NodeTimingStart;
-        let delegateStarted = false;
-        let delegateFinished = false;
-
-        try {
-          await this.#waitUntilUnpaused();
-          if (nodeAbortController.signal.aborted) {
-            throw createGraphAbortErrorFromSignal(nodeAbortController.signal, 'Delegate Tool Call aborted');
-          }
-
-          await this.#emitter.emit(
-            'nodeStart',
-            this.#withExecution({ node: delegateNode, inputs: inputValues, processId }),
-          );
-          delegateStarted = true;
-          timingStart = this.#startNodeTiming();
-
-          const delegateContext = this.#createNodeProcessContext(
-            delegateNode,
-            inputValues,
-            0,
-            processId,
-            nodeAbortController,
-            (node, partialOutputs, index) => this.#emitNodePartialOutput(node, partialOutputs, index, processId),
-          );
-
-          if (hasAssistantMessage) {
-            emitDetached(
-              this.#emitter,
-              'partialOutput',
-              this.#withExecution({
-                node: delegateNode,
-                outputs: assistantOutputs,
-                index: 0,
-                processId,
-              }),
-            );
-          }
-
-          let preToolBranchPromise: Promise<ContinuationBranchRunResult> | undefined;
-          if (hasActivePreToolBranch) {
-            preToolBranchPromise = this.#runContinuationOutputBranch(
-              delegateNode,
-              assistantOutputs,
-              preToolOutputPorts,
-              nodeAbortController.signal,
-              new Map(),
-              continuationBranchBoundaries,
-              branchContext,
-              true,
-              true,
-            );
-          }
-
-          // Start tool work without waiting for the early Message branch. The
-          // branch and every sibling Delegate invocation remain independent.
-          const invocationWork = await Promise.allSettled([
-            abortSiblingOnFailure(delegateToolCall(toolCall, delegateContext, delegateNode.data)),
-            abortSiblingOnFailure(
-              preToolBranchPromise ?? Promise.resolve({ graphOutputWrites: {}, nodeOutputs: new Map() }),
-            ),
-          ]);
-          const toolOutcome = invocationWork[0]!;
-          const preToolBranchOutcome = invocationWork[1]!;
-          if (toolOutcome.status === 'rejected') throw toolOutcome.reason;
-          if (preToolBranchOutcome.status === 'rejected') throw preToolBranchOutcome.reason;
-          const toolResult = toolOutcome.value;
-          const preToolBranch = preToolBranchOutcome.value;
-
-          if (nodeAbortController.signal.aborted) {
-            throw createGraphAbortErrorFromSignal(nodeAbortController.signal, 'Delegate Tool Call aborted');
-          }
-
-          const outputs = buildDelegatedToolCallOutputs(
-            [toolResult.record],
-            hasAssistantMessage ? assistantMessage : undefined,
-            toolResult.cost,
-          );
-          this.#accumulateCost(outputs);
-
-          await this.#emitter.emit(
-            'nodeFinish',
-            this.#withExecution(
-              withOptionalDuration(
-                {
-                  node: delegateNode,
-                  outputs,
-                  processId,
-                },
-                this.#finishNodeTiming(timingStart),
-              ),
-            ),
-          );
-          delegateFinished = true;
-
-          const finalOutputPorts = new Set<PortId>(['output' as PortId, 'message' as PortId]);
-          const finalBranch = canRunContinuationBranches
-            ? await this.#runContinuationOutputBranch(
-                delegateNode,
-                outputs,
-                finalOutputPorts,
-                nodeAbortController.signal,
-                preToolBranch.nodeOutputs,
-                continuationBranchBoundaries,
-                branchContext,
-                false,
-                true,
-              )
-            : { graphOutputWrites: {}, nodeOutputs: new Map<NodeId, Outputs>() };
-
-          return { finalBranch, outputs, preToolBranch, toolResult };
-        } catch (error) {
-          if (delegateStarted && !delegateFinished) {
-            await this.#nodeErrored(delegateNode, error, processId, this.#finishNodeTiming(timingStart));
-          }
-          throw error;
-        }
-      };
-
-      const toolWorkOutcomes = await Promise.allSettled(
-        toolCalls.map((toolCall, toolCallIndex) => abortSiblingOnFailure(runInvocation(toolCall, toolCallIndex))),
-      );
-
-      if (hasFailure) {
-        throw firstFailure;
-      }
-      const invocationResults = toolWorkOutcomes.map((outcome) => {
-        if (outcome.status === 'rejected') {
-          throw outcome.reason;
-        }
-        return outcome.value;
-      });
-
-      for (const result of invocationResults) {
-        invocation.latestOutputs.set(delegateNode.id, result.outputs);
-        for (const branch of [result.preToolBranch, result.finalBranch]) {
-          this.#commitContinuationGraphOutputs(branch.graphOutputWrites);
-          for (const [nodeId, outputs] of branch.nodeOutputs) {
-            invocation.latestOutputs.set(nodeId, outputs);
-          }
-        }
-      }
-
-      return invocationResults.map(({ toolResult }) => ({
-        message: toolResult.message,
-        record: toolResult.record,
-      }));
-    } finally {
-      llmSignal.removeEventListener('abort', abortFromLLM);
-      nodeAbortControllers.forEach((controller) => this.#unregisterNodeAbortController(delegateNode.id, controller));
-    }
+    return [...round.results];
   }
 
+  #createToolCallContinuationCoordinatorAdapter(): ToolCallContinuationCoordinatorAdapter {
+    return {
+      accumulateCost: (outputs) => this.#accumulateCost(outputs),
+      createBranchAdapter: () => {
+        const branchPlanner = this.#createToolCallContinuationBranchPlanner();
+        return {
+          canRunContinuationBranches: (llmNode, delegateNode) =>
+            !branchPlanner.unsafeNodeIds.has(llmNode.id) && !branchPlanner.unsafeNodeIds.has(delegateNode.id),
+          runOutputBranch: (request) =>
+            this.#runContinuationOutputBranch(
+              request.sourceNode,
+              request.sourceOutputs,
+              request.activeOutputPortIds,
+              request.signal,
+              request.availableNodeOutputs,
+              request.excludedNodeIds,
+              branchPlanner,
+              request.failOnUnsafeReadyNode,
+              request.deferGraphOutputCommit,
+            ),
+          validatePreToolBranch: (request) => {
+            this.#planToolCallContinuationBranch(
+              request.sourceNode,
+              request.sourceOutputs,
+              request.activeOutputPortIds,
+              new Map(),
+              request.excludedNodeIds,
+              branchPlanner,
+              true,
+            );
+          },
+        };
+      },
+      createDelegateProcessContext: (node, inputs, processId, nodeAbortController) =>
+        this.#createNodeProcessContext(
+          node,
+          inputs,
+          0,
+          processId,
+          nodeAbortController,
+          (partialNode, partialOutputs, index) =>
+            this.#emitNodePartialOutput(partialNode, partialOutputs, index, processId),
+        ),
+      createNodeAbortController: () => this.#newAbortController(),
+      emitDelegateError: (node, error, processId, timingStart) =>
+        this.#nodeErrored(node, error, processId, this.#finishNodeTiming(timingStart)),
+      emitDelegateFinish: async (node, outputs, processId, timingStart) => {
+        await this.#emitter.emit(
+          'nodeFinish',
+          this.#withExecution(
+            withOptionalDuration(
+              {
+                node,
+                outputs,
+                processId,
+              },
+              this.#finishNodeTiming(timingStart),
+            ),
+          ),
+        );
+      },
+      emitDelegatePartialOutput: (node, outputs, processId) => this.#emitNodePartialOutput(node, outputs, 0, processId),
+      emitDelegateStart: (node, inputs, processId) =>
+        this.#emitter.emit('nodeStart', this.#withExecution({ node, inputs, processId })),
+      getActiveOutputPortIds: (node) => this.#getActiveOutputPortIds(node),
+      getContinuationBranchBoundaryNodeIds: (llmNode) => new Set<NodeId>([llmNode.id, ...this.#currentlyProcessing]),
+      hasPreloadedOrFrozenDelegateOutput: (node, inputs, processId) =>
+        this.#nodeResults.has(node.id) || this.#resolveFrozenNodeOutputs(node, inputs, processId) != null,
+      registerNodeAbortController: (nodeId, controller) => this.#registerNodeAbortController(nodeId, controller),
+      rootAbortSignal: this.#abortController.signal,
+      unregisterNodeAbortController: (nodeId, controller) => this.#unregisterNodeAbortController(nodeId, controller),
+      startNodeTiming: () => this.#startNodeTiming(),
+      waitUntilUnpaused: () => this.#waitUntilUnpaused(),
+    };
+  }
   async #runContinuationOutputBranch(
     sourceNode: ChartNode,
     sourceOutputs: Outputs,
@@ -3046,21 +2861,21 @@ export class GraphProcessor {
     signal: AbortSignal,
     availableNodeOutputs: ReadonlyMap<NodeId, Outputs>,
     excludedNodeIds: ReadonlySet<NodeId>,
-    branchContext: ContinuationBranchContext,
+    branchPlanner: ToolCallContinuationBranchPlanner,
     failOnUnsafeReadyNode = false,
     deferGraphOutputCommit = false,
-  ): Promise<ContinuationBranchRunResult> {
+  ): Promise<ToolCallContinuationBranchRunResult> {
     if (signal.aborted) {
       throw createGraphAbortErrorFromSignal(signal, 'Tool continuation branch aborted');
     }
 
-    const branchPlan = this.#buildContinuationBranchPlan(
+    const branchPlan = this.#planToolCallContinuationBranch(
       sourceNode,
       sourceOutputs,
       activeOutputPortIds,
       availableNodeOutputs,
       excludedNodeIds,
-      branchContext,
+      branchPlanner,
       failOnUnsafeReadyNode,
     );
     if (!branchPlan) {
@@ -3180,7 +2995,10 @@ export class GraphProcessor {
     }
   }
 
-  #getContinuationBranchResults(processor: GraphProcessor, branchPlan: ContinuationBranchPlan): Map<NodeId, Outputs> {
+  #getContinuationBranchResults(
+    processor: GraphProcessor,
+    branchPlan: ToolCallContinuationBranchPlan,
+  ): Map<NodeId, Outputs> {
     const results = new Map<NodeId, Outputs>();
     for (const [nodeId, outputs] of processor.#nodeResults) {
       if (branchPlan.preloadedOutputs.has(nodeId) || !processor.#visitedNodes.has(nodeId)) {
@@ -3191,214 +3009,42 @@ export class GraphProcessor {
     return results;
   }
 
-  #buildContinuationBranchPlan(
+  #planToolCallContinuationBranch(
     sourceNode: ChartNode,
     sourceOutputs: Outputs,
     activeOutputPortIds: ReadonlySet<PortId>,
     availableNodeOutputs: ReadonlyMap<NodeId, Outputs>,
     excludedNodeIds: ReadonlySet<NodeId>,
-    branchContext: ContinuationBranchContext,
+    branchPlanner: ToolCallContinuationBranchPlanner,
     failOnUnsafeReadyNode = false,
-  ): ContinuationBranchPlan | undefined {
-    const { connections, unsafeNodeIds } = branchContext;
-    const hasAvailableSourceOutput = (outputId: PortId) => {
-      const output = sourceOutputs[outputId];
-      return output != null && output.type !== 'control-flow-excluded';
-    };
-    const getAvailableNodeOutputs = (nodeId: NodeId) => {
-      if (excludedNodeIds.has(nodeId) || unsafeNodeIds.has(nodeId) || this.#erroredNodes.has(nodeId)) {
-        return undefined;
-      }
-      return availableNodeOutputs.get(nodeId) ?? this.#nodeResults.get(nodeId);
-    };
-    const runToRelevantNodeIds = this.#getRunToRelevantNodeIds();
-    const canConsiderNode = (nodeId: NodeId) => {
-      const node = this.#nodesById[nodeId];
-      return (
-        node != null &&
-        !node.disabled &&
-        !this.#visitedNodes.has(nodeId) &&
-        (!runToRelevantNodeIds || runToRelevantNodeIds.has(nodeId))
-      );
-    };
-    const isUnsafeNode = (nodeId: NodeId) => excludedNodeIds.has(nodeId) || unsafeNodeIds.has(nodeId);
-    const outgoingConnectionsByNode = new Map<NodeId, NodeConnection[]>();
-    const incomingConnectionsByNode = new Map<NodeId, NodeConnection[]>();
-    for (const connection of connections) {
-      const outgoing = outgoingConnectionsByNode.get(connection.outputNodeId);
-      if (outgoing) {
-        outgoing.push(connection);
-      } else {
-        outgoingConnectionsByNode.set(connection.outputNodeId, [connection]);
-      }
-
-      const incoming = incomingConnectionsByNode.get(connection.inputNodeId);
-      if (incoming) {
-        incoming.push(connection);
-      } else {
-        incomingConnectionsByNode.set(connection.inputNodeId, [connection]);
-      }
-    }
-
-    const reachableNodeIds = new Set<NodeId>();
-    const candidateNodeIds = new Set<NodeId>();
-    for (const connection of outgoingConnectionsByNode.get(sourceNode.id) ?? []) {
-      if (activeOutputPortIds.has(connection.outputId) && canConsiderNode(connection.inputNodeId)) {
-        candidateNodeIds.add(connection.inputNodeId);
-      }
-    }
-
-    const boundaryNodeIds = new Set<NodeId>();
-    let addedNode = true;
-    while (addedNode) {
-      addedNode = false;
-
-      for (const candidateNodeId of [...candidateNodeIds]) {
-        const incomingConnections = incomingConnectionsByNode.get(candidateNodeId) ?? [];
-        const isReady = incomingConnections.every((connection) => {
-          if (connection.outputNodeId === sourceNode.id) {
-            return activeOutputPortIds.has(connection.outputId) || hasAvailableSourceOutput(connection.outputId);
-          }
-
-          return (
-            reachableNodeIds.has(connection.outputNodeId) || getAvailableNodeOutputs(connection.outputNodeId) != null
-          );
-        });
-        if (!isReady) {
-          continue;
-        }
-
-        candidateNodeIds.delete(candidateNodeId);
-        if (isUnsafeNode(candidateNodeId)) {
-          if (failOnUnsafeReadyNode) {
-            const unsafeNode = this.#nodesById[candidateNodeId]!;
-            throw new Error(
-              `Delegate Tool Call "${sourceNode.title}" cannot fire its pre-tool Message branch through unsupported node "${unsafeNode.title}". Move cycles, races, loops, and foreground rejoin points outside that branch.`,
-            );
-          }
-          continue;
-        }
-        reachableNodeIds.add(candidateNodeId);
-        addedNode = true;
-
-        for (const connection of incomingConnections) {
-          if (
-            connection.outputNodeId !== sourceNode.id &&
-            !reachableNodeIds.has(connection.outputNodeId) &&
-            getAvailableNodeOutputs(connection.outputNodeId) != null
-          ) {
-            boundaryNodeIds.add(connection.outputNodeId);
-          }
-        }
-
-        if (this.#nodesById[candidateNodeId]?.type === 'startBackgroundBranch') {
-          continue;
-        }
-
-        for (const connection of outgoingConnectionsByNode.get(candidateNodeId) ?? []) {
-          if (
-            connection.inputNodeId !== sourceNode.id &&
-            !reachableNodeIds.has(connection.inputNodeId) &&
-            canConsiderNode(connection.inputNodeId)
-          ) {
-            candidateNodeIds.add(connection.inputNodeId);
-          }
-        }
-      }
-    }
-
-    if (reachableNodeIds.size === 0) {
-      return undefined;
-    }
-
-    const includedNodeIds = new Set<NodeId>([sourceNode.id, ...reachableNodeIds, ...boundaryNodeIds]);
-    const asyncBranchConnections: NodeConnection[] = [];
-    for (const nodeId of reachableNodeIds) {
-      if (this.#nodesById[nodeId]?.type !== 'startBackgroundBranch') {
-        continue;
-      }
-      const asyncPlan = this.#asyncBranchPlansByTriggerNodeId.get(nodeId);
-      if (!asyncPlan) {
-        continue;
-      }
-      for (const node of asyncPlan.graph.nodes) {
-        includedNodeIds.add(node.id);
-      }
-      asyncBranchConnections.push(...asyncPlan.graph.connections);
-    }
-
-    const foregroundBranchConnections = connections.filter((connection) => {
-      if (!reachableNodeIds.has(connection.inputNodeId)) {
-        return false;
-      }
-
-      if (connection.outputNodeId === sourceNode.id) {
-        return activeOutputPortIds.has(connection.outputId) || hasAvailableSourceOutput(connection.outputId);
-      }
-
-      return includedNodeIds.has(connection.outputNodeId);
+  ): ToolCallContinuationBranchPlan | undefined {
+    return branchPlanner.plan({
+      activeOutputPortIds,
+      availableNodeOutputs,
+      excludedNodeIds,
+      failOnUnsafeReadyNode,
+      sourceNode,
+      sourceOutputs,
+      state: {
+        erroredNodeIds: new Set(this.#erroredNodes.keys()),
+        nodeOutputs: this.#nodeResults,
+        runToRelevantNodeIds: this.#getRunToRelevantNodeIds(),
+        visitedNodeIds: this.#visitedNodes,
+      },
     });
-    const seenConnections = new Set<string>();
-    const branchConnections = [...foregroundBranchConnections, ...asyncBranchConnections].filter((connection) => {
-      const key = `${connection.outputNodeId}:${connection.outputId}:${connection.inputNodeId}:${connection.inputId}`;
-      if (seenConnections.has(key)) {
-        return false;
-      }
-      seenConnections.add(key);
-      return true;
+  }
+
+  #createToolCallContinuationBranchPlanner(): ToolCallContinuationBranchPlanner {
+    return createToolCallContinuationBranchPlanner({
+      asyncBranchPlansByTriggerNodeId: this.#asyncBranchPlansByTriggerNodeId,
+      attachedNodeDataByNodeId: this.#attachedNodeData,
+      effectiveConnections: this.#getEffectiveConnections(),
+      graph: this.#graph,
+      isDefinitionValidConnection: (connection) => this.#isDefinitionValidConnection(connection),
+      nodesById: this.#nodesById,
+      stronglyConnectedComponents: this.#scc,
     });
-    const graph: NodeGraph = {
-      metadata: this.#graph.metadata ? { ...this.#graph.metadata } : undefined,
-      nodes: Object.values(this.#nodesById).filter((node) => includedNodeIds.has(node.id)),
-      connections: branchConnections,
-    };
-    const preloadedOutputs = new Map<NodeId, Outputs>([[sourceNode.id, sourceOutputs]]);
-    for (const nodeId of boundaryNodeIds) {
-      preloadedOutputs.set(nodeId, getAvailableNodeOutputs(nodeId)!);
-    }
-
-    return { graph, preloadedOutputs };
   }
-
-  #createContinuationBranchContext(): ContinuationBranchContext {
-    const connections = this.#getEffectiveConnections();
-    return {
-      connections,
-      unsafeNodeIds: this.#getUnsafeContinuationBranchNodeIds(),
-    };
-  }
-
-  #getUnsafeContinuationBranchNodeIds(): Set<NodeId> {
-    const unsafeNodeIds = new Set<NodeId>();
-    for (const component of this.#scc) {
-      if (component.length > 1) {
-        component.forEach((node) => unsafeNodeIds.add(node.id));
-      }
-    }
-
-    for (const node of Object.values(this.#nodesById)) {
-      const attachedData = this.#attachedNodeData.get(node.id);
-      if (
-        node.type === 'loopController' ||
-        node.type === 'raceInputs' ||
-        (attachedData != null && Object.values(attachedData).some(Boolean))
-      ) {
-        unsafeNodeIds.add(node.id);
-      }
-    }
-
-    // SCC preprocessing sees every persisted edge, including secondary edges
-    // that still participate in scheduler readiness. Preserve the same view
-    // when detecting a one-node cycle.
-    for (const connection of this.#graph.connections) {
-      if (connection.inputNodeId === connection.outputNodeId && this.#isDefinitionValidConnection(connection)) {
-        unsafeNodeIds.add(connection.inputNodeId);
-      }
-    }
-
-    return unsafeNodeIds;
-  }
-
   #getEffectiveConnections(): NodeConnection[] {
     if (this.#effectiveConnectionsForRun) {
       return this.#effectiveConnectionsForRun;
@@ -3554,7 +3200,7 @@ export class GraphProcessor {
   #getActiveAsyncBranchPlan(
     triggerNode: ChartNode,
     activeOutputPortIds: ReadonlySet<PortId>,
-  ): AsyncBranchPlan | undefined {
+  ): ToolCallContinuationAsyncBranchPlan | undefined {
     const plan = this.#asyncBranchPlansByTriggerNodeId.get(triggerNode.id);
     if (!plan || activeOutputPortIds.size === 0) {
       return undefined;

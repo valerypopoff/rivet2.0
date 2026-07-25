@@ -509,6 +509,8 @@ Important current boundary:
 - node exclusion decisions and excluded output construction have been extracted into [`NodeExclusionPolicy.ts`](../packages/core/src/model/NodeExclusionPolicy.ts)
 - child-processor event/lifecycle wiring has been extracted into [`SubprocessorBridge.ts`](../packages/core/src/model/SubprocessorBridge.ts)
 - run/paused/abort/finish-once transitions have been extracted into [`GraphRunLifecycle.ts`](../packages/core/src/model/GraphRunLifecycle.ts); it owns no queues, graph traversal, event emitter, or node work
+- connected-Delegate branch topology has been extracted into [`ToolCallContinuationBranchPlanner.ts`](../packages/core/src/model/ToolCallContinuationBranchPlanner.ts); it is a pure snapshot planner for effective connections, ready boundaries, unsafe nodes, and async branch inclusion
+- connected-Delegate round coordination has been extracted into [`ToolCallContinuationCoordinator.ts`](../packages/core/src/model/ToolCallContinuationCoordinator.ts); it starts scalar calls concurrently, joins them in model order, and uses only a narrow processor adapter for lifecycle, branch execution, and cancellation operations
 - `GraphProcessor` still remains the public evented execution surface and the owner of execution state
 
 ## Chat Runtime Seams
@@ -585,7 +587,7 @@ intentionally split under
 
 #### Connected Delegate tool continuation
 
-`GraphProcessor` supplies an optional owning-processor `ToolCallContinuation` through the LLM Chat process context. Its `run(...)` method delegates one whole model tool-call round and its `release()` method restores ordinary downstream scheduling for unresolved raw calls. This preserves the normal node boundary: `toolContinuation.ts` asks for a round to be delegated, while the processor owns graph scheduling, node lifecycle events, cancellation, cost aggregation, and downstream branches. When there is no eligible connected Delegate, the continuation object is absent and LLM Chat keeps the existing internal delegation path. More than one eligible connected Delegate is a hard graph error.
+`GraphProcessor` supplies an optional owning-processor `ToolCallContinuation` through the LLM Chat process context. Its `run(...)` method delegates one whole model tool-call round and its `release()` method restores ordinary downstream scheduling for unresolved raw calls. This preserves the normal node boundary: `toolContinuation.ts` asks for a round to be delegated, while [`ToolCallContinuationCoordinator.ts`](../packages/core/src/model/ToolCallContinuationCoordinator.ts) coordinates scalar Delegate calls and ordered joining. `GraphProcessor` remains the adapter owner for graph scheduling, node lifecycle events, cancellation, branch child processors, cost aggregation, and committed state. [`ToolCallContinuationBranchPlanner.ts`](../packages/core/src/model/ToolCallContinuationBranchPlanner.ts) is deliberately pure: each round snapshots effective topology after pause gating, then derives the temporary branch graph and preload plan without reading mutable processor maps. When there is no eligible connected Delegate, the continuation object is absent and LLM Chat keeps the existing internal delegation path. More than one eligible connected Delegate is a hard graph error.
 
 Split-run LLM Chat nodes are intentionally excluded by `resolveToolContinuationConnection(...)`. Each split index keeps the internal continuation path and the persisted edge remains ordinary, because one connected Delegate completion cannot safely be shared across parallel indexes.
 

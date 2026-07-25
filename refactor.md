@@ -671,7 +671,27 @@ wires, and connection dragging.
 
 ---
 
-## Phase 5: Extract Tool-Call Continuation from `GraphProcessor`
+## Phase 5: Extract Tool-Call Continuation from `GraphProcessor` - DONE
+
+### Status
+
+- Added `ToolCallContinuationBranchPlanner` as a pure per-round topology
+  snapshot. It indexes effective connections and derives only continuation
+  branch nodes, safe preload boundaries, async branch inclusion, and the
+  existing unsafe cycle/race/loop rejection.
+- Added `ToolCallContinuationCoordinator` with an operation-only adapter. It
+  creates model-order scalar Delegate invocations, overlaps early Message
+  branches with handler work, cancels siblings on the first failure while
+  waiting for settlement, and returns model-ordered results plus deferred
+  branch writes.
+- Kept temporary branch processor construction, root/run state inheritance,
+  event emission, cost ownership, and parent-state commits in `GraphProcessor`.
+  The processor snapshots the planner only after pause gating, preserving the
+  original point at which a continuation round observes mutable graph state.
+- Added direct planner characterization for effective connections/preloads,
+  unsafe ready nodes, and async branch injection. The existing continuation
+  suite remains the event/order integration contract. A focused coordinator
+  test also pins the post-pause point at which the branch adapter is created.
 
 ### Problem
 
