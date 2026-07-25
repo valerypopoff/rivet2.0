@@ -66,13 +66,59 @@ void describe('fetchEventSource', () => {
   });
 
   void it('rejects a stalled event reader using the supplied timeout', async () => {
-    const response = new EventSourceResponse(new ReadableStream<Uint8Array>({ start() {} }), undefined, 5);
+    let cancelCount = 0;
+    const response = new EventSourceResponse(
+      new ReadableStream<Uint8Array>({
+        start() {},
+        cancel() {
+          cancelCount += 1;
+        },
+      }),
+      undefined,
+      5,
+    );
 
     await assert.rejects(async () => {
       for await (const _event of response.events()) {
         // The test stream deliberately never produces an event.
       }
     }, /Timeout: API response took too long\./);
+
+    assert.equal(cancelCount, 1);
+    assert.equal(response.streams?.eventStream.locked, false);
+  });
+
+  void it('retains the raw response only when the event branch produces no recognized output', async () => {
+    const fallback = new EventSourceResponse(createStream(['{"error":"provider failure"}']));
+    assert.deepEqual(await collectEvents(fallback), []);
+    assert.deepEqual(await fallback.json(), { error: 'provider failure' });
+
+    const streamed = new EventSourceResponse(createStream(['data: first\n', 'data: second\n']));
+    assert.deepEqual(await collectEvents(streamed), ['first', 'second']);
+    await assert.rejects(streamed.text(), /Body is unusable|body stream is locked|aborted/i);
+  });
+
+  void it('cancels both stream branches when a consumer stops before the provider stream ends', async () => {
+    let cancelCount = 0;
+    const encoder = new TextEncoder();
+    const response = new EventSourceResponse(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: first\n'));
+        },
+        cancel() {
+          cancelCount += 1;
+        },
+      }),
+    );
+
+    for await (const event of response.events()) {
+      assert.equal(event, 'first');
+      break;
+    }
+
+    assert.equal(cancelCount, 1);
+    assert.equal(response.streams?.eventStream.locked, false);
   });
 
   void it('preserves the legacy line-tokenizer contract across chunk and UTF-8 boundaries', async () => {

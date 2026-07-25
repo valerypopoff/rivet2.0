@@ -16,4 +16,11 @@ void describe('vendored FNV-1a compatibility', () => {
 
     assert.equal(fnv1a(value, { size: 32, utf8Buffer: new Uint8Array(4) }), fnv1a(value, { size: 32 }));
   });
+
+  void it('rejects a reusable buffer that cannot make progress on the next UTF-8 code point', () => {
+    assert.throws(
+      () => fnv1a('👋', { size: 32, utf8Buffer: new Uint8Array(3) }),
+      /too small to encode the next character/,
+    );
+  });
 });

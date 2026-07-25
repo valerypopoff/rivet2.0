@@ -9,7 +9,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { openDB, unwrap, type DBSchema, type IDBPDatabase } from 'idb';
 import { cloneDeep } from 'lodash-es';
-import { preserveIndexedDbRequestTiming } from '../utils/indexedDb.js';
+import { createRecoverableIndexedDbConnection, preserveIndexedDbRequestTiming } from '../utils/indexedDb.js';
 
 interface DatasetDatabase extends DBSchema {
   datasets: {
@@ -25,28 +25,10 @@ interface DatasetDatabase extends DBSchema {
 export class BrowserDatasetProvider implements DatasetProvider {
   currentProjectId: ProjectId | undefined;
   #currentProjectDatasets: CombinedDataset[] = [];
-  #databasePromise: Promise<IDBPDatabase<DatasetDatabase>> | undefined;
+  #getDatasetDatabase = createRecoverableIndexedDbConnection(openDatasetDatabase);
 
   async getDatasetDatabase(): Promise<IDBDatabase> {
     return unwrap(await openDatasetDatabase());
-  }
-
-  #getDatasetDatabase(): Promise<IDBPDatabase<DatasetDatabase>> {
-    if (this.#databasePromise == null) {
-      const guarded = openDatasetDatabase(() => {
-        if (this.#databasePromise === guarded) {
-          this.#databasePromise = undefined;
-        }
-      }).catch((error: unknown) => {
-        if (this.#databasePromise === guarded) {
-          this.#databasePromise = undefined;
-        }
-        throw error;
-      });
-      this.#databasePromise = guarded;
-    }
-
-    return this.#databasePromise;
   }
 
   async loadDatasets(projectId: ProjectId): Promise<void> {

@@ -1513,7 +1513,9 @@ references). The 32-bit FNV-1a output is part of serialized recording version
 licensed implementation vendored in core instead of externalizing the ESM-only
 upstream package into the published CommonJS build. ASCII, Unicode,
 lone-surrogate, byte-array, reusable-buffer, and serialized-recording golden
-tests protect this persisted hash contract.
+tests protect this persisted hash contract. The optional reusable UTF-8 buffer
+must be able to encode the next code point; the vendored helper detects
+zero-progress `encodeInto(...)` calls and throws rather than looping forever.
 
 ### Replay (`replayExecutionRecording`)
 

@@ -1,7 +1,6 @@
 import { type DataId } from '@valerypopoff/rivet2-core';
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import { useEffect, useRef } from 'react';
-import { preserveIndexedDbRequestTiming } from '../utils/indexedDb.js';
+import { createRecoverableIndexedDbConnection, preserveIndexedDbRequestTiming } from '../utils/indexedDb.js';
 
 interface StaticDataDatabase extends DBSchema {
   data: {
@@ -13,55 +12,54 @@ interface StaticDataDatabase extends DBSchema {
   };
 }
 
-export function openStaticDataDatabase(): Promise<IDBPDatabase<StaticDataDatabase>> {
+export function openStaticDataDatabase(onUnavailable?: () => void): Promise<IDBPDatabase<StaticDataDatabase>> {
+  let database: IDBPDatabase<StaticDataDatabase> | undefined;
+
   return openDB<StaticDataDatabase>('rivet_static_data', 2, {
     upgrade(db) {
       if (!db.objectStoreNames.contains('data')) {
         db.createObjectStore('data');
       }
     },
+    blocking() {
+      database?.close();
+      onUnavailable?.();
+    },
+    terminated() {
+      onUnavailable?.();
+    },
+  }).then((openedDatabase) => {
+    database = openedDatabase;
+    return openedDatabase;
   });
 }
 
+const getStaticDataDatabase = createRecoverableIndexedDbConnection(openStaticDataDatabase);
+
 export function useStaticDataDatabase() {
-  const database = useRef<IDBPDatabase<StaticDataDatabase>>();
-  const databaseLoadedPromise = useRef<Promise<void>>();
-
-  useEffect(() => {
-    databaseLoadedPromise.current = openStaticDataDatabase().then((db) => {
-      database.current = db;
-    });
-  }, []);
-
   const insert = async (id: DataId, data: unknown) => {
-    await databaseLoadedPromise.current;
-    const transaction = preserveIndexedDbRequestTiming(database.current!.transaction('data', 'readwrite'));
+    const database = await getStaticDataDatabase();
+    const transaction = preserveIndexedDbRequestTiming(database.transaction('data', 'readwrite'));
     await transaction.store.add({ id, data }, id);
   };
 
   const get = async (id: DataId) => {
-    await databaseLoadedPromise.current;
-    const transaction = preserveIndexedDbRequestTiming(database.current!.transaction('data', 'readonly'));
+    const database = await getStaticDataDatabase();
+    const transaction = preserveIndexedDbRequestTiming(database.transaction('data', 'readonly'));
     return transaction.store.get(id);
   };
 
   const getAll = async () => {
-    await databaseLoadedPromise.current;
-    const transaction = preserveIndexedDbRequestTiming(database.current!.transaction('data', 'readonly'));
+    const database = await getStaticDataDatabase();
+    const transaction = preserveIndexedDbRequestTiming(database.transaction('data', 'readonly'));
     return transaction.store.getAll() as Promise<{ id: DataId; data: string }[]>;
   };
 
   const clear = async () => {
-    await databaseLoadedPromise.current;
-    const transaction = preserveIndexedDbRequestTiming(database.current!.transaction('data', 'readwrite'));
+    const database = await getStaticDataDatabase();
+    const transaction = preserveIndexedDbRequestTiming(database.transaction('data', 'readwrite'));
     await transaction.store.clear();
   };
 
-  return {
-    insert,
-    get,
-    getAll,
-    clear,
-    loaded: !!database.current,
-  };
+  return { insert, get, getAll, clear };
 }

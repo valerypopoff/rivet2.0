@@ -4,6 +4,7 @@ import { beforeEach, describe, it } from 'node:test';
 import { type DataId } from '@valerypopoff/rivet2-core';
 import { IDBFactory } from 'fake-indexeddb';
 import { openStaticDataDatabase } from '../../hooks/useStaticDataDatabase.js';
+import { createRecoverableIndexedDbConnection } from '../../utils/indexedDb.js';
 import { IndexedDBStorage, MemoryAsyncStorage, createDefaultAsyncStorage } from './indexedDB.js';
 
 beforeEach(() => {
@@ -30,6 +31,15 @@ void describe('browser IndexedDB storage', () => {
     assert.equal(await storage.getItem('key'), 'after');
     await storage.removeItem('key');
     assert.equal(await storage.getItem('key'), null);
+  });
+
+  void it('closes Jotai storage connections that block a future schema upgrade', async () => {
+    const storage = new IndexedDBStorage();
+    await storage.setItem('key', 'value');
+
+    const upgradedDatabase = await openNativeDatabase('jotai-store', 2, () => undefined);
+    assert.equal(upgradedDatabase.version, 2);
+    upgradedDatabase.close();
   });
 
   void it('keeps the in-memory fallback contract when IndexedDB is unavailable', async () => {
@@ -79,6 +89,41 @@ void describe('browser IndexedDB storage', () => {
     await database.transaction('data', 'readwrite').store.clear();
     assert.deepEqual(await database.transaction('data', 'readonly').store.getAll(), []);
     database.close();
+  });
+
+  void it('closes static-data connections that block a future schema upgrade', async () => {
+    await openStaticDataDatabase();
+
+    const upgradedDatabase = await openNativeDatabase('rivet_static_data', 3, () => undefined);
+    assert.equal(upgradedDatabase.version, 3);
+    upgradedDatabase.close();
+  });
+
+  void it('retries failed and browser-invalidated cached database opens', async () => {
+    let attempt = 0;
+    let invalidate: (() => void) | undefined;
+    const getDatabase = createRecoverableIndexedDbConnection(async (onUnavailable) => {
+      attempt += 1;
+      invalidate = onUnavailable;
+      if (attempt === 1) {
+        throw new Error('open failed');
+      }
+      return { attempt };
+    });
+
+    await assert.rejects(getDatabase(), /open failed/);
+    assert.deepEqual(await getDatabase(), { attempt: 2 });
+    assert.deepEqual(await getDatabase(), { attempt: 2 });
+
+    invalidate?.();
+    assert.deepEqual(await getDatabase(), { attempt: 3 });
+
+    const getImmediatelyInvalidatedDatabase = createRecoverableIndexedDbConnection(async (onUnavailable) => {
+      onUnavailable();
+      return { attempt: ++attempt };
+    });
+    assert.deepEqual(await getImmediatelyInvalidatedDatabase(), { attempt: 4 });
+    assert.deepEqual(await getImmediatelyInvalidatedDatabase(), { attempt: 5 });
   });
 });
 

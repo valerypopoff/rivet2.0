@@ -945,11 +945,12 @@ IndexedDB owners. Their persisted identities are compatibility contracts:
 - [`state/storage/indexedDB.ts`](../packages/app/src/state/storage/indexedDB.ts)
   owns `jotai-store` version 1 and its `state` object store. Missing values
   remain `null`, and the memory fallback remains active when IndexedDB is not
-  available.
+  available. Each storage backend caches one recoverable connection.
 - [`hooks/useStaticDataDatabase.ts`](../packages/app/src/hooks/useStaticDataDatabase.ts)
   owns `rivet_static_data` version 2 and its `data` object store. Inserts use
   `add`, not `put`, so duplicate static-data IDs continue to fail instead of
-  overwriting.
+  overwriting. All hook consumers share one lazy recoverable connection rather
+  than opening one connection per mounted hook.
 - [`io/BrowserDatasetProvider.ts`](../packages/app/src/io/BrowserDatasetProvider.ts)
   owns `datasets` version 2 and its `datasets` and `data` object stores. The
   provider caches one internal connection, resets it after blocking or
@@ -966,9 +967,13 @@ These owners resolve their public methods when the individual IndexedDB request
 settles rather than awaiting transaction completion.
 [`utils/indexedDb.ts`](../packages/app/src/utils/indexedDb.ts) observes `idb`'s
 additional transaction promise to prevent a request failure from also becoming
-an unhandled rejection; it must not be replaced with `await tx.done` as an
-incidental cleanup. `fake-indexeddb` migration tests open the exact legacy
-schemas before exercising the current owners.
+an unhandled rejection. The same utility owns their cached-connection recovery
+policy: open failures, browser termination, and blocking version changes clear
+the cached promise so a later operation can retry; blocking callbacks close the
+old handle first. It must not be replaced with `await tx.done` as an incidental
+cleanup. `fake-indexeddb` migration tests open the exact legacy schemas before
+exercising the current owners and verify that cached handles do not block future
+schema upgrades.
 
 Per-project editor-view persistence now lives in [`packages/app/src/state/projectEditor.ts`](../packages/app/src/state/projectEditor.ts).
 

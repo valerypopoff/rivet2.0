@@ -34,16 +34,38 @@ export class EventSourceResponse extends Response {
       return;
     }
     const reader = this.streams.eventStream.getReader();
+    let reachedEnd = false;
+    let emittedEvent = false;
+    let rawBranchCancellation: Promise<void> | undefined;
+
+    const cancelRawBranch = () => {
+      rawBranchCancellation ??= this.body?.cancel();
+      return rawBranchCancellation;
+    };
 
     try {
       while (true) {
         const { done, value } = await this.raceWithTimeout(reader.read(), this.timeout);
         if (done) {
+          reachedEnd = true;
           break;
         }
+
+        if (!emittedEvent) {
+          emittedEvent = true;
+          // The raw branch only exists for non-SSE provider errors. Once the
+          // event branch produces output, retaining it would buffer the entire
+          // provider stream for a fallback that cannot be used.
+          void cancelRawBranch()?.catch(() => undefined);
+        }
+
         yield value;
       }
     } finally {
+      if (!reachedEnd) {
+        await Promise.allSettled([reader.cancel(), cancelRawBranch()]);
+      }
+
       try {
         reader.releaseLock();
       } catch (err) {

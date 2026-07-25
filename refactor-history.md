@@ -811,25 +811,21 @@ not preserve a complete file list.
 ## Residual Watchlist For Future Refactors
 
 1. **GraphProcessor size and responsibility concentration**
-   - Current state: Several targeted extractions landed, Phase 8 added a characterization suite, node-exclusion decisions now live in `NodeExclusionPolicy.ts`, graph-boundary effects now live in `GraphBoundaryEffects.ts`, and the runtime-speed recovery removed one redundant hot-path scan while adding errored-input downstream characterization. `GraphProcessor.ts` still owns many execution policies.
+   - Current state: Several targeted extractions landed: node-exclusion decisions live in `NodeExclusionPolicy.ts`, graph-boundary effects live in `GraphBoundaryEffects.ts`, and connected tool-call continuation now has dedicated planner/coordinator owners. `GraphProcessor.ts` is still a 3,079-line orchestration boundary with many execution policies.
    - Next refactor should extract one policy at a time and extend the characterization suite before touching event order, aborts, subgraphs, loops, or races.
 
-2. **MCP stdio config logging and env handling**
-   - Current state: Deferred intentionally.
-   - Candidate target: `packages/node/src/native/NodeMCPProvider.ts`; avoid logging env secrets and pass configured env correctly to stdio transports.
-
-3. **Global app error logging policy**
+2. **Global app error logging policy**
    - Current state: Runtime/provider logging was redacted, but generic app `handleError(...)` can still log normalized error objects.
    - Next refactor should decide whether desktop diagnostics or stricter privacy is the desired global policy.
 
-4. **Tracked sidecar clone size**
-   - Current state: Sidecar binaries are documented and checksummed, but still increase clone size.
+3. **Tracked sidecar clone size**
+   - Current state: Six platform pnpm sidecar binaries, documentation, and checksums are tracked and total about 346 MB, so they still materially increase clone size.
    - Future work would be release-engineering heavy: Git LFS or checksum-verified downloads plus release packaging validation on every supported platform.
 
-5. **Provider implementation size**
-   - Current state: OpenAI/Anthropic unsafe parse diagnostics were centralized, provider files remain large, and `developer-docs/LLM-CHAT-V2-CONTRACT.md` now documents the Vercel SDK-powered `LLM Chat` ownership and test matrix. Legacy Chat remains compatibility-only.
+4. **Provider implementation size**
+   - Current state: OpenAI/Anthropic unsafe parse diagnostics are centralized, but the shared OpenAI and Anthropic provider utilities remain 892 and 450 lines respectively. `developer-docs/LLM-CHAT-V2-CONTRACT.md` documents the Vercel SDK-powered `LLM Chat` ownership and test matrix; Legacy Chat remains compatibility-only.
    - Future extraction should only target proven shared seams in the LLM Chat V2 path, such as provider-option assembly, structured-output normalization, or tool-call accumulation, after focused tests exist.
 
-6. **Deletion targets versus helper boundaries**
-   - Current state: The second refactor met its deletion target; the third did not, because two Chat v2 helper modules made high-risk policy easier to audit.
-   - Future plans should measure line deltas but prefer fewer concepts and safer ownership over raw deletion.
+5. **Line-count targets versus helper boundaries**
+   - Current state: The tool-call continuation extraction reduced `GraphProcessor.ts` by 354 lines while the three explicit planner/coordinator/type owners added 593 lines, for a justified net `+239` across that boundary.
+   - Future plans should report physical line movement honestly, but choose boundaries for fewer implicit concepts and safer ownership rather than a raw deletion target.

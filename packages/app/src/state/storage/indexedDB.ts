@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import { preserveIndexedDbRequestTiming } from '../../utils/indexedDb.js';
+import { createRecoverableIndexedDbConnection, preserveIndexedDbRequestTiming } from '../../utils/indexedDb.js';
 
 export interface AsyncStorageBackend {
   getItem: (key: string) => Promise<string | null>;
@@ -31,30 +31,22 @@ interface JotaiStorageDatabase extends DBSchema {
 }
 
 export class IndexedDBStorage implements AsyncStorageBackend {
-  private dbPromise: Promise<IDBPDatabase<JotaiStorageDatabase>>;
-
-  constructor() {
-    this.dbPromise = openDB<JotaiStorageDatabase>('jotai-store', 1, {
-      upgrade(database) {
-        database.createObjectStore('state');
-      },
-    });
-  }
+  private getDatabase = createRecoverableIndexedDbConnection(openJotaiStorageDatabase);
 
   async getItem(key: string): Promise<string | null> {
-    const db = await this.dbPromise;
+    const db = await this.getDatabase();
     const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readonly'));
     return (await transaction.store.get(key)) ?? null;
   }
 
   async setItem(key: string, value: string): Promise<void> {
-    const db = await this.dbPromise;
+    const db = await this.getDatabase();
     const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readwrite'));
     await transaction.store.put(value, key);
   }
 
   async removeItem(key: string): Promise<void> {
-    const db = await this.dbPromise;
+    const db = await this.getDatabase();
     const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readwrite'));
     await transaction.store.delete(key);
   }
@@ -62,4 +54,24 @@ export class IndexedDBStorage implements AsyncStorageBackend {
 
 export function createDefaultAsyncStorage(): AsyncStorageBackend {
   return typeof indexedDB === 'undefined' ? new MemoryAsyncStorage() : new IndexedDBStorage();
+}
+
+function openJotaiStorageDatabase(onUnavailable: () => void): Promise<IDBPDatabase<JotaiStorageDatabase>> {
+  let database: IDBPDatabase<JotaiStorageDatabase> | undefined;
+
+  return openDB<JotaiStorageDatabase>('jotai-store', 1, {
+    upgrade(upgradeDatabase) {
+      upgradeDatabase.createObjectStore('state');
+    },
+    blocking() {
+      database?.close();
+      onUnavailable();
+    },
+    terminated() {
+      onUnavailable();
+    },
+  }).then((openedDatabase) => {
+    database = openedDatabase;
+    return openedDatabase;
+  });
 }

@@ -105,9 +105,13 @@ standards-level SSE record parser. Its compatibility contract recognizes only
 `event: ` and `data: ` with a literal space, emits named-event markers and each
 data line independently, splits on LF (with CRLF handled by trimming), emits a
 recognized unterminated final line, and retains the raw `Response` branch for
-provider JSON errors. The focused characterization tests pin chunk and UTF-8
-boundaries, strict prefixes, comments/unknown fields, event-only records,
-`[DONE]`, response metadata, fallback JSON, and per-read timeout behavior.
+provider JSON errors when the event branch produces no recognized output. Once
+an event is emitted, the unused raw branch is cancelled instead of buffering
+the complete provider stream. Timeout, consumer-return, and parse-failure
+cleanup cancel the remaining stream branches before releasing the reader lock.
+The focused characterization tests pin chunk and UTF-8 boundaries, strict
+prefixes, comments/unknown fields, event-only records, `[DONE]`, response
+metadata, fallback JSON, per-read timeout behavior, and cancellation cleanup.
 Replacing this tokenizer with `eventsource-parser` would deliberately change
 multiline, no-space, bare-CR, record-boundary, and timeout semantics; treat that
 as a protocol-hardening change, not a behavior-neutral LOC refactor.
