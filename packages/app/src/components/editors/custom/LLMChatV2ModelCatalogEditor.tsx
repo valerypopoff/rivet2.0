@@ -26,17 +26,14 @@ import { useDependsOnPlugins } from '../../../hooks/useDependsOnPlugins.js';
 import { fillMissingSettingsFromEnvironmentVariables } from '../../../utils/tauri.js';
 import { tryRestoreStoredDataValue } from '../../../utils/executionDataStorage.js';
 import { getStaticInputApiKey } from '../../../utils/chatV2ModelCatalogInputKey.js';
-import {
-  getModelOptions,
-  includeCurrentModelOption,
-} from './llmChatV2ModelCatalogOptions.js';
+import { getModelOptions, includeCurrentModelOption } from './llmChatV2ModelCatalogOptions.js';
 import { chatV2ModelCatalogService } from '../../../utils/chatV2ModelCatalogService.js';
 import { type SharedEditorProps } from '../SharedEditorProps';
 import PlugIcon from '../../../assets/icons/plug-icon.svg?react';
 import { Tooltip } from '../../Tooltip';
 import { useDataRefs, useEnvironmentProvider, type DataRefReader } from '../../../providers/ProvidersContext.js';
 import { getSelectedProcessData } from '../../../state/selectors/executionSelectors.js';
-import { graphState } from '../../../state/graph.js';
+import { graphState } from '../editorWorkflowState.js';
 
 const styles = css`
   display: flex;
@@ -202,10 +199,7 @@ export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
     (listener: () => void) => chatV2ModelCatalogService.subscribe(statusKey, listener),
     [statusKey],
   );
-  const getModelCatalogSnapshot = useCallback(
-    () => chatV2ModelCatalogService.getSnapshot(statusKey),
-    [statusKey],
-  );
+  const getModelCatalogSnapshot = useCallback(() => chatV2ModelCatalogService.getSnapshot(statusKey), [statusKey]);
   const modelCatalogSession = useSyncExternalStore(
     subscribeToModelCatalog,
     getModelCatalogSnapshot,

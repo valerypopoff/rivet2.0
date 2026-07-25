@@ -2,11 +2,12 @@
 
 ## Status
 
-**Phases 1-2 completed and verified by 2026-07-25. Phases 3-5 remain planned
-and are not yet implemented.**
+**All five phases and their final repository-wide verification were completed
+by 2026-07-25.**
 
-This plan was prepared after reassessing the current repository and the 134
-completed refactors recorded in `refactor-history.md`.
+This plan was prepared after reassessing the repository and the 134 completed
+refactors recorded in `refactor-history.md`. Its five completed phases are now
+recorded as entries 135-139.
 
 The plan received a second live-code audit after its initial draft. That audit
 checked the current callers, package boundaries, test coverage, mutation and
@@ -850,22 +851,39 @@ in the general graph scheduler.
 
 ## Final Repository Verification
 
-After all five phases:
+### Completed 2026-07-25
 
-- Run focused suites after each commit.
-- Run the aggregate repository test command.
-- Run all affected workspace typechecks.
-- Run lint and formatting checks.
-- Run developer-document validation and link checks.
-- Run file-tree and architecture-boundary checks.
-- Run generated hosted-client and graph-creator freshness checks.
-- Run the production build.
-- Run the runtime equivalence and benchmark matrix.
-- Run dependency security checks.
-- Run `git diff --check`.
+- The aggregate `yarn test` suite passed across core, Node, app, app-executor,
+  and CLI.
+- The full production `yarn build`, workspace `yarn lint`, docs typecheck, and
+  style/freshness/architecture checks passed.
+- The file-tree guard passed with 152 reviewed long relative imports, below its
+  154-entry baseline. A small `editorWorkflowState` seam prevents custom
+  editors from reintroducing the graph/project-state import pattern.
+- Both `yarn bench:runtime-attribution` and `yarn bench:runtime-speed` passed;
+  the latter retained the expected fast-acyclic wide-fan-in advantage.
+- The dependency audit was re-run after the final check exposed new advisories:
+  the direct 5.x `brace-expansion` path is pinned to fixed 5.0.8, PostCSS is
+  resolved to fixed 8.5.22, and the remaining 1.x/2.x developer-tool paths are
+  documented as an expiring no-fix exception. `yarn security:audit` passes.
+- Formatting and `git diff --check` passed.
 
-The final review must compare behavior and ownership against this plan, then
-record the actual line movement and verification evidence in
+The final verification matrix required:
+
+- focused suites after each phase;
+- the aggregate repository test command;
+- all affected workspace typechecks;
+- lint and formatting checks;
+- developer-document validation and link checks;
+- file-tree and architecture-boundary checks;
+- generated hosted-client and graph-creator freshness checks;
+- the production build;
+- the runtime equivalence and benchmark matrix;
+- dependency security checks; and
+- `git diff --check`.
+
+The final review compared behavior and ownership against this plan, and the
+actual line movement and verification evidence are recorded in
 `refactor-history.md`.
 
 ## Success Criteria

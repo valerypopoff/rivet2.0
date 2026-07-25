@@ -2,8 +2,7 @@ import Select from '@atlaskit/select';
 import type { ChartNode, CustomEditorDefinition } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import { type FC, useMemo, useState } from 'react';
-import { graphState } from '../../../state/graph.js';
-import { projectState } from '../../../state/savedGraphs.js';
+import { graphState, projectState } from '../editorWorkflowState.js';
 import type { SharedEditorProps } from '../SharedEditorProps';
 import { getGlobalVariableOptions } from './globalVariableOptions.js';
 

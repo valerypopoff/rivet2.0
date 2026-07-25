@@ -47,6 +47,15 @@
       "expires": "2026-10-20"
     },
     {
+      "advisoryIds": [1124334],
+      "packages": ["brace-expansion"],
+      "dependents": ["minimatch@npm:3.1.5", "minimatch@npm:9.0.9"],
+      "scope": "Lint, build-time glob matching, and TypeScript analysis only; no Rivet runtime bundle accepts untrusted brace patterns through these dependencies.",
+      "reason": "brace-expansion 1.x and 2.x have no fixed compatible release. The 5.x consumer is pinned to fixed 5.0.8; remove this exception when the remaining minimatch 3 and 9 toolchain consumers adopt a fixed major line.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-20"
+    },
+    {
       "advisoryIds": [1123911],
       "packages": ["js-yaml"],
       "dependents": ["@eslint/eslintrc@npm:3.2.0"],
