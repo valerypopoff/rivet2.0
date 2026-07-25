@@ -33,7 +33,17 @@ back into the trigger, or an input from outside the subtree. It shows the
 matching runtime-style warning instead of saving the wire. The pure traversal
 lives in `domain/graphEditing/connectionValidation.ts`. Disconnect the invalid
 wire first when repairing a malformed graph. Runtime validation remains the
-defense in depth for serialized graphs and non-editor callers.
+defense in depth for serialized graphs and non-editor callers. When a persisted
+graph, stale frozen output, or preload state reaches one of those runtime
+checks, the root execution error is shown as a deduplicated editor toast as
+well as in the failed run. This is deliberately limited to `Start Async
+Branch` safety messages: ordinary node failures remain node-local so an editor
+run does not produce a global toast for every failed node. Browser execution
+and Node/remote executor transports use the same classification even though
+the latter serializes errors with one or more `Error:` prefixes. The same
+targeted toast is also emitted from a node error when the unsafe state is only
+known during execution, such as a frozen async trigger. Its later wrapped root
+error is not toasted a second time.
 
 ## Tool Continuation Connections
 

@@ -1176,7 +1176,19 @@ export class GraphProcessor {
         if (!shouldUseSeededExecutionPlan) {
           this.#preprocessGraph();
         }
-        this.#prepareAsyncBranchTopology();
+        try {
+          this.#prepareAsyncBranchTopology();
+        } catch (error) {
+          const normalizedError = getError(error);
+          // Topology validation happens before graphStart/nodeStart. Emit the
+          // ordinary root error event so every executor can present the
+          // actionable configuration failure instead of only rejecting the
+          // processGraph promise.
+          if (!this.#isSubProcessor && !this.#suppressGraphLifecycleEvents) {
+            await this.#emitter.emit('error', { error: normalizedError });
+          }
+          throw normalizedError;
+        }
 
         await this.#profileRuntimeAsync('emitGraphStart', () => this.#emitGraphStart());
         await this.#profileRuntimeAsync('emitPreloadedNodeResults', () => this.#emitPreloadedNodeResults());

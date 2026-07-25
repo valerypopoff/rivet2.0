@@ -25,6 +25,7 @@ import {
 import { userInputModalQuestionsState } from '../state/userInput';
 import { keys } from '../utils/typeSafety';
 import { handleError } from '../utils/errorHandling.js';
+import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation.js';
 import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity';
 import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
 import type { ExecutionDataFlowApi } from './useExecutionDataFlow';
@@ -174,7 +175,10 @@ export function useGraphExecutionEvents(
     clearNodeRunDataPreservationForNextStart();
     stopAll();
     handleError(data.error, 'Graph execution error', {
-      toastError: false,
+      // Ordinary node failures already have node-local status. Async branch
+      // safety violations can reject a malformed persisted graph before a
+      // useful node error is visible, so surface those actionable messages.
+      toastError: shouldToastAsyncBranchSafetyError(data.error),
     });
   };
 
@@ -266,10 +270,7 @@ export function useGraphExecutionEvents(
       return;
     }
 
-    const { preservedRunData, removedRunData } = splitRunDataByPreservedNodes(
-      currentLastRunData,
-      nodeIdsToPreserve,
-    );
+    const { preservedRunData, removedRunData } = splitRunDataByPreservedNodes(currentLastRunData, nodeIdsToPreserve);
 
     setLastRunData(preservedRunData);
     clearRemovedExecutionDataRefs(dataRefs, removedRunData, preservedRunData);
