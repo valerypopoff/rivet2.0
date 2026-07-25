@@ -91,6 +91,7 @@ Root Markdown is reserved for:
 - approved working docs, currently:
   - `backlog.md`
   - `image-build-optimization-plan.md`
+  - `loc_reduce_with_libs.md`
 
 Reference docs, architecture docs, operator docs, and contributor docs belong under `docs/`.
 The repo-structure verifier requires `README.md` and `AGENTS.md`, and checks both tracked and untracked root Markdown files so new working docs fail early unless they are added to the approved optional working-doc set. Working docs are allowed to disappear after their cleanup project is complete.

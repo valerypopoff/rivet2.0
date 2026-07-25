@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { z } from 'zod';
 
 import type {
   AppSettingsSource,
@@ -8,6 +9,15 @@ import type {
   WebAppOAuthClientAuthMethod,
   WebAppOAuthProvider,
 } from '../../shared/app-settings-types.js';
+import {
+  hasSetting,
+  normalizeBooleanSetting,
+  normalizeBoundedSingleLineString,
+  normalizeEnumSetting,
+  normalizeTrimmedString,
+  parseIntegerSetting,
+  toSettingsRecord,
+} from './app-settings/schema.js';
 import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { getAppDataRoot } from './security.js';
 import { badRequest, createHttpError } from './utils/httpError.js';
@@ -21,6 +31,7 @@ const MAX_EMAIL_LIST_ITEMS = 500;
 const DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60;
 const MIN_SESSION_TTL_SECONDS = 60;
 const MAX_SESSION_TTL_SECONDS = 366 * 24 * 60 * 60;
+const emailSchema = z.string().regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
 
 export type WebAppAuthRuntimeSettings = {
   mode: WebAppAuthMode;
@@ -71,32 +82,8 @@ const FAIL_CLOSED_WEB_APP_AUTH_SETTINGS: WebAppAuthRuntimeSettings = {
   mode: 'oauth',
 };
 
-function normalizeString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function isPresent(value: object, key: PropertyKey): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function rejectControlCharacters(value: string, fieldLabel: string): void {
-  if (/[\r\n\0]/.test(value)) {
-    throw badRequest(`${fieldLabel} must be a single-line value`);
-  }
-}
-
 function normalizeLimitedString(value: unknown, fieldLabel: string, maxLength = MAX_SHORT_TEXT_LENGTH): string {
-  const normalized = normalizeString(value);
-  if (!normalized) {
-    return '';
-  }
-
-  if (normalized.length > maxLength) {
-    throw badRequest(`${fieldLabel} is too long`);
-  }
-
-  rejectControlCharacters(normalized, fieldLabel);
-  return normalized;
+  return normalizeBoundedSingleLineString(value, fieldLabel, maxLength);
 }
 
 function normalizeEmailList(value: unknown, fieldLabel: string): string[] {
@@ -113,7 +100,7 @@ function normalizeEmailList(value: unknown, fieldLabel: string): string[] {
       continue;
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    if (!emailSchema.safeParse(normalized).success) {
       throw badRequest(`${fieldLabel} must contain valid email addresses`);
     }
 
@@ -127,7 +114,7 @@ function normalizeEmailList(value: unknown, fieldLabel: string): string[] {
 }
 
 function normalizeSecret(value: unknown, fallback: string): string {
-  const normalized = normalizeString(value);
+  const normalized = normalizeTrimmedString(value);
   if (!normalized) {
     return fallback;
   }
@@ -136,53 +123,28 @@ function normalizeSecret(value: unknown, fallback: string): string {
     throw badRequest('OAuth secret is too long');
   }
 
-  rejectControlCharacters(normalized, 'OAuth secret');
-  return normalized;
+  return normalizeBoundedSingleLineString(normalized, 'OAuth secret', MAX_SECRET_LENGTH);
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
-      return true;
-    }
-    if (['0', 'false', 'no', 'off'].includes(normalized)) {
-      return false;
-    }
-  }
-
-  return fallback;
+  return normalizeBooleanSetting(value, fallback);
 }
 
 function normalizeWebAppAuthMode(value: unknown, fallback: WebAppAuthMode): WebAppAuthMode {
-  const normalized = normalizeString(value).toLowerCase();
-  return normalized === 'oauth' || normalized === 'none' || normalized === 'ui-gate'
-    ? normalized
-    : fallback;
+  return normalizeEnumSetting(value, ['oauth', 'none', 'ui-gate'] as const, fallback);
 }
 
 function normalizeOAuthProvider(value: unknown, fallback: WebAppOAuthProvider): WebAppOAuthProvider {
-  const normalized = normalizeString(value).toLowerCase();
-  return normalized === 'dummy' || normalized === 'external' ? normalized : fallback;
+  return normalizeEnumSetting(value, ['dummy', 'external'] as const, fallback);
 }
 
 function normalizeClientAuthMethod(value: unknown, fallback: WebAppOAuthClientAuthMethod): WebAppOAuthClientAuthMethod {
-  const normalized = normalizeString(value).toLowerCase();
-  return normalized === 'basic' || normalized === 'body' ? normalized : fallback;
+  return normalizeEnumSetting(value, ['basic', 'body'] as const, fallback);
 }
 
 function normalizeSessionTtlSeconds(value: unknown, fallback: number): number {
-  const parsed = typeof value === 'number'
-    ? value
-    : typeof value === 'string'
-      ? Number(value.trim())
-      : Number.NaN;
-
-  if (!Number.isInteger(parsed)) {
+  const parsed = parseIntegerSetting(value);
+  if (parsed == null) {
     return fallback;
   }
 
@@ -254,9 +216,7 @@ function validateActiveOAuthSettings(settings: WebAppAuthRuntimeSettings): void 
 }
 
 function normalizeStoredSettings(value: unknown, source: AppSettingsSource): WebAppAuthRuntimeSettings {
-  const raw = value && typeof value === 'object'
-    ? value as WebAppAuthSettingsDraft & { updatedAt?: unknown }
-    : {};
+  const raw = toSettingsRecord(value) as WebAppAuthSettingsDraft & { updatedAt?: unknown };
   const modeFallback = source === 'app-settings'
     ? FAIL_CLOSED_WEB_APP_AUTH_SETTINGS.mode
     : DEFAULT_WEB_APP_AUTH_SETTINGS.mode;
@@ -285,42 +245,40 @@ function normalizeStoredSettings(value: unknown, source: AppSettingsSource): Web
 }
 
 function normalizeDraftSettings(value: unknown, previous: WebAppAuthRuntimeSettings): WebAppAuthRuntimeSettings {
-  const raw = value && typeof value === 'object'
-    ? value as WebAppAuthSettingsDraft
-    : {};
+  const raw = toSettingsRecord(value) as WebAppAuthSettingsDraft;
 
   const next: WebAppAuthRuntimeSettings = {
     mode: normalizeWebAppAuthMode(raw.mode, previous.mode),
     provider: normalizeOAuthProvider(raw.provider, previous.provider),
     dummyEmail: normalizeLimitedString(raw.dummyEmail, 'Dummy OAuth email') || previous.dummyEmail || DEFAULT_WEB_APP_AUTH_SETTINGS.dummyEmail,
     dummyAllowNonLocalhost: normalizeBoolean(raw.dummyAllowNonLocalhost, previous.dummyAllowNonLocalhost),
-    authorizeUrl: isPresent(raw, 'authorizeUrl')
+    authorizeUrl: hasSetting(raw, 'authorizeUrl')
       ? normalizeLimitedString(raw.authorizeUrl, 'Authorization URL', MAX_URL_LENGTH)
       : previous.authorizeUrl,
-    tokenUrl: isPresent(raw, 'tokenUrl')
+    tokenUrl: hasSetting(raw, 'tokenUrl')
       ? normalizeLimitedString(raw.tokenUrl, 'Token URL', MAX_URL_LENGTH)
       : previous.tokenUrl,
-    userUrl: isPresent(raw, 'userUrl')
+    userUrl: hasSetting(raw, 'userUrl')
       ? normalizeLimitedString(raw.userUrl, 'Profile URL', MAX_URL_LENGTH)
       : previous.userUrl,
-    clientId: isPresent(raw, 'clientId') ? normalizeLimitedString(raw.clientId, 'Client ID') : previous.clientId,
+    clientId: hasSetting(raw, 'clientId') ? normalizeLimitedString(raw.clientId, 'Client ID') : previous.clientId,
     clientSecret: normalizeSecret(raw.clientSecret, previous.clientSecret),
-    callbackUrl: isPresent(raw, 'callbackUrl')
+    callbackUrl: hasSetting(raw, 'callbackUrl')
       ? normalizeLimitedString(raw.callbackUrl, 'Callback URL', MAX_URL_LENGTH)
       : previous.callbackUrl,
-    scopes: isPresent(raw, 'scopes')
+    scopes: hasSetting(raw, 'scopes')
       ? normalizeLimitedString(raw.scopes, 'OAuth scopes') || DEFAULT_WEB_APP_AUTH_SETTINGS.scopes
       : previous.scopes,
-    emailClaim: isPresent(raw, 'emailClaim')
+    emailClaim: hasSetting(raw, 'emailClaim')
       ? normalizeLimitedString(raw.emailClaim, 'Email claim path') || DEFAULT_WEB_APP_AUTH_SETTINGS.emailClaim
       : previous.emailClaim,
     sessionSecret: normalizeSecret(raw.sessionSecret, previous.sessionSecret),
-    sessionTtlSeconds: isPresent(raw, 'sessionTtlSeconds')
+    sessionTtlSeconds: hasSetting(raw, 'sessionTtlSeconds')
       ? normalizeSessionTtlSeconds(raw.sessionTtlSeconds, DEFAULT_WEB_APP_AUTH_SETTINGS.sessionTtlSeconds)
       : previous.sessionTtlSeconds,
     clientAuthMethod: normalizeClientAuthMethod(raw.clientAuthMethod, previous.clientAuthMethod),
     debugLogProfile: normalizeBoolean(raw.debugLogProfile, previous.debugLogProfile),
-    serverUiAdminEmails: isPresent(raw, 'serverUiAdminEmails')
+    serverUiAdminEmails: hasSetting(raw, 'serverUiAdminEmails')
       ? normalizeEmailList(raw.serverUiAdminEmails, 'Server UI admin emails')
       : previous.serverUiAdminEmails,
     updatedAt: new Date().toISOString(),

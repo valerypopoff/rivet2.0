@@ -8,10 +8,14 @@ import type {
   DeploymentStorageSettings,
   DeploymentStorageSettingsDraft,
 } from '../../shared/app-settings-types.js';
+import {
+  normalizeBoundedText,
+  normalizeStrictEnumSetting,
+  toSettingsRecord,
+} from './app-settings/schema.js';
 import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { getAppDataRoot } from './security.js';
 import { badRequest } from './utils/httpError.js';
-import { parseEnum } from './utils/env-parsing.js';
 
 export const DEPLOYMENT_STORAGE_SETTINGS_RELATIVE_PATH = path.join('settings', 'deployment-storage.json');
 
@@ -28,30 +32,8 @@ const MAX_URL_LENGTH = 2048;
 const MAX_SECRET_LENGTH = 8192;
 const LOCAL_DOCKER_DATABASE_CONNECTION_STRING = 'postgres://rivet:rivet@workflow-postgres:5432/rivet';
 
-function normalizeString(value: unknown, fieldLabel: string, maxLength = MAX_SECRET_LENGTH): string {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  if (!normalized) {
-    return '';
-  }
-
-  if (normalized.length > maxLength) {
-    throw badRequest(`${fieldLabel} is too long`);
-  }
-
-  if (/[\0]/.test(normalized)) {
-    throw badRequest(`${fieldLabel} contains an invalid character`);
-  }
-
-  return normalized;
-}
-
 function normalizeSingleLine(value: unknown, fieldLabel: string, maxLength = MAX_SECRET_LENGTH): string {
-  const normalized = normalizeString(value, fieldLabel, maxLength);
-  if (/[\r\n]/.test(normalized)) {
-    throw badRequest(`${fieldLabel} must be a single-line value`);
-  }
-
-  return normalized;
+  return normalizeBoundedText(value, fieldLabel, maxLength, { singleLine: true });
 }
 
 function normalizeSecret(value: unknown, previous: string, fieldLabel: string): string {
@@ -60,20 +42,18 @@ function normalizeSecret(value: unknown, previous: string, fieldLabel: string): 
 }
 
 function normalizeStorageMode(value: unknown, fallback: DeploymentStorageMode): DeploymentStorageMode {
-  return parseEnum(
-    typeof value === 'string' ? value.trim() : undefined,
-    ['filesystem', 'managed'],
+  return normalizeStrictEnumSetting(
+    value,
+    ['filesystem', 'managed'] as const,
     fallback,
-    { strict: true },
   );
 }
 
 function normalizeDatabaseMode(value: unknown, fallback: DeploymentDatabaseMode): DeploymentDatabaseMode {
-  return parseEnum(
-    typeof value === 'string' ? value.trim() : undefined,
-    ['local-docker', 'managed'],
+  return normalizeStrictEnumSetting(
+    value,
+    ['local-docker', 'managed'] as const,
     fallback,
-    { strict: true },
   );
 }
 
@@ -81,11 +61,10 @@ function normalizeDatabaseSslMode(
   value: unknown,
   fallback: DeploymentDatabaseSslMode,
 ): DeploymentDatabaseSslMode {
-  return parseEnum(
-    typeof value === 'string' ? value.trim() : undefined,
-    ['disable', 'require', 'verify-full'],
+  return normalizeStrictEnumSetting(
+    value,
+    ['disable', 'require', 'verify-full'] as const,
     fallback,
-    { strict: true },
   );
 }
 
@@ -188,9 +167,7 @@ function normalizeSettings(
   fallback = getDefaultSettings(),
   source: AppSettingsSource = 'app-settings',
 ): DeploymentStorageRuntimeSettings {
-  const raw = value && typeof value === 'object'
-    ? value as DeploymentStorageSettingsDraft & { updatedAt?: unknown }
-    : {};
+  const raw = toSettingsRecord(value) as DeploymentStorageSettingsDraft & { updatedAt?: unknown };
   const storageMode = normalizeStorageMode(raw.storageMode, fallback.storageMode);
   const databaseMode = normalizeDatabaseMode(raw.databaseMode, fallback.databaseMode);
   const previousManagedDatabaseConnectionString = fallback.databaseMode === 'managed'

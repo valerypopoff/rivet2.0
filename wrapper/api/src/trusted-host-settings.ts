@@ -5,6 +5,7 @@ import type {
   TrustedHostSettings,
   TrustedHostSettingsDraft,
 } from '../../shared/app-settings-types.js';
+import { hasSetting, requireSettingsRecord, requireStringSetting, toSettingsRecord } from './app-settings/schema.js';
 import { getAppDataRoot } from './security.js';
 import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { badRequest } from './utils/httpError.js';
@@ -36,11 +37,7 @@ function isHostname(value: string): boolean {
 }
 
 function normalizeTrustedHost(value: unknown, index: number): string {
-  if (typeof value !== 'string') {
-    throw badRequest(`Trusted host ${index + 1} must be a string`);
-  }
-
-  const host = value.trim().toLowerCase();
+  const host = requireStringSetting(value, `Trusted host ${index + 1} must be a string`).trim().toLowerCase();
   if (!host) {
     return '';
   }
@@ -68,10 +65,8 @@ function normalizeTrustedHostSettingsDraft(
   value: unknown,
   fallback = DEFAULT_TRUSTED_HOST_SETTINGS,
 ): Omit<TrustedHostSettings, 'source' | 'updatedAt'> {
-  const raw = value && typeof value === 'object'
-    ? value as TrustedHostSettingsDraft
-    : {};
-  const rawHosts = Object.prototype.hasOwnProperty.call(raw, 'trustedHosts')
+  const raw = toSettingsRecord(value) as TrustedHostSettingsDraft;
+  const rawHosts = hasSetting(raw, 'trustedHosts')
     ? raw.trustedHosts
     : fallback.trustedHosts;
 
@@ -99,17 +94,12 @@ function normalizeTrustedHostSettingsDraft(
 }
 
 function readTrustedHostSettingsFromText(settingsText: string): TrustedHostSettings {
-  const parsed = JSON.parse(settingsText) as unknown;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw badRequest('Trusted host settings must be an object');
-  }
+  const parsed = requireSettingsRecord(JSON.parse(settingsText) as unknown, 'Trusted host settings must be an object');
 
   const settings = normalizeTrustedHostSettingsDraft(parsed);
-  const raw = parsed as { updatedAt?: unknown };
-
   return {
     ...settings,
-    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
     source: 'app-settings',
   };
 }

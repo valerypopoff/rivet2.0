@@ -70,6 +70,7 @@
     "fuse.js": "^6.6.2",
     "github-markdown-css": "5.9.0",
     "gpt-tokenizer": "^2.1.2",
+    "idb": "^8.0.3",
     "immer": "^10.0.3",
     "jest-diff": "^29.7.0",
     "jotai": "^2.11.0",

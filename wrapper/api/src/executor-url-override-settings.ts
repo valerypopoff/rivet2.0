@@ -4,6 +4,12 @@ import type {
   ExecutorUrlOverrideSettings,
   ExecutorUrlOverrideSettingsDraft,
 } from '../../shared/app-settings-types.js';
+import {
+  hasSetting,
+  normalizeBoundedSingleLineString,
+  requireSettingsRecord,
+  toSettingsRecord,
+} from './app-settings/schema.js';
 import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { badRequest } from './utils/httpError.js';
 
@@ -24,30 +30,12 @@ export function getExecutorUrlOverrideSettingsPath(): string {
   return path.join(getAppDataRootForExecutorUrlOverrides(), EXECUTOR_URL_OVERRIDE_SETTINGS_RELATIVE_PATH);
 }
 
-function isPresent(value: object, key: PropertyKey): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function normalizeString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
 function normalizeWebsocketUrl(value: unknown, fieldLabel: string, present = true): string {
-  if (present && typeof value !== 'undefined' && typeof value !== 'string') {
-    throw badRequest(`${fieldLabel} must be a string`);
-  }
-
-  const normalized = normalizeString(value);
+  const normalized = normalizeBoundedSingleLineString(value, fieldLabel, MAX_WEBSOCKET_URL_LENGTH, {
+    strict: present,
+  });
   if (!normalized) {
     return '';
-  }
-
-  if (normalized.length > MAX_WEBSOCKET_URL_LENGTH) {
-    throw badRequest(`${fieldLabel} is too long`);
-  }
-
-  if (/[\r\n\0]/.test(normalized)) {
-    throw badRequest(`${fieldLabel} must be a single-line value`);
   }
 
   let url: URL;
@@ -68,32 +56,25 @@ function normalizeExecutorUrlOverrideSettingsDraft(
   value: unknown,
   fallback = DEFAULT_EXECUTOR_URL_OVERRIDE_SETTINGS,
 ): Omit<ExecutorUrlOverrideSettings, 'source' | 'updatedAt'> {
-  const raw = value && typeof value === 'object'
-    ? value as ExecutorUrlOverrideSettingsDraft
-    : {};
+  const raw = toSettingsRecord(value) as ExecutorUrlOverrideSettingsDraft;
 
   return {
-    executorWsUrl: isPresent(raw, 'executorWsUrl')
+    executorWsUrl: hasSetting(raw, 'executorWsUrl')
       ? normalizeWebsocketUrl(raw.executorWsUrl, 'Node executor websocket URL override')
       : fallback.executorWsUrl,
-    remoteDebuggerDefaultWs: isPresent(raw, 'remoteDebuggerDefaultWs')
+    remoteDebuggerDefaultWs: hasSetting(raw, 'remoteDebuggerDefaultWs')
       ? normalizeWebsocketUrl(raw.remoteDebuggerDefaultWs, 'Remote Debugger websocket URL override')
       : fallback.remoteDebuggerDefaultWs,
   };
 }
 
 function readExecutorUrlOverrideSettingsFromText(settingsText: string): ExecutorUrlOverrideSettings {
-  const parsed = JSON.parse(settingsText) as unknown;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw badRequest('Executor URL override settings must be an object');
-  }
+  const parsed = requireSettingsRecord(JSON.parse(settingsText) as unknown, 'Executor URL override settings must be an object');
 
   const settings = normalizeExecutorUrlOverrideSettingsDraft(parsed);
-  const raw = parsed as { updatedAt?: unknown };
-
   return {
     ...settings,
-    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
     source: 'app-settings',
   };
 }

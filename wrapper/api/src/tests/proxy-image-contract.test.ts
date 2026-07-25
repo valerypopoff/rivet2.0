@@ -336,6 +336,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(dockerLauncherHelper, /dockerWaitTimeoutSeconds/);
   assert.match(devDockerLauncher, /refreshRunningProxy = action === 'dev' && proxyAlreadyRunning/);
   assert.match(devDockerLauncher, /up -d --no-deps --force-recreate --wait --wait-timeout \$\{waitTimeoutSeconds\} proxy/);
+  assert.match(devDockerLauncher, /\/app\/package-lock\.json/);
+  assert.match(devDockerLauncher, /Recreating \$\{service\} because dependency markers changed/);
   assert.match(prodDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
   assert.ok(rivetContextHelper.includes("const defaultContextRelPath = path.join(contextRootRelPath, 'rivet-source');"));
   assert.match(rivetContextHelper, /'\.upstream-version'/);

@@ -1004,6 +1004,13 @@ test('Runtime limit settings reject invalid values and fail loudly when saved fi
 
     await assert.rejects(
       writeRuntimeLimitSettings({
+        commandTimeoutSeconds: true,
+      }),
+      /Command timeout must be a positive whole number/,
+    );
+
+    await assert.rejects(
+      writeRuntimeLimitSettings({
         webAppActionRequestLimitBytes: 1,
       }),
       /Web app button data limit must be at least 1 MiB/,
@@ -1685,6 +1692,16 @@ test('Web app auth settings API saves and hides secrets', async () => {
     } finally {
       await server?.close();
     }
+  });
+});
+
+test('Web app auth settings keep the default session TTL for nonnumeric values', async () => {
+  await withAppSettingsEnv(async () => {
+    const settings = await writeWebAppAuthSettings({
+      sessionTtlSeconds: true,
+    });
+
+    assert.equal(settings.sessionTtlSeconds, 24 * 60 * 60);
   });
 });
 

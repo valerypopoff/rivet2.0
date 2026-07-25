@@ -4,8 +4,8 @@ import type {
   WorkflowEndpointAuthSettings,
   WorkflowEndpointAuthSettingsDraft,
 } from '../../shared/app-settings-types.js';
+import { hasSetting, requireBooleanSetting, requireSettingsRecord, toSettingsRecord } from './app-settings/schema.js';
 import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
-import { badRequest } from './utils/httpError.js';
 
 const repoRoot = path.resolve(process.cwd(), '..', '..');
 const WORKFLOW_ENDPOINT_AUTH_SETTINGS_RELATIVE_PATH = path.join('settings', 'workflow-endpoint-auth.json');
@@ -22,45 +22,26 @@ export function getWorkflowEndpointAuthSettingsPath(): string {
   return path.join(getAppDataRootForWorkflowEndpointAuth(), WORKFLOW_ENDPOINT_AUTH_SETTINGS_RELATIVE_PATH);
 }
 
-function isPresent(value: object, key: PropertyKey): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function normalizeBoolean(value: unknown, fieldLabel: string): boolean {
-  if (typeof value !== 'boolean') {
-    throw badRequest(`${fieldLabel} must be true or false`);
-  }
-
-  return value;
-}
-
 function normalizeWorkflowEndpointAuthSettingsDraft(
   value: unknown,
   fallback = DEFAULT_WORKFLOW_ENDPOINT_AUTH_SETTINGS,
 ): Omit<WorkflowEndpointAuthSettings, 'source' | 'updatedAt'> {
-  const raw = value && typeof value === 'object'
-    ? value as WorkflowEndpointAuthSettingsDraft
-    : {};
+  const raw = toSettingsRecord(value) as WorkflowEndpointAuthSettingsDraft;
 
   return {
-    requireBearerAuth: isPresent(raw, 'requireBearerAuth')
-      ? normalizeBoolean(raw.requireBearerAuth, 'Require bearer token')
+    requireBearerAuth: hasSetting(raw, 'requireBearerAuth')
+      ? requireBooleanSetting(raw.requireBearerAuth, 'Require bearer token')
       : fallback.requireBearerAuth,
   };
 }
 
 function readWorkflowEndpointAuthSettingsFromText(settingsText: string): WorkflowEndpointAuthSettings {
-  const parsed = JSON.parse(settingsText) as unknown;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw badRequest('Workflow endpoint auth settings must be an object');
-  }
+  const parsed = requireSettingsRecord(JSON.parse(settingsText) as unknown, 'Workflow endpoint auth settings must be an object');
 
   const settings = normalizeWorkflowEndpointAuthSettingsDraft(parsed);
-  const raw = parsed as { updatedAt?: unknown };
-
   return {
     ...settings,
-    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
     source: 'app-settings',
   };
 }
