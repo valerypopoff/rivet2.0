@@ -1,5 +1,48 @@
 # LLM Chat V2 Contract
 
+## Inline and profile configuration
+
+`LLM Chat` has one runtime pipeline and two configuration sources:
+
+- `inline` is the default and preserves every existing project's behavior.
+- `profile` requires the typed `llm-config` input produced by `LLM Profile`.
+
+`llmChatV2ProfileDataKeys` is the authoritative ownership list. An LLM Profile
+owns provider, model, the resolved credential, common generation parameters,
+provider-specific reasoning/thinking settings, provider-native capabilities,
+Custom-provider URL, headers, and extra provider options. LLM Chat continues to
+own prompts and history, response format/schema, Rivet tools and continuation,
+outputs, retries and request diagnostics, editor caching, and the
+conversation-specific OpenAI Previous Response ID.
+
+The profile output contains the resolved raw API key by design, along with its
+credential-source metadata. This supports fully detachable provider slots but
+also means normal execution data, recordings, previews, and remote transport may
+contain that key. The normal secret-free `ChatV2ProviderProfile` used for runtime
+diagnostics remains secret-free, and editor-cache keys continue to use only a
+credential fingerprint.
+
+Profile mode must not fork the request implementation. It creates an effective
+LLM Chat data object by applying only profile-owned fields, then uses the same
+provider resolution, request planning, continuation, output, and cache code as
+Inline mode. Missing `configurationMode` means `inline` for serialized backward
+compatibility. Stale inline dynamic provider inputs must neither remain visible
+nor affect execution after switching to profile mode.
+
+`llm-config` is a resolved value contract. Its normalizer clears every
+profile-owned `use...Input` flag before LLM Chat consumes it, including for
+externally constructed values. This prevents stale hidden Chat inputs from
+changing a profile's model, credentials, headers, generation settings, or
+thinking budget at runtime.
+
+Because the editor cannot know which provider capabilities an upstream profile
+will select at runtime, profile mode always exposes the `Tool Calls` port and
+always emits its corresponding output. The shared
+`shouldIncludeLLMChatV2ToolCalls(...)` policy owns this decision for both port
+declaration and runtime output construction, so a no-tools profile yields the
+normal control-flow-excluded Tool Calls value instead of a declared-but-missing
+output.
+
 The user-facing `LLM Chat` node is the current chat node. Its persisted internal
 node type is `llmChatV2`; legacy `Chat` / `Chat Loop` nodes remain compatibility
 paths and should not be used as the primary target for new provider refactors.

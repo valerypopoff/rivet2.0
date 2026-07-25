@@ -14,6 +14,7 @@ LLM Chat is the recommended chat node for new Rivet 2 graphs. It is a vendor-agn
 Use LLM Chat when you want to:
 
 - switch providers without rewiring the graph
+- select a reusable [LLM Profile](./llm-profile.mdx) at runtime
 - use OpenAI reasoning models, Anthropic thinking, or Google thinking controls
 - provide the API key from settings or from an input port
 - call custom OpenAI-compatible providers by setting `Provider base URL`
@@ -35,16 +36,17 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ## Inputs
 
-| Title                  | Data Type                                                 | Description                                                                                                                                |
-| ---------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| System Prompt          | `string`                                                  | Optional system prompt prepended to the main prompt.                                                                                       |
-| Prompt                 | `chat-message`, `chat-message[]`, `string`, or `string[]` | Main prompt sent to the model. Strings are converted to user messages.                                                                     |
-| Tools                  | `gpt-function` or `gpt-function[]`                        | Available when Tool use is enabled. Defines functions/tools the model may call.                                                            |
-| API Key                | `string`                                                  | Available when API key source is set to Input port.                                                                                        |
-| Provider base URL      | `string`                                                  | Available for Custom provider when Provider base URL uses an input. Accepts an OpenAI-compatible base URL or full `/chat/completions` URL. |
-| Headers                | `object`                                                  | Available when Headers uses an input. Adds provider request headers.                                                                       |
-| Extra Provider Options | `string` or `object`                                      | Available when Extra provider options uses an input. Power-user Vercel provider options.                                                   |
-| Response Schema        | `object` or `gpt-function`                                | Available when Response format is JSON schema.                                                                                             |
+| Title                  | Data Type                                                 | Description                                                                                                                                        |
+| ---------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| System Prompt          | `string`                                                  | Optional system prompt prepended to the main prompt.                                                                                               |
+| LLM Profile            | `llm-config`                                              | Required when Configuration is From profile. Supplies provider, model, credential, generation, reasoning, and provider-native capability settings. |
+| Prompt                 | `chat-message`, `chat-message[]`, `string`, or `string[]` | Main prompt sent to the model. Strings are converted to user messages.                                                                             |
+| Tools                  | `gpt-function` or `gpt-function[]`                        | Available when Tool use is enabled. Defines functions/tools the model may call.                                                                    |
+| API Key                | `string`                                                  | Inline mode only. Available when API key source is set to Input port. In profile mode this input belongs to LLM Profile.                           |
+| Provider base URL      | `string`                                                  | Inline mode only. Available for Custom provider when Provider base URL uses an input. Accepts a base URL or full `/chat/completions` URL.          |
+| Headers                | `object`                                                  | Inline mode only. Available when Headers uses an input. In profile mode this input belongs to LLM Profile.                                         |
+| Extra Provider Options | `string` or `object`                                      | Inline mode only. Available when Extra provider options uses an input. In profile mode this input belongs to LLM Profile.                          |
+| Response Schema        | `object` or `gpt-function`                                | Available when Response format is JSON schema.                                                                                                     |
 
 </TabItem>
 
@@ -58,7 +60,7 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 | Messages Sent    | `chat-message[]`                                                          | Messages sent to the provider.                                                                                                                                                                                                                                                                                                 |
 | All Messages     | `chat-message[]`                                                          | Conversation messages including the response.                                                                                                                                                                                                                                                                                  |
 | Response Tokens  | `number`                                                                  | Response token count when available.                                                                                                                                                                                                                                                                                           |
-| Tool Calls       | `object[]`                                                                | Available when tool use or provider built-in tools are enabled. With auto-continuation, completed Rivet calls are retained as delegated records for observability; unresolved raw calls remain when continuation stops. Connecting this port to one Delegate Tool Call enables graph-visible continuation automatically.       |
+| Tool Calls       | `object[]`                                                                | Always visible in From profile mode because provider capabilities are selected upstream; otherwise available when tool use or provider built-in tools are enabled. With auto-continuation, completed Rivet calls are retained as delegated records for observability; unresolved raw calls remain when continuation stops.     |
 | Usage            | `object`                                                                  | Available when Output usage details is enabled. Includes provider usage metadata when available.                                                                                                                                                                                                                               |
 | Reasoning        | `string` or `string[]`                                                    | Available when Output reasoning is enabled and the provider exposes reasoning/thinking output.                                                                                                                                                                                                                                 |
 | Response Status  | `number` or `number[]`                                                    | Available when Output request details is enabled. When Retry on non-200 is enabled, this is a per-attempt array.                                                                                                                                                                                                               |
@@ -71,7 +73,21 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ## Editor Settings
 
+### Configuration
+
+**Inline** is the backward-compatible default and keeps provider, model, credential,
+generation, reasoning, and provider-specific settings in LLM Chat.
+
+**From profile** hides those settings and adds a required **LLM Profile** input.
+Connect an [LLM Profile](./llm-profile.mdx) node to switch the inference
+configuration without duplicating or editing the rest of the Chat node. Prompt,
+response format, Rivet tools, auto-continuation, outputs, request diagnostics,
+retry behavior, cache behavior, and OpenAI Previous Response ID remain settings
+of the LLM Chat node.
+
 ### Model
+
+This section is available in Inline configuration mode.
 
 | Setting                           | Description                                                                                                                                          |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -84,11 +100,12 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 ### Parameters
 
-LLM Chat supports common generation parameters such as Temperature, Max output tokens, Top P, Top K, presence penalty, frequency penalty, stop sequences, and seed. New nodes leave Top P unset unless you fill it in or drive it from an input port. Provider support varies; unsupported settings may be ignored by the provider or model.
+Inline LLM Chat supports common generation parameters such as Temperature, Max output tokens, Top P, Top K, presence penalty, frequency penalty, stop sequences, and seed. In From profile mode these settings and their optional input ports belong to LLM Profile. New nodes leave Top P unset unless you fill it in or drive it from an input port. Provider support varies; unsupported settings may be ignored by the provider or model.
 
 ### Reasoning
 
-Reasoning settings are provider-specific:
+Reasoning settings are provider-specific. They are configured on LLM Chat in
+Inline mode and on LLM Profile in From profile mode:
 
 - OpenAI: Reasoning effort and optional reasoning summary.
 - Anthropic: Thinking mode, effort, thinking budget, and cache breakpoint TTL.

@@ -52,12 +52,18 @@ function legacyCanBeCoerced(from: DataType, to: DataType): boolean {
     to === 'image' ||
     to === 'knowledge-source' ||
     to === 'knowledge-document' ||
-    to === 'knowledge-evidence'
+    to === 'knowledge-evidence' ||
+    to === 'llm-config'
   ) {
     return from === to || from === 'object';
   }
 
-  if (from === 'knowledge-source' || from === 'knowledge-document' || from === 'knowledge-evidence') {
+  if (
+    from === 'knowledge-source' ||
+    from === 'knowledge-document' ||
+    from === 'knowledge-evidence' ||
+    from === 'llm-config'
+  ) {
     return to === 'object' || to === 'string';
   }
 
@@ -79,11 +85,11 @@ describe('data coercion compatibility policy', () => {
       }
     }
 
-    assert.equal(dataTypes.length, 80);
-    assert.equal(incompatiblePairs, 2_270);
+    assert.equal(dataTypes.length, 84);
+    assert.equal(incompatiblePairs, 2_655);
     assert.equal(
       createHash('sha256').update(matrix).digest('hex'),
-      'b56e68ddba14202901cf247051f0ba44489ced3ed40aaca12cb6a19a138414fd',
+      '17e085ba5f5300f0cb9d6fc1156aab63508d49b3dfe475931e3e85107f310b01',
     );
   });
 
@@ -290,7 +296,7 @@ describe('data coercion runtime behavior', () => {
     );
   });
 
-  it('normalizes knowledge values and returns undefined for malformed values', () => {
+  it('normalizes validated object values and returns undefined for malformed values', () => {
     assert.deepEqual(
       coerceTypeOptional(
         { type: 'object', value: { connectionId: ' primary ', sourceId: ' book ', version: ' v1 ' } },
@@ -329,6 +335,12 @@ describe('data coercion runtime behavior', () => {
       coerceTypeOptional({ type: 'object', value: { sourceId: 'missing-connection' } }, 'knowledge-source'),
       undefined,
     );
+
+    const profile = getDefaultValue('llm-config');
+    profile.configuration.model = '  model-from-profile  ';
+    const normalizedProfile = coerceTypeOptional({ type: 'object', value: profile }, 'llm-config');
+    assert.equal(normalizedProfile?.configuration.model, 'model-from-profile');
+    assert.equal(coerceTypeOptional({ type: 'object', value: { version: 999 } }, 'llm-config'), undefined);
   });
 
   it('preserves in-place assistant function-call argument normalization', () => {

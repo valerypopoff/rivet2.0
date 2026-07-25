@@ -1,0 +1,229 @@
+import type { ChatV2CredentialReference, ChatV2CredentialResult } from './chatV2ProviderProfile.js';
+import {
+  createLLMChatV2NodeData,
+  type LLMChatV2NodeData,
+  type LLMChatV2ProfileData,
+  type LLMChatV2ProfileDataKey,
+} from './llmChatV2NodeData.js';
+import type { ChatV2Provider } from './chatV2Types.js';
+import { LLM_PROFILE_VALUE_VERSION, pickLLMChatV2ProfileData, type LLMProfileValue } from './llmProfileTypes.js';
+
+export {
+  applyLLMProfileToNodeData,
+  createDefaultLLMProfileValue,
+  createLLMProfileNodeData,
+  LLM_PROFILE_VALUE_VERSION,
+  pickLLMChatV2ProfileData,
+  type LLMProfileValue,
+} from './llmProfileTypes.js';
+
+const credentialSources = new Set<ChatV2CredentialReference['source']>([
+  'input',
+  'settings',
+  'plugin',
+  'programmatic',
+  'environment',
+  'none',
+]);
+const profileProviders = new Set<ChatV2Provider>(['openai', 'anthropic', 'google', 'custom']);
+const stringFields = [
+  'model',
+  'customProviderApiKeyProgrammaticName',
+  'customProviderApiKeyEnvVarName',
+  'customProviderBaseURL',
+  'extraProviderOptions',
+  'openAIReasoningEffort',
+  'openAIReasoningSummary',
+] as const satisfies readonly LLMChatV2ProfileDataKey[];
+const booleanFields = [
+  'useModelInput',
+  'useTemperatureInput',
+  'useTopPInput',
+  'useTopKInput',
+  'usePresencePenaltyInput',
+  'useFrequencyPenaltyInput',
+  'useStopSequencesInput',
+  'useSeedInput',
+  'useMaxTokensInput',
+  'useCustomProviderBaseURLInput',
+  'useHeadersInput',
+  'useExtraProviderOptionsInput',
+  'enableOpenAIWebSearch',
+  'enableOpenAICodeInterpreter',
+  'useAnthropicThinkingBudgetInput',
+  'useGoogleThinkingBudgetInput',
+  'googleIncludeThoughts',
+  'enableGoogleSearchGrounding',
+  'enableGoogleUrlContext',
+] as const satisfies readonly LLMChatV2ProfileDataKey[];
+const requiredNumberFields = ['temperature', 'maxTokens'] as const satisfies readonly LLMChatV2ProfileDataKey[];
+const optionalNumberFields = [
+  'topP',
+  'topK',
+  'presencePenalty',
+  'frequencyPenalty',
+  'seed',
+  'anthropicThinkingBudget',
+  'googleThinkingBudget',
+] as const satisfies readonly LLMChatV2ProfileDataKey[];
+const resolvedInputToggleFields = [
+  'useModelInput',
+  'useTemperatureInput',
+  'useTopPInput',
+  'useTopKInput',
+  'usePresencePenaltyInput',
+  'useFrequencyPenaltyInput',
+  'useStopSequencesInput',
+  'useSeedInput',
+  'useMaxTokensInput',
+  'useCustomProviderBaseURLInput',
+  'useHeadersInput',
+  'useExtraProviderOptionsInput',
+  'useAnthropicThinkingBudgetInput',
+  'useGoogleThinkingBudgetInput',
+] as const satisfies readonly LLMChatV2ProfileDataKey[];
+
+export function normalizeLLMProfileValue(value: unknown): LLMProfileValue {
+  if (!isRecord(value)) {
+    throw new Error('LLM Profile input must contain an LLM profile value.');
+  }
+
+  if (value.version !== LLM_PROFILE_VALUE_VERSION) {
+    throw new Error(`Unsupported LLM Profile version: ${String(value.version)}.`);
+  }
+
+  if (!isRecord(value.configuration)) {
+    throw new Error('LLM Profile configuration is missing.');
+  }
+
+  const defaults = createLLMChatV2NodeData();
+  const provider = normalizeProvider(value.configuration.provider ?? defaults.provider);
+  const model = value.configuration.model;
+  if (typeof model !== 'string' || !model.trim()) {
+    throw new Error('LLM Profile model must be a non-empty string.');
+  }
+
+  const credential = normalizeCredential(value.credential);
+  const configuration = normalizeConfiguration({
+    ...defaults,
+    ...value.configuration,
+    provider,
+    model: model.trim(),
+  } as LLMChatV2NodeData);
+
+  return {
+    version: LLM_PROFILE_VALUE_VERSION,
+    configuration,
+    credential,
+  };
+}
+
+function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
+  for (const field of stringFields) {
+    if (typeof data[field] !== 'string') {
+      throw new Error(`LLM Profile ${field} must be a string.`);
+    }
+  }
+  for (const field of booleanFields) {
+    if (typeof data[field] !== 'boolean') {
+      throw new Error(`LLM Profile ${field} must be a boolean.`);
+    }
+  }
+  for (const field of requiredNumberFields) {
+    if (typeof data[field] !== 'number' || !Number.isFinite(data[field])) {
+      throw new Error(`LLM Profile ${field} must be a finite number.`);
+    }
+  }
+  for (const field of optionalNumberFields) {
+    const fieldValue = data[field];
+    if (fieldValue != null && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))) {
+      throw new Error(`LLM Profile ${field} must be a finite number when provided.`);
+    }
+  }
+
+  if (!Array.isArray(data.stopSequences) || data.stopSequences.some((sequence) => typeof sequence !== 'string')) {
+    throw new Error('LLM Profile stopSequences must be an array of strings.');
+  }
+  if (
+    !Array.isArray(data.headers) ||
+    data.headers.some(
+      (header) => !isRecord(header) || typeof header.key !== 'string' || typeof header.value !== 'string',
+    )
+  ) {
+    throw new Error('LLM Profile headers must contain string key/value pairs.');
+  }
+  if (data.apiKeySource !== 'environment' && data.apiKeySource !== 'input') {
+    throw new Error(`Unsupported LLM Profile API key source: ${String(data.apiKeySource)}.`);
+  }
+  assertEnumValue(data.openAIWebSearchContextSize, ['low', 'medium', 'high'], 'OpenAI web search context');
+  assertEnumValue(data.anthropicThinkingMode, ['', 'adaptive', 'enabled', 'disabled'], 'Anthropic thinking mode');
+  assertEnumValue(data.anthropicEffort, ['', 'low', 'medium', 'high', 'max'], 'Anthropic effort');
+  assertEnumValue(data.anthropicCacheControlTtl, ['', '5m', '1h'], 'Anthropic cache TTL');
+  assertEnumValue(data.googleThinkingLevel, ['', 'minimal', 'low', 'medium', 'high'], 'Google thinking level');
+
+  const resolvedData = {
+    ...data,
+    model: data.model.trim(),
+    customProviderBaseURL: data.customProviderBaseURL.trim(),
+    customProviderApiKeyProgrammaticName: data.customProviderApiKeyProgrammaticName?.trim(),
+    customProviderApiKeyEnvVarName: data.customProviderApiKeyEnvVarName?.trim(),
+    stopSequences: [...data.stopSequences],
+    headers: data.headers.map(({ key, value }) => ({ key, value })),
+  };
+
+  // A profile is a resolved configuration value. LLM Chat intentionally does not
+  // expose the profile-owned inputs, so accepting a dynamic flag here would let
+  // stale hidden connections influence a supposedly self-contained profile.
+  for (const field of resolvedInputToggleFields) {
+    resolvedData[field] = false;
+  }
+
+  return pickLLMChatV2ProfileData(resolvedData);
+}
+
+function assertEnumValue(value: unknown, allowed: readonly string[], label: string): asserts value is string {
+  if (typeof value !== 'string' || !allowed.includes(value)) {
+    throw new Error(`Unsupported LLM Profile ${label}: ${String(value)}.`);
+  }
+}
+
+function normalizeProvider(value: unknown): ChatV2Provider {
+  if (typeof value !== 'string' || !profileProviders.has(value as ChatV2Provider)) {
+    throw new Error(`Unsupported LLM Profile provider: ${String(value)}.`);
+  }
+
+  return value as ChatV2Provider;
+}
+
+function normalizeCredential(value: unknown): ChatV2CredentialResult {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.reference) ||
+    typeof value.reference.source !== 'string' ||
+    !credentialSources.has(value.reference.source as ChatV2CredentialReference['source'])
+  ) {
+    throw new Error('LLM Profile credential metadata is invalid.');
+  }
+
+  const credentialValue = value.value;
+  if (credentialValue != null && typeof credentialValue !== 'string') {
+    throw new Error('LLM Profile API key must be a string when provided.');
+  }
+
+  const name = value.reference.name;
+  if (name != null && typeof name !== 'string') {
+    throw new Error('LLM Profile credential name must be a string when provided.');
+  }
+
+  return {
+    ...(credentialValue == null ? {} : { value: credentialValue }),
+    reference: {
+      source: value.reference.source as ChatV2CredentialReference['source'],
+      ...(name == null ? {} : { name }),
+    },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value != null && !Array.isArray(value);
+}

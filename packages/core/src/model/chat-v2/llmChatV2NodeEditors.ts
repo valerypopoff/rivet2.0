@@ -1,4 +1,5 @@
 import type { EditorDefinition } from '../EditorDefinition.js';
+import type { ChartNode } from '../NodeBase.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import {
   DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS,
@@ -18,9 +19,10 @@ import {
   LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE,
   supportsLLMChatV2ParallelToolCalls,
 } from './parallelToolCalls.js';
-import type { LLMChatV2Node, LLMChatV2NodeData } from './llmChatV2NodeData.js';
+import type { LLMChatV2Node, LLMChatV2NodeData, LLMChatV2ProfileData } from './llmChatV2NodeData.js';
 
 type LLMChatV2EditorDefinition = EditorDefinition<LLMChatV2Node>;
+type LLMProfileEditorNode = ChartNode<'llmProfile', LLMChatV2ProfileData>;
 
 const hideUnlessProvider =
   (provider: LLMChatV2NodeData['provider']) =>
@@ -128,8 +130,7 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
         label: 'Alternative programmatic key name',
         dataKey: 'customProviderApiKeyProgrammaticName',
         placeholder: 'cerebrasApiKey',
-        helperMessage:
-          'If set, programmatic runs read this named run option instead of the shared customAiApiKey.',
+        helperMessage: 'If set, programmatic runs read this named run option instead of the shared customAiApiKey.',
         hideIf: (data) => data.provider !== 'custom' || data.apiKeySource === 'input',
       },
       {
@@ -145,18 +146,26 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
   );
 }
 
-function getProviderEditors(): LLMChatV2EditorDefinition[] {
-  return [getOpenAIProviderEditors(), getAnthropicProviderEditors(), getGoogleProviderEditors()];
+function getProviderEditors(includeOpenAIRequestState: boolean): LLMChatV2EditorDefinition[] {
+  return [
+    getOpenAIProviderEditors(includeOpenAIRequestState),
+    getAnthropicProviderEditors(),
+    getGoogleProviderEditors(),
+  ];
 }
 
-function getOpenAIProviderEditors(): LLMChatV2EditorDefinition {
+function getOpenAIProviderEditors(includeRequestState: boolean): LLMChatV2EditorDefinition {
   return providerGroup('openai', 'OpenAI', [
-    {
-      type: 'string',
-      label: 'Previous Response ID',
-      dataKey: 'openAIPreviousResponseId',
-      useInputToggleDataKey: 'useOpenAIPreviousResponseIdInput',
-    },
+    ...(includeRequestState
+      ? [
+          {
+            type: 'string' as const,
+            label: 'Previous Response ID',
+            dataKey: 'openAIPreviousResponseId' as const,
+            useInputToggleDataKey: 'useOpenAIPreviousResponseIdInput' as const,
+          },
+        ]
+      : []),
     {
       type: 'toggle',
       label: 'Enable Web Search',
@@ -288,7 +297,7 @@ function getParameterEditors(): LLMChatV2EditorDefinition {
   );
 }
 
-function getReasoningEditors(): LLMChatV2EditorDefinition {
+function getReasoningEditors(includeOutputReasoning: boolean): LLMChatV2EditorDefinition {
   return group('Reasoning', [
     {
       type: 'dropdown',
@@ -299,13 +308,17 @@ function getReasoningEditors(): LLMChatV2EditorDefinition {
         'OpenAI-compatible Vercel provider option for reasoning models. Some models only support a subset of effort levels.',
       hideIf: hideUnlessProvider('openai'),
     },
-    {
-      type: 'toggle',
-      label: 'Output reasoning',
-      dataKey: 'outputReasoning',
-      helperMessage:
-        'Adds a Reasoning output when the provider/model exposes reasoning or thinking text through the Vercel AI SDK. Some providers only expose token counts or summaries.',
-    },
+    ...(includeOutputReasoning
+      ? [
+          {
+            type: 'toggle' as const,
+            label: 'Output reasoning',
+            dataKey: 'outputReasoning' as const,
+            helperMessage:
+              'Adds a Reasoning output when the provider/model exposes reasoning or thinking text through the Vercel AI SDK. Some providers only expose token counts or summaries.',
+          },
+        ]
+      : []),
     {
       type: 'string',
       label: 'Reasoning summary',
@@ -441,7 +454,9 @@ function getToolEditors(): LLMChatV2EditorDefinition {
       label: 'Allow parallel toolcalls',
       dataKey: 'parallelToolCalls',
       helperMessage: LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE,
-      hideIf: (data) => !data.useToolCalling || !supportsLLMChatV2ParallelToolCalls(data.provider),
+      hideIf: (data) =>
+        !data.useToolCalling ||
+        (data.configurationMode !== 'profile' && !supportsLLMChatV2ParallelToolCalls(data.provider)),
     },
     {
       type: 'toggle',
@@ -462,8 +477,19 @@ function getToolEditors(): LLMChatV2EditorDefinition {
   ]);
 }
 
-function getOutputEditors(): LLMChatV2EditorDefinition {
+function getOutputEditors(includeOutputReasoning: boolean): LLMChatV2EditorDefinition {
   return group('Outputs', [
+    ...(includeOutputReasoning
+      ? [
+          {
+            type: 'toggle' as const,
+            label: 'Output reasoning',
+            dataKey: 'outputReasoning' as const,
+            helperMessage:
+              'Adds a Reasoning output when the provider/model exposes reasoning or thinking text through the Vercel AI SDK. Some providers only expose token counts or summaries.',
+          },
+        ]
+      : []),
     {
       type: 'toggle',
       label: 'Output usage details',
@@ -484,6 +510,20 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
       dataKey: 'cache',
       helperMessage:
         "Reuses this node's previous outputs if the input is the same (provider config, prompt and generation settings). The cache persists while the Rivet app is open.",
+    },
+  ]);
+}
+
+function getRequestStateEditors(): LLMChatV2EditorDefinition {
+  return group('Request state', [
+    {
+      type: 'string',
+      label: 'OpenAI Previous Response ID',
+      dataKey: 'openAIPreviousResponseId',
+      useInputToggleDataKey: 'useOpenAIPreviousResponseIdInput',
+      helperMessage:
+        'Optional conversation state for OpenAI Responses models. It is ignored by other providers and remains local to this LLM Chat invocation.',
+      hideIf: (data) => data.configurationMode !== 'profile' && data.provider !== 'openai',
     },
   ]);
 }
@@ -555,15 +595,49 @@ export async function getLLMChatV2Editors(
   data: LLMChatV2NodeData,
   context: RivetUIContext,
 ): Promise<EditorDefinition<LLMChatV2Node>[]> {
+  const usesProfile = data.configurationMode === 'profile';
+
   return [
-    getModelEditors(await getResolvedModelOptions(data, context)),
-    ...getProviderEditors(),
-    getParameterEditors(),
-    getReasoningEditors(),
+    {
+      type: 'segmented',
+      label: 'Configuration',
+      ariaLabel: 'LLM configuration source',
+      dataKey: 'configurationMode',
+      defaultValue: 'inline',
+      options: [
+        { value: 'inline', label: 'Inline' },
+        { value: 'profile', label: 'From profile' },
+      ],
+      helperMessage:
+        'Inline keeps provider and model settings in this node. From profile adds an LLM Profile input so reusable configurations can be switched without changing Chat behavior.',
+    },
+    ...(!usesProfile
+      ? [
+          getModelEditors(await getResolvedModelOptions(data, context)),
+          ...getProviderEditors(true),
+          getParameterEditors(),
+          getReasoningEditors(true),
+        ]
+      : []),
+    ...(usesProfile ? [getRequestStateEditors()] : []),
     getResponseFormatEditors(),
     getToolEditors(),
-    getOutputEditors(),
-    getProviderAdvancedEditors(),
+    getOutputEditors(usesProfile),
+    ...(!usesProfile ? [getProviderAdvancedEditors()] : []),
     getTechnicalDetailsEditors(),
   ];
+}
+
+export async function getLLMProfileEditors(
+  data: LLMChatV2ProfileData,
+  context: RivetUIContext,
+): Promise<EditorDefinition<LLMProfileEditorNode>[]> {
+  const profileData = data as LLMChatV2NodeData;
+  return [
+    getModelEditors(await getResolvedModelOptions(profileData, context)),
+    ...getProviderEditors(false),
+    getParameterEditors(),
+    getReasoningEditors(false),
+    getProviderAdvancedEditors(),
+  ] as unknown as EditorDefinition<LLMProfileEditorNode>[];
 }

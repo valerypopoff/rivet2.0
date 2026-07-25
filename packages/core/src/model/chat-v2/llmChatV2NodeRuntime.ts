@@ -16,6 +16,7 @@ import {
 import { parseChatV2Provider } from './providerOptions.js';
 import { createResolvedChatV2Provider, resolveChatV2Credential } from './chatV2ProviderProfile.js';
 import type { ChatV2ProviderProfile } from './chatV2ProviderProfile.js';
+import { applyLLMProfileToNodeData, normalizeLLMProfileValue } from './llmProfile.js';
 import type { RunChatV2PipelineOptions } from './chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
@@ -32,7 +33,7 @@ import {
 import {
   type LLMChatV2EditorCacheKeyParts,
   type LLMChatV2NodeData,
-  hasLLMChatV2BuiltInToolsEnabled,
+  shouldIncludeLLMChatV2ToolCalls,
 } from './llmChatV2NodeData.js';
 
 export { buildLLMChatV2EditorCacheKey, cloneLLMChatV2EditorCacheOutputs };
@@ -63,25 +64,33 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
   context: InternalProcessContext;
 }): Promise<LLMChatV2RuntimeConfig> {
   const { data, nodeId, inputs, context } = params;
+  const profileInput = inputs['llmProfile' as PortId];
+  if (data.configurationMode === 'profile' && profileInput == null) {
+    throw new Error('LLM Profile input is required when Configuration is From profile.');
+  }
+  const profile = data.configurationMode === 'profile' ? normalizeLLMProfileValue(profileInput?.value) : undefined;
+  const effectiveData = profile ? applyLLMProfileToNodeData(data, profile) : data;
 
-  if (hasLLMChatV2ToolResponseFormatConflict(data)) {
+  if (hasLLMChatV2ToolResponseFormatConflict(effectiveData)) {
     throw new Error(LLM_CHAT_V2_TOOL_RESPONSE_FORMAT_CONFLICT_COPY.paragraphs[0]);
   }
 
-  const provider = parseChatV2Provider(data.provider);
-  const modelId = getInputOrData(data, inputs, 'model', 'string');
-  const baseURL = resolveLLMChatV2BaseURL(data, inputs);
-  const nodeHeaders = resolveLLMChatV2Headers(data, inputs);
-  const credential = resolveChatV2Credential({
-    provider,
-    context,
-    apiKeySource: data.apiKeySource === 'input' ? 'input' : 'configured',
-    inputs,
-    customProgrammaticName: data.customProviderApiKeyProgrammaticName,
-    customEnvironmentName: data.customProviderApiKeyEnvVarName,
-  });
+  const provider = parseChatV2Provider(effectiveData.provider);
+  const modelId = getInputOrData(effectiveData, inputs, 'model', 'string');
+  const baseURL = resolveLLMChatV2BaseURL(effectiveData, inputs);
+  const nodeHeaders = resolveLLMChatV2Headers(effectiveData, inputs);
+  const credential =
+    profile?.credential ??
+    resolveChatV2Credential({
+      provider,
+      context,
+      apiKeySource: effectiveData.apiKeySource === 'input' ? 'input' : 'configured',
+      inputs,
+      customProgrammaticName: effectiveData.customProviderApiKeyProgrammaticName,
+      customEnvironmentName: effectiveData.customProviderApiKeyEnvVarName,
+    });
   const apiKey = credential.value;
-  const requestBodies: unknown[] | undefined = data.outputRequestStatus ? [] : undefined;
+  const requestBodies: unknown[] | undefined = effectiveData.outputRequestStatus ? [] : undefined;
   const resolvedProvider = await createResolvedChatV2Provider({
     provider,
     modelId,
@@ -96,17 +105,17 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
   const prompt = inputs['prompt' as PortId];
   const systemPrompt = inputs['systemPrompt' as PortId];
   const functions =
-    data.useToolCalling && inputs['functions' as PortId] != null
+    effectiveData.useToolCalling && inputs['functions' as PortId] != null
       ? (coerceTypeOptional(inputs['functions' as PortId], 'gpt-function[]') as GptFunction[] | undefined)
       : undefined;
-  const toolChoice = resolveLLMChatV2ToolChoice(data);
-  const responseFormatParameters = resolveChatV2ResponseFormatParameters(data, inputs);
+  const toolChoice = resolveLLMChatV2ToolChoice(effectiveData);
+  const responseFormatParameters = resolveChatV2ResponseFormatParameters(effectiveData, inputs);
   const providerOptions = mergeCustomProviderResponseFormatOptions(
     provider,
-    resolveLLMChatV2RuntimeProviderOptions(data, inputs),
+    resolveLLMChatV2RuntimeProviderOptions(effectiveData, inputs),
     responseFormatParameters,
   );
-  const generationParameters = resolveLLMChatV2GenerationParameters(data, inputs);
+  const generationParameters = resolveLLMChatV2GenerationParameters(effectiveData, inputs);
   const runOptions: RunChatV2PipelineOptions = {
     provider,
     model,
@@ -114,29 +123,30 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     prompt,
     systemPrompt,
     functions,
-    additionalTools: resolveLLMChatV2BuiltInTools(data, context, providerConfig, apiKey),
+    additionalTools: resolveLLMChatV2BuiltInTools(effectiveData, context, providerConfig, apiKey),
     ...generationParameters,
     responseOutput: createChatV2ResponseOutput(responseFormatParameters, provider),
     responseFormat: responseFormatParameters?.responseFormat,
-    outputUsage: data.outputUsage,
-    outputReasoning: data.outputReasoning,
-    outputRequestStatus: data.outputRequestStatus,
-    includeFunctionCalls: data.useToolCalling || hasLLMChatV2BuiltInToolsEnabled(data),
-    emitPartialOutputs: data.useAsGraphPartialOutput,
+    outputUsage: effectiveData.outputUsage,
+    outputReasoning: effectiveData.outputReasoning,
+    outputRequestStatus: effectiveData.outputRequestStatus,
+    includeFunctionCalls: shouldIncludeLLMChatV2ToolCalls(effectiveData),
+    emitPartialOutputs: effectiveData.useAsGraphPartialOutput,
     providerOptions,
     toolChoice,
-    anthropicCacheControlTtl: provider === 'anthropic' ? data.anthropicCacheControlTtl || undefined : undefined,
+    anthropicCacheControlTtl:
+      provider === 'anthropic' ? effectiveData.anthropicCacheControlTtl || undefined : undefined,
     requestBodies,
-    retryOnNon200: data.retryOnNon200,
-    retryOnNon200RepeatTimes: data.retryOnNon200RepeatTimes,
-    retryOnNon200CooldownMs: data.retryOnNon200CooldownMs,
+    retryOnNon200: effectiveData.retryOnNon200,
+    retryOnNon200RepeatTimes: effectiveData.retryOnNon200RepeatTimes,
+    retryOnNon200CooldownMs: effectiveData.retryOnNon200CooldownMs,
     context,
   };
 
-  const editorCache = data.cache ? context.editorExecutionCache : undefined;
+  const editorCache = effectiveData.cache ? context.editorExecutionCache : undefined;
   const { cacheKey, cachedOutputs } = resolveLLMChatV2EditorCache({
     apiKey,
-    data,
+    data: effectiveData,
     editorCache,
     functions,
     generationParameters,
@@ -158,7 +168,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     cacheKey,
     cachedOutputs,
     editorCache,
-    shouldAutoContinueToolCalls: !!data.autoContinueToolCalls && data.useToolCalling,
-    maxToolRounds: data.maxToolRounds ?? 3,
+    shouldAutoContinueToolCalls: !!effectiveData.autoContinueToolCalls && effectiveData.useToolCalling,
+    maxToolRounds: effectiveData.maxToolRounds ?? 3,
   };
 }

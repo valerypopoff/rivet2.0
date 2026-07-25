@@ -19,6 +19,7 @@ import {
   normalizeKnowledgeEvidence,
   normalizeKnowledgeSourceReference,
 } from '../integrations/KnowledgeStoreValidation.js';
+import { normalizeLLMProfileValue } from '../model/chat-v2/llmProfile.js';
 
 type ScalarCoercer = (value: ScalarOrArrayDataValue | undefined) => unknown;
 
@@ -31,12 +32,17 @@ type ScalarCoercionRuleRegistry = {
   readonly [T in ScalarDataType]: ScalarCoercionRule;
 };
 
-function isKnowledgeValueType(type: DataType): boolean {
-  return type === 'knowledge-source' || type === 'knowledge-document' || type === 'knowledge-evidence';
+function isValidatedObjectValueType(type: DataType): boolean {
+  return (
+    type === 'knowledge-source' ||
+    type === 'knowledge-document' ||
+    type === 'knowledge-evidence' ||
+    type === 'llm-config'
+  );
 }
 
 function canAttemptGeneralCoercion(from: DataType, to: DataType): boolean {
-  return !isKnowledgeValueType(from) || to === 'object' || to === 'string';
+  return !isValidatedObjectValueType(from) || to === 'object' || to === 'string';
 }
 
 function generalScalarRule(target: ScalarDataType, coerce?: ScalarCoercer): ScalarCoercionRule {
@@ -80,13 +86,16 @@ const scalarCoercionRules: ScalarCoercionRuleRegistry = {
   audio: sameTypeOrObjectScalarRule('audio'),
   'graph-reference': generalScalarRule('graph-reference', coerceToGraphReference),
   'knowledge-source': sameTypeOrObjectScalarRule('knowledge-source', (value) =>
-    coerceKnowledgeValue(value, normalizeKnowledgeSourceReference),
+    coerceValidatedObjectValue(value, normalizeKnowledgeSourceReference),
   ),
   'knowledge-document': sameTypeOrObjectScalarRule('knowledge-document', (value) =>
-    coerceKnowledgeValue(value, normalizeKnowledgeDocument),
+    coerceValidatedObjectValue(value, normalizeKnowledgeDocument),
   ),
   'knowledge-evidence': sameTypeOrObjectScalarRule('knowledge-evidence', (value) =>
-    coerceKnowledgeValue(value, normalizeKnowledgeEvidence),
+    coerceValidatedObjectValue(value, normalizeKnowledgeEvidence),
+  ),
+  'llm-config': sameTypeOrObjectScalarRule('llm-config', (value) =>
+    coerceValidatedObjectValue(value, normalizeLLMProfileValue),
   ),
   document: generalScalarRule('document'),
 };
@@ -484,7 +493,7 @@ function coerceToGraphReference(value: DataValue | undefined): { graphName: stri
   return undefined;
 }
 
-function coerceKnowledgeValue<T>(value: DataValue | undefined, normalize: (value: unknown) => T): T | undefined {
+function coerceValidatedObjectValue<T>(value: DataValue | undefined, normalize: (value: unknown) => T): T | undefined {
   if (!value || value.value == null || isArrayDataValue(value)) return undefined;
   try {
     return normalize(value.value);

@@ -83,7 +83,7 @@ function normalizeExtraProviderOptions(value: unknown): JsonObject | undefined {
   return value as JsonObject;
 }
 
-function resolveExtraProviderOptions(data: LLMChatV2NodeData, inputs: Inputs): JsonObject | undefined {
+export function resolveLLMChatV2ExtraProviderOptions(data: LLMChatV2NodeData, inputs: Inputs): JsonObject | undefined {
   if (!data.useExtraProviderOptionsInput) {
     return parseExtraProviderOptionsText(data.extraProviderOptions ?? '');
   }
@@ -93,7 +93,7 @@ function resolveExtraProviderOptions(data: LLMChatV2NodeData, inputs: Inputs): J
 
 function resolveProviderOptions(data: LLMChatV2NodeData, inputs: Inputs): ChatV2ProviderOptions | undefined {
   const providerOptions: ChatV2ProviderOptions = {};
-  const extraProviderOptions = resolveExtraProviderOptions(data, inputs);
+  const extraProviderOptions = resolveLLMChatV2ExtraProviderOptions(data, inputs);
 
   if (extraProviderOptions) {
     providerOptions[data.provider] = extraProviderOptions;

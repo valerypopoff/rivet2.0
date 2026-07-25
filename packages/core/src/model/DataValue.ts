@@ -6,6 +6,7 @@ import type {
   RivetKnowledgeEvidence,
   RivetKnowledgeSourceReference,
 } from '../integrations/KnowledgeStore.js';
+import { createDefaultLLMProfileValue, type LLMProfileValue } from './chat-v2/llmProfileTypes.js';
 
 export type DataValueDef<Type extends string, RuntimeType> = {
   type: Type;
@@ -100,6 +101,7 @@ export type GraphReferenceValue = DataValueDef<'graph-reference', { graphId: Gra
 export type KnowledgeSourceDataValue = DataValueDef<'knowledge-source', RivetKnowledgeSourceReference>;
 export type KnowledgeDocumentDataValue = DataValueDef<'knowledge-document', RivetKnowledgeDocument>;
 export type KnowledgeEvidenceDataValue = DataValueDef<'knowledge-evidence', RivetKnowledgeEvidence>;
+export type LLMProfileDataValue = DataValueDef<'llm-config', LLMProfileValue>;
 export type DocumentDataValue = DataValueDef<
   'document',
   {
@@ -148,6 +150,7 @@ export type ScalarDataValue =
   | KnowledgeSourceDataValue
   | KnowledgeDocumentDataValue
   | KnowledgeEvidenceDataValue
+  | LLMProfileDataValue
   | DocumentDataValue;
 
 export type ScalarType = ScalarDataValue['type'];
@@ -265,6 +268,10 @@ export const dataTypes = exhaustiveTuple<DataType>()(
   'knowledge-evidence[]',
   'fn<knowledge-evidence>',
   'fn<knowledge-evidence[]>',
+  'llm-config',
+  'llm-config[]',
+  'fn<llm-config>',
+  'fn<llm-config[]>',
   'document',
   'document[]',
   'fn<document>',
@@ -291,6 +298,7 @@ export const scalarTypes = exhaustiveTuple<ScalarType>()(
   'knowledge-source',
   'knowledge-document',
   'knowledge-evidence',
+  'llm-config',
   'document',
 );
 
@@ -371,6 +379,10 @@ export const dataTypeDisplayNames: Record<DataType, string> = {
   'knowledge-evidence[]': 'Knowledge Evidence Array',
   'fn<knowledge-evidence>': 'Function<Knowledge Evidence>',
   'fn<knowledge-evidence[]>': 'Function<Knowledge Evidence Array>',
+  'llm-config': 'LLM Profile',
+  'llm-config[]': 'LLM Profile Array',
+  'fn<llm-config>': 'Function<LLM Profile>',
+  'fn<llm-config[]>': 'Function<LLM Profile Array>',
   document: 'Document',
   'document[]': 'Document Array',
   'fn<document>': 'Function<Document>',
@@ -519,6 +531,7 @@ export const scalarDefaults: { [P in ScalarDataType]: Extract<ScalarDataValue, {
     source: { connectionId: '', sourceId: '' },
     documentId: '',
   },
+  'llm-config': createDefaultLLMProfileValue(),
   document: {
     mediaType: 'text/plain',
     data: new Uint8Array(),

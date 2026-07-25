@@ -12,7 +12,7 @@ export function getLLMChatV2CustomProviderApiKeyEnvVarNames(project: Project): s
       };
 
       if (
-        node.type === 'llmChatV2' &&
+        (node.type === 'llmChatV2' || node.type === 'llmProfile') &&
         data.provider === 'custom' &&
         data.apiKeySource !== 'input' &&
         typeof data.customProviderApiKeyEnvVarName === 'string'

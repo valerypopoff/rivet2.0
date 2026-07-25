@@ -191,6 +191,7 @@ const sidebars = {
         'node-reference/assemble-prompt',
         'node-reference/chat',
         'node-reference/llm-chat',
+        'node-reference/llm-profile',
         'node-reference/gpt-function',
         'node-reference/get-embedding',
         'node-reference/trim-chat-messages',

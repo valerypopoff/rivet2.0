@@ -312,6 +312,15 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
         </div>
       );
     },
+    'llm-config': ({ value }) => {
+      const { configuration, credential } = value.value;
+      return (
+        <div>
+          LLM profile: <em>{configuration.provider}</em> / <em>{configuration.model}</em>
+          <div>API key source: {credential.reference.source}</div>
+        </div>
+      );
+    },
     document: ({ value }) => {
       const documentValue = value as DocumentDataValue;
       const documentData = getMediaData(documentValue.value);

@@ -65,9 +65,10 @@ function getNodeTypeInstruction({
     case 'comment':
       return 'Generate Markdown comment content for a canvas note.';
     case 'llmChatV2':
+    case 'llmProfile':
       return dataKey === 'extraProviderOptions'
-        ? 'Generate provider option JSON for an LLM Chat node. Only include provider options that belong in the selected JSON field.'
-        : 'Generate content for the selected LLM Chat node editor field.';
+        ? `Generate provider option JSON for an ${nodeType === 'llmProfile' ? 'LLM Profile' : 'LLM Chat'} node. Only include provider options that belong in the selected JSON field.`
+        : `Generate content for the selected ${nodeType === 'llmProfile' ? 'LLM Profile' : 'LLM Chat'} node editor field.`;
     case 'httpCall':
       return 'Generate JSON content for the selected HTTP Call node editor field.';
     case 'tool':
@@ -131,14 +132,7 @@ function buildGenericEditorPrompt({
     '<current_editor_content>',
     currentValue,
     '</current_editor_content>',
-    ...(hasSelectedText
-      ? [
-          '',
-          '<selected_editor_content>',
-          selectedText,
-          '</selected_editor_content>',
-        ]
-      : []),
+    ...(hasSelectedText ? ['', '<selected_editor_content>', selectedText, '</selected_editor_content>'] : []),
     '',
     '<user_request>',
     prompt,
