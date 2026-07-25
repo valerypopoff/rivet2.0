@@ -72,11 +72,8 @@ export const NodePortsRenderer: FC<NodePortsProps> = ({ ...props }) => {
   );
 };
 
-export const NodePorts: FC<NodePortsProps> = ({
-  node,
-  connections,
-}) => {
-  const { dataBusPortChannels, draggingWire, closestPortToDraggingWire, hoveredDataBusChannelKeys } =
+export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
+  const { dataBusTopology, draggingWire, closestPortToDraggingWire, hoveredDataBusChannelKeys } =
     useCanvasViewContext();
   const { onDataBusChannelHoverChange, onPortMouseOut, onPortMouseOver, onWireEndDrag, onWireStartDrag } =
     useCanvasHandlersContext();
@@ -96,7 +93,7 @@ export const NodePorts: FC<NodePortsProps> = ({
   const hoveredDataBusChannelKeySet = useMemo(() => new Set(hoveredDataBusChannelKeys), [hoveredDataBusChannelKeys]);
 
   const getDataBusAntenna = (input: boolean, portId: PortId) => {
-    const channels = dataBusPortChannels.get(
+    const channels = dataBusTopology.portChannels.get(
       getDataBusPortChannelIndexKey({
         input,
         nodeId: node.id,
@@ -258,7 +255,10 @@ export const NodePorts: FC<NodePortsProps> = ({
         outputPortOrder?: string[];
       };
       const currentPortOrder = orderKey === 'inputPortOrder' ? nodeData.inputPortOrder : nodeData.outputPortOrder;
-      const normalizedCurrentPortOrder = normalizeSubGraphPortOrder(getDefinitionPortIds(definitions), currentPortOrder);
+      const normalizedCurrentPortOrder = normalizeSubGraphPortOrder(
+        getDefinitionPortIds(definitions),
+        currentPortOrder,
+      );
 
       if (areStringArraysEqual(nextPortOrder, normalizedCurrentPortOrder)) {
         return;
@@ -554,7 +554,9 @@ export const NodePorts: FC<NodePortsProps> = ({
                 key={`output-${output.id}`}
                 nodeId={node.id}
                 canDragTo={draggingWire ? draggingWire.startPortIsInput : false}
-                closest={closestPortToDraggingWire?.nodeId === node.id && closestPortToDraggingWire.portId === output.id}
+                closest={
+                  closestPortToDraggingWire?.nodeId === node.id && closestPortToDraggingWire.portId === output.id
+                }
                 definition={output}
                 draggingDataType={draggingWire?.dataType}
                 onMouseDown={handlePortMouseDown}

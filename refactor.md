@@ -520,7 +520,21 @@ unreachable-graph analysis continues using an older rule.
 
 ---
 
-## Phase 4: Centralize Data Bus Topology And Presentation Derivation
+## Phase 4: Centralize Data Bus Topology And Presentation Derivation - DONE
+
+### Status
+
+- `createDataBusTopology(...)` now builds the one scoped preview-connection
+  index for channel membership, input/output port groups, normal endpoint
+  antennas, active channel keys, and wire visibility decisions.
+- `buildDataBusGroupPresentation(...)` keeps channel pairing, provider state,
+  consumer counts, and related-hover derivation pure while `DataBusRail` keeps
+  `useCanvasNodeIO(...)` live for reactive plugin and variadic definitions.
+- `NodePorts` and `WireLayer` consume the shared topology. The rail's DOM
+  measurement and full-row state publication moved to `useDataBusRailLayout`,
+  and its CSS moved to `dataBusRailStyles.ts`.
+- Preview, definition-valid, comparison-removed, and port-coordinate ownership
+  remain distinct; no geometry is synthesized by the topology model.
 
 ### Problem
 

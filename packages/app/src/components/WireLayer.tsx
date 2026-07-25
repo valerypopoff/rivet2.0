@@ -58,7 +58,11 @@ import {
   type ToolContinuationWireState,
 } from './nodeCanvas/toolContinuationWireState.js';
 import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
-import { connectionMatchesDataBusChannelKeys, shouldRenderDataBusConnection } from './nodeCanvas/dataBusModel.js';
+import {
+  connectionMatchesDataBusChannelKeys,
+  shouldRenderDataBusConnection,
+  type DataBusTopology,
+} from './nodeCanvas/dataBusModel.js';
 
 const wiresStyles = css`
   position: absolute;
@@ -275,6 +279,7 @@ type WireLayerProps = {
   compareNodesById?: Record<NodeId, ChartNode>;
   compareRemovedConnections?: NodeConnection[];
   connectionCompareKindsByKey?: Record<string, ProjectComparisonChangeKind | undefined>;
+  dataBusTopology: DataBusTopology;
   draggingWire?: WireDef;
   draggingNode: boolean;
   highlightedNodes?: NodeId[];
@@ -295,6 +300,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   compareNodesById = {},
   compareRemovedConnections = [],
   connectionCompareKindsByKey = {},
+  dataBusTopology,
   draggingWire,
   draggingNode,
   highlightedNodes,
@@ -428,7 +434,7 @@ export const WireLayer: FC<WireLayerProps> = ({
         establishedConnectionKeySet.has(connectionKey) &&
         connectionMatchesDataBusChannelKeys({
           connection,
-          nodesById: effectiveNodesById,
+          topology: dataBusTopology,
           channelKeys: hoveredDataBusChannelKeySet,
         });
 
@@ -440,7 +446,7 @@ export const WireLayer: FC<WireLayerProps> = ({
         connection,
         forceVisible: connectionCompareKindsByKey[connectionKey] != null || hoverRevealed,
         isDefinitionValid: establishedConnectionKeySet.has(connectionKey),
-        nodesById: effectiveNodesById,
+        topology: dataBusTopology,
       });
     });
 
@@ -451,7 +457,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   }, [
     connectionCompareKindsByKey,
     connections,
-    effectiveNodesById,
+    dataBusTopology,
     establishedConnectionKeySet,
     hoveredDataBusChannelKeys,
   ]);
@@ -743,7 +749,7 @@ export const WireLayer: FC<WireLayerProps> = ({
     toolContinuationWireStates,
   };
   const hoverOverlayHost =
-    typeof document === 'undefined' ? undefined : (document.querySelector<HTMLElement>('.app') ?? document.body);
+    typeof document === 'undefined' ? undefined : document.querySelector<HTMLElement>('.app') ?? document.body;
 
   return (
     <>

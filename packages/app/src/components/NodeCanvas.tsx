@@ -117,13 +117,12 @@ import {
 } from './nodeCanvas/nodeCanvasResizeModel.js';
 import { DataBusRail } from './nodeCanvas/DataBusRail.js';
 import {
-  buildDataBusPortChannelIndex,
+  createDataBusTopology,
+  EMPTY_DATA_BUS_TOPOLOGY,
   getRenderableDataBusNodes,
-  type DataBusPortChannelIndex,
 } from './nodeCanvas/dataBusModel.js';
 
 const EMPTY_NODE_CONNECTIONS: NodeConnection[] = [];
-const EMPTY_DATA_BUS_PORT_CHANNEL_INDEX: DataBusPortChannelIndex = new Map();
 const EMPTY_EXPANDED_OUTPUT_NODE_IDS: NodeId[] = [];
 const EMPTY_RUN_DATA_BY_NODE: Record<NodeId, undefined> = {};
 const EMPTY_PROCESS_PAGE_BY_NODE: Record<NodeId, never> = {};
@@ -327,27 +326,22 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       referencedProjects,
     ],
   );
-  const dataBusPortChannels = useMemo(
+  const dataBusTopology = useMemo(
     () =>
       disableConnections
-        ? EMPTY_DATA_BUS_PORT_CHANNEL_INDEX
-        : buildDataBusPortChannelIndex({
+        ? EMPTY_DATA_BUS_TOPOLOGY
+        : createDataBusTopology({
             connections: previewConnections,
             nodesById: canvasEffectiveNodesById,
           }),
     [canvasEffectiveNodesById, disableConnections, previewConnections],
   );
-  const activeDataBusChannelKeySet = useMemo(
-    () =>
-      new Set([...dataBusPortChannels.values()].flatMap((channels) => channels.map((channel) => channel.channelKey))),
-    [dataBusPortChannels],
-  );
   useEffect(() => {
     setHoveredDataBusChannelKeys((currentKeys) => {
-      const nextKeys = currentKeys.filter((key) => activeDataBusChannelKeySet.has(key));
+      const nextKeys = currentKeys.filter((key) => dataBusTopology.activeChannelKeys.has(key));
       return nextKeys.length === currentKeys.length ? currentKeys : nextKeys;
     });
-  }, [activeDataBusChannelKeySet]);
+  }, [dataBusTopology.activeChannelKeys]);
   useEffect(() => {
     setHoveredDataBusChannelKeys([]);
   }, [selectedGraphMetadata?.id]);
@@ -962,7 +956,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     () => ({
       canvasZoom: canvasPosition.zoom,
       closestPortToDraggingWire: visibleClosestPort,
-      dataBusPortChannels,
+      dataBusTopology,
       draggingWire: visibleDraggingWire,
       graphStateOverlaysEnabled,
       heightCache: cache,
@@ -973,7 +967,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     [
       cache,
       canvasPosition.zoom,
-      dataBusPortChannels,
+      dataBusTopology,
       graphStateOverlaysEnabled,
       hoveredDataBusChannelKeys,
       isReallyZoomedOut,
@@ -1100,6 +1094,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
             compareNodesById={comparisonRenderState.compareNodesById}
             compareRemovedConnections={comparisonRenderState.compareRemovedConnections}
             connectionCompareKindsByKey={comparisonRenderState.connectionCompareKindsByKey}
+            dataBusTopology={dataBusTopology}
             highlightedNodes={highlightedNodes}
             highlightedPort={hoveringPort}
             hoveredDataBusChannelKeys={hoveredDataBusChannelKeys}
@@ -1114,7 +1109,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           busNodes={dataBusNodes}
           canvasHandlersContextValue={canvasHandlersContextValue}
           canvasViewContextValue={canvasViewContextValue}
-          connections={disableConnections ? EMPTY_NODE_CONNECTIONS : previewConnections}
+          dataBusTopology={dataBusTopology}
           nodeCompareKindsById={comparisonRenderState.nodeCompareKindsById}
           nodesById={canvasEffectiveNodesById}
           searchMatchingNodeIds={searchMatchingNodeIds}

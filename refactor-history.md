@@ -786,6 +786,13 @@ not preserve a complete file list.
     - Verification: Focused delegation and reachability suites passed; the complete core suite passed 968 tests with 8 intentional skips, and the complete app suite passed 1,565/1,565. Core/app lint and production builds, docs/style checks, Prettier, generated graph-creator freshness, and `git diff --check` passed.
     - Reassessment: Made edge targets and indexed graph IDs readonly, so dynamic Call Graph edges reuse the one analysis-wide graph-ID list instead of allocating a copy per edge. Kept the index cache module-private rather than exposing mutable cache state. Added direct coverage that an index is cached per graph and preserves both graph connection order and first-valid-input selection.
 
+138. **Centralized data-bus topology and presentation derivation**
+    - Why: The rail, ports, and wire layer each reinterpreted bus connections, while `DataBusRail` also owned layout observers, row-height publication, styles, and channel presentation.
+    - How: Added a canvas-scoped `createDataBusTopology(...)` index and `buildDataBusGroupPresentation(...)` pure view builder. Rewired NodeCanvas, NodePorts, DataBusRail, and WireLayer to use the shared topology. Extracted rail layout lifecycle to `useDataBusRailLayout.ts` and styles to `dataBusRailStyles.ts`.
+    - Preserved behavior: Live node IO definitions remain subscribed in each rail group; preview versus persisted definition-valid versus comparison-removed connections stay distinct; DOM port positions remain measured by `useNodePortPositions(...)`.
+    - Verification: Expanded focused data-bus model coverage for normal endpoints, direct bus links, sparse/missing/multiple providers, pathological ports, and wire visibility; ran data-bus layout/model tests and the app type check.
+    - Reassessment: Typed rail-layout inputs as the actual bus/topology contract so a same-count bus replacement resets observers; also observe rail child changes and dimensions because live IO can add or remove variadic channels without rerendering the parent. Retained only data-bus endpoint connections in the shared indexes instead of every graph edge. Channel lookup now degrades safely if an inconsistent node/port definition appears rather than relying on a non-null assertion.
+
 ## Residual Watchlist For Future Refactors
 
 1. **GraphProcessor size and responsibility concentration**

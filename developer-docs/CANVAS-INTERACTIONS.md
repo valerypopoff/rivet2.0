@@ -184,13 +184,19 @@ draggable.
 The header is shrinkable and title text is ellipsized, so an unusually long
 Passthrough title cannot push the fixed **Connect provider** control out of the
 available row.
-Each group indexes its incoming and outgoing connections once; channel rows do
-not repeatedly filter the graph-wide connection list.
-The rail and endpoint antenna index consume the same definition-valid preview
-connection list as normal node ports. During an input-origin rewire, the
-temporarily removed original edge therefore disappears from the provider label,
-receiver count, and antenna presentation together instead of leaving a stale
-radio marker behind the live drag wire.
+`createDataBusTopology(...)` is the canvas-scoped, preview-connection
+interpretation boundary. It indexes data-bus provider and consumer endpoints,
+per-channel connections, normal-port antenna references, active channel keys, and each
+connection's bus-channel membership exactly once. `DataBusRail`, `NodePorts`,
+and `WireLayer` consume that same topology rather than each rescanning the graph
+connections. `buildDataBusGroupPresentation(...)` then combines that stable
+topology with the rail group's _live_ `useCanvasNodeIO(...)` definitions. The
+definitions intentionally stay reactive: plugin, prefab, and variadic-port
+changes must update the rail without rebuilding a stale canvas snapshot.
+During an input-origin rewire, the temporarily removed original edge therefore
+disappears from the provider label, receiver count, antenna presentation, and
+wire suppression together instead of leaving a stale radio marker behind the
+live drag wire.
 
 Data-bus presentation is enabled only on connection-enabled graph canvases.
 Connection-disabled surfaces such as the Node library builder keep the
@@ -202,13 +208,18 @@ duplicate groups, and alignment operations. Their saved `visualData` is kept
 only as the location to restore if data-bus presentation is later turned off;
 fixed-rail interaction must not mutate that invisible spatial footprint.
 
-`dataBusModel.ts` is the pure classification boundary. `WireLayer` suppresses a
+`dataBusModel.ts` owns pure topology and per-group presentation derivation;
+`useDataBusRailLayout(...)` owns only intrinsic DOM measurement, observer
+lifecycle, compact/full-row state, and global row-height publication; and
+`dataBusRailStyles.ts` owns the rail CSS. `WireLayer` suppresses a
 bus provider or consumer wire only after that exact connection exists in the
 definition-valid persisted connection set. The in-progress `draggingWire`
 therefore stays an ordinary visible wire. `NodePorts` derives antenna metadata
-from one memoized endpoint index built from the same scoped effective-node and
-definition-valid preview-connection view. Port rendering performs a direct lookup
-instead of rescanning every graph connection for every visible port. Ordinary
+from the shared topology's memoized endpoint index. Port rendering performs a
+direct lookup instead of rescanning every graph connection for every visible
+port. The rail observes both size and child-list changes, because a live
+variadic IO update can add or remove channel rows without rerendering the rail
+parent. Ordinary
 wires and compact router-mast antennas can coexist on one source port. Each
 mast leaves the port horizontally into the free canvas before angling outward;
 input and output ports mirror the same geometry. Linked Node library instances
