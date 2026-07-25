@@ -37,6 +37,10 @@ export function resolveLLMProfileNodeValue(params: {
           'useCustomProviderBaseURLInput',
         )?.trim() ?? ''
       : '';
+  const openAIPreviousResponseId =
+    data.provider === 'openai' && data.useOpenAIPreviousResponseIdInput
+      ? coerceTypeOptional(inputs['previousResponseId' as PortId], 'string') ?? data.openAIPreviousResponseId ?? ''
+      : data.openAIPreviousResponseId ?? '';
   const anthropicThinkingBudget =
     data.provider === 'anthropic' && data.useAnthropicThinkingBudgetInput
       ? coerceTypeOptional(inputs['anthropicThinkingBudget' as PortId], 'number') ?? data.anthropicThinkingBudget
@@ -79,6 +83,8 @@ export function resolveLLMProfileNodeValue(params: {
       useSeedInput: false,
       customProviderBaseURL,
       useCustomProviderBaseURLInput: false,
+      openAIPreviousResponseId,
+      useOpenAIPreviousResponseIdInput: false,
       headers: Object.entries(headers ?? {}).map(([key, value]) => ({ key, value })),
       useHeadersInput: false,
       extraProviderOptions: extraProviderOptions == null ? '' : JSON.stringify(extraProviderOptions),

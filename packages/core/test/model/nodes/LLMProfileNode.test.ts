@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { LLMChatV2NodeImpl, LLMProfileNodeImpl, type LLMChatV2Node, type LLMProfileNode } from '../../../src/index.js';
 import { llmChatV2ProfileDataKeys } from '../../../src/model/chat-v2/llmChatV2NodeData.js';
 import { normalizeLLMProfileValue } from '../../../src/model/chat-v2/llmProfile.js';
+import { llmProfileInputIds } from '../../../src/model/chat-v2/llmProfileTypes.js';
 import { resolveLLMChatV2RuntimeConfig } from '../../../src/model/chat-v2/llmChatV2NodeRuntime.js';
 
 function createProfileNode(data: Partial<LLMProfileNode['data']> = {}) {
@@ -72,6 +73,74 @@ describe('LLMProfileNodeImpl', () => {
       node.getInputDefinitions().map((input) => input.id),
       ['model', 'apiKey', 'customProviderBaseURL', 'temperature', 'headers', 'extraProviderOptions'],
     );
+  });
+
+  it('keeps the full recoverable Profile input contract aligned with runtime ports', () => {
+    const commonDynamicInputs = {
+      useModelInput: true,
+      apiKeySource: 'input' as const,
+      useTemperatureInput: true,
+      useMaxTokensInput: true,
+      useTopPInput: true,
+      useTopKInput: true,
+      usePresencePenaltyInput: true,
+      useFrequencyPenaltyInput: true,
+      useStopSequencesInput: true,
+      useSeedInput: true,
+      useHeadersInput: true,
+      useExtraProviderOptionsInput: true,
+    };
+    const profileInputIds = new Set(
+      (['openai', 'anthropic', 'google', 'custom'] as const).flatMap((provider) =>
+        createProfileNode({
+          ...commonDynamicInputs,
+          provider,
+          useCustomProviderBaseURLInput: provider === 'custom',
+          useOpenAIPreviousResponseIdInput: provider === 'openai',
+          useAnthropicThinkingBudgetInput: provider === 'anthropic',
+          useGoogleThinkingBudgetInput: provider === 'google',
+        }).getInputDefinitions().map((input) => input.id),
+      ),
+    );
+
+    assert.deepEqual([...profileInputIds].sort(), [...llmProfileInputIds].sort());
+  });
+
+  it('exposes and resolves an input-driven OpenAI Previous Response ID in the profile', async () => {
+    const node = createProfileNode({
+      provider: 'openai',
+      useOpenAIPreviousResponseIdInput: true,
+    });
+
+    assert.ok(node.getInputDefinitions().some((input) => input.id === 'previousResponseId'));
+
+    const result = await node.process(
+      {
+        previousResponseId: { type: 'string', value: 'response-from-profile-input' },
+      } as any,
+      createRuntimeContext(),
+    );
+    const profile = normalizeLLMProfileValue(result.profile?.value);
+
+    assert.equal(profile.configuration.openAIPreviousResponseId, 'response-from-profile-input');
+    assert.equal(profile.configuration.useOpenAIPreviousResponseIdInput, false);
+  });
+
+  it('normalizes legacy profile nodes that predate Previous Response ID ownership', async () => {
+    const legacyNode = LLMProfileNodeImpl.create();
+    const legacyData = structuredClone(legacyNode.data) as Record<string, unknown>;
+    delete legacyData.openAIPreviousResponseId;
+    delete legacyData.useOpenAIPreviousResponseIdInput;
+    const node = new LLMProfileNodeImpl({
+      ...legacyNode,
+      data: legacyData as LLMProfileNode['data'],
+    });
+
+    const result = await node.process({}, createRuntimeContext());
+    const profile = normalizeLLMProfileValue(result.profile?.value);
+
+    assert.equal(profile.configuration.openAIPreviousResponseId, '');
+    assert.equal(profile.configuration.useOpenAIPreviousResponseIdInput, false);
   });
 
   it('resolves input-driven settings and embeds the resolved API key in the profile value', async () => {
@@ -204,6 +273,12 @@ describe('LLMProfileNodeImpl', () => {
       'Provider Advanced',
     ]);
     const profileDataKeys = new Set<string>(llmChatV2ProfileDataKeys);
+    const openAIGroup = profileEditors.find((editor) => editor.type === 'group' && editor.label === 'OpenAI') as any;
+    const previousResponseIdEditor = openAIGroup.editors.find(
+      (editor: any) => editor.dataKey === 'openAIPreviousResponseId',
+    );
+    assert.equal(previousResponseIdEditor?.label, 'Previous Response ID');
+    assert.equal(previousResponseIdEditor?.helperMessage, undefined);
     const visitProfileEditors = (editors: typeof profileEditors): void => {
       for (const editor of editors) {
         if ('dataKey' in editor && editor.dataKey != null) {
@@ -229,7 +304,22 @@ describe('LLMProfileNodeImpl', () => {
     const chatGroups = chatEditors
       .filter((editor): editor is Extract<typeof editor, { type: 'group' }> => editor.type === 'group')
       .map((editor) => editor.label);
-    assert.deepEqual(chatGroups, ['Request state', 'Response format', 'Tools', 'Outputs', 'Technical details']);
+    assert.deepEqual(chatGroups, ['Response format', 'Tools', 'Outputs', 'Technical details']);
+  });
+
+  it('does not render an empty Reasoning group for Custom provider profiles', async () => {
+    const profileEditors = await createProfileNode({ provider: 'custom' }).getEditors({} as any);
+
+    assert.ok(
+      !profileEditors.some((editor) => editor.type === 'group' && editor.label === 'Reasoning'),
+      'Custom profiles have no provider-specific reasoning controls.',
+    );
+
+    const chatEditors = await createChatNode({ configurationMode: 'profile', provider: 'custom' }).getEditors(
+      {} as any,
+    );
+    const outputsGroup = chatEditors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
+    assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label, 'Output reasoning');
   });
 
   it('keeps inline LLM Chat behavior unchanged and replaces only inference configuration in profile mode', async () => {
@@ -239,6 +329,7 @@ describe('LLMProfileNodeImpl', () => {
       apiKeySource: 'input',
       temperature: 0.15,
       maxTokens: 777,
+      openAIPreviousResponseId: 'response-from-profile',
       enableOpenAIWebSearch: true,
     });
     const profileOutput = await profileNode.process(
@@ -274,7 +365,8 @@ describe('LLMProfileNodeImpl', () => {
     assert.equal(runtime.runOptions.maxTokens, 777);
     assert.equal(runtime.runOptions.outputReasoning, true);
     assert.equal(runtime.runOptions.includeFunctionCalls, true);
-    assert.match(JSON.stringify(runtime.runOptions.providerOptions), /response-from-chat/);
+    assert.match(JSON.stringify(runtime.runOptions.providerOptions), /response-from-profile/);
+    assert.doesNotMatch(JSON.stringify(runtime.runOptions.providerOptions), /response-from-chat/);
     assert.doesNotMatch(runtime.cacheKey!, /profile-openai-secret/);
     assert.doesNotMatch(runtime.cacheKey!, /stale-inline-model/);
   });
@@ -325,7 +417,6 @@ describe('LLMProfileNodeImpl', () => {
     const inputIds = chatNode.getInputDefinitions().map((input) => input.id);
 
     assert.equal(inputIds[0], 'llmProfile');
-    assert.ok(inputIds.includes('previousResponseId' as any));
     for (const stalePort of [
       'model',
       'temperature',
@@ -333,6 +424,7 @@ describe('LLMProfileNodeImpl', () => {
       'customProviderBaseURL',
       'headers',
       'extraProviderOptions',
+      'previousResponseId',
     ]) {
       assert.ok(!inputIds.includes(stalePort as any));
     }

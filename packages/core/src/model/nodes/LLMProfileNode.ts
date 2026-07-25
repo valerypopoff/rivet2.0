@@ -49,6 +49,14 @@ export class LLMProfileNodeImpl extends NodeImpl<LLMProfileNode> {
         required: false,
       });
     }
+    if (this.data.provider === 'openai' && this.data.useOpenAIPreviousResponseIdInput) {
+      inputs.push({
+        id: 'previousResponseId' as PortId,
+        title: 'Previous Response ID',
+        dataType: 'string',
+        required: false,
+      });
+    }
     if (this.data.useTemperatureInput) {
       inputs.push({ id: 'temperature' as PortId, title: 'Temperature', dataType: 'number' });
     }

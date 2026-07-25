@@ -196,7 +196,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
-    if (this.data.useOpenAIPreviousResponseIdInput && (usesProfile || this.data.provider === 'openai')) {
+    if (!usesProfile && this.data.useOpenAIPreviousResponseIdInput && this.data.provider === 'openai') {
       inputs.push({
         id: 'previousResponseId' as PortId,
         title: 'Previous Response ID',

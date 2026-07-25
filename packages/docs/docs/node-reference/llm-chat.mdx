@@ -82,8 +82,15 @@ generation, reasoning, and provider-specific settings in LLM Chat.
 Connect an [LLM Profile](./llm-profile.mdx) node to switch the inference
 configuration without duplicating or editing the rest of the Chat node. Prompt,
 response format, Rivet tools, auto-continuation, outputs, request diagnostics,
-retry behavior, cache behavior, and OpenAI Previous Response ID remain settings
-of the LLM Chat node.
+retry behavior, and cache behavior remain settings of the LLM Chat node.
+
+When **Inline** is selected, choose **Export LLM settings to profile node** at the right of the switcher row to
+convert the current setup in one step. Rivet creates an LLM Profile node to the
+left, copies the provider and inference settings into it, moves any connected
+configuration inputs, connects the profile to this LLM Chat, and changes the
+Chat node to **From profile**. Prompt, tool, response-format, and downstream
+connections stay where they are. You can undo the whole conversion with one
+Undo action.
 
 ### Model
 
@@ -110,6 +117,9 @@ Inline mode and on LLM Profile in From profile mode:
 - OpenAI: Reasoning effort and optional reasoning summary.
 - Anthropic: Thinking mode, effort, thinking budget, and cache breakpoint TTL.
 - Google: Thinking level, thinking budget, and Include thoughts.
+
+**Output reasoning** is always in LLM Chat's **Outputs** section because it
+controls whether that Chat exposes the `Reasoning` output.
 
 The node body shows the selected reasoning effort for built-in providers.
 

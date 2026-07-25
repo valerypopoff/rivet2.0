@@ -12,8 +12,8 @@ owns provider, model, the resolved credential, common generation parameters,
 provider-specific reasoning/thinking settings, provider-native capabilities,
 Custom-provider URL, headers, and extra provider options. LLM Chat continues to
 own prompts and history, response format/schema, Rivet tools and continuation,
-outputs, retries and request diagnostics, editor caching, and the
-conversation-specific OpenAI Previous Response ID.
+outputs, retries and request diagnostics, and editor caching. Provider/model
+configuration, including OpenAI Previous Response ID, belongs to the profile.
 
 The profile output contains the resolved raw API key by design, along with its
 credential-source metadata. This supports fully detachable provider slots but
@@ -28,6 +28,28 @@ provider resolution, request planning, continuation, output, and cache code as
 Inline mode. Missing `configurationMode` means `inline` for serialized backward
 compatibility. Stale inline dynamic provider inputs must neither remain visible
 nor affect execution after switching to profile mode.
+
+The editor's Inline-only **Export LLM settings to profile node** action is a graph-editing
+convenience, not a third configuration mode. It creates a neighbouring LLM
+Profile, copies every field in `llmChatV2ProfileDataKeys`, rewires current
+connections for active Profile ports, and uses the complete `llmProfileInputIds`
+contract for recoverable connections so disabled settings move to the Profile
+too. It connects its `profile` output to LLM Chat's `llmProfile` input, and then
+changes the Chat node to `profile`. The whole conversion is one undoable
+command. Prompt/history, response format, tools, outputs, retries, and their
+connections stay on LLM Chat.
+The explanatory configuration copy occupies the full settings-panel width
+above the controls. The action shares the configuration-switcher row and is
+aligned to the right edge of the node settings panel. Its tooltip wrapper is
+the aligned flex item, so tooltip composition cannot constrain or wrap the
+switcher. This two-option switcher opts out of the shared segmented control's
+automatic option wrapping, so **From profile** remains one label on one line.
+
+**Output reasoning** is invocation-owned because it controls whether that LLM
+Chat exposes a `Reasoning` output; it always appears in the Chat node's
+**Outputs** section. LLM Profile's **Reasoning** section contains only
+provider-specific inference controls. It is omitted for Custom providers, which
+have no built-in provider-specific reasoning fields.
 
 `llm-config` is a resolved value contract. Its normalizer clears every
 profile-owned `use...Input` flag before LLM Chat consumes it, including for

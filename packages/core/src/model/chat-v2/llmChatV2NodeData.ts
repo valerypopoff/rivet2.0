@@ -93,6 +93,8 @@ export const llmChatV2ProfileDataKeys = [
   'useExtraProviderOptionsInput',
   'openAIReasoningEffort',
   'openAIReasoningSummary',
+  'openAIPreviousResponseId',
+  'useOpenAIPreviousResponseIdInput',
   'enableOpenAIWebSearch',
   'openAIWebSearchContextSize',
   'enableOpenAICodeInterpreter',

@@ -34,6 +34,7 @@ const stringFields = [
   'extraProviderOptions',
   'openAIReasoningEffort',
   'openAIReasoningSummary',
+  'openAIPreviousResponseId',
 ] as const satisfies readonly LLMChatV2ProfileDataKey[];
 const booleanFields = [
   'useModelInput',
@@ -48,6 +49,7 @@ const booleanFields = [
   'useCustomProviderBaseURLInput',
   'useHeadersInput',
   'useExtraProviderOptionsInput',
+  'useOpenAIPreviousResponseIdInput',
   'enableOpenAIWebSearch',
   'enableOpenAICodeInterpreter',
   'useAnthropicThinkingBudgetInput',
@@ -79,6 +81,7 @@ const resolvedInputToggleFields = [
   'useCustomProviderBaseURLInput',
   'useHeadersInput',
   'useExtraProviderOptionsInput',
+  'useOpenAIPreviousResponseIdInput',
   'useAnthropicThinkingBudgetInput',
   'useGoogleThinkingBudgetInput',
 ] as const satisfies readonly LLMChatV2ProfileDataKey[];

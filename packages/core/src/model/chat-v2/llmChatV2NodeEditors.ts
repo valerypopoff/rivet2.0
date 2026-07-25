@@ -146,26 +146,22 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
   );
 }
 
-function getProviderEditors(includeOpenAIRequestState: boolean): LLMChatV2EditorDefinition[] {
+function getProviderEditors(): LLMChatV2EditorDefinition[] {
   return [
-    getOpenAIProviderEditors(includeOpenAIRequestState),
+    getOpenAIProviderEditors(),
     getAnthropicProviderEditors(),
     getGoogleProviderEditors(),
   ];
 }
 
-function getOpenAIProviderEditors(includeRequestState: boolean): LLMChatV2EditorDefinition {
+function getOpenAIProviderEditors(): LLMChatV2EditorDefinition {
   return providerGroup('openai', 'OpenAI', [
-    ...(includeRequestState
-      ? [
-          {
-            type: 'string' as const,
-            label: 'Previous Response ID',
-            dataKey: 'openAIPreviousResponseId' as const,
-            useInputToggleDataKey: 'useOpenAIPreviousResponseIdInput' as const,
-          },
-        ]
-      : []),
+    {
+      type: 'string' as const,
+      label: 'Previous Response ID',
+      dataKey: 'openAIPreviousResponseId' as const,
+      useInputToggleDataKey: 'useOpenAIPreviousResponseIdInput' as const,
+    },
     {
       type: 'toggle',
       label: 'Enable Web Search',
@@ -297,7 +293,7 @@ function getParameterEditors(): LLMChatV2EditorDefinition {
   );
 }
 
-function getReasoningEditors(includeOutputReasoning: boolean): LLMChatV2EditorDefinition {
+function getReasoningEditors(): LLMChatV2EditorDefinition {
   return group('Reasoning', [
     {
       type: 'dropdown',
@@ -308,17 +304,6 @@ function getReasoningEditors(includeOutputReasoning: boolean): LLMChatV2EditorDe
         'OpenAI-compatible Vercel provider option for reasoning models. Some models only support a subset of effort levels.',
       hideIf: hideUnlessProvider('openai'),
     },
-    ...(includeOutputReasoning
-      ? [
-          {
-            type: 'toggle' as const,
-            label: 'Output reasoning',
-            dataKey: 'outputReasoning' as const,
-            helperMessage:
-              'Adds a Reasoning output when the provider/model exposes reasoning or thinking text through the Vercel AI SDK. Some providers only expose token counts or summaries.',
-          },
-        ]
-      : []),
     {
       type: 'string',
       label: 'Reasoning summary',
@@ -477,19 +462,15 @@ function getToolEditors(): LLMChatV2EditorDefinition {
   ]);
 }
 
-function getOutputEditors(includeOutputReasoning: boolean): LLMChatV2EditorDefinition {
+function getOutputEditors(): LLMChatV2EditorDefinition {
   return group('Outputs', [
-    ...(includeOutputReasoning
-      ? [
-          {
-            type: 'toggle' as const,
-            label: 'Output reasoning',
-            dataKey: 'outputReasoning' as const,
-            helperMessage:
-              'Adds a Reasoning output when the provider/model exposes reasoning or thinking text through the Vercel AI SDK. Some providers only expose token counts or summaries.',
-          },
-        ]
-      : []),
+    {
+      type: 'toggle',
+      label: 'Output reasoning',
+      dataKey: 'outputReasoning',
+      helperMessage:
+        'Adds a Reasoning output when the provider/model exposes reasoning or thinking text through the Vercel AI SDK. Some providers only expose token counts or summaries.',
+    },
     {
       type: 'toggle',
       label: 'Output usage details',
@@ -510,20 +491,6 @@ function getOutputEditors(includeOutputReasoning: boolean): LLMChatV2EditorDefin
       dataKey: 'cache',
       helperMessage:
         "Reuses this node's previous outputs if the input is the same (provider config, prompt and generation settings). The cache persists while the Rivet app is open.",
-    },
-  ]);
-}
-
-function getRequestStateEditors(): LLMChatV2EditorDefinition {
-  return group('Request state', [
-    {
-      type: 'string',
-      label: 'OpenAI Previous Response ID',
-      dataKey: 'openAIPreviousResponseId',
-      useInputToggleDataKey: 'useOpenAIPreviousResponseIdInput',
-      helperMessage:
-        'Optional conversation state for OpenAI Responses models. It is ignored by other providers and remains local to this LLM Chat invocation.',
-      hideIf: (data) => data.configurationMode !== 'profile' && data.provider !== 'openai',
     },
   ]);
 }
@@ -599,30 +566,21 @@ export async function getLLMChatV2Editors(
 
   return [
     {
-      type: 'segmented',
+      type: 'custom',
       label: 'Configuration',
-      ariaLabel: 'LLM configuration source',
-      dataKey: 'configurationMode',
-      defaultValue: 'inline',
-      options: [
-        { value: 'inline', label: 'Inline' },
-        { value: 'profile', label: 'From profile' },
-      ],
-      helperMessage:
-        'Inline keeps provider and model settings in this node. From profile adds an LLM Profile input so reusable configurations can be switched without changing Chat behavior.',
+      customEditorId: 'LLMChatV2Configuration',
     },
     ...(!usesProfile
       ? [
           getModelEditors(await getResolvedModelOptions(data, context)),
-          ...getProviderEditors(true),
+          ...getProviderEditors(),
           getParameterEditors(),
-          getReasoningEditors(true),
+          ...(data.provider === 'custom' ? [] : [getReasoningEditors()]),
         ]
       : []),
-    ...(usesProfile ? [getRequestStateEditors()] : []),
     getResponseFormatEditors(),
     getToolEditors(),
-    getOutputEditors(usesProfile),
+    getOutputEditors(),
     ...(!usesProfile ? [getProviderAdvancedEditors()] : []),
     getTechnicalDetailsEditors(),
   ];
@@ -635,9 +593,9 @@ export async function getLLMProfileEditors(
   const profileData = data as LLMChatV2NodeData;
   return [
     getModelEditors(await getResolvedModelOptions(profileData, context)),
-    ...getProviderEditors(false),
+    ...getProviderEditors(),
     getParameterEditors(),
-    getReasoningEditors(false),
+    ...(profileData.provider === 'custom' ? [] : [getReasoningEditors()]),
     getProviderAdvancedEditors(),
   ] as unknown as EditorDefinition<LLMProfileEditorNode>[];
 }

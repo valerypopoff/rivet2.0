@@ -8,6 +8,30 @@ import {
 
 export const LLM_PROFILE_VALUE_VERSION = 1 as const;
 
+/**
+ * Every input port owned by an LLM Profile, including ports that are hidden
+ * until their matching provider or input toggle is enabled. This lets editor
+ * operations preserve recoverable connections across configuration changes.
+ */
+export const llmProfileInputIds = [
+  'model',
+  'apiKey',
+  'customProviderBaseURL',
+  'previousResponseId',
+  'temperature',
+  'maxTokens',
+  'topP',
+  'topK',
+  'presencePenalty',
+  'frequencyPenalty',
+  'stopSequences',
+  'seed',
+  'headers',
+  'extraProviderOptions',
+  'anthropicThinkingBudget',
+  'googleThinkingBudget',
+] as const;
+
 export type LLMProfileValue = {
   version: typeof LLM_PROFILE_VALUE_VERSION;
   configuration: LLMChatV2ProfileData;
