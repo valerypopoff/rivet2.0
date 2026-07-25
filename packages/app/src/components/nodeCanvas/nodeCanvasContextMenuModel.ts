@@ -1,5 +1,6 @@
 import {
   getNodePrefabInstancePrefabId,
+  detachNodePrefabInstance,
   isNodePrefabInstanceNode,
   resolveToolContinuationConnections,
   resolveNodePrefabInstance,
@@ -81,6 +82,7 @@ export function getNodeCanvasContextMenuContext({
   const targetIsPrefabInstance = targetNode != null && isNodePrefabInstanceNode(targetNode);
   const targetPrefabId = targetIsPrefabInstance ? getNodePrefabInstancePrefabId(targetNode) : undefined;
   const resolvedTargetNode = targetNode ? resolveNodePrefabInstance(project, targetNode) : undefined;
+  const canDetachNodePrefab = targetNode != null && detachNodePrefabInstance(project, targetNode) != null;
   const effectiveTarget = targetIsPrefabInstance
     ? { nodeId: target.nodeId, nodeType: resolvedTargetNode!.type }
     : target;
@@ -182,6 +184,7 @@ export function getNodeCanvasContextMenuContext({
       unfreezeNodeIds,
       isFrozen,
       canOpenNodePrefabSource: targetPrefabId != null,
+      canDetachNodePrefab,
     },
   };
 }

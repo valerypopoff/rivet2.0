@@ -4,6 +4,7 @@ import {
   type ChartNode,
   type NodeId,
   type GraphId,
+  detachNodePrefabInstance,
   getNodePrefabInstancePrefabId,
   isNodePrefabInstanceNode,
   resolveNodePrefabInstance,
@@ -23,6 +24,7 @@ import { useDuplicateNode } from './useDuplicateNode';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useAddNodeCommand } from '../commands/addNodeCommand';
 import { useDeleteNodesCommand } from '../commands/deleteNodeCommand';
+import { useEditNodeCommand } from '../commands/editNodeCommand';
 import { copyToClipboard } from '../utils/copyToClipboard';
 import { useGoToSubgraphNode } from './useGoToSubgraphNode.js';
 import { useFrozenNodeOutputActions } from './useFrozenNodeOutputActions.js';
@@ -47,6 +49,7 @@ export function useGraphBuilderContextMenuHandler() {
   const nodesById = useAtomValue(nodesByIdState);
   const graphId = useAtomValue(graphMetadataState)?.id;
   const removeNodes = useDeleteNodesCommand();
+  const editNode = useEditNodeCommand();
   const goToSubgraphNode = useGoToSubgraphNode();
   const { freezeNode, unfreezeNode } = useFrozenNodeOutputActions();
   const setSubGraphPortRearrangeTarget = useSetAtom(subGraphPortRearrangeTargetState);
@@ -96,6 +99,17 @@ export function useGraphBuilderContextMenuHandler() {
         .with('node-open-prefab-source', () => {
           const { nodeId } = context.data as { nodeId: NodeId };
           openLinkedNodeLibraryNode(nodesById[nodeId]);
+        })
+        .with('node-detach-prefab', () => {
+          const { nodeId } = context.data as { nodeId: NodeId };
+          const linkedNode = nodesById[nodeId];
+          const detachedNode = linkedNode ? detachNodePrefabInstance(project, linkedNode) : undefined;
+
+          if (!detachedNode) {
+            return;
+          }
+
+          editNode({ nodeId, newNode: detachedNode, mergeWithPrevious: false });
         })
         .with('node-rearrange-subgraph-ports', () => {
           const { nodeId } = context.data as { nodeId: NodeId };

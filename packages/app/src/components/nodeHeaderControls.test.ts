@@ -89,6 +89,10 @@ test('linked node headers use the library-link control instead of the edit gear'
     contextMenuConfigurationSource,
     /id: 'node-open-prefab-source',[\s\S]*label: 'Open library node',[\s\S]*icon: SubgraphLinkIcon,/,
   );
+  assert.match(
+    contextMenuConfigurationSource,
+    /id: 'node-detach-prefab',[\s\S]*label: 'Detach from library node',[\s\S]*conditional: canDetachNodePrefab,/,
+  );
 
   assert.match(contextMenuConfigurationSource, /const canEditNode = \(context: unknown\) =>/);
   assert.match(
