@@ -93,6 +93,7 @@ export async function loadProjectAndAttachedDataFromFile(path: string): Promise<
 }
 
 export async function runGraphInFile(path: string, options: NodeRunGraphOptions): Promise<Record<string, DataValue>> {
+  options.abortSignal?.throwIfAborted();
   const project = await loadProjectFromFile(path);
   return runGraph(project, options);
 }
@@ -139,13 +140,22 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
       processorOptions.captureNodeTimings ?? (processorOptions.remoteDebugger !== undefined ? true : undefined),
   };
   const runtimePolicy = resolveCreateProcessorRuntimePolicy({ ...processorOptions, runtimeProfile });
-  const processor = coreCreateProcessor(project, effectiveProcessorOptions, {
-    cacheLoadedProjects: runtimePolicy.cacheLoadedProjects,
-    executionPlanCacheMode: runtimePolicy.executionPlanCacheMode,
-    runtimeCache: runtimePolicy.runtimeCache,
-    runtimeProfiler,
-    scheduler: runtimePolicy.scheduler,
-  });
+  const processor = coreCreateProcessor(
+    project,
+    {
+      ...effectiveProcessorOptions,
+      // Node owns the run-scoped binding below so repeated runs can clean it
+      // up without retaining completed processors on a long-lived signal.
+      abortSignal: undefined,
+    },
+    {
+      cacheLoadedProjects: runtimePolicy.cacheLoadedProjects,
+      executionPlanCacheMode: runtimePolicy.executionPlanCacheMode,
+      runtimeCache: runtimePolicy.runtimeCache,
+      runtimeProfiler,
+      scheduler: runtimePolicy.scheduler,
+    },
+  );
 
   configureNodeProcessor(processor.processor);
 
@@ -205,11 +215,13 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
       disposed = true;
       detachAbortCleanup();
       detachRemoteDebugger();
+      processor.dispose();
     },
     async run() {
       if (disposed) {
         throw new Error('This Node processor has been disposed.');
       }
+      abortSignal?.throwIfAborted();
       const shouldManageRemoteDebugger =
         effectiveProcessorOptions.remoteDebugger != null && !processor.processor.isRunning;
       const shouldManageRunScopedRuntimeCache = runtimePolicy.runtimeCache != null && !processor.processor.isRunning;
@@ -223,8 +235,10 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
       }
 
       const runScopedCodeRunner = runtimePolicy.useCachedDefaultCodeRunner ? new CachedNodeCodeRunner() : undefined;
+      const detachProcessorAbort = bindAbortSignal(processor.processor, abortSignal);
 
       const cleanupRunResources = () => {
+        detachProcessorAbort();
         runScopedCodeRunner?.clearCache();
         if (shouldManageRunScopedRuntimeCache) {
           clearGraphProcessorRuntimeCache(runtimePolicy.runtimeCache!);
@@ -237,14 +251,18 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
       };
 
       try {
-        const outputs = await processor.processor.processGraph(
+        const outputsPromise = processor.processor.processGraph(
           createNodeProcessContext(effectiveProcessorOptions, pluginEnv, { codeRunner: runScopedCodeRunner }),
           processor.inputs,
           processor.contextValues,
           { returnWhenGraphOutputsReady: effectiveProcessorOptions.returnWhenGraphOutputsReady },
         );
 
-        return outputs;
+        if (abortSignal?.aborted) {
+          void processor.processor.abort();
+        }
+
+        return await outputsPromise;
       } finally {
         if (processor.processor.isRunning) {
           void processor.processor
@@ -281,6 +299,7 @@ export function createGraphRunner(project: Project, options: NodeGraphRunnerOpti
     processor: NodeGraphProcessor,
     runOptions: NodeGraphRunnerRunOptions = {},
   ): Promise<Record<string, DataValue>> => {
+    runOptions.abortSignal?.throwIfAborted();
     activeProcessors.add(processor);
     const cleanupAbortSignal = bindAbortSignal(processor, runOptions.abortSignal);
 
@@ -326,6 +345,7 @@ export function createGraphRunner(project: Project, options: NodeGraphRunnerOpti
       if (disposed) {
         throw new Error('Cannot run a disposed graph runner.');
       }
+      runOptions.abortSignal?.throwIfAborted();
 
       return await runWithProcessor(createRunnerProcessor(project, processorOptions), runOptions);
     },
@@ -333,6 +353,7 @@ export function createGraphRunner(project: Project, options: NodeGraphRunnerOpti
 }
 
 export async function runGraph(project: Project, options: NodeRunGraphOptions): Promise<Record<string, DataValue>> {
+  options.abortSignal?.throwIfAborted();
   const processorOptions = stripRunGraphRuntimeProfile(options);
   const runtimePlan = resolveDefaultRunGraphRuntimePlan(project, processorOptions);
   const processorInfo = createProcessor(project, createRunGraphProcessorOptions(processorOptions, runtimePlan));
@@ -500,6 +521,7 @@ function createNodeProcessContext(
       },
     ),
     getChatNodeEndpoint: options.getChatNodeEndpoint,
+    onChatV2CallFinished: options.onChatV2CallFinished,
   };
 }
 

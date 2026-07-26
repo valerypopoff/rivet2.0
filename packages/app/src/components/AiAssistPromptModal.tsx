@@ -56,6 +56,7 @@ export type AiAssistPromptModalProps = {
   onClose: () => void;
   onGenerate: () => void | Promise<void>;
   bodyExtra?: ReactNode;
+  footerExtra?: ReactNode;
   generateDisabled?: boolean;
   generateLabel?: string;
   isDisabled?: boolean;
@@ -69,6 +70,7 @@ export type AiAssistPromptModalProps = {
 
 export function AiAssistPromptModal({
   bodyExtra,
+  footerExtra,
   generateDisabled = false,
   generateLabel = 'Generate',
   isDisabled = false,
@@ -138,6 +140,7 @@ export function AiAssistPromptModal({
             </div>
           </ModalBody>
           <ModalFooter>
+            {footerExtra}
             {working && onCancel ? (
               <Button aria-label="Cancel generation" onClick={onCancel}>
                 Cancel

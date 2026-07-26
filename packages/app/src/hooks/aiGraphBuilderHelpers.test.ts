@@ -10,6 +10,9 @@ import {
   type ProjectId,
   type TextNode,
   type ExtractJsonNode,
+  type GraphInputNode,
+  type GraphOutputNode,
+  type SubGraphNode,
 } from '@valerypopoff/rivet2-core';
 import {
   buildAiGraphBuilderExternalFunctions,
@@ -17,6 +20,15 @@ import {
   resolveAiGraphBuilderNodeDataKey,
   resolveAiGraphBuilderNodeType,
 } from './aiGraphBuilderHelpers';
+import { createGraphBuilderAuthoringCatalog } from '../features/graphBuilder/authoringCatalog';
+
+function createCatalog(registry: ReturnType<typeof createBuiltInRegistry>, project: Project) {
+  return createGraphBuilderAuthoringCatalog({
+    registry,
+    project,
+    referencedProjects: {},
+  });
+}
 
 test('resolveAiGraphBuilderNodeType accepts model-friendly node type labels', () => {
   const registry = createBuiltInRegistry();
@@ -41,14 +53,16 @@ test('createNode normalizes model-friendly node type labels before creating node
     connections: [],
   };
 
+  const project = {
+    metadata: { id: 'project-1' as ProjectId, title: 'Project', description: '' },
+    graphs: { [workingGraph.metadata!.id!]: workingGraph },
+    plugins: [],
+  } as Project;
   const helpers = buildAiGraphBuilderExternalFunctions({
-    project: {
-      metadata: { id: 'project-1' as ProjectId, title: 'Project', description: '' },
-      graphs: {},
-      plugins: [],
-    } as Project,
+    project,
     referencedProjects: {},
     registry,
+    catalog: createCatalog(registry, project),
     showChanges: () => {},
     workingGraph: () => workingGraph,
     setWorkingGraph: (nextGraph) => {
@@ -75,14 +89,16 @@ test('createNode keeps working after app state freezes a published graph snapsho
     connections: [],
   };
 
+  const project = {
+    metadata: { id: 'project-1' as ProjectId, title: 'Project', description: '' },
+    graphs: { [workingGraph.metadata!.id!]: workingGraph },
+    plugins: [],
+  } as Project;
   const helpers = buildAiGraphBuilderExternalFunctions({
-    project: {
-      metadata: { id: 'project-1' as ProjectId, title: 'Project', description: '' },
-      graphs: {},
-      plugins: [],
-    } as Project,
+    project,
     referencedProjects: {},
     registry,
+    catalog: createCatalog(registry, project),
     showChanges: () => {
       Object.freeze(workingGraph.nodes);
       Object.freeze(workingGraph.connections);
@@ -112,6 +128,7 @@ test('AI graph builder edit helpers accept object-shaped calls and data path key
   assert.equal(resolveAiGraphBuilderNodeDataKey({ text: '' }, 'data.text'), 'text');
   assert.equal(resolveAiGraphBuilderNodeDataKey({ text: '' }, 'node.data["text"]'), 'text');
   assert.equal(resolveAiGraphBuilderNodeDataKey({ jsonTemplate: '' }, '$.data.jsonTemplate'), 'jsonTemplate');
+  assert.throws(() => resolveAiGraphBuilderNodeDataKey({}, 'constructor'), /does not exist on node data/);
 });
 
 test('getPorts only reports connections that belong to the requested node', async () => {
@@ -157,14 +174,16 @@ test('getPorts only reports connections that belong to the requested node', asyn
     ],
   };
 
+  const project = {
+    metadata: { id: 'project-1' as ProjectId, title: 'Project', description: '' },
+    graphs: { [workingGraph.metadata!.id!]: workingGraph },
+    plugins: [],
+  } as Project;
   const helpers = buildAiGraphBuilderExternalFunctions({
-    project: {
-      metadata: { id: 'project-1' as ProjectId, title: 'Project', description: '' },
-      graphs: {},
-      plugins: [],
-    } as Project,
+    project,
     referencedProjects: {},
     registry,
+    catalog: createCatalog(registry, project),
     showChanges: () => {},
     workingGraph: () => workingGraph,
     setWorkingGraph: (nextGraph) => {
@@ -183,4 +202,106 @@ test('getPorts only reports connections that belong to the requested node', asyn
 
   assert.equal(outputPort.connectedTo.length, 1);
   assert.equal(outputPort.connectedTo[0].inputNodeId, nodeC.id);
+});
+
+test('getPorts includes built-in conditional inputs and uses the supplied authoring project', async () => {
+  const registry = createBuiltInRegistry();
+  const activeGraphId = 'graph-active' as GraphId;
+  const targetGraphId = 'graph-target' as GraphId;
+  const conditionalNode = registry.createDynamic('text') as TextNode;
+  conditionalNode.id = 'conditional' as NodeId;
+  conditionalNode.isConditional = true;
+
+  const subGraphNode = registry.createDynamic('subGraph') as SubGraphNode;
+  subGraphNode.id = 'subgraph' as NodeId;
+  subGraphNode.data.graphId = targetGraphId;
+
+  const graphInput = registry.createDynamic('graphInput') as GraphInputNode;
+  graphInput.data.id = 'question';
+  const graphOutput = registry.createDynamic('graphOutput') as GraphOutputNode;
+  graphOutput.data.id = 'answer';
+
+  let workingGraph: NodeGraph = {
+    metadata: { id: activeGraphId, name: 'Active', description: '' },
+    nodes: [conditionalNode, subGraphNode],
+    connections: [],
+  };
+  const project: Project = {
+    metadata: { id: 'project-1' as ProjectId, title: 'Project', description: '' },
+    graphs: {
+      [activeGraphId]: workingGraph,
+      [targetGraphId]: {
+        metadata: { id: targetGraphId, name: 'Target', description: '' },
+        nodes: [graphInput, graphOutput],
+        connections: [],
+      },
+    },
+  };
+  const helpers = buildAiGraphBuilderExternalFunctions({
+    project: () => project,
+    referencedProjects: {},
+    registry,
+    catalog: createCatalog(registry, project),
+    showChanges: () => {},
+    workingGraph: () => workingGraph,
+    setWorkingGraph: (nextGraph) => {
+      workingGraph = nextGraph;
+    },
+  });
+
+  const conditionalPorts = (await helpers.getPorts?.({} as ExternalFunctionProcessContext, conditionalNode.id)) as {
+    value: { inputs: Array<{ definition: { id: string } }> };
+  };
+  const subGraphPorts = (await helpers.getPorts?.({} as ExternalFunctionProcessContext, subGraphNode.id)) as {
+    value: {
+      inputs: Array<{ definition: { id: string } }>;
+      outputs: Array<{ definition: { id: string } }>;
+    };
+  };
+
+  assert.ok(conditionalPorts.value.inputs.some((input) => input.definition.id === '$if'));
+  assert.ok(subGraphPorts.value.inputs.some((input) => input.definition.id === 'question'));
+  assert.ok(subGraphPorts.value.outputs.some((output) => output.definition.id === 'answer'));
+});
+
+test('connectNodes rejects incompatible port types through shared editor compatibility', async () => {
+  const registry = createBuiltInRegistry();
+  const sourceNode = registry.createDynamic('text') as TextNode;
+  sourceNode.id = 'source' as NodeId;
+  const outputNode = registry.createDynamic('graphOutput') as GraphOutputNode;
+  outputNode.id = 'output' as NodeId;
+  outputNode.data.dataType = 'binary';
+
+  let workingGraph: NodeGraph = {
+    metadata: { id: 'graph-1' as GraphId, name: 'Graph', description: '' },
+    nodes: [sourceNode, outputNode],
+    connections: [],
+  };
+  const project: Project = {
+    metadata: { id: 'project-1' as ProjectId, title: 'Project', description: '' },
+    graphs: { [workingGraph.metadata!.id!]: workingGraph },
+  };
+  const helpers = buildAiGraphBuilderExternalFunctions({
+    project,
+    referencedProjects: {},
+    registry,
+    catalog: createCatalog(registry, project),
+    showChanges: () => {},
+    workingGraph: () => workingGraph,
+    setWorkingGraph: (nextGraph) => {
+      workingGraph = nextGraph;
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      helpers.connectNodes!({} as ExternalFunctionProcessContext, {
+        sourceNodeId: sourceNode.id,
+        sourcePortId: 'output',
+        destNodeId: outputNode.id,
+        destPortId: 'value',
+      }),
+    /is not compatible/,
+  );
+  assert.equal(workingGraph.connections.length, 0);
 });

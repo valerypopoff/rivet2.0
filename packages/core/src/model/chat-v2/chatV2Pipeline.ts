@@ -2,6 +2,7 @@ import type { ChatMessage } from '../DataValue.js';
 import type { PortId } from '../NodeBase.js';
 import { coercePromptToChatMessages, prependSystemPrompt } from '../chat/chatMessages.js';
 import { generateChatV2, streamChatV2 } from './aiSdkBridge.js';
+import { createObservedChatV2CallId, notifyChatV2CallFinished } from './chatV2CallObserver.js';
 import { chatMessagesToModelMessages } from './messageConverter.js';
 import type {
   ChatV2PipelineResult,
@@ -17,9 +18,7 @@ import {
   isChatV2ProviderFetchError,
   normalizeChatV2ProviderError,
 } from './chatV2Errors.js';
-import {
-  waitForLLMChatV2RetryCooldown,
-} from './chatV2Retry.js';
+import { waitForLLMChatV2RetryCooldown } from './chatV2Retry.js';
 import {
   createChatV2CommonOutputs,
   createChatV2ProviderFailureOutputs,
@@ -49,11 +48,19 @@ function isChatV2RetryFailure(error: unknown): error is ChatV2RetryFailure {
 }
 
 function getProviderFailureMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
+  try {
+    if (error instanceof Error && typeof error.message === 'string') {
+      return error.message;
+    }
+  } catch {
+    return 'Provider request failed with unreadable error metadata.';
   }
 
-  return String(error);
+  try {
+    return String(error);
+  } catch {
+    return 'Provider request failed with unreadable error metadata.';
+  }
 }
 
 function buildNon200StatusError(statusCode: number): Error & { statusCode: number } {
@@ -69,12 +76,21 @@ function normalizeProviderFailureMessage(
   error: unknown,
   options: Pick<RunChatV2PipelineOptions, 'provider' | 'modelId'>,
 ): string {
-  return getProviderFailureMessage(
-    normalizeChatV2ProviderError(error, {
+  return getProviderFailureMessage(normalizeProviderFailure(error, options));
+}
+
+function normalizeProviderFailure(
+  error: unknown,
+  options: Pick<RunChatV2PipelineOptions, 'provider' | 'modelId'>,
+): unknown {
+  try {
+    return normalizeChatV2ProviderError(error, {
       provider: options.provider,
       modelId: options.modelId,
-    }),
-  );
+    });
+  } catch {
+    return error;
+  }
 }
 
 function normalizeProviderFailureMessages(
@@ -85,6 +101,7 @@ function normalizeProviderFailureMessages(
 }
 
 async function runChatV2WithRetry(
+  options: RunChatV2PipelineOptions,
   chatOptions: StreamChatV2Options,
   retryPlan: ChatV2RequestPlan['retry'],
   signal: AbortSignal,
@@ -94,9 +111,18 @@ async function runChatV2WithRetry(
   const requestErrors: unknown[] = [];
 
   for (let attempt = 0; ; attempt++) {
+    const callId = createObservedChatV2CallId(options);
+    let callWasObserved = false;
     try {
       const result = transportMode === 'generate' ? await generateChatV2(chatOptions) : await streamChatV2(chatOptions);
       const statusCode = result.requestStatus ?? 200;
+      notifyChatV2CallFinished(options, {
+        callId,
+        attemptIndex: attempt,
+        outcome: statusCode === 200 ? 'success' : 'provider-failure',
+        result,
+      });
+      callWasObserved = true;
 
       if (retryPlan.enabled) {
         requestStatuses.push(statusCode);
@@ -115,6 +141,14 @@ async function runChatV2WithRetry(
 
       await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
     } catch (error) {
+      if (!callWasObserved) {
+        notifyChatV2CallFinished(options, {
+          callId,
+          attemptIndex: attempt,
+          outcome: signal.aborted ? 'aborted' : 'provider-failure',
+          error,
+        });
+      }
       const statusCode = getChatV2ProviderErrorStatusCode(error);
 
       if (!retryPlan.enabled || statusCode == null || statusCode === 200) {
@@ -218,6 +252,7 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
   const shouldStreamResponse = plan.transportMode === 'stream';
 
   const chatResponse = await runChatV2WithRetry(
+    options,
     {
       ...plan.request,
       abortSignal: options.context.signal,
@@ -256,10 +291,7 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
   ).catch((caughtError: unknown) => {
     const retryFailure = isChatV2RetryFailure(caughtError) ? caughtError : undefined;
     const rawError = retryFailure?.error ?? caughtError;
-    const normalizedError = normalizeChatV2ProviderError(rawError, {
-      provider: options.provider,
-      modelId: options.modelId,
-    });
+    const normalizedError = normalizeProviderFailure(rawError, options);
     const requestStatuses = retryFailure?.requestStatuses ?? [];
     const requestErrors = normalizeProviderFailureMessages(retryFailure?.requestErrors ?? [], options);
     const failureResult = buildProviderFailureResult(

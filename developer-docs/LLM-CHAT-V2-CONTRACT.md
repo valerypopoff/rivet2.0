@@ -92,6 +92,11 @@ paths and should not be used as the primary target for new provider refactors.
   tool, generation, provider-option, and output policy into the pipeline.
 - [`chatV2Pipeline.ts`](../packages/core/src/model/chat-v2/chatV2Pipeline.ts)
   owns the Vercel AI SDK request/stream-or-generate/retry/result pipeline.
+- [`chatV2CallObserver.ts`](../packages/core/src/model/chat-v2/chatV2CallObserver.ts)
+  owns the privacy-bounded physical-call accounting event. It snapshots safe
+  usage, outcome, provider/model identity, and known/unknown pricing once per
+  actual provider attempt while isolating malformed provider metadata and
+  throwing or rejected host callbacks.
 - [`aiSdkBridge.ts`](../packages/core/src/model/chat-v2/aiSdkBridge.ts) is the
   only place that should directly adapt to Vercel AI SDK call signatures.
 - [`chatV2Outputs.ts`](../packages/core/src/model/chat-v2/chatV2Outputs.ts)
@@ -217,6 +222,15 @@ paths and should not be used as the primary target for new provider refactors.
 - Request diagnostics should use `summarizeChatV2RequestPlan(...)`, which omits
   the live SDK model, prompt contents, and credential values. Never serialize a
   provider model or `ChatV2CredentialResult.value` for logging.
+- `RunGraphOptions.onChatV2CallFinished` observes physical provider attempts,
+  not logical node runs or recordings. It emits once for success, provider
+  failure, or an in-flight abort, including explicit Rivet retries, and never
+  includes prompts, request bodies, raw errors, provider metadata, headers, or
+  credentials. Missing usage and unknown pricing remain absent rather than
+  becoming zero. Core and Node run/processor entry points must forward the hook
+  onto the live `ProcessContext`; replayed or frozen work emits no synthetic
+  event. Observer exceptions and accidentally returned rejected promises must
+  never affect graph execution.
 - The `API key source` helper text in `llmChatV2NodeEditors.ts` is part of the
   user-facing credential contract: `Configured key` must explain the matching
   Settings > LLM key plus the programmatic runtime setting or env fallback for

@@ -8,6 +8,7 @@ The Node package version wraps core processor creation with Node defaults:
 
 - marks the processor executor as `nodejs`
 - attaches a `RivetDebuggerServer` when `remoteDebugger` is provided, re-attaches it at the start of each `run()`, and detaches it after the run finishes
+- binds `abortSignal` for each run, including an already-aborted signal, and removes the binding after the complete run settles
 - fills plugin environment values from `process.env` when `pluginEnv` is unset
 - provides `NodeNativeApi`, `NodeMCPProvider`, a Node CodeRunner, `NodeProjectReferenceLoader`, and a fallback tokenizer unless you override them
 
@@ -35,11 +36,16 @@ function createProcessor(project: Project, options: NodeCreateProcessorOptions):
   getSSEStream: (spec: RivetEventStreamFilterSpec) => ReadableStream;
   streamNode: (nodeIdOrTitle: string) => ReadableStream;
   run: () => Promise<Record<string, DataValue>>;
+  dispose: () => void;
 };
 ```
 
 For untyped JavaScript callers, unknown `runtimeProfile` string values are
 treated as `compatible` rather than as the omitted default.
+
+Call `dispose()` when an unstarted or reusable processor is no longer needed.
+It releases the Remote Debugger attachment and any host abort-signal binding.
+Completed runs release their run-scoped bindings automatically.
 
 ## Example
 

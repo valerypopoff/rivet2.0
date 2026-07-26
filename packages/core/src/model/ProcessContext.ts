@@ -32,6 +32,68 @@ import type {
 } from './StoredValueStore.js';
 import type { ToolCallContinuation } from './ToolCallContinuation.js';
 import type { KnowledgeStoreConnectionId, RivetKnowledgeStore } from '../integrations/KnowledgeStore.js';
+import type { ChatV2Provider } from './chat-v2/chatV2ProviderTypes.js';
+
+export type ChatV2CallId = Opaque<string, 'ChatV2CallId'>;
+
+export type ChatV2CallOutcome = 'success' | 'provider-failure' | 'aborted';
+
+/**
+ * Usage fields reported by the provider SDK for one physical Chat V2 call.
+ * The observer deliberately copies only usage data and never forwards provider
+ * metadata, request data, or authentication.
+ */
+export type ChatV2CallRawUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  inputTokenDetails?: {
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    noCacheTokens?: number;
+  };
+  outputTokenDetails?: {
+    reasoningTokens?: number;
+    textTokens?: number;
+  };
+};
+
+/**
+ * Rivet's provider-neutral names for usage reported by one physical call.
+ * Missing provider fields remain absent rather than being represented as zero.
+ */
+export type ChatV2CallNormalizedUsage = {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  cachedTokens?: number;
+  reasoningTokens?: number;
+};
+
+export type ChatV2CallPricing = {
+  status: 'known' | 'unknown';
+  costUsd?: number;
+};
+
+/**
+ * Privacy-bounded accounting event for a single physical Chat V2 provider call.
+ */
+export type ChatV2CallFinishedEvent = {
+  callId: ChatV2CallId;
+  /** Zero-based attempt index within this Chat V2 pipeline request. */
+  attemptIndex: number;
+  nodeId: NodeId;
+  processId: ProcessId;
+  provider: ChatV2Provider;
+  model: string;
+  outcome: ChatV2CallOutcome;
+  finishReason?: string;
+  rawUsage?: ChatV2CallRawUsage;
+  normalizedUsage?: ChatV2CallNormalizedUsage;
+  pricing: ChatV2CallPricing;
+};
+
+export type ChatV2CallFinishedObserver = (event: ChatV2CallFinishedEvent) => void;
 
 export type ProcessContext = {
   settings: RuntimeSettings;
@@ -63,6 +125,12 @@ export type ProcessContext = {
    * Runtime/library callers normally omit this; editor-only nodes/features can opt into it.
    */
   editorExecutionCache?: Map<string, unknown>;
+
+  /**
+   * Host-only accounting hook invoked once after every physical LLM Chat
+   * provider attempt. Observer failures are isolated from graph execution.
+   */
+  onChatV2CallFinished?: ChatV2CallFinishedObserver;
 
   /**
    * If implemented, chat nodes will first call this to resolve their configured endpoint to a final endpoint.

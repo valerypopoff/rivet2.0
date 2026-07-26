@@ -1137,6 +1137,7 @@ Caller-provided execution environment:
 - code runner
 - project reference loader
 - project path
+- optional host-only Chat v2 physical-call accounting observer
 - optional chat-endpoint resolution hook
 
 The `Tokenizer` interface supports an optional listener cleanup contract: `on('error', listener)` may return an unsubscribe callback. Built-in tokenizers return that callback, and `GraphProcessor` uses it to keep tokenizer error listeners run-scoped when processors or tokenizer instances are reused.
@@ -1288,6 +1289,7 @@ Current options include:
 - trace toggle
 - processor concurrency override
 - chat-endpoint resolver
+- Chat v2 physical-call accounting observer
 - tokenizer
 - code runner
 - project path
@@ -1296,6 +1298,47 @@ Current options include:
 - generated event callbacks like `onNodeStart`, `onGraphFinish`, etc.
 
 This option type is much broader than "just inputs and settings."
+
+`RunGraphOptions.onChatV2CallFinished` is a host accounting seam, not a graph
+output or provider hook. LLM Chat invokes it once for every physical provider
+attempt, including Rivet's explicit retry-on-non-200 attempts, provider
+failures, and calls aborted while in flight. The event correlates the call to
+the node and process, identifies the provider/model and zero-based attempt,
+and includes only optional usage fields, a provider-neutral optional usage
+projection, finish reason, outcome, and known/unknown pricing. Missing token
+counts and unknown custom-model prices remain absent rather than becoming
+zero. Request bodies, prompts/messages, provider metadata, errors, headers,
+and credentials are deliberately excluded. Once a completed non-200 call is
+reported, cancellation during its host-owned retry cooldown does not emit a
+second event for that same physical call. The observer is synchronous so
+the host can account for the event before the node continues; malformed
+provider usage or finish-reason accessors degrade to a minimal event instead of
+suppressing it. Negative or non-finite usage fields and non-finite calculated
+cost are omitted rather than entering host accounting. Observer exceptions
+remain isolated from graph behavior; the hook is synchronous, but Rivet also
+contains a rejected promise accidentally returned by a host instead of allowing
+it to become an unhandled rejection. Retry status inspection tolerates malformed
+provider-error accessors, and error normalization falls back to the original
+error if provider metadata cannot be read safely.
+The Vercel AI SDK bridge keeps
+`maxRetries: 0`; therefore any retry represented by this observer is an
+explicit Rivet pipeline attempt rather than a hidden SDK retry.
+Core `runGraph`/`createProcessor` and the Node package's `runGraph`,
+`createProcessor`, and `createGraphRunner` all place this observer on the
+actual `ProcessContext`; wrapper code must not leave it only on the public
+options object. The callback is intentionally in-process and is not serialized
+through Remote Debugger or recording playback. A replay performs no physical
+provider call, so it must not synthesize accounting events.
+Core and Node processor factories bind caller abort signals to the actual
+running processor, including signals that were already aborted before
+`run()`. Public run helpers reject an already-aborted signal before invoking
+`GraphProcessor.processGraph`, so graph lifecycle callbacks, project loaders,
+nodes, and external functions cannot run for a canceled start. The binding for
+an active run is run-scoped and remains active until managed async
+branches settle when graph outputs return early; afterward it is removed so a
+long-lived host signal cannot retain completed processors. Reusable processors
+reattach on their next run, while `coreCreateProcessor(...).dispose()` and the
+Node processor's existing `dispose()` release an unstarted binding explicitly.
 
 Runtime settings are normalized through [`processSettings.ts`](../packages/core/src/api/processSettings.ts). `resolveProcessSettings(...)` is the shared boundary used by core, `rivet-node`, and Trivet so programmatic execution gets the same runtime defaults while still preserving explicit runtime options such as `recordingPlaybackLatency`, without depending on app-only editor preference fields that still exist on the legacy `Settings` object for compatibility. Shared LLM credentials (`openAiApiKey`, legacy `openAiKey`, `anthropicApiKey`, `googleApiKey`, and `customAiApiKey`) are first-class runtime settings so LLM Chat configured-key mode works the same in the app, Node package, CLI, and test runners; provider plugin config remains the compatibility fallback for older Anthropic/Google plugin settings. Custom provider configured-key mode checks the node's `customProviderApiKeyProgrammaticName` as a top-level runtime setting name, then checks the node-specific env var name through `settings.pluginEnv` / `process.env`, then falls back to the shared `customAiApiKey`. `resolveProcessSettings(...)` must normalize `openAiApiKey` and `openAiKey` to the same resolved runtime value so old OpenAI-backed nodes and new programmatic callers stay compatible, and it must preserve extra top-level settings so wrapper/backend code can pass separate custom-provider secrets using the exact names configured on each LLM Chat node without abusing plugin environment settings. [`getPluginConfig(...)`](../packages/core/src/utils/getPluginConfig.ts) deliberately bridges shared `anthropicApiKey` and `googleApiKey` settings into the legacy Anthropic/Google plugin config lookup after non-empty explicit plugin settings and before plugin env fallbacks, so old plugin nodes and app-side helper graphs such as `Generate using AI` can use the same Settings > LLM keys without duplicating credentials into Plugins settings. Missing or blank plugin values fall through instead of blocking shared keys or environment fallbacks, because plugin settings are often partial.
 

@@ -37,7 +37,23 @@ function compact(value: string, maxLength = 500): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === 'object' && !Array.isArray(value);
+  if (value == null || typeof value !== 'object') {
+    return false;
+  }
+
+  try {
+    return !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function getRecordProperty(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
 }
 
 function stringifyProviderValue(value: unknown): string | undefined {
@@ -218,7 +234,10 @@ function coerceHttpStatusCode(value: unknown): number | undefined {
 }
 
 function getRecordStatusCode(record: Record<string, unknown>): number | undefined {
-  return coerceHttpStatusCode(record.statusCode) ?? coerceHttpStatusCode(record.status);
+  return (
+    coerceHttpStatusCode(getRecordProperty(record, 'statusCode')) ??
+    coerceHttpStatusCode(getRecordProperty(record, 'status'))
+  );
 }
 
 export function getChatV2ProviderErrorStatusCode(error: unknown, seen = new Set<unknown>()): number | undefined {
@@ -236,7 +255,7 @@ export function getChatV2ProviderErrorStatusCode(error: unknown, seen = new Set<
     return directStatusCode;
   }
 
-  const response = error.response;
+  const response = getRecordProperty(error, 'response');
   if (isRecord(response)) {
     const responseStatusCode = getRecordStatusCode(response);
     if (responseStatusCode != null) {
@@ -244,14 +263,14 @@ export function getChatV2ProviderErrorStatusCode(error: unknown, seen = new Set<
     }
   }
 
-  const data = error.data;
+  const data = getRecordProperty(error, 'data');
   if (isRecord(data)) {
     const dataStatusCode = getRecordStatusCode(data);
     if (dataStatusCode != null) {
       return dataStatusCode;
     }
 
-    const dataError = data.error;
+    const dataError = getRecordProperty(data, 'error');
     if (isRecord(dataError)) {
       const dataErrorStatusCode = getRecordStatusCode(dataError);
       if (dataErrorStatusCode != null) {
@@ -260,7 +279,7 @@ export function getChatV2ProviderErrorStatusCode(error: unknown, seen = new Set<
     }
   }
 
-  return getChatV2ProviderErrorStatusCode(error.cause, seen);
+  return getChatV2ProviderErrorStatusCode(getRecordProperty(error, 'cause'), seen);
 }
 
 function formatProviderFetchError(error: ErrorLike, context: ChatV2ErrorContext): string {

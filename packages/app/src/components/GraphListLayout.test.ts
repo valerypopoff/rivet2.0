@@ -87,6 +87,10 @@ test('graph settings explain web-app-aware reachability and reference indicators
 
   assert.match(source, /Main Graph or a web app action/);
   assert.match(source, /graphs and web apps that directly reference the currently open graph/);
+  assert.match(source, /label="Graph Builder implementation"/);
+  assert.match(source, /changes affect only new sessions/);
+  assert.match(source, /value: 'plan-b'/);
+  assert.match(source, /value: 'legacy'/);
 });
 
 test('Node library empty state centers in the canvas area and explains linked nodes', () => {

@@ -1,0 +1,2062 @@
+{
+  "formatVersion": 1,
+  "catalogFingerprint": "fnv1a64:902c5a0d93e15c96",
+  "entries": [
+    {
+      "authoringChoiceId": "registered:abortGraph",
+      "nodeType": "abortGraph",
+      "displayName": "Abort Graph",
+      "description": "The Abort Graph Node is used to stop the execution of the entire graph immediately. It can either \"successfully\" abort the graph (early exit), or \"error\" abort the graph. This can be useful for stopping the graph under certain conditions, or for handling errors.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:appendToDataset",
+      "nodeType": "appendToDataset",
+      "displayName": "Append To Dataset",
+      "description": "The Append to Dataset Node is used to append a row of data to a specified dataset. This node is particularly useful when you want to add new data to an existing dataset for further processing or analysis. The node requires a dataset provider to be available in the context when the graph is being run. The dataset provider is responsible for managing the storage and retrieval of datasets. In the Rivet application, the dataset provider is handled for you automatically. For more information on datasets, see the Data Studio section of the user guide.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:array",
+      "nodeType": "array",
+      "displayName": "Array",
+      "description": "Collects variadic inputs into an array.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "flatten",
+          "valueKind": "boolean",
+          "description": "Flatten array-valued inputs by one level."
+        },
+        {
+          "key": "flattenDeep",
+          "valueKind": "boolean",
+          "description": "Recursively flatten nested arrays."
+        }
+      ],
+      "safeDefaults": {
+        "flatten": true,
+        "flattenDeep": false
+      }
+    },
+    {
+      "authoringChoiceId": "registered:assembleMessage",
+      "nodeType": "assembleMessage",
+      "displayName": "Assemble Prompt",
+      "description": "The Assemble Message Node is designed to assemble a single chat message from multiple parts. It is similar to a Prompt Node, but it works with multimodal models, allowing you to include both text and images in the message. This node is particularly useful when working with multimodal LLMs such as GPT 4 Vision that can process both text and images simultaneously. The Assemble Message Node can be used in conjunction with the Image Node or URL Reference Node to include images in a message. The Assemble Message Node outputs a chat message in the same format as a Prompt Node.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:assemblePrompt",
+      "nodeType": "assemblePrompt",
+      "displayName": "Assemble Prompt",
+      "description": "An LLM Chat Node takes a single Prompt input, which can be one message or an array of messages that forms the message chain. The Assemble Prompt Node is used to assemble multiple chat messages into a single prompt. It takes multiple chat messages or strings as inputs and outputs one prompt array containing all the messages. If a string is connected to any of the inputs, it will be converted to a User type chat message with the string as the message.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:audio",
+      "nodeType": "audio",
+      "displayName": "Audio",
+      "description": "The Audio Node is used to define an audio sample for use with other nodes. It can also convert a binary type into an audio type. The Audio Node can either take an input that represents the audio data or use an audio file specified in the node's settings. The audio data should be in a format that can be converted to a Uint8Array.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:boolean",
+      "nodeType": "boolean",
+      "displayName": "Boolean",
+      "description": "Provides or converts a boolean value.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "value",
+          "valueKind": "boolean",
+          "description": "The constant boolean value."
+        },
+        {
+          "key": "useValueInput",
+          "valueKind": "boolean",
+          "description": "Read the value from an input port."
+        }
+      ],
+      "safeDefaults": {
+        "value": false
+      }
+    },
+    {
+      "authoringChoiceId": "registered:buildKnowledgeContext",
+      "nodeType": "buildKnowledgeContext",
+      "displayName": "Build Knowledge Context",
+      "description": "Build Knowledge Context converts typed evidence into bounded text for an LLM prompt. It assigns stable labels such as [K1] , includes selected metadata that actually exists on each evidence record, and never exceeds the configured character or token budget. Missing fields—including names inherited from JavaScript object prototypes—are ignored.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:callGraph",
+      "nodeType": "callGraph",
+      "displayName": "Call Graph",
+      "description": "Call Graph Node The Call Graph node executes a graph from a graph reference value. Use it with Graph Reference or List Graphs when the target graph should be chosen at runtime instead of being fixed in a Subgraph node. Inputs Title Data Type Description Graph graph reference The graph reference to execute. Inputs object Object whose keys are graph input IDs and values are input values. Outputs Title Data Type Description Outputs object Outputs returned by the called graph. Error string Error message when error output is enabled and the call fails. Settings Setting Description Use Error Output Adds an Error output instead of aborting on graph call failure.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:chat",
+      "nodeType": "chat",
+      "displayName": "Chat (Legacy)",
+      "description": "The Chat Node sends one or more messages to an OpenAI compatible chat completions API and returns the response from the LLM. :::info This is the legacy chat node. It remains available so existing graphs keep working. For new graphs, prefer the LLM Chat Node, which supports OpenAI, Anthropic, Google, custom OpenAI compatible providers, input port API keys, reasoning settings, response status/error outputs, and retry diagnostics. ::: You can use the Chat Node for local LLMs, as long as their API is compatible with the OpenAI API. For example, you can use the Chat Node with LM Studio. If you are looking for other language models that do not support the OpenAI API format, use LLM Chat or see the Plugins page for available plugin nodes.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:chatLoop",
+      "nodeType": "chatLoop",
+      "displayName": "Chat Loop",
+      "description": "Chat Loop Node The Chat Loop node is a convenience node for interactive chat style workflows. It keeps appending generated assistant messages to the conversation until the configured stop behavior is reached. Inputs Chat Loop uses the same model, prompt, tool, and provider inputs as chat family nodes. Outputs Title Data Type Description Full Conversation chat message[] Complete conversation collected by the loop. Last Message chat message Final message in the conversation. Settings Setting Description User Prompt Prompt text shown when the loop asks the user for a reply. Rendering Whether user facing prompts are rendered as text or markdown.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:chunk",
+      "nodeType": "chunk",
+      "displayName": "Chunk",
+      "description": "The Chunk node is used to split a string into an array of strings based on a token count. Chunking a string is useful to avoid hitting token count limits in LLMs. You can split a string into multiple chunks and then feed each chunk into an LLM Chat node that runs many items, then combine the outputs back together to answer questions about strings of text longer than the LLM can handle. The Chunk node can also be used to truncate a string to a certain token count, from the beginning or the end, by using the first or last outputs. If an overlap percentage is specified, then the chunks will overlap by the specified percentage (relative to the max token count). For example, if the max token count is 100 and the overlap is 50%, then the chunks will overlap by 50 tokens. This can be useful so that context is not lost between chunks, but it may result in more total chunks.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:coalesce",
+      "nodeType": "coalesce",
+      "displayName": "Coalesce",
+      "description": "The Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a Regex Match Node. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce continues checking later inputs.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:code",
+      "nodeType": "code",
+      "displayName": "Code (legacy)",
+      "description": "The Code (legacy) Node allows you to run arbitrary JavaScript code during your graph's execution. This can be useful for a variety of purposes, such as: Performing complex calculations Custom, domain specific logic that is complex to represent in Rivet nodes alone Using JavaScript functions that are not available in other nodes Use Code for new workflows when you want inputs created from {{name}} tokens and one direct returned value, while still keeping the same runtime permissions.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:codeNew",
+      "nodeType": "codeNew",
+      "displayName": "Code",
+      "description": "The Code Node runs JavaScript code and returns the exact value returned by that code as a single output. It is useful when you want the convenience of the Expression node's {{input}} ports, but you also want a normal code body with local variables, multiple statements, await , and an explicit return . Use Code (legacy) when you need multiple named outputs or when you want to work with the lower level inputs.foo.value API directly.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:comment",
+      "nodeType": "comment",
+      "displayName": "Comment",
+      "description": "Adds a non-executing Markdown note to the graph.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "text",
+          "valueKind": "string",
+          "description": "Markdown note text.",
+          "projection": "on-demand"
+        }
+      ],
+      "safeDefaults": {
+        "text": ""
+      }
+    },
+    {
+      "authoringChoiceId": "registered:compare",
+      "nodeType": "compare",
+      "displayName": "Compare",
+      "description": "The Compare Node allows you to perform a comparison operation between two input values. The node supports a variety of comparison functions including equality, inequality, less than, greater than, and logical operations such as AND, OR, XOR, NAND, NOR, and XNOR. You can change the comparison function from the node body on the canvas or from the settings panel. Both controls edit the same setting. If you enable the Comparison Function input port, the canvas body shows A (input) B because the operator is supplied by the incoming value.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:context",
+      "nodeType": "context",
+      "displayName": "Context",
+      "description": "Context values are shared run inputs that are accessible in any graph, whether the graph is the entry point graph or a subgraph called by another graph. The Context node reads one of those values by ID. This is useful for values that should be available everywhere without threading them through Graph Input nodes, such as current date values, tenant IDs, environment specific configuration, or API keys. In the desktop app, context values are edited in Project settings under Context values . They are stored by the Rivet app for that project ID, not written into the .rivet project file. They stay available when you close and reopen the same project, and after restarting the Rivet app on the same machine. In code, context values are passed with the contextValues / context run option. @valerypopoff/rivet2 node accepts loose primitive values and converts them into Rivet DataValue objects: ts co",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:createDataset",
+      "nodeType": "createDataset",
+      "displayName": "Create Dataset",
+      "description": "The Create Dataset Node is used to create a new dataset with a specified ID and name. If a dataset with the specified ID already exists, the node does nothing. This node is particularly useful when you want to create a new dataset for storing or processing data. Multiple datasets can have the same name, but IDs are unique across all datasets. The ID is used to identify the dataset when loading, appending, or deleting data. If the Dataset ID input is not provided, the node will automatically generate an ID for the dataset. If the Dataset Name input is not provided, the node will use the Dataset ID as the name. The node requires a dataset provider to be available in the context when the graph is being run. The dataset provider is responsible for managing the storage and retrieval of datasets. In the Rivet application, the dataset provider is handled for you automatically. For more informat",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:cron",
+      "nodeType": "cron",
+      "displayName": "Cron",
+      "description": "Cron Node The Cron node runs a target graph on a schedule after the node is triggered. It supports simple intervals such as 5 minutes and cron expressions such as /5 . Inputs Title Data Type Description Trigger boolean Starts the scheduled job when true. Target Graph string Optional target graph input when input mode is enabled. Outputs Title Data Type Description Last Output any Last output returned by the target graph. Iteration number Current iteration number. Completed boolean True after the scheduled job completes. Next Run string ISO timestamp for the next scheduled run. Settings Setting Description Execute Immediately Runs once immediately in addition to the schedule. Target Graph Graph to execute on schedule. Schedule Type Cron expression or simple interval. Schedule Schedule expression.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:datasetNearestNeighbors",
+      "nodeType": "datasetNearestNeighbors",
+      "displayName": "Dataset Nearest Neighbors",
+      "description": "The KNN (K Nearest Neighbors) Dataset Node is used to find the k nearest neighbors in a dataset given an embedding. This node is particularly useful when you want to find the most similar items in a dataset to a given item. The node requires a dataset provider to be available in the context when the graph is being run. The dataset provider is responsible for managing the storage and retrieval of datasets. In the Rivet application, the dataset provider is handled for you automatically. For more information on datasets, see the Data Studio section of the user guide.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:delay",
+      "nodeType": "delay",
+      "displayName": "Delay",
+      "description": "The Delay Node is used to introduce a delay in the execution of the graph. It takes any number of inputs and after a specified delay, passes the input values to the outputs without any modifications. This node is useful when you need to control the timing of your graph's execution.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:delegateFunctionCall",
+      "nodeType": "delegateFunctionCall",
+      "displayName": "Delegate Tool Call",
+      "description": "Delegates LLM tool calls to matching handler subgraphs or host external calls.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "autoDelegate",
+          "valueKind": "boolean",
+          "description": "Automatically resolve tool names to existing handler subgraphs. Manual handler-map authoring is not supported in the first release."
+        },
+        {
+          "key": "fallBackToExternalCall",
+          "valueKind": "boolean",
+          "description": "Try a host external call when no matching handler subgraph exists."
+        },
+        {
+          "key": "passthroughErrors",
+          "valueKind": "boolean",
+          "description": "Return external-call failures as tool results instead of failing delegation."
+        }
+      ],
+      "safeDefaults": {
+        "autoDelegate": true,
+        "fallBackToExternalCall": true,
+        "passthroughErrors": true
+      }
+    },
+    {
+      "authoringChoiceId": "registered:destructure",
+      "nodeType": "destructure",
+      "displayName": "Destructure",
+      "description": "The Destructure Node is used to extract multiple values from an object or array at once. It uses JSONPath notation to navigate through the input value and extract the values at the specified paths. This node is similar to the Extract Object Path Node, but it allows you to specify multiple paths and extract multiple values at once, which can be more convenient than using multiple Extract Object Path nodes.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:didRun",
+      "nodeType": "didRun",
+      "displayName": "Did Run",
+      "description": "The Did Run node outputs true when all connected inputs have run. Use it when you need to convert \"this branch ran at all\" into a boolean, especially for another node's built in If port. Unlike piping a value directly into an If port, Did Run treats falsy or empty payloads such as false , 0 , an empty string, null , or an explicit undefined value as successful runs. If any connected input is Not ran , Did Run is also Not ran . If no inputs are connected, it produces Not ran . The node settings panel shows a short behavior note explaining that connected inputs running produces true , and falsy or empty values still count as having run.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:document",
+      "nodeType": "document",
+      "displayName": "Document",
+      "description": "Document Node The Document node creates a document value. Use it when a workflow needs to carry file like document data, media type, and optional metadata between nodes. Inputs Title Data Type Description Data string or binary Optional document content when using an input. Media Type string Optional MIME type when using an input. Title string Optional document title when using an input. Context string Optional document context when using an input. Enable Citations boolean Optional citation flag when using an input. Inputs appear only when their corresponding settings are toggled to input mode. Outputs Title Data Type Description Document Data document The configured document value. Settings Setting Description Document File File to load as document data. Media Type MIME type for the document. Title Optional title metadata. Context Optional context metadata. Enable Citations Whether consu",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:evaluate",
+      "nodeType": "evaluate",
+      "displayName": "Evaluate",
+      "description": "The Evaluate Node performs a mathematical operation on the input values and outputs the result. It supports a variety of operations including addition, subtraction, multiplication, division, exponentiation, modulus, absolute value, and negation.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:expression",
+      "nodeType": "expression",
+      "displayName": "Expression",
+      "description": "Evaluates a JavaScript expression with interpolation inputs.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "expression",
+          "valueKind": "string",
+          "description": "JavaScript expression. Use {{name}} for dynamic inputs.",
+          "projection": "on-demand"
+        }
+      ],
+      "safeDefaults": {
+        "expression": "{{a}} == \"123\" ? {{b}} : {{c}}"
+      }
+    },
+    {
+      "authoringChoiceId": "registered:externalCall",
+      "nodeType": "externalCall",
+      "displayName": "External Call",
+      "description": "Calls a host-provided external function.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "functionName",
+          "valueKind": "string",
+          "description": "Host external-function name."
+        },
+        {
+          "key": "useFunctionNameInput",
+          "valueKind": "boolean",
+          "description": "Read the function name from an input."
+        },
+        {
+          "key": "useErrorOutput",
+          "valueKind": "boolean",
+          "description": "Expose an error output instead of failing immediately."
+        }
+      ],
+      "safeDefaults": {
+        "functionName": "",
+        "useFunctionNameInput": false,
+        "useErrorOutput": false
+      }
+    },
+    {
+      "authoringChoiceId": "registered:extractJson",
+      "nodeType": "extractJson",
+      "displayName": "Extract JSON",
+      "description": "The Extract JSON node lets you extract structured JSON from a string containing a JSON object or array. Data outside of the JSON object or array will be ignored. If the input is already an object or array value, the node passes it through unchanged. Extract JSON is very useful to extract structured data from LLM responses. Ask the LLM to reply with a JSON object, and then use Extract JSON to extract that data from its response, ignoring any text around the JSON object.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:extractMarkdownCodeBlocks",
+      "nodeType": "extractMarkdownCodeBlocks",
+      "displayName": "Extract Markdown Code Blocks",
+      "description": "The Extract Markdown Code Blocks Node is used to extract code blocks from a Markdown text. It extracts all code blocks and the specified languages for each block. The node outputs the first matched block, all matched blocks, and the languages specified for the blocks. A markdown code block is defined as a code block that is surrounded by three backticks on each side. For example: markdown Here is some JavaScript code: javascript console.log('Hello, world!'); This node is useful when working with LLMs that have been trained extensively on replying with markdown data.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:extractObjectPath",
+      "nodeType": "extractObjectPath",
+      "displayName": "Extract Object Path",
+      "description": "The Extract Object Path Node allows you to run jsonpath queries on an object. This is useful for extracting data from a JSON object or array. Some use cases include: Extracting data from a JSON object returned by an API Extracting properties from the result of an Extract JSON node or Extract YAML node Accessing individual elements of an array Complex queries such as $.store.book[?(@.price < 10)] to perform filtering Any valid jsonpath plus query can be used, but just be careful about complex queries. The input to Extract Object path must be either an object, or an array of any data type. You can also query properties of non object data types, such as strings, such as $.length to get the length of a string.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:extractRegex",
+      "nodeType": "extractRegex",
+      "displayName": "Extract Regex",
+      "description": "The Extract With Regex (or Extract Regex) node allows you to extract one or more strings from a string using a regular expression. Each capture group in the regular expression will correspond to an output port on the node, so the number of outputs will be equal to the number of capture groups in the regular expression. The Extract With Regex node can be used for many cases such as parsing a response from an LLM to extract specific values, or parsing a string from a file to extract specific values. If you do not have any capture groups in your regex, you can still use the Matches , Succeeded , and Failed outputs of the node to determine if the regex matched the input string.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:extractYaml",
+      "nodeType": "extractYaml",
+      "displayName": "Extract YAML",
+      "description": "The Extract YAML Node is used to parse a YAML object from a string. It is particularly useful when you want to extract structured data from a text string that includes a YAML object. The node looks for a predefined root property name in the input text and considers all indented text after that as part of the YAML object. By default, the root property name is set to yamlDocument , but it can be configured in the node settings or via an input port. You may also specify a path to a specific property in the YAML object using a JSONPath expression. The node will then extract the value of that property from the YAML object. This is a shorthand for using the Extract Object Path Node after the Extract YAML Node. Note that the entire document includes the root property name. For example, if the root property name is set to yamlDocument , then the object path $.yamlDocument will return the entire ",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:filter",
+      "nodeType": "filter",
+      "displayName": "Filter",
+      "description": "The Filter Node is used to filter an array based on a corresponding array of boolean values. The node takes in an array of any data type and an array of boolean values of the same length. It then filters the array, only including the elements where the corresponding boolean value is true . This node is particularly useful when you want to filter an array based on some condition. For example, you could set a Compare Node to run many items, compare each element in an array to a value, and then use the Filter Node to filter the array based on the results of the comparison.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:getAllDatasets",
+      "nodeType": "getAllDatasets",
+      "displayName": "Get All Datasets",
+      "description": "The Get All Datasets Node is used to retrieve all datasets available in the current project. This node is particularly useful when you want to access and manipulate multiple datasets in your graph, or search through all datasets for a specific dataset. The node requires a dataset provider to be available in the context when the graph is being run. The dataset provider is responsible for managing the storage and retrieval of datasets. In the Rivet application, the dataset provider is handled for you automatically. For more information on datasets, see the Data Studio section of the user guide.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:getDatasetRow",
+      "nodeType": "getDatasetRow",
+      "displayName": "Get Dataset Row",
+      "description": "The Get Dataset Row Node allows you to retrieve a specific row from a dataset by providing the dataset ID and the row ID. This node is particularly useful when you want to access and process specific rows of data in a dataset by their ID. The node requires a dataset provider to be available in the context when the graph is being run. The dataset provider is responsible for managing the storage and retrieval of datasets. In the Rivet application, the dataset provider is handled for you automatically. For more information on datasets, see the Data Studio section of the user guide.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:getEmbedding",
+      "nodeType": "getEmbedding",
+      "displayName": "Get Embedding",
+      "description": "The Get Embedding Node is used to generate a vector embedding for a given input text. This node is particularly useful when you want to convert text into a numerical representation that can K nearest neighbor search, and more. The node requires an integration to be available in the context when the graph is being run. The integration is responsible for generating the embedding. Currently, the only supported integration is OpenAI. However, when running Rivet in a parent application, you can register custom integrations.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:getGlobal",
+      "nodeType": "getGlobal",
+      "displayName": "Get Global",
+      "description": "The Get Global Node is used to retrieve a global value that is shared across all graphs and subgraphs. The ID of the global value is configured in this node. On the canvas, the node title shows an upward arrow icon rising from a baseline so it is easier to distinguish from Set Global. This icon is only a visual title cue. If an enabled Get Global node uses a static Variable ID that no enabled static Set Global node sets anywhere in the current project, the node header shows a triangular warning icon. Dynamic Get Global IDs and dynamic Set Global IDs supplied through input ports cannot be checked statically. The node can be configured to retrieve the value on demand, which means it will be read when nodes need it, rather than when this node executes. This is useful when the global value might change during the execution of the graph. The node can also be configured to wait until the varia",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:getKnowledgeSourceStatus",
+      "nodeType": "getKnowledgeSourceStatus",
+      "displayName": "Get Knowledge Source Status",
+      "description": "Get Knowledge Source Status reads the provider's durable active source manifest. It is the authoritative way to determine whether a source exists and which version is active. A missing source is normal output, not a graph error. Provider, authentication, and transport failures still fail the node.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:getStoredValue",
+      "nodeType": "getStoredValue",
+      "displayName": "Get Stored Value",
+      "description": "Get Stored Value loads a value from the root run's shared cache and optional persistence store. A missing key returns the selected type's default and Found: false ; an existing null value returns Found: true . If an existing value does not match the node's selected data type, Value returns that type's default while Found remains true . The search field lists static keys from enabled Set Stored Value nodes in the project. Manual and dynamic keys remain valid because a value can come from an earlier run or an external backend, so Rivet does not warn when no setter is present in the project.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:gptFunction",
+      "nodeType": "gptFunction",
+      "displayName": "Tool",
+      "description": "Declares a tool that an LLM Chat node can call.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "name",
+          "valueKind": "string",
+          "description": "Tool name exposed to the language model."
+        },
+        {
+          "key": "description",
+          "valueKind": "string",
+          "description": "Tool description exposed to the language model.",
+          "projection": "on-demand"
+        },
+        {
+          "key": "schema",
+          "valueKind": "string",
+          "description": "JSON Schema for the tool arguments.",
+          "projection": "on-demand"
+        },
+        {
+          "key": "strict",
+          "valueKind": "boolean",
+          "description": "Request strict tool-argument validation."
+        },
+        {
+          "key": "resultHandling",
+          "valueKind": "string-enum",
+          "description": "How the tool result is handled.",
+          "allowedValues": [
+            "continue",
+            "return-direct"
+          ]
+        },
+        {
+          "key": "useNameInput",
+          "valueKind": "boolean",
+          "description": "Read the tool name from an input."
+        },
+        {
+          "key": "useDescriptionInput",
+          "valueKind": "boolean",
+          "description": "Read the tool description from an input."
+        },
+        {
+          "key": "useSchemaInput",
+          "valueKind": "boolean",
+          "description": "Read the argument schema from an input."
+        }
+      ],
+      "safeDefaults": {
+        "name": "newTool",
+        "description": "No description provided",
+        "schema": "{\n  \"type\": \"object\",\n  \"properties\": {}\n}",
+        "resultHandling": "continue"
+      }
+    },
+    {
+      "authoringChoiceId": "registered:graphInput",
+      "nodeType": "graphInput",
+      "displayName": "Graph Input",
+      "description": "Declares one input at the graph boundary.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "id",
+          "valueKind": "string",
+          "description": "Stable graph input identifier."
+        },
+        {
+          "key": "dataType",
+          "valueKind": "string-enum",
+          "description": "Graph input data type.",
+          "allowedValues": [
+            "any",
+            "any[]",
+            "boolean",
+            "boolean[]",
+            "string",
+            "string[]",
+            "number",
+            "number[]",
+            "date",
+            "date[]",
+            "time",
+            "time[]",
+            "datetime",
+            "datetime[]",
+            "chat-message",
+            "chat-message[]",
+            "control-flow-excluded",
+            "control-flow-excluded[]",
+            "object",
+            "object[]",
+            "fn<string>",
+            "fn<number>",
+            "fn<boolean>",
+            "fn<date>",
+            "fn<time>",
+            "fn<datetime>",
+            "fn<any>",
+            "fn<object>",
+            "fn<chat-message>",
+            "fn<control-flow-excluded>",
+            "fn<string[]>",
+            "fn<number[]>",
+            "fn<boolean[]>",
+            "fn<date[]>",
+            "fn<time[]>",
+            "fn<datetime[]>",
+            "fn<any[]>",
+            "fn<object[]>",
+            "fn<chat-message[]>",
+            "fn<control-flow-excluded[]>",
+            "gpt-function",
+            "gpt-function[]",
+            "fn<gpt-function[]>",
+            "fn<gpt-function>",
+            "vector",
+            "vector[]",
+            "fn<vector>",
+            "fn<vector[]>",
+            "image",
+            "image[]",
+            "fn<image>",
+            "fn<image[]>",
+            "binary",
+            "binary[]",
+            "fn<binary>",
+            "fn<binary[]>",
+            "audio",
+            "audio[]",
+            "fn<audio>",
+            "fn<audio[]>",
+            "graph-reference",
+            "graph-reference[]",
+            "fn<graph-reference>",
+            "fn<graph-reference[]>",
+            "knowledge-source",
+            "knowledge-source[]",
+            "fn<knowledge-source>",
+            "fn<knowledge-source[]>",
+            "knowledge-document",
+            "knowledge-document[]",
+            "fn<knowledge-document>",
+            "fn<knowledge-document[]>",
+            "knowledge-evidence",
+            "knowledge-evidence[]",
+            "fn<knowledge-evidence>",
+            "fn<knowledge-evidence[]>",
+            "llm-config",
+            "llm-config[]",
+            "fn<llm-config>",
+            "fn<llm-config[]>",
+            "document",
+            "document[]",
+            "fn<document>",
+            "fn<document[]>"
+          ]
+        },
+        {
+          "key": "defaultValue",
+          "valueKind": "portable-json",
+          "description": "Optional portable default value.",
+          "projection": "on-demand"
+        },
+        {
+          "key": "useDefaultValueInput",
+          "valueKind": "boolean",
+          "description": "Read the default value from an input port."
+        }
+      ],
+      "safeDefaults": {
+        "id": "input",
+        "dataType": "string",
+        "useDefaultValueInput": false
+      }
+    },
+    {
+      "authoringChoiceId": "registered:graphOutput",
+      "nodeType": "graphOutput",
+      "displayName": "Graph Output",
+      "description": "Declares one output at the graph boundary.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "id",
+          "valueKind": "string",
+          "description": "Stable graph output identifier."
+        },
+        {
+          "key": "dataType",
+          "valueKind": "string-enum",
+          "description": "Graph output data type.",
+          "allowedValues": [
+            "any",
+            "any[]",
+            "boolean",
+            "boolean[]",
+            "string",
+            "string[]",
+            "number",
+            "number[]",
+            "date",
+            "date[]",
+            "time",
+            "time[]",
+            "datetime",
+            "datetime[]",
+            "chat-message",
+            "chat-message[]",
+            "control-flow-excluded",
+            "control-flow-excluded[]",
+            "object",
+            "object[]",
+            "fn<string>",
+            "fn<number>",
+            "fn<boolean>",
+            "fn<date>",
+            "fn<time>",
+            "fn<datetime>",
+            "fn<any>",
+            "fn<object>",
+            "fn<chat-message>",
+            "fn<control-flow-excluded>",
+            "fn<string[]>",
+            "fn<number[]>",
+            "fn<boolean[]>",
+            "fn<date[]>",
+            "fn<time[]>",
+            "fn<datetime[]>",
+            "fn<any[]>",
+            "fn<object[]>",
+            "fn<chat-message[]>",
+            "fn<control-flow-excluded[]>",
+            "gpt-function",
+            "gpt-function[]",
+            "fn<gpt-function[]>",
+            "fn<gpt-function>",
+            "vector",
+            "vector[]",
+            "fn<vector>",
+            "fn<vector[]>",
+            "image",
+            "image[]",
+            "fn<image>",
+            "fn<image[]>",
+            "binary",
+            "binary[]",
+            "fn<binary>",
+            "fn<binary[]>",
+            "audio",
+            "audio[]",
+            "fn<audio>",
+            "fn<audio[]>",
+            "graph-reference",
+            "graph-reference[]",
+            "fn<graph-reference>",
+            "fn<graph-reference[]>",
+            "knowledge-source",
+            "knowledge-source[]",
+            "fn<knowledge-source>",
+            "fn<knowledge-source[]>",
+            "knowledge-document",
+            "knowledge-document[]",
+            "fn<knowledge-document>",
+            "fn<knowledge-document[]>",
+            "knowledge-evidence",
+            "knowledge-evidence[]",
+            "fn<knowledge-evidence>",
+            "fn<knowledge-evidence[]>",
+            "llm-config",
+            "llm-config[]",
+            "fn<llm-config>",
+            "fn<llm-config[]>",
+            "document",
+            "document[]",
+            "fn<document>",
+            "fn<document[]>"
+          ]
+        }
+      ],
+      "safeDefaults": {
+        "id": "output",
+        "dataType": "string"
+      }
+    },
+    {
+      "authoringChoiceId": "registered:graphReference",
+      "nodeType": "graphReference",
+      "displayName": "Graph Reference",
+      "description": "Graph Reference Node The Graph Reference node outputs a reference to another graph in the current project. Pass the reference to a Call Graph node when the graph to execute should be selected dynamically. Inputs Title Data Type Description Graph Name Or ID string Optional input used when the graph is selected by wire. The input appears only when the Graph setting is switched to use an input. Outputs Title Data Type Description Graph graph reference A reference to the chosen graph. Settings Setting Description Graph The project graph to reference, or an input toggle.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:hash",
+      "nodeType": "hash",
+      "displayName": "Hash",
+      "description": "The Hash Node computes a hash of the input value using the configured hash function. It supports MD5, SHA 1, SHA 256, and SHA 512 hash algorithms. This node can be useful for generating unique IDs, checksums, and other purposes.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:httpCall",
+      "nodeType": "httpCall",
+      "displayName": "Http Call",
+      "description": "The HTTP Call Node allows you to make an HTTP call to a specified URL with a given method, headers, and body. This node is particularly useful when you need to interact with external APIs or services. The HTTP Call Node uses the Fetch API to make HTTP requests. It supports all HTTP methods (GET, POST, PUT, DELETE, etc.) and allows you to specify custom headers and a request body. :::caution When using the default browser executor, you have to worry about CORS when making HTTP requests to external APIs. If the API you are trying to call does not support CORS to http://tauri.local (most do not), you will run into CORS problems. This can manifest as an error fetch failed in the output panel. This can be worked around by using the Node executor in Rivet, which does not do CORS checks. :::",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:if",
+      "nodeType": "if",
+      "displayName": "If",
+      "description": "Takes in a condition and a value. If the condition is truthy, the value is passed through the True port, and the False port is not ran. If the condition is falsy, the value is passed through the False port, and the True port is not ran.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:ifElse",
+      "nodeType": "ifElse",
+      "displayName": "If/Else",
+      "description": "The If/Else Node is a control flow node that allows you to choose between two different values based on a condition. It takes in three inputs: a condition, a true value, and a false value. If the condition is truthy, the true value is passed through the output port. If the condition is not truthy, the false value is passed through the output port. This node can \"consume\" a Not Ran to continue a graph from that point. This means that if a Not Ran value is passed into the If port, the False value will be passed through instead. If the False value is not connected, then the result will again be Not Ran . The If/Else node is particularly useful for always ensuring that a graph returns a value, and the outputs of the graph always run, or ensuring that a later node in the graph always receives a value, even if intermediate nodes do not run.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:image",
+      "nodeType": "image",
+      "displayName": "Image",
+      "description": "The Image Node is used to define a static image for use with other nodes. It can convert a binary type into an image type. The node requires a media type (PNG, JPEG, or GIF) and a data input. The data input can be provided in two ways: Directly in the node's editor settings, using the image browser. Dynamically, by connecting another node to the Image Node's Data input port. The media type can also be provided in two ways: Directly in the node's editor settings, using the dropdown menu. Dynamically, by connecting another node to the Image Node's Media Type input port.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:join",
+      "nodeType": "join",
+      "displayName": "Coalesce",
+      "description": "The Join Node is used to concatenate an array of strings into a single string. The strings are joined using a specified delimiter. The Join Node can be used to flatten arrays of strings into a single string. This is useful when you want to format a list of items in a specific way, such as creating a comma separated list, or joining lines of text with newline characters. The node also supports the use of special characters as delimiters, such as newline ( \\n ), tab ( \\t ), and space ( ). To use them, put the literal character in the Join String field in the settings. For example, to use a newline character, you need to press Enter in the Join String field. Arrays that are input into the Join Node will be flattened before being joined. If you connect an array to Input 1 such as [\"apple\", \"banana\", \"cherry\"] , and a single value into Input 2, such as \"orange\" , the output of the Join Node w",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:jsFilter",
+      "nodeType": "jsFilter",
+      "displayName": "JS Filter",
+      "description": "JS Filter Node The JS Filter node filters an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return a truthy value for items that should stay in the output. Inputs Title Data Type Description Array any[] The array to filter. Additional inputs are created from {{name}} interpolation tokens in the callback body. Outputs Title Data Type Description Filtered any[] Items whose callback result was truthy. Settings Setting Description Callback Body JavaScript callback body. Use return to decide whether each item remains. Example js return item != null;",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:jsMap",
+      "nodeType": "jsMap",
+      "displayName": "JS Map",
+      "description": "JS Map Node The JS Map node transforms each item in an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return the mapped value for each item. Inputs Title Data Type Description Array any[] The array to transform. Additional inputs are created from {{name}} interpolation tokens in the callback body. Outputs Title Data Type Description Mapped any[] The array of mapped return values. Settings Setting Description Callback Body JavaScript callback body. Use return to produce each item. Example js return { ...item, index };",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:knowledgeDocument",
+      "nodeType": "knowledgeDocument",
+      "displayName": "Knowledge Document",
+      "description": "Knowledge Document packages searchable text with an optional stable document ID, title, and flat portable metadata. Use an Array node to collect multiple documents before synchronization.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:knowledgeSource",
+      "nodeType": "knowledgeSource",
+      "displayName": "Knowledge Source",
+      "description": "Knowledge Source creates a typed reference to one logical source in a named project knowledge store. The reference contains a connection ID and source ID. It can optionally pin an exact committed version; otherwise later nodes resolve the active version from the store. Configure any number of named stores under Project Settings → Knowledge stores . Credentials are kept out of the project file.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:listGraphs",
+      "nodeType": "listGraphs",
+      "displayName": "List Graphs",
+      "description": "List Graphs Node The List Graphs node returns references to every graph in the current project. Use it when a workflow needs to inspect or dynamically call project graphs. Inputs This node has no inputs. Outputs Title Data Type Description Graphs graph reference[] References for all graphs in the project. Graph Names string[] The display names of all graphs in the project. Settings This node has no settings.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:llmChatV2",
+      "nodeType": "llmChatV2",
+      "displayName": "LLM Chat",
+      "description": "Runs a provider-neutral LLM chat request with optional tool calling and continuation.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "useToolCalling",
+          "valueKind": "boolean",
+          "description": "Expose the Tools input and Tool Calls output."
+        },
+        {
+          "key": "autoContinueToolCalls",
+          "valueKind": "boolean",
+          "description": "Run declared tools and continue the LLM conversation until it produces a normal response."
+        },
+        {
+          "key": "parallelToolCalls",
+          "valueKind": "boolean",
+          "description": "Allow the provider to request multiple tools in one model round."
+        },
+        {
+          "key": "maxToolRounds",
+          "valueKind": "number",
+          "description": "Maximum positive integer count of auto-continuation rounds."
+        }
+      ],
+      "safeDefaults": {
+        "useToolCalling": false,
+        "autoContinueToolCalls": false,
+        "parallelToolCalls": false,
+        "maxToolRounds": 3
+      }
+    },
+    {
+      "authoringChoiceId": "registered:llmProfile",
+      "nodeType": "llmProfile",
+      "displayName": "LLM Profile",
+      "description": "LLM Profile packages one reusable inference configuration into a typed llm config value. Connect it to an LLM Chat node whose Configuration is From profile . If an LLM Chat is currently configured inline, use its Export LLM settings to profile node action to create and connect this node automatically with the chat's current provider and inference settings. The profile contains: provider and model the resolved API key and its source metadata Custom provider base URL common generation parameters OpenAI Previous Response ID provider specific reasoning and thinking settings provider native capabilities such as OpenAI Web Search and Google Search Grounding custom headers and extra provider options It intentionally does not contain prompts, response schemas, Rivet tools, tool continuation settings, output switches, retry settings, or editor caching. Those remain on each LLM Chat node. Output r",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:loadDataset",
+      "nodeType": "loadDataset",
+      "displayName": "Load Dataset",
+      "description": "The Load Dataset Node is used to load the entire contents of a dataset into a graph. The data can then be used in other nodes in the graph. The Load Dataset node outputs an array of dataset rows. Each row has the following structure: json { \"id\": \"1\", // The ID of the row \"embedding\": [], // The vector embedding of the row, if it has been saved with an embedding \"data\": [] // The data of the row, each element in the array corresponds to a column in the dataset } To access the data of a row, you can use the Extract Object Path Node to extract the data property from each row. If you use the jsonpath $[ ].data in the Extract Object Path Node, you will get an array of arrays, where each inner array represents a row in the dataset. You can extract a single row from the dataset by using $[0].data in the Extract Object Path Node. This will return an array of values, where each value corresponds",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:loopController",
+      "nodeType": "loopController",
+      "displayName": "Loop Controller",
+      "description": "The Loop Controller Node is a powerful node that allows you to create loops in your graph. It is the only node in Rivet that is allowed to contain cycles of nodes, including itself. The Loop Controller Node maintains the state of the loop and controls the flow of values through the loop. All values that can change in a loop must flow through the Loop Controller Node itself. The Loop Controller Node has a dynamic number of pairs of inputs. Each pair consists of an input and a default input. The default input is the initial state of the loop and the input is the value that changes in each iteration of the loop. The Loop Controller Node also has a dynamic number of output ports. On the first iteration, the value of each output port is the value passed into the corresponding default input port. On subsequent iterations, the value of each output port is the value passed into the corresponding",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:loopUntil",
+      "nodeType": "loopUntil",
+      "displayName": "Loop Until",
+      "description": "Runs another graph repeatedly until its configured stop condition is met.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "targetGraph",
+          "valueKind": "string-enum",
+          "description": "Existing project graph to execute on every iteration.",
+          "allowedValues": [
+            "graph-builder-node-spec-generation"
+          ]
+        },
+        {
+          "key": "conditionType",
+          "valueKind": "string-enum",
+          "description": "Condition that ends the loop.",
+          "allowedValues": [
+            "allOutputsSet",
+            "inputEqual"
+          ]
+        },
+        {
+          "key": "maxIterations",
+          "valueKind": "number",
+          "description": "Required positive safe-integer iteration limit for Graph Builder-authored loops."
+        },
+        {
+          "key": "inputToCheck",
+          "valueKind": "string",
+          "description": "Output name to compare when conditionType is inputEqual."
+        },
+        {
+          "key": "targetValue",
+          "valueKind": "string",
+          "description": "String value that ends an inputEqual loop."
+        }
+      ],
+      "safeDefaults": {
+        "conditionType": "allOutputsSet"
+      }
+    },
+    {
+      "authoringChoiceId": "registered:match",
+      "nodeType": "match",
+      "displayName": "Regex Match",
+      "description": "The Regex Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node. The node can be configured to either run the first matching output port, or to run all matching output ports. If no match is found, the Unmatched output port will be executed. This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly. If the Value input is provided, it will be passed through the corresponding output port if a match is found. If the Value input is not provided, the Test input will be passed through the corresponding output port if a match is found.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:mcpDiscovery",
+      "nodeType": "mcpDiscovery",
+      "displayName": "MCP Discovery",
+      "description": "The Model Context Protocol (MCP) enables communication with MCP compliant servers through either HTTP or Stdio transports. The MCP Discovery Node enables the ability to query an MCP servers and fetch Tools or Prompts in the server. Currently, the MCP Discovery Node currently utilizes the following MCP request methods for a compliant server: MCP Tools : tools/list MCP Prompts: prompts/list MCP Discovery Node uses the official MCP Typescript SDK ( @modelcontextprotocol/sdk ) and requires a node executor when running the graph in the Rivet IDE. The MCP Discovery Node supports two communication modes: 1. HTTP Mode : Uses Streamable HTTP Transport as default and a SSE Transport as a fallback for server communication. 2. STDIO Mode : Launches and communicates with local MCP servers using STIDO Transport. For STDIO connections with local servers, add the MCP server config in Project Edit MCP Co",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:mcpGetPrompt",
+      "nodeType": "mcpGetPrompt",
+      "displayName": "MCP Get Prompt",
+      "description": "The Model Context Protocol (MCP) enables communication with MCP compliant servers through either HTTP or Stdio transports. The MCP Get Prompt Node enables the ability to fetch a prompt from an MCP server using the prompts/get request method. MCP Prompts. For all communication purposes the MCP Get Prompt Node follows the precedent of the MCP Discovery Node. Please refer to the MCP Discovery Node for all MCP communication configuration details. This page is dedicated to MCP Get Prompt Node specific details only.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:mcpToolCall",
+      "nodeType": "mcpToolCall",
+      "displayName": "MCP Tool Call",
+      "description": "The Model Context Protocol (MCP) enables communication with MCP compliant servers through either HTTP or Stdio transports. The MCP Tool Call Node enables the ability to call a function on an MCP server. MCP Tools. For all communication purposes the MCP Tool Call Node follows the precedent of the MCP Discovery Node. Please refer to the MCP Discovery Node for all MCP communication configuration details. This page is dedicated to MCP Tool Call Node specific details only.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:number",
+      "nodeType": "number",
+      "displayName": "Number",
+      "description": "Provides or converts a numeric value.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "value",
+          "valueKind": "number",
+          "description": "The constant numeric value."
+        },
+        {
+          "key": "useValueInput",
+          "valueKind": "boolean",
+          "description": "Read the value from an input port."
+        },
+        {
+          "key": "round",
+          "valueKind": "boolean",
+          "description": "Round the output."
+        },
+        {
+          "key": "roundTo",
+          "valueKind": "number",
+          "description": "Number of decimal places used for rounding."
+        }
+      ],
+      "safeDefaults": {
+        "value": 0,
+        "round": false,
+        "roundTo": 0
+      }
+    },
+    {
+      "authoringChoiceId": "registered:object",
+      "nodeType": "object",
+      "displayName": "Object",
+      "description": "Builds an object from a JSON template and interpolation inputs.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "jsonTemplate",
+          "valueKind": "string",
+          "description": "JSON template. Use {{name}} for dynamic inputs.",
+          "projection": "on-demand"
+        }
+      ],
+      "safeDefaults": {
+        "jsonTemplate": "{\n  \"key\": \"{{input}}\"\n}"
+      }
+    },
+    {
+      "authoringChoiceId": "registered:passthrough",
+      "nodeType": "passthrough",
+      "displayName": "Passthrough",
+      "description": "Passes variadic values through without changing them.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "renderAsDataBus",
+          "valueKind": "boolean",
+          "description": "Render this Passthrough as a canvas data bus."
+        }
+      ]
+    },
+    {
+      "authoringChoiceId": "registered:playAudio",
+      "nodeType": "playAudio",
+      "displayName": "Play Audio",
+      "description": "Play Audio Node The Play Audio node sends an audio value to the active audio provider. It is intended for interactive runs where Rivet has an audio playback provider available. Inputs Title Data Type Description Data audio Audio sample to play. Outputs Title Data Type Description Audio Data audio The same audio value after playback. Settings This node has no settings.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:pop",
+      "nodeType": "pop",
+      "displayName": "Pop",
+      "description": "The Pop Node is used to remove either the first or last element from an array and output both the removed element and the remaining array. By default, the Pop Node will pop the last element from the array. This node is useful when you want to process elements of an array one by one in a loop.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:prompt",
+      "nodeType": "prompt",
+      "displayName": "Prompt",
+      "description": "Builds one structured chat message.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "type",
+          "valueKind": "string-enum",
+          "description": "Chat message role.",
+          "allowedValues": [
+            "system",
+            "user",
+            "assistant",
+            "function"
+          ]
+        },
+        {
+          "key": "promptText",
+          "valueKind": "string",
+          "description": "Message template. Use {{name}} for dynamic inputs.",
+          "projection": "on-demand"
+        },
+        {
+          "key": "name",
+          "valueKind": "string",
+          "description": "Optional message name or tool-call ID."
+        },
+        {
+          "key": "useTypeInput",
+          "valueKind": "boolean",
+          "description": "Read the message role from an input."
+        },
+        {
+          "key": "useNameInput",
+          "valueKind": "boolean",
+          "description": "Read the name from an input."
+        },
+        {
+          "key": "enableFunctionCall",
+          "valueKind": "boolean",
+          "description": "Expose the function-call input."
+        },
+        {
+          "key": "computeTokenCount",
+          "valueKind": "boolean",
+          "description": "Expose the token-count output."
+        },
+        {
+          "key": "isCacheBreakpoint",
+          "valueKind": "boolean",
+          "description": "Mark this message as a provider cache breakpoint."
+        },
+        {
+          "key": "useIsCacheBreakpointInput",
+          "valueKind": "boolean",
+          "description": "Read the cache-breakpoint flag from an input."
+        }
+      ],
+      "safeDefaults": {
+        "type": "user",
+        "promptText": "{{input}}",
+        "useTypeInput": false,
+        "enableFunctionCall": false
+      }
+    },
+    {
+      "authoringChoiceId": "registered:raceInputs",
+      "nodeType": "raceInputs",
+      "displayName": "Race Inputs",
+      "description": "The Race Inputs Node is used to handle multiple inputs and outputs the value of the first input to finish, force cancelling the other inputs. This node is particularly useful when you have multiple operations such as LLM Chat Node calls that can potentially fulfill the same requirement, and you want to use the result of the operation that finishes first.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:raiseEvent",
+      "nodeType": "raiseEvent",
+      "displayName": "Raise Event",
+      "description": "The Raise Event Node allows you to trigger an event from within your graph. This event can be listened for by the host project or by a Wait For Event Node within the same graph. This can be useful for triggering actions in your host application based on the state of your graph, or for synchronizing different parts of your graph. The node requires an event name and optionally an event data. The event name is used to identify the event when it is raised, and the event data is any additional information that you want to associate with the event.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:randomNumber",
+      "nodeType": "randomNumber",
+      "displayName": "Random number",
+      "description": "Outputs a random number between configured minimum and maximum values.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:readAllFiles",
+      "nodeType": "readAllFiles",
+      "displayName": "Read All Files",
+      "description": "Read All Files Node The Read All Files node reads every file in a directory and outputs an array containing each file path and content. It requires a native API, so it is available in environments that can read the local filesystem. Inputs Inputs appear when their corresponding settings are toggled to input mode. Title Data Type Description Path string Directory path to read. Recursive boolean Whether to read nested directories. Filter Globs string[] Glob filters for files to include. Ignores string[] Glob filters for paths to ignore. Outputs Title Data Type Description Files object[] Objects with path and content properties. Root Path string The root directory path used for the read. Settings Setting Description Path Directory path to read. Recursive Reads nested directories when enabled. Filter Globs Include filters. Ignores Ignore filters. Read as Binary Returns file contents as base6",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:readDirectory",
+      "nodeType": "readDirectory",
+      "displayName": "Read Directory",
+      "description": "The Read Directory Node reads the contents of a specified directory and outputs an array of filenames. The node can also be configured to read directories recursively, include directories in the output, filter the filenames, return relative paths, and ignore certain files or directories. If you are using the Rivet SDK, this node requires a native API to be available in the context when the graph is being run. The native API is responsible for providing the functionality to read the contents of a directory.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:readFile",
+      "nodeType": "readFile",
+      "displayName": "Read File",
+      "description": "The Read File Node is used to read the contents of a specified file from the file system and output it as a string. If you are using the Rivet SDK, this node requires a native API to be available in the context when the graph is being run. The native API is responsible for providing the functionality to read the contents of a directory.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:replaceDataset",
+      "nodeType": "replaceDataset",
+      "displayName": "Replace Dataset",
+      "description": "The Replace Dataset Node is used to either replace all of the data in a dataset in with new data, or to clear the data in a dataset, during graph execution. The node requires a dataset provider to be available in the context when the graph is being run. The dataset provider is responsible for managing the storage and retrieval of datasets. In the Rivet application, the dataset provider is handled for you automatically. For more information on datasets, see the Data Studio section of the user guide.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:reportProgress",
+      "nodeType": "reportProgress",
+      "displayName": "Report Progress",
+      "description": "The Report Progress node publishes a temporary status message, a percentage, or both to progress aware hosts while passing its input value through unchanged. Use it on the execution path of a long running graph to update the Button or Chat component that started a Rivet web app action. Progress is presentation state. It is not a graph output and is not saved into project data.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:searchKnowledge",
+      "nodeType": "searchKnowledge",
+      "displayName": "Search Knowledge",
+      "description": "Search Knowledge performs provider neutral retrieval against the active committed source. It accepts one query or multiple query variants, removes empty and duplicate variants, runs independent queries concurrently, deduplicates the results with reciprocal rank fusion, and returns typed evidence. String arrays from Code, Destructure, and other dynamically typed outputs remain separate queries when connected directly to Query . A failing provider query cancels unfinished sibling requests.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:setGlobal",
+      "nodeType": "setGlobal",
+      "displayName": "Set Global",
+      "description": "The Set Global Node is used to set a global value that is shared across all graphs and subgraphs during an execution in Rivet. This can be useful for storing and retrieving values that need to be accessed by multiple graphs. On the canvas, the node title shows a downward arrow icon so it is easier to distinguish from Get Global. This icon is only a visual title cue. The Set Global Node allows you to specify the ID of the global value and the value itself. The ID can be either a static string or an input value. The value can be of any data type. Static IDs appear in the Get Global node's search field so you can choose them without retyping.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:setStoredValue",
+      "nodeType": "setStoredValue",
+      "displayName": "Set Stored Value",
+      "description": "Set Stored Value saves a portable JSON value under a key. All graphs, subgraphs, and delegated tool graphs in the same root run share the saved value. In a Rivet web app the value is also persisted in the app's browser storage; API hosts can supply their own persistence callbacks. Ordinary editor and headless graph runs use fresh in memory storage. Reusing a processor does not preserve values between top level runs unless a host store is configured.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:shuffle",
+      "nodeType": "shuffle",
+      "displayName": "Shuffle",
+      "description": "The Shuffle Node is used to randomize the order of elements in an array. It takes an array as input and outputs a new array with the elements in a shuffled order. The Shuffle Node uses the Fisher Yates (aka Knuth) shuffle algorithm to ensure a fair distribution of permutations.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:slice",
+      "nodeType": "slice",
+      "displayName": "Slice",
+      "description": "The Slice Node is used to extract a portion of an array. It takes an array as input and outputs a new array that starts at a specified index and contains a specified number of elements. This node is useful for manipulating arrays, such as extracting a subset of data from a larger dataset.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:split",
+      "nodeType": "split",
+      "displayName": "Split String",
+      "description": "The Split Text Node is used to split a string into an array of substrings based on a specified delimiter. This is useful when you want to separate a string into individual elements for further processing. The node allows you to specify the delimiter either directly in the node settings or dynamically via an input port. The delimiter can be any string, including special characters like newline ( \\n ), tab ( \\t ), and space ( ). When entering special characters such as a new line in the node settings, put the literal character, not the escape sequence. For example, to split a string by a new line, press the Enter key to insert a new line in the node settings.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:startBackgroundBranch",
+      "nodeType": "startBackgroundBranch",
+      "displayName": "Start Async Branch",
+      "description": "Start Async Branch Node The Start Async Branch node lets the foreground path continue without waiting for one downstream branch. Rivet still owns that branch until the root graph run ends, so execution events, cancellation, and errors remain part of the same run. Web app actions return an already ready graph result without waiting for the async branch, while the processor remains running until that branch settles. Use this node for side effects that should overlap the foreground work, such as publishing a progress status while an AI tool is running. It is not a detached job that can outlive the graph run. Inputs and outputs The node has paired variadic ports. Connecting another input adds another input/output pair. Port Data Type Description Async Input [i] any A value required before the node starts. The node waits for all connected inputs. Async Output [i] any The unchanged value from ",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:subGraph",
+      "nodeType": "subGraph",
+      "displayName": "Subgraph",
+      "description": "Runs another graph in the current project.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "graphId",
+          "valueKind": "string-enum",
+          "description": "Graph to execute.",
+          "allowedValues": [
+            "graph-builder-node-spec-generation"
+          ]
+        },
+        {
+          "key": "useErrorOutput",
+          "valueKind": "boolean",
+          "description": "Expose an error output."
+        },
+        {
+          "key": "useAsGraphPartialOutput",
+          "valueKind": "boolean",
+          "description": "Forward partial outputs from the subgraph."
+        },
+        {
+          "key": "inputPortOrder",
+          "valueKind": "string-array",
+          "description": "Optional input-port order."
+        },
+        {
+          "key": "outputPortOrder",
+          "valueKind": "string-array",
+          "description": "Optional output-port order."
+        }
+      ],
+      "safeDefaults": {
+        "useErrorOutput": false,
+        "useAsGraphPartialOutput": false
+      }
+    },
+    {
+      "authoringChoiceId": "registered:syncKnowledgeSource",
+      "nodeType": "syncKnowledgeSource",
+      "displayName": "Sync Knowledge Source",
+      "description": "Sync Knowledge Source synchronizes a complete logical source. Rivet normalizes and chunks the documents, computes a deterministic content version, uploads that immutable version, and activates it only after all chunks succeed. Running the same content and settings again returns unchanged without re uploading. Document IDs must be unique within the source; duplicates fail before any write. An update activates the new version before guarded cleanup of the old one.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:text",
+      "nodeType": "text",
+      "displayName": "Text",
+      "description": "Builds text from a template and interpolation inputs.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": true,
+        "resolvePorts": true,
+        "configureSettings": true,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": [
+        {
+          "key": "text",
+          "valueKind": "string",
+          "description": "Text template. Use {{name}} for dynamic inputs.",
+          "projection": "on-demand"
+        },
+        {
+          "key": "normalizeLineEndings",
+          "valueKind": "boolean",
+          "description": "Normalize line endings to LF."
+        }
+      ],
+      "safeDefaults": {
+        "text": "{{input}}",
+        "normalizeLineEndings": true
+      }
+    },
+    {
+      "authoringChoiceId": "registered:toJson",
+      "nodeType": "toJson",
+      "displayName": "To JSON",
+      "description": "The To JSON Node is used to convert a given input into its JSON equivalent, effectively stringifying the value. This can be useful when you need to serialize an object or array into a string format for further processing or storage. The node provides an option to format the JSON output with indentation for easier reading.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:toMarkdownTable",
+      "nodeType": "toMarkdownTable",
+      "displayName": "To Markdown Table",
+      "description": "To Markdown Table Node The To Markdown Table node converts an array of objects into a Markdown table string. Use it when structured records should be rendered as readable Markdown for prompts, reports, or logs. Inputs Title Data Type Description Data Array any Array of objects to render as a table. Outputs Title Data Type Description Markdown Table string The generated Markdown table. Settings Setting Description Include Headers Adds a header row from the object keys. Align Pipes Aligns table pipes for more readable source.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:toTree",
+      "nodeType": "toTree",
+      "displayName": "To Tree",
+      "description": "To Tree Node The To Tree node renders an object or object array as a text tree. Use it when you have hierarchical data and want a readable indented tree string. Inputs Title Data Type Description Objects object[] or object Objects to render as a tree. Outputs Title Data Type Description Tree string Rendered text tree. Settings Setting Description Children Property Object property that contains child nodes. Format Interpolation template for each rendered tree item. Sort Alphabetically Sorts items by path before rendering.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:toYaml",
+      "nodeType": "toYaml",
+      "displayName": "To YAML",
+      "description": "The To YAML Node is used to convert an object into a YAML string. This can be useful when you need to output your data in a YAML format.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:trimChatMessages",
+      "nodeType": "trimChatMessages",
+      "displayName": "Trim Chat Messages",
+      "description": "The Trim Chat Messages Node is used to manage the length of chat message chains in terms of tokens. It takes an array of chat messages and trims messages from either the beginning or the end of the list until the total length of the messages is under the configured token length. This is particularly useful for setting up infinite message chains that stay under the language model's context limit.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:urlReference",
+      "nodeType": "urlReference",
+      "displayName": "URL Reference",
+      "description": "The URL Reference Node is used to define a reference to a URL or convert a string into a URL reference. This node is particularly useful when used with the Assemble Message node to define URLs for attachments or images, allowing the LLM to download the image instead of having to upload the image with your chat request.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:userInput",
+      "nodeType": "userInput",
+      "displayName": "User Input",
+      "description": "The User Input Node is designed to prompt the user for input during the execution of the graph. The user's response becomes the output of this node. This node is particularly useful in interactive scenarios where user input is required to proceed with the graph execution. The User Input Node can either use a static prompt defined in the node settings or dynamic prompts provided via the node's input.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:vectorNearestNeighbors",
+      "nodeType": "vectorNearestNeighbors",
+      "displayName": "Vector KNN",
+      "description": "The Vector KNN Node takes a vector embedding and searches for K similar vectors.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:vectorStore",
+      "nodeType": "vectorStore",
+      "displayName": "Vector Store",
+      "description": "The Vector Store Node takes a vector embedding and stores it in a vector store. The vector store can then be used to perform similarity searches. The Vector Store Node is used to store vectors in a vector database. It takes in a vector and data to store with the vector. This data is stored in the configured vector database integration for later retrieval. The Vector Store Node is part of the Input/Output group of nodes.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:waitForEvent",
+      "nodeType": "waitForEvent",
+      "displayName": "Wait For Event",
+      "description": "The Wait For Event Node is used to pause the execution of a graph until a specific event is raised by a Raise Event Node or the host project. The event name can be configured in the node settings or provided dynamically via an input port. This node is useful in scenarios where you want to wait for an external event to occur before proceeding with the graph execution. For example, you might want to wait for a user to click a button, or for an API call to complete.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    }
+  ]
+}
