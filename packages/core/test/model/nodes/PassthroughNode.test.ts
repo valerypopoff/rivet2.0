@@ -1,8 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
-  canRenderPassthroughAsDataBus,
-  isPassthroughDataBusNode,
   PassthroughNodeImpl,
   type Inputs,
   type NodeConnection,
@@ -80,21 +78,10 @@ void describe('PassthroughNode', () => {
     );
   });
 
-  void it('treats data-bus mode as presentation metadata and rejects hidden conditional or split modes', () => {
-    const chartNode = {
-      ...PassthroughNodeImpl.create(),
-      data: { renderAsDataBus: true },
-    };
+  void it('creates an ordinary executable node with no presentation mode', () => {
+    const chartNode = PassthroughNodeImpl.create();
 
-    assert.equal(isPassthroughDataBusNode(chartNode), true);
-    assert.equal(canRenderPassthroughAsDataBus(chartNode), true);
-    assert.equal(canRenderPassthroughAsDataBus({ ...chartNode, isConditional: true }), false);
-    assert.equal(canRenderPassthroughAsDataBus({ ...chartNode, isSplitRun: true }), false);
-    assert.equal(canRenderPassthroughAsDataBus({ ...chartNode, disabled: true }), false);
-    assert.equal(
-      canRenderPassthroughAsDataBus({ ...chartNode, variants: [{ id: 'variant', name: 'Variant' }] }),
-      false,
-    );
-    assert.equal(isPassthroughDataBusNode({ ...chartNode, data: undefined as never }), false);
+    assert.deepStrictEqual(chartNode.data, {});
+    assert.equal(chartNode.type, 'passthrough');
   });
 });

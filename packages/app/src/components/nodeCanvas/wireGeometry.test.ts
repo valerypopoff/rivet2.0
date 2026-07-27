@@ -28,6 +28,17 @@ test('getWirePath routes backwards wires through a horizontal midpoint bridge', 
   );
 });
 
+test('getWirePath can leave or enter a viewport-fixed endpoint vertically downward', () => {
+  assert.equal(
+    getWirePath({ sx: 0, sy: 10, ex: 100, ey: 110, startDirection: 'down' }),
+    'M0,10 C0,45 50,110 100,110',
+  );
+  assert.equal(
+    getWirePath({ sx: 0, sy: 10, ex: 100, ey: 110, endDirection: 'down' }),
+    'M0,10 C50,10 100,145 100,110',
+  );
+});
+
 test('normal offsets keep the two lanes evenly separated around a forward Bézier curve', () => {
   const coordinates = { sx: 0, sy: 10, ex: 100, ey: 220 };
   const forwardLane = getNormalOffsetWirePoints({ ...coordinates, offset: -2 });
@@ -52,6 +63,24 @@ test('normal offsets retain exact horizontal-port endpoints on steep, close wire
   assert.deepEqual(upperLane.at(-1), { x: 360, y: 431 });
   assert.deepEqual(lowerLane.at(0), { x: 280, y: 184 });
   assert.deepEqual(lowerLane.at(-1), { x: 360, y: 519 });
+});
+
+test('normal offsets preserve downward endpoint tangents', () => {
+  const coordinates = {
+    sx: 0,
+    sy: 10,
+    ex: 100,
+    ey: 110,
+    startDirection: 'down' as const,
+    endDirection: 'down' as const,
+  };
+  const leftLane = getNormalOffsetWirePoints({ ...coordinates, offset: 2 });
+  const rightLane = getNormalOffsetWirePoints({ ...coordinates, offset: -2 });
+
+  assert.deepEqual(leftLane.at(0), { x: -2, y: 10 });
+  assert.deepEqual(leftLane.at(-1), { x: 102, y: 110 });
+  assert.deepEqual(rightLane.at(0), { x: 2, y: 10 });
+  assert.deepEqual(rightLane.at(-1), { x: 98, y: 110 });
 });
 
 test('normal offsets also keep the lanes separated around backwards wire turns', () => {

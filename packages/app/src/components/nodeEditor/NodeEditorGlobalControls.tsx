@@ -1,11 +1,5 @@
 import { type FC, type ReactNode } from 'react';
-import {
-  canRenderDataBusNode,
-  DEFAULT_SPLIT_RUN_CONCURRENCY,
-  isDataBusNode,
-  type ChartNode,
-  type NodeConnection,
-} from '@valerypopoff/rivet2-core';
+import { DEFAULT_SPLIT_RUN_CONCURRENCY, isDataBusNode, type ChartNode } from '@valerypopoff/rivet2-core';
 import TextField from '@atlaskit/textfield';
 import Select from '@atlaskit/select';
 import Button from '@atlaskit/button';
@@ -15,7 +9,6 @@ import { LabeledToggle } from '../LabeledToggle.js';
 import { SegmentedEditor } from '../editors/SegmentedEditor.js';
 import GitBranchIcon from 'majesticons/line/git-branch-line.svg?react';
 import type { NodeColor } from '../../utils/nodeColor.js';
-import { getPassthroughDataBusConversionError } from '../../domain/graphEditing/dataBusConversion.js';
 
 type HeaderToggleFieldProps = {
   id: string;
@@ -98,7 +91,6 @@ function getSplitMode(node: ChartNode): SplitModeChoice {
 
 export const NodeEditorGlobalControls: FC<{
   node: ChartNode;
-  connections: readonly NodeConnection[];
   selectedVariant: string | undefined;
   setSelectedVariant: (value: string | undefined) => void;
   addVariantPopupOpen: boolean;
@@ -115,7 +107,6 @@ export const NodeEditorGlobalControls: FC<{
   onSaveAsVariant: (id: string) => void;
 }> = ({
   node,
-  connections,
   selectedVariant,
   setSelectedVariant,
   addVariantPopupOpen,
@@ -133,25 +124,9 @@ export const NodeEditorGlobalControls: FC<{
 }) => {
   const isVariant = selectedVariant !== undefined;
   const hasSavedVariants = variantOptions.length > 1;
-  const isDedicatedDataBus = isDataBusNode(node);
-  const isDataBus = isDedicatedDataBus || canRenderDataBusNode(node);
-  const hasInvalidDedicatedDataBusExecutionState =
-    isDedicatedDataBus &&
-    Boolean(node.disabled || node.isConditional || node.isSplitRun || (node.variants?.length ?? 0) > 0);
-  const canConvertPassthroughToDataBus =
-    node.type === 'passthrough' &&
-    !node.disabled &&
-    !node.isConditional &&
-    !node.isSplitRun &&
-    (node.variants?.length ?? 0) === 0;
-  const dataBusConversionError = !isDataBus && canConvertPassthroughToDataBus
-    ? getPassthroughDataBusConversionError(node, connections)
-    : undefined;
-  const dataBusConversionLabel = isDedicatedDataBus
-    ? 'Convert to Passthrough'
-    : isDataBus
-      ? 'Migrate to Data Bus'
-      : 'Convert to Data Bus';
+  const isDataBus = isDataBusNode(node);
+  const hasInvalidDataBusExecutionState =
+    isDataBus && Boolean(node.disabled || node.isConditional || node.isSplitRun || (node.variants?.length ?? 0) > 0);
   const showVariantEditor = !isDataBus && (hasSavedVariants || addVariantPopupOpen);
   const showVariantsButton = !isDataBus && !hasSavedVariants;
   const nodeEnabledToggleId = `node-enabled-${node.id}`;
@@ -190,38 +165,8 @@ export const NodeEditorGlobalControls: FC<{
         onDescriptionChange={onDescriptionChange}
         onColorChange={onColorChange}
       />
-      {(isDataBus || canConvertPassthroughToDataBus) && (
-        <div className="node-type-conversion">
-          <Button
-            appearance="subtle"
-            isDisabled={dataBusConversionError != null}
-            onClick={() => {
-              if (dataBusConversionError) {
-                return;
-              }
-
-              onUpdateNode(
-                isDedicatedDataBus
-                  ? {
-                      ...node,
-                      type: 'passthrough',
-                      data: {},
-                    }
-                  : {
-                      ...node,
-                      type: 'dataBus',
-                      data: {},
-                    },
-              );
-            }}
-          >
-            {dataBusConversionLabel}
-          </Button>
-          {dataBusConversionError && <span className="node-type-conversion-hint">{dataBusConversionError}</span>}
-        </div>
-      )}
-      {hasInvalidDedicatedDataBusExecutionState && (
-        <div className="node-type-conversion">
+      {hasInvalidDataBusExecutionState && (
+        <div className="node-type-action">
           <Button
             appearance="subtle"
             onClick={() => {

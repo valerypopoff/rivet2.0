@@ -778,7 +778,7 @@ describe('serialization compatibility', () => {
     assert.equal(deserialized.nodes.find((node) => node.id === 'current-custom')?.title, 'Custom current title');
   });
 
-  it('migrates compatible legacy visual data buses while preserving incompatible Passthrough execution modes', () => {
+  it('retires the legacy visual-bus flag while keeping every node as a Passthrough', () => {
     const graph: NodeGraph = {
       metadata: { id: 'g-data-bus-migration', name: 'Data Bus migration', description: '' },
       nodes: [
@@ -807,18 +807,33 @@ describe('serialization compatibility', () => {
           data: { renderAsDataBus: true },
           variants: [{ id: 'legacy-variant', name: 'Legacy variant' }],
         },
+        {
+          id: 'disabled-legacy-flag',
+          type: 'passthrough',
+          title: 'Ordinary Passthrough',
+          visualData: { x: 3, y: 0 },
+          data: { renderAsDataBus: false, preserved: 'value' },
+          variants: [],
+        },
       ],
       connections: [],
     };
 
     const deserialized = deserializeGraph(serializeGraph(graph));
 
-    const migratedBus = deserialized.nodes.find((node) => node.id === 'legacy-bus');
-    assert.equal(migratedBus?.type, 'dataBus');
-    assert.deepEqual(migratedBus?.data, {});
-    assert.equal(migratedBus?.title, 'Shared values');
-    assert.equal(deserialized.nodes.find((node) => node.id === 'conditional-legacy-bus')?.type, 'passthrough');
-    assert.equal(deserialized.nodes.find((node) => node.id === 'variant-legacy-bus')?.type, 'passthrough');
+    const ordinaryPassthrough = deserialized.nodes.find((node) => node.id === 'legacy-bus');
+    assert.equal(ordinaryPassthrough?.type, 'passthrough');
+    assert.deepEqual(ordinaryPassthrough?.data, {});
+    assert.equal(ordinaryPassthrough?.title, 'Shared values');
+    const conditionalPassthrough = deserialized.nodes.find((node) => node.id === 'conditional-legacy-bus');
+    const variantPassthrough = deserialized.nodes.find((node) => node.id === 'variant-legacy-bus');
+    assert.equal(conditionalPassthrough?.type, 'passthrough');
+    assert.deepEqual(conditionalPassthrough?.data, {});
+    assert.equal(variantPassthrough?.type, 'passthrough');
+    assert.deepEqual(variantPassthrough?.data, {});
+    const disabledLegacyFlag = deserialized.nodes.find((node) => node.id === 'disabled-legacy-flag');
+    assert.equal(disabledLegacyFlag?.type, 'passthrough');
+    assert.deepEqual(disabledLegacyFlag?.data, { preserved: 'value' });
   });
 });
 

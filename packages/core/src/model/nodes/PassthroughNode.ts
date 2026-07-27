@@ -12,15 +12,7 @@ import { nanoid } from 'nanoid/non-secure';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { dedent } from 'ts-dedent';
 
-export type PassthroughNode = ChartNode<'passthrough', PassthroughNodeData>;
-
-export type PassthroughNodeData = {
-  /**
-   * @deprecated Use the dedicated Data Bus node type. This remains readable so
-   * legacy projects can be migrated without losing their authored topology.
-   */
-  renderAsDataBus?: boolean;
-};
+export type PassthroughNode = ChartNode<'passthrough', Record<string, never>>;
 
 const INPUT_PORT_PATTERN = /^input(\d+)$/;
 const OUTPUT_PORT_PATTERN = /^output(\d+)$/;
@@ -46,25 +38,6 @@ function getHighestConnectedSlotIndex(connections: readonly NodeConnection[], no
   }
 
   return highestIndex;
-}
-
-export function isPassthroughDataBusNode(node: ChartNode | undefined): node is PassthroughNode {
-  return node?.type === 'passthrough' && (node.data as PassthroughNodeData | undefined)?.renderAsDataBus === true;
-}
-
-/**
- * Conditional and split-run Passthrough nodes have execution semantics that a
- * hidden canvas rail cannot communicate. Malformed or hand-edited combinations
- * therefore fall back to the normal visible node until the conflict is removed.
- */
-export function canRenderPassthroughAsDataBus(node: ChartNode | undefined): node is PassthroughNode {
-  return (
-    isPassthroughDataBusNode(node) &&
-    !node.isConditional &&
-    !node.isSplitRun &&
-    !node.disabled &&
-    (node.variants?.length ?? 0) === 0
-  );
 }
 
 export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {

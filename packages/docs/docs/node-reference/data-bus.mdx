@@ -57,13 +57,16 @@ Bus, Rivet shows it as an ordinary node card and offers **Repair Data Bus
 execution settings**. Repair clears only those incompatible settings; the bus
 title, position, and connections remain unchanged.
 
-When converting an ordinary Passthrough into a Data Bus, every incident port
-must already be a canonical `inputN` or `outputN` channel and each `inputN` can
-have only one provider. Rivet keeps the conversion disabled and explains what
-needs repair if those conditions are not met.
+Add Data Bus directly from the node list when you need shared canvas topology.
+Passthrough nodes no longer have a Data Bus display mode and cannot be switched
+into one from their settings. Open the Data Bus settings and select **Delete
+Data Bus** to remove the rail and its connections. Data Bus settings do not
+offer conversion to Passthrough.
 
-Legacy Passthrough nodes previously configured as canvas data buses are migrated
-to this node type when the project opens.
+Legacy Passthrough nodes previously configured as canvas data buses remain
+ordinary Passthrough nodes when the project opens. Rivet ignores and removes
+their retired display flag; it does not convert them into this dedicated node
+type.
 
 ## See also
 

@@ -40,6 +40,32 @@ test('array-like renderers tolerate malformed array payloads', () => {
   assert.equal(countOccurrences(malformedArrayMarkup, 'class="multi-output-item"'), 0);
 });
 
+test('split-run nested array types receive a renderer instead of mounting an undefined component', () => {
+  const nestedMessagesMarkup = renderDataValue({
+    type: 'chat-message[][]',
+    value: [
+      [{ type: 'system', message: 'System A' }],
+      [
+        { type: 'system', message: 'System B' },
+        { type: 'user', message: 'User B' },
+      ],
+    ],
+  } as unknown as DataValue);
+
+  assert.equal(countOccurrences(nestedMessagesMarkup, 'class="multi-output-item"'), 2);
+  assert.equal(countOccurrences(nestedMessagesMarkup, 'chat-message[]'), 2);
+});
+
+test('unknown runtime value types render a diagnostic instead of mounting an undefined component', () => {
+  const markup = renderDataValue({
+    type: 'unexpected-runtime-type',
+    value: { answer: 42 },
+  } as unknown as DataValue);
+
+  assert.match(markup, /ERROR: UNKNOWN TYPE/);
+  assert.match(markup, /unexpected-runtime-type/);
+});
+
 test('function renderers preserve array return types in their labels', () => {
   const markup = renderDataValue({ type: 'fn<string[]>', value: () => ['value'] });
 
@@ -47,7 +73,7 @@ test('function renderers preserve array return types in their labels', () => {
 });
 
 function renderDataValue(value: DataValue): string {
-  const Renderer = rendererMap[value.type];
+  const Renderer = rendererMap.get(value.type);
 
   return renderToStaticMarkup(createElement(Renderer, { value }));
 }

@@ -11,7 +11,12 @@ import clsx from 'clsx';
 import { ErrorBoundary } from 'react-error-boundary';
 import { nodeByIdState } from '../state/graph';
 import { type PortPositions } from './NodeCanvas';
-import { getNormalOffsetWirePath, getWirePath, getWireSegments } from './nodeCanvas/wireGeometry.js';
+import {
+  getNormalOffsetWirePath,
+  getWirePath,
+  getWireSegments,
+  type WireEndpointDirection,
+} from './nodeCanvas/wireGeometry.js';
 
 type WireProps = {
   connection: NodeConnection;
@@ -23,6 +28,8 @@ type WireProps = {
   portPositions: PortPositions;
   interactive?: boolean;
   bendPoint?: NodeConnection['bendPoint'];
+  startEndpointDirection?: WireEndpointDirection;
+  endEndpointDirection?: WireEndpointDirection;
   toolContinuation?: {
     active: boolean;
     kind: 'connected' | 'ambiguous';
@@ -53,6 +60,8 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
   portPositions,
   interactive = false,
   bendPoint: bendPointOverride,
+  startEndpointDirection,
+  endEndpointDirection,
   toolContinuation,
   onHoverStart,
   onHoverMove,
@@ -81,6 +90,8 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
   return (
     <ErrorBoundary fallback={<></>}>
       {wireSegments.map((segment, index) => {
+        const segmentStartDirection = index === 0 ? startEndpointDirection : undefined;
+        const segmentEndDirection = index === wireSegments.length - 1 ? endEndpointDirection : undefined;
         const wireProps = {
           sx: segment.start.x,
           sy: segment.start.y,
@@ -90,6 +101,8 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
           highlighted,
           isNotRan,
           compareChangeKind,
+          startEndpointDirection: segmentStartDirection,
+          endEndpointDirection: segmentEndDirection,
           toolContinuationKind: toolContinuation?.kind,
           toolContinuationActive: toolContinuation?.active,
         };
@@ -126,21 +139,28 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
       })}
       {interactive && (
         <>
-          {wireSegments.map((segment, index) => (
-            <WireInteractionTarget
-              key={`wire-hit-segment-${index}`}
-              sx={segment.start.x}
-              sy={segment.start.y}
-              ex={segment.end.x}
-              ey={segment.end.y}
-              onHoverStart={onHoverStart}
-              onHoverMove={onHoverMove}
-              onHoverEnd={onHoverEnd}
-              onMouseDown={onMouseDown}
-              onClick={onClick}
-              title={index === 0 ? toolContinuation?.title : undefined}
-            />
-          ))}
+          {wireSegments.map((segment, index) => {
+            const segmentStartDirection = index === 0 ? startEndpointDirection : undefined;
+            const segmentEndDirection = index === wireSegments.length - 1 ? endEndpointDirection : undefined;
+
+            return (
+              <WireInteractionTarget
+                key={`wire-hit-segment-${index}`}
+                sx={segment.start.x}
+                sy={segment.start.y}
+                ex={segment.end.x}
+                ey={segment.end.y}
+                startEndpointDirection={segmentStartDirection}
+                endEndpointDirection={segmentEndDirection}
+                onHoverStart={onHoverStart}
+                onHoverMove={onHoverMove}
+                onHoverEnd={onHoverEnd}
+                onMouseDown={onMouseDown}
+                onClick={onClick}
+                title={index === 0 ? toolContinuation?.title : undefined}
+              />
+            );
+          })}
         </>
       )}
     </ErrorBoundary>
@@ -182,6 +202,8 @@ export const Wire: FC<{
   markerEnd?: string;
   normalOffset?: number;
   normalOffsetPath?: boolean;
+  startEndpointDirection?: WireEndpointDirection;
+  endEndpointDirection?: WireEndpointDirection;
   toolContinuationActive?: boolean;
   toolContinuationKind?: 'connected' | 'ambiguous';
   toolContinuationPaired?: boolean;
@@ -199,14 +221,31 @@ export const Wire: FC<{
     markerEnd,
     normalOffset = 0,
     normalOffsetPath = false,
+    startEndpointDirection,
+    endEndpointDirection,
     toolContinuationActive,
     toolContinuationKind,
     toolContinuationPaired,
   }) => {
     const isBackwards = sx > ex;
     const wirePath = normalOffsetPath
-      ? getNormalOffsetWirePath({ sx, sy, ex, ey, offset: normalOffset })
-      : getWirePath({ sx, sy, ex, ey });
+      ? getNormalOffsetWirePath({
+          sx,
+          sy,
+          ex,
+          ey,
+          offset: normalOffset,
+          startDirection: startEndpointDirection,
+          endDirection: endEndpointDirection,
+        })
+      : getWirePath({
+          sx,
+          sy,
+          ex,
+          ey,
+          startDirection: startEndpointDirection,
+          endDirection: endEndpointDirection,
+        });
 
     return (
       <path
@@ -236,30 +275,54 @@ const WireInteractionTarget: FC<{
   sy: number;
   ex: number;
   ey: number;
+  startEndpointDirection?: WireEndpointDirection;
+  endEndpointDirection?: WireEndpointDirection;
   onHoverStart?: (event: MouseEvent<SVGPathElement>) => void;
   onHoverMove?: (event: MouseEvent<SVGPathElement>) => void;
   onHoverEnd?: () => void;
   onMouseDown?: (event: MouseEvent<SVGPathElement>) => void;
   onClick?: (event: MouseEvent<SVGPathElement>) => void;
   title?: string;
-}> = memo(({ sx, sy, ex, ey, onHoverStart, onHoverMove, onHoverEnd, onMouseDown, onClick, title }) => {
-  return (
-    <path
-      className="wire-hit-area"
-      d={getWirePath({ sx, sy, ex, ey })}
-      onMouseEnter={onHoverStart}
-      onMouseMove={onHoverMove}
-      onMouseLeave={onHoverEnd ? () => onHoverEnd() : undefined}
-      onMouseDown={onMouseDown}
-      onClick={onClick}
-      aria-label={title}
-      role={title ? 'img' : undefined}
-      tabIndex={title ? 0 : undefined}
-    >
-      {title && <title>{title}</title>}
-    </path>
-  );
-});
+}> = memo(
+  ({
+    sx,
+    sy,
+    ex,
+    ey,
+    startEndpointDirection,
+    endEndpointDirection,
+    onHoverStart,
+    onHoverMove,
+    onHoverEnd,
+    onMouseDown,
+    onClick,
+    title,
+  }) => {
+    return (
+      <path
+        className="wire-hit-area"
+        d={getWirePath({
+          sx,
+          sy,
+          ex,
+          ey,
+          startDirection: startEndpointDirection,
+          endDirection: endEndpointDirection,
+        })}
+        onMouseEnter={onHoverStart}
+        onMouseMove={onHoverMove}
+        onMouseLeave={onHoverEnd ? () => onHoverEnd() : undefined}
+        onMouseDown={onMouseDown}
+        onClick={onClick}
+        aria-label={title}
+        role={title ? 'img' : undefined}
+        tabIndex={title ? 0 : undefined}
+      >
+        {title && <title>{title}</title>}
+      </path>
+    );
+  },
+);
 
 WireInteractionTarget.displayName = 'WireInteractionTarget';
 

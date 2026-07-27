@@ -112,6 +112,12 @@ settings record and supplies them as
 `KnowledgeStoreProviderContext.credentials`; adapters must not duplicate
 knowledge of the settings storage path.
 
+Pinecone's connection-level API-key help text also names the headless
+deployment path directly below the credential field:
+`PINECONE_API_KEY=...` in a host-loaded `.env` file. The Node package reads the
+resulting `process.env.PINECONE_API_KEY` when `pluginEnv` is omitted; Rivet does
+not imply that arbitrary Node hosts automatically load `.env` files.
+
 The editor's connection test receives the same provider and owning-plugin identity that will be persisted with the connection, plus normalized unsaved configuration and credentials. A provider test must still be side-effect-free with respect to source data. Pinecone's test also validates that a successful response is JSON object data, so an HTTP proxy returning a `200` HTML/error page cannot produce a false-positive connection result.
 
 Project deserialization first validates the generic connection-record shape, unpadded stable IDs/names/configuration keys, provider/plugin IDs, and portable configuration so malformed metadata cannot crash the editor. Structural validation failures retain their specific diagnostics through the public `deserializeProject(...)` boundary instead of becoming a generic load error. Project-backed connections are then revalidated against the installed provider when first resolved in every root run. Unknown fields, missing required values, wrong scalar types, invalid provider/plugin ownership, and undeclared data do not reach provider factories. This keeps hand-edited and programmatically produced project files on the same boundary as the editor UI.

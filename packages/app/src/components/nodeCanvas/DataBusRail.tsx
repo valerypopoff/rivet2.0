@@ -265,9 +265,16 @@ const ProviderLabel: FC<{
   const { outputDefinitions } = useCanvasNodeIO(connection.outputNodeId);
   const sourceNode = nodesById[connection.outputNodeId];
   const outputDefinition = outputDefinitions.find((candidate) => candidate.id === connection.outputId);
-  const label = `${sourceNode?.title ?? 'Missing node'} / ${outputDefinition?.title ?? connection.outputId}`;
+  const sourceLabel = sourceNode?.title ?? 'Missing node';
+  const outputLabel = outputDefinition?.title ?? connection.outputId;
+  const label = `${sourceLabel} / ${outputLabel}`;
 
-  return <span title={label}>{label}</span>;
+  return (
+    <span className="data-bus-provider-label" title={label} aria-label={label}>
+      <span className="data-bus-provider-source">{sourceLabel}</span>
+      <span className="data-bus-provider-output">{outputLabel}</span>
+    </span>
+  );
 };
 
 const DataBusPort: FC<{

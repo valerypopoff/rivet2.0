@@ -519,6 +519,7 @@ export const NodeLibraryBuilder: FC = () => {
             selectedNode={editingPrefab.sourceNode}
             onDeselect={closeEditor}
             onUpdateNode={updateEditingPrefab}
+            onDeleteNode={() => deletePrefabSource(editingPrefab.sourceNode.id)}
           />
         )}
       </EditNodeCommandOverrideContext.Provider>

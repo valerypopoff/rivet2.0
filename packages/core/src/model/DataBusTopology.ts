@@ -2,11 +2,7 @@ import { parseDataBusChannelIndex } from './DataBusPorts.js';
 import type { DataBusNode } from './nodes/DataBusNode.js';
 import type { ChartNode, NodeConnection, NodeId, PortId } from './NodeBase.js';
 
-type LegacyDataBusNodeData = {
-  renderAsDataBus?: boolean;
-};
-
-export type DataBusTopologyNode = DataBusNode | ChartNode<'passthrough', LegacyDataBusNodeData>;
+export type DataBusTopologyNode = DataBusNode;
 
 export type CompiledDataBusTopology = {
   connections: NodeConnection[];
@@ -20,31 +16,12 @@ type MutableChannel = {
   consumerConnections: NodeConnection[];
 };
 
-export function isLegacyDataBusNode(node: ChartNode | undefined): node is ChartNode<'passthrough', LegacyDataBusNodeData> {
-  return node?.type === 'passthrough' && (node.data as LegacyDataBusNodeData | undefined)?.renderAsDataBus === true;
-}
-
-function isDataBusNode(node: ChartNode | undefined): node is DataBusNode {
+function isDedicatedDataBusNode(node: ChartNode | undefined): node is DataBusNode {
   return node?.type === 'dataBus';
 }
 
-/**
- * Legacy rail Passthroughs become topology nodes only while their normal
- * execution modifiers are inactive. Imported incompatible Passthroughs keep
- * their ordinary runtime behavior until manually repaired or migrated.
- */
 export function isDataBusTopologyNode(node: ChartNode | undefined): node is DataBusTopologyNode {
-  if (isDataBusNode(node)) {
-    return true;
-  }
-
-  return (
-    isLegacyDataBusNode(node) &&
-    !node.isConditional &&
-    !node.isSplitRun &&
-    !node.disabled &&
-    (node.variants?.length ?? 0) === 0
-  );
+  return isDedicatedDataBusNode(node);
 }
 
 export function canRenderDataBusNode(node: ChartNode | undefined): node is DataBusTopologyNode {
@@ -85,7 +62,10 @@ export function compileDataBusTopology(options: {
 
   for (const nodeId of dataBusNodeIds) {
     const node = nodesById[nodeId]!;
-    if (isDataBusNode(node) && (node.isConditional || node.isSplitRun || node.disabled || node.variants?.length)) {
+    if (
+      isDedicatedDataBusNode(node) &&
+      (node.isConditional || node.isSplitRun || node.disabled || node.variants?.length)
+    ) {
       throw new Error(
         `Data Bus "${node.title}" cannot be conditional, run per item, disabled, or variant-driven. Data Bus channels are always-active topology.`,
       );

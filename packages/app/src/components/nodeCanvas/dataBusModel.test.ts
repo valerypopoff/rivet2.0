@@ -21,12 +21,12 @@ import {
   shouldRenderDataBusConnection,
 } from './dataBusModel.js';
 
-function node(id: string, renderAsDataBus = false): ChartNode {
+function node(id: string, dataBus = false): ChartNode {
   return {
     id: id as NodeId,
-    type: renderAsDataBus ? 'passthrough' : 'text',
+    type: dataBus ? 'dataBus' : 'text',
     title: id,
-    data: renderAsDataBus ? { renderAsDataBus: true } : {},
+    data: {},
     visualData: { x: 0, y: 0 },
   };
 }
@@ -240,13 +240,25 @@ test('retains missing and multiple-provider states instead of normalizing them a
   assert.equal(presentation.dataChannels[1]?.consumerCount, 1);
 });
 
-test('leaves ordinary, execution-modified, and out-of-range Passthrough connections out of topology', () => {
-  const ordinaryBus = node('ordinary-bus');
+test('leaves Passthroughs, execution-modified buses, and out-of-range ports out of presentation topology', () => {
+  const ordinaryPassthrough: ChartNode = {
+    id: 'ordinary-passthrough' as NodeId,
+    type: 'passthrough',
+    title: 'ordinary-passthrough',
+    data: { renderAsDataBus: true },
+    visualData: { x: 0, y: 0 },
+  };
   const conditionalBus = { ...node('conditional-bus', true), isConditional: true };
-  const nodesById = { source: node('source'), 'ordinary-bus': ordinaryBus, 'conditional-bus': conditionalBus };
-  const ordinary = connection('source', 'output', 'ordinary-bus', 'input1');
+  const rangeBus = node('range-bus', true);
+  const nodesById = {
+    source: node('source'),
+    'ordinary-passthrough': ordinaryPassthrough,
+    'conditional-bus': conditionalBus,
+    'range-bus': rangeBus,
+  };
+  const ordinary = connection('source', 'output', 'ordinary-passthrough', 'input1');
   const conditional = connection('source', 'output', 'conditional-bus', 'input1');
-  const outOfRange = connection('source', 'output', 'conditional-bus', 'input1000000000');
+  const outOfRange = connection('source', 'output', 'range-bus', 'input1000000000');
   const index = topology(nodesById, [ordinary, conditional, outOfRange]);
 
   assert.equal(isEstablishedDataBusConnection(ordinary, index), false);

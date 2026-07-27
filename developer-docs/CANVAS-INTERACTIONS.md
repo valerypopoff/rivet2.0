@@ -139,15 +139,21 @@ or consumer instead. Preload and dependency-inspection entry points resolve the
 authored Node Library source directly and deliberately do not seed a reusable
 runtime plan before referenced project boundaries have been loaded; a later
 real run always preprocesses against the complete reference set.
-If hand-edited or legacy project data puts one of those execution settings on a
+If hand-edited project data puts one of those execution settings on a
 dedicated bus, the canvas shows its ordinary card and the node editor exposes a
 single repair action that clears the incompatible settings without changing its
 title, geometry, or connections.
-Converting an ordinary Passthrough into a Data Bus is guarded locally: each
-incident input/output must use a canonical bus channel and each input channel
-may have only one provider. The editor keeps the conversion action disabled
-with the repair reason until those incident edges are compatible; unrelated
-invalid buses elsewhere in the graph do not block it.
+Passthrough has no Data Bus presentation mode and the editor does not convert a
+Passthrough into topology. Designers add the dedicated Data Bus node explicitly.
+Because a Data Bus is rendered as a rail instead of a movable node card, the
+content area of its settings exposes a compact, top-aligned **Delete Data Bus**
+action instead of mounting the empty default node editor. The global-controls
+header deliberately does not contain that destructive action. Deletion uses the
+ordinary node-deletion command, so it removes incident connections, clears
+editor/execution state, and participates in undo history. Data Bus settings do
+not offer type conversion. When the same editor is hosted by the Node Library,
+the action delegates to the library's existing usage-guarded prefab deletion
+instead of mutating the active graph.
 
 New projects persist `dataBus` with ordinary `NodeConnection` records:
 
@@ -159,10 +165,13 @@ New projects persist `dataBus` with ordinary `NodeConnection` records:
 
 The provider is another ordinary connection into `input1`. Sparse channels are
 valid, bounded by the shared Data Bus port limit, and output-only channels stay
-visible as **Missing provider**. A legacy `passthrough` whose
-`data.renderAsDataBus` flag is compatible is migrated to `dataBus` on
-deserialization; programmatic execution recognizes the legacy shape during the
-transition. Ordinary Passthrough remains an executable value relay.
+visible as **Missing provider**. Deserialization performs the only remaining
+legacy cleanup step: it discards a retired `data.renderAsDataBus` flag and keeps
+the node as an ordinary executable Passthrough, regardless of its execution
+settings. It never converts that node into a dedicated Data Bus. Runtime
+topology compilation and canvas presentation recognize only the explicit
+`dataBus` type; directly constructed or hand-edited Passthrough data cannot
+re-enable the retired mode.
 
 `DataBusRail` renders one sticky top-of-canvas bus shelf per Data Bus. A shelf is deliberately a compact, single-line canvas control
 rather than a clipped or immovable node card: the node name, settings action,
@@ -193,12 +202,16 @@ horizontally scrollable while their scrollbars stay visually hidden, including
 while a wire drag exposes larger port hit targets. A vertical wheel gesture
 over an overflowing shelf is translated to horizontal scrolling; wheel events
 over the shelf never pan or zoom the canvas.
-Each populated channel is labelled `<source node> / <source output>`, exposes
-the normal input port for rewiring, exposes the paired output port for adding
-receivers, and shows the receiver count. Those existing channels scroll only in
-the space between the fixed Data Bus header and a fixed **Connect provider**
-terminal input. That terminal input is the next Data Bus channel with no paired
-output yet; pinning its presentation does not change its connection topology.
+Each populated channel labels `<source node>` and `<source output>` on separate
+lines so more channels fit within the available rail width. The source-node
+line is a smaller uppercase heading, separated slightly from the output label.
+Its tooltip retains the combined `<source node> / <source output>` form. The
+channel exposes the normal input port for rewiring, exposes the paired output
+port for adding receivers, and shows the receiver count. Those existing
+channels scroll only in the space between the fixed Data Bus header and a fixed
+**Connect provider** terminal input. That terminal input is the next Data Bus
+channel with no paired output yet; pinning its presentation does not change its
+connection topology.
 The settings action selects the hidden node and opens
 its ordinary node editor (or the library source when the bus is a linked Node
 Library instance). Search selection and project-comparison node styling
@@ -263,7 +276,10 @@ a wire between the two fixed groups.
 Hovering a rail channel (or one of its antennas) temporarily reveals every
 definition-valid provider and consumer wire for that channel and every
 transitively relayed Data Bus channel, using the saved connection geometry.
-Every revealed segment uses the active wire color, and
+At a rail port, the temporary path uses a downward endpoint tangent instead of
+the horizontal tangent used by normal node ports, so its curve enters the
+canvas below the fixed shelf rather than protruding along the shelf. Every
+revealed segment uses the active wire color, and
 the corresponding normal-node antennas are hidden until the hover ends, so the
 wire temporarily replaces rather than overlaps the radio presentation. A
 multi-hop `Data Bus A -> Data Bus B -> Data Bus C` route therefore reveals in

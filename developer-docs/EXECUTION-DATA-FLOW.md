@@ -37,6 +37,29 @@ External Remote Debugger runs are different: a backend that calls `createProcess
 
 Copy actions intentionally ignore run-duration metadata. The ordinary copy button and JSON-copy button continue to serialize displayed output values / internal output maps only.
 
+## Split-Run Aggregate Output Rendering
+
+`SplitRunProcessor` aggregates one output value per item run by appending one array
+layer to that output's runtime type. Most scalar outputs therefore become ordinary
+declared array types (`object` -> `object[]`, for example). A node that already
+returns an array can temporarily produce a nested runtime descriptor such as
+`chat-message[][]` or `number[][]`. LLM Chat commonly exposes this through
+`Messages Sent`, `All Messages`, and retry-status outputs when the node itself runs
+many items.
+
+These nested descriptors are execution-observability values, not additional
+project-level `DataType` declarations. The downstream split runtime can still peel
+off one array layer when another many-item node consumes them. The editor's
+`createDataValueRendererMap(...)` mirrors that behavior by creating recursive array
+renderers on demand. It must also return a diagnostic renderer for any other
+unknown runtime type. Call the renderer map's `get(...)` resolver rather than
+indexing its registered-type object directly: React treats a missing renderer as
+an undefined component and can otherwise crash every node-output surface while
+the user navigates a completed run.
+
+This does not change the user-facing rule that arbitrary nested arrays are not a
+general graph port type. Use a subgraph for explicit nested item processing.
+
 ## Parked Subgraph Output-Demand Execution Data
 
 Subgraph and Referenced Graph Alias output-demand pruning is currently disabled

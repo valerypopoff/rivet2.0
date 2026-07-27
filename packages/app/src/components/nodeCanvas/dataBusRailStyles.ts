@@ -287,6 +287,26 @@ export const dataBusRailStyles = css`
     white-space: nowrap;
   }
 
+  .data-bus-provider-label {
+    display: flex;
+    flex-direction: column;
+    gap: calc(2px * var(--ui-font-scale, 1));
+    min-width: 0;
+    line-height: 1;
+  }
+
+  .data-bus-provider-label > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .data-bus-provider-source {
+    font-size: 0.82em;
+    text-transform: uppercase;
+  }
+
   .data-bus-channel.empty .data-bus-channel-label,
   .data-bus-connect-provider .data-bus-channel-label {
     color: var(--foreground-dim);

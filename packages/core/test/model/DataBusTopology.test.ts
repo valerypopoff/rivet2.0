@@ -69,11 +69,11 @@ function dataBus(nodeId = 'bus'): ChartNode {
   };
 }
 
-function legacyDataBus(nodeId = 'bus'): ChartNode {
+function flaggedPassthrough(nodeId = 'passthrough'): ChartNode {
   return {
     id: id(nodeId),
     type: 'passthrough',
-    title: 'Legacy shared values',
+    title: 'Passthrough',
     data: { renderAsDataBus: true },
     visualData: { x: 0, y: 0 },
   };
@@ -204,33 +204,18 @@ void describe('Data Bus topology', () => {
     assert.deepEqual(outputs.result, { type: 'string', value: 'available immediately' });
   });
 
-  void it('keeps compatible legacy rail nodes as a compiled topology during programmatic execution', () => {
-    const bus = legacyDataBus();
-    const compiled = compileDataBusTopology({
-      graphNodes: [graphInput(), bus, relay('receiver')],
-      connections: [
-        connection('input', 'data', 'bus', 'input1'),
-        connection('bus', 'output1', 'receiver', 'input'),
-      ],
-    });
-
-    assert.deepEqual(compiled.executionNodes.map((node) => node.id), ['input', 'receiver']);
-    assert.deepEqual(compiled.connections, [connection('input', 'data', 'receiver', 'input')]);
-  });
-
-  void it('keeps legacy Passthroughs with execution modifiers out of Data Bus compilation', () => {
-    const bus = { ...legacyDataBus(), variants: [{ id: 'legacy-variant', name: 'Legacy variant' }] };
+  void it('never treats programmatic Passthrough metadata as Data Bus topology', () => {
+    const passthrough = flaggedPassthrough();
     const connections = [
-      connection('input', 'data', 'bus', 'input1'),
-      connection('bus', 'output1', 'receiver', 'input'),
+      connection('input', 'data', 'passthrough', 'input1'),
+      connection('passthrough', 'output1', 'receiver', 'input'),
     ];
-
     const compiled = compileDataBusTopology({
-      graphNodes: [graphInput(), bus, relay('receiver')],
+      graphNodes: [graphInput(), passthrough, relay('receiver')],
       connections,
     });
 
-    assert.deepEqual(compiled.executionNodes.map((node) => node.id), ['input', 'bus', 'receiver']);
+    assert.deepEqual(compiled.executionNodes.map((node) => node.id), ['input', 'passthrough', 'receiver']);
     assert.deepEqual(compiled.connections, connections);
   });
 

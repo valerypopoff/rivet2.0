@@ -964,6 +964,26 @@ const StaticWireContents = memo(
 
           const isHoveredConnection = hoveredConnectionKey === connectionKey;
           const isHoverRevealedDataBusConnection = hoverRevealedDataBusConnectionKeySet.has(connectionKey);
+          const startEndpointDirection =
+            isHoverRevealedDataBusConnection &&
+            isDataBusChannelPort({
+              input: false,
+              nodeId: connection.outputNodeId,
+              nodesById,
+              portId: connection.outputId,
+            })
+              ? 'down'
+              : undefined;
+          const endEndpointDirection =
+            isHoverRevealedDataBusConnection &&
+            isDataBusChannelPort({
+              input: true,
+              nodeId: connection.inputNodeId,
+              nodesById,
+              portId: connection.inputId,
+            })
+              ? 'down'
+              : undefined;
           const highlighted =
             isHighlightedNode ||
             isCurrentlyRunning ||
@@ -1000,6 +1020,8 @@ const StaticWireContents = memo(
                 nodesById={nodesById}
                 portPositions={portPositions}
                 bendPoint={bendPoint}
+                startEndpointDirection={startEndpointDirection}
+                endEndpointDirection={endEndpointDirection}
                 isNotRan={isNotRan}
                 compareChangeKind={compareChangeKind}
                 toolContinuation={toolContinuation}

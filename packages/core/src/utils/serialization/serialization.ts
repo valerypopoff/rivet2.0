@@ -11,7 +11,6 @@ import {
 } from './serializationUtils.js';
 import { prepareSerializedInput } from './serializationInput.js';
 import { UiGraphNormalizationError } from '../../model/UiGraphNormalization.js';
-import { isLegacyDataBusNode } from '../../model/DataBusTopology.js';
 import {
   datasetV4Deserializer,
   datasetV4Serializer,
@@ -90,6 +89,15 @@ function normalizeDeserializedGraph(graph: NodeGraph): void {
   }
 }
 
+type LegacyPassthroughData = Record<string, unknown> & {
+  renderAsDataBus?: unknown;
+};
+
+function hasLegacyDataBusFlag(node: ChartNode): node is ChartNode<'passthrough', LegacyPassthroughData> {
+  const data = node.data as LegacyPassthroughData | undefined;
+  return node.type === 'passthrough' && data != null && Object.hasOwn(data, 'renderAsDataBus');
+}
+
 function normalizeDeserializedNode(node: ChartNode): void {
   if (node.type === 'code' && node.title === 'Code') {
     node.title = 'Code (legacy)';
@@ -97,19 +105,9 @@ function normalizeDeserializedNode(node: ChartNode): void {
     node.title = 'Code';
   }
 
-  if (
-    isLegacyDataBusNode(node) &&
-    !node.isConditional &&
-    !node.isSplitRun &&
-    !node.disabled &&
-    (node.variants?.length ?? 0) === 0
-  ) {
+  if (hasLegacyDataBusFlag(node)) {
     const { renderAsDataBus: _legacyFlag, ...data } = node.data;
-    // The legacy type guard deliberately narrows `node` to Passthrough here;
-    // widen it again for the in-place authored-schema migration.
-    const migratedNode = node as ChartNode;
-    migratedNode.type = 'dataBus';
-    migratedNode.data = data;
+    (node as ChartNode).data = data;
   }
 }
 
