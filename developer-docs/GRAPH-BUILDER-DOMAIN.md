@@ -1,372 +1,496 @@
 # Transactional Graph Builder Domain
 
-The model-free Plan B domain lives in
-`packages/app/src/domain/graphBuilder`. Import it through that directory's
-`index.ts`; individual source files are implementation details.
+The transactional Graph Builder is a host-owned editing session around a
+private, revisioned virtual graph workspace. The model sees full-fidelity,
+data-only YAML projections of Rivet `NodeGraph` values and proposes exact
+unified diffs or, when a diff would be unusually fragile, one bounded complete
+document replacement. It never receives the live editor project, a filesystem
+handle, or a commit capability.
 
-## Contract ownership
+The primary implementation lives in:
 
-`graphBuilderSchemas.ts` is the runtime source of truth for:
+- [`src/domain/graphBuilder`](../packages/app/src/domain/graphBuilder) for
+  model-free schemas, limits, canonical values, deltas, diagnostics, and
+  validation contracts;
+- [`virtualGraphWorkspace.ts`](../packages/app/src/features/graphBuilder/virtualGraphWorkspace.ts)
+  for virtual documents, exact diff application, secret preservation, draft
+  revisions, and project-wide deltas;
+- [`sessionController.ts`](../packages/app/src/features/graphBuilder/sessionController.ts)
+  for the bounded policy loop and lifecycle;
+- [`readExecutor.ts`](../packages/app/src/features/graphBuilder/readExecutor.ts)
+  for revision-correlated reads and node templates;
+- [`authoringCatalog.ts`](../packages/app/src/features/graphBuilder/authoringCatalog.ts)
+  and
+  [`authoringSemantics.ts`](../packages/app/src/features/graphBuilder/authoringSemantics.ts)
+  for registry-aware construction and candidate validation;
+- [`editorGateway.ts`](../packages/app/src/features/graphBuilder/editorGateway.ts)
+  for the final compare-and-swap publication and history command.
 
-- `GraphBuilderDecision`
-- `GraphPatchProposal` and the host-owned `GraphPatch`
-- operation and node-reference contracts
-- diagnostics and validation results
-- bounded projections and read results
-- patch-application and public session results
-- active-graph authorization
+## Ownership boundary
 
-The protocol version is `GRAPH_BUILDER_PROTOCOL_VERSION`. Model/provider output
-must be accepted through the exported `parseGraphBuilder*` functions, not a
-TypeScript cast or plain `JSON.parse`. Those functions first enforce portable
-JSON limits and prototype safety, then run the strict Zod schema. Unknown
-properties, dangerous dictionary keys, unsafe/non-finite numbers, excessive
-depth/size, duplicate patch-local IDs, and duplicate canonical read requests
-are rejected. Values inside the set-like arrays of a read request must also be
-unique. That semantic check deliberately remains in the host parser rather than
-using JSON Schema `uniqueItems`, because otherwise provider response-format
-compatibility would become part of the runtime authority contract. The checked
-policy prompt tells the model not to repeat those values.
-The portable-data preflight also rejects sparse arrays, extra or hidden
-properties, symbol keys, and accessor properties without invoking their
-getters. Portable byte accounting and canonical serialization operate on
-private data-only clones, so a polluted inherited `toJSON` hook cannot replace
-validated arrays or undercount their encoded size. Full authoring-project
-identities apply the same data-only array and serialization rules, so
-compare-and-swap fingerprints cannot silently omit array metadata, execute an
-accessor, or be replaced by prototype behavior while being calculated.
-Referenced-project maps are canonicalized directly before catalog cloning or
-enumeration, so an accessor-bearing map fails closed without executing the
-accessor.
+The model may choose only one typed decision per policy turn:
 
-Canonical identities use sorted portable JSON. The current
-`fnv1a64:` digest is a deterministic, non-cryptographic lookup identity. Any
-authority or conflict check must also retain and compare the canonical string;
-the digest alone is not collision-proof. Composite identities use JSON-encoded
-string tuples rather than delimiter concatenation, so control characters
-inside otherwise valid graph, node, and port identifiers cannot make distinct
-endpoints alias one another. Preview connection rows use the same tuple
-identity for UI reconciliation; their human-readable labels are display text
-only.
+- `request-context`
+- `apply-patch`
+- `replace-document`
+- `ready`
+- `no-change`
+- `clarify`
+- `cannot-complete`
 
-## Transaction kernel
-
-`GraphBuilderTransactionKernel` owns a private clone of
-`GraphBuilderAuthoringProject` (`Project` without dataset payloads). It mutates
-only the authorized active graph and never accesses React, Jotai, storage,
-networking, graph execution, or the editor.
-
-Construct it with:
+The normal mutation decision is:
 
 ```ts
-new GraphBuilderTransactionKernel({
-  project,
-  activeGraphId,
-  authorization,
-  semantics,
-  idGenerator,
-  initialDraftRevision,
-});
+{
+  type: 'apply-patch';
+  baseRevision: number;
+  unifiedDiff: string;
+  summary?: string;
+}
 ```
 
-Its public state API deliberately returns clones:
+The bounded fallback is:
 
 ```ts
-kernel.getDraft();
-kernel.getDraftRevision();
-kernel.applyPatch(hostOwnedPatch);
+{
+  type: 'replace-document';
+  baseRevision: number;
+  path: string;
+  content: string;
+  summary?: string;
+}
 ```
 
-`applyPatch`:
+The older `GraphPatch` operation contracts remain exported for the hardened
+legacy rollback implementation and internal compatibility tests. They are not
+the model-facing authoring language for the transactional implementation.
+The same separation applies to reads:
+`graphBuilderTransactionalDecisionSchema` and
+`parseGraphBuilderTransactionalDecision(...)` accept only the five reads
+listed below, while the broader `graphBuilderDecisionSchema` remains available
+to legacy/internal consumers that still use `get-node-specs`,
+`inspect-draft`, or `inspect-draft-diff`. The policy runner must always use the
+transactional parser so the checked prompt and accepted model output cannot
+drift apart.
 
-1. Strict-parses and canonically fingerprints the host envelope.
-2. Replays an identical `patchId` or raises `GraphBuilderProtocolError` when the
-   same ID is reused with different content.
-3. Rejects stale revisions or unauthorized operations.
-4. Applies ordered operations to a candidate clone.
-5. Resolves patch-local `created` references through host-allocated node IDs.
-6. Re-resolves dynamic ports and validates connections after relevant changes.
-7. Normalizes through the captured semantics and verifies its derived effect
-   closure.
-8. Runs mandatory touched-scope validation.
-9. Atomically promotes the complete candidate, or retains the prior draft
-   byte-for-byte.
+Host code owns:
 
-An applied candidate advances `draftRevision` once. A canonical no-op does not.
-Rejected patches are retained in the in-memory idempotency ledger too, so a
-later state change cannot make redelivery of the same rejected identity perform
-new work. Deltas retain exact total counts but bound each returned item list;
-`truncated` tells preview/repair consumers when they must inspect the private
-draft rather than assuming the sample list is complete.
+- the base project snapshot and identity;
+- the canonical virtual-document text;
+- graph and node IDs already present in that text;
+- per-session draft and document revisions;
+- secret values represented by placeholders;
+- node templates derived from the live registry;
+- parsing, normalization, validation, and diagnostics;
+- preview construction, Apply eligibility, commit idempotency, undo, and redo.
 
-The initial exact operations are:
+The model owns only the requested edits expressed against a document revision
+it has read. Model prose never controls deltas, validation, or publication.
 
-- `createNode`: one captured authoring choice, host ID, registered defaults, and
-  a host placeholder position.
-- `updateNodeSettings`: authoring-adapter fields only; ID, type, and envelope
-  cannot change.
-- `updateNodeEnvelope`: title, disabled, conditional, split-run enablement, and
-  split limit only.
-- `deleteNode`: removes the node and every incident connection.
-- `connect`: exact endpoints, current ports, no duplicate edge, no occupied
-  single-input port, and mandatory semantic validation.
-- `disconnect`: removes exactly one matching endpoint tuple; missing and
-  ambiguous tuples reject.
+## Virtual graph workspace
 
-Settings that would invalidate an existing connection reject unless an earlier
-explicit `disconnect` in the same patch removed that connection.
+[`VirtualGraphWorkspace`](../packages/app/src/features/graphBuilder/virtualGraphWorkspace.ts)
+creates one editable document for every existing graph in the captured
+authoring project:
 
-## Injected authoring semantics
+```text
+graphs/<percent-encoded-graph-id>.yaml
+```
 
-The app adapter supplies one immutable `GraphBuilderAuthoringSemantics` snapshot:
+Each document is a deterministic YAML envelope:
 
-- `createNodeFromAuthoringChoice`
-- `applyNodeSettings`
-- `resolvePorts`
-- `validateConnection`
-- `normalizeCandidate`
-- `validateCandidate`
+```yaml
+version: 1
+graph:
+  metadata: ...
+  nodes: ...
+  connections: ...
+```
 
-The kernel passes defensive clones to these methods. Adapter failures,
-malformed results, incomplete mandatory validation, missing ports, or invalid
-normalization effects reject the whole candidate. Base projects and adapter
-node/normalization results cross the data-only authoring boundary before they
-are cloned or inspected. Dynamic port results separately cross the portable
-JSON boundary and must use unique, nonempty, trimmed, bounded port IDs plus
-known unique Rivet data types; accessor-bearing or hidden port metadata fails
-without executing. `GraphValidationResult`
-therefore includes `completeness: "complete" | "incomplete"` in addition to
-diagnostics and blocking keys. Diagnostic identities must be unique. Long
-host-derived identities use a deterministic hash suffix instead of plain
-truncation, preventing distinct graph paths from collapsing to the same
-blocking key or preview-list identity.
+The `graph` value is the complete portable `NodeGraph`, including node data,
+visual data, metadata, connections, and graph fields that the host does not
+otherwise interpret. It is deliberately NodeGraph-shaped rather than a
+hand-maintained settings projection. Code, prompts, schemas, and plugin-owned
+portable node fields therefore survive a read/edit/parse cycle without needing
+an adapter for every field.
 
-Catalog capture owns frozen copies of adapter aliases, setting descriptors,
-descriptor paths, and enum values. Caller-owned adapter arrays cannot mutate
-authorization or projection behavior after the catalog fingerprint is fixed.
-The registry contract fingerprints only editor preferences that affect
-authoring output. Changing unrelated editor UI behavior, such as whether newly
-created nodes open their settings panel, does not invalidate an active session.
-Plugin adapters are runtime-validated during capture: aliases, callbacks,
-setting kinds, paths, projections, and enum values must match the public
-adapter contract, and duplicate enum values fail closed instead of becoming
-latent fingerprinted behavior. Only own properties of the host-supplied
-adapter dictionary grant plugin authoring authority; prototype-inherited
-entries are ignored. Adapter properties are normalized from own contract fields
-only, and required setting-descriptor fields must also be own properties.
-Dynamic built-in metadata and project graph-existence checks use the same
-own-property rule so names such as `toString` cannot resolve through
-`Object.prototype`. Candidate node indexes use null-prototype records for the
-same reason: model-authored connection endpoint IDs must match an actual node,
-never an inherited object member.
-Catalog choices and referenced-resource entries use explicit code-unit
-ordering, so the captured fingerprint does not depend on the host locale when
-plugin or project identifiers contain Unicode.
-Node-type search likewise preserves Unicode letters and numbers, so localized
-plugin names and non-Latin policy queries remain discoverable.
+This YAML is an in-memory authoring representation. It is not the
+`.rivet-project` serialization format, is never written directly to disk, and
+does not grant access to project metadata, project data, UI graphs, plugins,
+referenced projects, or other files.
 
-Creation should route through the editor's extracted `createAddedNode`
-semantics. Port resolution must use effective nodes, complete incident
-connections, the full captured authoring project, referenced projects, and
-`getInputDefinitionsIncludingBuiltIn`. Connection type/topology rules and
-candidate validation remain app-owned injected policy; the transaction kernel
-does not duplicate them.
+Document paths are normalized relative paths. Absolute paths, backslashes,
+empty segments, `.` / `..` traversal, unknown documents, and graph-ID changes
+are rejected. The current scope edits existing graph documents; it does not
+create or delete graph files or mutate project-level resources.
 
-The normalizer may only change `data` on nodes created or settings-updated by
-the patch. It may not change identities, envelopes, graph metadata,
-connections, sibling graphs, UI graphs, prefabs, or other project state.
+### Active document and bounded reads
 
-## Integration boundary
+Every policy turn includes:
 
-The session controller owns policy turns and creates a `GraphPatch` by adding
-`patchId` and `expectedDraftRevision` to a parsed proposal. The editor gateway
-receives only a validated private draft/delta and remains responsible for the
-single compare-and-swap commit, history, recoverable editor state, selection,
-and layout.
+- the current draft revision;
+- an index of editable graph documents with path, graph ID, display name,
+  digest, UTF-16 length, and line count;
+- the beginning of the active graph document, up to the active-document line
+  and byte limits;
+- the cumulative project delta and current diagnostics.
 
-The policy runner executes its checked project with a four-node-type registry
-and forwards only LLM transport settings needed by the selected provider.
-Plugin environment/settings and legacy global Chat headers are deliberately
-omitted from that processor context; installing a plugin or configuring an
-unrelated Chat node cannot grant the policy workflow a new capability, inject
-an undeclared header, or make plugin credentials visible to it.
-The policy prompt has one shared source used by policy-asset generation,
-freshness checks, runtime sealing, and runner fixtures. Runtime validation also
-rejects drift in node execution envelopes, graph-input defaults, dormant
-project data/prefabs/UI graphs/knowledge stores, and inert LLM retry/tool
-settings before a processor is created.
-`policyAssetContract.ts` similarly owns the exact policy identities, expected
-edges, model-injection allowlist, and sealed LLM fields shared by the
-independent runtime and CI validators. The manifest parser rejects identity
-drift at module load. Validation logic remains independent so a checker bug is
-not automatically mirrored, while the underlying contract data cannot
-silently diverge. The parsed manifest and every shared array/object in that
-contract are deeply frozen runtime authority; another app module cannot mutate
-the selected graph identity or sealing allowlists after import.
-The policy LLM also seals both alternate custom-provider credential lookup
-names empty. It may receive only the captured shared custom-provider key from
-the minimal processor settings resolver; a serialized policy asset cannot name
-an unrelated programmatic setting or process environment variable.
-Missing provider configuration is rejected before the policy asset is loaded,
-and an asset load failure becomes a sanitized `invalid-asset` result without
-constructing a processor. Raw loader paths, provider errors, and their causes
-remain host-internal.
+If the active document is larger than the inline window, or another graph is
+needed, the model uses `read-virtual-document` with an exact path and a 1-based
+line window. If a byte bound ends inside one unusually long logical line, the
+result returns `nextOffset`; the next request uses that value as `startOffset`
+instead of line fields. Reads are bounded and return the observed draft
+revision, document digest, UTF-16 offsets/length, line counts, and truncation
+state. A model must read missing or stale text rather than guess it.
 
-During the rollback window, the legacy Graph Creator policy uses the same
-editor-safety boundary through
-`features/graphBuilder/legacyDraftRunner.ts`. That runner is production code,
-has no React/Jotai/editor-state dependency, accepts an injected
-`LegacyGraphBuilderAgentExecutor`, and mutates only its cloned full authoring
-project. The production executor factory in
-`legacyGraphCreatorAgentExecutor.ts` supplies the bundled Rivet policy,
-minimal registered AI Assist generator, runtime settings, and physical-call
-accounting observer. Open-ended runtime settings are applied before the
-executor's host-owned graph, inputs, abort signal, tools, registry, and
-observer, so an unexpected settings key cannot replace those execution
-boundaries. Deterministic tests and evaluation may inject a fake agent without
-replacing the mutation implementation.
+Each canonical document caches its line-start offsets when the workspace
+builds or rebuilds that document. Line-window reads index that cache directly,
+and `startOffset` cursor reads use a binary search over the same offsets rather
+than rescanning the full YAML string on every continuation.
 
-Legacy one-operation tools expose the current `draftRevision`, and progress
-contains host-derived draft deltas rather than a published graph. Completion
-without the explicit `finalMessage` event is a failure. A successful run
-returns `ready-for-preview` or `no-change`; it cannot commit. The React adapter
-retains session ownership with the ready draft and routes Apply through
-`prepareGraphBuilderCommit` plus `tryCommitGraphBuilderDraftState`, exactly like
-Plan B. This preserves existing undo history and makes cancellation, provider
-failure, handler failure, Discard, and stale editor/plugin identity zero-write
-outcomes. Cancellation also detaches the runner from an agent that ignores its
-abort signal while retaining a rejection observer on that abandoned promise,
-so the UI settles promptly without permitting a late unhandled rejection.
-An abort that already won is checked before the legacy agent is invoked, so it
-cannot spend a provider call or execute draft tools.
-Environment-backed settings resolution is also an editor-identity boundary:
-after it resolves, the adapter rechecks cancellation, component/session
-ownership, and the complete captured base identity before constructing the
-agent executor. A project or graph switch during credential lookup therefore
-becomes a zero-provider-call conflict instead of running against a stale
-snapshot. Both Plan B and rollback adapters race this injected settings task
-against their startup abort signal. Cancel or component disposal therefore
-settles the host `start()` promptly even when an environment provider ignores
-cancellation or never resolves. The abandoned promise remains rejection
-observed, and no executor or controller is constructed from a late result.
-Legacy draft finalization uses the same deterministic SCC-aware layout helper
-as Plan B and applies it only to node IDs absent from the captured base.
-Settings-only edits preserve every coordinate, and a reachable directed cycle
-cannot trap the synchronous rollback path in an unbounded layout traversal.
+The current implementation bounds an internal graph document at 4 MiB, one
+read at 2,000 lines and 12 KiB, and the inline active document at 2,000 lines
+and 64 KiB. These are safety limits, not a claim that every large graph can be
+edited in one policy turn.
 
-The controller is also the runtime trust boundary for asynchronous results:
+## Secret preservation
 
-- caller-supplied session IDs are validated against the portable identifier
-  contract, and all derived turn, attempt, read, patch, and repair-diagnostic
-  correlation IDs use the shared bounded-identifier derivation;
-- successful and failed physical policy calls contribute validated
-  complete/partial/unavailable usage before their result is consumed;
-- elapsed wall-clock duration is clamped to a nonnegative value, so a host
-  clock correction cannot violate the evaluation event schema or increase the
-  reported remaining budget above its configured maximum;
-- malformed usage fails closed, while exceeding a reported post-call budget
-  terminates as `budget-exhausted`;
-- a policy runner `invalid-decision` error, or a successful runner result whose
-  decision still fails the local parser, consumes the bounded repair budget and
-  records only a safe local diagnostic before another policy attempt;
-- read results are portable-schema parsed and must reproduce the exact
-  host-assigned request ID, request index, and draft revision;
-- Cancel, Discard, deadline expiry, active-work inactivity expiry, and
-  clarification expiry publish their terminal state immediately and abort
-  outstanding work. Controller waits race those abort signals, so even an
-  adapter that ignores abort cannot keep `start()`/`resume()` pending, later
-  promote a patch, or overwrite the outcome;
-- the wall clock is rechecked after asynchronous boundaries, after synchronous
-  policy-turn preflight, and before terminal promotion or Apply. Active-work
-  inactivity is cleared while clarification or a ready preview waits on the
-  user, while the hard session deadline continues to bound both states;
-- user requests and clarification answers are bounded before they can enter a
-  policy turn or the non-evictable transcript. Their replay-visible limit
-  diagnostics use locale-independent base-10 formatting, so the same rejected
-  input produces the same typed failure text on every host;
-- policy-attempt accounting is reserved only after the complete host-side turn
-  passes byte and transcript preflight, so a rejected local envelope never
-  masquerades as a physical provider call;
-- contradictory `ready`/`no-change` transitions consume a repair attempt and
-  provide a deterministic host diagnostic to the next policy turn. Final
-  whole-draft validation is portable-schema parsed again before preview;
-- session-state subscribers receive cloned snapshots, and exceptions from both
-  initial and subsequent notifications are isolated from controller ownership;
+Before a graph becomes model-visible, non-empty fields classified as
+secret-like are replaced by stable host-owned objects:
 
-The React adapter captures editor context before acquiring session ownership
-and fails closed if capture itself throws. It rechecks ownership and canonical
-identity after asynchronous settings resolution, then deep-clones resolved
-runtime settings so later settings-store mutation cannot change the in-flight
-session. Modal progress, cancellation, close confirmation, and captured-model
-display are derived only from the implementation mode latched when that session
-started. Brief stale state in the inactive rollback adapter during an
-asynchronous reset cannot make the opposite mode appear busy or cancel the
-wrong session. Only a controller in
-`ready-for-preview` may enter the synchronous, non-cancelable `committing`
-state. The editor commit gateway re-canonicalizes the prepared graph immediately
-before both commit-ID replay and publication. Replay identity also includes the
-complete captured base identity, captured owner session, draft revision,
-candidate graph, and user-visible summary, so a graph mutated after
-publication, a changed precondition, or a different owner cannot reuse an
-earlier ledger outcome. The gateway compares exact canonical content; the
-non-cryptographic digest is never the authority for Apply idempotency. Its
-cross-session replay ledger is capped because entries retain canonical graph
-content. The ledger retains an isolated outcome copy and returns a fresh copy
-for every initial or replay response, so consumer mutation cannot corrupt
-idempotent replay. All non-evictable patch/read identities remain owned by the
-bounded live session controller instead. A commit-time eligibility loss is
-reported as `failed/commit-ineligible` with the private preview retained; only
-a canonical base-identity mismatch is reported as `conflicted`.
+```yaml
+apiKey:
+  $graphBuilderSecret: host-secret:<stable-digest>
+```
 
-Apply, undo, and redo also preserve editor-only disconnected-connection
-recovery state. A recovery entry survives an unrelated Graph Builder commit
-only while both endpoint nodes still exist and the connection is still absent
-from the committed graph. Entries whose endpoint was deleted, or whose
-connection is live again, are removed from the post-commit snapshot. The
-history command retains the exact before/after recovery maps so undo and redo
-cannot silently discard unrelated recoverable wires.
+The original value remains only in session memory. A patch must leave each
+surviving placeholder unchanged at its exact semantic location. Introducing a
+new secret-like value, changing a placeholder, moving it, or removing it while
+its owner survives rejects the whole patch. Deleting the owning node is
+allowed. After parsing, the host restores preserved values before candidate
+validation.
 
-Terminal metrics are an optional product integration, not a hidden transport.
-`GraphBuilderMetricsEvent` has an explicit version and terminal outcome, and
-products inject a `GraphBuilderMetricsSink`. The default named no-op sink keeps
-the desktop behavior local. A sink exception is swallowed after the session
-result is fixed and must never affect generation or Apply.
+The classifier deliberately excludes null and empty values. Its string-valued
+lookup-policy exemptions are an exact reviewed allowlist:
+`apiKeyEnvVarName`, `apiKeyProgrammaticName`, `apiKeySource`,
+`customProviderApiKeyEnvVarName`, and
+`customProviderApiKeyProgrammaticName` after key normalization. It does not
+exempt arbitrary fields merely because their names end in `Source` or
+`EnvVarName`. Boolean `use...Input` policy switches remain model-editable.
+Once another field name is classified as secret-like, a non-empty number or
+boolean is protected just like a string or object. This is a defense-in-depth
+heuristic, not a universal secret-discovery system. New node families that
+store credentials under unusual field names should provide a reviewed
+classification seam before Graph Builder authoring is enabled for them.
 
-The editor snapshot marks a graph as transient only when it is absent from the
-persisted project and the captured live graph is empty. Authoring semantics
-receive the resulting graph-ID allowlist once. Persisted graph boundaries stay
-immutable, while the authorized transient graph may create and repair its
-boundary over several private patch batches before the single Apply.
+Secret placeholders protect stored project fields. They cannot protect a
+secret that the user pastes into the natural-language request, and they do not
+replace transport-level credential isolation in
+[`policyRunner.ts`](../packages/app/src/features/graphBuilder/policyRunner.ts).
 
-Preview details come from the bounded host-derived `GraphDraftDelta`, never
-from provider prose. The transaction kernel derives this delta cumulatively
-from the immutable session base to the current private draft; patch-local
-deltas remain transcript details and a later no-op cannot erase earlier
-preview changes. Public preview state contains the cumulative delta,
-diagnostics, revision, and summary, but never clones or exposes the complete
-private project. The UI displays exact total-count fields, the sampled
-node/connection identities, and a truncation marker. A commit conflict retains
-that same private preview so the user can inspect what was not published.
-The committed-state **View graph** action centers the authoritative active
-graph before closing the modal; it is not merely a relabeled Close action.
-Read payload portability and byte limits are enforced once at the executor
-boundary after a read-specific builder returns its value.
-Every ordering that contributes to fingerprints, diagnostics, catalog/read
-payloads, or evaluation artifacts uses the shared locale-independent UTF-16
-code-unit comparator. Host locale therefore cannot change a policy turn,
-authoritative identity, preview ordering, or replay/evaluation result.
+## Exact document-edit protocol
 
-Do not:
+### Unified diff
 
-- hand model output directly to `applyPatch` without the parser/controller
-  envelope;
-- expose raw `node.data` replacement;
-- reach into the live editor from a semantics adapter;
-- evict patch ledger entries before the session is disposed;
-- treat the non-cryptographic proposal digest as an authority check by itself;
-- silently continue after incomplete validation.
+An `apply-patch` decision contains one standard unified diff for one known
+virtual document. Headers identify the same normalized path:
 
-Focused tests live beside the domain files and cover schema/prototype safety,
-authorization, symbolic references, revision/idempotency behavior, atomic
-rejection, no-ops, connection preservation, delete effects, preconditions,
-normalization effect closure, and fail-closed validation.
+```diff
+--- a/graphs/example.yaml
++++ b/graphs/example.yaml
+@@ -10,3 +10,3 @@
+ ...
+```
+
+The host requires:
+
+- the exact current `baseRevision`;
+- one file header pair and one or more non-empty hunks;
+- exact hunk line counts;
+- exact context at the declared offsets;
+- no fuzzy matching, timestamps, absolute paths, traversal, or extra files;
+- a bounded diff body.
+
+[`graphBuilderUnifiedDiff.ts`](../packages/app/src/domain/graphBuilder/graphBuilderUnifiedDiff.ts)
+owns this syntax contract. Both the transactional decision schema and
+`VirtualGraphWorkspace` call the same parser, so a diff cannot pass the
+model-facing schema and then fail because the workspace recognizes a different
+header, integer, line-ending, or no-newline-marker dialect. Applying a parsed
+diff still performs the separate exact-context check against the current
+revision.
+
+Each policy decision changes one graph document. A complex session may submit
+several accepted diffs, including diffs for different graphs. This keeps
+individual repair diagnostics precise while the workspace still produces one
+cumulative, project-wide preview and one final atomic Apply.
+
+### Complete-document fallback
+
+`replace-document` carries the normalized path and complete canonical YAML
+content for one known graph document. The policy may use it only after reading
+the entire current document and only when an exact diff would be larger or
+more error-prone than returning the file. It must not construct a replacement
+from truncated context.
+
+The controller enforces that rule with a private current-revision coverage
+ledger keyed by normalized path, document digest, and total UTF-16 length. The
+active inline window and every successful `read-virtual-document` body that
+was actually retained for delivery to the model add exact offset intervals.
+Coverage can accumulate over several policy turns and survives transcript
+compaction because the ledger is independent of transcript bodies. Compacted
+read summaries neither add nor remove authority.
+
+When a draft edit advances the revision, coverage is cleared and rebuilt
+against the new path/digest/length descriptors. Failed reads and full bodies
+that the turn-size fitter replaced with budget-error results never count. A
+replacement is authorized only when the current ledger contains one
+gap-free `[0, totalLength)` interval for its exact path and digest.
+
+Replacement is not a weaker trust path. It uses the same revision check,
+strict YAML and graph parsing, secret-placeholder restoration, normalization,
+validation, delta, replay, review, preview, and Apply gates as a unified diff.
+The model-facing decision size remains bounded even though the private
+workspace can retain a larger internal document.
+
+Patch IDs are host-created and idempotent. Reusing the same ID and exact
+revision/edit returns the recorded result. Reusing an ID with different
+content or a different edit kind fails closed.
+
+## Patch transaction
+
+For a fresh diff or replacement, the virtual workspace:
+
+1. verifies the expected draft revision;
+2. applies the exact diff or accepts the complete replacement text;
+3. parses one strict YAML 1.2, data-only document with aliases disabled;
+4. verifies the document envelope and complete `NodeGraph` shape;
+5. restores host-owned secret values;
+6. replaces only the targeted graph in a cloned private project;
+7. invokes deterministic candidate normalization;
+8. calculates the attempted project delta;
+9. validates every graph changed by the candidate or normalizer against the
+   live registry and complete project context;
+10. promotes the candidate and rebuilds all canonical documents only if
+    validation is complete and non-blocking.
+
+The structural gate validates the complete standard `ChartNode` envelope
+before semantic code receives it. Required identity, title, data, and visual
+position fields must have their runtime types; optional execution flags,
+split-run limits, visual width/color/z-index, variants, and prompt-designer
+tests are validated when present. Split limits must be positive safe integers,
+visual numbers must be finite and safely bounded, and variant/test-group IDs
+must be unique inside their owning node. Node-specific `data` remains the
+registry-aware validator's responsibility.
+
+An applied edit advances the draft revision exactly once. A no-op or rejected
+edit does not advance it. Parse failures, stale revisions, context mismatches,
+secret-placeholder violations, invalid ports, unsupported node types, invalid
+async topology, boundary violations, and incomplete validation are returned as
+bounded, host-authored diagnostics. No partial candidate is retained.
+
+For persisted graphs, existing Graph Input/Output node identities and data
+types remain immutable, while new boundary nodes may be added. This supports
+requests that extend a graph without silently invalidating existing callers.
+Only a captured transient canvas has a fully mutable boundary while its initial
+interface is being authored. The current normalizer does not perform hidden
+cross-graph boundary propagation.
+
+## Registry-aware templates and validation
+
+Direct YAML authoring removes the need to expose every node setting through a
+custom operation schema, but it does not permit the model to invent node
+shapes.
+
+The model can use:
+
+- `search-node-types` for canonical authoring choices;
+- `get-node-templates` for complete host-created node objects and their
+  current port/specification context;
+- `get-diagnostics` for current blocking and advisory findings;
+- `list-project-resources` for bounded, non-secret resource metadata;
+- `read-virtual-document` for exact graph text.
+
+Document reads normally use `startLine`/`lineCount`. When a returned window
+ends in the middle of one unusually large logical line, its exact
+`nextOffset` cursor can be supplied as `startOffset` on the next read;
+offset and line-window fields are mutually exclusive.
+
+Templates are constructed through the same captured authoring catalog and live
+node registry as the editor. The model copies a complete template into a
+document, assigns a graph-local unique ID, and changes only task-required
+portable fields. Existing plugin nodes are visible in full-fidelity documents,
+but creating a node still requires a registry-backed template. Unknown,
+unregistered, or unsafe node choices fail validation.
+
+Candidate validation uses the complete private project, effective prefab nodes,
+referenced-project context, dynamic port definitions, connection coercion
+rules, compiled Data Bus topology, conditional inputs, async-branch
+restrictions, loop/tool semantics, and graph boundary rules. In particular,
+Data Bus relay cycles and effective-provider conflicts are rejected before a
+draft can be accepted, rather than being deferred to execution. The YAML parser
+is only a structural gate; it is never a substitute for Rivet semantic
+validation.
+
+Direct document editing does not bypass the Code-node privilege boundary.
+Creating a Code node with enabled runtime permissions, expanding an existing
+Code node's permissions, or changing source while the captured base node has an
+enabled base/variant runtime permission is rejected atomically. Disabling such
+permissions remains possible, but a later edit in the same session is still
+compared with the captured base and cannot use that as a privilege-changing
+shortcut.
+
+Delegate Tool Call keeps the same candidate-level invariants when authored
+through YAML as when configured through its editor adapter. New or reconfigured
+delegates must use Auto Delegate mode, fallback and passthrough settings must
+be booleans, and passthrough errors require external-call fallback. The checks
+also cover variant data so a later variant selection cannot bypass the
+authoring boundary.
+
+## Session lifecycle and review
+
+[`GraphBuilderSessionController`](../packages/app/src/features/graphBuilder/sessionController.ts)
+serializes policy decisions against one private workspace. The normal path is:
+
+```text
+created
+  -> gathering-context / editing
+  -> apply-patch / replace-document
+  -> reviewing
+  -> ready-for-preview
+  -> committing
+  -> committed
+```
+
+After every accepted document edit, the controller schedules another policy turn in
+`reviewing`. The model must compare the complete accepted draft with every
+requirement in the original request. It may read more context or submit another
+edit. A mutation decision is nonterminal; only a later `ready` decision can
+request preview.
+
+This review gate prevents a coherent first stage of a multi-stage request from
+being presented as the completed rebuild. A `ready` summary is presentation
+text only; the host derives the actual changed-graph and node/connection counts.
+
+Reads, decisions, and patch results are correlated with session, turn,
+request-index, and observed-revision values. Policy responses are parsed as one
+exact JSON object through the local schema. Invalid envelopes, provider
+failures, rejected edits, and stale reads consume bounded repair/attempt
+budgets rather than starting unbounded retries.
+
+The controller also owns wall-clock, inactivity, transcript, turn-size, token,
+cost, and clarification limits. Cancellation aborts in-flight work and prevents
+late results from mutating the draft. Once synchronous publication begins,
+commit outcome wins over a later cancel request.
+
+The default active-work limits are 32 provider attempts, four consecutive
+repair failures, 15 minutes of wall-clock work, and four minutes without
+provider/read activity. Streaming partial output refreshes only the inactivity
+timer; it never extends the wall-clock deadline. An applied edit resets the
+consecutive repair streak while total repair attempts remain in metrics. The
+read bodies retained by turn-size fitting are sent once through
+`contextResults` on the immediately following provider call and are omitted
+from that call's transcript copy to avoid duplication. After the immediate
+slot is cleared, current-revision read bodies may return to transcript history
+for follow-up work. As soon as an accepted edit advances the revision, older
+read bodies are represented only by compact digest records; this avoids paying
+for stale graph text during mandatory review and does not affect the separate
+coverage ledger.
+
+## Preview, Apply, and history
+
+The preview is a cumulative base-to-draft
+`GraphBuilderProjectDraftDelta`. It groups exact, bounded graph deltas and
+host-authored diagnostics for every changed graph. The draft itself remains
+private; React receives display data, not a mutable project reference.
+
+Active-work timers stop after a validated preview is ready. Review is
+user-paced and does not expire the private preview; Apply still rechecks the
+captured live editor identity and all commit gates.
+
+Apply:
+
+1. revalidates every changed graph against the complete draft context;
+2. rechecks the captured project/editor/plugin/reference/policy identity;
+3. verifies that the prepared canonical content has not changed;
+4. publishes every changed graph through one editor command;
+5. records one undoable history action;
+6. preserves editor-only active-graph state and related-graph snapshots needed
+   for undo/redo.
+
+If identity or eligibility changed, Apply fails without publishing anything
+and retains the private preview for inspection. A repeated commit ID with the
+same canonical content replays the recorded outcome; a different payload under
+the same ID is a protocol error.
+
+Discard, cancel, failure, expiration, and closing a confirmed nonterminal
+session publish nothing. The Graph Builder never writes a project file
+directly. Normal editor save/autosave behavior remains the only persistence
+path after a successful Apply.
+
+## Policy runtime and trust boundary
+
+The checked
+[`graph-builder-policy.rivet-project`](../packages/app/graphs/graph-builder-policy.rivet-project)
+contains the minimal LLM policy call. The host currently uses the conservative
+exact-JSON text variant for every provider, then validates the result with
+`graphBuilderTransactionalDecisionSchema`. A checked parity test keeps the
+decision and read discriminants printed in `policyPrompt.ts` identical to
+those accepted by this model-facing schema. The policy graph has no tools, native API,
+plugins, external calls, datasets, code runner, Stored Value store, Knowledge
+Store registry, project references, editor cache, or commit callback.
+
+The policy turn contains model-visible graph content. Every embedded string,
+including node code, prompt text, plugin descriptions, retrieved documents,
+and prior model text, is untrusted data and cannot override the system
+protocol. Credentials are resolved only by the policy runner's narrow settings
+adapter and never enter the policy turn, transcript, or graph output.
+
+## Legacy rollback
+
+[`legacyDraftRunner.ts`](../packages/app/src/features/graphBuilder/legacyDraftRunner.ts)
+and the bundled
+[`graph-creator.rivet-project`](../packages/app/graphs/graph-creator.rivet-project)
+remain a separately selectable rollback implementation during rollout. They
+also edit a private authoring-project draft and share the final editor commit
+gateway, so failure and cancellation do not partially publish a graph.
+
+The legacy tool loop still uses the operation contracts and its own policy
+behavior. Do not route transactional virtual-document decisions through the
+legacy agent, and do not describe legacy operation support as a restriction of
+the virtual workspace.
+
+## Current limits and future extension rules
+
+The implemented transactional scope supports:
+
+- full-fidelity editing of every existing graph document in the captured
+  project;
+- sequential single-document diffs or complete replacements across several
+  graphs;
+- changed-graph validation in complete project context, project-wide preview,
+  atomic Apply, undo, and redo;
+- safe editing of existing node fields plus template-backed node creation.
+
+It does not yet support:
+
+- creating, deleting, or renaming graph documents;
+- project metadata, project data, UI graph, node-library, plugin, knowledge
+  store, MCP, dataset, or referenced-project mutation;
+- direct filesystem access or direct `.rivet-project` replacement;
+- transactional isolation across different app windows or external file
+  writers;
+- guaranteed secret discovery for arbitrary plugin-defined field names;
+- fuzzy patch application.
+
+Very large documents can require several `nextOffset` continuation reads over
+several policy turns. Only successful read bodies retained for actual model
+delivery add coverage; turn-size-rejected bodies do not. Once the current
+path/digest/length ledger covers the full document, later transcript
+compaction does not revoke that authorization. Any accepted edit advances the
+revision and resets all accumulated coverage, so a later replacement must
+cover the new canonical document again.
+
+Any extension must add an explicit virtual resource type, authorization and
+validation policy, bounded read/write contract, preview representation, and
+history semantics. It must not weaken exact revision checks or let the model
+bypass the host-owned Apply gateway.

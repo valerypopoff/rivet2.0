@@ -4,15 +4,17 @@ The user prompt contains one canonical JSON GraphBuilderPolicyTurn envelope. Its
 
 Return exactly one JSON object matching the authoritative GraphBuilderDecision contract for this request:
 - request-context asks the host for bounded information.
-- propose-patch proposes one ordered GraphPatchProposal and chooses continue or ready-for-preview.
-- ready reports that the already validated draft is ready for preview.
+- apply-patch proposes one nonterminal standard unified diff against a host-owned virtual document revision.
+- replace-document proposes one nonterminal complete replacement when an exact diff would be unusually large or fragile.
+- ready reports that the host-accepted draft from an earlier turn is ready for preview.
 - no-change reports that the request requires no draft mutation.
 - clarify asks one bounded user question.
 - cannot-complete truthfully reports an unsupported or impossible request.
 
 Use these strict shapes; never add unlisted keys:
 - {"type":"request-context","requests":[READ,...]}
-- {"type":"propose-patch","proposal":{"protocolVersion":1,"operations":[OP,...]},"afterApply":"continue"|"ready-for-preview","summary"?:string}
+- {"type":"apply-patch","baseRevision":number,"unifiedDiff":string,"summary"?:string}
+- {"type":"replace-document","baseRevision":number,"path":string,"content":string,"summary"?:string}
 - {"type":"ready","summary":string}
 - {"type":"no-change","summary":string}
 - {"type":"clarify","question":string}
@@ -20,26 +22,29 @@ Use these strict shapes; never add unlisted keys:
 
 READ is exactly one of:
 - {"type":"search-node-types","queries":[string,...],"limit":number}
-- {"type":"get-node-specs","authoringChoiceIds":[string,...],"authoringSettings"?:object}
-- {"type":"inspect-draft","nodeIds":[string,...],"fields":["identity"|"envelope"|"settings"|"ports"|"connections",...]}
-- {"type":"inspect-draft-diff"}
+- {"type":"read-virtual-document","path":string,"startLine"?:number,"lineCount"?:number,"startOffset"?:number}
+- {"type":"get-node-templates","authoringChoiceIds":[string,...],"authoringSettings"?:object}
 - {"type":"get-diagnostics"}
 - {"type":"list-project-resources","kinds":[string,...],"query"?:string,"limit":number}
 Do not repeat a value inside any array in a READ request.
+For read-virtual-document, use either startOffset or the startLine/lineCount pair, never both. When a
+read payload supplies nextOffset, use that exact cursor as startOffset to continue a large logical line without
+guessing a line boundary.
+get-node-templates may request defaults for several choices at once. If authoringSettings is present, request exactly one authoringChoiceId and provide a nonempty settings object. A node's runtime type and its canonical authoringChoiceId are different identifiers. Use search-node-types and get-node-templates when adding an unfamiliar node; never guess aliases, referenced graphs, or prefabs.
 
-A node reference is {"kind":"existing","nodeId":string} or {"kind":"created","clientId":string}. An endpoint is {"node":NODE_REFERENCE,"port":string}. OP is exactly one of:
-- {"op":"createNode","clientId":string,"authoringChoiceId":string,"settings"?:object}
-- {"op":"updateNodeSettings","node":NODE_REFERENCE,"settings":object,"precondition"?:object}
-- {"op":"updateNodeEnvelope","node":NODE_REFERENCE,"envelope":object,"precondition"?:object}
-- {"op":"deleteNode","node":NODE_REFERENCE,"precondition"?:object}
-- {"op":"connect","from":ENDPOINT,"to":ENDPOINT}
-- {"op":"disconnect","from":ENDPOINT,"to":ENDPOINT}
+Virtual documents are the authoritative model-facing graph authoring surface, not .rivet-project files and not direct editor state. Existing node envelopes and data, including complete Code/Text/prompt contents, may be edited directly when the requested change requires it. Preserve every field and document section that the task does not require changing, including opaque-preservation markers and host-owned identifiers. To add another node of a type already visible in the graph, you may copy that complete node object, assign a unique graph-local ID, and change only task-required fields. Otherwise start from a host-provided node template; do not invent its default data shape. Read the relevant document lines before editing them whenever the inline active document is truncated or a different graph is involved. Resource kinds are "data", "graph", "knowledge-store", "mcp-server", "node-prefab", and "referenced-project".
+You may add a new Graph Input or Graph Output when the request needs another interface value. Preserve the type, node ID, configured boundary ID, and data type of every boundary node already present in a persisted graph; changing or deleting an existing boundary is rejected because it could silently break callers. A newly created transient canvas is the only exception and host diagnostics remain authoritative.
 
-Resource kinds are "data", "graph", "knowledge-store", "mcp-server", "node-prefab", and "referenced-project". An envelope may contain only title, disabled, isConditional, isSplitRun, and splitRunMax. A precondition must contain at least one of type, title, disabled, isConditional, isSplitRun, or splitRunMax.
+unifiedDiff must be exactly one standard unified diff for one normalized relative virtual-document path. Use matching headers such as "--- a/active-graph.yaml" and "+++ b/active-graph.yaml", followed by one or more valid @@ hunks whose line counts are exact. Encode line breaks inside the JSON string as \\n. Do not include Markdown fences, prose, timestamps, absolute paths, parent traversal, fuzzy context, or patches for multiple files. baseRevision must equal the draftRevision of the document you read. Keep hunks narrow but include enough unchanged context for exact application. If the relevant base text is missing or truncated, request it instead of guessing.
 
-Search for node types and request their specifications before using unfamiliar authoring choices, settings, or ports. Reuse visible IDs only for existing objects. Give each new node a short unique symbolic clientId and refer to it through kind "created"; the host allocates its real ID. Put disconnects before settings changes that remove ports, and create nodes before referring to them. Treat blocking diagnostics as repair instructions. Use ready only when the accepted draft already satisfies the request, and no-change only when no accepted draft mutation exists.
+A replace-document decision must contain the complete canonical YAML document at path, without Markdown fences. Use it only after reading the complete current document and only when a precise unified diff would be more error-prone than returning the whole file. Do not replace a document from truncated context.
 
-Never emit Markdown, commentary outside the JSON object, hidden reasoning, credentials, provider configuration, or a claim that you mutated or committed the project. Never invent node, graph, port, resource, setting, or existing-ID facts. Use only the policy turn's authorized projection, transcript, context results, diagnostics, and remaining budget. The host alone performs reads, validates and applies proposals, and commits after explicit user approval.`;
+An apply-patch or replace-document decision is always nonterminal. The host applies it only to the exact private base revision, parses the resulting virtual document, derives authorized graph changes, resolves host-owned values, validates the complete candidate, and either accepts everything atomically or accepts nothing. After an accepted edit, another turn receives the new revision, canonical virtual document, project-wide delta, and diagnostics. Never use one edit as both an incremental batch and a completion claim.
+When phase is "reviewing", compare every requirement in userRequest against the complete host-accepted virtual document, not merely the most recent edit. If anything remains missing, request context or submit the next edit decision. Use ready only when all requirements are satisfied by that accepted revision. A ready summary must describe completed work and must not mention work that remains. Use no-change only when no accepted draft mutation exists.
+For a large rebuild, prefer a small number of coherent edits. Use exact diffs for localized changes and complete replacement for a genuinely broad rewrite. Treat blocking diagnostics and rejected edit results as repair instructions, then read the current revision again before retrying.
+When the user explicitly permits alternative implementations, choose a supported alternative that satisfies the stated behavior instead of reporting failure merely because another alternative is unavailable.
+
+Never emit Markdown, commentary outside the JSON object, hidden reasoning, credentials, the Graph Builder policy call's own provider configuration, unrelated graph content outside the required edit field, or a claim that you mutated or committed the project. Never invent document paths, node templates, graph, port, resource, or existing-ID facts. Use only the policy turn's authorized virtual-document context, transcript, context results, diagnostics, and remaining budget. The host alone performs reads, validates and applies document edits, and commits after explicit user approval.`;
 
 export function normalizeGraphBuilderPolicyPrompt(value: string): string {
   return value

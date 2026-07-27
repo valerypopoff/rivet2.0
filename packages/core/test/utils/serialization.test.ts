@@ -777,6 +777,49 @@ describe('serialization compatibility', () => {
     assert.equal(deserialized.nodes.find((node) => node.id === 'current-default')?.title, 'Code');
     assert.equal(deserialized.nodes.find((node) => node.id === 'current-custom')?.title, 'Custom current title');
   });
+
+  it('migrates compatible legacy visual data buses while preserving incompatible Passthrough execution modes', () => {
+    const graph: NodeGraph = {
+      metadata: { id: 'g-data-bus-migration', name: 'Data Bus migration', description: '' },
+      nodes: [
+        {
+          id: 'legacy-bus',
+          type: 'passthrough',
+          title: 'Shared values',
+          visualData: { x: 0, y: 0 },
+          data: { renderAsDataBus: true },
+          variants: [],
+        },
+        {
+          id: 'conditional-legacy-bus',
+          type: 'passthrough',
+          title: 'Conditional shared values',
+          visualData: { x: 1, y: 0 },
+          data: { renderAsDataBus: true },
+          isConditional: true,
+          variants: [],
+        },
+        {
+          id: 'variant-legacy-bus',
+          type: 'passthrough',
+          title: 'Variant shared values',
+          visualData: { x: 2, y: 0 },
+          data: { renderAsDataBus: true },
+          variants: [{ id: 'legacy-variant', name: 'Legacy variant' }],
+        },
+      ],
+      connections: [],
+    };
+
+    const deserialized = deserializeGraph(serializeGraph(graph));
+
+    const migratedBus = deserialized.nodes.find((node) => node.id === 'legacy-bus');
+    assert.equal(migratedBus?.type, 'dataBus');
+    assert.deepEqual(migratedBus?.data, {});
+    assert.equal(migratedBus?.title, 'Shared values');
+    assert.equal(deserialized.nodes.find((node) => node.id === 'conditional-legacy-bus')?.type, 'passthrough');
+    assert.equal(deserialized.nodes.find((node) => node.id === 'variant-legacy-bus')?.type, 'passthrough');
+  });
 });
 
 describe('serialization helpers', () => {

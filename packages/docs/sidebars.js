@@ -277,6 +277,7 @@ const sidebars = {
         'node-reference/coalesce',
         'node-reference/compare',
         'node-reference/delay',
+        'node-reference/data-bus',
         'node-reference/did-run',
         'node-reference/if',
         'node-reference/if-else',

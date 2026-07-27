@@ -8,7 +8,7 @@ import {
   type MouseEvent,
 } from 'react';
 import { editingNodeState } from '../state/graphBuilder.js';
-import { nodesByIdState } from '../state/graph.js';
+import { connectionsForSingleNodeState, nodesByIdState } from '../state/graph.js';
 import styled from '@emotion/styled';
 import {
   createsLLMChatV2ToolResponseFormatConflictForEdit,
@@ -250,6 +250,19 @@ const Container = styled.div`
     padding-right: var(--node-editor-action-bar-row-reserve, 0px);
     min-width: 0;
     min-height: 30px;
+  }
+
+  .node-type-conversion {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .node-type-conversion-hint {
+    color: var(--foreground-muted);
+    font-size: var(--ui-font-size-sm);
+    line-height: 1.35;
   }
 
   .node-type-tooltip {
@@ -760,6 +773,7 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
   const [addVariantPopupOpen, setAddVariantPopupOpen] = useState(false);
   const [llmChatFeatureConflictOpen, setLlmChatFeatureConflictOpen] = useState(false);
   const { containerRef, isResizing, panelWidth, resizeHandleProps } = useNodeEditorWidth();
+  const selectedNodeConnections = useAtomValue(connectionsForSingleNodeState(selectedNode.id)) ?? [];
 
   const setStaticData = useSetStaticData();
   const editNode = useEditNodeCommand();
@@ -908,6 +922,7 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
             {showGlobalControls && (
               <NodeEditorGlobalControls
                 node={selectedNode}
+                connections={selectedNodeConnections}
                 selectedVariant={selectedVariant}
                 setSelectedVariant={setSelectedVariant}
                 addVariantPopupOpen={addVariantPopupOpen}

@@ -189,6 +189,22 @@ test('scoring checks structure and keeps cancellation, conflict, and redaction a
   assert.equal(unsafe.structuralScore, 1);
   assert.equal(unsafe.passedAllRequiredGates, false);
   assert.equal(unsafe.successfulFixture, false);
+
+  const structurallyIncomplete = scoreGraphBuilderEvaluationObservation(
+    fixture,
+    {
+      ...observation,
+      graph: {
+        ...observation.graph!,
+        connections: [],
+      },
+    },
+    policy,
+  );
+  assert.equal(structurallyIncomplete.breakdown.outcome, 1);
+  assert.equal(structurallyIncomplete.passedAllRequiredGates, true);
+  assert.ok(structurallyIncomplete.breakdown.connections < 1);
+  assert.equal(structurallyIncomplete.successfulFixture, false);
 });
 
 test('synthetic canary audit returns paths without retaining the inspected surface', () => {

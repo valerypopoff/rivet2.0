@@ -9,7 +9,7 @@ import type { LLMChatV2NodeData } from '@valerypopoff/rivet2-core';
  */
 export const GRAPH_BUILDER_POLICY_ASSET_PATH = 'packages/app/graphs/graph-builder-policy.rivet-project';
 export const GRAPH_BUILDER_POLICY_PROJECT_ID = 'graph-builder-policy-project-v1';
-export const GRAPH_BUILDER_POLICY_VERSION = 'graph-builder-policy-v1';
+export const GRAPH_BUILDER_POLICY_VERSION = 'graph-builder-policy-v3';
 
 export const GRAPH_BUILDER_POLICY_IDS = Object.freeze({
   project: GRAPH_BUILDER_POLICY_PROJECT_ID,

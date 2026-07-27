@@ -13,8 +13,10 @@ import {
   connectionMatchesDataBusChannelKeys,
   createDataBusTopology,
   getDataBusConnectionChannels,
+  getDataBusRelatedChannelKeys,
   getDataBusPortChannelIndexKey,
   getRenderableDataBusNodes,
+  isDataBusChannelPort,
   isEstablishedDataBusConnection,
   shouldRenderDataBusConnection,
 } from './dataBusModel.js';
@@ -85,6 +87,31 @@ test('indexes provider and consumer connections once while exposing normal endpo
   );
 });
 
+test('uses the dedicated Data Bus node type as the primary rail topology node', () => {
+  const bus: ChartNode = {
+    id: 'bus' as NodeId,
+    type: 'dataBus',
+    title: 'bus',
+    data: {},
+    visualData: { x: 0, y: 0 },
+  };
+  const provider = connection('source', 'output', 'bus', 'input1');
+  const consumer = connection('bus', 'output1', 'receiver', 'input');
+  const index = topology({ source: node('source'), bus, receiver: node('receiver') } as Record<string, ChartNode>, [
+    provider,
+    consumer,
+  ]);
+
+  assert.equal(isEstablishedDataBusConnection(provider, index), true);
+  assert.equal(isEstablishedDataBusConnection(consumer, index), true);
+  assert.deepEqual(
+    getRenderableDataBusNodes({ effectiveNodesById: { [bus.id]: bus }, nodes: [bus], presentationEnabled: true }).map(
+      ({ editorNode }) => editorNode.id,
+    ),
+    ['bus'],
+  );
+});
+
 test('preserves both roles of a direct bus-to-bus connection for hover revelation', () => {
   const nodesById = { first: node('first', true), second: node('second', true) };
   const directBusConnection = connection('first', 'output1', 'second', 'input2');
@@ -112,6 +139,51 @@ test('preserves both roles of a direct bus-to-bus connection for hover revelatio
   );
   assert.equal(index.activeChannelKeys.has('first:1'), true);
   assert.equal(index.activeChannelKeys.has('second:2'), true);
+});
+
+test('follows a complete relay chain when revealing a Data Bus channel', () => {
+  const nodesById = {
+    source: node('source'),
+    first: node('first', true),
+    second: node('second', true),
+    third: node('third', true),
+    receiver: node('receiver'),
+  };
+  const index = topology(nodesById, [
+    connection('source', 'output', 'first', 'input1'),
+    connection('first', 'output1', 'second', 'input1'),
+    connection('second', 'output1', 'third', 'input1'),
+    connection('third', 'output1', 'receiver', 'input'),
+  ]);
+
+  assert.deepEqual(getDataBusRelatedChannelKeys(index, ['first:1']), ['first:1', 'second:1', 'third:1']);
+
+  const presentation = buildDataBusGroupPresentation({
+    busNode: nodesById.first as any,
+    inputDefinitions: [input('input1'), input('input2')],
+    outputDefinitions: [output('output1')],
+    topology: index,
+  });
+  assert.deepEqual(presentation.dataChannels[0]?.relatedChannelKeys, ['second:1', 'third:1']);
+});
+
+test('identifies canonical ports on dedicated Data Buses for drag overlay routing', () => {
+  const bus: ChartNode = {
+    id: 'bus' as NodeId,
+    type: 'dataBus',
+    title: 'bus',
+    data: {},
+    visualData: { x: 0, y: 0 },
+  };
+  const nodesById = { bus, ordinary: node('ordinary') } as Record<NodeId, ChartNode>;
+
+  assert.equal(isDataBusChannelPort({ input: true, nodeId: bus.id, nodesById, portId: 'input1' as PortId }), true);
+  assert.equal(isDataBusChannelPort({ input: false, nodeId: bus.id, nodesById, portId: 'output1' as PortId }), true);
+  assert.equal(isDataBusChannelPort({ input: true, nodeId: bus.id, nodesById, portId: 'input0' as PortId }), false);
+  assert.equal(
+    isDataBusChannelPort({ input: true, nodeId: 'ordinary' as NodeId, nodesById, portId: 'input1' as PortId }),
+    false,
+  );
 });
 
 test('derives live rail presentation from definitions and shared topology', () => {

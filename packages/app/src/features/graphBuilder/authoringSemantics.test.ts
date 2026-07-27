@@ -21,7 +21,13 @@ import {
   type ProjectId,
   type RivetPlugin,
 } from '@valerypopoff/rivet2-core';
-import type { GraphBuilderAuthoringProject, GraphBuilderTouchedScope } from '../../domain/graphBuilder/index.js';
+import {
+  GRAPH_BUILDER_LIMITS,
+  GRAPH_BUILDER_PROTOCOL_VERSION,
+  GraphBuilderTransactionKernel,
+  type GraphBuilderAuthoringProject,
+  type GraphBuilderTouchedScope,
+} from '../../domain/graphBuilder/index.js';
 import { createGraphBuilderAuthoringCatalog, type GraphBuilderNodeAuthoringAdapter } from './authoringCatalog.js';
 import { createAppGraphBuilderAuthoringSemantics } from './authoringSemantics.js';
 import { buildGraphBuilderProjection, createGraphBuilderReadExecutor } from './readExecutor.js';
@@ -91,7 +97,10 @@ function touched(): GraphBuilderTouchedScope {
 function setup(
   inputProject = project(),
   registry: NodeRegistration<any, any> = registerBuiltInNodes(new NodeRegistration()),
-  options: { mutableBoundaryGraphIds?: readonly GraphId[] } = {},
+  options: {
+    additiveBoundaryGraphIds?: readonly GraphId[];
+    mutableBoundaryGraphIds?: readonly GraphId[];
+  } = {},
 ) {
   const referencedProject = {
     metadata: {
@@ -145,7 +154,7 @@ test('project-boundary validation cannot alias distinct graph-key tuples', () =>
     },
   });
 
-  assert.ok(validation.diagnostics.some((entry) => entry.ruleId === 'active-graph-only'));
+  assert.ok(validation.diagnostics.some((entry) => entry.ruleId === 'project-shell-identity'));
 });
 
 test('conditional ports and project-aware Subgraph boundaries are resolved from the active authoring project', () => {
@@ -170,6 +179,71 @@ test('conditional ports and project-aware Subgraph boundaries are resolved from 
     ports.outputs.map((port) => port.id),
     ['answer'],
   );
+});
+
+test('transactional authoring rejects a Data Bus relay cycle before accepting the draft', () => {
+  const source = node('graphInput', 'source', { id: 'source', dataType: 'any' }, 'Source');
+  const bus = node('dataBus', 'bus', {}, 'Shared values');
+  const output = node('graphOutput', 'result', { id: 'result', dataType: 'any' }, 'Result');
+  const inputProject = project(
+    [source, bus, output],
+    [
+      {
+        outputNodeId: source.id,
+        outputId: 'data' as PortId,
+        inputNodeId: bus.id,
+        inputId: 'input1' as PortId,
+      },
+      {
+        outputNodeId: bus.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: output.id,
+        inputId: 'value' as PortId,
+      },
+    ],
+  );
+  const { semantics } = setup(inputProject);
+  const kernel = new GraphBuilderTransactionKernel({
+    project: inputProject,
+    activeGraphId,
+    authorization: {
+      allowedGraphIds: [activeGraphId],
+      allowedOperations: ['connect', 'disconnect'],
+      allowSemanticCrossGraphPropagation: false,
+      sensitiveFieldAccess: 'none',
+    },
+    semantics,
+    idGenerator: () => 'unused' as NodeId,
+  });
+
+  const result = kernel.applyPatch({
+    protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
+    patchId: 'reject-data-bus-relay-cycle',
+    expectedDraftRevision: 0,
+    operations: [
+      {
+        op: 'connect',
+        from: { node: { kind: 'existing', nodeId: bus.id }, port: 'output1' },
+        to: { node: { kind: 'existing', nodeId: bus.id }, port: 'input2' },
+      },
+      {
+        op: 'disconnect',
+        from: { node: { kind: 'existing', nodeId: source.id }, port: 'data' },
+        to: { node: { kind: 'existing', nodeId: bus.id }, port: 'input1' },
+      },
+      {
+        op: 'connect',
+        from: { node: { kind: 'existing', nodeId: bus.id }, port: 'output2' },
+        to: { node: { kind: 'existing', nodeId: bus.id }, port: 'input1' },
+      },
+    ],
+  });
+
+  assert.equal(result.disposition, 'rejected');
+  assert.ok(result.diagnostics.some((entry) => entry.ruleId === 'data-bus-topology'));
+  assert.ok(result.diagnostics.some((entry) => /relay cycle/u.test(entry.message)));
+  assert.equal(kernel.getDraftRevision(), 0);
+  assert.deepEqual(kernel.getDraft().graphs[activeGraphId]!.connections, inputProject.graphs[activeGraphId]!.connections);
 });
 
 test('tool-delegation built-ins expose only the safe settings needed for auto-continuation', () => {
@@ -291,6 +365,107 @@ test('tool-delegation built-ins expose only the safe settings needed for auto-co
     },
   });
   assert.ok(validation.diagnostics.some((entry) => entry.ruleId === 'tool-delegate-mismatch'));
+});
+
+test('full-document Delegate Tool Call edits preserve auto-delegation invariants', () => {
+  const delegate = node('delegateFunctionCall', 'delegate', {
+    autoDelegate: true,
+    fallBackToExternalCall: true,
+    passthroughErrors: true,
+  });
+  const base = project([delegate]);
+  const { semantics } = setup(base);
+  const cases: ReadonlyArray<{
+    name: string;
+    mutate: (candidate: GraphBuilderAuthoringProject) => void;
+    expected: RegExp;
+  }> = [
+    {
+      name: 'manual delegation',
+      mutate: (candidate) => {
+        (
+          candidate.graphs[activeGraphId]!.nodes[0]!.data as {
+            autoDelegate: boolean;
+          }
+        ).autoDelegate = false;
+      },
+      expected: /must use Auto Delegate mode/u,
+    },
+    {
+      name: 'passthrough without fallback',
+      mutate: (candidate) => {
+        Object.assign(candidate.graphs[activeGraphId]!.nodes[0]!.data as Record<string, unknown>, {
+          fallBackToExternalCall: false,
+          passthroughErrors: true,
+        });
+      },
+      expected: /only when external-call fallback is enabled/u,
+    },
+    {
+      name: 'malformed fallback flag',
+      mutate: (candidate) => {
+        (candidate.graphs[activeGraphId]!.nodes[0]!.data as Record<string, unknown>).fallBackToExternalCall = 'yes';
+      },
+      expected: /boolean external-call fallback setting/u,
+    },
+    {
+      name: 'unsafe variant',
+      mutate: (candidate) => {
+        candidate.graphs[activeGraphId]!.nodes[0]!.variants = [
+          {
+            id: 'manual-variant',
+            data: {
+              autoDelegate: false,
+              fallBackToExternalCall: true,
+              passthroughErrors: true,
+            },
+          },
+        ];
+      },
+      expected: /variant 1 settings must use Auto Delegate mode/u,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const candidate = structuredClone(base);
+    testCase.mutate(candidate);
+    const validation = semantics.validateCandidate({
+      base,
+      candidate,
+      touchedScope: {
+        ...touched(),
+        nodeIds: [delegate.id],
+      },
+    });
+
+    assert.ok(
+      validation.diagnostics.some(
+        (entry) => entry.ruleId === 'protected-node-mutation' && testCase.expected.test(entry.message),
+      ),
+      testCase.name,
+    );
+  }
+
+  const emptyBase = project();
+  const { semantics: emptySemantics } = setup(emptyBase);
+  const createdCandidate = structuredClone(emptyBase);
+  const createdDelegate = node('delegateFunctionCall', 'created-delegate', {
+    autoDelegate: false,
+  });
+  createdCandidate.graphs[activeGraphId]!.nodes.push(createdDelegate);
+  const createdValidation = emptySemantics.validateCandidate({
+    base: emptyBase,
+    candidate: createdCandidate,
+    touchedScope: {
+      ...touched(),
+      nodeIds: [createdDelegate.id],
+    },
+  });
+  assert.ok(
+    createdValidation.diagnostics.some(
+      (entry) => entry.ruleId === 'protected-node-mutation' && /must use Auto Delegate mode/u.test(entry.message),
+    ),
+  );
 });
 
 test('Loop Until is authorable only with an existing non-recursive target and a positive bound', () => {
@@ -565,7 +740,7 @@ test('normalization terminates and produces distinct finite positions for a newl
   assert.equal(new Set(positions.map(([x, y]) => `${x}:${y}`)).size, created.length);
 });
 
-test('existing graph boundary identity is immutable and new boundaries require a transient empty base', () => {
+test('persisted boundaries stay immutable while additive and transient boundary authoring remain explicit', () => {
   const boundary = node('graphInput', 'boundary', { id: 'question', dataType: 'string' });
   const base = project([boundary]);
   const changed = structuredClone(base);
@@ -594,6 +769,19 @@ test('existing graph boundary identity is immutable and new boundaries require a
     touchedScope: touched(),
   });
   assert.ok(nonEmptyResult.diagnostics.some((entry) => entry.diagnosticKey.includes('new-boundary')));
+
+  const { semantics: additiveSemantics } = setup(nonEmptyCandidate, undefined, {
+    additiveBoundaryGraphIds: [activeGraphId],
+  });
+  const additiveResult = additiveSemantics.validateCandidate({
+    base: nonEmptyBase,
+    candidate: nonEmptyCandidate,
+    touchedScope: touched(),
+  });
+  assert.ok(
+    !additiveResult.diagnostics.some((entry) => entry.diagnosticKey.includes('new-boundary')),
+    'an explicitly additive graph may gain a boundary without weakening existing boundary identity',
+  );
 
   const emptyBase = project();
   const transientCandidate = project([
@@ -781,14 +969,14 @@ test('catalog preflights referenced projects before cloning them', () => {
   assert.equal(getterCalls, 0);
 });
 
-test('opaque plugins are create-only and neither defaults nor unknown fields enter projections', () => {
+test('opaque plugins are create-only and neither defaults nor unknown fields enter projections', async () => {
   const registry = registerBuiltInNodes(new NodeRegistration()).register(
     nodeDefinition(OpaquePluginNodeImpl, 'Opaque Plugin'),
     { id: 'opaque-plugin' } as RivetPlugin,
   );
   const opaque = node('opaquePlugin', 'opaque', { apiKey: 'live-secret', visible: 'also-hidden' });
   const inputProject = project([opaque]);
-  const { catalog } = setup(inputProject, registry);
+  const { catalog, semantics } = setup(inputProject, registry);
   const entry = catalog.getEntry('registered:opaquePlugin')!;
 
   assert.deepEqual(entry.capabilities, {
@@ -809,6 +997,52 @@ test('opaque plugins are create-only and neither defaults nor unknown fields ent
   });
   assert.equal(projection.nodes[0]!.safeSettings, undefined);
   assert.doesNotMatch(JSON.stringify(projection), /live-secret|also-hidden|secret-default/);
+
+  const executor = createGraphBuilderReadExecutor({
+    activeGraphId,
+    projectDataContext: { manifest: [] },
+    catalog,
+    semantics,
+    getDraft: () => inputProject,
+    getDraftRevision: () => 0,
+    getDiagnostics: () => [],
+    getDraftDelta: () => undefined,
+  });
+  const configuredSpecification = await executor.execute(
+    {
+      type: 'get-node-specs',
+      authoringChoiceIds: ['registered:opaquePlugin'],
+      authoringSettings: { visible: 'attempted' },
+    },
+    {
+      requestId: 'reject-opaque-configuration',
+      requestIndex: 0,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+
+  assert.equal(configuredSpecification.status, 'ok');
+  assert.deepEqual(
+    configuredSpecification.status === 'ok'
+      ? (configuredSpecification.payload as { specs: Array<Record<string, unknown>> }).specs[0]
+      : undefined,
+    {
+      authoringChoiceId: 'registered:opaquePlugin',
+      status: 'ok',
+      family: 'registered',
+      nodeType: 'opaquePlugin',
+      displayName: 'Opaque Plugin',
+      description: entry.description,
+      aliases: [],
+      capabilities: entry.capabilities,
+      settings: [],
+      configurationStatus: 'rejected',
+      configurationReason:
+        'The requested configuration was rejected because this authoring choice has no captured settings or port adapter.',
+    },
+  );
 });
 
 test('node-type search preserves non-Latin names and queries', async () => {
@@ -878,7 +1112,149 @@ test('projection lookup is own-property-safe and truncation preserves Unicode pa
   );
 });
 
-test('the project-aware catalog includes referenced graph aliases and linked prefabs', () => {
+test('projections and specification reads share canonical registered authoring choice IDs', async () => {
+  const inputProject = project([
+    node('codeNew', 'code', { code: 'return {{bookContent}};' }),
+    node('llmChatV2', 'chat'),
+    node('text', 'text', { text: 'Hello {{name}}' }),
+  ]);
+  const { catalog, semantics } = setup(inputProject);
+  const projection = buildGraphBuilderProjection({
+    project: inputProject,
+    activeGraphId,
+    draftRevision: 0,
+    catalog,
+    diagnostics: [],
+  });
+
+  assert.deepEqual(
+    projection.nodes.map(({ type, authoringChoiceId }) => ({ type, authoringChoiceId })),
+    [
+      { type: 'codeNew', authoringChoiceId: 'registered:codeNew' },
+      { type: 'llmChatV2', authoringChoiceId: 'registered:llmChatV2' },
+      { type: 'text', authoringChoiceId: 'registered:text' },
+    ],
+  );
+
+  const executor = createGraphBuilderReadExecutor({
+    activeGraphId,
+    projectDataContext: { manifest: [] },
+    catalog,
+    semantics,
+    getDraft: () => inputProject,
+    getDraftRevision: () => 0,
+    getDiagnostics: () => [],
+    getDraftDelta: () => undefined,
+  });
+  const specifications = await executor.execute(
+    {
+      type: 'get-node-specs',
+      authoringChoiceIds: ['codeNew', 'llmChatV2', 'text'],
+    },
+    {
+      requestId: 'specify-raw-registered-types',
+      requestIndex: 0,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+
+  assert.equal(specifications.status, 'ok');
+  const specs =
+    specifications.status === 'ok' ? (specifications.payload as { specs: Array<Record<string, unknown>> }).specs : [];
+  assert.deepEqual(
+    specs.map(({ authoringChoiceId, nodeType, status }) => ({ authoringChoiceId, nodeType, status })),
+    [
+      { authoringChoiceId: 'registered:codeNew', nodeType: 'codeNew', status: 'ok' },
+      { authoringChoiceId: 'registered:llmChatV2', nodeType: 'llmChatV2', status: 'ok' },
+      { authoringChoiceId: 'registered:text', nodeType: 'text', status: 'ok' },
+    ],
+  );
+
+  const configuredCodeSpecification = await executor.execute(
+    {
+      type: 'get-node-specs',
+      authoringChoiceIds: ['codeNew'],
+      authoringSettings: { code: 'return {{chapters}};' },
+    },
+    {
+      requestId: 'specify-raw-code-type',
+      requestIndex: 1,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+  assert.equal(configuredCodeSpecification.status, 'ok');
+  assert.deepEqual(
+    configuredCodeSpecification.status === 'ok'
+      ? (configuredCodeSpecification.payload as { specs: Array<Record<string, unknown>> }).specs.map(
+          ({ authoringChoiceId, configurationStatus, ports }) => ({
+            authoringChoiceId,
+            configurationStatus,
+            ports,
+          }),
+        )
+      : [],
+    [
+      {
+        authoringChoiceId: 'registered:codeNew',
+        configurationStatus: 'resolved',
+        ports: {
+          inputs: [{ id: 'chapters', dataType: 'any' }],
+          outputs: [{ id: 'output', dataType: 'any' }],
+        },
+      },
+    ],
+  );
+
+  const inspected = await executor.execute(
+    { type: 'inspect-draft', nodeIds: ['code'], fields: ['identity'] },
+    {
+      requestId: 'inspect-canonical-identity',
+      requestIndex: 2,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+  assert.deepEqual(inspected.status === 'ok' ? inspected.payload : undefined, {
+    nodes: [
+      {
+        nodeId: 'code',
+        identity: {
+          nodeId: 'code',
+          type: 'codeNew',
+          authoringChoiceId: 'registered:codeNew',
+        },
+      },
+    ],
+    missingNodeIds: [],
+  });
+
+  const unknown = await executor.execute(
+    { type: 'get-node-specs', authoringChoiceIds: ['not-a-node-type'] },
+    {
+      requestId: 'specify-unknown-node-type',
+      requestIndex: 3,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+  assert.deepEqual(unknown.status === 'ok' ? unknown.payload : undefined, {
+    specs: [
+      {
+        authoringChoiceId: 'not-a-node-type',
+        status: 'unsupported',
+        reason: 'Unknown authoring choice.',
+      },
+    ],
+  });
+});
+
+test('the project-aware catalog includes referenced graph aliases and preserves linked-prefab inspection', async () => {
   const inputProject = project();
   const { catalog, semantics } = setup(inputProject);
   const alias = catalog
@@ -893,10 +1269,31 @@ test('the project-aware catalog includes referenced graph aliases and linked pre
     allocatedNodeId: 'linked-instance' as NodeId,
     project: inputProject,
   });
+  const referencedAlias = catalog.createNode({
+    authoringChoiceId: alias.authoringChoiceId,
+    allocatedNodeId: 'referenced-alias' as NodeId,
+    project: inputProject,
+  });
   assert.equal(linked.type, NODE_PREFAB_INSTANCE_TYPE);
+  assert.equal(catalog.getNodeAuthoringChoiceId(linked), prefab.authoringChoiceId);
+  assert.equal(catalog.getNodeAuthoringChoiceId(referencedAlias), alias.authoringChoiceId);
 
   const candidate = structuredClone(inputProject);
-  candidate.graphs[activeGraphId]!.nodes.push(linked);
+  candidate.graphs[activeGraphId]!.nodes.push(linked, referencedAlias);
+  const projection = buildGraphBuilderProjection({
+    project: candidate,
+    activeGraphId,
+    draftRevision: 0,
+    catalog,
+    diagnostics: [],
+  });
+  assert.deepEqual(
+    projection.nodes.map(({ nodeId, authoringChoiceId }) => ({ nodeId, authoringChoiceId })),
+    [
+      { nodeId: 'linked-instance', authoringChoiceId: prefab.authoringChoiceId },
+      { nodeId: 'referenced-alias', authoringChoiceId: alias.authoringChoiceId },
+    ],
+  );
   const ports = semantics.resolvePorts({
     graphId: activeGraphId,
     nodeId: linked.id,
@@ -914,6 +1311,612 @@ test('the project-aware catalog includes referenced graph aliases and linked pre
         settings: { text: 'changed' },
       }),
     /read-only/,
+  );
+
+  const executor = createGraphBuilderReadExecutor({
+    activeGraphId,
+    projectDataContext: { manifest: [] },
+    catalog,
+    semantics,
+    getDraft: () => candidate,
+    getDraftRevision: () => 0,
+    getDiagnostics: () => [],
+    getDraftDelta: () => undefined,
+  });
+  const inspected = await executor.execute(
+    { type: 'inspect-draft', nodeIds: ['linked-instance'], fields: ['settings'] },
+    {
+      requestId: 'inspect-linked-prefab',
+      requestIndex: 0,
+      observedDraftRevision: 0,
+      draft: candidate,
+      abortSignal: new AbortController().signal,
+    },
+  );
+  assert.equal(inspected.status, 'ok');
+  assert.deepEqual(inspected.status === 'ok' ? inspected.payload : undefined, {
+    nodes: [
+      {
+        nodeId: 'linked-instance',
+        settingsProjectionStatus: 'available',
+        safeSettings: {
+          prefabId: 'linkedText',
+          sourceType: 'text',
+          sourceSettings: {
+            text: 'Hello {{name}}',
+            normalizeLineEndings: true,
+          },
+        },
+      },
+    ],
+    missingNodeIds: [],
+  });
+});
+
+test('legacy Code exposes only source and named ports through its safe authoring adapter', async () => {
+  const source = 'return { answer: { type: inputs.question.type, value: inputs.question.value } };';
+  const legacyCode = node('code', 'legacy-code', {
+    code: source,
+    inputNames: 'question',
+    outputNames: ['answer'],
+    allowFetch: true,
+    allowRequire: true,
+    allowRivet: true,
+    allowProcess: true,
+    allowConsole: true,
+  });
+  const inputProject = project([legacyCode]);
+  const { catalog, semantics } = setup(inputProject);
+  const entry = catalog.getEntry('registered:code')!;
+
+  assert.equal(entry.capabilities.inspectSafeProjection, true);
+  assert.equal(entry.capabilities.configureSettings, true);
+  assert.deepEqual(
+    entry.settings.map(({ key, projection, valueKind }) => ({ key, projection, valueKind })),
+    [
+      { key: 'code', projection: 'on-demand', valueKind: 'string' },
+      { key: 'inputNames', projection: undefined, valueKind: 'string-array' },
+      { key: 'outputNames', projection: undefined, valueKind: 'string-array' },
+    ],
+  );
+  assert.equal(typeof entry.safeDefaults?.code, 'string');
+  assert.deepEqual(entry.safeDefaults?.inputNames, ['input1']);
+  assert.deepEqual(entry.safeDefaults?.outputNames, ['output1']);
+  assert.doesNotMatch(
+    JSON.stringify(entry.safeDefaults),
+    /allowFetch|allowRequire|allowRivet|allowProcess|allowConsole/,
+  );
+
+  const projection = buildGraphBuilderProjection({
+    project: inputProject,
+    activeGraphId,
+    draftRevision: 0,
+    catalog,
+    diagnostics: [],
+  });
+  assert.deepEqual(projection.nodes[0]!.safeSettings, {
+    inputNames: ['question'],
+    outputNames: ['answer'],
+  });
+  assert.doesNotMatch(JSON.stringify(projection), /allowFetch|allowRequire|allowRivet|allowProcess|allowConsole/);
+
+  const executor = createGraphBuilderReadExecutor({
+    activeGraphId,
+    projectDataContext: { manifest: [] },
+    catalog,
+    semantics,
+    getDraft: () => inputProject,
+    getDraftRevision: () => 0,
+    getDiagnostics: () => [],
+    getDraftDelta: () => undefined,
+  });
+  const inspected = await executor.execute(
+    { type: 'inspect-draft', nodeIds: ['legacy-code'], fields: ['settings', 'ports'] },
+    {
+      requestId: 'inspect-legacy-code',
+      requestIndex: 0,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+  assert.equal(inspected.status, 'ok');
+  assert.deepEqual(inspected.status === 'ok' ? inspected.payload : undefined, {
+    nodes: [
+      {
+        nodeId: 'legacy-code',
+        settingsProjectionStatus: 'available',
+        safeSettings: {
+          code: source,
+          inputNames: ['question'],
+          outputNames: ['answer'],
+        },
+        ports: {
+          inputs: [{ id: 'question', dataType: 'string' }],
+          outputs: [{ id: 'answer', dataType: 'any' }],
+        },
+      },
+    ],
+    missingNodeIds: [],
+  });
+  assert.doesNotMatch(JSON.stringify(inspected), /allowFetch|allowRequire|allowRivet|allowProcess|allowConsole/);
+
+  const configuredSpecification = await executor.execute(
+    {
+      type: 'get-node-specs',
+      authoringChoiceIds: ['registered:code'],
+      authoringSettings: {
+        code: 'return { result: { type: inputs.value.type, value: inputs.value.value } };',
+        inputNames: ['value'],
+        outputNames: ['result'],
+      },
+    },
+    {
+      requestId: 'configure-legacy-code',
+      requestIndex: 1,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+  assert.equal(configuredSpecification.status, 'ok');
+  const configuredSpec =
+    configuredSpecification.status === 'ok'
+      ? (configuredSpecification.payload as { specs: Array<Record<string, unknown>> }).specs[0]
+      : undefined;
+  assert.equal(configuredSpec?.configurationStatus, 'resolved');
+  assert.deepEqual(configuredSpec?.ports, {
+    inputs: [{ id: 'value', dataType: 'string' }],
+    outputs: [{ id: 'result', dataType: 'any' }],
+  });
+
+  assert.throws(
+    () =>
+      catalog.applyNodeSettings({
+        node: legacyCode,
+        project: inputProject,
+        settings: { code: 'return { result: inputs.value };' },
+      }),
+    /runtime permission/,
+  );
+
+  const updated = catalog.applyNodeSettings({
+    node: legacyCode,
+    project: inputProject,
+    settings: {
+      inputNames: ['value'],
+      outputNames: ['result'],
+    },
+  });
+  assert.deepEqual(
+    {
+      allowFetch: (updated.data as Record<string, unknown>).allowFetch,
+      allowRequire: (updated.data as Record<string, unknown>).allowRequire,
+      allowRivet: (updated.data as Record<string, unknown>).allowRivet,
+      allowProcess: (updated.data as Record<string, unknown>).allowProcess,
+      allowConsole: (updated.data as Record<string, unknown>).allowConsole,
+    },
+    {
+      allowFetch: true,
+      allowRequire: true,
+      allowRivet: true,
+      allowProcess: true,
+      allowConsole: true,
+    },
+  );
+
+  const variantPrivilegedCode = structuredClone(legacyCode);
+  variantPrivilegedCode.data = {
+    ...(variantPrivilegedCode.data as Record<string, unknown>),
+    allowFetch: false,
+    allowRequire: false,
+    allowRivet: false,
+    allowProcess: false,
+    allowConsole: false,
+  };
+  variantPrivilegedCode.variants = [
+    {
+      id: 'malformed-permission',
+      data: {
+        ...(variantPrivilegedCode.data as Record<string, unknown>),
+        allowRequire: 'yes',
+      },
+    },
+  ];
+  assert.throws(
+    () =>
+      catalog.applyNodeSettings({
+        node: variantPrivilegedCode,
+        project: project([variantPrivilegedCode]),
+        settings: { code: 'return {};' },
+      }),
+    /base or variant runtime permission/,
+  );
+});
+
+test('Code source is authorable on demand without exposing runtime permissions in compact projections', async () => {
+  const source = 'const value = {{bookContent}};\nreturn value;';
+  const code = node('codeNew', 'code', {
+    code: source,
+    allowFetch: true,
+    allowRequire: false,
+    allowRivet: false,
+    allowProcess: false,
+    allowConsole: false,
+  });
+  const inputProject = project([code]);
+  const { catalog, semantics } = setup(inputProject);
+  const entry = catalog.getEntry('registered:codeNew')!;
+
+  assert.equal(entry.capabilities.inspectSafeProjection, true);
+  assert.equal(entry.capabilities.configureSettings, true);
+  assert.deepEqual(
+    entry.settings.map((descriptor) => ({
+      key: descriptor.key,
+      projection: descriptor.projection,
+      valueKind: descriptor.valueKind,
+    })),
+    [{ key: 'code', projection: 'on-demand', valueKind: 'string' }],
+  );
+
+  const compactProjection = buildGraphBuilderProjection({
+    project: inputProject,
+    activeGraphId,
+    draftRevision: 0,
+    catalog,
+    diagnostics: [],
+  });
+  assert.deepEqual({ ...compactProjection.nodes[0]!.safeSettings }, {});
+  assert.doesNotMatch(JSON.stringify(compactProjection), /bookContent|allowFetch/);
+
+  const executor = createGraphBuilderReadExecutor({
+    activeGraphId,
+    projectDataContext: { manifest: [] },
+    catalog,
+    semantics,
+    getDraft: () => inputProject,
+    getDraftRevision: () => 0,
+    getDiagnostics: () => [],
+    getDraftDelta: () => undefined,
+  });
+  const inspected = await executor.execute(
+    {
+      type: 'inspect-draft',
+      nodeIds: ['code'],
+      fields: ['settings', 'ports'],
+    },
+    {
+      requestId: 'inspect-code',
+      requestIndex: 0,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+
+  assert.equal(inspected.status, 'ok');
+  assert.deepEqual(inspected.status === 'ok' ? inspected.payload : undefined, {
+    nodes: [
+      {
+        nodeId: 'code',
+        settingsProjectionStatus: 'available',
+        safeSettings: { code: source },
+        ports: {
+          inputs: [{ id: 'bookContent', dataType: 'any' }],
+          outputs: [{ id: 'output', dataType: 'any' }],
+        },
+      },
+    ],
+    missingNodeIds: [],
+  });
+  assert.doesNotMatch(JSON.stringify(inspected), /allowFetch/);
+
+  const specification = await executor.execute(
+    {
+      type: 'get-node-specs',
+      authoringChoiceIds: ['registered:codeNew'],
+      authoringSettings: { code: 'return {{chapters}};' },
+    },
+    {
+      requestId: 'specify-code',
+      requestIndex: 1,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+  assert.equal(specification.status, 'ok');
+  assert.deepEqual(specification.status === 'ok' ? specification.payload : undefined, {
+    specs: [
+      {
+        authoringChoiceId: 'registered:codeNew',
+        status: 'ok',
+        family: 'registered',
+        nodeType: 'codeNew',
+        displayName: 'Code',
+        description: entry.description,
+        aliases: [],
+        capabilities: entry.capabilities,
+        settings: [
+          {
+            key: 'code',
+            valueKind: 'string',
+            description: 'JavaScript source. Use {{name}} for dynamic inputs and return one value.',
+            projection: 'on-demand',
+          },
+        ],
+        safeDefaults: entry.safeDefaults,
+        configurationStatus: 'resolved',
+        ports: {
+          inputs: [{ id: 'chapters', dataType: 'any' }],
+          outputs: [{ id: 'output', dataType: 'any' }],
+        },
+      },
+    ],
+  });
+
+  const rejectedSpecification = await executor.execute(
+    {
+      type: 'get-node-specs',
+      authoringChoiceIds: ['registered:codeNew'],
+      authoringSettings: { allowFetch: true },
+    },
+    {
+      requestId: 'reject-code-spec',
+      requestIndex: 2,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+  assert.equal(rejectedSpecification.status, 'ok');
+  assert.deepEqual(
+    rejectedSpecification.status === 'ok'
+      ? (rejectedSpecification.payload as { specs: Array<Record<string, unknown>> }).specs[0]
+      : undefined,
+    {
+      authoringChoiceId: 'registered:codeNew',
+      status: 'ok',
+      family: 'registered',
+      nodeType: 'codeNew',
+      displayName: 'Code',
+      description: entry.description,
+      aliases: [],
+      capabilities: entry.capabilities,
+      settings: [
+        {
+          key: 'code',
+          valueKind: 'string',
+          description: 'JavaScript source. Use {{name}} for dynamic inputs and return one value.',
+          projection: 'on-demand',
+        },
+      ],
+      safeDefaults: entry.safeDefaults,
+      configurationStatus: 'rejected',
+      configurationReason: 'The requested configuration was rejected by the captured authoring adapter.',
+    },
+  );
+  assert.equal(JSON.stringify(rejectedSpecification).includes('"configured"'), false);
+
+  assert.throws(
+    () =>
+      catalog.applyNodeSettings({
+        node: code,
+        project: inputProject,
+        settings: { code: 'return {{chapters}};' },
+      }),
+    /runtime permission/,
+  );
+
+  const safeCode = structuredClone(code);
+  (safeCode.data as { allowFetch?: boolean }).allowFetch = false;
+  const updated = catalog.applyNodeSettings({
+    node: safeCode,
+    project: project([safeCode]),
+    settings: { code: 'return {{chapters}};' },
+  });
+  assert.equal((updated.data as { allowFetch?: boolean }).allowFetch, false);
+  const candidate = project([updated]);
+  assert.deepEqual(
+    semantics
+      .resolvePorts({
+        graphId: activeGraphId,
+        nodeId: updated.id,
+        project: candidate,
+      })
+      .inputs.map((port) => port.id),
+    ['chapters'],
+  );
+  assert.throws(
+    () =>
+      catalog.applyNodeSettings({
+        node: updated,
+        project: candidate,
+        settings: { allowFetch: false },
+      }),
+    /not supported/,
+  );
+});
+
+test('safe-settings inspection reports oversized and invalid fields without mislabeling the adapter', async () => {
+  const oversizedCode = node('codeNew', 'oversized-code', {
+    code: 'x'.repeat(GRAPH_BUILDER_LIMITS.maxStringLength + 1),
+  });
+  const invalidText = node('text', 'invalid-text', {
+    text: 42,
+    normalizeLineEndings: true,
+  });
+  const absentCode = node('codeNew', 'absent-code', {});
+  const inputProject = project([oversizedCode, invalidText, absentCode]);
+  const { catalog, semantics } = setup(inputProject);
+  const executor = createGraphBuilderReadExecutor({
+    activeGraphId,
+    projectDataContext: { manifest: [] },
+    catalog,
+    semantics,
+    getDraft: () => inputProject,
+    getDraftRevision: () => 0,
+    getDiagnostics: () => [],
+    getDraftDelta: () => undefined,
+  });
+
+  const inspected = await executor.execute(
+    {
+      type: 'inspect-draft',
+      nodeIds: ['oversized-code', 'invalid-text', 'absent-code'],
+      fields: ['settings'],
+    },
+    {
+      requestId: 'inspect-omissions',
+      requestIndex: 0,
+      observedDraftRevision: 0,
+      draft: inputProject,
+      abortSignal: new AbortController().signal,
+    },
+  );
+
+  assert.equal(inspected.status, 'ok');
+  assert.deepEqual(inspected.status === 'ok' ? inspected.payload : undefined, {
+    nodes: [
+      {
+        nodeId: 'oversized-code',
+        settingsProjectionStatus: 'partial',
+        safeSettings: {},
+        omittedSettings: [{ key: 'code', reason: 'oversized' }],
+      },
+      {
+        nodeId: 'invalid-text',
+        settingsProjectionStatus: 'partial',
+        safeSettings: { normalizeLineEndings: true },
+        omittedSettings: [{ key: 'text', reason: 'invalid' }],
+      },
+      {
+        nodeId: 'absent-code',
+        settingsProjectionStatus: 'available',
+        safeSettings: {},
+      },
+    ],
+    missingNodeIds: [],
+  });
+});
+
+test('transactional Code authoring persists source while permission expansion rejects atomically', () => {
+  const inputProject = project();
+  const { semantics } = setup(inputProject);
+  const allocatedIds = ['generated-code'] as NodeId[];
+  const kernel = new GraphBuilderTransactionKernel({
+    project: inputProject,
+    activeGraphId,
+    authorization: {
+      allowedGraphIds: [activeGraphId],
+      allowedOperations: ['createNode', 'updateNodeSettings'],
+      allowSemanticCrossGraphPropagation: false,
+      sensitiveFieldAccess: 'none',
+    },
+    semantics,
+    idGenerator: () => allocatedIds.shift()!,
+  });
+
+  const created = kernel.applyPatch({
+    protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
+    patchId: 'create-code',
+    expectedDraftRevision: 0,
+    operations: [
+      {
+        op: 'createNode',
+        clientId: 'code',
+        authoringChoiceId: 'registered:codeNew',
+        settings: { code: 'return {{bookContent}};' },
+      },
+    ],
+  });
+  assert.equal(created.disposition, 'applied');
+  assert.equal(kernel.getDraftRevision(), 1);
+  const createdNode = kernel
+    .getDraft()
+    .graphs[activeGraphId]!.nodes.find((candidate) => candidate.id === 'generated-code')!;
+  assert.equal((createdNode.data as { code?: string }).code, 'return {{bookContent}};');
+  assert.equal((createdNode.data as { allowFetch?: boolean }).allowFetch, false);
+
+  const rejected = kernel.applyPatch({
+    protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
+    patchId: 'expand-code-permissions',
+    expectedDraftRevision: 1,
+    operations: [
+      {
+        op: 'updateNodeSettings',
+        node: { kind: 'existing', nodeId: 'generated-code' },
+        settings: { allowFetch: true },
+      },
+    ],
+  });
+  assert.equal(rejected.disposition, 'rejected');
+  assert.equal(kernel.getDraftRevision(), 1);
+  assert.equal(
+    (
+      kernel.getDraft().graphs[activeGraphId]!.nodes.find((candidate) => candidate.id === 'generated-code')!.data as {
+        allowFetch?: boolean;
+      }
+    ).allowFetch,
+    false,
+  );
+});
+
+test('full-document Code edits preserve the runtime-permission boundary', () => {
+  const privilegedCode = node('codeNew', 'privileged-code', {
+    code: 'return 1;',
+    allowFetch: true,
+  });
+  const base = project([privilegedCode]);
+  const { semantics } = setup(base);
+  const touchedScope = {
+    graphIds: [activeGraphId],
+    nodeIds: [privilegedCode.id],
+    connectionKeys: [],
+    operationIndices: [],
+  };
+
+  const changedSource = structuredClone(base);
+  (
+    changedSource.graphs[activeGraphId]!.nodes[0]!.data as {
+      code: string;
+    }
+  ).code = 'return 2;';
+  const changedSourceValidation = semantics.validateCandidate({
+    base,
+    candidate: changedSource,
+    touchedScope,
+  });
+  assert.ok(
+    changedSourceValidation.diagnostics.some(
+      (entry) => entry.ruleId === 'protected-node-mutation' && /cannot change Code source/u.test(entry.message),
+    ),
+  );
+
+  const safeBase = project();
+  const { semantics: safeSemantics } = setup(safeBase);
+  const unsafeCreated = structuredClone(safeBase);
+  const createdNode = node('codeNew', 'unsafe-created-code', {
+    code: 'return fetch("https://example.invalid");',
+    allowFetch: true,
+  });
+  unsafeCreated.graphs[activeGraphId]!.nodes.push(createdNode);
+  const unsafeCreatedValidation = safeSemantics.validateCandidate({
+    base: safeBase,
+    candidate: unsafeCreated,
+    touchedScope: {
+      graphIds: [activeGraphId],
+      nodeIds: [createdNode.id],
+      connectionKeys: [],
+      operationIndices: [],
+    },
+  });
+  assert.ok(
+    unsafeCreatedValidation.diagnostics.some(
+      (entry) =>
+        entry.ruleId === 'protected-node-mutation' &&
+        /cannot create or expand Code runtime permissions/u.test(entry.message),
+    ),
   );
 });
 
@@ -973,6 +1976,8 @@ test('bounded reads preserve order/revision and resource selectors withhold comm
   );
   assert.doesNotMatch(JSON.stringify(results), /must-not-leak|hidden|secret-command|PASSWORD/);
   assert.match(JSON.stringify(results[2]), /Hello/);
+  assert.match(JSON.stringify(results[2]), /"nodeId":"text"/);
+  assert.match(JSON.stringify(results[2]), /"settingsProjectionStatus":"available"/);
 });
 
 test('single reads use the controller-captured draft/revision and honor cancellation', async () => {

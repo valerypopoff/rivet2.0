@@ -23,7 +23,13 @@ import {
   type PortableJsonObject,
   type PortableJsonValue,
 } from '../../domain/graphBuilder/index.js';
-import type { GraphBuilderAuthoringCatalogEntry, GraphBuilderAuthoringCatalogSnapshot } from './authoringCatalog.js';
+import type {
+  GraphBuilderAuthoringCatalogEntry,
+  GraphBuilderAuthoringCatalogSnapshot,
+  GraphBuilderSafeSettingOmission,
+  GraphBuilderSafeSettingsProjection,
+} from './authoringCatalog.js';
+import { shouldProtectVirtualGraphSecretField, VirtualGraphWorkspaceError } from './virtualGraphWorkspace.js';
 import type { AppGraphBuilderAuthoringSemantics } from './authoringSemantics.js';
 
 const SUPPORTED_INSPECTION_FIELDS = new Set(['connections', 'envelope', 'identity', 'ports', 'settings']);
@@ -47,6 +53,12 @@ export type GraphBuilderReadExecutorOptions = {
   getDraftRevision: () => number;
   getDiagnostics: () => readonly GraphDiagnostic[];
   getDraftDelta: () => GraphDraftDelta | undefined;
+  readVirtualDocument?(input: {
+    path: string;
+    startLine?: number;
+    lineCount?: number;
+    startOffset?: number;
+  }): PortableJsonValue;
 };
 
 export type ExecuteGraphBuilderReadBatchOptions = {
@@ -159,26 +171,84 @@ function portableDataType(dataType: string | readonly string[]): string | string
   return typeof dataType === 'string' ? dataType : [...dataType];
 }
 
+function containsSecretLikeObjectKey(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(containsSecretLikeObjectKey);
+  }
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  return Object.entries(value).some(([key, child]) => {
+    return shouldProtectVirtualGraphSecretField(key, child) || containsSecretLikeObjectKey(child);
+  });
+}
+
+function omitUndefinedObjectProperties(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => {
+      if (entry === undefined) {
+        throw new Error(`Node template arrays cannot contain undefined at index ${index.toString(10)}.`);
+      }
+      return omitUndefinedObjectProperties(entry);
+    });
+  }
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, child]) =>
+      child === undefined ? [] : [[key, omitUndefinedObjectProperties(child)]],
+    ),
+  );
+}
+
 function projectSafeSettings(
   node: ChartNode,
   project: GraphBuilderAuthoringProject,
   catalog: GraphBuilderAuthoringCatalogSnapshot,
   options: { includeOnDemand?: boolean } = {},
 ): PortableJsonObject | undefined {
+  const projection = projectSafeSettingsDetailed(node, project, catalog, options);
+  if (!projection) {
+    return undefined;
+  }
+  return Object.keys(projection.safeSettings).length > 0 ? projection.safeSettings : undefined;
+}
+
+function projectSafeSettingsDetailed(
+  node: ChartNode,
+  project: GraphBuilderAuthoringProject,
+  catalog: GraphBuilderAuthoringCatalogSnapshot,
+  options: { includeOnDemand?: boolean } = {},
+): GraphBuilderSafeSettingsProjection | undefined {
   if (node.type !== NODE_PREFAB_INSTANCE_TYPE) {
-    return catalog.projectNodeSafeSettings(node, project, options);
+    return catalog.projectNodeSafeSettingsDetailed(node, project, options);
   }
 
   const prefabId = (node.data as { prefabId?: unknown } | undefined)?.prefabId;
   const resolved = resolveNodePrefabInstance(project as Project, node);
   if (resolved.type === NODE_PREFAB_INSTANCE_TYPE) {
-    return typeof prefabId === 'string' ? { prefabId, sourceStatus: 'missing' } : { sourceStatus: 'missing' };
+    return {
+      safeSettings: typeof prefabId === 'string' ? { prefabId, sourceStatus: 'missing' } : { sourceStatus: 'missing' },
+      omittedSettings: [],
+    };
   }
-  const sourceSettings = catalog.projectNodeSafeSettings(resolved, project, options);
+
+  const sourceProjection = catalog.projectNodeSafeSettingsDetailed(resolved, project, options);
+  const sourceSettings = sourceProjection?.safeSettings;
+  const omittedSettings: GraphBuilderSafeSettingOmission[] =
+    sourceProjection?.omittedSettings.map((omission) => ({
+      key: `sourceSettings.${omission.key}`,
+      reason: omission.reason,
+    })) ?? [];
   return {
-    ...(typeof prefabId === 'string' ? { prefabId } : {}),
-    sourceType: resolved.type,
-    ...(sourceSettings ? { sourceSettings } : {}),
+    safeSettings: {
+      ...(typeof prefabId === 'string' ? { prefabId } : {}),
+      sourceType: resolved.type,
+      ...(sourceSettings && Object.keys(sourceSettings).length > 0 ? { sourceSettings } : {}),
+    },
+    omittedSettings,
   };
 }
 
@@ -204,9 +274,11 @@ export function buildGraphBuilderProjection(input: {
     draftRevision: input.draftRevision,
     nodes: graph.nodes.map((node) => {
       const safeSettings = projectSafeSettings(node, input.project, input.catalog);
+      const authoringChoiceId = input.catalog.getNodeAuthoringChoiceId(node);
       return {
         nodeId: node.id,
         type: node.type,
+        ...(authoringChoiceId ? { authoringChoiceId } : {}),
         title: truncate(node.title),
         runMode: deriveRunMode(node),
         ...(safeSettings ? { safeSettings } : {}),
@@ -272,14 +344,15 @@ export class GraphBuilderReadExecutor {
     } catch (error) {
       this.#throwIfAborted(context.abortSignal);
       const unsupported = error instanceof UnsupportedGraphBuilderReadError;
+      const workspaceError = error instanceof VirtualGraphWorkspaceError;
       return parseGraphBuilderReadResult({
         requestId: context.requestId,
         requestIndex: context.requestIndex,
         observedDraftRevision: context.observedDraftRevision,
         status: unsupported ? 'unsupported' : 'failed',
         error: {
-          code: unsupported ? error.code : 'read-failed',
-          message: truncate(unsupported ? error.message : 'Graph Builder read failed.'),
+          code: unsupported || workspaceError ? error.code : 'read-failed',
+          message: truncate(unsupported || workspaceError ? error.message : 'Graph Builder read failed.'),
         },
       });
     }
@@ -314,6 +387,21 @@ export class GraphBuilderReadExecutor {
         return this.#searchNodeTypes(request.queries, request.limit);
       case 'get-node-specs':
         return this.#getNodeSpecs(draft, request.authoringChoiceIds, request.authoringSettings);
+      case 'get-node-templates':
+        return this.#getNodeTemplates(draft, request.authoringChoiceIds, request.authoringSettings);
+      case 'read-virtual-document':
+        if (!this.#options.readVirtualDocument) {
+          throw new UnsupportedGraphBuilderReadError(
+            'virtual-document-read-unavailable',
+            'This Graph Builder runtime has no virtual-document workspace.',
+          );
+        }
+        return this.#options.readVirtualDocument({
+          path: request.path,
+          ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
+          ...(request.lineCount === undefined ? {} : { lineCount: request.lineCount }),
+          ...(request.startOffset === undefined ? {} : { startOffset: request.startOffset }),
+        });
       case 'inspect-draft':
         return this.#inspectDraft(draft, request.nodeIds, request.fields);
       case 'inspect-draft-diff':
@@ -375,16 +463,26 @@ export class GraphBuilderReadExecutor {
     if (!activeGraph) {
       throw new Error(`Active graph "${this.#options.activeGraphId}" does not exist.`);
     }
+    if (
+      authoringSettings !== undefined &&
+      (authoringChoiceIds.length !== 1 || Object.keys(authoringSettings).length === 0)
+    ) {
+      throw new Error('Configured node specifications require exactly one authoring choice and non-empty settings.');
+    }
 
     return {
-      specs: authoringChoiceIds.map((authoringChoiceId, index): PortableJsonValue => {
-        const entry = this.#options.catalog.getEntry(authoringChoiceId);
-        if (!entry) {
+      specs: authoringChoiceIds.map((requestedChoiceId, index): PortableJsonValue => {
+        const authoringChoiceId = this.#options.catalog.resolveAuthoringChoiceId(requestedChoiceId);
+        if (!authoringChoiceId) {
           return {
-            authoringChoiceId,
+            authoringChoiceId: requestedChoiceId,
             status: 'unsupported',
             reason: 'Unknown authoring choice.',
           };
+        }
+        const entry = this.#options.catalog.getEntry(authoringChoiceId);
+        if (!entry) {
+          throw new Error(`Resolved authoring choice "${authoringChoiceId}" is absent from the catalog.`);
         }
 
         const base = {
@@ -407,19 +505,44 @@ export class GraphBuilderReadExecutor {
         };
 
         if (!entry.capabilities.resolvePorts) {
-          return base;
+          return authoringSettings === undefined
+            ? base
+            : {
+                ...base,
+                configurationStatus: 'rejected',
+                configurationReason:
+                  'The requested configuration was rejected because this authoring choice has no captured settings or port adapter.',
+              };
         }
 
         const nodeId = this.#createTemporaryNodeId(activeGraph.nodes, index);
+        let node: ChartNode;
         try {
-          const node = this.#options.catalog.createNode({
+          node = this.#options.catalog.createNode({
             authoringChoiceId,
             allocatedNodeId: nodeId,
             project: draft,
             ...(authoringSettings ? { settings: authoringSettings } : {}),
           });
-          const candidate = cloneDeep(draft);
-          candidate.graphs[this.#options.activeGraphId]!.nodes.push(node);
+        } catch {
+          return {
+            ...base,
+            ...(authoringSettings !== undefined
+              ? {
+                  configurationStatus: 'rejected',
+                  configurationReason: 'The requested configuration was rejected by the captured authoring adapter.',
+                }
+              : {
+                  portResolutionStatus: 'rejected',
+                  portResolutionReason:
+                    'The default node could not be constructed through the captured authoring adapter.',
+                }),
+          };
+        }
+
+        const candidate = cloneDeep(draft);
+        candidate.graphs[this.#options.activeGraphId]!.nodes.push(node);
+        try {
           const ports = this.#options.semantics.resolvePorts({
             graphId: this.#options.activeGraphId,
             nodeId,
@@ -427,7 +550,7 @@ export class GraphBuilderReadExecutor {
           });
           return {
             ...base,
-            configured: authoringSettings !== undefined,
+            ...(authoringSettings !== undefined ? { configurationStatus: 'resolved' } : {}),
             ports: {
               inputs: ports.inputs.map((port) => ({ id: port.id, dataType: portableDataType(port.dataType) })),
               outputs: ports.outputs.map((port) => ({ id: port.id, dataType: portableDataType(port.dataType) })),
@@ -436,10 +559,90 @@ export class GraphBuilderReadExecutor {
         } catch {
           return {
             ...base,
-            configurationStatus: 'unsupported',
-            configurationReason: 'The requested configuration is not supported by the captured authoring adapter.',
+            ...(authoringSettings !== undefined ? { configurationStatus: 'resolved' } : {}),
+            portResolutionStatus: 'rejected',
+            portResolutionReason: 'Ports are unavailable through the captured pure authoring adapter.',
           };
         }
+      }),
+    };
+  }
+
+  #getNodeTemplates(
+    draft: GraphBuilderAuthoringProject,
+    authoringChoiceIds: readonly string[],
+    authoringSettings: PortableJsonObject | undefined,
+  ): PortableJsonValue {
+    if (
+      authoringSettings !== undefined &&
+      (authoringChoiceIds.length !== 1 || Object.keys(authoringSettings).length === 0)
+    ) {
+      throw new Error('Configured node templates require exactly one authoring choice and non-empty settings.');
+    }
+
+    const specs = this.#getNodeSpecs(draft, authoringChoiceIds, authoringSettings);
+    const specsByChoiceId = new Map(
+      Array.isArray((specs as PortableJsonObject).specs)
+        ? ((specs as PortableJsonObject).specs as PortableJsonValue[]).flatMap((spec) => {
+            if (
+              spec === null ||
+              typeof spec !== 'object' ||
+              Array.isArray(spec) ||
+              typeof spec.authoringChoiceId !== 'string'
+            ) {
+              return [];
+            }
+            return [[spec.authoringChoiceId, spec] as const];
+          })
+        : [],
+    );
+
+    return {
+      templates: authoringChoiceIds.map((requestedChoiceId, index): PortableJsonValue => {
+        const authoringChoiceId = this.#options.catalog.resolveAuthoringChoiceId(requestedChoiceId);
+        if (!authoringChoiceId) {
+          return {
+            authoringChoiceId: requestedChoiceId,
+            status: 'unsupported',
+            reason: 'Unknown authoring choice.',
+          };
+        }
+
+        let node: ChartNode;
+        try {
+          node = this.#options.catalog.createNode({
+            authoringChoiceId,
+            allocatedNodeId: `NEW_NODE_${index + 1}` as NodeId,
+            project: draft,
+            ...(authoringSettings ? { settings: authoringSettings } : {}),
+          });
+        } catch {
+          return {
+            authoringChoiceId,
+            status: 'unsupported',
+            reason: 'The captured authoring adapter could not construct this node template.',
+          };
+        }
+
+        if (containsSecretLikeObjectKey(node.data)) {
+          return {
+            authoringChoiceId,
+            status: 'unsupported',
+            reason: 'This node template contains host-sensitive defaults and cannot be exposed to Graph Builder.',
+          };
+        }
+
+        return {
+          authoringChoiceId,
+          status: 'ok',
+          instructions:
+            'Copy the complete node object into the YAML nodes list, replace NEW_NODE_* with a unique graph-local ID, and change only task-required fields.',
+          // Rivet node objects may contain optional own properties whose value
+          // is undefined. YAML omits those fields, so templates must do the
+          // same before enforcing the strict portable-JSON transport contract.
+          node: parsePortableJson(omitUndefinedObjectProperties(node)),
+          ...(specsByChoiceId.get(authoringChoiceId) ? { spec: specsByChoiceId.get(authoringChoiceId)! } : {}),
+        };
       }),
     };
   }
@@ -472,8 +675,14 @@ export class GraphBuilderReadExecutor {
         continue;
       }
       const projection = Object.create(null) as PortableJsonObject;
+      projection.nodeId = node.id;
       if (requestedFields.has('identity')) {
-        projection.identity = { nodeId: node.id, type: node.type };
+        const authoringChoiceId = this.#options.catalog.getNodeAuthoringChoiceId(node);
+        projection.identity = {
+          nodeId: node.id,
+          type: node.type,
+          ...(authoringChoiceId ? { authoringChoiceId } : {}),
+        };
       }
       if (requestedFields.has('envelope')) {
         projection.envelope = {
@@ -486,8 +695,19 @@ export class GraphBuilderReadExecutor {
         };
       }
       if (requestedFields.has('settings')) {
-        projection.safeSettings =
-          projectSafeSettings(node, draft, this.#options.catalog, { includeOnDemand: true }) ?? {};
+        const settingsProjection = projectSafeSettingsDetailed(node, draft, this.#options.catalog, {
+          includeOnDemand: true,
+        });
+        if (!settingsProjection) {
+          projection.settingsProjectionStatus = 'unsupported';
+          projection.safeSettings = {};
+        } else {
+          projection.settingsProjectionStatus = settingsProjection.omittedSettings.length > 0 ? 'partial' : 'available';
+          projection.safeSettings = settingsProjection.safeSettings;
+          if (settingsProjection.omittedSettings.length > 0) {
+            projection.omittedSettings = [...settingsProjection.omittedSettings];
+          }
+        }
       }
       if (requestedFields.has('connections')) {
         projection.connections = graph.connections

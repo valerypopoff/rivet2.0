@@ -609,6 +609,7 @@ test('canNodeTypeBeFrozen blocks non-replayable node categories', () => {
     'raiseEvent',
     'playAudio',
     'startBackgroundBranch',
+    'dataBus',
   ] as const) {
     assert.equal(canNodeTypeBeFrozen(nodeType), false, `${nodeType} should not be freezable`);
   }

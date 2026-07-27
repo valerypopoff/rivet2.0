@@ -1,7 +1,12 @@
 import {
+  compileDataBusTopology,
   GraphProcessor,
+  isDataBusTopologyNode,
   resolveNodePrefabInstance,
+  type ChartNode,
   type GraphId,
+  type NodeConnection,
+  type NodeGraph,
   type NodeId,
   type NodeRegistration,
   type Outputs,
@@ -131,6 +136,51 @@ export type EditorRunToPlan = {
   runToNodeIds: NodeId[];
 };
 
+type EditorExecutionTopology = {
+  connections: NodeConnection[];
+  nodeIds: NodeId[];
+  nodes: ChartNode[];
+};
+
+/**
+ * Editor partial-run planning must use the same authored-to-runtime topology
+ * conversion as GraphProcessor. In particular, a Data Bus is not executable:
+ * its channels compile into direct dependencies between ordinary nodes.
+ */
+function getEditorExecutionTopology(project: Project, graph: NodeGraph): EditorExecutionTopology {
+  const compiledTopology = compileDataBusTopology({
+    connections: graph.connections,
+    graphNodes: graph.nodes.map((node) => resolveNodePrefabInstance(project, node)),
+  });
+
+  return {
+    connections: compiledTopology.connections,
+    nodeIds: compiledTopology.executionNodes.map((node) => node.id),
+    nodes: compiledTopology.executionNodes,
+  };
+}
+
+function assertEditorRunTargetIsExecutable(options: {
+  graph: NodeGraph;
+  nodeId: NodeId;
+  project: Project;
+  runKind: 'from' | 'to';
+}): void {
+  const node = options.graph.nodes.find((candidate) => candidate.id === options.nodeId);
+  if (!node) {
+    return;
+  }
+
+  const effectiveNode = resolveNodePrefabInstance(options.project, node);
+  if (isDataBusTopologyNode(effectiveNode)) {
+    const targetKind = options.runKind === 'from' ? 'run-from' : 'run-to';
+    throw new Error(
+      `Data Bus "${effectiveNode.title}" is topology-only and cannot be used as a ${targetKind} target. ` +
+        'Run an ordinary provider or consumer node instead.',
+    );
+  }
+}
+
 export function getEditorRunFromPlan(
   project: Project,
   graphId: GraphId,
@@ -146,21 +196,23 @@ export function getEditorRunFromPlan(
     throw new Error(`Node ${from} was not found in graph ${graphId}, cannot plan run-from execution`);
   }
 
+  assertEditorRunTargetIsExecutable({ graph, nodeId: from, project, runKind: 'from' });
+
   const processor = new GraphProcessor(project, graphId, projectNodeRegistry, true);
-  const graphNodeIds = graph.nodes.map((node) => node.id);
+  const executionTopology = getEditorExecutionTopology(project, graph);
+  const graphNodeIds = executionTopology.nodeIds;
   const dependenciesByNodeId = new Map<NodeId, Set<NodeId>>();
 
-  for (const node of graph.nodes) {
+  for (const node of executionTopology.nodes) {
     dependenciesByNodeId.set(node.id, new Set(processor.getDependencyNodesDeep(node.id)));
   }
 
-  const asyncTriggerAncestor = graph.nodes.find((node) => {
-    const effectiveNode = resolveNodePrefabInstance(project, node);
+  const asyncTriggerAncestor = executionTopology.nodes.find((effectiveNode) => {
     return (
-      node.id !== from &&
+      effectiveNode.id !== from &&
       effectiveNode.type === 'startBackgroundBranch' &&
       !effectiveNode.disabled &&
-      dependenciesByNodeId.get(from)?.has(node.id)
+      dependenciesByNodeId.get(from)?.has(effectiveNode.id)
     );
   });
   if (asyncTriggerAncestor) {
@@ -179,7 +231,7 @@ export function getEditorRunFromPlan(
   const nodesToRun = graphNodeIds.filter((nodeId) => nodesToRunSet.has(nodeId));
 
   const preloadNodeSet = new Set<NodeId>();
-  for (const connection of graph.connections) {
+  for (const connection of executionTopology.connections) {
     if (
       nodesToRunSet.has(connection.inputNodeId) &&
       !nodesToRunSet.has(connection.outputNodeId) &&
@@ -224,8 +276,13 @@ export function getEditorRunToPlan(
     throw new Error(`Graph ${graphId} was not found, cannot plan run-to execution`);
   }
 
+  for (const nodeId of to) {
+    assertEditorRunTargetIsExecutable({ graph, nodeId, project, runKind: 'to' });
+  }
+
   const processor = new GraphProcessor(project, graphId, projectNodeRegistry, true);
-  const graphNodeIds = graph.nodes.map((node) => node.id);
+  const executionTopology = getEditorExecutionTopology(project, graph);
+  const graphNodeIds = executionTopology.nodeIds;
   const graphNodeIdSet = new Set(graphNodeIds);
   const runToNodeIds = to.filter((nodeId) => graphNodeIdSet.has(nodeId));
   const nodesToRunSet = new Set<NodeId>();

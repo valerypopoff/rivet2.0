@@ -1,5 +1,11 @@
 import { useMemo, useRef } from 'react';
-import type { ChartNode, NodeConnection, NodeId, PortId } from '@valerypopoff/rivet2-core';
+import {
+  getProjectConnectionComparisonKey,
+  type ChartNode,
+  type NodeConnection,
+  type NodeId,
+  type PortId,
+} from '@valerypopoff/rivet2-core';
 import { getConnectionCacheKeys, getNodePortPosition } from '../Wire.js';
 import type { PortPositions } from '../NodeCanvas.js';
 import { lineCrossesViewport, type LineClipRect } from '../../utils/lineClipping.js';
@@ -13,6 +19,7 @@ export function useRenderableWires({
   connections,
   draggingNode,
   draggingWire,
+  forceRenderableConnectionKeySet,
   highlightedNodes,
   highlightedPort,
   nearViewportNodeIdSet,
@@ -26,6 +33,7 @@ export function useRenderableWires({
   connections: NodeConnection[];
   draggingNode: boolean;
   draggingWire: boolean;
+  forceRenderableConnectionKeySet?: ReadonlySet<string>;
   highlightedNodes?: NodeId[];
   highlightedPort?:
     | {
@@ -48,6 +56,7 @@ export function useRenderableWires({
         connections,
         draggingNode,
         draggingWire,
+        forceRenderableConnectionKeySet,
         highlightedNodes,
         highlightedPort,
         nearViewportNodeIdSet,
@@ -58,6 +67,7 @@ export function useRenderableWires({
       connections,
       draggingNode,
       draggingWire,
+      forceRenderableConnectionKeySet,
       highlightedNodes,
       highlightedPort,
       nearViewportNodeIdSet,
@@ -74,6 +84,14 @@ export function useRenderableWires({
 
       if (!inputNode || !outputNode) {
         return false;
+      }
+
+      // Data Bus hover revelation is an explicit user request. The bus itself
+      // is intentionally absent from the spatial viewport set, and a relay
+      // can connect to nodes far outside it, so normal virtualization and
+      // line clipping must not suppress this short-lived overlay.
+      if (forceRenderableConnectionKeySet?.has(getProjectConnectionComparisonKey(connection))) {
+        return true;
       }
 
       const [outputCacheKey, inputCacheKey] = getConnectionCacheKeys(connection);
@@ -108,6 +126,7 @@ export function useRenderableWires({
   }, [
     canvasToClientPosition,
     candidateConnections,
+    forceRenderableConnectionKeySet,
     nodesById,
     portPositions,
     viewportClientRect,

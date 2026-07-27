@@ -11,6 +11,7 @@ import {
 } from './serializationUtils.js';
 import { prepareSerializedInput } from './serializationInput.js';
 import { UiGraphNormalizationError } from '../../model/UiGraphNormalization.js';
+import { isLegacyDataBusNode } from '../../model/DataBusTopology.js';
 import {
   datasetV4Deserializer,
   datasetV4Serializer,
@@ -33,7 +34,7 @@ export function deserializeProject(serializedProject: unknown, path: string | nu
 
   try {
     const result = deserializeProjectByVersion(deserializerInput, version);
-    normalizeProjectDefaultNodeTitles(result[0]);
+    normalizeDeserializedProject(result[0]);
     if (path !== null) {
       result[0].metadata.path = path;
     }
@@ -62,7 +63,7 @@ export function deserializeGraph(serializedGraph: unknown): NodeGraph {
 
   try {
     const graph = deserializeGraphByVersion(deserializerInput, version);
-    normalizeGraphDefaultNodeTitles(graph);
+    normalizeDeserializedGraph(graph);
     return graph;
   } catch (err) {
     if (err instanceof yaml.YAMLError) {
@@ -73,23 +74,42 @@ export function deserializeGraph(serializedGraph: unknown): NodeGraph {
   }
 }
 
-function normalizeProjectDefaultNodeTitles(project: Project): void {
+function normalizeDeserializedProject(project: Project): void {
   for (const graph of Object.values(project.graphs)) {
-    normalizeGraphDefaultNodeTitles(graph);
+    normalizeDeserializedGraph(graph);
+  }
+
+  for (const prefab of Object.values(project.nodePrefabs ?? {})) {
+    normalizeDeserializedNode(prefab.sourceNode);
   }
 }
 
-function normalizeGraphDefaultNodeTitles(graph: NodeGraph): void {
+function normalizeDeserializedGraph(graph: NodeGraph): void {
   for (const node of graph.nodes) {
-    normalizeDefaultCodeNodeTitle(node);
+    normalizeDeserializedNode(node);
   }
 }
 
-function normalizeDefaultCodeNodeTitle(node: ChartNode): void {
+function normalizeDeserializedNode(node: ChartNode): void {
   if (node.type === 'code' && node.title === 'Code') {
     node.title = 'Code (legacy)';
   } else if (node.type === 'codeNew' && node.title === 'Code new') {
     node.title = 'Code';
+  }
+
+  if (
+    isLegacyDataBusNode(node) &&
+    !node.isConditional &&
+    !node.isSplitRun &&
+    !node.disabled &&
+    (node.variants?.length ?? 0) === 0
+  ) {
+    const { renderAsDataBus: _legacyFlag, ...data } = node.data;
+    // The legacy type guard deliberately narrows `node` to Passthrough here;
+    // widen it again for the in-place authored-schema migration.
+    const migratedNode = node as ChartNode;
+    migratedNode.type = 'dataBus';
+    migratedNode.data = data;
   }
 }
 

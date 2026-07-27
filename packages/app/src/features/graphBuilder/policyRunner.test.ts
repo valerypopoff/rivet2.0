@@ -11,16 +11,21 @@ import {
   type ProjectId,
   resolveProcessSettings,
 } from '@valerypopoff/rivet2-core';
-import { GRAPH_BUILDER_PROTOCOL_VERSION, type GraphBuilderDecision } from '../../domain/graphBuilder/index.js';
+import {
+  GRAPH_BUILDER_PROTOCOL_VERSION,
+  GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES,
+  GRAPH_BUILDER_TRANSACTIONAL_READ_TYPES,
+  type GraphBuilderDecision,
+} from '../../domain/graphBuilder/index.js';
 import type { GraphBuilderPolicyTurn } from './sessionController.js';
 import {
   createGraphBuilderPolicyRunner,
-  getGraphBuilderDecisionResponseSchema,
   GraphBuilderPolicyRunnerError,
   parseExactGraphBuilderDecisionJson,
   type GraphBuilderPolicyProcessorFactory,
 } from './policyRunner.js';
 import { GRAPH_BUILDER_POLICY_MANIFEST, GRAPH_BUILDER_POLICY_VERSION } from './policyManifest.js';
+import { GRAPH_BUILDER_POLICY_SYSTEM_PROMPT } from './policyPrompt.js';
 import { createGraphBuilderPolicyTestProject } from './policyRunnerTestFixture.js';
 
 function loadPolicyProject(): Promise<Project> {
@@ -45,6 +50,24 @@ function policyTurn(): GraphBuilderPolicyTurn {
       nodes: [],
       connections: [],
       diagnostics: [],
+    },
+    workspace: {
+      version: 1,
+      activeDocumentPath: 'graphs/graph-1.yaml',
+      delta: { graphDeltas: [] },
+      documents: [],
+      activeDocument: {
+        path: 'graphs/graph-1.yaml',
+        digest: 'digest',
+        startOffset: 0,
+        endOffset: 11,
+        totalLength: 11,
+        totalLines: 1,
+        startLine: 1,
+        endLine: 1,
+        content: 'version: 1\n',
+        truncated: false,
+      },
     },
     transcript: [],
     contextResults: [],
@@ -80,6 +103,7 @@ function processorFactory(
   result: unknown,
   inspect?: (project: Project, options: Parameters<GraphBuilderPolicyProcessorFactory>[1]) => void,
   eventOverrides: Partial<ChatV2CallFinishedEvent> = {},
+  outputOverride?: Outputs,
 ): GraphBuilderPolicyProcessorFactory {
   return (project, options) => {
     const selected = GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.graphId === options.graph ? 'schema' : 'text';
@@ -102,31 +126,25 @@ function processorFactory(
           pricing: { status: 'unknown' },
           ...eventOverrides,
         });
-        return outputsFor(result);
+        return outputOverride ?? outputsFor(result);
       },
     };
   };
 }
 
-test('built-in providers use the schema graph, a minimal registry, and call-level accounting', async () => {
+test('built-in providers use exact-JSON text mode, a minimal registry, and call-level accounting', async () => {
   const decision = readyDecision();
   let capturedProject: Project | undefined;
   const runner = createGraphBuilderPolicyRunner({
     loadPolicyProject,
     createProcessor: processorFactory(
-      decision,
+      JSON.stringify(decision),
       (project, options) => {
         capturedProject = project;
-        assert.equal(options.graph, GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.graphId);
+        assert.equal(options.graph, GRAPH_BUILDER_POLICY_MANIFEST.variants.text.graphId);
         assert.deepEqual(options.registry.getNodeTypes().sort(), ['graphInput', 'graphOutput', 'llmChatV2', 'text']);
         assert.equal(options.inputs.policyTurn != null, true);
-        assert.equal(
-          typeof options.inputs.responseSchema === 'object' &&
-            options.inputs.responseSchema != null &&
-            'type' in options.inputs.responseSchema &&
-            options.inputs.responseSchema.type,
-          'object',
-        );
+        assert.equal('responseSchema' in options.inputs, false);
       },
       {
         normalizedUsage: {
@@ -161,22 +179,48 @@ test('built-in providers use the schema graph, a minimal registry, and call-leve
   });
   assert.equal(JSON.stringify(capturedProject).includes('runtime-only-secret'), false);
   assert.equal(JSON.stringify(capturedProject).includes('must-not-enter-project'), false);
-  const node = capturedProject!.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.graphId as GraphId]!.nodes.find(
-    (candidate) => candidate.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.llmNodeId,
+  const node = capturedProject!.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.text.graphId as GraphId]!.nodes.find(
+    (candidate) => candidate.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.text.llmNodeId,
   )!;
   assert.equal((node.data as { model: string }).model, 'gpt-test');
   assert.equal((node.data as { temperature: number }).temperature, 0.2);
 });
 
+test('policy execution forwards streaming activity to the session heartbeat', async () => {
+  let activityCount = 0;
+  const runner = createGraphBuilderPolicyRunner({
+    loadPolicyProject,
+    createProcessor: processorFactory(JSON.stringify(readyDecision()), (_project, options) => {
+      options.onActivity?.();
+    }),
+  });
+
+  await runner.execute(policyTurn(), {
+    assistModel: {
+      displayName: 'OpenAI model',
+      provider: 'openai',
+      model: 'gpt-test',
+    },
+    runtimeSettings: resolveProcessSettings(),
+    abortSignal: new AbortController().signal,
+    onActivity: () => {
+      activityCount += 1;
+    },
+  });
+
+  assert.equal(activityCount, 1);
+});
+
 for (const provider of ['anthropic', 'google'] as const) {
-  test(`${provider} uses the checked schema policy variant without provider-specific authority`, async () => {
+  test(`${provider} uses the checked exact-JSON text variant without provider-specific authority`, async () => {
     let capturedProject: Project | undefined;
     const runner = createGraphBuilderPolicyRunner({
       loadPolicyProject,
-      createProcessor: processorFactory(readyDecision(), (project, options) => {
+      createProcessor: processorFactory(JSON.stringify(readyDecision()), (project, options) => {
         capturedProject = project;
-        assert.equal(options.graph, GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.graphId);
+        assert.equal(options.graph, GRAPH_BUILDER_POLICY_MANIFEST.variants.text.graphId);
         assert.deepEqual(options.registry.getNodeTypes().sort(), ['graphInput', 'graphOutput', 'llmChatV2', 'text']);
+        assert.equal('responseSchema' in options.inputs, false);
       }),
     });
 
@@ -190,8 +234,8 @@ for (const provider of ['anthropic', 'google'] as const) {
       abortSignal: new AbortController().signal,
     });
 
-    const node = capturedProject!.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.graphId as GraphId]!.nodes.find(
-      (candidate) => candidate.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.llmNodeId,
+    const node = capturedProject!.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.text.graphId as GraphId]!.nodes.find(
+      (candidate) => candidate.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.text.llmNodeId,
     )!;
     assert.equal((node.data as { provider: string }).provider, provider);
     assert.equal((node.data as { model: string }).model, `${provider}-test`);
@@ -223,7 +267,7 @@ test('custom providers use text mode and require one exact JSON object', async (
   assert.equal(result.usage.completeness, 'unavailable');
 });
 
-test('custom decision parser rejects markdown, trailing objects, arrays, and schema-invalid JSON', () => {
+test('exact decision parser rejects markdown, trailing objects, arrays, schema-invalid JSON, and duplicate keys', () => {
   const valid = JSON.stringify(readyDecision());
   assert.deepEqual(parseExactGraphBuilderDecisionJson(` \n${valid}\n `), readyDecision());
 
@@ -232,6 +276,10 @@ test('custom decision parser rejects markdown, trailing objects, arrays, and sch
     `${valid}\n${valid}`,
     `[${valid}]`,
     '{"type":"ready","summary":"Ready","unexpected":true}',
+    '{"type":"ready","type":"no-change","summary":"Duplicate top-level key"}',
+    '{"type":"ready","\\u0074ype":"no-change","summary":"Escaped duplicate key"}',
+    `{"type":"propose-patch","proposal":{"protocolVersion":${GRAPH_BUILDER_PROTOCOL_VERSION},"operations":[{"op":"createNode","clientId":"text","authoringChoiceId":"registered:text","settings":{"text":"one","text":"two"}}]}}`,
+    `{"type":"ready","summary":${'['.repeat(40)}"too deep"${']'.repeat(40)}}`,
   ]) {
     assert.throws(
       () => parseExactGraphBuilderDecisionJson(value),
@@ -240,38 +288,101 @@ test('custom decision parser rejects markdown, trailing objects, arrays, and sch
   }
 });
 
-test('invalid decisions retain usage from the successful physical provider call', async () => {
-  const runner = createGraphBuilderPolicyRunner({
-    loadPolicyProject,
-    createProcessor: processorFactory({ type: 'ready' }, undefined, {
-      normalizedUsage: {
-        promptTokens: 90,
-        completionTokens: 12,
-        totalTokens: 102,
-      },
-      pricing: { status: 'known', costUsd: 0.006 },
-    }),
-  });
-
-  await assert.rejects(
-    runner.execute(policyTurn(), {
-      assistModel: { displayName: 'OpenAI', provider: 'openai', model: 'gpt-test' },
-      runtimeSettings: resolveProcessSettings(),
-      abortSignal: new AbortController().signal,
-    }),
+test('duplicate-key diagnostics do not echo model-controlled key contents', () => {
+  const duplicateKey = 'model-controlled-key-contents'.repeat(500);
+  assert.throws(
+    () =>
+      parseExactGraphBuilderDecisionJson(`{"${duplicateKey}":1,"${duplicateKey}":2,"type":"ready","summary":"Ready"}`),
     (error) => {
       assert.equal(error instanceof GraphBuilderPolicyRunnerError, true);
-      const runnerError = error as GraphBuilderPolicyRunnerError;
-      assert.equal(runnerError.code, 'invalid-decision');
-      assert.deepEqual(runnerError.usage, {
-        inputTokens: 90,
-        outputTokens: 12,
-        costUsd: 0.006,
-        completeness: 'complete',
-      });
+      assert.equal((error as Error).message, 'Graph Builder policy response contains duplicate JSON object keys.');
+      assert.doesNotMatch((error as Error).message, /model-controlled-key-contents/);
       return true;
     },
   );
+});
+
+test('policy prompt and model-facing parser expose the same transactional discriminants', () => {
+  const decisionSection = GRAPH_BUILDER_POLICY_SYSTEM_PROMPT.split(
+    'Use these strict shapes; never add unlisted keys:',
+  )[1]!.split('READ is exactly one of:')[0]!;
+  const readSection = GRAPH_BUILDER_POLICY_SYSTEM_PROMPT.split('READ is exactly one of:')[1]!.split(
+    'Do not repeat a value inside any array in a READ request.',
+  )[0]!;
+  const extractTypes = (section: string) => [...section.matchAll(/^- \{"type":"([^"]+)"/gm)].map((match) => match[1]);
+
+  assert.deepEqual(extractTypes(decisionSection), Object.values(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES));
+  assert.deepEqual(extractTypes(readSection), Object.values(GRAPH_BUILDER_TRANSACTIONAL_READ_TYPES));
+  assert.match(readSection, /"startOffset"\?:number/);
+  assert.match(GRAPH_BUILDER_POLICY_SYSTEM_PROMPT, /supplies nextOffset, use that exact cursor as startOffset/u);
+  assert.doesNotMatch(GRAPH_BUILDER_POLICY_SYSTEM_PROMPT, /nextStartOffset/u);
+
+  for (const legacyRead of [
+    { type: 'get-node-specs', authoringChoiceIds: ['registered:text'] },
+    { type: 'inspect-draft', nodeIds: ['node-1'], fields: ['identity'] },
+    { type: 'inspect-draft-diff' },
+  ]) {
+    assert.throws(
+      () => parseExactGraphBuilderDecisionJson(JSON.stringify({ type: 'request-context', requests: [legacyRead] })),
+      (error) => error instanceof GraphBuilderPolicyRunnerError && error.code === 'invalid-decision',
+    );
+  }
+});
+
+test('non-string decisions and mismatched DataValue discriminators are rejected with observed usage', async (t) => {
+  const observedUsage = {
+    normalizedUsage: {
+      promptTokens: 90,
+      completionTokens: 12,
+      totalTokens: 102,
+    },
+    pricing: { status: 'known' as const, costUsd: 0.006 },
+  };
+
+  for (const testCase of [
+    {
+      name: 'non-string value',
+      result: { type: 'ready' },
+      outputOverride: undefined,
+    },
+    {
+      name: 'object discriminator with a string payload',
+      result: JSON.stringify(readyDecision()),
+      outputOverride: {
+        ['decision' as PortId]: {
+          type: 'object',
+          value: JSON.stringify(readyDecision()),
+        } as never,
+      },
+    },
+  ]) {
+    await t.test(testCase.name, async () => {
+      const runner = createGraphBuilderPolicyRunner({
+        loadPolicyProject,
+        createProcessor: processorFactory(testCase.result, undefined, observedUsage, testCase.outputOverride),
+      });
+
+      await assert.rejects(
+        runner.execute(policyTurn(), {
+          assistModel: { displayName: 'OpenAI', provider: 'openai', model: 'gpt-test' },
+          runtimeSettings: resolveProcessSettings(),
+          abortSignal: new AbortController().signal,
+        }),
+        (error) => {
+          assert.equal(error instanceof GraphBuilderPolicyRunnerError, true);
+          const runnerError = error as GraphBuilderPolicyRunnerError;
+          assert.equal(runnerError.code, 'invalid-decision');
+          assert.deepEqual(runnerError.usage, {
+            inputTokens: 90,
+            outputTokens: 12,
+            costUsd: 0.006,
+            completeness: 'complete',
+          });
+          return true;
+        },
+      );
+    });
+  }
 });
 
 test('runner rejects missing or duplicate designated-call accounting', async () => {
@@ -292,7 +403,7 @@ test('runner rejects missing or duplicate designated-call accounting', async () 
     loadPolicyProject,
     createProcessor: (project, options) => ({
       async run() {
-        const variant = GRAPH_BUILDER_POLICY_MANIFEST.variants.schema;
+        const variant = GRAPH_BUILDER_POLICY_MANIFEST.variants.text;
         const node = project.graphs[variant.graphId as GraphId]!.nodes.find(
           (candidate) => candidate.id === variant.llmNodeId,
         )!;
@@ -327,7 +438,7 @@ test('provider failures retain physical-call usage without exposing provider err
     loadPolicyProject,
     createProcessor: (project, options) => ({
       async run() {
-        const variant = GRAPH_BUILDER_POLICY_MANIFEST.variants.schema;
+        const variant = GRAPH_BUILDER_POLICY_MANIFEST.variants.text;
         const node = project.graphs[variant.graphId as GraphId]!.nodes.find(
           (candidate) => candidate.id === variant.llmNodeId,
         )!;
@@ -369,10 +480,10 @@ test('runner clones and revalidates the policy asset for each invocation', async
   let callCount = 0;
   const runner = createGraphBuilderPolicyRunner({
     loadPolicyProject: async () => sharedProject,
-    createProcessor: processorFactory(readyDecision(), (project) => {
+    createProcessor: processorFactory(JSON.stringify(readyDecision()), (project) => {
       callCount += 1;
-      const llmNode = project.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.graphId as GraphId]!.nodes.find(
-        (node) => node.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.llmNodeId,
+      const llmNode = project.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.text.graphId as GraphId]!.nodes.find(
+        (node) => node.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.text.llmNodeId,
       )!;
       assert.equal((llmNode.data as { model: string }).model, `model-${callCount}`);
       (llmNode.data as { model: string }).model = 'mutated-after-validation';
@@ -387,8 +498,8 @@ test('runner clones and revalidates the policy asset for each invocation', async
     });
   }
 
-  const sourceNode = sharedProject.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.graphId as GraphId]!.nodes.find(
-    (node) => node.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.schema.llmNodeId,
+  const sourceNode = sharedProject.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.text.graphId as GraphId]!.nodes.find(
+    (node) => node.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.text.llmNodeId,
   )!;
   assert.equal((sourceNode.data as { model: string }).model, 'graph-builder-policy-test-model');
 });
@@ -410,7 +521,7 @@ test('runner fails closed for canceled turns and incompatible policy assets', as
   aborted.abort();
   const runner = createGraphBuilderPolicyRunner({
     loadPolicyProject,
-    createProcessor: processorFactory(readyDecision()),
+    createProcessor: processorFactory(JSON.stringify(readyDecision())),
   });
   await assert.rejects(
     runner.execute(policyTurn(), {
@@ -433,7 +544,7 @@ test('runner fails closed for canceled turns and incompatible policy assets', as
       });
       return project;
     },
-    createProcessor: processorFactory(readyDecision()),
+    createProcessor: processorFactory(JSON.stringify(readyDecision())),
   });
   await assert.rejects(
     incompatibleRunner.execute(policyTurn(), {
@@ -534,6 +645,16 @@ test('runtime sealing rejects prompt, execution-envelope, and dormant project dr
           'UNRELATED_HOST_SECRET';
       },
     },
+    {
+      name: 'text decision output type',
+      mutate(project) {
+        const graph = project.graphs[GRAPH_BUILDER_POLICY_MANIFEST.variants.text.graphId as GraphId]!;
+        const output = graph.nodes.find(
+          (node) => node.id === GRAPH_BUILDER_POLICY_MANIFEST.variants.text.decisionOutputNodeId,
+        )!;
+        (output.data as { dataType: string }).dataType = 'any';
+      },
+    },
   ];
 
   for (const mutation of mutations) {
@@ -562,17 +683,4 @@ test('runtime sealing rejects prompt, execution-envelope, and dormant project dr
       assert.equal(processorCreated, false);
     });
   }
-});
-
-test('provider response schema is stable, cloned, and excludes known unsupported grammar keywords', () => {
-  const first = getGraphBuilderDecisionResponseSchema();
-  const second = getGraphBuilderDecisionResponseSchema();
-  assert.notEqual(first, second);
-  assert.deepEqual(first, second);
-
-  const serialized = JSON.stringify(first);
-  assert.equal(serialized.includes('"uniqueItems"'), false);
-  assert.equal(serialized.includes('"propertyNames"'), false);
-  assert.equal(serialized.includes('"$schema"'), false);
-  assert.equal(serialized.includes('"additionalProperties":false'), true);
 });

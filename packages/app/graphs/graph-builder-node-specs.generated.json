@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:902c5a0d93e15c96",
+  "catalogFingerprint": "fnv1a64:558f57a13765606f",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -234,12 +234,38 @@
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
-        "inspectSafeProjection": false,
+        "inspectSafeProjection": true,
         "resolvePorts": true,
-        "configureSettings": false,
+        "configureSettings": true,
         "editLinkedPrefabInstance": false
       },
-      "settings": []
+      "settings": [
+        {
+          "key": "code",
+          "valueKind": "string",
+          "description": "JavaScript source. Read typed values from inputs and return an object of typed named outputs.",
+          "projection": "on-demand"
+        },
+        {
+          "key": "inputNames",
+          "valueKind": "string-array",
+          "description": "Names of the legacy Code inputs."
+        },
+        {
+          "key": "outputNames",
+          "valueKind": "string-array",
+          "description": "Names of the legacy Code outputs."
+        }
+      ],
+      "safeDefaults": {
+        "code": "// This is a Code (legacy) node. Write JavaScript here and it will be executed.\n// Inputs are accessible via an object `inputs` and data is typed (i.e. inputs.foo.type, inputs.foo.value)\n// Return an object with named outputs that match the output names specified in the node's config.\n// Output values must be typed as well (e.g. { bar: { type: 'string', value: 'bar' } }\nreturn {\n  output1: {\n    type: inputs.input1.type,\n    value: inputs.input1.value\n  }\n};",
+        "inputNames": [
+          "input1"
+        ],
+        "outputNames": [
+          "output1"
+        ]
+      }
     },
     {
       "authoringChoiceId": "registered:codeNew",
@@ -249,12 +275,22 @@
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
-        "inspectSafeProjection": false,
+        "inspectSafeProjection": true,
         "resolvePorts": true,
-        "configureSettings": false,
+        "configureSettings": true,
         "editLinkedPrefabInstance": false
       },
-      "settings": []
+      "settings": [
+        {
+          "key": "code",
+          "valueKind": "string",
+          "description": "JavaScript source. Use {{name}} for dynamic inputs and return one value.",
+          "projection": "on-demand"
+        }
+      ],
+      "safeDefaults": {
+        "code": "// This is a Code node. Write JavaScript here and return one value.\n// Interpolation tokens create input ports and evaluate as connected values.\n// The returned value becomes the node's single output.\nconst value = {{input}};\nreturn value;"
+      }
     },
     {
       "authoringChoiceId": "registered:comment",
@@ -331,6 +367,21 @@
       "nodeType": "cron",
       "displayName": "Cron",
       "description": "Cron Node The Cron node runs a target graph on a schedule after the node is triggered. It supports simple intervals such as 5 minutes and cron expressions such as /5 . Inputs Title Data Type Description Trigger boolean Starts the scheduled job when true. Target Graph string Optional target graph input when input mode is enabled. Outputs Title Data Type Description Last Output any Last output returned by the target graph. Iteration number Current iteration number. Completed boolean True after the scheduled job completes. Next Run string ISO timestamp for the next scheduled run. Settings Setting Description Execute Immediately Runs once immediately in addition to the schedule. Target Graph Graph to execute on schedule. Schedule Type Cron expression or simple interval. Schedule Schedule expression.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:dataBus",
+      "nodeType": "dataBus",
+      "displayName": "Data Bus",
+      "description": "Shares independent values through a compact topology rail without executing as a relay node.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1472,18 +1523,12 @@
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
-        "inspectSafeProjection": true,
+        "inspectSafeProjection": false,
         "resolvePorts": true,
-        "configureSettings": true,
+        "configureSettings": false,
         "editLinkedPrefabInstance": false
       },
-      "settings": [
-        {
-          "key": "renderAsDataBus",
-          "valueKind": "boolean",
-          "description": "Render this Passthrough as a canvas data bus."
-        }
-      ]
+      "settings": []
     },
     {
       "authoringChoiceId": "registered:playAudio",

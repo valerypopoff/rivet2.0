@@ -99,6 +99,8 @@ import {
 import { ManagedAsyncBranches } from './ManagedAsyncBranches.js';
 import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
 import { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
+import { isDataBusTopologyNode } from './DataBusTopology.js';
+import { resolveNodePrefabInstance } from './NodePrefabResolver.js';
 
 // eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
@@ -579,6 +581,7 @@ export class GraphProcessor {
   #runCompletionPromise: Promise<GraphOutputs> | undefined;
 
   #nodesNotInCycle: ChartNode[] = undefined!;
+  #executionGraphNodes: ChartNode[] = undefined!;
 
   #nodeAbortControllers = new Map<NodeId, NodeAbortControllerEntry>();
 
@@ -705,11 +708,14 @@ export class GraphProcessor {
     }
   }
 
-  #preprocessGraph() {
+  #preprocessGraph(options: { allowRuntimeExecutionPlanCache?: boolean } = {}) {
     const profileStart = this.#startRuntimeProfile();
 
     try {
-      const runtimeCache = this.#canUseRuntimeExecutionPlanCache() ? this.#runtimeCache : undefined;
+      const runtimeCache =
+        options.allowRuntimeExecutionPlanCache === false || !this.#canUseRuntimeExecutionPlanCache()
+          ? undefined
+          : this.#runtimeCache;
       const shouldUseRuntimeCache = runtimeCache != null;
       const cachedPlan = runtimeCache?.executionPlans?.get(this.#graph);
 
@@ -780,11 +786,7 @@ export class GraphProcessor {
   ): void {
     const nodeInstances =
       options.recreateNodeInstances || !('nodeInstances' in preprocessedGraph)
-        ? this.#createNodeInstances(
-            isGraphExecutionPlan(preprocessedGraph)
-              ? preprocessedGraph.graphNodes
-              : Object.values(preprocessedGraph.nodesById),
-          )
+        ? this.#createNodeInstances(preprocessedGraph.graphNodes)
         : preprocessedGraph.nodeInstances;
 
     replaceRecordContents(this.#nodeInstances, nodeInstances);
@@ -793,6 +795,8 @@ export class GraphProcessor {
     this.#definitions = preprocessedGraph.definitions;
     this.#scc = preprocessedGraph.stronglyConnectedComponents;
     this.#nodesNotInCycle = preprocessedGraph.nodesNotInCycle;
+    this.#executionGraphNodes = preprocessedGraph.graphNodes;
+    this.#remainingNodes = new Set(this.#executionGraphNodes.map((node) => node.id));
     this.#graphExecutionPlan = isGraphExecutionPlan(preprocessedGraph) ? preprocessedGraph : undefined;
   }
 
@@ -990,6 +994,16 @@ export class GraphProcessor {
   }
 
   preloadNodeData(nodeId: NodeId, data: Outputs): void {
+    // Preloading is deliberately permitted before a run starts. Do not
+    // preprocess here: referenced-project ports are loaded by processGraph,
+    // and caching a plan before that point would preserve an empty boundary.
+    const effectiveNode = this.#getEffectiveAuthoredNode(nodeId);
+    if (isDataBusTopologyNode(effectiveNode)) {
+      throw new Error(
+        `Cannot preload Data Bus "${effectiveNode.title}". Data Bus channels are compiled topology, not node outputs.`,
+      );
+    }
+
     for (const value of Object.values(data)) {
       if (!value || !('type' in value) || !value.type) {
         throw new Error(`Invalid data value for node ${nodeId}, must be a DataValue`);
@@ -1013,6 +1027,13 @@ export class GraphProcessor {
 
   /** Gets all node IDs that a given node ID depends on being complete before the given node ID can start. */
   getDependencyNodesDeep(nodeId: NodeId): NodeId[] {
+    const effectiveNode = this.#getEffectiveAuthoredNode(nodeId);
+    if (isDataBusTopologyNode(effectiveNode)) {
+      throw new Error(
+        `Cannot get dependencies for Data Bus "${effectiveNode.title}". Data Bus channels are compiled topology, not executable nodes.`,
+      );
+    }
+
     this.#ensureGraphPreprocessed();
 
     const dependencyNodes = new Set<NodeId>();
@@ -1027,7 +1048,15 @@ export class GraphProcessor {
     }
 
     this.#loadedProjects ??= {};
-    this.#preprocessGraph();
+    // This synchronous inspection API can be called before processGraph has
+    // loaded references. Its provisional definitions must never be reused as
+    // a runtime plan for a later fully loaded invocation.
+    this.#preprocessGraph({ allowRuntimeExecutionPlanCache: false });
+  }
+
+  #getEffectiveAuthoredNode(nodeId: NodeId): ChartNode | undefined {
+    const authoredNode = this.#graph.nodes.find((node) => node.id === nodeId);
+    return authoredNode ? resolveNodePrefabInstance(this.#project, authoredNode) : undefined;
   }
 
   #collectDependencyNodesDeep(nodeId: NodeId, dependencyNodes: Set<NodeId>): void {
@@ -1091,10 +1120,11 @@ export class GraphProcessor {
 
     this.#erroredNodes = new Map();
     this.#currentlyProcessing = new Set();
-    const seededExecutionPlan = this.#seededExecutionPlanForNextRun();
-    this.#remainingNodes = new Set(
-      seededExecutionPlan ? seededExecutionPlan.nodeIds : this.#graph.nodes.map((node) => node.id),
-    );
+    // A processor may be constructed with a reusable execution plan. In that
+    // case preprocessing happened before this run, so retain the compiled
+    // execution-node set rather than restoring the authored graph nodes (which
+    // may include topology-only Data Bus nodes).
+    this.#remainingNodes = new Set(this.#seededExecutionPlanForNextRun()?.nodeIds ?? []);
     this.#pendingUserInputs = {};
     this.#processingQueue = new PQueue({ concurrency: this.#concurrency.nodeConcurrency });
     this.#graphOutputs = this.#sharedRunStateOverride?.graphOutputs ?? {};
@@ -1173,15 +1203,16 @@ export class GraphProcessor {
 
         const shouldUseSeededExecutionPlan = this.#seededExecutionPlanForNextRun() != null;
         this.#useSeededExecutionPlanOnNextRun = false;
-        if (!shouldUseSeededExecutionPlan) {
-          this.#preprocessGraph();
-        }
         try {
+          if (!shouldUseSeededExecutionPlan) {
+            this.#preprocessGraph();
+          }
+          this.#assertNoDataBusRunTargets();
           this.#prepareAsyncBranchTopology();
         } catch (error) {
           const normalizedError = getError(error);
-          // Topology validation happens before graphStart/nodeStart. Emit the
-          // ordinary root error event so every executor can present the
+          // Preflight validation happens before graphStart/nodeStart. Emit the
+          // ordinary root error event so every executor can present an
           // actionable configuration failure instead of only rejecting the
           // processGraph promise.
           if (!this.#isSubProcessor && !this.#suppressGraphLifecycleEvents) {
@@ -1369,7 +1400,7 @@ export class GraphProcessor {
       return;
     }
 
-    for (const node of this.#graph.nodes) {
+    for (const node of this.#executionGraphNodes) {
       if (!this.#nodeResults.has(node.id)) {
         continue;
       }
@@ -1409,7 +1440,7 @@ export class GraphProcessor {
   }
 
   async #processCompatibleGraph(): Promise<void> {
-    await this.#queueStartNodes(getStartNodes(this.#executionState, this.#graph.nodes, this.runToNodeIds));
+    await this.#queueStartNodes(getStartNodes(this.#executionState, this.#executionGraphNodes, this.runToNodeIds));
     await this.#processingQueue.onIdle();
     this.#markUnqueuedNodesIgnored();
   }
@@ -1423,15 +1454,15 @@ export class GraphProcessor {
       return false;
     }
 
-    if (this.#nodesNotInCycle.length !== this.#graph.nodes.length) {
+    if (this.#nodesNotInCycle.length !== this.#executionGraphNodes.length) {
       return false;
     }
 
-    if (this.#graph.connections.some((connection) => connection.inputNodeId === connection.outputNodeId)) {
+    if (this.#getEffectiveConnections().some((connection) => connection.inputNodeId === connection.outputNodeId)) {
       return false;
     }
 
-    return this.#graph.nodes.every((node) => {
+    return this.#executionGraphNodes.every((node) => {
       if (node.isSplitRun) {
         return false;
       }
@@ -1442,7 +1473,7 @@ export class GraphProcessor {
 
   async #processFastAcyclicGraph(): Promise<void> {
     const relevantNodeIds = new Set<NodeId>();
-    const nodesToVisit = [...getStartNodes(this.#executionState, this.#graph.nodes)];
+    const nodesToVisit = [...getStartNodes(this.#executionState, this.#executionGraphNodes)];
 
     for (let index = 0; index < nodesToVisit.length; index += 1) {
       const node = nodesToVisit[index]!;
@@ -1459,7 +1490,7 @@ export class GraphProcessor {
     const readyNodes: ChartNode[] = [];
     const queuedNodeIds = new Set<NodeId>();
 
-    for (const node of this.#graph.nodes) {
+    for (const node of this.#executionGraphNodes) {
       if (!relevantNodeIds.has(node.id)) {
         continue;
       }
@@ -1545,7 +1576,7 @@ export class GraphProcessor {
       return;
     }
 
-    for (const node of this.#graph.nodes) {
+    for (const node of this.#executionGraphNodes) {
       if (this.#queuedNodes.has(node.id) === false) {
         this.#ignoreNodes.add(node.id);
       }
@@ -3051,11 +3082,28 @@ export class GraphProcessor {
       asyncBranchPlansByTriggerNodeId: this.#asyncBranchPlansByTriggerNodeId,
       attachedNodeDataByNodeId: this.#attachedNodeData,
       effectiveConnections: this.#getEffectiveConnections(),
-      graph: this.#graph,
+      graph: this.#getExecutionGraph(),
       isDefinitionValidConnection: (connection) => this.#isDefinitionValidConnection(connection),
       nodesById: this.#nodesById,
       stronglyConnectedComponents: this.#scc,
     });
+  }
+
+  /**
+   * Graph-owned metadata is retained, but every scheduler-facing consumer
+   * receives the preprocessed topology. In particular, a Data Bus is not an
+   * executable intermediate node for tool-continuation discovery.
+   */
+  #getExecutionGraph(): NodeGraph {
+    return {
+      metadata: this.#graph.metadata ? { ...this.#graph.metadata } : undefined,
+      nodes: this.#executionGraphNodes,
+      // Keep every preprocessed connection here, rather than the scheduler's
+      // one-provider-per-input execution projection. The continuation planner
+      // needs to see otherwise-shadowed valid edges to reject unsafe cycles
+      // before it starts a pre-tool branch.
+      connections: [...new Set(Object.values(this.#connections).flat())],
+    };
   }
   #getEffectiveConnections(): NodeConnection[] {
     if (this.#effectiveConnectionsForRun) {
@@ -3182,7 +3230,7 @@ export class GraphProcessor {
       const includedNodeIds = new Set<NodeId>([triggerNode.id, ...nodeIds, ...inputAnchorNodeIds]);
       const graph: NodeGraph = {
         metadata: this.#graph.metadata ? { ...this.#graph.metadata } : undefined,
-        nodes: this.#graph.nodes.filter((node) => includedNodeIds.has(node.id)),
+        nodes: this.#executionGraphNodes.filter((node) => includedNodeIds.has(node.id)),
         connections: connections.filter(
           (connection) =>
             connection.inputNodeId === triggerNode.id ||
@@ -3293,6 +3341,21 @@ export class GraphProcessor {
     }
 
     return activeOutputPortIds;
+  }
+
+  #assertNoDataBusRunTargets(): void {
+    for (const nodeId of this.runToNodeIds ?? []) {
+      if (this.#nodesById[nodeId]) {
+        continue;
+      }
+
+      const effectiveNode = this.#getEffectiveAuthoredNode(nodeId);
+      if (isDataBusTopologyNode(effectiveNode)) {
+        throw new Error(
+          `Cannot run to Data Bus "${effectiveNode.title}". Data Bus channels are compiled topology, not executable nodes.`,
+        );
+      }
+    }
   }
 
   #getRunToRelevantNodeIds(): Set<NodeId> | undefined {

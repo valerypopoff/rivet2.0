@@ -4,16 +4,17 @@ import { type GraphId, type NodeGraph, type NodeId, type Project, type ProjectId
 import {
   GRAPH_BUILDER_LIMITS,
   GRAPH_BUILDER_PROTOCOL_VERSION,
-  type ApplyPatchResult,
   type GraphBuilderDecision,
+  type GraphBuilderDocumentPatchResult,
+  type GraphBuilderProjectDraftDelta,
   type GraphBuilderProjection,
   type GraphBuilderReadResult,
   type GraphDraftDelta,
-  type GraphPatch,
   type GraphValidationResult,
 } from '../../domain/graphBuilder/index.js';
 import type { GraphBuilderBaseIdentity } from './identity.js';
 import {
+  GRAPH_BUILDER_METRICS_VERSION,
   GraphBuilderSessionController,
   type GraphBuilderPolicyExecutionResult,
   type GraphBuilderPolicyTurn,
@@ -67,16 +68,68 @@ function delta(): GraphDraftDelta {
   };
 }
 
+function projectDelta(graphDelta: GraphDraftDelta = delta()): GraphBuilderProjectDraftDelta {
+  return { graphDeltas: [graphDelta] };
+}
+
+function emptyDelta(): GraphDraftDelta {
+  return {
+    graphId,
+    addedNodes: [],
+    removedNodes: [],
+    updatedNodes: [],
+    addedConnections: [],
+    removedConnections: [],
+  };
+}
+
 class FakeKernel {
   #draft = emptyProject();
   #revision = 0;
   readonly appliedPatchIds: string[] = [];
+  readonly replacedDocuments: Array<{ path: string; contents: string }> = [];
 
   constructor(private readonly appliedDelta: GraphDraftDelta = delta()) {}
 
-  applyPatch(patch: GraphPatch): ApplyPatchResult {
+  applyDocumentPatch(patch: {
+    patchId: string;
+    expectedDraftRevision: number;
+    unifiedDiff: string;
+  }): GraphBuilderDocumentPatchResult {
+    return this.#applyAcceptedEdit(patch);
+  }
+
+  replaceDocument(patch: {
+    patchId: string;
+    expectedDraftRevision: number;
+    path: string;
+    contents: string;
+  }): GraphBuilderDocumentPatchResult {
+    this.replacedDocuments.push({ path: patch.path, contents: patch.contents });
+    return this.#applyAcceptedEdit(patch);
+  }
+
+  #applyAcceptedEdit(patch: { patchId: string; expectedDraftRevision: number }): GraphBuilderDocumentPatchResult {
     if (patch.expectedDraftRevision !== this.#revision) {
-      throw new Error('stale revision');
+      return {
+        disposition: 'rejected',
+        patchId: patch.patchId,
+        baseRevision: this.#revision,
+        draftRevision: this.#revision,
+        diagnostics: [
+          {
+            diagnosticKey: 'expected-draft-revision',
+            ruleId: 'expected-draft-revision',
+            rulesVersion: '1',
+            severity: 'error',
+            verification: 'verified',
+            message: 'The document edit was proposed against a stale virtual graph draft revision.',
+            expected: patch.expectedDraftRevision,
+            actual: this.#revision,
+            repairHint: 'Regenerate the edit against the current draft revision.',
+          },
+        ],
+      };
     }
     this.appliedPatchIds.push(patch.patchId);
     const created = {
@@ -87,15 +140,13 @@ class FakeKernel {
       data: { text: 'Hello' },
     };
     this.#draft.graphs[graphId]!.nodes.push(created);
-    const previousDraftRevision = this.#revision++;
+    const baseRevision = this.#revision++;
     return {
       disposition: 'applied',
       patchId: patch.patchId,
-      proposalHash: 'proposal',
-      previousDraftRevision,
+      baseRevision,
       draftRevision: this.#revision,
-      createdNodeIds: { text: created.id },
-      delta: this.appliedDelta,
+      delta: projectDelta(this.appliedDelta),
       diagnostics: [],
     };
   }
@@ -105,16 +156,11 @@ class FakeKernel {
   }
 
   getDraftDelta() {
-    return this.hasDraftChanges()
-      ? structuredClone(this.appliedDelta)
-      : {
-          graphId,
-          addedNodes: [],
-          removedNodes: [],
-          updatedNodes: [],
-          addedConnections: [],
-          removedConnections: [],
-        };
+    return this.hasDraftChanges() ? structuredClone(this.appliedDelta) : emptyDelta();
+  }
+
+  getProjectDraftDelta() {
+    return this.hasDraftChanges() ? projectDelta(structuredClone(this.appliedDelta)) : { graphDeltas: [] };
   }
 
   getDraftRevision() {
@@ -130,11 +176,15 @@ class RevertingFakeKernel {
   #draft = emptyProject();
   #revision = 0;
 
-  applyPatch(patch: GraphPatch): ApplyPatchResult {
+  applyDocumentPatch(patch: {
+    patchId: string;
+    expectedDraftRevision: number;
+    unifiedDiff: string;
+  }): GraphBuilderDocumentPatchResult {
     if (patch.expectedDraftRevision !== this.#revision) {
       throw new Error('stale revision');
     }
-    const previousDraftRevision = this.#revision++;
+    const baseRevision = this.#revision++;
     const graph = this.#draft.graphs[graphId]!;
     const restoringBase = graph.nodes.length > 0;
     graph.nodes = restoringBase
@@ -151,20 +201,27 @@ class RevertingFakeKernel {
     return {
       disposition: 'applied',
       patchId: patch.patchId,
-      proposalHash: 'proposal',
-      previousDraftRevision,
+      baseRevision,
       draftRevision: this.#revision,
-      createdNodeIds: restoringBase ? {} : { text: 'created' as NodeId },
-      delta: {
+      delta: projectDelta({
         graphId,
         addedNodes: restoringBase ? [] : [{ nodeId: 'created' as NodeId, type: 'text', title: 'Text' }],
         removedNodes: restoringBase ? [{ nodeId: 'created' as NodeId, type: 'text', title: 'Text' }] : [],
         updatedNodes: [],
         addedConnections: [],
         removedConnections: [],
-      },
+      }),
       diagnostics: [],
     };
+  }
+
+  replaceDocument(patch: {
+    patchId: string;
+    expectedDraftRevision: number;
+    path: string;
+    contents: string;
+  }): GraphBuilderDocumentPatchResult {
+    return this.applyDocumentPatch({ ...patch, unifiedDiff: '' });
   }
 
   getDraft() {
@@ -172,16 +229,11 @@ class RevertingFakeKernel {
   }
 
   getDraftDelta() {
-    return this.hasDraftChanges()
-      ? delta()
-      : {
-          graphId,
-          addedNodes: [],
-          removedNodes: [],
-          updatedNodes: [],
-          addedConnections: [],
-          removedConnections: [],
-        };
+    return this.hasDraftChanges() ? delta() : emptyDelta();
+  }
+
+  getProjectDraftDelta() {
+    return this.hasDraftChanges() ? projectDelta() : { graphDeltas: [] };
   }
 
   getDraftRevision() {
@@ -197,7 +249,11 @@ class NoOpAfterChangeFakeKernel {
   #draft = emptyProject();
   #revision = 0;
 
-  applyPatch(patch: GraphPatch): ApplyPatchResult {
+  applyDocumentPatch(patch: {
+    patchId: string;
+    expectedDraftRevision: number;
+    unifiedDiff: string;
+  }): GraphBuilderDocumentPatchResult {
     if (patch.expectedDraftRevision !== this.#revision) {
       throw new Error('stale revision');
     }
@@ -213,29 +269,29 @@ class NoOpAfterChangeFakeKernel {
       return {
         disposition: 'applied',
         patchId: patch.patchId,
-        proposalHash: 'proposal',
-        previousDraftRevision: 0,
+        baseRevision: 0,
         draftRevision: 1,
-        createdNodeIds: { text: 'created' as NodeId },
-        delta: delta(),
+        delta: projectDelta(),
         diagnostics: [],
       };
     }
     return {
       disposition: 'no-op',
       patchId: patch.patchId,
-      proposalHash: 'proposal',
+      baseRevision: this.#revision,
       draftRevision: this.#revision,
-      delta: {
-        graphId,
-        addedNodes: [],
-        removedNodes: [],
-        updatedNodes: [],
-        addedConnections: [],
-        removedConnections: [],
-      },
+      delta: { graphDeltas: [] },
       diagnostics: [],
     };
+  }
+
+  replaceDocument(patch: {
+    patchId: string;
+    expectedDraftRevision: number;
+    path: string;
+    contents: string;
+  }): GraphBuilderDocumentPatchResult {
+    return this.applyDocumentPatch({ ...patch, unifiedDiff: '' });
   }
 
   getDraft() {
@@ -244,6 +300,10 @@ class NoOpAfterChangeFakeKernel {
 
   getDraftDelta() {
     return delta();
+  }
+
+  getProjectDraftDelta() {
+    return projectDelta();
   }
 
   getDraftRevision() {
@@ -268,7 +328,11 @@ function policyResult(turn: GraphBuilderPolicyTurn, decision: GraphBuilderDecisi
 }
 
 function createController(options: {
-  executePolicy: (turn: GraphBuilderPolicyTurn, abortSignal: AbortSignal) => Promise<GraphBuilderPolicyExecutionResult>;
+  executePolicy: (
+    turn: GraphBuilderPolicyTurn,
+    abortSignal: AbortSignal,
+    reportActivity: () => void,
+  ) => Promise<GraphBuilderPolicyExecutionResult>;
   kernel?: ConstructorParameters<typeof GraphBuilderSessionController>[0]['kernel'];
   read?: (
     request: Parameters<NonNullable<ConstructorParameters<typeof GraphBuilderSessionController>[0]['read']>>[0],
@@ -277,6 +341,7 @@ function createController(options: {
   verifyIdentity?: () => { matches: boolean; currentFingerprint: string };
   commit?: ConstructorParameters<typeof GraphBuilderSessionController>[0]['commit'];
   buildProjection?: ConstructorParameters<typeof GraphBuilderSessionController>[0]['buildProjection'];
+  buildWorkspaceContext?: ConstructorParameters<typeof GraphBuilderSessionController>[0]['buildWorkspaceContext'];
   limits?: Partial<GraphBuilderSessionLimits>;
   metricsSink?: GraphBuilderMetricsSink;
   request?: string;
@@ -297,6 +362,36 @@ function createController(options: {
         nodes: [],
         connections: [],
         diagnostics: [],
+      })),
+    buildWorkspaceContext:
+      options.buildWorkspaceContext ??
+      (() => ({
+        version: 1,
+        activeDocumentPath: 'graphs/graph.yaml',
+        delta: { graphDeltas: [] },
+        documents: [
+          {
+            path: 'graphs/graph.yaml',
+            graphId,
+            name: 'Graph',
+            digest: 'digest',
+            totalLength: 11,
+            totalLines: 1,
+            access: 'editable',
+          },
+        ],
+        activeDocument: {
+          path: 'graphs/graph.yaml',
+          digest: 'digest',
+          startOffset: 0,
+          endOffset: 11,
+          totalLength: 11,
+          totalLines: 1,
+          startLine: 1,
+          endLine: 1,
+          content: 'version: 1\n',
+          truncated: false,
+        },
       })),
     commit:
       options.commit ??
@@ -337,21 +432,31 @@ function createController(options: {
   return { controller, kernel, getCommitCount: () => commitCount };
 }
 
-const createReadyPatchDecision = (): GraphBuilderDecision => ({
-  type: 'propose-patch',
-  proposal: {
-    protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
-    operations: [
-      {
-        op: 'createNode',
-        clientId: 'text',
-        authoringChoiceId: 'registered:text',
-      },
-    ],
-  },
-  afterApply: 'ready-for-preview',
+const createPatchDecision = (baseRevision = 0): GraphBuilderDecision => ({
+  type: 'apply-patch',
+  baseRevision,
+  unifiedDiff: ['--- a/graphs/graph.yaml', '+++ b/graphs/graph.yaml', '@@ -1,1 +1,1 @@', '-before', '+after'].join(
+    '\n',
+  ),
   summary: 'Created a text node.',
 });
+
+const createReplacementDecision = (baseRevision = 0): GraphBuilderDecision => ({
+  type: 'replace-document',
+  baseRevision,
+  path: 'graphs/graph.yaml',
+  content: 'version: 1\ngraph:\n  metadata:\n    id: graph\n',
+  summary: 'Replaced the graph document.',
+});
+
+function createPatchOrReadyDecision(turn: GraphBuilderPolicyTurn): GraphBuilderDecision {
+  return turn.draftRevision === 0
+    ? createPatchDecision(turn.draftRevision)
+    : {
+        type: 'ready',
+        summary: 'Created a text node.',
+      };
+}
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -372,12 +477,23 @@ async function settlesWithin(promise: Promise<unknown>, milliseconds = 100): Pro
 }
 
 test('a successful policy patch remains private until explicit Apply', async () => {
+  const turns: GraphBuilderPolicyTurn[] = [];
   const { controller, getCommitCount } = createController({
-    executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+    executePolicy: async (turn) => {
+      turns.push(structuredClone(turn));
+      return policyResult(turn, createPatchOrReadyDecision(turn));
+    },
   });
 
   await controller.start();
   assert.equal(controller.getState().status, 'ready-for-preview');
+  assert.equal(turns.length, 2);
+  assert.equal(turns[1]!.phase, 'reviewing');
+  assert.equal(turns[1]!.draftRevision, 1);
+  assert.ok(turns[1]!.transcript.some((item) => item.type === 'patch-result'));
+  const prepared = controller.getState();
+  assert.equal(prepared.status, 'ready-for-preview');
+  assert.deepEqual(prepared.status === 'ready-for-preview' ? prepared.preview.delta : undefined, projectDelta());
   assert.equal(getCommitCount(), 0);
 
   await controller.apply();
@@ -387,9 +503,252 @@ test('a successful policy patch remains private until explicit Apply', async () 
   assert.equal(getCommitCount(), 1);
 });
 
+test('an accepted document replacement enters review before exposing the aggregated preview', async () => {
+  const turns: GraphBuilderPolicyTurn[] = [];
+  const kernel = new FakeKernel();
+  const { controller } = createController({
+    kernel,
+    executePolicy: async (turn) => {
+      turns.push(structuredClone(turn));
+      return policyResult(
+        turn,
+        turn.draftRevision === 0
+          ? createReplacementDecision(turn.draftRevision)
+          : { type: 'ready', summary: 'Replaced the graph document.' },
+      );
+    },
+  });
+
+  await controller.start();
+
+  assert.equal(turns.length, 2);
+  assert.equal(turns[1]!.phase, 'reviewing');
+  assert.equal(turns[1]!.draftRevision, 1);
+  assert.ok(turns[1]!.transcript.some((item) => item.type === 'decision' && item.decision.type === 'replace-document'));
+  assert.ok(turns[1]!.transcript.some((item) => item.type === 'patch-result'));
+  assert.deepEqual(kernel.replacedDocuments, [
+    {
+      path: 'graphs/graph.yaml',
+      contents: 'version: 1\ngraph:\n  metadata:\n    id: graph\n',
+    },
+  ]);
+  const state = controller.getState();
+  assert.equal(state.status, 'ready-for-preview');
+  assert.deepEqual(state.status === 'ready-for-preview' ? state.preview.delta : undefined, projectDelta());
+});
+
+test('document replacement requires complete current-document coverage visible to the policy turn', async () => {
+  const kernel = new FakeKernel();
+  const path = 'graphs/graph.yaml';
+  const source = '0123456789abcdefghij';
+  let policyCalls = 0;
+  const { controller } = createController({
+    kernel,
+    buildWorkspaceContext: () => ({
+      version: 1,
+      activeDocumentPath: path,
+      delta: { graphDeltas: [] },
+      documents: [
+        {
+          path,
+          graphId,
+          name: 'Graph',
+          digest: 'digest',
+          totalLength: source.length,
+          totalLines: 1,
+          access: 'editable',
+        },
+      ],
+      activeDocument: {
+        path,
+        digest: 'digest',
+        startOffset: 0,
+        endOffset: 10,
+        totalLength: source.length,
+        nextOffset: 10,
+        totalLines: 1,
+        startLine: 1,
+        endLine: 1,
+        content: source.slice(0, 10),
+        truncated: true,
+      },
+    }),
+    executePolicy: async (turn) => {
+      policyCalls += 1;
+      if (policyCalls === 1) {
+        return policyResult(turn, createReplacementDecision(turn.draftRevision));
+      }
+      if (policyCalls === 2) {
+        assert.ok(
+          turn.diagnostics.some((diagnostic) => diagnostic.ruleId === 'replacement-requires-complete-document'),
+        );
+        return policyResult(turn, {
+          type: 'request-context',
+          requests: [{ type: 'read-virtual-document', path, startOffset: 10 }],
+        });
+      }
+      if (policyCalls === 3) {
+        return policyResult(turn, createReplacementDecision(turn.draftRevision));
+      }
+      return policyResult(turn, { type: 'ready', summary: 'Replaced the complete graph document.' });
+    },
+    read: async (request, context) => {
+      assert.equal(request.type, 'read-virtual-document');
+      return {
+        requestId: context.requestId,
+        requestIndex: context.requestIndex,
+        observedDraftRevision: context.observedDraftRevision,
+        status: 'ok',
+        payload: {
+          contents: source.slice(10),
+          digest: 'digest',
+          draftRevision: context.observedDraftRevision,
+          endOffset: source.length,
+          graphId,
+          lineCount: 1,
+          path,
+          startOffset: 10,
+          startLine: 1,
+          totalLength: source.length,
+          totalLineCount: 1,
+          truncated: false,
+        },
+      };
+    },
+  });
+
+  await controller.start();
+
+  assert.equal(controller.getState().status, 'ready-for-preview');
+  assert.equal(policyCalls, 4);
+  assert.equal(kernel.replacedDocuments.length, 1);
+});
+
+test('document replacement coverage survives transcript compaction across continuation reads', async () => {
+  const kernel = new FakeKernel();
+  const path = 'graphs/graph.yaml';
+  const source = `0123456789${'a'.repeat(20_000)}`;
+  const splitOffset = 10_010;
+  let policyCalls = 0;
+  const { controller } = createController({
+    kernel,
+    limits: { maxTranscriptBytes: 5_000 },
+    buildWorkspaceContext: () => ({
+      version: 1,
+      activeDocumentPath: path,
+      delta: { graphDeltas: [] },
+      documents: [
+        {
+          path,
+          graphId,
+          name: 'Graph',
+          digest: 'digest',
+          totalLength: source.length,
+          totalLines: 1,
+          access: 'editable',
+        },
+      ],
+      activeDocument: {
+        path,
+        digest: 'digest',
+        startOffset: 0,
+        endOffset: 10,
+        totalLength: source.length,
+        nextOffset: 10,
+        totalLines: 1,
+        startLine: 1,
+        endLine: 1,
+        content: source.slice(0, 10),
+        truncated: true,
+      },
+    }),
+    executePolicy: async (turn) => {
+      policyCalls += 1;
+      if (policyCalls === 1) {
+        return policyResult(turn, {
+          type: 'request-context',
+          requests: [{ type: 'read-virtual-document', path, startOffset: 10 }],
+        });
+      }
+      if (policyCalls === 2) {
+        return policyResult(turn, {
+          type: 'request-context',
+          requests: [{ type: 'read-virtual-document', path, startOffset: splitOffset }],
+        });
+      }
+      if (policyCalls === 3) {
+        assert.ok(turn.transcript.some((item) => item.type === 'compacted' && item.originalType === 'read-result'));
+        return policyResult(turn, createReplacementDecision(turn.draftRevision));
+      }
+      return policyResult(turn, { type: 'ready', summary: 'Replaced the complete graph document.' });
+    },
+    read: async (request, context) => {
+      assert.equal(request.type, 'read-virtual-document');
+      const startOffset = request.startOffset ?? 0;
+      const endOffset = startOffset === 10 ? splitOffset : source.length;
+      return {
+        requestId: context.requestId,
+        requestIndex: context.requestIndex,
+        observedDraftRevision: context.observedDraftRevision,
+        status: 'ok',
+        payload: {
+          contents: source.slice(startOffset, endOffset),
+          digest: 'digest',
+          draftRevision: context.observedDraftRevision,
+          endOffset,
+          graphId,
+          lineCount: 1,
+          path,
+          startOffset,
+          startLine: 1,
+          totalLength: source.length,
+          totalLineCount: 1,
+          truncated: endOffset < source.length,
+          ...(endOffset < source.length ? { nextOffset: endOffset } : {}),
+        },
+      };
+    },
+  });
+
+  await controller.start();
+
+  assert.equal(controller.getState().status, 'ready-for-preview');
+  assert.equal(policyCalls, 4);
+  assert.equal(kernel.replacedDocuments.length, 1);
+});
+
+test('a stale document replacement is rejected with diagnostics and repaired on a later turn', async () => {
+  const kernel = new FakeKernel();
+  const phases: GraphBuilderPolicyTurn['phase'][] = [];
+  let policyCalls = 0;
+  const { controller } = createController({
+    kernel,
+    executePolicy: async (turn) => {
+      phases.push(turn.phase);
+      policyCalls += 1;
+      if (policyCalls === 1) {
+        return policyResult(turn, createReplacementDecision(turn.draftRevision + 1));
+      }
+      if (policyCalls === 2) {
+        assert.ok(turn.diagnostics.some((diagnostic) => diagnostic.ruleId === 'expected-draft-revision'));
+        return policyResult(turn, createReplacementDecision(turn.draftRevision));
+      }
+      return policyResult(turn, { type: 'ready', summary: 'Replaced the graph document.' });
+    },
+  });
+
+  await controller.start();
+
+  const state = controller.getState();
+  assert.equal(state.status, 'ready-for-preview');
+  assert.deepEqual(phases, ['gathering-context', 'repairing', 'reviewing']);
+  assert.equal(kernel.getDraftRevision(), 1);
+  assert.equal(kernel.replacedDocuments.length, 2);
+});
+
 test('session and derived correlation identifiers stay within the portable protocol limit', async () => {
   const executePolicy = async (turn: GraphBuilderPolicyTurn): Promise<GraphBuilderPolicyExecutionResult> =>
-    policyResult(turn, createReadyPatchDecision());
+    policyResult(turn, createPatchOrReadyDecision(turn));
 
   assert.throws(
     () => createController({ executePolicy, sessionId: '' }),
@@ -428,7 +787,7 @@ test('session and derived correlation identifiers stay within the portable proto
               type: 'request-context',
               requests: [{ type: 'get-diagnostics' }],
             }
-          : createReadyPatchDecision(),
+          : createPatchOrReadyDecision(turn),
       );
     },
     read: async (_request, context) => {
@@ -445,7 +804,7 @@ test('session and derived correlation identifiers stay within the portable proto
 
   await controller.start();
   assert.equal(controller.getState().status, 'ready-for-preview');
-  assert.equal(turns.length, 3);
+  assert.equal(turns.length, 4);
   for (const turn of turns) {
     assert.ok(turn.sessionId.length <= GRAPH_BUILDER_LIMITS.maxIdentifierLength);
     assert.ok(turn.turnId.length <= GRAPH_BUILDER_LIMITS.maxIdentifierLength);
@@ -462,7 +821,7 @@ test('session and derived correlation identifiers stay within the portable proto
 
 test('a subscriber that rejects its initial snapshot cannot break the session', async () => {
   const { controller } = createController({
-    executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+    executePolicy: async (turn) => policyResult(turn, createPatchOrReadyDecision(turn)),
   });
   const unsubscribe = controller.subscribe(() => {
     throw new Error('broken observer');
@@ -476,7 +835,7 @@ test('a subscriber that rejects its initial snapshot cannot break the session', 
 
 test('a commit-time eligibility loss is reported accurately and retains the private preview', async () => {
   const { controller } = createController({
-    executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+    executePolicy: async (turn) => policyResult(turn, createPatchOrReadyDecision(turn)),
     commit: () => ({
       status: 'ineligible',
       commitId: 'commit',
@@ -506,14 +865,7 @@ test('terminal decisions use the canonical base-to-draft difference rather than 
     executePolicy: async (turn) => {
       policyCalls += 1;
       if (policyCalls <= 2) {
-        const decision = createReadyPatchDecision();
-        if (decision.type !== 'propose-patch') {
-          throw new Error('Expected a patch decision.');
-        }
-        return policyResult(turn, {
-          ...decision,
-          afterApply: policyCalls === 1 ? 'continue' : 'ready-for-preview',
-        });
+        return policyResult(turn, createPatchDecision(turn.draftRevision));
       }
       return policyResult(turn, {
         type: 'no-change',
@@ -537,15 +889,13 @@ test('preview exposes the cumulative base-to-draft delta after a final no-op pat
     kernel,
     executePolicy: async (turn) => {
       policyCalls += 1;
-      const decision = createReadyPatchDecision();
-      if (decision.type !== 'propose-patch') {
-        throw new Error('Expected a patch decision.');
+      if (policyCalls > 2) {
+        return policyResult(turn, {
+          type: 'ready',
+          summary: 'Prepared 1 node added.',
+        });
       }
-      return policyResult(turn, {
-        type: 'propose-patch',
-        proposal: decision.proposal,
-        afterApply: policyCalls === 1 ? 'continue' : 'ready-for-preview',
-      });
+      return policyResult(turn, createPatchDecision(turn.draftRevision));
     },
   });
 
@@ -555,8 +905,8 @@ test('preview exposes the cumulative base-to-draft delta after a final no-op pat
   if (state.status !== 'ready-for-preview') {
     return;
   }
-  assert.equal(policyCalls, 2);
-  assert.deepEqual(state.preview.delta, delta());
+  assert.equal(policyCalls, 3);
+  assert.deepEqual(state.preview.delta, projectDelta());
   assert.equal(state.preview.summary, 'Prepared 1 node added.');
   assert.equal('draft' in state.preview, false);
 });
@@ -573,11 +923,26 @@ test('context reads run in parallel and are returned to the next policy turn in 
           requests: [{ type: 'inspect-draft-diff' }, { type: 'get-diagnostics' }],
         });
       }
-      assert.deepEqual(
-        turn.contextResults.map((result) => result.requestIndex),
-        [0, 1],
-      );
-      return policyResult(turn, createReadyPatchDecision());
+      if (policyCalls === 2) {
+        assert.deepEqual(
+          turn.contextResults.map((result) => result.requestIndex),
+          [0, 1],
+        );
+        assert.equal(
+          turn.transcript.filter((item) => item.type === 'read-result').length,
+          0,
+          'the immediate read results must not be serialized twice',
+        );
+      }
+      if (policyCalls === 3) {
+        assert.equal(
+          turn.transcript.filter((item) => item.type === 'compacted' && item.originalType === 'read-result').length,
+          2,
+          'read results become digest history after an accepted edit advances the revision',
+        );
+        assert.equal(turn.transcript.filter((item) => item.type === 'read-result').length, 0);
+      }
+      return policyResult(turn, createPatchOrReadyDecision(turn));
     },
     read: async (_request, context) => {
       await new Promise((resolve) => setTimeout(resolve, context.requestIndex === 0 ? 15 : 1));
@@ -597,6 +962,48 @@ test('context reads run in parallel and are returned to the next policy turn in 
   assert.equal(controller.getState().status, 'ready-for-preview');
 });
 
+test('aggregate read results are bounded before the next policy turn instead of exhausting the session', async () => {
+  const largePayload = Array.from({ length: 10 }, (_, index) => `${index}:${'x'.repeat(16_000)}`);
+  let policyCalls = 0;
+  const { controller } = createController({
+    executePolicy: async (turn) => {
+      policyCalls += 1;
+      if (policyCalls === 1) {
+        return policyResult(turn, {
+          type: 'request-context',
+          requests: [{ type: 'inspect-draft-diff' }, { type: 'get-diagnostics' }],
+        });
+      }
+
+      if (policyCalls === 2) {
+        assert.equal(turn.contextResults.length, 2);
+        assert.deepEqual(
+          turn.contextResults.map((result) => result.requestIndex),
+          [0, 1],
+        );
+        assert.ok(turn.contextResults.some((result) => result.status === 'ok'));
+        assert.ok(
+          turn.contextResults.some(
+            (result) => result.status === 'failed' && result.error.code === 'read-result-budget-exceeded',
+          ),
+        );
+      }
+      return policyResult(turn, createPatchOrReadyDecision(turn));
+    },
+    read: async (_request, context) => ({
+      requestId: context.requestId,
+      requestIndex: context.requestIndex,
+      observedDraftRevision: context.observedDraftRevision,
+      status: 'ok',
+      payload: { chunks: largePayload },
+    }),
+  });
+
+  await controller.start();
+  assert.equal(controller.getState().status, 'ready-for-preview');
+  assert.equal(policyCalls, 3);
+});
+
 test('clarification keeps the session resumable and rejects token reuse with different content', async () => {
   let calls = 0;
   const { controller } = createController({
@@ -604,7 +1011,7 @@ test('clarification keeps the session resumable and rejects token reuse with dif
       calls += 1;
       return calls === 1
         ? policyResult(turn, { type: 'clarify', question: 'Which output format?' })
-        : policyResult(turn, createReadyPatchDecision());
+        : policyResult(turn, createPatchOrReadyDecision(turn));
     },
   });
 
@@ -646,7 +1053,7 @@ test('identity changes after a provider await terminate as conflicted without ap
     kernel,
     executePolicy: async (turn) => {
       current = false;
-      return policyResult(turn, createReadyPatchDecision());
+      return policyResult(turn, createPatchOrReadyDecision(turn));
     },
     verifyIdentity: () => ({
       matches: current,
@@ -691,7 +1098,7 @@ test('provider error accessors cannot escape the controller error boundary', asy
 test('successful provider result accessors fail through typed policy validation', async () => {
   const { controller } = createController({
     executePolicy: async (turn) => {
-      const result = policyResult(turn, createReadyPatchDecision());
+      const result = policyResult(turn, createPatchDecision());
       Object.defineProperty(result, 'usage', {
         get() {
           throw new Error('hostile usage accessor');
@@ -725,7 +1132,7 @@ test('cancel aborts an in-flight provider attempt and never exposes a preview', 
   assert.equal(controller.getState().status, 'canceled');
   assert.ok(capturedTurn);
   assert.equal(await settlesWithin(started), true);
-  deferred.resolve(policyResult(capturedTurn, createReadyPatchDecision()));
+  deferred.resolve(policyResult(capturedTurn, createPatchDecision()));
   await waitForTimer(0);
   assert.equal(controller.getState().status, 'canceled');
 });
@@ -745,7 +1152,8 @@ test('an adapter promise is observed when cancellation happens before the wait i
   await waitForTimer(0);
 });
 
-test('the wall-clock deadline wins over a provider that ignores cancellation and late output is ignored', async () => {
+test('the wall-clock deadline wins over a provider that ignores cancellation and late output is ignored', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000 });
   const deferred = createDeferred<GraphBuilderPolicyExecutionResult>();
   let capturedTurn: GraphBuilderPolicyTurn | undefined;
   const metrics: GraphBuilderMetricsEvent[] = [];
@@ -759,12 +1167,13 @@ test('the wall-clock deadline wins over a provider that ignores cancellation and
   });
 
   const started = controller.start();
-  await waitForTimer(30);
-  assert.equal(controller.getState().status, 'expired');
+  await Promise.resolve();
   assert.ok(capturedTurn);
-  assert.equal(await settlesWithin(started), true);
-  deferred.resolve(policyResult(capturedTurn, createReadyPatchDecision()));
-  await waitForTimer(0);
+  t.mock.timers.tick(10);
+  await started;
+  assert.equal(controller.getState().status, 'expired');
+  deferred.resolve(policyResult(capturedTurn, createPatchDecision()));
+  await Promise.resolve();
   assert.equal(controller.getState().status, 'expired');
   assert.equal(kernel.getDraftRevision(), 0);
   assert.equal(metrics.length, 1);
@@ -790,15 +1199,82 @@ test('active-work inactivity expires a stalled provider call before the wall-clo
   assert.equal(controller.getState().status, 'expired');
   assert.ok(capturedTurn);
   assert.equal(await settlesWithin(started), true);
-  deferred.resolve(policyResult(capturedTurn, createReadyPatchDecision()));
+  deferred.resolve(policyResult(capturedTurn, createPatchDecision()));
   await waitForTimer(0);
   assert.equal(controller.getState().status, 'expired');
   assert.equal(kernel.getDraftRevision(), 0);
 });
 
+test('provider activity heartbeats keep a long streaming attempt alive across inactivity windows', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000 });
+  const deferred = createDeferred<GraphBuilderPolicyExecutionResult>();
+  let policyCalls = 0;
+  let firstTurn: GraphBuilderPolicyTurn | undefined;
+  let reportProviderActivity: (() => void) | undefined;
+  const { controller } = createController({
+    executePolicy: async (turn, _abortSignal, reportActivity) => {
+      policyCalls += 1;
+      if (policyCalls === 1) {
+        firstTurn = turn;
+        reportProviderActivity = reportActivity;
+        return await deferred.promise;
+      }
+      return policyResult(turn, createPatchOrReadyDecision(turn));
+    },
+    limits: { maxInactivityMs: 15, maxWallTimeMs: 1_000 },
+  });
+
+  const started = controller.start();
+  await Promise.resolve();
+  assert.ok(firstTurn);
+  assert.ok(reportProviderActivity);
+
+  for (let elapsed = 10; elapsed <= 30; elapsed += 10) {
+    t.mock.timers.tick(10);
+    reportProviderActivity();
+  }
+  deferred.resolve(policyResult(firstTurn, createPatchDecision()));
+  await started;
+
+  assert.equal(controller.getState().status, 'ready-for-preview');
+  assert.equal(policyCalls, 2);
+});
+
+test('provider activity heartbeats never extend the hard deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000 });
+  const deferred = createDeferred<GraphBuilderPolicyExecutionResult>();
+  let capturedTurn: GraphBuilderPolicyTurn | undefined;
+  let reportProviderActivity: (() => void) | undefined;
+  const { controller, kernel } = createController({
+    executePolicy: async (turn, _abortSignal, reportActivity) => {
+      capturedTurn = turn;
+      reportProviderActivity = reportActivity;
+      return await deferred.promise;
+    },
+    limits: { maxInactivityMs: 15, maxWallTimeMs: 40 },
+  });
+
+  const started = controller.start();
+  await Promise.resolve();
+  assert.ok(capturedTurn);
+  assert.ok(reportProviderActivity);
+
+  for (let elapsed = 10; elapsed < 40; elapsed += 10) {
+    t.mock.timers.tick(10);
+    reportProviderActivity();
+  }
+  t.mock.timers.tick(10);
+  await started;
+
+  assert.equal(controller.getState().status, 'expired');
+  deferred.resolve(policyResult(capturedTurn, createPatchDecision()));
+  await Promise.resolve();
+  assert.equal(kernel.getDraftRevision(), 0);
+});
+
 test('active-work inactivity stops once a preview is waiting for user review', async () => {
   const { controller } = createController({
-    executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+    executePolicy: async (turn) => policyResult(turn, createPatchOrReadyDecision(turn)),
     limits: { maxInactivityMs: 10, maxWallTimeMs: 1_000 },
   });
 
@@ -807,6 +1283,22 @@ test('active-work inactivity stops once a preview is waiting for user review', a
   await waitForTimer(30);
   assert.equal(controller.getState().status, 'ready-for-preview');
   await controller.cancel();
+});
+
+test('preview review remains applyable after the automated-work wall-clock deadline', async () => {
+  const { controller, getCommitCount } = createController({
+    executePolicy: async (turn) => policyResult(turn, createPatchOrReadyDecision(turn)),
+    limits: { maxInactivityMs: 10, maxWallTimeMs: 50 },
+  });
+
+  await controller.start();
+  assert.equal(controller.getState().status, 'ready-for-preview');
+  await waitForTimer(75);
+  assert.equal(controller.getState().status, 'ready-for-preview');
+
+  await controller.apply();
+  assert.equal(controller.getState().status, 'committed');
+  assert.equal(getCommitCount(), 1);
 });
 
 test('an abort-ignoring context read cannot keep the controller queue pending after expiry', async () => {
@@ -860,7 +1352,7 @@ test('failed provider usage is counted and takes budget precedence over the prov
   assert.equal(controller.getState().status, 'budget-exhausted');
   assert.deepEqual(metrics, [
     {
-      protocolVersion: 1,
+      protocolVersion: GRAPH_BUILDER_METRICS_VERSION,
       outcome: 'budget-exhausted',
       durationMs: metrics[0]!.durationMs,
       policyAttempts: 1,
@@ -878,7 +1370,7 @@ test('a zero usage budget prevents the first provider request', async () => {
   const { controller } = createController({
     executePolicy: async (turn) => {
       policyCalls += 1;
-      return policyResult(turn, createReadyPatchDecision());
+      return policyResult(turn, createPatchDecision());
     },
     limits: { maxCostUsd: 0 },
   });
@@ -908,7 +1400,7 @@ test('synchronous preflight that crosses the hard deadline cannot reserve a prov
     },
     executePolicy: async (turn) => {
       policyCalls += 1;
-      return policyResult(turn, createReadyPatchDecision());
+      return policyResult(turn, createPatchDecision());
     },
     limits: { maxWallTimeMs: 5 },
   });
@@ -922,7 +1414,8 @@ test('synchronous delta construction that crosses the hard deadline cannot publi
   const baseKernel = new FakeKernel();
   let deltaCalls = 0;
   const kernel: ConstructorParameters<typeof GraphBuilderSessionController>[0]['kernel'] = {
-    applyPatch: (patch) => baseKernel.applyPatch(patch),
+    applyDocumentPatch: (patch) => baseKernel.applyDocumentPatch(patch),
+    replaceDocument: (patch) => baseKernel.replaceDocument(patch),
     getDraft: () => baseKernel.getDraft(),
     getDraftDelta: () => {
       deltaCalls += 1;
@@ -934,11 +1427,12 @@ test('synchronous delta construction that crosses the hard deadline cannot publi
       }
       return baseKernel.getDraftDelta();
     },
+    getProjectDraftDelta: () => baseKernel.getProjectDraftDelta(),
     getDraftRevision: () => baseKernel.getDraftRevision(),
     hasDraftChanges: () => baseKernel.hasDraftChanges(),
   };
   const { controller } = createController({
-    executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+    executePolicy: async (turn) => policyResult(turn, createPatchOrReadyDecision(turn)),
     kernel,
     limits: { maxWallTimeMs: 100 },
   });
@@ -998,7 +1492,7 @@ test('invalid-decision usage is counted before a repair attempt is scheduled', a
   assert.equal(policyCalls, 1);
   assert.deepEqual(metrics, [
     {
-      protocolVersion: 1,
+      protocolVersion: GRAPH_BUILDER_METRICS_VERSION,
       outcome: 'budget-exhausted',
       durationMs: metrics[0]!.durationMs,
       policyAttempts: 1,
@@ -1015,7 +1509,7 @@ test('malformed successful usage fails closed and is reported as unavailable', a
   const metrics: GraphBuilderMetricsEvent[] = [];
   const { controller, kernel } = createController({
     executePolicy: async (turn) => ({
-      ...policyResult(turn, createReadyPatchDecision()),
+      ...policyResult(turn, createPatchDecision()),
       usage: {
         completeness: 'complete',
         inputTokens: -1,
@@ -1040,7 +1534,7 @@ test('token accounting rejects fractional or unsafe counts', async () => {
   for (const inputTokens of [1.5, Number.MAX_SAFE_INTEGER + 1]) {
     const { controller } = createController({
       executePolicy: async (turn) => ({
-        ...policyResult(turn, createReadyPatchDecision()),
+        ...policyResult(turn, createPatchDecision()),
         usage: {
           completeness: 'complete',
           inputTokens,
@@ -1073,14 +1567,41 @@ test('invalid model decisions consume bounded controller-owned repair attempts',
           usage: { completeness: 'unavailable' },
         });
       }
-      return policyResult(turn, createReadyPatchDecision());
+      return policyResult(turn, createPatchOrReadyDecision(turn));
     },
   });
 
   await controller.start();
   assert.equal(controller.getState().status, 'ready-for-preview');
-  assert.equal(policyCalls, 2);
-  assert.deepEqual(phases, ['gathering-context', 'repairing']);
+  assert.equal(policyCalls, 3);
+  assert.deepEqual(phases, ['gathering-context', 'repairing', 'reviewing']);
+});
+
+test('an applied edit resets the consecutive repair budget while retaining total repair accounting', async () => {
+  const metrics: GraphBuilderMetricsEvent[] = [];
+  let policyCalls = 0;
+  const { controller } = createController({
+    executePolicy: async (turn) => {
+      policyCalls += 1;
+      if (policyCalls === 1 || policyCalls === 3) {
+        throw Object.assign(new Error('invalid JSON'), {
+          code: 'invalid-decision',
+          usage: { completeness: 'unavailable' },
+        });
+      }
+      return policyResult(turn, createPatchOrReadyDecision(turn));
+    },
+    limits: { maxRepairAttempts: 1 },
+    metricsSink: { record: (event) => metrics.push(event) },
+  });
+
+  await controller.start();
+  assert.equal(controller.getState().status, 'ready-for-preview');
+  assert.equal(policyCalls, 4);
+
+  await controller.apply();
+  assert.equal(controller.getState().status, 'committed');
+  assert.equal(metrics[0]?.repairAttempts, 2);
 });
 
 test('invalid model decisions exhaust the repair budget without mutating the draft', async () => {
@@ -1128,7 +1649,7 @@ test('invalid terminal transitions provide a deterministic repair diagnostic', a
 
 test('final validation results are runtime-validated before preview', async () => {
   const { controller } = createController({
-    executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+    executePolicy: async (turn) => policyResult(turn, createPatchOrReadyDecision(turn)),
     validateDraft: () =>
       ({
         completeness: 'complete',
@@ -1164,15 +1685,13 @@ test('deterministic preview summaries use exact totals when delta details are tr
   const { controller } = createController({
     kernel,
     executePolicy: async (turn) => {
-      const decision = createReadyPatchDecision();
-      if (decision.type !== 'propose-patch') {
-        throw new Error('Expected a patch decision.');
+      if (turn.draftRevision > 0) {
+        return policyResult(turn, {
+          type: 'ready',
+          summary: 'Prepared 100 nodes added, 99 connections added.',
+        });
       }
-      return policyResult(turn, {
-        type: 'propose-patch',
-        proposal: decision.proposal,
-        afterApply: decision.afterApply,
-      });
+      return policyResult(turn, createPatchDecision(turn.draftRevision));
     },
   });
 
@@ -1197,7 +1716,7 @@ test('read results must match the exact originating request ID and index', async
               type: 'request-context',
               requests: [{ type: 'get-diagnostics' }],
             }
-          : createReadyPatchDecision(),
+          : createPatchOrReadyDecision(turn),
       );
     },
     read: async (_request, context) => ({
@@ -1255,7 +1774,7 @@ test('oversized policy turns exhaust the preflight budget without calling the pr
   const { controller } = createController({
     executePolicy: async (turn) => {
       policyCalls += 1;
-      return policyResult(turn, createReadyPatchDecision());
+      return policyResult(turn, createPatchDecision());
     },
     limits: { maxPolicyTurnBytes: 700, maxTranscriptBytes: 200 },
     metricsSink: { record: (event) => metrics.push(event) },
@@ -1273,7 +1792,7 @@ test('session limits reject unsafe timers and payload limits the policy transpor
   assert.throws(
     () =>
       createController({
-        executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+        executePolicy: async (turn) => policyResult(turn, createPatchDecision()),
         limits: { maxWallTimeMs: 2_147_483_648 },
       }),
     /supported timer range/,
@@ -1281,7 +1800,7 @@ test('session limits reject unsafe timers and payload limits the policy transpor
   assert.throws(
     () =>
       createController({
-        executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+        executePolicy: async (turn) => policyResult(turn, createPatchDecision()),
         limits: { maxPolicyTurnBytes: 300_000 },
       }),
     /portable protocol payload limit/,
@@ -1302,12 +1821,12 @@ test('transcript compaction keeps a digest identity for every earlier decision a
               type: 'request-context',
               requests: [{ type: 'get-diagnostics' }],
             }
-          : createReadyPatchDecision(),
+          : createPatchOrReadyDecision(turn),
       );
     },
     limits: {
       maxPolicyTurnBytes: 20_000,
-      maxTranscriptBytes: 1_800,
+      maxTranscriptBytes: 2_400,
     },
     read: async (_request, context) => ({
       requestId: context.requestId,
@@ -1322,9 +1841,9 @@ test('transcript compaction keeps a digest identity for every earlier decision a
   assert.equal(controller.getState().status, 'ready-for-preview');
   const finalTurn = turns.at(-1)!;
   assert.equal(finalTurn.contextMode, 'compacted');
-  assert.equal(finalTurn.transcript.length, 8);
+  assert.equal(finalTurn.transcript.length, 10);
   assert.ok(finalTurn.transcript.some((item) => item.type === 'compacted'));
-  for (const earlierTurn of turns.slice(0, 4)) {
+  for (const earlierTurn of turns.slice(0, -1)) {
     assert.equal(finalTurn.transcript.filter((item) => item.turnId === earlierTurn.turnId).length, 2);
   }
 });
@@ -1363,7 +1882,7 @@ test('oversized graph-building requests use an invariant failure message before 
   const { controller } = createController({
     executePolicy: async (turn) => {
       policyCalls += 1;
-      return policyResult(turn, createReadyPatchDecision());
+      return policyResult(turn, createPatchDecision());
     },
     request: 'x'.repeat(GRAPH_BUILDER_LIMITS.maxStringLength + 1),
   });
@@ -1385,7 +1904,7 @@ test('oversized graph-building requests use an invariant failure message before 
 test('metrics duration remains nonnegative when the host wall clock moves backward', async () => {
   const metrics: GraphBuilderMetricsEvent[] = [];
   const { controller } = createController({
-    executePolicy: async (turn) => policyResult(turn, createReadyPatchDecision()),
+    executePolicy: async (turn) => policyResult(turn, createPatchOrReadyDecision(turn)),
     metricsSink: { record: (event) => metrics.push(event) },
     request: 'x'.repeat(GRAPH_BUILDER_LIMITS.maxStringLength + 1),
   });
@@ -1408,7 +1927,7 @@ test('remaining wall-time never exceeds its configured budget when the host cloc
   const { controller } = createController({
     executePolicy: async (turn) => {
       observedRemainingMs = turn.remainingBudget.milliseconds;
-      return policyResult(turn, createReadyPatchDecision());
+      return policyResult(turn, createPatchOrReadyDecision(turn));
     },
     limits: { maxWallTimeMs: 1_000 },
   });

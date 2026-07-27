@@ -90,6 +90,7 @@ export function scoreGraphBuilderEvaluationObservation(
     breakdown.diagnostics * policy.weights.diagnostics +
     breakdown.outcome * policy.weights.outcome;
   const passedAllRequiredGates = requiredGates.every((gate) => gate.passed);
+  const passedAllStructuralExpectations = Object.values(breakdown).every((score) => score === 1);
 
   return {
     fixtureId: fixture.id,
@@ -101,7 +102,7 @@ export function scoreGraphBuilderEvaluationObservation(
     gates,
     requiredGateRate,
     passedAllRequiredGates,
-    successfulFixture: breakdown.outcome === 1 && passedAllRequiredGates,
+    successfulFixture: passedAllStructuralExpectations && passedAllRequiredGates,
     accountingCoverage: summarizeGraphBuilderProviderAttempts(observation.providerAttempts).accountingCoverage,
   };
 }

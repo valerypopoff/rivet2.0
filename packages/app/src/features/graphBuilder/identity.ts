@@ -10,9 +10,13 @@ import type { PluginState } from '../../state/plugins.js';
 import type { EditorPreferences } from '../../state/settings.js';
 import type { ResolvedAiAssistModelSettings } from '../../utils/aiAssistModelSettings.js';
 import type { GraphBuilderEditorSnapshot } from './editorSnapshot.js';
-import { GRAPH_BUILDER_POLICY_VERSION } from './policyManifest.js';
+import {
+  GRAPH_BUILDER_POLICY_MANIFEST,
+  GRAPH_BUILDER_POLICY_RESPONSE_MODE,
+  GRAPH_BUILDER_POLICY_VERSION,
+} from './policyManifest.js';
 
-export const GRAPH_BUILDER_AUTHORING_CONTRACT_VERSION = '1';
+export const GRAPH_BUILDER_AUTHORING_CONTRACT_VERSION = '2';
 export const GRAPH_BUILDER_VALIDATION_RULES_VERSION = '1';
 
 export type GraphBuilderBaseIdentity = {
@@ -88,9 +92,10 @@ export function createGraphBuilderPolicyConfigFingerprint(assistModel: ResolvedA
   return hashCanonicalGraphBuilderValue({
     customProviderBaseURL: assistModel.customProviderBaseURL ?? '',
     model: assistModel.model,
+    normalizedPromptSha256: GRAPH_BUILDER_POLICY_MANIFEST.normalizedPromptSha256,
     policyVersion: GRAPH_BUILDER_POLICY_VERSION,
     provider: assistModel.provider,
-    responseMode: assistModel.provider === 'custom' ? 'text' : 'json-schema',
+    responseMode: GRAPH_BUILDER_POLICY_RESPONSE_MODE,
   });
 }
 

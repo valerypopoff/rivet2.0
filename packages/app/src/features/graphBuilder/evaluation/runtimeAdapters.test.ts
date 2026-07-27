@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GRAPH_BUILDER_PROTOCOL_VERSION, type GraphBuilderDecision } from '../../../domain/graphBuilder/index.js';
+import * as YAML from 'yaml';
 import type { GraphBuilderPolicyExecutionResult, GraphBuilderPolicyTurn } from '../sessionController.js';
 import { runGraphBuilderDevelopmentComparison } from './comparison.js';
 import { runGraphBuilderDevelopmentEvaluation } from './harness.js';
@@ -21,24 +22,73 @@ function policyResult(turn: GraphBuilderPolicyTurn, decision: GraphBuilderDecisi
   };
 }
 
+function createNodeEditOrReady(
+  turn: GraphBuilderPolicyTurn,
+  nodeType: 'number' | 'text',
+  summary: string,
+  editMode: 'apply-patch' | 'replace-document' = 'apply-patch',
+): GraphBuilderDecision {
+  if (turn.draftRevision > 0) {
+    return { type: 'ready', summary };
+  }
+
+  assert.equal(turn.workspace.activeDocument.truncated, false);
+  const parsed = YAML.parse(turn.workspace.activeDocument.content) as {
+    version: number;
+    graph: {
+      nodes: Array<Record<string, unknown>>;
+    };
+  };
+  parsed.graph.nodes.push({
+    id: 'created-node',
+    type: nodeType,
+    title: nodeType === 'number' ? 'Number' : 'Text',
+    visualData: { x: 0, y: 0 },
+    data: nodeType === 'number' ? { value: 0 } : { text: '' },
+  });
+  const nextContents = YAML.stringify(parsed, null, { indent: 2, lineWidth: 0 });
+  if (editMode === 'replace-document') {
+    return {
+      type: 'replace-document',
+      baseRevision: turn.draftRevision,
+      path: turn.workspace.activeDocumentPath,
+      content: nextContents,
+      summary,
+    };
+  }
+  return {
+    type: 'apply-patch',
+    baseRevision: turn.draftRevision,
+    unifiedDiff: fullDocumentReplacementDiff(
+      turn.workspace.activeDocumentPath,
+      turn.workspace.activeDocument.content,
+      nextContents,
+    ),
+    summary,
+  };
+}
+
+function fullDocumentReplacementDiff(path: string, before: string, after: string): string {
+  const oldLines = splitDocumentLines(before);
+  const newLines = splitDocumentLines(after);
+  return [
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+  ].join('\n');
+}
+
+function splitDocumentLines(contents: string): string[] {
+  const normalized = contents.replace(/\r\n/g, '\n');
+  return normalized.endsWith('\n') ? normalized.slice(0, -1).split('\n') : normalized.split('\n');
+}
+
 test('Plan B evaluation adapter runs a checked fixture through the production host runtime', async () => {
   const adapter = createPlanBGraphBuilderEvaluationAdapter({
     executePolicy: async (turn) =>
-      policyResult(turn, {
-        type: 'propose-patch',
-        proposal: {
-          protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
-          operations: [
-            {
-              op: 'createNode',
-              clientId: 'number',
-              authoringChoiceId: 'registered:number',
-            },
-          ],
-        },
-        afterApply: 'ready-for-preview',
-        summary: 'Created a Number node.',
-      }),
+      policyResult(turn, createNodeEditOrReady(turn, 'number', 'Created a Number node.', 'replace-document')),
   });
 
   const run = await runGraphBuilderDevelopmentEvaluation({
@@ -181,22 +231,7 @@ test('Plan B evaluation adapter cancels the real controller without publishing t
 
 test('Plan B evaluation adapter exercises the stale-identity Apply rejection', async () => {
   const adapter = createPlanBGraphBuilderEvaluationAdapter({
-    executePolicy: async (turn) =>
-      policyResult(turn, {
-        type: 'propose-patch',
-        proposal: {
-          protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
-          operations: [
-            {
-              op: 'createNode',
-              clientId: 'text',
-              authoringChoiceId: 'registered:text',
-            },
-          ],
-        },
-        afterApply: 'ready-for-preview',
-        summary: 'Created a Text node.',
-      }),
+    executePolicy: async (turn) => policyResult(turn, createNodeEditOrReady(turn, 'text', 'Created a Text node.')),
   });
 
   const run = await runGraphBuilderDevelopmentEvaluation({
@@ -296,21 +331,7 @@ test('development comparison executes both concrete feature adapters over fresh 
   });
   const planBAdapter = createPlanBGraphBuilderEvaluationAdapter({
     executePolicy: async (turn) =>
-      policyResult(turn, {
-        type: 'propose-patch',
-        proposal: {
-          protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
-          operations: [
-            {
-              op: 'createNode',
-              clientId: 'number',
-              authoringChoiceId: 'registered:number',
-            },
-          ],
-        },
-        afterApply: 'ready-for-preview',
-        summary: 'Created a Number node.',
-      }),
+      policyResult(turn, createNodeEditOrReady(turn, 'number', 'Created a Number node.', 'replace-document')),
   });
 
   const comparison = await runGraphBuilderDevelopmentComparison({

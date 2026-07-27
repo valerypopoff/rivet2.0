@@ -1,19 +1,15 @@
 import {
-  newId,
   type GraphId,
-  type NodeConnection,
   type NodeId,
   type NodeRegistration,
   type Project,
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
 import {
-  GraphBuilderTransactionKernel,
+  calculateGraphBuilderDraftDelta,
   graphBuilderStringTupleKey,
-  type ApplyPatchResult,
   type GraphBuilderTouchedScope,
   type GraphDiagnostic,
-  type GraphPatch,
 } from '../../domain/graphBuilder/index.js';
 import { createAppGraphBuilderAuthoringSemantics } from './authoringSemantics.js';
 import { createGraphBuilderAuthoringCatalog, type GraphBuilderNodeAuthoringAdapter } from './authoringCatalog.js';
@@ -29,17 +25,9 @@ import {
   type GraphBuilderPolicyTurn,
   type GraphBuilderSessionLimits,
 } from './sessionController.js';
+import { createVirtualGraphWorkspace } from './virtualGraphWorkspace.js';
 
 type AuthoringProject = Omit<Project, 'data'>;
-
-const ALLOWED_PLAN_B_OPERATIONS = [
-  'createNode',
-  'updateNodeSettings',
-  'updateNodeEnvelope',
-  'deleteNode',
-  'connect',
-  'disconnect',
-] as const;
 
 export type CreatePlanBGraphBuilderSessionRuntimeOptions = {
   activeGraphId: GraphId;
@@ -49,7 +37,12 @@ export type CreatePlanBGraphBuilderSessionRuntimeOptions = {
   authoringProject: AuthoringProject;
   base: GraphBuilderBaseIdentity;
   commit(input: { draft: AuthoringProject; draftRevision: number; summary: string }): GraphBuilderCommitOutcome;
-  executePolicy(turn: GraphBuilderPolicyTurn, abortSignal: AbortSignal): Promise<GraphBuilderPolicyExecutionResult>;
+  executePolicy(
+    turn: GraphBuilderPolicyTurn,
+    abortSignal: AbortSignal,
+    reportActivity: () => void,
+  ): Promise<GraphBuilderPolicyExecutionResult>;
+  /** @deprecated Virtual-document patches carry graph-local node IDs directly. */
   idGenerator?: () => NodeId;
   limits?: Partial<GraphBuilderSessionLimits>;
   metricsSink?: GraphBuilderMetricsSink;
@@ -92,33 +85,56 @@ export function createPlanBGraphBuilderSessionRuntime(
     registry: options.registry,
     catalog,
     referencedProjects: options.referencedProjects,
+    // Existing graph interfaces remain stable so an edit cannot silently
+    // invalidate callers. The virtual workspace may add new optional surface
+    // to any graph; only transient canvases retain fully mutable boundaries.
+    additiveBoundaryGraphIds: Object.keys(options.authoringProject.graphs) as GraphId[],
     mutableBoundaryGraphIds: options.mutableBoundaryGraphIds,
   });
-  const kernel = new GraphBuilderTransactionKernel({
+  const workspace = createVirtualGraphWorkspace({
     project: options.authoringProject,
-    activeGraphId: options.activeGraphId,
-    authorization: {
-      allowedGraphIds: [options.activeGraphId],
-      allowedOperations: [...ALLOWED_PLAN_B_OPERATIONS],
-      allowSemanticCrossGraphPropagation: false,
-      sensitiveFieldAccess: 'none',
+    normalizeCandidate: ({ candidate, changedGraphIds, current }) => {
+      const createdNodeIds = changedGraphIds.flatMap((graphId) => {
+        const existingIds = new Set(current.graphs[graphId]?.nodes.map((node) => node.id) ?? []);
+        return (
+          candidate.graphs[graphId]?.nodes.filter((node) => !existingIds.has(node.id)).map((node) => node.id) ?? []
+        );
+      });
+      return semantics.normalizeCandidate({
+        base: current,
+        project: candidate,
+        createdNodeIds,
+        touchedScope: completeGraphScope(changedGraphIds, candidate),
+      }).project;
     },
-    semantics,
-    idGenerator: options.idGenerator ?? (() => newId() as NodeId),
+    validateCandidate: ({ candidate, changedGraphIds }) =>
+      semantics.validateCandidate({
+        base: options.authoringProject,
+        candidate,
+        touchedScope: completeGraphScope(changedGraphIds, candidate),
+      }),
   });
 
   let latestDiagnostics: GraphDiagnostic[] = [];
   const kernelFacade = {
-    applyPatch(patch: GraphPatch): ApplyPatchResult {
-      const result = kernel.applyPatch(patch);
+    applyDocumentPatch(input: { patchId: string; expectedDraftRevision: number; unifiedDiff: string }) {
+      const result = workspace.applyDocumentPatch(input);
       const fresh = result.disposition === 'replayed' ? result.original : result;
       latestDiagnostics = [...fresh.diagnostics];
       return result;
     },
-    getDraft: () => kernel.getDraft(),
-    getDraftDelta: () => kernel.getDraftDelta(),
-    getDraftRevision: () => kernel.getDraftRevision(),
-    hasDraftChanges: () => kernel.hasDraftChanges(),
+    replaceDocument(input: { patchId: string; expectedDraftRevision: number; path: string; contents: string }) {
+      const result = workspace.replaceDocument(input);
+      const fresh = result.disposition === 'replayed' ? result.original : result;
+      latestDiagnostics = [...fresh.diagnostics];
+      return result;
+    },
+    getDraft: () => workspace.getDraft(),
+    getDraftDelta: () =>
+      calculateGraphBuilderDraftDelta(options.authoringProject, workspace.getDraft(), options.activeGraphId),
+    getProjectDraftDelta: () => workspace.getProjectDraftDelta(),
+    getDraftRevision: () => workspace.getDraftRevision(),
+    hasDraftChanges: () => workspace.hasDraftChanges(),
   };
   const readExecutor = createGraphBuilderReadExecutor({
     activeGraphId: options.activeGraphId,
@@ -131,6 +147,8 @@ export function createPlanBGraphBuilderSessionRuntime(
     getDraftRevision: kernelFacade.getDraftRevision,
     getDiagnostics: () => latestDiagnostics,
     getDraftDelta: kernelFacade.getDraftDelta,
+    readVirtualDocument: ({ path, startLine, lineCount, startOffset }) =>
+      workspace.readDocument(path, startLine, lineCount, startOffset),
   });
 
   const controller = new GraphBuilderSessionController({
@@ -139,6 +157,7 @@ export function createPlanBGraphBuilderSessionRuntime(
     base: options.base,
     policyVersion: options.policyVersion ?? GRAPH_BUILDER_POLICY_VERSION,
     kernel: kernelFacade,
+    buildWorkspaceContext: () => workspace.getPolicyWorkspaceContext(options.activeGraphId),
     buildProjection: ({ delta, diagnostics, draft, draftRevision }) =>
       buildGraphBuilderProjection({
         project: draft,
@@ -154,10 +173,9 @@ export function createPlanBGraphBuilderSessionRuntime(
       semantics.validateCandidate({
         base: options.authoringProject,
         candidate: draft,
-        touchedScope: completeActiveGraphScope(
-          options.activeGraphId,
-          draft.graphs[options.activeGraphId]?.nodes.map((node) => node.id) ?? [],
-          draft.graphs[options.activeGraphId]?.connections ?? [],
+        touchedScope: completeGraphScope(
+          workspace.getProjectDraftDelta().graphDeltas.map((delta) => delta.graphId as GraphId),
+          draft,
         ),
       }),
     verifyIdentity: options.verifyIdentity,
@@ -173,21 +191,21 @@ export function createPlanBGraphBuilderSessionRuntime(
   };
 }
 
-function completeActiveGraphScope(
-  graphId: GraphId,
-  nodeIds: readonly NodeId[],
-  connections: readonly NodeConnection[],
-): GraphBuilderTouchedScope {
+function completeGraphScope(graphIds: readonly GraphId[], project: AuthoringProject): GraphBuilderTouchedScope {
+  const uniqueGraphIds = [...new Set(graphIds)];
   return {
-    graphIds: [graphId],
-    nodeIds: [...nodeIds],
-    connectionKeys: connections.map((connection) =>
-      graphBuilderStringTupleKey(
-        connection.outputNodeId,
-        connection.outputId,
-        connection.inputNodeId,
-        connection.inputId,
-      ),
+    graphIds: uniqueGraphIds,
+    nodeIds: uniqueGraphIds.flatMap((graphId) => project.graphs[graphId]?.nodes.map((node) => node.id) ?? []),
+    connectionKeys: uniqueGraphIds.flatMap(
+      (graphId) =>
+        project.graphs[graphId]?.connections.map((connection) =>
+          graphBuilderStringTupleKey(
+            connection.outputNodeId,
+            connection.outputId,
+            connection.inputNodeId,
+            connection.inputId,
+          ),
+        ) ?? [],
     ),
     operationIndices: [],
   };

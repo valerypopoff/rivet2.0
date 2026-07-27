@@ -269,9 +269,7 @@ const BUILDERS: Readonly<Record<GraphBuilderSyntheticProjectFixtureId, Synthetic
   },
   'data-bus-with-nearby-space': ({ registry }) => {
     const provider = node(registry, 'text', 'bus-provider', 'Provider', 0, 0, { text: 'shared' });
-    const bus = node(registry, 'passthrough', 'shared-bus', 'Shared Bus', 360, 0, {
-      renderAsDataBus: true,
-    });
+    const bus = node(registry, 'dataBus', 'shared-bus', 'Shared Bus', 360, 0, {});
     const consumer = node(registry, 'text', 'bus-consumer', 'Consumer', 720, 0, { text: '{{value}}' });
     return singleGraphProject(
       registry,

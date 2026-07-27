@@ -11,6 +11,8 @@ import {
 export { GRAPH_BUILDER_POLICY_ALLOWED_NODE_TYPES, GRAPH_BUILDER_POLICY_INJECTABLE_LLM_DATA_KEYS };
 
 export type GraphBuilderPolicyVariantName = 'schema' | 'text';
+export const GRAPH_BUILDER_POLICY_ACTIVE_VARIANT = 'text' as const satisfies GraphBuilderPolicyVariantName;
+export const GRAPH_BUILDER_POLICY_RESPONSE_MODE = 'exact-json-text';
 
 export type GraphBuilderPolicyVariantManifest = {
   graphId: string;

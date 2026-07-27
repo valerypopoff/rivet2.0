@@ -4,7 +4,6 @@ import { type GraphId, type Project, type ProjectId, resolveProcessSettings } fr
 import { GRAPH_BUILDER_PROTOCOL_VERSION, type GraphBuilderDecision } from '../../domain/graphBuilder/index.js';
 import {
   createGraphBuilderPolicyRunner,
-  getGraphBuilderDecisionResponseSchema,
   GRAPH_BUILDER_POLICY_VERSION,
   type GraphBuilderPolicyAssistModel,
 } from './policyRunner.js';
@@ -50,6 +49,24 @@ function policyTurn(provider: string): GraphBuilderPolicyTurn {
       connections: [],
       diagnostics: [],
     },
+    workspace: {
+      version: 1,
+      activeDocumentPath: 'graphs/provider-contract-graph.yaml',
+      delta: { graphDeltas: [] },
+      documents: [],
+      activeDocument: {
+        path: 'graphs/provider-contract-graph.yaml',
+        digest: 'digest',
+        startOffset: 0,
+        endOffset: 11,
+        totalLength: 11,
+        totalLines: 1,
+        startLine: 1,
+        endLine: 1,
+        content: 'version: 1\n',
+        truncated: false,
+      },
+    },
     transcript: [],
     contextResults: [],
     diagnostics: [],
@@ -72,16 +89,6 @@ function readyDecision(provider: string): GraphBuilderDecision {
   };
 }
 
-function schemaFromBody(body: Record<string, unknown>, path: readonly string[]): unknown {
-  let current: unknown = body;
-  for (const key of path) {
-    assert.ok(current != null && typeof current === 'object' && !Array.isArray(current));
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
-
-const schema = getGraphBuilderDecisionResponseSchema();
 const fixtures: readonly ProviderFixture[] = [
   {
     provider: 'openai',
@@ -95,10 +102,9 @@ const fixtures: readonly ProviderFixture[] = [
       assert.equal(headers.get('authorization'), `Bearer ${secret}`);
     },
     assertRequestBody(body) {
-      assert.equal(schemaFromBody(body, ['text', 'format', 'type']), 'json_schema');
-      assert.equal(schemaFromBody(body, ['text', 'format', 'strict']), true);
-      assert.equal(schemaFromBody(body, ['text', 'format', 'name']), 'graph_builder_decision');
-      assert.deepEqual(schemaFromBody(body, ['text', 'format', 'schema']), schema);
+      const text = body.text as { format?: { type?: unknown } } | undefined;
+      assert.notEqual(text?.format?.type, 'json_schema');
+      assert.equal(JSON.stringify(body).includes('graph_builder_decision'), false);
     },
     response(decisionText) {
       return {
@@ -138,8 +144,9 @@ const fixtures: readonly ProviderFixture[] = [
       assert.equal(headers.get('x-api-key'), secret);
     },
     assertRequestBody(body) {
-      assert.equal(schemaFromBody(body, ['output_config', 'format', 'type']), 'json_schema');
-      assert.deepEqual(schemaFromBody(body, ['output_config', 'format', 'schema']), schema);
+      const outputConfig = body.output_config as { format?: { type?: unknown } } | undefined;
+      assert.notEqual(outputConfig?.format?.type, 'json_schema');
+      assert.equal(JSON.stringify(body).includes('graph_builder_decision'), false);
     },
     response(decisionText) {
       return {
@@ -169,9 +176,12 @@ const fixtures: readonly ProviderFixture[] = [
       assert.equal(headers.get('x-goog-api-key'), secret);
     },
     assertRequestBody(body) {
-      assert.equal(schemaFromBody(body, ['generationConfig', 'responseMimeType']), 'application/json');
-      const responseSchema = schemaFromBody(body, ['generationConfig', 'responseSchema']);
-      assert.ok(responseSchema != null && typeof responseSchema === 'object' && !Array.isArray(responseSchema));
+      const generationConfig = body.generationConfig as
+        | { responseMimeType?: unknown; responseSchema?: unknown }
+        | undefined;
+      assert.notEqual(generationConfig?.responseMimeType, 'application/json');
+      assert.equal(generationConfig?.responseSchema, undefined);
+      assert.equal(JSON.stringify(body).includes('graph_builder_decision'), false);
     },
     response(decisionText) {
       return {

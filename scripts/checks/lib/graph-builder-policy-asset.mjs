@@ -85,7 +85,7 @@ function createPolicyLlmNode(id, responseFormat, x, y) {
     apiKeySource: 'environment',
     customProviderApiKeyEnvVarName: '',
     temperature: 0,
-    maxTokens: 8192,
+    maxTokens: 32_768,
     responseFormat,
     responseSchemaName: responseFormat === 'json_schema' ? 'graph_builder_decision' : '',
     responseSchemaDescription:
@@ -99,11 +99,11 @@ function createPolicyLlmNode(id, responseFormat, x, y) {
   return node;
 }
 
-function createDecisionOutput(id, x, y) {
+function createDecisionOutput(id, dataType, x, y) {
   const node = withIdentity(GraphOutputNodeImpl.create(), id, 'Decision', x, y);
   node.data = {
     id: 'decision',
-    dataType: 'any',
+    dataType,
   };
   return node;
 }
@@ -125,7 +125,7 @@ function createSchemaGraph() {
       createResponseSchemaInput(ids.responseSchemaInput, 0, 340),
       createSystemPromptNode(ids.systemPrompt, 420, 0),
       createPolicyLlmNode(ids.llm, 'json_schema', 850, 180),
-      createDecisionOutput(ids.decisionOutput, 1280, 180),
+      createDecisionOutput(ids.decisionOutput, 'any', 1280, 180),
     ],
     connections: GRAPH_BUILDER_POLICY_EXPECTED_CONNECTIONS.schema.map(
       ([outputNodeId, outputId, inputNodeId, inputId]) => connection(outputNodeId, outputId, inputNodeId, inputId),
@@ -145,7 +145,7 @@ function createTextGraph() {
       createPolicyTurnInput(ids.policyTurnInput, 0, 240),
       createSystemPromptNode(ids.systemPrompt, 420, 0),
       createPolicyLlmNode(ids.llm, '', 850, 180),
-      createDecisionOutput(ids.decisionOutput, 1280, 180),
+      createDecisionOutput(ids.decisionOutput, 'string', 1280, 180),
     ],
     connections: GRAPH_BUILDER_POLICY_EXPECTED_CONNECTIONS.text.map(([outputNodeId, outputId, inputNodeId, inputId]) =>
       connection(outputNodeId, outputId, inputNodeId, inputId),
@@ -276,10 +276,10 @@ function validateGraphInput(node, expectedId, expectedType, errors) {
   }
 }
 
-function validateDecisionOutput(node, errors) {
+function validateDecisionOutput(node, expectedType, errors) {
   if (!node) return;
-  if (node.data?.id !== 'decision' || node.data?.dataType !== 'any') {
-    errors.push(`Graph output ${node.id} must be the sole decision:any output.`);
+  if (node.data?.id !== 'decision' || node.data?.dataType !== expectedType) {
+    errors.push(`Graph output ${node.id} must be the sole decision:${expectedType} output.`);
   }
 }
 
@@ -340,7 +340,7 @@ function validateVariant(project, manifest, variant, errors) {
   const output = findNode(graph, config.decisionOutputNodeId, 'graphOutput', errors);
 
   validateGraphInput(turnInput, 'policyTurn', 'string', errors);
-  validateDecisionOutput(output, errors);
+  validateDecisionOutput(output, variant === 'text' ? 'string' : 'any', errors);
   validateLlmNode(llm, config.responseFormat, errors);
 
   if (systemPrompt) {

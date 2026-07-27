@@ -15,6 +15,8 @@ import { generatedBuiltInHelp } from '../../graphBuilderAssets.js';
 import {
   assertGraphBuilderAuthoringValue,
   compareGraphBuilderStrings,
+  GRAPH_BUILDER_LIMITS,
+  GraphBuilderPortableJsonError,
   hashCanonicalGraphBuilderValue,
   parsePortableJson,
   type GraphBuilderAuthoringProject,
@@ -48,6 +50,16 @@ export type GraphBuilderSettingDescriptor = Readonly<{
   description: string;
   allowedValues?: readonly string[];
   projection?: 'default' | 'on-demand';
+}>;
+
+export type GraphBuilderSafeSettingOmission = Readonly<{
+  key: string;
+  reason: 'invalid' | 'oversized';
+}>;
+
+export type GraphBuilderSafeSettingsProjection = Readonly<{
+  safeSettings: PortableJsonObject;
+  omittedSettings: readonly GraphBuilderSafeSettingOmission[];
 }>;
 
 export type GraphBuilderNodeAuthoringAdapter = Readonly<{
@@ -115,6 +127,7 @@ const BUILT_IN_DESCRIPTIONS: Readonly<Record<string, string>> = {
   array: 'Collects variadic inputs into an array.',
   boolean: 'Provides or converts a boolean value.',
   comment: 'Adds a non-executing Markdown note to the graph.',
+  dataBus: 'Shares independent values through a compact topology rail without executing as a relay node.',
   expression: 'Evaluates a JavaScript expression with interpolation inputs.',
   externalCall: 'Calls a host-provided external function.',
   gptFunction: 'Declares a tool that an LLM Chat node can call.',
@@ -181,6 +194,11 @@ const STATIC_BUILT_IN_SETTINGS: Readonly<Record<string, readonly GraphBuilderSet
     setting('useValueInput', 'boolean', 'Read the value from an input port.'),
   ],
   comment: [setting('text', 'string', 'Markdown note text.', { projection: 'on-demand' })],
+  codeNew: [
+    setting('code', 'string', 'JavaScript source. Use {{name}} for dynamic inputs and return one value.', {
+      projection: 'on-demand',
+    }),
+  ],
   expression: [
     setting('expression', 'string', 'JavaScript expression. Use {{name}} for dynamic inputs.', {
       projection: 'on-demand',
@@ -226,7 +244,8 @@ const STATIC_BUILT_IN_SETTINGS: Readonly<Record<string, readonly GraphBuilderSet
       projection: 'on-demand',
     }),
   ],
-  passthrough: [setting('renderAsDataBus', 'boolean', 'Render this Passthrough as a canvas data bus.')],
+  dataBus: [],
+  passthrough: [],
   prompt: [
     setting('type', 'string-enum', 'Chat message role.', {
       allowedValues: ['system', 'user', 'assistant', 'function'],
@@ -250,13 +269,17 @@ const STATIC_BUILT_IN_SETTINGS: Readonly<Record<string, readonly GraphBuilderSet
   ],
 };
 
-function isSecretFieldName(value: string): boolean {
+export function isGraphBuilderSecretFieldName(value: string): boolean {
   const compact = value.toLowerCase().replace(/[^a-z0-9]/g, '');
-  return SECRET_FIELD_NAMES.has(compact) || SECRET_FIELD_FRAGMENTS.some((fragment) => compact.includes(fragment));
+  return (
+    SECRET_FIELD_NAMES.has(compact) ||
+    compact.endsWith('token') ||
+    SECRET_FIELD_FRAGMENTS.some((fragment) => compact.includes(fragment))
+  );
 }
 
 function assertSafePath(path: readonly string[]): void {
-  if (path.length === 0 || path.some((segment) => segment.length === 0 || isSecretFieldName(segment))) {
+  if (path.length === 0 || path.some((segment) => segment.length === 0 || isGraphBuilderSecretFieldName(segment))) {
     throw new Error(`Unsafe Graph Builder setting path: ${path.join('.') || '(empty)'}`);
   }
   if (path.some((segment) => segment === '__proto__' || segment === 'prototype' || segment === 'constructor')) {
@@ -274,7 +297,7 @@ function redactSecretKeys(value: PortableJsonValue): PortableJsonValue {
 
   const output = Object.create(null) as PortableJsonObject;
   for (const [key, child] of Object.entries(value)) {
-    if (!isSecretFieldName(key)) {
+    if (!isGraphBuilderSecretFieldName(key)) {
       output[key] = redactSecretKeys(child);
     }
   }
@@ -288,7 +311,7 @@ function containsSecretKey(value: PortableJsonValue): boolean {
   if (value === null || typeof value !== 'object') {
     return false;
   }
-  return Object.entries(value).some(([key, child]) => isSecretFieldName(key) || containsSecretKey(child));
+  return Object.entries(value).some(([key, child]) => isGraphBuilderSecretFieldName(key) || containsSecretKey(child));
 }
 
 function getPathValue(value: unknown, path: readonly string[]): unknown {
@@ -396,7 +419,7 @@ function validateDescriptor(descriptor: GraphBuilderSettingDescriptor): void {
   ) {
     throw new Error('Graph Builder setting descriptor is malformed.');
   }
-  if (isSecretFieldName(descriptor.key)) {
+  if (isGraphBuilderSecretFieldName(descriptor.key)) {
     throw new Error(`Secret-like Graph Builder setting "${descriptor.key}" cannot be exposed.`);
   }
   const path = dataPath ?? [descriptor.key];
@@ -493,10 +516,136 @@ function normalizeAdapter(adapter: GraphBuilderNodeAuthoringAdapter | undefined)
   });
 }
 
+const CODE_RUNTIME_PERMISSION_KEYS = [
+  'allowFetch',
+  'allowRequire',
+  'allowRivet',
+  'allowProcess',
+  'allowConsole',
+] as const;
+
+function codeDataSets(node: ChartNode): unknown[] {
+  return [node.data, ...(node.variants ?? []).map((variant) => variant.data)];
+}
+
+function codeRuntimePermissionState(node: ChartNode): unknown[] {
+  return codeDataSets(node).map((data) => {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+      return data;
+    }
+    const record = data as Record<string, unknown>;
+    return CODE_RUNTIME_PERMISSION_KEYS.map((key) => record[key]);
+  });
+}
+
+function codeSourceState(node: ChartNode): unknown[] {
+  return codeDataSets(node).map((data) => {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+      return data;
+    }
+    return (data as Record<string, unknown>).code;
+  });
+}
+
+function delegateConfigurationState(node: ChartNode): unknown[] {
+  return [node.data, ...(node.variants ?? []).map((variant) => variant.data)];
+}
+
+function getDelegateFunctionCallConfigurationError(node: ChartNode): string | undefined {
+  for (const [index, value] of delegateConfigurationState(node).entries()) {
+    const location = index === 0 ? 'base settings' : `variant ${index} settings`;
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return `Delegate Tool Call ${location} must be an object.`;
+    }
+    const data = value as {
+      autoDelegate?: unknown;
+      fallBackToExternalCall?: unknown;
+      passthroughErrors?: unknown;
+    };
+    if (data.autoDelegate !== true) {
+      return `Delegate Tool Call ${location} must use Auto Delegate mode; manual handler maps remain outside the Graph Builder authoring surface.`;
+    }
+    if (data.fallBackToExternalCall !== undefined && typeof data.fallBackToExternalCall !== 'boolean') {
+      return `Delegate Tool Call ${location} must use a boolean external-call fallback setting.`;
+    }
+    if (data.passthroughErrors !== undefined && typeof data.passthroughErrors !== 'boolean') {
+      return `Delegate Tool Call ${location} must use a boolean passthrough-errors setting.`;
+    }
+    if (data.passthroughErrors === true && data.fallBackToExternalCall !== true) {
+      return `Delegate Tool Call ${location} can pass through errors only when external-call fallback is enabled.`;
+    }
+  }
+  return undefined;
+}
+
+function hasUnsafeCodeRuntimePermission(node: ChartNode): boolean {
+  return codeDataSets(node).some((data) => {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+      return true;
+    }
+    const record = data as Record<string, unknown>;
+    return CODE_RUNTIME_PERMISSION_KEYS.some((key) => {
+      const value = record[key];
+      return value !== undefined && value !== false;
+    });
+  });
+}
+
+function applyCodeAuthoringSettings(node: ChartNode, settings: PortableJsonObject): ChartNode {
+  if (node.data === null || typeof node.data !== 'object' || Array.isArray(node.data)) {
+    throw new Error('Code node settings payload is malformed.');
+  }
+  const currentData = node.data as Record<string, unknown>;
+  if (Object.hasOwn(settings, 'code') && settings.code !== currentData.code && hasUnsafeCodeRuntimePermission(node)) {
+    throw new Error('Code source cannot be changed while a base or variant runtime permission is enabled.');
+  }
+
+  const nextNode = cloneDeep(node);
+  Object.assign(nextNode.data as Record<string, unknown>, settings);
+  return nextNode;
+}
+
 function createBuiltInAdapter(
   nodeType: string,
   project: GraphBuilderAuthoringProject,
 ): GraphBuilderNodeAuthoringAdapter {
+  if (nodeType === 'code') {
+    return normalizeAdapter({
+      description: getBuiltInDescription(nodeType),
+      settings: [
+        setting(
+          'code',
+          'string',
+          'JavaScript source. Read typed values from inputs and return an object of typed named outputs.',
+          { projection: 'on-demand' },
+        ),
+        setting('inputNames', 'string-array', 'Names of the legacy Code inputs.'),
+        setting('outputNames', 'string-array', 'Names of the legacy Code outputs.'),
+      ],
+      projectSafeSettings: ({ node }) => {
+        const data = node.data as Record<string, unknown>;
+        const projection = Object.create(null) as PortableJsonObject;
+        for (const key of ['code', 'inputNames', 'outputNames'] as const) {
+          if (!Object.hasOwn(data, key) || data[key] === undefined) {
+            continue;
+          }
+          const value = data[key];
+          projection[key] = (key !== 'code' && typeof value === 'string' ? [value] : value) as PortableJsonValue;
+        }
+        return projection;
+      },
+      applySettings: ({ node, settings }) => applyCodeAuthoringSettings(node, settings),
+    });
+  }
+
+  if (nodeType === 'codeNew') {
+    return normalizeAdapter({
+      description: getBuiltInDescription(nodeType),
+      settings: ownRecordValue(STATIC_BUILT_IN_SETTINGS, nodeType) ?? [],
+      applySettings: ({ node, settings }) => applyCodeAuthoringSettings(node, settings),
+    });
+  }
+
   if (nodeType === 'delegateFunctionCall') {
     return normalizeAdapter({
       description: BUILT_IN_DESCRIPTIONS.delegateFunctionCall,
@@ -520,18 +669,9 @@ function createBuiltInAdapter(
       applySettings: ({ node, settings }) => {
         const nextNode = cloneDeep(node);
         Object.assign(nextNode.data as Record<string, unknown>, settings);
-        const data = nextNode.data as {
-          autoDelegate?: unknown;
-          fallBackToExternalCall?: unknown;
-          passthroughErrors?: unknown;
-        };
-        if (data.autoDelegate !== true) {
-          throw new Error(
-            'Graph Builder supports Delegate Tool Call only in Auto Delegate mode; manual handler maps remain outside the first-release patch protocol.',
-          );
-        }
-        if (data.passthroughErrors === true && data.fallBackToExternalCall !== true) {
-          throw new Error('Delegate Tool Call can pass through errors only when external-call fallback is enabled.');
+        const configurationError = getDelegateFunctionCallConfigurationError(nextNode);
+        if (configurationError) {
+          throw new Error(configurationError);
         }
         return nextNode;
       },
@@ -649,30 +789,52 @@ function createBuiltInAdapter(
   });
 }
 
+function classifySettingProjectionError(error: unknown): GraphBuilderSafeSettingOmission['reason'] {
+  return error instanceof GraphBuilderPortableJsonError && /\bexceeds\b/i.test(error.message) ? 'oversized' : 'invalid';
+}
+
 function projectSettings(
   node: ChartNode,
   project: GraphBuilderAuthoringProject,
   adapter: GraphBuilderNodeAuthoringAdapter,
   options: { includeOnDemand: boolean },
-): PortableJsonObject {
+): GraphBuilderSafeSettingsProjection {
   const projected = adapter.projectSafeSettings?.({ node: cloneDeep(node), project: cloneDeep(project) });
   if (projected !== undefined) {
-    const portable = parsePortableJson(projected) as PortableJsonObject;
+    assertGraphBuilderAuthoringValue(projected);
+    if (projected === null || typeof projected !== 'object' || Array.isArray(projected)) {
+      throw new Error('Safe projection adapter must return an object.');
+    }
     const descriptorByKey = new Map((adapter.settings ?? []).map((descriptor) => [descriptor.key, descriptor]));
-    const output = Object.create(null) as PortableJsonObject;
-    for (const [key, value] of Object.entries(portable)) {
-      const descriptor = descriptorByKey.get(key);
-      if (!descriptor) {
+    for (const key of Object.keys(projected)) {
+      if (!descriptorByKey.has(key)) {
         throw new Error(`Safe projection adapter returned undeclared setting "${key}".`);
       }
-      if (options.includeOnDemand || descriptor.projection !== 'on-demand') {
-        output[key] = validateSettingValue(descriptor, redactSecretKeys(value));
+    }
+
+    const output = Object.create(null) as PortableJsonObject;
+    const omittedSettings: GraphBuilderSafeSettingOmission[] = [];
+    for (const descriptor of adapter.settings ?? []) {
+      if (
+        (!options.includeOnDemand && descriptor.projection === 'on-demand') ||
+        !Object.hasOwn(projected, descriptor.key)
+      ) {
+        continue;
+      }
+      try {
+        output[descriptor.key] = validateSettingValue(
+          descriptor,
+          redactSecretKeys(parsePortableJson(projected[descriptor.key])),
+        );
+      } catch (error) {
+        omittedSettings.push({ key: descriptor.key, reason: classifySettingProjectionError(error) });
       }
     }
-    return output;
+    return { safeSettings: output, omittedSettings };
   }
 
   const output = Object.create(null) as PortableJsonObject;
+  const omittedSettings: GraphBuilderSafeSettingOmission[] = [];
   for (const descriptor of adapter.settings ?? []) {
     if (!options.includeOnDemand && descriptor.projection === 'on-demand') {
       continue;
@@ -682,14 +844,15 @@ function projectSettings(
     if (value !== undefined) {
       try {
         output[descriptor.key] = validateSettingValue(descriptor, redactSecretKeys(parsePortableJson(value)));
-      } catch {
-        // Existing projects can contain legacy or malformed values. Omit an
-        // invalid field instead of leaking it or making the whole safe
-        // projection unavailable.
+      } catch (error) {
+        // Existing projects can contain legacy, malformed, or source-sized
+        // values. Keep the adapter available while making every omitted field
+        // and reason explicit to the caller.
+        omittedSettings.push({ key: descriptor.key, reason: classifySettingProjectionError(error) });
       }
     }
   }
-  return output;
+  return { safeSettings: output, omittedSettings };
 }
 
 function applySettings(
@@ -840,7 +1003,7 @@ export class GraphBuilderAuthoringCatalogSnapshot {
       const canUseRichAdapter = !plugin || explicitAdapter !== undefined;
       const safeDefaults =
         canUseRichAdapter && (adapter.settings?.length ?? 0) > 0
-          ? projectSettings(defaultNode, options.project, adapter, { includeOnDemand: true })
+          ? projectSettings(defaultNode, options.project, adapter, { includeOnDemand: true }).safeSettings
           : undefined;
 
       entries.push(
@@ -951,12 +1114,89 @@ export class GraphBuilderAuthoringCatalogSnapshot {
     return this.#entriesByChoiceId.get(authoringChoiceId);
   }
 
+  resolveAuthoringChoiceId(value: string): string | undefined {
+    if (this.#entriesByChoiceId.has(value)) {
+      return value;
+    }
+
+    const registeredChoiceId = `registered:${value}`;
+    const registeredEntry = this.#entriesByChoiceId.get(registeredChoiceId);
+    return registeredEntry?.family === 'registered' ? registeredChoiceId : undefined;
+  }
+
+  getNodeAuthoringChoiceId(node: ChartNode): string | undefined {
+    let authoringChoiceId: string;
+    try {
+      if (node.type === NODE_PREFAB_INSTANCE_TYPE) {
+        const prefabId = (node.data as { prefabId?: unknown } | undefined)?.prefabId;
+        if (typeof prefabId !== 'string' || prefabId.length === 0) {
+          return undefined;
+        }
+        authoringChoiceId = `node-prefab:${encodeURIComponent(prefabId)}`;
+      } else if (node.type === 'referencedGraphAlias') {
+        const data = node.data as { projectId?: unknown; graphId?: unknown } | undefined;
+        if (
+          typeof data?.projectId !== 'string' ||
+          data.projectId.length === 0 ||
+          typeof data.graphId !== 'string' ||
+          data.graphId.length === 0
+        ) {
+          return undefined;
+        }
+        authoringChoiceId = `referenced-graph-alias:${encodeURIComponent(data.projectId)}:${encodeURIComponent(data.graphId)}`;
+      } else {
+        authoringChoiceId = `registered:${node.type}`;
+      }
+    } catch {
+      return undefined;
+    }
+
+    return authoringChoiceId.length <= GRAPH_BUILDER_LIMITS.maxIdentifierLength &&
+      this.#entriesByChoiceId.has(authoringChoiceId)
+      ? authoringChoiceId
+      : undefined;
+  }
+
   getNodeTypeAdapter(nodeType: string): GraphBuilderNodeAuthoringAdapter | undefined {
     return this.#adaptersByNodeType.get(nodeType);
   }
 
   canResolveNodeType(nodeType: string): boolean {
     return this.#adaptersByNodeType.has(nodeType);
+  }
+
+  getDirectNodeMutationRejectionReason(baseNode: ChartNode | undefined, candidateNode: ChartNode): string | undefined {
+    if (candidateNode.type === 'delegateFunctionCall') {
+      const configurationChanged =
+        !baseNode ||
+        baseNode.type !== candidateNode.type ||
+        !deepEqual(delegateConfigurationState(baseNode), delegateConfigurationState(candidateNode));
+      return configurationChanged ? getDelegateFunctionCallConfigurationError(candidateNode) : undefined;
+    }
+
+    if (candidateNode.type !== 'code' && candidateNode.type !== 'codeNew') {
+      return undefined;
+    }
+
+    if (
+      hasUnsafeCodeRuntimePermission(candidateNode) &&
+      (!baseNode ||
+        baseNode.type !== candidateNode.type ||
+        !deepEqual(codeRuntimePermissionState(baseNode), codeRuntimePermissionState(candidateNode)))
+    ) {
+      return 'Graph Builder cannot create or expand Code runtime permissions through virtual-document editing.';
+    }
+
+    if (
+      baseNode &&
+      baseNode.type === candidateNode.type &&
+      hasUnsafeCodeRuntimePermission(baseNode) &&
+      !deepEqual(codeSourceState(baseNode), codeSourceState(candidateNode))
+    ) {
+      return 'Graph Builder cannot change Code source while a base or variant runtime permission is enabled.';
+    }
+
+    return undefined;
   }
 
   createNode(input: {
@@ -1025,18 +1265,34 @@ export class GraphBuilderAuthoringCatalogSnapshot {
     project: GraphBuilderAuthoringProject,
     options: { includeOnDemand?: boolean } = {},
   ): PortableJsonObject | undefined {
+    const projection = this.projectNodeSafeSettingsDetailed(node, project, options);
+    if (!projection) {
+      return undefined;
+    }
+    return Object.keys(projection.safeSettings).length > 0 ? projection.safeSettings : undefined;
+  }
+
+  projectNodeSafeSettingsDetailed(
+    node: ChartNode,
+    project: GraphBuilderAuthoringProject,
+    options: { includeOnDemand?: boolean } = {},
+  ): GraphBuilderSafeSettingsProjection | undefined {
     if (node.type === NODE_PREFAB_INSTANCE_TYPE) {
       const prefabId = (node.data as { prefabId?: NodePrefabId } | undefined)?.prefabId;
-      return prefabId ? ({ prefabId } as unknown as PortableJsonObject) : undefined;
+      return prefabId
+        ? {
+            safeSettings: { prefabId } as unknown as PortableJsonObject,
+            omittedSettings: [],
+          }
+        : undefined;
     }
     const adapter = this.#adaptersByNodeType.get(node.type);
     if (!adapter || (adapter.settings?.length ?? 0) === 0) {
       return undefined;
     }
-    const projected = projectSettings(node, project, adapter, {
+    return projectSettings(node, project, adapter, {
       includeOnDemand: options.includeOnDemand ?? false,
     });
-    return Object.keys(projected).length > 0 ? projected : undefined;
   }
 }
 
@@ -1044,8 +1300,4 @@ export function createGraphBuilderAuthoringCatalog(
   options: CreateGraphBuilderAuthoringCatalogOptions,
 ): GraphBuilderAuthoringCatalogSnapshot {
   return new GraphBuilderAuthoringCatalogSnapshot(options);
-}
-
-export function isGraphBuilderSecretFieldName(value: string): boolean {
-  return isSecretFieldName(value);
 }

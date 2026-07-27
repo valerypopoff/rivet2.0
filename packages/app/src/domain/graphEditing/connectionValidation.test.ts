@@ -42,6 +42,13 @@ function makeStartAsyncBranchNode(nodeId: string, title = 'Start Async Branch'):
   return node;
 }
 
+function makeDataBusNode(nodeId: string): ChartNode {
+  const node = registry.createDynamic('dataBus');
+  node.id = nodeId as NodeId;
+  node.title = 'Shared values';
+  return node;
+}
+
 test('filterValidSubGraphConnections keeps valid subgraph input connections', () => {
   const sourceNode = makeTextNode('source');
   const subGraphNode = makeSubGraphNode('subgraph');
@@ -182,6 +189,114 @@ test('getAsyncBranchTopologyViolation follows the full async subtree', () => {
   assert.equal(violation?.triggerNodeId, asyncBranch.id);
   assert.equal(violation?.kind, 'graphOutput');
   assert.equal(violation?.nodeId, graphOutput.id);
+});
+
+test('getAsyncBranchTopologyViolation follows a shared Data Bus channel into Graph Output', () => {
+  const asyncBranch = makeStartAsyncBranchNode('async');
+  const dataBus = makeDataBusNode('bus');
+  const graphOutput = makeGraphOutputNode('result', 'answer');
+
+  const violation = getAsyncBranchTopologyViolation({
+    connections: [
+      makeBaseConnection({
+        outputNodeId: asyncBranch.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: dataBus.id,
+        inputId: 'input1' as PortId,
+      }),
+      makeBaseConnection({
+        outputNodeId: dataBus.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: graphOutput.id,
+        inputId: 'value' as PortId,
+      }),
+    ],
+    nodesById: {
+      [asyncBranch.id]: asyncBranch,
+      [dataBus.id]: dataBus,
+      [graphOutput.id]: graphOutput,
+    },
+  });
+
+  assert.equal(violation?.kind, 'graphOutput');
+  assert.equal(violation?.nodeId, graphOutput.id);
+});
+
+test('getAsyncBranchTopologyViolation does not join independent Data Bus channels', () => {
+  const asyncBranch = makeStartAsyncBranchNode('async');
+  const foregroundSource = makeTextNode('foreground');
+  const dataBus = makeDataBusNode('bus');
+  const graphOutput = makeGraphOutputNode('result', 'answer');
+
+  const violation = getAsyncBranchTopologyViolation({
+    connections: [
+      makeBaseConnection({
+        outputNodeId: asyncBranch.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: dataBus.id,
+        inputId: 'input1' as PortId,
+      }),
+      makeBaseConnection({
+        outputNodeId: foregroundSource.id,
+        outputId: 'output' as PortId,
+        inputNodeId: dataBus.id,
+        inputId: 'input2' as PortId,
+      }),
+      makeBaseConnection({
+        outputNodeId: dataBus.id,
+        outputId: 'output2' as PortId,
+        inputNodeId: graphOutput.id,
+        inputId: 'value' as PortId,
+      }),
+    ],
+    nodesById: {
+      [asyncBranch.id]: asyncBranch,
+      [foregroundSource.id]: foregroundSource,
+      [dataBus.id]: dataBus,
+      [graphOutput.id]: graphOutput,
+    },
+  });
+
+  assert.equal(violation, undefined);
+});
+
+test('getAsyncBranchTopologyViolation does not use an invalid Data Bus as a raw connection hub', () => {
+  const asyncBranch = makeStartAsyncBranchNode('async');
+  const foregroundSource = makeTextNode('foreground');
+  const dataBus = makeDataBusNode('bus');
+  dataBus.disabled = true;
+  const graphOutput = makeGraphOutputNode('result', 'answer');
+
+  const violation = getAsyncBranchTopologyViolation({
+    connections: [
+      makeBaseConnection({
+        outputNodeId: asyncBranch.id,
+        outputId: 'output1' as PortId,
+        inputNodeId: dataBus.id,
+        inputId: 'input1' as PortId,
+      }),
+      makeBaseConnection({
+        outputNodeId: foregroundSource.id,
+        outputId: 'output' as PortId,
+        inputNodeId: dataBus.id,
+        inputId: 'input2' as PortId,
+      }),
+      makeBaseConnection({
+        outputNodeId: dataBus.id,
+        outputId: 'output2' as PortId,
+        inputNodeId: graphOutput.id,
+        inputId: 'value' as PortId,
+      }),
+    ],
+    nodesById: {
+      [asyncBranch.id]: asyncBranch,
+      [foregroundSource.id]: foregroundSource,
+      [dataBus.id]: dataBus,
+      [graphOutput.id]: graphOutput,
+    },
+  });
+
+  assert.equal(violation, undefined);
 });
 
 test('getAsyncBranchTopologyViolation reports an external input into an async descendant', () => {

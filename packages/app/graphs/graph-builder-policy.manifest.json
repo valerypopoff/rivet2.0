@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "policyVersion": "graph-builder-policy-v1",
+  "policyVersion": "graph-builder-policy-v3",
   "assetPath": "packages/app/graphs/graph-builder-policy.rivet-project",
   "projectId": "graph-builder-policy-project-v1",
-  "normalizedPromptSha256": "e21c950dc59dac8dc5f4bc10f0508b87ce0911839ba8e2bb160270a5c69f4f67",
+  "normalizedPromptSha256": "ab96b117c81cb3e18186a78c92362561afe10b8e3fbe52556e346dd42a652072",
   "allowedInjectedLlmDataKeys": [
     "provider",
     "model",

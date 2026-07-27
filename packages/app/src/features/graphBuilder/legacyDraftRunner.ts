@@ -377,7 +377,7 @@ export async function runLegacyGraphBuilderDraft(
     draftRevision: workingRevision,
     draft,
     preview: {
-      delta,
+      delta: { graphDeltas: [delta] },
       diagnostics: [],
       draftRevision: workingRevision,
       summary,

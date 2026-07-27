@@ -90,6 +90,11 @@ void describe('PassthroughNode', () => {
     assert.equal(canRenderPassthroughAsDataBus(chartNode), true);
     assert.equal(canRenderPassthroughAsDataBus({ ...chartNode, isConditional: true }), false);
     assert.equal(canRenderPassthroughAsDataBus({ ...chartNode, isSplitRun: true }), false);
+    assert.equal(canRenderPassthroughAsDataBus({ ...chartNode, disabled: true }), false);
+    assert.equal(
+      canRenderPassthroughAsDataBus({ ...chartNode, variants: [{ id: 'variant', name: 'Variant' }] }),
+      false,
+    );
     assert.equal(isPassthroughDataBusNode({ ...chartNode, data: undefined as never }), false);
   });
 });

@@ -1,4 +1,4 @@
-export const GRAPH_BUILDER_PROTOCOL_VERSION = 1 as const;
+export const GRAPH_BUILDER_PROTOCOL_VERSION = 3 as const;
 
 export const GRAPH_BUILDER_LIMITS = {
   maxArrayItems: 128,

@@ -127,6 +127,10 @@ const EMPTY_EXPANDED_OUTPUT_NODE_IDS: NodeId[] = [];
 const EMPTY_RUN_DATA_BY_NODE: Record<NodeId, undefined> = {};
 const EMPTY_PROCESS_PAGE_BY_NODE: Record<NodeId, never> = {};
 
+function isDataBusRailTarget(target: EventTarget | null | undefined): boolean {
+  return typeof Element !== 'undefined' && target instanceof Element && target.closest('.radio-data-bus-rail') != null;
+}
+
 type NodeScopedUiTarget = {
   graphId: string;
   nodeId: NodeId;
@@ -532,6 +536,11 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
 
   const handleCanvasContextMenuRequest = useStableCallback(
     (event: { clientX: number; clientY: number; target: EventTarget }) => {
+      if (isDataBusRailTarget(event.target)) {
+        setShowContextMenu(false);
+        return;
+      }
+
       if (visibleDraggingWire) {
         cancelWireDrag();
         setShowContextMenu(false);
@@ -571,6 +580,16 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
 
   const handleCanvasMouseDownCapture = useStableCallback((event: MouseEvent<HTMLDivElement>) => {
     blurFocusedGraphFilterInput(event.currentTarget.ownerDocument);
+  });
+
+  const handleCanvasContextMenuCapture = useStableCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (!isDataBusRailTarget(event.target)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    setShowContextMenu(false);
   });
 
   useWireDragScrolling();
@@ -812,10 +831,16 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     'Space',
     (e) => {
       e.preventDefault();
-      handleContextMenu({
+      const target = lastMouseInfoRef.current.target;
+      if (!target || isDataBusRailTarget(target)) {
+        setShowContextMenu(false);
+        return;
+      }
+
+      handleCanvasContextMenuRequest({
         clientX: lastMouseInfoRef.current.x,
         clientY: lastMouseInfoRef.current.y,
-        target: lastMouseInfoRef.current.target!,
+        target,
       });
     },
     { notWhenInputFocused: true },
@@ -1041,6 +1066,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
         css={nodeCanvasStyles}
         style={{ '--canvas-background-color': canvasBackgroundColor } as CSSProperties}
         onContextMenu={handleCanvasContextMenu}
+        onContextMenuCapture={handleCanvasContextMenuCapture}
         onMouseDownCapture={handleCanvasMouseDownCapture}
         onMouseDown={canvasMouseDown}
         onMouseMove={canvasMouseMove.run}

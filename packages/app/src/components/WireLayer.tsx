@@ -60,6 +60,7 @@ import {
 import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
 import {
   connectionMatchesDataBusChannelKeys,
+  isDataBusChannelPort,
   shouldRenderDataBusConnection,
   type DataBusTopology,
 } from './nodeCanvas/dataBusModel.js';
@@ -486,6 +487,7 @@ export const WireLayer: FC<WireLayerProps> = ({
     connections: visibleConnections,
     draggingNode,
     draggingWire: !!draggingWire,
+    forceRenderableConnectionKeySet: hoverRevealedDataBusConnectionKeySet,
     highlightedNodes,
     highlightedPort,
     nearViewportNodeIdSet,
@@ -750,41 +752,58 @@ export const WireLayer: FC<WireLayerProps> = ({
   };
   const hoverOverlayHost =
     typeof document === 'undefined' ? undefined : document.querySelector<HTMLElement>('.app') ?? document.body;
+  const draggingWireTouchesDataBus =
+    !!draggingWire &&
+    (isDataBusChannelPort({
+      input: draggingWire.startPortIsInput,
+      nodeId: draggingWire.startNodeId,
+      nodesById: effectiveNodesById,
+      portId: draggingWire.startPortId,
+    }) ||
+      (!!draggingWire.endNodeId &&
+        !!draggingWire.endPortId &&
+        isDataBusChannelPort({
+          input: true,
+          nodeId: draggingWire.endNodeId,
+          nodesById: effectiveNodesById,
+          portId: draggingWire.endPortId,
+        })));
+  const draggingWireContents = draggingWire && (
+    <ErrorBoundary fallback={<></>} key="wire-inprogress">
+      {draggingWire.endNodeId && draggingWire.endPortId ? (
+        <ConditionallyRenderWire
+          connection={{
+            outputNodeId: draggingWire.startNodeId,
+            outputId: draggingWire.startPortId,
+            inputNodeId: draggingWire.endNodeId,
+            inputId: draggingWire.endPortId,
+          }}
+          selected={false}
+          highlighted
+          nodesById={renderNodesById}
+          portPositions={portPositions}
+          isNotRan={false}
+        />
+      ) : (
+        <PartialWire
+          connection={{
+            nodeId: draggingWire.startNodeId,
+            portId: draggingWire.startPortId,
+            toX: mousePositionCanvas.x,
+            toY: mousePositionCanvas.y,
+          }}
+          portPositions={portPositions}
+        />
+      )}
+    </ErrorBoundary>
+  );
 
   return (
     <>
       <svg css={wiresStyles}>
         <ToolContinuationMarkerDefinitions markerIds={toolContinuationMarkerIds} />
         <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
-          {draggingWire && (
-            <ErrorBoundary fallback={<></>} key="wire-inprogress">
-              {draggingWire.endNodeId && draggingWire.endPortId ? (
-                <ConditionallyRenderWire
-                  connection={{
-                    outputNodeId: draggingWire.startNodeId,
-                    outputId: draggingWire.startPortId,
-                    inputNodeId: draggingWire.endNodeId,
-                    inputId: draggingWire.endPortId,
-                  }}
-                  selected={false}
-                  highlighted={!!(draggingWire.endNodeId && draggingWire.endPortId)}
-                  nodesById={renderNodesById}
-                  portPositions={portPositions}
-                  isNotRan={false}
-                />
-              ) : (
-                <PartialWire
-                  connection={{
-                    nodeId: draggingWire.startNodeId,
-                    portId: draggingWire.startPortId,
-                    toX: mousePositionCanvas.x,
-                    toY: mousePositionCanvas.y,
-                  }}
-                  portPositions={portPositions}
-                />
-              )}
-            </ErrorBoundary>
-          )}
+          {!draggingWireTouchesDataBus && draggingWireContents}
           <StaticWireContents
             {...sharedStaticWireContentsProps}
             compareRemovedConnections={compareRemovedConnections}
@@ -801,6 +820,19 @@ export const WireLayer: FC<WireLayerProps> = ({
           )}
         </g>
       </svg>
+      {draggingWireContents &&
+        draggingWireTouchesDataBus &&
+        hoverOverlayHost &&
+        createPortal(
+          <svg aria-hidden="true" className="data-bus-drag-wire-overlay" css={[wiresStyles, hoverRevealedWiresStyles]}>
+            <g transform={`translate(${canvasClientOffset.x}, ${canvasClientOffset.y})`}>
+              <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
+                {draggingWireContents}
+              </g>
+            </g>
+          </svg>,
+          hoverOverlayHost,
+        )}
       {hoverOverlayRenderableWires.length > 0 &&
         hoverOverlayHost &&
         createPortal(

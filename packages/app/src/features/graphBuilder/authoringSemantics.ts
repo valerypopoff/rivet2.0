@@ -1,4 +1,5 @@
 import {
+  compileDataBusTopology,
   NODE_PREFAB_INSTANCE_TYPE,
   resolveNodePrefabInstance,
   type ChartNode,
@@ -37,9 +38,14 @@ export type CreateGraphBuilderAuthoringSemanticsOptions = {
   catalog: GraphBuilderAuthoringCatalogSnapshot;
   referencedProjects: Record<ProjectId, Project>;
   /**
+   * Graphs where Graph Builder may add new inputs or outputs while preserving
+   * every boundary node captured in the base project.
+   */
+  additiveBoundaryGraphIds?: readonly GraphId[];
+  /**
    * Graphs that were captured as transient empty canvases may author their
-   * initial boundary over several patch batches. Persisted graph boundaries
-   * remain immutable.
+   * initial boundary over several patch batches, including revising a boundary
+   * added earlier in the same private draft.
    */
   mutableBoundaryGraphIds?: readonly GraphId[];
 };
@@ -153,12 +159,14 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
   readonly #registry: NodeRegistration<any, any>;
   readonly #catalog: GraphBuilderAuthoringCatalogSnapshot;
   readonly #referencedProjects: Record<ProjectId, Project>;
+  readonly #additiveBoundaryGraphIds: ReadonlySet<GraphId>;
   readonly #mutableBoundaryGraphIds: ReadonlySet<GraphId>;
 
   constructor(options: CreateGraphBuilderAuthoringSemanticsOptions) {
     this.#registry = options.registry;
     this.#catalog = options.catalog;
     this.#referencedProjects = cloneDeep(options.referencedProjects);
+    this.#additiveBoundaryGraphIds = new Set(options.additiveBoundaryGraphIds ?? []);
     this.#mutableBoundaryGraphIds = new Set(options.mutableBoundaryGraphIds ?? []);
   }
 
@@ -227,7 +235,7 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
     const result = this.#validateConnectionWithoutTopology(input.graphId, input.connection, input.project);
     const topologyViolation = getAsyncBranchTopologyViolation({
       connections: graph.connections,
-      nodesById: toNodesById(graph.nodes),
+      nodesById: getEffectiveNodesById(input.project, graph.nodes),
     });
     if (!topologyViolation) {
       return result;
@@ -290,9 +298,9 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
       diagnostics.push(
         diagnostic({
           key: 'candidate:project-boundary-changed',
-          ruleId: 'active-graph-only',
+          ruleId: 'project-shell-identity',
           message:
-            'Graph Builder Plan B may only mutate the active graph; project resources and graph identities changed.',
+            'Graph Builder may mutate graph contents only; project resources and graph identities must remain unchanged.',
         }),
       );
     }
@@ -327,7 +335,8 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
 
       const baseNodesById = toNodesById(baseGraph.nodes);
       const candidateNodesById = toNodesById(graph.nodes);
-      if (!this.#mutableBoundaryGraphIds.has(graphId)) {
+      const boundaryIsMutable = this.#mutableBoundaryGraphIds.has(graphId);
+      if (!boundaryIsMutable) {
         for (const baseNode of baseGraph.nodes) {
           const identity = boundaryIdentity(baseNode);
           if (!identity) {
@@ -347,6 +356,8 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
             );
           }
         }
+      }
+      if (!boundaryIsMutable && !this.#additiveBoundaryGraphIds.has(graphId)) {
         for (const candidateNode of graph.nodes) {
           if (boundaryIdentity(candidateNode) && !baseNodesById[candidateNode.id]) {
             diagnostics.push(
@@ -363,6 +374,7 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
       }
 
       const nodesById = toNodesById(graph.nodes);
+      const effectiveNodesById = getEffectiveNodesById(input.candidate, graph.nodes);
       if (Object.keys(nodesById).length !== graph.nodes.length) {
         diagnostics.push(
           diagnostic({
@@ -376,7 +388,71 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
 
       for (const node of graph.nodes) {
         const baseNode = baseNodesById[node.id];
+        const directMutationRejection = this.#catalog.getDirectNodeMutationRejectionReason(baseNode, node);
+        if (directMutationRejection) {
+          diagnostics.push(
+            diagnostic({
+              key: `candidate:protected-node-mutation:${graphId}:${node.id}`,
+              ruleId: 'protected-node-mutation',
+              graphId,
+              nodeId: node.id,
+              message: directMutationRejection,
+            }),
+          );
+        }
         const configurationChanged = !baseNode || !deepEqual(baseNode.data, node.data);
+        const identityChanged = !baseNode || baseNode.type !== node.type;
+        if (identityChanged && !this.#catalog.getNodeAuthoringChoiceId(node)) {
+          diagnostics.push(
+            diagnostic({
+              key: `candidate:unsupported-node-type:${graphId}:${node.id}`,
+              ruleId: 'captured-node-authoring',
+              graphId,
+              nodeId: node.id,
+              message: `Node type "${node.type}" is unavailable from the captured project authoring catalog.`,
+            }),
+          );
+        }
+        if (configurationChanged) {
+          let effectiveType = node.type;
+          try {
+            effectiveType = getEffectiveNode(input.candidate, node).type;
+          } catch {
+            // Missing prefab sources are reported through the captured
+            // authoring capability check below.
+          }
+          if (!this.#catalog.canResolveNodeType(effectiveType)) {
+            diagnostics.push(
+              diagnostic({
+                key: `candidate:unsupported-node-settings:${graphId}:${node.id}`,
+                ruleId: 'captured-node-authoring',
+                graphId,
+                nodeId: node.id,
+                message: `Node "${node.title || node.id}" cannot be created or reconfigured because its type has no captured pure authoring adapter.`,
+              }),
+            );
+          } else {
+            try {
+              this.#resolveRichPorts({
+                graphId,
+                nodeId: node.id,
+                project: input.candidate,
+              });
+            } catch {
+              complete = false;
+              diagnostics.push(
+                diagnostic({
+                  key: `candidate:unresolved-node-configuration:${graphId}:${node.id}`,
+                  ruleId: 'captured-node-authoring',
+                  graphId,
+                  nodeId: node.id,
+                  message: `Node "${node.title || node.id}" could not be resolved through its captured authoring adapter after the configuration change.`,
+                  verification: 'unverified',
+                }),
+              );
+            }
+          }
+        }
         if (!configurationChanged) {
           continue;
         }
@@ -558,7 +634,7 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
 
       const topologyViolation = getAsyncBranchTopologyViolation({
         connections: graph.connections,
-        nodesById,
+        nodesById: effectiveNodesById,
       });
       if (topologyViolation) {
         diagnostics.push(
@@ -568,6 +644,30 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
             graphId,
             nodeId: topologyViolation.nodeId,
             message: topologyViolation.message,
+          }),
+        );
+      }
+
+      // Data Buses are not ordinary runtime nodes: their authored channels
+      // become direct execution edges only after topology compilation. Raw
+      // port validation above cannot see relay cycles or effective-provider
+      // conflicts, so validate the same compiled topology that execution uses
+      // before the draft is accepted.
+      try {
+        compileDataBusTopology({
+          connections: graph.connections,
+          graphNodes: graph.nodes.map((node) => effectiveNodesById[node.id] ?? node),
+        });
+      } catch (error) {
+        diagnostics.push(
+          diagnostic({
+            key: `candidate:data-bus-topology:${graphId}`,
+            ruleId: 'data-bus-topology',
+            graphId,
+            message:
+              error instanceof Error
+                ? `Data Bus topology cannot be compiled: ${error.message}`
+                : 'Data Bus topology cannot be compiled.',
           }),
         );
       }

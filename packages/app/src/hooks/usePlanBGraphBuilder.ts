@@ -198,11 +198,12 @@ export function usePlanBGraphBuilder() {
             applyDefaultNodeColors: context.authoringPreferences.applyDefaultNodeColors,
           },
           mutableBoundaryGraphIds: context.snapshot.transientGraph ? [context.base.activeGraphId] : [],
-          executePolicy: (turn, abortSignal) =>
+          executePolicy: (turn, abortSignal, reportActivity) =>
             policyRunner.execute(turn, {
               assistModel: context.assistModel,
               runtimeSettings,
               abortSignal,
+              onActivity: reportActivity,
             }),
           verifyIdentity: () => {
             const live = captureGraphBuilderEditorContext(store, sessionId);

@@ -6,6 +6,7 @@ import {
   type GraphBuilderPreview,
   type GraphBuilderSessionViewState,
 } from '../features/graphBuilder/sessionController.js';
+import { isGraphBuilderSessionWorking } from '../features/graphBuilder/sessionPresentation.js';
 import { graphBuilderStringTupleKey, type GraphDraftDelta } from '../domain/graphBuilder/index.js';
 
 const styles = css`
@@ -83,7 +84,7 @@ export function GraphBuilderSessionPanel({
     return null;
   }
 
-  if (state.status === 'gathering-context' || state.status === 'editing' || state.status === 'repairing') {
+  if (isGraphBuilderSessionWorking(state)) {
     return (
       <div css={styles}>
         <section className="graph-builder-session-card" aria-live="polite">
@@ -158,19 +159,31 @@ export function GraphBuilderSessionPanel({
 }
 
 function GraphBuilderPreviewContent({ preview }: { preview: GraphBuilderPreview }) {
-  const delta = preview.delta;
+  const graphDeltas = preview.delta.graphDeltas;
+  const sum = (select: (delta: GraphDraftDelta) => number) =>
+    graphDeltas.reduce((total, delta) => total + select(delta), 0);
   return (
     <>
       <div className="graph-builder-session-copy">{preview.summary}</div>
       <ul className="graph-builder-session-delta">
-        <li>{delta.addedNodeCount ?? delta.addedNodes.length} nodes added</li>
-        <li>{delta.updatedNodeCount ?? delta.updatedNodes.length} nodes updated</li>
-        <li>{delta.removedNodeCount ?? delta.removedNodes.length} nodes removed</li>
-        <li>{delta.addedConnectionCount ?? delta.addedConnections.length} connections added</li>
-        <li>{delta.removedConnectionCount ?? delta.removedConnections.length} connections removed</li>
-        {delta.truncated ? <li>Detailed change lists are truncated.</li> : null}
+        <li>
+          {graphDeltas.length} {graphDeltas.length === 1 ? 'graph' : 'graphs'} changed
+        </li>
+        <li>{sum((delta) => delta.addedNodeCount ?? delta.addedNodes.length)} nodes added</li>
+        <li>{sum((delta) => delta.updatedNodeCount ?? delta.updatedNodes.length)} nodes updated</li>
+        <li>{sum((delta) => delta.removedNodeCount ?? delta.removedNodes.length)} nodes removed</li>
+        <li>{sum((delta) => delta.addedConnectionCount ?? delta.addedConnections.length)} connections added</li>
+        <li>{sum((delta) => delta.removedConnectionCount ?? delta.removedConnections.length)} connections removed</li>
+        {graphDeltas.some((delta) => delta.truncated) ? <li>Detailed change lists are truncated.</li> : null}
       </ul>
-      <GraphBuilderDeltaDetails delta={delta} />
+      {graphDeltas.map((delta) => (
+        <section className="graph-builder-session-change-groups" key={delta.graphId}>
+          {graphDeltas.length > 1 ? (
+            <div className="graph-builder-session-change-heading">Graph: {delta.graphId}</div>
+          ) : null}
+          <GraphBuilderDeltaDetails delta={delta} />
+        </section>
+      ))}
       {preview.diagnostics.length > 0 ? (
         <ul className="graph-builder-session-diagnostics">
           {preview.diagnostics.map((diagnostic) => (

@@ -4,6 +4,7 @@ import {
   type ChartNode,
   type GraphId,
   type NodeGraph,
+  type NodePrefabId,
   type Project,
   type ProjectId,
   type UiComponentId,
@@ -64,7 +65,7 @@ function makeProject(
   graphs: NodeGraph[],
   mainGraphId?: string,
   uiGraphs?: Record<UiGraphId, UiGraph>,
-): Pick<Project, 'metadata' | 'graphs' | 'uiGraphs'> {
+): Pick<Project, 'metadata' | 'graphs' | 'nodePrefabs' | 'uiGraphs'> {
   return {
     metadata: {
       id: 'project-1' as ProjectId,
@@ -529,6 +530,73 @@ describe('graphReachability', () => {
     assert.deepEqual(sortGraphIds(report.definite), ['main', 'weather-handler']);
     assert.deepEqual(sortGraphIds(report.dynamic), []);
     assert.deepEqual(sortGraphIds(report.unreachable), ['time-handler']);
+  });
+
+  test('does not cross independent channels through a linked Data Bus when finding an auto-delegate Tool', () => {
+    const tool = makeNode('gptFunction', { name: 'weather' }, { id: 'tool' });
+    const unrelatedProvider = makeNode('text', {}, { id: 'unrelated-provider' });
+    const dataBus = makeNode('nodePrefabInstance', { prefabId: 'shared-bus' as NodePrefabId }, { id: 'bus' });
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [tool, unrelatedProvider, dataBus, delegateAuto],
+      [
+        makeConnection('tool', 'bus', 'function', 'input1'),
+        makeConnection('unrelated-provider', 'bus', 'output', 'input2'),
+        makeConnection('bus', 'delegate', 'output2', 'function-call'),
+      ],
+    );
+    const weatherHandler = makeGraph('weather-handler', 'Tools/weather');
+    const inputProject = makeProject([main, weatherHandler], 'main');
+    inputProject.nodePrefabs = {
+      ['shared-bus' as NodePrefabId]: {
+        id: 'shared-bus' as NodePrefabId,
+        sourceNode: makeNode('dataBus', {}, { id: 'prefab-source' }),
+      },
+    };
+
+    const report = getGraphReachabilityReport(inputProject);
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main']);
+    assert.deepEqual(sortGraphIds(report.unreachable), ['weather-handler']);
+  });
+
+  test('follows the matching Data Bus channel when finding an auto-delegate Tool', () => {
+    const tool = makeNode('gptFunction', { name: 'weather' }, { id: 'tool' });
+    const dataBus = makeNode('dataBus', {}, { id: 'bus' });
+    const delegateAuto = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: true,
+        handlers: [],
+        unknownHandler: undefined,
+      },
+      { id: 'delegate' },
+    );
+    const main = makeGraph(
+      'main',
+      'Main',
+      [tool, dataBus, delegateAuto],
+      [
+        makeConnection('tool', 'bus', 'function', 'input1'),
+        makeConnection('bus', 'delegate', 'output1', 'function-call'),
+      ],
+    );
+    const weatherHandler = makeGraph('weather-handler', 'Tools/weather');
+
+    const report = getGraphReachabilityReport(makeProject([main, weatherHandler], 'main'));
+
+    assert.deepEqual(sortGraphIds(report.definite), ['main', 'weather-handler']);
+    assert.deepEqual(sortGraphIds(report.unreachable), []);
   });
 
   test('prefers an exact auto-delegate graph name before the contains fallback', () => {

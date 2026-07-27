@@ -62,7 +62,7 @@ test('legacy draft runner keeps mutations private and returns a revisioned previ
   assert.deepEqual(baseProject, original, 'the captured editor project must remain unchanged');
   assert.equal(result.status, 'ready-for-preview');
   assert.equal(result.draft.graphs[graphId]?.nodes.length, 1);
-  assert.equal(result.preview.delta.addedNodeCount, 1);
+  assert.equal(result.preview.delta.graphDeltas[0]?.addedNodeCount, 1);
   assert.deepEqual(progress, [1]);
   assert.deepEqual(mutationResult, {
     type: 'object',

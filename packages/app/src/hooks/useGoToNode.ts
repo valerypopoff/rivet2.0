@@ -1,5 +1,5 @@
 import {
-  canRenderPassthroughAsDataBus,
+  canRenderDataBusNode,
   type GraphId,
   type NodeId,
   resolveNodePrefabInstance,
@@ -42,7 +42,7 @@ export function useGoToNode() {
 
     loadGraph(graphForNode, { graphView: createRootGraphViewContext(graphForNode.metadata!.id!) });
 
-    if (canRenderPassthroughAsDataBus(resolveNodePrefabInstance(project, node))) {
+    if (canRenderDataBusNode(resolveNodePrefabInstance(project, node))) {
       return;
     }
 

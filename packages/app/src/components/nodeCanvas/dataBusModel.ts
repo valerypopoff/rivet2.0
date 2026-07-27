@@ -1,17 +1,16 @@
 import {
-  canRenderPassthroughAsDataBus,
-  MAX_PASSTHROUGH_PORT_INDEX,
+  canRenderDataBusNode,
+  getDataBusChannelKey as getCoreDataBusChannelKey,
+  getDataBusInputChannelIndex as getCoreDataBusInputChannelIndex,
+  getDataBusOutputChannelIndex as getCoreDataBusOutputChannelIndex,
   type ChartNode,
+  type DataBusTopologyNode,
   type NodeConnection,
   type NodeId,
   type NodeInputDefinition,
   type NodeOutputDefinition,
-  type PassthroughNode,
   type PortId,
 } from '@valerypopoff/rivet2-core';
-
-const INPUT_PORT_PATTERN = /^input(\d+)$/;
-const OUTPUT_PORT_PATTERN = /^output(\d+)$/;
 
 export type DataBusChannelReference = {
   busNodeId: NodeId;
@@ -33,6 +32,12 @@ export type DataBusTopology = {
   connectionsByInputPort: ReadonlyMap<string, readonly NodeConnection[]>;
   connectionsByOutputPort: ReadonlyMap<string, readonly NodeConnection[]>;
   portChannels: DataBusPortChannelIndex;
+  /**
+   * Direct relay relationships between channels. A connection from one Data
+   * Bus channel to another creates an undirected edge here; callers use
+   * getDataBusRelatedChannelKeys() to follow the complete relay route.
+   */
+  relatedChannelKeysByChannelKey: ReadonlyMap<string, readonly string[]>;
 };
 
 export type DataBusChannelPresentation = {
@@ -53,7 +58,7 @@ export type DataBusGroupPresentation = {
 
 export type RenderableDataBusNode = {
   editorNode: ChartNode;
-  effectiveNode: PassthroughNode;
+  effectiveNode: DataBusTopologyNode;
 };
 
 export const EMPTY_DATA_BUS_TOPOLOGY: DataBusTopology = {
@@ -62,30 +67,40 @@ export const EMPTY_DATA_BUS_TOPOLOGY: DataBusTopology = {
   connectionsByInputPort: new Map(),
   connectionsByOutputPort: new Map(),
   portChannels: new Map(),
+  relatedChannelKeysByChannelKey: new Map(),
 };
 
-function parseChannelIndex(portId: PortId, pattern: RegExp): number | undefined {
-  const match = pattern.exec(portId);
-  const channelIndex = match ? Number(match[1]) : Number.NaN;
-  return Number.isSafeInteger(channelIndex) && channelIndex > 0 && channelIndex <= MAX_PASSTHROUGH_PORT_INDEX
-    ? channelIndex
-    : undefined;
-}
-
 export function getDataBusChannelKey(busNodeId: NodeId, channelIndex: number): string {
-  return `${busNodeId}:${channelIndex}`;
+  return getCoreDataBusChannelKey(busNodeId, channelIndex);
 }
 
 export function getDataBusInputChannelIndex(portId: PortId): number | undefined {
-  return parseChannelIndex(portId, INPUT_PORT_PATTERN);
+  return getCoreDataBusInputChannelIndex(portId);
 }
 
 export function getDataBusOutputChannelIndex(portId: PortId): number | undefined {
-  return parseChannelIndex(portId, OUTPUT_PORT_PATTERN);
+  return getCoreDataBusOutputChannelIndex(portId);
 }
 
 export function getDataBusPortChannelIndexKey(options: { input: boolean; nodeId: NodeId; portId: PortId }): string {
   return `${options.nodeId}\u0000${options.input ? 'input' : 'output'}\u0000${options.portId}`;
+}
+
+/** Returns whether a live port belongs to a rendered Data Bus channel. */
+export function isDataBusChannelPort(options: {
+  input: boolean;
+  nodeId: NodeId;
+  nodesById: Readonly<Record<NodeId, ChartNode | undefined>>;
+  portId: PortId;
+}): boolean {
+  const node = options.nodesById[options.nodeId];
+  if (!canRenderDataBusNode(node)) {
+    return false;
+  }
+
+  return options.input
+    ? getDataBusInputChannelIndex(options.portId) != null
+    : getDataBusOutputChannelIndex(options.portId) != null;
 }
 
 function getConnectionChannels(
@@ -96,7 +111,7 @@ function getConnectionChannels(
   const inputNode = nodesById[connection.inputNodeId];
   const inputChannelIndex = getDataBusInputChannelIndex(connection.inputId);
 
-  if (canRenderPassthroughAsDataBus(inputNode) && inputChannelIndex != null) {
+  if (canRenderDataBusNode(inputNode) && inputChannelIndex != null) {
     channels.push({
       busNodeId: inputNode.id,
       busTitle: inputNode.title,
@@ -108,7 +123,7 @@ function getConnectionChannels(
   const outputNode = nodesById[connection.outputNodeId];
   const outputChannelIndex = getDataBusOutputChannelIndex(connection.outputId);
 
-  if (canRenderPassthroughAsDataBus(outputNode) && outputChannelIndex != null) {
+  if (canRenderDataBusNode(outputNode) && outputChannelIndex != null) {
     const channelKey = getDataBusChannelKey(outputNode.id, outputChannelIndex);
     if (!channels.some((channel) => channel.channelKey === channelKey)) {
       channels.push({
@@ -136,6 +151,7 @@ export function createDataBusTopology(options: {
   const channelsByConnection = new Map<NodeConnection, readonly DataBusChannelReference[]>();
   const activeChannelKeys = new Set<string>();
   const mutablePortChannels = new Map<string, Map<string, DataBusChannelReference>>();
+  const mutableRelatedChannelKeys = new Map<string, Set<string>>();
 
   const addConnection = (
     connectionsByPort: Map<string, NodeConnection[]>,
@@ -164,6 +180,19 @@ export function createDataBusTopology(options: {
     mutablePortChannels.set(portKey, channelsByKey);
   };
 
+  const addChannelRelationships = (channels: readonly DataBusChannelReference[]) => {
+    for (const channel of channels) {
+      const relatedChannelKeys = mutableRelatedChannelKeys.get(channel.channelKey) ?? new Set<string>();
+      mutableRelatedChannelKeys.set(channel.channelKey, relatedChannelKeys);
+
+      for (const relatedChannel of channels) {
+        if (relatedChannel.channelKey !== channel.channelKey) {
+          relatedChannelKeys.add(relatedChannel.channelKey);
+        }
+      }
+    }
+  };
+
   for (const connection of options.connections) {
     const channels = getConnectionChannels(connection, options.nodesById);
     if (channels.length === 0) {
@@ -172,11 +201,12 @@ export function createDataBusTopology(options: {
 
     channelsByConnection.set(connection, channels);
     channels.forEach((channel) => activeChannelKeys.add(channel.channelKey));
+    addChannelRelationships(channels);
 
     const inputNode = options.nodesById[connection.inputNodeId];
     const inputChannelIndex = getDataBusInputChannelIndex(connection.inputId);
     const inputChannel =
-      canRenderPassthroughAsDataBus(inputNode) && inputChannelIndex != null
+      canRenderDataBusNode(inputNode) && inputChannelIndex != null
         ? channels.find(
             (candidate) => candidate.busNodeId === inputNode.id && candidate.channelIndex === inputChannelIndex,
           )
@@ -198,7 +228,7 @@ export function createDataBusTopology(options: {
     const outputNode = options.nodesById[connection.outputNodeId];
     const outputChannelIndex = getDataBusOutputChannelIndex(connection.outputId);
     const outputChannel =
-      canRenderPassthroughAsDataBus(outputNode) && outputChannelIndex != null
+      canRenderDataBusNode(outputNode) && outputChannelIndex != null
         ? channels.find(
             (candidate) => candidate.busNodeId === outputNode.id && candidate.channelIndex === outputChannelIndex,
           )
@@ -226,7 +256,41 @@ export function createDataBusTopology(options: {
     portChannels: new Map(
       [...mutablePortChannels].map(([portKey, channelsByKey]) => [portKey, [...channelsByKey.values()]]),
     ),
+    relatedChannelKeysByChannelKey: new Map(
+      [...mutableRelatedChannelKeys].map(([channelKey, relatedChannelKeys]) => [channelKey, [...relatedChannelKeys]]),
+    ),
   };
+}
+
+/**
+ * Resolves every Data Bus channel that belongs to the same relay route as
+ * one of the supplied channels. This is intentionally transitive: the core
+ * supports A -> B -> C Data Bus relays, so hover presentation must not stop
+ * after the first hop.
+ */
+export function getDataBusRelatedChannelKeys(
+  topology: DataBusTopology,
+  channelKeys: readonly string[],
+): readonly string[] {
+  const resolvedChannelKeys = new Set<string>();
+  const pendingChannelKeys = [...channelKeys];
+  let pendingChannelIndex = 0;
+
+  while (pendingChannelIndex < pendingChannelKeys.length) {
+    const channelKey = pendingChannelKeys[pendingChannelIndex++]!;
+    if (resolvedChannelKeys.has(channelKey)) {
+      continue;
+    }
+
+    resolvedChannelKeys.add(channelKey);
+    for (const relatedChannelKey of topology.relatedChannelKeysByChannelKey.get(channelKey) ?? []) {
+      if (!resolvedChannelKeys.has(relatedChannelKey)) {
+        pendingChannelKeys.push(relatedChannelKey);
+      }
+    }
+  }
+
+  return [...resolvedChannelKeys];
 }
 
 export function getRenderableDataBusNodes(options: {
@@ -240,7 +304,7 @@ export function getRenderableDataBusNodes(options: {
 
   return options.nodes.flatMap((editorNode) => {
     const effectiveNode = options.effectiveNodesById[editorNode.id];
-    return canRenderPassthroughAsDataBus(effectiveNode) ? [{ editorNode, effectiveNode }] : [];
+    return canRenderDataBusNode(effectiveNode) ? [{ editorNode, effectiveNode }] : [];
   });
 }
 
@@ -249,7 +313,7 @@ export function buildDataBusGroupPresentation(options: {
   inputDefinitions: readonly NodeInputDefinition[];
   outputDefinitions: readonly NodeOutputDefinition[];
   topology: DataBusTopology;
-  busNode: PassthroughNode;
+  busNode: DataBusTopologyNode;
 }): DataBusGroupPresentation {
   const outputDefinitionsByChannelIndex = new Map<number, NodeOutputDefinition>();
   for (const outputDefinition of options.outputDefinitions) {
@@ -276,20 +340,9 @@ export function buildDataBusGroupPresentation(options: {
           getDataBusPortChannelIndexKey({ input: false, nodeId: options.busNode.id, portId: outputDefinition.id }),
         ) ?? []
       : [];
-    const relatedChannelKeys = new Set<string>();
-
-    for (const relatedChannel of options.topology.portChannels.get(
-      getDataBusPortChannelIndexKey({ input: true, nodeId: options.busNode.id, portId: inputDefinition.id }),
-    ) ?? []) {
-      relatedChannelKeys.add(relatedChannel.channelKey);
-    }
-    if (outputDefinition) {
-      for (const relatedChannel of options.topology.portChannels.get(
-        getDataBusPortChannelIndexKey({ input: false, nodeId: options.busNode.id, portId: outputDefinition.id }),
-      ) ?? []) {
-        relatedChannelKeys.add(relatedChannel.channelKey);
-      }
-    }
+    const relatedChannelKeys = getDataBusRelatedChannelKeys(options.topology, [channelKey]).filter(
+      (relatedChannelKey) => relatedChannelKey !== channelKey,
+    );
 
     return [
       {
@@ -299,7 +352,7 @@ export function buildDataBusGroupPresentation(options: {
         inputDefinition,
         outputDefinition,
         providerConnections,
-        relatedChannelKeys: [...relatedChannelKeys],
+        relatedChannelKeys,
       },
     ];
   });

@@ -16,14 +16,15 @@ export type PassthroughNode = ChartNode<'passthrough', PassthroughNodeData>;
 
 export type PassthroughNodeData = {
   /**
-   * Canvas-only presentation mode. Runtime execution and serialized connections
-   * remain an ordinary Passthrough node.
+   * @deprecated Use the dedicated Data Bus node type. This remains readable so
+   * legacy projects can be migrated without losing their authored topology.
    */
   renderAsDataBus?: boolean;
 };
 
 const INPUT_PORT_PATTERN = /^input(\d+)$/;
 const OUTPUT_PORT_PATTERN = /^output(\d+)$/;
+/** @deprecated Use MAX_DATA_BUS_CHANNEL_INDEX for Data Bus channels. */
 export const MAX_PASSTHROUGH_PORT_INDEX = 10_000;
 
 function parsePositivePortIndex(portId: string, pattern: RegExp): number | undefined {
@@ -57,7 +58,13 @@ export function isPassthroughDataBusNode(node: ChartNode | undefined): node is P
  * therefore fall back to the normal visible node until the conflict is removed.
  */
 export function canRenderPassthroughAsDataBus(node: ChartNode | undefined): node is PassthroughNode {
-  return isPassthroughDataBusNode(node) && !node.isConditional && !node.isSplitRun;
+  return (
+    isPassthroughDataBusNode(node) &&
+    !node.isConditional &&
+    !node.isSplitRun &&
+    !node.disabled &&
+    (node.variants?.length ?? 0) === 0
+  );
 }
 
 export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {

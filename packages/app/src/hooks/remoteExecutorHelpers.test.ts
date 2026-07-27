@@ -9,6 +9,7 @@ import {
   type NodeConnection,
   type NodeGraph,
   type NodeId,
+  type NodePrefabId,
   type PortId,
   type Project,
   type ProjectId,
@@ -47,11 +48,26 @@ function makeStartAsyncBranchNode(nodeId: string): ChartNode {
   return node;
 }
 
-function makeConnection(outputNodeId: string, inputNodeId: string, inputId = 'input'): NodeConnection {
+function makeDataBusNode(nodeId: string): ChartNode {
+  const node = registry.createDynamic('dataBus');
+  node.id = nodeId as NodeId;
+  node.title = nodeId;
+  return node;
+}
+
+function makeLinkedNode(nodeId: string, prefabId: NodePrefabId): ChartNode {
+  const node = registry.createDynamic('nodePrefabInstance');
+  node.id = nodeId as NodeId;
+  node.title = nodeId;
+  node.data = { prefabId };
+  return node;
+}
+
+function makeConnection(outputNodeId: string, inputNodeId: string, inputId = 'input', outputId = 'output'): NodeConnection {
   return {
     outputNodeId: outputNodeId as NodeId,
     inputNodeId: inputNodeId as NodeId,
-    outputId: 'output' as PortId,
+    outputId: outputId as PortId,
     inputId: inputId as PortId,
   };
 }
@@ -85,6 +101,26 @@ function makeRunFromGraph(): NodeGraph {
       makeConnection('source', 'selected'),
       makeConnection('selected', 'downstream', 'main'),
       makeConnection('side', 'downstream', 'side'),
+      makeConnection('unrelated-source', 'unrelated-sink'),
+    ],
+  };
+}
+
+function makeDataBusRunGraph(): NodeGraph {
+  return {
+    metadata: { id: graphId, name: 'Graph' },
+    nodes: [
+      makeTextNode('source'),
+      makeDataBusNode('bus'),
+      makeTextNode('selected', '{{input}}'),
+      makeTextNode('downstream', '{{input}}'),
+      makeTextNode('unrelated-source'),
+      makeTextNode('unrelated-sink', '{{input}}'),
+    ],
+    connections: [
+      makeConnection('source', 'bus', 'input1'),
+      makeConnection('bus', 'selected', 'input', 'output1'),
+      makeConnection('selected', 'downstream'),
       makeConnection('unrelated-source', 'unrelated-sink'),
     ],
   };
@@ -127,6 +163,68 @@ test('getEditorRunFromPlan preloads only direct boundary inputs for a selected l
   assert.deepEqual(plan.preserveNodeIds, ['source', 'selected', 'side', 'unrelated-source', 'unrelated-sink']);
   assert.deepEqual(plan.preloadNodeIds, ['selected', 'side']);
   assert.deepEqual(plan.runToNodeIds, ['downstream']);
+});
+
+test('editor partial-run plans compile Data Bus channels into ordinary dependency boundaries', () => {
+  const project = makeProject(makeDataBusRunGraph());
+
+  const providerRunFromPlan = getEditorRunFromPlan(project, graphId, 'source' as NodeId, registry);
+  assert.deepEqual(providerRunFromPlan.nodesToRun, ['source', 'selected', 'downstream']);
+  assert.deepEqual(providerRunFromPlan.preloadNodeIds, []);
+  assert.deepEqual(providerRunFromPlan.runToNodeIds, ['downstream']);
+
+  const runFromPlan = getEditorRunFromPlan(project, graphId, 'selected' as NodeId, registry);
+  assert.deepEqual(runFromPlan.nodesToRun, ['selected', 'downstream']);
+  assert.deepEqual(runFromPlan.preserveNodeIds, ['source', 'unrelated-source', 'unrelated-sink']);
+  assert.deepEqual(runFromPlan.preloadNodeIds, ['source']);
+  assert.deepEqual(runFromPlan.runToNodeIds, ['downstream']);
+
+  const runToPlan = getEditorRunToPlan(project, graphId, ['selected' as NodeId], registry);
+  assert.deepEqual(runToPlan.nodesToRun, ['source', 'selected']);
+  assert.deepEqual(runToPlan.preserveNodeIds, []);
+  assert.deepEqual(runToPlan.runToNodeIds, ['selected']);
+});
+
+test('editor partial-run plans reject Data Buses as topology-only targets', () => {
+  const project = makeProject(makeDataBusRunGraph());
+
+  assert.throws(
+    () => getEditorRunFromPlan(project, graphId, 'bus' as NodeId, registry),
+    /Data Bus "bus" is topology-only and cannot be used as a run-from target/,
+  );
+  assert.throws(
+    () => getEditorRunToPlan(project, graphId, ['bus' as NodeId], registry),
+    /Data Bus "bus" is topology-only and cannot be used as a run-to target/,
+  );
+});
+
+test('editor partial-run plans reject Data Buses linked from the Node Library', () => {
+  const prefabId = 'shared-data-bus' as NodePrefabId;
+  const linkedBus = makeLinkedNode('linked-bus', prefabId);
+  const graph: NodeGraph = {
+    metadata: { id: graphId, name: 'Graph' },
+    nodes: [makeTextNode('source'), linkedBus, makeTextNode('receiver', '{{input}}')],
+    connections: [
+      makeConnection('source', linkedBus.id, 'input1'),
+      makeConnection(linkedBus.id, 'receiver', 'input', 'output1'),
+    ],
+  };
+  const project = makeProject(graph);
+  project.nodePrefabs = {
+    [prefabId]: {
+      id: prefabId,
+      sourceNode: makeDataBusNode('library-data-bus'),
+    },
+  };
+
+  assert.throws(
+    () => getEditorRunFromPlan(project, graphId, linkedBus.id, registry),
+    /Data Bus "library-data-bus" is topology-only and cannot be used as a run-from target/,
+  );
+  assert.throws(
+    () => getEditorRunToPlan(project, graphId, [linkedBus.id], registry),
+    /Data Bus "library-data-bus" is topology-only and cannot be used as a run-to target/,
+  );
 });
 
 test('getEditorRunFromPlan rejects descendants whose async trigger would otherwise be preloaded', () => {

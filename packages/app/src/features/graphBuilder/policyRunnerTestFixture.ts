@@ -33,7 +33,7 @@ export function createGraphBuilderPolicyTestProject(): Project {
       createGraphInput(schema.responseSchemaInputNodeId!, 'responseSchema', 'object'),
       createSystemPrompt('gbps-system-prompt'),
       createLlmNode(schema.llmNodeId, 'json_schema'),
-      createGraphOutput(schema.decisionOutputNodeId),
+      createGraphOutput(schema.decisionOutputNodeId, 'any'),
     ],
     connections: [
       connection(schema.policyTurnInputNodeId, 'data', schema.llmNodeId, 'prompt'),
@@ -52,7 +52,7 @@ export function createGraphBuilderPolicyTestProject(): Project {
       createGraphInput(text.policyTurnInputNodeId, 'policyTurn', 'string'),
       createSystemPrompt('gbpt-system-prompt'),
       createLlmNode(text.llmNodeId, ''),
-      createGraphOutput(text.decisionOutputNodeId),
+      createGraphOutput(text.decisionOutputNodeId, 'string'),
     ],
     connections: [
       connection(text.policyTurnInputNodeId, 'data', text.llmNodeId, 'prompt'),
@@ -113,7 +113,7 @@ function createLlmNode(id: string, responseFormat: 'json_schema' | '') {
     apiKeySource: 'environment',
     customProviderApiKeyEnvVarName: '',
     temperature: 0,
-    maxTokens: 8_192,
+    maxTokens: 32_768,
     responseFormat,
     responseSchemaName: responseFormat === 'json_schema' ? 'graph_builder_decision' : '',
     responseSchemaDescription:
@@ -127,11 +127,11 @@ function createLlmNode(id: string, responseFormat: 'json_schema' | '') {
   return node;
 }
 
-function createGraphOutput(id: string) {
+function createGraphOutput(id: string, dataType: 'any' | 'string') {
   const node = withIdentity(GraphOutputNodeImpl.create(), id, 'Decision');
   node.data = {
     id: 'decision',
-    dataType: 'any',
+    dataType,
   };
   return node;
 }

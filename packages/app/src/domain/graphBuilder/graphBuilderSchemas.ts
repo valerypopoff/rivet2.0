@@ -5,6 +5,11 @@ import {
   GRAPH_BUILDER_LIMITS,
   GRAPH_BUILDER_PROTOCOL_VERSION,
 } from './graphBuilderLimits.js';
+import {
+  GraphBuilderUnifiedDiffError,
+  isNormalizedGraphBuilderVirtualDocumentPath,
+  parseGraphBuilderUnifiedDiff,
+} from './graphBuilderUnifiedDiff.js';
 import { parsePortableJson, type PortableJsonObject, type PortableJsonValue } from './portableJson.js';
 
 const boundedIdentifierSchema = z
@@ -19,6 +24,30 @@ const safeDictionaryKeySchema = boundedIdentifierSchema.refine(
 );
 
 const boundedTextSchema = (maximumLength: number) => z.string().min(1).max(maximumLength);
+
+const virtualDocumentPathSchema = z
+  .string()
+  .min(1)
+  .max(GRAPH_BUILDER_LIMITS.maxSettingPathLength)
+  .refine((value) => value.trim() === value, 'Virtual document paths must not have surrounding whitespace')
+  .refine(isNormalizedGraphBuilderVirtualDocumentPath, 'Virtual document paths must be normalized relative paths');
+
+function validateStandardUnifiedDiff(value: string, context: z.RefinementCtx): void {
+  try {
+    parseGraphBuilderUnifiedDiff(value);
+  } catch (error) {
+    context.addIssue({
+      code: 'custom',
+      message: error instanceof GraphBuilderUnifiedDiffError ? error.message : 'Unified diff could not be validated.',
+    });
+  }
+}
+
+const graphBuilderUnifiedDiffSchema = z
+  .string()
+  .min(1)
+  .max(GRAPH_BUILDER_LIMITS.maxPortableBytes)
+  .superRefine(validateStandardUnifiedDiff);
 
 function uniqueStringArraySchema<T extends z.ZodType<string>>(
   itemSchema: T,
@@ -125,6 +154,16 @@ const createNodeOperationSchema = z.strictObject({
   settings: portableJsonObjectSchema.optional(),
 });
 
+const cloneNodeOperationSchema = z.strictObject({
+  op: z.literal('cloneNode'),
+  clientId: safeDictionaryKeySchema,
+  source: z.strictObject({
+    kind: z.literal('existing'),
+    nodeId: boundedIdentifierSchema,
+  }),
+  precondition: graphBuilderNodePreconditionSchema.optional(),
+});
+
 const updateNodeSettingsOperationSchema = z.strictObject({
   op: z.literal('updateNodeSettings'),
   node: graphBuilderNodeReferenceSchema,
@@ -169,6 +208,7 @@ const disconnectOperationSchema = z.strictObject({
 
 export const graphPatchOperationSchema = z.discriminatedUnion('op', [
   createNodeOperationSchema,
+  cloneNodeOperationSchema,
   updateNodeSettingsOperationSchema,
   updateNodeEnvelopeOperationSchema,
   deleteNodeOperationSchema,
@@ -177,6 +217,7 @@ export const graphPatchOperationSchema = z.discriminatedUnion('op', [
 ]);
 export type GraphPatchOperation = z.infer<typeof graphPatchOperationSchema>;
 export type CreateNodeOperation = z.infer<typeof createNodeOperationSchema>;
+export type CloneNodeOperation = z.infer<typeof cloneNodeOperationSchema>;
 export type UpdateNodeSettingsOperation = z.infer<typeof updateNodeSettingsOperationSchema>;
 export type UpdateNodeEnvelopeOperation = z.infer<typeof updateNodeEnvelopeOperationSchema>;
 export type DeleteNodeOperation = z.infer<typeof deleteNodeOperationSchema>;
@@ -191,13 +232,13 @@ export const graphPatchProposalSchema = z
   .superRefine((proposal, context) => {
     const clientIds = new Set<string>();
     proposal.operations.forEach((operation, operationIndex) => {
-      if (operation.op !== 'createNode') {
+      if (operation.op !== 'createNode' && operation.op !== 'cloneNode') {
         return;
       }
       if (clientIds.has(operation.clientId)) {
         context.addIssue({
           code: 'custom',
-          message: `Duplicate createNode clientId "${operation.clientId}"`,
+          message: `Duplicate created-node clientId "${operation.clientId}"`,
           path: ['operations', operationIndex, 'clientId'],
         });
       }
@@ -212,21 +253,97 @@ export const graphPatchSchema = graphPatchProposalSchema.extend({
 });
 export type GraphPatch = z.infer<typeof graphPatchSchema>;
 
+export const GRAPH_BUILDER_TRANSACTIONAL_READ_TYPES = {
+  searchNodeTypes: 'search-node-types',
+  readVirtualDocument: 'read-virtual-document',
+  getNodeTemplates: 'get-node-templates',
+  getDiagnostics: 'get-diagnostics',
+  listProjectResources: 'list-project-resources',
+} as const;
+
 const searchNodeTypesReadRequestSchema = z.strictObject({
-  type: z.literal('search-node-types'),
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_READ_TYPES.searchNodeTypes),
   queries: uniqueStringArraySchema(boundedTextSchema(500), { min: 1, max: 16, fieldName: 'queries' }),
   limit: z.number().int().safe().min(1).max(50),
 });
 
-const getNodeSpecsReadRequestSchema = z.strictObject({
-  type: z.literal('get-node-specs'),
-  authoringChoiceIds: uniqueStringArraySchema(boundedIdentifierSchema, {
-    min: 1,
-    max: 32,
-    fieldName: 'authoringChoiceIds',
-  }),
-  authoringSettings: portableJsonObjectSchema.optional(),
-});
+const getNodeSpecsReadRequestSchema = z
+  .strictObject({
+    type: z.literal('get-node-specs'),
+    authoringChoiceIds: uniqueStringArraySchema(boundedIdentifierSchema, {
+      min: 1,
+      max: 32,
+      fieldName: 'authoringChoiceIds',
+    }),
+    authoringSettings: portableJsonObjectSchema.optional(),
+  })
+  .superRefine((request, context) => {
+    if (request.authoringSettings === undefined) {
+      return;
+    }
+    if (request.authoringChoiceIds.length !== 1) {
+      context.addIssue({
+        code: 'custom',
+        message: 'authoringSettings requires exactly one authoringChoiceId',
+        path: ['authoringChoiceIds'],
+      });
+    }
+    if (Object.keys(request.authoringSettings).length === 0) {
+      context.addIssue({
+        code: 'custom',
+        message: 'authoringSettings must contain at least one setting',
+        path: ['authoringSettings'],
+      });
+    }
+  });
+
+const readVirtualDocumentReadRequestSchema = z
+  .strictObject({
+    type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_READ_TYPES.readVirtualDocument),
+    path: virtualDocumentPathSchema,
+    startLine: z.number().int().safe().positive().optional(),
+    lineCount: z.number().int().safe().min(1).max(2_000).optional(),
+    startOffset: z.number().int().safe().nonnegative().optional(),
+  })
+  .superRefine((request, context) => {
+    if (request.startOffset !== undefined && (request.startLine !== undefined || request.lineCount !== undefined)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'startOffset cannot be combined with startLine or lineCount',
+        path: ['startOffset'],
+      });
+    }
+  });
+
+const getNodeTemplatesReadRequestSchema = z
+  .strictObject({
+    type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_READ_TYPES.getNodeTemplates),
+    authoringChoiceIds: uniqueStringArraySchema(boundedIdentifierSchema, {
+      min: 1,
+      max: 32,
+      fieldName: 'authoringChoiceIds',
+    }),
+    authoringSettings: portableJsonObjectSchema.optional(),
+  })
+  .superRefine((request, context) => {
+    if (request.authoringSettings === undefined) {
+      return;
+    }
+    if (request.authoringChoiceIds.length !== 1) {
+      context.addIssue({
+        code: 'custom',
+        message: 'authoringSettings requires exactly one authoringChoiceId',
+        path: ['authoringChoiceIds'],
+      });
+    }
+    if (Object.keys(request.authoringSettings).length === 0) {
+      context.addIssue({
+        code: 'custom',
+        message: 'authoringSettings must contain at least one setting',
+        path: ['authoringSettings'],
+      });
+    }
+  });
 
 const inspectDraftReadRequestSchema = z.strictObject({
   type: z.literal('inspect-draft'),
@@ -239,23 +356,34 @@ const inspectDraftDiffReadRequestSchema = z.strictObject({
 });
 
 const getDiagnosticsReadRequestSchema = z.strictObject({
-  type: z.literal('get-diagnostics'),
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_READ_TYPES.getDiagnostics),
 });
 
 const listProjectResourcesReadRequestSchema = z.strictObject({
-  type: z.literal('list-project-resources'),
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_READ_TYPES.listProjectResources),
   kinds: uniqueStringArraySchema(boundedIdentifierSchema, { min: 1, max: 16, fieldName: 'kinds' }),
   query: z.string().max(500).optional(),
   limit: z.number().int().safe().min(1).max(50),
 });
 
+export const graphBuilderTransactionalReadRequestSchema = z.discriminatedUnion('type', [
+  searchNodeTypesReadRequestSchema,
+  readVirtualDocumentReadRequestSchema,
+  getNodeTemplatesReadRequestSchema,
+  getDiagnosticsReadRequestSchema,
+  listProjectResourcesReadRequestSchema,
+]);
+export type GraphBuilderTransactionalReadRequest = z.infer<typeof graphBuilderTransactionalReadRequestSchema>;
+
 export const graphBuilderReadRequestSchema = z.discriminatedUnion('type', [
   searchNodeTypesReadRequestSchema,
+  readVirtualDocumentReadRequestSchema,
+  getNodeTemplatesReadRequestSchema,
+  getDiagnosticsReadRequestSchema,
+  listProjectResourcesReadRequestSchema,
   getNodeSpecsReadRequestSchema,
   inspectDraftReadRequestSchema,
   inspectDraftDiffReadRequestSchema,
-  getDiagnosticsReadRequestSchema,
-  listProjectResourcesReadRequestSchema,
 ]);
 export type GraphBuilderReadRequest = z.infer<typeof graphBuilderReadRequestSchema>;
 
@@ -283,54 +411,102 @@ export const graphBuilderReadResultSchema = z.discriminatedUnion('status', [
 ]);
 export type GraphBuilderReadResult = z.infer<typeof graphBuilderReadResultSchema>;
 
+export const GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES = {
+  requestContext: 'request-context',
+  applyPatch: 'apply-patch',
+  replaceDocument: 'replace-document',
+  ready: 'ready',
+  noChange: 'no-change',
+  clarify: 'clarify',
+  cannotComplete: 'cannot-complete',
+} as const;
+
+const applyPatchDecisionSchema = z.strictObject({
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.applyPatch),
+  baseRevision: z.number().int().safe().nonnegative(),
+  unifiedDiff: graphBuilderUnifiedDiffSchema,
+  summary: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxSummaryLength).optional(),
+});
+const replaceDocumentDecisionSchema = z.strictObject({
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.replaceDocument),
+  baseRevision: z.number().int().safe().nonnegative(),
+  path: virtualDocumentPathSchema,
+  content: z.string().min(1).max(GRAPH_BUILDER_LIMITS.maxPortableBytes),
+  summary: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxSummaryLength).optional(),
+});
+const readyDecisionSchema = z.strictObject({
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.ready),
+  summary: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxSummaryLength),
+});
+const noChangeDecisionSchema = z.strictObject({
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.noChange),
+  summary: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxSummaryLength),
+});
+const clarifyDecisionSchema = z.strictObject({
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.clarify),
+  question: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxUserQuestionLength),
+});
+const cannotCompleteDecisionSchema = z.strictObject({
+  type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.cannotComplete),
+  reasonCode: graphBuilderCannotCompleteReasonCodeSchema,
+  reason: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxReasonLength),
+});
+
+function rejectDuplicateCanonicalReadRequests(
+  decision: { type: string; requests?: readonly unknown[] },
+  context: z.RefinementCtx,
+): void {
+  if (decision.type !== GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.requestContext || decision.requests == null) {
+    return;
+  }
+
+  const seen = new Set<string>();
+  decision.requests.forEach((request, requestIndex) => {
+    const canonical = canonicalGraphBuilderStringify(request);
+    if (seen.has(canonical)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Duplicate canonical read request',
+        path: ['requests', requestIndex],
+      });
+    }
+    seen.add(canonical);
+  });
+}
+
+export const graphBuilderTransactionalDecisionSchema = z
+  .discriminatedUnion('type', [
+    z.strictObject({
+      type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.requestContext),
+      requests: z
+        .array(graphBuilderTransactionalReadRequestSchema)
+        .min(1)
+        .max(GRAPH_BUILDER_LIMITS.maxDecisionRequests),
+    }),
+    applyPatchDecisionSchema,
+    replaceDocumentDecisionSchema,
+    readyDecisionSchema,
+    noChangeDecisionSchema,
+    clarifyDecisionSchema,
+    cannotCompleteDecisionSchema,
+  ])
+  .superRefine(rejectDuplicateCanonicalReadRequests);
+export type GraphBuilderTransactionalDecision = z.infer<typeof graphBuilderTransactionalDecisionSchema>;
+
 export const graphBuilderDecisionSchema = z
   .discriminatedUnion('type', [
     z.strictObject({
-      type: z.literal('request-context'),
+      type: z.literal(GRAPH_BUILDER_TRANSACTIONAL_DECISION_TYPES.requestContext),
       requests: z.array(graphBuilderReadRequestSchema).min(1).max(GRAPH_BUILDER_LIMITS.maxDecisionRequests),
     }),
-    z.strictObject({
-      type: z.literal('propose-patch'),
-      proposal: graphPatchProposalSchema,
-      afterApply: z.enum(['continue', 'ready-for-preview']),
-      summary: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxSummaryLength).optional(),
-    }),
-    z.strictObject({
-      type: z.literal('ready'),
-      summary: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxSummaryLength),
-    }),
-    z.strictObject({
-      type: z.literal('no-change'),
-      summary: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxSummaryLength),
-    }),
-    z.strictObject({
-      type: z.literal('clarify'),
-      question: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxUserQuestionLength),
-    }),
-    z.strictObject({
-      type: z.literal('cannot-complete'),
-      reasonCode: graphBuilderCannotCompleteReasonCodeSchema,
-      reason: boundedTextSchema(GRAPH_BUILDER_LIMITS.maxReasonLength),
-    }),
+    applyPatchDecisionSchema,
+    replaceDocumentDecisionSchema,
+    readyDecisionSchema,
+    noChangeDecisionSchema,
+    clarifyDecisionSchema,
+    cannotCompleteDecisionSchema,
   ])
-  .superRefine((decision, context) => {
-    if (decision.type !== 'request-context') {
-      return;
-    }
-
-    const seen = new Set<string>();
-    decision.requests.forEach((request, requestIndex) => {
-      const canonical = canonicalGraphBuilderStringify(request);
-      if (seen.has(canonical)) {
-        context.addIssue({
-          code: 'custom',
-          message: 'Duplicate canonical read request',
-          path: ['requests', requestIndex],
-        });
-      }
-      seen.add(canonical);
-    });
-  });
+  .superRefine(rejectDuplicateCanonicalReadRequests);
 export type GraphBuilderDecision = z.infer<typeof graphBuilderDecisionSchema>;
 
 export const graphDiagnosticSchema = z.strictObject({
@@ -425,6 +601,25 @@ export const graphDraftDeltaSchema = z.strictObject({
 });
 export type GraphDraftDelta = z.infer<typeof graphDraftDeltaSchema>;
 
+export const graphBuilderProjectDraftDeltaSchema = z
+  .strictObject({
+    graphDeltas: z.array(graphDraftDeltaSchema).max(32),
+  })
+  .superRefine((delta, context) => {
+    const graphIds = new Set<string>();
+    delta.graphDeltas.forEach((graphDelta, graphIndex) => {
+      if (graphIds.has(graphDelta.graphId)) {
+        context.addIssue({
+          code: 'custom',
+          message: `Duplicate graph delta for "${graphDelta.graphId}"`,
+          path: ['graphDeltas', graphIndex, 'graphId'],
+        });
+      }
+      graphIds.add(graphDelta.graphId);
+    });
+  });
+export type GraphBuilderProjectDraftDelta = z.infer<typeof graphBuilderProjectDraftDeltaSchema>;
+
 export const graphBuilderTouchedScopeSchema = z.strictObject({
   graphIds: z.array(boundedIdentifierSchema).min(1).max(8),
   nodeIds: z.array(boundedIdentifierSchema).max(GRAPH_BUILDER_LIMITS.maxPatchOperations * 2),
@@ -436,6 +631,7 @@ export type GraphBuilderTouchedScope = z.infer<typeof graphBuilderTouchedScopeSc
 export const graphBuilderSafeNodeProjectionSchema = z.strictObject({
   nodeId: boundedIdentifierSchema,
   type: boundedIdentifierSchema,
+  authoringChoiceId: boundedIdentifierSchema.optional(),
   title: z.string().max(GRAPH_BUILDER_LIMITS.maxStringLength),
   runMode: boundedIdentifierSchema.optional(),
   safeSettings: portableJsonObjectSchema.optional(),
@@ -458,7 +654,17 @@ export const graphBuilderAuthorizationScopeSchema = z
   .strictObject({
     allowedGraphIds: z.array(boundedIdentifierSchema).min(1).max(32),
     allowedOperations: z
-      .array(z.enum(['createNode', 'updateNodeSettings', 'updateNodeEnvelope', 'deleteNode', 'connect', 'disconnect']))
+      .array(
+        z.enum([
+          'createNode',
+          'cloneNode',
+          'updateNodeSettings',
+          'updateNodeEnvelope',
+          'deleteNode',
+          'connect',
+          'disconnect',
+        ]),
+      )
       .min(1),
     allowSemanticCrossGraphPropagation: z.boolean(),
     sensitiveFieldAccess: z.literal('none'),
@@ -485,6 +691,111 @@ const createdNodeIdsSchema = z
       }
     }
   });
+
+const appliedDocumentPatchResultSchema = z.strictObject({
+  disposition: z.literal('applied'),
+  patchId: boundedIdentifierSchema,
+  baseRevision: z.number().int().safe().nonnegative(),
+  draftRevision: z.number().int().safe().nonnegative(),
+  delta: graphBuilderProjectDraftDeltaSchema,
+  diagnostics: z.array(graphDiagnosticSchema).max(GRAPH_BUILDER_LIMITS.maxDiagnostics),
+});
+
+const noOpDocumentPatchResultSchema = z.strictObject({
+  disposition: z.literal('no-op'),
+  patchId: boundedIdentifierSchema,
+  baseRevision: z.number().int().safe().nonnegative(),
+  draftRevision: z.number().int().safe().nonnegative(),
+  delta: graphBuilderProjectDraftDeltaSchema,
+  diagnostics: z.array(graphDiagnosticSchema).max(GRAPH_BUILDER_LIMITS.maxDiagnostics),
+});
+
+const rejectedDocumentPatchResultSchema = z.strictObject({
+  disposition: z.literal('rejected'),
+  patchId: boundedIdentifierSchema,
+  baseRevision: z.number().int().safe().nonnegative(),
+  draftRevision: z.number().int().safe().nonnegative(),
+  diagnostics: z.array(graphDiagnosticSchema).min(1).max(GRAPH_BUILDER_LIMITS.maxDiagnostics),
+  attemptedDelta: graphBuilderProjectDraftDeltaSchema.optional(),
+});
+
+const freshGraphBuilderDocumentPatchResultUnionSchema = z.discriminatedUnion('disposition', [
+  appliedDocumentPatchResultSchema,
+  noOpDocumentPatchResultSchema,
+  rejectedDocumentPatchResultSchema,
+]);
+
+function validateFreshDocumentPatchResult(
+  result: z.infer<typeof freshGraphBuilderDocumentPatchResultUnionSchema>,
+  context: z.RefinementCtx,
+): void {
+  if (result.disposition === 'applied' && result.draftRevision !== result.baseRevision + 1) {
+    context.addIssue({
+      code: 'custom',
+      message: 'An applied document patch must advance the draft revision exactly once',
+      path: ['draftRevision'],
+    });
+  }
+  if (
+    (result.disposition === 'no-op' || result.disposition === 'rejected') &&
+    result.draftRevision !== result.baseRevision
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: 'A non-applied document patch must retain its base revision',
+      path: ['draftRevision'],
+    });
+  }
+}
+
+export const freshGraphBuilderDocumentPatchResultSchema = freshGraphBuilderDocumentPatchResultUnionSchema.superRefine(
+  validateFreshDocumentPatchResult,
+);
+export type FreshGraphBuilderDocumentPatchResult = z.infer<typeof freshGraphBuilderDocumentPatchResultSchema>;
+
+const replayedDocumentPatchResultSchema = z.strictObject({
+  disposition: z.literal('replayed'),
+  patchId: boundedIdentifierSchema,
+  baseRevision: z.number().int().safe().nonnegative(),
+  draftRevision: z.number().int().safe().nonnegative(),
+  diagnostics: z.array(graphDiagnosticSchema).max(GRAPH_BUILDER_LIMITS.maxDiagnostics),
+  original: freshGraphBuilderDocumentPatchResultSchema,
+});
+
+export const graphBuilderDocumentPatchResultSchema = z
+  .discriminatedUnion('disposition', [
+    appliedDocumentPatchResultSchema,
+    noOpDocumentPatchResultSchema,
+    rejectedDocumentPatchResultSchema,
+    replayedDocumentPatchResultSchema,
+  ])
+  .superRefine((result, context) => {
+    if (result.disposition !== 'replayed') {
+      validateFreshDocumentPatchResult(result, context);
+      return;
+    }
+    if (
+      result.original.patchId !== result.patchId ||
+      result.original.baseRevision !== result.baseRevision ||
+      result.original.draftRevision !== result.draftRevision
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Replayed document patch correlation must match the original result',
+        path: ['original'],
+      });
+    }
+    if (
+      canonicalGraphBuilderStringify(result.original.diagnostics) !== canonicalGraphBuilderStringify(result.diagnostics)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Replayed document patch diagnostics must match the original result',
+        path: ['diagnostics'],
+      });
+    }
+  });
+export type GraphBuilderDocumentPatchResult = z.infer<typeof graphBuilderDocumentPatchResultSchema>;
 
 const appliedPatchResultSchema = z.strictObject({
   disposition: z.literal('applied'),
@@ -609,12 +920,25 @@ export const graphBuilderSessionResultSchema = z.discriminatedUnion('status', [
 ]);
 export type GraphBuilderSessionResult = z.infer<typeof graphBuilderSessionResultSchema>;
 
-function parseWithPortablePreflight<T>(value: unknown, schema: z.ZodType<T>): T {
-  return schema.parse(parsePortableJson(value));
+function parseWithPortablePreflight<T>(
+  value: unknown,
+  schema: z.ZodType<T>,
+  options: { allowLargeText?: boolean } = {},
+): T {
+  return schema.parse(
+    parsePortableJson(
+      value,
+      options.allowLargeText ? { maxStringLength: GRAPH_BUILDER_LIMITS.maxPortableBytes } : undefined,
+    ),
+  );
 }
 
 export function parseGraphBuilderDecision(value: unknown): GraphBuilderDecision {
-  return parseWithPortablePreflight(value, graphBuilderDecisionSchema);
+  return parseWithPortablePreflight(value, graphBuilderDecisionSchema, { allowLargeText: true });
+}
+
+export function parseGraphBuilderTransactionalDecision(value: unknown): GraphBuilderTransactionalDecision {
+  return parseWithPortablePreflight(value, graphBuilderTransactionalDecisionSchema, { allowLargeText: true });
 }
 
 export function parseGraphPatchProposal(value: unknown): GraphPatchProposal {
@@ -639,6 +963,18 @@ export function parseGraphValidationResult(value: unknown): GraphValidationResul
 
 export function parseGraphBuilderProjection(value: unknown): GraphBuilderProjection {
   return parseWithPortablePreflight(value, graphBuilderProjectionSchema);
+}
+
+export function parseGraphBuilderProjectDraftDelta(value: unknown): GraphBuilderProjectDraftDelta {
+  return parseWithPortablePreflight(value, graphBuilderProjectDraftDeltaSchema);
+}
+
+export function parseFreshGraphBuilderDocumentPatchResult(value: unknown): FreshGraphBuilderDocumentPatchResult {
+  return parseWithPortablePreflight(value, freshGraphBuilderDocumentPatchResultSchema);
+}
+
+export function parseGraphBuilderDocumentPatchResult(value: unknown): GraphBuilderDocumentPatchResult {
+  return parseWithPortablePreflight(value, graphBuilderDocumentPatchResultSchema);
 }
 
 export function parseFreshApplyPatchResult(value: unknown): FreshApplyPatchResult {

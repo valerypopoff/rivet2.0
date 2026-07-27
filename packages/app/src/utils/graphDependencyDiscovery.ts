@@ -1,5 +1,8 @@
 import {
+  compileDataBusTopology,
   findAutoDelegateGraphCandidate,
+  isDataBusTopologyNode,
+  resolveNodePrefabInstances,
   type ChartNode,
   type GraphId,
   type NodeConnection,
@@ -22,7 +25,7 @@ type GraphDependencyEdge = {
   warnings?: string[];
 };
 
-type GraphDependencyProject = Pick<Project, 'graphs'>;
+type GraphDependencyProject = Pick<Project, 'graphs' | 'nodePrefabs'>;
 
 type GraphDependencyIndex = {
   allGraphIds: readonly GraphId[];
@@ -141,9 +144,11 @@ export function getGraphDependencyIndex(
     nodesById.set(node.id, node);
   }
 
+  const topologyConnections = getGraphDependencyTopologyConnections(discovery.project, graph);
+
   const connectionsByInputNodeId = new Map<NodeId, NodeConnection[]>();
   const connectionsByOutputNodeId = new Map<NodeId, NodeConnection[]>();
-  for (const connection of graph.connections) {
+  for (const connection of topologyConnections) {
     const inputConnections = connectionsByInputNodeId.get(connection.inputNodeId) ?? [];
     inputConnections.push(connection);
     connectionsByInputNodeId.set(connection.inputNodeId, inputConnections);
@@ -176,6 +181,36 @@ export function getGraphDependencyIndex(
   };
   indexesByGraphId.set(graphId, index);
   return index;
+}
+
+/**
+ * Dependency discovery follows the same effective connection graph as runtime
+ * preprocessing. A Data Bus is not a dependency hub: each populated channel
+ * independently connects its provider to its consumers.
+ *
+ * Invalid Data Bus topology already prevents execution. Discovery remains
+ * usable while the user repairs it by retaining ordinary direct connections
+ * but excluding bus-connected ones rather than inventing cross-channel paths.
+ */
+function getGraphDependencyTopologyConnections(
+  project: GraphDependencyProject,
+  graph: NodeGraph,
+): NodeConnection[] {
+  const effectiveNodes = resolveNodePrefabInstances(project as Project, graph.nodes);
+
+  try {
+    return compileDataBusTopology({
+      connections: graph.connections,
+      graphNodes: effectiveNodes,
+    }).connections;
+  } catch {
+    const effectiveNodesById = new Map(effectiveNodes.map((node) => [node.id, node]));
+    return graph.connections.filter(
+      (connection) =>
+        !isDataBusTopologyNode(effectiveNodesById.get(connection.inputNodeId)) &&
+        !isDataBusTopologyNode(effectiveNodesById.get(connection.outputNodeId)),
+    );
+  }
 }
 
 export function collectGraphDependencyEdges(options: {

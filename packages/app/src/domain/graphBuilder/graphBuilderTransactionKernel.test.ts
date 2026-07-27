@@ -13,6 +13,8 @@ import {
   type GraphBuilderAuthoringProject,
   type GraphBuilderAuthoringSemantics,
   type GraphBuilderResolvedNodePorts,
+  type GraphBuilderTouchedScope,
+  GRAPH_BUILDER_PROTOCOL_VERSION,
   GraphBuilderProtocolError,
   GraphBuilderTransactionKernel,
   parseApplyPatchResult,
@@ -128,6 +130,7 @@ function makeKernel(input: {
   project?: GraphBuilderAuthoringProject;
   semantics?: GraphBuilderAuthoringSemantics;
   ids?: string[];
+  idGenerator?: () => NodeId;
 }) {
   const ids = [...(input.ids ?? ['generated'])];
   return new GraphBuilderTransactionKernel({
@@ -137,6 +140,7 @@ function makeKernel(input: {
       allowedGraphIds: [graphId],
       allowedOperations: [
         'createNode',
+        'cloneNode',
         'updateNodeSettings',
         'updateNodeEnvelope',
         'deleteNode',
@@ -147,18 +151,20 @@ function makeKernel(input: {
       sensitiveFieldAccess: 'none',
     },
     semantics: input.semantics ?? makeSemantics(),
-    idGenerator: () => {
-      const next = ids.shift();
-      if (!next) {
-        throw new Error('Test ID generator exhausted');
-      }
-      return next as NodeId;
-    },
+    idGenerator:
+      input.idGenerator ??
+      (() => {
+        const next = ids.shift();
+        if (!next) {
+          throw new Error('Test ID generator exhausted');
+        }
+        return next as NodeId;
+      }),
   });
 }
 
 function patch(patchId: string, expectedDraftRevision: number, operations: GraphPatch['operations']): GraphPatch {
-  return { protocolVersion: 1, patchId, expectedDraftRevision, operations };
+  return { protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION, patchId, expectedDraftRevision, operations };
 }
 
 test('applies one atomic symbolic-ID patch, owns node IDs, and replays it idempotently', () => {
@@ -206,6 +212,230 @@ test('applies one atomic symbolic-ID patch, owns node IDs, and replays it idempo
       ),
     (error: unknown) => error instanceof GraphBuilderProtocolError && error.code === 'patch-identity-content-mismatch',
   );
+});
+
+test('cloneNode deep-clones the complete node, resets position, and copies no connections', () => {
+  const source = {
+    ...makeNode('source'),
+    type: 'nodePrefabInstance',
+    title: 'Linked node',
+    description: 'Keep the complete host-owned envelope',
+    isSplitRun: true,
+    isSplitSequential: true,
+    splitRunMax: 4,
+    splitRunConcurrency: 2,
+    disabled: true,
+    isConditional: true,
+    visualData: {
+      x: 125,
+      y: -40,
+      width: 320,
+      color: { border: '#112233', bg: '#ddeeff' },
+      zIndex: 7,
+    },
+    data: {
+      prefabId: 'linked-prefab',
+      opaqueConfig: {
+        secretMarker: 'opaque-secret',
+        nested: [{ enabled: true }],
+      },
+    },
+    variants: [{ id: 'variant', data: { opaqueVariant: ['preserve', 2] } }],
+    tests: [
+      {
+        id: 'test-group',
+        evaluatorGraphId: graphId,
+        tests: [{ conditionText: 'preserve test metadata' }],
+      },
+    ],
+  } satisfies ChartNode;
+  const target = makeNode('target');
+  let normalizedCreatedNodeIds: readonly NodeId[] = [];
+  let normalizedTouchedScope: GraphBuilderTouchedScope | undefined;
+  const kernel = makeKernel({
+    project: makeProject([source, target], [makeConnection('source', 'target')]),
+    ids: ['cloned'],
+    semantics: makeSemantics({
+      normalizeCandidate: ({ project, createdNodeIds, touchedScope }) => {
+        normalizedCreatedNodeIds = [...createdNodeIds];
+        normalizedTouchedScope = cloneDeep(touchedScope);
+        return { project: cloneDeep(project) };
+      },
+    }),
+  });
+
+  const result = kernel.applyPatch(
+    patch('clone-complete-node', 0, [
+      {
+        op: 'cloneNode',
+        clientId: 'copy',
+        source: { kind: 'existing', nodeId: 'source' },
+        precondition: {
+          type: 'nodePrefabInstance',
+          title: 'Linked node',
+          disabled: true,
+          isConditional: true,
+          isSplitRun: true,
+          splitRunMax: 4,
+        },
+      },
+    ]),
+  );
+
+  assert.equal(result.disposition, 'applied');
+  if (result.disposition !== 'applied') {
+    return;
+  }
+  assert.deepEqual({ ...result.createdNodeIds }, { copy: 'cloned' });
+  assert.doesNotMatch(JSON.stringify(result), /opaque-secret/);
+
+  const draft = kernel.getDraft();
+  const sourceInDraft = draft.graphs[graphId]!.nodes.find((node) => node.id === ('source' as NodeId))!;
+  const clone = draft.graphs[graphId]!.nodes.find((node) => node.id === ('cloned' as NodeId))!;
+  const expectedClone = cloneDeep(source);
+  expectedClone.id = 'cloned' as NodeId;
+  expectedClone.visualData = { ...expectedClone.visualData, x: 0, y: 0 };
+  assert.deepEqual(clone, expectedClone);
+  assert.notStrictEqual(clone.data, sourceInDraft.data);
+  assert.notStrictEqual(clone.visualData, sourceInDraft.visualData);
+  assert.deepEqual(draft.graphs[graphId]!.connections, [makeConnection('source', 'target')]);
+  assert.deepEqual(normalizedCreatedNodeIds, ['cloned']);
+  assert.deepEqual(normalizedTouchedScope, {
+    graphIds: [graphId],
+    nodeIds: ['cloned'],
+    connectionKeys: [],
+    operationIndices: [0],
+  });
+});
+
+test('cloneNode rejects patch-local sources and failed preconditions atomically', () => {
+  const missingSourceKernel = makeKernel({ ids: ['unused'] });
+  const missingSourceResult = missingSourceKernel.applyPatch(
+    patch('missing-clone-source', 0, [
+      {
+        op: 'cloneNode',
+        clientId: 'copy',
+        source: { kind: 'existing', nodeId: 'missing' },
+      },
+    ]),
+  );
+  assert.equal(missingSourceResult.disposition, 'rejected');
+  assert.match(missingSourceResult.diagnostics[0]?.message ?? '', /referenced node does not exist/i);
+
+  const patchLocalKernel = makeKernel({ ids: ['patch-created'] });
+  const patchLocalResult = patchLocalKernel.applyPatch(
+    patch('patch-local-clone-source', 0, [
+      { op: 'createNode', clientId: 'source', authoringChoiceId: 'registered:test' },
+      {
+        op: 'cloneNode',
+        clientId: 'copy',
+        source: { kind: 'existing', nodeId: 'patch-created' },
+      },
+    ]),
+  );
+  assert.equal(patchLocalResult.disposition, 'rejected');
+  assert.deepEqual(patchLocalKernel.getDraft().graphs[graphId]!.nodes, []);
+
+  const preconditionKernel = makeKernel({
+    project: makeProject([makeNode('source', { title: 'Current' })]),
+    ids: ['unused'],
+  });
+  const preconditionResult = preconditionKernel.applyPatch(
+    patch('clone-precondition', 0, [
+      {
+        op: 'cloneNode',
+        clientId: 'copy',
+        source: { kind: 'existing', nodeId: 'source' },
+        precondition: { title: 'Stale' },
+      },
+    ]),
+  );
+  assert.equal(preconditionResult.disposition, 'rejected');
+  assert.deepEqual(
+    preconditionKernel.getDraft().graphs[graphId]!.nodes.map((node) => node.id),
+    ['source'],
+  );
+});
+
+test('cloneNode requires a fresh bounded host ID even after an earlier delete', () => {
+  const project = makeProject([makeNode('source'), makeNode('retired')]);
+  const reusedIdKernel = makeKernel({ project, ids: ['retired'] });
+  const reusedIdResult = reusedIdKernel.applyPatch(
+    patch('clone-reused-id', 0, [
+      { op: 'deleteNode', node: { kind: 'existing', nodeId: 'retired' } },
+      {
+        op: 'cloneNode',
+        clientId: 'copy',
+        source: { kind: 'existing', nodeId: 'source' },
+      },
+    ]),
+  );
+  assert.equal(reusedIdResult.disposition, 'rejected');
+  assert.deepEqual(reusedIdKernel.getDraft(), project);
+
+  const unboundedIdKernel = makeKernel({ project, ids: [' padded '] });
+  const unboundedIdResult = unboundedIdKernel.applyPatch(
+    patch('clone-unbounded-id', 0, [
+      {
+        op: 'cloneNode',
+        clientId: 'copy',
+        source: { kind: 'existing', nodeId: 'source' },
+      },
+    ]),
+  );
+  assert.equal(unboundedIdResult.disposition, 'rejected');
+  assert.deepEqual(unboundedIdKernel.getDraft(), project);
+});
+
+test('cloneNode rejects Code source types before allocation and rolls back preceding operations', () => {
+  for (const sourceType of ['code', 'codeNew']) {
+    const source = {
+      ...makeNode('source', {
+        data: {
+          code: 'return process.env.SECRET;',
+          allowFetch: true,
+          allowRequire: true,
+          allowRivet: true,
+          allowProcess: true,
+          allowConsole: true,
+        },
+      }),
+      type: sourceType,
+    } satisfies ChartNode;
+    const project = makeProject([source, makeNode('other', { title: 'Original' })]);
+    let allocatorCalls = 0;
+    const kernel = makeKernel({
+      project,
+      idGenerator: () => {
+        allocatorCalls += 1;
+        return 'must-not-be-allocated' as NodeId;
+      },
+    });
+
+    const result = kernel.applyPatch(
+      patch(`blocked-clone-${sourceType}`, 0, [
+        {
+          op: 'updateNodeEnvelope',
+          node: { kind: 'existing', nodeId: 'other' },
+          envelope: { title: 'Must roll back' },
+        },
+        {
+          op: 'cloneNode',
+          clientId: 'copy',
+          source: { kind: 'existing', nodeId: 'source' },
+        },
+      ]),
+    );
+
+    assert.equal(result.disposition, 'rejected');
+    if (result.disposition !== 'rejected') {
+      continue;
+    }
+    assert.equal(result.diagnostics[0]?.ruleId, 'clone-source-type');
+    assert.equal(allocatorCalls, 0);
+    assert.deepEqual(kernel.getDraft(), project);
+    assert.equal(kernel.getDraftRevision(), 0);
+  }
 });
 
 test('rejects non-data base and adapter results without invoking getters', () => {

@@ -44,7 +44,7 @@ export type GraphReachabilityReport = {
 
 type ReachabilityMode = 'definite' | 'dynamic';
 
-type ReachabilityProject = Pick<Project, 'metadata' | 'graphs' | 'uiGraphs'>;
+type ReachabilityProject = Pick<Project, 'metadata' | 'graphs' | 'nodePrefabs' | 'uiGraphs'>;
 
 type GetGraphReachabilityReportOptions = {
   registry?: GraphReachabilityRegistry;

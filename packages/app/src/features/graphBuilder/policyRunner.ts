@@ -28,9 +28,8 @@ import {
   GRAPH_BUILDER_LIMITS,
   GRAPH_BUILDER_PROTOCOL_VERSION,
   canonicalGraphBuilderStringify,
-  graphBuilderDecisionSchema,
-  parseGraphBuilderDecision,
-  type GraphBuilderDecision,
+  parseGraphBuilderTransactionalDecision,
+  type GraphBuilderTransactionalDecision,
 } from '../../domain/graphBuilder/index.js';
 import type { ResolvedAiAssistModelSettings } from '../../utils/aiAssistModelSettings.js';
 import type {
@@ -40,6 +39,7 @@ import type {
 } from './sessionController.js';
 import {
   GRAPH_BUILDER_POLICY_ALLOWED_NODE_TYPES,
+  GRAPH_BUILDER_POLICY_ACTIVE_VARIANT,
   GRAPH_BUILDER_POLICY_INJECTABLE_LLM_DATA_KEYS,
   GRAPH_BUILDER_POLICY_MANIFEST,
   GRAPH_BUILDER_POLICY_VERSION,
@@ -72,6 +72,7 @@ export type GraphBuilderPolicyRunnerExecuteOptions = {
   assistModel: GraphBuilderPolicyAssistModel;
   runtimeSettings: Readonly<RuntimeSettings>;
   abortSignal: AbortSignal;
+  onActivity?: () => void;
 };
 
 export interface GraphBuilderPolicyRunner {
@@ -117,6 +118,7 @@ export type GraphBuilderPolicyProcessorOptions = {
   registry: NodeRegistration<any, any>;
   runtimeSettings: Readonly<RuntimeSettings>;
   abortSignal: AbortSignal;
+  onActivity?: () => void;
   onChatV2CallFinished: (event: ChatV2CallFinishedEvent) => void;
 };
 
@@ -197,6 +199,9 @@ function defaultProcessorFactory(
     inputs: options.inputs,
     registry: options.registry,
     abortSignal: options.abortSignal,
+    onPartialOutput: () => {
+      options.onActivity?.();
+    },
     onChatV2CallFinished: options.onChatV2CallFinished,
     // Keep the policy executor capability-minimal even if a caller passes a
     // RuntimeSettings object with extra host-owned properties.
@@ -223,11 +228,16 @@ async function defaultPolicyProjectLoader(): Promise<Project> {
   return project;
 }
 
-function selectVariant(provider: GraphBuilderPolicyAssistModel['provider']): {
-  name: GraphBuilderPolicyVariantName;
+function getActiveVariant(): {
+  name: typeof GRAPH_BUILDER_POLICY_ACTIVE_VARIANT;
   manifest: GraphBuilderPolicyVariantManifest;
 } {
-  const name: GraphBuilderPolicyVariantName = provider === 'custom' ? 'text' : 'schema';
+  // The authoritative decision contract contains arbitrary-key portable JSON
+  // settings and optional fields. That contract cannot be represented
+  // faithfully by the strict structured-output subsets used by the supported
+  // providers. Keep provider formatting advisory and enforce the exact JSON
+  // object plus the full runtime schema locally.
+  const name = GRAPH_BUILDER_POLICY_ACTIVE_VARIANT;
   return { name, manifest: GRAPH_BUILDER_POLICY_MANIFEST.variants[name] };
 }
 
@@ -299,13 +309,14 @@ function assertPolicyGraph(
   const typedLlmNode = llmNode as LLMChatV2Node;
   const typedTurnInput = turnInput as GraphInputNode;
   const typedDecisionOutput = decisionOutput as GraphOutputNode;
+  const expectedDecisionOutputType = name === 'text' ? 'string' : 'any';
   if (
     typedTurnInput.data.id !== 'policyTurn' ||
     typedTurnInput.data.dataType !== 'string' ||
     typedTurnInput.data.useDefaultValueInput !== false ||
     typedTurnInput.data.defaultValue !== undefined ||
     typedDecisionOutput.data.id !== 'decision' ||
-    typedDecisionOutput.data.dataType !== 'any'
+    typedDecisionOutput.data.dataType !== expectedDecisionOutputType
   ) {
     throw policyError('invalid-asset', `Graph Builder policy ${name} graph has incompatible graph ports.`);
   }
@@ -453,68 +464,6 @@ function injectModelConfiguration(
   }
 }
 
-const removedProviderSchemaKeys = new Set(['$schema', 'propertyNames', 'uniqueItems']);
-const supportedProviderSchemaKeywords = new Set([
-  '$defs',
-  '$ref',
-  'additionalProperties',
-  'allOf',
-  'anyOf',
-  'const',
-  'enum',
-  'exclusiveMaximum',
-  'exclusiveMinimum',
-  'items',
-  'maxItems',
-  'maxLength',
-  'maximum',
-  'minItems',
-  'minLength',
-  'minimum',
-  'oneOf',
-  'properties',
-  'required',
-  'type',
-]);
-
-function projectProviderSchema(value: unknown, mapValues = false): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => projectProviderSchema(item));
-  }
-  if (value == null || typeof value !== 'object') {
-    return value;
-  }
-
-  const output: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (mapValues) {
-      output[key] = projectProviderSchema(child);
-      continue;
-    }
-    if (removedProviderSchemaKeys.has(key)) {
-      continue;
-    }
-    if (!supportedProviderSchemaKeywords.has(key)) {
-      throw policyError('invalid-asset', `Graph Builder decision schema uses unsupported keyword "${key}".`);
-    }
-    output[key] = projectProviderSchema(child, key === 'properties' || key === '$defs');
-  }
-  return output;
-}
-
-let cachedDecisionResponseSchema: Record<string, unknown> | undefined;
-
-export function getGraphBuilderDecisionResponseSchema(): Record<string, unknown> {
-  if (cachedDecisionResponseSchema == null) {
-    const projected = projectProviderSchema(z.toJSONSchema(graphBuilderDecisionSchema));
-    if (projected == null || typeof projected !== 'object' || Array.isArray(projected)) {
-      throw policyError('invalid-asset', 'Graph Builder decision schema could not be projected.');
-    }
-    cachedDecisionResponseSchema = projected as Record<string, unknown>;
-  }
-  return cloneDeep(cachedDecisionResponseSchema);
-}
-
 function validateAndSerializeTurn(turn: GraphBuilderPolicyTurn): string {
   if (
     turn.protocolVersion !== GRAPH_BUILDER_PROTOCOL_VERSION ||
@@ -538,7 +487,151 @@ function validateAndSerializeTurn(turn: GraphBuilderPolicyTurn): string {
   return serialized;
 }
 
-export function parseExactGraphBuilderDecisionJson(value: string): GraphBuilderDecision {
+function assertNoDuplicateJsonObjectKeys(text: string): void {
+  let index = 0;
+  let containerDepth = 0;
+
+  const failInspection = (): never => {
+    throw policyError('invalid-decision', 'Graph Builder policy response could not be inspected as exact JSON.');
+  };
+  const enterContainer = (): void => {
+    containerDepth += 1;
+    // The decision envelope adds a few fixed containers around portable node
+    // settings. Stop well before recursive scanning could exhaust the stack;
+    // the authoritative decision schema applies the tighter per-value limit.
+    if (containerDepth > GRAPH_BUILDER_LIMITS.maxObjectDepth + 8) {
+      throw policyError('invalid-decision', 'Graph Builder policy response exceeds the JSON nesting limit.');
+    }
+  };
+  const leaveContainer = (): void => {
+    containerDepth -= 1;
+  };
+  const skipWhitespace = (): void => {
+    while (index < text.length && /\s/.test(text[index]!)) {
+      index += 1;
+    }
+  };
+  const readString = (): string => {
+    if (text[index] !== '"') {
+      return failInspection();
+    }
+    const start = index;
+    index += 1;
+    while (index < text.length) {
+      const character = text[index]!;
+      index += 1;
+      if (character === '\\') {
+        if (index >= text.length) {
+          return failInspection();
+        }
+        index += 1;
+      } else if (character === '"') {
+        try {
+          return JSON.parse(text.slice(start, index)) as string;
+        } catch {
+          return failInspection();
+        }
+      }
+    }
+    return failInspection();
+  };
+
+  const scanValue = (): void => {
+    skipWhitespace();
+    const character = text[index];
+    if (character === '{') {
+      scanObject();
+      return;
+    }
+    if (character === '[') {
+      scanArray();
+      return;
+    }
+    if (character === '"') {
+      readString();
+      return;
+    }
+
+    const start = index;
+    while (index < text.length && !/[\s,\]}]/.test(text[index]!)) {
+      index += 1;
+    }
+    if (start === index) {
+      failInspection();
+    }
+  };
+  const scanObject = (): void => {
+    enterContainer();
+    index += 1;
+    skipWhitespace();
+    if (text[index] === '}') {
+      index += 1;
+      leaveContainer();
+      return;
+    }
+
+    const keys = new Set<string>();
+    while (index < text.length) {
+      skipWhitespace();
+      const key = readString();
+      if (keys.has(key)) {
+        throw policyError('invalid-decision', 'Graph Builder policy response contains duplicate JSON object keys.');
+      }
+      keys.add(key);
+
+      skipWhitespace();
+      if (text[index] !== ':') {
+        failInspection();
+      }
+      index += 1;
+      scanValue();
+      skipWhitespace();
+      if (text[index] === '}') {
+        index += 1;
+        leaveContainer();
+        return;
+      }
+      if (text[index] !== ',') {
+        failInspection();
+      }
+      index += 1;
+    }
+    failInspection();
+  };
+  const scanArray = (): void => {
+    enterContainer();
+    index += 1;
+    skipWhitespace();
+    if (text[index] === ']') {
+      index += 1;
+      leaveContainer();
+      return;
+    }
+
+    while (index < text.length) {
+      scanValue();
+      skipWhitespace();
+      if (text[index] === ']') {
+        index += 1;
+        leaveContainer();
+        return;
+      }
+      if (text[index] !== ',') {
+        failInspection();
+      }
+      index += 1;
+    }
+    failInspection();
+  };
+
+  scanValue();
+  skipWhitespace();
+  if (index !== text.length) {
+    failInspection();
+  }
+}
+
+export function parseExactGraphBuilderDecisionJson(value: string): GraphBuilderTransactionalDecision {
   const text = value.trim();
   if (
     text.length === 0 ||
@@ -558,26 +651,23 @@ export function parseExactGraphBuilderDecisionJson(value: string): GraphBuilderD
   if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw policyError('invalid-decision', 'Graph Builder policy response must be one JSON object.');
   }
+  assertNoDuplicateJsonObjectKeys(text);
 
   try {
-    return parseGraphBuilderDecision(parsed);
+    return parseGraphBuilderTransactionalDecision(parsed);
   } catch (error) {
     throw policyError('invalid-decision', 'Graph Builder policy response does not match the decision contract.', error);
   }
 }
 
-function parseDecisionOutput(value: DataValue | undefined): GraphBuilderDecision {
+function parseDecisionOutput(value: DataValue | undefined): GraphBuilderTransactionalDecision {
   if (value == null || value.type === 'control-flow-excluded') {
     throw policyError('invalid-decision', 'Graph Builder policy did not return a decision.');
   }
-  if (typeof value.value === 'string') {
-    return parseExactGraphBuilderDecisionJson(value.value);
+  if (value.type !== 'string' || typeof value.value !== 'string') {
+    throw policyError('invalid-decision', 'Graph Builder policy response must be an exact JSON text value.');
   }
-  try {
-    return parseGraphBuilderDecision(value.value);
-  } catch (error) {
-    throw policyError('invalid-decision', 'Graph Builder policy returned an invalid decision.', error);
-  }
+  return parseExactGraphBuilderDecisionJson(value.value);
 }
 
 function usageFromEvent(event: ChatV2CallFinishedEvent): GraphBuilderPolicyUsage {
@@ -633,7 +723,7 @@ class DefaultGraphBuilderPolicyRunner implements GraphBuilderPolicyRunner {
     throwIfAborted(options.abortSignal);
     const serializedTurn = validateAndSerializeTurn(turn);
     const configuration = sanitizeModelConfiguration(options.assistModel);
-    const variant = selectVariant(configuration.provider);
+    const variant = getActiveVariant();
 
     let loadedProject: Project;
     try {
@@ -648,12 +738,6 @@ class DefaultGraphBuilderPolicyRunner implements GraphBuilderPolicyRunner {
 
     const observedCalls: ChatV2CallFinishedEvent[] = [];
     const inputs: Record<string, LooseDataValue> = { policyTurn: serializedTurn };
-    if (variant.name === 'schema') {
-      inputs.responseSchema = {
-        type: 'object',
-        value: getGraphBuilderDecisionResponseSchema(),
-      };
-    }
 
     const processor = this.#createProcessor(project, {
       graph: variant.manifest.graphId,
@@ -661,6 +745,7 @@ class DefaultGraphBuilderPolicyRunner implements GraphBuilderPolicyRunner {
       registry: graphBuilderPolicyRegistry,
       runtimeSettings: options.runtimeSettings,
       abortSignal: options.abortSignal,
+      onActivity: options.onActivity,
       onChatV2CallFinished(event) {
         if (event.nodeId === (variant.manifest.llmNodeId as NodeId)) {
           observedCalls.push(event);
@@ -692,7 +777,7 @@ class DefaultGraphBuilderPolicyRunner implements GraphBuilderPolicyRunner {
     const observedCall = validateObservedCall(observedCalls, configuration, 'success')!;
     const usage = usageFromEvent(observedCall);
 
-    let decision: GraphBuilderDecision;
+    let decision: GraphBuilderTransactionalDecision;
     try {
       decision = parseDecisionOutput(outputs['decision' as PortId]);
     } catch (error) {

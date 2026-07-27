@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { GraphId, ProjectId } from '@valerypopoff/rivet2-core';
+import { GRAPH_BUILDER_PROTOCOL_VERSION } from '../../domain/graphBuilder/index.js';
 import type { GraphBuilderBaseIdentity } from './identity.js';
 import { revalidateLegacyGraphBuilderStartup } from './legacySessionStartup.js';
 
@@ -17,7 +18,7 @@ function baseIdentity(projectFingerprint = 'project'): GraphBuilderBaseIdentity 
     referencedProjectsCanonicalIdentity: 'canonical:references',
     policyConfigFingerprint: 'policy',
     validationRulesVersion: '1',
-    protocolVersion: 1,
+    protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
   };
 }
 

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   createBuiltInRegistry,
   type ChartNode,
+  type FrozenNodeOutputsByGraph,
   type GraphId,
   type NodeConnection,
   type NodeGraph,
@@ -15,6 +16,7 @@ import { createStore } from 'jotai/vanilla';
 import { commandHistoryStackStatePerGraph } from '../../commands/Command.js';
 import { graphState } from '../../state/graph.js';
 import { activeGraphBuilderSessionOwnerState } from '../../state/graphBuilderAi.js';
+import { frozenNodeOutputsState, graphRunningState } from '../../state/dataFlow.js';
 import { projectNodeRegistryState } from '../../state/plugins.js';
 import { recoverableNodeConnectionsStatePerGraph } from '../../state/recoverableNodeConnections.js';
 import { projectState } from '../../state/savedGraphs.js';
@@ -29,6 +31,9 @@ import {
 const projectId = 'project' as ProjectId;
 const graphId = 'graph' as GraphId;
 const siblingGraphId = 'sibling' as GraphId;
+const createdGraphId = 'created' as GraphId;
+const removedGraphId = 'removed' as GraphId;
+const unrelatedGraphId = 'unrelated' as GraphId;
 
 function graph(id: GraphId, name: string): NodeGraph {
   return {
@@ -383,4 +388,166 @@ test('commit preserves disconnected recovery wires only while their endpoints su
   assert.deepEqual(store.get(recoverableNodeConnectionsStatePerGraph)[graphId], {
     ['source' as NodeId]: [recoverable],
   });
+});
+
+test('one prepared commit atomically publishes, undoes and redoes multiple graph snapshots', () => {
+  const store = createReadyStore();
+  const active = graph(graphId, 'Before');
+  active.nodes = [node('active-node')];
+  const sibling = graph(siblingGraphId, 'Sibling before');
+  sibling.nodes = [node('sibling-survives'), node('sibling-removed')];
+  const removed = graph(removedGraphId, 'Removed before');
+  const unrelated = graph(unrelatedGraphId, 'Unrelated before');
+  store.set(projectState, {
+    ...project(active),
+    graphs: {
+      [graphId]: active,
+      [siblingGraphId]: sibling,
+      [removedGraphId]: removed,
+      [unrelatedGraphId]: unrelated,
+    },
+  });
+  store.set(graphState, structuredClone(active));
+  const frozenOutputs: FrozenNodeOutputsByGraph = {
+    [siblingGraphId]: {
+      ['sibling-survives' as NodeId]: [{ ['output' as PortId]: { type: 'string', value: 'keep' } }],
+      ['sibling-removed' as NodeId]: [{ ['output' as PortId]: { type: 'string', value: 'remove' } }],
+    },
+  };
+  store.set(frozenNodeOutputsState, frozenOutputs);
+  store.set(recoverableNodeConnectionsStatePerGraph, {
+    [siblingGraphId]: {
+      ['sibling-survives' as NodeId]: [connection('sibling-survives', 'sibling-removed')],
+    },
+  });
+
+  const context = captureGraphBuilderEditorContext(store);
+  const draft = structuredClone(context.snapshot.authoringProject);
+  draft.graphs[graphId]!.metadata!.name = 'After';
+  draft.graphs[siblingGraphId]!.metadata!.name = 'Sibling after';
+  draft.graphs[siblingGraphId]!.nodes = [node('sibling-survives')];
+  draft.graphs[createdGraphId] = graph(createdGraphId, 'Created');
+  delete draft.graphs[removedGraphId];
+  const prepared = prepareGraphBuilderCommit({
+    base: context.base,
+    commitId: 'multi-graph',
+    draft,
+    draftRevision: 2,
+    summary: 'Changed four graphs.',
+  });
+
+  assert.deepEqual(Object.keys(prepared.nextGraphs ?? {}).sort(), [
+    createdGraphId,
+    graphId,
+    removedGraphId,
+    siblingGraphId,
+  ]);
+  const outcome = store.set(tryCommitGraphBuilderDraftState, {
+    prepared,
+    publishHistorySnapshot: (activeGraphId, snapshot) =>
+      store.set(publishGraphBuilderHistorySnapshotState, { activeGraphId, snapshot }),
+  });
+
+  assert.equal(outcome.status, 'committed');
+  assert.equal(store.get(graphState).metadata?.name, 'After');
+  assert.equal(store.get(projectState).graphs[siblingGraphId]?.metadata?.name, 'Sibling after');
+  assert.equal(store.get(projectState).graphs[createdGraphId]?.metadata?.name, 'Created');
+  assert.equal(store.get(projectState).graphs[removedGraphId], undefined);
+  assert.equal(store.get(projectState).graphs[unrelatedGraphId]?.metadata?.name, 'Unrelated before');
+  assert.deepEqual(Object.keys(store.get(frozenNodeOutputsState)[siblingGraphId] ?? {}), ['sibling-survives']);
+  assert.equal(store.get(recoverableNodeConnectionsStatePerGraph)[siblingGraphId], undefined);
+  assert.equal(store.get(commandHistoryStackStatePerGraph)[graphId]?.length, 1);
+
+  const entry = store.get(commandHistoryStackStatePerGraph)[graphId]![0]!;
+  store.set(projectState, {
+    ...store.get(projectState),
+    graphs: {
+      ...store.get(projectState).graphs,
+      [unrelatedGraphId]: graph(unrelatedGraphId, 'Unrelated user edit'),
+    },
+  });
+  entry.command.undo(entry.data, entry.appliedData, {} as never);
+  assert.equal(store.get(graphState).metadata?.name, 'Before');
+  assert.equal(store.get(projectState).graphs[siblingGraphId]?.metadata?.name, 'Sibling before');
+  assert.equal(store.get(projectState).graphs[createdGraphId], undefined);
+  assert.equal(store.get(projectState).graphs[removedGraphId]?.metadata?.name, 'Removed before');
+  assert.equal(store.get(projectState).graphs[unrelatedGraphId]?.metadata?.name, 'Unrelated user edit');
+  assert.deepEqual(Object.keys(store.get(frozenNodeOutputsState)[siblingGraphId] ?? {}).sort(), [
+    'sibling-removed',
+    'sibling-survives',
+  ]);
+  assert.ok(store.get(recoverableNodeConnectionsStatePerGraph)[siblingGraphId]);
+
+  entry.command.apply(entry.data, entry.appliedData, {} as never);
+  assert.equal(store.get(graphState).metadata?.name, 'After');
+  assert.equal(store.get(projectState).graphs[siblingGraphId]?.metadata?.name, 'Sibling after');
+  assert.equal(store.get(projectState).graphs[createdGraphId]?.metadata?.name, 'Created');
+  assert.equal(store.get(projectState).graphs[removedGraphId], undefined);
+  assert.equal(store.get(projectState).graphs[unrelatedGraphId]?.metadata?.name, 'Unrelated user edit');
+});
+
+test('multi-graph commit conflicts after a sibling edit and stays ineligible during a run', () => {
+  const conflictStore = createReadyStore();
+  const conflictContext = captureGraphBuilderEditorContext(conflictStore);
+  const conflictDraft = structuredClone(conflictContext.snapshot.authoringProject);
+  conflictDraft.graphs[siblingGraphId]!.metadata!.name = 'Generated sibling edit';
+  const conflictedPrepared = prepareGraphBuilderCommit({
+    base: conflictContext.base,
+    commitId: 'stale-sibling',
+    draft: conflictDraft,
+    draftRevision: 1,
+    summary: 'Changed the sibling.',
+  });
+  conflictStore.set(projectState, {
+    ...conflictStore.get(projectState),
+    graphs: {
+      ...conflictStore.get(projectState).graphs,
+      [siblingGraphId]: graph(siblingGraphId, 'User sibling edit'),
+    },
+  });
+
+  const conflicted = conflictStore.set(tryCommitGraphBuilderDraftState, {
+    prepared: conflictedPrepared,
+    publishHistorySnapshot: (activeGraphId, snapshot) =>
+      conflictStore.set(publishGraphBuilderHistorySnapshotState, { activeGraphId, snapshot }),
+  });
+  assert.equal(conflicted.status, 'conflicted');
+  assert.equal(conflictStore.get(projectState).graphs[siblingGraphId]?.metadata?.name, 'User sibling edit');
+
+  const runningStore = createReadyStore();
+  const runningPrepared = prepareChangedCommit(runningStore, 'running');
+  runningStore.set(graphRunningState, true);
+  const ineligible = runningStore.set(tryCommitGraphBuilderDraftState, {
+    prepared: runningPrepared,
+    publishHistorySnapshot: (activeGraphId, snapshot) =>
+      runningStore.set(publishGraphBuilderHistorySnapshotState, { activeGraphId, snapshot }),
+  });
+  assert.equal(ineligible.status, 'ineligible');
+  assert.equal(runningStore.get(graphState).metadata?.name, 'Before');
+  assert.equal(runningStore.get(commandHistoryStackStatePerGraph)[graphId], undefined);
+});
+
+test('commit rejects a sibling graph snapshot mutated after preparation', () => {
+  const store = createReadyStore();
+  const context = captureGraphBuilderEditorContext(store);
+  const draft = structuredClone(context.snapshot.authoringProject);
+  draft.graphs[siblingGraphId]!.metadata!.name = 'Sibling after';
+  const prepared = prepareGraphBuilderCommit({
+    base: context.base,
+    commitId: 'mutated-sibling',
+    draft,
+    draftRevision: 1,
+    summary: 'Changed the sibling.',
+  });
+  prepared.nextGraphs![siblingGraphId]!.metadata!.name = 'Mutated after preparation';
+
+  const outcome = store.set(tryCommitGraphBuilderDraftState, {
+    prepared,
+    publishHistorySnapshot: (activeGraphId, snapshot) =>
+      store.set(publishGraphBuilderHistorySnapshotState, { activeGraphId, snapshot }),
+  });
+
+  assert.equal(outcome.status, 'protocol-error');
+  assert.equal(store.get(projectState).graphs[siblingGraphId]?.metadata?.name, 'Sibling');
+  assert.equal(store.get(commandHistoryStackStatePerGraph)[graphId], undefined);
 });

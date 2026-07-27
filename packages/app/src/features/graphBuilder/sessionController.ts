@@ -3,28 +3,43 @@ import { cloneDeep } from 'lodash-es';
 import {
   GRAPH_BUILDER_LIMITS,
   GRAPH_BUILDER_PROTOCOL_VERSION,
-  canonicalGraphBuilderStringify,
+  canonicalGraphBuilderAuthoringStringify,
   hashCanonicalGraphBuilderValue,
   parseGraphBuilderDecision,
+  parseGraphBuilderDocumentPatchResult,
   parseGraphBuilderReadResult,
   parseGraphValidationResult,
   toBoundedGraphBuilderIdentifier,
-  type ApplyPatchResult,
   type GraphBuilderDecision,
+  type GraphBuilderDocumentPatchResult,
   type GraphBuilderProjection,
+  type GraphBuilderProjectDraftDelta,
   type GraphBuilderReadRequest,
   type GraphBuilderReadResult,
   type GraphBuilderSessionResult,
   type GraphDiagnostic,
   type GraphDraftDelta,
-  type GraphPatch,
-  type GraphPatchProposal,
   type GraphValidationResult,
 } from '../../domain/graphBuilder/index.js';
 import type { GraphBuilderCommitOutcome } from './editorGateway.js';
 import type { GraphBuilderBaseIdentity } from './identity.js';
+import type { VirtualGraphPolicyWorkspaceContext } from './virtualGraphWorkspace.js';
 
 type AuthoringProject = Omit<Project, 'data'>;
+type GraphBuilderDocumentEdit =
+  | {
+      kind: 'unified-diff';
+      patchId: string;
+      expectedDraftRevision: number;
+      unifiedDiff: string;
+    }
+  | {
+      kind: 'replacement';
+      patchId: string;
+      expectedDraftRevision: number;
+      path: string;
+      contents: string;
+    };
 
 export type GraphBuilderPolicyUsage = {
   inputTokens?: number;
@@ -39,16 +54,19 @@ export type GraphBuilderPolicyTurn = {
   sessionId: string;
   turnId: string;
   attemptId: string;
-  phase: 'gathering-context' | 'editing' | 'repairing';
+  phase: GraphBuilderPolicyPhase;
   userRequest: string;
   draftRevision: number;
   projection: GraphBuilderProjection;
+  workspace: VirtualGraphPolicyWorkspaceContext;
   transcript: GraphBuilderTranscriptItem[];
   contextResults: GraphBuilderReadResult[];
   diagnostics: GraphDiagnostic[];
   remainingBudget: GraphBuilderRemainingBudget;
   contextMode: 'full' | 'compacted';
 };
+
+export type GraphBuilderPolicyPhase = 'gathering-context' | 'editing' | 'reviewing' | 'repairing';
 
 export type GraphBuilderPolicyExecutionResult = {
   protocolVersion: number;
@@ -77,7 +95,7 @@ export type GraphBuilderFullTranscriptItem =
       type: 'patch-result';
       turnId: string;
       draftRevision: number;
-      result: ApplyPatchResult;
+      result: GraphBuilderDocumentPatchResult;
     }
   | {
       type: 'clarification-answer';
@@ -120,10 +138,10 @@ export type GraphBuilderSessionLimits = {
 };
 
 export const DEFAULT_GRAPH_BUILDER_SESSION_LIMITS: GraphBuilderSessionLimits = {
-  maxPolicyAttempts: 16,
+  maxPolicyAttempts: 32,
   maxRepairAttempts: 4,
-  maxWallTimeMs: 5 * 60_000,
-  maxInactivityMs: 2 * 60_000,
+  maxWallTimeMs: 15 * 60_000,
+  maxInactivityMs: 4 * 60_000,
   maxTranscriptBytes: 96 * 1024,
   maxPolicyTurnBytes: 256_000,
   clarificationTtlMs: 10 * 60_000,
@@ -133,7 +151,7 @@ export const DEFAULT_GRAPH_BUILDER_SESSION_LIMITS: GraphBuilderSessionLimits = {
 };
 
 export type GraphBuilderPreview = {
-  delta: GraphDraftDelta;
+  delta: GraphBuilderProjectDraftDelta;
   diagnostics: GraphDiagnostic[];
   draftRevision: number;
   summary: string;
@@ -142,7 +160,7 @@ export type GraphBuilderPreview = {
 export type GraphBuilderSessionViewState =
   | { status: 'created'; sessionId: string }
   | {
-      status: 'gathering-context' | 'editing' | 'repairing';
+      status: GraphBuilderPolicyPhase;
       sessionId: string;
       policyAttempts: number;
       progress: string;
@@ -220,12 +238,28 @@ export type GraphBuilderSessionControllerOptions = {
     draft: AuthoringProject;
     draftRevision: number;
   }): GraphBuilderProjection;
+  buildWorkspaceContext(): VirtualGraphPolicyWorkspaceContext;
   commit(input: { draft: AuthoringProject; draftRevision: number; summary: string }): GraphBuilderCommitOutcome;
-  executePolicy(turn: GraphBuilderPolicyTurn, abortSignal: AbortSignal): Promise<GraphBuilderPolicyExecutionResult>;
+  executePolicy(
+    turn: GraphBuilderPolicyTurn,
+    abortSignal: AbortSignal,
+    reportActivity: () => void,
+  ): Promise<GraphBuilderPolicyExecutionResult>;
   kernel: {
-    applyPatch(patch: GraphPatch): ApplyPatchResult;
+    applyDocumentPatch(input: {
+      patchId: string;
+      expectedDraftRevision: number;
+      unifiedDiff: string;
+    }): GraphBuilderDocumentPatchResult;
+    replaceDocument(input: {
+      patchId: string;
+      expectedDraftRevision: number;
+      path: string;
+      contents: string;
+    }): GraphBuilderDocumentPatchResult;
     getDraft(): AuthoringProject;
     getDraftDelta(): GraphDraftDelta;
+    getProjectDraftDelta(): GraphBuilderProjectDraftDelta;
     getDraftRevision(): number;
     hasDraftChanges(): boolean;
   };
@@ -259,6 +293,12 @@ type ClarificationState = {
   turnId: string;
 };
 
+type DocumentCoverage = {
+  digest: string;
+  intervals: DocumentInterval[];
+  totalLength: number;
+};
+
 export class GraphBuilderSessionController {
   readonly #options: GraphBuilderSessionControllerOptions;
   readonly #limits: GraphBuilderSessionLimits;
@@ -268,7 +308,7 @@ export class GraphBuilderSessionController {
   readonly #hardDeadlineAt: number;
   readonly #abortController = new AbortController();
   readonly #listeners = new Set<(state: GraphBuilderSessionViewState) => void>();
-  readonly #turnPatchLedger = new Map<string, GraphPatch>();
+  readonly #turnPatchLedger = new Map<string, GraphBuilderDocumentEdit>();
   readonly #usedResumeTokens = new Map<string, string>();
   readonly #usage: GraphBuilderPolicyUsage[] = [];
   #deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -279,9 +319,12 @@ export class GraphBuilderSessionController {
   #terminal = false;
   #policyAttempts = 0;
   #repairAttempts = 0;
+  #consecutiveRepairAttempts = 0;
   #turnSequence = 0;
   #transcript: GraphBuilderTranscriptItem[] = [];
   #contextResults: GraphBuilderReadResult[] = [];
+  #documentCoverage = new Map<string, DocumentCoverage>();
+  #documentCoverageRevision: number | undefined;
   #diagnostics: GraphDiagnostic[] = [];
   #lastSummary: string | undefined;
   #clarification: ClarificationState | undefined;
@@ -414,9 +457,6 @@ export class GraphBuilderSessionController {
         return;
       }
       const preview = this.#state.preview;
-      if (!this.#checkHardDeadline()) {
-        return;
-      }
       if (!this.#recheckIdentity(preview)) {
         return;
       }
@@ -477,7 +517,7 @@ export class GraphBuilderSessionController {
     return Promise.resolve();
   }
 
-  async #runPolicyLoop(initialPhase: 'gathering-context' | 'editing' | 'repairing'): Promise<void> {
+  async #runPolicyLoop(initialPhase: GraphBuilderPolicyPhase): Promise<void> {
     let phase = initialPhase;
 
     while (!this.#terminal && !this.#abortController.signal.aborted) {
@@ -494,6 +534,7 @@ export class GraphBuilderSessionController {
       const attemptId = toBoundedGraphBuilderIdentifier(`${turnId}:attempt:${nextPolicyAttempt}`);
       const draftRevision = this.#options.kernel.getDraftRevision();
       let projection: GraphBuilderProjection;
+      let workspace: VirtualGraphPolicyWorkspaceContext;
       try {
         projection = this.#options.buildProjection({
           delta: this.#options.kernel.getDraftDelta(),
@@ -501,11 +542,18 @@ export class GraphBuilderSessionController {
           draft: this.#options.kernel.getDraft(),
           draftRevision,
         });
+        workspace = this.#options.buildWorkspaceContext();
+        this.#synchronizeDocumentCoverage(workspace, draftRevision);
       } catch (error) {
-        this.#fail('projection-failed', 'Graph Builder could not safely project the current draft.', undefined, error);
+        this.#fail(
+          'projection-failed',
+          'Graph Builder could not safely project the current virtual workspace.',
+          undefined,
+          error,
+        );
         return;
       }
-      const compacted = compactTranscript(this.#transcript, this.#limits.maxTranscriptBytes);
+      const compacted = compactTranscript(this.#effectiveTranscript(), this.#limits.maxTranscriptBytes);
       if (compacted.overLimit) {
         this.#terminate({
           status: 'budget-exhausted',
@@ -523,11 +571,12 @@ export class GraphBuilderSessionController {
         userRequest: this.#request,
         draftRevision,
         projection,
+        workspace,
         transcript: compacted.items,
         contextResults: this.#contextResults,
         diagnostics: this.#diagnostics,
         remainingBudget: this.#remainingBudget(nextPolicyAttempt),
-        contextMode: compacted.compacted ? 'compacted' : 'full',
+        contextMode: transcriptContextMode(compacted),
       };
       if (portableByteLength(turn) > this.#limits.maxPolicyTurnBytes) {
         this.#terminate({
@@ -553,8 +602,11 @@ export class GraphBuilderSessionController {
 
       let execution: GraphBuilderPolicyExecutionResult;
       try {
+        this.#touchInactivityTimer();
         execution = await waitForAbort(
-          this.#options.executePolicy(turn, this.#abortController.signal),
+          this.#options.executePolicy(turn, this.#abortController.signal, () => {
+            this.#touchInactivityTimer();
+          }),
           this.#abortController.signal,
         );
       } catch (error) {
@@ -580,17 +632,12 @@ export class GraphBuilderSessionController {
           return;
         }
         if (isRepairablePolicyExecutionError(error)) {
-          this.#repairAttempts += 1;
           this.#recordPolicyRepairDiagnostic(
             turnId,
             'invalid-policy-decision',
             'The provider response did not match the Graph Builder decision contract.',
           );
-          if (this.#repairAttempts > this.#limits.maxRepairAttempts) {
-            this.#terminate({
-              status: 'budget-exhausted',
-              diagnostics: this.#diagnostics,
-            });
+          if (!this.#consumeRepairAttempt()) {
             return;
           }
           phase = 'repairing';
@@ -640,17 +687,12 @@ export class GraphBuilderSessionController {
       try {
         decision = parseGraphBuilderDecision(safelyReadProperty(execution, 'decision'));
       } catch (error) {
-        this.#repairAttempts += 1;
         this.#recordPolicyRepairDiagnostic(
           turnId,
           'invalid-policy-decision',
           'The provider response did not match the Graph Builder decision contract.',
         );
-        if (this.#repairAttempts > this.#limits.maxRepairAttempts) {
-          this.#terminate({
-            status: 'budget-exhausted',
-            diagnostics: this.#diagnostics,
-          });
+        if (!this.#consumeRepairAttempt()) {
           return;
         }
         phase = 'repairing';
@@ -659,7 +701,7 @@ export class GraphBuilderSessionController {
       this.#transcript.push({ type: 'decision', turnId, draftRevision, decision });
 
       if (decision.type === 'request-context') {
-        const results = await this.#executeReadBatch(decision.requests, turnId, draftRevision);
+        const results = await this.#executeReadBatch(decision.requests, turn);
         if (!results) {
           return;
         }
@@ -668,19 +710,39 @@ export class GraphBuilderSessionController {
         continue;
       }
 
-      if (decision.type === 'propose-patch') {
-        let patch: GraphPatch;
+      if (decision.type === 'apply-patch' || decision.type === 'replace-document') {
+        if (
+          decision.type === 'replace-document' &&
+          decision.baseRevision === draftRevision &&
+          !this.#hasCompleteDocumentCoverage(decision.path, draftRevision, turn.workspace)
+        ) {
+          this.#recordPolicyRepairDiagnostic(
+            turnId,
+            'replacement-requires-complete-document',
+            `Read the complete current ${decision.path} document before replacing it. Use nextOffset continuation reads until the current revision is fully covered.`,
+          );
+          if (!this.#consumeRepairAttempt()) {
+            return;
+          }
+          phase = 'repairing';
+          continue;
+        }
+        let patch: GraphBuilderDocumentEdit;
         try {
-          patch = this.#getOrCreatePatch(turnId, draftRevision, decision.proposal);
+          patch = this.#getOrCreateDocumentEdit(turnId, decision);
         } catch (error) {
           this.#fail('patch-identity-error', 'The policy reused a patch identity inconsistently.', undefined, error);
           return;
         }
-        let result: ApplyPatchResult;
+        let result: GraphBuilderDocumentPatchResult;
         try {
-          result = this.#options.kernel.applyPatch(patch);
+          result = parseGraphBuilderDocumentPatchResult(
+            patch.kind === 'unified-diff'
+              ? this.#options.kernel.applyDocumentPatch(patch)
+              : this.#options.kernel.replaceDocument(patch),
+          );
         } catch (error) {
-          this.#fail('patch-protocol-error', 'The proposed graph patch was invalid.', undefined, error);
+          this.#fail('patch-protocol-error', 'The proposed virtual-document patch was invalid.', undefined, error);
           return;
         }
         const resultRevision = result.disposition === 'replayed' ? result.original.draftRevision : result.draftRevision;
@@ -694,51 +756,34 @@ export class GraphBuilderSessionController {
         this.#diagnostics = freshResult.diagnostics;
 
         if (freshResult.disposition === 'rejected') {
-          this.#repairAttempts += 1;
-          if (this.#repairAttempts > this.#limits.maxRepairAttempts) {
-            this.#terminate({
-              status: 'budget-exhausted',
-              diagnostics: this.#diagnostics,
-            });
+          if (!this.#consumeRepairAttempt()) {
             return;
           }
           phase = 'repairing';
           continue;
         }
 
-        this.#lastSummary = decision.summary?.trim() || deterministicSummary(this.#options.kernel.getDraftDelta());
+        if (freshResult.disposition === 'applied') {
+          this.#consecutiveRepairAttempts = 0;
+        }
+        this.#lastSummary =
+          decision.summary?.trim() || deterministicSummary(this.#options.kernel.getProjectDraftDelta());
         this.#contextResults = [];
 
-        if (decision.afterApply === 'ready-for-preview') {
-          if (!this.#options.kernel.hasDraftChanges()) {
-            this.#repairAttempts += 1;
-            this.#recordPolicyRepairDiagnostic(
-              turnId,
-              'ready-without-draft-changes',
-              'The policy requested preview, but the accepted draft matches the captured base.',
-            );
-            phase = 'repairing';
-            continue;
-          }
-          if (this.#tryEnterPreview(this.#lastSummary)) {
-            return;
-          }
-          phase = 'repairing';
-          continue;
-        }
-
-        phase = 'editing';
+        phase = 'reviewing';
         continue;
       }
 
       if (decision.type === 'ready') {
         if (!this.#options.kernel.hasDraftChanges()) {
-          this.#repairAttempts += 1;
           this.#recordPolicyRepairDiagnostic(
             turnId,
             'ready-without-draft-changes',
             'The policy reported readiness, but the accepted draft matches the captured base.',
           );
+          if (!this.#consumeRepairAttempt()) {
+            return;
+          }
           phase = 'repairing';
           continue;
         }
@@ -751,12 +796,14 @@ export class GraphBuilderSessionController {
 
       if (decision.type === 'no-change') {
         if (this.#options.kernel.hasDraftChanges()) {
-          this.#repairAttempts += 1;
           this.#recordPolicyRepairDiagnostic(
             turnId,
             'no-change-with-draft-changes',
             'The policy reported no change while the private draft still differs from the captured base.',
           );
+          if (!this.#consumeRepairAttempt()) {
+            return;
+          }
           phase = 'repairing';
           continue;
         }
@@ -816,9 +863,9 @@ export class GraphBuilderSessionController {
 
   async #executeReadBatch(
     requests: GraphBuilderReadRequest[],
-    turnId: string,
-    draftRevision: number,
+    turn: GraphBuilderPolicyTurn,
   ): Promise<GraphBuilderReadResult[] | undefined> {
+    const { draftRevision, turnId } = turn;
     const batchAbort = new AbortController();
     const abortFromSession = () => batchAbort.abort(this.#abortController.signal.reason);
     this.#abortController.signal.addEventListener('abort', abortFromSession, { once: true });
@@ -883,8 +930,8 @@ export class GraphBuilderSessionController {
         this.#fail('invalid-read-result', 'Graph Builder received an invalid context result.');
         return undefined;
       }
-      const results = outcomes.flatMap((outcome) => (outcome.kind === 'result' ? [outcome.result] : []));
-      for (const [requestIndex, result] of results.entries()) {
+      const rawResults = outcomes.flatMap((outcome) => (outcome.kind === 'result' ? [outcome.result] : []));
+      for (const [requestIndex, result] of rawResults.entries()) {
         const expectedRequestId = createReadRequestId(turnId, requestIndex);
         if (
           result.observedDraftRevision !== draftRevision ||
@@ -894,6 +941,10 @@ export class GraphBuilderSessionController {
           this.#fail('mismatched-read-result', 'Graph Builder received an incorrectly correlated context result.');
           return undefined;
         }
+      }
+      const results = this.#fitReadResultsToNextPolicyTurn(rawResults, turn);
+      this.#recordDocumentReadCoverage(results, requests, turn.workspace, draftRevision);
+      for (const result of results) {
         this.#transcript.push({
           type: 'read-result',
           turnId,
@@ -907,25 +958,210 @@ export class GraphBuilderSessionController {
     }
   }
 
-  #getOrCreatePatch(turnId: string, draftRevision: number, proposal: GraphPatchProposal): GraphPatch {
+  #fitReadResultsToNextPolicyTurn(
+    results: GraphBuilderReadResult[],
+    currentTurn: GraphBuilderPolicyTurn,
+  ): GraphBuilderReadResult[] {
+    const budgetFailures = results.map((result) => readResultBudgetFailure(result));
+    const retained = [...budgetFailures];
+
+    for (let requestIndex = 0; requestIndex < results.length; requestIndex += 1) {
+      const candidate = [...retained];
+      candidate[requestIndex] = results[requestIndex]!;
+      if (this.#readResultsFitNextPolicyTurn(candidate, currentTurn)) {
+        retained[requestIndex] = results[requestIndex]!;
+      }
+    }
+
+    return retained;
+  }
+
+  #readResultsFitNextPolicyTurn(results: GraphBuilderReadResult[], currentTurn: GraphBuilderPolicyTurn): boolean {
+    // The candidate results occupy contextResults on the immediate next turn.
+    // They enter the transcript only after that turn, so budgeting them twice
+    // would reject useful reads and charge the provider for duplicate context.
+    const compacted = compactTranscript(this.#effectiveTranscript(results), this.#limits.maxTranscriptBytes);
+    if (compacted.overLimit) {
+      return false;
+    }
+
+    const nextPolicyAttempt = this.#policyAttempts + 1;
+    const nextTurnSequence = this.#turnSequence + 1;
+    const nextTurnId = toBoundedGraphBuilderIdentifier(`${this.#sessionId}:turn:${nextTurnSequence}`);
+    const prospectiveTurn: GraphBuilderPolicyTurn = {
+      ...currentTurn,
+      turnId: nextTurnId,
+      attemptId: toBoundedGraphBuilderIdentifier(`${nextTurnId}:attempt:${nextPolicyAttempt}`),
+      phase: 'gathering-context',
+      transcript: compacted.items,
+      contextResults: results,
+      remainingBudget: this.#remainingBudget(nextPolicyAttempt),
+      contextMode: transcriptContextMode(compacted),
+    };
+    return portableByteLength(prospectiveTurn) <= this.#limits.maxPolicyTurnBytes;
+  }
+
+  #effectiveTranscript(
+    contextResults: readonly GraphBuilderReadResult[] = this.#contextResults,
+  ): GraphBuilderTranscriptItem[] {
+    const currentRevision = this.#options.kernel.getDraftRevision();
+    const activeReadRequestIds = new Set(contextResults.map((result) => result.requestId));
+    return this.#transcript.flatMap((item) => {
+      if (item.type !== 'read-result') {
+        return [item];
+      }
+      if (activeReadRequestIds.has(item.result.requestId)) {
+        return [];
+      }
+      return [item.draftRevision === currentRevision ? item : compactTranscriptItem(item)];
+    });
+  }
+
+  #synchronizeDocumentCoverage(workspace: VirtualGraphPolicyWorkspaceContext, draftRevision: number): void {
+    if (this.#documentCoverageRevision !== draftRevision) {
+      this.#documentCoverage.clear();
+      this.#documentCoverageRevision = draftRevision;
+    }
+
+    const currentPaths = new Set(workspace.documents.map((document) => document.path));
+    for (const path of this.#documentCoverage.keys()) {
+      if (!currentPaths.has(path)) {
+        this.#documentCoverage.delete(path);
+      }
+    }
+    for (const descriptor of workspace.documents) {
+      const current = this.#documentCoverage.get(descriptor.path);
+      if (!current || current.digest !== descriptor.digest || current.totalLength !== descriptor.totalLength) {
+        this.#documentCoverage.set(descriptor.path, {
+          digest: descriptor.digest,
+          intervals: [],
+          totalLength: descriptor.totalLength,
+        });
+      }
+    }
+
+    const activeDocument = workspace.activeDocument;
+    const descriptor = workspace.documents.find((document) => document.path === activeDocument.path);
+    if (
+      descriptor &&
+      activeDocument.digest === descriptor.digest &&
+      activeDocument.totalLength === descriptor.totalLength &&
+      activeDocument.startOffset >= 0 &&
+      activeDocument.endOffset >= activeDocument.startOffset &&
+      activeDocument.endOffset <= descriptor.totalLength &&
+      activeDocument.content.length === activeDocument.endOffset - activeDocument.startOffset
+    ) {
+      this.#addDocumentCoverageInterval(activeDocument.path, [activeDocument.startOffset, activeDocument.endOffset]);
+    }
+  }
+
+  #recordDocumentReadCoverage(
+    results: readonly GraphBuilderReadResult[],
+    requests: readonly GraphBuilderReadRequest[],
+    workspace: VirtualGraphPolicyWorkspaceContext,
+    draftRevision: number,
+  ): void {
+    if (this.#documentCoverageRevision !== draftRevision) {
+      return;
+    }
+    for (const result of results) {
+      const request = requests[result.requestIndex];
+      if (request?.type !== 'read-virtual-document') {
+        continue;
+      }
+      for (const descriptor of workspace.documents) {
+        const interval = virtualDocumentReadInterval(
+          result,
+          descriptor.path,
+          draftRevision,
+          descriptor.totalLength,
+          descriptor.digest,
+        );
+        const requestedStartOffset = request.startOffset;
+        const payload = result.status === 'ok' ? result.payload : undefined;
+        const resultStartLine =
+          payload != null && typeof payload === 'object' && !Array.isArray(payload)
+            ? safelyReadProperty(payload, 'startLine')
+            : undefined;
+        if (
+          interval &&
+          descriptor.path === request.path &&
+          (requestedStartOffset === undefined
+            ? resultStartLine === (request.startLine ?? 1)
+            : interval[0] === requestedStartOffset)
+        ) {
+          this.#addDocumentCoverageInterval(descriptor.path, interval);
+          break;
+        }
+      }
+    }
+  }
+
+  #addDocumentCoverageInterval(path: string, interval: DocumentInterval): void {
+    const coverage = this.#documentCoverage.get(path);
+    if (!coverage) {
+      return;
+    }
+    coverage.intervals = mergeDocumentIntervals([...coverage.intervals, interval]);
+  }
+
+  #hasCompleteDocumentCoverage(
+    path: string,
+    draftRevision: number,
+    workspace: VirtualGraphPolicyWorkspaceContext,
+  ): boolean {
+    if (this.#documentCoverageRevision !== draftRevision) {
+      return false;
+    }
+    const descriptor = workspace.documents.find((document) => document.path === path);
+    const coverage = this.#documentCoverage.get(path);
+    return (
+      descriptor !== undefined &&
+      coverage !== undefined &&
+      coverage.digest === descriptor.digest &&
+      coverage.totalLength === descriptor.totalLength &&
+      (descriptor.totalLength === 0 ||
+        (coverage.intervals.length === 1 &&
+          coverage.intervals[0]![0] === 0 &&
+          coverage.intervals[0]![1] === descriptor.totalLength))
+    );
+  }
+
+  #getOrCreateDocumentEdit(
+    turnId: string,
+    decision: Extract<GraphBuilderDecision, { type: 'apply-patch' | 'replace-document' }>,
+  ): GraphBuilderDocumentEdit {
     const previous = this.#turnPatchLedger.get(turnId);
     if (previous) {
-      if (
-        canonicalGraphBuilderStringify({
-          protocolVersion: previous.protocolVersion,
-          operations: previous.operations,
-        }) !== canonicalGraphBuilderStringify(proposal)
-      ) {
+      const contentMatches =
+        decision.type === 'apply-patch'
+          ? previous.kind === 'unified-diff' && previous.unifiedDiff === decision.unifiedDiff
+          : previous.kind === 'replacement' &&
+            previous.path === decision.path &&
+            previous.contents === decision.content;
+      if (previous.expectedDraftRevision !== decision.baseRevision || !contentMatches) {
         throw new Error('A policy turn reused its identity with different patch content.');
       }
       return previous;
     }
 
-    const patch: GraphPatch = {
-      ...proposal,
+    const common = {
       patchId: toBoundedGraphBuilderIdentifier(`${turnId}:patch`),
-      expectedDraftRevision: draftRevision,
+      // Let the workspace turn stale model revisions into an ordinary
+      // rejected edit with a current-revision repair diagnostic. Treating
+      // this as a controller protocol failure would make a recoverable model
+      // mistake terminate the entire session.
+      expectedDraftRevision: decision.baseRevision,
     };
+    const patch =
+      decision.type === 'apply-patch'
+        ? { ...common, kind: 'unified-diff' as const, unifiedDiff: decision.unifiedDiff }
+        : {
+            ...common,
+            kind: 'replacement' as const,
+            path: decision.path,
+            contents: decision.content,
+          };
     this.#turnPatchLedger.set(turnId, patch);
     return patch;
   }
@@ -947,10 +1183,9 @@ export class GraphBuilderSessionController {
       return true;
     }
     if (validation.completeness !== 'complete' || validation.blockingDiagnosticKeys.length > 0) {
-      this.#repairAttempts += 1;
-      return false;
+      return !this.#consumeRepairAttempt();
     }
-    const delta = this.#options.kernel.getDraftDelta();
+    const delta = this.#options.kernel.getProjectDraftDelta();
     const preview: GraphBuilderPreview = {
       delta,
       diagnostics: this.#diagnostics,
@@ -960,10 +1195,10 @@ export class GraphBuilderSessionController {
     if (!this.#checkHardDeadline()) {
       return true;
     }
-    // Inactivity protects active provider/read work. Once a preview is ready,
-    // the controller is waiting on the user; only the hard session deadline
-    // should bound review time.
+    // Automated work is complete. Preview review is user-paced and therefore
+    // is not bounded by provider/read inactivity or the active-work deadline.
     this.#clearInactivityTimer();
+    this.#clearDeadlineTimer();
     this.#setState({ status: 'ready-for-preview', sessionId: this.#sessionId, preview });
     return true;
   }
@@ -1020,7 +1255,7 @@ export class GraphBuilderSessionController {
       });
       return false;
     }
-    if (this.#repairAttempts > this.#limits.maxRepairAttempts) {
+    if (this.#consecutiveRepairAttempts > this.#limits.maxRepairAttempts) {
       this.#terminate({
         status: 'budget-exhausted',
         diagnostics: this.#diagnostics,
@@ -1049,7 +1284,7 @@ export class GraphBuilderSessionController {
     const totals = this.#usageTotals();
     return {
       policyAttempts: Math.max(0, this.#limits.maxPolicyAttempts - policyAttempts),
-      repairAttempts: Math.max(0, this.#limits.maxRepairAttempts - this.#repairAttempts),
+      repairAttempts: Math.max(0, this.#limits.maxRepairAttempts - this.#consecutiveRepairAttempts),
       milliseconds: Math.max(0, this.#limits.maxWallTimeMs - this.#elapsedMs()),
       inputTokens: Math.max(0, this.#limits.maxInputTokens - (totals.inputTokens ?? 0)),
       outputTokens: Math.max(0, this.#limits.maxOutputTokens - (totals.outputTokens ?? 0)),
@@ -1104,6 +1339,13 @@ export class GraphBuilderSessionController {
       Math.max(0, this.#hardDeadlineAt - Date.now()),
     );
     unrefTimer(this.#deadlineTimer);
+  }
+
+  #clearDeadlineTimer(): void {
+    if (this.#deadlineTimer) {
+      clearTimeout(this.#deadlineTimer);
+      this.#deadlineTimer = undefined;
+    }
   }
 
   #touchInactivityTimer(): void {
@@ -1174,10 +1416,7 @@ export class GraphBuilderSessionController {
       return;
     }
     this.#terminal = true;
-    if (this.#deadlineTimer) {
-      clearTimeout(this.#deadlineTimer);
-      this.#deadlineTimer = undefined;
-    }
+    this.#clearDeadlineTimer();
     this.#clearInactivityTimer();
     this.#clearClarificationTimer();
     if (!this.#abortController.signal.aborted && result.status !== 'committed') {
@@ -1232,6 +1471,19 @@ export class GraphBuilderSessionController {
     ].slice(-GRAPH_BUILDER_LIMITS.maxDiagnostics);
   }
 
+  #consumeRepairAttempt(): boolean {
+    this.#repairAttempts += 1;
+    this.#consecutiveRepairAttempts += 1;
+    if (this.#consecutiveRepairAttempts <= this.#limits.maxRepairAttempts) {
+      return true;
+    }
+    this.#terminate({
+      status: 'budget-exhausted',
+      diagnostics: this.#diagnostics,
+    });
+    return false;
+  }
+
   #setState(state: GraphBuilderSessionViewState): void {
     this.#state = state;
     for (const listener of this.#listeners) {
@@ -1262,6 +1514,64 @@ export class GraphBuilderSessionController {
     this.#queue = scheduled.catch(() => undefined);
     return scheduled;
   }
+}
+
+type DocumentInterval = readonly [startOffset: number, endOffset: number];
+
+function mergeDocumentIntervals(intervals: readonly DocumentInterval[]): DocumentInterval[] {
+  const merged: DocumentInterval[] = [];
+  for (const [startOffset, endOffset] of [...intervals].sort(
+    ([leftStart, leftEnd], [rightStart, rightEnd]) => leftStart - rightStart || rightEnd - leftEnd,
+  )) {
+    const previous = merged.at(-1);
+    if (!previous || startOffset > previous[1]) {
+      merged.push([startOffset, endOffset]);
+    } else if (endOffset > previous[1]) {
+      merged[merged.length - 1] = [previous[0], endOffset];
+    }
+  }
+  return merged;
+}
+
+function virtualDocumentReadInterval(
+  result: GraphBuilderReadResult,
+  path: string,
+  draftRevision: number,
+  totalLength: number,
+  digest: string,
+): DocumentInterval | undefined {
+  if (result.status !== 'ok' || result.observedDraftRevision !== draftRevision) {
+    return undefined;
+  }
+  const payload = result.payload;
+  if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) {
+    return undefined;
+  }
+  const payloadPath = safelyReadProperty(payload, 'path');
+  const payloadRevision = safelyReadProperty(payload, 'draftRevision');
+  const payloadDigest = safelyReadProperty(payload, 'digest');
+  const payloadTotalLength = safelyReadProperty(payload, 'totalLength');
+  const startOffset = safelyReadProperty(payload, 'startOffset');
+  const endOffset = safelyReadProperty(payload, 'endOffset');
+  const contents = safelyReadProperty(payload, 'contents');
+  if (
+    payloadPath !== path ||
+    payloadRevision !== draftRevision ||
+    payloadDigest !== digest ||
+    payloadTotalLength !== totalLength ||
+    typeof startOffset !== 'number' ||
+    !Number.isSafeInteger(startOffset) ||
+    startOffset < 0 ||
+    typeof endOffset !== 'number' ||
+    !Number.isSafeInteger(endOffset) ||
+    endOffset < startOffset ||
+    endOffset > totalLength ||
+    typeof contents !== 'string' ||
+    contents.length !== endOffset - startOffset
+  ) {
+    return undefined;
+  }
+  return [startOffset, endOffset];
 }
 
 function compactTranscript(
@@ -1295,6 +1605,12 @@ function compactTranscript(
   return { compacted: true, items: cloneDeep(retained), overLimit: false };
 }
 
+function transcriptContextMode(
+  transcript: ReturnType<typeof compactTranscript>,
+): GraphBuilderPolicyTurn['contextMode'] {
+  return transcript.compacted || transcript.items.some((item) => item.type === 'compacted') ? 'compacted' : 'full';
+}
+
 function compactTranscriptItem(item: GraphBuilderTranscriptItem): GraphBuilderTranscriptItem {
   if (item.type === 'compacted' || item.type === 'clarification-answer') {
     return cloneDeep(item);
@@ -1315,8 +1631,11 @@ function transcriptItemSummary(item: GraphBuilderFullTranscriptItem): string {
       if (item.decision.type === 'request-context') {
         return `Decision requested ${item.decision.requests.length} context reads.`;
       }
-      if (item.decision.type === 'propose-patch') {
-        return `Decision proposed ${item.decision.proposal.operations.length} operations with ${item.decision.afterApply}.`;
+      if (item.decision.type === 'apply-patch') {
+        return `Decision proposed a virtual-document patch for revision ${item.decision.baseRevision.toString(10)}.`;
+      }
+      if (item.decision.type === 'replace-document') {
+        return `Decision proposed replacing ${item.decision.path} at revision ${item.decision.baseRevision.toString(10)}.`;
       }
       return `Decision type: ${item.decision.type}.`;
     case 'read-result':
@@ -1331,27 +1650,64 @@ function transcriptItemSummary(item: GraphBuilderFullTranscriptItem): string {
 }
 
 function portableByteLength(value: unknown): number {
-  return new TextEncoder().encode(canonicalGraphBuilderStringify(value)).byteLength;
+  // Aggregate transcripts and parallel read batches may temporarily exceed the
+  // per-envelope portable limit before compaction. Measure those data-only
+  // candidates with the larger authoring serializer, then enforce the much
+  // tighter session limit at each caller.
+  return new TextEncoder().encode(canonicalGraphBuilderAuthoringStringify(value)).byteLength;
 }
 
 function createReadRequestId(turnId: string, requestIndex: number): string {
   return toBoundedGraphBuilderIdentifier(`${turnId}:read:${requestIndex}`);
 }
 
-function deterministicSummary(delta: GraphDraftDelta | undefined): string {
-  if (!delta) {
+function readResultBudgetFailure(result: GraphBuilderReadResult): GraphBuilderReadResult {
+  return {
+    requestId: result.requestId,
+    requestIndex: result.requestIndex,
+    observedDraftRevision: result.observedDraftRevision,
+    status: 'failed',
+    error: {
+      code: 'read-result-budget-exceeded',
+      message: 'This result did not fit the aggregate Graph Builder context budget. Request fewer or narrower reads.',
+    },
+  };
+}
+
+function deterministicSummary(delta: GraphBuilderProjectDraftDelta | undefined): string {
+  if (!delta || delta.graphDeltas.length === 0) {
     return 'Prepared a validated graph change.';
   }
+  const graphDeltas = delta.graphDeltas;
+  const sum = (value: (graphDelta: GraphDraftDelta) => number) =>
+    graphDeltas.reduce((total, graphDelta) => total + value(graphDelta), 0);
   const parts = [
-    pluralize(delta.addedNodeCount ?? delta.addedNodes.length, 'node added', 'nodes added'),
-    pluralize(delta.updatedNodeCount ?? delta.updatedNodes.length, 'node updated', 'nodes updated'),
-    pluralize(delta.removedNodeCount ?? delta.removedNodes.length, 'node removed', 'nodes removed'),
-    pluralize(delta.addedConnectionCount ?? delta.addedConnections.length, 'connection added', 'connections added'),
     pluralize(
-      delta.removedConnectionCount ?? delta.removedConnections.length,
+      sum((entry) => entry.addedNodeCount ?? entry.addedNodes.length),
+      'node added',
+      'nodes added',
+    ),
+    pluralize(
+      sum((entry) => entry.updatedNodeCount ?? entry.updatedNodes.length),
+      'node updated',
+      'nodes updated',
+    ),
+    pluralize(
+      sum((entry) => entry.removedNodeCount ?? entry.removedNodes.length),
+      'node removed',
+      'nodes removed',
+    ),
+    pluralize(
+      sum((entry) => entry.addedConnectionCount ?? entry.addedConnections.length),
+      'connection added',
+      'connections added',
+    ),
+    pluralize(
+      sum((entry) => entry.removedConnectionCount ?? entry.removedConnections.length),
       'connection removed',
       'connections removed',
     ),
+    pluralize(graphDeltas.length, 'graph changed', 'graphs changed'),
   ].filter((part) => !part.startsWith('0 '));
   return parts.length > 0 ? `Prepared ${parts.join(', ')}.` : 'Prepared a validated graph change.';
 }
@@ -1360,12 +1716,14 @@ function pluralize(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function progressForPhase(phase: 'gathering-context' | 'editing' | 'repairing'): string {
+function progressForPhase(phase: GraphBuilderPolicyPhase): string {
   switch (phase) {
     case 'gathering-context':
       return 'Inspecting the available graph-building context…';
     case 'editing':
       return 'Preparing a private graph draft…';
+    case 'reviewing':
+      return 'Checking the accepted draft against the complete request…';
     case 'repairing':
       return 'Repairing the private draft against Rivet validation…';
   }

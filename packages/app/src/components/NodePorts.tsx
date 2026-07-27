@@ -45,6 +45,7 @@ import {
 } from './nodeCanvas/portReorderInteraction.js';
 import {
   formatDataBusChannelLabel,
+  getDataBusRelatedChannelKeys,
   getDataBusPortChannelIndexKey,
   type DataBusChannelReference,
 } from './nodeCanvas/dataBusModel.js';
@@ -116,7 +117,14 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   };
 
   const handleDataBusAntennaHoverChange = (channels: readonly DataBusChannelReference[], hovered: boolean) => {
-    onDataBusChannelHoverChange?.(hovered ? channels.map((channel) => channel.channelKey) : []);
+    onDataBusChannelHoverChange?.(
+      hovered
+        ? getDataBusRelatedChannelKeys(
+            dataBusTopology,
+            channels.map((channel) => channel.channelKey),
+          )
+        : [],
+    );
   };
 
   const isSubGraphNode = node.type === 'subGraph';

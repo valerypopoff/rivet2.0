@@ -1,0 +1,70 @@
+---
+id: data-bus
+title: Data Bus
+sidebar_label: Data Bus
+---
+
+## Overview
+
+A Data Bus is a topology-only node for sharing outputs across a large graph
+without drawing long wires everywhere. It is rendered as a compact rail at the
+top of a graph canvas rather than as an executable node card.
+
+Each channel has one provider and any number of consumers. Connect a provider
+to the next **Connect provider** input, then connect that channel's output to
+the inputs that need the same value. Receivers can appear anywhere in the
+graph.
+
+The workflow compiler expands every populated channel into direct dependencies
+before the graph runs. This means a Data Bus does not wait for all of its
+channels, and a later output can be placed on another channel without creating
+a false graph cycle.
+
+## Inputs and outputs
+
+| Port | Type | Description |
+| --- | --- | --- |
+| Input [i] | `any` | The provider for channel *i*. One connection is allowed. |
+| Output [i] | `any` | The same channel delivered to any number of receivers. |
+
+The node adds channels as you connect them. Sparse channels are valid. If a
+provider is removed while receivers remain, the channel is shown as **Missing
+provider** so it can be repaired.
+
+## Canvas behavior
+
+- Established connections use compact antenna markers instead of long wires.
+- Hover a channel or an antenna to reveal the actual provider and receiver
+  wires in the active color.
+- Long rails expand into separate full-width rows below the project tabs and
+  reserve canvas space rather than covering the graph.
+- The rail is not draggable. Use its settings button to select and edit the
+  Data Bus node.
+
+## Constraints
+
+Data Buses are always-active topology. They cannot be disabled, conditional,
+run per item, frozen, or configured with variants. A channel with several
+providers is an error; disconnect providers until exactly one remains.
+
+They also cannot be used as a **Run to** target. Choose an ordinary provider or
+consumer node instead. Invalid channel wiring fails before the graph begins, so
+Rivet can show the exact configuration error rather than silently running an
+empty graph.
+
+If a hand-edited project contains incompatible execution settings on a Data
+Bus, Rivet shows it as an ordinary node card and offers **Repair Data Bus
+execution settings**. Repair clears only those incompatible settings; the bus
+title, position, and connections remain unchanged.
+
+When converting an ordinary Passthrough into a Data Bus, every incident port
+must already be a canonical `inputN` or `outputN` channel and each `inputN` can
+have only one provider. Rivet keeps the conversion disabled and explains what
+needs repair if those conditions are not met.
+
+Legacy Passthrough nodes previously configured as canvas data buses are migrated
+to this node type when the project opens.
+
+## See also
+
+- [Passthrough](./passthrough.mdx)

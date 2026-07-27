@@ -1,10 +1,12 @@
-- Добавить агенту эвернесс о своих тулах? Чтобы он в случае чего мог посмотреть а как именно работает тул. Это ппоможет ему правильнее им пользоваться
+- Need to show the curent graph name somewhere. Like, by pressing some button?
+
 
 - Сделать чтобы можно было стримить аутпут из ЛЛМ чат нода прям в веб апп в компонент чата
 
+- Добавить агенту эвернесс о своих тулах? Чтобы он в случае чего мог посмотреть а как именно работает тул. Это ппоможет ему правильнее им пользоваться
+
 - A main page for the github website that says that it is a yet another workflow builder for AI but: free, developer oriented (not for everyone) so there's no bullshit, it's for professional work, it's good and optimized for production use (not only for POCs)
 
-- A new LLM Agent node: system prompt, tools, RAG, internet search, etc. A whole challenge is to reuse the current llm nodes just like in Langflow
 
 - A setting for LLM chat node to race several LLM calls and return the fastest. Need to think through how it works along with retries
 
@@ -30,7 +32,6 @@
 - AWS marketplace ready to launch thing for Rivet 2
 
 
-- Need to show the curent graph name somewhere. When there's many and they are in the folders and you click through subgraphs, the user gets lost. It's already shown in the run button. maybe make it more noticeable?
 
 - When I need to gather a lot of inputs into one node, it looks messy and it's easy to look over some connections. like in the "setGlobals" graph. We need to do something about this UX. maybe introduce a "Group" node that will contain many same type nodes and combine their outputs into one so I can later pipe it into just one node and be sur ethat all the nodes are connected?
 

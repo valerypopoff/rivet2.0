@@ -306,7 +306,7 @@ function getPrimaryAction(
       label: 'Generate',
     };
   }
-  if (state.status === 'gathering-context' || state.status === 'editing' || state.status === 'repairing') {
+  if (isGraphBuilderSessionWorking(state)) {
     return { disabled: true, label: 'Preparing draft…' };
   }
   if (state.status === 'awaiting-user') {

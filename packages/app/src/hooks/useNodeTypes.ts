@@ -25,6 +25,7 @@ import { booleanNodeDescriptor } from '../components/nodes/BooleanNode.js';
 import { compareNodeDescriptor } from '../components/nodes/CompareNode.js';
 import { coalesceNodeDescriptor } from '../components/nodes/CoalesceNode.js';
 import { passthroughNodeDescriptor } from '../components/nodes/PassthroughNode.js';
+import { dataBusNodeDescriptor } from '../components/nodes/DataBusNode.js';
 import { useAtomValue } from 'jotai';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import type { NodeOutputCopyValueProjector } from '../utils/executionDataCopyValue.js';
@@ -87,6 +88,7 @@ const overriddenDescriptors: Partial<NodeComponentDescriptors> = {
   compare: compareNodeDescriptor,
   coalesce: coalesceNodeDescriptor,
   passthrough: passthroughNodeDescriptor,
+  dataBus: dataBusNodeDescriptor,
 };
 
 export function useNodeTypes(): NodeComponentDescriptors {

@@ -130,6 +130,7 @@ type ApplyContext = {
   createdNodeIds: Map<string, NodeId>;
   settingUpdatedNodeIds: Set<NodeId>;
   createdNodeIdSet: Set<NodeId>;
+  prePatchNodeIds: ReadonlySet<NodeId>;
   touched: MutableTouchedScope;
 };
 
@@ -191,6 +192,7 @@ function connectionKey(connection: GraphBuilderConnectionDescriptor): string {
 }
 
 const graphBuilderDataTypes = new Set<string>(dataTypes);
+const cloneBlockedSourceNodeTypes = new Set(['code', 'codeNew']);
 
 function isBoundedIdentifier(value: unknown): value is string {
   return (
@@ -863,6 +865,7 @@ export class GraphBuilderTransactionKernel {
       createdNodeIds: new Map(),
       settingUpdatedNodeIds: new Set(),
       createdNodeIdSet: new Set(),
+      prePatchNodeIds: new Set(getActiveGraph(this.#draft, this.#activeGraphId).nodes.map((node) => node.id)),
       touched: {
         graphIds: new Set([this.#activeGraphId]),
         nodeIds: new Set(),
@@ -1043,36 +1046,7 @@ export class GraphBuilderTransactionKernel {
 
     switch (operation.op) {
       case 'createNode': {
-        const allocatedNodeId = this.#idGenerator();
-        if (
-          typeof allocatedNodeId !== 'string' ||
-          allocatedNodeId.length === 0 ||
-          allocatedNodeId.length > GRAPH_BUILDER_LIMITS.maxIdentifierLength
-        ) {
-          throw new OperationRejectedError([
-            createDiagnostic({
-              key: `create-node:invalid-host-id:${operationIndex}`,
-              ruleId: 'host-node-id-allocation',
-              graphId: this.#activeGraphId,
-              clientId: operation.clientId,
-              operationIndex,
-              message: 'The host node ID allocator returned an invalid ID.',
-            }),
-          ]);
-        }
-        if (findNode(context.candidate, this.#activeGraphId, allocatedNodeId)) {
-          throw new OperationRejectedError([
-            createDiagnostic({
-              key: `create-node:id-collision:${operationIndex}`,
-              ruleId: 'host-node-id-allocation',
-              graphId: this.#activeGraphId,
-              nodeId: allocatedNodeId,
-              clientId: operation.clientId,
-              operationIndex,
-              message: 'The host node ID allocator returned an ID that already exists.',
-            }),
-          ]);
-        }
+        const allocatedNodeId = this.#allocateFreshNodeId(context, operation.clientId, operationIndex, 'create-node');
 
         const rawAuthoredNode = this.#semantics.createNodeFromAuthoringChoice({
           operation,
@@ -1084,6 +1058,54 @@ export class GraphBuilderTransactionKernel {
         authoredNode.id = allocatedNodeId;
         authoredNode.visualData = { ...authoredNode.visualData, x: 0, y: 0 };
         graph.nodes.push(authoredNode);
+        context.createdNodeIds.set(operation.clientId, allocatedNodeId);
+        context.createdNodeIdSet.add(allocatedNodeId);
+        context.touched.nodeIds.add(allocatedNodeId);
+        break;
+      }
+      case 'cloneNode': {
+        const sourceNodeId = operation.source.nodeId as NodeId;
+        const sourceNode = findNode(context.candidate, this.#activeGraphId, sourceNodeId);
+        if (!context.prePatchNodeIds.has(sourceNodeId)) {
+          if (!sourceNode) {
+            throw this.#missingNodeError(operation.source, operationIndex);
+          }
+          throw new OperationRejectedError([
+            createDiagnostic({
+              key: `clone-node:patch-local-source:${operationIndex}:${sourceNodeId}`,
+              ruleId: 'clone-source-existence',
+              graphId: this.#activeGraphId,
+              nodeId: sourceNodeId,
+              clientId: operation.clientId,
+              operationIndex,
+              message: 'A clone source must be an existing node from the active graph, not a patch-local node.',
+            }),
+          ]);
+        }
+        if (!sourceNode) {
+          throw this.#missingNodeError(operation.source, operationIndex);
+        }
+        if (cloneBlockedSourceNodeTypes.has(sourceNode.type)) {
+          throw new OperationRejectedError([
+            createDiagnostic({
+              key: `clone-node:blocked-source-type:${operationIndex}:${sourceNodeId}`,
+              ruleId: 'clone-source-type',
+              graphId: this.#activeGraphId,
+              nodeId: sourceNodeId,
+              clientId: operation.clientId,
+              operationIndex,
+              message:
+                'Code nodes cannot be cloned because their opaque runtime permissions must not be copied to a new node.',
+            }),
+          ]);
+        }
+        validatePrecondition(sourceNode, operation.precondition, this.#activeGraphId, operationIndex);
+
+        const allocatedNodeId = this.#allocateFreshNodeId(context, operation.clientId, operationIndex, 'clone-node');
+        const clonedNode = cloneDeep(sourceNode);
+        clonedNode.id = allocatedNodeId;
+        clonedNode.visualData = { ...clonedNode.visualData, x: 0, y: 0 };
+        graph.nodes.push(clonedNode);
         context.createdNodeIds.set(operation.clientId, allocatedNodeId);
         context.createdNodeIdSet.add(allocatedNodeId);
         context.touched.nodeIds.add(allocatedNodeId);
@@ -1211,6 +1233,45 @@ export class GraphBuilderTransactionKernel {
         break;
       }
     }
+  }
+
+  #allocateFreshNodeId(
+    context: ApplyContext,
+    clientId: string,
+    operationIndex: number,
+    diagnosticPrefix: 'create-node' | 'clone-node',
+  ): NodeId {
+    const allocatedNodeId = this.#idGenerator();
+    if (!isBoundedIdentifier(allocatedNodeId)) {
+      throw new OperationRejectedError([
+        createDiagnostic({
+          key: `${diagnosticPrefix}:invalid-host-id:${operationIndex}`,
+          ruleId: 'host-node-id-allocation',
+          graphId: this.#activeGraphId,
+          clientId,
+          operationIndex,
+          message: 'The host node ID allocator returned an invalid ID.',
+        }),
+      ]);
+    }
+    if (
+      context.prePatchNodeIds.has(allocatedNodeId) ||
+      context.createdNodeIdSet.has(allocatedNodeId) ||
+      findNode(context.candidate, this.#activeGraphId, allocatedNodeId)
+    ) {
+      throw new OperationRejectedError([
+        createDiagnostic({
+          key: `${diagnosticPrefix}:id-collision:${operationIndex}`,
+          ruleId: 'host-node-id-allocation',
+          graphId: this.#activeGraphId,
+          nodeId: allocatedNodeId,
+          clientId,
+          operationIndex,
+          message: 'The host node ID allocator returned an ID that already exists.',
+        }),
+      ]);
+    }
+    return allocatedNodeId;
   }
 
   #validateNewConnection(context: ApplyContext, connection: NodeConnection, operationIndex: number): void {

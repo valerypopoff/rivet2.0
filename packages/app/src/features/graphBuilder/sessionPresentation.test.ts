@@ -26,7 +26,7 @@ test('modal presentation selects only the implementation latched for the session
 });
 
 test('only generation phases are presented as cancelable work', () => {
-  for (const status of ['gathering-context', 'editing', 'repairing'] as const) {
+  for (const status of ['gathering-context', 'editing', 'reviewing', 'repairing'] as const) {
     assert.equal(
       isGraphBuilderSessionWorking({
         status,
@@ -47,12 +47,16 @@ test('only generation phases are presented as cancelable work', () => {
         summary: 'Preview',
         draftRevision: 1,
         delta: {
-          graphId: 'graph',
-          addedNodes: [],
-          updatedNodes: [],
-          removedNodes: [],
-          addedConnections: [],
-          removedConnections: [],
+          graphDeltas: [
+            {
+              graphId: 'graph',
+              addedNodes: [],
+              updatedNodes: [],
+              removedNodes: [],
+              addedConnections: [],
+              removedConnections: [],
+            },
+          ],
         },
         diagnostics: [],
       },

@@ -1,4 +1,5 @@
 import {
+  isNodePrefabInstanceNode,
   type ChartNode,
   type NodeConnection,
   type NodeId,
@@ -132,6 +133,7 @@ const DataBusGroup: FC<{
   const { hoveredDataBusChannelKeys } = useCanvasViewContext();
   const hoveredChannelKeySet = new Set(hoveredDataBusChannelKeys);
   const nodeHeaderColor = getNodeHeaderColor(effectiveNode.visualData.color);
+  const settingsActionLabel = isNodePrefabInstanceNode(editorNode) ? 'Open library node' : 'Open Data Bus settings';
   const { connectProviderChannel, dataChannels } = useMemo(
     () =>
       buildDataBusGroupPresentation({
@@ -237,11 +239,11 @@ const DataBusGroup: FC<{
           <span className="data-bus-group-title" title={effectiveNode.title}>
             {effectiveNode.title}
           </span>
-          <Tooltip content="Open Passthrough settings" tag="span">
+          <Tooltip content={settingsActionLabel} tag="span">
             <button
               className="data-bus-settings"
               type="button"
-              aria-label={`Open settings for ${effectiveNode.title}`}
+              aria-label={`${settingsActionLabel} for ${effectiveNode.title}`}
               onMouseDown={(event) => event.stopPropagation()}
               onClick={handleOpenSettings}
             >

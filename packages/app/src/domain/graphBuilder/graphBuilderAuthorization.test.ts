@@ -26,3 +26,41 @@ test('authorization is explicit for the active graph and every operation', () =>
     ['active-graph-not-authorized', 'cross-graph-propagation-not-authorized', 'operation-not-authorized'],
   );
 });
+
+test('cloneNode is authorized only when explicitly included in the operation scope', () => {
+  const cloneOperation = {
+    op: 'cloneNode' as const,
+    clientId: 'copy',
+    source: { kind: 'existing' as const, nodeId: 'source' },
+  };
+  const allowedScope = parseGraphBuilderAuthorizationScope({
+    allowedGraphIds: ['graph-a'],
+    allowedOperations: ['cloneNode'],
+    allowSemanticCrossGraphPropagation: false,
+    sensitiveFieldAccess: 'none',
+  });
+
+  assert.deepEqual(
+    authorizeGraphBuilderOperations({
+      activeGraphId: 'graph-a' as GraphId,
+      operations: [cloneOperation],
+      scope: allowedScope,
+    }),
+    [],
+  );
+
+  const createOnlyScope = parseGraphBuilderAuthorizationScope({
+    allowedGraphIds: ['graph-a'],
+    allowedOperations: ['createNode'],
+    allowSemanticCrossGraphPropagation: false,
+    sensitiveFieldAccess: 'none',
+  });
+  assert.deepEqual(
+    authorizeGraphBuilderOperations({
+      activeGraphId: 'graph-a' as GraphId,
+      operations: [cloneOperation],
+      scope: createOnlyScope,
+    }).map(({ code, operationIndex }) => ({ code, operationIndex })),
+    [{ code: 'operation-not-authorized', operationIndex: 0 }],
+  );
+});

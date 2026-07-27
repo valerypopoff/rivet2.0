@@ -271,7 +271,11 @@ Policy-runner unit and mocked-provider contract tests use
 memory. They must not read the serialized repository asset directly: exact
 asset text, prompt hash, serialization, and freshness remain the checker's
 responsibility, while runtime tests own processor behavior and provider wire
-contracts.
+contracts. The current runtime selects the text variant for every provider, so
+the wire tests must reject a Graph Builder `json_schema` request for OpenAI,
+Anthropic, Google, and Custom providers. The packaged schema variant stays
+freshness-checked but inactive until a separate provider-safe decision DTO and
+normalization adapter are implemented and tested.
 
 After an intentional checked prompt, topology, manifest, or Core-default
 change, regenerate both files together:

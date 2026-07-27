@@ -22,9 +22,28 @@ function getLlm(project, manifest, variant) {
   return graph.nodes.find((node) => node.id === manifest.variants[variant].llmNodeId);
 }
 
+function getDecisionOutput(project, manifest, variant) {
+  const graph = getVariant(project, manifest, variant);
+  return graph.nodes.find((node) => node.id === manifest.variants[variant].decisionOutputNodeId);
+}
+
 test('accepts the generated two-variant policy asset', () => {
   const { project, manifest } = validFixture();
   assert.deepEqual(validateGraphBuilderPolicyAsset(project, manifest), []);
+});
+
+test('rejects decision output types that do not match their policy variant', () => {
+  for (const [variant, staleType] of [
+    ['schema', 'string'],
+    ['text', 'any'],
+  ]) {
+    const { project, manifest } = validFixture();
+    getDecisionOutput(project, manifest, variant).data.dataType = staleType;
+
+    const errors = validateGraphBuilderPolicyAsset(project, manifest);
+    const expectedType = variant === 'text' ? 'string' : 'any';
+    assert(errors.some((error) => error.includes(`decision:${expectedType}`)));
+  }
 });
 
 test('rejects model-visible outputs and lower-level execution behavior', () => {

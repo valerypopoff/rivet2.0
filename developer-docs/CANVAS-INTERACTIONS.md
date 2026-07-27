@@ -105,48 +105,66 @@ Canvas surfaces with connections disabled, such as Node library editing, keep
 their own local connection list instead of combining decorative nodes with the
 active graph's definition-valid connections.
 
-## Passthrough Data Buses
+## Data Buses
 
-`PassthroughNodeData.renderAsDataBus` is canvas-only presentation metadata. A
-renderable bus must be an ordinary Passthrough with Conditional and split-run
-execution disabled. `canRenderPassthroughAsDataBus(...)` is the shared guard:
-the node editor uses it to disable incompatible controls, the viewport uses it
-to hide the rectangular card, and wire/antenna classification uses it to avoid
-presenting malformed hand-edited graphs as valid buses. An incompatible node
-falls back to its normal visible card so the user can see and repair its actual
-execution semantics.
+`dataBus` is a dedicated topology-only node. It uses paired `inputN` /
+`outputN` channels in the saved graph, but it never receives an ordinary
+`GraphProcessor` invocation. `compileDataBusTopology(...)` expands each
+populated channel into an independent direct provider-to-consumer dependency
+before definitions, cycle detection, and scheduling run. Reusing a later output
+on a separate channel therefore does not make an earlier consumer wait for it.
+Async-branch validation and graph dependency/reachability discovery use those
+same compiled effective connections, so unrelated channels cannot create a
+false async path or a false Delegate Tool Call linkage.
 
-Project data does not gain a connection type. A bus remains a normal
-`passthrough` node with paired `inputN` / `outputN` ports and ordinary
-`NodeConnection` records:
+Tool-continuation branch safety keeps a separate complete preprocessed
+connection view for cycle detection. It must include valid edges shadowed by
+the scheduler's one-provider-per-input projection, so a persisted self-loop
+cannot be hidden merely because another connection currently supplies that
+input.
+
+Each Data Bus channel accepts at most one provider and any number of consumers.
+An absent provider remains visible and repairable but creates no dependency;
+duplicate providers and relay-only cycles fail preprocessing with an actionable
+error. Relay validation and source resolution are iterative and memoized, so a
+large valid relay chain cannot overflow the JavaScript stack or repeat the same
+source walk for every receiver. Data Bus nodes cannot be disabled, conditional, split, frozen, or
+variant-driven because these are execution concepts and a bus has no execution.
+Preflight compilation failures are emitted through the root processor `error`
+event before normal graph-start events, so every executor can surface the
+configuration error. A Data Bus cannot be preloaded/frozen or selected as a
+run-from or run-to target, nor can dependency inspection target it, including
+through a Node Library instance: those APIs must address an executable provider
+or consumer instead. Preload and dependency-inspection entry points resolve the
+authored Node Library source directly and deliberately do not seed a reusable
+runtime plan before referenced project boundaries have been loaded; a later
+real run always preprocesses against the complete reference set.
+If hand-edited or legacy project data puts one of those execution settings on a
+dedicated bus, the canvas shows its ordinary card and the node editor exposes a
+single repair action that clears the incompatible settings without changing its
+title, geometry, or connections.
+Converting an ordinary Passthrough into a Data Bus is guarded locally: each
+incident input/output must use a canonical bus channel and each input channel
+may have only one provider. The editor keeps the conversion action disabled
+with the repair reason until those incident edges are compatible; unrelated
+invalid buses elsewhere in the graph do not block it.
+
+New projects persist `dataBus` with ordinary `NodeConnection` records:
 
 ```yaml
-'[bus]:passthrough "Shared values"':
-  data:
-    renderAsDataBus: true
+'[bus]:dataBus "Shared values"':
   outgoingConnections:
     - output1->"Receiver" input
 ```
 
-The provider is another ordinary connection into `input1`. Core derives the
-highest Passthrough channel from connections on both the input and output sides.
-Core also owns the maximum accepted Passthrough port index; editor-side bus
-classification uses that same bound so malformed imported ports cannot be
-presented as channels the runtime will never expose.
-That preserves an output-only channel after its provider is disconnected, so
-the rail can show **Missing provider** and keep downstream connections
-repairable. Passthrough execution maps each present `inputN` directly to the
-same `outputN`; it does not assume sparse inputs are contiguous.
-Port suffixes are accepted only within the bounded Passthrough range, so
-malformed imported connections cannot force the editor to allocate an
-unbounded number of synthetic port definitions.
-The editor normally enforces one provider per input. If imported or hand-edited
-project data contains several providers for one bus channel, the rail labels
-the conflict instead of silently presenting the first provider as authoritative;
-the connected input can be disconnected repeatedly until one provider remains.
+The provider is another ordinary connection into `input1`. Sparse channels are
+valid, bounded by the shared Data Bus port limit, and output-only channels stay
+visible as **Missing provider**. A legacy `passthrough` whose
+`data.renderAsDataBus` flag is compatible is migrated to `dataBus` on
+deserialization; programmatic execution recognizes the legacy shape during the
+transition. Ordinary Passthrough remains an executable value relay.
 
-`DataBusRail` renders one sticky top-of-canvas bus shelf per eligible
-Passthrough. A shelf is deliberately a compact, single-line canvas control
+`DataBusRail` renders one sticky top-of-canvas bus shelf per Data Bus. A shelf is deliberately a compact, single-line canvas control
 rather than a clipped or immovable node card: the node name, settings action,
 and horizontally arranged channels share one shallow strip below the desktop
 navigation bar. When the combined intrinsic content of the visible shelves
@@ -178,21 +196,24 @@ over the shelf never pan or zoom the canvas.
 Each populated channel is labelled `<source node> / <source output>`, exposes
 the normal input port for rewiring, exposes the paired output port for adding
 receivers, and shows the receiver count. Those existing channels scroll only in
-the space between the fixed Passthrough header and a fixed **Connect provider**
-terminal input. That terminal input is the ordinary next Passthrough slot with
-no paired output yet; pinning its presentation does not change its connection
-or execution semantics. The settings action selects the hidden node and opens
-its ordinary node editor. Search selection and project-comparison node styling
+the space between the fixed Data Bus header and a fixed **Connect provider**
+terminal input. That terminal input is the next Data Bus channel with no paired
+output yet; pinning its presentation does not change its connection topology.
+The settings action selects the hidden node and opens
+its ordinary node editor (or the library source when the bus is a linked Node
+Library instance). Search selection and project-comparison node styling
 remain visible on the shelf.
 Go-to-node navigation recognizes a renderable bus and loads/selects its graph
 without panning to the hidden node card's saved spatial coordinates.
 The rail is not a spatial node card, so its root deliberately suppresses
 right-click context menus across groups, padding, and full-row background.
+The canvas's keyboard context-menu shortcut (`Space`) applies the same target
+guard, so a pointer resting over a bus rail cannot open a blank-canvas menu.
 Shift-click still delegates to normal node selection, preserving
 multi-node copy/delete behavior without making the viewport-fixed group
 draggable.
 The header is shrinkable and title text is ellipsized, so an unusually long
-Passthrough title cannot push the fixed **Connect provider** control out of the
+Data Bus title cannot push the fixed **Connect provider** control out of the
 available row.
 `createDataBusTopology(...)` is the canvas-scoped, preview-connection
 interpretation boundary. It indexes data-bus provider and consumer endpoints,
@@ -209,14 +230,14 @@ wire suppression together instead of leaving a stale radio marker behind the
 live drag wire.
 
 Data-bus presentation is enabled only on connection-enabled graph canvases.
-Connection-disabled surfaces such as the Node library builder keep the
-Passthrough card visible, even if its portable node data enables the mode; this
+Connection-disabled surfaces such as the Node library builder keep the Data Bus
+card visible, even though graph canvases render its fixed rail; this
 preserves access to the source node in editors that do not expose graph wiring.
 
 Hidden buses are excluded from box-selection, viewport culling, node drag and
 duplicate groups, and alignment operations. Their saved `visualData` is kept
-only as the location to restore if data-bus presentation is later turned off;
-fixed-rail interaction must not mutate that invisible spatial footprint.
+only as an editor fallback position; fixed-rail interaction must not mutate
+that invisible spatial footprint.
 
 `dataBusModel.ts` owns pure topology and per-group presentation derivation;
 `useDataBusRailLayout(...)` owns only intrinsic DOM measurement, observer
@@ -224,7 +245,10 @@ lifecycle, compact/full-row state, and global row-height publication; and
 `dataBusRailStyles.ts` owns the rail CSS. `WireLayer` suppresses a
 bus provider or consumer wire only after that exact connection exists in the
 definition-valid persisted connection set. The in-progress `draggingWire`
-therefore stays an ordinary visible wire. `NodePorts` derives antenna metadata
+therefore stays an ordinary visible wire. A drag whose source or current drop
+target is a Data Bus channel is drawn in the same short-lived fixed overlay as
+revealed bus routes, above the rail; normal drags remain in the ordinary wire
+SVG. `NodePorts` derives antenna metadata
 from the shared topology's memoized endpoint index. Port rendering performs a
 direct lookup instead of rescanning every graph connection for every visible
 port. The rail observes both size and child-list changes, because a live
@@ -237,11 +261,16 @@ use their resolved node behavior. For a direct bus-to-bus connection, the same
 index lets either rail channel highlight its related channel without rendering
 a wire between the two fixed groups.
 Hovering a rail channel (or one of its antennas) temporarily reveals every
-definition-valid provider and consumer wire for that channel, using the saved
-connection geometry. Every revealed segment uses the active wire color, and
+definition-valid provider and consumer wire for that channel and every
+transitively relayed Data Bus channel, using the saved connection geometry.
+Every revealed segment uses the active wire color, and
 the corresponding normal-node antennas are hidden until the hover ends, so the
 wire temporarily replaces rather than overlaps the radio presentation. A
-direct bus-to-bus link appears when either linked channel is hovered. Those
+multi-hop `Data Bus A -> Data Bus B -> Data Bus C` route therefore reveals in
+full when any linked channel is hovered. Explicitly revealed connections bypass
+ordinary viewport candidate and line-clipping culling for the duration of that
+hover, so off-screen provider/consumer endpoints do not leave a broken partial
+route. Those
 hover-revealed wires are visual-only: they do not gain a bend handle or wire
 hit target because any persisted bend would vanish again when the hover ends.
 Only those temporary wires move into a fixed viewport overlay above the bus
@@ -270,8 +299,8 @@ full DOM measurement on every idle canvas movement. A scoped capture listener
 schedules the same refresh when horizontal shelf or channel scrolling moves a
 rail port. Live node and wire drags continue using the full measurement pass.
 Established bus wires have no hit path or bend handle while hidden; their
-existing bend metadata remains serialized and reappears if data-bus
-presentation is turned off.
+existing bend metadata remains serialized and reappears if the node is converted
+to an ordinary Passthrough.
 Rail-only class/style changes such as selection and hover are ignored by the
 layout mutation observer; actual size changes remain covered by ResizeObserver.
 
@@ -301,7 +330,7 @@ copying linked instances back as sources is blocked.
 Use pure graph-editing tests for connection recovery, drag actions, variadic reorder,
 and bend-point persistence. Use focused browser/visual tests only for hit targets,
 pointer capture, portals, or layout that pure geometry cannot prove.
-Passthrough slot retention and sparse runtime mapping belong in
-`packages/core/test/model/nodes/PassthroughNode.test.ts`; provider/consumer
+Data Bus compilation and scheduler behavior belong in
+`packages/core/test/model/DataBusTopology.test.ts`; provider/consumer
 classification and wire-suppression eligibility belong in
 `packages/app/src/components/nodeCanvas/dataBusModel.test.ts`.
