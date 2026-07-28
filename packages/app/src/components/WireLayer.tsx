@@ -58,7 +58,12 @@ import {
   type ToolContinuationWireState,
 } from './nodeCanvas/toolContinuationWireState.js';
 import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
-import { connectionMatchesDataBusChannelKeys, shouldRenderDataBusConnection } from './nodeCanvas/dataBusModel.js';
+import {
+  connectionMatchesDataBusChannelKeys,
+  isDataBusChannelPort,
+  shouldRenderDataBusConnection,
+  type DataBusTopology,
+} from './nodeCanvas/dataBusModel.js';
 
 const wiresStyles = css`
   position: absolute;
@@ -275,6 +280,7 @@ type WireLayerProps = {
   compareNodesById?: Record<NodeId, ChartNode>;
   compareRemovedConnections?: NodeConnection[];
   connectionCompareKindsByKey?: Record<string, ProjectComparisonChangeKind | undefined>;
+  dataBusTopology: DataBusTopology;
   draggingWire?: WireDef;
   draggingNode: boolean;
   highlightedNodes?: NodeId[];
@@ -295,6 +301,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   compareNodesById = {},
   compareRemovedConnections = [],
   connectionCompareKindsByKey = {},
+  dataBusTopology,
   draggingWire,
   draggingNode,
   highlightedNodes,
@@ -428,7 +435,7 @@ export const WireLayer: FC<WireLayerProps> = ({
         establishedConnectionKeySet.has(connectionKey) &&
         connectionMatchesDataBusChannelKeys({
           connection,
-          nodesById: effectiveNodesById,
+          topology: dataBusTopology,
           channelKeys: hoveredDataBusChannelKeySet,
         });
 
@@ -440,7 +447,7 @@ export const WireLayer: FC<WireLayerProps> = ({
         connection,
         forceVisible: connectionCompareKindsByKey[connectionKey] != null || hoverRevealed,
         isDefinitionValid: establishedConnectionKeySet.has(connectionKey),
-        nodesById: effectiveNodesById,
+        topology: dataBusTopology,
       });
     });
 
@@ -451,7 +458,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   }, [
     connectionCompareKindsByKey,
     connections,
-    effectiveNodesById,
+    dataBusTopology,
     establishedConnectionKeySet,
     hoveredDataBusChannelKeys,
   ]);
@@ -480,6 +487,7 @@ export const WireLayer: FC<WireLayerProps> = ({
     connections: visibleConnections,
     draggingNode,
     draggingWire: !!draggingWire,
+    forceRenderableConnectionKeySet: hoverRevealedDataBusConnectionKeySet,
     highlightedNodes,
     highlightedPort,
     nearViewportNodeIdSet,
@@ -743,42 +751,59 @@ export const WireLayer: FC<WireLayerProps> = ({
     toolContinuationWireStates,
   };
   const hoverOverlayHost =
-    typeof document === 'undefined' ? undefined : (document.querySelector<HTMLElement>('.app') ?? document.body);
+    typeof document === 'undefined' ? undefined : document.querySelector<HTMLElement>('.app') ?? document.body;
+  const draggingWireTouchesDataBus =
+    !!draggingWire &&
+    (isDataBusChannelPort({
+      input: draggingWire.startPortIsInput,
+      nodeId: draggingWire.startNodeId,
+      nodesById: effectiveNodesById,
+      portId: draggingWire.startPortId,
+    }) ||
+      (!!draggingWire.endNodeId &&
+        !!draggingWire.endPortId &&
+        isDataBusChannelPort({
+          input: true,
+          nodeId: draggingWire.endNodeId,
+          nodesById: effectiveNodesById,
+          portId: draggingWire.endPortId,
+        })));
+  const draggingWireContents = draggingWire && (
+    <ErrorBoundary fallback={<></>} key="wire-inprogress">
+      {draggingWire.endNodeId && draggingWire.endPortId ? (
+        <ConditionallyRenderWire
+          connection={{
+            outputNodeId: draggingWire.startNodeId,
+            outputId: draggingWire.startPortId,
+            inputNodeId: draggingWire.endNodeId,
+            inputId: draggingWire.endPortId,
+          }}
+          selected={false}
+          highlighted
+          nodesById={renderNodesById}
+          portPositions={portPositions}
+          isNotRan={false}
+        />
+      ) : (
+        <PartialWire
+          connection={{
+            nodeId: draggingWire.startNodeId,
+            portId: draggingWire.startPortId,
+            toX: mousePositionCanvas.x,
+            toY: mousePositionCanvas.y,
+          }}
+          portPositions={portPositions}
+        />
+      )}
+    </ErrorBoundary>
+  );
 
   return (
     <>
       <svg css={wiresStyles}>
         <ToolContinuationMarkerDefinitions markerIds={toolContinuationMarkerIds} />
         <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
-          {draggingWire && (
-            <ErrorBoundary fallback={<></>} key="wire-inprogress">
-              {draggingWire.endNodeId && draggingWire.endPortId ? (
-                <ConditionallyRenderWire
-                  connection={{
-                    outputNodeId: draggingWire.startNodeId,
-                    outputId: draggingWire.startPortId,
-                    inputNodeId: draggingWire.endNodeId,
-                    inputId: draggingWire.endPortId,
-                  }}
-                  selected={false}
-                  highlighted={!!(draggingWire.endNodeId && draggingWire.endPortId)}
-                  nodesById={renderNodesById}
-                  portPositions={portPositions}
-                  isNotRan={false}
-                />
-              ) : (
-                <PartialWire
-                  connection={{
-                    nodeId: draggingWire.startNodeId,
-                    portId: draggingWire.startPortId,
-                    toX: mousePositionCanvas.x,
-                    toY: mousePositionCanvas.y,
-                  }}
-                  portPositions={portPositions}
-                />
-              )}
-            </ErrorBoundary>
-          )}
+          {!draggingWireTouchesDataBus && draggingWireContents}
           <StaticWireContents
             {...sharedStaticWireContentsProps}
             compareRemovedConnections={compareRemovedConnections}
@@ -795,6 +820,19 @@ export const WireLayer: FC<WireLayerProps> = ({
           )}
         </g>
       </svg>
+      {draggingWireContents &&
+        draggingWireTouchesDataBus &&
+        hoverOverlayHost &&
+        createPortal(
+          <svg aria-hidden="true" className="data-bus-drag-wire-overlay" css={[wiresStyles, hoverRevealedWiresStyles]}>
+            <g transform={`translate(${canvasClientOffset.x}, ${canvasClientOffset.y})`}>
+              <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
+                {draggingWireContents}
+              </g>
+            </g>
+          </svg>,
+          hoverOverlayHost,
+        )}
       {hoverOverlayRenderableWires.length > 0 &&
         hoverOverlayHost &&
         createPortal(
@@ -926,6 +964,26 @@ const StaticWireContents = memo(
 
           const isHoveredConnection = hoveredConnectionKey === connectionKey;
           const isHoverRevealedDataBusConnection = hoverRevealedDataBusConnectionKeySet.has(connectionKey);
+          const startEndpointDirection =
+            isHoverRevealedDataBusConnection &&
+            isDataBusChannelPort({
+              input: false,
+              nodeId: connection.outputNodeId,
+              nodesById,
+              portId: connection.outputId,
+            })
+              ? 'down'
+              : undefined;
+          const endEndpointDirection =
+            isHoverRevealedDataBusConnection &&
+            isDataBusChannelPort({
+              input: true,
+              nodeId: connection.inputNodeId,
+              nodesById,
+              portId: connection.inputId,
+            })
+              ? 'down'
+              : undefined;
           const highlighted =
             isHighlightedNode ||
             isCurrentlyRunning ||
@@ -962,6 +1020,8 @@ const StaticWireContents = memo(
                 nodesById={nodesById}
                 portPositions={portPositions}
                 bendPoint={bendPoint}
+                startEndpointDirection={startEndpointDirection}
+                endEndpointDirection={endEndpointDirection}
                 isNotRan={isNotRan}
                 compareChangeKind={compareChangeKind}
                 toolContinuation={toolContinuation}

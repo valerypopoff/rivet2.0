@@ -1,0 +1,65 @@
+---
+id: llm-profile
+title: LLM Profile Node
+sidebar_label: LLM Profile
+---
+
+## Overview
+
+LLM Profile packages one reusable inference configuration into a typed
+`llm-config` value. Connect it to an LLM Chat node whose **Configuration** is
+**From profile**.
+
+If an LLM Chat is currently configured inline, use its **Export LLM settings to profile node**
+action to create and connect this node automatically with the chat's current
+provider and inference settings.
+
+The profile contains:
+
+- provider and model
+- the resolved API key and its source metadata
+- Custom-provider base URL
+- common generation parameters
+- OpenAI Previous Response ID
+- provider-specific reasoning and thinking settings
+- provider-native capabilities such as OpenAI Web Search and Google Search Grounding
+- custom headers and extra provider options
+
+It intentionally does not contain prompts, response schemas, Rivet tools,
+tool-continuation settings, output switches, retry settings, or editor caching.
+Those remain on each LLM Chat node.
+
+**Output reasoning** also remains on LLM Chat, in its **Outputs** section: it
+controls whether that individual Chat exposes a `Reasoning` output. A Custom
+provider profile has no built-in provider-specific reasoning fields, so it does
+not show an empty **Reasoning** section.
+
+## Inputs
+
+Settings with **Use input port** enabled appear as inputs. Depending on the
+configuration these can include Model, API Key, Provider base URL, generation
+parameters, Headers, Extra Provider Options, and provider-specific thinking
+budgets.
+
+The API key is resolved when LLM Profile runs. The resulting `llm-config` value
+contains the resolved key, including when it came from Rivet settings or a
+programmatic runtime option. It can therefore appear in execution data,
+recordings, previews, or remote transport just like any other node output.
+
+## Outputs
+
+| Title   | Data Type    | Description                                               |
+| ------- | ------------ | --------------------------------------------------------- |
+| Profile | `llm-config` | Complete resolved inference profile consumed by LLM Chat. |
+
+## Example
+
+1. Create two LLM Profile nodes with different providers or models.
+2. Set one LLM Chat node to **Configuration → From profile**.
+3. Connect either profile to **LLM Profile**.
+4. Keep the same prompt, tools, response schema, and downstream wiring while
+   switching the connected profile.
+
+## See Also
+
+- [LLM Chat](./llm-chat.mdx)

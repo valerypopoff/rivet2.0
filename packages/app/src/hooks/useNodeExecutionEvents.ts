@@ -13,6 +13,8 @@ import { type ExecutionDataFlowApi } from './useExecutionDataFlow';
 import { lastRunDataByNodeState } from '../state/dataFlow';
 import { collectStoredRefIds, deleteStoredRefIds, storeInputsOrOutputsForHistory } from '../utils/executionDataStorage';
 import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization';
+import { handleError } from '../utils/errorHandling';
+import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation';
 import { useDataRefs } from '../providers/ProvidersContext';
 import { projectState } from '../state/savedGraphs';
 
@@ -100,6 +102,10 @@ export function useNodeExecutionEvents({
       splitRunDurationMs,
     });
     setSelectedNodePageLatest(node.id, execution);
+
+    if (shouldToastAsyncBranchSafetyError(error)) {
+      handleError(error, 'Graph execution error');
+    }
   };
 
   const onPartialOutput = ({ node, outputs, index, processId, execution }: ProcessEvents['partialOutput']) => {

@@ -69,6 +69,29 @@ function evidence(id: string, query: string): RivetKnowledgeEvidence {
 }
 
 describe('ManagedKnowledgeStore', () => {
+  it('never calls a legacy progress callback-shaped property supplied at runtime', async () => {
+    const driver = new MemoryDriver();
+    const store = new ManagedKnowledgeStore(driver);
+    let progressCalls = 0;
+    const legacyContext = {
+      signal: new AbortController().signal,
+      reportProgress: () => {
+        progressCalls += 1;
+      },
+    } as KnowledgeOperationContext;
+
+    await store.syncSource(
+      {
+        source: source(),
+        documents: [{ text: 'A sufficiently long source document. '.repeat(20) }],
+        chunking: { unit: 'characters', targetSize: 160, overlap: 20, minimumBoundarySize: 80 },
+      },
+      legacyContext,
+    );
+
+    assert.equal(progressCalls, 0);
+  });
+
   it('commits an immutable version after uploading chunks and skips unchanged content', async () => {
     const driver = new MemoryDriver();
     const store = new ManagedKnowledgeStore(driver);

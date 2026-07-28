@@ -33,7 +33,7 @@ export function deserializeProject(serializedProject: unknown, path: string | nu
 
   try {
     const result = deserializeProjectByVersion(deserializerInput, version);
-    normalizeProjectDefaultNodeTitles(result[0]);
+    normalizeDeserializedProject(result[0]);
     if (path !== null) {
       result[0].metadata.path = path;
     }
@@ -62,7 +62,7 @@ export function deserializeGraph(serializedGraph: unknown): NodeGraph {
 
   try {
     const graph = deserializeGraphByVersion(deserializerInput, version);
-    normalizeGraphDefaultNodeTitles(graph);
+    normalizeDeserializedGraph(graph);
     return graph;
   } catch (err) {
     if (err instanceof yaml.YAMLError) {
@@ -73,23 +73,41 @@ export function deserializeGraph(serializedGraph: unknown): NodeGraph {
   }
 }
 
-function normalizeProjectDefaultNodeTitles(project: Project): void {
+function normalizeDeserializedProject(project: Project): void {
   for (const graph of Object.values(project.graphs)) {
-    normalizeGraphDefaultNodeTitles(graph);
+    normalizeDeserializedGraph(graph);
+  }
+
+  for (const prefab of Object.values(project.nodePrefabs ?? {})) {
+    normalizeDeserializedNode(prefab.sourceNode);
   }
 }
 
-function normalizeGraphDefaultNodeTitles(graph: NodeGraph): void {
+function normalizeDeserializedGraph(graph: NodeGraph): void {
   for (const node of graph.nodes) {
-    normalizeDefaultCodeNodeTitle(node);
+    normalizeDeserializedNode(node);
   }
 }
 
-function normalizeDefaultCodeNodeTitle(node: ChartNode): void {
+type LegacyPassthroughData = Record<string, unknown> & {
+  renderAsDataBus?: unknown;
+};
+
+function hasLegacyDataBusFlag(node: ChartNode): node is ChartNode<'passthrough', LegacyPassthroughData> {
+  const data = node.data as LegacyPassthroughData | undefined;
+  return node.type === 'passthrough' && data != null && Object.hasOwn(data, 'renderAsDataBus');
+}
+
+function normalizeDeserializedNode(node: ChartNode): void {
   if (node.type === 'code' && node.title === 'Code') {
     node.title = 'Code (legacy)';
   } else if (node.type === 'codeNew' && node.title === 'Code new') {
     node.title = 'Code';
+  }
+
+  if (hasLegacyDataBusFlag(node)) {
+    const { renderAsDataBus: _legacyFlag, ...data } = node.data;
+    (node as ChartNode).data = data;
   }
 }
 

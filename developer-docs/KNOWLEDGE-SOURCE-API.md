@@ -8,14 +8,18 @@ Core owns the provider-neutral types and lifecycle:
 
 - `packages/core/src/integrations/KnowledgeStore.ts`: public documents, source references, evidence, filters, requests, capabilities, and store/registry interfaces
 - `packages/core/src/integrations/KnowledgeStoreProvider.ts`: provider registry and one-root-run connection controller
+- `packages/core/src/integrations/KnowledgeStoreFieldPolicy.ts`: provider-field defaults and normalization plus the local credential-settings shape
 - `packages/core/src/integrations/KnowledgeStoreValidation.ts`: portable boundary validation
 - `packages/core/src/integrations/ManagedKnowledgeStore.ts`: deterministic chunking, immutable version activation, idempotency, serialization, and multi-query fusion
 - `packages/core/src/model/nodes/*Knowledge*.ts`: the six built-in workflow nodes
 - `packages/core/src/plugins/pinecone/PineconeKnowledgeStore.ts`: the first provider adapter
 
-The app owns named-connection editing and local credentials. Node and web-app packages only propagate host registries into core.
+The app owns the named-connection editing workflow and decides when local
+credentials are saved. Core owns the field policy and the nested local-settings
+shape used for those credentials. Node and web-app packages only propagate host
+registries into core.
 
-The connection editor renders each provider field as an independently spaced label/control/help group. Keep the modal layout on its root container so provider forms retain the same vertical rhythm as fields are added or removed.
+The connection editor renders each provider field as an independently spaced label/control/help group. Keep the modal layout on its root container so provider forms retain the same vertical rhythm as fields are added or removed. Secret credential fields are masked by default and provide an accessible inline reveal/hide control; that control changes only the input presentation and must not move the secret into project data or another state owner. The modal suppresses WebView2/Edge's native password reveal and clear pseudo-elements for those fields so the editor never presents competing credential controls.
 
 ## Project and Secret Boundary
 
@@ -23,7 +27,60 @@ The connection editor renders each provider field as an independently spaced lab
 
 Connection, provider, owning-plugin, configuration-field, metadata, and filter-field identifiers reject JavaScript's `__proto__`, `prototype`, and `constructor` object keys. These identifiers cross ordinary settings/project record boundaries, so accepting the reserved names would make editor and runtime lookup semantics depend on object prototypes.
 
-All remaining dynamic-key reads use own-property checks. Names such as `toString` and `valueOf` are therefore valid provider field names and resolve defaults or explicitly stored values rather than accidentally reading `Object.prototype`; the editor and runtime use the same rule. Defaults apply only when a field is absent: an explicitly stored `null`, `undefined`, or wrong-type value cannot silently turn into the provider default.
+All remaining dynamic-key reads use own-property checks. Names such as
+`toString` and `valueOf` are therefore valid provider field names and resolve
+defaults or explicitly stored values rather than accidentally reading
+`Object.prototype`; the editor and runtime use the same rule. Defaults apply
+only when a field is absent: an explicitly stored `null`, `undefined`, or
+wrong-type value cannot silently turn into the provider default.
+
+`KnowledgeStoreFieldPolicy.ts` is the only owner of provider-field semantics.
+It exposes pure helpers for draft defaults, one-field validation, permissive
+editor-draft normalization, strict persisted-definition normalization,
+credential normalization, and immutable credential reads/writes/removal. The
+registered provider field specifications are the schema for all of those
+operations.
+
+`KnowledgeStoreProviderCredentialField` names the credential-only subset
+(`string` and `secret`), permits only string defaults, and excludes select
+options at the type boundary. Credential normalization accepts a readonly field
+array, matching the immutable provider snapshots returned by the registry.
+Provider registration enforces the same default and option restrictions for
+plain JavaScript callers.
+
+The one-field helper requires an explicit normalization mode. Do not infer the
+boundary from the field type: connection drafts, persisted connections,
+credential drafts, and stored credentials intentionally have four distinct
+modes. Their most visible differences are required-value checks and the
+treatment of explicit `undefined`.
+
+The two connection-normalization modes are intentionally different:
+
+- editor drafts iterate declared fields and discard unknown draft properties;
+- persisted project definitions reject unknown configuration fields.
+
+This preserves the editor's save/test behavior while ensuring hand-edited
+project files cannot pass undeclared configuration to a provider. Shared
+validation returns a field key, label, and issue code only. It never includes
+the rejected value, so callers can preserve their existing UI/runtime wording
+without placing credentials in errors or diagnostic metadata.
+
+Issue-code presentation is exhaustive in the editor adapter. Adding a new
+`KnowledgeStoreProviderFieldIssueCode` therefore requires an explicit
+user-facing message instead of silently falling back to an unrelated field
+error.
+
+Credential drafts and stored credentials also retain their historical boundary
+semantics. An explicitly supplied non-string draft value is a field type error;
+stored `undefined` follows missing-value handling, while stored `null` remains
+an invalid credential value. Keep these modes explicit when extending the
+policy so editor and controller error wording does not drift.
+
+Definition normalization verifies that the supplied provider owns the
+definition instead of silently rewriting a mismatched provider ID. The
+editor-only draft model applies the same ownership assertion before Save or
+Test normalization, keeping accidental cross-provider calls from validating
+against the wrong field schema.
 
 Named connections count as plugin usage even though their workflow nodes are provider-neutral core nodes. The app's plugin-spec derivation therefore retains or adds the owning provider plugin; if that owner is unresolved, existing plugin specs are preserved conservatively until usage can be proven.
 
@@ -33,7 +90,33 @@ Provider credentials never belong in `Project`. The editor stores them under:
 settings.pluginSettings[providerId].knowledgeStoreCredentials[connectionId]
 ```
 
-Provider registration rejects secret fields in `connectionConfigSpec`; secrets must use `credentialConfigSpec`. Duplicating a connection copies portable configuration but intentionally starts with empty credentials. The runtime controller reads only declared string credentials from the local settings record and supplies them as `KnowledgeStoreProviderContext.credentials`; adapters must not duplicate knowledge of the settings storage path.
+Provider registration rejects secret fields in `connectionConfigSpec`; secrets
+must use `credentialConfigSpec`. The core credential helpers preserve the
+provider-scoped settings tree, replace or remove only the requested connection
+entry, and retain existing empty parent records rather than silently
+normalizing the persisted settings shape. Dynamic provider, connection, and
+credential-field keys are always materialized as own data properties, never
+through inherited object setters. Reads accept ordinary and prototype-less
+records and ignore malformed containers safely.
+
+The app's `projectKnowledgeStoreDraft.ts` model keeps editor-only workflow
+policy out of React: duplicating a connection copies portable configuration but
+starts with empty credentials, existing connections cannot change providers,
+and switching a new draft's provider resets both configuration and
+credentials. Save and Test Connection normalize the same unsaved draft. The
+modal still owns cancellation: starting another connection test aborts the
+previous one, and closing the modal aborts the active test.
+
+The runtime controller reads only declared string credentials from the local
+settings record and supplies them as
+`KnowledgeStoreProviderContext.credentials`; adapters must not duplicate
+knowledge of the settings storage path.
+
+Pinecone's connection-level API-key help text also names the headless
+deployment path directly below the credential field:
+`PINECONE_API_KEY=...` in a host-loaded `.env` file. The Node package reads the
+resulting `process.env.PINECONE_API_KEY` when `pluginEnv` is omitted; Rivet does
+not imply that arbitrary Node hosts automatically load `.env` files.
 
 The editor's connection test receives the same provider and owning-plugin identity that will be persisted with the connection, plus normalized unsaved configuration and credentials. A provider test must still be side-effect-free with respect to source data. Pinecone's test also validates that a successful response is JSON object data, so an HTTP proxy returning a `200` HTML/error page cannot produce a false-positive connection result.
 
@@ -78,6 +161,14 @@ Static metadata and filter settings use the shared `jsonObject` editor definitio
 Missing sources and inactive exact versions are normal status/search outputs. Authentication, provider, malformed data, and transport failures are errors. Tool graphs must not throw merely to communicate that initialization is required.
 
 Node boundaries validate high-level results from host-provided stores as well as plugin stores. Returned source identity, committed versions, counts, messages, evidence, query groups, and metadata must satisfy the public contracts before becoming typed graph outputs. Optional document/evidence fields are rejected when present with the wrong type instead of being silently discarded, versions remain bounded, top-level and per-query evidence IDs must be unique, and successful query groups must match the normalized requested queries in order. `KnowledgeSourceStatus` is discriminated by `exists`: an existing source must return its non-empty `activeVersion`, while a missing source cannot return one. When an expected version is supplied, Rivet derives the match from the returned active version and rejects a contradictory provider flag. The public TypeScript contract mirrors these runtime invariants so malformed host adapters fail during development instead of later in a graph run.
+
+Knowledge operations cannot publish host-facing or web-app progress implicitly.
+`KnowledgeOperationContext` exposes cancellation and, where needed, token
+counting only. Store and driver implementations return diagnostic state through
+their declared result/message fields. A workflow author who wants temporary
+status presentation must wire an explicit **Report Progress** node or
+`setWebAppStatus` External Call; ordinary Knowledge nodes never update that UI
+as an execution side effect.
 
 ## Portable Contracts
 
@@ -146,7 +237,7 @@ Registration is a runtime boundary even for JavaScript plugins: Rivet validates 
 
 Use `ManagedKnowledgeStore` when the backend can expose manifest, chunk upsert, search, and version delete primitives. Implement `RivetKnowledgeStore` directly only when the backend already owns equivalent source/version semantics.
 
-Provider callbacks must propagate cancellation, report backend failures without silent fallback, avoid logging document/query payloads, and enforce tenant authorization in the host or provider boundary.
+Provider callbacks must propagate cancellation, report backend failures without silent fallback, avoid logging document/query payloads, and enforce tenant authorization in the host or provider boundary. They must not publish host-facing progress or web-app status; provider-neutral result fields are their only status channel back into the workflow.
 
 Credential field requirements and string defaults are enforced during runtime connection resolution as well as in the editor. A provider that supports another fallback, such as an environment variable, should leave its per-connection credential optional and resolve that fallback inside `createStore`.
 
@@ -156,11 +247,13 @@ Managed drivers should provide `operationScope` whenever several store instances
 
 Coverage lives in:
 
+- `packages/core/test/integrations/KnowledgeStoreFieldPolicy.test.ts`
 - `packages/core/test/integrations/ManagedKnowledgeStore.test.ts`
 - `packages/core/test/integrations/KnowledgeStoreProvider.test.ts`
 - `packages/core/test/model/nodes/KnowledgeNodes.test.ts`
 - `packages/core/test/model/GraphProcessor.knowledgeStores.test.ts`
 - `packages/core/test/plugins/pinecone/PineconeKnowledgeStore.test.ts`
+- `packages/app/src/components/projectKnowledgeStoreDraft.test.ts`
 - Node API, HTTP web-app, and WebSocket tests
 
 When the runtime or browser client changes, run focused tests, package type checks/builds, docs typecheck, repository style checks, and the generated web-app client freshness check.

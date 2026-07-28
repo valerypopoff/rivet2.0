@@ -155,7 +155,6 @@ export class SyncKnowledgeSourceNodeImpl extends NodeImpl<SyncKnowledgeSourceNod
         },
         {
           signal: context.signal,
-          reportProgress: context.reportProgress,
           getTokenCount: (text) => context.tokenizer.getTokenCountForString(text, { node: context.node }),
         },
       ),

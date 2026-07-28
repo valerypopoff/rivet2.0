@@ -4,6 +4,8 @@ import { isInTauri } from '../utils/tauri';
 import { getContrastingMonochromeColor } from '../utils/colorContrast.js';
 import { createHybridStorage, memoryStorage } from './storage.js';
 
+export { graphBuilderImplementationModeState } from './graphBuilderAi.js';
+
 // Legacy storage key for recoil-persist to avoid breaking existing users' settings
 const { storage } = createHybridStorage('recoil-persist', undefined, { debounceMs: 0 });
 

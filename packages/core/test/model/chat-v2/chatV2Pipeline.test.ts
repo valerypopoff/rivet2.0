@@ -3,7 +3,8 @@ import { strict as assert } from 'node:assert';
 import { NoObjectGeneratedError } from 'ai';
 import type { LanguageModelUsage } from 'ai';
 import type { Outputs } from '../../../src/model/GraphProcessor.js';
-import type { PortId } from '../../../src/model/NodeBase.js';
+import type { NodeId, PortId } from '../../../src/model/NodeBase.js';
+import type { ChatV2CallFinishedEvent, ProcessId } from '../../../src/model/ProcessContext.js';
 import type {
   ChatV2GenerateExecutor,
   ChatV2Model,
@@ -23,6 +24,17 @@ async function* mockStream(parts: ChatV2StreamPart[]): AsyncGenerator<ChatV2Stre
 
 function createMockModel(): ChatV2Model {
   return {} as ChatV2Model;
+}
+
+function createObservedContext(events: ChatV2CallFinishedEvent[], signal: AbortSignal = new AbortController().signal) {
+  return {
+    signal,
+    node: { id: 'chat-node' as NodeId },
+    processId: 'chat-process' as ProcessId,
+    onChatV2CallFinished: (event: ChatV2CallFinishedEvent) => {
+      events.push(event);
+    },
+  };
 }
 
 function createTextStreamExecutor({
@@ -320,6 +332,437 @@ void describe('streamChatV2', () => {
 });
 
 void describe('runChatV2Pipeline', () => {
+  void it('reports complete, privacy-bounded accounting for one successful physical call', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    const usage: LanguageModelUsage = {
+      inputTokens: 10,
+      outputTokens: 4,
+      totalTokens: 14,
+      inputTokenDetails: {
+        cacheReadTokens: 2,
+        cacheWriteTokens: 1,
+        noCacheTokens: 7,
+      },
+      outputTokenDetails: {
+        reasoningTokens: 1,
+        textTokens: 3,
+      },
+    };
+    const executeStream: ChatV2StreamExecutor = async () => ({
+      fullStream: mockStream([
+        { type: 'text-start', id: 'text_1' },
+        { type: 'text-delta', id: 'text_1', text: 'Hello' },
+        { type: 'text-end', id: 'text_1' },
+      ]),
+      finishReason: 'stop',
+      usage,
+      providerMetadata: {
+        openai: {
+          responseId: 'must-not-be-observed',
+        },
+      },
+    });
+
+    await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5',
+      prompt: { type: 'string', value: 'private prompt' },
+      context: createObservedContext(events),
+      executeStream,
+    });
+
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0], {
+      callId: events[0]!.callId,
+      attemptIndex: 0,
+      nodeId: 'chat-node',
+      processId: 'chat-process',
+      provider: 'openai',
+      model: 'gpt-5',
+      outcome: 'success',
+      finishReason: 'stop',
+      rawUsage: usage,
+      normalizedUsage: {
+        promptTokens: 10,
+        completionTokens: 4,
+        totalTokens: 14,
+        cachedTokens: 3,
+        reasoningTokens: 1,
+      },
+      pricing: {
+        status: 'known',
+        costUsd: calculateChatV2Cost('openai', 'gpt-5', 10, 4),
+      },
+    });
+    assert.ok(events[0]!.callId.length > 0);
+    assert.equal('providerMetadata' in events[0]!, false);
+    assert.equal('messages' in events[0]!, false);
+    assert.equal('prompt' in events[0]!, false);
+    assert.equal('requestBody' in events[0]!, false);
+  });
+
+  void it('preserves missing usage fields and unknown pricing without substituting zero', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    const executeStream: ChatV2StreamExecutor = async () => ({
+      fullStream: mockStream([
+        { type: 'text-start', id: 'text_1' },
+        { type: 'text-delta', id: 'text_1', text: 'Hello' },
+        { type: 'text-end', id: 'text_1' },
+      ]),
+      usage: {
+        inputTokens: 0,
+      },
+    });
+
+    await runChatV2Pipeline({
+      provider: 'custom',
+      model: createMockModel(),
+      modelId: 'private-model',
+      prompt: { type: 'string', value: 'Hello' },
+      context: createObservedContext(events),
+      executeStream,
+    });
+
+    assert.deepEqual(events[0]?.rawUsage, {
+      inputTokens: 0,
+    });
+    assert.deepEqual(events[0]?.normalizedUsage, {
+      promptTokens: 0,
+    });
+    assert.deepEqual(events[0]?.pricing, {
+      status: 'unknown',
+    });
+  });
+
+  void it('omits negative and non-finite usage values from accounting events', async () => {
+    const malformedEvents: ChatV2CallFinishedEvent[] = [];
+    const executeMalformedUsage: ChatV2StreamExecutor = async () => ({
+      fullStream: mockStream([]),
+      usage: {
+        inputTokens: -10,
+        outputTokens: 4,
+        totalTokens: Number.POSITIVE_INFINITY,
+        inputTokenDetails: {
+          cacheReadTokens: -2,
+          cacheWriteTokens: 1,
+          noCacheTokens: Number.NaN,
+        },
+        outputTokenDetails: {
+          reasoningTokens: -1,
+          textTokens: 3,
+        },
+      },
+    });
+
+    await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5',
+      prompt: { type: 'string', value: 'Hello' },
+      context: createObservedContext(malformedEvents),
+      executeStream: executeMalformedUsage,
+    });
+
+    assert.deepEqual(malformedEvents[0]?.rawUsage, {
+      outputTokens: 4,
+      inputTokenDetails: {
+        cacheWriteTokens: 1,
+      },
+      outputTokenDetails: {
+        textTokens: 3,
+      },
+    });
+    assert.deepEqual(malformedEvents[0]?.normalizedUsage, {
+      completionTokens: 4,
+    });
+    assert.deepEqual(malformedEvents[0]?.pricing, {
+      status: 'known',
+    });
+  });
+
+  void it('contains a promise accidentally returned by the synchronous accounting observer', async () => {
+    let thenWasConsumed = false;
+    const rejectedThenable: PromiseLike<void> = {
+      then(_onFulfilled, onRejected) {
+        thenWasConsumed = true;
+        onRejected?.(new Error('Async observer failure'));
+        return Promise.resolve();
+      },
+    };
+
+    const result = await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5',
+      prompt: { type: 'string', value: 'Hello' },
+      context: {
+        signal: new AbortController().signal,
+        node: { id: 'chat-node' as NodeId },
+        processId: 'chat-process' as ProcessId,
+        onChatV2CallFinished: () => rejectedThenable as never,
+      },
+      executeStream: createTextStreamExecutor(),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(result.response, 'Hello');
+    assert.equal(thenWasConsumed, true);
+  });
+
+  void it('reports each physical retry exactly once with a distinct call id', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    let attempt = 0;
+    const executeStream: ChatV2StreamExecutor = async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        const error = new Error('Provider unavailable') as Error & { statusCode: number };
+        error.name = 'AI_APICallError';
+        error.statusCode = 503;
+        throw error;
+      }
+
+      return {
+        fullStream: mockStream([
+          { type: 'text-start', id: 'text_1' },
+          { type: 'text-delta', id: 'text_1', text: 'Recovered' },
+          { type: 'text-end', id: 'text_1' },
+        ]),
+      };
+    };
+
+    await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5',
+      prompt: { type: 'string', value: 'Hello' },
+      retryOnNon200: true,
+      retryOnNon200RepeatTimes: 1,
+      context: createObservedContext(events),
+      executeStream,
+    });
+
+    assert.equal(events.length, 2);
+    assert.deepEqual(
+      events.map(({ attemptIndex, outcome }) => ({ attemptIndex, outcome })),
+      [
+        { attemptIndex: 0, outcome: 'provider-failure' },
+        { attemptIndex: 1, outcome: 'success' },
+      ],
+    );
+    assert.notEqual(events[0]!.callId, events[1]!.callId);
+  });
+
+  void it('does not report a completed non-200 call twice when cancellation interrupts its retry cooldown', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    const abortController = new AbortController();
+
+    await assert.rejects(
+      runChatV2Pipeline({
+        provider: 'custom',
+        model: createMockModel(),
+        modelId: 'custom-model',
+        prompt: { type: 'string', value: 'Hello' },
+        retryOnNon200: true,
+        retryOnNon200RepeatTimes: 1,
+        retryOnNon200CooldownMs: 1_000,
+        context: createObservedContext(events, abortController.signal),
+        executeStream: async () => {
+          queueMicrotask(() => abortController.abort());
+          return {
+            fullStream: mockStream([]),
+            requestStatus: 503,
+          };
+        },
+      }),
+      (error: unknown) => error instanceof Error && error.name === 'AbortError',
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.outcome, 'provider-failure');
+    assert.equal(events[0]?.attemptIndex, 0);
+  });
+
+  void it('reports provider failures and aborts without letting observer failures affect the graph', async () => {
+    const providerFailureEvents: ChatV2CallFinishedEvent[] = [];
+    const providerError = new Error('Provider unavailable');
+    await assert.rejects(
+      runChatV2Pipeline({
+        provider: 'custom',
+        model: createMockModel(),
+        modelId: 'custom-model',
+        prompt: { type: 'string', value: 'Hello' },
+        context: createObservedContext(providerFailureEvents),
+        executeStream: async () => {
+          throw providerError;
+        },
+      }),
+    );
+    assert.equal(providerFailureEvents.length, 1);
+    assert.equal(providerFailureEvents[0]?.outcome, 'provider-failure');
+
+    const abortEvents: ChatV2CallFinishedEvent[] = [];
+    const abortController = new AbortController();
+    abortController.abort();
+    await assert.rejects(
+      runChatV2Pipeline({
+        provider: 'openai',
+        model: createMockModel(),
+        modelId: 'gpt-5',
+        prompt: { type: 'string', value: 'Hello' },
+        context: createObservedContext(abortEvents, abortController.signal),
+        executeStream: async () => {
+          throw new DOMException('Aborted', 'AbortError');
+        },
+      }),
+    );
+    assert.equal(abortEvents.length, 1);
+    assert.equal(abortEvents[0]?.outcome, 'aborted');
+
+    const result = await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5',
+      prompt: { type: 'string', value: 'Hello' },
+      context: {
+        signal: new AbortController().signal,
+        node: { id: 'chat-node' as NodeId },
+        processId: 'chat-process' as ProcessId,
+        onChatV2CallFinished: () => {
+          throw new Error('Observer failure');
+        },
+      },
+      executeStream: createTextStreamExecutor(),
+    });
+    assert.equal(result.response, 'Hello');
+
+    const errorWithThrowingUsage = new Error('Original provider failure');
+    Object.defineProperty(errorWithThrowingUsage, 'usage', {
+      get() {
+        throw new Error('Broken provider usage getter');
+      },
+    });
+    Object.defineProperty(errorWithThrowingUsage, 'finishReason', {
+      get() {
+        throw new Error('Broken provider finish-reason getter');
+      },
+    });
+    const malformedMetadataEvents: ChatV2CallFinishedEvent[] = [];
+    await assert.rejects(
+      runChatV2Pipeline({
+        provider: 'custom',
+        model: createMockModel(),
+        modelId: 'custom-model',
+        prompt: { type: 'string', value: 'Hello' },
+        context: createObservedContext(malformedMetadataEvents),
+        executeStream: async () => {
+          throw errorWithThrowingUsage;
+        },
+      }),
+      (error) => error === errorWithThrowingUsage,
+    );
+    assert.equal(malformedMetadataEvents.length, 1);
+    assert.deepEqual(malformedMetadataEvents[0], {
+      callId: malformedMetadataEvents[0]!.callId,
+      attemptIndex: 0,
+      nodeId: 'chat-node',
+      processId: 'chat-process',
+      provider: 'custom',
+      model: 'custom-model',
+      outcome: 'provider-failure',
+      pricing: { status: 'unknown' },
+    });
+  });
+
+  void it('preserves the provider failure when malformed status metadata accessors throw', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    const malformedProviderError = new Error('Original provider failure');
+    malformedProviderError.name = 'AI_APICallError';
+    Object.defineProperty(malformedProviderError, 'statusCode', {
+      get() {
+        throw new Error('Broken status getter');
+      },
+    });
+    Object.defineProperty(malformedProviderError, 'response', {
+      get() {
+        throw new Error('Broken response getter');
+      },
+    });
+    let attempts = 0;
+
+    await assert.rejects(
+      runChatV2Pipeline({
+        provider: 'custom',
+        model: createMockModel(),
+        modelId: 'custom-model',
+        prompt: { type: 'string', value: 'Hello' },
+        retryOnNon200: true,
+        retryOnNon200RepeatTimes: 2,
+        context: createObservedContext(events),
+        executeStream: async () => {
+          attempts += 1;
+          throw malformedProviderError;
+        },
+      }),
+      (error) => error === malformedProviderError,
+    );
+
+    assert.equal(attempts, 1);
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.outcome, 'provider-failure');
+  });
+
+  void it('keeps retry accounting and status outputs when provider error messages are unreadable', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    const malformedProviderError = new Error();
+    malformedProviderError.name = 'AI_APICallError';
+    Object.defineProperty(malformedProviderError, 'message', {
+      get() {
+        throw new Error('Broken message getter');
+      },
+    });
+    Object.defineProperty(malformedProviderError, 'statusCode', {
+      value: 503,
+    });
+    let attempts = 0;
+
+    const result = await runChatV2Pipeline({
+      provider: 'custom',
+      model: createMockModel(),
+      modelId: 'custom-model',
+      prompt: { type: 'string', value: 'Hello' },
+      outputRequestStatus: true,
+      retryOnNon200: true,
+      retryOnNon200RepeatTimes: 1,
+      context: createObservedContext(events),
+      executeStream: async () => {
+        attempts += 1;
+        throw malformedProviderError;
+      },
+    });
+
+    assert.equal(attempts, 2);
+    assert.equal(result.requestStatus, 503);
+    assert.deepEqual(result.commonOutputs['requestStatus' as PortId], {
+      type: 'number[]',
+      value: [503, 503],
+    });
+    assert.deepEqual(result.commonOutputs['requestError' as PortId], {
+      type: 'string[]',
+      value: [
+        'Provider request failed with unreadable error metadata.',
+        'Provider request failed with unreadable error metadata.',
+      ],
+    });
+    assert.deepEqual(
+      events.map(({ attemptIndex, outcome }) => ({ attemptIndex, outcome })),
+      [
+        { attemptIndex: 0, outcome: 'provider-failure' },
+        { attemptIndex: 1, outcome: 'provider-failure' },
+      ],
+    );
+  });
+
   void it('keeps assembled system messages when the System Prompt input is empty', async () => {
     let capturedArgs: Record<string, unknown> | undefined;
 

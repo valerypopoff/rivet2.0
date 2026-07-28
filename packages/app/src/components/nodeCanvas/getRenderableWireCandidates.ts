@@ -1,4 +1,9 @@
-import type { NodeConnection, NodeId, PortId } from '@valerypopoff/rivet2-core';
+import {
+  getProjectConnectionComparisonKey,
+  type NodeConnection,
+  type NodeId,
+  type PortId,
+} from '@valerypopoff/rivet2-core';
 import { markCanvasPerfEnd, markCanvasPerfStart, setCanvasPerf } from './canvasPerfDebug.js';
 
 export interface GetRenderableWireCandidatesOptions {
@@ -13,6 +18,7 @@ export interface GetRenderableWireCandidatesOptions {
         portId: PortId;
       }
     | undefined;
+  forceRenderableConnectionKeySet?: ReadonlySet<string>;
   nearViewportNodeIdSet: ReadonlySet<NodeId>;
   runningNodeIdSet: ReadonlySet<NodeId>;
   visibleNodeIdSet: ReadonlySet<NodeId>;
@@ -24,6 +30,7 @@ export function getRenderableWireCandidates({
   draggingWire,
   highlightedNodes,
   highlightedPort,
+  forceRenderableConnectionKeySet,
   nearViewportNodeIdSet,
   runningNodeIdSet,
   visibleNodeIdSet,
@@ -39,6 +46,10 @@ export function getRenderableWireCandidates({
   const highlightedNodeIdSet = highlightedNodes ? new Set(highlightedNodes) : undefined;
 
   const candidates = connections.filter((connection) => {
+    if (forceRenderableConnectionKeySet?.has(getProjectConnectionComparisonKey(connection))) {
+      return true;
+    }
+
     const isHighlightedPort =
       highlightedPort &&
       (highlightedPort.isInput

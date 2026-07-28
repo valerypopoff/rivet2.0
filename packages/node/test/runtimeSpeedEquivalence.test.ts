@@ -524,4 +524,22 @@ void describe('runtime speed equivalence guards', () => {
       assert.match(error.cause.message, /Aborted|Processing aborted/, mode.name);
     }
   });
+
+  void it('rejects already-aborted signals across public Node APIs', async () => {
+    const fixture = makeAbortSignalProject(20);
+
+    for (const mode of publicRuntimeModes) {
+      const controller = new AbortController();
+      controller.abort();
+      const error = await runPublicModeError(mode, fixture, {
+        graph: fixture.graphId,
+        inputs: {
+          input: 'pre-aborted seed',
+        },
+        abortSignal: controller.signal,
+      });
+
+      assert.equal(error.name, 'AbortError', mode.name);
+    }
+  });
 });

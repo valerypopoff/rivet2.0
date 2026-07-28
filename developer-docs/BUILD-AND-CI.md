@@ -197,10 +197,11 @@ limit before tests can start.
 
 ### `yarn test:style`
 
-Runs repository checks for test style, documentation links, generated graph-builder
-context, rich-text sinks, AI runtime boundaries, desktop shell policy, low-level
-editor boundaries, tracked Yarn PnP install state, and generated web-app client
-freshness.
+Runs repository checks for test style, documentation links, the checked Graph
+Builder policy project, compact generated Graph Builder node specifications,
+generated legacy graph-builder context, rich-text sinks, AI
+runtime boundaries, desktop shell policy, low-level editor boundaries, tracked
+Yarn PnP install state, and generated web-app client freshness.
 The web-app freshness check runs through the Node workspace's
 `check:web-app-client` script so both generation and verification resolve the same
 package-owned `esbuild` dependency. The generator uses `createRequire(...)` for
@@ -215,7 +216,10 @@ visible review queue because several parked runtime optimizations intentionally 
 characterization cases beside the active suite.
 
 `check-ai-runtime-boundaries.mjs` prevents Generate using AI and the graph builder
-from regaining legacy Chat/Azure endpoint seams. `check-desktop-shell-contract.mjs`
+from regaining legacy Chat/Azure endpoint seams. It also keeps the selectable
+legacy Graph Builder on `runLegacyGraphBuilderDraft` plus the atomic editor
+commit gateway and rejects direct `graphState` publication or history clearing
+from its host hook. `check-desktop-shell-contract.mjs`
 owns static Tauri minimum-size/macOS-menu invariants that previously lived in a
 brittle TSX source parser. `check-editor-boundaries.mjs` prevents low-level Monaco
 owners from importing app state/product layers.
@@ -225,11 +229,124 @@ docs and direct `developer-docs/*.md` files. It skips external URLs, anchors,
 and fenced code blocks, then resolves remaining links against the repo root so
 Windows and Linux CI runners use the same containment rules.
 
-The graph-creator-data checker verifies that the AI graph-builder bundled
-context in `packages/app/graphs/graph-creator.rivet-data` is generated from the
-current built-in node source files and current node-reference docs. If it fails,
-refresh the generated bundle with
+The graph-creator-data checker keeps the temporary
+`packages/app/graphs/graph-creator.rivet-data` artifact reproducible from the
+current built-in node source files and node-reference docs until the rollout
+observation window ends. Neither Graph Builder implementation loads this 1 MB
+bundle at runtime: the hardened legacy path uses the live safe authoring
+catalog, while the transactional path's compact checked knowledge is covered
+by `check-graph-builder-node-specs.mjs`. The checker also rejects regression of
+removed legacy repository-discovery, nested-research, dormant mutation, and
+per-operation publication nodes, and rejects re-importing the data bundle from
+the legacy runtime. If the retained artifact freshness check fails, run
 `node scripts/checks/check-graph-creator-data.mjs --write`.
+
+`check-graph-builder-policy.mjs` owns the small transactional policy project's
+serialized topology and runtime manifest. It deserializes
+[`graph-builder-policy.rivet-project`](../packages/app/graphs/graph-builder-policy.rivet-project),
+checks its two stable graph/LLM/output seams against
+[`graph-builder-policy.manifest.json`](../packages/app/graphs/graph-builder-policy.manifest.json),
+instantiates every node through the four-node minimal registry, verifies every
+connected port, and rejects extra graphs, nodes, capabilities, outputs, stale
+schema edges, prompt drift, serialized secrets/headers, tools, retries, cache,
+partial output, reasoning, usage, request-status/body exposure, or alternate
+custom-provider programmatic/environment credential lookup names. It then
+compares both files with the output of the Core node factories and serializer,
+so a structurally safe but stale asset also fails. Run the focused unit and
+asset checks with:
+
+```powershell
+node .yarn/releases/yarn-4.17.1.cjs tsx --test scripts/checks/check-graph-builder-policy.test.mjs
+node .yarn/releases/yarn-4.17.1.cjs check:graph-builder-policy
+```
+
+`yarn check:graph-builder-assets` is the release-facing aggregate gate. It
+runs the retained legacy Graph Creator data check plus the policy and generated
+node help/specification checks. The node-spec command first builds Core's ESM
+output because the app authoring catalog deliberately consumes Core through its
+public package export; this keeps the aggregate gate valid in fresh CI
+checkouts where `packages/core/dist` does not exist yet. The checker then uses
+that same compiled export for its built-in registry, avoiding a mixed
+source/compiled module graph. Keep release workflows on this aggregate command
+so adding a transactional asset does not silently leave packaging prerequisites
+behind.
+
+Policy-runner unit and mocked-provider contract tests use
+`policyRunnerTestFixture.ts` to construct the same sealed two-variant shape in
+memory. They must not read the serialized repository asset directly: exact
+asset text, prompt hash, serialization, and freshness remain the checker's
+responsibility, while runtime tests own processor behavior and provider wire
+contracts. The current runtime selects the text variant for every provider, so
+the wire tests must reject a Graph Builder `json_schema` request for OpenAI,
+Anthropic, Google, and Custom providers. The packaged schema variant stays
+freshness-checked but inactive until a separate provider-safe decision DTO and
+normalization adapter are implemented and tested.
+
+After an intentional checked prompt, topology, manifest, or Core-default
+change, regenerate both files together:
+
+```powershell
+node .yarn/releases/yarn-4.17.1.cjs check:graph-builder-policy --write
+```
+
+`check-graph-builder-evaluation.mjs` validates the frozen public fixture,
+threshold, holdout-contract, and manifest assets. It also guards the concrete
+execution seams: production and evaluation must both invoke
+`runLegacyGraphBuilderDraft` for hardened legacy and
+`createPlanBGraphBuilderSessionRuntime` for Plan B. The focused runtime-adapter
+suite drives those real host runtimes with deterministic fake policy/agent
+executors, so it needs no credentials and must report provider accounting as
+unknown rather than inventing attempts:
+
+```powershell
+node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-app exec tsx --test src/features/graphBuilder/evaluation/runtimeAdapters.test.ts
+node .yarn/releases/yarn-4.17.1.cjs check:graph-builder-evaluation
+```
+
+Credentialed development comparisons may supply the bundled legacy executor,
+the checked Plan B policy runner, and their real attempt/audit collectors to
+the same adapters. Collectors are created and consumed per fixture trial; reuse
+is rejected so accounting cannot accumulate across observations. The retired
+as-shipped legacy slot is artifact-only; the checker and adapters must never
+synthesize it from hardened behavior.
+
+`check-graph-builder-node-specs.mjs` constructs the built-in, project-aware
+authoring catalog through the same app adapter used by transactional Graph
+Builder sessions and compares its compact portable metadata with
+[`graph-builder-node-specs.generated.json`](../packages/app/graphs/graph-builder-node-specs.generated.json).
+Its package command builds `@valerypopoff/rivet2-core` ESM first; do not invoke
+the `.mjs` file directly unless that output is already present and current.
+The same checker derives bounded summaries from the checked node-reference
+pages into
+[`graph-builder-node-help.generated.json`](../packages/app/graphs/graph-builder-node-help.generated.json).
+The live catalog consumes that help map so every built-in has useful search/read
+context without loading source files or full documentation at runtime; the
+node-spec file remains the deterministic freshness and packaging snapshot.
+The asset contains choice IDs, display names, safe descriptions, independent
+capability flags, explicit settings descriptors, safe defaults, and the
+catalog fingerprint; it contains no source files, React editors, UI metadata,
+plugin-opaque node data, or credentials. Update and verify it with:
+
+```powershell
+node .yarn/releases/yarn-4.17.1.cjs check:graph-builder-node-specs --write
+node .yarn/releases/yarn-4.17.1.cjs check:graph-builder-node-specs
+```
+
+The second command is part of `yarn test:style`, so changing a built-in
+authoring adapter, registered default, or captured preference contract without
+refreshing the checked asset fails locally and in CI.
+
+When changing the authoring semantics or transaction normalization contract,
+also run the focused suites below. They cover project-aware and variadic ports,
+secret-safe projection, boundary authorization, cycle-safe deterministic
+placement, explicit LLM-tool/Delegate/Loop Until adapters, ambiguous
+continuation and bounded-loop validation, run-mode envelope fields, and the
+kernel rule that only newly created nodes may be repositioned:
+
+```powershell
+node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-app exec tsx --test src/features/graphBuilder/authoringSemantics.test.ts
+node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-app exec tsx --test src/domain/graphBuilder/graphBuilderTransactionKernel.test.ts
+```
 
 `yarn check:file-tree` rejects unignored generated paths and package source deep
 imports. The remaining production long-relative-import queue has a shrinking numeric
@@ -554,8 +671,12 @@ upstream packages catch up.
 The root `postcss@npm:^8.4.21` resolution keeps the `rtlcss` documentation
 toolchain on the same patched PostCSS 8.x release used by the rest of the
 workspace. Keep that descriptor pinned until `rtlcss` or its owning Docusaurus
-dependency refreshes the transitive lock entry; do not replace it with an audit
-exception.
+dependency refreshes the transitive lock entry; do not replace that fix with an
+audit exception. Likewise, keep the direct
+`brace-expansion@npm:^5.0.5` resolution on its fixed release. The remaining
+1.x/2.x `brace-expansion` paths have no compatible fix and therefore need
+separate, expiring dependent-specific exceptions rather than a broad package
+waiver.
 
 The build workflow runs that JavaScript audit immediately after dependency
 installation. A separate `rustsec/audit-check` job scans
@@ -620,7 +741,7 @@ Runs on `ubuntu-latest` and performs:
 2. shared Node/Yarn setup and install-state cache restore
 3. `node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache`
 4. `yarn security:audit`
-5. `node scripts/checks/check-graph-creator-data.mjs`
+5. `yarn check:graph-builder-assets`
 6. `yarn build`
 7. `yarn test`
 8. `yarn test:docs`
@@ -634,8 +755,10 @@ the Node build.
 ### Important notes
 
 - build runs with increased `NODE_OPTIONS`
-- the AI graph-builder context check is also run as a named workflow step so stale node/source context gets a clear
-  GitHub failure line before the heavier build/test phases; `yarn test:style` keeps the same guard for local parity
+- the AI Graph Builder asset gate is also run as a named workflow step so stale
+  legacy context, policy projects/manifests, or node help/specifications get a
+  clear GitHub failure line before the heavier build/test phases;
+  `yarn test:style` keeps the same guard for local parity
 - formatting check covers repo-maintenance docs and scripts that are already Prettier-clean. The full repo is not
   currently Prettier-normalized, so do not switch this to `prettier --check .` without a dedicated format pass.
 
@@ -667,10 +790,11 @@ Per matrix entry, the workflow:
 8. runs `yarn build:hosted-web-deps`
 9. invokes `tauri-apps/tauri-action`
 
-A separate Linux prerequisite job verifies the AI graph-builder context with
-`node scripts/checks/check-graph-creator-data.mjs` once per workflow run before
-any platform bundle job starts. The check is platform-independent and needs only
-the checked-out repo, so release workflows should keep it as one shared
+A separate Linux prerequisite job installs the pinned Yarn dependencies and
+runs `yarn check:graph-builder-assets` once per workflow before any platform
+bundle job starts. The gate covers the retained legacy context plus the Plan B
+policy project/manifest and generated node help/specification assets. It is
+platform-independent, so release workflows should keep it as one shared
 prerequisite instead of repeating it in every Windows/macOS/Linux build job.
 
 `yarn build:hosted-web-deps` builds only the core and Trivet package outputs
@@ -756,7 +880,7 @@ The release workflows share the `rivet-docs-pages` concurrency group with `cance
 
 The workflow has six jobs:
 
-1. `verify-ai-graph-builder-context` runs on `ubuntu-latest`, checks out the repo, and runs `node scripts/checks/check-graph-creator-data.mjs`.
+1. `verify-ai-graph-builder-assets` runs on `ubuntu-latest`, checks out the repo, restores and installs the pinned Yarn dependencies, and runs `yarn check:graph-builder-assets`.
 2. `build-windows` runs on `windows-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
 3. `build-macos` runs on `macos-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
 4. `build-docs` runs on `ubuntu-latest` after that verifier, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
@@ -778,7 +902,7 @@ This workflow is intentionally develop-only. It does not run for `main`.
 
 The workflow has six jobs:
 
-1. `verify-ai-graph-builder-context` runs on `ubuntu-latest`, checks out the repo, and runs `node scripts/checks/check-graph-creator-data.mjs`.
+1. `verify-ai-graph-builder-assets` runs on `ubuntu-latest`, checks out the repo, restores and installs the pinned Yarn dependencies, and runs `yarn check:graph-builder-assets`.
 2. `build-windows` runs on `windows-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
 3. `build-macos` runs on `macos-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
 4. `build-docs` runs on `ubuntu-latest` after that verifier, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
@@ -850,7 +974,8 @@ The workflow:
 2. verifies the checkout starts clean
 3. runs the shared Node/Yarn setup for the build, matching the repo development toolchain and restoring Yarn install state
 4. installs dependencies with the checked-in Yarn release and `--immutable --immutable-cache --check-cache`
-5. verifies the AI graph-builder context with `node scripts/checks/check-graph-creator-data.mjs`
+5. verifies the retained legacy and Plan B Graph Builder assets with
+   `yarn check:graph-builder-assets`
 6. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and `@valerypopoff/rivet2-cli`
 7. verifies that dependency install and package build touched only generated artifacts
 8. uses Node `22.21.1` and npm `11.5.1` for npm trusted-publishing compatibility

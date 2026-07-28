@@ -249,11 +249,9 @@ export class ManagedKnowledgeStore implements RivetKnowledgeStore {
       };
     }
 
-    context.reportProgress?.({ message: `Preparing ${documents.length} knowledge document(s).`, percent: 5 });
     const chunks = await chunkDocuments(documents, documentIds, version, chunking, context);
     if (chunks.length === 0) throw new Error('Sync Knowledge Source produced no non-empty chunks.');
 
-    context.reportProgress?.({ message: `Uploading ${chunks.length} knowledge chunk(s).`, percent: 15 });
     await this.driver.upsertChunks(source.sourceId, version, chunks, context);
     throwIfAborted(context.signal);
 
@@ -267,7 +265,6 @@ export class ManagedKnowledgeStore implements RivetKnowledgeStore {
       updatedAt: new Date().toISOString(),
       ...(metadata && Object.keys(metadata).length ? { metadata } : {}),
     };
-    context.reportProgress?.({ message: 'Committing the new knowledge-source version.', percent: 90 });
     await this.driver.commitManifest(manifest, context);
 
     const committed = await this.#getManifest(source.sourceId, context);
@@ -303,7 +300,6 @@ export class ManagedKnowledgeStore implements RivetKnowledgeStore {
       }
     }
 
-    context.reportProgress?.({ message: 'Knowledge source is ready.', percent: 100 });
     return {
       source: { ...source, version },
       result: existing ? 'updated' : 'created',
@@ -501,10 +497,6 @@ async function chunkDocuments(
         chunksInDocument: pieces.length,
         ...(document.metadata ? { metadata: document.metadata } : {}),
       });
-    });
-    context.reportProgress?.({
-      message: `Prepared document ${documentIndex + 1} of ${documents.length}.`,
-      percent: 5 + Math.round(((documentIndex + 1) / documents.length) * 10),
     });
   }
   return chunks;

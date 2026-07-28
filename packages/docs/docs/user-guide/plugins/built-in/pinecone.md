@@ -14,7 +14,12 @@ For a Knowledge Source connection, create a serverless Pinecone index with integ
 - **API Version**: defaults to `2026-04`.
 - **Rerank Model**: optional provider-side reranking model.
 
-The connection API key is stored in local Rivet settings, not in the project. When it is blank, runtime execution can use the plugin's global Pinecone API key. Programmatic hosts can instead supply a `knowledgeStores` entry and own authentication themselves.
+The connection API key is stored in local Rivet settings, not in the project.
+When it is blank, runtime execution can use the plugin's global Pinecone API
+key. For a headless host, expose `PINECONE_API_KEY` to the process—for example,
+put `PINECONE_API_KEY=...` in a `.env` file that the host loads before running
+the graph. Programmatic hosts can instead supply a `knowledgeStores` entry and
+own authentication themselves.
 
 Rivet uploads text through Pinecone's integrated-embedding records endpoints. It writes immutable content versions and a reserved manifest record, waits for the manifest to be readable, and searches only the active version. It does not create or delete Pinecone indexes.
 

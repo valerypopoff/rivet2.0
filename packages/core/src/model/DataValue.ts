@@ -6,6 +6,7 @@ import type {
   RivetKnowledgeEvidence,
   RivetKnowledgeSourceReference,
 } from '../integrations/KnowledgeStore.js';
+import { createDefaultLLMProfileValue, type LLMProfileValue } from './chat-v2/llmProfileTypes.js';
 
 export type DataValueDef<Type extends string, RuntimeType> = {
   type: Type;
@@ -100,6 +101,7 @@ export type GraphReferenceValue = DataValueDef<'graph-reference', { graphId: Gra
 export type KnowledgeSourceDataValue = DataValueDef<'knowledge-source', RivetKnowledgeSourceReference>;
 export type KnowledgeDocumentDataValue = DataValueDef<'knowledge-document', RivetKnowledgeDocument>;
 export type KnowledgeEvidenceDataValue = DataValueDef<'knowledge-evidence', RivetKnowledgeEvidence>;
+export type LLMProfileDataValue = DataValueDef<'llm-config', LLMProfileValue>;
 export type DocumentDataValue = DataValueDef<
   'document',
   {
@@ -148,6 +150,7 @@ export type ScalarDataValue =
   | KnowledgeSourceDataValue
   | KnowledgeDocumentDataValue
   | KnowledgeEvidenceDataValue
+  | LLMProfileDataValue
   | DocumentDataValue;
 
 export type ScalarType = ScalarDataValue['type'];
@@ -161,6 +164,11 @@ export type StringArrayDataValue = ArrayDataValue<StringDataValue>;
 export type ArrayDataValues = {
   [P in ScalarDataValue['type']]: ArrayDataValue<Extract<ScalarDataValue, { type: P }>>;
 }[ScalarDataValue['type']];
+
+export type ArrayLikeDataValue =
+  | ArrayDataValues
+  | (AnyDataValue & { value: unknown[] })
+  | (ObjectDataValue & { value: unknown[] });
 
 export type ScalarOrArrayDataValue = ScalarDataValue | ArrayDataValues;
 
@@ -260,6 +268,10 @@ export const dataTypes = exhaustiveTuple<DataType>()(
   'knowledge-evidence[]',
   'fn<knowledge-evidence>',
   'fn<knowledge-evidence[]>',
+  'llm-config',
+  'llm-config[]',
+  'fn<llm-config>',
+  'fn<llm-config[]>',
   'document',
   'document[]',
   'fn<document>',
@@ -286,6 +298,7 @@ export const scalarTypes = exhaustiveTuple<ScalarType>()(
   'knowledge-source',
   'knowledge-document',
   'knowledge-evidence',
+  'llm-config',
   'document',
 );
 
@@ -366,6 +379,10 @@ export const dataTypeDisplayNames: Record<DataType, string> = {
   'knowledge-evidence[]': 'Knowledge Evidence Array',
   'fn<knowledge-evidence>': 'Function<Knowledge Evidence>',
   'fn<knowledge-evidence[]>': 'Function<Knowledge Evidence Array>',
+  'llm-config': 'LLM Profile',
+  'llm-config[]': 'LLM Profile Array',
+  'fn<llm-config>': 'Function<LLM Profile>',
+  'fn<llm-config[]>': 'Function<LLM Profile Array>',
   document: 'Document',
   'document[]': 'Document Array',
   'fn<document>': 'Function<Document>',
@@ -384,7 +401,7 @@ export function isScalarDataType(type: DataType): type is ScalarDataType {
   return !isArrayDataType(type) && !isFunctionDataType(type);
 }
 
-export function isArrayDataValue(value: DataValue | undefined): value is ArrayDataValues {
+export function isArrayDataValue(value: DataValue | undefined): value is ArrayLikeDataValue {
   if (!value) {
     return false;
   }
@@ -402,7 +419,9 @@ export function isFunctionDataType(type: DataType): type is FunctionDataType {
   return type.startsWith('fn<');
 }
 
-export function isFunctionDataValue(value: DataValue | undefined): value is FunctionDataValues {
+export function isFunctionDataValue(
+  value: DataValue | undefined,
+): value is FunctionDataValues | (AnyDataValue & { value: () => unknown }) {
   if (!value) {
     return false;
   }
@@ -410,11 +429,16 @@ export function isFunctionDataValue(value: DataValue | undefined): value is Func
 }
 
 export function isNotFunctionDataValue(value: DataValue | undefined): value is ScalarOrArrayDataValue {
-  return !isFunctionDataValue(value);
+  return value !== undefined && !isFunctionDataValue(value);
+}
+
+export function functionTypeToReturnType(functionType: FunctionDataType): ScalarOrArrayDataType {
+  return functionType.slice(3, -1) as ScalarOrArrayDataType;
 }
 
 export function functionTypeToScalarType(functionType: FunctionDataType): ScalarDataType {
-  return functionType.slice(3, -1) as ScalarDataType;
+  const returnType = functionTypeToReturnType(functionType);
+  return isArrayDataType(returnType) ? arrayTypeToScalarType(returnType) : returnType;
 }
 
 export function arrayTypeToScalarType(arrayType: ArrayDataType): ScalarDataType {
@@ -441,7 +465,11 @@ export function unwrapDataValue(value: DataValue | undefined): ScalarOrArrayData
   }
 
   if (isFunctionDataValue(value)) {
-    return { type: functionTypeToScalarType(value.type), value: value.value() } as ScalarOrArrayDataValue;
+    const evaluated = value.value();
+    if (value.type === 'any') {
+      return { type: 'any', value: evaluated };
+    }
+    return { type: functionTypeToReturnType(value.type), value: evaluated } as ScalarOrArrayDataValue;
   }
 
   return value;
@@ -503,6 +531,7 @@ export const scalarDefaults: { [P in ScalarDataType]: Extract<ScalarDataValue, {
     source: { connectionId: '', sourceId: '' },
     documentId: '',
   },
+  'llm-config': createDefaultLLMProfileValue(),
   document: {
     mediaType: 'text/plain',
     data: new Uint8Array(),
@@ -518,8 +547,9 @@ export function getDefaultValue<T extends DataType>(type: T): GetDataValue<T>['v
   }
 
   if (isFunctionDataType(type)) {
-    return (() => scalarDefaults[getScalarTypeOf(type)]) as unknown as GetDataValue<T>['value'];
+    const returnType = functionTypeToReturnType(type);
+    return (() => getDefaultValue(returnType)) as unknown as GetDataValue<T>['value'];
   }
 
-  return scalarDefaults[getScalarTypeOf(type)] as unknown as GetDataValue<T>['value'];
+  return structuredClone(scalarDefaults[getScalarTypeOf(type)]) as unknown as GetDataValue<T>['value'];
 }

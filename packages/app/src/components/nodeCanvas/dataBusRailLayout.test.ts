@@ -4,8 +4,8 @@ import { getDataBusCompactMaxWidth, getDataBusFullRowsHeight, shouldUseDataBusFu
 
 test('reserves one fixed-height row for every pinned bus', () => {
   assert.equal(getDataBusFullRowsHeight({ rowCount: 0, uiFontScale: 1 }), 0);
-  assert.equal(getDataBusFullRowsHeight({ rowCount: 3, uiFontScale: 1 }), 117);
-  assert.equal(getDataBusFullRowsHeight({ rowCount: 3, uiFontScale: 1.25 }), 146.25);
+  assert.equal(getDataBusFullRowsHeight({ rowCount: 3, uiFontScale: 1 }), 129);
+  assert.equal(getDataBusFullRowsHeight({ rowCount: 3, uiFontScale: 1.25 }), 161.25);
   assert.equal(getDataBusFullRowsHeight({ rowCount: Number.NaN, uiFontScale: 1 }), 0);
 });
 

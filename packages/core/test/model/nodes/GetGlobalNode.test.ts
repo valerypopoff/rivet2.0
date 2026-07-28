@@ -21,8 +21,7 @@ describe('GetGlobalNode', () => {
         label: editor.label,
         dataKey: 'dataKey' in editor ? editor.dataKey : undefined,
         includeInGraphSearch: editor.includeInGraphSearch,
-        turnOffDataKeysWhenEnabled:
-          editor.type === 'toggle' ? editor.turnOffDataKeysWhenEnabled : undefined,
+        turnOffDataKeysWhenEnabled: editor.type === 'toggle' ? editor.turnOffDataKeysWhenEnabled : undefined,
       })),
       [
         {
@@ -96,6 +95,32 @@ describe('GetGlobalNode', () => {
     assert.equal(outputs.value?.type, 'fn<string>');
     assert.equal(typeof outputs.value?.value, 'function');
     assert.equal((outputs.value?.value as () => unknown)(), 'global value');
+  });
+
+  it('returns isolated object defaults in immediate and on-demand modes', async () => {
+    const context = {
+      getGlobal: () => undefined,
+    } as InternalProcessContext;
+
+    const immediateChartNode = GetGlobalNodeImpl.create();
+    immediateChartNode.data.dataType = 'object';
+    immediateChartNode.data.wait = false;
+    const immediateNode = new GetGlobalNodeImpl(immediateChartNode);
+    const firstImmediate = await immediateNode.process({} as Inputs, context);
+    (firstImmediate.value?.value as Record<string, unknown>).leaked = true;
+    const secondImmediate = await immediateNode.process({} as Inputs, context);
+    assert.deepEqual(secondImmediate.value?.value, {});
+
+    const onDemandChartNode = GetGlobalNodeImpl.create();
+    onDemandChartNode.data.dataType = 'object';
+    onDemandChartNode.data.onDemand = true;
+    onDemandChartNode.data.wait = false;
+    const onDemandNode = new GetGlobalNodeImpl(onDemandChartNode);
+    const onDemandOutputs = await onDemandNode.process({} as Inputs, context);
+    const getOnDemandValue = onDemandOutputs.value?.value as () => Record<string, unknown>;
+    const firstOnDemand = getOnDemandValue();
+    firstOnDemand.leaked = true;
+    assert.deepEqual(getOnDemandValue(), {});
   });
 
   it('rejects on-demand plus wait before reading dynamic IDs', async () => {

@@ -1,16 +1,35 @@
 import { Field } from '@atlaskit/form';
 import { useAtom } from 'jotai';
 import { type FC } from 'react';
-import { recordExecutionsState, showNodeRunDurationsState } from '../../../state/settings.js';
+import {
+  graphBuilderImplementationModeState,
+  recordExecutionsState,
+  showNodeRunDurationsState,
+} from '../../../state/settings.js';
 import { showGraphReferenceIndicatorsState, showUnreachableGraphTagsState } from '../../../state/ui.js';
 import { LabeledToggle } from '../../LabeledToggle.js';
+import { SegmentedEditor } from '../../editors/SegmentedEditor.js';
 import { fields } from '../settingsPageStyles.js';
+
+const graphBuilderImplementationOptions = [
+  { label: 'Transactional', value: 'plan-b' },
+  { label: 'Legacy rollback', value: 'legacy' },
+] as const;
 
 export const GraphsSettingsPage: FC = () => {
   const [recordExecutions, setRecordExecutions] = useAtom(recordExecutionsState);
   const [showNodeRunDurations, setShowNodeRunDurations] = useAtom(showNodeRunDurationsState);
   const [showUnreachableGraphTags, setShowUnreachableGraphTags] = useAtom(showUnreachableGraphTagsState);
   const [showGraphReferenceIndicators, setShowGraphReferenceIndicators] = useAtom(showGraphReferenceIndicatorsState);
+  const [graphBuilderImplementationMode, setGraphBuilderImplementationMode] = useAtom(
+    graphBuilderImplementationModeState,
+  );
+
+  const changeGraphBuilderImplementationMode = (value: string | boolean) => {
+    if (value === 'legacy' || value === 'plan-b') {
+      setGraphBuilderImplementationMode(value);
+    }
+  };
 
   return (
     <div css={fields}>
@@ -62,6 +81,16 @@ export const GraphsSettingsPage: FC = () => {
           />
         )}
       </Field>
+      <SegmentedEditor
+        value={graphBuilderImplementationMode}
+        onChange={changeGraphBuilderImplementationMode}
+        isReadonly={false}
+        isDisabled={false}
+        label="Graph Builder implementation"
+        name="graphBuilderImplementationMode"
+        helperMessage="Developer rollout control. Legacy remains the default until the evaluation and dogfood gates pass. Transactional builds a private draft for review before Apply. A running session keeps the implementation it started with; changes affect only new sessions."
+        options={graphBuilderImplementationOptions}
+      />
     </div>
   );
 };

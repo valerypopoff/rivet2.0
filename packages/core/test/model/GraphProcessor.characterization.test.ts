@@ -1263,6 +1263,121 @@ void describe('GraphProcessor characterization', () => {
     assert.equal(runtimeCache.executionPlans?.has(mainGraph), true);
   });
 
+  void it('does not cache unresolved referenced graph ports when data is preloaded before a cached run', async () => {
+    const referencedProjectId = 'preload-reference-cache-child' as ProjectId;
+    const referencedGraphId = 'preload-reference-cache-graph' as GraphId;
+    const referencedProbe = makeProbeNode('preload-reference-cache-probe', {
+      value: { type: 'string', value: 'referenced value' },
+    });
+    const referencedOutput = makeGraphOutputNode('referencedResult');
+    const referencedGraph = makeGraph(
+      [referencedProbe, referencedOutput],
+      [connect(referencedProbe.id, referencedOutput.id, 'value')],
+      referencedGraphId,
+    );
+    const referencedProject = makeProject(referencedGraph);
+    referencedProject.metadata.id = referencedProjectId;
+
+    const preloadedProbe = makeProbeNode('preload-reference-cache-boundary');
+    const aliasNode: ChartNode = {
+      id: 'preload-reference-cache-alias' as NodeId,
+      type: 'referencedGraphAlias',
+      title: 'Referenced Graph Alias',
+      data: {
+        graphId: referencedGraphId,
+        inputData: {},
+        projectId: referencedProjectId,
+        useErrorOutput: false,
+      },
+      visualData: { x: 0, y: 0, width: 240 },
+    };
+    const parentOutput = makeGraphOutputNode('result');
+    const parentGraph = makeGraph(
+      [preloadedProbe, aliasNode, parentOutput],
+      [connect(aliasNode.id, parentOutput.id, 'value', 'referencedResult')],
+      'preload-reference-cache-parent' as GraphId,
+    );
+    const project = makeProject(parentGraph);
+    project.references = [{ id: referencedProjectId }];
+    const runtimeCache: GraphProcessorRuntimeCache = {};
+    const processor = new GraphProcessor(project, parentGraph.metadata!.id, createRegistry(), false, {
+      cacheLoadedProjects: true,
+      runtimeCache,
+    });
+
+    // Preloading must not preprocess the graph: the referenced alias cannot
+    // expose its boundary ports until processGraph has loaded its project.
+    processor.preloadNodeData(preloadedProbe.id, {
+      output: { type: 'string', value: 'preloaded boundary' },
+    });
+    assert.notEqual(runtimeCache.executionPlans?.has(parentGraph), true);
+
+    const outputs = await processor.processGraph({
+      ...testProcessContext(),
+      projectReferenceLoader: {
+        loadProject: async () => referencedProject,
+      },
+    });
+
+    assert.deepEqual(outputs.result, { type: 'string', value: 'referenced value' });
+    assert.equal(runtimeCache.executionPlans?.has(parentGraph), true);
+  });
+
+  void it('does not cache unresolved referenced graph ports during a pre-run dependency inspection', async () => {
+    const referencedProjectId = 'dependency-reference-cache-child' as ProjectId;
+    const referencedGraphId = 'dependency-reference-cache-graph' as GraphId;
+    const referencedProbe = makeProbeNode('dependency-reference-cache-probe', {
+      value: { type: 'string', value: 'referenced value' },
+    });
+    const referencedOutput = makeGraphOutputNode('referencedResult');
+    const referencedGraph = makeGraph(
+      [referencedProbe, referencedOutput],
+      [connect(referencedProbe.id, referencedOutput.id, 'value')],
+      referencedGraphId,
+    );
+    const referencedProject = makeProject(referencedGraph);
+    referencedProject.metadata.id = referencedProjectId;
+
+    const aliasNode: ChartNode = {
+      id: 'dependency-reference-cache-alias' as NodeId,
+      type: 'referencedGraphAlias',
+      title: 'Referenced Graph Alias',
+      data: {
+        graphId: referencedGraphId,
+        inputData: {},
+        projectId: referencedProjectId,
+        useErrorOutput: false,
+      },
+      visualData: { x: 0, y: 0, width: 240 },
+    };
+    const parentOutput = makeGraphOutputNode('result');
+    const parentGraph = makeGraph(
+      [aliasNode, parentOutput],
+      [connect(aliasNode.id, parentOutput.id, 'value', 'referencedResult')],
+      'dependency-reference-cache-parent' as GraphId,
+    );
+    const project = makeProject(parentGraph);
+    project.references = [{ id: referencedProjectId }];
+    const runtimeCache: GraphProcessorRuntimeCache = {};
+    const processor = new GraphProcessor(project, parentGraph.metadata!.id, createRegistry(), false, {
+      cacheLoadedProjects: true,
+      runtimeCache,
+    });
+
+    processor.getDependencyNodesDeep(parentOutput.id);
+    assert.notEqual(runtimeCache.executionPlans?.has(parentGraph), true);
+
+    const outputs = await processor.processGraph({
+      ...testProcessContext(),
+      projectReferenceLoader: {
+        loadProject: async () => referencedProject,
+      },
+    });
+
+    assert.deepEqual(outputs.result, { type: 'string', value: 'referenced value' });
+    assert.equal(runtimeCache.executionPlans?.has(parentGraph), true);
+  });
+
   void it('can cache execution plans for subprocessors without caching the root graph', async () => {
     const childProbeNode = makeProbeNode('child-probe', { value: { type: 'string', value: 'child value' } });
     const childOutputNode = makeGraphOutputNode('childResult');

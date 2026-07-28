@@ -10,11 +10,9 @@ import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import {
   type FunctionDataValues,
-  type ScalarDataValue,
   type ScalarOrArrayDataType,
-  isArrayDataType,
-  isScalarDataType,
-  scalarDefaults,
+  type ScalarOrArrayDataValue,
+  getDefaultValue,
 } from '../DataValue.js';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { coerceType } from '../../utils/coerceType.js';
@@ -164,12 +162,7 @@ export class GetGlobalNodeImpl extends NodeImpl<GetGlobalNode> {
               return value.value;
             }
 
-            // Have some useful defaults before the value is set
-            if (isArrayDataType(this.data.dataType)) {
-              return [];
-            }
-
-            return scalarDefaults[this.data.dataType];
+            return getDefaultValue(this.data.dataType);
           },
         } as FunctionDataValues,
         ['variable_id_out' as PortId]: { type: 'string', value: id },
@@ -181,12 +174,11 @@ export class GetGlobalNodeImpl extends NodeImpl<GetGlobalNode> {
     let value = this.data.wait ? await context.waitForGlobal(id) : context.getGlobal(id);
 
     // Have some useful defaults before the value is set
-    if (!value && isArrayDataType(this.data.dataType)) {
-      value = { type: this.data.dataType, value: [] };
-    }
-
-    if (!value && isScalarDataType(this.data.dataType)) {
-      value = { type: this.data.dataType, value: scalarDefaults[this.data.dataType] } as ScalarDataValue;
+    if (!value) {
+      value = {
+        type: this.data.dataType,
+        value: getDefaultValue(this.data.dataType),
+      } as ScalarOrArrayDataValue;
     }
 
     return {

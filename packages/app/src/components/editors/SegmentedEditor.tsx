@@ -142,7 +142,20 @@ export const SegmentedEditor: FC<{
   helperMessage?: string;
   options: readonly { label: string; value: string | boolean }[];
   defaultValue?: string | boolean;
-}> = ({ value, onChange, isReadonly, isDisabled, label, ariaLabel, name, helperMessage, options, defaultValue }) => {
+  allowOptionWrap?: boolean;
+}> = ({
+  value,
+  onChange,
+  isReadonly,
+  isDisabled,
+  label,
+  ariaLabel,
+  name,
+  helperMessage,
+  options,
+  defaultValue,
+  allowOptionWrap = true,
+}) => {
   const selectedValue = value ?? defaultValue ?? options[0]?.value;
   const disabled = isReadonly || isDisabled;
   const visibleLabel = label.trim() ? label : undefined;
@@ -173,7 +186,7 @@ export const SegmentedEditor: FC<{
 
         choice.dataset.wrap = 'false';
 
-        const wraps = choice.scrollWidth > availableWidth + 1;
+        const wraps = allowOptionWrap && choice.scrollWidth > availableWidth + 1;
         choice.dataset.wrap = wraps ? 'true' : 'false';
         setShouldWrap(wraps);
       });
@@ -201,7 +214,7 @@ export const SegmentedEditor: FC<{
       cancelAnimationFrame(measureAnimationFrame);
       resizeObserver.disconnect();
     };
-  }, [options]);
+  }, [allowOptionWrap, options]);
 
   const control = (
     <div className="segmented-editor-control" css={segmentedEditorStyles}>
@@ -211,7 +224,7 @@ export const SegmentedEditor: FC<{
         className="segmented-choice"
         role="group"
         aria-label={effectiveAriaLabel}
-        data-wrap={shouldWrap ? 'true' : 'false'}
+        data-wrap={allowOptionWrap && shouldWrap ? 'true' : 'false'}
       >
         {options.map((option) => (
           <button

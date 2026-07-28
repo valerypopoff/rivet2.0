@@ -35,6 +35,7 @@ export * from './integrations/integrations.js';
 import './integrations/enableIntegrations.js';
 export * from './integrations/VectorDatabase.js';
 export * from './integrations/KnowledgeStore.js';
+export * from './integrations/KnowledgeStoreFieldPolicy.js';
 export * from './integrations/KnowledgeStoreProvider.js';
 export * from './integrations/KnowledgeStoreValidation.js';
 export * from './integrations/ManagedKnowledgeStore.js';
@@ -78,6 +79,7 @@ export * from './integrations/CodeRunner.js';
 export * from './integrations/Tokenizer.js';
 export * from './integrations/GptTokenizerTokenizer.js';
 export { JS_LIST_CALLBACK_LOCAL_NAMES, interpolateJSListCallbackBody } from './model/nodes/jsListCallbackHelpers.js';
+export { findAutoDelegateGraphCandidate } from './model/nodes/toolCallDelegation.js';
 export {
   extractInterpolationVariables,
   findInterpolationTokenSpans,

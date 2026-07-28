@@ -61,6 +61,25 @@ export function resolveNodePrefabInstance(project: Project, node: ChartNode): Ch
   };
 }
 
+/**
+ * Turns a valid graph-local library link into its current effective node.
+ *
+ * The returned node keeps the link's id and graph-local geometry, so existing
+ * connections remain valid. All node behavior and settings are cloned from
+ * the library source. Missing or invalid sources cannot be detached because
+ * there is no concrete node definition to preserve.
+ */
+export function detachNodePrefabInstance(project: Project, node: ChartNode): ChartNode | undefined {
+  const prefabId = getNodePrefabInstancePrefabId(node);
+  const sourceNode = prefabId ? project.nodePrefabs?.[prefabId]?.sourceNode : undefined;
+
+  if (!sourceNode || !canUseNodeAsPrefabSource(sourceNode)) {
+    return undefined;
+  }
+
+  return resolveNodePrefabInstance(project, node);
+}
+
 export function resolveNodePrefabInstances(project: Project, nodes: readonly ChartNode[]): ChartNode[] {
   return nodes.map((node) => resolveNodePrefabInstance(project, node));
 }

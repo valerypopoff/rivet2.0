@@ -2,7 +2,7 @@ import Select from '@atlaskit/select';
 import type { ChartNode, CustomEditorDefinition } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import type { FC } from 'react';
-import { projectState } from '../../../state/savedGraphs.js';
+import { projectState } from '../editorWorkflowState.js';
 import type { SharedEditorProps } from '../SharedEditorProps.js';
 
 type Props = SharedEditorProps & { editor: CustomEditorDefinition<ChartNode> };

@@ -53,6 +53,7 @@ export type RunGraphOptions = {
   includeTrace?: boolean;
   concurrency?: GraphProcessorConcurrency;
   getChatNodeEndpoint?: ProcessContext['getChatNodeEndpoint'];
+  onChatV2CallFinished?: ProcessContext['onChatV2CallFinished'];
   tokenizer?: Tokenizer;
   codeRunner?: ProcessContext['codeRunner'];
   projectPath?: string;
@@ -192,9 +193,27 @@ export function coreCreateProcessor(
     }
   }
 
-  options.abortSignal?.addEventListener('abort', () => {
+  const abortSignal = options.abortSignal;
+  let abortSignalAttached = false;
+  const abortProcessor = () => {
+    abortSignalAttached = false;
     void processor.abort();
-  });
+  };
+  const attachAbortSignal = () => {
+    if (!abortSignal || abortSignal.aborted || abortSignalAttached) {
+      return;
+    }
+    abortSignal.addEventListener('abort', abortProcessor, { once: true });
+    abortSignalAttached = true;
+  };
+  const detachAbortSignal = () => {
+    if (!abortSignal || !abortSignalAttached) {
+      return;
+    }
+    abortSignal.removeEventListener('abort', abortProcessor);
+    abortSignalAttached = false;
+  };
+  attachAbortSignal();
 
   const resolvedInputs = looseDataValuesToDataValues(inputs);
   const resolvedContextValues = looseDataValuesToDataValues(context);
@@ -206,8 +225,13 @@ export function coreCreateProcessor(
     getEvents: (spec: RivetEventStreamFilterSpec) => getProcessorEvents(processor, spec),
     getSSEStream: (spec: RivetEventStreamFilterSpec) => getProcessorSSEStream(processor, spec),
     streamNode: (nodeIdOrTitle: string) => getSingleNodeStream(processor, nodeIdOrTitle),
+    dispose() {
+      detachAbortSignal();
+    },
     async run() {
-      const outputs = await processor.processGraph(
+      abortSignal?.throwIfAborted();
+      attachAbortSignal();
+      const outputsPromise = processor.processGraph(
         {
           nativeApi: options.nativeApi,
           datasetProvider: options.datasetProvider,
@@ -220,18 +244,35 @@ export function coreCreateProcessor(
           editorExecutionCache: options.editorExecutionCache,
           settings: resolveProcessSettings(options),
           getChatNodeEndpoint: options.getChatNodeEndpoint,
+          onChatV2CallFinished: options.onChatV2CallFinished,
         },
         resolvedInputs,
         resolvedContextValues,
         { returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady },
       );
 
-      return outputs;
+      if (abortSignal?.aborted) {
+        void processor.abort();
+      }
+
+      try {
+        return await outputsPromise;
+      } finally {
+        if (processor.isRunning) {
+          void processor
+            .waitForRunCompletion()
+            .catch(() => undefined)
+            .finally(detachAbortSignal);
+        } else {
+          detachAbortSignal();
+        }
+      }
     },
   };
 }
 
 export async function coreRunGraph(project: Project, options: RunGraphOptions): Promise<Record<string, DataValue>> {
+  options.abortSignal?.throwIfAborted();
   const processorInfo = coreCreateProcessor(project, options);
   return processorInfo.run();
 }

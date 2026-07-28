@@ -9,8 +9,10 @@ import type { ChartNode, NodeId } from '../NodeBase.js';
 
 export type LLMChatV2ToolChoiceMode = '' | 'auto' | 'function' | 'required';
 export type LLMChatV2ApiKeySource = 'environment' | 'input';
+export type LLMChatV2ConfigurationMode = 'inline' | 'profile';
 
 export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
+  configurationMode?: LLMChatV2ConfigurationMode;
   provider: ChatV2Provider;
   apiKeySource?: LLMChatV2ApiKeySource;
   customProviderApiKeyProgrammaticName?: string;
@@ -60,6 +62,58 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
 export type LLMChatV2NodeData = LLMChatV2NodeConfigData;
 export type LLMChatV2Node = ChartNode<'llmChatV2', LLMChatV2NodeData>;
 
+export const llmChatV2ProfileDataKeys = [
+  'model',
+  'useModelInput',
+  'temperature',
+  'useTemperatureInput',
+  'topP',
+  'useTopPInput',
+  'topK',
+  'useTopKInput',
+  'presencePenalty',
+  'usePresencePenaltyInput',
+  'frequencyPenalty',
+  'useFrequencyPenaltyInput',
+  'stopSequences',
+  'useStopSequencesInput',
+  'seed',
+  'useSeedInput',
+  'maxTokens',
+  'useMaxTokensInput',
+  'provider',
+  'apiKeySource',
+  'customProviderApiKeyProgrammaticName',
+  'customProviderApiKeyEnvVarName',
+  'customProviderBaseURL',
+  'useCustomProviderBaseURLInput',
+  'headers',
+  'useHeadersInput',
+  'extraProviderOptions',
+  'useExtraProviderOptionsInput',
+  'openAIReasoningEffort',
+  'openAIReasoningSummary',
+  'openAIPreviousResponseId',
+  'useOpenAIPreviousResponseIdInput',
+  'enableOpenAIWebSearch',
+  'openAIWebSearchContextSize',
+  'enableOpenAICodeInterpreter',
+  'anthropicThinkingMode',
+  'anthropicThinkingBudget',
+  'useAnthropicThinkingBudgetInput',
+  'anthropicEffort',
+  'anthropicCacheControlTtl',
+  'googleThinkingBudget',
+  'useGoogleThinkingBudgetInput',
+  'googleThinkingLevel',
+  'googleIncludeThoughts',
+  'enableGoogleSearchGrounding',
+  'enableGoogleUrlContext',
+] as const satisfies readonly (keyof LLMChatV2NodeData)[];
+
+export type LLMChatV2ProfileDataKey = (typeof llmChatV2ProfileDataKeys)[number];
+export type LLMChatV2ProfileData = Pick<LLMChatV2NodeData, LLMChatV2ProfileDataKey>;
+
 export type LLMChatV2EditorCacheKeyParts = {
   nodeId: NodeId;
   nodeData: LLMChatV2NodeData;
@@ -81,6 +135,7 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     ...createChatV2CommonNodeData({
       model: 'gpt-5',
     }),
+    configurationMode: 'inline',
     provider: 'openai',
     apiKeySource: 'environment',
     customProviderApiKeyProgrammaticName: '',
@@ -133,4 +188,8 @@ export function hasLLMChatV2BuiltInToolsEnabled(data: LLMChatV2NodeData): boolea
     (data.provider === 'openai' && (data.enableOpenAIWebSearch || data.enableOpenAICodeInterpreter)) ||
     (data.provider === 'google' && (data.enableGoogleSearchGrounding || data.enableGoogleUrlContext))
   );
+}
+
+export function shouldIncludeLLMChatV2ToolCalls(data: LLMChatV2NodeData): boolean {
+  return data.configurationMode === 'profile' || data.useToolCalling || hasLLMChatV2BuiltInToolsEnabled(data);
 }

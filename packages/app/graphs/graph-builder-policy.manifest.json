@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "policyVersion": "graph-builder-policy-v3",
+  "assetPath": "packages/app/graphs/graph-builder-policy.rivet-project",
+  "projectId": "graph-builder-policy-project-v1",
+  "normalizedPromptSha256": "ab96b117c81cb3e18186a78c92362561afe10b8e3fbe52556e346dd42a652072",
+  "allowedInjectedLlmDataKeys": [
+    "provider",
+    "model",
+    "customProviderBaseURL",
+    "temperature",
+    "topP",
+    "topK",
+    "presencePenalty",
+    "frequencyPenalty",
+    "stopSequences",
+    "seed",
+    "maxTokens",
+    "openAIReasoningEffort",
+    "openAIReasoningSummary",
+    "anthropicThinkingMode",
+    "anthropicThinkingBudget",
+    "anthropicEffort",
+    "anthropicCacheControlTtl",
+    "googleThinkingBudget",
+    "googleThinkingLevel",
+    "googleIncludeThoughts"
+  ],
+  "variants": {
+    "schema": {
+      "graphId": "graph-builder-policy-schema-v1",
+      "llmNodeId": "gbps-llm",
+      "policyTurnInputNodeId": "gbps-policy-turn-input",
+      "responseSchemaInputNodeId": "gbps-response-schema-input",
+      "decisionOutputNodeId": "gbps-decision-output",
+      "responseFormat": "json_schema"
+    },
+    "text": {
+      "graphId": "graph-builder-policy-text-v1",
+      "llmNodeId": "gbpt-llm",
+      "policyTurnInputNodeId": "gbpt-policy-turn-input",
+      "decisionOutputNodeId": "gbpt-decision-output",
+      "responseFormat": ""
+    }
+  }
+}

@@ -64,6 +64,20 @@ describe('KnowledgeStoreController', () => {
         },
         /requires labeled options/,
       ],
+      [
+        {
+          credentialConfigSpec: [
+            { key: 'token', label: 'Token', type: 'secret', options: [{ label: 'Unexpected', value: 'value' }] },
+          ],
+        },
+        /cannot declare select options/,
+      ],
+      [
+        {
+          credentialConfigSpec: [{ key: 'token', label: 'Token', type: 'secret', default: false }],
+        },
+        /invalid default value/,
+      ],
     ] as const) {
       assert.throws(() => registerKnowledgeStoreProvider({ ...baseProvider, ...override } as never), expected);
     }
@@ -336,6 +350,24 @@ describe('KnowledgeStoreController', () => {
     await assert.rejects(
       () => new KnowledgeStoreController(undefined).resolve('primary', malformed),
       /invalid stored credentials for Region/,
+    );
+
+    const nullRequired = makeContext(providerId);
+    nullRequired.settings.pluginSettings = {
+      [providerId]: { knowledgeStoreCredentials: { primary: { token: null } } },
+    } as never;
+    await assert.rejects(
+      () => new KnowledgeStoreController(undefined).resolve('primary', nullRequired),
+      /invalid stored credentials for Access Token/,
+    );
+
+    const undefinedRequired = makeContext(providerId);
+    undefinedRequired.settings.pluginSettings = {
+      [providerId]: { knowledgeStoreCredentials: { primary: { token: undefined } } },
+    } as never;
+    await assert.rejects(
+      () => new KnowledgeStoreController(undefined).resolve('primary', undefinedRequired),
+      /requires Access Token/,
     );
   });
 

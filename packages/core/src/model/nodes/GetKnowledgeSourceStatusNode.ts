@@ -87,7 +87,7 @@ export class GetKnowledgeSourceStatusNodeImpl extends NodeImpl<GetKnowledgeSourc
     const result = normalizeKnowledgeSourceStatusResult(
       await store.getSourceStatus(
         { source, ...(normalizedExpectedVersion ? { expectedVersion: normalizedExpectedVersion } : {}) },
-        { signal: context.signal, reportProgress: context.reportProgress },
+        { signal: context.signal },
       ),
       source,
       normalizedExpectedVersion,

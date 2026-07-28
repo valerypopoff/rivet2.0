@@ -1,526 +1,575 @@
-import {
-  deserializeProject,
-  deserializeDatasets,
-  coreCreateProcessor,
-  type NodeId,
-  coerceType,
-  InMemoryDatasetProvider,
-  type DataValue,
-  type ExternalFunction,
-  type ExternalFunctionProcessContext,
-  registerBuiltInNodes,
-  NodeRegistration,
-  getError,
-} from '@valerypopoff/rivet2-core';
+import { newId } from '@valerypopoff/rivet2-core';
+import { useAtomValue, useStore } from 'jotai';
 import { cloneDeep } from 'lodash-es';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
-import { TauriNativeApi } from '../model/native/TauriNativeApi';
-import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
-import { useAtom, useAtomValue } from 'jotai';
-import { graphState } from '../state/graph';
-import { settingsState } from '../state/settings';
-import { useAutoLayoutGraph } from './useAutoLayoutGraph';
-import { useCenterViewOnGraph } from './useCenterViewOnGraph';
-import { useDependsOnPlugins } from './useDependsOnPlugins';
-import graphBuilderProject from '../../graphs/graph-creator.rivet-project?raw';
-import graphBuilderData from '../../graphs/graph-creator.rivet-data?raw';
-import { referencedProjectsState } from '../state/savedGraphs';
+import type { GraphBuilderAuthoringProject, GraphDraftDelta } from '../domain/graphBuilder/index.js';
+import { createGraphBuilderAuthoringCatalog } from '../features/graphBuilder/authoringCatalog.js';
 import {
-  buildAiGraphBuilderExternalFunctions,
-  parseAiGraphBuilderEditNodeArgs,
-  resolveAiGraphBuilderNodeDataKey,
-  resolveAiGraphBuilderNodeId,
-} from './aiGraphBuilderHelpers.js';
-import { useProjectNodeRegistry } from './useProjectNodeRegistry';
-import { handleError } from '../utils/errorHandling.js';
-import { useClearCurrentGraphHistory } from '../commands/Command.js';
+  captureGraphBuilderEditorContext,
+  prepareGraphBuilderCommit,
+  publishGraphBuilderHistorySnapshotState,
+  tryCommitGraphBuilderDraftState,
+  type GraphBuilderCommitOutcome,
+} from '../features/graphBuilder/editorGateway.js';
+import { graphBuilderBaseIdentityMatches, type GraphBuilderBaseIdentity } from '../features/graphBuilder/identity.js';
+import { runLegacyGraphBuilderDraft } from '../features/graphBuilder/legacyDraftRunner.js';
+import { createBundledLegacyGraphBuilderAgentExecutor } from '../features/graphBuilder/legacyGraphCreatorAgentExecutor.js';
+import { revalidateLegacyGraphBuilderStartup } from '../features/graphBuilder/legacySessionStartup.js';
+import type { GraphBuilderPreview, GraphBuilderSessionViewState } from '../features/graphBuilder/sessionController.js';
+import { waitForGraphBuilderStartupTask } from '../features/graphBuilder/startupTask.js';
 import { useEnvironmentProvider } from '../providers/ProvidersContext.js';
+import { activeGraphBuilderSessionOwnerState } from '../state/graphBuilderAi.js';
+import { settingsState } from '../state/settings.js';
+import { handleError } from '../utils/errorHandling.js';
 import type { ResolvedAiAssistModelSettings } from '../utils/aiAssistModelSettings.js';
-import { createAiAssistVercelGeneratorChatNodeDefinition } from '../utils/aiAssistVercelGenerator.js';
+import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri.js';
+import { formatLegacyGraphBuilderAccounting, LegacyGraphBuilderAccounting } from './legacyGraphBuilderLogging.js';
+import { useCenterViewOnGraph } from './useCenterViewOnGraph.js';
+import { useDependsOnPlugins } from './useDependsOnPlugins.js';
 
-const MAX_LOG_VALUE_LENGTH = 1_600;
+type PendingLegacyDraft = {
+  base: GraphBuilderBaseIdentity;
+  draft: GraphBuilderAuthoringProject;
+  draftRevision: number;
+  preview: GraphBuilderPreview;
+  sessionId: string;
+};
 
-function formatLogValue(value: unknown, maxLength = MAX_LOG_VALUE_LENGTH): string {
-  let formatted: string;
+type ActiveLegacySession = {
+  abortController?: AbortController;
+  sessionId: string;
+};
 
-  try {
-    formatted = typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value, null, 2);
-  } catch {
-    formatted = String(value);
-  }
+type LegacyGraphBuilderSession = {
+  capturedModelDisplayName?: string;
+  sessionId?: string;
+  state?: GraphBuilderSessionViewState;
+};
 
-  if (formatted.length <= maxLength) {
-    return formatted;
-  }
-
-  return `${formatted.slice(0, maxLength)}... [truncated ${formatted.length - maxLength} chars]`;
-}
-
-function formatExternalFunctionArgs(args: unknown[]): string {
-  if (args.length === 0) {
-    return '(no args)';
-  }
-
-  return args.map((arg, index) => `arg${index + 1}=${formatLogValue(arg)}`).join(', ');
-}
-
-function formatExternalFunctionResult(result: unknown): string {
-  if (typeof result === 'object' && result != null && 'type' in result && 'value' in result) {
-    const dataValue = result as DataValue;
-    return `${dataValue.type}: ${formatLogValue(dataValue.value)}`;
-  }
-
-  return formatLogValue(result);
-}
-
-function wrapLoggedExternalFunctions(
-  functions: Record<string, ExternalFunction>,
-  log: (message: string) => void,
-): Record<string, ExternalFunction> {
-  return Object.fromEntries(
-    Object.entries(functions).map(([name, fn]) => [
-      name,
-      async (context: ExternalFunctionProcessContext, ...args: unknown[]) => {
-        log(`CALL ${name} ${formatExternalFunctionArgs(args)}`);
-
-        try {
-          const result = await fn(context, ...args);
-          log(`OK ${name} -> ${formatExternalFunctionResult(result)}`);
-          return result;
-        } catch (error) {
-          log(`ERROR ${name}: ${getError(error).message}`);
-          throw error;
-        }
-      },
-    ]),
-  );
-}
-
-export function useAiGraphBuilder({ onFeedback }: { onFeedback: (feedback: string) => void }) {
-  const [graph, setGraph] = useAtom(graphState);
-
+/**
+ * Temporary rollback adapter for the legacy Graph Creator policy. The policy
+ * now runs entirely against the same private-draft/atomic-commit boundary as
+ * Plan B; only its model orchestration remains legacy.
+ */
+export function useLegacyAiGraphBuilder({ onFeedback }: { onFeedback: (feedback: string) => void }) {
+  const store = useStore();
   const settings = useAtomValue(settingsState);
   const plugins = useDependsOnPlugins();
   const environmentProvider = useEnvironmentProvider();
-  const projectNodeRegistry = useProjectNodeRegistry();
-
   const centerView = useCenterViewOnGraph();
-  const autoLayout = useAutoLayoutGraph();
-  const clearCurrentGraphHistory = useClearCurrentGraphHistory();
+  const [session, setSession] = useState<LegacyGraphBuilderSession>({});
+  const activeRef = useRef<ActiveLegacySession>();
+  const pendingRef = useRef<PendingLegacyDraft>();
+  const mountedRef = useRef(true);
 
-  const referencedProjects = useAtomValue(referencedProjectsState);
+  const releaseOwnership = useCallback(
+    (sessionId: string) => {
+      const owner = store.get(activeGraphBuilderSessionOwnerState);
+      if (owner?.sessionId === sessionId) {
+        store.set(activeGraphBuilderSessionOwnerState, undefined);
+      }
+    },
+    [store],
+  );
 
-  return async function applyPrompt(
-    prompt: string,
-    assistModel: ResolvedAiAssistModelSettings,
-    abort: AbortSignal,
-  ): Promise<boolean> {
-    let workingToastId: ReturnType<typeof toast.info> | undefined;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const active = activeRef.current;
+      active?.abortController?.abort('Legacy Graph Builder disposed');
+      if (active) {
+        releaseOwnership(active.sessionId);
+      }
+      activeRef.current = undefined;
+      pendingRef.current = undefined;
+    };
+  }, [releaseOwnership]);
 
-    try {
-      let workingGraph = cloneDeep(graph);
-      const log = (message: string) => {
-        const time = new Date().toLocaleTimeString();
-        onFeedback(`[${time}] ${message}`);
-      };
-      const logGraphState = (message: string) => {
-        log(`${message} Graph has ${workingGraph.nodes.length} nodes and ${workingGraph.connections.length} connections.`);
-      };
+  const start = useCallback(
+    async (request: string, requestedModel: ResolvedAiAssistModelSettings): Promise<void> => {
+      if (activeRef.current || !request.trim()) {
+        return;
+      }
 
-      const [project] = deserializeProject(graphBuilderProject);
-      const data = deserializeDatasets(graphBuilderData);
+      let initialContext: ReturnType<typeof captureGraphBuilderEditorContext>;
+      try {
+        initialContext = captureGraphBuilderEditorContext(store);
+      } catch {
+        const sessionId = newId();
+        setSession({
+          capturedModelDisplayName: requestedModel.displayName,
+          sessionId,
+          state: failedState(
+            sessionId,
+            'editor-context-capture-failed',
+            'Rivet could not safely capture the current project for Graph Builder.',
+          ),
+        });
+        return;
+      }
+      if (!initialContext.eligibility.eligible) {
+        const sessionId = newId();
+        setSession({
+          capturedModelDisplayName: initialContext.assistModel.displayName,
+          sessionId,
+          state: failedState(sessionId, 'ineligible', initialContext.eligibility.reason),
+        });
+        return;
+      }
+      if (initialContext.assistModel.missingConfiguration) {
+        const sessionId = newId();
+        setSession({
+          capturedModelDisplayName: initialContext.assistModel.displayName,
+          sessionId,
+          state: failedState(sessionId, 'invalid-model-configuration', initialContext.assistModel.missingConfiguration),
+        });
+        return;
+      }
 
-      workingToastId = toast.info('Working...');
-      log(`Starting AI graph builder with ${assistModel.displayName}.`);
-      log(`Prompt: ${formatLogValue(prompt)}`);
-      logGraphState('Initial state.');
-
-      const showChanges = () => {
-        const laidOutGraph = {
-          ...workingGraph,
-          nodes: autoLayout(workingGraph),
-        };
-        const publishedGraph = cloneDeep(laidOutGraph);
-        clearCurrentGraphHistory();
-        setGraph(publishedGraph);
-        centerView(publishedGraph);
-        workingGraph = cloneDeep(publishedGraph);
-      };
-
-      const externalFunctions: Record<string, ExternalFunction> = {
-        ...buildAiGraphBuilderExternalFunctions({
-          project,
-          referencedProjects,
-          registry: projectNodeRegistry,
-          onLog: log,
-          showChanges,
-          workingGraph: () => workingGraph,
-          setWorkingGraph: (nextGraph) => {
-            workingGraph = nextGraph;
-          },
-        }),
-        showChanges: async () => ({
-          type: 'boolean' as const,
-          value: true,
-        }),
-        editNode: async (_ctx: unknown, rawNodeId: unknown, rawKey: unknown, rawValue: unknown) => {
-          const { nodeId, key, value } = parseAiGraphBuilderEditNodeArgs(rawNodeId, rawKey, rawValue);
-          const node = workingGraph.nodes.find((node) => node.id === nodeId);
-
-          if (!node) {
-            throw new Error(`Node with ID ${nodeId} not found`);
-          }
-
-          const data = node.data as Record<string, unknown>;
-          const dataKey = resolveAiGraphBuilderNodeDataKey(data, key);
-          const updatedData = { ...data, [dataKey]: value };
-          log(`Resolved editNode target ${node.id} (${node.type}) ${JSON.stringify(key)} -> data.${dataKey}.`);
-          workingGraph = {
-            ...workingGraph,
-            nodes: workingGraph.nodes.map((candidate) =>
-              candidate.id === nodeId ? { ...candidate, data: updatedData } : candidate,
-            ),
-          };
-
-          showChanges();
-          logGraphState(`Edited node ${node.id} (${node.type}) data.${dataKey}.`);
-
-          return {
-            type: 'object' as const,
-            value: updatedData,
-          };
+      const sessionId = newId();
+      const abortController = new AbortController();
+      activeRef.current = { abortController, sessionId };
+      store.set(activeGraphBuilderSessionOwnerState, {
+        projectId: initialContext.base.projectId,
+        sessionId,
+      });
+      setSession({
+        capturedModelDisplayName: initialContext.assistModel.displayName,
+        sessionId,
+        state: {
+          status: 'gathering-context',
+          sessionId,
+          policyAttempts: 0,
+          progress: 'Preparing the private legacy Graph Builder draft…',
         },
-        getNodeData: async (_ctx: unknown, rawNodeId: unknown) => {
-          const nodeId = resolveAiGraphBuilderNodeId(rawNodeId);
-          const node = workingGraph.nodes.find((node) => node.id === nodeId);
+      });
 
-          if (!node) {
-            throw new Error(`Node with ID ${nodeId} not found`);
-          }
-          log(`Reading data for node ${node.id} (${node.type}). Keys: ${Object.keys(node.data ?? {}).join(', ') || '(none)'}.`);
+      let retainDraft = false;
+      let workingToastId: ReturnType<typeof toast.info> | undefined;
+      const accounting = new LegacyGraphBuilderAccounting();
+      const isCurrent = () => activeRef.current?.sessionId === sessionId;
+      const logWithTime = (message: string) => {
+        if (isCurrent()) {
+          onFeedback(`[${new Date().toLocaleTimeString()}] ${message}`);
+        }
+      };
 
-          return {
-            type: 'object' as const,
-            value: {
-              data: node.data as Record<string, unknown>,
-              splittingEnabled: node.isSplitRun,
+      try {
+        const context = captureGraphBuilderEditorContext(store, sessionId);
+        if (!context.eligibility.eligible || !graphBuilderBaseIdentityMatches(initialContext.base, context.base)) {
+          setSession({
+            capturedModelDisplayName: initialContext.assistModel.displayName,
+            sessionId,
+            state: conflictedState(sessionId, initialContext.base, context.base.projectFingerprint),
+          });
+          return;
+        }
+
+        workingToastId = toast.info('Working…');
+        logWithTime(`Starting AI graph builder with ${context.assistModel.displayName}.`);
+        logWithTime(`Request received (${request.length} chars).`);
+        setSession({
+          capturedModelDisplayName: context.assistModel.displayName,
+          sessionId,
+          state: {
+            status: 'editing',
+            sessionId,
+            policyAttempts: 0,
+            progress: 'The legacy policy is preparing a private graph draft…',
+          },
+        });
+
+        const runtimeSettingsResult = await waitForGraphBuilderStartupTask(
+          fillMissingSettingsFromEnvironmentVariables(settings, plugins, {
+            environmentProvider,
+          }),
+          abortController.signal,
+        );
+        if (runtimeSettingsResult.status === 'aborted') {
+          return;
+        }
+        const runtimeSettings = runtimeSettingsResult.value;
+        const startupRevalidation = revalidateLegacyGraphBuilderStartup({
+          abortSignal: abortController.signal,
+          base: context.base,
+          captureContext: () => captureGraphBuilderEditorContext(store, sessionId),
+          isCurrent: isCurrent(),
+          isMounted: mountedRef.current,
+        });
+        if (startupRevalidation.status === 'abandoned') {
+          return;
+        }
+        if (startupRevalidation.status === 'conflicted') {
+          setSession({
+            capturedModelDisplayName: context.assistModel.displayName,
+            sessionId,
+            state: conflictedState(sessionId, context.base, startupRevalidation.currentFingerprint),
+          });
+          return;
+        }
+
+        const executeAgent = createBundledLegacyGraphBuilderAgentExecutor({
+          assistModel: context.assistModel,
+          runtimeSettings,
+          onChatV2CallFinished: (event) => {
+            accounting.record(event);
+          },
+        });
+
+        const result = await runLegacyGraphBuilderDraft({
+          abortSignal: abortController.signal,
+          activeGraphId: context.base.activeGraphId,
+          baseProject: context.snapshot.authoringProject,
+          catalog: createGraphBuilderAuthoringCatalog({
+            registry: context.registry,
+            project: context.snapshot.authoringProject,
+            referencedProjects: context.referencedProjects,
+            authoringPreferences: {
+              applyDefaultNodeColors: context.authoringPreferences.applyDefaultNodeColors,
             },
-          };
-        },
-        deleteNode: async (_ctx: unknown, rawNodeId: unknown) => {
-          const nodeId = resolveAiGraphBuilderNodeId(rawNodeId);
-          const node = workingGraph.nodes.find((node) => node.id === nodeId);
+          }),
+          executeAgent,
+          onFeedback: logWithTime,
+          onProgress: (progress) => {
+            if (!isCurrent() || !mountedRef.current) {
+              return;
+            }
+            if (progress.type === 'draft-changed') {
+              setSession({
+                capturedModelDisplayName: context.assistModel.displayName,
+                sessionId,
+                state: {
+                  status: 'editing',
+                  sessionId,
+                  policyAttempts: 0,
+                  progress: draftProgressMessage(progress.delta, progress.draftRevision),
+                },
+              });
+            } else if (progress.type === 'model-update') {
+              setSession({
+                capturedModelDisplayName: context.assistModel.displayName,
+                sessionId,
+                state: {
+                  status: 'editing',
+                  sessionId,
+                  policyAttempts: 0,
+                  progress: progress.message,
+                },
+              });
+            }
+          },
+          referencedProjects: context.referencedProjects,
+          registry: context.registry,
+          request: request.trim(),
+        });
 
-          if (!node) {
-            throw new Error(`Node with ID ${nodeId} not found`);
-          }
+        if (!isCurrent() || !mountedRef.current) {
+          return;
+        }
+        if (result.status === 'canceled') {
+          setSession({
+            capturedModelDisplayName: context.assistModel.displayName,
+            sessionId,
+            state: canceledState(sessionId),
+          });
+          return;
+        }
 
-          workingGraph = {
-            ...workingGraph,
-            nodes: workingGraph.nodes.filter((node) => node.id !== nodeId),
-            connections: workingGraph.connections.filter(
-              (connection) => connection.inputNodeId !== nodeId && connection.outputNodeId !== nodeId,
+        const live = captureGraphBuilderEditorContext(store, sessionId);
+        if (!live.eligibility.eligible || !graphBuilderBaseIdentityMatches(context.base, live.base)) {
+          setSession({
+            capturedModelDisplayName: context.assistModel.displayName,
+            sessionId,
+            state:
+              result.status === 'ready-for-preview'
+                ? {
+                    ...conflictedState(sessionId, context.base, live.base.projectFingerprint),
+                    retainedPreview: result.preview,
+                  }
+                : conflictedState(sessionId, context.base, live.base.projectFingerprint),
+          });
+          return;
+        }
+
+        if (result.status === 'no-change') {
+          setSession({
+            capturedModelDisplayName: context.assistModel.displayName,
+            sessionId,
+            state: {
+              status: 'no-change',
+              sessionId,
+              result: {
+                status: 'no-change',
+                base: publicBase(context.base),
+                summary: result.summary,
+              },
+            },
+          });
+          return;
+        }
+
+        pendingRef.current = {
+          base: context.base,
+          draft: result.draft,
+          draftRevision: result.draftRevision,
+          preview: result.preview,
+          sessionId,
+        };
+        retainDraft = true;
+        activeRef.current = { sessionId };
+        setSession({
+          capturedModelDisplayName: context.assistModel.displayName,
+          sessionId,
+          state: {
+            status: 'ready-for-preview',
+            sessionId,
+            preview: result.preview,
+          },
+        });
+        logWithTime('Private draft is ready for preview. The editor graph is unchanged until Apply.');
+      } catch (error) {
+        if (!isCurrent() || !mountedRef.current) {
+          return;
+        }
+        if (abortController.signal.aborted) {
+          setSession({
+            capturedModelDisplayName: initialContext.assistModel.displayName,
+            sessionId,
+            state: canceledState(sessionId),
+          });
+        } else {
+          logWithTime('FAILED Graph Builder request failed. See the error notification for details.');
+          handleError(error, 'AI graph builder failed', {
+            metadata: {
+              model: initialContext.assistModel.displayName,
+              promptLength: request.length,
+            },
+          });
+          setSession({
+            capturedModelDisplayName: initialContext.assistModel.displayName,
+            sessionId,
+            state: failedState(
+              sessionId,
+              'legacy-policy-failed',
+              'The legacy Graph Builder could not prepare a safe draft.',
             ),
-          };
+          });
+        }
+      } finally {
+        logWithTime(`ACCOUNTING ${formatLegacyGraphBuilderAccounting(accounting.snapshot())}`);
+        if (workingToastId != null) {
+          toast.dismiss(workingToastId);
+        }
+        if (!retainDraft && activeRef.current?.sessionId === sessionId) {
+          activeRef.current = undefined;
+          pendingRef.current = undefined;
+          releaseOwnership(sessionId);
+        }
+      }
+    },
+    [environmentProvider, onFeedback, plugins, releaseOwnership, settings, store],
+  );
 
-          showChanges();
-          logGraphState(`Deleted node ${node.id} (${node.type}).`);
+  const apply = useCallback(async () => {
+    const pending = pendingRef.current;
+    if (!pending || session.state?.status !== 'ready-for-preview') {
+      return;
+    }
+    setSession((current) => ({
+      ...current,
+      state: {
+        status: 'committing',
+        sessionId: pending.sessionId,
+        preview: pending.preview,
+      },
+    }));
 
-          return {
-            type: 'boolean' as const,
-            value: true,
-          };
-        },
-        addNodeData: async (_ctx: unknown, rawNodeId: unknown, rawKey: unknown, rawValue: unknown) => {
-          const { nodeId, key, value } = parseAiGraphBuilderEditNodeArgs(rawNodeId, rawKey, rawValue);
-          const node = workingGraph.nodes.find((node) => node.id === nodeId);
-
-          if (!node) {
-            throw new Error(`Node with ID ${nodeId} not found`);
-          }
-
-          const updatedData = { ...(node.data as Record<string, unknown>), [key]: value };
-          workingGraph = {
-            ...workingGraph,
-            nodes: workingGraph.nodes.map((candidate) =>
-              candidate.id === nodeId ? { ...candidate, data: updatedData } : candidate,
-            ),
-          };
-
-          showChanges();
-          logGraphState(`Added node data ${node.id} (${node.type}) data.${key}.`);
-
-          return {
-            type: 'object',
-            value: updatedData,
-          };
-        },
-        lintGraph: async () => {
-          const warnings: string[] = [];
-
-          for (const connection of workingGraph.connections) {
-            const sourceNode = workingGraph.nodes.find((node) => node.id === connection.outputNodeId);
-            const destNode = workingGraph.nodes.find((node) => node.id === connection.inputNodeId);
-
-            if (!sourceNode || !destNode) {
-              warnings.push(`Node not found for connection: ${JSON.stringify(connection)}`);
-              continue;
-            }
-
-            const sourceInstance = projectNodeRegistry.createDynamicImpl(sourceNode);
-            const destInstance = projectNodeRegistry.createDynamicImpl(destNode);
-
-            const sourceConnections = workingGraph.connections.filter((conn) => conn.outputNodeId === sourceNode.id);
-
-            const destConnections = workingGraph.connections.filter((conn) => conn.inputNodeId === destNode.id);
-
-            const nodesById = Object.fromEntries(workingGraph.nodes.map((node) => [node.id, node]));
-
-            try {
-              const sourcePort = sourceInstance
-                .getOutputDefinitions(sourceConnections, nodesById, project, referencedProjects)
-                .find((port) => port.id === connection.outputId);
-
-              if (!sourcePort) {
-                warnings.push(`Port not found for connection: ${JSON.stringify(connection)}`);
-                continue;
-              }
-            } catch (e) {
-              warnings.push(`Error getting source port for connection: ${JSON.stringify(connection)}`);
-              continue;
-            }
-
-            try {
-              const destPort = destInstance
-                .getInputDefinitions(destConnections, nodesById, project, referencedProjects)
-                .find((port) => port.id === connection.inputId);
-
-              if (!destPort) {
-                warnings.push(`Port not found for connection: ${JSON.stringify(connection)}`);
-                continue;
-              }
-            } catch (e) {
-              warnings.push(`Error getting dest port for connection: ${JSON.stringify(connection)}`);
-              continue;
-            }
-          }
-
-          // Find islands of nodes, i.e. the graph does not form a cohesive unit
-          const visited = new Set<NodeId>();
-          const islands: NodeId[][] = [];
-          const dfs = (nodeId: NodeId, island: NodeId[]) => {
-            visited.add(nodeId);
-            island.push(nodeId);
-
-            for (const connection of workingGraph.connections) {
-              if (connection.outputNodeId === nodeId && !visited.has(connection.inputNodeId)) {
-                dfs(connection.inputNodeId, island);
-              } else if (connection.inputNodeId === nodeId && !visited.has(connection.outputNodeId)) {
-                dfs(connection.outputNodeId, island);
-              }
-            }
-          };
-          for (const node of workingGraph.nodes) {
-            if (!visited.has(node.id)) {
-              const island: NodeId[] = [];
-              dfs(node.id, island);
-              islands.push(island);
-            }
-          }
-          if (islands.length > 1) {
-            warnings.push(`Graph is not connected as one unit. Found ${islands.length} islands.`);
-          }
-
-          // Find mismatched data types
-          for (const connection of workingGraph.connections) {
-            const sourceNode = workingGraph.nodes.find((node) => node.id === connection.outputNodeId);
-            const destNode = workingGraph.nodes.find((node) => node.id === connection.inputNodeId);
-
-            if (!sourceNode || !destNode) {
-              continue;
-            }
-
-            const sourceInstance = projectNodeRegistry.createDynamicImpl(sourceNode);
-            const destInstance = projectNodeRegistry.createDynamicImpl(destNode);
-
-            const sourceConnections = workingGraph.connections.filter((conn) => conn.outputNodeId === sourceNode.id);
-
-            const destConnections = workingGraph.connections.filter((conn) => conn.inputNodeId === destNode.id);
-
-            const nodesById = Object.fromEntries(workingGraph.nodes.map((node) => [node.id, node]));
-
-            try {
-              const sourcePort = sourceInstance
-                .getOutputDefinitions(sourceConnections, nodesById, project, referencedProjects)
-                .find((port) => port.id === connection.outputId);
-
-              if (!sourcePort) {
-                continue;
-              }
-
-              const destPort = destInstance
-                .getInputDefinitions(destConnections, nodesById, project, referencedProjects)
-                .find((port) => port.id === connection.inputId);
-
-              if (!destPort) {
-                continue;
-              }
-
-              const sourceType = sourceNode.isSplitRun ? `${sourcePort.dataType}[]` : sourcePort.dataType;
-              const destType = destNode.isSplitRun ? `${destPort.dataType}[]` : destPort.dataType;
-
-              const coerced = destPort.coerced ?? true;
-
-              const isAny =
-                sourceType === 'any' || destType === 'any' || sourceType === 'any[]' || destType === 'any[]';
-
-              if (sourceType !== destType && !coerced && !isAny) {
-                warnings.push(
-                  `Data type mismatch: ${sourceType} -> ${destType} for connection: ${JSON.stringify(connection)}`,
-                );
-              } else if (sourceType !== destType && coerced && !isAny) {
-                warnings.push(
-                  `Minor: Coerced data type mismatch: ${sourceType} -> ${destType} for connection: ${JSON.stringify(connection)}. Data will be coerced to ${destType} successfully, but this may not be what you want.`,
-                );
-              }
-            } catch (e) {
-              continue;
-            }
-          }
-
-          // Find nodes with no connections
-          for (const node of workingGraph.nodes) {
-            const connections = workingGraph.connections.filter(
-              (connection) => connection.inputNodeId === node.id || connection.outputNodeId === node.id,
-            );
-
-            if (connections.length === 0) {
-              warnings.push(`Node ${node.id} has no connections.`);
-            }
-          }
-
-          return {
-            type: 'string[]' as const,
-            value: warnings,
-          };
-        },
-        toggleSplitting: async (_ctx: unknown, rawNodeId: unknown, enabled: unknown, maxSplitAmount: unknown) => {
-          const rawOptions =
-            typeof rawNodeId === 'object' && rawNodeId != null && !Array.isArray(rawNodeId)
-              ? (rawNodeId as Record<string, unknown>)
-              : undefined;
-          const nodeId = resolveAiGraphBuilderNodeId(rawOptions ?? rawNodeId);
-          const resolvedEnabled = rawOptions?.enabled ?? enabled;
-          const resolvedMaxSplitAmount = rawOptions?.maxSplitAmount ?? maxSplitAmount;
-          const enabledBoolean =
-            typeof resolvedEnabled === 'boolean' ? resolvedEnabled : String(resolvedEnabled).toLowerCase() === 'true';
-          const maxSplitAmountNumber =
-            typeof resolvedMaxSplitAmount === 'number' ? resolvedMaxSplitAmount : Number(resolvedMaxSplitAmount);
-          const node = workingGraph.nodes.find((node) => node.id === nodeId);
-
-          if (!node) {
-            throw new Error(`Node with ID ${nodeId} not found`);
-          }
-
-          if (!Number.isFinite(maxSplitAmountNumber) || maxSplitAmountNumber <= 0) {
-            throw new Error(`Max split amount must be greater than 0. Recommended is 100.`);
-          }
-
-          workingGraph = {
-            ...workingGraph,
-            nodes: workingGraph.nodes.map((candidate) =>
-              candidate.id === nodeId
-                ? { ...candidate, isSplitRun: enabledBoolean, splitRunMax: maxSplitAmountNumber }
-                : candidate,
-            ),
-          };
-
-          showChanges();
-          logGraphState(`Set splitting for node ${node.id} (${node.type}) to ${enabledBoolean}.`);
-          return {
-            type: 'boolean' as const,
-            value: true,
-          };
-        },
+    let outcome: GraphBuilderCommitOutcome;
+    try {
+      const prepared = prepareGraphBuilderCommit({
+        base: pending.base,
+        commitId: `${pending.sessionId}:commit`,
+        draft: pending.draft,
+        draftRevision: pending.draftRevision,
+        ownerSessionId: pending.sessionId,
+        summary: pending.preview.summary,
+      });
+      outcome = store.set(tryCommitGraphBuilderDraftState, {
+        prepared,
+        publishHistorySnapshot: (activeGraphId, snapshot) =>
+          store.set(publishGraphBuilderHistorySnapshotState, {
+            activeGraphId,
+            snapshot,
+          }),
+      });
+    } catch {
+      outcome = {
+        status: 'protocol-error',
+        commitId: `${pending.sessionId}:commit`,
+        reason: 'The prepared legacy draft could not be committed safely.',
       };
+    }
 
-      const loggedExternalFunctions = wrapLoggedExternalFunctions(externalFunctions, log);
-
-      const onUserEvent: { [key: string]: (data: DataValue | undefined) => void } = {
-        runningCommands: (data) => {
-          const functionName = coerceType(data, 'object').name;
-
-          if (functionName !== 'updateUser') {
-            log(`MODEL requested command ${functionName}. Event payload: ${formatLogValue(data)}`);
-          }
-        },
-        finalMessage: (data) => {
-          const message = coerceType(data, 'string');
-          log(`FINAL ${message}`);
-          toast.info(message);
-        },
-        updateUser: (data) => {
-          const message = coerceType(data, 'string');
-          log(`UPDATE ${message}`);
-        },
-      };
-
-      const registry = registerBuiltInNodes(new NodeRegistration());
-      registry.register(createAiAssistVercelGeneratorChatNodeDefinition(assistModel));
-
-      const processor = coreCreateProcessor(project, {
-        graph: 'Main',
-        inputs: {
-          request: prompt,
-          graph: JSON.stringify(workingGraph, null, 2),
-          model: assistModel.model,
-          api: assistModel.generatorBranch,
-        },
-        abortSignal: abort,
-        context: {
-          allNodeTypes: {
-            type: 'string[]',
-            value: projectNodeRegistry.getNodeTypes(),
+    pendingRef.current = undefined;
+    activeRef.current = undefined;
+    releaseOwnership(pending.sessionId);
+    if (outcome.status === 'committed') {
+      const committedGraph = pending.draft.graphs[pending.base.activeGraphId];
+      if (committedGraph) {
+        centerView(cloneDeep(committedGraph));
+      }
+      setSession((current) => ({
+        ...current,
+        state: {
+          status: 'committed',
+          sessionId: pending.sessionId,
+          result: {
+            status: 'committed',
+            base: publicBase(pending.base),
+            draftRevision: pending.draftRevision,
+            summary: pending.preview.summary,
           },
         },
-        externalFunctions: loggedExternalFunctions,
-        onUserEvent,
-        nativeApi: new TauriNativeApi(),
-        datasetProvider: new InMemoryDatasetProvider(data),
-        registry,
-        ...(await fillMissingSettingsFromEnvironmentVariables(settings, plugins, {
-          environmentProvider,
-        })),
-      });
-
-      const { cost } = await processor.run();
-
-      if (abort.aborted) {
-        log('Canceled after processor run completed.');
-        return false;
-      }
-
-      logGraphState(`Finished AI graph builder. Cost: ${coerceType(cost, 'number')}.`);
-      console.log(`Cost: ${coerceType(cost, 'number')}`);
-      return true;
-    } catch (err) {
-      if (abort.aborted) {
-        onFeedback(`[${new Date().toLocaleTimeString()}] Canceled.`);
-        return false;
-      }
-
-      onFeedback(`[${new Date().toLocaleTimeString()}] FAILED ${getError(err).message}`);
-      handleError(err, 'AI graph builder failed', {
-        metadata: {
-          model: assistModel.displayName,
-          promptLength: prompt.length,
-        },
-      });
-      return false;
-    } finally {
-      if (workingToastId != null) {
-        toast.dismiss(workingToastId);
-      }
+      }));
+      return;
     }
+    if (outcome.status === 'conflicted') {
+      setSession((current) => ({
+        ...current,
+        state: {
+          ...conflictedState(pending.sessionId, pending.base, outcome.currentFingerprint),
+          retainedPreview: pending.preview,
+        },
+      }));
+      return;
+    }
+    setSession((current) => ({
+      ...current,
+      state: {
+        ...failedState(
+          pending.sessionId,
+          outcome.status === 'ineligible' ? 'commit-ineligible' : 'commit-protocol-error',
+          outcome.reason,
+        ),
+        retainedPreview: pending.preview,
+      },
+    }));
+  }, [centerView, releaseOwnership, session.state?.status, store]);
+
+  const cancel = useCallback(async () => {
+    const active = activeRef.current;
+    if (!active) {
+      return;
+    }
+    active.abortController?.abort('Legacy Graph Builder canceled');
+    pendingRef.current = undefined;
+    activeRef.current = undefined;
+    releaseOwnership(active.sessionId);
+    if (mountedRef.current) {
+      setSession((current) => ({
+        ...current,
+        state: canceledState(active.sessionId),
+      }));
+    }
+  }, [releaseOwnership]);
+
+  const discard = useCallback(async () => {
+    const active = activeRef.current;
+    if (!active) {
+      return;
+    }
+    active.abortController?.abort('Legacy Graph Builder draft discarded');
+    pendingRef.current = undefined;
+    activeRef.current = undefined;
+    releaseOwnership(active.sessionId);
+    setSession((current) => ({
+      ...current,
+      state: {
+        status: 'discarded',
+        sessionId: active.sessionId,
+        result: {
+          status: 'discarded',
+          summary: 'The private legacy draft was discarded without changing the project.',
+        },
+      },
+    }));
+  }, [releaseOwnership]);
+
+  const reset = useCallback(async () => {
+    const active = activeRef.current;
+    active?.abortController?.abort('Legacy Graph Builder session reset');
+    if (active) {
+      releaseOwnership(active.sessionId);
+    }
+    activeRef.current = undefined;
+    pendingRef.current = undefined;
+    setSession({});
+  }, [releaseOwnership]);
+
+  return {
+    ...session,
+    apply,
+    cancel,
+    discard,
+    reset,
+    start,
+  };
+}
+
+function draftProgressMessage(delta: GraphDraftDelta, draftRevision: number): string {
+  const changeCount =
+    (delta.addedNodeCount ?? delta.addedNodes.length) +
+    (delta.updatedNodeCount ?? delta.updatedNodes.length) +
+    (delta.removedNodeCount ?? delta.removedNodes.length) +
+    (delta.addedConnectionCount ?? delta.addedConnections.length) +
+    (delta.removedConnectionCount ?? delta.removedConnections.length);
+  return `Prepared private draft revision ${draftRevision} (${changeCount} change${changeCount === 1 ? '' : 's'}).`;
+}
+
+function publicBase(base: GraphBuilderBaseIdentity) {
+  return {
+    projectId: base.projectId,
+    activeGraphId: base.activeGraphId,
+    editorRevision: base.editorRevision,
+    projectFingerprint: base.projectFingerprint,
+    registryContractFingerprint: base.registryContractFingerprint,
+    referencedProjectsFingerprint: base.referencedProjectsFingerprint,
+    policyConfigFingerprint: base.policyConfigFingerprint,
+    validationRulesVersion: base.validationRulesVersion,
+    protocolVersion: base.protocolVersion,
+  };
+}
+
+function canceledState(sessionId: string): GraphBuilderSessionViewState {
+  return {
+    status: 'canceled',
+    sessionId,
+    result: { status: 'canceled' },
+  };
+}
+
+function failedState(sessionId: string, code: string, userMessage: string) {
+  return {
+    status: 'failed' as const,
+    sessionId,
+    result: {
+      status: 'failed' as const,
+      failure: { code, userMessage },
+      diagnostics: [],
+    },
+  };
+}
+
+function conflictedState(sessionId: string, base: GraphBuilderBaseIdentity, currentFingerprint: string) {
+  return {
+    status: 'conflicted' as const,
+    sessionId,
+    result: {
+      status: 'conflicted' as const,
+      base: publicBase(base),
+      currentFingerprint,
+    },
   };
 }

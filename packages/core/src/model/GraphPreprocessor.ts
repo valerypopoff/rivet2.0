@@ -6,6 +6,7 @@ import type { NodeConnection, NodeId, ChartNode, NodeInputDefinition, NodeOutput
 import type { NodeDefinitionContext, NodeImpl } from './NodeImpl.js';
 import type { Project, ProjectId } from './Project.js';
 import { resolveNodePrefabInstances } from './NodePrefabResolver.js';
+import { compileDataBusTopology } from './DataBusTopology.js';
 
 export type GraphNodeDefinitions = Record<NodeId, { inputs: NodeInputDefinition[]; outputs: NodeOutputDefinition[] }>;
 export type GraphPortConnectionMap = Record<NodeId, Partial<Record<PortId, NodeConnection>>>;
@@ -19,6 +20,8 @@ export type GraphOutputNodeResult = {
 export type GraphPreprocessorResult = {
   connections: Record<NodeId, NodeConnection[]>;
   definitions: GraphNodeDefinitions;
+  /** Nodes participating in execution after topology-only nodes are compiled out. */
+  graphNodes: ChartNode[];
   nodeInstances: Record<NodeId, NodeImpl<ChartNode>>;
   nodesById: Record<NodeId, ChartNode>;
   nodesNotInCycle: ChartNode[];
@@ -27,7 +30,6 @@ export type GraphPreprocessorResult = {
 
 export type GraphExecutionPlan = Omit<GraphPreprocessorResult, 'nodeInstances'> & {
   cycleIndexByNode: Record<NodeId, number>;
-  graphNodes: ChartNode[];
   nodeIds: readonly NodeId[];
   inputConnectionByNodeAndPort: GraphPortConnectionMap;
   inputConnectionsByNode: Record<NodeId, NodeConnection[]>;
@@ -63,7 +65,12 @@ export function preprocessGraphState(
 export function preprocessGraphState(options: GraphPreprocessorOptions): GraphPreprocessedState {
   const { buildExecutionPlan, definitionContext, graph, loadedProjects, project, registry, warnOnInvalidGraph } =
     options;
-  const graphNodes = resolveNodePrefabInstances(project, graph.nodes);
+  const authoredGraphNodes = resolveNodePrefabInstances(project, graph.nodes);
+  const compiledTopology = compileDataBusTopology({
+    connections: graph.connections,
+    graphNodes: authoredGraphNodes,
+  });
+  const graphNodes = compiledTopology.executionNodes;
   const effectiveDefinitionContext =
     definitionContext && graphNodes.some(usesGraphBoundaryDefinitionContext) ? definitionContext : undefined;
   const nodeInstances: Record<NodeId, NodeImpl<ChartNode>> = {};
@@ -75,7 +82,7 @@ export function preprocessGraphState(options: GraphPreprocessorOptions): GraphPr
     nodesById[node.id] = node;
   }
 
-  for (const connection of graph.connections) {
+  for (const connection of compiledTopology.connections) {
     if (!nodesById[connection.inputNodeId] || !nodesById[connection.outputNodeId]) {
       if (warnOnInvalidGraph) {
         if (!nodesById[connection.inputNodeId]) {
@@ -124,6 +131,7 @@ export function preprocessGraphState(options: GraphPreprocessorOptions): GraphPr
   const result: GraphPreprocessorResult = {
     connections,
     definitions,
+    graphNodes,
     nodeInstances,
     nodesById,
     nodesNotInCycle,
@@ -380,6 +388,7 @@ function buildGraphExecutionPlan(options: {
   GraphExecutionPlan,
   | 'connections'
   | 'definitions'
+  | 'graphNodes'
   | 'nodesById'
   | 'nodesNotInCycle'
   | 'stronglyConnectedComponents'
@@ -467,7 +476,6 @@ function buildGraphExecutionPlan(options: {
 
   return {
     cycleIndexByNode,
-    graphNodes,
     nodeIds: graphNodes.map((node) => node.id),
     inputConnectionByNodeAndPort,
     inputConnectionsByNode,

@@ -26,6 +26,25 @@ for (const file of aiRuntimeFiles) {
   }
 }
 
+const legacyGraphBuilderHost = readFileSync(join(repoRoot, 'packages/app/src/hooks/useAiGraphBuilder.ts'), 'utf8');
+for (const { pattern, reason } of [
+  { pattern: /\bsetGraph\s*\(/, reason: 'legacy Graph Builder publishes editor graph state during generation' },
+  { pattern: /\bclearCurrentGraphHistory\b/, reason: 'legacy Graph Builder clears editor history during generation' },
+  { pattern: /\buseAtom\s*\(\s*graphState\s*\)/, reason: 'legacy Graph Builder owns authoritative graph mutation' },
+]) {
+  if (pattern.test(legacyGraphBuilderHost)) {
+    failures.push(`packages/app/src/hooks/useAiGraphBuilder.ts: ${reason}`);
+  }
+}
+if (
+  !legacyGraphBuilderHost.includes('runLegacyGraphBuilderDraft') ||
+  !legacyGraphBuilderHost.includes('tryCommitGraphBuilderDraftState')
+) {
+  failures.push(
+    'packages/app/src/hooks/useAiGraphBuilder.ts: legacy Graph Builder must use the private draft runner and atomic commit gateway',
+  );
+}
+
 if (failures.length > 0) {
   console.error('AI generation must remain on the Chat V2 provider/request path:');
   for (const failure of failures) console.error(`- ${failure}`);

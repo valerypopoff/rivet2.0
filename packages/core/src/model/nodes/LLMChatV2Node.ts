@@ -12,7 +12,7 @@ import { getCommonChatV2Inputs, getCommonChatV2Outputs } from '../chat-v2/chatV2
 import { getLLMChatV2Editors } from '../chat-v2/llmChatV2NodeEditors.js';
 import {
   createLLMChatV2NodeData,
-  hasLLMChatV2BuiltInToolsEnabled,
+  shouldIncludeLLMChatV2ToolCalls,
   type LLMChatV2Node,
 } from '../chat-v2/llmChatV2NodeData.js';
 import { isLLMChatV2StructuredResponseFormat } from '../chat-v2/chatV2FeatureCompatibility.js';
@@ -131,11 +131,35 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   }
 
   getInputDefinitions(): NodeInputDefinition[] {
-    const inputs = getCommonChatV2Inputs(this.data, {
+    const usesProfile = this.data.configurationMode === 'profile';
+    const commonInputData = usesProfile
+      ? {
+          ...this.data,
+          useModelInput: false,
+          useTemperatureInput: false,
+          useTopPInput: false,
+          useTopKInput: false,
+          usePresencePenaltyInput: false,
+          useFrequencyPenaltyInput: false,
+          useStopSequencesInput: false,
+          useSeedInput: false,
+          useMaxTokensInput: false,
+        }
+      : this.data;
+    const inputs = getCommonChatV2Inputs(commonInputData, {
       includeFunctions: this.data.useToolCalling,
     });
 
-    if (this.data.apiKeySource === 'input') {
+    if (usesProfile) {
+      inputs.unshift({
+        id: 'llmProfile' as PortId,
+        title: 'LLM Profile',
+        dataType: 'llm-config',
+        required: true,
+      });
+    }
+
+    if (!usesProfile && this.data.apiKeySource === 'input') {
       inputs.push({
         id: 'apiKey' as PortId,
         title: 'API Key',
@@ -144,7 +168,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
-    if (usesBaseURLInput(this.data)) {
+    if (!usesProfile && usesBaseURLInput(this.data)) {
       inputs.unshift({
         id: 'customProviderBaseURL' as PortId,
         title: 'Provider base URL',
@@ -153,7 +177,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
-    if (this.data.useHeadersInput) {
+    if (!usesProfile && this.data.useHeadersInput) {
       inputs.push({
         id: 'headers' as PortId,
         title: 'Headers',
@@ -162,7 +186,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
-    if (this.data.useExtraProviderOptionsInput) {
+    if (!usesProfile && this.data.useExtraProviderOptionsInput) {
       inputs.push({
         id: 'extraProviderOptions' as PortId,
         title: 'Extra Provider Options',
@@ -172,7 +196,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
-    if (this.data.provider === 'openai' && this.data.useOpenAIPreviousResponseIdInput) {
+    if (!usesProfile && this.data.useOpenAIPreviousResponseIdInput && this.data.provider === 'openai') {
       inputs.push({
         id: 'previousResponseId' as PortId,
         title: 'Previous Response ID',
@@ -181,7 +205,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
-    if (this.data.provider === 'anthropic' && this.data.useAnthropicThinkingBudgetInput) {
+    if (!usesProfile && this.data.provider === 'anthropic' && this.data.useAnthropicThinkingBudgetInput) {
       inputs.push({
         id: 'anthropicThinkingBudget' as PortId,
         title: 'Thinking Budget',
@@ -190,7 +214,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
-    if (this.data.provider === 'google' && this.data.useGoogleThinkingBudgetInput) {
+    if (!usesProfile && this.data.provider === 'google' && this.data.useGoogleThinkingBudgetInput) {
       inputs.push({
         id: 'googleThinkingBudget' as PortId,
         title: 'Thinking Budget',
@@ -238,7 +262,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
 
   getOutputDefinitions(): NodeOutputDefinition[] {
     const outputs = getCommonChatV2Outputs(this.data, {
-      includeFunctionCalls: this.data.useToolCalling || hasLLMChatV2BuiltInToolsEnabled(this.data),
+      includeFunctionCalls: shouldIncludeLLMChatV2ToolCalls(this.data),
       includeUsage: this.data.outputUsage,
       includeReasoning: this.data.outputReasoning,
     });
@@ -301,6 +325,18 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   }
 
   getBody(): NodeBodySpec {
+    if (this.data.configurationMode === 'profile') {
+      return {
+        type: 'markdown',
+        disableLinks: true,
+        text: [
+          getBodyLine('Configuration', 'From LLM Profile input'),
+          ...(this.data.useToolCalling ? [getBodyLine('Tools', 'Enabled')] : []),
+          ...(this.data.responseFormat ? [getBodyLine('Response format', this.data.responseFormat)] : []),
+        ].join('\n'),
+      };
+    }
+
     const modelInfo = getChatV2ModelInfo(this.data.provider, this.data.model);
     const providerLabel = getProviderBodyLabel(this.data);
     const baseURLValue = getCustomProviderBaseURLBodyValue(this.data);

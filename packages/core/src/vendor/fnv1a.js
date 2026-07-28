@@ -63,6 +63,9 @@ function fnv1aEncodeInto(string, size, utf8Buffer) {
 
   while (remaining.length > 0) {
     const result = cachedEncoder.encodeInto(remaining, utf8Buffer);
+    if (result.read === 0) {
+      throw new Error('The `utf8Buffer` option is too small to encode the next character');
+    }
     remaining = remaining.slice(result.read);
     for (let index = 0; index < result.written; index++) {
       hash ^= BigInt(utf8Buffer[index]);
@@ -74,9 +77,9 @@ function fnv1aEncodeInto(string, size, utf8Buffer) {
 }
 
 /**
- * @param {string} value
- * @param {{ size?: 32 | 64 | 128 | 256 | 512 | 1024, utf8Buffer?: Uint8Array }} options
- * @returns {string}
+ * @param {string | Uint8Array} value
+ * @param {{ size?: 32 | 64 | 128 | 256 | 512 | 1024, utf8Buffer?: Uint8Array }} [options]
+ * @returns {bigint}
  */
 export default function fnv1a(value, { size = 32, utf8Buffer } = {}) {
   if (!FNV_PRIMES[size]) {

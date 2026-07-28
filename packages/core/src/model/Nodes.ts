@@ -13,6 +13,9 @@ export * from './nodes/ChatNodeBase.js';
 import { llmChatV2Node } from './nodes/LLMChatV2Node.js';
 export * from './nodes/LLMChatV2Node.js';
 
+import { llmProfileNode } from './nodes/LLMProfileNode.js';
+export * from './nodes/LLMProfileNode.js';
+
 import { promptNode } from './nodes/PromptNode.js';
 export * from './nodes/PromptNode.js';
 
@@ -96,6 +99,10 @@ export * from './nodes/DidRunNode.js';
 
 import { passthroughNode } from './nodes/PassthroughNode.js';
 export * from './nodes/PassthroughNode.js';
+
+import { dataBusNode } from './nodes/DataBusNode.js';
+export * from './nodes/DataBusNode.js';
+export * from './DataBusTopology.js';
 
 import { startBackgroundBranchNode } from './nodes/StartBackgroundBranchNode.js';
 export * from './nodes/StartBackgroundBranchNode.js';
@@ -307,6 +314,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(userInputNode)
     .register(textNode)
     .register(llmChatV2Node)
+    .register(llmProfileNode)
     .register(chatNode)
     .register(promptNode)
     .register(extractRegexNode)
@@ -336,6 +344,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(coalesceNode)
     .register(didRunNode)
     .register(passthroughNode)
+    .register(dataBusNode)
     .register(startBackgroundBranchNode)
     .register(popNode)
     .register(setGlobalNode)

@@ -16,20 +16,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify-ai-graph-builder-context:
-    name: Verify AI graph builder context
+  verify-ai-graph-builder-assets:
+    name: Verify AI Graph Builder assets
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
-      - name: Verify AI graph builder context
-        run: node scripts/checks/check-graph-creator-data.mjs
+      - uses: ./.github/actions/setup-yarn
+
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+
+      - name: Verify AI graph builder assets
+        run: yarn check:graph-builder-assets
 
   build-windows:
     name: Stable Windows desktop bundle
     if: github.ref == 'refs/heads/main'
-    needs: verify-ai-graph-builder-context
+    needs: verify-ai-graph-builder-assets
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -72,7 +77,7 @@ jobs:
   build-macos:
     name: Stable macOS desktop bundle
     if: github.ref == 'refs/heads/main'
-    needs: verify-ai-graph-builder-context
+    needs: verify-ai-graph-builder-assets
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -142,7 +147,7 @@ jobs:
   build-docs:
     name: Stable documentation site
     if: github.ref == 'refs/heads/main'
-    needs: verify-ai-graph-builder-context
+    needs: verify-ai-graph-builder-assets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

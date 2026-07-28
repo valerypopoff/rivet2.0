@@ -6,6 +6,7 @@ export * from './chatV2RequestPlan.js';
 export * from './chatV2ResponseFormat.js';
 export * from './chatV2Shared.js';
 export * from './chatV2Types.js';
+export * from './llmProfileTypes.js';
 export * from './messageConverter.js';
 export * from './modelRegistry.js';
 export * from './providerOptions.js';

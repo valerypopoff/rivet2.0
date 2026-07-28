@@ -77,6 +77,7 @@ type NodeContextMenuData = {
   unfreezeNodeIds: NodeId[];
   isFrozen: boolean;
   canOpenNodePrefabSource: boolean;
+  canDetachNodePrefab: boolean;
 };
 
 type NodeFreezeTarget = {
@@ -118,7 +119,8 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
     typeof data.canUnfreeze !== 'boolean' ||
     typeof data.freezeMenuTargetCount !== 'number' ||
     typeof data.isFrozen !== 'boolean' ||
-    typeof data.canOpenNodePrefabSource !== 'boolean'
+    typeof data.canOpenNodePrefabSource !== 'boolean' ||
+    typeof data.canDetachNodePrefab !== 'boolean'
   ) {
     return undefined;
   }
@@ -147,6 +149,7 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
     unfreezeNodeIds,
     isFrozen: data.isFrozen,
     canOpenNodePrefabSource: data.canOpenNodePrefabSource,
+    canDetachNodePrefab: data.canDetachNodePrefab,
   };
 };
 
@@ -218,6 +221,7 @@ const canRearrangeVariadicMirrorPorts = (context: unknown) => {
 };
 
 const canOpenNodePrefabSource = (context: unknown) => getNodeContextMenuData(context)?.canOpenNodePrefabSource === true;
+const canDetachNodePrefab = (context: unknown) => getNodeContextMenuData(context)?.canDetachNodePrefab === true;
 const canEditNode = (context: unknown) => {
   const data = getNodeContextMenuData(context);
   return data != null && !data.isLinkedNode;
@@ -318,6 +322,12 @@ export function useContextMenuConfiguration() {
                 label: 'Open library node',
                 icon: SubgraphLinkIcon,
                 conditional: canOpenNodePrefabSource,
+              },
+              {
+                id: 'node-detach-prefab',
+                label: 'Detach from library node',
+                icon: SubgraphLinkIcon,
+                conditional: canDetachNodePrefab,
               },
               {
                 id: 'node-rearrange-subgraph-ports',

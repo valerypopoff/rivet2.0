@@ -1,12 +1,18 @@
 import {
+  type ChartNode,
   type DataValue,
   type ExternalFunction,
   type NodeGraph,
   type NodeId,
+  type NodeInputDefinition,
+  type NodeOutputDefinition,
   type NodeRegistration,
   type PortId,
   type Project,
+  newId,
 } from '@valerypopoff/rivet2-core';
+import { getPortCompatibilityStatus } from '../domain/graphEditing/portCompatibility.js';
+import type { GraphBuilderAuthoringCatalogSnapshot } from '../features/graphBuilder/authoringCatalog.js';
 
 export function parseConnectionOptions(options: unknown) {
   if (
@@ -92,7 +98,7 @@ export function resolveAiGraphBuilderNodeDataKey(data: Record<string, unknown>, 
     bracketKey,
   ].filter((candidate): candidate is string => !!candidate);
 
-  const matchingKey = candidates.find((candidate) => candidate in data);
+  const matchingKey = candidates.find((candidate) => Object.hasOwn(data, candidate));
 
   if (!matchingKey) {
     throw new Error(
@@ -169,6 +175,51 @@ export function resolveAiGraphBuilderNodeType(registry: NodeRegistration<any, an
   throw new Error(`Unknown node type: ${requestedNodeType || rawNodeType}`);
 }
 
+export function resolveLegacyGraphBuilderAuthoringChoice(
+  catalog: GraphBuilderAuthoringCatalogSnapshot,
+  rawNodeType: unknown,
+): string {
+  const requestedNodeType = resolveAiGraphBuilderRequestedNodeType(rawNodeType);
+  const requestedKey = normalizeNodeTypeLabel(requestedNodeType);
+  if (!requestedKey) {
+    throw new Error('Node type must not be empty.');
+  }
+
+  const legacyAlias = getAiGraphBuilderNodeTypeAlias(requestedKey);
+  if (legacyAlias) {
+    const aliasedChoice = catalog
+      .listEntries()
+      .find((entry) => entry.family === 'registered' && entry.nodeType === legacyAlias);
+    if (aliasedChoice) {
+      return aliasedChoice.authoringChoiceId;
+    }
+  }
+
+  const candidates = catalog.listEntries().filter((entry) => {
+    const labels = [
+      entry.authoringChoiceId,
+      entry.nodeType,
+      entry.displayName,
+      `${entry.displayName} Node`,
+      ...entry.aliases,
+    ];
+    return labels.some((label) => normalizeNodeTypeLabel(label) === requestedKey);
+  });
+
+  if (candidates.length === 1) {
+    return candidates[0]!.authoringChoiceId;
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      `Ambiguous node type "${requestedNodeType}". Matching choices: ${candidates
+        .map((candidate) => candidate.authoringChoiceId)
+        .join(', ')}.`,
+    );
+  }
+
+  throw new Error(`Unknown or unsupported node type: ${requestedNodeType}`);
+}
+
 function getAiGraphBuilderNodeTypeAlias(requestedKey: string): string | undefined {
   if (
     [
@@ -191,7 +242,8 @@ function getAiGraphBuilderNodeTypeAlias(requestedKey: string): string | undefine
 }
 
 export function buildAiGraphBuilderExternalFunctions(options: {
-  project: Project;
+  catalog: GraphBuilderAuthoringCatalogSnapshot;
+  project: Project | (() => Project);
   referencedProjects: Record<string, Project>;
   registry: NodeRegistration<any, any>;
   showChanges: () => void;
@@ -201,19 +253,24 @@ export function buildAiGraphBuilderExternalFunctions(options: {
 }): Record<string, ExternalFunction> {
   const getWorkingGraph = options.workingGraph;
   const setWorkingGraph = options.setWorkingGraph;
+  const getProject = () => (typeof options.project === 'function' ? options.project() : options.project);
 
   return {
     createNode: async (_ctx: unknown, nodeType: unknown) => {
       const graph = getWorkingGraph();
-      const resolvedNodeType = resolveAiGraphBuilderNodeType(options.registry, nodeType);
-      options.onLog?.(`Resolved createNode node type ${JSON.stringify(nodeType)} -> ${resolvedNodeType}`);
-      const newNode = options.registry.createDynamic(resolvedNodeType);
+      const authoringChoiceId = resolveLegacyGraphBuilderAuthoringChoice(options.catalog, nodeType);
+      const newNode = options.catalog.createNode({
+        authoringChoiceId,
+        allocatedNodeId: newId<NodeId>(),
+        project: getProject(),
+      });
+      options.onLog?.(`Resolved createNode node type ${JSON.stringify(nodeType)} -> ${authoringChoiceId}`);
       setWorkingGraph({
         ...graph,
         nodes: [...graph.nodes, newNode],
       });
       options.showChanges();
-      options.onLog?.(`Created node ${newNode.id} (${resolvedNodeType}).`);
+      options.onLog?.(`Created node ${newNode.id} (${newNode.type}).`);
       return {
         type: 'string',
         value: newNode.id,
@@ -233,18 +290,27 @@ export function buildAiGraphBuilderExternalFunctions(options: {
       if (!destNode) {
         throw new Error(`Node with ID ${destNodeId} not found`);
       }
+      if (!options.catalog.canResolveNodeType(sourceNode.type) || !options.catalog.canResolveNodeType(destNode.type)) {
+        throw new Error('Connections to opaque plugin nodes are unavailable in the legacy Graph Builder.');
+      }
 
-      const sourceInstance = options.registry.createDynamicImpl(sourceNode);
-      const destInstance = options.registry.createDynamicImpl(destNode);
-      const sourceNodeConnections = graph.connections.filter((connection) => connection.outputNodeId === sourceNodeId);
-      const destNodeConnections = graph.connections.filter((connection) => connection.inputNodeId === destNodeId);
-      const nodesById = Object.fromEntries(graph.nodes.map((node) => [node.id, node]));
-      const sourcePort = sourceInstance
-        .getOutputDefinitions(sourceNodeConnections, nodesById, options.project, options.referencedProjects)
-        .find((port) => port.id === sourcePortId);
-      const destPort = destInstance
-        .getInputDefinitions(destNodeConnections, nodesById, options.project, options.referencedProjects)
-        .find((port) => port.id === destPortId);
+      const project = getProject();
+      const sourcePorts = resolveAiGraphBuilderNodePorts({
+        graph,
+        node: sourceNode,
+        project,
+        referencedProjects: options.referencedProjects,
+        registry: options.registry,
+      });
+      const destPorts = resolveAiGraphBuilderNodePorts({
+        graph,
+        node: destNode,
+        project,
+        referencedProjects: options.referencedProjects,
+        registry: options.registry,
+      });
+      const sourcePort = sourcePorts.outputs.find((port) => port.id === sourcePortId);
+      const destPort = destPorts.inputs.find((port) => port.id === destPortId);
 
       if (!sourcePort) {
         throw new Error(`Output port with ID ${sourcePortId} not found on node ${sourceNodeId}`);
@@ -254,12 +320,24 @@ export function buildAiGraphBuilderExternalFunctions(options: {
         throw new Error(`Input port with ID ${destPortId} not found on node ${destNodeId}`);
       }
 
+      const compatibility = getPortCompatibilityStatus({
+        draggingDataType: sourcePort.dataType,
+        portDataType: destPort.dataType,
+        canCoerce: destPort.coerced ?? true,
+        isInput: true,
+      });
+      if (compatibility === 'incompatible' || compatibility === 'none') {
+        throw new Error(
+          `Output ${sourceNodeId}.${sourcePortId} is not compatible with input ${destNodeId}.${destPortId}.`,
+        );
+      }
+
       const alreadyConnectedToDest = graph.connections.find(
         (connection) => connection.inputNodeId === destNodeId && connection.inputId === destPortId,
       );
 
       if (alreadyConnectedToDest) {
-        throw new Error(`Node ${destNodeId} is already connected to this output. Disconnect it first.`);
+        throw new Error(`Node ${destNodeId} already has a connection to this input. Disconnect it first.`);
       }
 
       setWorkingGraph({
@@ -310,10 +388,6 @@ export function buildAiGraphBuilderExternalFunctions(options: {
         value: true,
       };
     },
-    getSerializedGraph: async () => ({
-      type: 'string',
-      value: JSON.stringify(getWorkingGraph(), null, 2),
-    }),
     getPorts: async (_ctx: unknown, nodeId: unknown) => {
       const graph = getWorkingGraph();
       const node = graph.nodes.find((candidate) => candidate.id === nodeId);
@@ -321,28 +395,46 @@ export function buildAiGraphBuilderExternalFunctions(options: {
       if (!node) {
         throw new Error(`Node with ID ${nodeId} not found`);
       }
+      if (!options.catalog.canResolveNodeType(node.type)) {
+        throw new Error(
+          `Ports for opaque plugin node type "${node.type}" are unavailable in the legacy Graph Builder.`,
+        );
+      }
       options.onLog?.(`Reading ports for node ${node.id} (${node.type}).`);
 
       const connectionsToNode = graph.connections.filter(
         (connection) => connection.inputNodeId === node.id || connection.outputNodeId === node.id,
       );
-      const instance = options.registry.createDynamicImpl(node);
-      const nodesById = Object.fromEntries(graph.nodes.map((candidate) => [candidate.id, candidate]));
-      const inputs = instance.getInputDefinitions(connectionsToNode, nodesById, options.project, options.referencedProjects);
-      const outputs = instance.getOutputDefinitions(connectionsToNode, nodesById, options.project, options.referencedProjects);
+      const { inputs, outputs } = resolveAiGraphBuilderNodePorts({
+        graph,
+        node,
+        project: getProject(),
+        referencedProjects: options.referencedProjects,
+        registry: options.registry,
+      });
 
       return {
         type: 'object',
         value: {
           inputs: inputs.map((input) => ({
-            definition: input,
+            definition: {
+              id: input.id,
+              title: input.title,
+              dataType: input.dataType,
+              required: input.required ?? false,
+              coerced: input.coerced ?? false,
+            },
             connectedTo: connectionsToNode.find(
               (connection) => connection.inputNodeId === node.id && connection.inputId === input.id,
             ),
             actualDataType: node.isSplitRun ? `${input.dataType}[]` : input.dataType,
           })),
           outputs: outputs.map((output) => ({
-            definition: output,
+            definition: {
+              id: output.id,
+              title: output.title,
+              dataType: output.dataType,
+            },
             connectedTo: connectionsToNode.filter(
               (connection) => connection.outputNodeId === node.id && connection.outputId === output.id,
             ),
@@ -351,5 +443,29 @@ export function buildAiGraphBuilderExternalFunctions(options: {
         },
       } as DataValue;
     },
+  };
+}
+
+export function resolveAiGraphBuilderNodePorts(options: {
+  graph: NodeGraph;
+  node: ChartNode;
+  project: Project;
+  referencedProjects: Record<string, Project>;
+  registry: NodeRegistration<any, any>;
+}): { inputs: NodeInputDefinition[]; outputs: NodeOutputDefinition[] } {
+  const incidentConnections = options.graph.connections.filter(
+    (connection) => connection.inputNodeId === options.node.id || connection.outputNodeId === options.node.id,
+  );
+  const nodesById = Object.fromEntries(options.graph.nodes.map((node) => [node.id, node]));
+  const instance = options.registry.createDynamicImpl(options.node);
+
+  return {
+    inputs: instance.getInputDefinitionsIncludingBuiltIn(
+      incidentConnections,
+      nodesById,
+      options.project,
+      options.referencedProjects,
+    ),
+    outputs: instance.getOutputDefinitions(incidentConnections, nodesById, options.project, options.referencedProjects),
   };
 }

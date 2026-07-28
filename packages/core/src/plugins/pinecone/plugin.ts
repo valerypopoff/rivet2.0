@@ -34,7 +34,8 @@ export const pineconePlugin: RivetPlugin = {
           key: 'apiKey',
           label: 'API Key',
           type: 'secret',
-          description: 'Stored locally and never written to the project file. Leave blank to use the plugin default.',
+          description:
+            'Stored locally and never written to the project file. Leave blank to use the plugin default. For headless runs, set PINECONE_API_KEY in the host environment (for example, PINECONE_API_KEY=... in a loaded .env file).',
         },
       ],
       createStore: (_connectionId, definition, context) =>

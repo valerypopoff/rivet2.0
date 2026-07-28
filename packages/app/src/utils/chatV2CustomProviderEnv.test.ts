@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert';
 import { getLLMChatV2CustomProviderApiKeyEnvVarNames } from './chatV2CustomProviderEnv';
 
 describe('getLLMChatV2CustomProviderApiKeyEnvVarNames', () => {
-  it('collects unique configured-key env vars from custom LLM Chat nodes', () => {
+  it('collects unique configured-key env vars from custom LLM Chat and LLM Profile nodes', () => {
     const project = {
       graphs: {
         main: {
@@ -14,6 +14,14 @@ describe('getLLMChatV2CustomProviderApiKeyEnvVarNames', () => {
                 provider: 'custom',
                 apiKeySource: 'environment',
                 customProviderApiKeyEnvVarName: ' CEREBRAS_API_KEY ',
+              },
+            },
+            {
+              type: 'llmProfile',
+              data: {
+                provider: 'custom',
+                apiKeySource: 'environment',
+                customProviderApiKeyEnvVarName: ' PROFILE_API_KEY ',
               },
             },
             {
@@ -46,6 +54,6 @@ describe('getLLMChatV2CustomProviderApiKeyEnvVarNames', () => {
       },
     } as any;
 
-    assert.deepEqual(getLLMChatV2CustomProviderApiKeyEnvVarNames(project), ['CEREBRAS_API_KEY']);
+    assert.deepEqual(getLLMChatV2CustomProviderApiKeyEnvVarNames(project), ['CEREBRAS_API_KEY', 'PROFILE_API_KEY']);
   });
 });

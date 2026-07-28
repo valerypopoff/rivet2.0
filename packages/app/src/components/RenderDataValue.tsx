@@ -63,7 +63,7 @@ export function RenderDataValue({
     return <div>Value no longer available in memory.</div>;
   }
 
-  const Renderer = rendererMap[resolvedValue.type];
+  const Renderer = rendererMap.get(resolvedValue.type);
 
   return (
     <Renderer

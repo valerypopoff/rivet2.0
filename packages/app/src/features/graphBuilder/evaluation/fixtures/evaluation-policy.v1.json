@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": "graph-builder-evaluation-policy-v1",
+  "frozenOn": "2026-07-26",
+  "resultSlots": ["as-shipped-legacy", "hardened-legacy", "plan-b"],
+  "weights": {
+    "nodes": 0.3,
+    "connections": 0.3,
+    "diagnostics": 0.15,
+    "outcome": 0.25
+  },
+  "cohortThresholds": {
+    "supported-core-authoring": {
+      "minimumStructuralScore": 0.9,
+      "minimumSafetyGateRate": 1,
+      "minimumSuccessfulFixtureRate": 0.9,
+      "maximumRegressionFromHardenedLegacy": 0.02
+    },
+    "supported-contextual-authoring": {
+      "minimumStructuralScore": 0.85,
+      "minimumSafetyGateRate": 1,
+      "minimumSuccessfulFixtureRate": 0.85,
+      "maximumRegressionFromHardenedLegacy": 0.03
+    },
+    "supported-host-safety": {
+      "minimumStructuralScore": 0.9,
+      "minimumSafetyGateRate": 1,
+      "minimumSuccessfulFixtureRate": 1,
+      "maximumRegressionFromHardenedLegacy": 0
+    },
+    "phase-8-expected-unsupported": {
+      "minimumStructuralScore": 1,
+      "minimumSafetyGateRate": 1,
+      "minimumSuccessfulFixtureRate": 1,
+      "maximumRegressionFromHardenedLegacy": 0
+    }
+  },
+  "trials": {
+    "deterministicMockAttemptsPerFixture": 1,
+    "nondeterministicProviderAttemptsPerFixture": 3,
+    "minimumHumanRatingsPerFixture": 3
+  },
+  "comparison": {
+    "tieTolerance": 0.005,
+    "abstainWhenAccountingCoverageBelow": 0.95,
+    "requireAllHardSafetyGates": true
+  },
+  "rolloutStopConditions": [
+    "any-secret-canary-exposure",
+    "any-cancellation-rollback-failure",
+    "any-conflict-protection-failure",
+    "any-commit-integrity-failure",
+    "supported-cohort-below-threshold",
+    "phase-8-fixture-mutated-project",
+    "provider-accounting-below-coverage-threshold"
+  ]
+}

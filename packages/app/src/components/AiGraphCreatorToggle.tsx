@@ -2,11 +2,12 @@ import { css } from '@emotion/react';
 import { type CSSProperties, type FC } from 'react';
 import SparklesIcon from '../assets/icons/ai-sparks-solid.svg?react';
 import { showAiGraphCreatorInputState } from './AiGraphCreatorInput';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { sidebarOpenState } from '../state/graphBuilder';
 import clsx from 'clsx';
 import { leftSidebarLiveWidthState } from '../state/ui';
 import { getLeftSidebarAttachedControlOffset } from '../utils/leftSidebarWidth';
+import { getGraphBuilderEligibilityFromGetter } from '../features/graphBuilder/editorGateway.js';
 
 const styles = css`
   position: absolute;
@@ -41,15 +42,30 @@ const styles = css`
       background: var(--grey-lightish);
       color: var(--grey-lightest);
     }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    &:disabled:hover {
+      background: var(--grey-darker);
+      color: var(--primary);
+    }
   }
 `;
 
 export const AiGraphCreatorToggle: FC = () => {
+  const store = useStore();
   const setShowAiGraphCreatorInput = useSetAtom(showAiGraphCreatorInputState);
   const isSidebarOpen = useAtomValue(sidebarOpenState);
   const aiGraphCreatorLeft = getLeftSidebarAttachedControlOffset(useAtomValue(leftSidebarLiveWidthState));
+  const eligibility = getGraphBuilderEligibilityFromGetter((target) => store.get(target));
 
   const handleClick = () => {
+    if (!eligibility.eligible) {
+      return;
+    }
     setShowAiGraphCreatorInput((prev) => !prev);
   };
 
@@ -59,7 +75,12 @@ export const AiGraphCreatorToggle: FC = () => {
       className={clsx({ 'sidebar-open': isSidebarOpen })}
       style={{ '--ai-graph-creator-left': `${aiGraphCreatorLeft}px` } as CSSProperties}
     >
-      <button onClick={handleClick}>
+      <button
+        aria-label="Open AI Graph Builder"
+        disabled={!eligibility.eligible}
+        onClick={handleClick}
+        title={eligibility.eligible ? 'Build or edit this graph with AI' : eligibility.reason}
+      >
         <SparklesIcon />
       </button>
     </div>

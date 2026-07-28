@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { NodeConnection, NodeId, PortId } from '@valerypopoff/rivet2-core';
+import {
+  getProjectConnectionComparisonKey,
+  type NodeConnection,
+  type NodeId,
+  type PortId,
+} from '@valerypopoff/rivet2-core';
 import { getRenderableWireCandidates } from './getRenderableWireCandidates.js';
 
 const asNodeId = (value: string) => value as NodeId;
@@ -107,6 +112,20 @@ test('getRenderableWireCandidates excludes fully offscreen non-highlighted conne
   });
 
   assert.deepEqual(candidates, []);
+});
+
+test('getRenderableWireCandidates keeps explicitly revealed Data Bus connections outside the viewport', () => {
+  const candidates = getRenderableWireCandidates({
+    connections: allConnections,
+    draggingNode: false,
+    draggingWire: false,
+    forceRenderableConnectionKeySet: new Set([getProjectConnectionComparisonKey(connectionOffscreen)]),
+    nearViewportNodeIdSet: new Set(),
+    runningNodeIdSet: new Set(),
+    visibleNodeIdSet: new Set(),
+  });
+
+  assert.deepEqual(candidates, [connectionOffscreen]);
 });
 
 test('getRenderableWireCandidates preserves connection identity and order', () => {

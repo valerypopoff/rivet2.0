@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   GraphProcessor,
   canUseNodeAsPrefabSource,
+  detachNodePrefabInstance,
   globalRivetNodeRegistry,
   resolveNodePrefabInstance,
   type ChartNode,
@@ -109,6 +110,57 @@ describe('NodePrefabResolver', () => {
       color: { bg: 'source-bg', border: 'source-border' },
       zIndex: 7,
     });
+  });
+
+  it('detaches a valid instance into an ordinary node without changing its effective behavior or placement', () => {
+    const instanceNode = makePrefabInstance({
+      visualData: { x: 100, y: 200, width: 260, zIndex: 7 },
+    });
+    const project = makeProject(instanceNode);
+    project.nodePrefabs![prefabId]!.sourceNode = makeTextSourceNode({
+      description: 'Library-owned description',
+      disabled: true,
+      isConditional: true,
+      isSplitRun: true,
+      splitRunConcurrency: 3,
+      variants: [{ id: 'alternative', data: { text: 'alternative text' } }],
+      tests: [{ id: 'test', evaluatorGraphId: graphId, tests: [] }],
+    });
+
+    const detachedNode = detachNodePrefabInstance(project, instanceNode);
+
+    assert.ok(detachedNode);
+    assert.equal(detachedNode.id, instanceNode.id);
+    assert.equal(detachedNode.type, 'text');
+    assert.equal(detachedNode.title, 'Shared Text');
+    assert.equal(detachedNode.description, 'Library-owned description');
+    assert.deepEqual(detachedNode.data, { text: 'hello from prefab' });
+    assert.equal(detachedNode.disabled, true);
+    assert.equal(detachedNode.isConditional, true);
+    assert.equal(detachedNode.isSplitRun, true);
+    assert.equal(detachedNode.splitRunConcurrency, 3);
+    assert.deepEqual(detachedNode.variants, [{ id: 'alternative', data: { text: 'alternative text' } }]);
+    assert.deepEqual(detachedNode.tests, [{ id: 'test', evaluatorGraphId: graphId, tests: [] }]);
+    assert.deepEqual(detachedNode.visualData, {
+      x: 100,
+      y: 200,
+      width: 260,
+      color: { bg: 'source-bg', border: 'source-border' },
+      zIndex: 7,
+    });
+  });
+
+  it('does not detach ordinary or missing-source nodes', () => {
+    const project = makeProject();
+
+    assert.equal(detachNodePrefabInstance(project, makeTextSourceNode()), undefined);
+    assert.equal(
+      detachNodePrefabInstance(
+        project,
+        makePrefabInstance({ data: { prefabId: 'missing-prefab' as NodePrefabId } }),
+      ),
+      undefined,
+    );
   });
 
   it('runs linked nodes as the source node and delivers outputs downstream', async () => {

@@ -33,6 +33,7 @@ type RunGraphOptions = {
   includeTrace?: boolean;
   concurrency?: GraphProcessorConcurrency;
   getChatNodeEndpoint?: ProcessContext['getChatNodeEndpoint'];
+  onChatV2CallFinished?: ProcessContext['onChatV2CallFinished'];
   tokenizer?: Tokenizer;
   codeRunner?: ProcessContext['codeRunner'];
   projectPath?: string;
@@ -117,7 +118,7 @@ User event handlers. The keys are event names and the values are callbacks invok
 
 Type: `AbortSignal`
 
-The `abortSignal` property is an optional `AbortSignal` instance. This can be used to send an abort signal to the graph processing operation, allowing you to programmatically stop the execution process.
+The `abortSignal` property is an optional `AbortSignal` instance. This can be used to send an abort signal to the graph processing operation, allowing you to programmatically stop the execution process. A signal that is already aborted when the run starts rejects before graph lifecycle callbacks or nodes can execute. Rivet removes the run-scoped listener after the complete graph run, including managed async branches, has settled.
 
 ### captureNodeTimings
 
@@ -150,6 +151,26 @@ Controls graph processor concurrency, including the default concurrency used by 
 Type: `ProcessContext['getChatNodeEndpoint']`
 
 Overrides the legacy Chat node endpoint resolver.
+
+### onChatV2CallFinished
+
+Type: `ProcessContext['onChatV2CallFinished']`
+
+Optional host-only accounting callback for physical LLM Chat provider calls.
+It is invoked once for each actual call, including explicit
+retry-on-non-200 attempts, provider failures, and calls aborted while in
+flight. Events contain node/process/call correlation, provider and model,
+outcome, optional finish reason, optional raw and provider-neutral usage
+fields, and known/unknown pricing. Missing token counts and unknown prices
+remain absent rather than being reported as zero.
+
+This callback deliberately does not receive prompts, messages, request
+bodies, provider metadata, raw errors, headers, or credentials. Callback
+execution is synchronous so accounting is recorded before the node
+continues, while malformed provider usage accessors and callback failures do
+not change graph execution. LLM Chat
+disables SDK-level retries, so retries observed here are separate physical
+attempts owned by Rivet's pipeline.
 
 ### tokenizer
 

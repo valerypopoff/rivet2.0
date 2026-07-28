@@ -618,10 +618,12 @@ void describe('GraphProcessor managed async branches', () => {
       [source, trigger, graphOutput],
       [connect(source.id, trigger.id, 'input1'), connect(trigger.id, graphOutput.id, 'value', 'output1')],
     );
-    await assert.rejects(
-      createProcessor(graphWithOutput).processGraph(testProcessContext()),
-      /cannot contain Graph Output node/,
-    );
+    const outputProcessor = createProcessor(graphWithOutput);
+    const rootErrors: Array<Error | string> = [];
+    outputProcessor.on('error', ({ error }) => rootErrors.push(error));
+    await assert.rejects(outputProcessor.processGraph(testProcessContext()), /cannot contain Graph Output node/);
+    assert.equal(rootErrors.length, 1);
+    assert.match(String(rootErrors[0]), /cannot contain Graph Output node/);
 
     const graphWithJoin = makeGraph(
       'async-join-invalid',

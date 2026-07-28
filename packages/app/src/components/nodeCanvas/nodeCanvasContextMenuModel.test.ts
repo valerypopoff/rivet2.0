@@ -192,6 +192,7 @@ test('getNodeCanvasContextMenuContext hydrates node context data from the DOM ta
         unfreezeNodeIds: [],
         isFrozen: false,
         canOpenNodePrefabSource: false,
+        canDetachNodePrefab: false,
       },
     },
   );
@@ -232,6 +233,29 @@ test('getNodeCanvasContextMenuContext marks linked nodes while resolving their s
   assert.equal(context.data.nodeType, 'text');
   assert.equal(context.data.isLinkedNode, true);
   assert.equal(context.data.canOpenNodePrefabSource, true);
+  assert.equal(context.data.canDetachNodePrefab, true);
+});
+
+test('getNodeCanvasContextMenuContext keeps detachment unavailable for linked nodes with a missing source', () => {
+  const prefabId = 'missing-prefab' as NodePrefabId;
+  const linkedNode = makeNode('nodePrefabInstance', nodeId, 'Missing linked node');
+  linkedNode.data = { prefabId };
+
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-nodePrefabInstance'),
+    nodesById: {
+      [nodeId]: linkedNode,
+    },
+    project: {
+      ...project,
+      nodePrefabs: {},
+    },
+  });
+
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.canOpenNodePrefabSource, true);
+  assert.equal(context.data.canDetachNodePrefab, false);
 });
 
 test('getNodeCanvasContextMenuContext enables Subgraph port rearrange when the target graph has boundary nodes', () => {
@@ -585,6 +609,7 @@ test('canNodeTypeBeFrozen blocks non-replayable node categories', () => {
     'raiseEvent',
     'playAudio',
     'startBackgroundBranch',
+    'dataBus',
   ] as const) {
     assert.equal(canNodeTypeBeFrozen(nodeType), false, `${nodeType} should not be freezable`);
   }

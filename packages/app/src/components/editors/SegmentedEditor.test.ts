@@ -25,3 +25,8 @@ test('segmented choice track is theme-tokenized for Bright contrast', () => {
     /:root\.theme-bright,[\s\S]*--segmented-choice-bg: color-mix\(in srgb, var\(--secondary\) 5%, #c7d0dc 95%\);/,
   );
 });
+
+test('callers can keep compact segmented options on one line', () => {
+  assert.match(segmentedEditorSource, /allowOptionWrap\?: boolean/);
+  assert.match(segmentedEditorSource, /const wraps = allowOptionWrap && choice\.scrollWidth > availableWidth \+ 1;/);
+});

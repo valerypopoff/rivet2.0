@@ -38,8 +38,8 @@ jobs:
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache --check-cache
 
-      - name: Verify AI graph builder context
-        run: node scripts/checks/check-graph-creator-data.mjs
+      - name: Verify AI graph builder assets
+        run: yarn check:graph-builder-assets
 
       - name: Build publishable packages
         run: node .yarn/releases/yarn-4.17.1.cjs build:npm-public

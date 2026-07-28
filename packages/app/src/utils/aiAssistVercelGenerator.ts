@@ -95,7 +95,7 @@ function getOptionalStopSequences(data: Record<string, unknown>, inputs: Inputs)
 
 function getMaxTokens(data: Record<string, unknown>, inputs: Inputs): number | undefined {
   return getDataBoolean(data, 'useMaxTokensInput')
-    ? (getInputNumber(inputs, 'maxTokens') ?? getDataNumber(data, 'maxTokens'))
+    ? getInputNumber(inputs, 'maxTokens') ?? getDataNumber(data, 'maxTokens')
     : getDataNumber(data, 'maxTokens');
 }
 
@@ -107,7 +107,10 @@ function pickGeneratorOutputs(outputs: Outputs): Outputs {
   };
 }
 
-function getProviderForGeneratorNode(branch: AiAssistGeneratorChatBranch, modelSettings: ResolvedAiAssistModelSettings) {
+function getProviderForGeneratorNode(
+  branch: AiAssistGeneratorChatBranch,
+  modelSettings: ResolvedAiAssistModelSettings,
+) {
   return branch === 'anthropic' ? 'anthropic' : modelSettings.provider;
 }
 
@@ -118,7 +121,9 @@ function getCustomProviderBaseURL(
   return provider === 'custom' ? modelSettings.customProviderBaseURL : undefined;
 }
 
-function getGeneratorProviderOptions(provider: ResolvedAiAssistModelSettings['provider']): ChatV2ProviderOptions | undefined {
+function getGeneratorProviderOptions(
+  provider: ResolvedAiAssistModelSettings['provider'],
+): ChatV2ProviderOptions | undefined {
   return provider === 'openai'
     ? {
         openai: {
@@ -165,9 +170,6 @@ const inputDefinitions: NodeInputDefinition[] = [
   { id: createPortId('systemPrompt'), title: 'System Prompt', dataType: 'string', required: false, coerced: true },
   { id: createPortId('system'), title: 'System Prompt', dataType: 'string', required: false, coerced: true },
   { id: createPortId('model'), title: 'Model', dataType: 'string', required: false },
-  { id: createPortId('temperature'), title: 'Temperature', dataType: 'number', required: false },
-  { id: createPortId('top_p'), title: 'Top P', dataType: 'number', required: false },
-  { id: createPortId('useTopP'), title: 'Use Top P', dataType: 'boolean', required: false },
   { id: createPortId('maxTokens'), title: 'Max Tokens', dataType: 'number', required: false },
   { id: createPortId('stop'), title: 'Stop', dataType: 'string', required: false },
   {

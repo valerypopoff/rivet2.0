@@ -117,6 +117,7 @@ export const useBuiltInNodeImages = (): Partial<Record<BuiltInNodeType, string>>
     loopController: loopControllerNodeImage,
     coalesce: coalesceNodeImage,
     passthrough: passthroughNodeImage,
+    dataBus: passthroughNodeImage,
     abortGraph: abortGraphNodeImage,
     raceInputs: raceInputsNodeImage,
     randomNumber: randomNumberNodeImage,

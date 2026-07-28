@@ -1,3 +1,6 @@
+import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { createRecoverableIndexedDbConnection, preserveIndexedDbRequestTiming } from '../../utils/indexedDb.js';
+
 export interface AsyncStorageBackend {
   getItem: (key: string) => Promise<string | null>;
   setItem: (key: string, value: string) => Promise<void>;
@@ -20,56 +23,55 @@ export class MemoryAsyncStorage implements AsyncStorageBackend {
   }
 }
 
+interface JotaiStorageDatabase extends DBSchema {
+  state: {
+    key: string;
+    value: string;
+  };
+}
+
 export class IndexedDBStorage implements AsyncStorageBackend {
-  private dbName = 'jotai-store';
-  private storeName = 'state';
-  private dbPromise: Promise<IDBDatabase>;
-
-  constructor() {
-    this.dbPromise = this.initDB();
-  }
-
-  private initDB(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, 1);
-
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        db.createObjectStore(this.storeName);
-      };
-    });
-  }
+  private getDatabase = createRecoverableIndexedDbConnection(openJotaiStorageDatabase);
 
   async getItem(key: string): Promise<string | null> {
-    const db = await this.dbPromise;
-    return new Promise((resolve, reject) => {
-      const request = db.transaction(this.storeName, 'readonly').objectStore(this.storeName).get(key);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-    });
+    const db = await this.getDatabase();
+    const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readonly'));
+    return (await transaction.store.get(key)) ?? null;
   }
 
   async setItem(key: string, value: string): Promise<void> {
-    const db = await this.dbPromise;
-    return new Promise((resolve, reject) => {
-      const request = db.transaction(this.storeName, 'readwrite').objectStore(this.storeName).put(value, key);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve();
-    });
+    const db = await this.getDatabase();
+    const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readwrite'));
+    await transaction.store.put(value, key);
   }
 
   async removeItem(key: string): Promise<void> {
-    const db = await this.dbPromise;
-    return new Promise((resolve, reject) => {
-      const request = db.transaction(this.storeName, 'readwrite').objectStore(this.storeName).delete(key);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve();
-    });
+    const db = await this.getDatabase();
+    const transaction = preserveIndexedDbRequestTiming(db.transaction('state', 'readwrite'));
+    await transaction.store.delete(key);
   }
 }
 
 export function createDefaultAsyncStorage(): AsyncStorageBackend {
   return typeof indexedDB === 'undefined' ? new MemoryAsyncStorage() : new IndexedDBStorage();
+}
+
+function openJotaiStorageDatabase(onUnavailable: () => void): Promise<IDBPDatabase<JotaiStorageDatabase>> {
+  let database: IDBPDatabase<JotaiStorageDatabase> | undefined;
+
+  return openDB<JotaiStorageDatabase>('jotai-store', 1, {
+    upgrade(upgradeDatabase) {
+      upgradeDatabase.createObjectStore('state');
+    },
+    blocking() {
+      database?.close();
+      onUnavailable();
+    },
+    terminated() {
+      onUnavailable();
+    },
+  }).then((openedDatabase) => {
+    database = openedDatabase;
+    return openedDatabase;
+  });
 }

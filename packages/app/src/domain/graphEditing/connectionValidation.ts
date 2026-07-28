@@ -1,4 +1,6 @@
 import {
+  compileDataBusTopology,
+  isDataBusTopologyNode,
   type ChartNode,
   type NodeConnection,
   type NodeId,
@@ -158,10 +160,31 @@ export function getAsyncBranchTopologyViolation({
   connections: readonly NodeConnection[];
   nodesById: Record<NodeId, ChartNode>;
 }): AsyncBranchTopologyViolation | undefined {
+  // A Data Bus is a topology-only relay. Analyze its compiled connections so
+  // separate channels do not become one raw-connection hub while validating an
+  // async subtree. If a hand-edited bus is itself invalid, its dedicated
+  // validation/preprocessing error remains the actionable diagnosis. Exclude
+  // bus edges from this secondary check instead of falling back to the raw hub
+  // topology and inventing a false cross-channel async path.
+  const graphNodes = Object.values(nodesById);
+  let topologyConnections: readonly NodeConnection[];
+  try {
+    topologyConnections = compileDataBusTopology({
+      connections,
+      graphNodes,
+    }).connections;
+  } catch {
+    topologyConnections = connections.filter(
+      (connection) =>
+        !isDataBusTopologyNode(nodesById[connection.inputNodeId]) &&
+        !isDataBusTopologyNode(nodesById[connection.outputNodeId]),
+    );
+  }
+
   const outgoingByNodeId = new Map<NodeId, NodeId[]>();
   const incomingByNodeId = new Map<NodeId, NodeConnection[]>();
 
-  for (const connection of connections) {
+  for (const connection of topologyConnections) {
     const outgoingNodeIds = outgoingByNodeId.get(connection.outputNodeId) ?? [];
     outgoingNodeIds.push(connection.inputNodeId);
     outgoingByNodeId.set(connection.outputNodeId, outgoingNodeIds);

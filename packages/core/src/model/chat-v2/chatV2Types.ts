@@ -3,12 +3,13 @@ import type { ChatMessage, GptFunction } from '../DataValue.js';
 import type { Outputs } from '../GraphProcessor.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { AssistantMessageFunctionCallMode, StreamedFunctionCall } from '../chat/streamChatResponse.js';
+import type { ChatV2Provider } from './chatV2ProviderTypes.js';
+
+export type { ChatV2Provider };
 
 type StreamTextArgs = Parameters<typeof streamText>[0];
 type GenerateTextArgs = Parameters<typeof generateText>[0];
 type MaybePromiseLike<T> = T | PromiseLike<T>;
-
-export type ChatV2Provider = 'openai' | 'anthropic' | 'google' | 'custom';
 
 export type ChatV2Model = StreamTextArgs['model'];
 export type ChatV2ProviderOptions = StreamTextArgs['providerOptions'];
@@ -126,7 +127,8 @@ export type RunChatV2PipelineOptions = {
   retryOnNon200?: boolean | undefined;
   retryOnNon200RepeatTimes?: number | undefined;
   retryOnNon200CooldownMs?: number | undefined;
-  context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'>;
+  context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &
+    Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId'>>;
   executeStream?: ChatV2StreamExecutor | undefined;
   executeGenerate?: ChatV2GenerateExecutor | undefined;
 };

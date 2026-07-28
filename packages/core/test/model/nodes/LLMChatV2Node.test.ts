@@ -140,6 +140,17 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.outputRequestStatus, false);
   });
 
+  it('uses the dedicated configuration editor so Inline settings can be exported to a profile', async () => {
+    const node = createNode();
+    const editors = await node.getEditors({});
+
+    assert.deepEqual(editors[0], {
+      type: 'custom',
+      label: 'Configuration',
+      customEditorId: 'LLMChatV2Configuration',
+    });
+  });
+
   it('adds an API key input only when the Model section is set to input port', async () => {
     const defaultNode = createNode();
     const inputNode = createNode({
@@ -696,7 +707,10 @@ describe('LLMChatV2NodeImpl', () => {
       outputGroup.editors.find((editor: any) => editor.dataKey === 'outputUsage')?.helperMessage,
       /Vercel AI SDK usage metadata/,
     );
-    assert.ok(!outputGroup.editors.some((editor: any) => editor.dataKey === 'outputReasoning'));
+    assert.equal(
+      outputGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label,
+      'Output reasoning',
+    );
     assert.equal(
       outputGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
       'Stream response',
@@ -725,6 +739,7 @@ describe('LLMChatV2NodeImpl', () => {
     const editors = await node.getEditors({});
     const groupLabels = editors.filter((editor) => editor.type === 'group').map((editor) => editor.label);
     const reasoningGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Reasoning') as any;
+    const outputGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
     const openAIGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'OpenAI') as any;
     const anthropicGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Anthropic') as any;
     const googleGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Google') as any;
@@ -740,7 +755,6 @@ describe('LLMChatV2NodeImpl', () => {
       reasoningGroup.editors.map((editor: any) => editor.dataKey),
       [
         'openAIReasoningEffort',
-        'outputReasoning',
         'openAIReasoningSummary',
         'anthropicThinkingMode',
         'anthropicEffort',
@@ -750,12 +764,8 @@ describe('LLMChatV2NodeImpl', () => {
         'googleIncludeThoughts',
       ],
     );
-    assert.equal(
-      reasoningGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label,
-      'Output reasoning',
-    );
     assert.match(
-      reasoningGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.helperMessage,
+      outputGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.helperMessage,
       /reasoning or thinking text/,
     );
     assert.equal(
@@ -809,6 +819,17 @@ describe('LLMChatV2NodeImpl', () => {
     assert.ok(!anthropicGroup.editors.some((editor: any) => editor.dataKey === 'anthropicThinkingMode'));
     assert.ok(!googleGroup.editors.some((editor: any) => editor.dataKey === 'googleThinkingBudget'));
     assert.ok(!googleGroup.editors.some((editor: any) => editor.dataKey === 'googleStructuredOutputs'));
+  });
+
+  it('keeps Output reasoning in Outputs for Inline and From-profile configurations', async () => {
+    const inlineCustomEditors = await createNode({ provider: 'custom' }).getEditors({});
+    const profileEditors = await createNode({ configurationMode: 'profile' }).getEditors({});
+
+    for (const editors of [inlineCustomEditors, profileEditors]) {
+      const outputsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
+      assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label, 'Output reasoning');
+    }
+    assert.ok(!inlineCustomEditors.some((editor) => editor.type === 'group' && editor.label === 'Reasoning'));
   });
 
   it('resolves provider-specific reasoning options in the Vercel providerOptions shape', () => {

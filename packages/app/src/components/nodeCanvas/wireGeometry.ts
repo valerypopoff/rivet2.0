@@ -1,7 +1,15 @@
 export type WirePoint = { x: number; y: number };
 export type WireSegment = { start: WirePoint; end: WirePoint };
+export type WireEndpointDirection = 'horizontal' | 'down';
 
-type WirePathCoordinates = { sx: number; sy: number; ex: number; ey: number };
+type WirePathCoordinates = {
+  sx: number;
+  sy: number;
+  ex: number;
+  ey: number;
+  startDirection?: WireEndpointDirection;
+  endDirection?: WireEndpointDirection;
+};
 
 const CUBIC_OFFSET_SAMPLE_COUNT = 48;
 const BACKWARDS_BRIDGE_SAMPLE_COUNT = 12;
@@ -23,8 +31,31 @@ export function getWireSegments({
     : [{ start, end }];
 }
 
-export function getWirePath({ sx, sy, ex, ey }: WirePathCoordinates): string {
+export function getWirePath({
+  sx,
+  sy,
+  ex,
+  ey,
+  startDirection = 'horizontal',
+  endDirection = 'horizontal',
+}: WirePathCoordinates): string {
   const handleDistance = sx <= ex ? Math.abs(ex - sx) * 0.5 : Math.abs(ey - sy) * 0.6;
+  const directionalControls = getDirectionalWireControlPoints({
+    sx,
+    sy,
+    ex,
+    ey,
+    startDirection,
+    endDirection,
+    horizontalHandleDistance: handleDistance,
+  });
+
+  if (directionalControls) {
+    return (
+      `M${sx},${sy} C${directionalControls.control1.x},${directionalControls.control1.y} ` +
+      `${directionalControls.control2.x},${directionalControls.control2.y} ${ex},${ey}`
+    );
+  }
 
   const curveX1 = sx + handleDistance;
   const curveX2 = ex - handleDistance;
@@ -46,13 +77,22 @@ export function getNormalOffsetWirePoints({
   ...coordinates
 }: WirePathCoordinates & { offset: number }): WirePoint[] {
   const points = getWirePathSamplePoints(coordinates);
+  const startDirection = coordinates.startDirection ?? 'horizontal';
+  const endDirection = coordinates.endDirection ?? 'horizontal';
 
   return points.map((point, index) => {
-    // Every built-in wire leaves and enters its node horizontally. Preserve that
-    // exact endpoint tangent instead of estimating it from the first short
-    // sample, which can otherwise pull steep, closely spaced lanes off-port.
-    if (index === 0 || index === points.length - 1) {
-      return { x: point.x, y: point.y + offset };
+    // Preserve the declared endpoint tangent instead of estimating it from the
+    // first short sample, which can pull steep, closely spaced lanes off-port.
+    if (index === 0) {
+      return startDirection === 'down'
+        ? { x: point.x - offset, y: point.y }
+        : { x: point.x, y: point.y + offset };
+    }
+
+    if (index === points.length - 1) {
+      return endDirection === 'down'
+        ? { x: point.x + offset, y: point.y }
+        : { x: point.x, y: point.y + offset };
     }
 
     const previous = points[Math.max(0, index - 1)]!;
@@ -80,8 +120,35 @@ export function getNormalOffsetWirePath({ offset, ...coordinates }: WirePathCoor
     .join(' ');
 }
 
-function getWirePathSamplePoints({ sx, sy, ex, ey }: WirePathCoordinates): WirePoint[] {
+function getWirePathSamplePoints({
+  sx,
+  sy,
+  ex,
+  ey,
+  startDirection = 'horizontal',
+  endDirection = 'horizontal',
+}: WirePathCoordinates): WirePoint[] {
   const handleDistance = sx <= ex ? Math.abs(ex - sx) * 0.5 : Math.abs(ey - sy) * 0.6;
+  const directionalControls = getDirectionalWireControlPoints({
+    sx,
+    sy,
+    ex,
+    ey,
+    startDirection,
+    endDirection,
+    horizontalHandleDistance: handleDistance,
+  });
+
+  if (directionalControls) {
+    return sampleCubicPoints(
+      { x: sx, y: sy },
+      directionalControls.control1,
+      directionalControls.control2,
+      { x: ex, y: ey },
+      CUBIC_OFFSET_SAMPLE_COUNT,
+    );
+  }
+
   const curveX1 = sx + handleDistance;
   const curveX2 = ex - handleDistance;
   const middleY = (sy + ey) / 2;
@@ -115,6 +182,34 @@ function getWirePathSamplePoints({ sx, sy, ex, ey }: WirePathCoordinates): WireP
       CUBIC_OFFSET_SAMPLE_COUNT,
     ),
   );
+}
+
+function getDirectionalWireControlPoints({
+  sx,
+  sy,
+  ex,
+  ey,
+  startDirection,
+  endDirection,
+  horizontalHandleDistance,
+}: Required<Pick<WirePathCoordinates, 'sx' | 'sy' | 'ex' | 'ey' | 'startDirection' | 'endDirection'>> & {
+  horizontalHandleDistance: number;
+}): { control1: WirePoint; control2: WirePoint } | undefined {
+  if (startDirection !== 'down' && endDirection !== 'down') {
+    return undefined;
+  }
+
+  const horizontalDistance = Math.max(24, horizontalHandleDistance);
+  const verticalDistance = Math.max(
+    24,
+    Math.min(120, Math.max(Math.abs(ey - sy) * 0.35, Math.abs(ex - sx) * 0.15)),
+  );
+
+  return {
+    control1:
+      startDirection === 'down' ? { x: sx, y: sy + verticalDistance } : { x: sx + horizontalDistance, y: sy },
+    control2: endDirection === 'down' ? { x: ex, y: ey + verticalDistance } : { x: ex - horizontalDistance, y: ey },
+  };
 }
 
 function sampleCubicPoints(

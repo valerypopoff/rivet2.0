@@ -28,6 +28,7 @@ import { useSetStaticData } from '../hooks/useSetStaticData';
 import { DefaultNodeEditor } from './editors/DefaultNodeEditor';
 import { useAtomValue, useAtom } from 'jotai';
 import { useEditNodeCommand } from '../commands/editNodeCommand';
+import { useDeleteNodesCommand } from '../commands/deleteNodeCommand.js';
 import { NodeEditorGlobalControls } from './nodeEditor/NodeEditorGlobalControls.js';
 import { NodeEditorResizeContext } from './nodeEditor/NodeEditorResizeContext.js';
 import { ResizeHandle } from './ResizeHandle.js';
@@ -250,6 +251,17 @@ const Container = styled.div`
     padding-right: var(--node-editor-action-bar-row-reserve, 0px);
     min-width: 0;
     min-height: 30px;
+  }
+
+  .node-type-action {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .data-bus-settings-actions {
+    align-self: flex-start;
   }
 
   .node-type-tooltip {
@@ -646,7 +658,12 @@ const Container = styled.div`
   }
 `;
 
-type NodeEditorProps = { selectedNode: ChartNode; onDeselect: () => void; onUpdateNode?: NodeChanged };
+type NodeEditorProps = {
+  selectedNode: ChartNode;
+  onDeselect: () => void;
+  onUpdateNode?: NodeChanged;
+  onDeleteNode?: () => void;
+};
 
 export type NodeChanged = (changed: ChartNode, newData?: Record<DataId, string>) => void;
 
@@ -755,7 +772,7 @@ function useNodeEditorActionBarAvoidance(containerRef: RefObject<HTMLDivElement 
   return avoidance;
 }
 
-export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUpdateNode }) => {
+export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUpdateNode, onDeleteNode }) => {
   const [selectedVariant, setSelectedVariant] = useState<string | undefined>();
   const [addVariantPopupOpen, setAddVariantPopupOpen] = useState(false);
   const [llmChatFeatureConflictOpen, setLlmChatFeatureConflictOpen] = useState(false);
@@ -763,6 +780,7 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
 
   const setStaticData = useSetStaticData();
   const editNode = useEditNodeCommand();
+  const deleteNodes = useDeleteNodesCommand();
 
   const updateNode = useStableCallback((node: ChartNode, newData?: Record<DataId, string>) => {
     // Otherwise the editor "changes" and causes deleted nodes to reappear...
@@ -838,6 +856,14 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
 
   const nodeDisabledChanged = useStableCallback((disabled: boolean) => {
     updateNode({ ...selectedNode, disabled });
+  });
+
+  const deleteSelectedNode = useStableCallback(() => {
+    if (onDeleteNode) {
+      onDeleteNode();
+      return;
+    }
+    deleteNodes({ nodeIds: [selectedNode.id], skipGraphInputUsageConfirm: true });
   });
 
   const variantOptions = useMemo(() => {
@@ -927,7 +953,13 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
 
             <div className="section section-node">
               <div className="section-node-content">
-                {Editor ? (
+                {selectedNode.type === 'dataBus' ? (
+                  <div className="node-type-action data-bus-settings-actions">
+                    <Button appearance="danger" onClick={deleteSelectedNode}>
+                      Delete Data Bus
+                    </Button>
+                  </div>
+                ) : Editor ? (
                   <Editor node={nodeForEditor} onChange={isVariant ? () => {} : updateNode} />
                 ) : (
                   <DefaultNodeEditor

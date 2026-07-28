@@ -12,18 +12,11 @@ import { nanoid } from 'nanoid/non-secure';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { dedent } from 'ts-dedent';
 
-export type PassthroughNode = ChartNode<'passthrough', PassthroughNodeData>;
-
-export type PassthroughNodeData = {
-  /**
-   * Canvas-only presentation mode. Runtime execution and serialized connections
-   * remain an ordinary Passthrough node.
-   */
-  renderAsDataBus?: boolean;
-};
+export type PassthroughNode = ChartNode<'passthrough', Record<string, never>>;
 
 const INPUT_PORT_PATTERN = /^input(\d+)$/;
 const OUTPUT_PORT_PATTERN = /^output(\d+)$/;
+/** @deprecated Use MAX_DATA_BUS_CHANNEL_INDEX for Data Bus channels. */
 export const MAX_PASSTHROUGH_PORT_INDEX = 10_000;
 
 function parsePositivePortIndex(portId: string, pattern: RegExp): number | undefined {
@@ -45,19 +38,6 @@ function getHighestConnectedSlotIndex(connections: readonly NodeConnection[], no
   }
 
   return highestIndex;
-}
-
-export function isPassthroughDataBusNode(node: ChartNode | undefined): node is PassthroughNode {
-  return node?.type === 'passthrough' && (node.data as PassthroughNodeData | undefined)?.renderAsDataBus === true;
-}
-
-/**
- * Conditional and split-run Passthrough nodes have execution semantics that a
- * hidden canvas rail cannot communicate. Malformed or hand-edited combinations
- * therefore fall back to the normal visible node until the conflict is removed.
- */
-export function canRenderPassthroughAsDataBus(node: ChartNode | undefined): node is PassthroughNode {
-  return isPassthroughDataBusNode(node) && !node.isConditional && !node.isSplitRun;
 }
 
 export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {

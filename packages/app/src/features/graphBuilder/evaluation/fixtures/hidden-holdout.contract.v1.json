@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": "graph-builder-hidden-holdout-contract-v1",
+  "suiteVersion": "graph-builder-hidden-holdout-v1",
+  "protectedManifestSha256": null,
+  "status": "placeholder",
+  "inputsIncluded": false,
+  "aggregateResultsOnly": true,
+  "ownership": "external-protected-release-evaluation"
+}

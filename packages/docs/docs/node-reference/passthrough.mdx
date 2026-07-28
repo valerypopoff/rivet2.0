@@ -4,118 +4,43 @@ title: Passthrough Node
 sidebar_label: Passthrough
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 ![Passthrough Node Screenshot](./assets/passthrough-node.png)
 
 ## Overview
 
-The Passthrough Node is a simple node that passes the input value to the output without any modifications. This node can be useful in scenarios where you want to pass a value through a certain path in your graph without altering it, such as grouping together values from different branches of your graph, or controlling how wires flow through your graph.
+The Passthrough node is an executable value relay: every connected `Input [i]`
+is emitted unchanged from `Output [i]`. Use it when a value belongs on an
+actual workflow path or when you need a readable, local fan-out point.
 
-<Tabs
-  defaultValue="inputs"
-  values={[
-    {label: 'Inputs', value: 'inputs'},
-    {label: 'Outputs', value: 'outputs'},
-    {label: 'Editor Settings', value: 'settings'},
-  ]
-}>
-
-<TabItem value="inputs">
+For a compact canvas rail that shares values broadly without adding an
+executable relay, add the dedicated [Data Bus](./data-bus.mdx) node instead.
+Passthrough cannot be displayed or configured as a Data Bus.
+Projects carrying the retired Passthrough bus-line flag open with an ordinary
+Passthrough; Rivet ignores and removes that legacy presentation setting.
 
 ## Inputs
 
-| Title     | Data Type | Description                        | Default Value | Notes                                                            |
-| --------- | --------- | ---------------------------------- | ------------- | ---------------------------------------------------------------- |
-| Input [i] | `any`     | The ith input to be passed through | N/A           | Dynamic number of inputs based on how many connections there are |
-
-</TabItem>
-
-<TabItem value="outputs">
+| Title | Data type | Description | Notes |
+| --- | --- | --- | --- |
+| Input [i] | `any` | The ith input to pass through. | Ports are added as connections are made. |
 
 ## Outputs
 
-| Title      | Data Type | Description                         | Notes                                                             |
-| ---------- | --------- | ----------------------------------- | ----------------------------------------------------------------- |
-| Output [i] | `any`     | The ith output from the passthrough | Dynamic number of outputs based on how many connections there are |
+| Title | Data type | Description | Notes |
+| --- | --- | --- | --- |
+| Output [i] | `any` | The ith input value, unchanged. | Mirrors the corresponding connected input. |
 
-</TabItem>
+## Settings
 
-<TabItem value="settings">
+Passthrough has no node-specific settings.
 
-## Editor Settings
+## Error handling
 
-### Render as data bus
+Passthrough does not transform or validate values. If an input is missing, its
+matching output is absent.
 
-Pins the Passthrough to a compact, single-line bus shelf at the top of the
-canvas instead of rendering its rectangular node card. The node name, settings,
-and horizontally arranged channels stay in one shallow strip. Use this when one
-value needs to feed many nodes across a large graph:
+## See also
 
-- Connect any node output to the bus's next **Connect provider** port.
-- Drag from that channel's output port to as many receiver inputs as needed.
-- Established bus connections appear as short, angled router-antenna markers
-  on providers and receivers instead of long wires.
-- Hover an antenna or rail channel to highlight the other endpoints. The
-  channel's number shows how many receivers use it.
-- While the channel is hovered, Rivet temporarily draws its real provider and
-  receiver wires in the active color instead of its radio-connection markers.
-  The antennas return when the pointer leaves.
-- When its channels outgrow the compact shelf width, the bus expands into a
-  dedicated full-width panel row directly below the project tabs. The row
-  starts after an open left sidebar, keeps the bus content centered, and
-  reduces the canvas height so nodes and controls begin beneath it. Very large
-  channel lists still scroll horizontally without displaying permanent
-  scrollbars or covering the canvas.
-- Several compact bus panels also promote when their combined width exceeds
-  the compact limit. In full-width mode, every bus keeps its own panel row and
-  the rows stack vertically instead of being combined into one strip. The
-  canvas reserves the height of every row. Opening or resizing the left
-  sidebar immediately recalculates the remaining shelf space.
-
-While you drag a connection, Rivet temporarily shows the ordinary wire so its
-destination remains clear. Use the settings button beside the bus name to open
-the hidden Passthrough's settings or turn data-bus rendering off. Shift-click
-a bus shelf to include it in multi-selection. Right-click is intentionally
-ignored anywhere on the shelf or full-width bus row because it is not a
-spatial node card; use the settings button and normal selection hotkeys for
-its actions.
-
-This setting changes only the canvas presentation. The project still stores an
-ordinary Passthrough node with ordinary connections, and graph execution is
-unchanged. Conditional execution and Run per item must be off because hiding
-those execution modes in a rail would make the graph misleading. If a project
-file contains an incompatible combination, Rivet shows the normal node card
-until it is repaired.
-
-</TabItem>
-
-</Tabs>
-
-## Error Handling
-
-The Passthrough Node does not have any error handling. If an input is missing or null, the corresponding output will also be missing or null.
-
-## FAQ
-
-**Q: What happens if an input is missing or null?**
-
-A: If an input is missing or null, the corresponding output will also be missing or null.
-
-**Q: What happens when a data-bus provider is disconnected but receivers still use that channel?**
-
-A: The channel remains visible as **Missing provider** so it can be repaired.
-The receivers are not silently reassigned to another channel.
-
-**Q: What if an imported project contains several providers for one channel?**
-
-A: Rivet marks the channel as **Multiple providers**. Disconnect the channel's
-input repeatedly until only the intended provider remains.
-
-## See Also
-
-- [If Node](./if.mdx)
-- [Regex Match Node](./regex-match.mdx)
-- [Coalesce Node](./coalesce.mdx)
-- [Race Inputs Node](./race-inputs.mdx)
+- [Data Bus](./data-bus.mdx)
+- [Coalesce](./coalesce.mdx)
+- [Race Inputs](./race-inputs.mdx)
