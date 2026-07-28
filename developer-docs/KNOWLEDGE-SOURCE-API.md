@@ -19,7 +19,7 @@ credentials are saved. Core owns the field policy and the nested local-settings
 shape used for those credentials. Node and web-app packages only propagate host
 registries into core.
 
-The connection editor renders each provider field as an independently spaced label/control/help group. Keep the modal layout on its root container so provider forms retain the same vertical rhythm as fields are added or removed.
+The connection editor renders each provider field as an independently spaced label/control/help group. Keep the modal layout on its root container so provider forms retain the same vertical rhythm as fields are added or removed. Secret credential fields are masked by default and provide an accessible inline reveal/hide control; that control changes only the input presentation and must not move the secret into project data or another state owner. The modal suppresses WebView2/Edge's native password reveal and clear pseudo-elements for those fields so the editor never presents competing credential controls.
 
 ## Project and Secret Boundary
 
@@ -162,6 +162,14 @@ Missing sources and inactive exact versions are normal status/search outputs. Au
 
 Node boundaries validate high-level results from host-provided stores as well as plugin stores. Returned source identity, committed versions, counts, messages, evidence, query groups, and metadata must satisfy the public contracts before becoming typed graph outputs. Optional document/evidence fields are rejected when present with the wrong type instead of being silently discarded, versions remain bounded, top-level and per-query evidence IDs must be unique, and successful query groups must match the normalized requested queries in order. `KnowledgeSourceStatus` is discriminated by `exists`: an existing source must return its non-empty `activeVersion`, while a missing source cannot return one. When an expected version is supplied, Rivet derives the match from the returned active version and rejects a contradictory provider flag. The public TypeScript contract mirrors these runtime invariants so malformed host adapters fail during development instead of later in a graph run.
 
+Knowledge operations cannot publish host-facing or web-app progress implicitly.
+`KnowledgeOperationContext` exposes cancellation and, where needed, token
+counting only. Store and driver implementations return diagnostic state through
+their declared result/message fields. A workflow author who wants temporary
+status presentation must wire an explicit **Report Progress** node or
+`setWebAppStatus` External Call; ordinary Knowledge nodes never update that UI
+as an execution side effect.
+
 ## Portable Contracts
 
 Metadata is a flat record of null, finite number, boolean, string, or a homogeneous scalar array. Providers may support a narrower subset and must reject unsupported values explicitly before a write.
@@ -229,7 +237,7 @@ Registration is a runtime boundary even for JavaScript plugins: Rivet validates 
 
 Use `ManagedKnowledgeStore` when the backend can expose manifest, chunk upsert, search, and version delete primitives. Implement `RivetKnowledgeStore` directly only when the backend already owns equivalent source/version semantics.
 
-Provider callbacks must propagate cancellation, report backend failures without silent fallback, avoid logging document/query payloads, and enforce tenant authorization in the host or provider boundary.
+Provider callbacks must propagate cancellation, report backend failures without silent fallback, avoid logging document/query payloads, and enforce tenant authorization in the host or provider boundary. They must not publish host-facing progress or web-app status; provider-neutral result fields are their only status channel back into the workflow.
 
 Credential field requirements and string defaults are enforced during runtime connection resolution as well as in the editor. A provider that supports another fallback, such as an environment variable, should leave its per-connection credential optional and resolve that fallback inside `createStore`.
 

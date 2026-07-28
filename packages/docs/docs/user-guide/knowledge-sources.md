@@ -29,6 +29,12 @@ Sync is content-addressed and idempotent. Repeating identical content does not r
 
 Document IDs must be unique within a synchronized source. Rivet checks this before uploading, preventing two documents from producing colliding chunk records.
 
+Knowledge nodes do not publish temporary web-app status automatically. Their
+messages and synchronization results are normal graph outputs. If users should
+see progress while a Knowledge operation runs, explicitly place **Report
+Progress** on the workflow path or call `setWebAppStatus`; leaving those actions
+out keeps the operation silent.
+
 ## Missing Sources and Versions
 
 Missing knowledge is application state, not an exception. Status returns `Exists: false`, and Search returns `Source Found: false`, empty evidence, and a useful message. This makes it straightforward for an agent tool to say that initialization is needed without failing its graph.

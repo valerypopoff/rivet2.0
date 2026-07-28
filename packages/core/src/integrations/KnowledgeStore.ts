@@ -1,5 +1,3 @@
-import type { GraphProgress } from '../model/GraphProgress.js';
-
 export type KnowledgeStoreConnectionId = string;
 
 export type KnowledgeMetadataScalar = null | boolean | number | string;
@@ -51,7 +49,6 @@ export type RivetKnowledgeStoreCapabilities = {
 
 export type KnowledgeOperationContext = {
   signal: AbortSignal;
-  reportProgress?: (progress: GraphProgress) => void;
   getTokenCount?: (text: string) => Promise<number>;
 };
 

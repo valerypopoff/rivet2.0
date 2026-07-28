@@ -83,7 +83,10 @@ test('LLM settings page explains where provider keys are used', () => {
   assert.match(source, /CUSTOM_PROVIDER_API_KEY/);
   assert.match(source, /OPENAI_ORG_ID/);
   assert.match(source, /matching runtime keys\s+when running projects programmatically/);
-  assert.match(source, /<Field name="openai-api-key" label="OpenAI API Key">[\s\S]*value=\{settings\.openAiApiKey \|\| settings\.openAiKey \|\| ''\}/);
+  assert.match(
+    source,
+    /<Field name="openai-api-key" label="OpenAI API Key">[\s\S]*value=\{settings\.openAiApiKey \|\| settings\.openAiKey \|\| ''\}/,
+  );
   assert.match(source, /<Field name="anthropic-api-key" label="Anthropic API Key">/);
   assert.match(source, /<Field name="google-api-key" label="Google API Key">/);
   assert.match(source, /<Field name="custom-provider-api-key" label="Custom provider API Key">/);
@@ -101,4 +104,17 @@ test('Knowledge Store modal gives each labeled field a visible vertical rhythm',
   assert.match(source, /const modalStyles = css`[\s\S]*display: flex;[\s\S]*flex-direction: column;[\s\S]*gap: 16px;/);
   assert.match(source, /\.knowledge-store-field \{[\s\S]*display: flex;[\s\S]*flex-direction: column;[\s\S]*gap: 6px;/);
   assert.doesNotMatch(source, /\.knowledge-store-form \{[\s\S]*gap: 14px;/);
+});
+
+test('Knowledge Store secret fields include an accessible reveal control', () => {
+  const source = readFileSync(join(componentsDir, 'ProjectKnowledgeStoresConfiguration.tsx'), 'utf8');
+
+  assert.match(source, /const \[isSecretVisible, setIsSecretVisible\] = useState\(false\)/);
+  assert.match(source, /type=\{isSecret && !isSecretVisible \? 'password'/);
+  assert.match(source, /elemAfterInput=\{[\s\S]*isSecret \?/);
+  assert.match(source, /aria-label=\{secretVisibilityLabel\}/);
+  assert.match(source, /aria-pressed=\{isSecretVisible\}/);
+  assert.match(source, /onClick=\{\(\) => setIsSecretVisible\(\(current\) => !current\)\}/);
+  assert.match(source, /input\[type='password'\]::\-ms-reveal/);
+  assert.match(source, /input\[type='password'\]::\-ms-clear/);
 });

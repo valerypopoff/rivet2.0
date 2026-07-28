@@ -15,6 +15,8 @@ import {
   type Settings,
 } from '@valerypopoff/rivet2-core';
 import { useAtom } from 'jotai';
+import EyeIcon from 'majesticons/line/eye-line.svg?react';
+import EyeOffIcon from 'majesticons/line/eye-off-line.svg?react';
 import { nanoid } from 'nanoid/non-secure';
 import { useEffect, useRef, useState, type FC, type ReactNode } from 'react';
 import { toast } from 'react-toastify';
@@ -88,6 +90,16 @@ const modalStyles = css`
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .knowledge-store-secret-toggle {
+    align-self: center;
+    margin-inline-end: 2px;
+  }
+
+  .knowledge-store-field input[type='password']::-ms-reveal,
+  .knowledge-store-field input[type='password']::-ms-clear {
+    display: none;
   }
 `;
 
@@ -333,7 +345,7 @@ const KnowledgeStoreModal: FC<{
           {(provider?.credentialConfigSpec?.length ?? 0) > 0 && <strong>Credentials</strong>}
           {provider?.credentialConfigSpec?.map((field) => (
             <ProviderField
-              key={field.key}
+              key={`credential:${editing.providerId}:${field.key}`}
               field={field}
               value={readOwnProperty(editing.credentials, field.key) ?? ''}
               onChange={(value) =>
@@ -387,6 +399,8 @@ const ProviderField: FC<{
   value: unknown;
   onChange(value: unknown): void;
 }> = ({ field, value, onChange }) => {
+  const [isSecretVisible, setIsSecretVisible] = useState(false);
+
   if (field.type === 'boolean') {
     return (
       <ConfigField label={field.label} description={field.description}>
@@ -409,11 +423,29 @@ const ProviderField: FC<{
       </ConfigField>
     );
   }
+  const isSecret = field.type === 'secret';
+  const secretVisibilityLabel = isSecretVisible ? `Hide ${field.label}` : `Show ${field.label}`;
+
   return (
     <ConfigField label={field.label} description={field.description}>
       <Textfield
-        type={field.type === 'secret' ? 'password' : field.type === 'number' ? 'number' : 'text'}
+        type={isSecret && !isSecretVisible ? 'password' : field.type === 'number' ? 'number' : 'text'}
         value={value == null ? '' : String(value)}
+        elemAfterInput={
+          isSecret ? (
+            <Button
+              appearance="subtle"
+              spacing="compact"
+              className="knowledge-store-secret-toggle"
+              iconBefore={isSecretVisible ? <EyeOffIcon width={16} height={16} /> : <EyeIcon width={16} height={16} />}
+              aria-label={secretVisibilityLabel}
+              aria-pressed={isSecretVisible}
+              title={secretVisibilityLabel}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setIsSecretVisible((current) => !current)}
+            />
+          ) : undefined
+        }
         onChange={(event) => {
           const nextValue = event.currentTarget.value;
           onChange(field.type === 'number' && nextValue !== '' ? Number(nextValue) : nextValue);

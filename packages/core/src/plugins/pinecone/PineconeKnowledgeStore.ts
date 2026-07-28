@@ -158,10 +158,6 @@ class PineconeKnowledgeStoreDriver implements ManagedKnowledgeStoreDriver {
     const records = chunks.map((chunk) => this.#chunkRecord(sourceId, version, chunk));
     const batches = batchNdjson(records, 32, 1_500_000);
     for (let index = 0; index < batches.length; index += 1) {
-      context.reportProgress?.({
-        message: `Uploading knowledge batch ${index + 1} of ${batches.length}.`,
-        percent: 15 + Math.round(((index + 1) / batches.length) * 70),
-      });
       const response = await this.#request(
         `${this.config.indexHost}/records/namespaces/${encodeURIComponent(namespace)}/upsert`,
         { method: 'POST', body: batches[index], headers: { 'Content-Type': 'application/x-ndjson' } },

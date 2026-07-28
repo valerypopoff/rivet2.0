@@ -1,6 +1,10 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import type { KnowledgeStoreConnectionDefinition, RuntimeSettings } from '../../../src/index.js';
+import type {
+  KnowledgeOperationContext,
+  KnowledgeStoreConnectionDefinition,
+  RuntimeSettings,
+} from '../../../src/index.js';
 import {
   createPineconeKnowledgeStore,
   PineconeKnowledgeError,
@@ -22,9 +26,49 @@ const definition: KnowledgeStoreConnectionDefinition = {
 const settings = {} as RuntimeSettings;
 const credentials = { apiKey: 'test-key' };
 
-const operationContext = () => ({ signal: new AbortController().signal });
+const operationContext = (reportProgress?: () => void) =>
+  ({
+    signal: new AbortController().signal,
+    ...(reportProgress ? { reportProgress } : {}),
+  }) as KnowledgeOperationContext;
 
 describe('Pinecone knowledge store', () => {
+  it('does not publish implicit progress even when a legacy callback-shaped property is supplied', async () => {
+    let implicitProgressCalls = 0;
+    const originalFetch = globalThis.fetch;
+    let manifestRecord: Record<string, unknown> | undefined;
+    globalThis.fetch = async (input, init = {}) => {
+      const url = String(input);
+      if (url.includes('/vectors/fetch')) {
+        return Response.json({ vectors: manifestRecord ? { __rivet_manifest__: { metadata: manifestRecord } } : {} });
+      }
+      if (url.endsWith('/upsert')) {
+        const records = String(init.body)
+          .split('\n')
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        manifestRecord = records.find((record) => record._id === '__rivet_manifest__') ?? manifestRecord;
+        return new Response('{}', { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+    try {
+      const store = createPineconeKnowledgeStore(definition, settings, credentials);
+      await store.syncSource(
+        {
+          source: { connectionId: 'books', sourceId: 'book' },
+          documents: [{ text: 'Book text' }],
+        },
+        operationContext(() => {
+          implicitProgressCalls += 1;
+        }),
+      );
+
+      assert.equal(implicitProgressCalls, 0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('validates successful connection-test responses instead of accepting proxy error pages', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('<html>proxy error</html>');

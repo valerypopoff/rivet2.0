@@ -1052,6 +1052,10 @@ status. `InternalProcessContext.reportProgress(...)` normalizes an optional mess
 and percentage and emits `ProcessEvents.progress` with the current node, process,
 and execution identity. The built-in **Report Progress** node is a required-value
 passthrough so authors can place progress updates on the actual workflow path.
+The reserved `setWebAppStatus` External Call is the other explicit
+workflow-authored entry point. Ordinary domain nodes and provider integrations
+must not call this capability implicitly; for example, Knowledge Store
+operation contexts deliberately omit progress reporting.
 `SubprocessorBridge`, executor serialization, Remote Debugger transport, execution
 recording/playback, and `createProcessor(...).onProgress` preserve this event. The
 app execution snapshot intentionally ignores it: web-app preview/host callbacks own

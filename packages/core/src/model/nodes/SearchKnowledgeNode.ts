@@ -141,7 +141,7 @@ export class SearchKnowledgeNodeImpl extends NodeImpl<SearchKnowledgeNode> {
           filter,
           rerank,
         },
-        { signal: context.signal, reportProgress: context.reportProgress },
+        { signal: context.signal },
       ),
       source,
       queries,

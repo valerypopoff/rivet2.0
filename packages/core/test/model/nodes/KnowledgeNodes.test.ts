@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   BuildKnowledgeContextNodeImpl,
+  GetKnowledgeSourceStatusNodeImpl,
   KnowledgeDocumentNodeImpl,
   KnowledgeSourceNodeImpl,
   SearchKnowledgeNodeImpl,
@@ -46,6 +47,66 @@ describe('knowledge nodes', () => {
     ];
 
     assert.deepEqual(editorTypes, ['jsonObject', 'jsonObject', 'jsonObject']);
+  });
+
+  it('does not give knowledge stores an implicit web-app progress capability', async () => {
+    const operationContexts: unknown[] = [];
+    const source = { connectionId: 'main', sourceId: 'book' };
+    const store: RivetKnowledgeStore = {
+      capabilities: {},
+      async getSourceStatus(request, operationContext) {
+        operationContexts.push(operationContext);
+        return { exists: false, source: request.source, message: 'Not initialized.' };
+      },
+      async syncSource(request, operationContext) {
+        operationContexts.push(operationContext);
+        return {
+          source: { ...request.source, version: 'v1' },
+          result: 'created',
+          documentCount: request.documents.length,
+          chunkCount: 1,
+          warnings: [],
+        };
+      },
+      async search(request, operationContext) {
+        operationContexts.push(operationContext);
+        return {
+          sourceFound: false,
+          source: request.source,
+          evidence: [],
+          queryResults: [],
+          message: 'Not initialized.',
+        };
+      },
+    };
+    const processContext = createContext(store);
+
+    await new SyncKnowledgeSourceNodeImpl(SyncKnowledgeSourceNodeImpl.create()).process(
+      {
+        source: { type: 'knowledge-source', value: source },
+        documents: { type: 'string', value: 'Book text' },
+      } as Inputs,
+      processContext,
+    );
+    await new GetKnowledgeSourceStatusNodeImpl(GetKnowledgeSourceStatusNodeImpl.create()).process(
+      { source: { type: 'knowledge-source', value: source } } as Inputs,
+      processContext,
+    );
+    await new SearchKnowledgeNodeImpl(SearchKnowledgeNodeImpl.create()).process(
+      {
+        source: { type: 'knowledge-source', value: source },
+        query: { type: 'string', value: 'Question' },
+      } as Inputs,
+      processContext,
+    );
+
+    assert.equal(operationContexts.length, 3);
+    assert.equal(
+      operationContexts.some((operationContext) =>
+        Object.prototype.hasOwnProperty.call(operationContext, 'reportProgress'),
+      ),
+      false,
+    );
   });
 
   it('creates a source reference from dynamic IDs and an optional exact version', async () => {
