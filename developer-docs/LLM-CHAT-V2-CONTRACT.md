@@ -248,13 +248,26 @@ paths and should not be used as the primary target for new provider refactors.
   by tests before moving normalization code.
 - Streaming output must preserve response text, all messages, request status,
   request body, usage, reasoning, and response-error ports.
-- `Prompt` and `Assemble Prompt` system messages remain system messages through
-  Rivet's provider-neutral AI SDK request. The captured `LLM request body` is
-  intentionally the provider's actual wire body, not a normalized Rivet view:
-  OpenAI Responses uses `input` and represents system instructions as
-  `developer` items, while OpenAI-compatible chat-completions providers keep
-  them as `system` entries in `messages`. Do not rewrite either transport merely
-  to make the diagnostic shape uniform.
+- `Prompt` and `Assemble Message` can create distinct `system` and `developer`
+  chat messages. AI SDK's provider-neutral `ModelMessage` exposes only `system`
+  for instruction messages, so `messageConverter.ts` temporarily represents
+  both roles that way. At the OpenAI and Custom OpenAI-compatible HTTP boundary,
+  `developerMessageRoles.ts` restores the explicit Rivet roles in either
+  chat-completions `messages` or Responses `input`. It sends the request only
+  when the number of provider instruction items exactly matches the recorded
+  role plan; unfamiliar or mismatched request shapes fail with a content-free
+  diagnostic rather than silently downgrading a developer message or partially
+  mutating the request. Anthropic and Google retain the provider-neutral system-instruction
+  representation because their transports do not expose an equivalent
+  developer role. The captured `LLM request body` remains the actual transformed
+  body sent on the wire, not a normalized Rivet view.
+- The legacy Anthropic and Google chat nodes also accept Prompt-provided
+  `developer` messages. They combine those messages with their dedicated system
+  input and any Prompt-provided `system` messages, then remove all instruction
+  messages from the conversational message list before invoking the provider.
+  Their request-token estimates include the combined instruction text.
+  Execution-output rendering must label developer messages explicitly rather
+  than falling through to the unknown-message presentation.
 - System messages supplied through the `Prompt` input are additive. An empty
   `System Prompt` input leaves them untouched; a non-empty dedicated system
   prompt is prepended without replacing any of them. The merge checks the

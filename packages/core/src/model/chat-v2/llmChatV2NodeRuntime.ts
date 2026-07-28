@@ -4,6 +4,8 @@ import type { GptFunction } from '../DataValue.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
+import { coercePromptToChatMessages, prependSystemPrompt } from '../chat/chatMessages.js';
+import { getInstructionMessageRoles, restoreOpenAICompatibleInstructionRoles } from './developerMessageRoles.js';
 import {
   createChatV2ResponseOutput,
   mergeCustomProviderResponseFormatOptions,
@@ -90,6 +92,15 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
       customEnvironmentName: effectiveData.customProviderApiKeyEnvVarName,
     });
   const apiKey = credential.value;
+  const prompt = inputs['prompt' as PortId];
+  const systemPrompt = inputs['systemPrompt' as PortId];
+  const instructionRoles = getInstructionMessageRoles(
+    prependSystemPrompt(coercePromptToChatMessages(prompt), systemPrompt),
+  );
+  const transformRequestBody =
+    (provider === 'openai' || provider === 'custom') && instructionRoles.includes('developer')
+      ? (body: unknown) => restoreOpenAICompatibleInstructionRoles(body, instructionRoles)
+      : undefined;
   const requestBodies: unknown[] | undefined = effectiveData.outputRequestStatus ? [] : undefined;
   const resolvedProvider = await createResolvedChatV2Provider({
     provider,
@@ -99,11 +110,10 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     headers: nodeHeaders,
     credential,
     onRequestBody: requestBodies == null ? undefined : (body) => requestBodies.push(body),
+    transformRequestBody,
   });
   const providerConfig = resolvedProvider.config;
   const model = resolvedProvider.model;
-  const prompt = inputs['prompt' as PortId];
-  const systemPrompt = inputs['systemPrompt' as PortId];
   const functions =
     effectiveData.useToolCalling && inputs['functions' as PortId] != null
       ? (coerceTypeOptional(inputs['functions' as PortId], 'gpt-function[]') as GptFunction[] | undefined)

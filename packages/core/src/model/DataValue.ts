@@ -25,6 +25,14 @@ export type SystemChatMessage = {
   isCacheBreakpoint?: boolean;
 };
 
+export type DeveloperChatMessage = {
+  type: 'developer';
+  message: ChatMessageMessagePart | ChatMessageMessagePart[];
+
+  /** If true, this message marks a breakpoint when used with prompt caching (as of right now, Anthropic-only). */
+  isCacheBreakpoint?: boolean;
+};
+
 export type UserChatMessage = {
   type: 'user';
   message: ChatMessageMessagePart | ChatMessageMessagePart[];
@@ -68,7 +76,12 @@ export type FunctionResponseChatMessage = {
   isCacheBreakpoint?: boolean;
 };
 
-export type ChatMessage = SystemChatMessage | UserChatMessage | AssistantChatMessage | FunctionResponseChatMessage;
+export type ChatMessage =
+  | SystemChatMessage
+  | DeveloperChatMessage
+  | UserChatMessage
+  | AssistantChatMessage
+  | FunctionResponseChatMessage;
 
 export type ChatMessageMessagePart =
   | string

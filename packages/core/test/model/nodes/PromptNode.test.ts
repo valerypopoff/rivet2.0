@@ -135,6 +135,22 @@ describe('PromptNode', () => {
     });
   });
 
+  it('creates a distinct developer message', async () => {
+    const result = await createNode({
+      type: 'developer',
+      promptText: 'Follow the application rules.',
+    }).process({}, context);
+
+    assert.deepStrictEqual(result.output, {
+      type: 'chat-message',
+      value: {
+        type: 'developer',
+        message: 'Follow the application rules.',
+        isCacheBreakpoint: undefined,
+      },
+    });
+  });
+
   it('finishes graph execution when a whole prompt text input resolves to an empty string', async () => {
     const promptNode = PromptNodeImpl.create();
     const graph = {

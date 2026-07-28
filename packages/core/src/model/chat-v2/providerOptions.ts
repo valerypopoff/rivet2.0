@@ -104,16 +104,14 @@ export type CreateChatV2ModelOptions = {
   baseURL?: string | undefined;
   headers?: Record<string, string> | undefined;
   onRequestBody?: ((body: unknown) => void) | undefined;
+  transformRequestBody?: ((body: unknown) => unknown) | undefined;
 };
 
 type StructuredOutputCapableChatModel = ChatV2Model & {
   supportsStructuredOutputs?: boolean;
 };
 
-export type ResolveChatV2ProviderConfigContext = Pick<
-  InternalProcessContext,
-  'getPluginConfig' | 'settings'
->;
+export type ResolveChatV2ProviderConfigContext = Pick<InternalProcessContext, 'getPluginConfig' | 'settings'>;
 
 export type ResolvedChatV2ProviderConfig = {
   baseURL?: string | undefined;
@@ -186,20 +184,62 @@ function cloneCapturedRequestBody(body: unknown): unknown {
   }
 }
 
-function createRequestBodyCapturingFetch(onRequestBody: (body: unknown) => void): typeof fetch {
+function serializeTransformedFetchBody(originalBody: BodyInit | null | undefined, transformedBody: unknown): BodyInit {
+  const serialized = JSON.stringify(transformedBody);
+  if (serialized === undefined) {
+    throw new Error('Provider request-body transformation returned a non-serializable value.');
+  }
+
+  if (originalBody instanceof ArrayBuffer) {
+    return new TextEncoder().encode(serialized);
+  }
+
+  if (ArrayBuffer.isView(originalBody)) {
+    return new TextEncoder().encode(serialized);
+  }
+
+  return serialized;
+}
+
+function removeStaleContentLength(headers: HeadersInit | undefined): HeadersInit | undefined {
+  if (headers == null) {
+    return undefined;
+  }
+
+  const nextHeaders = new Headers(headers);
+  nextHeaders.delete('content-length');
+  return nextHeaders;
+}
+
+function createRequestBodyProcessingFetch(options: CreateChatV2ModelOptions): typeof fetch {
   return async (input, init) => {
-    const body = parseFetchBody(init?.body);
-    if (body !== undefined) {
-      onRequestBody(cloneCapturedRequestBody(body));
+    const parsedBody = parseFetchBody(init?.body);
+    const processedBody =
+      parsedBody !== undefined && options.transformRequestBody != null
+        ? options.transformRequestBody(parsedBody)
+        : parsedBody;
+
+    if (processedBody !== undefined) {
+      options.onRequestBody?.(cloneCapturedRequestBody(processedBody));
     }
 
     const nativeFetch = globalThis.fetch as unknown as (input: unknown, init?: unknown) => Promise<Response>;
-    return nativeFetch(input, init);
+    const processedInit =
+      processedBody !== parsedBody
+        ? {
+            ...init,
+            body: serializeTransformedFetchBody(init?.body, processedBody),
+            headers: removeStaleContentLength(init?.headers),
+          }
+        : init;
+    return nativeFetch(input, processedInit);
   };
 }
 
-function maybeCreateRequestBodyCapturingFetch(options: CreateChatV2ModelOptions): typeof fetch | undefined {
-  return options.onRequestBody == null ? undefined : createRequestBodyCapturingFetch(options.onRequestBody);
+function maybeCreateRequestBodyProcessingFetch(options: CreateChatV2ModelOptions): typeof fetch | undefined {
+  return options.onRequestBody == null && options.transformRequestBody == null
+    ? undefined
+    : createRequestBodyProcessingFetch(options);
 }
 
 export async function resolveChatV2ProviderConfig(
@@ -260,7 +300,7 @@ export function createChatV2Model(
         organization: context.settings.openAiOrganization || undefined,
         baseURL: undefined,
         headers: options.headers,
-        fetch: maybeCreateRequestBodyCapturingFetch(options),
+        fetch: maybeCreateRequestBodyProcessingFetch(options),
       });
 
       return providerInstance.responses(modelId);
@@ -272,7 +312,7 @@ export function createChatV2Model(
           options.apiKey || context.settings.anthropicApiKey || context.getPluginConfig('anthropicApiKey') || undefined,
         baseURL: undefined,
         headers: options.headers,
-        fetch: maybeCreateRequestBodyCapturingFetch(options),
+        fetch: maybeCreateRequestBodyProcessingFetch(options),
       });
 
       return providerInstance.messages(modelId);
@@ -283,7 +323,7 @@ export function createChatV2Model(
         apiKey: options.apiKey || context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined,
         baseURL: undefined,
         headers: options.headers,
-        fetch: maybeCreateRequestBodyCapturingFetch(options),
+        fetch: maybeCreateRequestBodyProcessingFetch(options),
       });
 
       return providerInstance.chat(modelId);
@@ -300,7 +340,7 @@ export function createChatV2Model(
         baseURL: options.baseURL,
         headers: options.headers,
         includeUsage: false,
-        fetch: maybeCreateRequestBodyCapturingFetch(options),
+        fetch: maybeCreateRequestBodyProcessingFetch(options),
       });
       const model = providerInstance.chatModel(modelId) as StructuredOutputCapableChatModel;
       // The installed OpenAI-compatible provider reads this from the model instance,

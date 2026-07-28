@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 
 ## Overview
 
-The Prompt Node is used to create a chat message, which is a string of text with an attached "type" indicating who sent the message (User, Assistant, System) and optionally an attached "name".
+The Prompt Node is used to create a chat message, which is a string of text with an attached "type" indicating who sent the message (User, Assistant, System, or Developer) and optionally an attached "name".
 
 The Prompt Node also provides the same interpolation capabilities as a [Text Node](./text.mdx), allowing you to dynamically insert values into the message.
 
@@ -58,13 +58,13 @@ A useful pattern is to use the default message `{{input}}` to convert any text i
 
 ## Editor Settings
 
-| Setting              | Description                                                                                                                                                                                                                                 | Default Value | Use Input Toggle | Input Data Type |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
-| Type                 | The type of the chat message. Can be one of the following: `system`, `user`, `assistant`, `function`.                                                                                                                                       | `user`        | Yes              | `string`        |
-| Name                 | The name to attach to the chat message.                                                                                                                                                                                                     | (empty)       | Yes              | `string`        |
-| Enable Function Call | If enabled, a `Function Call` input port will be added to the node, allowing you to attach a function call to the chat message.                                                                                                             | False         | No               | N/A             |
-| Compute Token Count  | If enabled, a `Token Count` output port will be added to the node, allowing you to compute the number of tokens in the chat message. This can be useful for keeping track of the total number of tokens used in a conversation with an LLM. | False         | No               | N/A             |
-| Prompt Text          | The text of the chat message. You can use `{{input}}` to dynamically insert values into the message. The generated message always uses LF (`\n`) line endings.                                                                              | `{{input}}`   | No               | `string`        |
+| Setting              | Description                                                                                                                                                                                                                                                                                    | Default Value | Use Input Toggle | Input Data Type |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
+| Type                 | The type of the chat message. Can be one of the following: `system`, `developer`, `user`, `assistant`, `function`. Developer messages express application instructions separately where the provider supports that role; other providers send them through their system-instruction mechanism. | `user`        | Yes              | `string`        |
+| Name                 | The name to attach to the chat message.                                                                                                                                                                                                                                                        | (empty)       | Yes              | `string`        |
+| Enable Function Call | If enabled, a `Function Call` input port will be added to the node, allowing you to attach a function call to the chat message.                                                                                                                                                                | False         | No               | N/A             |
+| Compute Token Count  | If enabled, a `Token Count` output port will be added to the node, allowing you to compute the number of tokens in the chat message. This can be useful for keeping track of the total number of tokens used in a conversation with an LLM.                                                    | False         | No               | N/A             |
+| Prompt Text          | The text of the chat message. You can use `{{input}}` to dynamically insert values into the message. The generated message always uses LF (`\n`) line endings.                                                                                                                                 | `{{input}}`   | No               | `string`        |
 
 </TabItem>
 
@@ -91,7 +91,7 @@ A useful pattern is to use the default message `{{input}}` to convert any text i
 
 ## Error Handling
 
-The Prompt Node will error if the `Prompt Text` is not provided or if the `Type` is not one of the allowed types (`system`, `user`, `assistant`, `function`).
+The Prompt Node will error if the `Prompt Text` is not provided or if the `Type` is not one of the allowed types (`system`, `developer`, `user`, `assistant`, `function`).
 
 ## FAQ
 

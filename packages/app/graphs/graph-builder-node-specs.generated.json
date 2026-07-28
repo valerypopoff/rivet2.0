@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:558f57a13765606f",
+  "catalogFingerprint": "fnv1a64:0d4e68437ab8f16d",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1580,6 +1580,7 @@
           "description": "Chat message role.",
           "allowedValues": [
             "system",
+            "developer",
             "user",
             "assistant",
             "function"

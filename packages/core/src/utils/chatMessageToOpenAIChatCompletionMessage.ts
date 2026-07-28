@@ -35,6 +35,13 @@ export async function chatMessageToOpenAIChatCompletionMessage(
         };
       }
     })
+    .with(
+      { type: 'developer' },
+      (m): ChatCompletionRequestMessage => ({
+        role: 'developer',
+        content: onlyStringContent(m),
+      }),
+    )
     .with({ type: 'user' }, async (m): Promise<ChatCompletionRequestMessage> => {
       const parts = Array.isArray(m.message) ? m.message : [m.message];
 

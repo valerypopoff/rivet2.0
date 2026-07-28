@@ -27,7 +27,7 @@ import { createInterpolationInputDefinition } from '../interpolationInputDefinit
 export type PromptNode = ChartNode<'prompt', PromptNodeData>;
 
 export type PromptNodeData = {
-  type: 'system' | 'user' | 'assistant' | 'function';
+  type: ChatMessage['type'];
   useTypeInput: boolean;
 
   promptText: string;
@@ -146,6 +146,7 @@ export class PromptNodeImpl extends NodeImpl<PromptNode> {
         label: 'Type',
         options: [
           { value: 'system', label: 'System' },
+          { value: 'developer', label: 'Developer' },
           { value: 'user', label: 'User' },
           { value: 'assistant', label: 'Assistant' },
           { value: 'function', label: 'Function' },
@@ -212,7 +213,7 @@ export class PromptNodeImpl extends NodeImpl<PromptNode> {
   static getUIData(): NodeUIData {
     return {
       infoBoxBody: dedent`
-        Outputs a chat message, which is a string of text with an attached "type" saying who sent the message (User, Assistant, System) and optionally an attached "name".
+        Outputs a chat message, which is a string of text with an attached "type" saying who sent the message (User, Assistant, System, Developer) and optionally an attached "name".
 
         Also provides the same <span style="color: var(--primary)">{{interpolation}}</span> capabilities as a Text node.
 
@@ -245,13 +246,21 @@ export class PromptNodeImpl extends NodeImpl<PromptNode> {
     const type = getInputOrData(this.data, inputs, 'type', 'string');
     const isCacheBreakpoint = getInputOrData(this.data, inputs, 'isCacheBreakpoint', 'boolean');
 
-    if (['assistant', 'system', 'user', 'function'].includes(type) === false) {
+    if (['assistant', 'system', 'developer', 'user', 'function'].includes(type) === false) {
       throw new Error(`Invalid type: ${type}`);
     }
 
     const message = match(type)
       .with(
         'system',
+        (type): ChatMessage => ({
+          type,
+          message: outputValue,
+          isCacheBreakpoint,
+        }),
+      )
+      .with(
+        'developer',
         (type): ChatMessage => ({
           type,
           message: outputValue,
@@ -327,6 +336,7 @@ export const promptNode = nodeDefinition(PromptNodeImpl, 'Prompt');
 
 const typeDisplay: Record<PromptNodeData['type'], string> = {
   assistant: 'Assistant',
+  developer: 'Developer',
   system: 'System',
   user: 'User',
   function: 'Function',

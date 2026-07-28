@@ -50,6 +50,14 @@ The older [Chat Node](./chat.mdx) remains available for existing graphs, but new
 
 </TabItem>
 
+Prompt messages created with the [Prompt](./prompt.mdx) or
+[Assemble Message](./assemble-message.mdx) node may use a distinct
+`developer` role. OpenAI and Custom OpenAI-compatible requests preserve that
+role in the HTTP request body. Anthropic and Google do not expose the same role,
+so LLM Chat sends developer content through their system-instruction mechanism.
+Provider and model support still applies; a Custom provider that rejects
+`developer` messages will return its normal provider error.
+
 <TabItem value="outputs">
 
 ## Outputs

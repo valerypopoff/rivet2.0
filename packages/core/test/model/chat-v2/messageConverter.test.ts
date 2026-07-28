@@ -4,6 +4,21 @@ import type { ChatMessage } from '../../../src/model/DataValue.js';
 import { chatMessagesToModelMessages } from '../../../src/model/chat-v2/messageConverter.js';
 
 describe('chatMessagesToModelMessages', () => {
+  it('represents developer messages as provider-neutral instruction messages', async () => {
+    const result = await chatMessagesToModelMessages(
+      [{ type: 'developer', message: 'Follow developer instructions.' }],
+      { provider: 'custom' },
+    );
+
+    assert.deepEqual(result, [
+      {
+        role: 'system',
+        content: 'Follow developer instructions.',
+        providerOptions: undefined,
+      },
+    ]);
+  });
+
   it('preserves Anthropic document metadata and cache breakpoints', async () => {
     const messages: ChatMessage[] = [
       {

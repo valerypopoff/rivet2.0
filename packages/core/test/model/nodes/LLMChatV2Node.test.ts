@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -260,7 +260,10 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(customBaseUrlEditor.label, 'Provider base URL');
     assert.equal(customBaseUrlEditor.useInputToggleDataKey, 'useCustomProviderBaseURLInput');
     assert.equal(customBaseUrlEditor.hideIf({ provider: 'custom' }), false);
-    assert.equal(providerAdvancedGroup.editors.some((editor: any) => editor.dataKey === 'baseURL'), false);
+    assert.equal(
+      providerAdvancedGroup.editors.some((editor: any) => editor.dataKey === 'baseURL'),
+      false,
+    );
     assert.equal(extraProviderOptionsEditor.type, 'code');
     assert.equal(extraProviderOptionsEditor.language, 'json');
     assert.equal(extraProviderOptionsEditor.useInputToggleDataKey, 'useExtraProviderOptionsInput');
@@ -536,7 +539,10 @@ describe('LLMChatV2NodeImpl', () => {
         required: false,
       },
     );
-    assert.equal(builtInInputNode.getInputDefinitions().find((input) => input.id === 'baseURL'), undefined);
+    assert.equal(
+      builtInInputNode.getInputDefinitions().find((input) => input.id === 'baseURL'),
+      undefined,
+    );
   });
 
   it('adds an extra provider options input when enabled', () => {
@@ -827,7 +833,10 @@ describe('LLMChatV2NodeImpl', () => {
 
     for (const editors of [inlineCustomEditors, profileEditors]) {
       const outputsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
-      assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label, 'Output reasoning');
+      assert.equal(
+        outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label,
+        'Output reasoning',
+      );
     }
     assert.ok(!inlineCustomEditors.some((editor) => editor.type === 'group' && editor.label === 'Reasoning'));
   });
@@ -1241,6 +1250,60 @@ describe('LLMChatV2NodeImpl', () => {
         },
       },
     });
+  });
+
+  it('restores explicit developer roles in Custom provider request bodies', async () => {
+    const node = createNode({
+      provider: 'custom',
+      model: 'openai-compatible-model',
+      customProviderBaseURL: 'https://api.example.test/v1',
+      customProviderApiKeyEnvVarName: 'CUSTOM_TEST_API_KEY',
+    });
+    const context = createRuntimeContextWithPluginEnv({
+      CUSTOM_TEST_API_KEY: 'sk-test-secret',
+    });
+    const runtime = await resolveLLMChatV2RuntimeConfig({
+      data: node.data,
+      nodeId: node.chartNode.id,
+      inputs: createPromptInputs({
+        prompt: {
+          type: 'chat-message[]',
+          value: [
+            { type: 'system', message: 'System instruction' },
+            { type: 'developer', message: 'Developer instruction' },
+            { type: 'user', message: 'User message' },
+          ],
+        },
+      }),
+      context,
+    });
+    const model = runtime.runOptions.model as unknown as { config?: { fetch?: typeof fetch } };
+    let sentBody: any;
+    const fetchMock = mock.method(globalThis, 'fetch', async (_input, init) => {
+      sentBody = JSON.parse(String(init?.body));
+      return new Response('{}', { status: 200 });
+    });
+
+    try {
+      assert.ok(model.config?.fetch);
+      await model.config.fetch('https://api.example.test/v1/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: 'System instruction' },
+            { role: 'system', content: 'Developer instruction' },
+            { role: 'user', content: 'User message' },
+          ],
+        }),
+      });
+
+      assert.deepEqual(
+        sentBody.messages.map((message: { role: string }) => message.role),
+        ['system', 'developer', 'user'],
+      );
+    } finally {
+      fetchMock.mock.restore();
+    }
   });
 
   it('uses raw Custom provider JSON object mode without an AI SDK output descriptor', async () => {
