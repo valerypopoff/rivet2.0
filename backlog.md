@@ -1,3 +1,5 @@
+- Make LLM chat accept an array of LLM profiles and use it as a fallback chain
+
 - Need to show the curent graph name somewhere. Like, by pressing some button?
 
 

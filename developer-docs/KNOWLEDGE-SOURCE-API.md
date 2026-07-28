@@ -137,6 +137,18 @@ Host registries are accepted by core and Node `runGraph` / `createProcessor`, `r
 
 Registries contain live callback objects and are never serialized to a remote executor. Remote Node runs resolve project provider configuration on the remote runtime.
 
+The Node API automatically registers trusted built-in plugin specs declared by
+the project when `createProcessor()`, `runGraph()`, or `createGraphRunner()`
+uses the default registry. This makes built-in Knowledge Store providers
+available in headless and published web-app runs and includes their environment
+fallbacks, such as `PINECONE_API_KEY`, in plugin settings. A host-supplied
+registry remains authoritative and is never mutated; URI and package plugins
+still require explicit host loading. Node environment extraction honors
+declared fallbacks on both string and secret plugin configuration fields.
+Passing `pluginEnv` explicitly replaces automatic plugin-environment extraction
+for that processor, so hosts that provide it must include every fallback they
+want Knowledge Store providers to see.
+
 ## Data and Node Surface
 
 Three scalar `DataValue` types are first-class and also receive array/function variants:

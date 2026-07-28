@@ -267,3 +267,22 @@ export function makeKnowledgeStatusProject(): Project {
   ];
   return project;
 }
+
+export function makePineconeKnowledgeStatusProject(): Project {
+  const project = makeKnowledgeStatusProject();
+  project.metadata.knowledgeStores = {
+    primary: {
+      displayName: 'Books',
+      provider: 'pinecone',
+      pluginId: 'pinecone',
+      config: {
+        apiVersion: '2026-04',
+        indexHost: 'https://books.example.svc.pinecone.io',
+        namespaceTemplate: 'book-{sourceId}',
+        textField: 'chunk_text',
+      },
+    },
+  };
+  project.plugins = [{ type: 'built-in', id: 'pinecone', name: 'Pinecone' }];
+  return project;
+}

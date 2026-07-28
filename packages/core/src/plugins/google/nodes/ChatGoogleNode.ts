@@ -625,6 +625,7 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
               temperature: useTopP ? undefined : temperature,
               top_p: useTopP ? topP : undefined,
               top_k: undefined,
+              systemPrompt,
               project: project!,
               location: location!,
               applicationCredentials: applicationCredentials!,

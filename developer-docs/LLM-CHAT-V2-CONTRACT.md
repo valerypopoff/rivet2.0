@@ -265,6 +265,8 @@ paths and should not be used as the primary target for new provider refactors.
   `developer` messages. They combine those messages with their dedicated system
   input and any Prompt-provided `system` messages, then remove all instruction
   messages from the conversational message list before invoking the provider.
+  Google's Generative AI key and Vertex project-credential transports both use
+  the resulting provider-native system instruction.
   Their request-token estimates include the combined instruction text.
   Execution-output rendering must label developer messages explicitly rather
   than falling through to the unknown-message presentation.

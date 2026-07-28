@@ -2,7 +2,6 @@ import {
   type DataValue,
   type NodeRegistration,
   type Project,
-  type StringPluginConfigurationSpec,
   globalRivetNodeRegistry,
   type AttachedData,
   coreCreateProcessor,
@@ -22,6 +21,7 @@ import {
   type NodeGraph,
   type ProcessContext,
   type GraphProcessorRuntimeProfiler,
+  resolveBuiltInPlugin,
 } from '@valerypopoff/rivet2-core';
 
 import { readFile } from 'node:fs/promises';
@@ -134,8 +134,10 @@ type DefaultRunGraphRuntimePlan = 'compatible' | 'default-safe';
 
 export function createProcessor(project: Project, options: NodeCreateProcessorOptions): NodeCreatedProcessor {
   const { runtimeProfile, runtimeProfiler, ...processorOptions } = options;
+  const registry = resolveNodeProcessorRegistry(project, processorOptions.registry);
   const effectiveProcessorOptions = {
     ...processorOptions,
+    registry,
     captureNodeTimings:
       processorOptions.captureNodeTimings ?? (processorOptions.remoteDebugger !== undefined ? true : undefined),
   };
@@ -289,9 +291,18 @@ export function createGraphRunner(project: Project, options: NodeGraphRunnerOpti
   };
   void ignoredRuntimeProfile;
 
-  const processContext = createNodeProcessContext(processorOptions, resolveNodePluginEnv(processorOptions), {
-    codeRunner: undefined,
-  });
+  const typedProcessorOptions = processorOptions as RunGraphOptions;
+  const effectiveProcessorOptions: RunGraphOptions = {
+    ...typedProcessorOptions,
+    registry: resolveNodeProcessorRegistry(project, typedProcessorOptions.registry),
+  };
+  const processContext = createNodeProcessContext(
+    effectiveProcessorOptions,
+    resolveNodePluginEnv(effectiveProcessorOptions),
+    {
+      codeRunner: undefined,
+    },
+  );
   const activeProcessors = new Set<NodeGraphProcessor>();
   let disposed = false;
 
@@ -312,7 +323,7 @@ export function createGraphRunner(project: Project, options: NodeGraphRunnerOpti
         processContext,
         looseDataValuesToDataValues(runOptions.inputs ?? {}),
         looseDataValuesToDataValues(runOptions.context ?? {}),
-        { returnWhenGraphOutputsReady: processorOptions.returnWhenGraphOutputsReady === true },
+        { returnWhenGraphOutputsReady: effectiveProcessorOptions.returnWhenGraphOutputsReady === true },
       );
 
       if (runOptions.abortSignal?.aborted) {
@@ -347,9 +358,30 @@ export function createGraphRunner(project: Project, options: NodeGraphRunnerOpti
       }
       runOptions.abortSignal?.throwIfAborted();
 
-      return await runWithProcessor(createRunnerProcessor(project, processorOptions), runOptions);
+      return await runWithProcessor(createRunnerProcessor(project, effectiveProcessorOptions), runOptions);
     },
   };
+}
+
+function resolveNodeProcessorRegistry(
+  project: Project,
+  registry: NodeRegistration<any, any> | undefined,
+): NodeRegistration<any, any> {
+  if (registry) {
+    return registry;
+  }
+
+  const registeredPluginIds = new Set(globalRivetNodeRegistry.getPlugins().map((plugin) => plugin.id));
+  for (const spec of project.plugins ?? []) {
+    if (spec.type !== 'built-in' || registeredPluginIds.has(spec.id)) {
+      continue;
+    }
+
+    globalRivetNodeRegistry.registerPlugin(resolveBuiltInPlugin(spec.id));
+    registeredPluginIds.add(spec.id);
+  }
+
+  return globalRivetNodeRegistry;
 }
 
 export async function runGraph(project: Project, options: NodeRunGraphOptions): Promise<Record<string, DataValue>> {
@@ -548,21 +580,23 @@ function bindAbortSignal(processor: NodeGraphProcessor, abortSignal?: AbortSigna
 function getPluginEnvFromProcessEnv(registry?: NodeRegistration<any, any>) {
   const pluginEnv: Record<string, string> = {};
   for (const plugin of (registry ?? globalRivetNodeRegistry).getPlugins() ?? []) {
-    const configs = Object.entries(plugin.configSpec ?? {}).filter(([, c]) => c.type === 'string') as [
-      string,
-      StringPluginConfigurationSpec,
-    ][];
-    for (const [configName, config] of configs) {
-      if (config.pullEnvironmentVariable) {
-        const envVarName =
-          typeof config.pullEnvironmentVariable === 'string'
-            ? config.pullEnvironmentVariable
-            : config.pullEnvironmentVariable === true
-              ? configName
-              : undefined;
-        if (envVarName) {
-          pluginEnv[envVarName] = process.env[envVarName] ?? '';
-        }
+    for (const [configName, config] of Object.entries(plugin.configSpec ?? {})) {
+      if (
+        (config.type !== 'string' && config.type !== 'secret') ||
+        !('pullEnvironmentVariable' in config) ||
+        !config.pullEnvironmentVariable
+      ) {
+        continue;
+      }
+
+      const envVarName =
+        typeof config.pullEnvironmentVariable === 'string'
+          ? config.pullEnvironmentVariable
+          : config.pullEnvironmentVariable === true
+            ? configName
+            : undefined;
+      if (envVarName) {
+        pluginEnv[envVarName] = process.env[envVarName] ?? '';
       }
     }
   }

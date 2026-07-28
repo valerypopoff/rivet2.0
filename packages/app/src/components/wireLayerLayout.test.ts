@@ -38,7 +38,10 @@ test('wire hover uses transparent rendered-wire hit paths instead of global curv
   assert.match(wireSource, /from '\.\/nodeCanvas\/wireGeometry\.js';/);
   assert.match(wireSource, /const WireInteractionTarget/);
   assert.match(wireSource, /className="wire-hit-area"/);
-  assert.match(wireSource, /d=\{getWirePath\(\{ sx, sy, ex, ey \}\)\}/);
+  assert.match(
+    wireSource,
+    /d=\{getWirePath\(\{\s*sx,\s*sy,\s*ex,\s*ey,\s*startDirection:\s*startEndpointDirection,\s*endDirection:\s*endEndpointDirection,\s*\}\)\}/,
+  );
 });
 
 test('wire bend handles are local rendered-wire affordances with persisted connection data', () => {

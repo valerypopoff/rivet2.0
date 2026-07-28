@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
+import { getVertexGenerativeModelOptions } from '../../../../src/plugins/google/google.js';
 import { getChatGoogleNodeMessages } from '../../../../src/plugins/google/nodes/ChatGoogleNode.js';
 
 describe('legacy Google instruction messages', () => {
@@ -36,6 +37,29 @@ describe('legacy Google instruction messages', () => {
       {
         messages: [],
         systemPrompt: 'Developer only',
+      },
+    );
+  });
+
+  it('forwards the combined instruction through the Vertex model configuration', () => {
+    assert.deepEqual(
+      getVertexGenerativeModelOptions({
+        model: 'gemini-pro',
+        systemPrompt: 'System and developer instructions',
+        max_output_tokens: 2048,
+        temperature: 0.4,
+        top_p: 0.9,
+        top_k: 32,
+      }),
+      {
+        model: 'gemini-pro',
+        systemInstruction: 'System and developer instructions',
+        generationConfig: {
+          maxOutputTokens: 2048,
+          temperature: 0.4,
+          topP: 0.9,
+          topK: 32,
+        },
       },
     );
   });

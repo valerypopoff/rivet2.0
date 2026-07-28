@@ -3,9 +3,13 @@ import * as assert from 'node:assert/strict';
 import { loadTestGraphs } from './testUtils';
 import {
   CodeNodeImpl,
+  createBuiltInRegistry,
+  createGraphRunner,
   createProcessor,
   ExecutionRecorder,
+  getKnowledgeStoreProvider,
   globalRivetNodeRegistry,
+  resetGlobalRivetNodeRegistry,
   runGraph,
   type ChartNode,
   type CodeRunner,
@@ -27,6 +31,7 @@ import {
   makeSubgraphChainProject,
   makeTextChainProject,
 } from './runtimeSpeedFixtures.js';
+import { makePineconeKnowledgeStatusProject } from './webAppFixtures.js';
 
 function makeCodeProject(code: string): Project {
   const codeNode = CodeNodeImpl.create();
@@ -308,6 +313,76 @@ async function assertRunGraphMatchesCompatible(
 }
 
 describe('api', () => {
+  it('registers project-declared built-in plugins for the default Node registry', () => {
+    resetGlobalRivetNodeRegistry();
+    const project = makeCodeProject(`return { output1: { type: 'string', value: 'done' } };`);
+    project.plugins = [{ type: 'built-in', id: 'pinecone', name: 'Pinecone' }];
+
+    assert.equal(
+      globalRivetNodeRegistry.getPlugins().some((plugin) => plugin.id === 'pinecone'),
+      false,
+    );
+
+    const processor = createProcessor(project, {});
+    const repeatedProcessor = createProcessor(project, {});
+    const runner = createGraphRunner(project, {});
+    try {
+      assert.equal(globalRivetNodeRegistry.getPlugins().filter((plugin) => plugin.id === 'pinecone').length, 1);
+      assert.equal(getKnowledgeStoreProvider('pinecone')?.id, 'pinecone');
+    } finally {
+      processor.dispose();
+      repeatedProcessor.dispose();
+      runner.dispose();
+      resetGlobalRivetNodeRegistry();
+    }
+  });
+
+  it('does not augment a host-supplied registry from project plugin specs', () => {
+    const project = makeCodeProject(`return { output1: { type: 'string', value: 'done' } };`);
+    project.plugins = [{ type: 'built-in', id: 'pinecone', name: 'Pinecone' }];
+    const registry = createBuiltInRegistry();
+
+    const processor = createProcessor(project, { registry });
+    try {
+      assert.deepEqual(registry.getPlugins(), []);
+    } finally {
+      processor.dispose();
+    }
+  });
+
+  it('loads secret plugin environment variables for project-backed Knowledge Stores', async () => {
+    resetGlobalRivetNodeRegistry();
+    const originalApiKey = process.env.PINECONE_API_KEY;
+    const originalFetch = globalThis.fetch;
+    const requestApiKeys: Array<string | null> = [];
+
+    process.env.PINECONE_API_KEY = 'headless-pinecone-key';
+    globalThis.fetch = async (_input, init = {}) => {
+      requestApiKeys.push(new Headers(init.headers).get('Api-Key'));
+      return Response.json({ vectors: {} });
+    };
+
+    try {
+      const project = makePineconeKnowledgeStatusProject();
+      const environmentOutputs = await runGraph(project, {});
+      const explicitOutputs = await runGraph(project, {
+        pluginEnv: { PINECONE_API_KEY: 'explicit-pinecone-key' },
+      });
+
+      assert.equal(environmentOutputs.value?.type, 'string');
+      assert.equal(explicitOutputs.value?.type, 'string');
+      assert.deepEqual(requestApiKeys, ['headless-pinecone-key', 'explicit-pinecone-key']);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetGlobalRivetNodeRegistry();
+      if (originalApiKey === undefined) {
+        delete process.env.PINECONE_API_KEY;
+      } else {
+        process.env.PINECONE_API_KEY = originalApiKey;
+      }
+    }
+  });
+
   it('persists Stored Value nodes across separate runGraph calls through synchronous host callbacks', async () => {
     const values = new Map<string, string>();
     const storedValueStore = {

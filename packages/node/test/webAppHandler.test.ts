@@ -13,6 +13,7 @@ import {
   type DataValue,
   type Project,
   type RivetKnowledgeStore,
+  resetGlobalRivetNodeRegistry,
   RIVET_WEB_APP_DOCUMENT_CSS,
   RIVET_WEB_APP_ASSET_CACHE_CONTROL,
   RIVET_WEB_APP_ASSET_ROUTE,
@@ -28,6 +29,7 @@ import {
 import {
   makeExternalStatusProject,
   makeKnowledgeStatusProject,
+  makePineconeKnowledgeStatusProject,
   makeStoredValueProject,
   makeWebAppActionRequest,
   makeWebAppProject,
@@ -1255,6 +1257,40 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.equal(response.status, 200);
     assert.deepEqual(body.outputs.value, { type: 'string', value: 'handler store' });
+  });
+
+  void it('loads project-declared built-in Knowledge Store providers for HTTP actions', async () => {
+    resetGlobalRivetNodeRegistry();
+    const originalApiKey = process.env.PINECONE_API_KEY;
+    const originalFetch = globalThis.fetch;
+    let requestApiKey: string | null = null;
+
+    process.env.PINECONE_API_KEY = 'published-pinecone-key';
+    globalThis.fetch = async (_input, init = {}) => {
+      requestApiKey = new Headers(init.headers).get('Api-Key');
+      return Response.json({ vectors: {} });
+    };
+
+    try {
+      const handler = createRivetWebAppHandler(makePineconeKnowledgeStatusProject(), {
+        basePath: '/app',
+        uiGraphId: 'ui-graph',
+      });
+      const response = await handler.handleRequest(makeWebAppActionRequest());
+      const body = (await response.json()) as { outputs: Record<string, DataValue> };
+
+      assert.equal(response.status, 200);
+      assert.equal(body.outputs.value?.type, 'string');
+      assert.equal(requestApiKey, 'published-pinecone-key');
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetGlobalRivetNodeRegistry();
+      if (originalApiKey === undefined) {
+        delete process.env.PINECONE_API_KEY;
+      } else {
+        process.env.PINECONE_API_KEY = originalApiKey;
+      }
+    }
   });
 
   void it('dispatches an action through a repaired duplicate component ID', async () => {
