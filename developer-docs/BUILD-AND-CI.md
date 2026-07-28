@@ -262,9 +262,14 @@ node .yarn/releases/yarn-4.17.1.cjs check:graph-builder-policy
 
 `yarn check:graph-builder-assets` is the release-facing aggregate gate. It
 runs the retained legacy Graph Creator data check plus the policy and generated
-node help/specification checks. Keep release workflows on this aggregate
-command so adding a transactional asset does not silently leave packaging
-prerequisites behind.
+node help/specification checks. The node-spec command first builds Core's ESM
+output because the app authoring catalog deliberately consumes Core through its
+public package export; this keeps the aggregate gate valid in fresh CI
+checkouts where `packages/core/dist` does not exist yet. The checker then uses
+that same compiled export for its built-in registry, avoiding a mixed
+source/compiled module graph. Keep release workflows on this aggregate command
+so adding a transactional asset does not silently leave packaging prerequisites
+behind.
 
 Policy-runner unit and mocked-provider contract tests use
 `policyRunnerTestFixture.ts` to construct the same sealed two-variant shape in
@@ -309,6 +314,8 @@ synthesize it from hardened behavior.
 authoring catalog through the same app adapter used by transactional Graph
 Builder sessions and compares its compact portable metadata with
 [`graph-builder-node-specs.generated.json`](../packages/app/graphs/graph-builder-node-specs.generated.json).
+Its package command builds `@valerypopoff/rivet2-core` ESM first; do not invoke
+the `.mjs` file directly unless that output is already present and current.
 The same checker derives bounded summaries from the checked node-reference
 pages into
 [`graph-builder-node-help.generated.json`](../packages/app/graphs/graph-builder-node-help.generated.json).

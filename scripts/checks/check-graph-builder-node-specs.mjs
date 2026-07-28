@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NodeRegistration, registerBuiltInNodes } from '../../packages/core/src/index.ts';
+import { NodeRegistration, registerBuiltInNodes } from '@valerypopoff/rivet2-core';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const assetRelativePath = 'packages/app/graphs/graph-builder-node-specs.generated.json';
