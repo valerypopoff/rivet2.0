@@ -16,7 +16,13 @@ import {
   type LLMChatV2Node,
 } from '../chat-v2/llmChatV2NodeData.js';
 import { isLLMChatV2StructuredResponseFormat } from '../chat-v2/chatV2FeatureCompatibility.js';
+import {
+  buildLLMProfileRequestDiagnostics,
+  compactLLMProfileRequestErrors,
+  compactLLMProfileRequestStatuses,
+} from '../chat-v2/llmProfileFallback.js';
 import { getChatV2ModelInfo } from '../chat-v2/modelRegistry.js';
+import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from '../chat-v2/chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
   cloneLLMChatV2EditorCacheOutputs,
@@ -29,7 +35,6 @@ import {
   googleThinkingLevelOptions,
   openAIReasoningEffortOptions,
 } from '../chat-v2/providerOptions.js';
-import { runChatV2Pipeline } from '../chat-v2/chatV2Pipeline.js';
 import { runChatV2PipelineWithToolContinuation } from '../chat-v2/toolContinuation.js';
 import { delegateToolCall } from './toolCallDelegation.js';
 
@@ -153,9 +158,12 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     if (usesProfile) {
       inputs.unshift({
         id: 'llmProfile' as PortId,
-        title: 'LLM Profile',
-        dataType: 'llm-config',
+        title: 'LLM Profiles',
+        dataType: ['llm-config', 'llm-config[]'] as const,
         required: true,
+        coerced: true,
+        splitRunBehavior: 'preserve-array',
+        description: 'One LLM Profile or an ordered fallback chain. Profiles are tried left to right.',
       });
     }
 
@@ -284,21 +292,66 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     }
 
     if (this.data.outputRequestStatus) {
+      const profileArrayRequestDetails =
+        this.data.configurationMode === 'profile'
+          ? (['number', 'number[]', 'any'] as const)
+          : this.data.retryOnNon200
+            ? 'number[]'
+            : 'number';
+      outputs.push({
+        id: 'requestStatus' as PortId,
+        title: 'Response Status',
+        dataType: profileArrayRequestDetails,
+        ...(this.data.configurationMode === 'profile'
+          ? {
+              description:
+                'A scalar profile keeps the normal status shape. An LLM Profile array groups values by profile: one request is a number, retries are a number array.',
+            }
+          : {}),
+      });
+    }
+
+    if (shouldOutputChatV2RequestError(this.data)) {
+      const profileArrayRequestErrors =
+        this.data.configurationMode === 'profile'
+          ? (['string', 'string[]', 'any'] as const)
+          : this.data.retryOnNon200
+            ? 'string[]'
+            : 'string';
+      outputs.push({
+        id: 'requestError' as PortId,
+        title: 'Response Error',
+        dataType: profileArrayRequestErrors,
+        ...(this.data.configurationMode === 'profile'
+          ? {
+              description:
+                'A scalar profile keeps the normal error shape. An LLM Profile array keeps profile positions when errors occur: one error is a string and retries are an array.',
+            }
+          : {}),
+      });
+    }
+
+    if (shouldOutputChatV2RequestBody(this.data)) {
+      outputs.push({
+        id: 'requestBody' as PortId,
+        title: 'LLM request body',
+        dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'] as const,
+      });
+    }
+
+    if (this.data.configurationMode === 'profile') {
       outputs.push(
         {
-          id: 'requestStatus' as PortId,
-          title: 'Response Status',
-          dataType: this.data.retryOnNon200 ? 'number[]' : 'number',
+          id: 'llmProfileSummary' as PortId,
+          title: 'LLM Profile Summary',
+          dataType: 'string',
+          description: 'Human-readable profile fallback outcome for this LLM Chat run.',
         },
         {
-          id: 'requestError' as PortId,
-          title: 'Response Error',
-          dataType: this.data.retryOnNon200 ? 'string[]' : 'string',
-        },
-        {
-          id: 'requestBody' as PortId,
-          title: 'LLM request body',
-          dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'] as const,
+          id: 'llmProfileAttempts' as PortId,
+          title: 'LLM Profile Attempts',
+          dataType: 'object[]',
+          description: 'Chronological provider/profile attempts for this LLM Chat run.',
         },
       );
     }
@@ -330,7 +383,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
         type: 'markdown',
         disableLinks: true,
         text: [
-          getBodyLine('Configuration', 'From LLM Profile input'),
+          getBodyLine('Configuration', 'From LLM Profiles input'),
           ...(this.data.useToolCalling ? [getBodyLine('Tools', 'Enabled')] : []),
           ...(this.data.responseFormat ? [getBodyLine('Response format', this.data.responseFormat)] : []),
         ].join('\n'),
@@ -378,6 +431,32 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     const toolCallContinuation = context.toolCallContinuation;
 
     if (runtime.cachedOutputs != null) {
+      if (runtime.profileChainUsesArray && this.data.outputRequestStatus) {
+        const cachedStatus = runtime.cachedOutputs['requestStatus' as PortId];
+        if (cachedStatus?.type === 'any' && Array.isArray(cachedStatus.value)) {
+          cachedStatus.value = compactLLMProfileRequestStatuses(cachedStatus.value);
+        }
+      }
+      if (runtime.profileChainUsesArray && shouldOutputChatV2RequestError(this.data)) {
+        const cachedError = runtime.cachedOutputs['requestError' as PortId];
+        if (cachedError?.type === 'any' && Array.isArray(cachedError.value)) {
+          cachedError.value = compactLLMProfileRequestErrors(cachedError.value);
+        }
+      }
+
+      // Cached provider output belongs to an earlier invocation, whereas this
+      // port is an observability record for physical profile attempts made by
+      // the current one. A cache hit made no such attempt.
+      if (runtime.profileAttempts != null) {
+        runtime.cachedOutputs['llmProfileAttempts' as PortId] = {
+          type: 'object[]',
+          value: [],
+        };
+        runtime.cachedOutputs['llmProfileSummary' as PortId] = {
+          type: 'string',
+          value: 'Editor cache hit — no LLM Profile calls were made for this run.',
+        };
+      }
       return runtime.cachedOutputs;
     }
 
@@ -412,15 +491,53 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
               delegatedToolCall: delegated.record,
             };
           },
+          runPipeline: runtime.runPipeline,
         })
-      : await runChatV2Pipeline(runtime.runOptions);
+      : await runtime.runPipeline(runtime.runOptions);
+
+    if (runtime.profileAttempts != null) {
+      result.commonOutputs['llmProfileAttempts' as PortId] = {
+        type: 'object[]',
+        value: runtime.profileAttempts,
+      };
+      result.commonOutputs['llmProfileSummary' as PortId] = {
+        type: 'string',
+        value: runtime.getProfileSummary!(),
+      };
+
+      if (runtime.profileChainUsesArray && runtime.profileChainLength != null) {
+        const diagnostics = buildLLMProfileRequestDiagnostics(runtime.profileChainLength, runtime.profileAttempts);
+        // Rivet has scalar and one-dimensional array Data Values, but no
+        // nested-array Data Type. Keep profile/retry grouping as portable JSON
+        // inside Any values. One request or error stays scalar when doing so
+        // preserves useful diagnostic information.
+        if (this.data.outputRequestStatus) {
+          result.commonOutputs['requestStatus' as PortId] = {
+            type: 'any',
+            value: diagnostics.statuses,
+          };
+        }
+        if (shouldOutputChatV2RequestError(this.data)) {
+          result.commonOutputs['requestError' as PortId] = {
+            type: 'any',
+            value: diagnostics.errors,
+          };
+        }
+      }
+    }
 
     if (toolCallContinuation && result.functionCalls.length > 0) {
       toolCallContinuation.release();
     }
 
-    if (runtime.cacheKey != null && runtime.editorCache != null) {
-      runtime.editorCache.set(runtime.cacheKey, cloneLLMChatV2EditorCacheOutputs(result.commonOutputs));
+    if (runtime.cacheKey != null && runtime.editorCache != null && !runtime.isProfileFallbackExhausted()) {
+      const cacheOutputs = cloneLLMChatV2EditorCacheOutputs(result.commonOutputs);
+      // Attempt history is specific to this execution. Rebuild it as an empty
+      // observability value on a later cache hit instead of presenting stale
+      // provider calls as if they happened again.
+      delete cacheOutputs['llmProfileAttempts' as PortId];
+      delete cacheOutputs['llmProfileSummary' as PortId];
+      runtime.editorCache.set(runtime.cacheKey, cacheOutputs);
     }
 
     return result.commonOutputs;

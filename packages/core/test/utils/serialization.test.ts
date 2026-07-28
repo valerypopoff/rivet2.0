@@ -737,6 +737,30 @@ describe('serialization compatibility', () => {
     assert.equal(deserialized.connections[0]!.inputNodeId, 'b');
   });
 
+  it('migrates legacy LLM Chat request details into separate diagnostic settings', () => {
+    const graph: NodeGraph = {
+      metadata: { id: 'g-legacy-llm-diagnostics', name: 'Legacy LLM diagnostics', description: '' },
+      nodes: [
+        {
+          id: 'chat',
+          type: 'llmChatV2',
+          title: 'LLM Chat',
+          visualData: { x: 0, y: 0 },
+          data: { outputRequestStatus: true },
+          variants: [],
+        },
+      ],
+      connections: [],
+    };
+
+    const deserialized = deserializeGraph(serializeGraph(graph));
+    const data = deserialized.nodes[0]!.data as Record<string, unknown>;
+
+    assert.equal(data.outputRequestStatus, true);
+    assert.equal(data.outputRequestError, true);
+    assert.equal(data.outputRequestBody, true);
+  });
+
   it('renames only default Code node titles when deserializing', () => {
     const graph: NodeGraph = {
       metadata: { id: 'g-code-rename', name: 'Code Rename', description: '' },

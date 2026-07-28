@@ -2319,6 +2319,7 @@ export class GraphProcessor {
   async #processSplitRunNode(node: ChartNode, processId: ProcessId) {
     return processSplitRunNode(node, processId, {
       getInputValues: (n) => this.#getInputValuesForNode(n),
+      getInputDefinitions: (n) => this.#definitions[n.id]?.inputs ?? [],
       isExcludedDueToControlFlow: (n, inputs, pid) => this.#excludedDueToControlFlow(n, inputs, pid) !== false,
       processNodeWithInputData: (n, inputs, idx, pid, partial) =>
         this.#processNodeWithInputData(n, inputs, idx, pid, partial),

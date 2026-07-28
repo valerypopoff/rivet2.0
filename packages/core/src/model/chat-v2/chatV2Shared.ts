@@ -43,7 +43,6 @@ export type CommonChatV2OutputOptions = {
   inMessagesPortId?: PortId;
   allMessagesPortId?: PortId;
   functionCallsPortId?: PortId;
-  responseTokensPortId?: PortId;
   usagePortId?: PortId;
   reasoningPortId?: PortId;
   includeFunctionCalls?: boolean;
@@ -51,9 +50,7 @@ export type CommonChatV2OutputOptions = {
   includeReasoning?: boolean;
 };
 
-export function createChatV2CommonNodeData(
-  overrides: Partial<ChatV2CommonNodeData> = {},
-): ChatV2CommonNodeData {
+export function createChatV2CommonNodeData(overrides: Partial<ChatV2CommonNodeData> = {}): ChatV2CommonNodeData {
   return {
     model: 'gpt-4o',
     useModelInput: false,
@@ -209,7 +206,6 @@ export function getCommonChatV2Outputs(
     inMessagesPortId = 'in-messages' as PortId,
     allMessagesPortId = 'all-messages' as PortId,
     functionCallsPortId = 'function-calls' as PortId,
-    responseTokensPortId = 'responseTokens' as PortId,
     usagePortId = 'usage' as PortId,
     reasoningPortId = 'reasoning' as PortId,
     includeFunctionCalls = data.useToolCalling,
@@ -232,11 +228,6 @@ export function getCommonChatV2Outputs(
       id: allMessagesPortId,
       title: 'All Messages',
       dataType: 'chat-message[]',
-    },
-    {
-      id: responseTokensPortId,
-      title: 'Response Tokens',
-      dataType: 'number',
     },
   ];
 

@@ -99,7 +99,9 @@ describe('LLMProfileNodeImpl', () => {
           useOpenAIPreviousResponseIdInput: provider === 'openai',
           useAnthropicThinkingBudgetInput: provider === 'anthropic',
           useGoogleThinkingBudgetInput: provider === 'google',
-        }).getInputDefinitions().map((input) => input.id),
+        })
+          .getInputDefinitions()
+          .map((input) => input.id),
       ),
     );
 
@@ -304,7 +306,7 @@ describe('LLMProfileNodeImpl', () => {
     const chatGroups = chatEditors
       .filter((editor): editor is Extract<typeof editor, { type: 'group' }> => editor.type === 'group')
       .map((editor) => editor.label);
-    assert.deepEqual(chatGroups, ['Response format', 'Tools', 'Outputs', 'Technical details']);
+    assert.deepEqual(chatGroups, ['Response format', 'Tools', 'Outputs', 'Error behavior']);
   });
 
   it('does not render an empty Reasoning group for Custom provider profiles', async () => {
@@ -319,7 +321,10 @@ describe('LLMProfileNodeImpl', () => {
       {} as any,
     );
     const outputsGroup = chatEditors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
-    assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label, 'Output reasoning');
+    assert.equal(
+      outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label,
+      'Output reasoning',
+    );
   });
 
   it('keeps inline LLM Chat behavior unchanged and replaces only inference configuration in profile mode', async () => {
@@ -364,14 +369,14 @@ describe('LLMProfileNodeImpl', () => {
     assert.equal(runtime.runOptions.temperature, 0.15);
     assert.equal(runtime.runOptions.maxTokens, 777);
     assert.equal(runtime.runOptions.outputReasoning, true);
-    assert.equal(runtime.runOptions.includeFunctionCalls, true);
+    assert.equal(runtime.runOptions.includeFunctionCalls, false);
     assert.match(JSON.stringify(runtime.runOptions.providerOptions), /response-from-profile/);
     assert.doesNotMatch(JSON.stringify(runtime.runOptions.providerOptions), /response-from-chat/);
     assert.doesNotMatch(runtime.cacheKey!, /profile-openai-secret/);
     assert.doesNotMatch(runtime.cacheKey!, /stale-inline-model/);
   });
 
-  it('keeps the advertised Tool Calls output present when the selected profile has no tools', async () => {
+  it('does not add Tool Calls output when From profile mode has Tool use off', async () => {
     const profileNode = createProfileNode({
       provider: 'openai',
       model: 'gpt-profile',
@@ -398,8 +403,8 @@ describe('LLMProfileNodeImpl', () => {
       context: createRuntimeContext(),
     });
 
-    assert.equal(runtime.runOptions.includeFunctionCalls, true);
-    assert.ok(chatNode.getOutputDefinitions().some((output) => output.id === ('function-calls' as any)));
+    assert.equal(runtime.runOptions.includeFunctionCalls, false);
+    assert.ok(!chatNode.getOutputDefinitions().some((output) => output.id === ('function-calls' as any)));
   });
 
   it('requires a valid profile input and removes stale inline configuration ports', async () => {
@@ -428,7 +433,7 @@ describe('LLMProfileNodeImpl', () => {
     ]) {
       assert.ok(!inputIds.includes(stalePort as any));
     }
-    assert.ok(chatNode.getOutputDefinitions().some((output) => output.id === ('function-calls' as any)));
+    assert.ok(!chatNode.getOutputDefinitions().some((output) => output.id === ('function-calls' as any)));
 
     await assert.rejects(
       resolveLLMChatV2RuntimeConfig({

@@ -57,6 +57,8 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
   outputRequestStatus?: boolean;
+  outputRequestError?: boolean;
+  outputRequestBody?: boolean;
 };
 
 export type LLMChatV2NodeData = LLMChatV2NodeConfigData;
@@ -128,6 +130,8 @@ export type LLMChatV2EditorCacheKeyParts = {
   responseFormatParameters: unknown;
   providerOptions: unknown;
   toolChoice: unknown;
+  /** Ordered, credential-fingerprinted fallback profile configuration. */
+  profileChain?: unknown;
 };
 
 export function createLLMChatV2NodeData(): LLMChatV2NodeData {
@@ -180,16 +184,11 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     retryOnNon200RepeatTimes: DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_REPEAT_TIMES,
     retryOnNon200CooldownMs: DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS,
     outputRequestStatus: false,
+    outputRequestError: false,
+    outputRequestBody: false,
   };
 }
 
-export function hasLLMChatV2BuiltInToolsEnabled(data: LLMChatV2NodeData): boolean {
-  return (
-    (data.provider === 'openai' && (data.enableOpenAIWebSearch || data.enableOpenAICodeInterpreter)) ||
-    (data.provider === 'google' && (data.enableGoogleSearchGrounding || data.enableGoogleUrlContext))
-  );
-}
-
 export function shouldIncludeLLMChatV2ToolCalls(data: LLMChatV2NodeData): boolean {
-  return data.configurationMode === 'profile' || data.useToolCalling || hasLLMChatV2BuiltInToolsEnabled(data);
+  return data.useToolCalling;
 }

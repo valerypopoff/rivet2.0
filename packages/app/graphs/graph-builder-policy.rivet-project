@@ -41,6 +41,8 @@ data:
             openAIReasoningSummary: ""
             openAIWebSearchContextSize: medium
             outputReasoning: false
+            outputRequestBody: false
+            outputRequestError: false
             outputRequestStatus: false
             outputUsage: false
             parallelToolCalls: false
@@ -189,6 +191,8 @@ data:
             openAIReasoningSummary: ""
             openAIWebSearchContextSize: medium
             outputReasoning: false
+            outputRequestBody: false
+            outputRequestError: false
             outputRequestStatus: false
             outputUsage: false
             parallelToolCalls: false

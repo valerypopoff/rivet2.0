@@ -1354,6 +1354,7 @@ void describe('runChatV2Pipeline', () => {
       prompt: { type: 'string', value: 'Tell me the weather.' },
       systemPrompt: { type: 'string', value: 'Be concise.' },
       outputUsage: true,
+      includeFunctionCalls: true,
       context: {
         signal: new AbortController().signal,
         onPartialOutputs: (outputs) => {
@@ -1375,7 +1376,7 @@ void describe('runChatV2Pipeline', () => {
 
     assert.equal(result.commonOutputs['response' as PortId]?.type, 'string');
     assert.equal(result.commonOutputs['response' as PortId]?.value, 'Hello world');
-    assert.equal(result.commonOutputs['responseTokens' as PortId]?.value, 8);
+    assert.equal('responseTokens' in result.commonOutputs, false);
     assert.deepEqual(result.commonOutputs['function-calls' as PortId]?.value, [
       {
         name: 'lookup_weather',
@@ -1451,6 +1452,7 @@ void describe('runChatV2Pipeline', () => {
       outputUsage: true,
       outputReasoning: true,
       outputRequestStatus: true,
+      includeFunctionCalls: true,
       emitPartialOutputs: false,
       context: {
         signal: new AbortController().signal,
@@ -1476,7 +1478,7 @@ void describe('runChatV2Pipeline', () => {
         id: 'call_1',
       },
     ]);
-    assert.equal(result.commonOutputs['responseTokens' as PortId]?.value, 4);
+    assert.equal('responseTokens' in result.commonOutputs, false);
     assert.deepEqual(result.commonOutputs['reasoning' as PortId], {
       type: 'string',
       value: 'reasoned',
@@ -1554,7 +1556,7 @@ void describe('runChatV2Pipeline', () => {
         id: 'call_1',
       },
     ]);
-    assert.equal(result.commonOutputs['responseTokens' as PortId]?.value, 2);
+    assert.equal('responseTokens' in result.commonOutputs, false);
   });
 
   void it('keeps parsed structured output from completed non-streaming responses', async () => {
@@ -1656,7 +1658,7 @@ void describe('runChatV2Pipeline', () => {
         id: 'call_1',
       },
     ]);
-    assert.equal(result.commonOutputs['responseTokens' as PortId]?.value, 2);
+    assert.equal('responseTokens' in result.commonOutputs, false);
     assert.equal((result.allMessages.at(-1) as any)?.message, responseText);
   });
 

@@ -40,6 +40,17 @@ test('array-like renderers tolerate malformed array payloads', () => {
   assert.equal(countOccurrences(malformedArrayMarkup, 'class="multi-output-item"'), 0);
 });
 
+test('renders mixed Any arrays as individually inferred values instead of inferring every item from the first', () => {
+  const markup = renderDataValue({
+    type: 'any',
+    value: [[403, 403], 200],
+  });
+
+  assert.doesNotMatch(markup, /Invalid array value/);
+  assert.equal(countOccurrences(markup, 'class="multi-output-item"'), 2);
+  assert.equal(countOccurrences(markup, 'class="nested-value">any</span>'), 2);
+});
+
 test('split-run nested array types receive a renderer instead of mounting an undefined component', () => {
   const nestedMessagesMarkup = renderDataValue({
     type: 'chat-message[][]',

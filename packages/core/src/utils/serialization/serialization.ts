@@ -93,9 +93,36 @@ type LegacyPassthroughData = Record<string, unknown> & {
   renderAsDataBus?: unknown;
 };
 
+type LegacyLLMChatV2DiagnosticsData = Record<string, unknown> & {
+  outputRequestStatus?: unknown;
+  outputRequestError?: unknown;
+  outputRequestBody?: unknown;
+};
+
 function hasLegacyDataBusFlag(node: ChartNode): node is ChartNode<'passthrough', LegacyPassthroughData> {
   const data = node.data as LegacyPassthroughData | undefined;
   return node.type === 'passthrough' && data != null && Object.hasOwn(data, 'renderAsDataBus');
+}
+
+function migrateLegacyLLMChatV2Diagnostics(node: ChartNode): void {
+  if (node.type !== 'llmChatV2' || node.data == null || typeof node.data !== 'object') {
+    return;
+  }
+
+  const data = node.data as LegacyLLMChatV2DiagnosticsData;
+  if (data.outputRequestStatus !== true) {
+    return;
+  }
+
+  // Output request details used to expose all three diagnostics together.
+  // Materialize the split settings on load so existing output connections and
+  // editor-visible behavior remain unchanged after the setting was separated.
+  if (!Object.hasOwn(data, 'outputRequestError')) {
+    data.outputRequestError = true;
+  }
+  if (!Object.hasOwn(data, 'outputRequestBody')) {
+    data.outputRequestBody = true;
+  }
 }
 
 function normalizeDeserializedNode(node: ChartNode): void {
@@ -109,6 +136,8 @@ function normalizeDeserializedNode(node: ChartNode): void {
     const { renderAsDataBus: _legacyFlag, ...data } = node.data;
     (node as ChartNode).data = data;
   }
+
+  migrateLegacyLLMChatV2Diagnostics(node);
 }
 
 function deserializeProjectByVersion(
@@ -128,10 +157,7 @@ function deserializeProjectByVersion(
   }
 }
 
-function deserializeGraphByVersion(
-  serializedGraph: unknown,
-  version: SerializationVersion,
-): NodeGraph {
+function deserializeGraphByVersion(serializedGraph: unknown, version: SerializationVersion): NodeGraph {
   switch (version) {
     case 4:
       return graphV4Deserializer(serializedGraph);

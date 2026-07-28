@@ -5,6 +5,7 @@ import { generateChatV2, streamChatV2 } from './aiSdkBridge.js';
 import { createObservedChatV2CallId, notifyChatV2CallFinished } from './chatV2CallObserver.js';
 import { chatMessagesToModelMessages } from './messageConverter.js';
 import type {
+  ChatV2ProviderAttempt,
   ChatV2PipelineResult,
   RunChatV2PipelineOptions,
   StreamChatV2Result,
@@ -31,6 +32,28 @@ type ChatV2WithRetryResult = {
   requestErrors: unknown[];
   responseError?: unknown;
 };
+
+export type ChatV2PipelineProviderFailure = {
+  requestMessages: ChatMessage[];
+  options: RunChatV2PipelineOptions;
+  plan: ChatV2RequestPlan;
+  normalizedError: unknown;
+  rawError: unknown;
+  requestStatuses: number[];
+  requestErrors: string[];
+  /** A completed non-200 custom stream may still have a useful response body. */
+  diagnosticResult?: ChatV2PipelineResult;
+};
+
+export type ChatV2PipelineExecution =
+  | {
+      outcome: 'success';
+      result: ChatV2PipelineResult;
+    }
+  | {
+      outcome: 'provider-failure';
+      failure: ChatV2PipelineProviderFailure;
+    };
 
 class ChatV2RetryFailure extends Error {
   constructor(
@@ -100,6 +123,14 @@ function normalizeProviderFailureMessages(
   return errors.map((error) => normalizeProviderFailureMessage(error, options));
 }
 
+function notifyProviderAttempt(options: RunChatV2PipelineOptions, attempt: ChatV2ProviderAttempt): void {
+  try {
+    options.onProviderAttempt?.(attempt);
+  } catch {
+    // Attempt diagnostics are observational and must never affect the request.
+  }
+}
+
 async function runChatV2WithRetry(
   options: RunChatV2PipelineOptions,
   chatOptions: StreamChatV2Options,
@@ -123,6 +154,13 @@ async function runChatV2WithRetry(
         result,
       });
       callWasObserved = true;
+
+      notifyProviderAttempt(options, {
+        attemptIndex: attempt,
+        outcome: statusCode === 200 ? 'success' : 'provider-failure',
+        status: statusCode,
+        ...(statusCode === 200 ? {} : { error: buildNon200StatusError(statusCode) }),
+      });
 
       if (retryPlan.enabled) {
         requestStatuses.push(statusCode);
@@ -150,6 +188,12 @@ async function runChatV2WithRetry(
         });
       }
       const statusCode = getChatV2ProviderErrorStatusCode(error);
+      notifyProviderAttempt(options, {
+        attemptIndex: attempt,
+        outcome: 'provider-failure',
+        ...(statusCode == null ? {} : { status: statusCode }),
+        error,
+      });
 
       if (!retryPlan.enabled || statusCode == null || statusCode === 200) {
         throw error;
@@ -176,7 +220,7 @@ function buildProviderFailureResult(
   requestStatuses: number[],
   requestErrors: string[],
 ): ChatV2PipelineResult | undefined {
-  if (!plan.output.outputRequestStatus) {
+  if (!plan.output.outputRequestStatus && !plan.output.outputRequestError) {
     return undefined;
   }
 
@@ -203,6 +247,9 @@ function buildProviderFailureResult(
     requestBodies: options.requestBodies,
     outputUsage: plan.output.outputUsage,
     outputReasoning: plan.output.outputReasoning,
+    outputRequestStatus: plan.output.outputRequestStatus,
+    outputRequestError: plan.output.outputRequestError,
+    outputRequestBody: plan.output.outputRequestBody,
     includeFunctionCalls: plan.output.includeFunctionCalls,
     retryOnNon200: plan.retry.enabled,
   });
@@ -227,7 +274,13 @@ function buildProviderFailureResult(
   };
 }
 
-export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Promise<ChatV2PipelineResult> {
+/**
+ * Runs one provider/model round without deciding whether a provider failure
+ * should become diagnostic outputs or should advance an LLM Profile fallback
+ * chain. Shared prompt/schema/tool construction errors deliberately continue
+ * to throw: they are graph configuration errors, not a profile failure.
+ */
+export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptions): Promise<ChatV2PipelineExecution> {
   const requestMessages = prependSystemPrompt(
     coercePromptToChatMessages(options.prompt, { requirePrompt: true }),
     options.systemPrompt,
@@ -251,66 +304,67 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
   });
   const shouldStreamResponse = plan.transportMode === 'stream';
 
-  const chatResponse = await runChatV2WithRetry(
-    options,
-    {
-      ...plan.request,
-      abortSignal: options.context.signal,
-      executeStream: options.executeStream,
-      executeGenerate: options.executeGenerate,
-      onPartialOutput: !shouldStreamResponse
-        ? undefined
-        : ({ text, functionCalls }) => {
-            options.context.onPartialOutputs?.(
-              createChatV2CommonOutputs({
-                requestMessages,
-                response: text,
-                structuredOutput: undefined,
-                functionCalls,
-                usage: undefined,
-                reasoning: '',
-                requestStatus: undefined,
-                responseError: undefined,
-                requestStatuses: [],
-                requestErrors: [],
-                requestBodies: undefined,
-                outputUsage: false,
-                outputReasoning: false,
-                outputRequestStatus: false,
-                includeFunctionCalls: plan.output.includeFunctionCalls,
-                functionCallMode: plan.output.functionCallMode,
-                retryOnNon200: false,
-                responseFormat: undefined,
-              }),
-            );
-          },
-    },
-    plan.retry,
-    options.context.signal,
-    plan.transportMode,
-  ).catch((caughtError: unknown) => {
+  let chatResponse: ChatV2WithRetryResult;
+  try {
+    chatResponse = await runChatV2WithRetry(
+      options,
+      {
+        ...plan.request,
+        abortSignal: options.context.signal,
+        executeStream: options.executeStream,
+        executeGenerate: options.executeGenerate,
+        onPartialOutput: !shouldStreamResponse
+          ? undefined
+          : ({ text, functionCalls }) => {
+              options.context.onPartialOutputs?.(
+                createChatV2CommonOutputs({
+                  requestMessages,
+                  response: text,
+                  structuredOutput: undefined,
+                  functionCalls,
+                  usage: undefined,
+                  reasoning: '',
+                  requestStatus: undefined,
+                  responseError: undefined,
+                  requestStatuses: [],
+                  requestErrors: [],
+                  requestBodies: undefined,
+                  outputUsage: false,
+                  outputReasoning: false,
+                  outputRequestStatus: false,
+                  outputRequestError: false,
+                  outputRequestBody: false,
+                  includeFunctionCalls: plan.output.includeFunctionCalls,
+                  functionCallMode: plan.output.functionCallMode,
+                  retryOnNon200: false,
+                  responseFormat: undefined,
+                }),
+              );
+            },
+      },
+      plan.retry,
+      options.context.signal,
+      plan.transportMode,
+    );
+  } catch (caughtError) {
+    if (options.context.signal.aborted) {
+      throw caughtError;
+    }
+
     const retryFailure = isChatV2RetryFailure(caughtError) ? caughtError : undefined;
     const rawError = retryFailure?.error ?? caughtError;
-    const normalizedError = normalizeProviderFailure(rawError, options);
-    const requestStatuses = retryFailure?.requestStatuses ?? [];
-    const requestErrors = normalizeProviderFailureMessages(retryFailure?.requestErrors ?? [], options);
-    const failureResult = buildProviderFailureResult(
-      requestMessages,
-      options,
-      plan,
-      normalizedError,
-      rawError,
-      requestStatuses,
-      requestErrors,
-    );
-    if (failureResult) {
-      return failureResult;
-    }
-    throw normalizedError;
-  });
-
-  if ('commonOutputs' in chatResponse) {
-    return chatResponse;
+    return {
+      outcome: 'provider-failure',
+      failure: {
+        requestMessages,
+        options,
+        plan,
+        normalizedError: normalizeProviderFailure(rawError, options),
+        rawError,
+        requestStatuses: retryFailure?.requestStatuses ?? [],
+        requestErrors: normalizeProviderFailureMessages(retryFailure?.requestErrors ?? [], options),
+      },
+    };
   }
 
   const usage = normalizeChatV2Usage(chatResponse.result.usage, options);
@@ -335,6 +389,8 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
     outputUsage: plan.output.outputUsage,
     outputReasoning: plan.output.outputReasoning,
     outputRequestStatus: plan.output.outputRequestStatus,
+    outputRequestError: plan.output.outputRequestError,
+    outputRequestBody: plan.output.outputRequestBody,
     includeFunctionCalls: plan.output.includeFunctionCalls,
     functionCallMode: plan.output.functionCallMode,
     retryOnNon200: plan.retry.enabled,
@@ -346,7 +402,7 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
     throw new Error('Chat v2 pipeline expected all-messages output to be chat-message[].');
   }
 
-  return {
+  const result: ChatV2PipelineResult = {
     commonOutputs,
     requestMessages,
     allMessages: allMessagesOutput.value,
@@ -359,4 +415,55 @@ export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Prom
     providerMetadata: chatResponse.result.providerMetadata,
     requestStatus,
   };
+
+  const providerRoundFailure =
+    chatResponse.responseError ?? (requestStatus === 200 ? undefined : buildNon200StatusError(requestStatus));
+  if (providerRoundFailure != null) {
+    const rawError = providerRoundFailure;
+    return {
+      outcome: 'provider-failure',
+      failure: {
+        requestMessages,
+        options,
+        plan,
+        normalizedError: normalizeProviderFailure(rawError, options),
+        rawError,
+        requestStatuses: chatResponse.requestStatuses,
+        requestErrors: normalizeProviderFailureMessages(chatResponse.requestErrors, options),
+        diagnosticResult: result,
+      },
+    };
+  }
+
+  return { outcome: 'success', result };
+}
+
+/**
+ * Retains the established single-profile behavior: request-detail mode can
+ * turn a provider failure into normal excluded outputs; otherwise it remains
+ * a thrown normalized provider error.
+ */
+export function materializeChatV2PipelineFailure(failure: ChatV2PipelineProviderFailure): ChatV2PipelineResult {
+  if (failure.diagnosticResult != null) {
+    return failure.diagnosticResult;
+  }
+  const failureResult = buildProviderFailureResult(
+    failure.requestMessages,
+    failure.options,
+    failure.plan,
+    failure.normalizedError,
+    failure.rawError,
+    failure.requestStatuses,
+    failure.requestErrors,
+  );
+  if (failureResult != null) {
+    return failureResult;
+  }
+
+  throw failure.normalizedError;
+}
+
+export async function runChatV2Pipeline(options: RunChatV2PipelineOptions): Promise<ChatV2PipelineResult> {
+  const execution = await runChatV2PipelineExecution(options);
+  return execution.outcome === 'success' ? execution.result : materializeChatV2PipelineFailure(execution.failure);
 }

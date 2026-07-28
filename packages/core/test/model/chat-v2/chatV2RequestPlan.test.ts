@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import {
-  buildChatV2RequestPlan,
-  summarizeChatV2RequestPlan,
-} from '../../../src/model/chat-v2/chatV2RequestPlan.js';
+import { buildChatV2RequestPlan, summarizeChatV2RequestPlan } from '../../../src/model/chat-v2/chatV2RequestPlan.js';
 
 const model = {} as never;
 
@@ -54,6 +51,8 @@ describe('buildChatV2RequestPlan', () => {
     assert.deepEqual(plan.request.providerOptions, { custom: { structuredOutputs: true } });
     assert.equal(plan.output.outputUsage, true);
     assert.equal(plan.output.outputRequestStatus, true);
+    assert.equal(plan.output.outputRequestError, true);
+    assert.equal(plan.output.outputRequestBody, true);
   });
 
   it('produces an inspectable summary without model objects, messages, or credentials', () => {

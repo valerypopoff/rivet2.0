@@ -160,6 +160,57 @@ describe('chatV2Outputs', () => {
     });
   });
 
+  it('keeps response status, response error, and request body independently optional', () => {
+    const outputs = createChatV2CommonOutputs({
+      requestMessages,
+      response: 'Done',
+      structuredOutput: undefined,
+      functionCalls: [],
+      usage: undefined,
+      reasoning: '',
+      requestStatus: 202,
+      responseError: 'provider warning',
+      requestStatuses: [],
+      requestErrors: [],
+      requestBodies: [{ model: 'test' }],
+      outputUsage: false,
+      outputReasoning: false,
+      outputRequestStatus: true,
+      outputRequestError: false,
+      outputRequestBody: false,
+      includeFunctionCalls: false,
+      retryOnNon200: false,
+      responseFormat: undefined,
+    });
+
+    assert.deepEqual(outputs['requestStatus' as PortId], { type: 'number', value: 202 });
+    assert.equal('requestError' in outputs, false);
+    assert.equal('requestBody' in outputs, false);
+  });
+
+  it('does not emit tool calls when Tool use did not declare that output', () => {
+    const outputs = createChatV2CommonOutputs({
+      requestMessages,
+      response: 'Done',
+      structuredOutput: undefined,
+      functionCalls: [createFunctionCall()],
+      usage: undefined,
+      reasoning: '',
+      requestStatus: 200,
+      responseError: undefined,
+      requestStatuses: [],
+      requestErrors: [],
+      outputUsage: false,
+      outputReasoning: false,
+      outputRequestStatus: false,
+      includeFunctionCalls: false,
+      retryOnNon200: false,
+      responseFormat: undefined,
+    });
+
+    assert.equal('function-calls' in outputs, false);
+  });
+
   it('builds provider failure outputs without successful response side effects', () => {
     const outputs = createChatV2ProviderFailureOutputs({
       requestMessages,
@@ -170,6 +221,9 @@ describe('chatV2Outputs', () => {
       requestBodies: [{ attempt: 1 }, { attempt: 2 }],
       outputUsage: true,
       outputReasoning: true,
+      outputRequestStatus: true,
+      outputRequestError: true,
+      outputRequestBody: true,
       includeFunctionCalls: true,
       retryOnNon200: true,
     });
@@ -195,6 +249,34 @@ describe('chatV2Outputs', () => {
       value: undefined,
     });
     assert.deepEqual(outputs['function-calls' as PortId], {
+      type: 'control-flow-excluded',
+      value: undefined,
+    });
+  });
+
+  it('can return only Response Error for a provider failure', () => {
+    const outputs = createChatV2ProviderFailureOutputs({
+      requestMessages,
+      responseStatus: 503,
+      responseError: '503 Service Unavailable',
+      requestStatuses: [503],
+      requestErrors: ['503 Service Unavailable'],
+      outputUsage: false,
+      outputReasoning: false,
+      outputRequestStatus: false,
+      outputRequestError: true,
+      outputRequestBody: false,
+      includeFunctionCalls: false,
+      retryOnNon200: false,
+    });
+
+    assert.deepEqual(outputs['requestError' as PortId], {
+      type: 'string',
+      value: '503 Service Unavailable',
+    });
+    assert.equal('requestStatus' in outputs, false);
+    assert.equal('requestBody' in outputs, false);
+    assert.deepEqual(outputs['response' as PortId], {
       type: 'control-flow-excluded',
       value: undefined,
     });

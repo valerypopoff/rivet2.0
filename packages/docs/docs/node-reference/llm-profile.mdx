@@ -8,7 +8,8 @@ sidebar_label: LLM Profile
 
 LLM Profile packages one reusable inference configuration into a typed
 `llm-config` value. Connect it to an LLM Chat node whose **Configuration** is
-**From profile**.
+**From profile**. You can also collect several profile values into an ordered
+`llm-config[]` array and use that as LLM Chat's fallback chain.
 
 If an LLM Chat is currently configured inline, use its **Export LLM settings to profile node**
 action to create and connect this node automatically with the chat's current
@@ -56,9 +57,11 @@ recordings, previews, or remote transport just like any other node output.
 
 1. Create two LLM Profile nodes with different providers or models.
 2. Set one LLM Chat node to **Configuration → From profile**.
-3. Connect either profile to **LLM Profile**.
-4. Keep the same prompt, tools, response schema, and downstream wiring while
-   switching the connected profile.
+3. Use an Array node to collect the profiles in preferred order, then connect
+   the resulting `llm-config[]` value to **LLM Profiles**.
+4. LLM Chat retries the first profile according to its own **Retry on non-200**
+   settings before trying the next profile. Inspect **LLM Profile Attempts** to
+   see which profiles and physical attempts ran.
 
 ## See Also
 
