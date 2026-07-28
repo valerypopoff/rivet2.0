@@ -72,6 +72,62 @@ test('deriveLargeStoredValuePreviewFullText keeps explicit undefined any-array i
   );
 });
 
+test('deriveLargeStoredValuePreviewFullText returns plain function-result text', () => {
+  assert.equal(
+    deriveLargeStoredValuePreviewFullText({
+      type: 'chat-message',
+      value: {
+        type: 'function',
+        name: 'call_1',
+        toolName: 'lookup',
+        message: 'tool result',
+      },
+    }),
+    'tool result',
+  );
+});
+
+test('deriveLargeStoredValuePreviewFullText preserves non-function messages for the role-aware renderer', () => {
+  assert.equal(
+    deriveLargeStoredValuePreviewFullText({
+      type: 'chat-message',
+      value: {
+        type: 'assistant',
+        message: 'assistant response',
+        function_call: undefined,
+        function_calls: undefined,
+      },
+    }),
+    undefined,
+  );
+});
+
+test('deriveLargeStoredValuePreviewFullText joins plain function-result arrays', () => {
+  assert.equal(
+    deriveLargeStoredValuePreviewFullText({
+      type: 'chat-message[]',
+      value: [
+        { type: 'function', name: 'call_1', toolName: 'first', message: 'first result' },
+        { type: 'function', name: 'call_2', toolName: 'second', message: 'second result' },
+      ],
+    }),
+    'first result\nsecond result',
+  );
+});
+
+test('deriveLargeStoredValuePreviewFullText preserves mixed message arrays for the role-aware renderer', () => {
+  assert.equal(
+    deriveLargeStoredValuePreviewFullText({
+      type: 'chat-message[]',
+      value: [
+        { type: 'function', name: 'call_1', toolName: 'first', message: 'first result' },
+        { type: 'assistant', message: 'assistant response', function_call: undefined, function_calls: undefined },
+      ],
+    }),
+    undefined,
+  );
+});
+
 test('deriveLargeStoredValuePreviewFullText returns undefined for missing or unsupported values', () => {
   assert.equal(deriveLargeStoredValuePreviewFullText(undefined), undefined);
   assert.equal(

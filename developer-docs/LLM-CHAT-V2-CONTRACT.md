@@ -283,6 +283,11 @@ paths and should not be used as the primary target for new provider refactors.
   node return immediately when the remaining work must not hold the foreground
   path open, while keeping it owned by the root run. Each invocation's scalar
   tool-result downstream branches run after that invocation finishes.
+- Delegate Tool Call exposes **Tool Name** and **Tool Arguments** for each
+  completed invocation. Tool Arguments is the normalized object actually passed
+  to the handler, including parsed JSON-string arguments from legacy call
+  shapes. The generic output order matches the node ports: Message, Tool Name,
+  Tool Arguments, Output, Tool Result Message.
 - Early and final Delegate branches may converge within the same tool round:
   outputs completed by the early pre-tool message branch are available to the
   final tool-result branch for that round. Do not treat prior-round branch

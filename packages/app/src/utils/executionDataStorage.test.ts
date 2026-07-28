@@ -7,6 +7,7 @@ import {
   clearRemovedExecutionDataRefs,
   collectStoredRefIds,
   hasUnavailableStoredRefs,
+  isPreviewOnlyStoredValue,
   restoreStoredDataValue,
   restoreStoredInputsOrOutputs,
   splitRunDataByPreservedNodes,
@@ -58,6 +59,36 @@ test('storeDataValueForHistory includes split index in ref ids for split outputs
   assert.equal(stored.storage, 'ref');
   assert.equal(stored.refId, 'execution:node-split:process-split:output:2:output');
   assert.equal(dataRefs.values.has(stored.refId), true);
+});
+
+test('isPreviewOnlyStoredValue folds only chat-message refs with text previews', () => {
+  assert.equal(
+    isPreviewOnlyStoredValue({
+      type: 'chat-message',
+      storage: 'ref',
+      refId: 'large-chat',
+      preview: {
+        kind: 'text',
+        excerpt: 'large result',
+        totalChars: 20_000,
+        lineCount: 1,
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    isPreviewOnlyStoredValue({
+      type: 'chat-message',
+      storage: 'ref',
+      refId: 'small-chat',
+      preview: {
+        kind: 'summary',
+        label: 'Chat Message (function)',
+        totalBytes: 12,
+      },
+    }),
+    false,
+  );
 });
 
 test('storeInputsOrOutputsForHistory skips absent port payloads', () => {

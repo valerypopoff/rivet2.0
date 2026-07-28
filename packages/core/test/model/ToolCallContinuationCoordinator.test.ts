@@ -16,6 +16,7 @@ describe('ToolCallContinuationCoordinator', () => {
     const initialWaitEntered = deferred<void>();
     let waitCalls = 0;
     let branchAdapterCreations = 0;
+    const activatedOutputPortSets: string[][] = [];
     const rootAbortController = new AbortController();
     const coordinator = new ToolCallContinuationCoordinator({
       accumulateCost: () => undefined,
@@ -23,7 +24,10 @@ describe('ToolCallContinuationCoordinator', () => {
         branchAdapterCreations++;
         return {
           canRunContinuationBranches: () => true,
-          runOutputBranch: async () => emptyBranchResult(),
+          runOutputBranch: async ({ activeOutputPortIds }) => {
+            activatedOutputPortSets.push([...activeOutputPortIds]);
+            return emptyBranchResult();
+          },
           validatePreToolBranch: () => undefined,
         };
       },
@@ -68,6 +72,7 @@ describe('ToolCallContinuationCoordinator', () => {
       result.results.map((item) => item.record.name),
       ['lookup'],
     );
+    assert.deepEqual(activatedOutputPortSets, [['tool-name', 'tool-arguments', 'output', 'message']]);
   });
 });
 

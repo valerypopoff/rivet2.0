@@ -162,7 +162,12 @@ export function isPreviewOnlyStoredValue(
   }
 
   const scalarType = getScalarTypeOf(value.type);
-  return scalarType === 'string' || scalarType === 'object' || scalarType === 'any';
+  return (
+    scalarType === 'string' ||
+    scalarType === 'object' ||
+    scalarType === 'any' ||
+    (scalarType === 'chat-message' && value.preview.kind === 'text')
+  );
 }
 
 export function getStoredValuePreview(value: DataValueWithRefs | DataValue | undefined): StoredDataPreview | undefined {

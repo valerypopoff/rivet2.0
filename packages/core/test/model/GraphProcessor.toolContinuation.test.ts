@@ -2188,9 +2188,9 @@ describe('GraphProcessor connected tool continuation', () => {
       {
         assistantMessage: '',
         toolCalls: [
-          makeToolCall('call-slow', 'slow'),
-          makeToolCall('call-fast', 'fast'),
-          makeToolCall('call-medium', 'medium'),
+          makeToolCall('call-slow', 'slow', { position: 1 }),
+          makeToolCall('call-fast', 'fast', { position: 2 }),
+          makeToolCall('call-medium', 'medium', { position: 3 }),
         ],
       },
     ]);
@@ -2243,11 +2243,24 @@ describe('GraphProcessor connected tool continuation', () => {
     assert.equal(new Set(delegateStarts.map((run) => run.processId)).size, 3);
     assert.equal(delegateFinishes.size, 3);
     const outputsInModelOrder = delegateStarts.map((run) => {
-      const output = delegateFinishes.get(run.processId)?.['output' as PortId];
+      const outputs = delegateFinishes.get(run.processId);
+      const output = outputs?.['output' as PortId];
       assert.ok(output && output.type === 'string');
-      return (JSON.parse(output.value) as { value: string }).value;
+      const toolName = outputs?.['tool-name' as PortId];
+      const toolArguments = outputs?.['tool-arguments' as PortId];
+      assert.ok(toolName && toolName.type === 'string');
+      assert.ok(toolArguments && toolArguments.type === 'object' && !Array.isArray(toolArguments.value));
+      return {
+        arguments: toolArguments.value,
+        name: toolName.value,
+        output: (JSON.parse(output.value) as { value: string }).value,
+      };
     });
-    assert.deepEqual(outputsInModelOrder, ['slow result', 'fast result', 'medium result']);
+    assert.deepEqual(outputsInModelOrder, [
+      { arguments: { position: 1 }, name: 'slow', output: 'slow result' },
+      { arguments: { position: 2 }, name: 'fast', output: 'fast result' },
+      { arguments: { position: 3 }, name: 'medium', output: 'medium result' },
+    ]);
     assert.deepEqual(
       FakeLLMNodeImpl.continuationRecords.map((record) => record.id),
       ['call-slow', 'call-fast', 'call-medium'],

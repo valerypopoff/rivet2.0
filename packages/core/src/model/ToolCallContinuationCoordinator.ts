@@ -268,7 +268,12 @@ export class ToolCallContinuationCoordinator {
 
           const finalBranch = canRunContinuationBranches
             ? await branchAdapter.runOutputBranch({
-                activeOutputPortIds: new Set<PortId>(['output' as PortId, 'message' as PortId]),
+                activeOutputPortIds: new Set<PortId>([
+                  'tool-name' as PortId,
+                  'tool-arguments' as PortId,
+                  'output' as PortId,
+                  'message' as PortId,
+                ]),
                 availableNodeOutputs: preToolBranch.nodeOutputs,
                 deferGraphOutputCommit: true,
                 excludedNodeIds: continuationBranchBoundaries,

@@ -120,7 +120,6 @@ describe('DelegateFunctionCallNodeImpl', () => {
   it('delegates a direct function call object', async () => {
     const node = createNode();
     let receivedArguments: Record<string, unknown> | undefined;
-
     const result = await node.process(
       {
         ['function-call' as PortId]: {
@@ -139,6 +138,9 @@ describe('DelegateFunctionCallNodeImpl', () => {
     );
 
     assert.deepEqual(receivedArguments, { value: 123 });
+    assert.deepEqual(Object.keys(result), ['assistant-message', 'tool-name', 'tool-arguments', 'output', 'message']);
+    assert.deepEqual(result['tool-name' as PortId], { type: 'string', value: 'foo' });
+    assert.deepEqual(result['tool-arguments' as PortId], { type: 'object', value: { value: 123 } });
     assert.equal(result.output?.value, 'ok');
     assert.deepEqual(result.message?.value, {
       type: 'function',
@@ -361,7 +363,28 @@ describe('DelegateFunctionCallNodeImpl', () => {
     const messageOutput = outputs.find((output) => output.id === 'message');
     const assistantMessageOutput = outputs.find((output) => output.id === 'assistant-message');
 
-    assert.equal(outputs[0]?.id, 'assistant-message');
+    assert.deepEqual(
+      outputs.map((output) => output.id),
+      ['assistant-message', 'tool-name', 'tool-arguments', 'output', 'message'],
+    );
+    assert.deepEqual(
+      outputs.find((output) => output.id === 'tool-name'),
+      {
+        id: 'tool-name',
+        dataType: ['string', 'string[]'],
+        title: 'Tool Name',
+        description: 'The name of the tool selected by the LLM.',
+      },
+    );
+    assert.deepEqual(
+      outputs.find((output) => output.id === 'tool-arguments'),
+      {
+        id: 'tool-arguments',
+        dataType: ['object', 'object[]'],
+        title: 'Tool Arguments',
+        description: 'The resolved arguments passed to the selected tool.',
+      },
+    );
     assert.deepEqual(messageOutput?.dataType, ['chat-message', 'chat-message[]', 'object', 'object[]']);
     assert.equal(messageOutput?.title, 'Tool Result Message');
     assert.deepEqual(assistantMessageOutput, {
@@ -397,6 +420,8 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.equal(externalCallCount, 0);
     assert.equal(result.output?.type, 'string');
     assert.equal(result.output?.value, 'stored output');
+    assert.deepEqual(result['tool-name' as PortId], { type: 'string', value: 'foo' });
+    assert.deepEqual(result['tool-arguments' as PortId], { type: 'object', value: {} });
     assert.deepEqual(result.message?.value, delegatedToolCallRecord('foo', 'stored output').message);
     assert.equal(result['cost' as PortId], undefined);
   });
@@ -406,6 +431,8 @@ describe('DelegateFunctionCallNodeImpl', () => {
     let externalCallCount = 0;
     const fooRecord = delegatedToolCallRecord('foo', 'foo output', 'call_foo');
     const barRecord = delegatedToolCallRecord('bar', 'bar output', 'call_bar');
+    fooRecord.arguments = { value: 'foo input' };
+    barRecord.arguments = { value: 'bar input' };
 
     const result = await node.process(
       {
@@ -423,6 +450,14 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.equal(externalCallCount, 0);
     assert.equal(result.output?.type, 'string[]');
     assert.deepEqual(result.output?.value, ['foo output', 'bar output']);
+    assert.deepEqual(result['tool-name' as PortId], {
+      type: 'string[]',
+      value: ['foo', 'bar'],
+    });
+    assert.deepEqual(result['tool-arguments' as PortId], {
+      type: 'object[]',
+      value: [fooRecord.arguments, barRecord.arguments],
+    });
     assert.equal(result.message?.type, 'chat-message[]');
     assert.deepEqual(result.message?.value, [fooRecord.message, barRecord.message]);
   });
