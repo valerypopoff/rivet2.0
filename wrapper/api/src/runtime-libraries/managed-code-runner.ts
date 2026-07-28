@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
+import { LRUCache } from 'lru-cache';
 
 import { prepareRuntimeLibrariesForExecution } from './backend.js';
 
@@ -53,11 +54,6 @@ interface ManagedCodeRunnerOptions {
   loadRivet?: LoadRivetModule;
 }
 
-interface CompiledCodeCacheEntry {
-  fn: CompiledCodeFunction;
-  lastUsed: number;
-}
-
 interface ManagedRequireSnapshot {
   cacheKey: string;
   groupKey: string;
@@ -66,12 +62,17 @@ interface ManagedRequireSnapshot {
 
 const COMPILED_CODE_CACHE_LIMIT = 1000;
 const MANAGED_REQUIRE_CACHE_LIMIT = 100;
-const compiledCodeCache = new Map<string, CompiledCodeCacheEntry>();
-const managedRequireCache = new Map<string, NodeRequire>();
+let compiledCodeCache = createCompiledCodeCache(COMPILED_CODE_CACHE_LIMIT);
+const managedRequireCache = new LRUCache<string, NodeRequire>({
+  max: MANAGED_REQUIRE_CACHE_LIMIT,
+});
 const managedRequireGroupKeys = new Map<string, string>();
 const managedRequireNodeModulesPaths = new Set<string>();
 let compiledCodeCacheLimit = COMPILED_CODE_CACHE_LIMIT;
-let compiledCodeCacheUseCounter = 0;
+
+function createCompiledCodeCache(limit: number): LRUCache<string, CompiledCodeFunction> {
+  return new LRUCache({ max: Math.max(1, limit) });
+}
 
 function isEnvFlagEnabled(value: string | undefined, defaultValue = false): boolean {
   if (value == null) {
@@ -146,47 +147,17 @@ function getCompiledCodeCacheKey(code: string, argNames: string[]): string {
 }
 
 function getCachedCompiledCode(cacheKey: string): CompiledCodeFunction | null {
-  const entry = compiledCodeCache.get(cacheKey);
-  if (!entry) {
+  if (compiledCodeCacheLimit <= 0) {
     return null;
   }
 
-  entry.lastUsed = ++compiledCodeCacheUseCounter;
-  return entry.fn;
+  return compiledCodeCache.get(cacheKey) ?? null;
 }
 
 function setCachedCompiledCode(cacheKey: string, fn: CompiledCodeFunction): void {
-  compiledCodeCache.set(cacheKey, {
-    fn,
-    lastUsed: ++compiledCodeCacheUseCounter,
-  });
-
-  trimCompiledCodeCache();
-}
-
-function trimCompiledCodeCache(): void {
-  while (compiledCodeCache.size > compiledCodeCacheLimit) {
-    const oldestKey = getOldestCompiledCodeCacheKey();
-    if (oldestKey == null) {
-      return;
-    }
-
-    compiledCodeCache.delete(oldestKey);
+  if (compiledCodeCacheLimit > 0) {
+    compiledCodeCache.set(cacheKey, fn);
   }
-}
-
-function getOldestCompiledCodeCacheKey(): string | null {
-  let oldestKey: string | null = null;
-  let oldestUsed = Number.POSITIVE_INFINITY;
-
-  for (const [key, entry] of compiledCodeCache.entries()) {
-    if (entry.lastUsed < oldestUsed) {
-      oldestKey = key;
-      oldestUsed = entry.lastUsed;
-    }
-  }
-
-  return oldestKey;
 }
 
 function createCompiledCodeFunction(code: string, argNames: string[]): CompiledCodeFunction {
@@ -199,12 +170,11 @@ export function resetManagedCodeRunnerCacheForTests(): void {
     clearNodeRequireCacheUnder(nodeModulesPath);
   }
 
-  compiledCodeCache.clear();
+  compiledCodeCacheLimit = COMPILED_CODE_CACHE_LIMIT;
+  compiledCodeCache = createCompiledCodeCache(compiledCodeCacheLimit);
   managedRequireCache.clear();
   managedRequireGroupKeys.clear();
   managedRequireNodeModulesPaths.clear();
-  compiledCodeCacheUseCounter = 0;
-  compiledCodeCacheLimit = COMPILED_CODE_CACHE_LIMIT;
 }
 
 export function getManagedCodeRunnerCacheSizeForTests(): number {
@@ -217,7 +187,7 @@ export function getManagedRequireCacheSizeForTests(): number {
 
 export function setManagedCodeRunnerCacheLimitForTests(limit: number): void {
   compiledCodeCacheLimit = Math.max(0, Math.floor(limit));
-  trimCompiledCodeCache();
+  compiledCodeCache = createCompiledCodeCache(compiledCodeCacheLimit);
 }
 
 function readRuntimeLibrariesSnapshotId(runtimeLibrariesRoot: string, nodeModulesPath: string): string {
@@ -259,17 +229,6 @@ function getManagedRequireSnapshot(runtimeLibrariesRoot: string, nodeModulesPath
   };
 }
 
-function trimManagedRequireCache(): void {
-  while (managedRequireCache.size > MANAGED_REQUIRE_CACHE_LIMIT) {
-    const oldestKey = managedRequireCache.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      return;
-    }
-
-    managedRequireCache.delete(oldestKey);
-  }
-}
-
 function clearNodeRequireCacheUnder(nodeModulesPath: string): void {
   const normalizedNodeModulesPath = normalizeCachePathForComparison(nodeModulesPath);
   const root = `${normalizedNodeModulesPath}${path.sep}`;
@@ -308,15 +267,12 @@ function getCachedManagedRequire(snapshot: ManagedRequireSnapshot): NodeRequire 
 
   const cached = managedRequireCache.get(snapshot.cacheKey);
   if (cached) {
-    managedRequireCache.delete(snapshot.cacheKey);
-    managedRequireCache.set(snapshot.cacheKey, cached);
     return cached;
   }
 
   const virtualEntry = path.join(snapshot.nodeModulesPath, '__virtual.cjs');
   const requireFn = createRequire(virtualEntry);
   managedRequireCache.set(snapshot.cacheKey, requireFn);
-  trimManagedRequireCache();
   return requireFn;
 }
 

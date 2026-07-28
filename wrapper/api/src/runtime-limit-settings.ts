@@ -4,6 +4,12 @@ import type {
   RuntimeLimitSettings,
   RuntimeLimitSettingsDraft,
 } from '../../shared/app-settings-types.js';
+import {
+  hasSetting,
+  normalizePositiveIntegerSetting,
+  requireSettingsRecord,
+  toSettingsRecord,
+} from './app-settings/schema.js';
 import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { badRequest } from './utils/httpError.js';
 
@@ -30,60 +36,32 @@ export function getRuntimeLimitSettingsPath(): string {
   return path.join(getAppDataRootForRuntimeLimits(), RUNTIME_LIMIT_SETTINGS_RELATIVE_PATH);
 }
 
-function normalizePositiveInteger(
-  value: unknown,
-  fieldLabel: string,
-  maxValue: number,
-): number {
-  if (value === '') {
-    throw badRequest(`${fieldLabel} is required`);
-  }
-
-  const parsed = typeof value === 'number'
-    ? value
-    : typeof value === 'string'
-      ? Number(value.trim())
-      : Number.NaN;
-
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw badRequest(`${fieldLabel} must be a positive whole number`);
-  }
-
-  if (parsed > maxValue) {
-    throw badRequest(`${fieldLabel} is too large`);
-  }
-
-  return parsed;
-}
-
 function normalizeRuntimeLimitSettingsDraft(
   value: unknown,
   fallback = DEFAULT_RUNTIME_LIMIT_SETTINGS,
 ): Omit<RuntimeLimitSettings, 'source' | 'updatedAt'> {
-  const raw = value && typeof value === 'object'
-    ? value as RuntimeLimitSettingsDraft
-    : {};
+  const raw = toSettingsRecord(value) as RuntimeLimitSettingsDraft;
   const valueOrFallback = (
     key: keyof RuntimeLimitSettingsDraft,
     fallbackValue: number,
   ): unknown => (
-    Object.prototype.hasOwnProperty.call(raw, key)
+    hasSetting(raw, key)
       ? raw[key]
       : fallbackValue
   );
 
   return {
-    commandTimeoutSeconds: normalizePositiveInteger(
+    commandTimeoutSeconds: normalizePositiveIntegerSetting(
       valueOrFallback('commandTimeoutSeconds', fallback.commandTimeoutSeconds),
       'Command timeout',
       MAX_RUNTIME_LIMIT_SECONDS,
     ),
-    maxOutputBytes: normalizePositiveInteger(
+    maxOutputBytes: normalizePositiveIntegerSetting(
       valueOrFallback('maxOutputBytes', fallback.maxOutputBytes),
       'Maximum captured output',
       MAX_OUTPUT_BYTES,
     ),
-    proxyReadTimeoutSeconds: normalizePositiveInteger(
+    proxyReadTimeoutSeconds: normalizePositiveIntegerSetting(
       valueOrFallback('proxyReadTimeoutSeconds', fallback.proxyReadTimeoutSeconds),
       'Proxy read timeout',
       MAX_RUNTIME_LIMIT_SECONDS,
@@ -91,7 +69,7 @@ function normalizeRuntimeLimitSettingsDraft(
     webAppActionRequestLimitBytes: normalizeWebAppActionRequestLimitBytes(
       valueOrFallback('webAppActionRequestLimitBytes', fallback.webAppActionRequestLimitBytes),
     ),
-    dockerWaitTimeoutSeconds: normalizePositiveInteger(
+    dockerWaitTimeoutSeconds: normalizePositiveIntegerSetting(
       valueOrFallback('dockerWaitTimeoutSeconds', fallback.dockerWaitTimeoutSeconds),
       'Docker startup wait timeout',
       MAX_RUNTIME_LIMIT_SECONDS,
@@ -100,7 +78,7 @@ function normalizeRuntimeLimitSettingsDraft(
 }
 
 function normalizeWebAppActionRequestLimitBytes(value: unknown): number {
-  const parsed = normalizePositiveInteger(
+  const parsed = normalizePositiveIntegerSetting(
     value,
     'Web app button data limit',
     MAX_WEB_APP_ACTION_REQUEST_LIMIT_BYTES,
@@ -114,17 +92,12 @@ function normalizeWebAppActionRequestLimitBytes(value: unknown): number {
 }
 
 function readRuntimeLimitSettingsFromText(settingsText: string): RuntimeLimitSettings {
-  const parsed = JSON.parse(settingsText) as unknown;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw badRequest('Runtime limit settings must be an object');
-  }
+  const parsed = requireSettingsRecord(JSON.parse(settingsText) as unknown, 'Runtime limit settings must be an object');
 
   const settings = normalizeRuntimeLimitSettingsDraft(parsed);
-  const raw = parsed as { updatedAt?: unknown };
-
   return {
     ...settings,
-    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
     source: 'app-settings',
   };
 }

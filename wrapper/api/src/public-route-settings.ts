@@ -8,6 +8,7 @@ import type {
   PublicRouteSettingsDraft,
   WebAppRouteSettings,
 } from '../../shared/app-settings-types.js';
+import { normalizeTrimmedString, toSettingsRecord } from './app-settings/schema.js';
 import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { getAppDataRoot } from './security.js';
 import { badRequest } from './utils/httpError.js';
@@ -89,7 +90,7 @@ function getDefaultPublicRouteSettings(source: AppSettingsSource = 'default'): R
 }
 
 function normalizeRouteSlug(value: unknown, fieldLabel: string): string {
-  const raw = typeof value === 'string' ? value.trim() : '';
+  const raw = normalizeTrimmedString(value);
   const slug = raw.replace(/^\/+/, '').replace(/\/+$/, '').toLowerCase();
 
   if (!slug) {
@@ -119,9 +120,7 @@ function normalizePublicRouteSettingsDraft(
   value: unknown,
   fallback = getDefaultPublicRouteSettings(),
 ): Omit<RuntimePublicRouteSettings, 'updatedAt' | 'source'> {
-  const raw = value && typeof value === 'object'
-    ? value as PublicRouteSettingsDraft
-    : {};
+  const raw = toSettingsRecord(value) as PublicRouteSettingsDraft;
   const normalized = {} as Omit<RuntimePublicRouteSettings, 'updatedAt' | 'source'>;
   const usedSlugs = new Map<string, string>();
 
@@ -140,9 +139,7 @@ function normalizePublicRouteSettingsDraft(
 }
 
 function normalizeStoredPublicRouteSettings(value: unknown): RuntimePublicRouteSettings {
-  const raw = value && typeof value === 'object'
-    ? value as PublicRouteSettingsDraft & { updatedAt?: unknown }
-    : {};
+  const raw = toSettingsRecord(value) as PublicRouteSettingsDraft & { updatedAt?: unknown };
   const settings = normalizePublicRouteSettingsDraft(raw);
 
   return {
@@ -153,9 +150,7 @@ function normalizeStoredPublicRouteSettings(value: unknown): RuntimePublicRouteS
 }
 
 function normalizeLegacyWebAppRouteSettings(value: unknown): RuntimePublicRouteSettings {
-  const raw = value && typeof value === 'object'
-    ? value as Pick<PublicRouteSettingsDraft, 'publishedAppsBasePath' | 'latestAppsBasePath'> & { updatedAt?: unknown }
-    : {};
+  const raw = toSettingsRecord(value) as Pick<PublicRouteSettingsDraft, 'publishedAppsBasePath' | 'latestAppsBasePath'> & { updatedAt?: unknown };
   const fallback = getDefaultPublicRouteSettings();
   const settings = normalizePublicRouteSettingsDraft({
     ...fallback,
@@ -259,7 +254,7 @@ export async function writeWebAppRouteSettings(draft: unknown, expectedRevision?
   const settings = (await publicRouteSettingsRepository.update((current) => ({
     ...normalizePublicRouteSettingsDraft({
       ...current,
-      ...(draft && typeof draft === 'object' ? draft : {}),
+      ...toSettingsRecord(draft),
     }, current),
     updatedAt: new Date().toISOString(),
     source: 'app-settings',

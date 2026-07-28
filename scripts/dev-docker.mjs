@@ -20,17 +20,23 @@ let composeBase = 'docker compose -f ops/compose/docker-compose.managed-services
 const diagnosticServices = 'api web executor proxy';
 let envFileLabel = '.env';
 
-async function runningWebDependenciesNeedRefresh(env) {
-  const dependencyMarkerCheck = [
+const devDependencyMarkerChecks = {
+  web: [
     'test -f /workspace/rivet/node_modules/.rivet-dev-yarn-install-ok',
     'test -f /workspace/rivet/.yarn/unplugged/.rivet-dev-yarn-install-ok',
     'test -f /workspace/rivet/node_modules/.yarn.lock',
     'cmp -s /workspace/rivet/yarn.lock /workspace/rivet/node_modules/.yarn.lock',
     'test -f /workspace/wrapper/web/node_modules/.package-lock.json',
     'cmp -s /workspace/wrapper/web/package-lock.json /workspace/wrapper/web/node_modules/.package-lock.json',
-  ].join(' && ');
+  ].join(' && '),
+  api: [
+    'test -f /app/node_modules/.package-lock.json',
+    'cmp -s /app/package-lock.json /app/node_modules/.package-lock.json',
+  ].join(' && '),
+};
 
-  const result = await runCapture(`${composeBase} exec -T web sh -lc "${dependencyMarkerCheck}"`, env, {
+async function runningServiceDependenciesNeedRefresh(service, env) {
+  const result = await runCapture(`${composeBase} exec -T ${service} sh -lc "${devDependencyMarkerChecks[service]}"`, env, {
     allowFailure: true,
     cwd: rootDir,
   });
@@ -105,19 +111,21 @@ async function main() {
     }
 
     if (action === 'dev') {
-      const webAlreadyRunning = await isComposeServiceRunning('web', {
-        composeBase,
-        cwd: rootDir,
-        env: mergedEnv,
-      });
+      for (const service of ['web', 'api']) {
+        const alreadyRunning = await isComposeServiceRunning(service, {
+          composeBase,
+          cwd: rootDir,
+          env: mergedEnv,
+        });
 
-      if (webAlreadyRunning && (await runningWebDependenciesNeedRefresh(mergedEnv))) {
-        console.log('[dev-docker] Recreating web because dependency markers changed.');
-        await run(
-          `${composeBase} up -d --no-deps --force-recreate --wait --wait-timeout ${waitTimeoutSeconds} web`,
-          mergedEnv,
-          { cwd: rootDir },
-        );
+        if (alreadyRunning && (await runningServiceDependenciesNeedRefresh(service, mergedEnv))) {
+          console.log(`[dev-docker] Recreating ${service} because dependency markers changed.`);
+          await run(
+            `${composeBase} up -d --no-deps --force-recreate --wait --wait-timeout ${waitTimeoutSeconds} ${service}`,
+            mergedEnv,
+            { cwd: rootDir },
+          );
+        }
       }
     }
 

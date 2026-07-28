@@ -4,6 +4,7 @@ import type {
   NodeExecutorProxySettings,
   NodeExecutorProxySettingsDraft,
 } from '../../shared/app-settings-types.js';
+import { hasSetting, normalizeBoundedSingleLineString, toSettingsRecord } from './app-settings/schema.js';
 import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { getAppDataRoot } from './security.js';
 import { badRequest } from './utils/httpError.js';
@@ -12,33 +13,11 @@ const NODE_EXECUTOR_PROXY_SETTINGS_RELATIVE_PATH = path.join('settings', 'node-e
 const MAX_PROXY_URL_LENGTH = 2048;
 const MAX_NO_PROXY_LENGTH = 4096;
 
-function normalizeString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function isPresent(value: object, key: PropertyKey): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function rejectControlCharacters(value: string, fieldLabel: string): void {
-  if (/[\r\n\0]/.test(value)) {
-    throw badRequest(`${fieldLabel} must be a single-line value`);
-  }
-}
-
 function normalizeProxyUrl(value: unknown, fieldLabel: string, present = true): string {
-  if (present && typeof value !== 'undefined' && typeof value !== 'string') {
-    throw badRequest(`${fieldLabel} must be a string`);
-  }
-
-  const normalized = normalizeString(value);
+  const normalized = normalizeBoundedSingleLineString(value, fieldLabel, MAX_PROXY_URL_LENGTH, { strict: present });
   if (!normalized) {
     return '';
   }
-  if (normalized.length > MAX_PROXY_URL_LENGTH) {
-    throw badRequest(`${fieldLabel} is too long`);
-  }
-  rejectControlCharacters(normalized, fieldLabel);
 
   let url: URL;
   try {
@@ -53,29 +32,21 @@ function normalizeProxyUrl(value: unknown, fieldLabel: string, present = true): 
 }
 
 function normalizeNoProxy(value: unknown, present = true): string {
-  if (present && typeof value !== 'undefined' && typeof value !== 'string') {
-    throw badRequest('NO_PROXY must be a string');
-  }
-
-  const normalized = normalizeString(value);
+  const normalized = normalizeBoundedSingleLineString(value, 'NO_PROXY', MAX_NO_PROXY_LENGTH, { strict: present });
   if (!normalized) {
     return '';
   }
-  if (normalized.length > MAX_NO_PROXY_LENGTH) {
-    throw badRequest('NO_PROXY is too long');
-  }
-  rejectControlCharacters(normalized, 'NO_PROXY');
   return normalized;
 }
 
 function normalizeNodeExecutorProxySettingsDraft(
   value: unknown,
 ): Omit<NodeExecutorProxySettings, 'source' | 'updatedAt'> {
-  const raw = value && typeof value === 'object' ? value as NodeExecutorProxySettingsDraft : {};
+  const raw = toSettingsRecord(value) as NodeExecutorProxySettingsDraft;
   return {
-    httpProxy: normalizeProxyUrl(raw.httpProxy, 'HTTP_PROXY', isPresent(raw, 'httpProxy')),
-    httpsProxy: normalizeProxyUrl(raw.httpsProxy, 'HTTPS_PROXY', isPresent(raw, 'httpsProxy')),
-    noProxy: normalizeNoProxy(raw.noProxy, isPresent(raw, 'noProxy')),
+    httpProxy: normalizeProxyUrl(raw.httpProxy, 'HTTP_PROXY', hasSetting(raw, 'httpProxy')),
+    httpsProxy: normalizeProxyUrl(raw.httpsProxy, 'HTTPS_PROXY', hasSetting(raw, 'httpsProxy')),
+    noProxy: normalizeNoProxy(raw.noProxy, hasSetting(raw, 'noProxy')),
   };
 }
 
@@ -115,7 +86,7 @@ export async function writeNodeExecutorProxySettings(
   return (await nodeExecutorProxySettingsRepository.update((previous) => ({
     ...normalizeNodeExecutorProxySettingsDraft({
       ...previous,
-      ...(draft && typeof draft === 'object' ? draft : {}),
+      ...toSettingsRecord(draft),
     }),
     updatedAt: new Date().toISOString(),
     source: 'app-settings',

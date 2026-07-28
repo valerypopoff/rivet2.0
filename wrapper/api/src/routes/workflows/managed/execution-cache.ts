@@ -1,3 +1,5 @@
+import { LRUCache } from 'lru-cache';
+
 export type ManagedWorkflowRunKind = 'published' | 'latest' | 'web-app' | 'latest-web-app';
 
 export type ManagedEndpointPointerCacheEntry = {
@@ -37,50 +39,43 @@ export class ManagedWorkflowExecutionCache {
   readonly #endpointPointerLimit: number;
   readonly #revisionMaterializationBytesLimit: number;
   readonly #maxSingleRevisionBytes: number;
-  readonly #endpointPointers = new Map<string, ManagedEndpointPointerCacheEntry>();
+  readonly #endpointPointers: LRUCache<string, ManagedEndpointPointerCacheEntry>;
   readonly #workflowEndpointPointerKeys = new Map<string, Set<string>>();
-  readonly #revisionMaterializations = new Map<string, ManagedRevisionMaterializationRecord>();
-  #revisionMaterializationBytes = 0;
+  readonly #revisionMaterializations: LRUCache<string, ManagedRevisionMaterializationRecord>;
 
   constructor(options: ManagedWorkflowExecutionCacheOptions = {}) {
     this.#endpointPointerLimit = options.endpointPointerLimit ?? DEFAULT_ENDPOINT_POINTER_LIMIT;
     this.#revisionMaterializationBytesLimit = options.revisionMaterializationBytesLimit ?? DEFAULT_REVISION_MATERIALIZATION_BYTES_LIMIT;
     this.#maxSingleRevisionBytes = options.maxSingleRevisionBytes ?? DEFAULT_MAX_SINGLE_REVISION_BYTES;
+    this.#endpointPointers = new LRUCache({
+      max: Math.max(1, this.#endpointPointerLimit),
+      dispose: (entry, key) => {
+        this.#unlinkEndpointPointerKey(entry.workflowId, key);
+      },
+    });
+    this.#revisionMaterializations = new LRUCache({
+      maxSize: Math.max(1, this.#revisionMaterializationBytesLimit),
+      maxEntrySize: Math.max(1, this.#maxSingleRevisionBytes),
+      sizeCalculation: (record) => record.sizeBytes,
+    });
   }
 
   getEndpointPointer(key: string): ManagedEndpointPointerCacheEntry | null {
-    const entry = this.#endpointPointers.get(key);
-    if (!entry) {
+    if (this.#endpointPointerLimit <= 0) {
       return null;
     }
 
-    this.#endpointPointers.delete(key);
-    this.#endpointPointers.set(key, entry);
-    return entry;
+    return this.#endpointPointers.get(key) ?? null;
   }
 
   setEndpointPointer(key: string, entry: ManagedEndpointPointerCacheEntry): void {
-    const existing = this.#endpointPointers.get(key);
-    if (existing) {
-      this.#unlinkEndpointPointerKey(existing.workflowId, key);
+    if (this.#endpointPointerLimit <= 0) {
       this.#endpointPointers.delete(key);
+      return;
     }
 
     this.#endpointPointers.set(key, entry);
     this.#linkEndpointPointerKey(entry.workflowId, key);
-
-    while (this.#endpointPointers.size > this.#endpointPointerLimit) {
-      const oldestKey = this.#endpointPointers.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-
-      const oldestEntry = this.#endpointPointers.get(oldestKey);
-      this.#endpointPointers.delete(oldestKey);
-      if (oldestEntry) {
-        this.#unlinkEndpointPointerKey(oldestEntry.workflowId, oldestKey);
-      }
-    }
   }
 
   invalidateWorkflowEndpointPointers(workflowId: string): void {
@@ -89,11 +84,9 @@ export class ManagedWorkflowExecutionCache {
       return;
     }
 
-    for (const key of keys) {
+    for (const key of [...keys]) {
       this.#endpointPointers.delete(key);
     }
-
-    this.#workflowEndpointPointerKeys.delete(workflowId);
   }
 
   clearEndpointPointers(): void {
@@ -102,55 +95,33 @@ export class ManagedWorkflowExecutionCache {
   }
 
   getRevisionMaterialization(revisionId: string): ManagedRevisionMaterializationCacheEntry | null {
-    const record = this.#revisionMaterializations.get(revisionId);
-    if (!record) {
+    if (this.#revisionMaterializationBytesLimit <= 0) {
       return null;
     }
 
-    this.#revisionMaterializations.delete(revisionId);
-    this.#revisionMaterializations.set(revisionId, record);
-    return record.entry;
+    return this.#revisionMaterializations.get(revisionId)?.entry ?? null;
   }
 
   setRevisionMaterialization(entry: ManagedRevisionMaterializationCacheEntry): boolean {
     const sizeBytes = measureRevisionMaterializationBytes(entry);
-    if (sizeBytes > this.#maxSingleRevisionBytes) {
-      this.#deleteRevisionMaterialization(entry.revisionId);
+    if (
+      this.#revisionMaterializationBytesLimit <= 0
+      || sizeBytes > this.#maxSingleRevisionBytes
+      || sizeBytes > this.#revisionMaterializationBytesLimit
+    ) {
+      this.#revisionMaterializations.delete(entry.revisionId);
       return false;
     }
 
-    this.#deleteRevisionMaterialization(entry.revisionId);
     this.#revisionMaterializations.set(entry.revisionId, {
       entry,
       sizeBytes,
     });
-    this.#revisionMaterializationBytes += sizeBytes;
-
-    while (this.#revisionMaterializationBytes > this.#revisionMaterializationBytesLimit) {
-      const oldestRevisionId = this.#revisionMaterializations.keys().next().value;
-      if (!oldestRevisionId) {
-        break;
-      }
-
-      this.#deleteRevisionMaterialization(oldestRevisionId);
-    }
-
     return true;
   }
 
   clearRevisionMaterializations(): void {
     this.#revisionMaterializations.clear();
-    this.#revisionMaterializationBytes = 0;
-  }
-
-  #deleteRevisionMaterialization(revisionId: string): void {
-    const existing = this.#revisionMaterializations.get(revisionId);
-    if (!existing) {
-      return;
-    }
-
-    this.#revisionMaterializations.delete(revisionId);
-    this.#revisionMaterializationBytes = Math.max(0, this.#revisionMaterializationBytes - existing.sizeBytes);
   }
 
   #linkEndpointPointerKey(workflowId: string, key: string): void {
