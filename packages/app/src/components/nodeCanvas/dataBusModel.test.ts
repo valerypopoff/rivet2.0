@@ -214,6 +214,25 @@ test('derives live rail presentation from definitions and shared topology', () =
   assert.equal(presentation.connectProviderChannel?.outputDefinition, undefined);
 });
 
+test('omits a non-terminal channel whose provider and consumers are both absent', () => {
+  const bus = node('bus', true);
+  const provider = connection('source', 'output', 'bus', 'input1');
+  const consumer = connection('bus', 'output1', 'receiver', 'input');
+  const index = topology({ bus, source: node('source'), receiver: node('receiver') }, [provider, consumer]);
+  const presentation = buildDataBusGroupPresentation({
+    busNode: bus as any,
+    inputDefinitions: [input('input1'), input('input2'), input('input3')],
+    outputDefinitions: [output('output1'), output('output2')],
+    topology: index,
+  });
+
+  assert.deepEqual(
+    presentation.dataChannels.map(({ channelIndex }) => channelIndex),
+    [1],
+  );
+  assert.equal(presentation.connectProviderChannel?.channelIndex, 3);
+});
+
 test('retains missing and multiple-provider states instead of normalizing them away', () => {
   const bus = node('bus', true);
   const firstProvider = connection('first-source', 'output', 'bus', 'input1');

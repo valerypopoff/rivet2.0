@@ -212,6 +212,19 @@ channels scroll only in the space between the fixed Data Bus header and a fixed
 **Connect provider** terminal input. That terminal input is the next Data Bus
 channel with no paired output yet; pinning its presentation does not change its
 connection topology.
+Data Bus IO derivation is sparse: it emits definitions only for channel indices
+that still have a provider or receiver, plus the first unused input index for
+**Connect provider**. A pair therefore disappears as soon as both sides are
+disconnected, without renumbering surviving connections or recording a
+render-time graph mutation. The group-presentation model defensively filters
+fully empty non-terminal channels as well. Rail ports are absolutely positioned
+with their centers on each pair's lower boundary and a reserved transparent
+gutter contains the lower half of each circle. They remain ordinary measurable
+and interactive ports without consuming label-grid columns or requiring
+overflow that could introduce rail scrollbars. The receiver count is likewise
+removed from the label grid and rendered as a non-interactive overlay inside the
+output port, leaving the two-line provider label the channel's only in-flow
+content with dedicated clearance above the pair's lower boundary.
 The settings action selects the hidden node and opens
 its ordinary node editor (or the library source when the bus is a linked Node
 Library instance). Search selection and project-comparison node styling

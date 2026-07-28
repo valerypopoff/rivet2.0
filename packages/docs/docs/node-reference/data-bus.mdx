@@ -27,13 +27,17 @@ a false graph cycle.
 | Input [i] | `any` | The provider for channel *i*. One connection is allowed. |
 | Output [i] | `any` | The same channel delivered to any number of receivers. |
 
-The node adds channels as you connect them. Sparse channels are valid. If a
-provider is removed while receivers remain, the channel is shown as **Missing
-provider** so it can be repaired.
+The node adds channels as you connect them. A channel disappears automatically
+once it has neither a provider nor any receivers, and its index becomes
+available for the next channel. Sparse channels are valid. If a provider is
+removed while receivers remain, the channel is shown as **Missing provider** so
+it can be repaired.
 
 ## Canvas behavior
 
 - Established connections use compact antenna markers instead of long wires.
+- Channel ports hang halfway below the lower edge of each rail item, leaving the
+  label width available for provider details.
 - Hover a channel or an antenna to reveal the actual provider and receiver
   wires in the active color.
 - Long rails expand into separate full-width rows below the project tabs and

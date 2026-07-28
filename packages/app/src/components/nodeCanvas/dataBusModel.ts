@@ -361,7 +361,10 @@ export function buildDataBusGroupPresentation(options: {
   return {
     channels,
     connectProviderChannel,
-    dataChannels: channels.filter((channel) => channel !== connectProviderChannel),
+    dataChannels: channels.filter(
+      (channel) =>
+        channel !== connectProviderChannel && (channel.providerConnections.length > 0 || channel.consumerCount > 0),
+    ),
   };
 }
 

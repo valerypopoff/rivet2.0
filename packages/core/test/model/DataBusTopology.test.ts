@@ -4,6 +4,7 @@ import {
   canRenderDataBusNode,
   compileDataBusTopology,
   createBuiltInRegistry,
+  DataBusNodeImpl,
   getDataBusInputPortId,
   getDataBusOutputPortId,
   GraphProcessor,
@@ -11,6 +12,7 @@ import {
   nodeDefinition,
   parseDataBusChannelIndex,
   type ChartNode,
+  type DataBusNode,
   type GraphId,
   type Inputs,
   type NodeConnection,
@@ -59,7 +61,7 @@ function port(value: string): PortId {
   return value as PortId;
 }
 
-function dataBus(nodeId = 'bus'): ChartNode {
+function dataBus(nodeId = 'bus'): DataBusNode {
   return {
     id: id(nodeId),
     type: 'dataBus',
@@ -244,6 +246,49 @@ void describe('Data Bus topology', () => {
     assert.throws(() => getDataBusInputPortId(0), RangeError);
     assert.throws(() => getDataBusOutputPortId(1.5), RangeError);
     assert.throws(() => getDataBusInputPortId(10_001), RangeError);
+  });
+
+  void it('derives sparse ports and reuses the first channel that becomes fully disconnected', () => {
+    const bus = dataBus();
+    const impl = new DataBusNodeImpl(bus);
+    const channelConnections = [
+      connection('first-source', 'output', 'bus', 'input1'),
+      connection('bus', 'output1', 'first-receiver', 'input'),
+      connection('third-source', 'output', 'bus', 'input3'),
+      connection('bus', 'output3', 'third-receiver', 'input'),
+    ];
+
+    assert.deepEqual(
+      impl.getInputDefinitions(channelConnections).map(({ id: portId }) => portId),
+      ['input1', 'input3', 'input2'],
+    );
+    assert.deepEqual(
+      impl.getOutputDefinitions(channelConnections).map(({ id: portId }) => portId),
+      ['output1', 'output3'],
+    );
+
+    const onlyThirdChannel = channelConnections.slice(2);
+    assert.deepEqual(
+      impl.getInputDefinitions(onlyThirdChannel).map(({ id: portId }) => portId),
+      ['input3', 'input1'],
+    );
+    assert.deepEqual(
+      impl.getOutputDefinitions(onlyThirdChannel).map(({ id: portId }) => portId),
+      ['output3'],
+    );
+
+    const oneSidedChannels = [
+      connection('fourth-source', 'output', 'bus', 'input4'),
+      connection('bus', 'output6', 'sixth-receiver', 'input'),
+    ];
+    assert.deepEqual(
+      impl.getInputDefinitions(oneSidedChannels).map(({ id: portId }) => portId),
+      ['input4', 'input6', 'input1'],
+    );
+    assert.deepEqual(
+      impl.getOutputDefinitions(oneSidedChannels).map(({ id: portId }) => portId),
+      ['output4', 'output6'],
+    );
   });
 
   void it('rejects frozen/preloaded output injection for topology-only buses', () => {

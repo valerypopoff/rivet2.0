@@ -202,12 +202,12 @@ const DataBusGroup: FC<{
           )}
         </span>
         {outputDefinition && (
-          <>
-            <span className="data-bus-channel-usage" title={`${consumerCount} connected receiver(s)`}>
-              {consumerCount}
-            </span>
-            <DataBusPort definition={outputDefinition} connected={consumerCount > 0} nodeId={effectiveNode.id} />
-          </>
+          <DataBusPort
+            connected={consumerCount > 0}
+            connectionCount={consumerCount}
+            definition={outputDefinition}
+            nodeId={effectiveNode.id}
+          />
         )}
       </div>
     );
@@ -279,10 +279,11 @@ const ProviderLabel: FC<{
 
 const DataBusPort: FC<{
   connected: boolean;
+  connectionCount?: number;
   definition: NodeInputDefinition | NodeOutputDefinition;
   input?: boolean;
   nodeId: NodeId;
-}> = ({ connected, definition, input = false, nodeId }) => {
+}> = ({ connected, connectionCount, definition, input = false, nodeId }) => {
   const { draggingWire, closestPortToDraggingWire } = useCanvasViewContext();
   const { onPortMouseOut, onPortMouseOver, onWireEndDrag, onWireStartDrag } = useCanvasHandlersContext();
   const preservePortTextCase = useAtomValue(preservePortTextCaseState);
@@ -299,27 +300,43 @@ const DataBusPort: FC<{
   });
 
   return (
-    <Port
-      canDragTo={draggingWire ? (input ? !draggingWire.startPortIsInput : draggingWire.startPortIsInput) : false}
-      closest={closestPortToDraggingWire?.nodeId === nodeId && closestPortToDraggingWire.portId === portId}
-      connected={
-        connected ||
-        (input
-          ? draggingWire?.endNodeId === nodeId && draggingWire.endPortId === portId
-          : draggingWire?.startNodeId === nodeId && draggingWire.startPortId === portId)
-      }
-      definition={definition}
-      draggingDataType={draggingWire?.dataType}
-      hideLabel
-      id={portId}
-      input={input}
-      nodeId={nodeId}
-      onMouseDown={handlePortMouseDown}
-      onMouseOut={onPortMouseOut}
-      onMouseOver={onPortMouseOver}
-      onMouseUp={handlePortMouseUp}
-      preservePortCase={preservePortTextCase}
-      title={definition.title}
-    />
+    <div
+      className={clsx('data-bus-channel-port', input ? 'input' : 'output', {
+        connected,
+      })}
+    >
+      <Port
+        canDragTo={draggingWire ? (input ? !draggingWire.startPortIsInput : draggingWire.startPortIsInput) : false}
+        closest={closestPortToDraggingWire?.nodeId === nodeId && closestPortToDraggingWire.portId === portId}
+        connected={
+          connected ||
+          (input
+            ? draggingWire?.endNodeId === nodeId && draggingWire.endPortId === portId
+            : draggingWire?.startNodeId === nodeId && draggingWire.startPortId === portId)
+        }
+        definition={definition}
+        draggingDataType={draggingWire?.dataType}
+        hideLabel
+        id={portId}
+        input={input}
+        nodeId={nodeId}
+        onMouseDown={handlePortMouseDown}
+        onMouseOut={onPortMouseOut}
+        onMouseOver={onPortMouseOver}
+        onMouseUp={handlePortMouseUp}
+        preservePortCase={preservePortTextCase}
+        title={definition.title}
+      />
+      {connectionCount !== undefined && (
+        <span
+          className={clsx('data-bus-channel-port-count', {
+            'two-digits': connectionCount >= 10,
+            'three-or-more-digits': connectionCount >= 100,
+          })}
+        >
+          {connectionCount}
+        </span>
+      )}
+    </div>
   );
 };

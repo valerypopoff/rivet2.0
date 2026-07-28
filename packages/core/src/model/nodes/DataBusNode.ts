@@ -31,8 +31,8 @@ export {
   parseDataBusChannelIndex,
 } from '../DataBusPorts.js';
 
-function getHighestConnectedChannelIndex(connections: readonly NodeConnection[], nodeId: NodeId): number {
-  let highestIndex = 0;
+function getConnectedChannelIndices(connections: readonly NodeConnection[], nodeId: NodeId): number[] {
+  const channelIndices = new Set<number>();
 
   for (const connection of connections) {
     const inputIndex =
@@ -40,10 +40,28 @@ function getHighestConnectedChannelIndex(connections: readonly NodeConnection[],
     const outputIndex =
       connection.outputNodeId === nodeId ? parseDataBusChannelIndex(connection.outputId, false) : undefined;
 
-    highestIndex = Math.max(highestIndex, inputIndex ?? 0, outputIndex ?? 0);
+    if (inputIndex != null) {
+      channelIndices.add(inputIndex);
+    }
+    if (outputIndex != null) {
+      channelIndices.add(outputIndex);
+    }
   }
 
-  return highestIndex;
+  return [...channelIndices].sort((left, right) => left - right);
+}
+
+function getFirstAvailableChannelIndex(connectedChannelIndices: readonly number[]): number | undefined {
+  let availableIndex = 1;
+
+  for (const channelIndex of connectedChannelIndices) {
+    if (channelIndex !== availableIndex) {
+      break;
+    }
+    availableIndex += 1;
+  }
+
+  return availableIndex <= MAX_DATA_BUS_CHANNEL_INDEX ? availableIndex : undefined;
 }
 
 export function isDataBusNode(node: ChartNode | undefined): node is DataBusNode {
@@ -64,32 +82,26 @@ export class DataBusNodeImpl extends NodeImpl<DataBusNode> {
   });
 
   getInputDefinitions(connections: NodeConnection[]): NodeInputDefinition[] {
-    const inputCount = Math.min(
-      getHighestConnectedChannelIndex(connections, this.chartNode.id) + 1,
-      MAX_DATA_BUS_CHANNEL_INDEX,
-    );
+    const connectedChannelIndices = getConnectedChannelIndices(connections, this.chartNode.id);
+    const availableChannelIndex = getFirstAvailableChannelIndex(connectedChannelIndices);
+    const channelIndices =
+      availableChannelIndex == null ? connectedChannelIndices : [...connectedChannelIndices, availableChannelIndex];
 
-    return Array.from({ length: inputCount }, (_, offset) => {
-      const channelIndex = offset + 1;
-      return {
-        dataType: 'any',
-        id: getDataBusInputPortId(channelIndex),
-        title: `Input ${channelIndex}`,
-      };
-    });
+    return channelIndices.map((channelIndex) => ({
+      dataType: 'any',
+      id: getDataBusInputPortId(channelIndex),
+      title: `Input ${channelIndex}`,
+    }));
   }
 
   getOutputDefinitions(connections: NodeConnection[]): NodeOutputDefinition[] {
-    const outputCount = getHighestConnectedChannelIndex(connections, this.chartNode.id);
+    const connectedChannelIndices = getConnectedChannelIndices(connections, this.chartNode.id);
 
-    return Array.from({ length: outputCount }, (_, offset) => {
-      const channelIndex = offset + 1;
-      return {
-        dataType: 'any',
-        id: getDataBusOutputPortId(channelIndex),
-        title: `Output ${channelIndex}`,
-      };
-    });
+    return connectedChannelIndices.map((channelIndex) => ({
+      dataType: 'any',
+      id: getDataBusOutputPortId(channelIndex),
+      title: `Output ${channelIndex}`,
+    }));
   }
 
   static getUIData(): NodeUIData {

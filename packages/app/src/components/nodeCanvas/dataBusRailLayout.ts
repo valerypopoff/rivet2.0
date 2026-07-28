@@ -1,6 +1,6 @@
 export const DATA_BUS_COMPACT_VIEWPORT_RATIO = 0.7;
 export const DATA_BUS_COMPACT_MAX_WIDTH_PX = 760;
-export const DATA_BUS_FULL_ROW_HEIGHT_PX = 39;
+export const DATA_BUS_FULL_ROW_HEIGHT_PX = 50;
 
 export function getDataBusFullRowsHeight(options: { rowCount: number; uiFontScale: number }): number {
   const rowCount = Number.isFinite(options.rowCount) ? Math.max(0, Math.floor(options.rowCount)) : 0;

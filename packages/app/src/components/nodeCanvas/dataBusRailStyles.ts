@@ -46,17 +46,30 @@ export const dataBusRailStyles = css`
 
   .data-bus-group {
     position: relative;
+    isolation: isolate;
     display: flex;
     align-items: stretch;
     flex: 0 0 auto;
     min-width: 0;
     max-width: min(70vw, calc(760px * var(--ui-font-scale, 1)));
     overflow: hidden;
+    border: 0;
+    background: transparent;
+    color: var(--foreground);
+  }
+
+  .data-bus-group::after {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    right: 0;
+    bottom: calc(8px * var(--ui-font-scale, 1));
+    left: 0;
     border: 1px solid var(--app-panel-border, var(--grey));
     border-radius: calc(7px * var(--ui-font-scale, 1));
     background: var(--app-panel-bg, var(--grey-darkest));
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-    color: var(--foreground);
   }
 
   &.full-row .data-bus-group {
@@ -66,9 +79,15 @@ export const dataBusRailStyles = css`
     max-width: none;
     overflow: hidden;
     border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  &.full-row .data-bus-group::after {
+    border: 0;
     border-bottom: 1px solid var(--app-panel-border, var(--grey));
     border-radius: 0;
-    background: var(--app-panel-bg, var(--grey-darkest));
     box-shadow: none;
   }
 
@@ -89,27 +108,27 @@ export const dataBusRailStyles = css`
     margin: 0 auto;
   }
 
-  &.full-row .data-bus-group.selected,
-  &.full-row .data-bus-group.search-match:not(.selected),
-  &.full-row .data-bus-group.compare-added,
-  &.full-row .data-bus-group.compare-changed {
+  &.full-row .data-bus-group.selected::after,
+  &.full-row .data-bus-group.search-match:not(.selected)::after,
+  &.full-row .data-bus-group.compare-added::after,
+  &.full-row .data-bus-group.compare-changed::after {
     border-color: transparent;
     box-shadow: none;
   }
 
-  &.full-row .data-bus-group.selected {
+  &.full-row .data-bus-group.selected::after {
     box-shadow: inset 0 -2px var(--primary);
   }
 
-  &.full-row .data-bus-group.search-match:not(.selected) {
+  &.full-row .data-bus-group.search-match:not(.selected)::after {
     box-shadow: inset 0 -1px color-mix(in srgb, var(--primary) 65%, transparent);
   }
 
-  &.full-row .data-bus-group.compare-added:not(.selected) {
+  &.full-row .data-bus-group.compare-added:not(.selected)::after {
     box-shadow: inset 0 -2px var(--success);
   }
 
-  &.full-row .data-bus-group.compare-changed:not(.selected) {
+  &.full-row .data-bus-group.compare-changed:not(.selected)::after {
     box-shadow: inset 0 -2px var(--warning-light);
   }
 
@@ -117,28 +136,28 @@ export const dataBusRailStyles = css`
     content: '';
     position: absolute;
     top: 0;
-    bottom: 0;
+    bottom: calc(8px * var(--ui-font-scale, 1));
     left: 0;
     width: calc(3px * var(--ui-font-scale, 1));
     background: var(--bus-accent);
   }
 
-  .data-bus-group.selected {
+  .data-bus-group.selected::after {
     border-color: var(--primary);
     box-shadow:
       0 0 0 1px var(--primary),
       0 2px 8px rgba(0, 0, 0, 0.24);
   }
 
-  .data-bus-group.search-match:not(.selected) {
+  .data-bus-group.search-match:not(.selected)::after {
     border-color: color-mix(in srgb, var(--primary) 55%, var(--app-panel-border, var(--grey)) 45%);
   }
 
-  .data-bus-group.compare-added {
+  .data-bus-group.compare-added::after {
     border-color: var(--success);
   }
 
-  .data-bus-group.compare-changed {
+  .data-bus-group.compare-changed::after {
     border-color: var(--warning-light);
   }
 
@@ -158,8 +177,10 @@ export const dataBusRailStyles = css`
     gap: calc(5px * var(--ui-font-scale, 1));
     max-width: calc(220px * var(--ui-font-scale, 1));
     min-width: 0;
-    min-height: calc(30px * var(--ui-font-scale, 1));
+    height: calc(${DATA_BUS_FULL_ROW_HEIGHT_PX - 8}px * var(--ui-font-scale, 1));
+    min-height: calc(${DATA_BUS_FULL_ROW_HEIGHT_PX - 8}px * var(--ui-font-scale, 1));
     padding: 0 calc(3px * var(--ui-font-scale, 1)) 0 calc(8px * var(--ui-font-scale, 1));
+    box-sizing: border-box;
     border-right: 1px solid var(--app-panel-border, var(--grey));
     color: var(--foreground);
   }
@@ -221,37 +242,58 @@ export const dataBusRailStyles = css`
 
   .data-bus-channel,
   .data-bus-connect-provider {
+    position: relative;
     display: grid;
-    grid-template-columns: 16px minmax(0, 1fr) auto 16px;
-    align-items: center;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
     gap: calc(6px * var(--ui-font-scale, 1));
-    min-height: calc(30px * var(--ui-font-scale, 1));
-    padding: 0 calc(7px * var(--ui-font-scale, 1));
+    box-sizing: border-box;
+    min-height: calc(${DATA_BUS_FULL_ROW_HEIGHT_PX}px * var(--ui-font-scale, 1));
+    padding: calc(3px * var(--ui-font-scale, 1)) calc(7px * var(--ui-font-scale, 1))
+      calc(8px * var(--ui-font-scale, 1));
   }
 
   .data-bus-channel {
     flex: 0 0 auto;
-    border-right: 1px solid color-mix(in srgb, var(--app-panel-border, var(--grey)) 65%, transparent);
-  }
-
-  .data-bus-channel:last-child {
-    border-right: 0;
+    padding-top: calc(2px * var(--ui-font-scale, 1));
   }
 
   .data-bus-connect-provider {
+    grid-template-columns: minmax(0, 1fr);
     flex: 0 0 auto;
-    border-left: 1px solid color-mix(in srgb, var(--app-panel-border, var(--grey)) 65%, transparent);
+  }
+
+  .data-bus-connect-provider .data-bus-channel-label {
+    align-self: center;
+  }
+
+  .data-bus-channel:not(:last-child)::after,
+  .data-bus-connect-provider::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: calc(8px * var(--ui-font-scale, 1));
+    width: 1px;
+    background: color-mix(in srgb, var(--app-panel-border, var(--grey)) 65%, transparent);
+    pointer-events: none;
+  }
+
+  .data-bus-channel:not(:last-child)::after {
+    right: 0;
+  }
+
+  .data-bus-connect-provider::after {
+    left: 0;
   }
 
   .data-bus-channel:hover,
   .data-bus-connect-provider:hover,
   .data-bus-channel.highlighted {
-    background: rgba(255, 255, 255, 0.055);
-  }
-
-  .data-bus-channel.empty,
-  .data-bus-connect-provider {
-    grid-template-columns: 16px minmax(0, 1fr);
+    background: linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.055) 0 calc(100% - 8px * var(--ui-font-scale, 1)),
+      transparent calc(100% - 8px * var(--ui-font-scale, 1))
+    );
   }
 
   .data-bus-channel.missing-provider .data-bus-channel-label,
@@ -259,9 +301,18 @@ export const dataBusRailStyles = css`
     color: var(--warning-light);
   }
 
-  .data-bus-channel .port,
-  .data-bus-connect-provider .port {
-    z-index: 1;
+  .data-bus-channel-port {
+    position: absolute;
+    bottom: calc(8px * var(--ui-font-scale, 1) - 8px);
+    z-index: 2;
+  }
+
+  .data-bus-channel-port.input {
+    left: calc(8px * var(--ui-font-scale, 1));
+  }
+
+  .data-bus-channel-port.output {
+    right: calc(8px * var(--ui-font-scale, 1));
   }
 
   .data-bus-channel .port-hover-area,
@@ -270,10 +321,35 @@ export const dataBusRailStyles = css`
     top: 50%;
   }
 
-  .data-bus-channel .input-port,
-  .data-bus-channel .output-port,
-  .data-bus-connect-provider .input-port {
+  .data-bus-channel-port .input-port,
+  .data-bus-channel-port .output-port {
     margin: 0;
+  }
+
+  .data-bus-channel-port-count {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: grid;
+    place-items: center;
+    color: var(--foreground-dim);
+    font-family: var(--font-family);
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  .data-bus-channel-port.connected .data-bus-channel-port-count {
+    color: var(--foreground-on-primary);
+  }
+
+  .data-bus-channel-port-count.two-digits {
+    font-size: 7px;
+  }
+
+  .data-bus-channel-port-count.three-or-more-digits {
+    font-size: 6px;
   }
 
   .data-bus-channel-label {
@@ -285,6 +361,8 @@ export const dataBusRailStyles = css`
     font-size: var(--ui-font-size-2xs);
     text-overflow: ellipsis;
     white-space: nowrap;
+    padding-top: 0.45em;
+    padding-right: 0.65em;
   }
 
   .data-bus-provider-label {
@@ -303,8 +381,9 @@ export const dataBusRailStyles = css`
   }
 
   .data-bus-provider-source {
-    font-size: 0.82em;
+    font-size: 0.9em;
     text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .data-bus-channel.empty .data-bus-channel-label,
@@ -313,12 +392,4 @@ export const dataBusRailStyles = css`
     font-style: italic;
   }
 
-  .data-bus-channel-usage {
-    min-width: 18px;
-    color: var(--foreground-dim);
-    font-family: var(--font-family);
-    font-size: var(--ui-font-size-2xs);
-    text-align: right;
-    white-space: nowrap;
-  }
 `;
