@@ -252,6 +252,7 @@ Development-only execution measurement is available through:
 ### Safety and compatibility
 
 - `RIVET_ENV_ALLOWLIST` extends the hosted env shim beyond the built-in OpenAI vars. Browser-side hosted env lookups are cached for the current page session, so restart/recreate the app and reload the browser after changing env values that the editor should see.
+- `PINECONE_API_KEY` is a runtime-only secret for Node-executed Pinecone Knowledge Stores. Compose forwards it only to API and executor services; it is intentionally not browser-visible through the hosted env shim and the Browser executor cannot run those stores.
 - `RIVET_SHELL_ALLOWLIST` extends the hosted shell-command allowlist beyond `git` and `pnpm`.
 - `RIVET_EXTRA_ROOTS` adds more allowed filesystem roots.
 - App Settings -> `General` bounds hosted shell execution: `Command timeout` is stored in seconds and `Maximum captured output` is stored as bytes after the UI accepts MiB. These do not control workflow HTTP proxy timeouts.

@@ -149,6 +149,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_ORG_ID=${OPENAI_ORG_ID:-}
       - OPENAI_ENDPOINT=${OPENAI_ENDPOINT:-}
+      - PINECONE_API_KEY=${PINECONE_API_KEY:-}
     volumes:
       - ../..:/workspace
       - ${RIVET_SOURCE_HOST_PATH:-../../rivet}:/workspace/rivet
@@ -236,6 +237,7 @@ services:
       - RIVET_APP_DATA_ROOT=/home/rivet/.local/share/com.valerypopoff.rivet2
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=executor
+      - PINECONE_API_KEY=${PINECONE_API_KEY:-}
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
       - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
     volumes:
