@@ -82,6 +82,10 @@ export type ChatV2CallFinishedEvent = {
   callId: ChatV2CallId;
   /** Zero-based attempt index within this Chat V2 pipeline request. */
   attemptIndex: number;
+  /** Zero-based profile index when LLM Chat is using a profile fallback chain. */
+  profileIndex?: number;
+  /** Zero-based model round within one auto-continued LLM Chat invocation. */
+  roundIndex?: number;
   nodeId: NodeId;
   processId: ProcessId;
   provider: ChatV2Provider;

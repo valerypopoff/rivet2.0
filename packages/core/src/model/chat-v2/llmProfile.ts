@@ -121,6 +121,29 @@ export function normalizeLLMProfileValue(value: unknown): LLMProfileValue {
   };
 }
 
+/**
+ * Normalizes the single LLM Profile or ordered fallback chain accepted by
+ * LLM Chat's From profile input. We validate every member here rather than
+ * trusting a same-type `llm-config[]` wrapper: arrays can otherwise carry
+ * malformed values without re-entering scalar coercion.
+ */
+export function normalizeLLMProfileChainInput(value: unknown): LLMProfileValue[] {
+  const rawProfiles = Array.isArray(value) ? value : [value];
+
+  if (rawProfiles.length === 0) {
+    throw new Error('LLM Profiles input must contain at least one LLM Profile.');
+  }
+
+  return rawProfiles.map((profile, index) => {
+    try {
+      return normalizeLLMProfileValue(profile);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`LLM Profiles input item ${index} is invalid: ${message}`);
+    }
+  });
+}
+
 function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
   for (const field of stringFields) {
     if (typeof data[field] !== 'string') {

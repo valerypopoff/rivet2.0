@@ -173,35 +173,27 @@ topology compilation and canvas presentation recognize only the explicit
 `dataBus` type; directly constructed or hand-edited Passthrough data cannot
 re-enable the retired mode.
 
-`DataBusRail` renders one sticky top-of-canvas bus shelf per Data Bus. A shelf is deliberately a compact, single-line canvas control
-rather than a clipped or immovable node card: the node name, settings action,
-and horizontally arranged channels share one shallow strip below the desktop
-navigation bar. When the combined intrinsic content of the visible shelves
-exceeds the compact `min(70vw, 760px * UI scale)` cap, all visible buses promote
-into dedicated full-width rows immediately below the project tabs. Each bus
-retains its own panel row; rows stack vertically in graph order rather than
-flattening several buses into one strip. Every row begins at the live right
-edge of an open left sidebar, while its bus content remains centered in the
-remaining width. The `dataBusFullRowCountState` atom records the number of
-reserved rows, and `getDataBusFullRowsHeight` is the shared height calculation
-used by both root layout CSS and canvas coordinate conversion. The complete
-stack reserves real vertical space: the canvas surface, node editor, borders,
-notices, and top controls all move down and the usable canvas height shrinks by
-one fixed row height per bus. `GraphBuilder` itself keeps the full viewport
-height while the canvas is shifted and shortened inside it; this ensures
-absolutely positioned sibling panels use the window bottom and do not subtract
-the bus-row stack a second time. The left sidebar remains beside the rows
-instead of moving below them. In this mode, each full-width row is the panel surface;
-the centered bus content has no independent card border, radius, shadow, or
-background. Detection uses
-the summed intrinsic header and channel widths plus inter-shelf gaps rather than
-the currently constrained shelf width, which prevents an expand/collapse
-measurement loop. The live sidebar width participates in that calculation and
-also centers a compact shelf inside the unobstructed canvas area. Rail and channel overflow remain
-horizontally scrollable while their scrollbars stay visually hidden, including
-while a wire drag exposes larger port hit targets. A vertical wheel gesture
-over an overflowing shelf is translated to horizontal scrolling; wheel events
-over the shelf never pan or zoom the canvas.
+`DataBusRail` always renders one pinned, full-width row per Data Bus immediately
+below the project tabs. A Data Bus never switches to a floating shelf or waits
+for content measurement before reserving space. Each bus retains its own panel
+row; rows stack vertically in graph order rather than flattening several buses
+into one strip. Every row begins at the live right edge of an open left sidebar,
+while its bus content remains centered in the remaining width. The
+`dataBusFullRowCountState` atom records the number of reserved rows, and
+`getDataBusFullRowsHeight` is the shared height calculation used by both root
+layout CSS and canvas coordinate conversion. The complete stack reserves real
+vertical space: the canvas surface, node editor, borders, notices, and top
+controls all move down and the usable canvas height shrinks by one fixed row
+height per bus. `GraphBuilder` itself keeps the full viewport height while the
+canvas is shifted and shortened inside it; this ensures absolutely positioned
+sibling panels use the window bottom and do not subtract the bus-row stack a
+second time. The left sidebar remains beside the rows instead of moving below
+them. Each full-width row is the panel surface; the centered bus content has no
+independent card border, radius, shadow, or background. Channel overflow remains
+horizontally scrollable while its scrollbar stays visually hidden, including
+while a wire drag exposes larger port hit targets. A vertical wheel gesture over
+an overflowing channel list is translated to horizontal scrolling; wheel events
+over the rail never pan or zoom the canvas.
 Each populated channel labels `<source node>` and `<source output>` on separate
 lines so more channels fit within the available rail width. The source-node
 line is a smaller uppercase heading, separated slightly from the output label.
@@ -266,8 +258,7 @@ only as an editor fallback position; fixed-rail interaction must not mutate
 that invisible spatial footprint.
 
 `dataBusModel.ts` owns pure topology and per-group presentation derivation;
-`useDataBusRailLayout(...)` owns only intrinsic DOM measurement, observer
-lifecycle, compact/full-row state, and global row-height publication; and
+`useDataBusRailLayout(...)` publishes the always-pinned row count, and
 `dataBusRailStyles.ts` owns the rail CSS. `WireLayer` suppresses a
 bus provider or consumer wire only after that exact connection exists in the
 definition-valid persisted connection set. The in-progress `draggingWire`
@@ -277,10 +268,7 @@ revealed bus routes, above the rail; normal drags remain in the ordinary wire
 SVG. `NodePorts` derives antenna metadata
 from the shared topology's memoized endpoint index. Port rendering performs a
 direct lookup instead of rescanning every graph connection for every visible
-port. The rail observes both size and child-list changes, because a live
-variadic IO update can add or remove channel rows without rerendering the rail
-parent. Ordinary
-wires and compact router-mast antennas can coexist on one source port. Each
+port. Ordinary wires and router-mast antennas can coexist on one source port. Each
 mast leaves the port horizontally into the free canvas before angling outward;
 input and output ports mirror the same geometry. Linked Node library instances
 use their resolved node behavior. For a direct bus-to-bus connection, the same
@@ -305,12 +293,12 @@ hit target because any persisted bend would vanish again when the hover ends.
 Only those temporary wires move into a fixed viewport overlay above the bus
 rail. The ordinary wire SVG remains below nodes and canvas controls. The
 overlay reapplies the canvas root's client offset before the normal pan/zoom
-transform, so its endpoints stay attached in compact, full-width, and
+transform, so its endpoints stay attached in pinned full-width and
 sidebar-shifted rail layouts without being clipped by the canvas viewport.
 
 A zero-movement output-port click always starts the normal pending-wire gesture,
-even if the compact rail layout places another input inside the drop-target
-proximity radius. Only a moved pointer gesture may connect during that initial
+even if another rail input lies inside the drop-target proximity radius. Only a
+moved pointer gesture may connect during that initial
 press-and-release; the subsequent click-to-connect gesture remains unchanged.
 
 The rail is viewport-fixed, while SVG wires are drawn in canvas coordinates.

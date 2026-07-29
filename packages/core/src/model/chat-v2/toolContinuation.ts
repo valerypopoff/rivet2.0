@@ -85,11 +85,6 @@ function applyAccumulatedUsage(
   }
 
   result.usage = usage;
-  result.commonOutputs['responseTokens' as PortId] = {
-    type: 'number',
-    value: usage.completionTokens,
-  };
-
   if (outputUsage) {
     result.commonOutputs['usage' as PortId] = {
       type: 'object',

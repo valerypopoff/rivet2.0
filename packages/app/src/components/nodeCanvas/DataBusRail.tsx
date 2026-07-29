@@ -9,7 +9,7 @@ import {
   type ProjectComparisonChangeKind,
 } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
-import { type CSSProperties, type FC, type MouseEvent, useMemo, useRef, type WheelEvent } from 'react';
+import { type CSSProperties, type FC, type MouseEvent, useMemo, type WheelEvent } from 'react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import { useCanvasNodeIO } from '../../hooks/useGetNodeIO.js';
 import { useStableCallback } from '../../hooks/useStableCallback.js';
@@ -72,12 +72,7 @@ export const DataBusRail: FC<{
   searchMatchingNodeIds,
   selectedNodeIds,
 }) => {
-  const railRef = useRef<HTMLDivElement>(null);
-  const fullRow = useDataBusRailLayout({
-    busNodes,
-    railRef,
-    topology: dataBusTopology,
-  });
+  useDataBusRailLayout(busNodes.length);
 
   if (busNodes.length === 0) {
     return null;
@@ -90,11 +85,9 @@ export const DataBusRail: FC<{
     <CanvasViewContext.Provider value={canvasViewContextValue}>
       <CanvasHandlersContext.Provider value={canvasHandlersContextValue}>
         <div
-          ref={railRef}
-          className={clsx('radio-data-bus-rail', { 'full-row': fullRow })}
+          className="radio-data-bus-rail"
           css={dataBusRailStyles}
           aria-label="Canvas data buses"
-          data-full-row={fullRow || undefined}
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();

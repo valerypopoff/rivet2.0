@@ -13,7 +13,8 @@ export const renderDataValueStyles = css`
     color: var(--grey-light);
   }
 
-  .chat-message.system header em {
+  .chat-message.system header em,
+  .chat-message.developer header em {
     color: var(--grey-light);
   }
 

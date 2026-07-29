@@ -237,4 +237,57 @@ describe('createChatV2Model', () => {
       fetchMock.mock.restore();
     }
   });
+
+  it('sends and captures transformed provider request bodies', async () => {
+    const capturedBodies: unknown[] = [];
+    let sentBody: unknown;
+    let sentHeaders: Headers | undefined;
+    const fetchMock = mock.method(globalThis, 'fetch', async (_input, init) => {
+      sentBody = JSON.parse(String(init?.body));
+      sentHeaders = new Headers(init?.headers);
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    try {
+      const model = createChatV2Model(
+        'custom',
+        'gpt-oss-120b',
+        {
+          settings: {},
+          getPluginConfig: () => undefined,
+        } as any,
+        {
+          apiKey: 'secret-key',
+          baseURL: 'https://api.example.test/v1',
+          onRequestBody: (body) => capturedBodies.push(body),
+          transformRequestBody: (body) => ({
+            ...(body as Record<string, unknown>),
+            transformed: true,
+          }),
+        },
+      ) as { config?: { fetch?: typeof fetch } };
+      const requestBody = {
+        model: 'gpt-oss-120b',
+        messages: [{ role: 'system', content: 'Hello' }],
+      };
+
+      assert.ok(model.config?.fetch);
+      await model.config.fetch('https://api.example.test/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-length': '1', 'x-test': 'preserved' },
+        body: JSON.stringify(requestBody),
+      });
+
+      const expected = { ...requestBody, transformed: true };
+      assert.deepEqual(capturedBodies, [expected]);
+      assert.deepEqual(sentBody, expected);
+      assert.equal(sentHeaders?.has('content-length'), false);
+      assert.equal(sentHeaders?.get('x-test'), 'preserved');
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
 });

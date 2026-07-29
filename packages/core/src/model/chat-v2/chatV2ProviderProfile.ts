@@ -80,9 +80,11 @@ function resolveConfiguredCredential(
         if (pluginEnvValue) {
           return { value: pluginEnvValue, reference: { source: 'environment', name: environmentName } };
         }
-        const processValue = (globalThis as typeof globalThis & {
-          process?: { env?: Record<string, string | undefined> };
-        }).process?.env?.[environmentName];
+        const processValue = (
+          globalThis as typeof globalThis & {
+            process?: { env?: Record<string, string | undefined> };
+          }
+        ).process?.env?.[environmentName];
         if (processValue) {
           return { value: processValue, reference: { source: 'environment', name: environmentName } };
         }
@@ -134,6 +136,7 @@ export async function createResolvedChatV2Provider(options: {
   headers?: Record<string, string> | undefined;
   credential: ChatV2CredentialResult;
   onRequestBody?: CreateChatV2ModelOptions['onRequestBody'];
+  transformRequestBody?: CreateChatV2ModelOptions['transformRequestBody'];
 }): Promise<{
   profile: ChatV2ProviderProfile;
   model: ChatV2Model;
@@ -147,6 +150,7 @@ export async function createResolvedChatV2Provider(options: {
     ...config,
     apiKey: options.credential.value,
     onRequestBody: options.onRequestBody,
+    transformRequestBody: options.transformRequestBody,
   });
 
   return {

@@ -1,7 +1,4 @@
-import {
-  normalizeLLMChatV2RetryCooldownMs,
-  normalizeLLMChatV2RetryCount,
-} from './chatV2Retry.js';
+import { normalizeLLMChatV2RetryCooldownMs, normalizeLLMChatV2RetryCount } from './chatV2Retry.js';
 import type {
   ChatV2MessageList,
   ChatV2Provider,
@@ -9,6 +6,7 @@ import type {
   RunChatV2PipelineOptions,
   StreamChatV2Options,
 } from './chatV2Types.js';
+import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from './chatV2Types.js';
 
 export type ChatV2TransportMode = 'stream' | 'generate';
 
@@ -21,15 +19,14 @@ export type ChatV2RequestPlan = {
     repeatTimes: number;
     cooldownMs: number;
   };
-  request: Omit<
-    StreamChatV2Options,
-    'abortSignal' | 'executeStream' | 'executeGenerate' | 'onPartialOutput'
-  >;
+  request: Omit<StreamChatV2Options, 'abortSignal' | 'executeStream' | 'executeGenerate' | 'onPartialOutput'>;
   output: Pick<
     RunChatV2PipelineOptions,
     | 'outputUsage'
     | 'outputReasoning'
     | 'outputRequestStatus'
+    | 'outputRequestError'
+    | 'outputRequestBody'
     | 'includeFunctionCalls'
     | 'functionCallMode'
   >;
@@ -58,6 +55,8 @@ type BuildChatV2RequestPlanOptions = Pick<
   | 'outputUsage'
   | 'outputReasoning'
   | 'outputRequestStatus'
+  | 'outputRequestError'
+  | 'outputRequestBody'
   | 'includeFunctionCalls'
   | 'emitPartialOutputs'
   | 'functionCallMode'
@@ -97,9 +96,7 @@ export function buildChatV2RequestPlan(options: BuildChatV2RequestPlanOptions): 
     transportMode: shouldStream ? 'stream' : 'generate',
     retry: {
       enabled: options.retryOnNon200 === true,
-      repeatTimes: options.retryOnNon200
-        ? normalizeLLMChatV2RetryCount(options.retryOnNon200RepeatTimes)
-        : 0,
+      repeatTimes: options.retryOnNon200 ? normalizeLLMChatV2RetryCount(options.retryOnNon200RepeatTimes) : 0,
       cooldownMs: normalizeLLMChatV2RetryCooldownMs(options.retryOnNon200CooldownMs),
     },
     request: {
@@ -123,7 +120,9 @@ export function buildChatV2RequestPlan(options: BuildChatV2RequestPlanOptions): 
     output: {
       outputUsage: options.outputUsage,
       outputReasoning: options.outputReasoning,
-      outputRequestStatus: options.outputRequestStatus,
+      outputRequestStatus: options.outputRequestStatus === true,
+      outputRequestError: shouldOutputChatV2RequestError(options),
+      outputRequestBody: shouldOutputChatV2RequestBody(options),
       includeFunctionCalls: options.includeFunctionCalls,
       functionCallMode: options.functionCallMode,
     },

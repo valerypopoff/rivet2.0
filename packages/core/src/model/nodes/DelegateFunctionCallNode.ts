@@ -76,6 +76,20 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     });
 
     outputs.push({
+      id: 'tool-name' as PortId,
+      dataType: ['string', 'string[]'] as const,
+      title: 'Tool Name',
+      description: 'The name of the tool selected by the LLM.',
+    });
+
+    outputs.push({
+      id: 'tool-arguments' as PortId,
+      dataType: ['object', 'object[]'] as const,
+      title: 'Tool Arguments',
+      description: 'The resolved arguments passed to the selected tool.',
+    });
+
+    outputs.push({
       id: 'output' as PortId,
       dataType: ['string', 'string[]'] as const,
       title: 'Output',

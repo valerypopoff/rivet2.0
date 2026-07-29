@@ -19,7 +19,19 @@ export function deriveLargeStoredValuePreviewFullText(restoredValue: DataValue |
       return typeof restoredValue.value === 'string'
         ? restoredValue.value
         : stringifyAnyJsonLikeForDisplay(restoredValue.value);
+    case 'chat-message':
+      return getFunctionResultText(restoredValue.value);
+    case 'chat-message[]': {
+      const functionResultTexts = restoredValue.value.map(getFunctionResultText);
+      return functionResultTexts.every((text): text is string => text !== undefined)
+        ? functionResultTexts.join('\n')
+        : undefined;
+    }
     default:
       return undefined;
   }
+}
+
+function getFunctionResultText(message: Extract<DataValue, { type: 'chat-message' }>['value']): string | undefined {
+  return message.type === 'function' && typeof message.message === 'string' ? message.message : undefined;
 }

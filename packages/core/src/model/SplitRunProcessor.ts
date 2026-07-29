@@ -6,16 +6,17 @@ import {
   isArrayDataValue,
   arrayizeDataValue,
 } from './DataValue.js';
-import { type ChartNode, type PortId } from './NodeBase.js';
+import { type ChartNode, type NodeInputDefinition, type PortId } from './NodeBase.js';
 import type { ProcessId } from './ProcessContext.js';
 import type { Inputs, Outputs } from './GraphProcessor.js';
 import { getGraphAbortReasonFromError, isAbortLikeError } from './GraphAbortReasons.js';
 import { getError } from '../utils/errors.js';
 import PQueue from '../utils/pQueueCompat.js';
-import { entries, fromEntries, values } from '../utils/typeSafety.js';
+import { entries, fromEntries } from '../utils/typeSafety.js';
 
 export type SplitRunDeps = {
   getInputValues(node: ChartNode): Inputs;
+  getInputDefinitions(node: ChartNode): NodeInputDefinition[];
   isExcludedDueToControlFlow(node: ChartNode, inputValues: Inputs, processId: ProcessId): boolean;
   processNodeWithInputData(
     node: ChartNode,
@@ -83,8 +84,17 @@ export async function processSplitRunNode(
     return;
   }
 
+  const inputDefinitionsById = new Map(deps.getInputDefinitions(node).map((definition) => [definition.id, definition]));
   const splittingAmount = Math.min(
-    max(values(inputValues).map((value) => (Array.isArray(value?.value) ? value?.value.length : 1))) ?? 1,
+    max(
+      entries(inputValues).map(([portId, value]) =>
+        inputDefinitionsById.get(portId as PortId)?.splitRunBehavior === 'preserve-array'
+          ? 1
+          : Array.isArray(value?.value)
+            ? value.value.length
+            : 1,
+      ),
+    ) ?? 1,
     node.splitRunMax ?? 10,
   );
 
@@ -96,9 +106,9 @@ export async function processSplitRunNode(
     let results: SplitResult[];
 
     if (node.isSplitSequential) {
-      results = await runSequential(node, inputValues, splittingAmount, processId, deps);
+      results = await runSequential(node, inputValues, inputDefinitionsById, splittingAmount, processId, deps);
     } else {
-      results = await runParallel(node, inputValues, splittingAmount, processId, deps);
+      results = await runParallel(node, inputValues, inputDefinitionsById, splittingAmount, processId, deps);
     }
 
     splitRunDurationMs = getSplitRunDurationMs(results);
@@ -137,6 +147,7 @@ export async function processSplitRunNode(
 async function runSequential(
   node: ChartNode,
   inputValues: Inputs,
+  inputDefinitionsById: ReadonlyMap<PortId, NodeInputDefinition>,
   splittingAmount: number,
   processId: ProcessId,
   deps: SplitRunDeps,
@@ -148,7 +159,7 @@ async function runSequential(
       throw deps.getAbortError();
     }
 
-    const inputs = splitInputsAtIndex(inputValues, i);
+    const inputs = splitInputsAtIndex(inputValues, inputDefinitionsById, i);
     const splitTimingStart = deps.startNodeTiming?.();
 
     try {
@@ -169,6 +180,7 @@ async function runSequential(
 async function runParallel(
   node: ChartNode,
   inputValues: Inputs,
+  inputDefinitionsById: ReadonlyMap<PortId, NodeInputDefinition>,
   splittingAmount: number,
   processId: ProcessId,
   deps: SplitRunDeps,
@@ -185,7 +197,7 @@ async function runParallel(
             throw deps.getAbortError();
           }
 
-          const inputs = splitInputsAtIndex(inputValues, i);
+          const inputs = splitInputsAtIndex(inputValues, inputDefinitionsById, i);
           const output = await deps.processNodeWithInputData(node, inputs, i, processId, (n, partialOutputs, index) => {
             deps.emit('partialOutput', { node: n, outputs: partialOutputs, index, processId });
           });
@@ -215,11 +227,19 @@ function getParallelSplitRunConcurrency(node: ChartNode, defaultConcurrency: num
   return typeof value === 'number' && Number.isFinite(value) && value >= 2 ? Math.floor(value) : defaultConcurrency;
 }
 
-function splitInputsAtIndex(inputValues: Inputs, index: number): Inputs {
+function splitInputsAtIndex(
+  inputValues: Inputs,
+  inputDefinitionsById: ReadonlyMap<PortId, NodeInputDefinition>,
+  index: number,
+): Inputs {
   return fromEntries(
     entries(inputValues).map(([port, value]) => [
       port as PortId,
-      isArrayDataValue(value) ? arrayizeDataValue(value)[index] ?? undefined : value,
+      inputDefinitionsById.get(port as PortId)?.splitRunBehavior === 'preserve-array'
+        ? value
+        : isArrayDataValue(value)
+          ? arrayizeDataValue(value)[index] ?? undefined
+          : value,
     ]),
   ) as Inputs;
 }

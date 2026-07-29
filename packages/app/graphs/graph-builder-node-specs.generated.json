@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:558f57a13765606f",
+  "catalogFingerprint": "fnv1a64:9d20412a931d8dba",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1297,7 +1297,7 @@
       "authoringChoiceId": "registered:llmProfile",
       "nodeType": "llmProfile",
       "displayName": "LLM Profile",
-      "description": "LLM Profile packages one reusable inference configuration into a typed llm config value. Connect it to an LLM Chat node whose Configuration is From profile . If an LLM Chat is currently configured inline, use its Export LLM settings to profile node action to create and connect this node automatically with the chat's current provider and inference settings. The profile contains: provider and model the resolved API key and its source metadata Custom provider base URL common generation parameters OpenAI Previous Response ID provider specific reasoning and thinking settings provider native capabilities such as OpenAI Web Search and Google Search Grounding custom headers and extra provider options It intentionally does not contain prompts, response schemas, Rivet tools, tool continuation settings, output switches, retry settings, or editor caching. Those remain on each LLM Chat node. Output r",
+      "description": "LLM Profile packages one reusable inference configuration into a typed llm config value. Connect it to an LLM Chat node whose Configuration is From profile . You can also collect several profile values into an ordered llm config[] array and use that as LLM Chat's fallback chain. If an LLM Chat is currently configured inline, use its Export LLM settings to profile node action to create and connect this node automatically with the chat's current provider and inference settings. The profile contains: provider and model the resolved API key and its source metadata Custom provider base URL common generation parameters OpenAI Previous Response ID provider specific reasoning and thinking settings provider native capabilities such as OpenAI Web Search and Google Search Grounding custom headers and extra provider options It intentionally does not contain prompts, response schemas, Rivet tools, to",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1580,6 +1580,7 @@
           "description": "Chat message role.",
           "allowedValues": [
             "system",
+            "developer",
             "user",
             "assistant",
             "function"

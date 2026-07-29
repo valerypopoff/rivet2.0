@@ -3,6 +3,7 @@ import type { Outputs } from '../GraphProcessor.js';
 import type { ResolvedChatV2ProviderConfig } from './providerOptions.js';
 import type { ChatV2Provider, ChatV2ProviderOptions, ChatV2ToolChoice } from './chatV2Types.js';
 import type { LLMChatV2EditorCacheKeyParts, LLMChatV2NodeData } from './llmChatV2NodeData.js';
+import type { LLMProfileValue } from './llmProfileTypes.js';
 
 export function buildLLMChatV2EditorCacheKey(parts: LLMChatV2EditorCacheKeyParts): string {
   return stableStringify(parts) ?? '';
@@ -104,6 +105,27 @@ function fingerprintProviderOptionsForCache(providerOptions: ChatV2ProviderOptio
   return fingerprintSecret(stableStringify(providerOptions) ?? '');
 }
 
+function fingerprintProfileChainForCache(
+  data: LLMChatV2NodeData,
+  profiles: readonly LLMProfileValue[] | undefined,
+): unknown {
+  if (profiles == null) {
+    return undefined;
+  }
+
+  return profiles.map((profile) => ({
+    configuration: fingerprintNodeDataForCache({
+      ...data,
+      ...profile.configuration,
+      configurationMode: 'profile',
+    }),
+    credential: {
+      reference: profile.credential.reference,
+      value: fingerprintSecret(profile.credential.value),
+    },
+  }));
+}
+
 export function resolveLLMChatV2EditorCache(params: {
   apiKey: string | undefined;
   data: LLMChatV2NodeData;
@@ -119,6 +141,9 @@ export function resolveLLMChatV2EditorCache(params: {
   responseFormatParameters: unknown;
   systemPrompt: unknown;
   toolChoice: ChatV2ToolChoice | undefined;
+  profileChain?: readonly LLMProfileValue[] | undefined;
+  /** Keeps scalar profile output shapes distinct from one-item profile arrays. */
+  profileChainUsesArray?: boolean | undefined;
 }): { cacheKey: string | undefined; cachedOutputs: Outputs | undefined } {
   const { editorCache } = params;
 
@@ -140,6 +165,13 @@ export function resolveLLMChatV2EditorCache(params: {
     responseFormatParameters: params.responseFormatParameters,
     providerOptions: fingerprintProviderOptionsForCache(params.providerOptions),
     toolChoice: params.toolChoice,
+    profileChain:
+      params.profileChain == null
+        ? undefined
+        : {
+            inputWasArray: params.profileChainUsesArray ?? false,
+            profiles: fingerprintProfileChainForCache(params.data, params.profileChain),
+          },
   });
 
   return {

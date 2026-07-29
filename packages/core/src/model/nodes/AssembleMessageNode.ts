@@ -21,7 +21,7 @@ import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 export type AssembleMessageNode = ChartNode<'assembleMessage', AssembleMessageNodeData>;
 
 export type AssembleMessageNodeData = {
-  type: 'system' | 'user' | 'assistant' | 'function';
+  type: ChatMessage['type'];
   useTypeInput: boolean;
 
   toolCallId: string;
@@ -30,6 +30,7 @@ export type AssembleMessageNodeData = {
 
 const messageTypeToTitle: Record<ChatMessage['type'], string> = {
   assistant: 'Assistant',
+  developer: 'Developer',
   function: 'Function Tool Call',
   system: 'System',
   user: 'User',
@@ -110,6 +111,7 @@ export class AssembleMessageNodeImpl extends NodeImpl<AssembleMessageNode> {
         dataKey: 'type',
         options: [
           { value: 'system', label: 'System' },
+          { value: 'developer', label: 'Developer' },
           { value: 'user', label: 'User' },
           { value: 'assistant', label: 'Assistant' },
           { value: 'function', label: 'Function' },
@@ -159,6 +161,13 @@ export class AssembleMessageNodeImpl extends NodeImpl<AssembleMessageNode> {
     const outMessage: MultiMessage = match(type)
       .with(
         'system',
+        (type): MultiMessage => ({
+          type,
+          message: [],
+        }),
+      )
+      .with(
+        'developer',
         (type): MultiMessage => ({
           type,
           message: [],

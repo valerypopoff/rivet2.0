@@ -147,11 +147,7 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
 }
 
 function getProviderEditors(): LLMChatV2EditorDefinition[] {
-  return [
-    getOpenAIProviderEditors(),
-    getAnthropicProviderEditors(),
-    getGoogleProviderEditors(),
-  ];
+  return [getOpenAIProviderEditors(), getAnthropicProviderEditors(), getGoogleProviderEditors()];
 }
 
 function getOpenAIProviderEditors(): LLMChatV2EditorDefinition {
@@ -480,6 +476,20 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
+      label: 'Output response status',
+      dataKey: 'outputRequestStatus',
+      helperMessage:
+        'Adds a Response Status output. Retry mode returns statuses for each physical request. An LLM Profile array groups values by profile, while a profile with one request stays a number.',
+    },
+    {
+      type: 'toggle',
+      label: 'Output request body',
+      dataKey: 'outputRequestBody',
+      helperMessage:
+        'Adds an LLM request body output. It can contain prompts and non-secret provider options; it never includes authorization headers or API keys.',
+    },
+    {
+      type: 'toggle',
       label: 'Stream response',
       dataKey: 'useAsGraphPartialOutput',
       helperMessage:
@@ -487,10 +497,11 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
-      label: 'Cache outputs (editor only)',
+      label: 'Cache outputs (editor only) (legacy)',
       dataKey: 'cache',
       helperMessage:
-        "Reuses this node's previous outputs if the input is the same (provider config, prompt and generation settings). The cache persists while the Rivet app is open.",
+        "Legacy editor-only cache. It reuses this node's previous outputs for the same input while the Rivet app is open. Turn it off to retire it from this node.",
+      hideIf: (data) => data.cache !== true,
     },
   ]);
 }
@@ -518,8 +529,8 @@ function getProviderAdvancedEditors(): LLMChatV2EditorDefinition {
   ]);
 }
 
-function getTechnicalDetailsEditors(): LLMChatV2EditorDefinition {
-  return group('Technical details', [
+function getErrorBehaviorEditors(): LLMChatV2EditorDefinition {
+  return group('Error behavior', [
     {
       type: 'toggle',
       label: 'Retry on non-200',
@@ -550,10 +561,10 @@ function getTechnicalDetailsEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
-      label: 'Output request details',
-      dataKey: 'outputRequestStatus',
+      label: 'Output response error',
+      dataKey: 'outputRequestError',
       helperMessage:
-        'Adds Response Status, Response Error, and LLM request body outputs. Retry mode changes status/error to per-attempt arrays, and LLM request body becomes an array when multiple provider calls are made.',
+        'Adds a Response Error output. Provider request failures become excluded outputs instead of node errors. Retry mode returns errors for each physical request; an LLM Profile array groups errors by profile.',
     },
   ]);
 }
@@ -582,7 +593,7 @@ export async function getLLMChatV2Editors(
     getToolEditors(),
     getOutputEditors(),
     ...(!usesProfile ? [getProviderAdvancedEditors()] : []),
-    getTechnicalDetailsEditors(),
+    getErrorBehaviorEditors(),
   ];
 }
 

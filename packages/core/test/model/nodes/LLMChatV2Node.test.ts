@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -138,6 +138,8 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.retryOnNon200RepeatTimes, 1);
     assert.equal(node.data.retryOnNon200CooldownMs, 0);
     assert.equal(node.data.outputRequestStatus, false);
+    assert.equal(node.data.outputRequestError, false);
+    assert.equal(node.data.outputRequestBody, false);
   });
 
   it('uses the dedicated configuration editor so Inline settings can be exported to a profile', async () => {
@@ -260,7 +262,10 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(customBaseUrlEditor.label, 'Provider base URL');
     assert.equal(customBaseUrlEditor.useInputToggleDataKey, 'useCustomProviderBaseURLInput');
     assert.equal(customBaseUrlEditor.hideIf({ provider: 'custom' }), false);
-    assert.equal(providerAdvancedGroup.editors.some((editor: any) => editor.dataKey === 'baseURL'), false);
+    assert.equal(
+      providerAdvancedGroup.editors.some((editor: any) => editor.dataKey === 'baseURL'),
+      false,
+    );
     assert.equal(extraProviderOptionsEditor.type, 'code');
     assert.equal(extraProviderOptionsEditor.language, 'json');
     assert.equal(extraProviderOptionsEditor.useInputToggleDataKey, 'useExtraProviderOptionsInput');
@@ -390,11 +395,12 @@ describe('LLMChatV2NodeImpl', () => {
     assert.doesNotMatch(getMarkdownBodyText(createNode({ provider: 'custom' })), /Reasoning effort:/);
   });
 
-  it('places technical details after all LLM settings sections', async () => {
+  it('places error behavior after all LLM settings sections and retires editor cache', async () => {
     const node = createNode();
     const editors = await node.getEditors({});
     const groupLabels = editors.filter((editor) => editor.type === 'group').map((editor) => editor.label);
-    const technicalDetailsGroup = editors.at(-1) as any;
+    const outputsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
+    const errorBehaviorGroup = editors.at(-1) as any;
 
     assert.deepEqual(groupLabels, [
       'Model',
@@ -407,18 +413,34 @@ describe('LLMChatV2NodeImpl', () => {
       'Tools',
       'Outputs',
       'Provider Advanced',
-      'Technical details',
+      'Error behavior',
     ]);
-    assert.equal(technicalDetailsGroup.label, 'Technical details');
-    assert.equal(technicalDetailsGroup.editors[0]?.dataKey, 'retryOnNon200');
-    assert.equal(technicalDetailsGroup.editors[1]?.dataKey, 'retryOnNon200RepeatTimes');
-    assert.equal(technicalDetailsGroup.editors[1]?.hideIf({ retryOnNon200: false }), true);
-    assert.equal(technicalDetailsGroup.editors[1]?.hideIf({ retryOnNon200: true }), false);
-    assert.equal(technicalDetailsGroup.editors[2]?.dataKey, 'retryOnNon200CooldownMs');
-    assert.equal(technicalDetailsGroup.editors[3]?.dataKey, 'outputRequestStatus');
+    assert.equal(errorBehaviorGroup.label, 'Error behavior');
+    assert.equal(errorBehaviorGroup.editors[0]?.dataKey, 'retryOnNon200');
+    assert.equal(errorBehaviorGroup.editors[1]?.dataKey, 'retryOnNon200RepeatTimes');
+    assert.equal(errorBehaviorGroup.editors[1]?.hideIf({ retryOnNon200: false }), true);
+    assert.equal(errorBehaviorGroup.editors[1]?.hideIf({ retryOnNon200: true }), false);
+    assert.equal(errorBehaviorGroup.editors[2]?.dataKey, 'retryOnNon200CooldownMs');
+    assert.equal(errorBehaviorGroup.editors[3]?.dataKey, 'outputRequestError');
+    assert.equal(
+      outputsGroup.editors.some((editor: any) => editor.dataKey === 'outputRequestStatus'),
+      true,
+    );
+    assert.equal(
+      outputsGroup.editors.some((editor: any) => editor.dataKey === 'outputRequestBody'),
+      true,
+    );
+    assert.equal(
+      outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label,
+      'Output request body',
+    );
+    const legacyCacheEditor = outputsGroup.editors.find((editor: any) => editor.dataKey === 'cache');
+    assert.equal(legacyCacheEditor.label, 'Cache outputs (editor only) (legacy)');
+    assert.equal(legacyCacheEditor.hideIf({ cache: false }), true);
+    assert.equal(legacyCacheEditor.hideIf({ cache: true }), false);
   });
 
-  it('adds request transport outputs only when technical details request them', () => {
+  it('adds independent request diagnostic outputs only when their controls are on', () => {
     const defaultNode = createNode();
     const statusNode = createNode({
       outputRequestStatus: true,
@@ -426,6 +448,16 @@ describe('LLMChatV2NodeImpl', () => {
     const retryStatusNode = createNode({
       outputRequestStatus: true,
       retryOnNon200: true,
+    });
+    const errorNode = createNode({
+      outputRequestError: true,
+    });
+    const bodyNode = createNode({
+      outputRequestBody: true,
+    });
+    const profileStatusNode = createNode({
+      configurationMode: 'profile',
+      outputRequestStatus: true,
     });
 
     assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestStatus'));
@@ -449,6 +481,14 @@ describe('LLMChatV2NodeImpl', () => {
     );
     assert.deepEqual(
       statusNode.getOutputDefinitions().find((output) => output.id === 'requestError'),
+      undefined,
+    );
+    assert.deepEqual(
+      retryStatusNode.getOutputDefinitions().find((output) => output.id === 'requestError'),
+      undefined,
+    );
+    assert.deepEqual(
+      errorNode.getOutputDefinitions().find((output) => output.id === 'requestError'),
       {
         id: 'requestError',
         title: 'Response Error',
@@ -456,15 +496,17 @@ describe('LLMChatV2NodeImpl', () => {
       },
     );
     assert.deepEqual(
-      retryStatusNode.getOutputDefinitions().find((output) => output.id === 'requestError'),
+      profileStatusNode.getOutputDefinitions().find((output) => output.id === 'requestStatus'),
       {
-        id: 'requestError',
-        title: 'Response Error',
-        dataType: 'string[]',
+        id: 'requestStatus',
+        title: 'Response Status',
+        dataType: ['number', 'number[]', 'any'],
+        description:
+          'A scalar profile keeps the normal status shape. An LLM Profile array groups values by profile: one request is a number, retries are a number array.',
       },
     );
     assert.deepEqual(
-      statusNode.getOutputDefinitions().find((output) => output.id === 'requestBody'),
+      bodyNode.getOutputDefinitions().find((output) => output.id === 'requestBody'),
       {
         id: 'requestBody',
         title: 'LLM request body',
@@ -477,6 +519,22 @@ describe('LLMChatV2NodeImpl', () => {
     );
     assert.equal(
       retryStatusNode.getOutputDefinitions().some((output) => output.id === 'requestErrors'),
+      false,
+    );
+    assert.equal(
+      errorNode.getOutputDefinitions().some((output) => output.id === 'requestStatus'),
+      false,
+    );
+    assert.equal(
+      bodyNode.getOutputDefinitions().some((output) => output.id === 'requestStatus'),
+      false,
+    );
+    assert.equal(
+      bodyNode.getOutputDefinitions().some((output) => output.id === 'requestError'),
+      false,
+    );
+    assert.equal(
+      defaultNode.getOutputDefinitions().some((output) => output.id === 'responseTokens'),
       false,
     );
   });
@@ -536,7 +594,10 @@ describe('LLMChatV2NodeImpl', () => {
         required: false,
       },
     );
-    assert.equal(builtInInputNode.getInputDefinitions().find((input) => input.id === 'baseURL'), undefined);
+    assert.equal(
+      builtInInputNode.getInputDefinitions().find((input) => input.id === 'baseURL'),
+      undefined,
+    );
   });
 
   it('adds an extra provider options input when enabled', () => {
@@ -558,15 +619,20 @@ describe('LLMChatV2NodeImpl', () => {
     );
   });
 
-  it('adds Tool Calls output when provider built-in tools are enabled', () => {
-    const node = createNode({
+  it('only adds Tool Calls output when Tool use is enabled', () => {
+    const builtInToolsNode = createNode({
       provider: 'openai',
       useToolCalling: false,
       enableOpenAIWebSearch: true,
     });
+    const toolUseNode = createNode({
+      provider: 'openai',
+      useToolCalling: true,
+    });
 
-    const outputs = node.getOutputDefinitions();
-    const functionCalls = outputs.find((output) => output.id === 'function-calls');
+    assert.ok(!builtInToolsNode.getOutputDefinitions().some((output) => output.id === 'function-calls'));
+
+    const functionCalls = toolUseNode.getOutputDefinitions().find((output) => output.id === 'function-calls');
 
     assert.ok(functionCalls);
     assert.equal(functionCalls.title, 'Tool Calls');
@@ -721,7 +787,7 @@ describe('LLMChatV2NodeImpl', () => {
     );
     assert.equal(
       outputGroup.editors.find((editor: any) => editor.dataKey === 'cache')?.label,
-      'Cache outputs (editor only)',
+      'Cache outputs (editor only) (legacy)',
     );
     assert.match(
       outputGroup.editors.find((editor: any) => editor.dataKey === 'cache')?.helperMessage,
@@ -827,7 +893,10 @@ describe('LLMChatV2NodeImpl', () => {
 
     for (const editors of [inlineCustomEditors, profileEditors]) {
       const outputsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
-      assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label, 'Output reasoning');
+      assert.equal(
+        outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label,
+        'Output reasoning',
+      );
     }
     assert.ok(!inlineCustomEditors.some((editor) => editor.type === 'group' && editor.label === 'Reasoning'));
   });
@@ -1241,6 +1310,60 @@ describe('LLMChatV2NodeImpl', () => {
         },
       },
     });
+  });
+
+  it('restores explicit developer roles in Custom provider request bodies', async () => {
+    const node = createNode({
+      provider: 'custom',
+      model: 'openai-compatible-model',
+      customProviderBaseURL: 'https://api.example.test/v1',
+      customProviderApiKeyEnvVarName: 'CUSTOM_TEST_API_KEY',
+    });
+    const context = createRuntimeContextWithPluginEnv({
+      CUSTOM_TEST_API_KEY: 'sk-test-secret',
+    });
+    const runtime = await resolveLLMChatV2RuntimeConfig({
+      data: node.data,
+      nodeId: node.chartNode.id,
+      inputs: createPromptInputs({
+        prompt: {
+          type: 'chat-message[]',
+          value: [
+            { type: 'system', message: 'System instruction' },
+            { type: 'developer', message: 'Developer instruction' },
+            { type: 'user', message: 'User message' },
+          ],
+        },
+      }),
+      context,
+    });
+    const model = runtime.runOptions.model as unknown as { config?: { fetch?: typeof fetch } };
+    let sentBody: any;
+    const fetchMock = mock.method(globalThis, 'fetch', async (_input, init) => {
+      sentBody = JSON.parse(String(init?.body));
+      return new Response('{}', { status: 200 });
+    });
+
+    try {
+      assert.ok(model.config?.fetch);
+      await model.config.fetch('https://api.example.test/v1/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: 'System instruction' },
+            { role: 'system', content: 'Developer instruction' },
+            { role: 'user', content: 'User message' },
+          ],
+        }),
+      });
+
+      assert.deepEqual(
+        sentBody.messages.map((message: { role: string }) => message.role),
+        ['system', 'developer', 'user'],
+      );
+    } finally {
+      fetchMock.mock.restore();
+    }
   });
 
   it('uses raw Custom provider JSON object mode without an AI SDK output descriptor', async () => {

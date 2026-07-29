@@ -449,8 +449,9 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
     }, '');
     prompt += '\n\nAssistant:';
 
-    // Get the "System" prompt input for Claude 3 models
-    const system = data.model.startsWith('claude-3') ? getSystemPrompt(inputs) : undefined;
+    const useMessageApi =
+      model.startsWith('claude-3') || model.startsWith('claude-sonnet') || model.startsWith('claude-opus');
+    const system = useMessageApi ? getSystemPrompt(inputs) : undefined;
 
     let { maxTokens } = data;
     const tokenizerInfo: TokenizerCallInfo = {
@@ -459,7 +460,12 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
       endpoint: undefined,
     };
 
-    const tokenCountEstimate = await context.tokenizer.getTokenCountForString(prompt, tokenizerInfo);
+    const systemText =
+      typeof system === 'string' ? system : system?.map((message) => message.text).join('\n\n');
+    const tokenCountEstimate = await context.tokenizer.getTokenCountForString(
+      [systemText, prompt].filter(Boolean).join('\n\n'),
+      tokenizerInfo,
+    );
     const modelInfo = anthropicModels[model] ?? {
       maxTokens: Number.MAX_SAFE_INTEGER,
       cost: {
@@ -510,8 +516,6 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
               ? tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters }))
               : undefined,
           };
-          const useMessageApi =
-            model.startsWith('claude-3') || model.startsWith('claude-sonnet') || model.startsWith('claude-opus');
           const cacheKey = JSON.stringify(useMessageApi ? messageOptions : completionOptions);
           if (data.cache) {
             const cached = cache.get(cacheKey);
@@ -785,41 +789,33 @@ export const chatAnthropicNode = pluginNodeDefinition(ChatAnthropicNodeImpl, 'Ch
 
 export function getSystemPrompt(inputs: Inputs): SystemPrompt | undefined {
   const systemInput = inputs['system' as PortId];
-
   const system = coerceTypeOptional(systemInput, 'string');
+  const systemMessages: NonNullable<SystemPrompt> = [];
 
   if (system) {
-    return [
-      {
-        type: 'text',
-        text: system,
-        cache_control:
-          systemInput?.type === 'chat-message'
-            ? systemInput.value.isCacheBreakpoint
-              ? { type: 'ephemeral' }
-              : null
-            : null,
-      },
-    ];
+    systemMessages.push({
+      type: 'text',
+      text: system,
+      cache_control:
+        systemInput?.type === 'chat-message'
+          ? systemInput.value.isCacheBreakpoint
+            ? { type: 'ephemeral' }
+            : null
+          : null,
+    });
   }
 
-  const prompt = inputs['prompt' as PortId];
-  if (prompt && prompt.type === 'chat-message[]') {
-    const systemMessages = prompt.value.filter((message) => message.type === 'system');
-    if (systemMessages.length) {
-      const converted = systemMessages.map((message) => {
-        return {
-          type: 'text' as const,
-          text: coerceType({ type: 'chat-message', value: message }, 'string'),
-          cache_control: message.isCacheBreakpoint ? { type: 'ephemeral' as const } : null,
-        };
+  for (const message of coercePromptToChatMessages(inputs['prompt' as PortId])) {
+    if (message.type === 'system' || message.type === 'developer') {
+      systemMessages.push({
+        type: 'text',
+        text: coerceType({ type: 'chat-message', value: message }, 'string'),
+        cache_control: message.isCacheBreakpoint ? { type: 'ephemeral' } : null,
       });
-
-      return converted;
     }
   }
 
-  return undefined;
+  return systemMessages.length > 0 ? systemMessages : undefined;
 }
 
 function getChatMessages(inputs: Inputs) {
@@ -854,7 +850,7 @@ export async function chatMessagesToClaude3ChatMessages(chatMessages: ChatMessag
 }
 
 async function chatMessageToClaude3ChatMessage(message: ChatMessage): Promise<Claude3ChatMessage | undefined> {
-  if (message.type === 'system') {
+  if (message.type === 'system' || message.type === 'developer') {
     return undefined;
   }
 

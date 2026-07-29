@@ -41,6 +41,7 @@ const styles = css`
 
 const typeDisplay: Record<PromptNodeData['type'], string> = {
   assistant: 'Assistant',
+  developer: 'Developer',
   system: 'System',
   user: 'User',
   function: 'Function',

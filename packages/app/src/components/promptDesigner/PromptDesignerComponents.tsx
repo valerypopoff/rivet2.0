@@ -8,7 +8,7 @@ import { useMultilineEditorFontSize } from '../../hooks/useMultilineEditorFontSi
 import { GraphSelector } from '../editors/GraphSelectorEditor';
 import type { PromptDesignerTestGroupResults } from '../../state/promptDesigner';
 
-const CHAT_MESSAGE_TYPES = ['user', 'assistant', 'system', 'function'] as const;
+const CHAT_MESSAGE_TYPES = ['user', 'assistant', 'system', 'developer', 'function'] as const;
 
 export const PromptDesignerMessage: FC<{
   message: ChatMessage;

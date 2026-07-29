@@ -89,7 +89,6 @@ function makePipelineResult(
     response: { type: 'string', value: response },
     'in-messages': { type: 'chat-message[]', value: requestMessages },
     'all-messages': { type: 'chat-message[]', value: allMessages },
-    responseTokens: { type: 'number', value: usage?.completionTokens ?? 0 },
   };
 
   if (outputUsage) {
@@ -282,7 +281,7 @@ describe('runChatV2PipelineWithToolContinuation', () => {
       value: result.requestMessages,
     });
     assert.deepEqual(result.commonOutputs.usage, { type: 'object', value: firstUsage });
-    assert.deepEqual(result.commonOutputs.responseTokens, { type: 'number', value: 3 });
+    assert.equal('responseTokens' in result.commonOutputs, false);
     assert.deepEqual(result.commonOutputs.reasoning, {
       type: 'string[]',
       value: ['Use the deterministic exporter.'],
@@ -478,7 +477,7 @@ describe('runChatV2PipelineWithToolContinuation', () => {
       reasoningTokens: 1,
       totalCost: 0.005,
     });
-    assert.deepEqual(result.commonOutputs.responseTokens, { type: 'number', value: 7 });
+    assert.equal('responseTokens' in result.commonOutputs, false);
     assert.deepEqual(result.commonOutputs.usage, { type: 'object', value: result.usage });
   });
 
@@ -594,7 +593,7 @@ describe('runChatV2PipelineWithToolContinuation', () => {
       reasoningTokens: 0,
       totalCost: undefined,
     });
-    assert.deepEqual(result.commonOutputs.responseTokens, { type: 'number', value: 3 });
+    assert.equal('responseTokens' in result.commonOutputs, false);
     assert.deepEqual(result.commonOutputs.usage, { type: 'object', value: result.usage });
   });
 

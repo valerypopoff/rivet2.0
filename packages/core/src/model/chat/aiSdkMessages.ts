@@ -59,6 +59,15 @@ export async function rivetMessagesToAiSdk(messages: ChatMessage[]): Promise<Mod
         break;
       }
 
+      case 'developer': {
+        // ModelMessage has no provider-neutral developer role.
+        result.push({
+          role: 'system',
+          content: stringifyParts(msg.message),
+        });
+        break;
+      }
+
       case 'user': {
         const parts = Array.isArray(msg.message) ? msg.message : [msg.message];
 

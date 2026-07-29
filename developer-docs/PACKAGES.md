@@ -35,7 +35,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -75,7 +75,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -104,7 +104,7 @@ This package is the shared Node runtime used by:
 - the CLI
 - parts of the app-executor stack
 
-It is not just a convenience wrapper. It sets Node-default providers, debugger integration, env-based LLM/plugin config fallback, and Node-specific reference loading. Runtime settings still flow through core's shared `resolveProcessSettings(...)` helper instead of being rebuilt independently in the Node package. When callers omit shared LLM credentials, the Node package fills `openAiApiKey`/legacy `openAiKey` from `OPENAI_API_KEY`, `anthropicApiKey` from `ANTHROPIC_API_KEY`, `googleApiKey` from `GOOGLE_GENERATIVE_AI_API_KEY`, and shared `customAiApiKey` from the canonical `CUSTOM_PROVIDER_API_KEY` env var before falling back to legacy `CUSTOM_AI_API_KEY`; named custom-provider keys should be passed explicitly as top-level run options whose names match each node's `Alternative programmatic key name`, while plugin-declared env values continue to populate `pluginEnv`.
+It is not just a convenience wrapper. It sets Node-default providers, debugger integration, env-based LLM/plugin config fallback, and Node-specific reference loading. When callers use the default Node registry, project-declared built-in plugins are registered before processor construction so their nodes, provider integrations, and declared string/secret environment fallbacks are available in headless graph and web-app runs; an explicitly supplied registry remains host-owned and is not augmented. Runtime settings still flow through core's shared `resolveProcessSettings(...)` helper instead of being rebuilt independently in the Node package. When callers omit shared LLM credentials, the Node package fills `openAiApiKey`/legacy `openAiKey` from `OPENAI_API_KEY`, `anthropicApiKey` from `ANTHROPIC_API_KEY`, `googleApiKey` from `GOOGLE_GENERATIVE_AI_API_KEY`, and shared `customAiApiKey` from the canonical `CUSTOM_PROVIDER_API_KEY` env var before falling back to legacy `CUSTOM_AI_API_KEY`; named custom-provider keys should be passed explicitly as top-level run options whose names match each node's `Alternative programmatic key name`, while plugin-declared env values continue to populate `pluginEnv`. Supplying `pluginEnv` explicitly replaces that automatic plugin-environment extraction rather than merging with `process.env`.
 It also supplies a default tokenizer for Node-side runs when the caller does not provide one explicitly.
 
 The default Node MCP provider deliberately uses short-lived clients. Every tool or
@@ -524,7 +524,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.8.8`
+- Version: `2.8.9`
 - Private: yes
 
 ### Runtime shape
@@ -588,7 +588,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -693,7 +693,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -817,7 +817,7 @@ Graph-oriented testing package.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -850,7 +850,7 @@ Docusaurus 3 documentation site package.
 
 ### Package metadata
 
-- Version: `2.0.2`
+- Version: `2.0.3`
 - Private: yes
 
 ### Script surface

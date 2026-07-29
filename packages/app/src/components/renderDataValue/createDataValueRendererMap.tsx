@@ -48,7 +48,13 @@ export function createDataValueRendererMap(options: {
         return <Fragment>undefined</Fragment>;
       }
 
-      if (isArrayDataType(dataType as DataType)) {
+      // An Any value can hold a heterogeneous JSON array. Do not infer the
+      // whole array from its first element: [number[], number] would otherwise
+      // be treated as number[][] and the scalar number would render as an
+      // invalid array. Keep each item as Any so recursive rendering infers it
+      // independently.
+      const isAnyArray = dataType === 'any' && Array.isArray(value.value);
+      if (isArrayDataType(dataType as DataType) || isAnyArray) {
         if (!Array.isArray(value.value)) {
           return (
             <div css={multiOutputStyles}>
@@ -57,7 +63,9 @@ export function createDataValueRendererMap(options: {
           );
         }
 
-        let items = arrayizeDataValue(value as ScalarOrArrayDataValue);
+        let items = isAnyArray
+          ? value.value.map((item) => ({ type: 'any' as const, value: item }))
+          : arrayizeDataValue(value as ScalarOrArrayDataValue);
         const count = items.length;
 
         if (isCompact) {

@@ -904,7 +904,10 @@ These are related but different concepts:
 
 ### Split-run (pager within a single node)
 
-- A node marked `isSplitRun: true` processes array inputs item-by-item.
+- A node marked `isSplitRun: true` processes array inputs item-by-item. An input
+  definition may set `splitRunBehavior: 'preserve-array'` when its array is one
+  value for every item rather than a fan-out dimension; `LLM Chat` uses this for
+  its ordered LLM Profile fallback chain.
 - All iterations share the same `processId` and `graphRunId`.
 - Each iteration's output is stored in `splitOutputData[index]`.
 - The UI shows a pager ("page 1 of N") within the node's output panel.

@@ -107,6 +107,7 @@ export type ChatCompletionOptions = {
   location: string;
   applicationCredentials: string;
   model: GoogleModelsDeprecated;
+  systemPrompt?: string;
   prompt: Content[];
   max_output_tokens: number;
   temperature?: number;
@@ -128,6 +129,24 @@ export type ChatCompletionChunk = {
     | undefined;
   model: string;
 };
+
+export function getVertexGenerativeModelOptions(
+  options: Pick<
+    ChatCompletionOptions,
+    'model' | 'systemPrompt' | 'max_output_tokens' | 'temperature' | 'top_p' | 'top_k'
+  >,
+) {
+  return {
+    model: options.model,
+    systemInstruction: options.systemPrompt,
+    generationConfig: {
+      maxOutputTokens: options.max_output_tokens,
+      temperature: options.temperature,
+      topP: options.top_p,
+      topK: options.top_k,
+    },
+  };
+}
 
 export type StreamGenerativeAiOptions = {
   apiKey: string;
@@ -217,6 +236,7 @@ export async function* streamChatCompletions({
   temperature,
   top_p,
   top_k,
+  systemPrompt,
   prompt,
 }: ChatCompletionOptions): AsyncGenerator<ChatCompletionChunk> {
   // Dynamic import: the Google auth library fails under static CJS require.
@@ -225,15 +245,16 @@ export async function* streamChatCompletions({
   // Can't find a way to pass the credentials path in
   process.env.GOOGLE_APPLICATION_CREDENTIALS = applicationCredentials;
   const vertexAi = new VertexAI({ project, location });
-  const generativeModel = vertexAi.preview.getGenerativeModel({
-    model,
-    generationConfig: {
-      maxOutputTokens: max_output_tokens,
+  const generativeModel = vertexAi.preview.getGenerativeModel(
+    getVertexGenerativeModelOptions({
+      model,
+      systemPrompt,
+      max_output_tokens,
       temperature,
-      topP: top_p,
-      topK: top_k,
-    },
-  });
+      top_p,
+      top_k,
+    }),
+  );
   const response = await generativeModel.generateContentStream({
     contents: prompt as unknown as VertexContent[],
   });

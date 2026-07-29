@@ -121,16 +121,51 @@ export type RunChatV2PipelineOptions = {
   outputUsage?: boolean | undefined;
   outputReasoning?: boolean | undefined;
   outputRequestStatus?: boolean | undefined;
+  outputRequestError?: boolean | undefined;
+  outputRequestBody?: boolean | undefined;
   includeFunctionCalls?: boolean | undefined;
   emitPartialOutputs?: boolean | undefined;
   functionCallMode?: AssistantMessageFunctionCallMode | undefined;
   retryOnNon200?: boolean | undefined;
   retryOnNon200RepeatTimes?: number | undefined;
   retryOnNon200CooldownMs?: number | undefined;
+  /**
+   * Internal, privacy-bounded metadata for an ordered LLM Profile fallback
+   * chain. It is forwarded to physical-call observers but never sent to a
+   * provider.
+   */
+  profileIndex?: number | undefined;
+  roundIndex?: number | undefined;
+  /** Internal physical-call trace used by the LLM Profile fallback coordinator. */
+  onProviderAttempt?: ((attempt: ChatV2ProviderAttempt) => void) | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &
     Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId'>>;
   executeStream?: ChatV2StreamExecutor | undefined;
   executeGenerate?: ChatV2GenerateExecutor | undefined;
+};
+
+/**
+ * Older LLM Chat nodes used Output request details as one switch for status,
+ * error, and request body. Keep that saved contract intact while newly saved
+ * nodes use the independent controls.
+ */
+export function shouldOutputChatV2RequestError(
+  options: Pick<RunChatV2PipelineOptions, 'outputRequestStatus' | 'outputRequestError'>,
+): boolean {
+  return options.outputRequestError ?? options.outputRequestStatus ?? false;
+}
+
+export function shouldOutputChatV2RequestBody(
+  options: Pick<RunChatV2PipelineOptions, 'outputRequestStatus' | 'outputRequestBody'>,
+): boolean {
+  return options.outputRequestBody ?? options.outputRequestStatus ?? false;
+}
+
+export type ChatV2ProviderAttempt = {
+  attemptIndex: number;
+  outcome: 'success' | 'provider-failure';
+  status?: number | undefined;
+  error?: unknown;
 };
 
 export type ChatV2PipelineResult = {

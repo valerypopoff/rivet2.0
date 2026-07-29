@@ -98,6 +98,14 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
             {messageContent}
           </div>
         ))
+        .with({ type: 'developer' }, () => (
+          <div className="chat-message developer">
+            <header>
+              <em>developer</em>
+            </header>
+            {messageContent}
+          </div>
+        ))
         .with({ type: 'user' }, () => (
           <div className="chat-message user">
             <header>

@@ -159,6 +159,8 @@ export function notifyChatV2CallFinished(
   const event: ChatV2CallFinishedEvent = {
     callId: params.callId,
     attemptIndex: params.attemptIndex,
+    ...(options.profileIndex == null ? {} : { profileIndex: options.profileIndex }),
+    ...(options.roundIndex == null ? {} : { roundIndex: options.roundIndex }),
     nodeId,
     processId,
     provider: options.provider,

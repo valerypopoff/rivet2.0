@@ -2,46 +2,30 @@ import { css } from '@emotion/react';
 import { DATA_BUS_FULL_ROW_HEIGHT_PX } from './dataBusRailLayout.js';
 
 export const dataBusRailStyles = css`
-  position: absolute;
-  top: calc(46px * var(--ui-font-scale, 1));
+  position: fixed;
+  top: var(--project-selector-height);
   right: 0;
   left: var(--data-bus-full-row-left, 0px);
   z-index: 10002;
   display: flex;
-  align-items: center;
-  gap: calc(6px * var(--ui-font-scale, 1));
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
   box-sizing: border-box;
-  width: max-content;
-  max-width: calc(100% - var(--data-bus-full-row-left, 0px) - 32px);
-  margin: 0 auto;
-  padding: 0 calc(6px * var(--ui-font-scale, 1));
-  overflow-x: auto;
-  overflow-y: hidden;
+  width: auto;
+  height: var(--data-bus-full-row-height, 0px);
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
   pointer-events: auto;
   scrollbar-width: none;
+  transform: none;
+  background: transparent;
 
   &::-webkit-scrollbar {
     display: none;
-  }
-
-  &.full-row {
-    position: fixed;
-    top: var(--project-selector-height);
-    right: 0;
-    left: var(--data-bus-full-row-left, 0px);
-    box-sizing: border-box;
-    width: auto;
-    height: var(--data-bus-full-row-height, 0px);
-    max-width: none;
-    margin: 0;
-    flex-direction: column;
-    align-items: stretch;
-    justify-content: flex-start;
-    gap: 0;
-    padding: 0;
-    overflow: hidden;
-    transform: none;
-    background: transparent;
   }
 
   .data-bus-group {
@@ -49,13 +33,17 @@ export const dataBusRailStyles = css`
     isolation: isolate;
     display: flex;
     align-items: stretch;
-    flex: 0 0 auto;
+    flex: 0 0 calc(${DATA_BUS_FULL_ROW_HEIGHT_PX}px * var(--ui-font-scale, 1));
     min-width: 0;
-    max-width: min(70vw, calc(760px * var(--ui-font-scale, 1)));
+    width: 100%;
+    height: calc(${DATA_BUS_FULL_ROW_HEIGHT_PX}px * var(--ui-font-scale, 1));
+    max-width: none;
     overflow: hidden;
     border: 0;
+    border-radius: 0;
     background: transparent;
     color: var(--foreground);
+    box-shadow: none;
   }
 
   .data-bus-group::after {
@@ -66,69 +54,46 @@ export const dataBusRailStyles = css`
     right: 0;
     bottom: calc(8px * var(--ui-font-scale, 1));
     left: 0;
-    border: 1px solid var(--app-panel-border, var(--grey));
-    border-radius: calc(7px * var(--ui-font-scale, 1));
-    background: var(--app-panel-bg, var(--grey-darkest));
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-  }
-
-  &.full-row .data-bus-group {
-    flex: 0 0 calc(${DATA_BUS_FULL_ROW_HEIGHT_PX}px * var(--ui-font-scale, 1));
-    width: 100%;
-    height: calc(${DATA_BUS_FULL_ROW_HEIGHT_PX}px * var(--ui-font-scale, 1));
-    max-width: none;
-    overflow: hidden;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-  }
-
-  &.full-row .data-bus-group::after {
     border: 0;
     border-bottom: 1px solid var(--app-panel-border, var(--grey));
     border-radius: 0;
+    background: var(--app-panel-bg, var(--grey-darkest));
     box-shadow: none;
   }
 
   .data-bus-group-content {
     display: flex;
     align-items: stretch;
-    flex: 1 1 auto;
-    min-width: 0;
-    margin-left: calc(3px * var(--ui-font-scale, 1));
-    overflow: hidden;
-  }
-
-  &.full-row .data-bus-group-content {
     flex: 0 1 auto;
+    min-width: 0;
     width: max-content;
     max-width: calc(100% - 32px * var(--ui-font-scale, 1));
     height: 100%;
     margin: 0 auto;
+    overflow: hidden;
   }
 
-  &.full-row .data-bus-group.selected::after,
-  &.full-row .data-bus-group.search-match:not(.selected)::after,
-  &.full-row .data-bus-group.compare-added::after,
-  &.full-row .data-bus-group.compare-changed::after {
+  .data-bus-group.selected::after,
+  .data-bus-group.search-match:not(.selected)::after,
+  .data-bus-group.compare-added::after,
+  .data-bus-group.compare-changed::after {
     border-color: transparent;
     box-shadow: none;
   }
 
-  &.full-row .data-bus-group.selected::after {
+  .data-bus-group.selected::after {
     box-shadow: inset 0 -2px var(--primary);
   }
 
-  &.full-row .data-bus-group.search-match:not(.selected)::after {
+  .data-bus-group.search-match:not(.selected)::after {
     box-shadow: inset 0 -1px color-mix(in srgb, var(--primary) 65%, transparent);
   }
 
-  &.full-row .data-bus-group.compare-added:not(.selected)::after {
+  .data-bus-group.compare-added:not(.selected)::after {
     box-shadow: inset 0 -2px var(--success);
   }
 
-  &.full-row .data-bus-group.compare-changed:not(.selected)::after {
+  .data-bus-group.compare-changed:not(.selected)::after {
     box-shadow: inset 0 -2px var(--warning-light);
   }
 
@@ -140,25 +105,6 @@ export const dataBusRailStyles = css`
     left: 0;
     width: calc(3px * var(--ui-font-scale, 1));
     background: var(--bus-accent);
-  }
-
-  .data-bus-group.selected::after {
-    border-color: var(--primary);
-    box-shadow:
-      0 0 0 1px var(--primary),
-      0 2px 8px rgba(0, 0, 0, 0.24);
-  }
-
-  .data-bus-group.search-match:not(.selected)::after {
-    border-color: color-mix(in srgb, var(--primary) 55%, var(--app-panel-border, var(--grey)) 45%);
-  }
-
-  .data-bus-group.compare-added::after {
-    border-color: var(--success);
-  }
-
-  .data-bus-group.compare-changed::after {
-    border-color: var(--warning-light);
   }
 
   .data-bus-group.disabled {
@@ -249,8 +195,7 @@ export const dataBusRailStyles = css`
     gap: calc(6px * var(--ui-font-scale, 1));
     box-sizing: border-box;
     min-height: calc(${DATA_BUS_FULL_ROW_HEIGHT_PX}px * var(--ui-font-scale, 1));
-    padding: calc(3px * var(--ui-font-scale, 1)) calc(7px * var(--ui-font-scale, 1))
-      calc(8px * var(--ui-font-scale, 1));
+    padding: calc(3px * var(--ui-font-scale, 1)) calc(7px * var(--ui-font-scale, 1)) calc(8px * var(--ui-font-scale, 1));
   }
 
   .data-bus-channel {
@@ -391,5 +336,4 @@ export const dataBusRailStyles = css`
     color: var(--foreground-dim);
     font-style: italic;
   }
-
 `;

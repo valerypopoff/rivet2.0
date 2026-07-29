@@ -288,10 +288,25 @@ For package plugins, the sidecar expects installed plugin files under the app-da
 
 ### Node runtime
 
-`rivet-node` consumers can also pass a custom registry or rely on
-built-ins/plugins already present in the registry they use. The default
-TypeScript runtime is the only supported Node runtime path; plugin execution is
-owned by the assembled registry passed to `GraphProcessor`.
+When `createProcessor()`, `runGraph()`, or `createGraphRunner()` uses the
+default Node registry, `rivet-node` synchronously registers any trusted
+built-in plugin specs declared by the project before constructing the
+processor. This keeps built-in provider registration and plugin environment
+fallbacks consistent with editor and app-executor runs. In particular, a
+project-backed Knowledge Store can resolve its built-in provider during
+headless HTTP or web-app execution, and plugin config such as
+`PINECONE_API_KEY` is read from the Node host environment. Environment
+fallback extraction covers both visible string settings and secret settings;
+secret editor typing must not suppress a declared host environment fallback.
+An explicitly supplied `pluginEnv` is the complete plugin-environment map for
+that processor and takes precedence over automatic `process.env` extraction;
+it is not merged with host environment values.
+
+An explicitly supplied `registry` remains authoritative and is not mutated.
+URI and package plugins are never imported automatically by the Node API;
+hosts supporting those plugins must load them and pass the completed registry.
+The default TypeScript runtime is the only supported Node runtime path, and
+plugin execution remains owned by the registry passed to `GraphProcessor`.
 
 ## Plugin Ownership and Config Lookup
 

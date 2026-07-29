@@ -1,4 +1,5 @@
 import {
+  type ChatMessage,
   type ChartNode,
   type EditorDefinition,
   type Inputs,
@@ -372,8 +373,6 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
   async process(data, inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const output: Outputs = {};
 
-    const systemPrompt = coerceTypeOptional(inputs['systemPrompt' as PortId], 'string');
-
     const rawModel = getInputOrData(data, inputs, 'model');
     const model = rawModel as GenerativeAiGoogleModel;
 
@@ -382,7 +381,7 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
     const useTopP = getInputOrData(data, inputs, 'useTopP', 'boolean');
     const thinkingBudget = getInputOrData(data, inputs, 'thinkingBudget', 'number');
 
-    const { messages } = getChatGoogleNodeMessages(inputs);
+    const { messages, systemPrompt } = getChatGoogleNodeMessages(inputs);
 
     let prompt = await Promise.all(
       messages.map(async (message): Promise<Content> => {
@@ -451,7 +450,7 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
           };
         }
 
-        throw new Error(`Google Vertex AI does not support message type ${message.type}`);
+        throw new Error('Google Vertex AI received an unsupported message type.');
       }),
     );
 
@@ -484,7 +483,10 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
     };
 
     // TODO Better token counting for Google models.
-    const tokenCount = await context.tokenizer.getTokenCountForMessages(messages, undefined, tokenizerInfo);
+    const tokenMessages: ChatMessage[] = systemPrompt
+      ? [{ type: 'system', message: systemPrompt }, ...messages]
+      : messages;
+    const tokenCount = await context.tokenizer.getTokenCountForMessages(tokenMessages, undefined, tokenizerInfo);
 
     if (generativeAiGoogleModels[model]) {
       maxTokens = clampMaxTokensToModelLimit(
@@ -623,6 +625,7 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
               temperature: useTopP ? undefined : temperature,
               top_p: useTopP ? topP : undefined,
               top_k: undefined,
+              systemPrompt,
               project: project!,
               location: location!,
               applicationCredentials: applicationCredentials!,
@@ -756,6 +759,17 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
 export const chatGoogleNode = pluginNodeDefinition(ChatGoogleNodeImpl, 'Chat (Google, Legacy)');
 
 export function getChatGoogleNodeMessages(inputs: Inputs) {
-  const prompt = inputs['prompt' as PortId];
-  return { messages: coercePromptToChatMessages(prompt, { requirePrompt: true }) };
+  const promptMessages = coercePromptToChatMessages(inputs['prompt' as PortId], { requirePrompt: true });
+  const instructionMessages = promptMessages.filter(
+    (message) => message.type === 'system' || message.type === 'developer',
+  );
+  const systemPromptParts = [
+    coerceTypeOptional(inputs['systemPrompt' as PortId], 'string'),
+    ...instructionMessages.map((message) => coerceTypeOptional({ type: 'chat-message', value: message }, 'string')),
+  ].filter((part): part is string => !!part);
+
+  return {
+    messages: promptMessages.filter((message) => message.type !== 'system' && message.type !== 'developer'),
+    systemPrompt: systemPromptParts.length > 0 ? systemPromptParts.join('\n\n') : undefined,
+  };
 }

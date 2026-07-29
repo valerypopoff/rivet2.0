@@ -280,20 +280,11 @@ function buildSummaryPreview(value: DataValue): StoredDataPreview {
     )
     .with(
       { type: 'chat-message' },
-      (chatMessageValue): StoredDataPreview => ({
-        kind: 'summary',
-        label: `Chat Message (${chatMessageValue.value.type})`,
-        totalBytes: getChatMessageSize(chatMessageValue.value),
-      }),
+      (chatMessageValue): StoredDataPreview => buildChatMessagePreview(chatMessageValue.value),
     )
     .with(
       { type: 'chat-message[]' },
-      (chatMessageValues): StoredDataPreview => ({
-        kind: 'summary',
-        label: 'Chat Message Array',
-        totalBytes: chatMessageValues.value.reduce((acc, current) => acc + getChatMessageSize(current), 0),
-        itemCount: chatMessageValues.value.length,
-      }),
+      (chatMessageValues): StoredDataPreview => buildChatMessagesPreview(chatMessageValues.value),
     )
     .otherwise(
       (): StoredDataPreview => ({
@@ -305,6 +296,40 @@ function buildSummaryPreview(value: DataValue): StoredDataPreview {
           : undefined,
       }),
     );
+}
+
+function buildChatMessagePreview(message: ChatMessage): StoredDataPreview {
+  const functionResultText = getFunctionResultText(message);
+  if (functionResultText && functionResultText.length > REF_STORAGE_THRESHOLD_CHARS) {
+    return buildTextPreview(functionResultText);
+  }
+
+  return {
+    kind: 'summary',
+    label: `Chat Message (${message.type})`,
+    totalBytes: getChatMessageSize(message),
+  };
+}
+
+function buildChatMessagesPreview(messages: ChatMessage[]): StoredDataPreview {
+  const functionResultTexts = messages.map(getFunctionResultText);
+  if (functionResultTexts.every((text): text is string => text !== undefined)) {
+    const text = functionResultTexts.join('\n');
+    if (text.length > REF_STORAGE_THRESHOLD_CHARS) {
+      return buildTextPreview(text);
+    }
+  }
+
+  return {
+    kind: 'summary',
+    label: 'Chat Message Array',
+    totalBytes: messages.reduce((acc, current) => acc + getChatMessageSize(current), 0),
+    itemCount: messages.length,
+  };
+}
+
+function getFunctionResultText(message: ChatMessage): string | undefined {
+  return message.type === 'function' && typeof message.message === 'string' ? message.message : undefined;
 }
 
 function getDataValueSizeHint(value: DataValue): number {

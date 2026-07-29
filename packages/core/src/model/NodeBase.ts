@@ -119,6 +119,13 @@ export type NodeInputDefinition = {
 
   /** Will the input value attempt to be coerced into the desired type? */
   coerced?: boolean;
+
+  /**
+   * Whether an array on this port participates in a node's Many-runs fan-out.
+   * Most inputs retain the default `split`; configuration collections such as
+   * an LLM Profile fallback chain can opt into `preserve-array`.
+   */
+  splitRunBehavior?: 'split' | 'preserve-array';
 };
 
 /** Represents an output definition of a node. */

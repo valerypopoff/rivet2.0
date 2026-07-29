@@ -248,7 +248,7 @@ const STATIC_BUILT_IN_SETTINGS: Readonly<Record<string, readonly GraphBuilderSet
   passthrough: [],
   prompt: [
     setting('type', 'string-enum', 'Chat message role.', {
-      allowedValues: ['system', 'user', 'assistant', 'function'],
+      allowedValues: ['system', 'developer', 'user', 'assistant', 'function'],
     }),
     setting('promptText', 'string', 'Message template. Use {{name}} for dynamic inputs.', {
       projection: 'on-demand',
