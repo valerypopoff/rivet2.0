@@ -2,7 +2,7 @@
   "name": "@valerypopoff/trivet",
   "license": "MIT",
   "repository": "https://github.com/valerypopoff/rivet2.0",
-  "version": "2.1.8",
+  "version": "2.1.9",
   "main": "dist/cjs/bundle.cjs",
   "module": "dist/esm/index.js",
   "src": "src/index.ts",

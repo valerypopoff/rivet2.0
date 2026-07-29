@@ -35,7 +35,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -75,7 +75,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -524,7 +524,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.8.8`
+- Version: `2.8.9`
 - Private: yes
 
 ### Runtime shape
@@ -588,7 +588,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -693,7 +693,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -817,7 +817,7 @@ Graph-oriented testing package.
 
 ### Package metadata
 
-- Version: `2.1.8`
+- Version: `2.1.9`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -850,7 +850,7 @@ Docusaurus 3 documentation site package.
 
 ### Package metadata
 
-- Version: `2.0.2`
+- Version: `2.0.3`
 - Private: yes
 
 ### Script surface
