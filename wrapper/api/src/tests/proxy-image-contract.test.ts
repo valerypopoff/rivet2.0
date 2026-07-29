@@ -228,6 +228,9 @@ test('executor image and compose contracts keep the websocket service independen
 
   for (const compose of [prodCompose, devCompose]) {
     assert.match(compose, /executor:[\s\S]*- PORT=21889[\s\S]*- RIVET_EXECUTOR_PORT=21889[\s\S]*- RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
+    assert.match(compose, /OPENAI_ENDPOINT=\$\{OPENAI_ENDPOINT:-\}\r?\n\s*- PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}/);
+    assert.match(compose, /RIVET_RUNTIME_PROCESS_ROLE=executor\r?\n\s*- PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}/);
+    assert.equal((compose.match(/^\s*- PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}$/gm) ?? []).length, 2);
     assert.match(compose, /- HOME=\/home\/rivet/);
     assert.match(compose, /- npm_config_cache=\/home\/rivet\/\.npm/);
     assert.match(compose, /- YARN_CACHE_FOLDER=\/home\/rivet\/\.cache\/yarn/);
