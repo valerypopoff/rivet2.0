@@ -47,4 +47,5 @@ test('in-app menu hotkeys keep platform-specific command modifiers', () => {
 test('in-app menu hotkeys keep existing semantic non-letter shortcuts', () => {
   assert.equal(getInAppMenuHotkeyCommand(keyEvent({ code: 'F5', key: 'F5' }), 'windows'), 'remote_debugger');
   assert.equal(getInAppMenuHotkeyCommand(keyEvent({ code: 'Enter', ctrlKey: true, key: 'Enter' }), 'windows'), 'run');
+  assert.equal(getInAppMenuHotkeyCommand(keyEvent({ code: 'F5', key: 'F5', shiftKey: true }), 'windows'), undefined);
 });

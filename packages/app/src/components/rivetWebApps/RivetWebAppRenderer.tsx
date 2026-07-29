@@ -61,6 +61,7 @@ import {
   type UiGraphChatMessagePresentation,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
+import { matchesKeyboardShortcut } from '../../utils/keyboardShortcutMatcher.js';
 
 // Vite resolves this CommonJS compatibility export directly, while tsx exposes
 // the same component beneath `default` during source-level tests.
@@ -768,7 +769,15 @@ const RivetWebAppChat: FC<{
   };
 
   const handleSearchShortcut = (event: KeyboardEvent<HTMLElement>) => {
-    if (messages.length === 0 || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'f') {
+    if (
+      messages.length === 0 ||
+      !matchesKeyboardShortcut(event.nativeEvent, {
+        altKey: false,
+        codes: ['KeyF'],
+        commandModifier: 'any-command',
+        keys: ['f'],
+      })
+    ) {
       return;
     }
 

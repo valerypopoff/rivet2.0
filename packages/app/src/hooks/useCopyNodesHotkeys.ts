@@ -6,6 +6,9 @@ import { useCopyNodes } from './useCopyNodes';
 import { usePasteNodes } from './usePasteNodes';
 import { useDuplicateNode } from './useDuplicateNode';
 import { useDeleteNodesCommand } from '../commands/deleteNodeCommand';
+import { matchesKeyboardShortcut, type KeyboardShortcutEvent } from '../utils/keyboardShortcutMatcher.js';
+
+export type NodeClipboardShortcut = 'copy' | 'cut' | 'duplicate' | 'paste';
 
 function isNodeClipboardShortcutBlocked() {
   const activeElement = document.activeElement;
@@ -17,8 +20,17 @@ function isNodeClipboardShortcutBlocked() {
   return ['INPUT', 'TEXTAREA'].includes(activeElement.tagName) || activeElement.isContentEditable;
 }
 
-function isNodeClipboardShortcut(e: KeyboardEvent, key: string) {
-  return e.key.toLowerCase() === key && (e.metaKey || e.ctrlKey) && !e.shiftKey;
+const NODE_CLIPBOARD_SHORTCUTS = {
+  copy: { altKey: false, codes: ['KeyC'], commandModifier: 'any-command' as const, keys: ['c'], shiftKey: false },
+  cut: { altKey: false, codes: ['KeyX'], commandModifier: 'any-command' as const, keys: ['x'], shiftKey: false },
+  duplicate: { altKey: false, codes: ['KeyD'], commandModifier: 'any-command' as const, keys: ['d'], shiftKey: false },
+  paste: { altKey: false, codes: ['KeyV'], commandModifier: 'any-command' as const, keys: ['v'], shiftKey: false },
+};
+
+export function getNodeClipboardShortcut(event: KeyboardShortcutEvent): NodeClipboardShortcut | undefined {
+  return (Object.keys(NODE_CLIPBOARD_SHORTCUTS) as NodeClipboardShortcut[]).find((shortcut) =>
+    matchesKeyboardShortcut(event, NODE_CLIPBOARD_SHORTCUTS[shortcut]),
+  );
 }
 
 export function useCopyNodesHotkeys() {
@@ -37,16 +49,15 @@ export function useCopyNodesHotkeys() {
       return;
     }
 
-    const isCopy = isNodeClipboardShortcut(e, 'c');
-    if (isCopy && selectedNodeIds.length > 0 && !editingNodeId) {
+    const shortcut = getNodeClipboardShortcut(e);
+    if (shortcut === 'copy' && selectedNodeIds.length > 0 && !editingNodeId) {
       e.preventDefault();
       e.stopPropagation();
 
       copyNodes();
     }
 
-    const isCut = isNodeClipboardShortcut(e, 'x');
-    if (isCut && selectedNodeIds.length > 0 && !editingNodeId) {
+    if (shortcut === 'cut' && selectedNodeIds.length > 0 && !editingNodeId) {
       e.preventDefault();
       e.stopPropagation();
 
@@ -54,16 +65,14 @@ export function useCopyNodesHotkeys() {
       deleteNodes({ nodeIds: selectedNodeIds });
     }
 
-    const isPaste = isNodeClipboardShortcut(e, 'v');
-    if (isPaste && !editingNodeId) {
+    if (shortcut === 'paste' && !editingNodeId) {
       e.preventDefault();
       e.stopPropagation();
 
       pasteNodes({ x: mousePosition.x, y: mousePosition.y });
     }
 
-    const isDuplicate = isNodeClipboardShortcut(e, 'd');
-    if (isDuplicate && selectedNodeIds.length === 1 && !editingNodeId) {
+    if (shortcut === 'duplicate' && selectedNodeIds.length === 1 && !editingNodeId) {
       e.preventDefault();
       e.stopPropagation();
 

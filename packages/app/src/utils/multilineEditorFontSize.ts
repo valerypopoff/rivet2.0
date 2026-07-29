@@ -1,3 +1,5 @@
+import { matchesKeyboardShortcut } from './keyboardShortcutMatcher.js';
+
 export const DEFAULT_MULTILINE_EDITOR_FONT_SIZE = 14;
 export const MIN_MULTILINE_EDITOR_FONT_SIZE = 10;
 export const MAX_MULTILINE_EDITOR_FONT_SIZE = 28;
@@ -36,16 +38,17 @@ const MULTILINE_EDITOR_FONT_SIZE_SHORTCUTS: Record<
   },
 };
 
-function hasMultilineEditorFontSizeModifier(event: MultilineEditorFontSizeModifierEvent): boolean {
-  return (event.ctrlKey || event.metaKey) && !event.altKey;
-}
-
 function matchesMultilineEditorFontSizeShortcut(
   event: MultilineEditorFontSizeKeyEvent,
   command: MultilineEditorFontSizeCommand,
 ): boolean {
   const shortcut = MULTILINE_EDITOR_FONT_SIZE_SHORTCUTS[command];
-  return shortcut.keys.has(event.key) || shortcut.codes.has(event.code);
+  return matchesKeyboardShortcut(event, {
+    altKey: false,
+    codes: [...shortcut.codes],
+    commandModifier: 'any-command',
+    keys: [...shortcut.keys],
+  });
 }
 
 export function clampMultilineEditorFontSize(fontSize: number): number {
@@ -71,10 +74,6 @@ export function adjustMultilineEditorFontSize(
 export function getMultilineEditorFontSizeCommand(
   event: MultilineEditorFontSizeKeyEvent,
 ): MultilineEditorFontSizeCommand | undefined {
-  if (!hasMultilineEditorFontSizeModifier(event)) {
-    return undefined;
-  }
-
   return (['increase', 'decrease', 'reset'] as const).find((command) =>
     matchesMultilineEditorFontSizeShortcut(event, command),
   );
@@ -83,7 +82,7 @@ export function getMultilineEditorFontSizeCommand(
 export function getMultilineEditorFontSizeWheelCommand(
   event: MultilineEditorFontSizeWheelEvent,
 ): MultilineEditorFontSizeCommand | undefined {
-  if (!hasMultilineEditorFontSizeModifier(event) || event.deltaY === 0) {
+  if (!((event.ctrlKey || event.metaKey) && !event.altKey) || event.deltaY === 0) {
     return undefined;
   }
 

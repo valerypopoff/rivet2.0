@@ -395,8 +395,9 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     const reactSearchShortcut = new reactDom.window.KeyboardEvent('keydown', {
       bubbles: true,
       cancelable: true,
+      code: 'KeyF',
       ctrlKey: true,
-      key: 'f',
+      key: '\u0430',
     });
     await act(async () => {
       reactRootElement
@@ -406,8 +407,9 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
     const hostedSearchShortcut = new hostedDom.window.KeyboardEvent('keydown', {
       bubbles: true,
       cancelable: true,
+      code: 'KeyF',
       ctrlKey: true,
-      key: 'f',
+      key: '\u0430',
     });
     hostedDom.window.document
       .querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')

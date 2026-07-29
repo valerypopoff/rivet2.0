@@ -26,7 +26,7 @@ Rivet can show a broken-thread icon next to graphs that are unreachable from the
 
 The **Web Apps** section below the graph tree lists the project's declarative web-app screens. Use **New web app** there to add one. Selecting a web app opens its builder instead of a workflow canvas; see [Rivet Web Apps](./rivet-web-apps.md) for the full building and serving guide.
 
-Use the search button in the top bar, or press **Ctrl+F** or **Cmd+F**, to search across graph names and node content in the current project. When matches are found, Rivet shows how many text occurrences were found and how many graphs contain them.
+Use the search button in the top bar, or press **Ctrl+F** or **Cmd+F**, to search across graph names and node content in the current project. When matches are found, Rivet shows how many text occurrences were found and how many graphs contain them. Rivet shortcuts continue to work when you switch your keyboard language or layout.
 
 To delete a graph, right click on it and select "Delete". This will delete the graph from your project.
 
