@@ -10994,6 +10994,24 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["@fontsource/roboto", [\
+      ["npm:5.3.0", {\
+        "packageLocation": "./.yarn/cache/@fontsource-roboto-npm-5.3.0-b30c2964be-d9f968fb23.zip/node_modules/@fontsource/roboto/",\
+        "packageDependencies": [\
+          ["@fontsource/roboto", "npm:5.3.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["@fontsource/roboto-mono", [\
+      ["npm:5.3.0", {\
+        "packageLocation": "./.yarn/cache/@fontsource-roboto-mono-npm-5.3.0-1f60b409b8-87cf9277b1.zip/node_modules/@fontsource/roboto-mono/",\
+        "packageDependencies": [\
+          ["@fontsource/roboto-mono", "npm:5.3.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@gentrace/core", [\
       ["npm:3.5.12", {\
         "packageLocation": "./.yarn/cache/@gentrace-core-npm-3.5.12-64f32363b8-ec1768c4ca.zip/node_modules/@gentrace/core/",\
@@ -19375,6 +19393,8 @@ const RAW_RUNTIME_STATE =
           ["@docusaurus/preset-classic", "virtual:de4bf54a777135b8d60a2c1bc2cf7d39bd0fa16a9131c1af77548d129c9a717e7f375cc137473742e792217a8989b7749d6c0934ca8eca0d7787e968286b7135#npm:3.10.1"],\
           ["@docusaurus/theme-classic", "virtual:de4bf54a777135b8d60a2c1bc2cf7d39bd0fa16a9131c1af77548d129c9a717e7f375cc137473742e792217a8989b7749d6c0934ca8eca0d7787e968286b7135#npm:3.10.1"],\
           ["@docusaurus/types", "virtual:de4bf54a777135b8d60a2c1bc2cf7d39bd0fa16a9131c1af77548d129c9a717e7f375cc137473742e792217a8989b7749d6c0934ca8eca0d7787e968286b7135#npm:3.10.1"],\
+          ["@fontsource/roboto", "npm:5.3.0"],\
+          ["@fontsource/roboto-mono", "npm:5.3.0"],\
           ["@mdx-js/react", "virtual:de4bf54a777135b8d60a2c1bc2cf7d39bd0fa16a9131c1af77548d129c9a717e7f375cc137473742e792217a8989b7749d6c0934ca8eca0d7787e968286b7135#npm:3.1.1"],\
           ["@tsconfig/docusaurus", "npm:2.0.9"],\
           ["@types/node", "npm:22.20.1"],\

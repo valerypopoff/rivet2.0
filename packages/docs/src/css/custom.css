@@ -1,39 +1,109 @@
+@import '@fontsource/roboto/300.css';
+@import '@fontsource/roboto/400.css';
+@import '@fontsource/roboto/500.css';
+@import '@fontsource/roboto/700.css';
+@import '@fontsource/roboto/900.css';
+@import '@fontsource/roboto-mono/400.css';
+@import '@fontsource/roboto-mono/700.css';
+
 /**
  * Any CSS included here will be global. The classic template
  * bundles Infima by default. Infima is a CSS framework designed to
  * work well for content-centric websites.
  */
 
-/* You can override the default Infima variables here. */
+/*
+ * Keep the documentation shell aligned with Rivet's two canonical visual
+ * modes: Bright for Docusaurus light mode and Molten for dark mode. These are
+ * intentionally a small semantic mirror rather than an import from the app,
+ * because the app styles also carry editor-specific resets and component
+ * contracts that do not belong in the documentation site.
+ */
 :root {
-  --ifm-color-primary: #cc6a4c;
-  --ifm-color-primary-dark: #b35842;
-  --ifm-color-primary-darker: #99463a;
-  --ifm-color-primary-darkest: #7f2e2a;
-  --ifm-color-primary-light: #ff8862;
-  --ifm-color-primary-lighter: #ffa382;
-  --ifm-color-primary-lightest: #ffbda1;
+  --ifm-font-family-base: 'Roboto', sans-serif;
+  --ifm-heading-font-family: 'Roboto', sans-serif;
+  --ifm-font-family-monospace: 'Roboto Mono', monospace;
+  --ifm-color-primary: #1769e0;
+  --ifm-color-primary-dark: #0f5fcf;
+  --ifm-color-primary-darker: #0d56bb;
+  --ifm-color-primary-darkest: #0d4ea8;
+  --ifm-color-primary-light: #3d82e7;
+  --ifm-color-primary-lighter: #5b9cff;
+  --ifm-color-primary-lightest: #92baff;
+  --ifm-background-color: #f5f7fb;
+  --ifm-background-surface-color: #ffffff;
+  --ifm-font-color-base: #1d2733;
+  --ifm-font-color-secondary: #526171;
+  --ifm-navbar-background-color: #f0f4fa;
+  --ifm-navbar-link-color: #1d2733;
+  --ifm-footer-background-color: #eef2f7;
+  --ifm-footer-color: #1d2733;
+  --ifm-footer-link-color: #526171;
+  --ifm-toc-border-color: #cfd8e3;
+  --ifm-code-background: #eef2f7;
+  --ifm-global-border-width: 1px;
+  --ifm-global-radius: 0.5rem;
+  --ifm-global-shadow-lw: 0 1px 3px rgba(30, 30, 30, 0.14);
+  --ifm-navbar-shadow: none;
   --ifm-code-font-size: 95%;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #ff8862;
-  --ifm-color-primary-dark: #cc6a4c;
-  --ifm-color-primary-darker: #b35842;
-  --ifm-color-primary-darkest: #99463a;
-  --ifm-color-primary-light: #ffa382;
-  --ifm-color-primary-lighter: #ffbda1;
-  --ifm-color-primary-lightest: #ffd1c0;
+  --ifm-color-primary: #ff9900;
+  --ifm-color-primary-dark: #e17f00;
+  --ifm-color-primary-darker: #cc6600;
+  --ifm-color-primary-darkest: #9c4e00;
+  --ifm-color-primary-light: #ffad2e;
+  --ifm-color-primary-lighter: #ffb545;
+  --ifm-color-primary-lightest: #ffd389;
+  --ifm-background-color: #252b37;
+  --ifm-background-surface-color: #212630;
+  --ifm-font-color-base: #f0f0f0;
+  --ifm-font-color-secondary: #9fadbc;
+  --ifm-navbar-background-color: #212630;
+  --ifm-navbar-link-color: #f0f0f0;
+  --ifm-footer-background-color: #212630;
+  --ifm-footer-color: #f0f0f0;
+  --ifm-footer-link-color: #9fadbc;
+  --ifm-toc-border-color: rgba(240, 240, 240, 0.12);
+  --ifm-code-background: #282a2e;
+  --ifm-global-shadow-lw: 0 1px 3px rgba(0, 0, 0, 0.2);
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+.navbar {
+  border-bottom: 1px solid #cfd8e3;
+}
+
+[data-theme='dark'] .navbar {
+  border-bottom-color: rgba(240, 240, 240, 0.1);
+}
+
+.navbar__title,
+.navbar__link,
+.footer__title {
+  font-family: var(--ifm-font-family-base);
+}
+
+.navbar__title,
+.footer__title {
+  font-weight: 700;
+}
+
+.footer {
+  border-top: 1px solid #cfd8e3;
+}
+
+[data-theme='dark'] .footer {
+  border-top-color: rgba(240, 240, 240, 0.1);
 }
 
 [data-theme='dark'] img[src$='img/logo.svg'] {
   filter: invert(1);
 }
 
-.theme-doc-markdown.markdown
-  :is(h1, h2, h3, h4, h5, h6):has(+ :is(p, ul, ol, blockquote)) {
+.theme-doc-markdown.markdown :is(h1, h2, h3, h4, h5, h6):has(+ :is(p, ul, ol, blockquote)) {
   margin-bottom: 0.45rem;
 }
 

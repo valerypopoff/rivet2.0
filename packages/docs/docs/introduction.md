@@ -1,5 +1,5 @@
 ---
-slug: /
+slug: /user-guide
 ---
 
 # Introduction to Rivet

@@ -273,7 +273,7 @@ This is a better refactor seam because settings page changes no longer require e
 
 ### `HelpModal`
 
-The Help modal intentionally stays narrow: it links only to the published Rivet 2 documentation site at `https://valerypopoff.github.io/rivet2.0/` and to GitHub issues at `https://github.com/valerypopoff/rivet2.0/issues`. Do not reintroduce old Rivet community, X/Twitter, or YouTube destinations there unless those destinations become current Rivet 2 support surfaces again.
+The Help modal intentionally stays narrow: it links directly to the published Rivet 2 User Guide at `https://valerypopoff.github.io/rivet2.0/user-guide` and to GitHub issues at `https://github.com/valerypopoff/rivet2.0/issues`. The no-project screen uses the same direct User Guide route so its documentation action does not stop at the promotional homepage. Do not reintroduce old Rivet community, X/Twitter, or YouTube destinations there unless those destinations become current Rivet 2 support surfaces again.
 
 ### `LeftSidebar`
 

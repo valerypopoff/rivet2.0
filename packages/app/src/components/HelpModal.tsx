@@ -40,13 +40,11 @@ export const HelpModal: FC = () => {
               <p>Need help with Rivet 2? Check out the following places.</p>
 
               <h2>
-                <a href="https://valerypopoff.github.io/rivet2.0/" target="_blank" rel="noreferrer">
+                <a href="https://valerypopoff.github.io/rivet2.0/user-guide" target="_blank" rel="noreferrer">
                   <QuestionIcon /> Rivet 2 documentation
                 </a>
               </h2>
-              <p>
-                Read the user guide, tutorial, API reference, node reference, and CLI documentation.
-              </p>
+              <p>Read the user guide, tutorial, API reference, node reference, and CLI documentation.</p>
               <h2>
                 <a href="https://github.com/valerypopoff/rivet2.0/issues" target="_blank" rel="noreferrer">
                   <GithubIcon viewBox="0 0 100 100" /> GitHub issues

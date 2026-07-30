@@ -37,7 +37,6 @@ const config = {
       'classic',
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
-        pages: false,
         docs: {
           routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
@@ -53,7 +52,7 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
-      image: 'img/social-card.png',
+      image: 'img/social-card-v2.png',
       colorMode: {
         defaultMode: 'dark',
       },
@@ -118,7 +117,7 @@ const config = {
               },
               {
                 label: 'User Guide',
-                to: '/',
+                to: '/user-guide',
               },
               {
                 label: 'API Reference',

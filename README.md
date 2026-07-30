@@ -6,7 +6,9 @@ Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chai
 
 [Download Rivet 2 desktop app](https://valerypopoff.github.io/rivet2.0/download)
 
-[User documentation](https://valerypopoff.github.io/rivet2.0)
+[Rivet 2 website](https://valerypopoff.github.io/rivet2.0/)
+
+[User documentation](https://valerypopoff.github.io/rivet2.0/user-guide)
 
 This checkout is also designed to be embedded by wrapper applications that vendor Rivet source code. Wrappers can import from local source paths and use the supported app-host seams without depending on public npm packages.
 
@@ -179,7 +181,11 @@ truth. The release workflows run `yarn sync:desktop-version` before packaging so
 Tauri/Cargo metadata and Windows installer filenames follow that package
 version automatically.
 
-The GitHub Pages site is the public documentation website at `https://valerypopoff.github.io/rivet2.0/`. Its top-right Download link opens a downloads page with the latest stable Windows installer from `main` and latest developer Windows installer from `develop`.
+The GitHub Pages site at `https://valerypopoff.github.io/rivet2.0/` presents
+Rivet 2 and hosts the documentation. The User Guide starts at `/user-guide`.
+The top-right Download link opens a downloads page with the latest stable
+Windows installer from `main` and latest developer Windows installer from
+`develop`.
 
 GitHub Pages must either be enabled once in repository settings with Source set to GitHub Actions, or the repository must provide a `PAGES_ENABLEMENT_TOKEN` Actions secret that can enable Pages for the workflows. The stable release workflow deploys through the `github-pages` environment and should be allowed from `main`. The developer workflow deploys through `developer-windows-pages` so develop-branch installer deployments are not blocked by production `github-pages` environment rules; if that environment is protected later, it must allow `develop`.
 

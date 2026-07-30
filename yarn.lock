@@ -5651,6 +5651,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@fontsource/roboto-mono@npm:^5.3.0":
+  version: 5.3.0
+  resolution: "@fontsource/roboto-mono@npm:5.3.0"
+  checksum: 10/87cf9277b1755a379fa75c93fa2fc8a4743326fee17f90a2032727b9134aa655ff6aa2a8b0d7a46757febbac1b5fbfdd802813f56a32176e278c1b48d1bf573e
+  languageName: node
+  linkType: hard
+
+"@fontsource/roboto@npm:^5.3.0":
+  version: 5.3.0
+  resolution: "@fontsource/roboto@npm:5.3.0"
+  checksum: 10/d9f968fb239a16acdd3976a106f1ec8b530a6577ea5b1437dbeab3f782b7c189468dbaabdad3b2e68b75d63316bb48e2e905f661dec59a9a9353846eec04d35d
+  languageName: node
+  linkType: hard
+
 "@gentrace/core@npm:^3.5.12":
   version: 3.5.12
   resolution: "@gentrace/core@npm:3.5.12"
@@ -11987,6 +12001,8 @@ __metadata:
     "@docusaurus/preset-classic": "npm:3.10.1"
     "@docusaurus/theme-classic": "npm:^3.10.1"
     "@docusaurus/types": "npm:^3.10.1"
+    "@fontsource/roboto": "npm:^5.3.0"
+    "@fontsource/roboto-mono": "npm:^5.3.0"
     "@mdx-js/react": "npm:^3.1.1"
     "@tsconfig/docusaurus": "npm:^2.0.9"
     "@types/node": "npm:^22.20.1"

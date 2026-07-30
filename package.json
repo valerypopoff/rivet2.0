@@ -10,6 +10,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --max-old-space-size=8192 .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-app run dev",
+    "docs": "node .yarn/releases/yarn-4.17.1.cjs workspace docs run",
     "build": "node --max-old-space-size=8192 .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet2-core run build && node --max-old-space-size=8192 .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet2-node run build && node --max-old-space-size=8192 .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-app-executor run build && node --max-old-space-size=8192 .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/trivet run build && node --max-old-space-size=8192 .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-app run build && node --max-old-space-size=8192 .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet2-cli run build",
     "build:all": "npm run build",
     "build:runtime": "node scripts/build-wrapper-target.mjs runtime",
