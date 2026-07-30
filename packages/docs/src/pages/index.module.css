@@ -11,8 +11,13 @@
   --landing-accent-text: #0f5fcf;
   --landing-accent-bright: #1769e0;
   --landing-accent-soft: rgba(23, 105, 224, 0.1);
+  --landing-secondary-action: #a9c9f4;
+  --landing-secondary-action-hover: #93bbef;
+  --landing-secondary-action-text: #113765;
   --landing-on-accent: #ffffff;
   --landing-green: #00b74c;
+  --landing-green-soft: rgba(0, 183, 76, 0.195);
+  --hero-description-size: clamp(1.02rem, 1.5vw, 1.18rem);
   --landing-green-dark: #009624;
   --landing-canvas: #1d2430;
   --landing-canvas-panel: #171d27;
@@ -33,13 +38,11 @@
   --landing-muted: #9fadbc;
   --landing-line: rgba(240, 240, 240, 0.1);
   --landing-line-strong: rgba(240, 240, 240, 0.18);
-  --landing-accent: #ff9900;
-  --landing-accent-dark: #cc6600;
-  --landing-accent-text: #ffb545;
-  --landing-accent-bright: #ff9900;
-  --landing-accent-soft: rgba(255, 153, 0, 0.12);
-  --landing-on-accent: #000000;
+  /* Keep the bright blue action palette in dark mode too. */
   --landing-green: #00b74c;
+  --landing-secondary-action: #3c78c2;
+  --landing-secondary-action-hover: #4c88d1;
+  --landing-secondary-action-text: #f3f7ff;
   --landing-green-dark: #009624;
   --landing-canvas: #171d27;
   --landing-canvas-panel: #1d2430;
@@ -105,13 +108,13 @@
 }
 
 .heroCopy {
-  max-width: 760px;
+  max-width: 960px;
 }
 
 .heroEyebrow,
 .eyebrow {
-  color: var(--landing-accent-text);
-  font-size: 0.72rem;
+  color: var(--landing-green);
+  font-size: 1.0rem;
   font-weight: 700;
   letter-spacing: 0.13em;
   line-height: 1.4;
@@ -126,27 +129,29 @@
 }
 
 .heroEyebrow span {
-  width: 0.48rem;
-  height: 0.48rem;
+  width: 0.6rem;
+  height: 0.6rem;
+  flex: 0 0 auto;
   border-radius: 50%;
-  background: var(--landing-accent);
-  box-shadow: 0 0 0 5px var(--landing-accent-soft);
+  background: var(--landing-green);
+  box-shadow: 0 0 0 5px var(--landing-green-soft);
+  margin-bottom: 0.2rem;
 }
 
 .heroCopy h1 {
-  max-width: 720px;
+  max-width: 1000px;
   margin-bottom: 1.5rem;
   color: var(--landing-ink);
   font-size: clamp(3.25rem, 6.25vw, 4.25rem);
   font-weight: 700;
-  line-height: 0.96;
+  line-height: 1.1;
 }
 
 .heroDescription {
-  max-width: 630px;
+  max-width: 1000px;
   margin-bottom: 2rem;
   color: var(--landing-muted);
-  font-size: clamp(1.02rem, 1.5vw, 1.18rem);
+  font-size: var(--hero-description-size);
   line-height: 1.75;
 }
 
@@ -171,9 +176,9 @@
   font-weight: 700;
   text-decoration: none;
   transition:
-    transform 160ms ease,
     border-color 160ms ease,
-    background 160ms ease;
+    background 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .primaryAction {
@@ -184,16 +189,16 @@
 }
 
 .secondaryAction {
-  border: 1px solid var(--landing-line-strong);
-  color: var(--landing-ink);
-  background: var(--landing-surface);
+  border: 1px solid var(--landing-secondary-action);
+  color: var(--landing-secondary-action-text);
+  background: var(--landing-secondary-action);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--landing-secondary-action) 34%, transparent);
 }
 
 .primaryAction:hover,
 .secondaryAction:hover {
   color: inherit;
   text-decoration: none;
-  transform: translateY(-2px);
 }
 
 .primaryAction:hover {
@@ -203,8 +208,10 @@
 }
 
 .secondaryAction:hover {
-  color: var(--landing-ink);
-  border-color: var(--landing-accent);
+  color: var(--landing-secondary-action-text);
+  border-color: var(--landing-secondary-action-hover);
+  background: var(--landing-secondary-action-hover);
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--landing-secondary-action) 48%, transparent);
 }
 
 .textAction {
@@ -220,6 +227,12 @@
 .textAction:hover {
   color: var(--landing-accent-text);
   text-decoration: none;
+}
+
+.heroActions .textAction {
+  min-height: 3.15rem;
+  padding: 0.8rem 0.35rem;
+  white-space: nowrap;
 }
 
 .heroShowcase {
@@ -254,7 +267,7 @@
 .heroFeature p {
   margin-bottom: 0;
   color: var(--landing-muted);
-  font-size: 0.82rem;
+  font-size: var(--hero-description-size);
   line-height: 1.6;
 }
 
@@ -295,6 +308,22 @@
   background: rgba(255, 255, 255, 0.16);
 }
 
+.previewProject {
+  display: inline-flex;
+  align-items: center;
+  justify-self: center;
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.previewProject img {
+  width: 0.62rem;
+  height: 0.62rem;
+  flex: 0 0 auto;
+  filter: invert(1);
+  object-fit: contain;
+}
+
 .runState {
   display: flex;
   align-items: center;
@@ -325,10 +354,10 @@
   z-index: 2;
   display: flex;
   width: 21%;
-  aspect-ratio: 1.63;
+  aspect-ratio: 1.46;
   flex-direction: column;
   justify-content: center;
-  padding: 2rem 0.75rem 0.7rem;
+  padding: 1.8rem 0.75rem 1.7rem;
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: var(--workflow-node-radius);
   corner-shape: squircle;
@@ -357,8 +386,7 @@
   gap: 0.38rem;
   padding: 0 0.55rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: var(--workflow-node-radius) var(--workflow-node-radius) 0 0;
-  corner-shape: squircle;
+  border-radius: calc(var(--workflow-node-radius) - 1px) calc(var(--workflow-node-radius) - 1px) 0 0;
   color: rgba(255, 255, 255, 0.72);
   background: var(--landing-node-header);
   font-family: var(--ifm-font-family-base);
@@ -384,6 +412,34 @@
   margin-top: 0.3rem;
   color: rgba(255, 255, 255, 0.38);
   font-size: 0.54rem;
+}
+
+.nodeOutput {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  min-height: 1.28rem;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0 0 calc(var(--workflow-node-radius) - 1px) calc(var(--workflow-node-radius) - 1px);
+  color: rgba(255, 255, 255, 0.42);
+  background: rgba(0, 0, 0, 0.12);
+  font-family: var(--ifm-font-family-base);
+  font-size: 0.43rem;
+}
+
+.nodeOutput b {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.7);
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.45rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inputPort,
@@ -510,33 +566,6 @@
   text-transform: uppercase;
 }
 
-.proofBar {
-  display: flex;
-  width: min(1180px, 100%);
-  min-height: 6rem;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1.5rem;
-  margin: 5.6rem auto 0;
-  border-top: 1px solid var(--landing-line);
-}
-
-.proofBar span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  color: var(--landing-muted);
-  font-size: 0.77rem;
-  font-weight: 700;
-}
-
-.proofBar i {
-  width: 0.3rem;
-  height: 0.3rem;
-  border-radius: 50%;
-  background: var(--landing-accent);
-}
-
 .foundationSection,
 .useCasesSection,
 .lifecycleSection,
@@ -610,14 +639,13 @@
 
 .foundationCard .cardNumber {
   display: block;
-  margin-bottom: 3rem;
+  margin-bottom: 1.25rem;
   color: var(--landing-accent-text);
   font-family: var(--ifm-font-family-monospace);
   font-size: 0.72rem;
   font-weight: 700;
 }
 
-.foundationCard p,
 .useCaseCard p {
   margin-bottom: 0.65rem;
   color: var(--landing-muted);
@@ -651,13 +679,12 @@
 .useCaseCard {
   min-height: 245px;
   padding: 1.8rem;
-  border: 1px solid var(--landing-line);
-  border-radius: 1rem;
-  corner-shape: squircle;
-  background: var(--landing-surface);
+  border: 0;
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--landing-surface) 72%, transparent);
   transition:
-    transform 180ms ease,
-    border-color 180ms ease;
+    background 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .useCaseCard::before {
@@ -671,8 +698,8 @@
 }
 
 .useCaseCard:hover {
-  border-color: var(--landing-line-strong);
-  transform: translateY(-3px);
+  background: color-mix(in srgb, var(--landing-surface) 92%, transparent);
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--landing-ink) 8%, transparent);
 }
 
 .lifecycleGrid {
@@ -923,11 +950,11 @@
   }
 
   .nodeHeader {
-    border-radius: 0.65rem 0.65rem 0 0;
+    border-radius: calc(0.65rem - 1px) calc(0.65rem - 1px) 0 0;
   }
 
-  .useCaseCard {
-    border-radius: 0.55rem;
+  .nodeOutput {
+    border-radius: 0 0 calc(0.65rem - 1px) calc(0.65rem - 1px);
   }
 }
 
@@ -969,12 +996,6 @@
 }
 
 @media (max-width: 820px) {
-  .proofBar {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 1.5rem 0;
-  }
-
   .foundationGrid,
   .useCaseGrid {
     grid-template-columns: 1fr;
@@ -984,7 +1005,6 @@
     min-height: auto;
   }
 
-  .foundationCard .cardNumber,
   .useCaseCard::before {
     margin-bottom: 2rem;
   }
@@ -1084,13 +1104,8 @@
     grid-template-columns: 1fr auto;
   }
 
-  .previewTopbar > span:nth-child(2) {
+  .previewProject {
     display: none;
-  }
-
-  .proofBar {
-    grid-template-columns: 1fr;
-    margin-top: 3.5rem;
   }
 
   .lifecycleGrid {
@@ -1112,31 +1127,69 @@
 }
 
 @media (max-width: 380px) {
-  .canvas {
-    min-height: 600px;
+  .heroCopy h1 {
+    font-size: clamp(2.25rem, 11vw, 2.4rem);
+    line-height: 1.12;
   }
 
-  .workflowNode,
+  .canvas {
+    min-height: 500px;
+  }
+
+  .workflowNode {
+    width: 86px;
+    min-height: 84px;
+    padding: 1.7rem 0.45rem 1.55rem;
+  }
+
   .llmNode {
-    right: 18px;
-    left: 18px;
-    width: auto;
+    width: 78px;
+    min-height: 88px;
+  }
+
+  .workflowNode strong {
+    font-size: 0.58rem;
+  }
+
+  .nodeHeader {
+    padding: 0 0.38rem;
+    font-size: 0.42rem;
+  }
+
+  .nodeDetail {
+    font-size: 0.45rem;
+  }
+
+  .nodeOutput {
+    gap: 0.18rem;
+    padding: 0.2rem 0.38rem;
+    font-size: 0.36rem;
+  }
+
+  .nodeOutput b {
+    font-size: 0.37rem;
   }
 
   .promptNode {
-    top: 24px;
+    top: 22px;
+    left: 8px;
   }
 
   .llmNode {
-    top: 135px;
+    top: 76px;
+    right: auto;
+    left: calc(50% - 39px);
   }
 
   .knowledgeNode {
-    top: 246px;
+    top: 142px;
+    left: 8px;
   }
 
   .outputNode {
-    top: 357px;
+    top: 210px;
+    right: 8px;
+    left: auto;
   }
 }
 

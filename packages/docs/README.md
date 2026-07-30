@@ -27,6 +27,15 @@ CTA changes. `src/pages/index.tsx` owns the page structure and
 The hero keeps its introductory copy above the workflow showcase at every
 viewport width; its concise feature explanations sit to the left of the example
 workflow on wide layouts and move above it as space narrows.
+Keep the hero calls to action in one non-shifting row, with the source link
+following the two primary actions. The workflow preview is intentionally a
+completed run: its Rivet-mark title bar, compact per-node output strips, and
+inspector are page illustration only, not a second interactive editor. The
+foundation cards use one descriptive heading per item; avoid adding redundant
+all-caps labels or decorative proof bars back to the hero.
+At the narrowest responsive breakpoint, the hero title scales down and the
+workflow preview uses compact staggered nodes so its forward data connections
+remain legible rather than crossing through a full-width mobile stack.
 The docs shell and landing page intentionally mirror Rivet's canonical themes:
 locally bundled Roboto/Roboto Mono typography, the Molten palette in dark mode,
 and the Bright palette in light mode. Keep this small semantic mirror in `src/css/custom.css`

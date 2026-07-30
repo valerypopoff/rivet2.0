@@ -5,18 +5,19 @@ export type HomepageCard = {
 };
 
 export type HomepageFeature = Pick<HomepageCard, 'title' | 'description'>;
+export type HomepageFoundation = Omit<HomepageCard, 'eyebrow'>;
 
 export const homepageContent = {
   meta: {
-    title: 'Visual AI workflows you can inspect, test, and ship',
+    title: 'Rivet 2 is a Visual AI workflows you can inspect, test, and ship',
     description:
       'Rivet 2 is a free, open-source visual IDE and runtime for building AI agents, knowledge workflows, prompt pipelines, and production AI applications.',
   },
   hero: {
     eyebrow: 'Free · Open-source · MIT licensed',
-    title: 'Build production-ready AI harnesses',
+    title: 'Rivet 2 — IDE for production ready AI-harnesses: agents, workflows and web apps',
     description:
-      'Rivet 2 is a node-based IDE for building production ready AI-powered workflows, agents, and web apps. Prototype, inspect and run the same project in Node, from the CLI, or inside your own application.',
+      'Prototype, inspect and run the same Rivet project in Node, from the CLI, or inside your own application.',
     primaryAction: {
       label: 'Download Rivet 2',
       to: '/download',
@@ -52,23 +53,27 @@ export const homepageContent = {
         kind: 'INPUT',
         title: 'Customer question',
         detail: 'string',
+        output: 'Question ready',
       },
       knowledge: {
         kind: 'KNOWLEDGE',
         title: 'Search product docs',
         detail: '6 grounded results',
         status: '184 ms',
+        output: '6 results ready',
       },
       agent: {
         kind: 'LLM CHAT',
         title: 'Support agent',
         detail: 'Tools · structured output',
         status: '1.2 s',
+        output: 'Answer ready',
       },
       output: {
         kind: 'OUTPUT',
         title: 'Helpful answer',
         detail: 'Markdown',
+        output: 'Response emitted',
       },
     },
     inspector: {
@@ -82,7 +87,6 @@ export const homepageContent = {
     },
     caption: ['Inputs', 'Model calls', 'Tool results', 'Outputs'],
   },
-  proofPoints: ['Visual editor', 'Live node-level debugging', 'Desktop and headless runtimes', 'Your models and data'],
   philosophy: {
     eyebrow: 'An AI workflow IDE, not a black box',
     title: 'Visual when it helps. Code when it matters.',
@@ -91,24 +95,21 @@ export const homepageContent = {
   },
   foundations: [
     {
-      eyebrow: 'Understand every run',
       title: 'Inspect the whole execution',
       description:
         'See inputs, outputs, tool calls, timing, errors, and intermediate values at the node where they happened. Debug the workflow instead of guessing what the model did.',
     },
     {
-      eyebrow: 'Build with real control flow',
       title: 'Compose systems, not prompt demos',
       description:
         'Use subgraphs, loops, parallel work, reusable LLM profiles, async side effects, stored values, and typed inputs to keep complex agents legible.',
     },
     {
-      eyebrow: 'Keep the escape hatch',
       title: 'Use code without abandoning the canvas',
       description:
         'Drop into JavaScript for custom transformations or integrations, then bring the result straight back into the visible workflow.',
     },
-  ] satisfies HomepageCard[],
+  ] satisfies HomepageFoundation[],
   useCases: {
     eyebrow: 'Built for practical AI work',
     title: 'One workspace for the systems around your model.',

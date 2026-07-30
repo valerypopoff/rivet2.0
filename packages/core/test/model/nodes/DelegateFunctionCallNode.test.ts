@@ -140,9 +140,9 @@ describe('DelegateFunctionCallNodeImpl', () => {
 
     assert.deepEqual(receivedArguments, { value: 123 });
     assert.deepEqual(Object.keys(result), [
-      'assistant-message',
       'tool-name',
       'tool-arguments',
+      'assistant-message',
       'output',
       'execution-time',
       'message',
@@ -375,7 +375,7 @@ describe('DelegateFunctionCallNodeImpl', () => {
 
     assert.deepEqual(
       outputs.map((output) => output.id),
-      ['assistant-message', 'tool-name', 'tool-arguments', 'output', 'execution-time', 'message'],
+      ['tool-name', 'tool-arguments', 'assistant-message', 'output', 'execution-time', 'message'],
     );
     assert.deepEqual(
       outputs.find((output) => output.id === 'tool-name'),

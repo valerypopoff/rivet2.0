@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import Head from '@docusaurus/Head';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import { homepageContent } from '../content/homepageContent';
 import styles from './index.module.css';
 
@@ -35,6 +36,7 @@ function WorkflowNode({
   kind,
   title,
   detail,
+  output,
   status,
 }: {
   className: string;
@@ -42,6 +44,7 @@ function WorkflowNode({
   kind: string;
   title: string;
   detail: string;
+  output: string;
   status?: string;
 }) {
   return (
@@ -53,6 +56,10 @@ function WorkflowNode({
       </div>
       <strong>{title}</strong>
       <span className={styles.nodeDetail}>{detail}</span>
+      <div className={styles.nodeOutput}>
+        <span>Output</span>
+        <b>{output}</b>
+      </div>
       <i className={styles.inputPort} data-workflow-port={`${id}-input`} />
       <i className={styles.outputPort} data-workflow-port={`${id}-output`} />
     </div>
@@ -74,6 +81,7 @@ function createConnectionPath(from: WorkflowPoint, to: WorkflowPoint) {
 
 function WorkflowPreview({ content }: { content: (typeof homepageContent)['workflowPreview'] }) {
   const { nodes } = content;
+  const logoUrl = useBaseUrl('/img/logo.svg');
   const canvasRef = useRef<HTMLDivElement>(null);
   const [connections, setConnections] = useState<WorkflowConnectionLayout | null>(null);
 
@@ -135,7 +143,10 @@ function WorkflowPreview({ content }: { content: (typeof homepageContent)['workf
           <i />
           <i />
         </span>
-        <span>{content.projectName}</span>
+        <span className={styles.previewProject}>
+          <img src={logoUrl} alt="" />
+          {content.projectName}
+        </span>
         <span className={styles.runState}>
           <i /> {content.runState}
         </span>
@@ -158,6 +169,7 @@ function WorkflowPreview({ content }: { content: (typeof homepageContent)['workf
           kind={nodes.prompt.kind}
           title={nodes.prompt.title}
           detail={nodes.prompt.detail}
+          output={nodes.prompt.output}
         />
         <WorkflowNode
           className={styles.knowledgeNode}
@@ -165,6 +177,7 @@ function WorkflowPreview({ content }: { content: (typeof homepageContent)['workf
           kind={nodes.knowledge.kind}
           title={nodes.knowledge.title}
           detail={nodes.knowledge.detail}
+          output={nodes.knowledge.output}
           status={nodes.knowledge.status}
         />
         <WorkflowNode
@@ -173,6 +186,7 @@ function WorkflowPreview({ content }: { content: (typeof homepageContent)['workf
           kind={nodes.agent.kind}
           title={nodes.agent.title}
           detail={nodes.agent.detail}
+          output={nodes.agent.output}
           status={nodes.agent.status}
         />
         <WorkflowNode
@@ -181,6 +195,7 @@ function WorkflowPreview({ content }: { content: (typeof homepageContent)['workf
           kind={nodes.output.kind}
           title={nodes.output.title}
           detail={nodes.output.detail}
+          output={nodes.output.output}
         />
         <div className={styles.inspectorCard}>
           <span>{content.inspector.label}</span>
@@ -250,10 +265,10 @@ export default function Home() {
                 <ActionLink to={content.hero.secondaryAction.to} variant="secondary">
                   {content.hero.secondaryAction.label}
                 </ActionLink>
+                <ActionLink to={content.hero.sourceAction.to} variant="text">
+                  {content.hero.sourceAction.label} <Arrow />
+                </ActionLink>
               </div>
-              <ActionLink to={content.hero.sourceAction.to} variant="text">
-                {content.hero.sourceAction.label} <Arrow />
-              </ActionLink>
             </div>
             <div className={styles.heroShowcase}>
               <div className={styles.heroFeatureList}>
@@ -266,14 +281,6 @@ export default function Home() {
               </div>
               <WorkflowPreview content={content.workflowPreview} />
             </div>
-          </div>
-          <div className={styles.proofBar}>
-            {content.proofPoints.map((point) => (
-              <span key={point}>
-                <i />
-                {point}
-              </span>
-            ))}
           </div>
         </section>
 
@@ -288,7 +295,6 @@ export default function Home() {
               {content.foundations.map((foundation, index) => (
                 <article className={styles.foundationCard} key={foundation.title}>
                   <span className={styles.cardNumber}>{String(index + 1).padStart(2, '0')}</span>
-                  <p>{foundation.eyebrow}</p>
                   <h3>{foundation.title}</h3>
                   <span>{foundation.description}</span>
                 </article>

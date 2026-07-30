@@ -113,7 +113,6 @@ export function buildDelegatedToolCallOutputs(
   const outputs: Outputs =
     records.length === 1
       ? {
-          ['assistant-message' as PortId]: preToolMessageOutput,
           ['tool-name' as PortId]: {
             type: 'string',
             value: records[0]!.name,
@@ -122,6 +121,7 @@ export function buildDelegatedToolCallOutputs(
             type: 'object',
             value: records[0]!.arguments,
           },
+          ['assistant-message' as PortId]: preToolMessageOutput,
           ['output' as PortId]: {
             type: 'string',
             value: records[0]!.output,
@@ -133,7 +133,6 @@ export function buildDelegatedToolCallOutputs(
           },
         }
       : {
-          ['assistant-message' as PortId]: preToolMessageOutput,
           ['tool-name' as PortId]: {
             type: 'string[]',
             value: records.map((record) => record.name),
@@ -142,6 +141,7 @@ export function buildDelegatedToolCallOutputs(
             type: 'object[]',
             value: records.map((record) => record.arguments),
           },
+          ['assistant-message' as PortId]: preToolMessageOutput,
           ['output' as PortId]: {
             type: 'string[]',
             value: records.map((record) => record.output),

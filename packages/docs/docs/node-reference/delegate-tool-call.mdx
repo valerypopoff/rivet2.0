@@ -33,9 +33,9 @@ safely represent multiple parallel split indexes.
 
 | Title                                       | Data Type                          | Description                                                                                                                             |
 | ------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Message (fires before tool call invocation) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It fires once for each tool-call invocation.         |
 | Tool Name                                   | `string` or `string[]`             | Name of the tool selected by the LLM. Connected auto-continuation emits one scalar name from each separate invocation.                  |
 | Tool Arguments                              | `object` or `object[]`             | Actual arguments selected by the LLM and passed to the handler. Connected auto-continuation emits one scalar object per invocation.     |
+| Message (fires before tool call invocation) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It fires once for each tool-call invocation.         |
 | Output                                      | `string` or `string[]`             | Output returned by the delegated handler. Connected auto-continuation emits a scalar value from each separate tool-call invocation.     |
 | Tool Execution Time (sec)                   | `number` or `number[]`             | Seconds spent running the handler graph or external function. Connected auto-continuation emits one scalar duration per invocation.     |
 | Tool Result Message                         | `chat-message`, `object`, or array | Handler output shaped as a function-result message. Connected auto-continuation emits one scalar message from each separate invocation. |
