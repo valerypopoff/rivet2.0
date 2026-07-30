@@ -31,14 +31,14 @@ safely represent multiple parallel split indexes.
 
 ## Outputs
 
-| Title                                       | Data Type                          | Description                                                                                                                              |
-| ------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Message (fires before tool call invocation) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It fires once for each tool-call invocation.          |
-| Tool Name                                   | `string` or `string[]`             | Name of the tool selected by the LLM. Connected auto-continuation emits one scalar name from each separate invocation.                   |
-| Tool Arguments                              | `object` or `object[]`             | Actual arguments selected by the LLM and passed to the handler. Connected auto-continuation emits one scalar object per invocation.      |
-| Output                                      | `string` or `string[]`             | Output returned by the delegated handler. Connected auto-continuation emits a scalar value from each separate tool-call invocation.      |
-| Tool Execution Time                         | `number` or `number[]`             | Milliseconds spent running the handler graph or external function. Connected auto-continuation emits one scalar duration per invocation. |
-| Tool Result Message                         | `chat-message`, `object`, or array | Handler output shaped as a function-result message. Connected auto-continuation emits one scalar message from each separate invocation.  |
+| Title                                       | Data Type                          | Description                                                                                                                             |
+| ------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Message (fires before tool call invocation) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It fires once for each tool-call invocation.         |
+| Tool Name                                   | `string` or `string[]`             | Name of the tool selected by the LLM. Connected auto-continuation emits one scalar name from each separate invocation.                  |
+| Tool Arguments                              | `object` or `object[]`             | Actual arguments selected by the LLM and passed to the handler. Connected auto-continuation emits one scalar object per invocation.     |
+| Output                                      | `string` or `string[]`             | Output returned by the delegated handler. Connected auto-continuation emits a scalar value from each separate tool-call invocation.     |
+| Tool Execution Time (sec)                   | `number` or `number[]`             | Seconds spent running the handler graph or external function. Connected auto-continuation emits one scalar duration per invocation.     |
+| Tool Result Message                         | `chat-message`, `object`, or array | Handler output shaped as a function-result message. Connected auto-continuation emits one scalar message from each separate invocation. |
 
 The rendered **Tool Result Message** identifies the human-readable tool name and,
 when it differs, the provider tool-call ID. The same label appears in the node's
@@ -51,8 +51,8 @@ Value** in expanded output views.
 passed to the handler graph or external function. JSON-string arguments from
 legacy tool-call shapes are parsed before this output is emitted.
 
-**Tool Execution Time** measures only the handler graph or external function,
-in milliseconds. It does not include the connected Delegate's pre-tool Message
+**Tool Execution Time (sec)** measures only the handler graph or external function,
+in seconds. It does not include the connected Delegate's pre-tool Message
 branch or downstream result branches. Older replayed tool-call records that did
 not preserve a duration leave this output unavailable.
 

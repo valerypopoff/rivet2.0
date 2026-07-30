@@ -134,7 +134,12 @@ with browser chat history and is formatted in the browser's locale and timezone,
 is stripped when Rivet converts conversation history to graph `chat-message[]` input.
 Custom browser renderers can use `getUiGraphChatMessagePresentations(messages)` from
 `@valerypopoff/rivet2-core/web-app-runtime` to render the local times and the
-transition-only date separators without modifying Chat state.
+transition-only date separators without modifying Chat state. The timestamp
+presentation for an assistant turn additionally exposes a browser-observed
+`elapsedSincePreviousUserMessage` string when the closest preceding user turn has
+a valid earlier timestamp. The React and hosted renderers append that string as a
+second line in the message-time tooltip; it measures end-to-end browser time, not
+only model inference time.
 `runRivetWebAppAction(...)` repeats the projection for direct host calls, so
 lifecycle hooks and `createProcessorOptions` receive only action-relevant state.
 Unrelated form values and prior output state remain local to the web app.

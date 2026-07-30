@@ -99,8 +99,8 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     outputs.push({
       id: 'execution-time' as PortId,
       dataType: ['number', 'number[]'] as const,
-      title: 'Tool Execution Time',
-      description: 'Milliseconds spent running the tool handler graph or external function.',
+      title: 'Tool Execution Time (sec)',
+      description: 'Seconds spent running the tool handler graph or external function.',
     });
 
     outputs.push({

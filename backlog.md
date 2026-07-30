@@ -1,6 +1,4 @@
 
-- В Delegate Tool Call показывать сколько времени ушло на ран чего угодно, что backs тулколл. Например на ран графа
-
 - При вызове туллколов трекать на что уходит время и сколько
 
 - Make the LLM call fail after specific time? It should help the llm profile fallback chain. Then, a fail should be of 2 kinds: soft (will retry the same LLM profile if retrying is on) and hard (fail the whole LLM profile even if retrying is on)

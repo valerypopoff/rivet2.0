@@ -43,7 +43,7 @@ The Delegate exposes normal text that the assistant produced alongside its tool
 calls as **Message (fires before tool call invocation)**. This port activates
 automatically once for every tool call, and Rivet starts those branch
 invocations alongside the corresponding handler.
-**Output**, **Tool Execution Time**, and **Tool Result Message** follow ordinary
+**Output**, **Tool Execution Time (sec)**, and **Tool Result Message** follow ordinary
 left-to-right execution after the Delegate finishes. Whitespace-only messages do not activate the
 pre-tool branch.
 

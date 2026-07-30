@@ -20,6 +20,8 @@ const UI_GRAPH_APP_STORAGE_PREFIX = 'rivet-web-app-storage:v1';
 
 export type UiGraphChatMessageTimestampPresentation = Readonly<{
   dateTime: string;
+  /** Present only for an assistant response with a valid preceding user-turn timestamp. */
+  elapsedSincePreviousUserMessage?: string;
   label: string;
 }>;
 
@@ -106,12 +108,18 @@ export function getUiGraphChatMessagePresentations(
       dateTime: timestamp.toISOString(),
       dateLabel: dateFormatter.format(timestamp),
       timeLabel: timeFormatter.format(timestamp),
+      timestamp,
     };
   });
   const hasMultipleDates = new Set(entries.flatMap((entry) => (entry ? [entry.dateKey] : []))).size > 1;
   let previousDateKey: string | undefined;
+  let previousUserTimestamp: Date | undefined;
 
-  return entries.map((entry) => {
+  return entries.map((entry, index) => {
+    const message = messages[index]!;
+    if (message.role === 'user') {
+      previousUserTimestamp = entry?.timestamp;
+    }
     if (!entry) return {};
 
     const dateSeparator =
@@ -119,12 +127,30 @@ export function getUiGraphChatMessagePresentations(
         ? { dateTime: entry.dateTime, label: entry.dateLabel }
         : undefined;
     previousDateKey = entry.dateKey;
+
+    const elapsedSincePreviousUserMessage =
+      message.role === 'assistant' && previousUserTimestamp
+        ? formatUiGraphChatElapsedSeconds(entry.timestamp.getTime() - previousUserTimestamp.getTime())
+        : undefined;
+
     return {
       ...(dateSeparator ? { dateSeparator } : {}),
-      timestamp: { dateTime: entry.dateTime, label: entry.timeLabel },
+      timestamp: {
+        dateTime: entry.dateTime,
+        ...(elapsedSincePreviousUserMessage ? { elapsedSincePreviousUserMessage } : {}),
+        label: entry.timeLabel,
+      },
     };
   });
 }
+
+/** Formats a browser-observed assistant-response delay without altering stored timestamps. */
+const formatUiGraphChatElapsedSeconds = (elapsedMilliseconds: number): string | undefined => {
+  if (!Number.isFinite(elapsedMilliseconds) || elapsedMilliseconds < 0) return undefined;
+
+  const seconds = Math.round((elapsedMilliseconds / 1_000) * 10) / 10;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)} seconds after previous user message`;
+};
 
 const parseUiGraphChatTimestamp = (value: unknown): Date | undefined => {
   if (typeof value !== 'string') return undefined;

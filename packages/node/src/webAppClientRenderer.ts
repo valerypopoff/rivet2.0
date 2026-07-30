@@ -629,7 +629,12 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
                         'data-rivet-chat-search-ignore': 'true',
                         dateTime: messagePresentation.timestamp.dateTime,
                         text: messagePresentation.timestamp.label,
-                        title: messagePresentation.timestamp.dateTime,
+                        title: [
+                          messagePresentation.timestamp.dateTime,
+                          messagePresentation.timestamp.elapsedSincePreviousUserMessage,
+                        ]
+                          .filter(Boolean)
+                          .join('\n'),
                       }),
                     ]
                   : []),

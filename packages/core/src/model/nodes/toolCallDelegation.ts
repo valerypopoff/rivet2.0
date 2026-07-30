@@ -91,16 +91,19 @@ export function buildDelegatedToolCallOutputs(
           value: preToolMessage,
         };
 
-  const executionTimes = records.map(getExecutionTimeMs);
-  const executionTimeOutput = executionTimes.every((executionTimeMs) => executionTimeMs != null)
+  const executionTimesSeconds = records.map((record) => {
+    const executionTimeMs = getExecutionTimeMs(record);
+    return executionTimeMs == null ? undefined : executionTimeMs / 1_000;
+  });
+  const executionTimeOutput = executionTimesSeconds.every((executionTimeSeconds) => executionTimeSeconds != null)
     ? records.length === 1
       ? {
           type: 'number' as const,
-          value: executionTimes[0]!,
+          value: executionTimesSeconds[0]!,
         }
       : {
           type: 'number[]' as const,
-          value: executionTimes,
+          value: executionTimesSeconds,
         }
     : {
         type: 'control-flow-excluded' as const,

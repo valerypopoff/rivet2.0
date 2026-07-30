@@ -1026,7 +1026,9 @@ const RivetWebAppChatMessage: FC<{
           className="rivet-web-app-chat-message-time"
           data-rivet-chat-search-ignore="true"
           dateTime={presentation.timestamp.dateTime}
-          title={presentation.timestamp.dateTime}
+          title={[presentation.timestamp.dateTime, presentation.timestamp.elapsedSincePreviousUserMessage]
+            .filter(Boolean)
+            .join('\n')}
         >
           {presentation.timestamp.label}
         </time>

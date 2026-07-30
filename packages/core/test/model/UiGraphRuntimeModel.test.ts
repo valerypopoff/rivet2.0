@@ -330,6 +330,11 @@ describe('UiGraphRuntimeModel', () => {
 
     assert.deepEqual(presentations[0]?.timestamp, { dateTime: '2026-07-20T23:45:00.000Z', label: '23:45' });
     assert.equal(presentations[0]?.dateSeparator, undefined);
+    assert.deepEqual(presentations[1]?.timestamp, {
+      dateTime: '2026-07-20T23:46:00.000Z',
+      elapsedSincePreviousUserMessage: '60 seconds after previous user message',
+      label: '23:46',
+    });
     assert.equal(presentations[1]?.dateSeparator, undefined);
     assert.deepEqual(presentations[2]?.dateSeparator, {
       dateTime: '2026-07-21T00:05:00.000Z',
@@ -347,6 +352,25 @@ describe('UiGraphRuntimeModel', () => {
     );
     assert.equal(oneDatePresentations[0]?.dateSeparator, undefined);
     assert.equal(oneDatePresentations[1]?.dateSeparator, undefined);
+    assert.equal(
+      oneDatePresentations[1]?.timestamp?.elapsedSincePreviousUserMessage,
+      '36000 seconds after previous user message',
+    );
+
+    const malformedUserTimestampPresentations = getUiGraphChatMessagePresentations(
+      [
+        { role: 'user', content: 'First', timestamp: '2026-07-22T08:00:00.000Z' },
+        { role: 'assistant', content: 'First response', timestamp: '2026-07-22T08:00:02.000Z' },
+        { role: 'user', content: 'Legacy user', timestamp: 'not-a-date' },
+        { role: 'assistant', content: 'Second response', timestamp: '2026-07-22T08:00:04.000Z' },
+      ],
+      { locales: 'en-GB', timeZone: 'UTC' },
+    );
+    assert.equal(
+      malformedUserTimestampPresentations[3]?.timestamp?.elapsedSincePreviousUserMessage,
+      undefined,
+      'a malformed closest user timestamp must not reuse an older user turn',
+    );
   });
 
   it('stamps a Chat response when the interaction controller receives its action result', async () => {

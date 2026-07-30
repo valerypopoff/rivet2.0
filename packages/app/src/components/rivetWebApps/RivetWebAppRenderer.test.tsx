@@ -498,6 +498,9 @@ test('Chat renders browser-local timestamps and date separators only across mult
       assert.match(messageTime.textContent ?? '', /^\d{2}:\d{2}$/);
       assert.match(messageTime.dateTime, /^2026-07-2[0-2]T12:00:00\.000Z$/);
     }
+    assert.equal(messageTimes[0]?.title, '2026-07-20T12:00:00.000Z');
+    assert.equal(messageTimes[1]?.title, '2026-07-21T12:00:00.000Z\n86400 seconds after previous user message');
+    assert.equal(messageTimes[2]?.title, '2026-07-22T12:00:00.000Z');
     assert.equal(rootElement.querySelectorAll('.rivet-web-app-chat-date-separator').length, 2);
   } finally {
     await act(async () => root.unmount());

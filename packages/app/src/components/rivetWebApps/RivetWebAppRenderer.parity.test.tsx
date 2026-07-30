@@ -470,6 +470,10 @@ test('React and hosted Chat renderers keep timestamp and date-separator presenta
     for (const root of [reactRootElement, hostedDom.window.document]) {
       assert.equal(root.querySelectorAll('.rivet-web-app-chat-message-time').length, 3);
       assert.equal(root.querySelectorAll('.rivet-web-app-chat-date-separator').length, 2);
+      assert.equal(
+        root.querySelectorAll<HTMLTimeElement>('.rivet-web-app-chat-message-time')[1]?.title,
+        '2026-07-21T12:00:00.000Z\n86400 seconds after previous user message',
+      );
     }
     assert.deepEqual(
       readChatTimestampPresentation(reactRootElement),
@@ -766,12 +770,17 @@ function readChatState(root: ParentNode): { disabled: boolean; isStopControl: bo
   };
 }
 
-function readChatTimestampPresentation(root: ParentNode): { dateSeparators: string[]; times: string[] } {
+function readChatTimestampPresentation(root: ParentNode): {
+  dateSeparators: string[];
+  times: string[];
+  titles: string[];
+} {
   return {
     dateSeparators: [...root.querySelectorAll('.rivet-web-app-chat-date-separator')].map(
       (separator) => separator.textContent ?? '',
     ),
     times: [...root.querySelectorAll('.rivet-web-app-chat-message-time')].map((time) => time.textContent ?? ''),
+    titles: [...root.querySelectorAll<HTMLTimeElement>('.rivet-web-app-chat-message-time')].map((time) => time.title),
   };
 }
 

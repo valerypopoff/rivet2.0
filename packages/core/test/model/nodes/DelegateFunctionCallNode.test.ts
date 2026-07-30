@@ -409,8 +409,8 @@ describe('DelegateFunctionCallNodeImpl', () => {
       {
         id: 'execution-time',
         dataType: ['number', 'number[]'],
-        title: 'Tool Execution Time',
-        description: 'Milliseconds spent running the tool handler graph or external function.',
+        title: 'Tool Execution Time (sec)',
+        description: 'Seconds spent running the tool handler graph or external function.',
       },
     );
     assert.equal(
@@ -475,7 +475,7 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.deepEqual(result.output?.value, ['foo output', 'bar output']);
     assert.deepEqual(result['execution-time' as PortId], {
       type: 'number[]',
-      value: [12.5, 34.5],
+      value: [0.0125, 0.0345],
     });
     assert.deepEqual(result['tool-name' as PortId], {
       type: 'string[]',
