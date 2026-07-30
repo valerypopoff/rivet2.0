@@ -154,7 +154,7 @@ Response format supports Default, Text, JSON object, and JSON schema. JSON objec
 
 ### Tools
 
-Tool use enables the Tools input and optional tool-choice controls. Auto-continue mode lets Rivet execute tool calls, send tool results back to the model, and repeat until a normal answer is produced or the max tool-round limit is reached.
+Tool use enables the Tools input and optional tool-choice controls. Auto-continue mode lets Rivet execute tool calls, send tool results back to the model, and repeat until a normal answer is produced or the maximum tool-round limit is reached. A round is one model response containing one or more eligible tool calls, so a single round can contain multiple parallel calls. After Rivet executes the last permitted round, it makes one final provider request so the model can turn those results into an answer. If that request returns more tool calls, Rivet leaves them unresolved on the normal **Tool Calls** output and does not auto-continue again.
 
 Each [Tool](./gpt-function.mdx) can choose **Result handling**. The default,
 **Continue with LLM**, keeps the normal result-and-follow-up loop. **Return

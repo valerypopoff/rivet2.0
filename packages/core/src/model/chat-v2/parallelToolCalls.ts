@@ -1,7 +1,7 @@
 import type { ChatV2Provider, ChatV2ProviderOptions } from './chatV2Types.js';
 
 export const LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE =
-  'Supported by OpenAI, Anthropic, and compatible Custom providers. Custom providers receive parallel_tool_calls only when enabled; otherwise their default applies unless Extra provider options supplies the field.';
+  'Allows the model to request multiple tool calls in one round.';
 
 export function supportsLLMChatV2ParallelToolCalls(provider: ChatV2Provider): boolean {
   return provider === 'openai' || provider === 'anthropic' || provider === 'custom';

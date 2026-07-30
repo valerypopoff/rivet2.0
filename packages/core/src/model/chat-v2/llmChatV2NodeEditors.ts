@@ -449,8 +449,9 @@ function getToolEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'number',
-      label: 'Max tool rounds',
+      label: 'Maximum tool rounds',
       dataKey: 'maxToolRounds',
+      helperMessage: 'Each round may contain multiple parallel tool calls if not disallowed.',
       min: 1,
       step: 1,
       hideIf: (data) => !data.useToolCalling || !data.autoContinueToolCalls,

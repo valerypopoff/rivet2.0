@@ -709,7 +709,7 @@ describe('LLMChatV2NodeImpl', () => {
     );
     assert.equal(
       toolsGroup.editors.find((editor: any) => editor.dataKey === 'parallelToolCalls')?.helperMessage,
-      'Supported by OpenAI, Anthropic, and compatible Custom providers. Custom providers receive parallel_tool_calls only when enabled; otherwise their default applies unless Extra provider options supplies the field.',
+      'Allows the model to request multiple tool calls in one round.',
     );
     assert.equal(
       toolsGroup.editors
@@ -764,6 +764,14 @@ describe('LLMChatV2NodeImpl', () => {
     assert.ok(toolsGroup.editors.some((editor: any) => editor.dataKey === 'toolChoiceFunction'));
     assert.ok(toolsGroup.editors.some((editor: any) => editor.dataKey === 'autoContinueToolCalls'));
     assert.ok(toolsGroup.editors.some((editor: any) => editor.dataKey === 'maxToolRounds'));
+    assert.equal(
+      toolsGroup.editors.find((editor: any) => editor.dataKey === 'maxToolRounds')?.label,
+      'Maximum tool rounds',
+    );
+    assert.equal(
+      toolsGroup.editors.find((editor: any) => editor.dataKey === 'maxToolRounds')?.helperMessage,
+      'Each round may contain multiple parallel tool calls if not disallowed.',
+    );
     assert.ok(!outputGroup.editors.some((editor: any) => editor.dataKey === 'useToolCalling'));
     assert.equal(
       outputGroup.editors.find((editor: any) => editor.dataKey === 'outputUsage')?.label,

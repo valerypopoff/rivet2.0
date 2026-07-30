@@ -597,6 +597,46 @@ describe('runChatV2PipelineWithToolContinuation', () => {
     assert.deepEqual(result.commonOutputs.usage, { type: 'object', value: result.usage });
   });
 
+  it('allows 21 calls across ten batches but does not auto-continue an eleventh batch', async () => {
+    const firstTenBatches = Array.from({ length: 10 }, (_, roundIndex) =>
+      Array.from({ length: roundIndex === 0 ? 3 : 2 }, (_, callIndex) =>
+        makeToolCall(`call_${roundIndex + 1}_${callIndex + 1}`, 'foo', {
+          round: roundIndex + 1,
+          call: callIndex + 1,
+        }),
+      ),
+    );
+    const delegatedBatches: string[][] = [];
+    let providerCalls = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        maxToolRounds: 10,
+        runPipeline: async () => {
+          providerCalls++;
+          const batch = firstTenBatches[providerCalls - 1] ?? [makeToolCall('call_11_1', 'foo')];
+          return makePipelineResult('', batch);
+        },
+        delegateToolCallRound: async (toolCalls) => {
+          delegatedBatches.push(toolCalls.map((toolCall) => toolCall.id));
+          return toolCalls.map((toolCall) => makeDelegatedToolResultMessage(toolCall, `${toolCall.id} result`));
+        },
+      }),
+    );
+
+    assert.equal(providerCalls, 11);
+    assert.equal(delegatedBatches.length, 10);
+    assert.deepEqual(
+      delegatedBatches,
+      firstTenBatches.map((batch) => batch.map((toolCall) => toolCall.id)),
+    );
+    assert.equal(delegatedBatches.flat().length, 21);
+    assert.deepEqual(
+      result.functionCalls.map((toolCall) => toolCall.id),
+      ['call_11_1'],
+    );
+  });
+
   it('does not auto-continue unknown tool calls', async () => {
     let delegated = false;
 

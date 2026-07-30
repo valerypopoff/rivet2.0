@@ -305,7 +305,12 @@ paths and should not be used as the primary target for new provider refactors.
   path can process or report them instead of silently swallowing them. The
   existing raw-input contract still applies there: a single-run Delegate accepts
   one raw call, while a raw multi-call array requires split-run or an explicit
-  selection step.
+  selection step. A tool round is one provider response containing one or more
+  eligible Rivet calls, so the limit does not cap individual calls. After the
+  final permitted round completes, the continuation loop makes one final
+  provider request for the model's answer; any calls in that response are the
+  unresolved raw calls described above and must not start another continuation
+  round.
 - A connected continuation Delegate cannot use frozen or preloaded output
   replay. The runtime rejects either boundary before tool side effects begin;
   silently bypassing it would make the visible editor/run-from boundary lie,
