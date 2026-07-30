@@ -286,8 +286,10 @@ paths and should not be used as the primary target for new provider refactors.
 - Delegate Tool Call exposes **Tool Name** and **Tool Arguments** for each
   completed invocation. Tool Arguments is the normalized object actually passed
   to the handler, including parsed JSON-string arguments from legacy call
-  shapes. The generic output order matches the node ports: Message, Tool Name,
-  Tool Arguments, Output, Tool Result Message.
+  shapes. It also exposes **Tool Execution Time**, the milliseconds spent in the
+  handler graph or external function rather than its pre-tool or downstream
+  branches. The generic output order matches the node ports: Message, Tool Name,
+  Tool Arguments, Output, Tool Execution Time, Tool Result Message.
 - Early and final Delegate branches may converge within the same tool round:
   outputs completed by the early pre-tool message branch are available to the
   final tool-result branch for that round. Do not treat prior-round branch

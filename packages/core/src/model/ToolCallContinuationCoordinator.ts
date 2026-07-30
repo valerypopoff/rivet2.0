@@ -272,6 +272,7 @@ export class ToolCallContinuationCoordinator {
                   'tool-name' as PortId,
                   'tool-arguments' as PortId,
                   'output' as PortId,
+                  'execution-time' as PortId,
                   'message' as PortId,
                 ]),
                 availableNodeOutputs: preToolBranch.nodeOutputs,

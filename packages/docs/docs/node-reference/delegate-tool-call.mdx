@@ -31,13 +31,14 @@ safely represent multiple parallel split indexes.
 
 ## Outputs
 
-| Title                                       | Data Type                          | Description                                                                                                                             |
-| ------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Message (fires before tool call invocation) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It fires once for each tool-call invocation.         |
-| Tool Name                                   | `string` or `string[]`             | Name of the tool selected by the LLM. Connected auto-continuation emits one scalar name from each separate invocation.                  |
-| Tool Arguments                              | `object` or `object[]`             | Actual arguments selected by the LLM and passed to the handler. Connected auto-continuation emits one scalar object per invocation.     |
-| Output                                      | `string` or `string[]`             | Output returned by the delegated handler. Connected auto-continuation emits a scalar value from each separate tool-call invocation.     |
-| Tool Result Message                         | `chat-message`, `object`, or array | Handler output shaped as a function-result message. Connected auto-continuation emits one scalar message from each separate invocation. |
+| Title                                       | Data Type                          | Description                                                                                                                              |
+| ------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Message (fires before tool call invocation) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It fires once for each tool-call invocation.          |
+| Tool Name                                   | `string` or `string[]`             | Name of the tool selected by the LLM. Connected auto-continuation emits one scalar name from each separate invocation.                   |
+| Tool Arguments                              | `object` or `object[]`             | Actual arguments selected by the LLM and passed to the handler. Connected auto-continuation emits one scalar object per invocation.      |
+| Output                                      | `string` or `string[]`             | Output returned by the delegated handler. Connected auto-continuation emits a scalar value from each separate tool-call invocation.      |
+| Tool Execution Time                         | `number` or `number[]`             | Milliseconds spent running the handler graph or external function. Connected auto-continuation emits one scalar duration per invocation. |
+| Tool Result Message                         | `chat-message`, `object`, or array | Handler output shaped as a function-result message. Connected auto-continuation emits one scalar message from each separate invocation.  |
 
 The rendered **Tool Result Message** identifies the human-readable tool name and,
 when it differs, the provider tool-call ID. The same label appears in the node's
@@ -49,6 +50,11 @@ Value** in expanded output views.
 **Tool Arguments** contains the actual argument object returned by the LLM and
 passed to the handler graph or external function. JSON-string arguments from
 legacy tool-call shapes are parsed before this output is emitted.
+
+**Tool Execution Time** measures only the handler graph or external function,
+in milliseconds. It does not include the connected Delegate's pre-tool Message
+branch or downstream result branches. Older replayed tool-call records that did
+not preserve a duration leave this output unavailable.
 
 ## Settings
 
@@ -64,8 +70,8 @@ When this node is the connected auto-continuation Delegate, **Message (fires
 before tool call invocation)** activates automatically for nonblank text.
 When one model response contains multiple tool calls, Rivet creates one real,
 parallel Delegate invocation per call. Every invocation gets its own run page,
-scalar input and outputs, and Message/Tool Name/Tool Arguments/Output/Tool Result
-Message downstream branches. Empty or whitespace-only text does not activate
+scalar input and outputs, and Message/Tool Name/Tool Arguments/Output/Tool
+Execution Time/Tool Result Message downstream branches. Empty or whitespace-only text does not activate
 the pre-tool branch.
 
 Costs reported by live handler graphs or external functions appear on their

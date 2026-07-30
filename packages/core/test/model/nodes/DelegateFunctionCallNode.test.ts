@@ -60,13 +60,14 @@ function createSubgraphContext(
   } as unknown as InternalProcessContext;
 }
 
-function delegatedToolCallRecord(name: string, output: string, id = `call_${name}`) {
+function delegatedToolCallRecord(name: string, output: string, id = `call_${name}`, executionTimeMs?: number) {
   return {
     delegatedToolCall: true,
     name,
     arguments: {},
     id,
     output,
+    ...(executionTimeMs == null ? {} : { executionTimeMs }),
     message: {
       type: 'function',
       message: output,
@@ -138,10 +139,19 @@ describe('DelegateFunctionCallNodeImpl', () => {
     );
 
     assert.deepEqual(receivedArguments, { value: 123 });
-    assert.deepEqual(Object.keys(result), ['assistant-message', 'tool-name', 'tool-arguments', 'output', 'message']);
+    assert.deepEqual(Object.keys(result), [
+      'assistant-message',
+      'tool-name',
+      'tool-arguments',
+      'output',
+      'execution-time',
+      'message',
+    ]);
     assert.deepEqual(result['tool-name' as PortId], { type: 'string', value: 'foo' });
     assert.deepEqual(result['tool-arguments' as PortId], { type: 'object', value: { value: 123 } });
     assert.equal(result.output?.value, 'ok');
+    assert.equal(result['execution-time' as PortId]?.type, 'number');
+    assert.ok((result['execution-time' as PortId]?.value as number) >= 0);
     assert.deepEqual(result.message?.value, {
       type: 'function',
       message: 'ok',
@@ -365,7 +375,7 @@ describe('DelegateFunctionCallNodeImpl', () => {
 
     assert.deepEqual(
       outputs.map((output) => output.id),
-      ['assistant-message', 'tool-name', 'tool-arguments', 'output', 'message'],
+      ['assistant-message', 'tool-name', 'tool-arguments', 'output', 'execution-time', 'message'],
     );
     assert.deepEqual(
       outputs.find((output) => output.id === 'tool-name'),
@@ -394,6 +404,15 @@ describe('DelegateFunctionCallNodeImpl', () => {
       description:
         'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
     });
+    assert.deepEqual(
+      outputs.find((output) => output.id === 'execution-time'),
+      {
+        id: 'execution-time',
+        dataType: ['number', 'number[]'],
+        title: 'Tool Execution Time',
+        description: 'Milliseconds spent running the tool handler graph or external function.',
+      },
+    );
     assert.equal(
       node.getOutputDefinitions().some((output) => output.id === ('cost' as PortId)),
       false,
@@ -422,6 +441,10 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.equal(result.output?.value, 'stored output');
     assert.deepEqual(result['tool-name' as PortId], { type: 'string', value: 'foo' });
     assert.deepEqual(result['tool-arguments' as PortId], { type: 'object', value: {} });
+    assert.deepEqual(result['execution-time' as PortId], {
+      type: 'control-flow-excluded',
+      value: undefined,
+    });
     assert.deepEqual(result.message?.value, delegatedToolCallRecord('foo', 'stored output').message);
     assert.equal(result['cost' as PortId], undefined);
   });
@@ -429,8 +452,8 @@ describe('DelegateFunctionCallNodeImpl', () => {
   it('surfaces multiple already-delegated tool call records as arrays without running them again', async () => {
     const node = createNode();
     let externalCallCount = 0;
-    const fooRecord = delegatedToolCallRecord('foo', 'foo output', 'call_foo');
-    const barRecord = delegatedToolCallRecord('bar', 'bar output', 'call_bar');
+    const fooRecord = delegatedToolCallRecord('foo', 'foo output', 'call_foo', 12.5);
+    const barRecord = delegatedToolCallRecord('bar', 'bar output', 'call_bar', 34.5);
     fooRecord.arguments = { value: 'foo input' };
     barRecord.arguments = { value: 'bar input' };
 
@@ -450,6 +473,10 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.equal(externalCallCount, 0);
     assert.equal(result.output?.type, 'string[]');
     assert.deepEqual(result.output?.value, ['foo output', 'bar output']);
+    assert.deepEqual(result['execution-time' as PortId], {
+      type: 'number[]',
+      value: [12.5, 34.5],
+    });
     assert.deepEqual(result['tool-name' as PortId], {
       type: 'string[]',
       value: ['foo', 'bar'],

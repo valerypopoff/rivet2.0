@@ -72,7 +72,7 @@ describe('ToolCallContinuationCoordinator', () => {
       result.results.map((item) => item.record.name),
       ['lookup'],
     );
-    assert.deepEqual(activatedOutputPortSets, [['tool-name', 'tool-arguments', 'output', 'message']]);
+    assert.deepEqual(activatedOutputPortSets, [['tool-name', 'tool-arguments', 'output', 'execution-time', 'message']]);
   });
 });
 

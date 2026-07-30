@@ -29,6 +29,8 @@ export type DelegatedToolCallRecord = {
   arguments: Record<string, unknown>;
   id?: string;
   output: string;
+  /** Milliseconds spent running the handler graph or external function. Absent on legacy records. */
+  executionTimeMs?: number;
   message: ChatMessage;
 };
 
@@ -89,6 +91,22 @@ export function buildDelegatedToolCallOutputs(
           value: preToolMessage,
         };
 
+  const executionTimes = records.map(getExecutionTimeMs);
+  const executionTimeOutput = executionTimes.every((executionTimeMs) => executionTimeMs != null)
+    ? records.length === 1
+      ? {
+          type: 'number' as const,
+          value: executionTimes[0]!,
+        }
+      : {
+          type: 'number[]' as const,
+          value: executionTimes,
+        }
+    : {
+        type: 'control-flow-excluded' as const,
+        value: undefined,
+      };
+
   const outputs: Outputs =
     records.length === 1
       ? {
@@ -105,6 +123,7 @@ export function buildDelegatedToolCallOutputs(
             type: 'string',
             value: records[0]!.output,
           },
+          ['execution-time' as PortId]: executionTimeOutput,
           ['message' as PortId]: {
             type: 'chat-message',
             value: records[0]!.message,
@@ -124,6 +143,7 @@ export function buildDelegatedToolCallOutputs(
             type: 'string[]',
             value: records.map((record) => record.output),
           },
+          ['execution-time' as PortId]: executionTimeOutput,
           ['message' as PortId]: {
             type: 'chat-message[]',
             value: records.map((record) => record.message),
@@ -202,6 +222,7 @@ function buildToolResultMessage(
 function buildDelegatedToolCallRecord(
   functionCall: ParsedAssistantChatMessageFunctionCall,
   outputString: string,
+  executionTimeMs?: number,
 ): DelegatedToolCallRecord {
   return {
     delegatedToolCall: true,
@@ -209,6 +230,7 @@ function buildDelegatedToolCallRecord(
     arguments: functionCall.arguments,
     id: functionCall.id,
     output: outputString,
+    ...(executionTimeMs == null ? {} : { executionTimeMs }),
     message: buildToolResultMessage(functionCall, outputString),
   };
 }
@@ -243,25 +265,28 @@ export async function delegateToolCall(
     if (config.autoDelegate && config.fallBackToExternalCall) {
       const externalFunction = context.externalFunctions[functionCall.name];
       if (externalFunction) {
+        const executionStart = getCurrentTimeMs();
         try {
           const externalContext = omit(context, ['setGlobal']);
           const result = await externalFunction(externalContext, functionCall.arguments ?? {});
           const outputString = stringifyToolOutput(result);
+          const executionTimeMs = getCurrentTimeMs() - executionStart;
 
           return {
             outputString,
             message: buildToolResultMessage(functionCall, outputString),
-            record: buildDelegatedToolCallRecord(functionCall, outputString),
+            record: buildDelegatedToolCallRecord(functionCall, outputString, executionTimeMs),
             cost: result.cost,
           };
         } catch (error) {
           if (config.passthroughErrors) {
             const outputString = `Error: ${getError(error).message}`;
+            const executionTimeMs = getCurrentTimeMs() - executionStart;
 
             return {
               outputString,
               message: buildToolResultMessage(functionCall, outputString),
-              record: buildDelegatedToolCallRecord(functionCall, outputString),
+              record: buildDelegatedToolCallRecord(functionCall, outputString, executionTimeMs),
             };
           }
 
@@ -301,14 +326,27 @@ export async function delegateToolCall(
   }
 
   const subprocessor = context.createSubProcessor(handler.value, { signal: context.signal });
+  const executionStart = getCurrentTimeMs();
   const outputs = await subprocessor.processGraph(context, subgraphInputs, context.contextValues);
+  const executionTimeMs = getCurrentTimeMs() - executionStart;
   const outputString = coerceTypeOptional(outputs['output' as PortId], 'string') ?? '';
   const cost = coerceTypeOptional(outputs['cost' as PortId], 'number');
 
   return {
     outputString,
     message: buildToolResultMessage(functionCall, outputString),
-    record: buildDelegatedToolCallRecord(functionCall, outputString),
+    record: buildDelegatedToolCallRecord(functionCall, outputString, executionTimeMs),
     cost,
   };
+}
+
+function getCurrentTimeMs(): number {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function getExecutionTimeMs(record: DelegatedToolCallRecord): number | undefined {
+  const { executionTimeMs } = record;
+  return typeof executionTimeMs === 'number' && Number.isFinite(executionTimeMs) && executionTimeMs >= 0
+    ? executionTimeMs
+    : undefined;
 }
