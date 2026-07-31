@@ -20,6 +20,8 @@ import {
   shouldRunMenuCommandForProjectSelection,
 } from '../utils/projectWorkspaceSelection.js';
 import type { MenuIds } from '../utils/menuCommandIds.js';
+import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
+import { shouldRunFileMenuCommand } from '../utils/fileMenuConfiguration.js';
 
 export type { MenuIds };
 
@@ -83,6 +85,7 @@ export function useMenuCommands(
   } = {},
 ) {
   const { onRunGraph } = options;
+  const hostUiConfig = useRivetAppHostUiConfig();
   const ioProvider = useIOProvider();
   const [graphData] = useAtom(graphState);
   const openOverlay = useAtomValue(overlayOpenState);
@@ -107,6 +110,10 @@ export function useMenuCommands(
 
   useEffect(() => {
     const handler: MenuCommandHandler = ({ payload }) => {
+      if (!shouldRunFileMenuCommand(payload, hostUiConfig.fileMenu)) {
+        return;
+      }
+
       if (!shouldRunMenuCommandForProjectSelection({ command: payload, projectWorkspaceSelected })) {
         return;
       }
@@ -179,6 +186,7 @@ export function useMenuCommands(
     setNewProjectModalOpen,
     setHelpModalOpen,
     projectWorkspaceSelected,
+    hostUiConfig.fileMenu,
   ]);
 
   useEffect(() => {

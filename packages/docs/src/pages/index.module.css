@@ -114,7 +114,7 @@
 .heroEyebrow,
 .eyebrow {
   color: var(--landing-green);
-  font-size: 1.0rem;
+  font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.13em;
   line-height: 1.4;
@@ -281,6 +281,184 @@
   box-shadow:
     0 18px 44px rgba(0, 0, 0, 0.24),
     0 0 0 1px rgba(255, 255, 255, 0.025) inset;
+}
+
+.liveDemo {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--landing-canvas-line);
+  border-radius: 1.25rem;
+  corner-shape: squircle;
+  color: #f7f4ef;
+  background: var(--landing-canvas);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.24),
+    0 0 0 1px rgba(255, 255, 255, 0.025) inset;
+}
+
+.liveDemoToolbar {
+  display: flex;
+  min-height: 3.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--landing-canvas-line);
+  color: rgba(255, 255, 255, 0.45);
+  background: var(--landing-canvas-panel);
+  font-size: 0.72rem;
+}
+
+.liveDemoToolbar > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.liveDemoState {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: rgba(255, 255, 255, 0.82);
+  font-weight: 700;
+}
+
+.liveDemoState i {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--landing-green);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--landing-green) 68%, transparent);
+}
+
+.liveDemoActions {
+  justify-content: flex-end;
+}
+
+.liveDemoActions button,
+.liveDemoActions a {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.45rem;
+  color: rgba(255, 255, 255, 0.76);
+  background: rgba(255, 255, 255, 0.04);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.liveDemoActions button:hover,
+.liveDemoActions a:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  text-decoration: none;
+}
+
+.liveDemoViewport {
+  position: relative;
+  min-height: clamp(450px, 43vw, 570px);
+  background: var(--landing-canvas);
+}
+
+.liveDemoIframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--landing-canvas);
+  pointer-events: none;
+}
+
+.liveDemoActive .liveDemoIframe {
+  pointer-events: auto;
+}
+
+.liveDemoActivation {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  border: 0;
+  color: #fff;
+  background: linear-gradient(rgba(14, 18, 25, 0.2), rgba(14, 18, 25, 0.52));
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+.liveDemoActivation:disabled {
+  cursor: progress;
+}
+
+.liveDemoActivation strong {
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0.6rem;
+  background: rgba(19, 24, 33, 0.88);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  font-size: 0.92rem;
+}
+
+.liveDemoActivation span {
+  max-width: 31rem;
+  padding: 0.4rem 0.7rem;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(19, 24, 33, 0.76);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.liveDemoEscapeHint {
+  position: absolute;
+  z-index: 3;
+  top: 0.75rem;
+  right: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.45rem;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(14, 18, 25, 0.86);
+  font-size: 0.68rem;
+  pointer-events: none;
+}
+
+.mobileDemo {
+  display: grid;
+  gap: 1rem;
+}
+
+.mobileDemoAction {
+  display: inline-flex;
+  min-height: 2.8rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.65rem 1rem;
+  border: 1px solid var(--landing-line-strong);
+  border-radius: 0.6rem;
+  color: var(--landing-accent-text);
+  background: var(--landing-surface);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.mobileDemoAction:hover {
+  color: var(--landing-accent-dark);
+  text-decoration: none;
 }
 
 .previewTopbar {
@@ -944,6 +1122,7 @@
   }
 
   .workflowPreview,
+  .liveDemo,
   .workflowNode,
   .runtimeCard {
     border-radius: 0.65rem;
@@ -983,6 +1162,11 @@
 
   .workflowPreview {
     width: min(720px, 100%);
+    margin: 0 auto;
+  }
+
+  .liveDemo {
+    width: min(900px, 100%);
     margin: 0 auto;
   }
 
@@ -1058,6 +1242,10 @@
   .primaryAction,
   .secondaryAction {
     width: 100%;
+  }
+
+  .liveDemo {
+    display: none;
   }
 
   .canvas {

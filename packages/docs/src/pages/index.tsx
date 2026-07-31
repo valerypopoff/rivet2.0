@@ -1,4 +1,6 @@
-import React, { useEffect, useRef, useState, type ReactNode } from 'react';
+import React, { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import BrowserOnly from '@docusaurus/BrowserOnly';
+import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Head from '@docusaurus/Head';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
@@ -218,6 +220,153 @@ function WorkflowPreview({ content }: { content: (typeof homepageContent)['workf
   );
 }
 
+type RivetDemoMessage =
+  | { type: 'rivet-demo:error'; message?: unknown }
+  | { type: 'rivet-demo:ready' }
+  | { type: 'rivet-demo:release' };
+
+type RivetDemoRequest = { type: 'rivet-demo:status-request' };
+
+function isRivetDemoMessage(value: unknown): value is RivetDemoMessage {
+  if (typeof value !== 'object' || value == null || !('type' in value)) {
+    return false;
+  }
+
+  const type = (value as { type?: unknown }).type;
+  return type === 'rivet-demo:error' || type === 'rivet-demo:ready' || type === 'rivet-demo:release';
+}
+
+function LiveRivetDemo({ url }: { url: string }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [active, setActive] = useState(false);
+  const [error, setError] = useState<string>();
+  const [instance, setInstance] = useState(0);
+  const [ready, setReady] = useState(false);
+
+  const requestDemoStatus = useCallback(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: 'rivet-demo:status-request' } satisfies RivetDemoRequest,
+      '*',
+    );
+  }, []);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow || !isRivetDemoMessage(event.data)) {
+        return;
+      }
+
+      if (event.data.type === 'rivet-demo:ready') {
+        setReady(true);
+        setError(undefined);
+      } else if (event.data.type === 'rivet-demo:release') {
+        setActive(false);
+        window.focus();
+      } else {
+        setActive(false);
+        setError(typeof event.data.message === 'string' ? event.data.message : 'The embedded demo could not start.');
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    requestDemoStatus();
+    return () => window.removeEventListener('message', handleMessage);
+  }, [requestDemoStatus]);
+
+  const reset = () => {
+    setActive(false);
+    setError(undefined);
+    setReady(false);
+    setInstance((current) => current + 1);
+  };
+
+  return (
+    <div className={`${styles.liveDemo} ${active ? styles.liveDemoActive : ''}`}>
+      <div className={styles.liveDemoToolbar}>
+        <div>
+          <span className={styles.liveDemoState}>
+            <i />
+            Live Rivet project
+          </span>
+          <span>Runs locally · no API key</span>
+        </div>
+        <div className={styles.liveDemoActions}>
+          <button type="button" onClick={reset}>
+            Reset
+          </button>
+          <a href={url} target="_blank" rel="noreferrer">
+            Open full screen <Arrow />
+          </a>
+        </div>
+      </div>
+      <div className={styles.liveDemoViewport}>
+        <iframe
+          key={instance}
+          ref={iframeRef}
+          className={styles.liveDemoIframe}
+          src={url}
+          title="Interactive Rivet 2 workflow editor"
+          sandbox="allow-same-origin allow-scripts"
+          onLoad={requestDemoStatus}
+        />
+        {!active ? (
+          <button
+            className={styles.liveDemoActivation}
+            type="button"
+            disabled={!ready || Boolean(error)}
+            onClick={() => {
+              setActive(true);
+              iframeRef.current?.focus();
+            }}
+          >
+            <strong>
+              {error ? 'Live demo unavailable' : ready ? 'Click to edit and run this workflow' : 'Opening Rivet'}
+            </strong>
+            <span>
+              {error ??
+                (ready
+                  ? 'The frame activates on click so it does not capture page scrolling. Press Escape to release it.'
+                  : 'Loading the real Rivet editor in your browser…')}
+            </span>
+          </button>
+        ) : (
+          <span className={styles.liveDemoEscapeHint}>Press Esc to release the page</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ResponsiveWorkflowDemo({
+  content,
+  url,
+}: {
+  content: (typeof homepageContent)['workflowPreview'];
+  url: string;
+}) {
+  const [wideEnough, setWideEnough] = useState(() => window.matchMedia('(min-width: 621px)').matches);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(min-width: 621px)');
+    const update = () => setWideEnough(mediaQuery.matches);
+    mediaQuery.addEventListener('change', update);
+    return () => mediaQuery.removeEventListener('change', update);
+  }, []);
+
+  if (wideEnough) {
+    return <LiveRivetDemo url={url} />;
+  }
+
+  return (
+    <div className={styles.mobileDemo}>
+      <WorkflowPreview content={content} />
+      <a className={styles.mobileDemoAction} href={url}>
+        Open the live Rivet demo <Arrow />
+      </a>
+    </div>
+  );
+}
+
 function ActionLink({
   children,
   to,
@@ -239,6 +388,10 @@ function ActionLink({
 
 export default function Home() {
   const content = homepageContent;
+  const { siteConfig } = useDocusaurusContext();
+  const builtDemoUrl = useBaseUrl('/rivet-demo/');
+  const configuredDemoUrl = siteConfig.customFields?.promoDemoUrl;
+  const demoUrl = typeof configuredDemoUrl === 'string' && configuredDemoUrl ? configuredDemoUrl : builtDemoUrl;
 
   return (
     <Layout description={content.meta.description}>
@@ -279,7 +432,9 @@ export default function Home() {
                   </article>
                 ))}
               </div>
-              <WorkflowPreview content={content.workflowPreview} />
+              <BrowserOnly fallback={<WorkflowPreview content={content.workflowPreview} />}>
+                {() => <ResponsiveWorkflowDemo content={content.workflowPreview} url={demoUrl} />}
+              </BrowserOnly>
             </div>
           </div>
         </section>

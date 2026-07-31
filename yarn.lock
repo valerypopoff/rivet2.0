@@ -8766,6 +8766,8 @@ __metadata:
     "@emotion/styled": "npm:^11.11.0"
     "@eslint/eslintrc": "npm:^3.2.0"
     "@floating-ui/react": "npm:^0.26.1"
+    "@fontsource/roboto": "npm:^5.3.0"
+    "@fontsource/roboto-mono": "npm:^5.3.0"
     "@recoiljs/refine": "npm:^0.1.1"
     "@swc/core": "npm:^1.15.43"
     "@tanstack/react-query": "npm:^5.4.3"

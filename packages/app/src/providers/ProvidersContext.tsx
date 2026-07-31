@@ -1,6 +1,11 @@
 import { createContext, useContext, useMemo, type FC, type ReactNode } from 'react';
 import { type IOProvider } from '../io/IOProvider.js';
-import { type DatasetProvider, type AudioProvider, type ProjectId, type CombinedDataset } from '@valerypopoff/rivet2-core';
+import {
+  type DatasetProvider,
+  type AudioProvider,
+  type ProjectId,
+  type CombinedDataset,
+} from '@valerypopoff/rivet2-core';
 import { BrowserIOProvider } from '../io/BrowserIOProvider.js';
 import { LegacyBrowserIOProvider } from '../io/LegacyBrowserIOProvider.js';
 import { TauriIOProvider } from '../io/TauriIOProvider.js';
@@ -9,6 +14,7 @@ import { TauriBrowserAudioProvider } from '../io/TauriBrowserAudioProvider.js';
 import { deleteGlobalDataRef, getGlobalDataRef, setGlobalDataRef } from '../utils/globals/globalDataRefs.js';
 import { getDefaultEnvironmentProvider, getDefaultPathPolicyProvider } from '../utils/tauri.js';
 import type { AsyncStorageBackend } from '../state/storage/indexedDB.js';
+import { BrowserStaticDataStore, type StaticDataStore } from './StaticDataStore.js';
 
 export type DataRefStore = {
   get(key: string): ReturnType<typeof getGlobalDataRef>;
@@ -43,6 +49,7 @@ export type Providers = {
   dataRefs: DataRefStore;
   environment: EnvironmentProvider;
   pathPolicy: PathPolicyProvider;
+  staticData: StaticDataStore;
 };
 
 export type ProviderOverrides = Partial<Omit<Providers, 'dataRefs'>> & {
@@ -84,6 +91,10 @@ export function usePathPolicyProvider(): PathPolicyProvider {
   return useProviders().pathPolicy;
 }
 
+export function useStaticDataStore(): StaticDataStore {
+  return useProviders().staticData;
+}
+
 function createDefaultDataRefs(): DataRefStore {
   return {
     get: getGlobalDataRef,
@@ -92,9 +103,12 @@ function createDefaultDataRefs(): DataRefStore {
   };
 }
 
-function createDefaultProviders(overrides: Pick<ProviderOverrides, 'datasets' | 'pathPolicy'> = {}): Providers {
+function createDefaultProviders(
+  overrides: Pick<ProviderOverrides, 'datasets' | 'pathPolicy' | 'staticData'> = {},
+): Providers {
   const datasets = overrides.datasets ?? new BrowserDatasetProvider();
   const pathPolicy = overrides.pathPolicy ?? getDefaultPathPolicyProvider();
+  const staticData = overrides.staticData ?? new BrowserStaticDataStore();
 
   let io: IOProvider;
   if (TauriIOProvider.isSupported()) {
@@ -112,6 +126,7 @@ function createDefaultProviders(overrides: Pick<ProviderOverrides, 'datasets' | 
     dataRefs: createDefaultDataRefs(),
     environment: getDefaultEnvironmentProvider(),
     pathPolicy,
+    staticData,
   };
 }
 

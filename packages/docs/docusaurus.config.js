@@ -30,6 +30,10 @@ const config = {
 
   trailingSlash: false,
 
+  customFields: {
+    promoDemoUrl: process.env.RIVET_PROMO_DEMO_URL || null,
+  },
+
   plugins: [require.resolve('docusaurus-plugin-image-zoom')],
 
   presets: [

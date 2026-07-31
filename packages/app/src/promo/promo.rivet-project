@@ -1,0 +1,64 @@
+version: 4
+data:
+  attachedData:
+    trivet:
+      testSuites: []
+      version: 1
+  graphs:
+    promo-support-agent:
+      metadata:
+        description: A deterministic, no-key workflow that assembles a provider-ready support agent brief.
+        id: promo-support-agent
+        name: Support agent brief
+      nodes:
+        '[promo-question]:text "Customer question"':
+          data:
+            text: How should I explain a delayed shipment while keeping the answer grounded in our support policy?
+          outgoingConnections:
+            - output->"Build agent brief" promo-brief/question
+          visualData: 120/180/310/1//
+        '[promo-role]:text "Agent role"':
+          data:
+            text: You are a concise support agent. Be direct, empathetic, and explicit about what is known versus assumed.
+          outgoingConnections:
+            - output->"Build agent brief" promo-brief/role
+          visualData: 120/480/310/2//
+        '[promo-policy]:text "Grounding policy"':
+          data:
+            text: Use only supplied policy facts. Ask for missing order details. Never invent delivery dates, refunds, or actions already taken.
+          outgoingConnections:
+            - output->"Build agent brief" promo-brief/policy
+          visualData: 120/780/310/3//
+        '[promo-brief]:text "Build agent brief"':
+          data:
+            text: |-
+              # Provider-ready support agent brief
+
+              ## Customer question
+              {{question}}
+
+              ## Agent role
+              {{role}}
+
+              ## Grounding policy
+              {{policy}}
+
+              ## Response contract
+              1. Acknowledge the concern.
+              2. State only verified facts.
+              3. Ask for the minimum missing information.
+              4. End with the next concrete action.
+          outgoingConnections:
+            - output->"Agent brief" promo-output/value
+          visualData: 620/430/390/4//
+        '[promo-output]:graphOutput "Agent brief"':
+          data:
+            dataType: string
+            id: output
+          visualData: 1160/470/310/5//
+  metadata:
+    description: Edit the source text nodes and run the project to assemble a deterministic support agent brief.
+    id: rivet-promo-project
+    mainGraphId: promo-support-agent
+    title: Rivet 2 Live Demo
+  plugins: []

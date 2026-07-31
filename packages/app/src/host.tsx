@@ -109,6 +109,7 @@ export {
   useIOProvider,
   usePathPolicyProvider,
   useProviders,
+  useStaticDataStore,
   type AppDatasetProvider,
   type DataRefReader,
   type DataRefStore,
@@ -117,6 +118,12 @@ export {
   type ProviderOverrides,
   type Providers,
 } from './providers/ProvidersContext.js';
+export {
+  BrowserStaticDataStore,
+  MemoryStaticDataStore,
+  type StaticDataRecord,
+  type StaticDataStore,
+} from './providers/StaticDataStore.js';
 export {
   HostCallbacksProvider,
   useRivetAppHostCallbacks,
@@ -128,6 +135,8 @@ export {
 } from './providers/HostCallbacksContext.js';
 export {
   HostUiConfigProvider,
+  shouldCheckForUpdates,
+  shouldPreloadCodeEditor,
   useRivetAppHostUiConfig,
   type RivetAppHostUiConfig,
 } from './providers/HostUiConfigContext.js';
@@ -189,5 +198,10 @@ export {
   type ProjectNodeComparison,
 } from '@valerypopoff/rivet2-core';
 export type { ProjectCompareSideLabels } from './state/projectComparison.js';
-export { configureHybridStorageBackend, IndexedDBStorage, type AsyncStorageBackend } from './state/storage.js';
+export {
+  configureHybridStorageBackend,
+  IndexedDBStorage,
+  MemoryAsyncStorage,
+  type AsyncStorageBackend,
+} from './state/storage.js';
 export type { IOProvider, PathBasedIOProvider } from './io/IOProvider.js';

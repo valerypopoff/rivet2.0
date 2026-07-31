@@ -59,6 +59,11 @@ import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js
 import { getProjectWorkspaceTargetCapabilities } from '../domain/workspace/projectWorkspaceTarget.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
 import { getDataBusFullRowsHeight } from './nodeCanvas/dataBusRailLayout.js';
+import {
+  shouldCheckForUpdates,
+  shouldPreloadCodeEditor,
+  useRivetAppHostUiConfig,
+} from '../providers/HostUiConfigContext.js';
 
 const styles = css`
   position: fixed;
@@ -189,6 +194,7 @@ export const RivetApp: FC = () => {
     await tryRunGraph(options);
   }, 'Run graph');
   const runTests = wrapAsync(tryRunTests, 'Run tests');
+  const hostUiConfig = useRivetAppHostUiConfig();
 
   useMenuCommands({
     onRunGraph: runGraph,
@@ -197,14 +203,22 @@ export const RivetApp: FC = () => {
   useInAppMenuHotkeys();
 
   const checkForUpdate = useCheckForUpdate();
+  const updatesEnabled = shouldCheckForUpdates(hostUiConfig);
+  const codeEditorPreloadEnabled = shouldPreloadCodeEditor(hostUiConfig);
 
   useAsyncEffect(async () => {
-    await checkForUpdate();
-  }, []);
+    if (updatesEnabled) {
+      await checkForUpdate();
+    }
+  }, [updatesEnabled]);
 
   useWindowTitle();
 
   useEffect(() => {
+    if (!codeEditorPreloadEnabled) {
+      return;
+    }
+
     let cancelled = false;
     const preload = () => {
       if (!cancelled) {
@@ -230,7 +244,7 @@ export const RivetApp: FC = () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, []);
+  }, [codeEditorPreloadEnabled]);
 
   useEffect(() => {
     const rootStyle = document.documentElement.style;

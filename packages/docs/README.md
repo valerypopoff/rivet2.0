@@ -28,9 +28,27 @@ The hero keeps its introductory copy above the workflow showcase at every
 viewport width; its concise feature explanations sit to the left of the example
 workflow on wide layouts and move above it as space narrows.
 Keep the hero calls to action in one non-shifting row, with the source link
-following the two primary actions. The workflow preview is intentionally a
-completed run: its Rivet-mark title bar, compact per-node output strips, and
-inspector are page illustration only, not a second interactive editor. The
+following the two primary actions. On screens wider than 620px, the workflow
+showcase embeds the real Rivet editor from the separately built
+`/rivet-demo/` entry. Its checked-in project lives at
+`../app/src/promo/promo.rivet-project`, runs deterministically without plugins,
+providers, API keys, or external calls, and uses fresh in-memory app storage on
+every iframe load. Its Roboto and Roboto Mono files are bundled with the promo
+entry rather than fetched from a third-party font host. The frame stays
+non-interactive until clicked so it cannot
+capture normal page scrolling; Escape releases it, Reset reloads it, and the
+full-screen link opens the same static entry directly. Startup uses a
+parent-request/child-response status handshake in addition to the child's
+initial ready event, so a fast iframe cannot leave the landing page permanently
+stuck on its loading overlay by posting readiness before the parent listener is
+attached. The trusted frame allows
+same-origin ES-module loading, while the bundled project, editor-state provider,
+and static-data provider use fresh in-memory stores instead of loading or saving
+the documentation site's persisted Rivet state. The promo host also blocks
+browser File commands. Any future feature added to this surface that writes
+directly to browser storage must be reviewed separately. Narrow screens keep the
+responsive completed-run illustration and link to the full demo instead of
+loading the full editor inline. The
 foundation cards use one descriptive heading per item; avoid adding redundant
 all-caps labels or decorative proof bars back to the hero.
 At the narrowest responsive breakpoint, the hero title scales down and the
@@ -53,10 +71,16 @@ yarn install --immutable
 yarn docs dev
 ```
 
-This short root command runs the docs package's `dev` script and starts a local
-development server. Most changes are reflected live without having to restart
-the server. `yarn docs build`, `yarn docs serve`, and `yarn docs typecheck` use
-the same forwarding command.
+This short root command first builds the embedded Rivet promo with development
+asset paths, then starts Docusaurus on port 3000 and a strict-port static Vite
+preview on port 5174. Serving the bundled promo here is intentional: loading the
+full Rivet source module graph independently in every open documentation tab
+can overwhelm a local browser and leave the parent page waiting indefinitely.
+Landing-page text and CSS still update through Docusaurus hot reload. Changes to
+the promo host or bundled project require restarting `yarn docs dev`, which
+rebuilds that entry before serving it. Stop the parent command to stop both
+servers. `yarn docs build`, `yarn docs serve`, and `yarn docs typecheck` use the
+same forwarding command.
 
 ### Build
 
@@ -64,7 +88,18 @@ the same forwarding command.
 yarn workspace docs build
 ```
 
-This command generates static content into the `build` directory and can be served using any static contents hosting service.
+This command validates the bundled promo project, builds Docusaurus, builds the
+Rivet demo into `build/rivet-demo`, and checks the demo's initial and total
+asset budgets. The promo build derives its absolute asset base from
+Docusaurus's `baseUrl`, so the directory index works both on GitHub Pages and
+when Docusaurus's static preview canonicalizes it to a no-trailing-slash URL.
+The result is one static directory suitable for GitHub Pages or any other
+static-content host. Generated promo assets remain under the ignored `build`
+directory and are never checked in.
+
+The docs TypeScript configuration excludes generated `build/` output so
+typechecking remains source-only and produces the same result before or after a
+production build.
 
 ### Maintenance
 
