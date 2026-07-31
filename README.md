@@ -196,6 +196,7 @@ Both Pages release workflows intentionally build installer artifacts only. They 
 Useful current developer docs:
 
 - [Developer Docs Index](developer-docs/README.md)
+- [Building Complex Rivet Projects With An AI Agent](developer-docs/AI-ASSISTED-PROJECT-AUTHORING.md)
 - [Developer Docs Overview](developer-docs/OVERVIEW.md)
 - [Repo File Tree](developer-docs/REPO-FILE-TREE.md)
 - [Package Boundaries](developer-docs/PACKAGES.md)
