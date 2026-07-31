@@ -1,3 +1,6 @@
+- Удаление сообщений из компонента чата по одному
+
+- In LLM chat output, "messages sent" and "all messages" - auto collapse them and let the user unflod them when long
 
 - При вызове туллколов трекать на что уходит время и сколько
 

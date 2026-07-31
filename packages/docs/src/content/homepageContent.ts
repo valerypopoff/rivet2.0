@@ -7,6 +7,12 @@ export type HomepageCard = {
 export type HomepageFeature = Pick<HomepageCard, 'title' | 'description'>;
 export type HomepageFoundation = Omit<HomepageCard, 'eyebrow'>;
 
+export type HomepageUseCaseIcon = 'agent' | 'knowledge' | 'prompt' | 'web-app' | 'evaluation' | 'automation';
+
+export type HomepageUseCase = HomepageCard & {
+  icon: HomepageUseCaseIcon;
+};
+
 export const homepageContent = {
   meta: {
     title: 'Rivet 2 is a Visual AI workflows you can inspect, test, and ship',
@@ -117,42 +123,48 @@ export const homepageContent = {
       'Start with a small prompt chain or assemble a complete application. Rivet gives each part of the system a visible place to live.',
     cards: [
       {
+        icon: 'agent',
         eyebrow: 'Agents and tools',
         title: 'Tool-using assistants',
         description:
           'Define tool contracts, delegate calls to graphs, run tools in parallel, and inspect every argument and result before the model continues.',
       },
       {
+        icon: 'knowledge',
         eyebrow: 'Knowledge and RAG',
         title: 'Grounded AI workflows',
         description:
           'Synchronize provider-neutral knowledge sources, search with multiple queries, assemble evidence, and keep retrieval separate from generation.',
       },
       {
+        icon: 'prompt',
         eyebrow: 'Prompt engineering',
         title: 'Structured generation pipelines',
         description:
           'Build multi-step prompts, reusable model profiles, strict response schemas, fallbacks, transformations, and validation into one readable flow.',
       },
       {
+        icon: 'web-app',
         eyebrow: 'AI product surfaces',
         title: 'Web apps and chat experiences',
         description:
           'Create project-contained forms, chat interfaces, actions, and output views, then serve them through the CLI or embed them in your own host.',
       },
       {
+        icon: 'evaluation',
         eyebrow: 'Evaluation',
         title: 'Repeatable tests for AI behavior',
         description:
           'Use Trivet test suites, datasets, recordings, and validation graphs to turn important examples into checks you can rerun.',
       },
       {
+        icon: 'automation',
         eyebrow: 'Automation',
         title: 'Model-assisted business workflows',
         description:
           'Combine LLMs with HTTP, files, datasets, MCP, schedules, branching, and custom code without hiding the logic inside one giant agent prompt.',
       },
-    ] satisfies HomepageCard[],
+    ] satisfies HomepageUseCase[],
   },
   lifecycle: {
     eyebrow: 'From first idea to a running product',
@@ -207,6 +219,30 @@ const output = await runGraphInFile('./assistant.rivet-project', {
     action: {
       label: 'Explore the API reference',
       to: '/api-reference',
+    },
+  },
+  wrapper: {
+    eyebrow: 'A ready self-hosted Rivet server',
+    title: 'Serve Rivet projects without building the host yourself.',
+    description:
+      'Rivet Studio Server is a ready-to-deploy, self-hosted wrapper for Rivet projects. Use it when you want production API endpoints and web apps without writing and maintaining your own Node server.',
+    capabilities: [
+      'Publish project workflows as callable API endpoints',
+      'Serve web apps defined inside Rivet projects',
+      'Keep deployment and project execution on infrastructure you control',
+      'Start with a ready server instead of implementing the hosting layer from scratch',
+    ],
+    serverLabel: 'Rivet Studio Server',
+    deploymentLabel: 'One self-hosted runtime for your Rivet projects',
+    services: [
+      ['API endpoints', 'Run project workflows over HTTP'],
+      ['Published web apps', 'Serve project-defined interfaces'],
+      ['Rivet projects', 'Deploy the same artifacts you edit'],
+    ],
+    runtimeSurfaces: ['Self-hosted', 'Docker-ready', 'Your infrastructure'],
+    action: {
+      label: 'View Rivet Studio Server on GitHub',
+      to: 'https://github.com/valerypopoff/Rivet-Studio-Server',
     },
   },
   closing: {

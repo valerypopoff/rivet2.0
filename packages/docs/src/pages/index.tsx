@@ -240,6 +240,7 @@ function LiveRivetDemo({ url }: { url: string }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [active, setActive] = useState(false);
   const [error, setError] = useState<string>();
+  const [expanded, setExpanded] = useState(false);
   const [instance, setInstance] = useState(0);
   const [ready, setReady] = useState(false);
 
@@ -261,6 +262,7 @@ function LiveRivetDemo({ url }: { url: string }) {
         setError(undefined);
       } else if (event.data.type === 'rivet-demo:release') {
         setActive(false);
+        setExpanded(false);
         window.focus();
       } else {
         setActive(false);
@@ -273,67 +275,127 @@ function LiveRivetDemo({ url }: { url: string }) {
     return () => window.removeEventListener('message', handleMessage);
   }, [requestDemoStatus]);
 
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActive(false);
+        setExpanded(false);
+      }
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [expanded]);
+
   const reset = () => {
     setActive(false);
+    setExpanded(false);
     setError(undefined);
     setReady(false);
     setInstance((current) => current + 1);
   };
 
+  const expand = () => {
+    setExpanded(true);
+    setActive(true);
+    requestAnimationFrame(() => iframeRef.current?.focus());
+  };
+
   return (
-    <div className={`${styles.liveDemo} ${active ? styles.liveDemoActive : ''}`}>
-      <div className={styles.liveDemoToolbar}>
-        <div>
-          <span className={styles.liveDemoState}>
-            <i />
-            Live Rivet project
-          </span>
-          <span>Runs locally · no API key</span>
-        </div>
-        <div className={styles.liveDemoActions}>
-          <button type="button" onClick={reset}>
-            Reset
-          </button>
-          <a href={url} target="_blank" rel="noreferrer">
-            Open full screen <Arrow />
-          </a>
-        </div>
-      </div>
-      <div className={styles.liveDemoViewport}>
-        <iframe
-          key={instance}
-          ref={iframeRef}
-          className={styles.liveDemoIframe}
-          src={url}
-          title="Interactive Rivet 2 workflow editor"
-          sandbox="allow-same-origin allow-scripts"
-          onLoad={requestDemoStatus}
+    <>
+      {expanded && (
+        <button
+          aria-label="Close enlarged Rivet demo"
+          className={styles.liveDemoBackdrop}
+          type="button"
+          onClick={() => {
+            setActive(false);
+            setExpanded(false);
+          }}
         />
-        {!active ? (
-          <button
-            className={styles.liveDemoActivation}
-            type="button"
-            disabled={!ready || Boolean(error)}
-            onClick={() => {
-              setActive(true);
-              iframeRef.current?.focus();
-            }}
-          >
-            <strong>
-              {error ? 'Live demo unavailable' : ready ? 'Click to edit and run this workflow' : 'Opening Rivet'}
-            </strong>
-            <span>
-              {error ??
-                (ready
-                  ? 'The frame activates on click so it does not capture page scrolling. Press Escape to release it.'
-                  : 'Loading the real Rivet editor in your browser…')}
+      )}
+      <div
+        className={`${styles.liveDemo} ${active ? styles.liveDemoActive : ''} ${expanded ? styles.liveDemoExpanded : ''}`}
+      >
+        <div className={styles.liveDemoToolbar}>
+          <div className={styles.liveDemoIntroduction}>
+            <span className={styles.liveDemoState}>
+              <i />
+              Live Rivet app
             </span>
-          </button>
-        ) : (
-          <span className={styles.liveDemoEscapeHint}>Press Esc to release the page</span>
-        )}
+            <span>A real demo project is open below. Try editing it, then click Run project.</span>
+          </div>
+          <div className={styles.liveDemoActions}>
+            <button type="button" onClick={reset}>
+              Reset
+            </button>
+            <button
+              type="button"
+              disabled={!ready || Boolean(error)}
+              onClick={
+                expanded
+                  ? () => {
+                      setActive(false);
+                      setExpanded(false);
+                    }
+                  : expand
+              }
+            >
+              {expanded ? (
+                'Close full screen'
+              ) : (
+                <>
+                  Open full screen <Arrow />
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+        <div className={styles.liveDemoViewport}>
+          <iframe
+            key={instance}
+            ref={iframeRef}
+            className={styles.liveDemoIframe}
+            src={url}
+            title="Interactive Rivet 2 workflow editor"
+            sandbox="allow-same-origin allow-scripts"
+            onLoad={requestDemoStatus}
+          />
+          {!active ? (
+            <button
+              className={styles.liveDemoActivation}
+              type="button"
+              disabled={!ready || Boolean(error)}
+              onClick={() => {
+                setActive(true);
+                iframeRef.current?.focus();
+              }}
+            >
+              <strong>
+                {error ? 'Live demo unavailable' : ready ? 'Click to edit and run this workflow' : 'Opening Rivet'}
+              </strong>
+              <span>
+                {error ??
+                  (ready
+                    ? 'The frame activates on click so it does not capture page scrolling. Press Escape to release it.'
+                    : 'Loading the real Rivet editor in your browser…')}
+              </span>
+            </button>
+          ) : (
+            <span className={styles.liveDemoEscapeHint}>Press Esc to release the page</span>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -364,6 +426,59 @@ function ResponsiveWorkflowDemo({
         Open the live Rivet demo <Arrow />
       </a>
     </div>
+  );
+}
+
+type UseCaseIconName = (typeof homepageContent)['useCases']['cards'][number]['icon'];
+
+function UseCaseIcon({ name }: { name: UseCaseIconName }) {
+  const paths: Record<UseCaseIconName, ReactNode> = {
+    agent: (
+      <>
+        <circle cx="7" cy="16" r="3" />
+        <circle cx="24" cy="8" r="3" />
+        <circle cx="24" cy="24" r="3" />
+        <path d="M10 16h5m0 0 6-6m-6 6 6 6" />
+      </>
+    ),
+    knowledge: (
+      <>
+        <ellipse cx="13" cy="8" rx="8" ry="4" />
+        <path d="M5 8v8c0 2.2 3.6 4 8 4 1.2 0 2.3-.1 3.3-.4M5 12c0 2.2 3.6 4 8 4" />
+        <circle cx="22" cy="21" r="4" />
+        <path d="m25 24 3 3" />
+      </>
+    ),
+    prompt: (
+      <>
+        <path d="m9 7-5 9 5 9M23 7l5 9-5 9M13 11h7M12 16h8M13 21h7" />
+      </>
+    ),
+    'web-app': (
+      <>
+        <rect x="4" y="5" width="24" height="22" rx="3" />
+        <path d="M4 11h24M8 8h.1M12 8h.1M16 8h.1M10 16h12M10 21h8" />
+      </>
+    ),
+    evaluation: (
+      <>
+        <rect x="6" y="4" width="20" height="24" rx="3" />
+        <path d="m10 11 2 2 4-4M18 11h4m-12 8 2 2 4-4M18 19h4" />
+      </>
+    ),
+    automation: (
+      <>
+        <circle cx="7" cy="8" r="3" />
+        <circle cx="25" cy="24" r="3" />
+        <path d="M10 8h5a4 4 0 0 1 4 4v8a4 4 0 0 0 4 4M13 18l3-3 3 3" />
+      </>
+    ),
+  };
+
+  return (
+    <svg className={styles.useCaseIcon} viewBox="0 0 32 32" aria-hidden="true">
+      {paths[name]}
+    </svg>
   );
 }
 
@@ -469,6 +584,7 @@ export default function Home() {
             <div className={styles.useCaseGrid}>
               {content.useCases.cards.map((useCase) => (
                 <article className={styles.useCaseCard} key={useCase.title}>
+                  <UseCaseIcon name={useCase.icon} />
                   <p>{useCase.eyebrow}</p>
                   <h3>{useCase.title}</h3>
                   <span>{useCase.description}</span>
@@ -540,6 +656,56 @@ export default function Home() {
                     <span key={surface}>{surface}</span>
                   ))}
                 </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.wrapperSection}>
+          <div className={styles.sectionShell}>
+            <div className={styles.wrapperGrid}>
+              <div className={styles.wrapperCard}>
+                <div className={styles.wrapperTopbar}>
+                  <span>{content.wrapper.serverLabel}</span>
+                  <i />
+                </div>
+                <div className={styles.wrapperBody}>
+                  <strong>{content.wrapper.deploymentLabel}</strong>
+                  <div className={styles.wrapperServices}>
+                    {content.wrapper.services.map(([label, description]) => (
+                      <div key={label}>
+                        <i />
+                        <span>
+                          <b>{label}</b>
+                          {description}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className={styles.runtimeFooter}>
+                  {content.wrapper.runtimeSurfaces.map((surface) => (
+                    <span key={surface}>{surface}</span>
+                  ))}
+                </div>
+              </div>
+              <div className={styles.wrapperCopy}>
+                <SectionHeading
+                  eyebrow={content.wrapper.eyebrow}
+                  title={content.wrapper.title}
+                  description={content.wrapper.description}
+                />
+                <ul>
+                  {content.wrapper.capabilities.map((capability) => (
+                    <li key={capability}>
+                      <i />
+                      {capability}
+                    </li>
+                  ))}
+                </ul>
+                <ActionLink to={content.wrapper.action.to} variant="text">
+                  {content.wrapper.action.label} <Arrow />
+                </ActionLink>
               </div>
             </div>
           </div>

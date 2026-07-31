@@ -37,7 +37,8 @@ every iframe load. Its Roboto and Roboto Mono files are bundled with the promo
 entry rather than fetched from a third-party font host. The frame stays
 non-interactive until clicked so it cannot
 capture normal page scrolling; Escape releases it, Reset reloads it, and the
-full-screen link opens the same static entry directly. Startup uses a
+full-screen action enlarges the existing iframe to 90% of the viewport over a
+dismissible dark backdrop instead of navigating away. Startup uses a
 parent-request/child-response status handshake in addition to the child's
 initial ready event, so a fast iframe cannot leave the landing page permanently
 stuck on its loading overlay by posting readiness before the parent listener is
@@ -50,7 +51,13 @@ directly to browser storage must be reviewed separately. Narrow screens keep the
 responsive completed-run illustration and link to the full demo instead of
 loading the full editor inline. The
 foundation cards use one descriptive heading per item; avoid adding redundant
-all-caps labels or decorative proof bars back to the hero.
+all-caps labels or decorative proof bars back to the hero. Descriptive landing
+copy uses `--body-copy-size` as its minimum size; compact UI labels, eyebrows,
+code, and metadata may remain smaller. Use-case cards use inline, decorative
+SVG icons so they stay theme-aware and require no separate image assets.
+The production-runtime section is followed by an editable Rivet Studio Server
+section sourced from `src/content/homepageContent.ts`; it presents the optional
+self-hosted server without making it part of the core Rivet runtime.
 At the narrowest responsive breakpoint, the hero title scales down and the
 workflow preview uses compact staggered nodes so its forward data connections
 remain legible rather than crossing through a full-width mobile stack.
