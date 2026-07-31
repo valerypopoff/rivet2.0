@@ -9,8 +9,11 @@ import {
 import { getMarkdownFoldingRanges, MARKDOWN_FOLDING_LANGUAGES } from './markdownFoldingRanges.js';
 import { getJsonSchemaRequiredFieldDefinitionAtOffset } from './jsonSchemaRequiredDefinition.js';
 import { isMacOSPlatform } from '../platform/os.js';
+import { installAmbiguousUnicodeHighlightCommand } from './unicodeHighlighting.js';
 
 export { monaco };
+
+installAmbiguousUnicodeHighlightCommand(monaco.editor);
 
 const PROMPT_INTERPOLATION_BRACE_CONFIGURATION: monaco.languages.LanguageConfiguration = {
   brackets: [['{', '}']],
@@ -108,10 +111,7 @@ function registerJsonSchemaRequiredDefinitionProvider(): void {
 
   monaco.languages.registerDefinitionProvider('json', {
     provideDefinition(model, position) {
-      const definition = getJsonSchemaRequiredFieldDefinitionAtOffset(
-        model.getValue(),
-        model.getOffsetAt(position),
-      );
+      const definition = getJsonSchemaRequiredFieldDefinitionAtOffset(model.getValue(), model.getOffsetAt(position));
 
       if (!definition) {
         return undefined;
