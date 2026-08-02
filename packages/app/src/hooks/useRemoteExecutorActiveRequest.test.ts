@@ -41,3 +41,13 @@ test('useRemoteExecutor releases delivered response traces on abort and error te
     assert.match(terminalCase, /responseTraceByRequestIdRef\.current\.delete\(requestId\);/);
   }
 });
+
+test('useRemoteExecutor keeps one message subscription across execution-state rerenders', async () => {
+  const source = await readFile(new URL('./useRemoteExecutor.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /const handleExecutorMessage(?:: RemoteExecutorMessageHandler)? = useStableCallback\(/);
+  assert.match(source, /executorSession\.subscribeMessages\(handleExecutorMessage\)/);
+  assert.match(source, /\[executorSession, handleExecutorMessage\]/);
+  assert.doesNotMatch(source, /executorSession\.subscribeMessages\(\(message, data, requestId\) =>/);
+  assert.doesNotMatch(source, /\[eventDispatcher, executorSession,/);
+});

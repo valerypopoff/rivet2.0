@@ -1350,7 +1350,11 @@ export class GraphProcessor {
   }
 
   #prepareNodeProcessContextBase(): void {
-    const hostChatV2Observer = this.#context.onChatV2CallFinished;
+    // Subgraphs receive their caller's InternalProcessContext, whose observer
+    // is already a GraphProcessor wrapper. Always resolve the original host
+    // observer from the root run so nested LLM calls are not emitted once by
+    // every ancestor before their own event is bridged to the root emitter.
+    const hostChatV2Observer = this.getRootProcessor().#context.onChatV2CallFinished;
     this.#nodeProcessContextBase = {
       ...this.#context,
       abortGraph: (error) => {

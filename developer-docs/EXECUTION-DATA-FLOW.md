@@ -433,6 +433,19 @@ handled separately and are not treated as replayable execution events.
 `createProcessEventDispatcher()` deserializes and dispatches processor events to
 the same handler functions.
 
+`RivetApp` is the single mounted owner of `useGraphExecutor`. It passes the
+resulting run callback to `GraphBuilder`, the graph context-menu handler, and
+other editor entry points that need to start a run. Those consumers must not
+mount another executor hook: every `useRemoteExecutor` instance subscribes to
+the active project runtime, so a second owner would dispatch each Node/Remote
+event twice into the same editor execution state. The same single-owner rule
+also prevents competing Browser-executor user-input handlers.
+
+The remote executor installs one stable session-message subscription. Its
+handler reads the latest editor/project state through `useStableCallback` rather
+than resubscribing after every execution-state render; changing that ownership
+can create a passive-effect gap in which a WebSocket event is lost.
+
 Remote execution is routed through project-keyed executor-session runtimes rather
 than through Remote Debugger globals. `ExecutorSessionProvider` owns an
 in-memory runtime registry keyed by `project.metadata.id`; the default hooks
@@ -1517,6 +1530,21 @@ report omitted-row counts. Trace correlation must use root/graph/node/process
 and tool-call identities; timing-based association is forbidden. Observer,
 serialization, and trace-building failures are non-fatal and cannot alter graph
 execution or cost accounting.
+
+The projection is idempotent across observer redelivery. Model events are
+identified by root/graph run, node, process, and model-call id; identified tool
+events are matched by root/graph run, source node, source process, and tool-call
+id. A redelivered event replaces the earlier row in place so later terminal
+metadata wins without inflating counts, usage, or cost. Tool events without a
+stable tool-call id remain separate because Rivet cannot safely prove that they
+describe the same physical call.
+
+The editor applies the same trace-event upsert policy to active node-run data
+and inactive-project execution snapshots. Switching project tabs while a
+Browser, Node, or Remote run is active must therefore retain the physical-call
+rows needed by the node Response Inspector; the inactive snapshot path must not
+reduce those events only into Run Activity or append identified redeliveries as
+extra node-history rows.
 
 Response traces always take their public graph identity and terminal boundary
 from the root graph execution. Physical model and tool rows from nested graphs

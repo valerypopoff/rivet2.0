@@ -248,3 +248,99 @@ test('inactive project snapshot reducer stores hidden user input prompts and cle
 
   assert.deepEqual(finishedSnapshot.userInputQuestions, {});
 });
+
+test('inactive project snapshot reducer upserts identified model and tool trace events', () => {
+  const projectId = 'project-a' as ProjectId;
+  const graphId = 'graph-a' as GraphId;
+  const graphRunId = 'graph-run-a' as GraphRunId;
+  const rootRunId = 'root-run-a' as RootRunId;
+  const nodeId = 'llm-node' as NodeId;
+  const processId = 'llm-process' as ProcessId;
+  const refStore = createDataRefStore();
+  const execution = { graphId, graphRunId, rootRunId };
+  let snapshot = createEmptyProjectExecutionSnapshot();
+
+  for (const durationMs of [10, 12]) {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      data: {
+        attemptIndex: 0,
+        callId: 'model-call',
+        durationMs,
+        execution,
+        model: 'gpt-test',
+        nodeId,
+        outcome: 'success',
+        pricing: { status: 'unknown' },
+        processId,
+        provider: 'openai',
+      } as never,
+      message: 'llmCallFinished',
+      projectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+  }
+
+  for (const durationMs of [4, 6]) {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      data: {
+        durationMs,
+        execution,
+        handlerKind: 'graph',
+        outcome: 'success',
+        sourceNodeId: nodeId,
+        sourceProcessId: processId,
+        toolCallId: 'tool-call',
+        toolName: 'lookup',
+      } as never,
+      message: 'toolCallFinished',
+      projectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+  }
+
+  const events = snapshot.lastRunDataByNode[nodeId]?.[0]?.data.agentTraceEvents;
+  assert.equal(events?.length, 2);
+  assert.equal(events?.[0]?.type, 'llm-call-finished');
+  assert.equal(events?.[0]?.durationMs, 12);
+  assert.equal(events?.[1]?.type, 'tool-call-finished');
+  assert.equal(events?.[1]?.durationMs, 6);
+});
+
+test('inactive project snapshot reducer keeps anonymous tool trace events distinct', () => {
+  const projectId = 'project-a' as ProjectId;
+  const graphId = 'graph-a' as GraphId;
+  const graphRunId = 'graph-run-a' as GraphRunId;
+  const rootRunId = 'root-run-a' as RootRunId;
+  const nodeId = 'llm-node' as NodeId;
+  const processId = 'llm-process' as ProcessId;
+  const refStore = createDataRefStore();
+  const execution = { graphId, graphRunId, rootRunId };
+  let snapshot = createEmptyProjectExecutionSnapshot();
+
+  for (const durationMs of [4, 6]) {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      data: {
+        durationMs,
+        execution,
+        handlerKind: 'external',
+        outcome: 'success',
+        sourceNodeId: nodeId,
+        sourceProcessId: processId,
+        toolName: 'anonymous',
+      } as never,
+      message: 'toolCallFinished',
+      projectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+  }
+
+  const events = snapshot.lastRunDataByNode[nodeId]?.[0]?.data.agentTraceEvents;
+  assert.equal(events?.length, 2);
+  assert.deepEqual(
+    events?.map((event) => event.durationMs),
+    [4, 6],
+  );
+});

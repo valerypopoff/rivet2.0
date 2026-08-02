@@ -163,6 +163,15 @@ Run Activity reuses the response-inspector model for metadata when it is
 available. It must not introduce another trace format or another cost/usage
 aggregation path.
 
+The response projection deduplicates transport redelivery by stable
+physical-call identity before calculating rows or totals. Model identity
+includes the owning root/graph run, node/process, and model-call id; identified
+tool identity includes the owning root/graph run, source node/process, and
+tool-call id. Anonymous tool events deliberately remain distinct. Run Activity
+replaces redelivered identified rows while they are retained and otherwise relies on the
+runtime's exactly-once lifecycle-event contract; nested processors must emit
+once and the editor must keep a single executor subscription.
+
 ## Provider-neutral presentation descriptors
 
 Specialized previews are opt-in node presentation metadata, not a list of

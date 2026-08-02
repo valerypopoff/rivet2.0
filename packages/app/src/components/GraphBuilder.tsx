@@ -52,6 +52,7 @@ import {
   getProjectComparisonReferenceFileName,
 } from '../utils/projectComparisonSummary.js';
 import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
+import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
 
 const Container = styled.div`
   position: relative;
@@ -124,7 +125,7 @@ const Container = styled.div`
   }
 `;
 
-export const GraphBuilder: FC = () => {
+export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => {
   const [nodes, setNodes] = useAtom(nodesState);
   const [connections, setConnections] = useAtom(connectionsState);
   const [selectedNodeIds, setSelectedNodeIds] = useAtom(selectedNodesState);
@@ -148,7 +149,7 @@ export const GraphBuilder: FC = () => {
   });
 
   const nodesById = useAtomValue(nodesByIdState);
-  const contextMenuHandler = useGraphBuilderContextMenuHandler();
+  const contextMenuHandler = useGraphBuilderContextMenuHandler(runGraph);
   const openNodeLibrary = useOpenNodeLibrary();
 
   const nodeSelected = useStableCallback((node: ChartNode, multi: boolean) => {

@@ -33,10 +33,8 @@ test('fullscreen node output modal is rendered outside the canvas tree', () => {
   assert.match(rendererBody, /previousGraphIdRef\.current !== graphId/);
   assert.match(rendererBody, /return \(\) => \{\s*setFullscreenOutputNodeId\(null\);\s*\};/);
   const normalizedRivetAppSource = rivetAppSource.replace(/\r\n/g, '\n');
-  const graphBuilderIndex = normalizedRivetAppSource.indexOf('<GraphBuilder />');
-  const fullscreenModalIndex = normalizedRivetAppSource.indexOf(
-    '<AppErrorBoundary context="Fullscreen Output Modal"',
-  );
+  const graphBuilderIndex = normalizedRivetAppSource.indexOf('<GraphBuilder runGraph={tryRunGraph} />');
+  const fullscreenModalIndex = normalizedRivetAppSource.indexOf('<AppErrorBoundary context="Fullscreen Output Modal"');
   const helpModalIndex = normalizedRivetAppSource.indexOf('<HelpModal />');
 
   assert.notEqual(graphBuilderIndex, -1);
@@ -44,9 +42,6 @@ test('fullscreen node output modal is rendered outside the canvas tree', () => {
   assert.notEqual(helpModalIndex, -1);
   assert.ok(fullscreenModalIndex > graphBuilderIndex);
   assert.ok(fullscreenModalIndex < helpModalIndex);
-  assert.match(
-    normalizedRivetAppSource,
-    /\n      \)}\n      <AppErrorBoundary context="Fullscreen Output Modal"/,
-  );
+  assert.match(normalizedRivetAppSource, /\n      \)}\n      <AppErrorBoundary context="Fullscreen Output Modal"/);
   assert.match(fullScreenModalSource, /shouldReturnFocus={false}/);
 });

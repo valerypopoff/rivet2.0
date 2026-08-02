@@ -89,6 +89,124 @@ void describe('AgentResponseTrace', () => {
     assert.equal(trace.backgroundWorkPending, true);
   });
 
+  void it('deduplicates redelivered identified calls without double-counting usage or cost', () => {
+    const firstModelCall = modelEvent({
+      callId: 'model-round-1' as never,
+      roundIndex: 0,
+      durationMs: 100,
+      normalizedUsage: { promptTokens: 10, completionTokens: 2 },
+      pricing: { status: 'known', costUsd: 0.01 },
+    });
+    const secondModelCall = modelEvent({
+      callId: 'model-round-2' as never,
+      roundIndex: 1,
+      durationMs: 200,
+      normalizedUsage: { promptTokens: 20, completionTokens: 3 },
+      pricing: { status: 'known', costUsd: 0.02 },
+    });
+    const delegatedToolCall = toolEvent({ toolCallId: 'delegated-tool', durationMs: 5 });
+
+    const trace = buildAgentResponseTrace({
+      scope: 'llm-invocation',
+      execution,
+      nodeId: 'llm' as NodeId,
+      processId: 'process' as ProcessId,
+      events: [
+        firstModelCall,
+        delegatedToolCall,
+        secondModelCall,
+        { ...firstModelCall, durationMs: 110 },
+        { ...delegatedToolCall, durationMs: 6 },
+        { ...secondModelCall, durationMs: 210 },
+      ],
+      status: 'completed',
+    });
+
+    assert.equal(trace.summary.modelCallCount, 2);
+    assert.equal(trace.summary.toolCallCount, 1);
+    assert.equal(trace.summary.promptTokens, 30);
+    assert.equal(trace.summary.completionTokens, 5);
+    assert.equal(trace.summary.knownCostUsd, 0.03);
+    assert.deepEqual(
+      trace.modelCalls.map((call) => [call.callId, call.durationMs]),
+      [
+        ['model-round-1', 110],
+        ['model-round-2', 210],
+      ],
+    );
+    assert.equal(trace.toolCalls[0]?.durationMs, 6);
+  });
+
+  void it('keeps identical call ids from separate graph runs distinct in a response trace', () => {
+    const nestedExecution = {
+      ...execution,
+      graphId: 'nested-graph' as GraphId,
+      graphRunId: 'nested-graph-run' as GraphRunId,
+      parentGraphRunId: execution.graphRunId,
+    };
+    const sharedModelIdentity = {
+      callId: 'shared-model-call' as never,
+      nodeId: 'shared-llm' as NodeId,
+      processId: 'shared-process' as ProcessId,
+    };
+    const sharedToolIdentity = {
+      toolCallId: 'shared-tool-call',
+      sourceNodeId: 'shared-llm' as NodeId,
+      sourceProcessId: 'shared-process' as ProcessId,
+    };
+
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [
+        modelEvent(sharedModelIdentity),
+        modelEvent({ ...sharedModelIdentity, execution: nestedExecution }),
+        toolEvent(sharedToolIdentity),
+        toolEvent({ ...sharedToolIdentity, execution: nestedExecution }),
+      ],
+      status: 'completed',
+    });
+
+    assert.equal(trace.summary.modelCallCount, 2);
+    assert.equal(trace.summary.toolCallCount, 2);
+  });
+
+  void it('limits invocation traces to the selected graph run', () => {
+    const otherExecution = {
+      ...execution,
+      graphRunId: 'other-graph-run' as GraphRunId,
+    };
+    const trace = buildAgentResponseTrace({
+      scope: 'llm-invocation',
+      execution,
+      nodeId: 'llm' as NodeId,
+      processId: 'process' as ProcessId,
+      events: [
+        modelEvent(),
+        modelEvent({ execution: otherExecution }),
+        toolEvent(),
+        toolEvent({ execution: otherExecution }),
+      ],
+      status: 'completed',
+    });
+
+    assert.equal(trace.summary.modelCallCount, 1);
+    assert.equal(trace.summary.toolCallCount, 1);
+  });
+
+  void it('keeps anonymous tool events distinct because they have no stable identity', () => {
+    const { toolCallId: _firstId, ...firstAnonymousToolCall } = toolEvent();
+    const { toolCallId: _secondId, ...secondAnonymousToolCall } = toolEvent();
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [firstAnonymousToolCall, secondAnonymousToolCall],
+      status: 'completed',
+    });
+
+    assert.equal(trace.summary.toolCallCount, 2);
+  });
+
   void it('keeps aggregate totals while bounding rendered rows', () => {
     const modelCalls = Array.from({ length: AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS + 3 }, () => modelEvent());
     const toolCalls = Array.from({ length: AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS + 2 }, () => toolEvent());

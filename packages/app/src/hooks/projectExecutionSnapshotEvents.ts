@@ -1,5 +1,6 @@
 import { produce } from 'immer';
 import {
+  type AgentTraceEvent,
   type GraphRunId,
   type ProcessEventMessageMap,
   type ProcessEvents,
@@ -36,6 +37,7 @@ import {
 import { applyProcessEventToRunActivityJournal } from '../features/runActivity/runActivityProcessEvents.js';
 import { createRunActivityJournal } from '../features/runActivity/runActivityJournal.js';
 import { handleError } from '../utils/errorHandling.js';
+import { upsertAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
 
 export type ProjectExecutionSnapshotEventResult = {
   changed: boolean;
@@ -170,6 +172,26 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         changed: true,
         snapshot: applyPartialOutput(snapshot, options.data as ProcessEvents['partialOutput'], options),
       };
+    case 'llmCallFinished': {
+      const data = options.data as ProcessEvents['llmCallFinished'];
+      return {
+        changed: true,
+        snapshot: applyAgentTraceEvent(snapshot, {
+          type: 'llm-call-finished',
+          ...data,
+        }),
+      };
+    }
+    case 'toolCallFinished': {
+      const data = options.data as ProcessEvents['toolCallFinished'];
+      return {
+        changed: true,
+        snapshot: applyAgentTraceEvent(snapshot, {
+          type: 'tool-call-finished',
+          ...data,
+        }),
+      };
+    }
     case 'nodeOutputsCleared':
       return {
         changed: true,
@@ -235,6 +257,12 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot,
       };
   }
+}
+
+function applyAgentTraceEvent(snapshot: ProjectExecutionSnapshot, event: AgentTraceEvent): ProjectExecutionSnapshot {
+  return produce(snapshot, (draft) => {
+    upsertAgentTraceEventForInvocation(draft.lastRunDataByNode, event);
+  });
 }
 
 function applyStart(

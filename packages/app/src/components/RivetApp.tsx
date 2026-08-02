@@ -335,7 +335,7 @@ export const RivetApp: FC = () => {
             ) : uiGraphOpen ? (
               <UiGraphBuilder runGraph={tryRunGraph} />
             ) : (
-              <GraphBuilder />
+              <GraphBuilder runGraph={tryRunGraph} />
             ))}
           <AppErrorBoundary context="Settings Modal" fallback={<div>Failed to render Settings</div>}>
             <SettingsModal />

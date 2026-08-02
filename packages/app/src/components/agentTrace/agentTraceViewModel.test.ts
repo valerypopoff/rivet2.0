@@ -39,6 +39,17 @@ void describe('agentTraceViewModel', () => {
   void it('isolates the selected LLM process while retaining its delegated tools', () => {
     const selectedProcessId = 'selected' as ProcessId;
     const otherProcessId = 'other' as ProcessId;
+    const selectedModelCall = modelEvent(selectedProcessId);
+    const selectedToolCall = {
+      type: 'tool-call-finished',
+      execution,
+      toolCallId: 'tool-call',
+      toolName: 'search',
+      sourceNodeId: node.id,
+      sourceProcessId: selectedProcessId,
+      handlerKind: 'graph',
+      outcome: 'success',
+    } satisfies AgentTraceEvent;
     const processData = {
       graphId: execution.graphId,
       graphRunId: execution.graphRunId,
@@ -49,17 +60,11 @@ void describe('agentTraceViewModel', () => {
         startedAt: 100,
         finishedAt: 140,
         agentTraceEvents: [
-          modelEvent(selectedProcessId),
+          selectedModelCall,
+          { ...selectedModelCall, durationMs: 12 },
           modelEvent(otherProcessId),
-          {
-            type: 'tool-call-finished',
-            execution,
-            toolName: 'search',
-            sourceNodeId: node.id,
-            sourceProcessId: selectedProcessId,
-            handlerKind: 'graph',
-            outcome: 'success',
-          },
+          selectedToolCall,
+          { ...selectedToolCall, durationMs: 4 },
         ],
       },
     } as unknown as ProcessDataForNode;
@@ -69,7 +74,9 @@ void describe('agentTraceViewModel', () => {
     assert.equal(trace?.processId, selectedProcessId);
     assert.equal(trace?.modelCalls.length, 1);
     assert.equal(trace?.modelCalls[0]?.processId, selectedProcessId);
+    assert.equal(trace?.modelCalls[0]?.durationMs, 12);
     assert.equal(trace?.toolCalls.length, 1);
+    assert.equal(trace?.toolCalls[0]?.durationMs, 4);
     assert.equal(trace?.durationMs, 40);
   });
 

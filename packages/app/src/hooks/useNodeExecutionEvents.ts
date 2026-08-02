@@ -18,6 +18,7 @@ import { handleError } from '../utils/errorHandling';
 import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation';
 import { useDataRefs } from '../providers/ProvidersContext';
 import { projectState } from '../state/savedGraphs';
+import { upsertAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
 
 export type NodeExecutionEventsApi = {
   onNodeError: (data: ProcessEvents['nodeError']) => void;
@@ -186,41 +187,23 @@ export function useNodeExecutionEvents({
     setSelectedNodePageLatest(node.id, execution);
   };
 
-  const appendAgentTraceEvent = (
-    nodeId: ProcessEvents['llmCallFinished']['nodeId'],
-    processId: ProcessEvents['llmCallFinished']['processId'],
-    execution: ProcessEvents['llmCallFinished']['execution'],
-    event: AgentTraceEvent,
-  ) => {
+  const appendAgentTraceEvent = (event: AgentTraceEvent) => {
     setLastRunData((prev) =>
       produce(prev, (draft) => {
-        const processes = (draft[nodeId] ??= []);
-        let process = processes.find((candidate) => candidate.processId === processId);
-        if (process == null) {
-          process = {
-            processId,
-            graphId: execution.graphId,
-            graphRunId: execution.graphRunId,
-            rootRunId: execution.rootRunId,
-            data: {},
-          };
-          processes.push(process);
-        }
-        process.data.agentTraceEvents ??= [];
-        process.data.agentTraceEvents.push(event);
+        upsertAgentTraceEventForInvocation(draft, event);
       }),
     );
   };
 
   const onLlmCallFinished = (data: ProcessEvents['llmCallFinished']) => {
-    appendAgentTraceEvent(data.nodeId, data.processId, data.execution, {
+    appendAgentTraceEvent({
       type: 'llm-call-finished',
       ...data,
     });
   };
 
   const onToolCallFinished = (data: ProcessEvents['toolCallFinished']) => {
-    appendAgentTraceEvent(data.sourceNodeId, data.sourceProcessId, data.execution, {
+    appendAgentTraceEvent({
       type: 'tool-call-finished',
       ...data,
     });

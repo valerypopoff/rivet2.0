@@ -96,14 +96,17 @@ export type BuildAgentResponseTraceOptions = {
 };
 
 export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions): AgentResponseTrace {
-  const matchingEvents = options.events.filter((event) => {
-    if (event.execution.rootRunId !== options.execution.rootRunId) return false;
-    if (options.scope === 'response') return true;
-    if (event.type === 'llm-call-finished') {
-      return event.nodeId === options.nodeId && event.processId === options.processId;
-    }
-    return event.sourceNodeId === options.nodeId && event.sourceProcessId === options.processId;
-  });
+  const matchingEvents = deduplicateAgentTraceEvents(
+    options.events.filter((event) => {
+      if (event.execution.rootRunId !== options.execution.rootRunId) return false;
+      if (options.scope === 'response') return true;
+      if (event.execution.graphRunId !== options.execution.graphRunId) return false;
+      if (event.type === 'llm-call-finished') {
+        return event.nodeId === options.nodeId && event.processId === options.processId;
+      }
+      return event.sourceNodeId === options.nodeId && event.sourceProcessId === options.processId;
+    }),
+  );
   const allModelCalls = matchingEvents
     .filter(
       (event): event is Extract<AgentTraceEvent, { type: 'llm-call-finished' }> => event.type === 'llm-call-finished',
@@ -140,6 +143,47 @@ export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions)
     omittedModelCallCount: Math.max(0, allModelCalls.length - AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS),
     omittedToolCallCount: Math.max(0, allToolCalls.length - AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS),
   };
+}
+
+/**
+ * Trace transport is observational and may redeliver an event. Keep the
+ * projection idempotent so repeated delivery cannot inflate call counts,
+ * tokens, or cost. Physical model calls and identified tool calls carry stable
+ * IDs; anonymous tool events remain distinct because they cannot be matched
+ * safely.
+ */
+function deduplicateAgentTraceEvents(events: readonly AgentTraceEvent[]): AgentTraceEvent[] {
+  const deduplicated: AgentTraceEvent[] = [];
+  const indexByIdentity = new Map<string, number>();
+
+  for (const event of events) {
+    const identity = getAgentTraceEventIdentity(event);
+    if (identity == null) {
+      deduplicated.push(event);
+      continue;
+    }
+
+    const existingIndex = indexByIdentity.get(identity);
+    if (existingIndex == null) {
+      indexByIdentity.set(identity, deduplicated.length);
+      deduplicated.push(event);
+    } else {
+      // Preserve first-seen order while retaining the latest terminal metadata.
+      deduplicated[existingIndex] = event;
+    }
+  }
+
+  return deduplicated;
+}
+
+export function getAgentTraceEventIdentity(event: AgentTraceEvent): string | undefined {
+  if (event.type === 'llm-call-finished') {
+    return `model\u0000${event.execution.rootRunId}\u0000${event.execution.graphRunId}\u0000${event.nodeId}\u0000${event.processId}\u0000${event.callId}`;
+  }
+
+  return event.toolCallId == null
+    ? undefined
+    : `tool\u0000${event.execution.rootRunId}\u0000${event.execution.graphRunId}\u0000${event.sourceNodeId}\u0000${event.sourceProcessId}\u0000${event.toolCallId}`;
 }
 
 function toModelCallTrace(event: Extract<AgentTraceEvent, { type: 'llm-call-finished' }>): AgentModelCallTrace {

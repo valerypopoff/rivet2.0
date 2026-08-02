@@ -8,6 +8,7 @@ import {
   globalRivetNodeRegistry,
   nodeDefinition,
   type ChartNode,
+  type ChatV2CallFinishedEvent,
   type GraphId,
   type GraphProgress,
   type Inputs,
@@ -28,6 +29,7 @@ import { loadTestGraphInProcessor, testProcessContext } from '../testUtils';
 type TrackedNode = ChartNode<'trackedTest', { delayMs: number; markEditorCacheHit?: boolean }>;
 type FailingNode = ChartNode<'failingTest', { delayMs: number }>;
 type LoopRequiredNode = ChartNode<'loopRequiredTest', Record<string, never>>;
+type ObservedLlmCallNode = ChartNode<'observedLlmCallTest', Record<string, never>>;
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -193,6 +195,47 @@ class LoopRequiredTestNodeImpl extends NodeImpl<LoopRequiredNode> {
 
 const loopRequiredTestNode = nodeDefinition(LoopRequiredTestNodeImpl, 'Loop Required Test');
 
+class ObservedLlmCallTestNodeImpl extends NodeImpl<ObservedLlmCallNode> {
+  static create(): ObservedLlmCallNode {
+    return {
+      type: 'observedLlmCallTest',
+      id: 'observed-llm-call-node' as NodeId,
+      title: 'Observed LLM Call Test',
+      visualData: { x: 0, y: 0, width: 175 },
+      data: {},
+    };
+  }
+
+  static getUIData() {
+    return {};
+  }
+
+  getInputDefinitions(): NodeInputDefinition[] {
+    return [];
+  }
+
+  getOutputDefinitions(): NodeOutputDefinition[] {
+    return [{ id: 'output' as PortId, title: 'Output', dataType: 'string' }];
+  }
+
+  process(_inputs: Inputs, context: InternalProcessContext): Outputs {
+    context.onChatV2CallFinished?.({
+      callId: 'nested-call' as never,
+      attemptIndex: 0,
+      nodeId: this.chartNode.id,
+      processId: context.processId!,
+      provider: 'openai',
+      model: 'test-model',
+      outcome: 'success',
+      pricing: { status: 'unknown' },
+    });
+
+    return { ['output' as PortId]: { type: 'string', value: 'done' } };
+  }
+}
+
+const observedLlmCallTestNode = nodeDefinition(ObservedLlmCallTestNodeImpl, 'Observed LLM Call Test');
+
 function createTrackedRegistry() {
   return createBuiltInRegistry().register(trackedTestNode);
 }
@@ -203,6 +246,10 @@ function createTimingRegistry() {
 
 function createLoopRequiredRegistry() {
   return createBuiltInRegistry().register(loopRequiredTestNode);
+}
+
+function createObservedLlmCallRegistry() {
+  return createBuiltInRegistry().register(observedLlmCallTestNode);
 }
 
 function makeProject(graph: any) {
@@ -230,6 +277,20 @@ function makeGraphOutputNode(id = 'output', dataType = 'any') {
       dataType,
     },
     visualData: { x: 500, y: 0, width: 300 },
+  };
+}
+
+function makeSubgraphNode(id: string, graphId: string) {
+  return {
+    id: id as NodeId,
+    type: 'subGraph',
+    title: id,
+    data: {
+      graphId,
+      useErrorOutput: false,
+      useAsGraphPartialOutput: false,
+    },
+    visualData: { x: 0, y: 0, width: 300 },
   };
 }
 
@@ -962,6 +1023,83 @@ void describe('GraphProcessor', () => {
 
     assert.deepEqual(outputs.result, { type: 'string', value: 'frozen child value' });
     assert.equal(TrackedTestNodeImpl.processCount, 0);
+  });
+
+  void it('emits a nested LLM call once with its nested execution identity', async () => {
+    const registry = createObservedLlmCallRegistry();
+    const observedNode = registry.create('observedLlmCallTest');
+    const childOutputNode = makeGraphOutputNode('childResult', 'string');
+    const childGraph = {
+      metadata: {
+        id: 'observed-call-child-graph',
+        name: 'Observed Call Child Graph',
+        description: '',
+      },
+      nodes: [observedNode, childOutputNode],
+      connections: [
+        {
+          outputNodeId: observedNode.id,
+          outputId: 'output' as PortId,
+          inputNodeId: childOutputNode.id,
+          inputId: 'value' as PortId,
+        },
+      ],
+    };
+    const middleSubgraphNode = makeSubgraphNode('call-observed-child', childGraph.metadata.id);
+    const middleOutputNode = makeGraphOutputNode('middleResult', 'string');
+    const middleGraph = {
+      metadata: {
+        id: 'observed-call-middle-graph',
+        name: 'Observed Call Middle Graph',
+        description: '',
+      },
+      nodes: [middleSubgraphNode, middleOutputNode],
+      connections: [
+        {
+          outputNodeId: middleSubgraphNode.id,
+          outputId: 'childResult' as PortId,
+          inputNodeId: middleOutputNode.id,
+          inputId: 'value' as PortId,
+        },
+      ],
+    };
+    const rootSubgraphNode = makeSubgraphNode('call-observed-middle', middleGraph.metadata.id);
+    const rootOutputNode = makeGraphOutputNode('result', 'string');
+    const rootGraph = {
+      metadata: {
+        id: 'observed-call-root-graph',
+        name: 'Observed Call Root Graph',
+        description: '',
+      },
+      nodes: [rootSubgraphNode, rootOutputNode],
+      connections: [
+        {
+          outputNodeId: rootSubgraphNode.id,
+          outputId: 'middleResult' as PortId,
+          inputNodeId: rootOutputNode.id,
+          inputId: 'value' as PortId,
+        },
+      ],
+    };
+    const project = makeProject(rootGraph);
+    project.graphs[middleGraph.metadata.id] = middleGraph as any;
+    project.graphs[childGraph.metadata.id] = childGraph as any;
+    const processor = new GraphProcessor(project, rootGraph.metadata.id as GraphId, registry);
+    const hostEvents: ChatV2CallFinishedEvent[] = [];
+    const processorEvents: ProcessEvents['llmCallFinished'][] = [];
+    processor.on('llmCallFinished', (event) => processorEvents.push(event));
+
+    const outputs = await processor.processGraph({
+      ...testProcessContext(),
+      onChatV2CallFinished: (event) => hostEvents.push(event),
+    });
+
+    assert.deepEqual(outputs.result, { type: 'string', value: 'done' });
+    assert.equal(hostEvents.length, 1);
+    assert.equal(processorEvents.length, 1);
+    assert.equal(processorEvents[0]!.callId, 'nested-call');
+    assert.equal(processorEvents[0]!.execution.graphId, childGraph.metadata.id);
+    assert.equal(processorEvents[0]!.execution.parentGraphRunId == null, false);
   });
 
   void it('keeps readiness and control-flow exclusions ahead of frozen output replay', async () => {
