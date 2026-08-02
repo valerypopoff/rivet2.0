@@ -407,6 +407,34 @@ void describe('runChatV2Pipeline', () => {
     assert.equal('requestBody' in events[0]!, false);
   });
 
+  void it('retains a cache subtotal when a provider reports only cache reads or writes', async () => {
+    for (const [inputTokenDetails, expectedCachedTokens] of [
+      [{ cacheReadTokens: 3 }, 3],
+      [{ cacheWriteTokens: 2 }, 2],
+    ] as const) {
+      const events: ChatV2CallFinishedEvent[] = [];
+      const executeStream: ChatV2StreamExecutor = async () => ({
+        fullStream: mockStream([]),
+        usage: {
+          inputTokens: 10,
+          outputTokens: 4,
+          inputTokenDetails,
+        },
+      });
+
+      await runChatV2Pipeline({
+        provider: 'openai',
+        model: createMockModel(),
+        modelId: 'gpt-5',
+        prompt: { type: 'string', value: 'Hello' },
+        context: createObservedContext(events),
+        executeStream,
+      });
+
+      assert.equal(events[0]?.normalizedUsage?.cachedTokens, expectedCachedTokens);
+    }
+  });
+
   void it('preserves missing usage fields and unknown pricing without substituting zero', async () => {
     const events: ChatV2CallFinishedEvent[] = [];
     const executeStream: ChatV2StreamExecutor = async () => ({
@@ -437,6 +465,90 @@ void describe('runChatV2Pipeline', () => {
     });
     assert.deepEqual(events[0]?.pricing, {
       status: 'unknown',
+    });
+  });
+
+  void it('reports a known GPT-5.6 Luna price for the physical call observed by Response Inspector', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    const executeStream: ChatV2StreamExecutor = async () => ({
+      fullStream: mockStream([
+        { type: 'text-start', id: 'text_1' },
+        { type: 'text-delta', id: 'text_1', text: 'Hello' },
+        { type: 'text-end', id: 'text_1' },
+      ]),
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+      },
+    });
+
+    await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5.6-luna',
+      prompt: { type: 'string', value: 'Hello' },
+      context: createObservedContext(events),
+      executeStream,
+    });
+
+    assert.deepEqual(events[0]?.pricing, {
+      status: 'known',
+      costUsd: 1.4,
+    });
+  });
+
+  void it('reports an explicitly unpriced Gemini model as unknown to Response Inspector', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    const executeStream: ChatV2StreamExecutor = async () => ({
+      fullStream: mockStream([
+        { type: 'text-start', id: 'text_1' },
+        { type: 'text-delta', id: 'text_1', text: 'Hello' },
+        { type: 'text-end', id: 'text_1' },
+      ]),
+      usage: {
+        inputTokens: 10,
+        outputTokens: 4,
+      },
+    });
+
+    await runChatV2Pipeline({
+      provider: 'google',
+      model: createMockModel(),
+      modelId: 'gemini-1.5-pro',
+      prompt: { type: 'string', value: 'Hello' },
+      context: createObservedContext(events),
+      executeStream,
+    });
+
+    assert.deepEqual(events[0]?.pricing, {
+      status: 'unknown',
+    });
+  });
+
+  void it('keeps known-model pricing unavailable when the provider omits a billable token count', async () => {
+    const events: ChatV2CallFinishedEvent[] = [];
+    const executeStream: ChatV2StreamExecutor = async () => ({
+      fullStream: mockStream([
+        { type: 'text-start', id: 'text_1' },
+        { type: 'text-delta', id: 'text_1', text: 'Hello' },
+        { type: 'text-end', id: 'text_1' },
+      ]),
+      usage: {
+        inputTokens: 12,
+      },
+    });
+
+    await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5.6-luna',
+      prompt: { type: 'string', value: 'Hello' },
+      context: createObservedContext(events),
+      executeStream,
+    });
+
+    assert.deepEqual(events[0]?.pricing, {
+      status: 'known',
     });
   });
 
@@ -480,6 +592,7 @@ void describe('runChatV2Pipeline', () => {
     });
     assert.deepEqual(malformedEvents[0]?.normalizedUsage, {
       completionTokens: 4,
+      cachedTokens: 1,
     });
     assert.deepEqual(malformedEvents[0]?.pricing, {
       status: 'known',

@@ -55,6 +55,66 @@ describe('chatV2Outputs', () => {
     });
   });
 
+  it('keeps a Usage cost unknown when the provider omitted one billable token count', () => {
+    assert.deepEqual(
+      normalizeChatV2Usage(
+        {
+          inputTokens: 12,
+        },
+        { provider: 'openai', modelId: 'gpt-5.6-luna' },
+      ),
+      {
+        promptTokens: 12,
+        completionTokens: 0,
+        totalTokens: 12,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        totalCost: undefined,
+      },
+    );
+  });
+
+  it('drops malformed provider token metadata instead of leaking it into Usage', () => {
+    assert.deepEqual(
+      normalizeChatV2Usage(
+        {
+          inputTokens: Number.NaN,
+          outputTokens: 8,
+          totalTokens: Number.POSITIVE_INFINITY,
+          inputTokenDetails: {
+            cacheReadTokens: -2,
+            cacheWriteTokens: 3,
+          },
+          outputTokenDetails: {
+            reasoningTokens: -1,
+          },
+        },
+        { provider: 'openai', modelId: 'gpt-5.6-luna' },
+      ),
+      {
+        promptTokens: 0,
+        completionTokens: 8,
+        totalTokens: 8,
+        cachedTokens: 3,
+        reasoningTokens: 0,
+        totalCost: undefined,
+      },
+    );
+  });
+
+  it('uses the same normalized pricing for GPT-5.6 Luna Usage output', () => {
+    assert.equal(
+      normalizeChatV2Usage(
+        {
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        },
+        { provider: 'openai', modelId: 'gpt-5.6-luna' },
+      )?.totalCost,
+      1.4,
+    );
+  });
+
   it('builds successful common outputs including structured response, usage, reasoning, tools, and retry status', () => {
     const usage = normalizeChatV2Usage(
       {

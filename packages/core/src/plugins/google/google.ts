@@ -74,20 +74,16 @@ export const generativeAiGoogleModels = {
   },
   'gemini-1.5-pro': {
     maxTokens: 2097152,
-    cost: {
-      prompt: 0, // It's per-character wtf
-      completion: 0, // It's per-character
-    },
     displayName: 'Gemini 1.5 Pro',
+    // The retained legacy model stays selectable, but its old catalog did not
+    // carry a reliable token rate. Do not turn that absence into a false $0.
+    pricing: 'unpriced' as const,
   },
   'gemini-1.5-flash': {
     maxTokens: 1048576,
-    cost: {
-      prompt: 0, // It's per-character wtf
-      completion: 0, // It's per-character
-    },
     displayName: 'Gemini 1.5 Flash',
-  }
+    pricing: 'unpriced' as const,
+  },
 };
 
 export type GenerativeAiGoogleModel = keyof typeof generativeAiGoogleModels;

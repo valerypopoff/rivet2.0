@@ -5,7 +5,8 @@ import type { Outputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import { createAssistantMessagesOutput, type StreamedFunctionCall } from '../chat/streamChatResponse.js';
 import { isChatV2StructuredResponseFormat } from './chatV2ResponseFormat.js';
-import { calculateChatV2Cost } from './modelRegistry.js';
+import { calculateChatV2UsageCost } from './modelRegistry.js';
+import { isChatV2FiniteNonNegativeNumber } from './chatV2UsageAccounting.js';
 import {
   shouldOutputChatV2RequestBody,
   shouldOutputChatV2RequestError,
@@ -98,12 +99,24 @@ export function normalizeChatV2Usage(
     return undefined;
   }
 
-  const promptTokens = usage.inputTokens ?? 0;
-  const completionTokens = usage.outputTokens ?? 0;
-  const totalTokens = usage.totalTokens ?? promptTokens + completionTokens;
+  // Provider usage metadata crosses a runtime boundary and can be malformed.
+  // Keep the node's portable Usage output aligned with the physical-call
+  // observer: only finite, non-negative token counts are meaningful.
+  const promptTokens = isChatV2FiniteNonNegativeNumber(usage.inputTokens) ? usage.inputTokens : 0;
+  const completionTokens = isChatV2FiniteNonNegativeNumber(usage.outputTokens) ? usage.outputTokens : 0;
+  const totalTokens = isChatV2FiniteNonNegativeNumber(usage.totalTokens)
+    ? usage.totalTokens
+    : promptTokens + completionTokens;
   const cachedTokens =
-    (usage.inputTokenDetails?.cacheReadTokens ?? 0) + (usage.inputTokenDetails?.cacheWriteTokens ?? 0);
-  const reasoningTokens = usage.outputTokenDetails?.reasoningTokens ?? 0;
+    (isChatV2FiniteNonNegativeNumber(usage.inputTokenDetails?.cacheReadTokens)
+      ? usage.inputTokenDetails.cacheReadTokens
+      : 0) +
+    (isChatV2FiniteNonNegativeNumber(usage.inputTokenDetails?.cacheWriteTokens)
+      ? usage.inputTokenDetails.cacheWriteTokens
+      : 0);
+  const reasoningTokens = isChatV2FiniteNonNegativeNumber(usage.outputTokenDetails?.reasoningTokens)
+    ? usage.outputTokenDetails.reasoningTokens
+    : 0;
 
   return {
     promptTokens,
@@ -111,7 +124,7 @@ export function normalizeChatV2Usage(
     totalTokens,
     cachedTokens,
     reasoningTokens,
-    totalCost: calculateChatV2Cost(options.provider, options.modelId, promptTokens, completionTokens),
+    totalCost: calculateChatV2UsageCost(options.provider, options.modelId, usage),
   };
 }
 

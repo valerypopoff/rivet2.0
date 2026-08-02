@@ -7,6 +7,11 @@ import { parseProviderJsonChunk } from './providerStreamParsing.js';
 
 export type OpenAIModel = {
   maxTokens: number;
+  /**
+   * USD per 1,000 tokens. This is the legacy Chat-node unit consumed by
+   * `chatCost.getCostForTokens`; LLM Chat V2 normalizes it at its own registry
+   * boundary before multiplying by raw token counts.
+   */
   cost: {
     prompt: number;
     completion: number;
@@ -26,11 +31,55 @@ export const defaultOpenaiSupported: NonNullable<OpenAIModel['supported']> = {
 };
 
 export const openaiModels = {
+  'gpt-5.6': {
+    maxTokens: 1_050_000,
+    cost: {
+      prompt: 0.005,
+      completion: 0.03,
+    },
+    displayName: 'GPT-5.6',
+    supported: {
+      parallelFunctionCalls: true,
+    },
+  },
+  'gpt-5.6-sol': {
+    maxTokens: 1_050_000,
+    cost: {
+      prompt: 0.005,
+      completion: 0.03,
+    },
+    displayName: 'GPT-5.6 Sol',
+    supported: {
+      parallelFunctionCalls: true,
+    },
+  },
+  'gpt-5.6-terra': {
+    maxTokens: 1_050_000,
+    cost: {
+      prompt: 0.002,
+      completion: 0.012,
+    },
+    displayName: 'GPT-5.6 Terra',
+    supported: {
+      parallelFunctionCalls: true,
+    },
+  },
+  'gpt-5.6-luna': {
+    maxTokens: 1_050_000,
+    cost: {
+      prompt: 0.0002,
+      completion: 0.0012,
+    },
+    displayName: 'GPT-5.6 Luna',
+    supported: {
+      parallelFunctionCalls: true,
+    },
+  },
   'gpt-5': {
     maxTokens: 400000,
     cost: {
-      prompt: 1.25e-6,
-      completion: 10e-6,
+      prompt: 1.25e-3,
+      completion: 0.01,
     },
     displayName: 'GPT-5',
     supported: {
@@ -40,8 +89,8 @@ export const openaiModels = {
   'gpt-5-mini': {
     maxTokens: 400000,
     cost: {
-      prompt: 0.25 - 6,
-      completion: 2e-6,
+      prompt: 0.25e-3,
+      completion: 0.002,
     },
     displayName: 'GPT-5 mini',
     supported: {
@@ -51,8 +100,8 @@ export const openaiModels = {
   'gpt-5-nano': {
     maxTokens: 400000,
     cost: {
-      prompt: 0.05e-6,
-      completion: 0.4e-6,
+      prompt: 0.05e-3,
+      completion: 0.0004,
     },
     displayName: 'GPT-5 nano',
     supported: {
@@ -62,8 +111,8 @@ export const openaiModels = {
   'gpt-4o': {
     maxTokens: 128000,
     cost: {
-      prompt: 0.005,
-      completion: 0.015,
+      prompt: 0.0025,
+      completion: 0.01,
     },
     displayName: 'GPT-4o',
   },
@@ -71,7 +120,7 @@ export const openaiModels = {
     maxTokens: 128000,
     cost: {
       prompt: 0.00015,
-      completion: 0.00075,
+      completion: 0.0006,
     },
     displayName: 'GPT-4o mini',
   },
@@ -79,7 +128,7 @@ export const openaiModels = {
     maxTokens: 128000,
     cost: {
       prompt: 0.015,
-      completion: 0.6,
+      completion: 0.06,
     },
     displayName: 'o1',
     supported: {
@@ -121,24 +170,24 @@ export const openaiModels = {
   'gpt-4.1': {
     maxTokens: 1_047_576,
     cost: {
-      prompt: 2e-6,
-      completion: 8e-6,
+      prompt: 0.002,
+      completion: 0.008,
     },
     displayName: 'GPT-4.1',
   },
   o3: {
     maxTokens: 200_000,
     cost: {
-      prompt: 10e-6,
-      completion: 40e-6,
+      prompt: 0.01,
+      completion: 0.04,
     },
     displayName: 'o3',
   },
   'o4-mini': {
     maxTokens: 200_000,
     cost: {
-      prompt: 1.1e-6,
-      completion: 4.4e-6,
+      prompt: 0.0011,
+      completion: 0.0044,
     },
     displayName: 'o4-mini',
   },

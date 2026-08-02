@@ -48,6 +48,19 @@ test('OpenAI model refresh uses the explicit API key override', async () => {
   assert.equal(authorization, 'Bearer input-openai-key');
 });
 
+test('OpenAI model refresh retains static GPT-5.6 Luna when the API list omits it', async () => {
+  const context = createContext('input-openai-key');
+
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: [{ id: 'gpt-api-only-model' }] }));
+
+  invalidateChatV2DiscoveredModelOptions('openai', context);
+  const result = await getChatV2DiscoveredModelOptionsWithStatus('openai', context);
+
+  assert.equal(result.source, 'api');
+  assert.ok(result.options.some((option) => option.value === 'gpt-api-only-model'));
+  assert.ok(result.options.some((option) => option.value === 'gpt-5.6-luna'));
+});
+
 test('OpenAI model refresh ignores stale legacy endpoint and chat headers', async () => {
   const context = {
     settings: {

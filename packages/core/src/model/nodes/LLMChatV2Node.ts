@@ -6,7 +6,7 @@ import type { NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '
 import type { NodeBodySpec } from '../NodeBodySpec.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
-import type { InternalProcessContext } from '../ProcessContext.js';
+import type { ChatV2CallFinishedEvent, InternalProcessContext } from '../ProcessContext.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { getCommonChatV2Inputs, getCommonChatV2Outputs } from '../chat-v2/chatV2Shared.js';
 import { getLLMChatV2Editors } from '../chat-v2/llmChatV2NodeEditors.js';
@@ -22,6 +22,7 @@ import {
   compactLLMProfileRequestStatuses,
 } from '../chat-v2/llmProfileFallback.js';
 import { getChatV2ModelInfo } from '../chat-v2/modelRegistry.js';
+import { summarizeChatV2PhysicalCallUsage } from '../chat-v2/chatV2UsageAccounting.js';
 import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from '../chat-v2/chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
@@ -430,11 +431,29 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
+    const physicalCallEvents: ChatV2CallFinishedEvent[] = [];
+    // Usage is a node-level output, while retries, fallback profiles, and tool
+    // continuation produce several physical provider calls underneath it.
+    // Observe those calls locally before runtime assembly so the final Usage
+    // can reflect the same physical-call boundary as Response Inspector.
+    const usageTrackingContext = this.data.outputUsage
+      ? {
+          ...context,
+          onChatV2CallFinished: (event: ChatV2CallFinishedEvent) => {
+            try {
+              physicalCallEvents.push(event);
+            } catch {
+              // Accounting is observational and must never affect a provider call.
+            }
+            return context.onChatV2CallFinished?.(event);
+          },
+        }
+      : context;
     const runtime = await resolveLLMChatV2RuntimeConfig({
       data: this.data,
       nodeId: this.chartNode.id,
       inputs,
-      context,
+      context: usageTrackingContext,
     });
     const toolCallContinuation = context.toolCallContinuation;
 
@@ -503,6 +522,17 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
           runPipeline: runtime.runPipeline,
         })
       : await runtime.runPipeline(runtime.runOptions);
+
+    if (this.data.outputUsage && physicalCallEvents.length > 0) {
+      const physicalUsage = summarizeChatV2PhysicalCallUsage(physicalCallEvents);
+      if (physicalUsage != null) {
+        result.usage = physicalUsage;
+        result.commonOutputs['usage' as PortId] = {
+          type: 'object',
+          value: physicalUsage,
+        };
+      }
+    }
 
     if (runtime.profileAttempts != null) {
       result.commonOutputs['llmProfileAttempts' as PortId] = {
