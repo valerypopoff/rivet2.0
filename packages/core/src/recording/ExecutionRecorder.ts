@@ -54,11 +54,12 @@ const toRecordedEventMap: {
       },
       execution,
     ),
-  nodeStart: ({ node, inputs, processId, resultOrigin, execution }) =>
+  nodeStart: ({ node, inputs, inputConnections, processId, resultOrigin, execution }) =>
     withExecution(
       {
         nodeId: node.id,
         inputs,
+        ...(inputConnections == null ? {} : { inputConnections }),
         processId,
         ...(resultOrigin === undefined ? {} : { resultOrigin }),
       },

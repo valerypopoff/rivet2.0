@@ -30,6 +30,7 @@ const ITEMS: RunActivityItemViewModel[] = [
     navigable: true,
     fullOutputAvailable: true,
     inspectable: true,
+    inputProvenanceAvailable: true,
     resultOrigin: 'executed',
   },
   {
@@ -85,6 +86,7 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
   const located: string[] = [];
   const fullOutputs: string[] = [];
   const inspected: string[] = [];
+  const inspectedInputs: string[] = [];
   const diagnosticsCopied: boolean[] = [];
   const columnWidths: Array<{ nodeName: number; graphName: number; nodeType: number }> = [];
   const viewModel: RunActivityViewModel = {
@@ -106,6 +108,7 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
           onLocate={(item) => located.push(item.activityKey)}
           onOpenFullOutput={(item) => fullOutputs.push(item.activityKey)}
           onInspectResponse={(item) => inspected.push(item.activityKey)}
+          onInspectValueProvenance={(item) => inspectedInputs.push(item.activityKey)}
           onCopyDiagnostics={() => diagnosticsCopied.push(true)}
           onColumnWidthsChange={(widths) => columnWidths.push(widths)}
         />,
@@ -162,14 +165,16 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
     const buttons = [...modelRow.querySelectorAll<HTMLButtonElement>('.run-activity-row-actions button')];
     assert.deepEqual(
       buttons.map((button) => button.textContent?.trim()),
-      ['Locate on canvas', 'Open full output', 'Inspect response'],
+      ['Locate on canvas', 'Open full output', 'Inspect response', 'Explain inputs'],
     );
     await act(async () => buttons[0]!.click());
     await act(async () => buttons[1]!.click());
     await act(async () => buttons[2]!.click());
+    await act(async () => buttons[3]!.click());
     assert.deepEqual(located, ['root:graph:model:process']);
     assert.deepEqual(fullOutputs, ['root:graph:model:process']);
     assert.deepEqual(inspected, ['root:graph:model:process']);
+    assert.deepEqual(inspectedInputs, ['root:graph:model:process']);
 
     const errorsFilter = [...document.querySelectorAll<HTMLButtonElement>('.segmented-choice-option')].find(
       (button) => button.textContent === 'Errors',

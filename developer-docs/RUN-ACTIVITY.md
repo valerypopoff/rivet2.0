@@ -47,6 +47,11 @@ use that sequence for presentation order; later completion events update the
 row without moving it. Timestamps remain display and duration data, not the
 primary ordering key.
 
+The main activity list stays time-ordered so parallel work remains legible.
+Expanded subgraph rows expose their graph-run path and exact caller metadata
+(`parentGraphRunId` / executor) instead of trying to infer nesting from graph
+names or timestamps.
+
 ## Lifecycle semantics
 
 Keep these states distinct:
@@ -72,6 +77,13 @@ Treat the root-settlement marker as provisional: a later exact node or graph
 terminal must clear `terminalEventMissing` and replace the provisional child
 status with the observed terminal status.
 
+Conversely, delayed duplicate root/graph starts or node `nodeStart`,
+`userInput`, and `progress` events must never reopen a settled root or
+resurrect an invocation that already reached (or was provisionally closed by)
+a terminal state. Keep its terminal status and any richer metadata already
+captured. A delayed child discovered after root settlement is retained as a
+missing-terminal child rather than shown as running or waiting.
+
 An exact root-graph terminal event is followed by an unscoped processor
 `done`, `error`, or `abort` confirmation. The reducer tracks those pending
 confirmations separately. It must consume the confirmation without applying it
@@ -80,6 +92,13 @@ to whichever other root happens to be the only active run at that moment.
 Partial-output events update the existing invocation entry. They must be
 coalesced rather than appended as timeline rows. Parallel node and tool work
 retains separate entries and stable ordering.
+
+`userInput` changes the exact invocation to `waiting` and records only the
+question count and rendering type; never retain question text or its callback.
+`progress` records the latest normalized percent/message for that invocation.
+These events are additive observability, not generic scheduler-blocking
+diagnostics: do not label an undispatched node as waiting without an explicit
+runtime event and exact execution identity.
 
 ## Retention and value ownership
 
@@ -101,6 +120,32 @@ rather than throwing or substituting `undefined`. Journal eviction does not own
 or delete ordinary node-history values; those remain governed by the
 execution-data lifecycle.
 
+### Input provenance
+
+Expanded Run Activity rows with recorded inputs expose **Explain inputs**. The
+inspector prefers the selected invocation's effective, value-free input-edge
+snapshot, captured at `nodeStart` after Data Bus preprocessing, and combines it
+with the ordinary per-invocation input/output store; it is not a
+second value store and does not add values, prompts, or credentials to the
+journal. Snapshot retention strips every field except the four endpoint ids.
+It expands Data Bus channels through the same compiled topology used
+by execution, then follows upstream node inputs recursively with a bounded
+depth. It uses the existing bounded stored-value previews, except that
+credential-like input ports (for example `apiKey`, `token`, `authorization`,
+or `password`) never display their value preview.
+
+The producer process shown for a connection is the latest compatible recorded
+producer before the consumer invocation in that graph run. This is a useful,
+conservative association for ordinary flow, but it is not a new runtime
+causality guarantee for arbitrary repeated/looped work. If a producer record,
+captured edge, current graph fallback, or Data Bus topology is unavailable, the
+inspector must say so instead of guessing. Older recordings and remote hosts
+that did not provide the snapshot may use current effective graph wiring, and
+the inspector must mark that reduced confidence explicitly. Inputs without a
+graph connection are labelled as supplied outside ordinary graph wiring (for
+example node configuration/defaults) when a value was recorded, or as not
+supplied when no value was recorded.
+
 The default bounds retain every active root plus the newest completed root,
 2,000 node invocations per root, 250 model-call rows per invocation, and 500
 tool-call rows per invocation. Totals and omitted-row counters remain truthful
@@ -108,7 +153,9 @@ after row storage reaches a bound.
 
 The presentation model carries the selected `rootRunId`. Stateful views use
 that identity—not item counts or timestamps—to reset expansion and live-follow
-bookkeeping when the selected root changes.
+bookkeeping when the selected root changes. Invocation inspectors close when
+the drawer closes or the selected root changes, so they cannot present an older
+run beside a newly selected activity timeline.
 
 ## Result provenance
 
@@ -162,6 +209,16 @@ counts come from explicit attempt/profile metadata, not inferred timing.
 Run Activity reuses the response-inspector model for metadata when it is
 available. It must not introduce another trace format or another cost/usage
 aggregation path.
+
+The root header may aggregate retained physical model/tool counts, normalized
+usage, and known model cost. It must identify incomplete cost as partial when a
+retained call has unknown pricing or bounded trace retention omitted calls;
+never present that subtotal as a complete total. Roots with no model or tool
+activity do not render an empty accounting summary. Per-row response inspection
+remains the authoritative detailed accounting view.
+
+Copy diagnostics may include this bounded root accounting summary, but must not
+derive or export provider request data, stored values, or input-preview rows.
 
 The response projection deduplicates transport redelivery by stable
 physical-call identity before calculating rows or totals. Model identity

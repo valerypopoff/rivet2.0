@@ -50,6 +50,7 @@ export type RecordedEventsMap = OverrideProperties<
     nodeStart: WithOptionalExecution<{
       nodeId: NodeId;
       inputs: Inputs;
+      inputConnections?: ProcessEvents['nodeStart']['inputConnections'];
       processId: ProcessId;
       resultOrigin?: ProcessEvents['nodeStart']['resultOrigin'];
     }>;

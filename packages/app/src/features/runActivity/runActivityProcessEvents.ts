@@ -16,6 +16,8 @@ const RUN_ACTIVITY_PROCESS_EVENT_NAMES = new Set<keyof ProcessEventMessageMap>([
   'graphError',
   'graphAbort',
   'nodeStart',
+  'userInput',
+  'progress',
   'partialOutput',
   'nodeFinish',
   'nodeError',

@@ -247,6 +247,7 @@ export async function replayExecutionRecording(options: {
           emitDetached(emitter, 'nodeStart', {
             node,
             inputs: data.inputs,
+            ...(data.inputConnections === undefined ? {} : { inputConnections: data.inputConnections }),
             processId: data.processId as ProcessId,
             ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
             execution,

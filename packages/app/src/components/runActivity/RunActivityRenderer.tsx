@@ -38,10 +38,12 @@ import { hasStoredPortMapValues, hasStoredSplitOutputValues } from '../../utils/
 import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
 import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { RunActivityDrawer } from './RunActivityDrawer.js';
+import { ValueProvenanceInspector } from './ValueProvenanceInspector.js';
 import {
   areRunActivityColumnWidthsEqual,
   normalizeRunActivityColumnWidths,
 } from '../../features/runActivity/runActivityColumnWidths.js';
+import { buildValueProvenanceReport } from '../../features/runActivity/valueProvenance.js';
 import {
   buildRunActivityViewModel,
   selectRunActivityRoot,
@@ -67,6 +69,7 @@ export const RunActivityRenderer: FC = () => {
     node: ChartNode;
     processData: ProcessDataForNode;
   }>();
+  const [provenanceItem, setProvenanceItem] = useState<RunActivityItemViewModel>();
   const goToNode = useGoToNode();
   const setOpenOverlay = useSetAtom(overlayOpenState);
   const setSelectedGraphRunByView = useSetAtom(selectedGraphRunByViewState);
@@ -192,6 +195,33 @@ export const RunActivityRenderer: FC = () => {
     setInspectedProcess({ node: effectiveNode, processData });
   });
 
+  const handleInspectValueProvenance = useStableCallback((item: RunActivityItemViewModel) => {
+    setProvenanceItem(item);
+  });
+
+  const provenanceReport = useMemo(() => {
+    if (provenanceItem == null) return undefined;
+    const root = journal.rootsById[provenanceItem.identity.rootRunId];
+    const invocation = root?.nodeInvocationsByKey[provenanceItem.activityKey];
+    const graph = getCurrentGraphDefinition(
+      project.graphs[provenanceItem.graphId],
+      currentGraph,
+      provenanceItem.graphId,
+    );
+    if (!root || !invocation || !graph) return undefined;
+    return buildValueProvenanceReport({ graph, root, target: invocation, runDataByNode });
+  }, [currentGraph, journal.rootsById, project.graphs, provenanceItem, runDataByNode]);
+
+  useEffect(() => {
+    if (provenanceItem != null && provenanceReport == null) setProvenanceItem(undefined);
+  }, [provenanceItem, provenanceReport]);
+
+  useEffect(() => {
+    if (provenanceItem != null && (!open || selectedRoot?.rootRunId !== provenanceItem.identity.rootRunId)) {
+      setProvenanceItem(undefined);
+    }
+  }, [open, provenanceItem, selectedRoot?.rootRunId]);
+
   const handleCopyDiagnostics = useStableCallback(() => {
     const diagnostic = {
       status: viewModel.status,
@@ -199,6 +229,7 @@ export const RunActivityRenderer: FC = () => {
       outputsReadyAt: viewModel.outputsReadyAt,
       durationMs: viewModel.durationMs,
       backgroundWorkPending: viewModel.backgroundWorkPending ?? false,
+      accounting: viewModel.accounting,
       partialReason: viewModel.partialReason,
       omittedItemCount: viewModel.omittedItemCount ?? 0,
       activities: viewModel.items.map((item) => ({
@@ -242,10 +273,14 @@ export const RunActivityRenderer: FC = () => {
         onLocate={selectExactInvocation}
         onOpenFullOutput={handleOpenFullOutput}
         onInspectResponse={handleInspectResponse}
+        onInspectValueProvenance={handleInspectValueProvenance}
         onCopyDiagnostics={handleCopyDiagnostics}
       />
       {inspectedProcess && (
         <AgentResponseInspector trace={inspectedTrace} onClose={() => setInspectedProcess(undefined)} renderInPortal />
+      )}
+      {provenanceItem && provenanceReport && (
+        <ValueProvenanceInspector report={provenanceReport} onClose={() => setProvenanceItem(undefined)} />
       )}
     </>
   );

@@ -168,6 +168,8 @@ export type ProcessEvents = {
   nodeStart: WithExecution<{
     node: ChartNode;
     inputs: Inputs;
+    /** Effective, value-free producer edges after Data Bus preprocessing. */
+    inputConnections?: NodeConnection[];
     processId: ProcessId;
     resultOrigin?: NodeResultOrigin;
   }>;
@@ -2373,6 +2375,7 @@ export class GraphProcessor {
   async #processSplitRunNode(node: ChartNode, processId: ProcessId) {
     return processSplitRunNode(node, processId, {
       getInputValues: (n) => this.#getInputValuesForNode(n),
+      getInputConnections: (n) => this.#getInputConnectionsForNode(n),
       getInputDefinitions: (n) => this.#definitions[n.id]?.inputs ?? [],
       isExcludedDueToControlFlow: (n, inputs, pid) => this.#excludedDueToControlFlow(n, inputs, pid) !== false,
       processNodeWithInputData: (n, inputs, idx, pid, partial, markResultAsEditorCacheHit) =>
@@ -2411,7 +2414,13 @@ export class GraphProcessor {
   async #processFrozenNode(node: ChartNode, processId: ProcessId, inputValues: Inputs, outputValues: Outputs) {
     await this.#emitter.emit(
       'nodeStart',
-      this.#withExecution({ node, inputs: inputValues, processId, resultOrigin: 'frozen' as const }),
+      this.#withExecution({
+        node,
+        inputs: inputValues,
+        inputConnections: this.#getInputConnectionsForNode(node),
+        processId,
+        resultOrigin: 'frozen' as const,
+      }),
     );
 
     const timingStart = this.#startNodeTiming();
@@ -2460,7 +2469,13 @@ export class GraphProcessor {
     // macrotask queue, giving the browser a chance to repaint during execution.
     await this.#emitter.emit(
       'nodeStart',
-      this.#withExecution({ node, inputs: inputValues, processId, resultOrigin: 'executed' as const }),
+      this.#withExecution({
+        node,
+        inputs: inputValues,
+        inputConnections: this.#getInputConnectionsForNode(node),
+        processId,
+        resultOrigin: 'executed' as const,
+      }),
     );
 
     const timingStart = this.#startNodeTiming();
@@ -2976,7 +2991,13 @@ export class GraphProcessor {
       emitDelegateStart: (node, inputs, processId) =>
         this.#emitter.emit(
           'nodeStart',
-          this.#withExecution({ node, inputs, processId, resultOrigin: 'executed' as const }),
+          this.#withExecution({
+            node,
+            inputs,
+            inputConnections: this.#getInputConnectionsForNode(node),
+            processId,
+            resultOrigin: 'executed' as const,
+          }),
         ),
       getActiveOutputPortIds: (node) => this.#getActiveOutputPortIds(node),
       getContinuationBranchBoundaryNodeIds: (llmNode) => new Set<NodeId>([llmNode.id, ...this.#currentlyProcessing]),
@@ -3731,6 +3752,17 @@ export class GraphProcessor {
       },
       {} as Record<string, any>,
     );
+  }
+
+  #getInputConnectionsForNode(node: ChartNode): NodeConnection[] {
+    return this.#getEffectiveConnections()
+      .filter((connection) => connection.inputNodeId === node.id)
+      .map(({ outputNodeId, outputId, inputNodeId, inputId }) => ({
+        outputNodeId,
+        outputId,
+        inputNodeId,
+        inputId,
+      }));
   }
 
   get #executionState(): ExecutionState {

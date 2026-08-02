@@ -180,6 +180,12 @@ test('projects stable exact invocation rows, bounded stored previews, children, 
   assert.equal(viewModel.status, 'outputs-ready');
   assert.equal(viewModel.backgroundWorkPending, true);
   assert.equal(viewModel.durationMs, 750);
+  assert.deepEqual(viewModel.accounting, {
+    modelCallCount: 2,
+    toolCallCount: 1,
+    knownCostUsd: 0.01,
+    costStatus: 'partial',
+  });
   assert.equal(viewModel.omittedItemCount, 3);
   assert.match(viewModel.partialReason ?? '', /exact run identity/);
   assert.match(viewModel.partialReason ?? '', /2 legacy events/);
@@ -248,6 +254,34 @@ test('does not recursively materialize large or cyclic inline values', () => {
   assert.match(preview, /visible/);
   assert.match(preview, /Circular/);
   assert.ok(preview.length <= RUN_ACTIVITY_PREVIEW_MAX_CHARS);
+});
+
+test('only exposes input provenance when an invocation has a recorded or connected input', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const capturedInvocation = invocation({
+    key: 'input-provenance',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'text',
+    processId: 'text-process',
+  });
+  selectedRoot.nodeInvocationsByKey[capturedInvocation.key] = capturedInvocation;
+  selectedRoot.nodeInvocationOrder = [capturedInvocation.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const withoutInputs = buildRunActivityViewModel(journal, () => ({
+    runData: { inputData: {}, outputData: {} },
+  }));
+  assert.equal(withoutInputs.items[0]?.inputProvenanceAvailable, false);
+
+  capturedInvocation.inputPortIds = ['prompt' as PortId];
+  const withConnectedInput = buildRunActivityViewModel(journal, () => ({
+    runData: { inputData: {}, outputData: {} },
+  }));
+  assert.equal(withConnectedInput.items[0]?.inputProvenanceAvailable, true);
 });
 
 test('empty journal discloses ignored legacy events without inventing a run', () => {

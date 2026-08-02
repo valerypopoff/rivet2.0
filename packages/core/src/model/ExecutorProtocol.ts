@@ -1,6 +1,6 @@
 import type { DataValue, ScalarOrArrayDataValue, StringArrayDataValue } from './DataValue.js';
 import type { Dataset, DatasetId, DatasetMetadata, DatasetRow } from './Dataset.js';
-import type { ChartNode, NodeId, PortId } from './NodeBase.js';
+import type { ChartNode, NodeConnection, NodeId, PortId } from './NodeBase.js';
 import type { GraphId, NodeGraph } from './NodeGraph.js';
 import type {
   ChatV2CallTraceEvent,
@@ -45,6 +45,7 @@ export type SerializedProcessEventMap = {
   nodeStart: WithExecution<{
     node: ChartNode;
     inputs: Inputs;
+    inputConnections?: NodeConnection[];
     processId: ProcessId;
     resultOrigin?: NodeResultOrigin;
   }>;

@@ -35,6 +35,7 @@ import type {
   RunActivityItemStatus,
   RunActivityItemViewModel,
   RunActivityStatus,
+  RunActivityViewModel,
 } from './types.js';
 import { filterRunActivityItems } from './filterRunActivityItems.js';
 
@@ -457,6 +458,10 @@ const drawerStyles = css`
     border-color: color-mix(in srgb, var(--primary) 48%, var(--app-panel-border));
   }
 
+  .run-activity-row.status-waiting {
+    border-color: color-mix(in srgb, var(--warning) 46%, var(--app-panel-border));
+  }
+
   .run-activity-row-toggle {
     align-items: center;
     width: 100%;
@@ -491,6 +496,10 @@ const drawerStyles = css`
 
   .run-activity-status-dot.status-running {
     background: var(--primary);
+  }
+
+  .run-activity-status-dot.status-waiting {
+    background: var(--warning);
   }
 
   .run-activity-status-dot.status-error,
@@ -812,6 +821,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
   onLocate,
   onOpenFullOutput,
   onInspectResponse,
+  onInspectValueProvenance,
   onCopyDiagnostics,
   height = DEFAULT_RUN_ACTIVITY_DRAWER_HEIGHT,
   onHeightChange,
@@ -1170,6 +1180,9 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
             {rootStatus}
             {viewModel.durationMs == null ? '' : ` / ${formatDuration(viewModel.durationMs)}`}
           </span>
+          {viewModel.accounting && (
+            <span className="run-activity-summary">{formatAccounting(viewModel.accounting)}</span>
+          )}
         </div>
         <div className="run-activity-header-controls">
           <div className="run-activity-filters">
@@ -1297,6 +1310,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
                   onLocate={onLocate}
                   onOpenFullOutput={onOpenFullOutput}
                   onInspectResponse={onInspectResponse}
+                  onInspectValueProvenance={onInspectValueProvenance}
                   renderExpandedContent={renderExpandedContent}
                 />
               ))}
@@ -1385,8 +1399,18 @@ const RunActivityRow: FC<{
   onLocate?: RunActivityDrawerProps['onLocate'];
   onOpenFullOutput?: RunActivityDrawerProps['onOpenFullOutput'];
   onInspectResponse?: RunActivityDrawerProps['onInspectResponse'];
+  onInspectValueProvenance?: RunActivityDrawerProps['onInspectValueProvenance'];
   renderExpandedContent?: RunActivityDrawerProps['renderExpandedContent'];
-}> = ({ item, expanded, onToggle, onLocate, onOpenFullOutput, onInspectResponse, renderExpandedContent }) => {
+}> = ({
+  item,
+  expanded,
+  onToggle,
+  onLocate,
+  onOpenFullOutput,
+  onInspectResponse,
+  onInspectValueProvenance,
+  renderExpandedContent,
+}) => {
   const preview = item.error ?? item.preview ?? describeActivity(item);
   return (
     <article
@@ -1463,6 +1487,15 @@ const RunActivityRow: FC<{
                 Inspect response
               </button>
             )}
+            {item.inputProvenanceAvailable && onInspectValueProvenance && (
+              <button
+                type="button"
+                className="run-activity-action-button"
+                onClick={() => onInspectValueProvenance(item)}
+              >
+                Explain inputs
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1509,6 +1542,7 @@ export function getMaximumRunActivityDrawerHeight(
 }
 
 function describeActivity(item: RunActivityItemViewModel): string {
+  if (item.status === 'waiting') return 'Waiting for input';
   if (item.status === 'running') return 'Running';
   if (item.status === 'not-ran') return 'Not run';
   if (item.category === 'model') return 'Model response';
@@ -1553,6 +1587,25 @@ function formatDuration(value: number): string {
 
 function formatTime(value: number): string {
   return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(value);
+}
+
+function formatAccounting(accounting: NonNullable<RunActivityViewModel['accounting']>): string {
+  const parts = [
+    `${accounting.modelCallCount} model ${accounting.modelCallCount === 1 ? 'call' : 'calls'}`,
+    `${accounting.toolCallCount} tool ${accounting.toolCallCount === 1 ? 'call' : 'calls'}`,
+  ];
+  if (accounting.promptTokens != null || accounting.completionTokens != null) {
+    parts.push(`${accounting.promptTokens ?? 0} in / ${accounting.completionTokens ?? 0} out tokens`);
+  }
+  const tokenDetails = [
+    accounting.cachedTokens == null ? undefined : `${accounting.cachedTokens} cached`,
+    accounting.reasoningTokens == null ? undefined : `${accounting.reasoningTokens} reasoning`,
+  ].filter((detail): detail is string => detail != null);
+  if (tokenDetails.length > 0) parts.push(tokenDetails.join(', '));
+  if (accounting.costStatus !== 'unknown') {
+    parts.push(`$${accounting.knownCostUsd.toFixed(6)}${accounting.costStatus === 'partial' ? ' partial' : ''}`);
+  }
+  return parts.join(' · ');
 }
 
 function toDomId(value: string): string {

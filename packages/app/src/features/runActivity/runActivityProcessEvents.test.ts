@@ -89,3 +89,39 @@ test('recognizes the reserved legacy preload process identity', () => {
     'preloaded',
   );
 });
+
+test('projects user-input and progress events through the process-event boundary', () => {
+  const processId = 'interactive' as ProcessId;
+  let journal = applyProcessEventToRunActivityJournal({
+    journal: createRunActivityJournal(),
+    message: 'userInput',
+    occurredAt: 1,
+    data: {
+      node,
+      processId,
+      inputs: {},
+      inputStrings: ['Choose one'],
+      renderingType: 'markdown',
+      execution,
+    } satisfies ProcessEventMessageMap['userInput'],
+  });
+  journal = applyProcessEventToRunActivityJournal({
+    journal,
+    message: 'progress',
+    occurredAt: 2,
+    data: {
+      node,
+      processId,
+      progress: { percent: 50, message: 'Preparing choices' },
+      execution,
+    } satisfies ProcessEventMessageMap['progress'],
+  });
+
+  const invocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ ...execution, nodeId: node.id, processId })
+    ]!;
+  assert.equal(invocation.status, 'waiting');
+  assert.deepEqual(invocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
+  assert.deepEqual(invocation.progress, { percent: 50, message: 'Preparing choices' });
+});

@@ -9,17 +9,19 @@ import {
   type GraphId,
   type GraphRunId,
   type NodeGraph,
+  type NodeConnection,
   type NodeId,
   type PortId,
   type ProcessEvents,
   type ProcessId,
   type ProjectId,
+  type GraphProgress,
   type RootRunId,
 } from '@valerypopoff/rivet2-core';
 
 export type RunActivityRootStatus = 'running' | 'outputs-ready' | 'completed' | 'error' | 'aborted';
 export type RunActivityGraphStatus = 'unknown' | 'running' | 'completed' | 'error' | 'aborted';
-export type RunActivityNodeStatus = 'unknown' | 'running' | 'completed' | 'error' | 'aborted' | 'excluded';
+export type RunActivityNodeStatus = 'unknown' | 'waiting' | 'running' | 'completed' | 'error' | 'aborted' | 'excluded';
 export type RunActivityResultOrigin = 'executed' | 'preloaded' | 'frozen' | 'editor-cache' | 'unknown';
 
 export type RunActivityNodeKey = string & { readonly __runActivityNodeKey: unique symbol };
@@ -54,6 +56,10 @@ export type RunActivityNodeInvocation = {
   errorSummary?: string;
   terminalEventMissing?: boolean;
   exclusionReason?: string;
+  waitingForUserInput?: { questionCount: number; renderingType: 'text' | 'markdown' };
+  progress?: GraphProgress;
+  /** Effective, value-free input edges captured when this invocation started. */
+  inputConnections?: NodeConnection[];
   inputPortIds: PortId[];
   outputPortIds: PortId[];
   splitOutputPortIds: Record<number, PortId[]>;
@@ -142,6 +148,8 @@ type ProcessEventName =
   | 'graphError'
   | 'graphAbort'
   | 'nodeStart'
+  | 'userInput'
+  | 'progress'
   | 'partialOutput'
   | 'nodeFinish'
   | 'nodeError'
@@ -256,6 +264,12 @@ function applyEvent(journal: RunActivityJournal, event: RunActivityEvent, occurr
     case 'nodeStart':
       applyNodeStart(journal, event.data, occurredAt, event.resultOrigin);
       return;
+    case 'userInput':
+      applyUserInput(journal, event.data, occurredAt);
+      return;
+    case 'progress':
+      applyProgress(journal, event.data, occurredAt);
+      return;
     case 'partialOutput':
       applyPartialOutput(journal, event.data, occurredAt, event.resultOrigin);
       return;
@@ -305,12 +319,13 @@ function applyStart(journal: RunActivityJournal, data: RunActivityEventByName['s
   root.rootGraphId = data.startGraph.metadata?.id ?? execution.graphId;
   root.rootGraphName = data.startGraph.metadata?.name ?? root.rootGraphName;
   root.startedAt = minDefined(root.startedAt, at);
-  root.status = 'running';
-  root.finishedAt = undefined;
-  root.terminalErrorSummary = undefined;
-  root.paused = false;
   root.isPartial = false;
-  addActiveRoot(journal, root.rootRunId);
+
+  // Transport/replay delivery can surface a duplicate start after the exact
+  // root terminal event. Enrich the already-recorded root, but never reopen
+  // it: that would make a completed run look live without adding it back to
+  // the active-root index.
+  if (isTerminalRootStatus(root.status)) return;
 }
 
 function applyGraphStart(
@@ -323,6 +338,11 @@ function applyGraphStart(
 
   const root = ensureRoot(journal, execution, at, data.graph);
   const graph = ensureGraphRun(journal, root, execution, data.graph, at);
+  if (isTerminalRootStatus(root.status)) {
+    markGraphRunTerminalFromRoot(root, graph);
+    return;
+  }
+  if (isTerminalGraphStatus(graph.status) || graph.terminalEventMissing) return;
   graph.status = 'running';
   graph.startedAt = minDefined(graph.startedAt, at);
 }
@@ -336,7 +356,11 @@ function applyGraphOutputsReady(
   if (execution == null) return;
 
   const root = ensureRoot(journal, execution, at, data.graph);
-  ensureGraphRun(journal, root, execution, data.graph, at);
+  const graph = ensureGraphRun(journal, root, execution, data.graph, at);
+  if (isTerminalRootStatus(root.status)) {
+    markGraphRunTerminalFromRoot(root, graph);
+    return;
+  }
   if (execution.parentGraphRunId == null) {
     root.graphOutputsReadyAt ??= at;
     if (!isTerminalRootStatus(root.status)) root.status = 'outputs-ready';
@@ -381,9 +405,74 @@ function applyNodeStart(
   const invocation = getOrCreateNodeInvocation(journal, 'nodeStart', data, at, resultOrigin);
   if (invocation == null) return;
 
+  if (isTerminalNodeStatus(invocation.status) || invocation.terminalEventMissing) return;
   invocation.status = 'running';
   invocation.startedAt = minDefined(invocation.startedAt, at);
   invocation.inputPortIds = mergePortIds(invocation.inputPortIds, Object.keys(data.inputs) as PortId[]);
+  // A legacy duplicate can omit this newer metadata. Keep the richer first
+  // observation instead of erasing an exact invocation-time snapshot.
+  if (data.inputConnections != null) {
+    invocation.inputConnections = normalizeInputConnections(data.inputConnections);
+  }
+  invocation.waitingForUserInput = undefined;
+}
+
+function applyUserInput(
+  journal: RunActivityJournal,
+  data: RunActivityEventByName['userInput']['data'],
+  at: number,
+): void {
+  const invocation = getOrCreateNodeInvocation(journal, 'userInput', data, at, 'executed');
+  if (invocation == null) return;
+  if (isTerminalNodeStatus(invocation.status) || invocation.terminalEventMissing) return;
+
+  invocation.status = 'waiting';
+  invocation.startedAt = minDefined(invocation.startedAt, at);
+  invocation.inputPortIds = mergePortIds(invocation.inputPortIds, Object.keys(data.inputs) as PortId[]);
+  invocation.waitingForUserInput = {
+    questionCount: data.inputStrings.length,
+    renderingType: data.renderingType,
+  };
+}
+
+function applyProgress(
+  journal: RunActivityJournal,
+  data: RunActivityEventByName['progress']['data'],
+  at: number,
+): void {
+  const invocation = getOrCreateNodeInvocation(journal, 'progress', data, at, 'executed');
+  if (invocation == null) return;
+
+  if (isTerminalNodeStatus(invocation.status) || invocation.terminalEventMissing) return;
+  invocation.status = invocation.status === 'unknown' ? 'running' : invocation.status;
+  invocation.startedAt = minDefined(invocation.startedAt, at);
+  invocation.progress = data.progress;
+}
+
+/**
+ * The journal is a metadata boundary. Preserve only the value-free identity
+ * fields required by provenance; canvas-only bend points and malformed remote
+ * payload baggage must not become retained activity history.
+ */
+function normalizeInputConnections(connections: readonly NodeConnection[]): NodeConnection[] {
+  return connections.flatMap((connection) => {
+    if (
+      typeof connection?.outputNodeId !== 'string' ||
+      typeof connection.inputNodeId !== 'string' ||
+      typeof connection.outputId !== 'string' ||
+      typeof connection.inputId !== 'string'
+    ) {
+      return [];
+    }
+    return [
+      {
+        outputNodeId: connection.outputNodeId,
+        outputId: connection.outputId,
+        inputNodeId: connection.inputNodeId,
+        inputId: connection.inputId,
+      },
+    ];
+  });
 }
 
 function applyPartialOutput(
@@ -428,6 +517,7 @@ function applyNodeFinish(
   if (invocation == null) return;
 
   invocation.status = 'completed';
+  invocation.waitingForUserInput = undefined;
   invocation.finishedAt = at;
   invocation.terminalEventMissing = undefined;
   invocation.durationMs = normalizeDuration(data.durationMs, invocation.startedAt, at);
@@ -450,6 +540,7 @@ function applyNodeError(
   if (invocation == null) return;
 
   invocation.status = 'error';
+  invocation.waitingForUserInput = undefined;
   invocation.finishedAt = at;
   invocation.terminalEventMissing = undefined;
   invocation.durationMs = normalizeDuration(data.durationMs, invocation.startedAt, at);
@@ -467,6 +558,7 @@ function applyNodeExcluded(
   if (invocation == null) return;
 
   invocation.status = 'excluded';
+  invocation.waitingForUserInput = undefined;
   invocation.startedAt ??= at;
   invocation.finishedAt = at;
   invocation.terminalEventMissing = undefined;
@@ -616,6 +708,9 @@ function getOrCreateNodeInvocation(
   const invocation = ensureNodeInvocation(journal, root, execution, data.node.id, data.processId, at);
   if (invocation == null) return undefined;
 
+  markGraphRunTerminalFromRoot(root, graph);
+  markNodeInvocationTerminalFromRoot(root, invocation);
+
   invocation.graphName = graph.graphName ?? invocation.graphName;
   invocation.nodeTitle = data.node.title;
   invocation.nodeType = data.node.type;
@@ -635,8 +730,13 @@ function getOrCreateTraceInvocation(
   if (exactExecution == null) return undefined;
 
   const root = ensureRoot(journal, exactExecution, at);
-  ensureGraphRun(journal, root, exactExecution, undefined, at);
-  return ensureNodeInvocation(journal, root, exactExecution, nodeId, processId, at);
+  const graph = ensureGraphRun(journal, root, exactExecution, undefined, at);
+  const invocation = ensureNodeInvocation(journal, root, exactExecution, nodeId, processId, at);
+  if (invocation == null) return undefined;
+
+  markGraphRunTerminalFromRoot(root, graph);
+  markNodeInvocationTerminalFromRoot(root, invocation);
+  return invocation;
 }
 
 function ensureRoot(
@@ -795,6 +895,44 @@ function finishRoot(
   pruneCompletedRoots(journal);
 }
 
+/**
+ * A root terminal event may arrive before a delayed child graph event. Keep
+ * that late graph visible, but mark it as terminally incomplete instead of
+ * incorrectly presenting it as still running.
+ */
+function markGraphRunTerminalFromRoot(root: RunActivityRoot, graphRun: RunActivityGraphRun): void {
+  if (!isTerminalRootStatus(root.status) || isTerminalGraphStatus(graphRun.status) || graphRun.terminalEventMissing) {
+    return;
+  }
+
+  graphRun.status = root.status === 'completed' ? 'unknown' : 'aborted';
+  graphRun.finishedAt = root.finishedAt ?? graphRun.finishedAt;
+  graphRun.terminalEventMissing = true;
+}
+
+/**
+ * Late node starts, waits, and progress updates must not resurrect an
+ * invocation that the root already closed. A later exact node terminal event
+ * is still allowed to replace this conservative missing-terminal marker.
+ */
+function markNodeInvocationTerminalFromRoot(root: RunActivityRoot, invocation: RunActivityNodeInvocation): void {
+  if (
+    !isTerminalRootStatus(root.status) ||
+    isTerminalNodeStatus(invocation.status) ||
+    invocation.terminalEventMissing
+  ) {
+    return;
+  }
+
+  invocation.status = root.status === 'completed' ? 'unknown' : 'aborted';
+  const finishedAt = root.finishedAt ?? invocation.finishedAt;
+  invocation.finishedAt = finishedAt;
+  if (finishedAt != null) {
+    invocation.durationMs = normalizeDuration(invocation.durationMs, invocation.startedAt, finishedAt);
+  }
+  invocation.terminalEventMissing = true;
+}
+
 function applyUnscopedRootTerminal(
   journal: RunActivityJournal,
   status: Exclude<RunActivityRootStatus, 'running' | 'outputs-ready'>,
@@ -936,6 +1074,14 @@ function minDefined(current: number | undefined, candidate: number): number {
 
 function isTerminalRootStatus(status: RunActivityRootStatus): boolean {
   return status === 'completed' || status === 'error' || status === 'aborted';
+}
+
+function isTerminalGraphStatus(status: RunActivityGraphStatus): boolean {
+  return status === 'completed' || status === 'error' || status === 'aborted';
+}
+
+function isTerminalNodeStatus(status: RunActivityNodeStatus): boolean {
+  return status === 'completed' || status === 'error' || status === 'aborted' || status === 'excluded';
 }
 
 function isNonEmptyString(value: unknown): value is string {

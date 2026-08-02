@@ -4,7 +4,7 @@ import type { RunActivityColumnWidths } from '../../features/runActivity/runActi
 
 export type RunActivityStatus = 'idle' | 'running' | 'outputs-ready' | 'completed' | 'failed' | 'aborted';
 
-export type RunActivityItemStatus = 'running' | 'success' | 'error' | 'interrupted' | 'not-ran' | 'unknown';
+export type RunActivityItemStatus = 'waiting' | 'running' | 'success' | 'error' | 'interrupted' | 'not-ran' | 'unknown';
 
 export type RunActivityCategory = 'generic' | 'model' | 'tool' | 'error';
 
@@ -13,6 +13,17 @@ export type RunActivityFilter = 'all' | 'llm-tools' | 'errors';
 export interface RunActivityGraphOption {
   graphId: GraphId;
   graphName: string;
+}
+
+export interface RunActivityAccountingSummary {
+  modelCallCount: number;
+  toolCallCount: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedTokens?: number;
+  reasoningTokens?: number;
+  knownCostUsd: number;
+  costStatus: 'known' | 'partial' | 'unknown';
 }
 
 export interface RunActivityInvocationIdentity {
@@ -70,6 +81,8 @@ export interface RunActivityItemViewModel {
   navigable?: boolean;
   fullOutputAvailable?: boolean;
   inspectable?: boolean;
+  /** This invocation recorded input ports or the ordinary execution store retained input values. */
+  inputProvenanceAvailable?: boolean;
   /** Lets Errors include failed child model/tool attempts without mislabelling the node result itself. */
   hasErrors?: boolean;
   resultOrigin: RunActivityResultOriginView;
@@ -84,6 +97,7 @@ export interface RunActivityViewModel {
   startedAt?: number;
   outputsReadyAt?: number;
   backgroundWorkPending?: boolean;
+  accounting?: RunActivityAccountingSummary;
   graphOptions?: RunActivityGraphOption[];
   omittedItemCount?: number;
   /** Truthful explanation for incomplete legacy, replay, or evicted run data. */
@@ -97,6 +111,7 @@ export interface RunActivityDrawerProps {
   onLocate?(item: RunActivityItemViewModel): void;
   onOpenFullOutput?(item: RunActivityItemViewModel): void;
   onInspectResponse?(item: RunActivityItemViewModel): void;
+  onInspectValueProvenance?(item: RunActivityItemViewModel): void;
   onCopyDiagnostics?(): void;
   height?: number;
   onHeightChange?(height: number): void;

@@ -6,7 +6,7 @@ import {
   isArrayDataValue,
   arrayizeDataValue,
 } from './DataValue.js';
-import { type ChartNode, type NodeInputDefinition, type PortId } from './NodeBase.js';
+import { type ChartNode, type NodeConnection, type NodeInputDefinition, type PortId } from './NodeBase.js';
 import type { ProcessId } from './ProcessContext.js';
 import type { Inputs, Outputs } from './GraphProcessor.js';
 import { getGraphAbortReasonFromError, isAbortLikeError } from './GraphAbortReasons.js';
@@ -18,6 +18,7 @@ type SplitRunResultOrigin = 'executed' | 'editor-cache';
 
 export type SplitRunDeps = {
   getInputValues(node: ChartNode): Inputs;
+  getInputConnections(node: ChartNode): NodeConnection[];
   getInputDefinitions(node: ChartNode): NodeInputDefinition[];
   isExcludedDueToControlFlow(node: ChartNode, inputValues: Inputs, processId: ProcessId): boolean;
   processNodeWithInputData(
@@ -44,7 +45,13 @@ export type SplitRunDeps = {
   getAbortError(): Error;
   emit(
     event: 'nodeStart',
-    data: { node: ChartNode; inputs: Inputs; processId: ProcessId; resultOrigin: 'executed' },
+    data: {
+      node: ChartNode;
+      inputs: Inputs;
+      inputConnections: NodeConnection[];
+      processId: ProcessId;
+      resultOrigin: 'executed';
+    },
   ): Promise<void> | void;
   emit(
     event: 'nodeFinish',
@@ -102,7 +109,13 @@ export async function processSplitRunNode(node: ChartNode, processId: ProcessId,
     node.splitRunMax ?? 10,
   );
 
-  await deps.emit('nodeStart', { node, inputs: inputValues, processId, resultOrigin: 'executed' });
+  await deps.emit('nodeStart', {
+    node,
+    inputs: inputValues,
+    inputConnections: deps.getInputConnections(node),
+    processId,
+    resultOrigin: 'executed',
+  });
   const timingStart = deps.startNodeTiming?.();
   let splitRunDurationMs: Record<number, number> | undefined;
   let results: SplitResult[] = [];

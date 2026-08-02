@@ -70,6 +70,15 @@ test('projects a complete lifecycle without retaining DataValues or node data', 
       processId,
       execution,
       inputs: { ['prompt' as PortId]: { type: 'string', value: 'DO_NOT_COPY_INPUT_VALUE' } },
+      inputConnections: [
+        {
+          outputNodeId: 'source-node' as NodeId,
+          outputId: 'output' as PortId,
+          inputNodeId: nodeId,
+          inputId: 'prompt' as PortId,
+          bendPoint: { x: 1, y: 2 },
+        },
+      ],
     },
     12,
   );
@@ -147,6 +156,14 @@ test('projects a complete lifecycle without retaining DataValues or node data', 
   assert.equal(invocation.partialOutputCount, 2);
   assert.equal(invocation.outputRevision, 3);
   assert.deepEqual(invocation.inputPortIds, ['prompt']);
+  assert.deepEqual(invocation.inputConnections, [
+    {
+      outputNodeId: 'source-node',
+      outputId: 'output',
+      inputNodeId: nodeId,
+      inputId: 'prompt',
+    },
+  ]);
   assert.deepEqual(invocation.outputPortIds, ['response', 'usage']);
   assert.equal(invocation.firstOutputAt, 15);
   assert.equal(invocation.latestOutputAt, 18);
@@ -187,6 +204,83 @@ test('keeps first-seen invocation order while parallel nodes finish out of order
     root.nodeInvocationsByKey[root.nodeInvocationOrder[0]!]!.sequence <
       root.nodeInvocationsByKey[root.nodeInvocationOrder[1]!]!.sequence,
   );
+});
+
+test('retains waiting and progress metadata without retaining the user-input callback', () => {
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('start', { project, startGraph: graph, inputs: {}, contextValues: {}, execution }, 1),
+    event(
+      'userInput',
+      {
+        node,
+        processId,
+        execution,
+        inputs: {},
+        inputStrings: ['Choose one'],
+        renderingType: 'markdown',
+        callback: () => {},
+      },
+      2,
+    ),
+    event('progress', { node, processId, execution, progress: { percent: 35, message: 'Preparing choices' } }, 3),
+  ]);
+
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  const invocation = journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!;
+  assert.equal(invocation.status, 'waiting');
+  assert.deepEqual(invocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
+  assert.deepEqual(invocation.progress, { percent: 35, message: 'Preparing choices' });
+  assert.equal(JSON.stringify(journal).includes('Choose one'), false);
+
+  journal = apply(journal, 'nodeFinish', { node, processId, execution, outputs: {} }, 4);
+  assert.equal(journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.waitingForUserInput, undefined);
+});
+
+test('does not let a legacy duplicate node-start erase its captured wiring snapshot', () => {
+  const inputConnections = [
+    {
+      outputNodeId: 'source-node' as NodeId,
+      outputId: 'output' as PortId,
+      inputNodeId: nodeId,
+      inputId: 'input' as PortId,
+    },
+  ];
+  const journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('start', { project, startGraph: graph, inputs: {}, contextValues: {}, execution }, 1),
+    event('nodeStart', { node, processId, execution, inputs: {}, inputConnections }, 2),
+    event('nodeStart', { node, processId, execution, inputs: {} }, 3),
+  ]);
+
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  assert.deepEqual(journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.inputConnections, inputConnections);
+});
+
+test('does not resurrect a terminal invocation from delayed start or user-input events', () => {
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('start', { project, startGraph: graph, inputs: {}, contextValues: {}, execution }, 1),
+    event('nodeStart', { node, processId, execution, inputs: {} }, 2),
+    event('nodeFinish', { node, processId, execution, outputs: {} }, 3),
+  ]);
+  journal = apply(journal, 'nodeStart', { node, processId, execution, inputs: {} }, 4);
+  journal = apply(
+    journal,
+    'userInput',
+    {
+      node,
+      processId,
+      execution,
+      inputs: {},
+      inputStrings: ['Late question'],
+      renderingType: 'text',
+      callback: () => {},
+    },
+    5,
+  );
+
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  const invocation = journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!;
+  assert.equal(invocation.status, 'completed');
+  assert.equal(invocation.waitingForUserInput, undefined);
 });
 
 test('keys identical node and process IDs independently for each exact graph invocation', () => {
@@ -487,6 +581,51 @@ test('marks invocations with missing terminal events truthfully when their root 
   assert.equal(invocation.status, 'completed');
   assert.equal(invocation.terminalEventMissing, undefined);
   assert.equal(invocation.durationMs, 2);
+});
+
+test('does not reopen a settled root from delayed start, graph, or node lifecycle events', () => {
+  const lateNode = { ...node, id: 'late-node' as NodeId };
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('graphStart', { graph, inputs: {}, execution }, 1),
+    event('nodeStart', { node, processId, inputs: {}, execution }, 2),
+    event('graphFinish', { graph, outputs: {}, execution }, 3),
+  ]);
+
+  journal = apply(journal, 'start', { project, startGraph: graph, inputs: {}, contextValues: {}, execution }, 4);
+  journal = apply(journal, 'graphStart', { graph, inputs: {}, execution }, 5);
+  journal = apply(journal, 'nodeStart', { node: lateNode, processId, inputs: {}, execution }, 6);
+  journal = apply(
+    journal,
+    'userInput',
+    {
+      node: lateNode,
+      processId,
+      execution,
+      inputs: {},
+      inputStrings: ['Late question'],
+      renderingType: 'text',
+      callback: () => {},
+    },
+    7,
+  );
+  journal = apply(
+    journal,
+    'progress',
+    { node: lateNode, processId, execution, progress: { percent: 50, message: 'Late progress' } },
+    8,
+  );
+
+  const root = journal.rootsById[rootRunId]!;
+  const lateInvocation =
+    root.nodeInvocationsByKey[createRunActivityNodeKey({ rootRunId, graphRunId, nodeId: lateNode.id, processId })]!;
+  assert.equal(root.status, 'completed');
+  assert.equal(root.finishedAt, 3);
+  assert.deepEqual(journal.activeRootRunIds, []);
+  assert.equal(root.graphRunsById[graphRunId]!.status, 'completed');
+  assert.equal(lateInvocation.status, 'unknown');
+  assert.equal(lateInvocation.terminalEventMissing, true);
+  assert.equal(lateInvocation.waitingForUserInput, undefined);
+  assert.equal(lateInvocation.progress, undefined);
 });
 
 test('does not mislabel a root graph when the first exact event belongs to a subgraph', () => {

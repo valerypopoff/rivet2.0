@@ -28,6 +28,7 @@ async function runSplitOriginScenario(options: {
     getInputValues: () => ({
       prompts: { type: 'string[]', value: ['first', 'second'] },
     }),
+    getInputConnections: () => [],
     getInputDefinitions: () => [
       {
         id: 'prompts' as PortId,
@@ -90,6 +91,7 @@ describe('SplitRunProcessor', () => {
 
     await processSplitRunNode(createSplitNode(), 'process' as any, {
       getInputValues: () => inputs,
+      getInputConnections: () => [],
       getInputDefinitions: () => inputDefinitions,
       isExcludedDueToControlFlow: () => false,
       processNodeWithInputData: async (_node, invocationInputs) => {

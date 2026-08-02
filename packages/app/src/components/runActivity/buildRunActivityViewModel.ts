@@ -8,9 +8,10 @@ import type {
   RunActivityToolCall,
 } from '../../features/runActivity/runActivityJournal.js';
 import { selectCurrentRunActivityRoot } from '../../features/runActivity/runActivityJournal.js';
-import type { NodeRunDataWithRefs, StoredDataPreview, StoredDataValue } from '../../state/dataFlow.js';
+import type { NodeRunDataWithRefs, StoredDataValue } from '../../state/dataFlow.js';
 import type {
   RunActivityCategory,
+  RunActivityAccountingSummary,
   RunActivityChildViewModel,
   RunActivityDetailRow,
   RunActivityItemStatus,
@@ -19,10 +20,12 @@ import type {
   RunActivityStatus,
   RunActivityViewModel,
 } from './types.js';
+import { previewStoredDataValue } from '../../features/runActivity/storedValuePreview.js';
 
-export const RUN_ACTIVITY_PREVIEW_MAX_CHARS = 240;
-const INLINE_PREVIEW_MAX_DEPTH = 2;
-const INLINE_PREVIEW_MAX_ITEMS = 8;
+export {
+  RUN_ACTIVITY_PREVIEW_MAX_CHARS,
+  previewStoredDataValue,
+} from '../../features/runActivity/storedValuePreview.js';
 
 export type RunActivityInvocationResolution = {
   graphName?: string;
@@ -77,6 +80,7 @@ export function buildRunActivityViewModel(
     .map((invocation) => buildInvocationViewModel(root, invocation, resolveInvocation))
     .sort((left, right) => left.sequence - right.sequence);
   const partialReason = getPartialReason(journal, root);
+  const accounting = buildAccountingSummary(root);
 
   return {
     rootRunId: root.rootRunId,
@@ -86,9 +90,51 @@ export function buildRunActivityViewModel(
     ...(root.graphOutputsReadyAt == null ? {} : { outputsReadyAt: root.graphOutputsReadyAt }),
     ...(root.startedAt == null ? {} : { durationMs: Math.max(0, (root.finishedAt ?? now) - root.startedAt) }),
     ...(root.status === 'outputs-ready' ? { backgroundWorkPending: true } : {}),
+    ...(accounting == null ? {} : { accounting }),
     graphOptions: buildGraphOptions(root, items),
     ...(root.omittedNodeInvocationCount > 0 ? { omittedItemCount: root.omittedNodeInvocationCount } : {}),
     ...(partialReason ? { partialReason } : {}),
+  };
+}
+
+function buildAccountingSummary(root: RunActivityRoot): RunActivityAccountingSummary | undefined {
+  const invocations = root.nodeInvocationOrder
+    .map((key) => root.nodeInvocationsByKey[key])
+    .filter((invocation): invocation is RunActivityNodeInvocation => invocation != null);
+  const modelCallCount = invocations.reduce((total, invocation) => total + invocation.modelCallCount, 0);
+  const toolCallCount = invocations.reduce((total, invocation) => total + invocation.toolCallCount, 0);
+  if (modelCallCount === 0 && toolCallCount === 0) return undefined;
+  const calls = invocations.flatMap((invocation) => invocation.modelCalls);
+  const omittedCount = invocations.reduce((total, invocation) => total + invocation.omittedModelCallCount, 0);
+  const totalUsage = (key: 'promptTokens' | 'completionTokens' | 'cachedTokens' | 'reasoningTokens') => {
+    const total = calls.reduce((sum, call) => sum + (call.usage?.[key] ?? 0), 0);
+    return total > 0 ? total : undefined;
+  };
+  const knownCosts = calls
+    .filter((call) => call.pricing.status === 'known' && call.pricing.costUsd != null)
+    .reduce((total, call) => total + call.pricing.costUsd!, 0);
+  const hasUnknownCost = calls.some((call) => call.pricing.status !== 'known' || call.pricing.costUsd == null);
+  const costStatus =
+    modelCallCount === 0 || (knownCosts === 0 && (hasUnknownCost || omittedCount > 0))
+      ? 'unknown'
+      : hasUnknownCost || omittedCount > 0
+        ? 'partial'
+        : 'known';
+
+  const promptTokens = totalUsage('promptTokens');
+  const completionTokens = totalUsage('completionTokens');
+  const cachedTokens = totalUsage('cachedTokens');
+  const reasoningTokens = totalUsage('reasoningTokens');
+
+  return {
+    modelCallCount,
+    toolCallCount,
+    ...(promptTokens == null ? {} : { promptTokens }),
+    ...(completionTokens == null ? {} : { completionTokens }),
+    ...(cachedTokens == null ? {} : { cachedTokens }),
+    ...(reasoningTokens == null ? {} : { reasoningTokens }),
+    knownCostUsd: knownCosts,
+    costStatus,
   };
 }
 
@@ -117,7 +163,7 @@ function buildInvocationViewModel(
     status === 'error' ||
     status === 'interrupted' ||
     children.some((child) => child.status === 'error' || child.status === 'interrupted');
-  const detailRows = buildDetailRows(invocation, resolved, category);
+  const detailRows = buildDetailRows(root, graphRun, invocation, resolved, category);
   const primaryModelCall = getEffectiveModelCall(invocation.modelCalls);
   const searchTerms = buildInvocationSearchTerms(invocation, resolved.searchTerms);
 
@@ -154,6 +200,10 @@ function buildInvocationViewModel(
     navigable: resolved.navigable ?? false,
     fullOutputAvailable: resolved.fullOutputAvailable ?? (resolved.runData != null && invocation.outputsAvailable),
     inspectable: resolved.inspectable ?? false,
+    inputProvenanceAvailable:
+      Object.keys(resolved.runData?.inputData ?? {}).length > 0 ||
+      invocation.inputPortIds.length > 0 ||
+      (invocation.inputConnections?.length ?? 0) > 0,
     ...(hasErrors ? { hasErrors: true } : {}),
   };
 }
@@ -241,63 +291,6 @@ function selectStoredPortValue(
   return Object.values(stored)[0];
 }
 
-export function previewStoredDataValue(value: StoredDataValue): string {
-  if (value.storage === 'ref') return previewStoredRef(value.preview);
-  return truncatePreview(previewInlineValue(value.value));
-}
-
-function previewStoredRef(preview: StoredDataPreview): string {
-  if (preview.kind === 'summary') return truncatePreview(preview.label);
-  return truncatePreview(preview.excerpt);
-}
-
-function previewInlineValue(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value == null || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    return String(value);
-  }
-  return projectInlineValue(value, 0, new WeakSet<object>());
-}
-
-function projectInlineValue(value: unknown, depth: number, seen: WeakSet<object>): string {
-  if (typeof value === 'string') return JSON.stringify(truncatePreview(value));
-  if (value == null || typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (typeof value === 'bigint') return `${value.toString()}n`;
-  if (typeof value === 'function') return '[Function]';
-  if (typeof value === 'symbol') return value.toString();
-  if (typeof value !== 'object') return String(value);
-  if (seen.has(value)) return '[Circular]';
-  if (depth >= INLINE_PREVIEW_MAX_DEPTH) return Array.isArray(value) ? `[Array(${value.length})]` : '[Object]';
-
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const entries = value
-        .slice(0, INLINE_PREVIEW_MAX_ITEMS)
-        .map((entry) => projectInlineValue(entry, depth + 1, seen));
-      if (value.length > INLINE_PREVIEW_MAX_ITEMS) entries.push(`... ${value.length - INLINE_PREVIEW_MAX_ITEMS} more`);
-      return `[${entries.join(', ')}]`;
-    }
-    const entries = Object.entries(value as Record<string, unknown>);
-    const projected = entries
-      .slice(0, INLINE_PREVIEW_MAX_ITEMS)
-      .map(([key, entry]) => `${JSON.stringify(key)}: ${projectInlineValue(entry, depth + 1, seen)}`);
-    if (entries.length > INLINE_PREVIEW_MAX_ITEMS)
-      projected.push(`... ${entries.length - INLINE_PREVIEW_MAX_ITEMS} more`);
-    return `{${projected.join(', ')}}`;
-  } catch {
-    return '[Unpreviewable value]';
-  } finally {
-    seen.delete(value);
-  }
-}
-
-function truncatePreview(value: string): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= RUN_ACTIVITY_PREVIEW_MAX_CHARS) return normalized;
-  return `${normalized.slice(0, RUN_ACTIVITY_PREVIEW_MAX_CHARS - 3)}...`;
-}
-
 function buildChildRows(invocation: RunActivityNodeInvocation): RunActivityChildViewModel[] {
   return [
     ...invocation.modelCalls.map((call) => ({ sequence: call.sequence, child: modelCallToChild(call) })),
@@ -340,6 +333,8 @@ function toolCallToChild(call: RunActivityToolCall): RunActivityChildViewModel {
 }
 
 function buildDetailRows(
+  root: RunActivityRoot,
+  graphRun: RunActivityGraphRun | undefined,
   invocation: RunActivityNodeInvocation,
   resolved: RunActivityInvocationResolution,
   category: RunActivityCategory,
@@ -351,9 +346,36 @@ function buildDetailRows(
     invocation.resultOrigin === 'executed'
       ? []
       : [{ label: 'Result origin', value: describeResultOrigin(invocation.resultOrigin) }];
+  const graphPath = getGraphRunPath(root, invocation.graphRunId);
+  if (graphPath.length > 1) rows.push({ label: 'Graph path', value: graphPath.join(' \u203a ') });
+  if (graphRun?.executor) {
+    rows.push({
+      label: 'Subgraph caller',
+      value: `Node ${graphRun.executor.nodeId} in ${graphRun.executor.parentGraphId}`,
+    });
+  }
   for (const portId of resolved.contextInputPortIds ?? []) {
     const value = resolved.runData?.inputData?.[portId];
     if (value != null) rows.push({ label: `Input: ${portId}`, value: previewStoredDataValue(value) });
+  }
+  if (invocation.waitingForUserInput) {
+    rows.push({
+      label: 'Waiting for',
+      value: `${invocation.waitingForUserInput.questionCount} user ${
+        invocation.waitingForUserInput.questionCount === 1 ? 'question' : 'questions'
+      } (${invocation.waitingForUserInput.renderingType})`,
+    });
+  }
+  if (invocation.progress) {
+    rows.push({
+      label: 'Progress',
+      value: [
+        invocation.progress.percent == null ? undefined : `${Math.round(invocation.progress.percent)}%`,
+        invocation.progress.message,
+      ]
+        .filter((value): value is string => value != null)
+        .join(' · '),
+    });
   }
   if (invocation.partialOutputCount > 0) {
     rows.push({ label: 'Partial output updates', value: String(invocation.partialOutputCount) });
@@ -387,6 +409,18 @@ function buildDetailRows(
   return rows;
 }
 
+function getGraphRunPath(root: RunActivityRoot, graphRunId: string): string[] {
+  const path: string[] = [];
+  const seen = new Set<string>();
+  let current = root.graphRunsById[graphRunId];
+  while (current && !seen.has(current.graphRunId)) {
+    seen.add(current.graphRunId);
+    path.unshift(current.graphName ?? String(current.graphId));
+    current = current.parentGraphRunId == null ? undefined : root.graphRunsById[current.parentGraphRunId];
+  }
+  return path;
+}
+
 function resolveCategory(
   invocation: RunActivityNodeInvocation,
   resolvedCategory: RunActivityInvocationResolution['category'],
@@ -405,6 +439,7 @@ function mapRootStatus(status: RunActivityRoot['status']): RunActivityStatus {
 function mapNodeStatus(status: RunActivityNodeInvocation['status']): RunActivityItemStatus {
   const mapped: Record<RunActivityNodeInvocation['status'], RunActivityItemStatus> = {
     unknown: 'unknown',
+    waiting: 'waiting',
     running: 'running',
     completed: 'success',
     error: 'error',
@@ -426,6 +461,7 @@ function describeResultOrigin(origin: RunActivityNodeInvocation['resultOrigin'])
 }
 
 function describeUnavailableOutput(invocation: RunActivityNodeInvocation): string {
+  if (invocation.status === 'waiting') return 'Waiting for user input';
   if (invocation.status === 'running') return 'Running';
   if (invocation.status === 'excluded') return invocation.exclusionReason ?? 'Not run';
   if (invocation.resultOrigin !== 'executed') return describeResultOrigin(invocation.resultOrigin);
