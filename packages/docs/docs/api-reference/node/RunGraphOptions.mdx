@@ -157,6 +157,10 @@ Overrides the legacy Chat node endpoint resolver.
 Type: `ProcessContext['onChatV2CallFinished']`
 
 Optional host-only accounting callback for physical LLM Chat provider calls.
+The callback runs exactly once per physical attempt and now includes additive
+start-time, duration, and round metadata. The metadata-only
+`llmCallFinished` process event is the portable recording/remote-inspection
+surface; it excludes raw provider usage and all prompt/request/response content.
 It is invoked once for each actual call, including explicit
 retry-on-non-200 attempts, provider failures, and calls aborted while in
 flight. Events contain node/process/call correlation, provider and model,

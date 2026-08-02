@@ -4,13 +4,13 @@ import { useAtomValue, useStore } from 'jotai';
 import { DndContext, DragOverlay, useDraggable } from '@dnd-kit/core';
 import BrowserIcon from 'majesticons/line/browser-line.svg?react';
 import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
+import { toast } from 'react-toastify';
 import type { UiGraphComponent } from '@valerypopoff/rivet2-core';
 import {
   applyUiGraphWebAppStorageActionPatch,
   applyUiGraphWebAppStoragePatch,
   loadUiGraphWebAppStorage,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
-import { toast } from 'react-toastify';
 import { projectState } from '../state/savedGraphs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
 import { leftSidebarLiveWidthState } from '../state/ui.js';
@@ -44,7 +44,8 @@ import {
 
 const styles = css`
   position: fixed;
-  inset: var(--project-selector-height) 0 0 var(--ui-graph-left-offset, 0px);
+  inset: var(--project-selector-height) 0 var(--run-activity-drawer-reserved-height, 0px)
+    var(--ui-graph-left-offset, 0px);
   display: grid;
   grid-template-columns: minmax(360px, 520px) minmax(360px, 1fr);
   gap: 18px;
@@ -52,6 +53,10 @@ const styles = css`
   overflow: auto;
   background: var(--canvas-background-color, var(--grey-darker));
   color: var(--foreground);
+
+  @media (max-width: 720px) {
+    bottom: 0;
+  }
 
   .ui-graph-builder-panel,
   .ui-graph-builder-preview {

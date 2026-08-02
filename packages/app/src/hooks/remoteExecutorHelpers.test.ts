@@ -16,6 +16,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import {
   canPreloadEditorRunFromPlan,
+  createProcessEventDispatcher,
   getDependentDataForNodeForPreload,
   getEditorRunFromPlan,
   getEditorRunToPlan,
@@ -63,7 +64,12 @@ function makeLinkedNode(nodeId: string, prefabId: NodePrefabId): ChartNode {
   return node;
 }
 
-function makeConnection(outputNodeId: string, inputNodeId: string, inputId = 'input', outputId = 'output'): NodeConnection {
+function makeConnection(
+  outputNodeId: string,
+  inputNodeId: string,
+  inputId = 'input',
+  outputId = 'output',
+): NodeConnection {
   return {
     outputNodeId: outputNodeId as NodeId,
     inputNodeId: inputNodeId as NodeId,
@@ -136,6 +142,28 @@ test('selectTestSuitesToRun filters suites and cases narrowly', () => {
   );
 
   assert.deepEqual(selected, [{ id: 'suite-1', testCases: [{ id: 'case-2' }] }]);
+});
+
+test('Run Activity observer failures do not suppress primary execution-state events', () => {
+  let primaryNodeStartCount = 0;
+  const previousConsoleError = console.error;
+  console.error = () => undefined;
+
+  try {
+    const dispatcher = createProcessEventDispatcher({
+      onRunActivityEvent: () => {
+        throw new Error('projection failed');
+      },
+      onNodeStart: () => {
+        primaryNodeStartCount += 1;
+      },
+    } as any);
+
+    assert.equal(dispatcher.nodeStart({}), true);
+    assert.equal(primaryNodeStartCount, 1);
+  } finally {
+    console.error = previousConsoleError;
+  }
 });
 
 test('getEditorRunFromPlan runs the selected node and downstream nodes while preloading upstream and side inputs', () => {

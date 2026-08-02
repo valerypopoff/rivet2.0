@@ -19,7 +19,6 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:promo": "vite --config vite.promo.config.ts --port 5174 --strictPort",
-    "preview:promo": "vite preview --config vite.promo.config.ts --port 5174 --strictPort",
     "start": "vite",
     "build": "tsc && vite build",
     "build:promo": "vite build --config vite.promo.config.ts",

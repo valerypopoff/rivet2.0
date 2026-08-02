@@ -126,6 +126,7 @@ const cspellWordsBrowserPlugin = (): PluginOption => ({
 });
 
 export type RivetViteConfigOptions = {
+  monacoWorkerDistPath?: (root: string, outDir: string, base: string) => string;
   reactDevTools?: boolean;
 };
 
@@ -192,7 +193,9 @@ export function createRivetViteConfig(options: RivetViteConfigOptions = {}): Use
       dictionaryEnBrowserPlugin(),
       cspellWordsBrowserPlugin(),
       // Bad ESM
-      (monacoEditorPlugin as any).default({}),
+      (monacoEditorPlugin as any).default(
+        options.monacoWorkerDistPath ? { customDistPath: options.monacoWorkerDistPath } : {},
+      ),
       topLevelAwait(),
       splitVendorChunkPlugin(),
     ],

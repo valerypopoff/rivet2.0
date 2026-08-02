@@ -55,7 +55,11 @@ import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
 
 const Container = styled.div`
   position: relative;
-  height: 100vh;
+  height: calc(100vh - var(--run-activity-drawer-reserved-height, 0px));
+
+  @media (max-width: 720px) {
+    height: 100vh;
+  }
 
   .user-input-modal-open {
     position: absolute;

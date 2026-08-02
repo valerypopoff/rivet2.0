@@ -27,6 +27,8 @@ import type {
   ProcessContext,
   ProcessId,
   RootRunId,
+  ChatV2CallTraceEvent,
+  ToolCallFinishedEvent,
 } from './ProcessContext.js';
 import type { ExecutionRecorder } from '../recording/ExecutionRecorder.js';
 import type { Tagged } from 'type-fest';
@@ -119,6 +121,7 @@ type ToolCallContinuationInvocation = {
   delegateNode: DelegateFunctionCallNode;
   latestOutputs: Map<NodeId, Outputs>;
   llmNodeId: NodeId;
+  llmProcessId: ProcessId;
   released: boolean;
 };
 
@@ -134,6 +137,8 @@ function createGraphOutputsOverlay(parent: GraphOutputs): { view: GraphOutputs; 
   });
   return { view, writes };
 }
+
+export type NodeResultOrigin = 'executed' | 'preloaded' | 'frozen' | 'editor-cache' | 'unknown';
 
 export type ProcessEvents = {
   /** Called when processing has started. */
@@ -160,13 +165,19 @@ export type ProcessEvents = {
   graphAbort: WithExecution<{ successful: boolean; graph: NodeGraph; error?: Error | string }>;
 
   /** Called when a node has started processing, with the input values for the node. */
-  nodeStart: WithExecution<{ node: ChartNode; inputs: Inputs; processId: ProcessId }>;
+  nodeStart: WithExecution<{
+    node: ChartNode;
+    inputs: Inputs;
+    processId: ProcessId;
+    resultOrigin?: NodeResultOrigin;
+  }>;
 
   /** Called when a node has finished processing, with the output values for the node. */
   nodeFinish: WithExecution<{
     node: ChartNode;
     outputs: Outputs;
     processId: ProcessId;
+    resultOrigin?: NodeResultOrigin;
     durationMs?: number;
     splitRunDurationMs?: Record<number, number>;
   }>;
@@ -176,6 +187,7 @@ export type ProcessEvents = {
     node: ChartNode;
     error: Error | string;
     processId: ProcessId;
+    resultOrigin?: NodeResultOrigin;
     durationMs?: number;
     splitRunDurationMs?: Record<number, number>;
   }>;
@@ -187,6 +199,7 @@ export type ProcessEvents = {
     inputs: Inputs;
     outputs: Outputs;
     reason: string;
+    resultOrigin?: NodeResultOrigin;
   }>;
 
   /** Called when a user input node requires user input. Call the callback when finished, or call userInput() on the GraphProcessor with the results. */
@@ -204,10 +217,22 @@ export type ProcessEvents = {
   }>;
 
   /** Called when a node has partially processed, with the current partial output values for the node. */
-  partialOutput: WithExecution<{ node: ChartNode; outputs: Outputs; index: number; processId: ProcessId }>;
+  partialOutput: WithExecution<{
+    node: ChartNode;
+    outputs: Outputs;
+    index: number;
+    processId: ProcessId;
+    resultOrigin?: NodeResultOrigin;
+  }>;
 
   /** Called when a node reports host-facing progress. */
   progress: WithExecution<{ node: ChartNode; processId: ProcessId; progress: GraphProgress }>;
+
+  /** Privacy-bounded metadata for one physical LLM provider call. */
+  llmCallFinished: WithExecution<ChatV2CallTraceEvent>;
+
+  /** Privacy-bounded metadata for one delegated tool execution. */
+  toolCallFinished: WithExecution<ToolCallFinishedEvent>;
 
   /** Called when the outputs of a node have been cleared entirely. If processId is present, only the one process() should be cleared. */
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
@@ -1325,6 +1350,7 @@ export class GraphProcessor {
   }
 
   #prepareNodeProcessContextBase(): void {
+    const hostChatV2Observer = this.#context.onChatV2CallFinished;
     this.#nodeProcessContextBase = {
       ...this.#context,
       abortGraph: (error) => {
@@ -1343,6 +1369,25 @@ export class GraphProcessor {
       graphInputNodeValues: this.#graphInputNodeValues,
       graphInputs: this.#graphInputs,
       graphOutputs: this.#graphOutputs,
+      onChatV2CallFinished: (event) => {
+        try {
+          const observerResult = hostChatV2Observer?.(event);
+          if (observerResult != null && typeof (observerResult as PromiseLike<void>).then === 'function') {
+            void Promise.resolve(observerResult).catch(() => undefined);
+          }
+        } catch {
+          // Host observers must never change graph execution.
+        }
+        // Runtime traces carry only the normalized, provider-neutral usage
+        // contract. The host observer above retains its existing raw accounting
+        // callback, but provider-shaped usage never enters recordings or remote
+        // trace transport.
+        const { rawUsage: _rawUsage, ...traceEvent } = event;
+        emitDetached(this.#emitter, 'llmCallFinished', this.#withExecution(traceEvent));
+      },
+      onToolCallFinished: (event) => {
+        emitDetached(this.#emitter, 'toolCallFinished', this.#withExecution(event));
+      },
       project: this.#project,
       raiseEvent: (event, data) => {
         this.getRootProcessor().raiseEvent(event, data as DataValue);
@@ -1417,6 +1462,7 @@ export class GraphProcessor {
           node,
           inputs: {},
           processId: 'preload' as ProcessId,
+          resultOrigin: 'preloaded' as const,
         }),
       );
 
@@ -1426,6 +1472,7 @@ export class GraphProcessor {
           node,
           outputs: this.#nodeResults.get(node.id)!,
           processId: 'preload' as ProcessId,
+          resultOrigin: 'preloaded' as const,
         }),
       );
     }
@@ -2303,6 +2350,9 @@ export class GraphProcessor {
         node,
         new Error('Start Async Branch cannot use frozen outputs because replaying it could repeat async side effects.'),
         processId,
+        undefined,
+        undefined,
+        'frozen',
       );
     } else if (frozenOutputs) {
       await this.#processFrozenNode(node, processId, inputValues, frozenOutputs);
@@ -2321,14 +2371,14 @@ export class GraphProcessor {
       getInputValues: (n) => this.#getInputValuesForNode(n),
       getInputDefinitions: (n) => this.#definitions[n.id]?.inputs ?? [],
       isExcludedDueToControlFlow: (n, inputs, pid) => this.#excludedDueToControlFlow(n, inputs, pid) !== false,
-      processNodeWithInputData: (n, inputs, idx, pid, partial) =>
-        this.#processNodeWithInputData(n, inputs, idx, pid, partial),
+      processNodeWithInputData: (n, inputs, idx, pid, partial, markResultAsEditorCacheHit) =>
+        this.#processNodeWithInputData(n, inputs, idx, pid, partial, markResultAsEditorCacheHit),
       splitRunConcurrency: this.#concurrency.splitRunConcurrency,
       accumulateCost: (output) => this.#accumulateCost(output),
       setNodeResults: (nodeId, outputs) => this.#nodeResults.set(nodeId, outputs),
       markNodeVisited: (nodeId) => this.#visitedNodes.add(nodeId),
-      nodeErrored: (n, err, pid, durationMs, splitRunDurationMs) =>
-        this.#nodeErrored(n, err, pid, durationMs, splitRunDurationMs),
+      nodeErrored: (n, err, pid, durationMs, splitRunDurationMs, resultOrigin) =>
+        this.#nodeErrored(n, err, pid, durationMs, splitRunDurationMs, resultOrigin),
       isAborted: () => this.#lifecycle.isAborted,
       getAbortError: () => createGraphAbortErrorFromSignal(this.#abortController.signal),
       emit: (event, data) => {
@@ -2355,7 +2405,10 @@ export class GraphProcessor {
   }
 
   async #processFrozenNode(node: ChartNode, processId: ProcessId, inputValues: Inputs, outputValues: Outputs) {
-    await this.#emitter.emit('nodeStart', this.#withExecution({ node, inputs: inputValues, processId }));
+    await this.#emitter.emit(
+      'nodeStart',
+      this.#withExecution({ node, inputs: inputValues, processId, resultOrigin: 'frozen' as const }),
+    );
 
     const timingStart = this.#startNodeTiming();
     this.#nodeResults.set(node.id, outputValues);
@@ -2371,6 +2424,7 @@ export class GraphProcessor {
             node,
             outputs: outputValues,
             processId,
+            resultOrigin: 'frozen' as const,
           },
           this.#finishNodeTiming(timingStart),
         ),
@@ -2400,9 +2454,13 @@ export class GraphProcessor {
   async #processNormalNode(node: ChartNode, processId: ProcessId, inputValues: Inputs) {
     // Use awaited emit (not emitDetached) so that listeners can yield to the
     // macrotask queue, giving the browser a chance to repaint during execution.
-    await this.#emitter.emit('nodeStart', this.#withExecution({ node, inputs: inputValues, processId }));
+    await this.#emitter.emit(
+      'nodeStart',
+      this.#withExecution({ node, inputs: inputValues, processId, resultOrigin: 'executed' as const }),
+    );
 
     const timingStart = this.#startNodeTiming();
+    let resultOrigin: NodeResultOrigin = 'executed';
 
     try {
       const outputValues = await this.#processNodeWithInputData(
@@ -2411,6 +2469,9 @@ export class GraphProcessor {
         0,
         processId,
         (node, partialOutputs, index) => this.#emitNodePartialOutput(node, partialOutputs, index, processId),
+        () => {
+          resultOrigin = 'editor-cache';
+        },
       );
 
       this.#nodeResults.set(node.id, outputValues);
@@ -2424,13 +2485,14 @@ export class GraphProcessor {
               node,
               outputs: outputValues,
               processId,
+              resultOrigin,
             },
             this.#finishNodeTiming(timingStart),
           ),
         ),
       );
     } catch (error) {
-      await this.#nodeErrored(node, error, processId, this.#finishNodeTiming(timingStart));
+      await this.#nodeErrored(node, error, processId, this.#finishNodeTiming(timingStart), undefined, resultOrigin);
     }
   }
 
@@ -2440,11 +2502,12 @@ export class GraphProcessor {
     processId: ProcessId,
     durationMs?: number,
     splitRunDurationMs?: Record<number, number>,
+    resultOrigin: NodeResultOrigin = 'executed',
   ): Promise<void> {
     const error = getError(e);
     const exclusionReason = this.#getErrorExclusionReason(node, error, processId);
     if (exclusionReason) {
-      await this.#emitNodeExcluded(node, processId, this.#getInputValuesForNode(node), exclusionReason);
+      await this.#emitNodeExcluded(node, processId, this.#getInputValuesForNode(node), exclusionReason, resultOrigin);
       this.#emitTraceEvent(`Node ${node.title} (${node.id}-${processId}) was excluded: ${exclusionReason}`);
       return;
     }
@@ -2452,13 +2515,19 @@ export class GraphProcessor {
     this.#erroredNodes.set(node.id, error);
     await this.#emitter.emit(
       'nodeError',
-      this.#withExecution(withOptionalDuration({ node, error, processId }, durationMs, splitRunDurationMs)),
+      this.#withExecution(
+        withOptionalDuration({ node, error, processId, resultOrigin }, durationMs, splitRunDurationMs),
+      ),
     );
     this.#emitTraceEvent(`Node ${node.title} (${node.id}-${processId}) errored: ${error.stack}`);
   }
 
   #emitNodePartialOutput(node: ChartNode, outputs: Outputs, index: number, processId: ProcessId): void {
-    emitDetached(this.#emitter, 'partialOutput', this.#withExecution({ node, outputs, index, processId }));
+    emitDetached(
+      this.#emitter,
+      'partialOutput',
+      this.#withExecution({ node, outputs, index, processId, resultOrigin: 'executed' as const }),
+    );
   }
 
   #getErrorExclusionReason(node: ChartNode, error: Error, processId: ProcessId): string | undefined {
@@ -2589,6 +2658,7 @@ export class GraphProcessor {
     index: number,
     processId: ProcessId,
     partialOutput?: (node: ChartNode, partialOutputs: Outputs, index: number) => void,
+    markResultAsEditorCacheHit?: () => void,
   ) {
     const instance = this.#nodeInstances[node.id]!;
     const nodeAbortController = this.#newAbortController();
@@ -2608,6 +2678,8 @@ export class GraphProcessor {
           processId,
           nodeAbortController,
           partialOutput,
+          undefined,
+          markResultAsEditorCacheHit,
         );
       } finally {
         this.#finishRuntimeProfile('createNodeProcessContext', createContextProfileStart);
@@ -2654,6 +2726,8 @@ export class GraphProcessor {
     processId: ProcessId,
     nodeAbortController: AbortController,
     partialOutput?: (node: ChartNode, partialOutputs: Outputs, index: number) => void,
+    toolCallTraceSource?: InternalProcessContext['toolCallTraceSource'],
+    markResultAsEditorCacheHit?: InternalProcessContext['markResultAsEditorCacheHit'],
   ): InternalProcessContext {
     const plugin = this.#registry.getPluginFor(node.type);
     const toolCallContinuation = this.#getToolCallContinuationContext(
@@ -2673,6 +2747,7 @@ export class GraphProcessor {
       externalFunctions: this.#externalFunctions,
       getPluginConfig: (name) => getPluginConfig(plugin, this.#context.settings, name),
       isDirectRunTarget: this.runToNodeIds?.includes(node.id) ?? false,
+      markResultAsEditorCacheHit,
       node,
       nodeAbortController,
       onPartialOutputs: (partialOutputs) => {
@@ -2693,6 +2768,7 @@ export class GraphProcessor {
         emitDetached(this.#emitter, 'globalSet', this.#withExecution({ id, value, processId }));
       },
       toolCallContinuation,
+      toolCallTraceSource,
       waitEvent: async (event) => {
         return new Promise((resolve, reject) => {
           const abortListener = () => {
@@ -2747,6 +2823,7 @@ export class GraphProcessor {
       delegateNode,
       latestOutputs: new Map(),
       llmNodeId: node.id,
+      llmProcessId: processId,
       released: false,
     };
     this.#toolCallContinuationInvocations.set(invocationKey, invocation);
@@ -2802,7 +2879,9 @@ export class GraphProcessor {
     assistantMessage: string,
     llmSignal: AbortSignal,
   ): Promise<ToolCallContinuationResult[]> {
-    const round = await new ToolCallContinuationCoordinator(this.#createToolCallContinuationCoordinatorAdapter()).run({
+    const round = await new ToolCallContinuationCoordinator(
+      this.#createToolCallContinuationCoordinatorAdapter(llmNode.id, invocation.llmProcessId),
+    ).run({
       assistantMessage,
       delegateNode: invocation.delegateNode,
       llmNode,
@@ -2823,7 +2902,10 @@ export class GraphProcessor {
     return [...round.results];
   }
 
-  #createToolCallContinuationCoordinatorAdapter(): ToolCallContinuationCoordinatorAdapter {
+  #createToolCallContinuationCoordinatorAdapter(
+    sourceNodeId: NodeId,
+    sourceProcessId: ProcessId,
+  ): ToolCallContinuationCoordinatorAdapter {
     return {
       accumulateCost: (outputs) => this.#accumulateCost(outputs),
       createBranchAdapter: () => {
@@ -2865,6 +2947,7 @@ export class GraphProcessor {
           nodeAbortController,
           (partialNode, partialOutputs, index) =>
             this.#emitNodePartialOutput(partialNode, partialOutputs, index, processId),
+          { nodeId: sourceNodeId, processId: sourceProcessId },
         ),
       createNodeAbortController: () => this.#newAbortController(),
       emitDelegateError: (node, error, processId, timingStart) =>
@@ -2878,6 +2961,7 @@ export class GraphProcessor {
                 node,
                 outputs,
                 processId,
+                resultOrigin: 'executed' as const,
               },
               this.#finishNodeTiming(timingStart),
             ),
@@ -2886,7 +2970,10 @@ export class GraphProcessor {
       },
       emitDelegatePartialOutput: (node, outputs, processId) => this.#emitNodePartialOutput(node, outputs, 0, processId),
       emitDelegateStart: (node, inputs, processId) =>
-        this.#emitter.emit('nodeStart', this.#withExecution({ node, inputs, processId })),
+        this.#emitter.emit(
+          'nodeStart',
+          this.#withExecution({ node, inputs, processId, resultOrigin: 'executed' as const }),
+        ),
       getActiveOutputPortIds: (node) => this.#getActiveOutputPortIds(node),
       getContinuationBranchBoundaryNodeIds: (llmNode) => new Set<NodeId>([llmNode.id, ...this.#currentlyProcessing]),
       hasPreloadedOrFrozenDelegateOutput: (node, inputs, processId) =>
@@ -3405,6 +3492,7 @@ export class GraphProcessor {
       node: executorNode,
       outputs: partialOutputs,
       processId: this.#executor.processId,
+      resultOrigin: 'executed' as const,
       execution: parentExecution,
     });
   }
@@ -3587,11 +3675,26 @@ export class GraphProcessor {
     emitDetached(this.#emitter, 'nodeExcluded', this.#createNodeExcludedEvent(node, processId, inputValues, reason));
   }
 
-  async #emitNodeExcluded(node: ChartNode, processId: ProcessId, inputValues: Inputs, reason: string): Promise<void> {
-    await this.#emitter.emit('nodeExcluded', this.#createNodeExcludedEvent(node, processId, inputValues, reason));
+  async #emitNodeExcluded(
+    node: ChartNode,
+    processId: ProcessId,
+    inputValues: Inputs,
+    reason: string,
+    resultOrigin: NodeResultOrigin = 'executed',
+  ): Promise<void> {
+    await this.#emitter.emit(
+      'nodeExcluded',
+      this.#createNodeExcludedEvent(node, processId, inputValues, reason, resultOrigin),
+    );
   }
 
-  #createNodeExcludedEvent(node: ChartNode, processId: ProcessId, inputValues: Inputs, reason: string) {
+  #createNodeExcludedEvent(
+    node: ChartNode,
+    processId: ProcessId,
+    inputValues: Inputs,
+    reason: string,
+    resultOrigin: NodeResultOrigin = 'executed',
+  ) {
     const outputs = createExcludedNodeOutputs(node, this.#definitions[node.id]!.outputs);
 
     this.#nodeResults.set(node.id, outputs);
@@ -3602,6 +3705,7 @@ export class GraphProcessor {
       inputs: inputValues,
       outputs,
       reason,
+      resultOrigin,
     });
   }
 

@@ -1,0 +1,162 @@
+version: 4
+data:
+  graphs:
+    promo-structured-output-main:
+      metadata:
+        description: An LLM turns an unstructured support ticket into typed fields for deterministic downstream use.
+        id: promo-structured-output-main
+        name: Typed structured output
+      nodes:
+        '[structured-api-key]:text "API Key — paste yours here"':
+          data:
+            text: ""
+          outgoingConnections:
+            - output->"Extract ticket fields" structured-llm/apiKey
+          visualData: 60/100/330/1//
+        '[structured-ticket]:text "Messy support ticket"':
+          data:
+            text: |-
+              Extract the support ticket into the supplied schema.
+
+              Customer message:
+              Hi — since yesterday the dashboard is completely blank after login. I have a client presentation in two hours, so could a person please look at this urgently? Thanks, Mina
+          outgoingConnections:
+            - output->"Extract ticket fields" structured-llm/prompt
+          visualData: 60/430/390/2//
+        '[structured-schema]:object "Strict ticket schema"':
+          data:
+            jsonTemplate: |-
+              {
+                "type": "object",
+                "properties": {
+                  "category": {
+                    "type": "string",
+                    "enum": ["billing", "technical", "feature-request"]
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"]
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "needsHuman": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["category", "priority", "summary", "needsHuman"],
+                "additionalProperties": false
+              }
+          outgoingConnections:
+            - output->"Extract ticket fields" structured-llm/responseSchema
+          visualData: 520/610/430/3//
+        '[structured-llm]:llmChatV2 "Extract ticket fields"':
+          data:
+            anthropicCacheControlTtl: ""
+            anthropicEffort: ""
+            anthropicThinkingMode: ""
+            apiKeySource: input
+            autoContinueToolCalls: false
+            baseURL: ""
+            cache: false
+            configurationMode: inline
+            customProviderApiKeyEnvVarName: CUSTOM_PROVIDER_API_KEY
+            customProviderApiKeyProgrammaticName: ""
+            customProviderBaseURL: ""
+            enableGoogleSearchGrounding: false
+            enableGoogleUrlContext: false
+            enableOpenAICodeInterpreter: false
+            enableOpenAIWebSearch: false
+            extraProviderOptions: ""
+            googleIncludeThoughts: false
+            googleThinkingLevel: ""
+            headers: []
+            maxTokens: 220
+            maxToolRounds: 1
+            model: gpt-4o-mini
+            openAIPreviousResponseId: ""
+            openAIReasoningEffort: ""
+            openAIReasoningSummary: ""
+            openAIWebSearchContextSize: medium
+            outputReasoning: false
+            outputRequestBody: false
+            outputRequestError: false
+            outputRequestStatus: false
+            outputUsage: false
+            parallelToolCalls: false
+            provider: openai
+            responseFormat: json_schema
+            responseSchemaDescription: A normalized support-ticket triage record.
+            responseSchemaName: support_ticket_triage
+            retryOnNon200: false
+            retryOnNon200CooldownMs: 0
+            retryOnNon200RepeatTimes: 0
+            stopSequences: []
+            temperature: 0
+            toolChoice: ""
+            toolChoiceFunction: ""
+            useAnthropicThinkingBudgetInput: false
+            useAsGraphPartialOutput: false
+            useBaseURLInput: false
+            useCustomProviderBaseURLInput: false
+            useExtraProviderOptionsInput: false
+            useFrequencyPenaltyInput: false
+            useGoogleThinkingBudgetInput: false
+            useHeadersInput: false
+            useMaxTokensInput: false
+            useModelInput: false
+            useOpenAIPreviousResponseIdInput: false
+            usePresencePenaltyInput: false
+            useResponseSchemaDescriptionInput: false
+            useResponseSchemaNameInput: false
+            useSeedInput: false
+            useStopSequencesInput: false
+            useTemperatureInput: false
+            useToolCalling: false
+            useTopKInput: false
+            useTopPInput: false
+          outgoingConnections:
+            - response->"Expose typed fields" structured-destructure/object
+          visualData: 1050/330/360/4//
+        '[structured-destructure]:destructure "Expose typed fields"':
+          data:
+            pathPortIds:
+              - category
+              - priority
+              - summary
+              - needsHuman
+            paths:
+              - $.category
+              - $.priority
+              - $.summary
+              - $.needsHuman
+          outgoingConnections:
+            - category->"Render triage card" structured-render/category
+            - priority->"Render triage card" structured-render/priority
+            - summary->"Render triage card" structured-render/summary
+            - needsHuman->"Render triage card" structured-render/needsHuman
+          visualData: 1510/330/360/5//
+        '[structured-render]:text "Render triage card"':
+          data:
+            text: |-
+              # Support ticket triage
+
+              - Category: **{{category}}**
+              - Priority: **{{priority}}**
+              - Needs a person: **{{needsHuman}}**
+
+              {{summary}}
+          outgoingConnections:
+            - output->"Triage card" structured-output/value
+          visualData: 1970/330/390/6//
+        '[structured-output]:graphOutput "Triage card"':
+          data:
+            dataType: string
+            id: output
+          visualData: 2460/390/330/7//
+  metadata:
+    description: Paste an OpenAI API key, then inspect strict JSON-schema output flowing through typed downstream ports.
+    id: rivet-promo-structured-output
+    mainGraphId: promo-structured-output-main
+    title: Demo — Typed Structured Output
+  plugins: []

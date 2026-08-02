@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
 import type { ChartNode, NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
 import type { GraphId } from '../NodeGraph.js';
-import { NodeImpl, type NodeBody, type NodeUIData } from '../NodeImpl.js';
+import { NodeImpl, type NodeBody, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
 import { dedent } from 'ts-dedent';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
@@ -111,6 +111,14 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     });
 
     return outputs;
+  }
+
+  getRunActivityDescriptor(): NodeRunActivityDescriptor {
+    return {
+      category: 'tool',
+      primaryOutputPortId: 'output' as PortId,
+      contextInputPortIds: ['function-call' as PortId],
+    };
   }
 
   static getUIData(): NodeUIData {

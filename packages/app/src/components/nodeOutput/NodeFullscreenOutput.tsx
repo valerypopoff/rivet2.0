@@ -20,6 +20,8 @@ import { fullscreenOutputNodeState, hoveringNodeState } from '../../state/graphB
 import { fullscreenOutputModalBoundsState, overlayOpenState } from '../../state/ui.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { FullScreenModal } from '../FullScreenModal.js';
+import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
+import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { CodeNodeErrorOutput } from '../nodes/CodeNode.js';
 import { MATCH_ACTIVE_CLASS, MATCH_CLASS } from './fullscreenOutputSearch.js';
 import { findFullscreenOutputScrollContainer } from './fullscreenOutputSearchViewport.js';
@@ -35,7 +37,11 @@ import {
   shouldShowNodeRunDurationSummary,
 } from './NodeRunDurationMeta.js';
 import { useFullscreenOutputSearch } from './useFullscreenOutputSearch.js';
-import { createFullscreenNodeOutputViewModel, getNodeOutputCopySource } from './nodeOutputViewModel.js';
+import {
+  createFullscreenNodeOutputViewModel,
+  getNodeOutputCopySource,
+  getSelectedNodeOutputProcess,
+} from './nodeOutputViewModel.js';
 
 export const FullscreenNodeOutputModalRenderer: FC = () => {
   useDependsOnPlugins();
@@ -257,6 +263,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
   const fullscreenOutputRootRef = useRef<HTMLDivElement>(null);
   const [isHeaderOverContent, setIsHeaderOverContent] = useState(false);
+  const [isInspectorOpen, setInspectorOpen] = useState(false);
 
   const filteredOutput = useMemo(
     () => filterProcessDataForSelection({ ...graphSelectionOptions, processData: output }),
@@ -289,6 +296,11 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
     [dataRefs, filteredOutput, node.type, selectedPage, showNodeRunDurations],
   );
   const { data, processId } = outputViewModel;
+  const selectedProcessData = useMemo(
+    () => getSelectedNodeOutputProcess(filteredOutput ?? [], selectedPage),
+    [filteredOutput, selectedPage],
+  );
+  const responseTrace = useMemo(() => buildLlmInvocationTrace(node, selectedProcessData), [node, selectedProcessData]);
 
   const handleOpenPromptDesigner = () => {
     if (!processId) {
@@ -496,6 +508,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
           onCopyValue={handleCopyToClipboard}
           onCopyJson={handleCopyToClipboardJson}
           onOpenPromptDesigner={node.type === 'chat' ? handleOpenPromptDesigner : undefined}
+          onInspectResponse={node.type === 'llmChatV2' ? () => setInspectorOpen(true) : undefined}
         />
       </header>
 
@@ -509,6 +522,9 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
           {outputBody}
         </div>
       </FullscreenOutputSearchContext.Provider>
+      {isInspectorOpen && (
+        <AgentResponseInspector trace={responseTrace} onClose={() => setInspectorOpen(false)} renderInPortal />
+      )}
     </div>
   );
 };

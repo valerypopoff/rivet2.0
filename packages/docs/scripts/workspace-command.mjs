@@ -15,6 +15,15 @@ export function spawnWorkspaceScript(workspace, script, options = {}) {
   });
 }
 
+export function spawnRepositoryScript(script, options = {}) {
+  return spawn(process.execPath, [yarnCli, script], {
+    cwd: repositoryDirectory,
+    env: { ...process.env, ...options.env },
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+}
+
 export function terminateWorkspaceProcess(child) {
   if (child.exitCode != null || child.signalCode != null || child.pid == null) {
     return;

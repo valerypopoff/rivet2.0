@@ -1,8 +1,8 @@
 import { omit } from 'lodash-es';
 import type { DataValue, ParsedAssistantChatMessageFunctionCall, ChatMessage } from '../DataValue.js';
 import type { GraphId } from '../NodeGraph.js';
-import type { InternalProcessContext } from '../ProcessContext.js';
-import type { PortId } from '../NodeBase.js';
+import type { InternalProcessContext, ProcessId } from '../ProcessContext.js';
+import type { NodeId, PortId } from '../NodeBase.js';
 import type { Outputs } from '../GraphProcessor.js';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
 import { getError } from '../../utils/errors.js';
@@ -21,6 +21,8 @@ export type ToolCallDelegationResult = {
   record: DelegatedToolCallRecord;
   /** Cost from this live delegation. Kept out of the replay record so replay cannot charge it again. */
   cost?: number;
+  /** Internal trace disposition; never exposed through node ports. */
+  traceOutcome?: 'success' | 'passthrough-error';
 };
 
 export type DelegatedToolCallRecord = {
@@ -252,6 +254,54 @@ export async function delegateToolCall(
   config: ToolCallDelegationConfig,
 ): Promise<ToolCallDelegationResult> {
   const functionCall = normalizeFunctionCallInput(rawFunctionCall);
+  const source = context.toolCallTraceSource ?? {
+    nodeId: context.node?.id ?? ('unknown' as NodeId),
+    processId: context.processId ?? ('unknown' as ProcessId),
+  };
+  const startedAt = Date.now();
+  const timingStart = getCurrentTimeMs();
+  const trace: ToolCallTraceHandler = { handlerKind: 'unknown' };
+
+  try {
+    const result = await delegateResolvedToolCall(functionCall, context, config, trace);
+    notifyToolCallFinished(context, {
+      ...(functionCall.id == null ? {} : { toolCallId: functionCall.id }),
+      toolName: functionCall.name,
+      sourceNodeId: source.nodeId,
+      sourceProcessId: source.processId,
+      ...trace,
+      outcome: result.traceOutcome ?? 'success',
+      startedAt,
+      durationMs: Math.max(0, getCurrentTimeMs() - timingStart),
+    });
+    return result;
+  } catch (error) {
+    notifyToolCallFinished(context, {
+      ...(functionCall.id == null ? {} : { toolCallId: functionCall.id }),
+      toolName: functionCall.name,
+      sourceNodeId: source.nodeId,
+      sourceProcessId: source.processId,
+      ...trace,
+      outcome: context.signal.aborted ? 'aborted' : 'failure',
+      startedAt,
+      durationMs: Math.max(0, getCurrentTimeMs() - timingStart),
+    });
+    throw error;
+  }
+}
+
+type ToolCallTraceHandler = {
+  handlerKind: 'graph' | 'external' | 'unknown';
+  handlerGraphId?: GraphId;
+  handlerName?: string;
+};
+
+async function delegateResolvedToolCall(
+  functionCall: ParsedAssistantChatMessageFunctionCall,
+  context: InternalProcessContext,
+  config: ToolCallDelegationConfig,
+  trace: ToolCallTraceHandler,
+): Promise<ToolCallDelegationResult> {
   let handler: { key: string | undefined; value: GraphId } | undefined;
 
   if (config.autoDelegate) {
@@ -268,6 +318,8 @@ export async function delegateToolCall(
     if (config.autoDelegate && config.fallBackToExternalCall) {
       const externalFunction = context.externalFunctions[functionCall.name];
       if (externalFunction) {
+        trace.handlerKind = 'external';
+        trace.handlerName = functionCall.name;
         const executionStart = getCurrentTimeMs();
         try {
           const externalContext = omit(context, ['setGlobal']);
@@ -290,6 +342,7 @@ export async function delegateToolCall(
               outputString,
               message: buildToolResultMessage(functionCall, outputString),
               record: buildDelegatedToolCallRecord(functionCall, outputString, executionTimeMs),
+              traceOutcome: 'passthrough-error',
             };
           }
 
@@ -321,6 +374,13 @@ export async function delegateToolCall(
     },
   };
 
+  trace.handlerKind = 'graph';
+  trace.handlerGraphId = handler.value;
+  const handlerName = context.project.graphs[handler.value]?.metadata?.name;
+  if (handlerName != null) {
+    trace.handlerName = handlerName;
+  }
+
   for (const [argName, argument] of Object.entries(functionCall.arguments ?? {})) {
     subgraphInputs[argName] = {
       type: 'any',
@@ -341,6 +401,17 @@ export async function delegateToolCall(
     record: buildDelegatedToolCallRecord(functionCall, outputString, executionTimeMs),
     cost,
   };
+}
+
+function notifyToolCallFinished(
+  context: InternalProcessContext,
+  event: Parameters<NonNullable<InternalProcessContext['onToolCallFinished']>>[0],
+): void {
+  try {
+    context.onToolCallFinished?.(event);
+  } catch {
+    // Trace observers must never change tool execution behavior.
+  }
 }
 
 function getCurrentTimeMs(): number {

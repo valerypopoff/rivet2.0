@@ -46,16 +46,20 @@ export function createDebuggerProcessorAttachments(options: {
         }),
       );
       cleanups.push(
-        processor.on('nodeError', ({ node, error, processId, execution, durationMs, splitRunDurationMs }) => {
-          options.broadcast(processor, 'nodeError', {
-            node,
-            error: typeof error === 'string' ? error : error.toString(),
-            processId,
-            execution,
-            ...(durationMs === undefined ? {} : { durationMs }),
-            ...(splitRunDurationMs === undefined ? {} : { splitRunDurationMs }),
-          });
-        }),
+        processor.on(
+          'nodeError',
+          ({ node, error, processId, execution, resultOrigin, durationMs, splitRunDurationMs }) => {
+            options.broadcast(processor, 'nodeError', {
+              node,
+              error: typeof error === 'string' ? error : error.toString(),
+              processId,
+              execution,
+              ...(resultOrigin === undefined ? {} : { resultOrigin }),
+              ...(durationMs === undefined ? {} : { durationMs }),
+              ...(splitRunDurationMs === undefined ? {} : { splitRunDurationMs }),
+            });
+          },
+        ),
       );
       cleanups.push(
         processor.on('error', ({ error }) => {
@@ -103,6 +107,16 @@ export function createDebuggerProcessorAttachments(options: {
       cleanups.push(
         processor.on('progress', (data) => {
           options.broadcast(processor, 'progress', data);
+        }),
+      );
+      cleanups.push(
+        processor.on('llmCallFinished', (data) => {
+          options.broadcast(processor, 'llmCallFinished', data);
+        }),
+      );
+      cleanups.push(
+        processor.on('toolCallFinished', (data) => {
+          options.broadcast(processor, 'toolCallFinished', data);
         }),
       );
       cleanups.push(

@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
+  buildAgentResponseTrace,
   RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
   isRivetWebAppRunTerminalEvent,
   parseRivetWebAppClientMessage,
@@ -99,6 +100,12 @@ void describe('UiGraphActionProtocol', () => {
   });
 
   void it('distinguishes replayable terminal events from intermediate events', () => {
+    const responseTrace = buildAgentResponseTrace({
+      scope: 'response',
+      execution: { graphId: 'graph', graphRunId: 'graph-run', rootRunId: 'root-run' } as never,
+      events: [],
+      status: 'completed',
+    });
     const completed = parseRivetWebAppServerMessage({
       type: 'action.completed',
       requestId: 'request',
@@ -106,6 +113,7 @@ void describe('UiGraphActionProtocol', () => {
       sequence: 3,
       statePatch: { result: 'Done' },
       storagePatch: { analysis: 'Updated' },
+      responseTrace,
     });
     const accepted = parseRivetWebAppServerMessage({
       type: 'action.accepted',
@@ -118,5 +126,17 @@ void describe('UiGraphActionProtocol', () => {
     assert.ok(accepted && accepted.type === 'action.accepted');
     assert.equal(isRivetWebAppRunTerminalEvent(completed), true);
     assert.equal(isRivetWebAppRunTerminalEvent(accepted), false);
+    assert.deepEqual(completed?.type === 'action.completed' ? completed.responseTrace : undefined, responseTrace);
+    assert.equal(
+      parseRivetWebAppServerMessage({
+        type: 'action.completed',
+        requestId: 'request',
+        runId: 'run',
+        sequence: 3,
+        statePatch: {},
+        responseTrace: { ...responseTrace, messages: ['secret'] },
+      }),
+      undefined,
+    );
   });
 });

@@ -23,6 +23,8 @@ import {
   type RivetStoredValueStore,
   type RivetKnowledgeStoreRegistry,
   rivetWebAppStatusExternalFunction,
+  AgentResponseTraceCollector,
+  type AgentResponseTrace,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor, type NodeCreateProcessorOptions } from './api.js';
 import {
@@ -61,6 +63,7 @@ export type RivetWebAppActionResult = {
   outputs: Record<string, DataValue>;
   statePatch: Record<string, unknown>;
   storagePatch: Record<string, unknown>;
+  responseTrace?: AgentResponseTrace;
 };
 
 export type RivetWebAppHandlerOptions = {
@@ -345,6 +348,10 @@ export async function prepareRivetWebAppAction(
       storedValueStore: hostStoredValueStore ?? browserStoredValues!.store,
       knowledgeStores: hostKnowledgeStores,
     });
+    const responseTraceCollector =
+      component.type === 'chat' && component.allowResponseInspection === true
+        ? new AgentResponseTraceCollector(processorRunner.processor)
+        : undefined;
     let started = false;
     let disposed = false;
 
@@ -354,6 +361,7 @@ export async function prepareRivetWebAppAction(
         if (started || disposed) return;
         disposed = true;
         actionAbortController.abort(new Error('Prepared Rivet web app action disposed before execution.'));
+        responseTraceCollector?.dispose();
         processorRunner.dispose();
       },
       processor: processorRunner.processor,
@@ -375,10 +383,12 @@ export async function prepareRivetWebAppAction(
           await callActionHook(onActionStart, actionContext);
           processorRunStarted = true;
           const outputs = await processorRunner.run();
+          const responseTrace = responseTraceCollector?.build();
           const result = {
             outputs,
             statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, actionState),
             storagePatch: browserStoredValues?.getPatch() ?? {},
+            ...(responseTrace == null ? {} : { responseTrace }),
           };
           await callActionHook(onActionFinish, { ...actionContext, ...result });
           return result;
@@ -388,6 +398,7 @@ export async function prepareRivetWebAppAction(
         } finally {
           if (!processorRunStarted) {
             removeAbortForwarding();
+            responseTraceCollector?.dispose();
             processorRunner.dispose();
           } else if (processorRunner.processor.isRunning) {
             // An early web-app result does not end the processor lifecycle. Keep
@@ -395,9 +406,13 @@ export async function prepareRivetWebAppAction(
             void processorRunner.processor
               .waitForRunCompletion()
               .catch(() => undefined)
-              .finally(removeAbortForwarding);
+              .finally(() => {
+                removeAbortForwarding();
+                responseTraceCollector?.dispose();
+              });
           } else {
             removeAbortForwarding();
+            responseTraceCollector?.dispose();
           }
         }
       },

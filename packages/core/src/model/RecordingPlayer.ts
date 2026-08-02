@@ -248,6 +248,7 @@ export async function replayExecutionRecording(options: {
             node,
             inputs: data.inputs,
             processId: data.processId as ProcessId,
+            ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
             execution,
           });
           if (node.type === 'chat') {
@@ -267,6 +268,7 @@ export async function replayExecutionRecording(options: {
                 node,
                 outputs: data.outputs,
                 processId: data.processId as ProcessId,
+                ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
                 execution,
               },
               getRecordedDuration(data.durationMs, execution, data.nodeId, data.processId as ProcessId, event.ts),
@@ -289,6 +291,7 @@ export async function replayExecutionRecording(options: {
                 node,
                 error: data.error,
                 processId: data.processId as ProcessId,
+                ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
                 execution,
               },
               getRecordedDuration(data.durationMs, execution, data.nodeId, data.processId as ProcessId, event.ts),
@@ -308,6 +311,7 @@ export async function replayExecutionRecording(options: {
             inputs: data.inputs,
             outputs: data.outputs,
             reason: data.reason,
+            ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
             execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
           });
           visitedNodes.add(data.nodeId);
@@ -334,6 +338,7 @@ export async function replayExecutionRecording(options: {
             outputs: data.outputs,
             index: data.index,
             processId: data.processId as ProcessId,
+            ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
             execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
           });
           break;
@@ -345,6 +350,22 @@ export async function replayExecutionRecording(options: {
             processId: data.processId as ProcessId,
             progress: data.progress,
             execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
+          });
+          break;
+        }
+        case 'llmCallFinished': {
+          const { data } = event;
+          emitDetached(emitter, 'llmCallFinished', {
+            ...data,
+            execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
+          });
+          break;
+        }
+        case 'toolCallFinished': {
+          const { data } = event;
+          emitDetached(emitter, 'toolCallFinished', {
+            ...data,
+            execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.sourceNodeId), data.execution),
           });
           break;
         }

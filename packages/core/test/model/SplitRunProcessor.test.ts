@@ -16,6 +16,51 @@ function createSplitNode(): ChartNode {
   };
 }
 
+async function runSplitOriginScenario(options: {
+  cachedIndexes: ReadonlySet<number>;
+  isSplitSequential: boolean;
+}): Promise<'executed' | 'editor-cache' | undefined> {
+  const node = createSplitNode();
+  node.isSplitSequential = options.isSplitSequential;
+  let finishOrigin: 'executed' | 'editor-cache' | undefined;
+
+  await processSplitRunNode(node, 'process' as any, {
+    getInputValues: () => ({
+      prompts: { type: 'string[]', value: ['first', 'second'] },
+    }),
+    getInputDefinitions: () => [
+      {
+        id: 'prompts' as PortId,
+        title: 'Prompts',
+        dataType: 'string[]',
+      },
+    ],
+    isExcludedDueToControlFlow: () => false,
+    processNodeWithInputData: async (_node, _inputs, index, _processId, _partialOutput, markCacheHit) => {
+      if (options.cachedIndexes.has(index)) {
+        markCacheHit?.();
+      }
+      return { output: { type: 'string', value: `result-${index}` } } as Outputs;
+    },
+    splitRunConcurrency: 2,
+    accumulateCost: () => {},
+    setNodeResults: () => {},
+    markNodeVisited: () => {},
+    nodeErrored: async (_node, error) => {
+      throw error;
+    },
+    isAborted: () => false,
+    getAbortError: () => new Error('aborted'),
+    emit: async (event, data) => {
+      if (event === 'nodeFinish') {
+        finishOrigin = data.resultOrigin;
+      }
+    },
+  });
+
+  return finishOrigin;
+}
+
 describe('SplitRunProcessor', () => {
   it('keeps preserve-array inputs intact while splitting ordinary array inputs', async () => {
     const received: Inputs[] = [];
@@ -77,5 +122,16 @@ describe('SplitRunProcessor', () => {
       received.map((invocationInputs) => invocationInputs.prompts?.value),
       ['first', 'second'],
     );
+  });
+
+  void it('reports editor-cache when every sequential split replays cached output', async () => {
+    assert.equal(
+      await runSplitOriginScenario({ cachedIndexes: new Set([0, 1]), isSplitSequential: true }),
+      'editor-cache',
+    );
+  });
+
+  void it('reports executed when a parallel split run mixes cached and physical outputs', async () => {
+    assert.equal(await runSplitOriginScenario({ cachedIndexes: new Set([0]), isSplitSequential: false }), 'executed');
   });
 });

@@ -8,6 +8,7 @@ import {
   type JSFilterNode,
   type JSMapNode,
   type ProcessEvents,
+  type AgentTraceEvent,
 } from '@valerypopoff/rivet2-core';
 import { type ExecutionDataFlowApi } from './useExecutionDataFlow';
 import { lastRunDataByNodeState } from '../state/dataFlow';
@@ -25,6 +26,8 @@ export type NodeExecutionEventsApi = {
   onNodeOutputsCleared: (data: ProcessEvents['nodeOutputsCleared']) => void;
   onNodeStart: (data: ProcessEvents['nodeStart']) => void;
   onPartialOutput: (data: ProcessEvents['partialOutput']) => void;
+  onLlmCallFinished: (data: ProcessEvents['llmCallFinished']) => void;
+  onToolCallFinished: (data: ProcessEvents['toolCallFinished']) => void;
 };
 
 export function useNodeExecutionEvents({
@@ -183,6 +186,46 @@ export function useNodeExecutionEvents({
     setSelectedNodePageLatest(node.id, execution);
   };
 
+  const appendAgentTraceEvent = (
+    nodeId: ProcessEvents['llmCallFinished']['nodeId'],
+    processId: ProcessEvents['llmCallFinished']['processId'],
+    execution: ProcessEvents['llmCallFinished']['execution'],
+    event: AgentTraceEvent,
+  ) => {
+    setLastRunData((prev) =>
+      produce(prev, (draft) => {
+        const processes = (draft[nodeId] ??= []);
+        let process = processes.find((candidate) => candidate.processId === processId);
+        if (process == null) {
+          process = {
+            processId,
+            graphId: execution.graphId,
+            graphRunId: execution.graphRunId,
+            rootRunId: execution.rootRunId,
+            data: {},
+          };
+          processes.push(process);
+        }
+        process.data.agentTraceEvents ??= [];
+        process.data.agentTraceEvents.push(event);
+      }),
+    );
+  };
+
+  const onLlmCallFinished = (data: ProcessEvents['llmCallFinished']) => {
+    appendAgentTraceEvent(data.nodeId, data.processId, data.execution, {
+      type: 'llm-call-finished',
+      ...data,
+    });
+  };
+
+  const onToolCallFinished = (data: ProcessEvents['toolCallFinished']) => {
+    appendAgentTraceEvent(data.sourceNodeId, data.sourceProcessId, data.execution, {
+      type: 'tool-call-finished',
+      ...data,
+    });
+  };
+
   return {
     onNodeError,
     onNodeExcluded,
@@ -190,6 +233,8 @@ export function useNodeExecutionEvents({
     onNodeOutputsCleared,
     onNodeStart,
     onPartialOutput,
+    onLlmCallFinished,
+    onToolCallFinished,
   };
 }
 

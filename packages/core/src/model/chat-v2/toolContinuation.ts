@@ -153,6 +153,7 @@ export async function runChatV2PipelineWithToolContinuation(
       ...pipelineOptions,
       functions,
       prompt: currentPrompt,
+      roundIndex: completedRounds,
       systemPrompt: currentSystemPrompt,
     });
     accumulatedUsage = autoContinue ? addUsage(accumulatedUsage, result.usage) : undefined;

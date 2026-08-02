@@ -1021,6 +1021,7 @@ export const ChatNodeBase = {
           if (data.cache) {
             const cached = cache.get(cacheKey);
             if (cached) {
+              context.markResultAsEditorCacheHit?.();
               return cached;
             }
           }
@@ -1086,7 +1087,8 @@ export const ChatNodeBase = {
             numberOfChoices,
             useServerTokenCalculation: data.useServerTokenCalculation,
             modelCosts: {
-              prompt: finalModel in openaiModels ? openaiModels[finalModel as keyof typeof openaiModels].cost.prompt : 0,
+              prompt:
+                finalModel in openaiModels ? openaiModels[finalModel as keyof typeof openaiModels].cost.prompt : 0,
               completion:
                 finalModel in openaiModels ? openaiModels[finalModel as keyof typeof openaiModels].cost.completion : 0,
             },
@@ -1126,4 +1128,3 @@ export function getChatNodeMessages(inputs: Inputs) {
   const messages = prependSystemPrompt(coercePromptToChatMessages(prompt), systemPrompt);
   return { messages, systemPrompt };
 }
-

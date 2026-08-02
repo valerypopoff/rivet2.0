@@ -4,7 +4,6 @@ export const sourceReadingTestAllowlist = new Set([
   'packages/app-executor/bin/executor.test.mts',
   'packages/app/src/components/ActionBarLayout.test.ts',
   'packages/app/src/components/ActionBarMoreMenu.test.ts',
-  'packages/app/src/components/ChatViewerLayout.test.ts',
   'packages/app/src/components/GraphListLayout.test.ts',
   'packages/app/src/components/LabeledToggle.test.ts',
   'packages/app/src/components/MissingAppPluginsModal.test.ts',

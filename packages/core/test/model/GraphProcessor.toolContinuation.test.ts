@@ -2202,6 +2202,7 @@ describe('GraphProcessor connected tool continuation', () => {
     );
     const delegateStarts: Array<{ processId: ProcessId; toolCallId: string }> = [];
     const delegateFinishes = new Map<ProcessId, Outputs>();
+    const toolEvents: ProcessEvents['toolCallFinished'][] = [];
 
     processor.setExternalFunction('slow', async () => {
       await delay(30);
@@ -2232,6 +2233,7 @@ describe('GraphProcessor connected tool continuation', () => {
         delegateFinishes.set(event.processId, event.outputs);
       }
     });
+    processor.on('toolCallFinished', (event) => toolEvents.push(event));
 
     await withTimeout(processor.processGraph(testProcessContext()), 'parallel tool batch');
 
@@ -2264,6 +2266,20 @@ describe('GraphProcessor connected tool continuation', () => {
     assert.deepEqual(
       FakeLLMNodeImpl.continuationRecords.map((record) => record.id),
       ['call-slow', 'call-fast', 'call-medium'],
+    );
+    assert.deepEqual(toolEvents.map((event) => event.toolCallId).sort(), ['call-fast', 'call-medium', 'call-slow']);
+    assert.equal(
+      toolEvents.every((event) => event.sourceNodeId === llm.id),
+      true,
+    );
+    assert.equal(new Set(toolEvents.map((event) => event.sourceProcessId)).size, 1);
+    assert.equal(
+      toolEvents.every((event) => event.handlerKind === 'external' && event.outcome === 'success'),
+      true,
+    );
+    assert.equal(
+      toolEvents.every((event) => !('arguments' in event) && !('result' in event)),
+      true,
     );
   });
 

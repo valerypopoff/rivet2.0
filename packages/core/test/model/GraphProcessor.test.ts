@@ -11,6 +11,7 @@ import {
   type GraphId,
   type GraphProgress,
   type Inputs,
+  type InternalProcessContext,
   type NodeConnection,
   type NodeId,
   type NodeInputDefinition,
@@ -24,7 +25,7 @@ import {
 } from '../../src/index.js';
 import { loadTestGraphInProcessor, testProcessContext } from '../testUtils';
 
-type TrackedNode = ChartNode<'trackedTest', { delayMs: number }>;
+type TrackedNode = ChartNode<'trackedTest', { delayMs: number; markEditorCacheHit?: boolean }>;
 type FailingNode = ChartNode<'failingTest', { delayMs: number }>;
 type LoopRequiredNode = ChartNode<'loopRequiredTest', Record<string, never>>;
 const originalFetch = globalThis.fetch;
@@ -94,13 +95,16 @@ class TrackedTestNodeImpl extends NodeImpl<TrackedNode> {
       : [];
   }
 
-  async process(inputs: Inputs): Promise<Outputs> {
+  async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     TrackedTestNodeImpl.activeCount += 1;
     TrackedTestNodeImpl.maxActiveCount = Math.max(TrackedTestNodeImpl.maxActiveCount, TrackedTestNodeImpl.activeCount);
     TrackedTestNodeImpl.processCount += 1;
 
     try {
       await waitFor(this.data.delayMs);
+      if (this.data.markEditorCacheHit) {
+        context.markResultAsEditorCacheHit?.();
+      }
       return inputs['input1' as PortId] != null ? { ['output1' as PortId]: inputs['input1' as PortId] } : {};
     } finally {
       TrackedTestNodeImpl.activeCount -= 1;
@@ -709,13 +713,19 @@ void describe('GraphProcessor', () => {
     const graph = createSingleNodeGraph(trackedNode, 'timing-disabled-graph');
 
     let untimedFinish: ProcessEvents['nodeFinish'] | undefined;
+    let untimedStart: ProcessEvents['nodeStart'] | undefined;
     const untimedProcessor = new GraphProcessor(makeProject(graph), graph.metadata.id as any, registry);
+    untimedProcessor.on('nodeStart', (event) => {
+      untimedStart = event;
+    });
     untimedProcessor.on('nodeFinish', (event) => {
       untimedFinish = event;
     });
     await untimedProcessor.processGraph(testProcessContext(), {});
 
     assert.equal(Object.prototype.hasOwnProperty.call(untimedFinish!, 'durationMs'), false);
+    assert.equal(untimedStart?.resultOrigin, 'executed');
+    assert.equal(untimedFinish?.resultOrigin, 'executed');
 
     let timedFinish: ProcessEvents['nodeFinish'] | undefined;
     const timedProcessor = new GraphProcessor(makeProject(graph), graph.metadata.id as any, registry, false, {
@@ -728,6 +738,29 @@ void describe('GraphProcessor', () => {
 
     assert.equal(typeof timedFinish?.durationMs, 'number');
     assert.ok(timedFinish!.durationMs! >= 0);
+  });
+
+  void it('uses terminal provenance to report a confirmed editor-cache replay', async () => {
+    const registry = createTrackedRegistry();
+    const trackedNode = registry.create('trackedTest');
+    trackedNode.id = 'editor-cache-node' as NodeId;
+    trackedNode.data.markEditorCacheHit = true;
+    const graph = createSingleNodeGraph(trackedNode, 'editor-cache-origin-graph');
+    const origins: Array<{ event: 'start' | 'finish'; origin: ProcessEvents['nodeFinish']['resultOrigin'] }> = [];
+    const processor = new GraphProcessor(makeProject(graph), graph.metadata.id as GraphId, registry);
+    processor.on('nodeStart', ({ node, resultOrigin }) => {
+      if (node.id === trackedNode.id) origins.push({ event: 'start', origin: resultOrigin });
+    });
+    processor.on('nodeFinish', ({ node, resultOrigin }) => {
+      if (node.id === trackedNode.id) origins.push({ event: 'finish', origin: resultOrigin });
+    });
+
+    await processor.processGraph(testProcessContext(), {});
+
+    assert.deepEqual(origins, [
+      { event: 'start', origin: 'executed' },
+      { event: 'finish', origin: 'editor-cache' },
+    ]);
   });
 
   void it('captures node error duration when requested', async () => {
@@ -751,6 +784,7 @@ void describe('GraphProcessor', () => {
 
     assert.equal(typeof nodeError?.durationMs, 'number');
     assert.ok(nodeError!.durationMs! >= 0);
+    assert.equal(nodeError?.resultOrigin, 'executed');
   });
 
   void it('captures split-run aggregate and per-item durations when requested', async () => {
@@ -781,6 +815,7 @@ void describe('GraphProcessor', () => {
     assert.equal(typeof splitFinish?.splitRunDurationMs?.[1], 'number');
     assert.ok(splitFinish!.splitRunDurationMs![0]! >= 0);
     assert.ok(splitFinish!.splitRunDurationMs![1]! >= 0);
+    assert.equal(splitFinish?.resultOrigin, 'executed');
   });
 
   void it('does not add duration to preloaded node events', async () => {
@@ -803,6 +838,7 @@ void describe('GraphProcessor', () => {
     await processor.processGraph(testProcessContext(), {});
 
     assert.equal(Object.prototype.hasOwnProperty.call(preloadFinish!, 'durationMs'), false);
+    assert.equal(preloadFinish?.resultOrigin, 'preloaded');
   });
 
   void it('replays frozen node outputs and skips the node implementation', async () => {
@@ -828,7 +864,7 @@ void describe('GraphProcessor', () => {
       ],
     };
     const processor = new GraphProcessor(makeProject(graph), graph.metadata.id as GraphId, registry);
-    const nodeEvents: string[] = [];
+    const nodeEvents: Array<{ label: string; resultOrigin: ProcessEvents['nodeStart']['resultOrigin'] }> = [];
     processor.setFrozenNodeOutputResolver(
       createFrozenNodeOutputResolver({
         [graph.metadata.id]: {
@@ -840,18 +876,20 @@ void describe('GraphProcessor', () => {
         },
       } as any),
     );
-    processor.on('nodeStart', ({ node }) => nodeEvents.push(`start:${node.id}`));
-    processor.on('nodeFinish', ({ node }) => nodeEvents.push(`finish:${node.id}`));
+    processor.on('nodeStart', ({ node, resultOrigin }) => nodeEvents.push({ label: `start:${node.id}`, resultOrigin }));
+    processor.on('nodeFinish', ({ node, resultOrigin }) =>
+      nodeEvents.push({ label: `finish:${node.id}`, resultOrigin }),
+    );
 
     const outputs = await processor.processGraph(testProcessContext());
 
     assert.deepEqual(outputs.result, { type: 'string', value: 'frozen value' });
     assert.equal(TrackedTestNodeImpl.processCount, 0);
     assert.deepEqual(nodeEvents, [
-      'start:frozen-tracked-node',
-      'finish:frozen-tracked-node',
-      `start:${outputNode.id}`,
-      `finish:${outputNode.id}`,
+      { label: 'start:frozen-tracked-node', resultOrigin: 'frozen' },
+      { label: 'finish:frozen-tracked-node', resultOrigin: 'frozen' },
+      { label: `start:${outputNode.id}`, resultOrigin: 'executed' },
+      { label: `finish:${outputNode.id}`, resultOrigin: 'executed' },
     ]);
   });
 

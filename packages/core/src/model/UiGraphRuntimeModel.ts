@@ -17,6 +17,7 @@ import {
   type UiGraphOutputRenderMode,
 } from './UiGraph.js';
 import { normalizeGraphProgress, type GraphProgress } from './GraphProgress.js';
+import type { AgentResponseTrace } from './AgentResponseTrace.js';
 
 export type UiGraphOutputRenderModel = {
   hasValue: boolean;
@@ -122,6 +123,7 @@ export type UiGraphActionRunContext = Readonly<{
 
 export type UiGraphActionRunResult = {
   statePatch?: Record<string, unknown>;
+  responseTrace?: AgentResponseTrace;
 };
 
 export type UiGraphActionRunner = (context: UiGraphActionRunContext) => Promise<UiGraphActionRunResult>;
@@ -393,6 +395,7 @@ export function createUiGraphInteractionController(
   const stampChatResponseAtBrowserReceipt = (
     component: UiGraphActionComponent,
     statePatch: Record<string, unknown> | undefined,
+    responseTrace?: AgentResponseTrace,
   ): Record<string, unknown> | undefined => {
     if (component.type !== 'chat' || !statePatch) {
       return statePatch;
@@ -418,7 +421,13 @@ export function createUiGraphInteractionController(
       ...statePatch,
       [messagesStateKey]: [
         ...messages.slice(0, -1),
-        { ...(lastMessage as UiGraphChatMessage), timestamp: new Date().toISOString() },
+        {
+          ...(lastMessage as UiGraphChatMessage),
+          timestamp: new Date().toISOString(),
+          ...(component.allowResponseInspection && responseTrace != null
+            ? { responseTraceId: responseTrace.traceId }
+            : {}),
+        },
       ],
     };
   };
@@ -488,7 +497,7 @@ export function createUiGraphInteractionController(
 
         const statePatch = actionController.resolveStatePatch(
           execution,
-          stampChatResponseAtBrowserReceipt(component, result.statePatch),
+          stampChatResponseAtBrowserReceipt(component, result.statePatch, result.responseTrace),
         );
         if (statePatch) {
           const nextState = applyUiGraphStatePatch(state, statePatch);

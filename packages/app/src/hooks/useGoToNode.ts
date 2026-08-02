@@ -1,10 +1,5 @@
-import {
-  canRenderDataBusNode,
-  type GraphId,
-  type NodeId,
-  resolveNodePrefabInstance,
-} from '@valerypopoff/rivet2-core';
-import { createRootGraphViewContext } from '../domain/graphEditing/navigationActions.js';
+import { canRenderDataBusNode, type GraphId, type NodeId, resolveNodePrefabInstance } from '@valerypopoff/rivet2-core';
+import { createRootGraphViewContext, type GraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import { useStableCallback } from './useStableCallback';
 import { useLoadGraph } from './useLoadGraph';
 import { graphState } from '../state/graph';
@@ -15,6 +10,7 @@ import { useCanvasPositioning } from './useCanvasPositioning.js';
 
 type GoToNodeOptions = {
   graphId?: GraphId;
+  graphView?: GraphViewContext;
   zoom?: number;
   viewportCenter?: { x: number; y: number };
 };
@@ -40,7 +36,9 @@ export function useGoToNode() {
 
     const node = graphForNode.nodes.find((n) => n.id === nodeId)!;
 
-    loadGraph(graphForNode, { graphView: createRootGraphViewContext(graphForNode.metadata!.id!) });
+    loadGraph(graphForNode, {
+      graphView: options?.graphView ?? createRootGraphViewContext(graphForNode.metadata!.id!),
+    });
 
     if (canRenderDataBusNode(resolveNodePrefabInstance(project, node))) {
       return;

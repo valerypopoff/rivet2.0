@@ -276,6 +276,18 @@ OpenAI, Anthropic, Google, and custom-provider configured keys are set in Settin
 
 LLM Chat normalizes common provider failures into readable errors. For example, an invalid API key should produce a provider request error that includes the HTTP status, provider, model, endpoint, and a hint to check the API key source.
 
+In the Rivet editor, use **Inspect response** beside the normal output controls or
+in the full-output toolbar to inspect how the currently selected LLM Chat
+invocation ran. The inspector follows the selected graph run and process page,
+including live invocations. It reports model attempts, **Provider request
+retries**, **LLM profile fallbacks**, tool executions, durations, reported token
+usage, and known or unknown cost state in semantic groups. It intentionally
+never shows prompts, conversation
+messages, generated response text, reasoning text, tool arguments/results,
+retrieved documents, credentials, headers, or raw provider bodies. Frozen
+outputs, cache replay, and older recordings may show a partial or unavailable
+trace when no physical-call metadata exists.
+
 Enable **Output response status** when you want machine-readable statuses, **Output response error** when provider request failures should return through an output rather than fail the node, and **Output request body** to inspect the provider body Rivet sent. With Retry on non-200 enabled, scalar-profile Response Status and Response Error become arrays so you can see each retry. With an actual LLM Profile array, Response Status is a profile-indexed Any value: one physical request stays a number and multiple attempts are an array. Response Error is compact: one profile error is a string, retries remain an array, and no request errors return `[]`. When multiple profiles include an error, the Any value retains their profile positions, for example `['Invalid URL', []]`. Setup failures stay visible in `LLM Profile Attempts`. LLM request body captures provider bodies in physical call order, including fallback candidates. `LLM Profile Summary` gives an immediately readable succeeded/failed/not-attempted outcome for each configured profile, while `LLM Profile Attempts` is the cross-profile diagnostic record; it redacts known API-key and request-header values while identifying the provider, model, profile index, retry attempt, status, and failure. If the terminal profile fails during setup before a request is made, LLM Chat returns its safe aggregate chain error instead of stale request diagnostics from an earlier profile. Request headers and Rivet-managed API key headers are not included, but prompts and request options in the actual provider body are visible. Rivet disables the Vercel AI SDK's hidden default retries, so the Retry on non-200 switch is the only retry policy for LLM Chat provider requests.
 
 ## See Also

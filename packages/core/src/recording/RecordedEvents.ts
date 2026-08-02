@@ -47,13 +47,19 @@ export type RecordedEventsMap = OverrideProperties<
     graphAbort: WithOptionalExecution<{ graphId: GraphId; error?: string; successful: boolean }>;
 
     /** Called when a node has started processing, with the input values for the node. */
-    nodeStart: WithOptionalExecution<{ nodeId: NodeId; inputs: Inputs; processId: ProcessId }>;
+    nodeStart: WithOptionalExecution<{
+      nodeId: NodeId;
+      inputs: Inputs;
+      processId: ProcessId;
+      resultOrigin?: ProcessEvents['nodeStart']['resultOrigin'];
+    }>;
 
     /** Called when a node has finished processing, with the output values for the node. */
     nodeFinish: WithOptionalExecution<{
       nodeId: NodeId;
       outputs: Outputs;
       processId: ProcessId;
+      resultOrigin?: ProcessEvents['nodeFinish']['resultOrigin'];
       durationMs?: number;
       splitRunDurationMs?: Record<number, number>;
     }>;
@@ -63,6 +69,7 @@ export type RecordedEventsMap = OverrideProperties<
       nodeId: NodeId;
       error: string;
       processId: ProcessId;
+      resultOrigin?: ProcessEvents['nodeError']['resultOrigin'];
       durationMs?: number;
       splitRunDurationMs?: Record<number, number>;
     }>;
@@ -74,6 +81,7 @@ export type RecordedEventsMap = OverrideProperties<
       inputs: Inputs;
       outputs: Outputs;
       reason: string;
+      resultOrigin?: ProcessEvents['nodeExcluded']['resultOrigin'];
     }>;
 
     /** Called when a user input node requires user input. Call the callback when finished, or call userInput() on the GraphProcessor with the results. */
@@ -87,7 +95,13 @@ export type RecordedEventsMap = OverrideProperties<
     }>;
 
     /** Called when a node has partially processed, with the current partial output values for the node. */
-    partialOutput: WithOptionalExecution<{ nodeId: NodeId; outputs: Outputs; index: number; processId: ProcessId }>;
+    partialOutput: WithOptionalExecution<{
+      nodeId: NodeId;
+      outputs: Outputs;
+      index: number;
+      processId: ProcessId;
+      resultOrigin?: ProcessEvents['partialOutput']['resultOrigin'];
+    }>;
 
     progress: WithOptionalExecution<{
       nodeId: NodeId;

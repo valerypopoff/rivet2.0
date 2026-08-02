@@ -674,10 +674,10 @@ toolchain on the same patched PostCSS 8.x release used by the rest of the
 workspace. Keep that descriptor pinned until `rtlcss` or its owning Docusaurus
 dependency refreshes the transitive lock entry; do not replace that fix with an
 audit exception. Likewise, keep the direct
-`brace-expansion@npm:^5.0.5` resolution on its fixed release. The remaining
-1.x/2.x `brace-expansion` paths have no compatible fix and therefore need
-separate, expiring dependent-specific exceptions rather than a broad package
-waiver.
+`brace-expansion` resolutions for the `^1.1.7`, `^2.0.2`, and `^5.0.5`
+descriptors on reviewed fixed releases. These paths are used by build-time glob
+consumers; keep their deterministic lock entries current instead of restoring
+the former audit exceptions.
 
 The build workflow runs that JavaScript audit immediately after dependency
 installation. A separate `rustsec/audit-check` job scans

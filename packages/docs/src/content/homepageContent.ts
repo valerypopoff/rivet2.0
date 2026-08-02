@@ -4,7 +4,14 @@ export type HomepageCard = {
   description: string;
 };
 
-export type HomepageFeature = Pick<HomepageCard, 'title' | 'description'>;
+export type HomepageDemoId = 'agent' | 'workflow' | 'web-app' | 'batch-runs' | 'structured-output';
+
+export type HomepageDemo = Pick<HomepageCard, 'title' | 'description'> & {
+  demoId: HomepageDemoId;
+  instruction: string;
+};
+export type HomepageFeature = HomepageDemo;
+export type HomepageContextualDemo = HomepageDemo & Pick<HomepageCard, 'eyebrow'>;
 export type HomepageFoundation = Omit<HomepageCard, 'eyebrow'>;
 
 export type HomepageUseCaseIcon = 'agent' | 'knowledge' | 'prompt' | 'web-app' | 'evaluation' | 'automation';
@@ -13,15 +20,51 @@ export type HomepageUseCase = HomepageCard & {
   icon: HomepageUseCaseIcon;
 };
 
+const agentDemo = {
+  demoId: 'agent',
+  title: 'LLM agent with tools',
+  description: 'Let an LLM call a typed tool backed by a Rivet graph. Inspect the call, tool result, and final answer.',
+  instruction: 'Paste your OpenAI API key, then run the project to watch the LLM call its tool graph.',
+} satisfies HomepageDemo;
+const workflowDemo = {
+  demoId: 'workflow',
+  title: 'Multi-step LLM workflow',
+  description: 'Run focused LLM steps in parallel, combine their results, and inspect every value in the workflow.',
+  instruction: 'Paste your OpenAI API key, then run the project to see two LLM steps execute in parallel.',
+} satisfies HomepageDemo;
+const webAppDemo = {
+  demoId: 'web-app',
+  title: 'Web app powered by a workflow',
+  description: 'Put a chat interface over an LLM workflow. Build both in Rivet and keep them in the same project.',
+  instruction: 'Paste your OpenAI API key, then open “Chat web app — open this” under Web Apps.',
+} satisfies HomepageDemo;
+const batchRunsDemo = {
+  demoId: 'batch-runs',
+  title: 'One node, many inspectable runs',
+  description:
+    'Feed three requests into one LLM node, run them in parallel, and switch between the node’s individual inputs, outputs, durations, and statuses.',
+  instruction:
+    'Paste your OpenAI API key, then run the project; the Classify requests node processes three customer requests as parallel, selectable runs.',
+} satisfies HomepageDemo;
+const structuredOutputDemo = {
+  demoId: 'structured-output',
+  title: 'Typed structured output',
+  description:
+    'Constrain an LLM with a visible JSON schema, expose its fields as typed values, and pass them through ordinary Rivet nodes without parsing strings by hand.',
+  instruction:
+    'Paste your OpenAI API key, then run the project; the LLM extracts a support ticket into the visible schema and the final Text node renders a triage card.',
+} satisfies HomepageDemo;
+
 export const homepageContent = {
+  demos: [agentDemo, workflowDemo, webAppDemo, batchRunsDemo, structuredOutputDemo] satisfies HomepageDemo[],
   meta: {
-    title: 'Rivet 2 is a Visual AI workflows you can inspect, test, and ship',
+    title: 'Rivet 2 — Visual AI workflows you can inspect, test, and ship',
     description:
       'Rivet 2 is a free, open-source visual IDE and runtime for building AI agents, knowledge workflows, prompt pipelines, and production AI applications.',
   },
   hero: {
     eyebrow: 'Free · Open-source · MIT licensed',
-    title: 'Rivet 2 — IDE for production ready AI-harnesses: agents, workflows and web apps',
+    title: 'Build AI agents, workflows, and web apps visually',
     description:
       'Prototype, inspect and run the same Rivet project in Node, from the CLI, or inside your own application.',
     primaryAction: {
@@ -36,62 +79,7 @@ export const homepageContent = {
       label: 'View source on GitHub',
       to: 'https://github.com/valerypopoff/rivet2.0',
     },
-    features: [
-      {
-        title: 'Visible AI systems',
-        description: 'Keep prompts, tools, branching, and data flow readable on one canvas.',
-      },
-      {
-        title: 'Inspectable runs',
-        description: 'See each input, model request, tool result, error, and cost where it happened.',
-      },
-      {
-        title: 'A runtime beyond the editor',
-        description: 'Run the same project in the desktop app, Node, CLI, Docker, or your own host.',
-      },
-    ] satisfies HomepageFeature[],
-  },
-  workflowPreview: {
-    projectName: 'support-agent.rivet-project',
-    runState: 'Run complete',
-    nodes: {
-      prompt: {
-        kind: 'INPUT',
-        title: 'Customer question',
-        detail: 'string',
-        output: 'Question ready',
-      },
-      knowledge: {
-        kind: 'KNOWLEDGE',
-        title: 'Search product docs',
-        detail: '6 grounded results',
-        status: '184 ms',
-        output: '6 results ready',
-      },
-      agent: {
-        kind: 'LLM CHAT',
-        title: 'Support agent',
-        detail: 'Tools · structured output',
-        status: '1.2 s',
-        output: 'Answer ready',
-      },
-      output: {
-        kind: 'OUTPUT',
-        title: 'Helpful answer',
-        detail: 'Markdown',
-        output: 'Response emitted',
-      },
-    },
-    inspector: {
-      label: 'Latest run',
-      title: 'Every step is inspectable',
-      rows: [
-        ['Prompt', 'ready'],
-        ['Knowledge', '6 results'],
-        ['Model response', 'complete'],
-      ],
-    },
-    caption: ['Inputs', 'Model calls', 'Tool results', 'Outputs'],
+    features: [agentDemo, workflowDemo, webAppDemo] satisfies HomepageFeature[],
   },
   philosophy: {
     eyebrow: 'An AI workflow IDE, not a black box',
@@ -116,6 +104,10 @@ export const homepageContent = {
         'Drop into JavaScript for custom transformations or integrations, then bring the result straight back into the visible workflow.',
     },
   ] satisfies HomepageFoundation[],
+  foundationsDemo: {
+    ...batchRunsDemo,
+    eyebrow: 'Live execution demo',
+  } satisfies HomepageContextualDemo,
   useCases: {
     eyebrow: 'Built for practical AI work',
     title: 'One workspace for the systems around your model.',
@@ -166,6 +158,10 @@ export const homepageContent = {
       },
     ] satisfies HomepageUseCase[],
   },
+  useCasesDemo: {
+    ...structuredOutputDemo,
+    eyebrow: 'Live typed-data demo',
+  } satisfies HomepageContextualDemo,
   lifecycle: {
     eyebrow: 'From first idea to a running product',
     title: 'The graph stays useful after the prototype works.',

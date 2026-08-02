@@ -3,7 +3,8 @@ import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import type { GraphId, NodeGraph } from '../../src/model/NodeGraph.js';
-import type { GraphProcessor, ProcessEvents } from '../../src/model/GraphProcessor.js';
+import type { GraphProcessor, NodeResultOrigin, ProcessEvents } from '../../src/model/GraphProcessor.js';
+import type { SerializedProcessEventMap } from '../../src/model/ExecutorProtocol.js';
 import { replayExecutionRecording } from '../../src/model/RecordingPlayer.js';
 import type { GraphExecutionMetadata, GraphRunId, ProcessId, RootRunId } from '../../src/model/ProcessContext.js';
 import { ExecutionRecorder } from '../../src/recording/ExecutionRecorder.js';
@@ -144,6 +145,40 @@ async function replayNodeFinishTiming(
   return { durationMs, splitRunDurationMs };
 }
 
+async function replayNodeResultOrigins(
+  recorder: ExecutionRecorder,
+): Promise<Array<{ type: string; resultOrigin: NodeResultOrigin | undefined }>> {
+  const replayEmitter = new Emittery<ProcessEvents>();
+  const replayed: Array<{ type: string; resultOrigin: NodeResultOrigin | undefined }> = [];
+
+  for (const type of ['nodeStart', 'partialOutput', 'nodeFinish', 'nodeError', 'nodeExcluded'] as const) {
+    replayEmitter.on(type, (data) => replayed.push({ type, resultOrigin: data.resultOrigin }));
+  }
+
+  await replayExecutionRecording({
+    emitter: replayEmitter,
+    erroredNodes: new Map(),
+    graphInputs: {},
+    graphOutputs: {},
+    isAborted: () => false,
+    nodeResults: new Map(),
+    project: {
+      metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+      graphs: { [graph.metadata!.id!]: graph },
+    } as any,
+    recorder,
+    recordingPlaybackChatLatency: 0,
+    setContextValues: () => {},
+    setGraphInputs: () => {},
+    setGraphOutputs: () => {},
+    setRunning: () => {},
+    visitedNodes: new Set(),
+    waitUntilUnpaused: async () => {},
+  });
+
+  return replayed;
+}
+
 void describe('ExecutionRecorder', () => {
   void it('should serialize an instance of ExecutionRecorder', async () => {
     // Simulate storage in string form
@@ -276,6 +311,176 @@ void describe('ExecutionRecorder', () => {
         { type: 'graphFinish', execution: execution },
       ],
     );
+  });
+
+  void it('preserves result origins through serialized executor events, recording, and replay', async () => {
+    const recorder = new ExecutionRecorder({ includePartialOutputs: true });
+    const socket = new FakeSocket();
+    const finished = recorder.recordSocket(socket as unknown as WebSocket);
+
+    const events = [
+      {
+        message: 'nodeStart',
+        data: {
+          node,
+          inputs: {},
+          processId,
+          resultOrigin: 'editor-cache',
+          execution,
+        } satisfies SerializedProcessEventMap['nodeStart'],
+      },
+      {
+        message: 'partialOutput',
+        data: {
+          node,
+          outputs: { output: { type: 'string', value: 'partial' } },
+          index: 0,
+          processId,
+          resultOrigin: 'executed',
+          execution,
+        } satisfies SerializedProcessEventMap['partialOutput'],
+      },
+      {
+        message: 'nodeFinish',
+        data: {
+          node,
+          outputs: { output: { type: 'string', value: 'finished' } },
+          processId,
+          resultOrigin: 'frozen',
+          execution,
+        } satisfies SerializedProcessEventMap['nodeFinish'],
+      },
+      {
+        message: 'nodeError',
+        data: {
+          node,
+          error: 'failed',
+          processId,
+          resultOrigin: 'preloaded',
+          execution,
+        } satisfies SerializedProcessEventMap['nodeError'],
+      },
+      {
+        message: 'nodeExcluded',
+        data: {
+          node,
+          inputs: {},
+          outputs: {},
+          reason: 'excluded',
+          processId,
+          resultOrigin: 'unknown',
+          execution,
+        } satisfies SerializedProcessEventMap['nodeExcluded'],
+      },
+    ] as const;
+
+    for (const event of events) {
+      socket.emit(event);
+    }
+    socket.emit({ message: 'done', data: { results: {} } satisfies SerializedProcessEventMap['done'] });
+    await finished;
+
+    assert.deepEqual(
+      recorder.events
+        .filter((event) => events.some((expected) => expected.message === event.type))
+        .map((event) => ({ type: event.type, resultOrigin: event.data.resultOrigin })),
+      [
+        { type: 'nodeStart', resultOrigin: 'editor-cache' },
+        { type: 'partialOutput', resultOrigin: 'executed' },
+        { type: 'nodeFinish', resultOrigin: 'frozen' },
+        { type: 'nodeError', resultOrigin: 'preloaded' },
+        { type: 'nodeExcluded', resultOrigin: 'unknown' },
+      ],
+    );
+
+    const roundTripped = ExecutionRecorder.deserializeFromString(recorder.serialize());
+    assert.deepEqual(await replayNodeResultOrigins(roundTripped), [
+      { type: 'nodeStart', resultOrigin: 'editor-cache' },
+      { type: 'partialOutput', resultOrigin: 'executed' },
+      { type: 'nodeFinish', resultOrigin: 'frozen' },
+      { type: 'nodeError', resultOrigin: 'preloaded' },
+      { type: 'nodeExcluded', resultOrigin: 'unknown' },
+    ]);
+
+    const legacySerialized = JSON.parse(recorder.serialize()) as {
+      recording: { events: Array<{ type: string; data: { resultOrigin?: NodeResultOrigin } }> };
+    };
+    for (const event of legacySerialized.recording.events) {
+      delete event.data.resultOrigin;
+    }
+    const legacyRecorder = ExecutionRecorder.deserializeFromString(JSON.stringify(legacySerialized));
+    assert.deepEqual(
+      await replayNodeResultOrigins(legacyRecorder),
+      events.map((event) => ({ type: event.message, resultOrigin: undefined })),
+    );
+  });
+
+  void it('records and replays privacy-bounded model and tool trace events', async () => {
+    const recorder = new ExecutionRecorder();
+    const emitter = new Emittery<ProcessEvents>();
+    recorder.record(emitter as unknown as GraphProcessor);
+    const modelEvent: ProcessEvents['llmCallFinished'] = {
+      execution,
+      callId: 'call-1' as never,
+      nodeId,
+      processId,
+      provider: 'openai',
+      model: 'gpt-5',
+      outcome: 'success',
+      attemptIndex: 0,
+      startedAt: 100,
+      durationMs: 25,
+      normalizedUsage: { promptTokens: 10, completionTokens: 4 },
+      pricing: { status: 'unknown' },
+    };
+    const toolEvent: ProcessEvents['toolCallFinished'] = {
+      execution,
+      toolCallId: 'tool-1',
+      toolName: 'lookup',
+      sourceNodeId: nodeId,
+      sourceProcessId: processId,
+      handlerKind: 'graph',
+      handlerGraphId: graph.metadata!.id,
+      handlerName: 'Lookup',
+      outcome: 'success',
+      startedAt: 130,
+      durationMs: 15,
+    };
+
+    await emitter.emit('llmCallFinished', modelEvent);
+    await emitter.emit('toolCallFinished', toolEvent);
+    await emitter.emit('done', { results: {} });
+
+    const replayEmitter = new Emittery<ProcessEvents>();
+    const replayed: unknown[] = [];
+    replayEmitter.on('llmCallFinished', (event) => replayed.push(event));
+    replayEmitter.on('toolCallFinished', (event) => replayed.push(event));
+
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+
+    assert.deepEqual(replayed, [modelEvent, toolEvent]);
+    assert.equal('rawUsage' in (replayed[0] as object), false);
+    assert.equal('arguments' in (replayed[1] as object), false);
+    assert.equal('result' in (replayed[1] as object), false);
   });
 
   void it('preserves recorded node finish duration during replay', async () => {

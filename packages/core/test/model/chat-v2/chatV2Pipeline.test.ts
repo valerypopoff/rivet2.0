@@ -373,11 +373,16 @@ void describe('runChatV2Pipeline', () => {
     });
 
     assert.equal(events.length, 1);
+    assert.equal(typeof events[0]!.startedAt, 'number');
+    assert.equal(typeof events[0]!.durationMs, 'number');
+    assert.ok(events[0]!.durationMs! >= 0);
     assert.deepEqual(events[0], {
       callId: events[0]!.callId,
       attemptIndex: 0,
       nodeId: 'chat-node',
       processId: 'chat-process',
+      startedAt: events[0]!.startedAt,
+      durationMs: events[0]!.durationMs,
       provider: 'openai',
       model: 'gpt-5',
       outcome: 'success',
@@ -662,11 +667,15 @@ void describe('runChatV2Pipeline', () => {
       (error) => error === errorWithThrowingUsage,
     );
     assert.equal(malformedMetadataEvents.length, 1);
+    assert.equal(typeof malformedMetadataEvents[0]!.startedAt, 'number');
+    assert.equal(typeof malformedMetadataEvents[0]!.durationMs, 'number');
     assert.deepEqual(malformedMetadataEvents[0], {
       callId: malformedMetadataEvents[0]!.callId,
       attemptIndex: 0,
       nodeId: 'chat-node',
       processId: 'chat-process',
+      startedAt: malformedMetadataEvents[0]!.startedAt,
+      durationMs: malformedMetadataEvents[0]!.durationMs,
       provider: 'custom',
       model: 'custom-model',
       outcome: 'provider-failure',

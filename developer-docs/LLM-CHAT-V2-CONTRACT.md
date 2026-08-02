@@ -1,5 +1,41 @@
 # LLM Chat V2 Contract
 
+## Response trace boundary
+
+Every physical provider attempt completed by LLM Chat emits the additive
+`llmCallFinished` process event. The event is correlated by root run, graph,
+node, process, round, profile, and attempt identities and contains only timing,
+outcome, finish reason, normalized token usage, and pricing state. It never
+contains prompts, messages, generated text, reasoning text, request bodies,
+headers, credentials, raw provider errors, or provider-specific raw usage.
+The existing host-only `onChatV2CallFinished` callback remains exactly once per
+physical attempt and may retain its existing raw accounting payload; failures in
+either observer path are isolated from graph execution.
+
+`AgentResponseTrace` is a versioned projection built from these physical-call
+events and the corresponding `toolCallFinished` events. It is presentation and
+observability data, not an LLM input or graph output. Response traces stop their
+duration when mapped graph outputs are ready, while invocation traces span the
+selected LLM node process. Retry and fallback counts come from explicit attempt
+and profile metadata, never timestamp inference. Unknown or partially known
+pricing stays unknown/partial rather than becoming `$0`.
+
+The normal inspector presentation groups the projection into **Execution**,
+**Recovery behavior**, **Usage and cost**, and **Timing**. The recovery labels
+are deliberately explicit: **Provider request retries** counts repeated physical
+requests after failures, while **LLM profile fallbacks** counts transitions to a
+later configured profile. Trace, graph, node, and process IDs remain mandatory
+correlation data in the portable contract but are hidden from the ordinary UI;
+they are not useful response-level diagnostics by themselves.
+
+The editor stores trace events on the exact node process so the inline and
+full-output inspectors follow the selected run and process page, including while
+it is running. Editor-launched inspectors mount at the application overlay root,
+outside transformed and overflow-clipped node output surfaces. Cache replay,
+frozen output, and recordings that predate the
+physical-call events truthfully show partial or unavailable data instead of
+inventing zero calls or cost.
+
 ## Inline and profile configuration
 
 `LLM Chat` has one runtime pipeline and two configuration sources:
@@ -200,6 +236,15 @@ paths and should not be used as the primary target for new provider refactors.
   usage, outcome, provider/model identity, and known/unknown pricing once per
   actual provider attempt while isolating malformed provider metadata and
   throwing or rejected host callbacks.
+- Response-trace fallback totals count forward profile-index advances for each
+  LLM node invocation. This includes profiles that failed during configuration
+  and therefore produced no physical-call event when a later profile reaches a
+  physical call; sticky reuse of the selected fallback profile in later
+  continuation rounds is not counted again. A chain that fails entirely during
+  configuration has no physical-call rows from which to infer an exact fallback
+  total. A known-price attempt may still have no calculable cost when a failed
+  provider request reports insufficient usage, so its trace row remains valid
+  and the aggregate cost is reported as partial or unknown rather than zero.
 - [`aiSdkBridge.ts`](../packages/core/src/model/chat-v2/aiSdkBridge.ts) is the
   only place that should directly adapt to Vercel AI SDK call signatures.
 - [`chatV2Outputs.ts`](../packages/core/src/model/chat-v2/chatV2Outputs.ts)

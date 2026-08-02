@@ -4,6 +4,7 @@ import {
   applyUiGraphWebAppStoragePatch,
   copyUiGraphText,
   createUiGraphChatHistoryFlushStatePatch,
+  createUiGraphChatMessageRemovalStatePatch,
   createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   createUiGraphInteractionController,
@@ -21,6 +22,10 @@ import {
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
+  saveUiGraphResponseTrace,
+  loadUiGraphResponseTrace,
+  pruneUiGraphResponseTraces,
+  type AgentResponseTrace,
   type UiGraphActionComponent,
   type UiGraphChatMessageTimestampPresentation,
   type UiGraphComponent,
@@ -51,8 +56,195 @@ type DomPurifyApi = {
   sanitize?: (value: string, options: Record<string, unknown>) => string;
 };
 
+function createResponseInspectorElement(trace: AgentResponseTrace | null, onClose: () => void): HTMLElement {
+  const metric = (label: string, value: string) =>
+    createElement('div', {}, [createElement('dt', { text: label }), createElement('dd', { text: value })]);
+  const metricGroup = (title: string, metrics: HTMLElement[], description?: string) =>
+    createElement('section', { className: 'rivet-agent-response-inspector-metric-group' }, [
+      createElement('div', { className: 'rivet-agent-response-inspector-group-heading' }, [
+        createElement('h3', { text: title }),
+        ...(description ? [createElement('p', { text: description })] : []),
+      ]),
+      createElement('dl', { className: 'rivet-agent-response-inspector-metrics' }, metrics),
+    ]);
+  const body =
+    trace == null
+      ? createElement('div', { className: 'rivet-agent-response-inspector-unavailable' }, [
+          createElement('strong', { text: 'Trace unavailable' }),
+          createElement('p', {
+            text: 'This response was produced by an older host, a replay, or while response inspection was disabled.',
+          }),
+        ])
+      : createElement('div', { className: 'rivet-agent-response-inspector-body' }, [
+          metricGroup('Execution', [
+            metric('Status', trace.status),
+            metric('Total duration', formatTraceDuration(trace.durationMs)),
+            metric('Model calls', String(trace.summary.modelCallCount)),
+            metric('Tool calls', String(trace.summary.toolCallCount)),
+          ]),
+          metricGroup(
+            'Recovery behavior',
+            [
+              metric('Provider request retries', String(trace.summary.retryCount)),
+              metric('LLM profile fallbacks', String(trace.summary.fallbackCount)),
+            ],
+            'Provider request retries repeat a failed request. LLM profile fallbacks move to the next configured profile.',
+          ),
+          metricGroup('Usage and cost', [
+            metric('Input tokens', formatTraceTokens(trace.summary.promptTokens)),
+            metric('Output tokens', formatTraceTokens(trace.summary.completionTokens)),
+            metric('Cached input tokens', formatTraceTokens(trace.summary.cachedTokens)),
+            metric('Reasoning tokens', formatTraceTokens(trace.summary.reasoningTokens)),
+            metric(
+              'Model cost',
+              trace.summary.costStatus === 'unknown'
+                ? 'Unknown'
+                : `$${trace.summary.knownCostUsd.toFixed(6)}${trace.summary.costStatus === 'partial' ? ' (partial)' : ''}`,
+            ),
+          ]),
+          ...(trace.startedAt == null && trace.responseReadyAt == null && !trace.backgroundWorkPending
+            ? []
+            : [
+                createElement('section', { className: 'rivet-agent-response-inspector-metric-group' }, [
+                  createElement('div', { className: 'rivet-agent-response-inspector-group-heading' }, [
+                    createElement('h3', { text: 'Timing' }),
+                  ]),
+                  createElement('dl', { className: 'rivet-agent-response-inspector-timing' }, [
+                    ...(trace.startedAt == null
+                      ? []
+                      : [
+                          createElement('div', {}, [
+                            createElement('dt', { text: 'Started' }),
+                            createElement('dd', { text: new Date(trace.startedAt).toLocaleString() }),
+                          ]),
+                        ]),
+                    ...(trace.responseReadyAt == null
+                      ? []
+                      : [
+                          createElement('div', {}, [
+                            createElement('dt', { text: 'Response ready' }),
+                            createElement('dd', { text: new Date(trace.responseReadyAt).toLocaleString() }),
+                          ]),
+                        ]),
+                    ...(trace.backgroundWorkPending
+                      ? [
+                          createElement('div', {}, [
+                            createElement('dt', { text: 'Async work' }),
+                            createElement('dd', { text: 'Still active when this response was delivered' }),
+                          ]),
+                        ]
+                      : []),
+                  ]),
+                ]),
+              ]),
+          createTraceDetails(
+            'Model calls',
+            trace.modelCalls.map((call) =>
+              createElement('article', {}, [
+                createElement('strong', { text: `${call.provider} · ${call.model}` }),
+                createElement('span', {
+                  text: `${call.outcome}${call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`} · round ${(call.roundIndex ?? 0) + 1} · attempt ${call.attemptIndex + 1}`,
+                }),
+                createElement('span', {
+                  text: `${formatTraceDuration(call.durationMs)} · ${formatTraceCallUsage(call.usage)} · ${call.pricing.status === 'known' && call.pricing.costUsd != null ? `$${call.pricing.costUsd.toFixed(6)}` : 'cost unknown'}`,
+                }),
+                ...(call.finishReason ? [createElement('span', { text: `Finish reason: ${call.finishReason}` })] : []),
+              ]),
+            ),
+            trace.omittedModelCallCount,
+          ),
+          createTraceDetails(
+            'Tool calls',
+            trace.toolCalls.map((call) =>
+              createElement('article', {}, [
+                createElement('strong', { text: call.toolName }),
+                createElement('span', {
+                  text: `${call.outcome} · ${call.handlerKind}${call.handlerName ? ` · ${call.handlerName}` : ''}`,
+                }),
+                createElement('span', { text: formatTraceDuration(call.durationMs) }),
+              ]),
+            ),
+            trace.omittedToolCallCount,
+          ),
+        ]);
+  return createElement(
+    'div',
+    {
+      className: 'rivet-agent-response-inspector-backdrop',
+      onClick: (event: MouseEvent) => event.target === event.currentTarget && onClose(),
+    },
+    [
+      createElement(
+        'section',
+        {
+          'aria-label': 'Response inspector',
+          'aria-modal': 'true',
+          className: 'rivet-agent-response-inspector',
+          role: 'dialog',
+        },
+        [
+          createElement('header', {}, [
+            createElement('div', {}, [
+              createElement('strong', { text: 'Response inspector' }),
+              createElement('span', { text: 'Execution metadata only' }),
+            ]),
+            createElement('button', {
+              'aria-label': 'Close response inspector',
+              className: 'rivet-agent-response-inspector-close',
+              onClick: onClose,
+              text: '×',
+              type: 'button',
+            }),
+          ]),
+          body,
+        ],
+      ),
+    ],
+  );
+}
+
+function createTraceDetails(title: string, rows: HTMLElement[], omitted: number): HTMLElement {
+  const details = createElement('details', { className: 'rivet-agent-response-inspector-section' }, [
+    createElement('summary', { text: title }),
+    createElement(
+      'div',
+      {},
+      rows.length ? rows : [createElement('p', { text: `No ${title.toLowerCase()} recorded.` })],
+    ),
+    ...(omitted > 0 ? [createElement('p', { text: `${omitted} additional rows omitted by the trace limit.` })] : []),
+  ]) as HTMLDetailsElement;
+  details.open = true;
+  return details;
+}
+
+function formatTraceDuration(value: number | undefined): string {
+  return value == null ? 'Unavailable' : `${(value / 1_000).toFixed(value >= 10_000 ? 1 : 2)} sec`;
+}
+
+function formatTraceTokens(value: number | undefined): string {
+  return value == null ? 'Not reported' : new Intl.NumberFormat().format(value);
+}
+
+function formatTraceCallUsage(usage: AgentResponseTrace['modelCalls'][number]['usage']): string {
+  if (usage == null) return 'usage not reported';
+  const parts = [
+    usage.promptTokens == null ? undefined : `${formatTraceTokens(usage.promptTokens)} in`,
+    usage.completionTokens == null ? undefined : `${formatTraceTokens(usage.completionTokens)} out`,
+    usage.cachedTokens == null ? undefined : `${formatTraceTokens(usage.cachedTokens)} cached`,
+    usage.reasoningTokens == null ? undefined : `${formatTraceTokens(usage.reasoningTokens)} reasoning`,
+  ].filter((part): part is string => part != null);
+  return parts.length > 0 ? parts.join(', ') : 'usage not reported';
+}
+
 type ChatPresentationState = {
   activeMatchIndex: number;
+  messageMenu?: {
+    messageIndex: number;
+    x: number;
+    y: number;
+  };
+  readingMessageContent?: string;
+  inspectedTrace?: AgentResponseTrace | null;
   isMenuOpen: boolean;
   isPinsOpen: boolean;
   isSearchOpen: boolean;
@@ -131,7 +323,13 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
   const getChatPresentationState = (componentId: string): ChatPresentationState => {
     let state = chatPresentationStates.get(componentId);
     if (!state) {
-      state = { activeMatchIndex: 0, isMenuOpen: false, isPinsOpen: false, isSearchOpen: false, query: '' };
+      state = {
+        activeMatchIndex: 0,
+        isMenuOpen: false,
+        isPinsOpen: false,
+        isSearchOpen: false,
+        query: '',
+      };
       chatPresentationStates.set(componentId, state);
     }
     return state;
@@ -167,6 +365,17 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     });
   };
 
+  const focusChatReadingViewCloseButton = (componentId: string): void => {
+    schedule(() => {
+      for (const button of root.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-reading-view-close')) {
+        if (button.dataset.rivetChatReadingViewComponentId === componentId) {
+          button.focus();
+          return;
+        }
+      }
+    });
+  };
+
   root.addEventListener(
     'pointerdown',
     (event) => {
@@ -189,6 +398,15 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           menu
             .querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')
             ?.setAttribute('aria-expanded', 'false');
+        }
+      }
+      for (const menu of root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-message-context-menu')) {
+        if (menu.contains(event.target as Node)) continue;
+        const componentId = menu.dataset.rivetChatMessageMenuComponentId;
+        const chatState = componentId ? chatPresentationStates.get(componentId) : undefined;
+        if (chatState?.messageMenu) {
+          chatState.messageMenu = undefined;
+          menu.remove();
         }
       }
     },
@@ -330,7 +548,10 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
                 ),
             );
           }
-          return { statePatch: result.statePatch };
+          if (component.type === 'chat' && component.allowResponseInspection && result.responseTrace) {
+            saveUiGraphResponseTrace(config.uiGraph, component.id, result.responseTrace);
+          }
+          return { statePatch: result.statePatch, responseTrace: result.responseTrace };
         } catch (error) {
           if (error instanceof HostedActionError && error.code === 'revision_mismatch') {
             revisionMismatch = true;
@@ -580,6 +801,8 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         if (!hasMessages) {
           searchState.isSearchOpen = false;
           searchState.isPinsOpen = false;
+          searchState.messageMenu = undefined;
+          searchState.readingMessageContent = undefined;
           searchState.query = '';
           searchState.activeMatchIndex = 0;
         }
@@ -608,6 +831,66 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             render();
           }
         };
+        const openMessageContextMenu = (messageIndex: number, event: MouseEvent) => {
+          event.preventDefault();
+          searchState.isMenuOpen = false;
+          searchState.isSearchOpen = false;
+          const margin = 8;
+          const menuWidth = 196;
+          const menuHeight =
+            renderModel.messages[messageIndex]?.role === 'assistant'
+              ? renderModel.component.allowResponseInspection
+                ? 108
+                : 76
+              : 44;
+          searchState.messageMenu = {
+            messageIndex,
+            x: Math.min(event.clientX, Math.max(margin, globalThis.innerWidth - menuWidth - margin)),
+            y: Math.min(event.clientY, Math.max(margin, globalThis.innerHeight - menuHeight - margin)),
+          };
+          render();
+        };
+        const openSelectedMessageInReadingView = () => {
+          const messageIndex = searchState.messageMenu?.messageIndex;
+          searchState.messageMenu = undefined;
+          const message = messageIndex == null ? undefined : renderModel.messages[messageIndex];
+          if (message?.role !== 'assistant') return;
+          searchState.readingMessageContent = message.content;
+          render();
+          focusChatReadingViewCloseButton(componentId);
+        };
+        const closeReadingView = () => {
+          searchState.readingMessageContent = undefined;
+          render();
+        };
+        const inspectSelectedResponse = () => {
+          const messageIndex = searchState.messageMenu?.messageIndex;
+          searchState.messageMenu = undefined;
+          const message = messageIndex == null ? undefined : renderModel.messages[messageIndex];
+          searchState.inspectedTrace =
+            message?.role === 'assistant' && typeof message.responseTraceId === 'string'
+              ? loadUiGraphResponseTrace(config.uiGraph, component.id, message.responseTraceId) ?? null
+              : null;
+          render();
+        };
+        const closeResponseInspector = () => {
+          searchState.inspectedTrace = undefined;
+          render();
+        };
+        const removeSelectedMessage = () => {
+          const messageIndex = searchState.messageMenu?.messageIndex;
+          searchState.messageMenu = undefined;
+          if (messageIndex == null) return;
+          const statePatch = createUiGraphChatMessageRemovalStatePatch(
+            renderModel.component.id,
+            interactionController.getSnapshot().state,
+            messageIndex,
+          );
+          if (statePatch) {
+            interactionController.updateStatePatch(statePatch);
+          }
+          render();
+        };
         const messagePresentations = getUiGraphChatMessagePresentations(renderModel.messages);
         const messageNodes = renderModel.messages
           .map((message, messageIndex) => {
@@ -619,7 +902,14 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             );
             const messageElement = createElement(
               'div',
-              { className: `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role}` },
+              {
+                className: `rivet-web-app-chat-message rivet-web-app-chat-message-${message.role}${
+                  searchState.messageMenu?.messageIndex === messageIndex
+                    ? ' rivet-web-app-chat-message-context-selected'
+                    : ''
+                }`,
+                onContextMenu: (event: MouseEvent) => openMessageContextMenu(messageIndex, event),
+              },
               [
                 messageContent,
                 ...(messagePresentation?.timestamp
@@ -720,6 +1010,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           if (!hasMessages) return;
           searchState.isMenuOpen = false;
           searchState.isPinsOpen = false;
+          searchState.messageMenu = undefined;
           searchState.isSearchOpen = true;
           searchState.activeMatchIndex = 0;
           render();
@@ -727,18 +1018,21 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         };
         const togglePins = () => {
           searchState.isMenuOpen = false;
+          searchState.messageMenu = undefined;
           searchState.isSearchOpen = false;
           searchState.isPinsOpen = !searchState.isPinsOpen;
           render();
         };
         const toggleMenu = () => {
           searchState.isSearchOpen = false;
+          searchState.messageMenu = undefined;
           searchState.isMenuOpen = !searchState.isMenuOpen;
           render();
         };
         const flushChatHistory = () => {
           searchState.isMenuOpen = false;
           searchState.isPinsOpen = false;
+          searchState.messageMenu = undefined;
           interactionController.updateStatePatch(createUiGraphChatHistoryFlushStatePatch(renderModel.component.id));
           render();
         };
@@ -933,6 +1227,51 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             ),
           );
         }
+        const readingView =
+          searchState.readingMessageContent == null
+            ? undefined
+            : createElement(
+                'div',
+                {
+                  className: 'rivet-web-app-modal-backdrop rivet-web-app-chat-reading-view-backdrop',
+                  onClick: (event: MouseEvent) => {
+                    if (event.target === event.currentTarget) closeReadingView();
+                  },
+                },
+                [
+                  createElement(
+                    'section',
+                    {
+                      'aria-label': 'Assistant message',
+                      'aria-modal': 'true',
+                      className: 'rivet-web-app-chat-reading-view',
+                      role: 'dialog',
+                    },
+                    [
+                      createElement('header', { className: 'rivet-web-app-chat-reading-view-header' }, [
+                        createElement('strong', { text: 'Assistant message' }),
+                        createElement(
+                          'button',
+                          {
+                            'aria-label': 'Close reading view',
+                            className: 'rivet-web-app-chat-reading-view-close',
+                            'data-rivet-chat-reading-view-component-id': componentId,
+                            onClick: closeReadingView,
+                            title: 'Close reading view',
+                            type: 'button',
+                          },
+                          [createLineIcon(CROSS_ICON_PATH)],
+                        ),
+                      ]),
+                      renderMarkdownElement(
+                        searchState.readingMessageContent,
+                        'rivet-web-app-chat-message-markdown rivet-web-app-chat-reading-view-markdown markdown-body',
+                        true,
+                      ),
+                    ],
+                  ),
+                ],
+              );
         const chatChildren: Node[] = [
           createElement('div', { className: 'rivet-web-app-chat-header' }, [
             createElement('span', { className: 'rivet-web-app-chat-title' }, [
@@ -978,6 +1317,52 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
             ...(pinsPanel ? [pinsPanel] : searchPanel ? [searchPanel] : []),
             messagesElement,
           ]),
+          ...(searchState.messageMenu
+            ? [
+                createElement(
+                  'div',
+                  {
+                    'data-rivet-chat-message-menu-component-id': componentId,
+                    className: 'rivet-web-app-chat-message-context-menu',
+                    role: 'menu',
+                    style: `left: ${searchState.messageMenu.x}px; top: ${searchState.messageMenu.y}px;`,
+                  },
+                  [
+                    ...(renderModel.messages[searchState.messageMenu.messageIndex]?.role === 'assistant'
+                      ? [
+                          createElement('button', {
+                            onClick: openSelectedMessageInReadingView,
+                            role: 'menuitem',
+                            text: 'Open in reading view',
+                            type: 'button',
+                          }),
+                        ]
+                      : []),
+                    ...(renderModel.component.allowResponseInspection &&
+                    renderModel.messages[searchState.messageMenu.messageIndex]?.role === 'assistant'
+                      ? [
+                          createElement('button', {
+                            onClick: inspectSelectedResponse,
+                            role: 'menuitem',
+                            text: 'Inspect response',
+                            type: 'button',
+                          }),
+                        ]
+                      : []),
+                    createElement('button', {
+                      onClick: removeSelectedMessage,
+                      role: 'menuitem',
+                      text: 'Remove message',
+                      type: 'button',
+                    }),
+                  ],
+                ),
+              ]
+            : []),
+          ...(readingView ? [readingView] : []),
+          ...(searchState.inspectedTrace !== undefined
+            ? [createResponseInspectorElement(searchState.inspectedTrace, closeResponseInspector)]
+            : []),
         ];
         if (actionError) {
           chatChildren.push(
@@ -989,6 +1374,22 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         chatChildren.push(composer);
         const chat = createElement('section', { className: 'rivet-web-app-chat' }, chatChildren);
         chat.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && searchState.inspectedTrace !== undefined) {
+            event.preventDefault();
+            closeResponseInspector();
+            return;
+          }
+          if (event.key === 'Escape' && searchState.readingMessageContent != null) {
+            event.preventDefault();
+            closeReadingView();
+            return;
+          }
+          if (event.key === 'Escape' && searchState.messageMenu) {
+            event.preventDefault();
+            searchState.messageMenu = undefined;
+            render();
+            return;
+          }
           if (event.key === 'Escape' && searchState.isMenuOpen) {
             event.preventDefault();
             searchState.isMenuOpen = false;
@@ -1154,6 +1555,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     ]);
     disposeOutputResizeObservers();
     root.replaceChildren(surface, ...renderRevisionMismatchModal());
+    root.querySelector<HTMLButtonElement>('.rivet-agent-response-inspector-close')?.focus();
     disposeOutputResizeObservers = observeOutputResizeBounds(root);
     const chatMessagesByComponentId = new Map<string, HTMLElement>();
     root.querySelectorAll<HTMLElement>('.rivet-web-app-chat-messages').forEach((messages) => {
@@ -1217,6 +1619,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     const nextState = interactionController.getSnapshot().state;
     if (!isRestoringChatState && hasUiGraphChatPersistentStateChanged(config.uiGraph, persistedChatState, nextState)) {
       saveUiGraphChatPersistentState(config.uiGraph, nextState);
+      pruneUiGraphResponseTraces(config.uiGraph, nextState);
     }
     persistedChatState = nextState;
     if (change !== 'state') render();

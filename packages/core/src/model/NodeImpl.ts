@@ -6,6 +6,7 @@ import {
   type NodeId,
   type NodeInputDefinition,
   type NodeOutputDefinition,
+  type PortId,
 } from './NodeBase.js';
 import type { Project, ProjectId } from './Project.js';
 import type { InternalProcessContext } from './ProcessContext.js';
@@ -43,7 +44,18 @@ export interface PluginNodeImpl<T extends ChartNode> {
   create(): T;
 
   getUIData(context: RivetUIContext): NodeUIData | Promise<NodeUIData>;
+
+  /** Optional metadata-only presentation hints for the editor Run Activity view. */
+  getRunActivityDescriptor?(data: T['data']): NodeRunActivityDescriptor;
 }
+
+export type NodeRunActivityDescriptor = {
+  category?: 'generic' | 'model' | 'tool';
+  /** Preferred output to preview without changing execution or serialization. */
+  primaryOutputPortId?: PortId;
+  /** Small context inputs that are useful to label an invocation. */
+  contextInputPortIds?: PortId[];
+};
 
 export abstract class NodeImpl<T extends ChartNode, Type extends T['type'] = T['type']> {
   readonly chartNode: T;
@@ -115,6 +127,10 @@ export abstract class NodeImpl<T extends ChartNode, Type extends T['type'] = T['
   getBody(_context: RivetUIContext): NodeBody | Promise<NodeBody> {
     return undefined;
   }
+
+  getRunActivityDescriptor(): NodeRunActivityDescriptor | undefined {
+    return undefined;
+  }
 }
 
 export type NodeBody = string | NodeBodySpec | NodeBodySpec[] | undefined;
@@ -157,6 +173,10 @@ export class PluginNodeImplClass<T extends ChartNode, Type extends T['type'] = T
 
   getBody(context: RivetUIContext): NodeBody | Promise<NodeBody> {
     return this.impl.getBody(this.data, context);
+  }
+
+  getRunActivityDescriptor(): NodeRunActivityDescriptor | undefined {
+    return this.impl.getRunActivityDescriptor?.(this.data);
   }
 }
 

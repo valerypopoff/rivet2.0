@@ -11,12 +11,48 @@ import { useCallback, useRef, useState } from 'react';
 import { deserializeProject, getError, type GraphId } from '@valerypopoff/rivet2-core';
 import { MemoryAsyncStorage, MemoryStaticDataStore, RivetAppHost, type RivetWorkspaceHost } from '../host.js';
 import { installGlobalErrorHandlers } from '../utils/errorHandling.js';
-import projectSource from './promo.rivet-project?raw';
+import agentProjectSource from './promo-agent.rivet-project?raw';
+import batchRunsProjectSource from './promo-batch-runs.rivet-project?raw';
+import structuredOutputProjectSource from './promo-structured-output.rivet-project?raw';
+import webAppProjectSource from './promo-web-app.rivet-project?raw';
+import workflowProjectSource from './promo-workflow.rivet-project?raw';
+import { isPromoProjectKey, PROMO_PROJECT_MANIFEST, type PromoProjectKey } from './promoProjectManifest.js';
 import '../host.css';
 import './promo.css';
 
-const PROMO_PROJECT_ID = 'rivet-promo-project';
-const PROMO_GRAPH_ID = 'promo-support-agent';
+const PROMO_PROJECT_SOURCES = {
+  agent: agentProjectSource,
+  'batch-runs': batchRunsProjectSource,
+  'structured-output': structuredOutputProjectSource,
+  'web-app': webAppProjectSource,
+  workflow: workflowProjectSource,
+} satisfies Record<PromoProjectKey, string>;
+
+type PromoProjectDefinition = (typeof PROMO_PROJECT_MANIFEST)[PromoProjectKey] & { source: string };
+type PromoProjectSelection = { definition: PromoProjectDefinition } | { error: string };
+
+function getSelectedPromoProject(search: string): PromoProjectSelection {
+  const requestedProject = new URLSearchParams(search).get('project');
+  if (!requestedProject) {
+    return {
+      definition: { ...PROMO_PROJECT_MANIFEST.agent, source: PROMO_PROJECT_SOURCES.agent },
+    };
+  }
+
+  if (isPromoProjectKey(requestedProject)) {
+    return {
+      definition: {
+        ...PROMO_PROJECT_MANIFEST[requestedProject],
+        source: PROMO_PROJECT_SOURCES[requestedProject],
+      },
+    };
+  }
+
+  return { error: `Unknown Rivet demo project "${requestedProject}".` };
+}
+
+const selectedPromoProject = getSelectedPromoProject(window.location.search);
+const selectedPromoDefinition = 'definition' in selectedPromoProject ? selectedPromoProject.definition : undefined;
 const PROMO_HOST_UI = {
   checkForUpdates: false,
   fileMenu: { visibleItems: [] },
@@ -40,14 +76,14 @@ function postToParent(message: PromoMessage) {
   }
 }
 
-function createPromoSnapshot() {
-  const [deserializedProject] = deserializeProject(projectSource);
+function createPromoSnapshot(definition: PromoProjectDefinition) {
+  const [deserializedProject] = deserializeProject(definition.source);
   const { data, ...project } = deserializedProject;
 
   return {
     data,
-    openedGraph: PROMO_GRAPH_ID as GraphId,
-    path: 'rivet-live-demo.rivet-project',
+    openedGraph: definition.graphId as GraphId,
+    path: definition.path,
     project,
     testSuites: [],
   };
@@ -68,8 +104,14 @@ function PromoApp() {
     }
 
     openedRef.current = true;
+    if ('error' in selectedPromoProject) {
+      setError(selectedPromoProject.error);
+      postToParent({ type: 'rivet-demo:error', message: selectedPromoProject.error });
+      return;
+    }
+
     try {
-      const opened = await workspaceHost.openProjectSnapshot(createPromoSnapshot());
+      const opened = await workspaceHost.openProjectSnapshot(createPromoSnapshot(selectedPromoProject.definition));
       if (!opened) {
         throw new Error('Rivet declined to open the bundled demo project.');
       }
@@ -81,7 +123,7 @@ function PromoApp() {
   }, []);
 
   const handleActiveProjectChanged = useCallback((event: { projectId: string | null }) => {
-    if (event.projectId !== PROMO_PROJECT_ID) {
+    if (!selectedPromoDefinition || event.projectId !== selectedPromoDefinition.projectId) {
       return;
     }
 
@@ -108,8 +150,8 @@ function PromoApp() {
         <div className="promo-loading" role="status">
           <div className="promo-loading-content">
             <span className="promo-loading-indicator" aria-hidden="true" />
-            <strong>Opening the live Rivet workflow</strong>
-            <span>The project runs locally in this browser and needs no API key.</span>
+            <strong>Opening the Rivet demo project</strong>
+            <span>{selectedPromoDefinition?.loadingHint ?? 'Checking the requested demo…'}</span>
           </div>
         </div>
       ) : null}

@@ -481,6 +481,41 @@ WebSocket runner.
 
 ## Security
 
+### Optional Chat response inspection
+
+Chat response inspection is opt-in per component through
+`allowResponseInspection`; the default is `false`. When disabled, the action
+runner must not collect, transport, persist, or expose an `AgentResponseTrace`.
+When enabled, HTTP results and protocol-v1 `action.completed` messages may add an
+optional `responseTrace`. This is an additive v1 field: older clients ignore it,
+and newer clients show **Trace unavailable** if an older host omits it.
+
+Assistant messages store only an optional `responseTraceId`. Conversation
+history conversion ignores that field, so trace metadata never enters later LLM
+context. Validated traces are stored separately from messages, scoped by app
+path, UI graph, and Chat component; the browser keeps the newest 100 and prunes
+orphans after history changes. Unavailable browser storage falls back to
+in-memory storage for the page session. If a browser-storage write fails, that
+in-memory copy remains authoritative until a later write succeeds, so an older
+persisted record cannot hide a response trace that the current page just
+produced.
+
+The assistant-message menu order is **Open in reading view**, **Inspect
+response**, **Remove message**. The shared accessible inspector groups metadata
+into **Execution**, **Recovery behavior**, **Usage and cost**, and **Timing**,
+then lists physical model and tool calls. **Provider request retries** means a
+failed request was repeated; **LLM profile fallbacks** means execution moved to
+the next configured profile. Correlation identities remain in the portable
+trace for runtime isolation, recordings, and retention, but the normal inspector
+does not render opaque trace, graph, node, or process IDs. Both React and
+generated hosted renderers must validate the portable trace before rendering it.
+
+The trace duration ends when graph outputs are ready. If managed async branches
+remain active, the trace reports that fact without delaying the foreground
+response. The trace contract forbids prompts, messages, generated text,
+reasoning, tool arguments/results, retrieved content, raw provider bodies,
+headers, credentials, and raw errors.
+
 Web apps are declarative: no project JavaScript or arbitrary HTML execution.
 Markdown and rich content use the shared sanitization policy. Action routes should
 be same-origin and wrapper-authenticated. Do not put credentials, request headers,

@@ -6,7 +6,7 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "dev": "node scripts/dev.mjs",
-    "dev:site": "docusaurus start",
+    "dev:site": "docusaurus start --host 127.0.0.1 --port 3000",
     "start": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "build:site": "docusaurus build",

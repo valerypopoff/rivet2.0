@@ -91,7 +91,12 @@ const styles = css`
     display: flex;
     flex-direction: column;
     left: 50%;
-    max-height: calc(100vh - var(--project-selector-height) - var(--data-bus-full-row-height, 0px) - 36px);
+    max-height: calc(
+      100vh - var(--project-selector-height) - var(--data-bus-full-row-height, 0px) - var(
+          --run-activity-drawer-reserved-height,
+          0px
+        ) - 36px
+    );
     max-width: calc(100vw - 32px);
     min-width: 360px;
     overflow: hidden;
@@ -100,6 +105,10 @@ const styles = css`
     top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px) + 20px);
     transform: translateX(-50%);
     width: 30vw;
+
+    @media (max-width: 720px) {
+      max-height: calc(100vh - var(--project-selector-height) - var(--data-bus-full-row-height, 0px) - 36px);
+    }
 
     .search-controls {
       align-items: center;

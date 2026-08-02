@@ -6,8 +6,11 @@ import {
   type DelegateFunctionCallNode,
   type GraphId,
   type InternalProcessContext,
+  type NodeId,
   type Outputs,
   type PortId,
+  type ProcessId,
+  type ToolCallFinishedEvent,
 } from '../../../src/index.js';
 import { applyStreamedFunctionCallOutputs } from '../../../src/model/chat/streamChatResponse.js';
 
@@ -162,6 +165,62 @@ describe('DelegateFunctionCallNodeImpl', () => {
       type: 'control-flow-excluded',
       value: undefined,
     });
+  });
+
+  it('reports one privacy-bounded execution event without exposing tool arguments or results', async () => {
+    const events: ToolCallFinishedEvent[] = [];
+    const context = createContext(() => 'private result');
+    context.toolCallTraceSource = {
+      nodeId: 'llm-node' as NodeId,
+      processId: 'llm-process' as ProcessId,
+    };
+    context.onToolCallFinished = (event) => events.push(event);
+
+    await createNode().process(
+      {
+        ['function-call' as PortId]: {
+          type: 'object',
+          value: { name: 'foo', arguments: { secret: 'private' }, id: 'call_1' },
+        },
+      },
+      context,
+    );
+
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0], {
+      toolCallId: 'call_1',
+      toolName: 'foo',
+      sourceNodeId: 'llm-node',
+      sourceProcessId: 'llm-process',
+      handlerKind: 'external',
+      handlerName: 'foo',
+      outcome: 'success',
+      startedAt: events[0]!.startedAt,
+      durationMs: events[0]!.durationMs,
+    });
+    assert.equal(typeof events[0]!.startedAt, 'number');
+    assert.equal(typeof events[0]!.durationMs, 'number');
+    assert.equal('arguments' in events[0]!, false);
+    assert.equal('result' in events[0]!, false);
+  });
+
+  it('does not let a trace observer failure change successful tool execution', async () => {
+    const context = createContext(() => 'ok');
+    context.onToolCallFinished = () => {
+      throw new Error('observer failure');
+    };
+
+    const result = await createNode().process(
+      {
+        ['function-call' as PortId]: {
+          type: 'object',
+          value: { name: 'foo', arguments: {}, id: 'call_1' },
+        },
+      },
+      context,
+    );
+
+    assert.equal(result.output?.value, 'ok');
   });
 
   it('preserves the cost returned by an external-function fallback', async () => {

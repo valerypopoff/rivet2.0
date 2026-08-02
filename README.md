@@ -31,15 +31,15 @@ For a self-hosted Rivet 2 wrapper, see [Rivet Studio Server](https://github.com/
 
 Rivet 2 is organized as a Yarn workspace monorepo:
 
-| Package                            | Purpose                                                                                                                                                    |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@valerypopoff/rivet2-core`        | Shared graph model, execution engine, built-in nodes, serialization, provider integrations, plugin assembly, and runtime contracts.                        |
-| `@valerypopoff/rivet-app`          | Tauri and React desktop IDE, graph editor, settings, plugins UI, debugger surfaces, prompt designer, chat viewer, data studio, and hosted app entrypoints. |
-| `@valerypopoff/rivet-app-executor` | Node executor sidecar used by the app for Node-mode graph execution.                                                                                       |
-| `@valerypopoff/rivet2-node`        | Node runtime adapter for loading and running Rivet projects programmatically.                                                                              |
-| `@valerypopoff/rivet2-cli`         | CLI commands for running and serving Rivet graphs.                                                                                                         |
-| `@valerypopoff/trivet`             | Graph-oriented test utilities and test serialization.                                                                                                      |
-| `packages/docs`                    | Docusaurus documentation site.                                                                                                                             |
+| Package                            | Purpose                                                                                                                                                     |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@valerypopoff/rivet2-core`        | Shared graph model, execution engine, built-in nodes, serialization, provider integrations, plugin assembly, and runtime contracts.                         |
+| `@valerypopoff/rivet-app`          | Tauri and React desktop IDE, graph editor, settings, plugins UI, debugger surfaces, Run Activity, prompt designer, data studio, and hosted app entrypoints. |
+| `@valerypopoff/rivet-app-executor` | Node executor sidecar used by the app for Node-mode graph execution.                                                                                        |
+| `@valerypopoff/rivet2-node`        | Node runtime adapter for loading and running Rivet projects programmatically.                                                                               |
+| `@valerypopoff/rivet2-cli`         | CLI commands for running and serving Rivet graphs.                                                                                                          |
+| `@valerypopoff/trivet`             | Graph-oriented test utilities and test serialization.                                                                                                       |
+| `packages/docs`                    | Docusaurus documentation site.                                                                                                                              |
 
 The repo also includes `developer-docs/`, which documents current architecture
 and integration contracts, and `refactor-history.md`, which consolidates

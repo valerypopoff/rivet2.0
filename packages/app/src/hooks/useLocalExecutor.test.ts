@@ -14,10 +14,7 @@ test('local executor owns browser processors per project and clears the settled 
     useLocalExecutorSource,
     /currentProcessorsByProjectId = useRef\(new Map<ProjectId, GraphProcessor>\(\)\)/,
   );
-  assert.match(
-    useLocalExecutorSource,
-    /currentProcessorsByProjectId\.current\.get\(runProjectId\)\?\.isRunning/,
-  );
+  assert.match(useLocalExecutorSource, /currentProcessorsByProjectId\.current\.get\(runProjectId\)\?\.isRunning/);
   assert.match(
     useLocalExecutorSource,
     /finally\s*\{[\s\S]*if \(processor && runProjectId && store\.get\(projectState\)\.metadata\.id === runProjectId\) \{[\s\S]*dispatchGraphExecutionEvent\('stop', \(\) => currentExecution\.onStop\(\)\);[\s\S]*currentProcessorsByProjectId\.current\.delete\(runProjectId\);/,
@@ -41,37 +38,59 @@ test('local executor routes inactive project browser events into execution snaps
 });
 
 test('local executor clears project-owned browser runtime resources on project close', () => {
-  assert.match(useLocalExecutorSource, /processor\.abort\(\);[\s\S]*currentProcessorsByProjectId\.current\.delete\(projectId\);/);
+  assert.match(
+    useLocalExecutorSource,
+    /processor\.abort\(\);[\s\S]*currentProcessorsByProjectId\.current\.delete\(projectId\);/,
+  );
   assert.match(useLocalExecutorSource, /editorExecutionCachesByProjectId\.current\.delete\(projectId\);/);
 });
 
 test('local executor stops hidden browser snapshots when startup fails before a terminal event', () => {
-  assert.match(useLocalExecutorSource, /function markInactiveLocalRunFailed\(runProjectId: ProjectId, error: unknown\)/);
+  assert.match(
+    useLocalExecutorSource,
+    /function markInactiveLocalRunFailed\(runProjectId: ProjectId, error: unknown\)/,
+  );
   assert.match(useLocalExecutorSource, /routeLocalProcessEvent\(\s*runProjectId,\s*'error',/);
   assert.match(useLocalExecutorSource, /markInactiveLocalRunFailed\(runProjectId, e\);/);
 });
 
 test('local executor stores hidden browser recordings in project execution snapshots', () => {
-  assert.match(useLocalExecutorSource, /function setLastRecordingForProject\(runProjectId: ProjectId, recording: string\)/);
+  assert.match(
+    useLocalExecutorSource,
+    /function setLastRecordingForProject\(runProjectId: ProjectId, recording: string\)/,
+  );
   assert.match(useLocalExecutorSource, /lastRecording: recording/);
   assert.match(useProjectExecutionSnapshotsSource, /lastRecording: store\.get\(lastRecordingState\)/);
   assert.match(useProjectExecutionSnapshotsSource, /store\.set\(lastRecordingState, nextSnapshot\.lastRecording\)/);
 });
 
 test('local executor controls target the active project processor only', () => {
-  assert.match(useLocalExecutorSource, /currentProcessorsByProjectId\.current\.get\(project\.metadata\.id as ProjectId\)\?\.abort\(\)/);
-  assert.match(useLocalExecutorSource, /currentProcessorsByProjectId\.current\.get\(project\.metadata\.id as ProjectId\)\?\.pause\(\)/);
-  assert.match(useLocalExecutorSource, /currentProcessorsByProjectId\.current\.get\(project\.metadata\.id as ProjectId\)\?\.resume\(\)/);
+  assert.match(
+    useLocalExecutorSource,
+    /currentProcessorsByProjectId\.current\.get\(project\.metadata\.id as ProjectId\)\?\.abort\(\)/,
+  );
+  assert.match(
+    useLocalExecutorSource,
+    /currentProcessorsByProjectId\.current\.get\(project\.metadata\.id as ProjectId\)\?\.pause\(\)/,
+  );
+  assert.match(
+    useLocalExecutorSource,
+    /currentProcessorsByProjectId\.current\.get\(project\.metadata\.id as ProjectId\)\?\.resume\(\)/,
+  );
   assert.match(
     useLocalExecutorSource,
     /const processor = currentProcessorsByProjectId\.current\.get\(project\.metadata\.id as ProjectId\)/,
   );
 });
 
-test('remote executor dispatch also isolates UI projection failures', () => {
+test('remote executor dispatch isolates Run Activity and primary UI projection failures', () => {
   assert.match(
     remoteExecutorHelpersSource,
-    /dispatchGraphExecutionEvent\('nodeFinish', \(\) =>[\s\S]*currentExecution\.onNodeFinish\(data as ProcessEvents\['nodeFinish'\]\)/,
+    /const dispatchWithRunActivity[\s\S]*dispatchRunActivityEvent\(message, data\);[\s\S]*return dispatchGraphExecutionEvent\(message, dispatchPrimary\)/,
+  );
+  assert.match(
+    remoteExecutorHelpersSource,
+    /nodeFinish: \(data: unknown\) =>[\s\S]*dispatchWithRunActivity\('nodeFinish',[\s\S]*currentExecution\.onNodeFinish\(data as ProcessEvents\['nodeFinish'\]\)/,
   );
   assert.doesNotMatch(remoteExecutorHelpersSource, /nodeFinish: \(data: unknown\) => currentExecution\.onNodeFinish/);
 });

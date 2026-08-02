@@ -30,6 +30,10 @@ const config = {
 
   trailingSlash: false,
 
+  // Development serves the prebuilt Rivet promo from the same Docusaurus
+  // origin. Production builds that entry separately after Docusaurus finishes.
+  staticDirectories: process.env.NODE_ENV === 'production' ? ['static'] : ['static', '.promo-dev'],
+
   customFields: {
     promoDemoUrl: process.env.RIVET_PROMO_DEMO_URL || null,
   },

@@ -1,19 +1,21 @@
 import { type FC, useEffect, useRef } from 'react';
 import { css } from '@emotion/react';
 import { useTotalRunCost } from '../hooks/useTotalRunCost';
-import { useAtomValue } from 'jotai';
-import { graphRunningState, graphStartTimeState } from '../state/dataFlow';
+import { useAtom, useAtomValue } from 'jotai';
+import { graphRunningState, graphStartTimeState, runActivityJournalState } from '../state/dataFlow';
+import { runActivityDrawerOpenState } from '../state/ui.js';
 import prettyMs from 'pretty-ms';
+import { resolveRuntimeStatusTiming } from './runtimeStatus.js';
 
 const styles = css`
   position: fixed;
-  bottom: 8px;
+  bottom: calc(8px + var(--run-activity-drawer-reserved-height, 0px));
   right: 8px;
   height: 32px;
   width: auto;
-  background: var(--grey-darker);
-  border-top: 1px solid var(--grey-dark);
-  color: var(--grey-light);
+  background: var(--modal-surface-bg);
+  border: 1px solid var(--app-panel-border);
+  color: var(--foreground-dim);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -27,17 +29,50 @@ const styles = css`
   @supports not (corner-shape: squircle) {
     border-radius: 5px;
   }
+
+  .runtime {
+    height: 100%;
+    margin: 0;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .runtime:hover {
+    color: var(--foreground);
+  }
+
+  .runtime:focus-visible {
+    border-radius: var(--ui-button-radius-sm, 6px);
+    outline: 1px solid var(--primary);
+    outline-offset: -2px;
+  }
+
+  @media (max-width: 720px) {
+    bottom: 8px;
+  }
 `;
 
 export const StatusBar: FC<{}> = () => {
   const cost = useTotalRunCost();
   const graphRunning = useAtomValue(graphRunningState);
   const graphStartTime = useAtomValue(graphStartTimeState);
+  const runActivityJournal = useAtomValue(runActivityJournalState);
+  const [runActivityOpen, setRunActivityOpen] = useAtom(runActivityDrawerOpenState);
+  const runtimeTiming = resolveRuntimeStatusTiming({
+    graphRunning,
+    graphStartTime,
+    journal: runActivityJournal,
+    now: Date.now(),
+  });
 
-  const runtimeRef = useRef<HTMLDivElement>(null);
+  const runtimeRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    if (!graphRunning || graphStartTime == null) {
+    if (!runtimeTiming.isLive) {
       return;
     }
 
@@ -48,10 +83,9 @@ export const StatusBar: FC<{}> = () => {
         return;
       }
 
-      runtime.innerText = prettyMs(Date.now() - graphStartTime, {
-        keepDecimalsOnWholeSeconds: true,
-        secondsDecimalDigits: 2,
-      });
+      if (runtimeTiming.startedAt != null) {
+        runtime.innerText = formatRuntime(Math.max(0, Date.now() - runtimeTiming.startedAt));
+      }
       animationFrameId = requestAnimationFrame(updateRuntime);
     };
 
@@ -61,15 +95,20 @@ export const StatusBar: FC<{}> = () => {
         cancelAnimationFrame(animationFrameId);
       }
     };
-  }, [graphRunning, graphStartTime]);
+  }, [runtimeTiming.isLive, runtimeTiming.startedAt]);
 
   return (
     <div css={styles}>
-      {(graphStartTime ?? 0) > 0 && (
-        <div className="runtime">
-          Runtime: <strong ref={runtimeRef}></strong>
-        </div>
-      )}
+      <button
+        type="button"
+        className="runtime"
+        aria-label={runActivityOpen ? 'Close Run Activity' : 'Open Run Activity'}
+        aria-pressed={runActivityOpen}
+        title={runActivityOpen ? 'Close Run Activity' : 'Open Run Activity'}
+        onClick={() => setRunActivityOpen((current) => !current)}
+      >
+        Runtime: <strong ref={runtimeRef}>{formatRuntimeOrPlaceholder(runtimeTiming.elapsedMs)}</strong>
+      </button>
       {cost > 0 && (
         <div className="cost">
           Run Cost: <strong>${parseFloat(cost.toFixed(3)).toLocaleString()}</strong>
@@ -78,3 +117,14 @@ export const StatusBar: FC<{}> = () => {
     </div>
   );
 };
+
+function formatRuntime(elapsedMs: number): string {
+  return prettyMs(elapsedMs, {
+    keepDecimalsOnWholeSeconds: true,
+    secondsDecimalDigits: 2,
+  });
+}
+
+function formatRuntimeOrPlaceholder(elapsedMs: number | undefined): string {
+  return elapsedMs == null ? '—' : formatRuntime(elapsedMs);
+}

@@ -127,6 +127,8 @@ export function notifyChatV2CallFinished(
     outcome: ChatV2CallFinishedEvent['outcome'];
     result?: StreamChatV2Result;
     error?: unknown;
+    startedAt?: number;
+    durationMs?: number;
   },
 ): void {
   const observer = options.context.onChatV2CallFinished;
@@ -173,6 +175,8 @@ export function notifyChatV2CallFinished(
       status: modelInfo == null ? 'unknown' : 'known',
       ...(costUsd == null ? {} : { costUsd }),
     },
+    ...(params.startedAt == null ? {} : { startedAt: params.startedAt }),
+    ...(params.durationMs == null ? {} : { durationMs: params.durationMs }),
   };
 
   try {

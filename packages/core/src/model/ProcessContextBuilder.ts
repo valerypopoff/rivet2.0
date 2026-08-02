@@ -19,9 +19,11 @@ export type NodeProcessContextBase = Omit<
   | 'requestUserInput'
   | 'reportProgress'
   | 'isDirectRunTarget'
+  | 'markResultAsEditorCacheHit'
   | 'setGlobal'
   | 'signal'
   | 'toolCallContinuation'
+  | 'toolCallTraceSource'
   | 'waitEvent'
 >;
 
@@ -37,6 +39,7 @@ export function buildNodeProcessContext(options: {
   externalFunctions: Record<string, ExternalFunction>;
   getPluginConfig: (name: string) => string | undefined;
   isDirectRunTarget: boolean;
+  markResultAsEditorCacheHit?: InternalProcessContext['markResultAsEditorCacheHit'];
   node: ChartNode;
   nodeAbortController: AbortController;
   onPartialOutputs: (partialOutputs: Outputs) => void;
@@ -45,6 +48,7 @@ export function buildNodeProcessContext(options: {
   reportProgress: InternalProcessContext['reportProgress'];
   setGlobal: (id: string, value: ScalarOrArrayDataValue) => void;
   toolCallContinuation?: InternalProcessContext['toolCallContinuation'];
+  toolCallTraceSource?: InternalProcessContext['toolCallTraceSource'];
   waitEvent: (event: string) => Promise<DataValue | undefined>;
 }): InternalProcessContext {
   const {
@@ -56,6 +60,7 @@ export function buildNodeProcessContext(options: {
     externalFunctions,
     getPluginConfig,
     isDirectRunTarget,
+    markResultAsEditorCacheHit,
     node,
     nodeAbortController,
     onPartialOutputs,
@@ -64,6 +69,7 @@ export function buildNodeProcessContext(options: {
     reportProgress,
     setGlobal,
     toolCallContinuation,
+    toolCallTraceSource,
     waitEvent,
   } = options;
 
@@ -73,6 +79,7 @@ export function buildNodeProcessContext(options: {
     attachedData,
     activeOutputPortIds,
     isDirectRunTarget,
+    markResultAsEditorCacheHit,
     waitEvent,
     externalFunctions: { ...externalFunctions },
     onPartialOutputs,
@@ -84,6 +91,7 @@ export function buildNodeProcessContext(options: {
     requestUserInput,
     reportProgress,
     toolCallContinuation,
+    toolCallTraceSource,
     execution,
   };
 }

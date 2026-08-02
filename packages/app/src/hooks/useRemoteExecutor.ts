@@ -10,6 +10,10 @@ import {
   type RivetWebAppStorage,
   type StringArrayDataValue,
   type GraphId,
+  type AgentResponseTrace,
+  type AgentTraceEvent,
+  type GraphExecutionMetadata,
+  buildAgentResponseTrace,
 } from '@valerypopoff/rivet2-core';
 import { useCurrentExecution } from './useCurrentExecution';
 import { graphState } from '../state/graph';
@@ -24,7 +28,7 @@ import { trivetState } from '../state/trivet';
 import { runTrivet } from '@valerypopoff/trivet';
 import { produce } from 'immer';
 import { userInputModalQuestionsState } from '../state/userInput';
-import { frozenNodeOutputsState, lastRunDataByNodeState } from '../state/dataFlow';
+import { frozenNodeOutputsState, graphRunningState, lastRunDataByNodeState } from '../state/dataFlow';
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai';
 import { type RefObject, useEffect, useRef } from 'react';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
@@ -69,6 +73,14 @@ import {
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
 
+type RemoteResponseTraceState = {
+  callback: (trace: AgentResponseTrace) => void;
+  events: AgentTraceEvent[];
+  startedAt: number;
+  execution?: GraphExecutionMetadata;
+  delivered: boolean;
+};
+
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
   const environmentProvider = useEnvironmentProvider();
@@ -78,6 +90,7 @@ export function useRemoteExecutor() {
   const webAppStoragePatchCallbacksByRequestIdRef = useRef(
     new Map<RemoteRunRequestId, (storagePatch: RivetWebAppStorage) => void>(),
   );
+  const responseTraceByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteResponseTraceState>());
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
   const unscopedEventRoutingRef = useRef(createUnscopedRemoteExecutionRoutingState());
@@ -113,11 +126,17 @@ export function useRemoteExecutor() {
       clearActiveRemoteRunRequest(activeGraphRequestIdRef);
       earlyResultRequestIdsRef.current.clear();
       webAppStoragePatchCallbacksByRequestIdRef.current.clear();
+      responseTraceByRequestIdRef.current.clear();
       executorSession.setActiveGraphRunRequestId(null);
       if (store.get(projectState).metadata.id !== project.metadata.id) {
         return;
       }
 
+      if (store.get(graphRunningState)) {
+        currentExecution.onRunActivityEvent('error', {
+          error: new Error('Remote executor disconnected before the graph run reached a terminal event.'),
+        });
+      }
       currentExecution.onStop();
     },
   });
@@ -241,6 +260,7 @@ export function useRemoteExecutor() {
           if (requestId) {
             earlyResultRequestIdsRef.current.delete(requestId);
             webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+            responseTraceByRequestIdRef.current.delete(requestId);
           }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
@@ -251,6 +271,10 @@ export function useRemoteExecutor() {
           }
           break;
         case 'graphOutputsReady':
+          emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, true);
+          if (shouldDispatchExecutionEvent) {
+            eventDispatcher.graphOutputsReady(data);
+          }
           if (requestId) {
             earlyResultRequestIdsRef.current.add(requestId);
             webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
@@ -273,6 +297,8 @@ export function useRemoteExecutor() {
           if (requestId) {
             earlyResultRequestIdsRef.current.delete(requestId);
             webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+            emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'aborted');
+            responseTraceByRequestIdRef.current.delete(requestId);
           }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
@@ -283,11 +309,13 @@ export function useRemoteExecutor() {
           }
           break;
         case 'graphAbort':
+          emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'aborted');
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.graphAbort(data);
           }
           break;
         case 'graphError':
+          emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'error');
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.graphError(data);
           }
@@ -295,6 +323,18 @@ export function useRemoteExecutor() {
         case 'partialOutput':
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.partialOutput(data);
+          }
+          break;
+        case 'llmCallFinished':
+          collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'llm-call-finished', data);
+          if (shouldDispatchExecutionEvent) {
+            eventDispatcher.llmCallFinished(data);
+          }
+          break;
+        case 'toolCallFinished':
+          collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'tool-call-finished', data);
+          if (shouldDispatchExecutionEvent) {
+            eventDispatcher.toolCallFinished(data);
           }
           break;
         case 'progress':
@@ -306,6 +346,7 @@ export function useRemoteExecutor() {
           }
           break;
         case 'graphFinish':
+          emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false);
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.graphFinish(data);
           }
@@ -335,6 +376,8 @@ export function useRemoteExecutor() {
           if (requestId) {
             earlyResultRequestIdsRef.current.delete(requestId);
             webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+            emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'error');
+            responseTraceByRequestIdRef.current.delete(requestId);
           }
           clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
           if (requestId === executorSession.getActiveGraphRunRequestId()) {
@@ -473,12 +516,23 @@ export function useRemoteExecutor() {
             if (options.onWebAppStoragePatch) {
               webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
             }
+            if (options.onResponseTrace) {
+              responseTraceByRequestIdRef.current.set(requestId, {
+                callback: options.onResponseTrace,
+                events: [],
+                startedAt: Date.now(),
+                delivered: false,
+              });
+            }
           },
           onRequestSettled: (requestId) => {
             if (earlyResultRequestIdsRef.current.has(requestId)) {
               return;
             }
             webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+            if (!earlyResultRequestIdsRef.current.has(requestId)) {
+              responseTraceByRequestIdRef.current.delete(requestId);
+            }
             clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
             if (requestId === executorSession.getActiveGraphRunRequestId()) {
               executorSession.setActiveGraphRunRequestId(null);
@@ -738,6 +792,55 @@ export function useRemoteExecutor() {
     tryRunTests,
     submitUserInput,
   };
+}
+
+function collectRemoteAgentTraceEvent(
+  traces: Map<RemoteRunRequestId, RemoteResponseTraceState>,
+  requestId: RemoteRunRequestId | undefined,
+  type: AgentTraceEvent['type'],
+  data: unknown,
+): void {
+  if (requestId == null) return;
+  const trace = traces.get(requestId);
+  if (trace == null || trace.delivered || typeof data !== 'object' || data == null) return;
+  const event = { type, ...data } as AgentTraceEvent;
+  trace.execution ??= event.execution;
+  trace.events.push(event);
+}
+
+function emitRemoteResponseTrace(
+  traces: Map<RemoteRunRequestId, RemoteResponseTraceState>,
+  requestId: RemoteRunRequestId | undefined,
+  data: unknown,
+  backgroundWorkPending: boolean,
+  terminalStatus?: 'error' | 'aborted',
+): void {
+  if (requestId == null) return;
+  const state = traces.get(requestId);
+  if (state == null || state.delivered) return;
+  const eventExecution =
+    typeof data === 'object' && data != null && 'execution' in data
+      ? (data as { execution?: GraphExecutionMetadata }).execution
+      : undefined;
+  state.execution ??= eventExecution;
+  if (state.execution == null) return;
+
+  const now = Date.now();
+  const trace = buildAgentResponseTrace({
+    scope: 'response',
+    execution: state.execution,
+    events: state.events,
+    startedAt: state.startedAt,
+    ...(backgroundWorkPending ? { responseReadyAt: now } : { finishedAt: now }),
+    status: terminalStatus ?? (backgroundWorkPending ? 'response-ready' : 'completed'),
+    backgroundWorkPending,
+  });
+  state.delivered = true;
+  try {
+    state.callback(trace);
+  } catch (error) {
+    logRuntimeDebug('Response trace observer failed.', { error });
+  }
 }
 
 function getActiveGraphRunRequestId(

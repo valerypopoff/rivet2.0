@@ -15,6 +15,7 @@ import {
   logRuntimeDebug,
   logRuntimeError,
   logRuntimeInfo,
+  AgentResponseTraceCollector,
 } from '@valerypopoff/rivet2-core';
 import { produce } from 'immer';
 import { useEffect, useRef } from 'react';
@@ -266,12 +267,21 @@ export function useLocalExecutor() {
     processor.on('partialOutput', (data) => {
       routeLocalProcessEvent(runProjectId, 'partialOutput', data, () => eventDispatcher.partialOutput(data));
     });
+    processor.on('llmCallFinished', (data) => {
+      routeLocalProcessEvent(runProjectId, 'llmCallFinished', data, () => eventDispatcher.llmCallFinished(data));
+    });
+    processor.on('toolCallFinished', (data) => {
+      routeLocalProcessEvent(runProjectId, 'toolCallFinished', data, () => eventDispatcher.toolCallFinished(data));
+    });
     processor.on('graphStart', async (data: ProcessEvents['graphStart']) => {
       routeLocalProcessEvent(runProjectId, 'graphStart', data, () => eventDispatcher.graphStart(data));
       await yieldToMacrotask();
     });
     processor.on('graphFinish', (data) => {
       routeLocalProcessEvent(runProjectId, 'graphFinish', data, () => eventDispatcher.graphFinish(data));
+    });
+    processor.on('graphOutputsReady', (data) => {
+      routeLocalProcessEvent(runProjectId, 'graphOutputsReady', data, () => eventDispatcher.graphOutputsReady(data));
     });
     processor.on('nodeOutputsCleared', (data) => {
       routeLocalProcessEvent(runProjectId, 'nodeOutputsCleared', data, () => eventDispatcher.nodeOutputsCleared(data));
@@ -335,6 +345,7 @@ export function useLocalExecutor() {
     }
 
     let processor: GraphProcessor | undefined;
+    let responseTraceCollector: AgentResponseTraceCollector | undefined;
     const handleAbort = () => {
       void processor?.abort();
     };
@@ -370,6 +381,7 @@ export function useLocalExecutor() {
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
+      responseTraceCollector = options.onResponseTrace ? new AgentResponseTraceCollector(processor) : undefined;
       for (const [name, externalFunction] of Object.entries(options.externalFunctions ?? {})) {
         processor.setExternalFunction(name, externalFunction);
       }
@@ -459,6 +471,8 @@ export function useLocalExecutor() {
         }
       }
 
+      const responseTrace = responseTraceCollector?.build();
+      if (responseTrace) options.onResponseTrace?.(responseTrace);
       return results;
     } catch (e) {
       const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
@@ -486,6 +500,7 @@ export function useLocalExecutor() {
       return undefined;
     } finally {
       const cleanupProcessorRun = () => {
+        responseTraceCollector?.dispose();
         options.abortSignal?.removeEventListener('abort', handleAbort);
 
         if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {

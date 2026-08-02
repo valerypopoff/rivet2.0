@@ -22,26 +22,39 @@ const require = createRequire(import.meta.url);
 const { baseUrl } = require('../docusaurus.config.js');
 const promoPublicPath = `${baseUrl.replace(/\/?$/, '/')}rivet-demo/`;
 const indexHtml = await readFile(resolve(demoDirectory, 'index.html'), 'utf8');
+
+function resolvePromoAssetPath(assetUrl) {
+  const pathname = new URL(assetUrl, 'https://rivet.invalid/').pathname;
+  assert.ok(
+    pathname.startsWith(promoPublicPath),
+    `Promo entry asset "${assetUrl}" must stay under "${promoPublicPath}".`,
+  );
+
+  const path = resolve(demoDirectory, decodeURIComponent(pathname.slice(promoPublicPath.length)));
+  const pathFromDemo = relative(demoDirectory, path);
+  assert.ok(
+    pathFromDemo !== '..' && !pathFromDemo.startsWith(`..\\`) && !pathFromDemo.startsWith('../'),
+    `Promo entry asset "${assetUrl}" escapes the generated demo directory.`,
+  );
+  return path;
+}
+
 const initialAssetPaths = [...indexHtml.matchAll(/<(?:script|link)\b[^>]+(?:src|href)="([^"]+)"/g)]
   .map((match) => match[1])
   .filter((assetUrl) => /\.(?:css|js)(?:$|\?)/.test(assetUrl))
-  .map((assetUrl) => {
-    const pathname = new URL(assetUrl, 'https://rivet.invalid/').pathname;
-    assert.ok(
-      pathname.startsWith(promoPublicPath),
-      `Promo entry asset "${assetUrl}" must stay under "${promoPublicPath}".`,
-    );
+  .map(resolvePromoAssetPath);
 
-    const path = resolve(demoDirectory, decodeURIComponent(pathname.slice(promoPublicPath.length)));
-    const pathFromDemo = relative(demoDirectory, path);
-    assert.ok(
-      pathFromDemo !== '..' && !pathFromDemo.startsWith(`..\\`) && !pathFromDemo.startsWith('../'),
-      `Promo entry asset "${assetUrl}" escapes the generated demo directory.`,
-    );
-    return path;
-  });
+const monacoWorkerAssetPaths = [
+  ...new Set([...indexHtml.matchAll(/"([^"]*\/monacoeditorwork\/[^"]+\.js)"/g)].map((match) => match[1])),
+].map(resolvePromoAssetPath);
 
 assert.ok(initialAssetPaths.length > 0, 'The promo entry must reference built JS or CSS assets.');
+assert.ok(monacoWorkerAssetPaths.length > 0, 'The promo entry must declare its Monaco worker assets.');
+
+// Reading these files proves that the URLs injected by vite-plugin-monaco-editor
+// map to the same output tree that Docusaurus serves. The plugin otherwise
+// silently duplicates an absolute URL base inside the filesystem output path.
+await Promise.all(monacoWorkerAssetPaths.map((path) => readFile(path)));
 
 const initialGzipBytes = (
   await Promise.all(initialAssetPaths.map(async (path) => gzipSync(await readFile(path)).byteLength))

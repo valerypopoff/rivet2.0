@@ -126,7 +126,23 @@ While a response is running, the composer’s green Send control becomes a neutr
 
 Once the conversation has messages, the Chat header includes **Search chat**. Use it, or press `Ctrl+F` on Windows/Linux or `Cmd+F` on macOS while focus is inside the Chat, to search the rendered conversation text. Rivet highlights every visible match, shows the current result as `n/m`, and the previous/next controls keep the active result in view inside the chat history.
 
-Hover an assistant response and use its pin icon to keep it handy during a long conversation. When at least one response is pinned, the Chat header shows the pin count. Open it to review each pinned response together with the user message that preceded it, then select an entry to bring that question to the top of the conversation. Use the **Chat options** (`...`) menu beside the Chat heading and choose **Flush chat history** to remove that Chat block's saved messages and pins while keeping any unsent draft. This affects only local browser state, not project YAML or the backing graph.
+Hover an assistant response and use its pin icon to keep it handy during a long conversation. When at least one response is pinned, the Chat header shows the pin count. Open it to review each pinned response together with the user message that preceded it, then select an entry to bring that question to the top of the conversation. Right-click (or context-click) an assistant message and choose **Open in reading view** to inspect long Markdown, tables, and code in a large scrollable window. The reading view closes from its close button, the shaded backdrop, or the Escape key. The same context menu offers **Remove message**; user-message context menus offer removal only. Removing a pinned response also unpins it and keeps the other pins aligned with the remaining conversation. Use the **Chat options** (`...`) menu beside the Chat heading and choose **Flush chat history** to remove that Chat block's saved messages and pins while keeping any unsent draft. These actions affect only local browser state, not project YAML or the backing graph.
+
+Enable **Allow response inspection** on the Chat component when users should be
+able to inspect execution metadata for assistant replies. It is off by default.
+When enabled, the assistant-message context menu adds **Inspect response** after
+**Open in reading view**. The responsive dialog summarizes response timing,
+model attempts, tool executions, reported tokens, and known or unknown cost in
+separate **Execution**, **Recovery behavior**, **Usage and cost**, and **Timing**
+groups. **Provider request retries** are repeated requests after failures; **LLM
+profile fallbacks** are switches to the next configured profile.
+It never exposes prompts, messages, response content, reasoning, tool
+arguments/results, retrieved documents, request bodies, headers, or credentials.
+Opaque runtime IDs are also hidden from the normal inspector. Traces are
+browser-local, separate from Chat messages, limited to the newest 100 per Chat
+component, and are never sent back to the model as conversation history. If a
+page talks to an older host, the inspector may truthfully show **Trace
+unavailable**.
 
 ## Previewing Locally
 

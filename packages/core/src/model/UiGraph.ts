@@ -49,6 +49,8 @@ export type UiGraphChatMessage = {
   content: string;
   /** UTC ISO-8601 timestamp captured by the browser when the message is shown. */
   timestamp?: string;
+  /** Reference to separately persisted response metadata. Never sent to an LLM. */
+  responseTraceId?: string;
 };
 
 export type UiGraphChatPin = {
@@ -120,6 +122,7 @@ export type UiGraphComponent =
       type: 'chat';
       action: UiGraphChatRunGraphAction;
       placeholder?: string;
+      allowResponseInspection?: boolean;
     }
   | {
       id: UiComponentId;
@@ -340,6 +343,33 @@ export function createUiGraphChatPinStatePatch(
     [pinsStateKey]: pinnedIndexes.includes(messageIndex)
       ? pinnedIndexes.filter((index) => index !== messageIndex)
       : [...pinnedIndexes, messageIndex].sort((left, right) => left - right),
+  };
+}
+
+/**
+ * Removes one persisted Chat message and keeps pinned assistant indexes aligned
+ * with the remaining history. Removing a pinned response unpins it.
+ */
+export function createUiGraphChatMessageRemovalStatePatch(
+  componentId: UiComponentId,
+  state: Readonly<Record<string, unknown>>,
+  messageIndex: number,
+): Record<string, unknown> | undefined {
+  const messages = getUiGraphChatMessages(componentId, state);
+  if (!Number.isSafeInteger(messageIndex) || messageIndex < 0 || messageIndex >= messages.length) {
+    return undefined;
+  }
+
+  const pinsStateKey = getUiGraphChatPinsStateKey(componentId);
+  const pinnedIndexes = getUiGraphChatPins(componentId, state).map((pin) => pin.messageIndex);
+  const remainingPinnedIndexes = pinnedIndexes.flatMap((pinnedIndex) => {
+    if (pinnedIndex === messageIndex) return [];
+    return [pinnedIndex > messageIndex ? pinnedIndex - 1 : pinnedIndex];
+  });
+
+  return {
+    [getUiGraphChatMessagesStateKey(componentId)]: messages.filter((_message, index) => index !== messageIndex),
+    [pinsStateKey]: remainingPinnedIndexes,
   };
 }
 

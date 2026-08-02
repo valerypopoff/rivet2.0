@@ -114,7 +114,7 @@ When the **Bright** theme is active, node text and code editors use Monaco's lig
 
 ## Workspaces
 
-The top app bar contains workspace tabs. Canvas is the normal graph-editing workspace. Other workspaces, such as Trivet Tests, Chat Viewer, and Data Studio, open full-screen workspace views. When no project is open, the top bar shows a Welcome screen tab so you can return to the centered welcome screen after opening a project-independent workspace. Run/debug controls are shown only while Canvas is active.
+The top app bar contains workspace tabs. Canvas is the normal graph-editing workspace. Other workspaces, such as Trivet Tests and Data Studio, open full-screen workspace views. When no project is open, the top bar shows a Welcome screen tab so you can return to the centered welcome screen after opening a project-independent workspace. Run/debug controls are shown only while Canvas is active.
 
 ### Prompt Designer
 
@@ -124,11 +124,14 @@ The prompt designer allows you to tweak an individual prompt to get the output y
 
 Trivet allows you to set up test suites and test cases for your project. See the [Trivet](../trivet.md) documentation for more information.
 
-### Chat Viewer
+### Run Activity
 
-The chat viewer gives you a full-screen view of Chat and LLM Chat nodes that have produced chat content. Its top-bar tab appears only when there is something to view.
-
-This view can give you a quick overview of how your AI is performing, and what it is doing at any given time. It can also be used to debug issues with your AI.
+Run Activity is a resizable editor drawer for the current or latest root
+execution. It keeps the canvas available while showing activity from the root
+graph, subgraphs, repeated node invocations, model calls, delegated tools, and
+errors. Click the **Runtime** control in the lower-right status bar to toggle
+the drawer. Use its row actions to return to the exact graph run and node
+process represented by an entry. See [Run Activity](./features/run-activity.md).
 
 ## Action Bar
 

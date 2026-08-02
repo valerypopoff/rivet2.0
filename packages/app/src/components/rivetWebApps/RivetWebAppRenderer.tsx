@@ -2,6 +2,7 @@ import {
   Fragment,
   type FC,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent,
   type ReactNode,
   type RefObject,
@@ -29,8 +30,10 @@ import {
   type UiGraphChatPin,
   type UiGraphComponent,
   type UiGraphInteractionController,
+  type AgentResponseTrace,
   RIVET_WEB_APP_RENDERER_CSS,
   createUiGraphChatHistoryFlushStatePatch,
+  createUiGraphChatMessageRemovalStatePatch,
   createUiGraphInteractionController,
   createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
@@ -58,10 +61,14 @@ import {
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
+  saveUiGraphResponseTrace,
+  loadUiGraphResponseTrace,
+  pruneUiGraphResponseTraces,
   type UiGraphChatMessagePresentation,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
 import { matchesKeyboardShortcut } from '../../utils/keyboardShortcutMatcher.js';
+import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
 
 // Vite resolves this CommonJS compatibility export directly, while tsx exposes
 // the same component beneath `default` during source-level tests.
@@ -106,6 +113,7 @@ export type RivetWebAppActionResult = {
   outputs: Record<string, DataValue>;
   statePatch?: Record<string, unknown>;
   storagePatch?: Record<string, unknown>;
+  responseTrace?: AgentResponseTrace;
 };
 
 /**
@@ -175,6 +183,7 @@ function useUiGraphChatBrowserPersistence(
       const nextState = interactionController.getSnapshot().state;
       if (!isRestoringRef.current && hasUiGraphChatPersistentStateChanged(uiGraph, previousState, nextState)) {
         saveUiGraphChatPersistentState(uiGraph, nextState);
+        pruneUiGraphResponseTraces(uiGraph, nextState);
       }
       previousState = nextState;
     });
@@ -264,7 +273,10 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             },
           );
         }
-        return { statePatch: result.statePatch };
+        if (component.type === 'chat' && component.allowResponseInspection && result.responseTrace) {
+          saveUiGraphResponseTrace(normalizedInteractionUiGraph, component.id, result.responseTrace);
+        }
+        return { statePatch: result.statePatch, responseTrace: result.responseTrace };
       }),
     [interactionController, normalizedInteractionUiGraph, onRunAction, storageAdapter],
   );
@@ -301,6 +313,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
                 isRunning={interaction.runningComponentIds.has(component.id)}
                 isOutputCollapsed={interaction.collapsedOutputComponentIds.has(component.id)}
                 uiGraphName={normalizedUiGraph.name}
+                uiGraph={normalizedInteractionUiGraph}
                 state={interaction.state}
                 onRunAction={runAction}
                 onCancelAction={interactionController.cancelAction}
@@ -350,6 +363,7 @@ const RivetWebAppComponent: FC<{
   isRunning: boolean;
   isOutputCollapsed: boolean;
   uiGraphName: string;
+  uiGraph: UiGraph;
   state: Readonly<Record<string, unknown>>;
   onRunAction(component: UiGraphActionComponent): Promise<void> | void;
   onCancelAction(componentId: UiComponentId): void;
@@ -372,6 +386,7 @@ const RivetWebAppComponent: FC<{
   onFlushChatHistory,
   state,
   uiGraphName,
+  uiGraph,
 }) => {
   const renderModel = useMemo(() => getUiGraphComponentRenderModel(component, state), [component, state]);
   const outputResizeCleanupRef = useRef<(() => void) | undefined>(undefined);
@@ -478,6 +493,7 @@ const RivetWebAppComponent: FC<{
           onStatePatch={onStatePatch}
           onFlushChatHistory={onFlushChatHistory}
           state={state}
+          uiGraph={uiGraph}
           uiGraphName={uiGraphName}
         />
       );
@@ -629,6 +645,7 @@ const RivetWebAppChat: FC<{
   onStatePatch(patch: Record<string, unknown>): void;
   renderModel: Extract<ReturnType<typeof getUiGraphComponentRenderModel>, { type: 'chat' }>;
   state: Readonly<Record<string, unknown>>;
+  uiGraph: UiGraph;
   uiGraphName: string;
 }> = ({
   actionError,
@@ -641,15 +658,25 @@ const RivetWebAppChat: FC<{
   onStatePatch,
   renderModel,
   state,
+  uiGraph,
   uiGraphName,
 }) => {
   const messagesRef = useRef<HTMLDivElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const overflowMenuRef = useRef<HTMLSpanElement>(null);
+  const messageContextMenuRef = useRef<HTMLDivElement>(null);
+  const readingViewCloseButtonRef = useRef<HTMLButtonElement>(null);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
   const [isPinsOpen, setIsPinsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [messageContextMenu, setMessageContextMenu] = useState<{
+    messageIndex: number;
+    x: number;
+    y: number;
+  }>();
+  const [readingViewContent, setReadingViewContent] = useState<string>();
+  const [inspectedTrace, setInspectedTrace] = useState<AgentResponseTrace | null>();
   const [searchQuery, setSearchQuery] = useState('');
   const [requestedSearchMatchIndex, setRequestedSearchMatchIndex] = useState(0);
   const [searchMatchState, setSearchMatchState] = useState({ activeIndex: -1, count: 0 });
@@ -685,15 +712,30 @@ const RivetWebAppChat: FC<{
   }, [isPinsOpen, pins.length]);
 
   useEffect(() => {
-    if (!isOverflowMenuOpen) return;
+    if (messageContextMenu && !messages[messageContextMenu.messageIndex]) {
+      setMessageContextMenu(undefined);
+    }
+    if (messages.length === 0 && readingViewContent != null) {
+      setReadingViewContent(undefined);
+    }
+  }, [messageContextMenu, messages, readingViewContent]);
+
+  useEffect(() => {
+    if (!isOverflowMenuOpen && !messageContextMenu) return;
 
     const closeMenuOnPointerDown = (event: globalThis.PointerEvent) => {
-      if (!overflowMenuRef.current?.contains(event.target as Node)) {
-        setIsOverflowMenuOpen(false);
-      }
+      if (
+        overflowMenuRef.current?.contains(event.target as Node) ||
+        messageContextMenuRef.current?.contains(event.target as Node)
+      )
+        return;
+      setIsOverflowMenuOpen(false);
+      setMessageContextMenu(undefined);
     };
     const closeMenuOnKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setIsOverflowMenuOpen(false);
+      if (event.key !== 'Escape') return;
+      setIsOverflowMenuOpen(false);
+      setMessageContextMenu(undefined);
     };
     document.addEventListener('pointerdown', closeMenuOnPointerDown);
     document.addEventListener('keydown', closeMenuOnKeyDown);
@@ -701,7 +743,20 @@ const RivetWebAppChat: FC<{
       document.removeEventListener('pointerdown', closeMenuOnPointerDown);
       document.removeEventListener('keydown', closeMenuOnKeyDown);
     };
-  }, [isOverflowMenuOpen]);
+  }, [isOverflowMenuOpen, messageContextMenu]);
+
+  useEffect(() => {
+    if (readingViewContent == null) return;
+
+    readingViewCloseButtonRef.current?.focus();
+    const closeReadingViewOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setReadingViewContent(undefined);
+    };
+    document.addEventListener('keydown', closeReadingViewOnEscape);
+    return () => document.removeEventListener('keydown', closeReadingViewOnEscape);
+  }, [readingViewContent]);
 
   useLayoutEffect(() => {
     const messagesElement = messagesRef.current;
@@ -729,6 +784,7 @@ const RivetWebAppChat: FC<{
   const openSearch = () => {
     if (messages.length === 0) return;
     setIsOverflowMenuOpen(false);
+    setMessageContextMenu(undefined);
     setIsPinsOpen(false);
     setIsSearchOpen(true);
     setRequestedSearchMatchIndex(0);
@@ -737,19 +793,66 @@ const RivetWebAppChat: FC<{
 
   const togglePins = () => {
     setIsOverflowMenuOpen(false);
+    setMessageContextMenu(undefined);
     setIsSearchOpen(false);
     setIsPinsOpen((isOpen) => !isOpen);
   };
 
   const toggleOverflowMenu = () => {
     setIsSearchOpen(false);
+    setMessageContextMenu(undefined);
     setIsOverflowMenuOpen((isOpen) => !isOpen);
   };
 
   const flushChatHistory = () => {
     setIsOverflowMenuOpen(false);
+    setMessageContextMenu(undefined);
     setIsPinsOpen(false);
     onFlushChatHistory(component.id);
+  };
+
+  const openMessageContextMenu = (messageIndex: number, event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    setIsOverflowMenuOpen(false);
+    setIsSearchOpen(false);
+    const margin = 8;
+    const menuWidth = 196;
+    const menuHeight =
+      messages[messageIndex]?.role === 'assistant' ? (component.allowResponseInspection ? 108 : 76) : 44;
+    setMessageContextMenu({
+      messageIndex,
+      x: Math.min(event.clientX, Math.max(margin, globalThis.innerWidth - menuWidth - margin)),
+      y: Math.min(event.clientY, Math.max(margin, globalThis.innerHeight - menuHeight - margin)),
+    });
+  };
+
+  const openSelectedMessageInReadingView = () => {
+    if (!messageContextMenu) return;
+    const message = messages[messageContextMenu.messageIndex];
+    setMessageContextMenu(undefined);
+    if (message?.role === 'assistant') {
+      setReadingViewContent(message.content);
+    }
+  };
+
+  const removeSelectedMessage = () => {
+    if (!messageContextMenu) return;
+    const statePatch = createUiGraphChatMessageRemovalStatePatch(component.id, state, messageContextMenu.messageIndex);
+    setMessageContextMenu(undefined);
+    if (statePatch) {
+      onStatePatch(statePatch);
+    }
+  };
+
+  const inspectSelectedResponse = () => {
+    if (!messageContextMenu) return;
+    const message = messages[messageContextMenu.messageIndex];
+    setMessageContextMenu(undefined);
+    setInspectedTrace(
+      message?.role === 'assistant' && typeof message.responseTraceId === 'string'
+        ? loadUiGraphResponseTrace(uiGraph, component.id, message.responseTraceId) ?? null
+        : null,
+    );
   };
 
   const togglePin = (messageIndex: number) => {
@@ -942,11 +1045,13 @@ const RivetWebAppChat: FC<{
                 )}
                 <RivetWebAppChatMessage
                   content={message.content}
+                  contextMenuOpen={messageContextMenu?.messageIndex === index}
                   messageIndex={index}
                   pinned={pinnedMessageIndexes.has(index)}
                   presentation={presentation}
                   role={message.role}
                   uiGraphName={uiGraphName}
+                  onContextMenu={openMessageContextMenu}
                   onTogglePin={togglePin}
                 />
               </Fragment>
@@ -961,6 +1066,67 @@ const RivetWebAppChat: FC<{
           )}
         </div>
       </div>
+      {messageContextMenu && (
+        <div
+          ref={messageContextMenuRef}
+          className="rivet-web-app-chat-message-context-menu"
+          role="menu"
+          style={{ left: messageContextMenu.x, top: messageContextMenu.y }}
+        >
+          {messages[messageContextMenu.messageIndex]?.role === 'assistant' && (
+            <button type="button" role="menuitem" onClick={openSelectedMessageInReadingView}>
+              Open in reading view
+            </button>
+          )}
+          {component.allowResponseInspection && messages[messageContextMenu.messageIndex]?.role === 'assistant' && (
+            <button type="button" role="menuitem" onClick={inspectSelectedResponse}>
+              Inspect response
+            </button>
+          )}
+          <button type="button" role="menuitem" onClick={removeSelectedMessage}>
+            Remove message
+          </button>
+        </div>
+      )}
+      {readingViewContent != null && (
+        <div
+          className="rivet-web-app-modal-backdrop rivet-web-app-chat-reading-view-backdrop"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setReadingViewContent(undefined);
+            }
+          }}
+        >
+          <section
+            aria-label="Assistant message"
+            aria-modal="true"
+            className="rivet-web-app-chat-reading-view"
+            role="dialog"
+          >
+            <header className="rivet-web-app-chat-reading-view-header">
+              <strong>Assistant message</strong>
+              <button
+                ref={readingViewCloseButtonRef}
+                type="button"
+                className="rivet-web-app-chat-reading-view-close"
+                aria-label="Close reading view"
+                title="Close reading view"
+                onClick={() => setReadingViewContent(undefined)}
+              >
+                <CrossIcon aria-hidden="true" />
+              </button>
+            </header>
+            <RivetWebAppChatMarkdown
+              className="rivet-web-app-chat-message-markdown rivet-web-app-chat-reading-view-markdown markdown-body"
+              content={readingViewContent}
+              uiGraphName={uiGraphName}
+            />
+          </section>
+        </div>
+      )}
+      {inspectedTrace !== undefined && (
+        <AgentResponseInspector trace={inspectedTrace ?? undefined} onClose={() => setInspectedTrace(undefined)} />
+      )}
       {actionError && (
         <div className="rivet-web-app-chat-error" role="alert">
           {actionError}
@@ -1004,17 +1170,32 @@ const RivetWebAppChat: FC<{
 
 const RivetWebAppChatMessage: FC<{
   content: string;
+  contextMenuOpen: boolean;
   messageIndex: number;
   pinned: boolean;
   presentation?: UiGraphChatMessagePresentation;
   role: 'assistant' | 'user';
   uiGraphName: string;
+  onContextMenu(messageIndex: number, event: ReactMouseEvent<HTMLElement>): void;
   onTogglePin(messageIndex: number): void;
-}> = ({ content, messageIndex, pinned, presentation, role, uiGraphName, onTogglePin }) => {
+}> = ({
+  content,
+  contextMenuOpen,
+  messageIndex,
+  pinned,
+  presentation,
+  role,
+  uiGraphName,
+  onContextMenu,
+  onTogglePin,
+}) => {
   const message = (
     <div
-      className={`rivet-web-app-chat-message rivet-web-app-chat-message-${role}`}
+      className={`rivet-web-app-chat-message rivet-web-app-chat-message-${role}${
+        contextMenuOpen ? ' rivet-web-app-chat-message-context-selected' : ''
+      }`}
       data-rivet-chat-message-index={role === 'user' ? messageIndex : undefined}
+      onContextMenu={(event) => onContextMenu(messageIndex, event)}
     >
       <RivetWebAppChatMarkdown
         className="rivet-web-app-chat-message-markdown markdown-body"

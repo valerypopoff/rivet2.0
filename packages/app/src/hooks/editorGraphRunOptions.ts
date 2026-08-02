@@ -8,6 +8,7 @@ import type {
   RivetWebAppStorage,
   RivetStoredValueStore,
   RivetKnowledgeStoreRegistry,
+  AgentResponseTrace,
 } from '@valerypopoff/rivet2-core';
 
 export type EditorGraphRunOptions = {
@@ -17,6 +18,7 @@ export type EditorGraphRunOptions = {
   graphId?: GraphId;
   inputs?: GraphInputs;
   onProgress?: (progress: GraphProgress) => void;
+  onResponseTrace?: (trace: AgentResponseTrace) => void;
   onWebAppStoragePatch?: (storagePatch: RivetWebAppStorage) => void;
   storedValueStore?: RivetStoredValueStore;
   knowledgeStores?: RivetKnowledgeStoreRegistry;

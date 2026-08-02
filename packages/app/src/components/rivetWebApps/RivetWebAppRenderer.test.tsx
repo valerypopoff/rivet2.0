@@ -392,7 +392,7 @@ test('Chat restores browser state, preserves it through Reset, and flushes only 
       [draftKey]: 'Unsaved draft',
       [messagesKey]: [
         { content: 'Question', role: 'user' },
-        { content: 'Response', role: 'assistant' },
+        { content: 'Response\n\n| Column | Value |\n| --- | --- |\n| Status | Ready |', role: 'assistant' },
       ],
       [pinsKey]: [1],
     }),
@@ -424,6 +424,79 @@ test('Chat restores browser state, preserves it through Reset, and flushes only 
       root.render(<RivetWebAppRenderer uiGraph={uiGraph} onRunAction={async () => ({ outputs: {} })} />);
     });
     assert.equal(rootElement.querySelectorAll('.rivet-web-app-chat-message').length, 2);
+
+    await act(async () => {
+      rootElement
+        .querySelector<HTMLElement>('[data-rivet-chat-message-index="1"] .rivet-web-app-chat-message')
+        ?.dispatchEvent(
+          new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 32, clientY: 48 }),
+        );
+    });
+    assert.deepEqual(
+      [...rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button')].map(
+        (button) => button.textContent,
+      ),
+      ['Open in reading view', 'Remove message'],
+    );
+    await act(async () =>
+      rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button')?.click(),
+    );
+    assert.equal(rootElement.querySelector('.rivet-web-app-chat-reading-view')?.getAttribute('role'), 'dialog');
+    assert.deepEqual(
+      [...rootElement.querySelectorAll('.rivet-web-app-chat-reading-view th, .rivet-web-app-chat-reading-view td')].map(
+        (cell) => cell.textContent?.trim(),
+      ),
+      ['Column', 'Value', 'Status', 'Ready'],
+    );
+    await act(async () =>
+      rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-reading-view-close')?.click(),
+    );
+
+    const inspectableUiGraph: UiGraph = {
+      ...uiGraph,
+      components: uiGraph.components.map((component) =>
+        component.type === 'chat' ? { ...component, allowResponseInspection: true } : component,
+      ),
+    };
+    await act(async () => {
+      root.render(<RivetWebAppRenderer uiGraph={inspectableUiGraph} onRunAction={async () => ({ outputs: {} })} />);
+    });
+    await act(async () => {
+      rootElement
+        .querySelector<HTMLElement>('[data-rivet-chat-message-index="1"] .rivet-web-app-chat-message')
+        ?.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    });
+    assert.deepEqual(
+      [...rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button')].map(
+        (button) => button.textContent,
+      ),
+      ['Open in reading view', 'Inspect response', 'Remove message'],
+    );
+    await act(async () =>
+      rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button')[1]?.click(),
+    );
+    assert.equal(rootElement.querySelector('.rivet-agent-response-inspector')?.getAttribute('role'), 'dialog');
+    assert.match(
+      rootElement.querySelector('.rivet-agent-response-inspector-unavailable')?.textContent ?? '',
+      /Trace unavailable/,
+    );
+    await act(async () =>
+      rootElement.querySelector<HTMLButtonElement>('.rivet-agent-response-inspector header button')?.click(),
+    );
+
+    await act(async () => {
+      rootElement
+        .querySelector<HTMLElement>('[data-rivet-chat-message-index="1"] .rivet-web-app-chat-message')
+        ?.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    });
+    await act(async () =>
+      rootElement.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button')[2]?.click(),
+    );
+    assert.equal(rootElement.querySelectorAll('.rivet-web-app-chat-message').length, 1);
+    assert.deepEqual(JSON.parse(dom.window.localStorage.getItem(storageKey)!), {
+      [draftKey]: 'Unsaved draft',
+      [messagesKey]: [{ content: 'Question', role: 'user' }],
+    });
 
     await act(async () => rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click());
     assert.equal(rootElement.querySelector('.rivet-web-app-chat-menu')?.textContent, 'Flush chat history');

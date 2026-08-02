@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import type { ChatV2CallFinishedEvent } from '../../../src/model/ProcessContext.js';
+import type { ChatV2CallFinishedEvent, GraphExecutionMetadata } from '../../../src/model/ProcessContext.js';
+import { buildAgentResponseTrace, isAgentResponseTrace } from '../../../src/model/AgentResponseTrace.js';
 import {
   buildLLMProfileRequestDiagnostics,
   compactLLMProfileRequestErrors,
@@ -188,9 +189,13 @@ describe('LLM Profile fallback chain', () => {
         value: [createDefaultLLMProfileValue(), createDefaultLLMProfileValue()],
       },
     } as any;
+    let cacheHitMarks = 0;
     const context = {
       signal: new AbortController().signal,
       editorExecutionCache: new Map<string, unknown>(),
+      markResultAsEditorCacheHit: () => {
+        cacheHitMarks += 1;
+      },
     } as any;
     const runtime = await resolveLLMChatV2RuntimeConfig({
       data: node.data,
@@ -220,6 +225,7 @@ describe('LLM Profile fallback chain', () => {
     });
     assert.deepEqual(outputs.requestStatus, { type: 'any', value: [[503, 503], 200] });
     assert.deepEqual(outputs.requestError, { type: 'any', value: ['Invalid URL', []] });
+    assert.equal(cacheHitMarks, 1);
   });
 
   it('keys the editor cache by fallback order without storing profile secrets', async () => {
@@ -488,6 +494,7 @@ describe('LLM Profile fallback chain', () => {
   });
 
   it('records configuration failures, redacts credentials, and advances without making a provider call', async () => {
+    const observed: ChatV2CallFinishedEvent[] = [];
     const runner = createLLMProfileFallbackRunner({
       candidates: [
         { provider: 'custom', model: 'broken', credential: 'do-not-leak' },
@@ -503,6 +510,12 @@ describe('LLM Profile fallback chain', () => {
           provider: 'custom',
           model: {} as ChatV2Model,
           modelId: 'backup',
+          context: {
+            ...roundOptions.context,
+            node: { id: 'chat' as any },
+            processId: 'process' as any,
+            onChatV2CallFinished: (event) => observed.push(event),
+          },
           executeGenerate: async () => ({ text: 'backup answer', requestStatus: 200 }),
         };
       },
@@ -520,6 +533,26 @@ describe('LLM Profile fallback chain', () => {
       outcome: 'failure',
       error: 'The configured key [redacted] is invalid.',
     });
+    assert.deepEqual(
+      observed.map((event) => [event.profileIndex, event.roundIndex, event.outcome]),
+      [[1, 0, 'success']],
+    );
+
+    const execution = {
+      graphId: 'graph',
+      graphRunId: 'graph-run',
+      rootRunId: 'root-run',
+    } as GraphExecutionMetadata;
+    const trace = buildAgentResponseTrace({
+      scope: 'llm-invocation',
+      execution,
+      nodeId: 'chat' as any,
+      processId: 'process' as any,
+      events: observed.map((event) => ({ type: 'llm-call-finished' as const, execution, ...event })),
+      status: 'completed',
+    });
+    assert.equal(trace.summary.fallbackCount, 1);
+    assert.equal(isAgentResponseTrace(trace), true);
   });
 
   it('redacts known profile and global header values from fallback attempt errors', async () => {

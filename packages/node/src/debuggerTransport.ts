@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { WarningsPort, getError } from '@valerypopoff/rivet2-core';
+import { WarningsPort, getError, type NodeResultOrigin } from '@valerypopoff/rivet2-core';
 import { stringifyDebuggerPayloadForTransport } from './debuggerPayloadSanitizer.js';
 
 export type DebuggerErrorEmitter = {
@@ -113,6 +113,13 @@ function createDebuggerFallbackData(
   if (messageName.startsWith('node') || messageName === 'partialOutput' || messageName === 'progress') {
     fallbackData.node = data ? readProperty(data, 'node') : undefined;
     fallbackData.processId = data ? readProperty(data, 'processId') : undefined;
+
+    const resultOrigin = data ? readResultOrigin(data) : undefined;
+    const durationMs = data ? readFiniteNumberProperty(data, 'durationMs') : undefined;
+    const splitRunDurationMs = data ? readFiniteNumberRecordProperty(data, 'splitRunDurationMs') : undefined;
+    if (resultOrigin !== undefined) fallbackData.resultOrigin = resultOrigin;
+    if (durationMs !== undefined) fallbackData.durationMs = durationMs;
+    if (splitRunDurationMs !== undefined) fallbackData.splitRunDurationMs = splitRunDurationMs;
   }
 
   if (messageName.startsWith('graph')) {
@@ -172,6 +179,40 @@ function readProperty(record: Record<string, unknown>, key: string): unknown {
 function readStringProperty(record: Record<string, unknown>, key: string): string | undefined {
   const value = readProperty(record, key);
   return typeof value === 'string' ? value : undefined;
+}
+
+function readResultOrigin(record: Record<string, unknown>): NodeResultOrigin | undefined {
+  const value = readStringProperty(record, 'resultOrigin');
+  return value === 'executed' ||
+    value === 'preloaded' ||
+    value === 'frozen' ||
+    value === 'editor-cache' ||
+    value === 'unknown'
+    ? value
+    : undefined;
+}
+
+function readFiniteNumberProperty(record: Record<string, unknown>, key: string): number | undefined {
+  const value = readProperty(record, key);
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readFiniteNumberRecordProperty(
+  record: Record<string, unknown>,
+  key: string,
+): Record<string, number> | undefined {
+  const value = asRecord(readProperty(record, key));
+  if (value == null) return undefined;
+
+  try {
+    const entries = Object.entries(value);
+    if (!entries.every(([, duration]) => typeof duration === 'number' && Number.isFinite(duration))) {
+      return undefined;
+    }
+    return Object.fromEntries(entries) as Record<string, number>;
+  } catch {
+    return undefined;
+  }
 }
 
 function formatFallbackReason(error: unknown): string {

@@ -379,58 +379,99 @@ export function createProcessEventDispatcher(currentExecution: {
   onNodeOutputsCleared: (event: ProcessEvents['nodeOutputsCleared']) => void;
   onNodeStart: (event: ProcessEvents['nodeStart']) => void;
   onPartialOutput: (event: ProcessEvents['partialOutput']) => void;
+  onLlmCallFinished: (event: ProcessEvents['llmCallFinished']) => void;
+  onToolCallFinished: (event: ProcessEvents['toolCallFinished']) => void;
   onPause: () => void;
   onResume: () => void;
   onStart: (event: ProcessEvents['start']) => void;
   onUserInput: (event: ProcessEvents['userInput']) => void;
+  onRunActivityEvent: <K extends keyof ProcessEventMessageMap>(message: K, data: ProcessEventMessageMap[K]) => void;
 }) {
+  const dispatchRunActivityEvent = <K extends keyof ProcessEventMessageMap>(
+    message: K,
+    data: ProcessEventMessageMap[K],
+  ) => dispatchGraphExecutionEvent(`Run Activity ${message}`, () => currentExecution.onRunActivityEvent(message, data));
+
+  const dispatchWithRunActivity = <K extends keyof ProcessEventMessageMap>(
+    message: K,
+    data: ProcessEventMessageMap[K],
+    dispatchPrimary: () => void,
+  ) => {
+    // Run Activity is an observer. Its reducer must never suppress the
+    // editor's existing execution-state update if the projection fails.
+    dispatchRunActivityEvent(message, data);
+    return dispatchGraphExecutionEvent(message, dispatchPrimary);
+  };
+
   return {
     nodeStart: (data: unknown) =>
-      dispatchGraphExecutionEvent('nodeStart', () => currentExecution.onNodeStart(data as ProcessEvents['nodeStart'])),
+      dispatchWithRunActivity('nodeStart', data as ProcessEvents['nodeStart'], () =>
+        currentExecution.onNodeStart(data as ProcessEvents['nodeStart']),
+      ),
     nodeFinish: (data: unknown) =>
-      dispatchGraphExecutionEvent('nodeFinish', () =>
+      dispatchWithRunActivity('nodeFinish', data as ProcessEvents['nodeFinish'], () =>
         currentExecution.onNodeFinish(data as ProcessEvents['nodeFinish']),
       ),
     nodeError: (data: unknown) =>
-      dispatchGraphExecutionEvent('nodeError', () => currentExecution.onNodeError(data as ProcessEvents['nodeError'])),
+      dispatchWithRunActivity('nodeError', data as ProcessEvents['nodeError'], () =>
+        currentExecution.onNodeError(data as ProcessEvents['nodeError']),
+      ),
     userInput: (data: unknown) =>
       dispatchGraphExecutionEvent('userInput', () => currentExecution.onUserInput(data as ProcessEvents['userInput'])),
     start: (data: unknown) =>
-      dispatchGraphExecutionEvent('start', () => currentExecution.onStart(data as ProcessEvents['start'])),
+      dispatchWithRunActivity('start', data as ProcessEvents['start'], () =>
+        currentExecution.onStart(data as ProcessEvents['start']),
+      ),
     done: (data: unknown) =>
-      dispatchGraphExecutionEvent('done', () => currentExecution.onDone(data as ProcessEvents['done'])),
+      dispatchWithRunActivity('done', data as ProcessEvents['done'], () =>
+        currentExecution.onDone(data as ProcessEvents['done']),
+      ),
     abort: (data: unknown) =>
-      dispatchGraphExecutionEvent('abort', () => currentExecution.onAbort(data as ProcessEvents['abort'])),
+      dispatchWithRunActivity('abort', data as ProcessEvents['abort'], () =>
+        currentExecution.onAbort(data as ProcessEvents['abort']),
+      ),
+    graphOutputsReady: (data: unknown) =>
+      dispatchRunActivityEvent('graphOutputsReady', data as ProcessEvents['graphOutputsReady']),
     graphAbort: (data: unknown) =>
-      dispatchGraphExecutionEvent('graphAbort', () =>
+      dispatchWithRunActivity('graphAbort', data as ProcessEvents['graphAbort'], () =>
         currentExecution.onGraphAbort(data as ProcessEvents['graphAbort']),
       ),
     graphError: (data: unknown) =>
-      dispatchGraphExecutionEvent('graphError', () =>
+      dispatchWithRunActivity('graphError', data as ProcessEvents['graphError'], () =>
         currentExecution.onGraphError(data as ProcessEvents['graphError']),
       ),
     partialOutput: (data: unknown) =>
-      dispatchGraphExecutionEvent('partialOutput', () =>
+      dispatchWithRunActivity('partialOutput', data as ProcessEvents['partialOutput'], () =>
         currentExecution.onPartialOutput(data as ProcessEvents['partialOutput']),
       ),
+    llmCallFinished: (data: unknown) =>
+      dispatchWithRunActivity('llmCallFinished', data as ProcessEvents['llmCallFinished'], () =>
+        currentExecution.onLlmCallFinished(data as ProcessEvents['llmCallFinished']),
+      ),
+    toolCallFinished: (data: unknown) =>
+      dispatchWithRunActivity('toolCallFinished', data as ProcessEvents['toolCallFinished'], () =>
+        currentExecution.onToolCallFinished(data as ProcessEvents['toolCallFinished']),
+      ),
     graphStart: (data: unknown) =>
-      dispatchGraphExecutionEvent('graphStart', () =>
+      dispatchWithRunActivity('graphStart', data as ProcessEvents['graphStart'], () =>
         currentExecution.onGraphStart(data as ProcessEvents['graphStart']),
       ),
     graphFinish: (data: unknown) =>
-      dispatchGraphExecutionEvent('graphFinish', () =>
+      dispatchWithRunActivity('graphFinish', data as ProcessEvents['graphFinish'], () =>
         currentExecution.onGraphFinish(data as ProcessEvents['graphFinish']),
       ),
     nodeOutputsCleared: (data: unknown) =>
-      dispatchGraphExecutionEvent('nodeOutputsCleared', () =>
+      dispatchWithRunActivity('nodeOutputsCleared', data as ProcessEvents['nodeOutputsCleared'], () =>
         currentExecution.onNodeOutputsCleared(data as ProcessEvents['nodeOutputsCleared']),
       ),
-    pause: () => dispatchGraphExecutionEvent('pause', () => currentExecution.onPause()),
-    resume: () => dispatchGraphExecutionEvent('resume', () => currentExecution.onResume()),
+    pause: () => dispatchWithRunActivity('pause', undefined, () => currentExecution.onPause()),
+    resume: () => dispatchWithRunActivity('resume', undefined, () => currentExecution.onResume()),
     error: (data: unknown) =>
-      dispatchGraphExecutionEvent('error', () => currentExecution.onError(data as ProcessEvents['error'])),
+      dispatchWithRunActivity('error', data as ProcessEvents['error'], () =>
+        currentExecution.onError(data as ProcessEvents['error']),
+      ),
     nodeExcluded: (data: unknown) =>
-      dispatchGraphExecutionEvent('nodeExcluded', () =>
+      dispatchWithRunActivity('nodeExcluded', data as ProcessEvents['nodeExcluded'], () =>
         currentExecution.onNodeExcluded(data as ProcessEvents['nodeExcluded']),
       ),
   } as const;

@@ -1,0 +1,201 @@
+version: 4
+data:
+  graphs:
+    promo-workflow-main:
+      metadata:
+        description: Two focused LLM branches run in parallel and merge into one decision brief.
+        id: promo-workflow-main
+        name: Parallel LLM review
+      nodes:
+        '[workflow-api-key]:text "API Key — paste yours here"':
+          data:
+            text: ""
+          outgoingConnections:
+            - output->"Opportunity analyst" workflow-opportunity/apiKey
+            - output->"Risk analyst" workflow-risk/apiKey
+          visualData: 60/110/330/1//
+        '[workflow-idea]:text "Product idea"':
+          data:
+            text: A quiet co-working café with reservable focus desks and optional phone-free hours.
+          outgoingConnections:
+            - output->"Opportunity prompt" workflow-opportunity-prompt/idea
+            - output->"Risk prompt" workflow-risk-prompt/idea
+          visualData: 60/440/330/2//
+        '[workflow-opportunity-prompt]:text "Opportunity prompt"':
+          data:
+            text: |-
+              Product idea: {{idea}}
+
+              Identify the three strongest customer benefits. Be concrete and concise.
+          outgoingConnections:
+            - output->"Opportunity analyst" workflow-opportunity/prompt
+          visualData: 500/250/350/3//
+        '[workflow-risk-prompt]:text "Risk prompt"':
+          data:
+            text: |-
+              Product idea: {{idea}}
+
+              Identify the three most important execution risks and one mitigation for each. Be concise.
+          outgoingConnections:
+            - output->"Risk analyst" workflow-risk/prompt
+          visualData: 500/610/350/4//
+        '[workflow-opportunity]:llmChatV2 "Opportunity analyst"':
+          data:
+            anthropicCacheControlTtl: ""
+            anthropicEffort: ""
+            anthropicThinkingMode: ""
+            apiKeySource: input
+            autoContinueToolCalls: false
+            baseURL: ""
+            cache: false
+            configurationMode: inline
+            customProviderApiKeyEnvVarName: CUSTOM_PROVIDER_API_KEY
+            customProviderApiKeyProgrammaticName: ""
+            customProviderBaseURL: ""
+            enableGoogleSearchGrounding: false
+            enableGoogleUrlContext: false
+            enableOpenAICodeInterpreter: false
+            enableOpenAIWebSearch: false
+            extraProviderOptions: ""
+            googleIncludeThoughts: false
+            googleThinkingLevel: ""
+            headers: []
+            maxTokens: 300
+            maxToolRounds: 1
+            model: gpt-4o-mini
+            openAIPreviousResponseId: ""
+            openAIReasoningEffort: ""
+            openAIReasoningSummary: ""
+            openAIWebSearchContextSize: medium
+            outputReasoning: false
+            outputRequestBody: false
+            outputRequestError: false
+            outputRequestStatus: false
+            outputUsage: false
+            parallelToolCalls: false
+            provider: openai
+            responseFormat: text
+            responseSchemaDescription: ""
+            responseSchemaName: ""
+            retryOnNon200: false
+            retryOnNon200CooldownMs: 0
+            retryOnNon200RepeatTimes: 0
+            stopSequences: []
+            temperature: 0.3
+            toolChoice: ""
+            toolChoiceFunction: ""
+            useAnthropicThinkingBudgetInput: false
+            useAsGraphPartialOutput: false
+            useBaseURLInput: false
+            useCustomProviderBaseURLInput: false
+            useExtraProviderOptionsInput: false
+            useFrequencyPenaltyInput: false
+            useGoogleThinkingBudgetInput: false
+            useHeadersInput: false
+            useMaxTokensInput: false
+            useModelInput: false
+            useOpenAIPreviousResponseIdInput: false
+            usePresencePenaltyInput: false
+            useResponseSchemaDescriptionInput: false
+            useResponseSchemaNameInput: false
+            useSeedInput: false
+            useStopSequencesInput: false
+            useTemperatureInput: false
+            useToolCalling: false
+            useTopKInput: false
+            useTopPInput: false
+          outgoingConnections:
+            - response->"Merge the parallel reviews" workflow-merge/opportunity
+          visualData: 970/220/340/5//
+        '[workflow-risk]:llmChatV2 "Risk analyst"':
+          data:
+            anthropicCacheControlTtl: ""
+            anthropicEffort: ""
+            anthropicThinkingMode: ""
+            apiKeySource: input
+            autoContinueToolCalls: false
+            baseURL: ""
+            cache: false
+            configurationMode: inline
+            customProviderApiKeyEnvVarName: CUSTOM_PROVIDER_API_KEY
+            customProviderApiKeyProgrammaticName: ""
+            customProviderBaseURL: ""
+            enableGoogleSearchGrounding: false
+            enableGoogleUrlContext: false
+            enableOpenAICodeInterpreter: false
+            enableOpenAIWebSearch: false
+            extraProviderOptions: ""
+            googleIncludeThoughts: false
+            googleThinkingLevel: ""
+            headers: []
+            maxTokens: 300
+            maxToolRounds: 1
+            model: gpt-4o-mini
+            openAIPreviousResponseId: ""
+            openAIReasoningEffort: ""
+            openAIReasoningSummary: ""
+            openAIWebSearchContextSize: medium
+            outputReasoning: false
+            outputRequestBody: false
+            outputRequestError: false
+            outputRequestStatus: false
+            outputUsage: false
+            parallelToolCalls: false
+            provider: openai
+            responseFormat: text
+            responseSchemaDescription: ""
+            responseSchemaName: ""
+            retryOnNon200: false
+            retryOnNon200CooldownMs: 0
+            retryOnNon200RepeatTimes: 0
+            stopSequences: []
+            temperature: 0.3
+            toolChoice: ""
+            toolChoiceFunction: ""
+            useAnthropicThinkingBudgetInput: false
+            useAsGraphPartialOutput: false
+            useBaseURLInput: false
+            useCustomProviderBaseURLInput: false
+            useExtraProviderOptionsInput: false
+            useFrequencyPenaltyInput: false
+            useGoogleThinkingBudgetInput: false
+            useHeadersInput: false
+            useMaxTokensInput: false
+            useModelInput: false
+            useOpenAIPreviousResponseIdInput: false
+            usePresencePenaltyInput: false
+            useResponseSchemaDescriptionInput: false
+            useResponseSchemaNameInput: false
+            useSeedInput: false
+            useStopSequencesInput: false
+            useTemperatureInput: false
+            useToolCalling: false
+            useTopKInput: false
+            useTopPInput: false
+          outgoingConnections:
+            - response->"Merge the parallel reviews" workflow-merge/risks
+          visualData: 970/610/340/6//
+        '[workflow-merge]:text "Merge the parallel reviews"':
+          data:
+            text: |-
+              # Parallel decision brief
+
+              ## Opportunity review
+              {{opportunity}}
+
+              ## Risk review
+              {{risks}}
+          outgoingConnections:
+            - output->"Decision brief" workflow-output/value
+          visualData: 1450/390/420/7//
+        '[workflow-output]:graphOutput "Decision brief"':
+          data:
+            dataType: string
+            id: output
+          visualData: 2000/450/320/8//
+  metadata:
+    description: Paste one OpenAI API key, then inspect two parallel LLM calls and their deterministic merge.
+    id: rivet-promo-workflow
+    mainGraphId: promo-workflow-main
+    title: Demo — LLM Workflow
+  plugins: []

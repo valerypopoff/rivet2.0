@@ -2,10 +2,15 @@ import type { DataValue, ScalarOrArrayDataValue, StringArrayDataValue } from './
 import type { Dataset, DatasetId, DatasetMetadata, DatasetRow } from './Dataset.js';
 import type { ChartNode, NodeId, PortId } from './NodeBase.js';
 import type { GraphId, NodeGraph } from './NodeGraph.js';
-import type { GraphExecutionMetadata, ProcessId } from './ProcessContext.js';
+import type {
+  ChatV2CallTraceEvent,
+  GraphExecutionMetadata,
+  ProcessId,
+  ToolCallFinishedEvent,
+} from './ProcessContext.js';
 import type { Project, ProjectId } from './Project.js';
 import type { Settings } from './Settings.js';
-import type { FrozenNodeOutputsByGraph } from './GraphProcessor.js';
+import type { FrozenNodeOutputsByGraph, NodeResultOrigin } from './GraphProcessor.js';
 import type { GraphProgress } from './GraphProgress.js';
 import type { RivetWebAppStorage } from './UiGraphWebAppStorage.js';
 
@@ -37,11 +42,17 @@ export type SerializedProcessEventMap = {
   graphFinish: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;
   graphOutputsReady: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;
   graphAbort: WithExecution<{ successful: boolean; graph: NodeGraph; error?: Error | string }>;
-  nodeStart: WithExecution<{ node: ChartNode; inputs: Inputs; processId: ProcessId }>;
+  nodeStart: WithExecution<{
+    node: ChartNode;
+    inputs: Inputs;
+    processId: ProcessId;
+    resultOrigin?: NodeResultOrigin;
+  }>;
   nodeFinish: WithExecution<{
     node: ChartNode;
     outputs: Outputs;
     processId: ProcessId;
+    resultOrigin?: NodeResultOrigin;
     durationMs?: number;
     splitRunDurationMs?: Record<number, number>;
   }>;
@@ -49,6 +60,7 @@ export type SerializedProcessEventMap = {
     node: ChartNode;
     error: Error | string;
     processId: ProcessId;
+    resultOrigin?: NodeResultOrigin;
     durationMs?: number;
     splitRunDurationMs?: Record<number, number>;
   }>;
@@ -58,6 +70,7 @@ export type SerializedProcessEventMap = {
     inputs: Inputs;
     outputs: Outputs;
     reason: string;
+    resultOrigin?: NodeResultOrigin;
   }>;
   userInput: WithExecution<{
     node: ChartNode;
@@ -66,12 +79,20 @@ export type SerializedProcessEventMap = {
     processId: ProcessId;
     renderingType: 'text' | 'markdown';
   }>;
-  partialOutput: WithExecution<{ node: ChartNode; outputs: Outputs; index: number; processId: ProcessId }>;
+  partialOutput: WithExecution<{
+    node: ChartNode;
+    outputs: Outputs;
+    index: number;
+    processId: ProcessId;
+    resultOrigin?: NodeResultOrigin;
+  }>;
   progress: WithExecution<{
     node: ChartNode;
     processId: ProcessId;
     progress: GraphProgress;
   }>;
+  llmCallFinished: WithExecution<ChatV2CallTraceEvent>;
+  toolCallFinished: WithExecution<ToolCallFinishedEvent>;
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
   error: { error: Error | string };
   done: { results: GraphOutputs };
@@ -104,6 +125,8 @@ export type ProcessEventMessageMap = {
   graphOutputsReady: SerializedProcessEventMap['graphOutputsReady'];
   partialOutput: SerializedProcessEventMap['partialOutput'];
   progress: SerializedProcessEventMap['progress'];
+  llmCallFinished: SerializedProcessEventMap['llmCallFinished'];
+  toolCallFinished: SerializedProcessEventMap['toolCallFinished'];
   nodeOutputsCleared: SerializedProcessEventMap['nodeOutputsCleared'];
   error: SerializedProcessEventMap['error'];
   graphError: SerializedProcessEventMap['graphError'];

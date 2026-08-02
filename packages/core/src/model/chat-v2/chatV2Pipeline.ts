@@ -143,6 +143,7 @@ async function runChatV2WithRetry(
 
   for (let attempt = 0; ; attempt++) {
     const callId = createObservedChatV2CallId(options);
+    const callStartedAt = Date.now();
     let callWasObserved = false;
     try {
       const result = transportMode === 'generate' ? await generateChatV2(chatOptions) : await streamChatV2(chatOptions);
@@ -152,6 +153,8 @@ async function runChatV2WithRetry(
         attemptIndex: attempt,
         outcome: statusCode === 200 ? 'success' : 'provider-failure',
         result,
+        startedAt: callStartedAt,
+        durationMs: Math.max(0, Date.now() - callStartedAt),
       });
       callWasObserved = true;
 
@@ -185,6 +188,8 @@ async function runChatV2WithRetry(
           attemptIndex: attempt,
           outcome: signal.aborted ? 'aborted' : 'provider-failure',
           error,
+          startedAt: callStartedAt,
+          durationMs: Math.max(0, Date.now() - callStartedAt),
         });
       }
       const statusCode = getChatV2ProviderErrorStatusCode(error);

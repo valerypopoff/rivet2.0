@@ -852,6 +852,9 @@ describe('startDebuggerServer broadcast', () => {
           },
         },
         processId: 'process-1',
+        resultOrigin: 'executed',
+        durationMs: 47,
+        splitRunDurationMs: { 0: 19, 1: 28 },
       });
     } finally {
       JSON.stringify = originalStringify;
@@ -859,6 +862,9 @@ describe('startDebuggerServer broadcast', () => {
 
     const nodeFinish = getSentDebuggerMessage(socket, 'nodeFinish');
     assert.equal(nodeFinish.data.node.id, 'expression-1');
+    assert.equal(nodeFinish.data.resultOrigin, 'executed');
+    assert.equal(nodeFinish.data.durationMs, 47);
+    assert.deepEqual(nodeFinish.data.splitRunDurationMs, { 0: 19, 1: 28 });
     assert.equal(nodeFinish.data.outputs[WarningsPort].type, 'string[]');
     assert.match(nodeFinish.data.outputs[WarningsPort].value[0], /could not serialize/);
     await waitFor(() => assert.equal(errors.length, 1));

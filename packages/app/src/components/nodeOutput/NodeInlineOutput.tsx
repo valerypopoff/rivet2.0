@@ -1,10 +1,11 @@
 import type { ChartNode, ProcessId } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
+import EyeIcon from 'majesticons/line/eye-line.svg?react';
 import ExpandIcon from 'majesticons/line/maximize-line.svg?react';
 import FlaskIcon from 'majesticons/line/flask-line.svg?react';
 import type { FC, MouseEvent } from 'react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import ExpandDownStopIcon from '../../assets/icons/expand-down-stop.svg?react';
 import SnowflakeIcon from '../../assets/icons/snowflake-icon.svg?react';
 import { useNodeIO } from '../../hooks/useGetNodeIO.js';
@@ -27,6 +28,8 @@ import {
 } from '../../state/selectors/executionSelectors.js';
 import { overlayOpenState } from '../../state/ui.js';
 import { Tooltip } from '../Tooltip.js';
+import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
+import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { CodeNodeErrorOutput } from '../nodes/CodeNode.js';
 import {
   getNodeOutputContentKey,
@@ -90,6 +93,7 @@ export const NodeInlineOutput: FC<{
       <div className="node-output">
         <NodeOutputSingleProcess
           node={node}
+          processData={firstOutput}
           data={firstOutput.data}
           isFrozen={isFrozen}
           isOutputExpanded={isOutputExpanded}
@@ -121,6 +125,7 @@ export const NodeInlineOutput: FC<{
 
 const NodeOutputSingleProcess: FC<{
   node: ChartNode;
+  processData: ProcessDataForNode;
   data: NodeRunDataWithRefs;
   isFrozen: boolean;
   isOutputExpanded: boolean;
@@ -132,6 +137,7 @@ const NodeOutputSingleProcess: FC<{
   onOpenFullscreenModal?: () => void;
 }> = ({
   node,
+  processData,
   data,
   isFrozen,
   isOutputExpanded,
@@ -143,6 +149,7 @@ const NodeOutputSingleProcess: FC<{
   onOpenFullscreenModal,
 }) => {
   const dataRefs = useDataRefs();
+  const [isInspectorOpen, setInspectorOpen] = useState(false);
   const { Output, OutputSimple, getCopyValueData } = useUnknownNodeComponentDescriptorFor(node);
 
   const setOverlayOpen = useSetAtom(overlayOpenState);
@@ -180,9 +187,15 @@ const NodeOutputSingleProcess: FC<{
     copyOutputValue(copySource, dataRefs, getCopyValueData, io.outputDefinitions),
   );
   const hasPromptDesignerAction = node.type === 'chat';
-  const outputInnerClassName = hasPromptDesignerAction
-    ? 'node-output-inner has-output-actions has-prompt-designer-action'
-    : 'node-output-inner has-output-actions';
+  const hasResponseInspectorAction = node.type === 'llmChatV2';
+  const responseTrace = useMemo(() => buildLlmInvocationTrace(node, processData), [node, processData]);
+  const responseInspector = isInspectorOpen ? (
+    <AgentResponseInspector trace={responseTrace} onClose={() => setInspectorOpen(false)} renderInPortal />
+  ) : null;
+  const outputInnerClassName =
+    hasPromptDesignerAction || hasResponseInspectorAction
+      ? 'node-output-inner has-output-actions has-extra-output-action'
+      : 'node-output-inner has-output-actions';
   const erroredOutputInnerClassName = `${outputInnerClassName} errored`;
 
   if (content.kind === 'code-error') {
@@ -192,11 +205,14 @@ const NodeOutputSingleProcess: FC<{
       <div className={erroredOutputInnerClassName}>
         <NodeOutputOverlayButtons
           hasPromptDesignerAction={hasPromptDesignerAction}
+          hasResponseInspectorAction={hasResponseInspectorAction}
           onCopyToClipboard={handleCopyToClipboard}
           onOpenFullscreenModal={onOpenFullscreenModal}
           onOpenPromptDesigner={handleOpenPromptDesigner}
+          onOpenResponseInspector={() => setInspectorOpen(true)}
           onToggleExpandedOutput={onToggleExpandedOutput}
         />
+        {responseInspector}
         <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
           {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody />}
           {showDurationMeta && <NodeRunDurationMeta data={data} hasBody />}
@@ -213,11 +229,14 @@ const NodeOutputSingleProcess: FC<{
       <div className={erroredOutputInnerClassName}>
         <NodeOutputOverlayButtons
           hasPromptDesignerAction={hasPromptDesignerAction}
+          hasResponseInspectorAction={hasResponseInspectorAction}
           onCopyToClipboard={handleCopyToClipboard}
           onOpenFullscreenModal={onOpenFullscreenModal}
           onOpenPromptDesigner={handleOpenPromptDesigner}
+          onOpenResponseInspector={() => setInspectorOpen(true)}
           onToggleExpandedOutput={onToggleExpandedOutput}
         />
+        {responseInspector}
         <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
           {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody />}
           {showDurationMeta && <NodeRunDurationMeta data={data} hasBody />}
@@ -252,11 +271,14 @@ const NodeOutputSingleProcess: FC<{
     <div className={outputInnerClassName}>
       <NodeOutputOverlayButtons
         hasPromptDesignerAction={hasPromptDesignerAction}
+        hasResponseInspectorAction={hasResponseInspectorAction}
         onCopyToClipboard={handleCopyToClipboard}
         onOpenFullscreenModal={onOpenFullscreenModal}
         onOpenPromptDesigner={handleOpenPromptDesigner}
+        onOpenResponseInspector={() => setInspectorOpen(true)}
         onToggleExpandedOutput={onToggleExpandedOutput}
       />
+      {responseInspector}
       {isFrozen && <FrozenOutputNotice />}
       <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
         {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody={hasBody} />}
@@ -281,15 +303,19 @@ const NodeOutputSingleProcess: FC<{
 
 const NodeOutputOverlayButtons: FC<{
   hasPromptDesignerAction: boolean;
+  hasResponseInspectorAction: boolean;
   onCopyToClipboard: () => void;
   onOpenFullscreenModal?: () => void;
   onOpenPromptDesigner: () => void;
+  onOpenResponseInspector: () => void;
   onToggleExpandedOutput: () => void;
 }> = ({
   hasPromptDesignerAction,
+  hasResponseInspectorAction,
   onCopyToClipboard,
   onOpenFullscreenModal,
   onOpenPromptDesigner,
+  onOpenResponseInspector,
   onToggleExpandedOutput,
 }) => {
   const handleOutputActionMouseDown = useStableCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -320,6 +346,14 @@ const NodeOutputOverlayButtons: FC<{
           <CopyIcon />
         </div>
       </Tooltip>
+
+      {hasResponseInspectorAction && (
+        <Tooltip content="Inspect response">
+          <div className="response-inspector-button" onClick={onOpenResponseInspector}>
+            <EyeIcon />
+          </div>
+        </Tooltip>
+      )}
 
       {hasPromptDesignerAction && (
         <Tooltip content="Open chat in Prompt Designer">
@@ -365,7 +399,7 @@ const NodeOutputMultiProcess: FC<{
   const [selectedPage, setSelectedPage] = useAtom(selectedProcessPageState(node.id));
   const selectedPageIndex = getSelectedProcessPageIndex(data, selectedPage);
   const displaySelectedPage: number | 'latest' =
-    selectedPage === 'latest' ? 'latest' : (selectedPageIndex ?? selectedPage);
+    selectedPage === 'latest' ? 'latest' : selectedPageIndex ?? selectedPage;
 
   const prevPage = useStableCallback(() => {
     setSelectedPage((page) => {
@@ -401,6 +435,7 @@ const NodeOutputMultiProcess: FC<{
       {selectedData && (
         <NodeOutputSingleProcess
           data={selectedData.data}
+          processData={selectedData}
           isFrozen={isFrozen}
           isOutputExpanded={isOutputExpanded}
           isHovered={isHovered}

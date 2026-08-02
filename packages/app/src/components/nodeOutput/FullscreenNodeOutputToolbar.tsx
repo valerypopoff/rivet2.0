@@ -1,5 +1,6 @@
 import { css } from '@emotion/react';
 import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
+import EyeIcon from 'majesticons/line/eye-line.svg?react';
 import FlaskIcon from 'majesticons/line/flask-line.svg?react';
 import { type FC, type KeyboardEventHandler, type Ref } from 'react';
 import { LabeledToggle } from '../LabeledToggle.js';
@@ -156,6 +157,7 @@ export type FullscreenNodeOutputToolbarProps = {
   onCopyValue: () => void;
   onCopyJson: () => void;
   onOpenPromptDesigner?: () => void;
+  onInspectResponse?: () => void;
 };
 
 export const FullscreenNodeOutputToolbar: FC<FullscreenNodeOutputToolbarProps> = ({
@@ -175,6 +177,7 @@ export const FullscreenNodeOutputToolbar: FC<FullscreenNodeOutputToolbarProps> =
   onCopyValue,
   onCopyJson,
   onOpenPromptDesigner,
+  onInspectResponse,
 }) => {
   return (
     <div css={fullscreenOutputToolbarCss} className={isOverContent ? 'is-over-content' : undefined}>
@@ -223,6 +226,11 @@ export const FullscreenNodeOutputToolbar: FC<FullscreenNodeOutputToolbarProps> =
       <div className="copy-json-button" onClick={onCopyJson} title="Copy as JSON">
         JSON
       </div>
+      {onInspectResponse && (
+        <div className="toolbar-icon response-inspector-button" onClick={onInspectResponse} title="Inspect response">
+          <EyeIcon />
+        </div>
+      )}
       {onOpenPromptDesigner && (
         <div className="toolbar-icon prompt-designer-button" onClick={onOpenPromptDesigner}>
           <FlaskIcon />

@@ -1,0 +1,136 @@
+version: 4
+data:
+  graphs:
+    promo-web-app-chat:
+      metadata:
+        description: The LLM workflow behind a project-defined chat web app.
+        id: promo-web-app-chat
+        name: Workflow behind the chat web app
+      nodes:
+        '[web-api-key]:text "API Key — paste yours here"':
+          data:
+            text: ""
+          outgoingConnections:
+            - output->"Concise assistant" web-llm/apiKey
+          visualData: 60/100/330/1//
+        '[web-history]:graphInput "Conversation history"':
+          data:
+            dataType: chat-message[]
+            id: conversationHistory
+            useDefaultValueInput: false
+          outgoingConnections:
+            - data->"Assemble chat prompt" web-prompt/message1
+          visualData: 60/430/330/2//
+        '[web-user-input]:graphInput "User message"':
+          data:
+            dataType: string
+            id: userInput
+            useDefaultValueInput: false
+          outgoingConnections:
+            - data->"Assemble chat prompt" web-prompt/message2
+          visualData: 60/730/330/3//
+        '[web-system]:text "Assistant instructions"':
+          data:
+            text: |-
+              You are a concise product-thinking assistant embedded in a Rivet web app.
+              Give practical answers in at most four short bullets and ask one useful follow-up question.
+          outgoingConnections:
+            - output->"Concise assistant" web-llm/systemPrompt
+          visualData: 520/100/370/4//
+        '[web-prompt]:assemblePrompt "Assemble chat prompt"':
+          outgoingConnections:
+            - prompt->"Concise assistant" web-llm/prompt
+          visualData: 520/520/350/5//
+        '[web-llm]:llmChatV2 "Concise assistant"':
+          data:
+            anthropicCacheControlTtl: ""
+            anthropicEffort: ""
+            anthropicThinkingMode: ""
+            apiKeySource: input
+            autoContinueToolCalls: false
+            baseURL: ""
+            cache: false
+            configurationMode: inline
+            customProviderApiKeyEnvVarName: CUSTOM_PROVIDER_API_KEY
+            customProviderApiKeyProgrammaticName: ""
+            customProviderBaseURL: ""
+            enableGoogleSearchGrounding: false
+            enableGoogleUrlContext: false
+            enableOpenAICodeInterpreter: false
+            enableOpenAIWebSearch: false
+            extraProviderOptions: ""
+            googleIncludeThoughts: false
+            googleThinkingLevel: ""
+            headers: []
+            maxTokens: 500
+            maxToolRounds: 1
+            model: gpt-4o-mini
+            openAIPreviousResponseId: ""
+            openAIReasoningEffort: ""
+            openAIReasoningSummary: ""
+            openAIWebSearchContextSize: medium
+            outputReasoning: false
+            outputRequestBody: false
+            outputRequestError: false
+            outputRequestStatus: false
+            outputUsage: false
+            parallelToolCalls: false
+            provider: openai
+            responseFormat: text
+            responseSchemaDescription: ""
+            responseSchemaName: ""
+            retryOnNon200: false
+            retryOnNon200CooldownMs: 0
+            retryOnNon200RepeatTimes: 0
+            stopSequences: []
+            temperature: 0.4
+            toolChoice: ""
+            toolChoiceFunction: ""
+            useAnthropicThinkingBudgetInput: false
+            useAsGraphPartialOutput: false
+            useBaseURLInput: false
+            useCustomProviderBaseURLInput: false
+            useExtraProviderOptionsInput: false
+            useFrequencyPenaltyInput: false
+            useGoogleThinkingBudgetInput: false
+            useHeadersInput: false
+            useMaxTokensInput: false
+            useModelInput: false
+            useOpenAIPreviousResponseIdInput: false
+            usePresencePenaltyInput: false
+            useResponseSchemaDescriptionInput: false
+            useResponseSchemaNameInput: false
+            useSeedInput: false
+            useStopSequencesInput: false
+            useTemperatureInput: false
+            useToolCalling: false
+            useTopKInput: false
+            useTopPInput: false
+          outgoingConnections:
+            - response->"Assistant response" web-output/value
+          visualData: 1030/380/350/6//
+        '[web-output]:graphOutput "Assistant response"':
+          data:
+            dataType: string
+            id: output
+          visualData: 1510/430/330/7//
+  metadata:
+    description: Paste an OpenAI API key in the workflow, then open the bundled chat web app and talk to it.
+    id: rivet-promo-web-app
+    mainGraphId: promo-web-app-chat
+    title: Demo — Web App
+  plugins: []
+  uiGraphs:
+    promo-web-app-ui:
+      components:
+        - action:
+            graphId: promo-web-app-chat
+            historyInputId: conversationHistory
+            responseOutputId: output
+            type: runGraph
+            userInputId: userInput
+          id: promo-web-app-chat-component
+          placeholder: Ask about a product idea…
+          type: chat
+      id: promo-web-app-ui
+      name: Chat web app — open this

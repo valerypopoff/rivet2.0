@@ -1,11 +1,15 @@
-import React, { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import BrowserOnly from '@docusaurus/BrowserOnly';
+import React, { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Head from '@docusaurus/Head';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import useBaseUrl from '@docusaurus/useBaseUrl';
-import { homepageContent } from '../content/homepageContent';
+import {
+  homepageContent,
+  type HomepageContextualDemo,
+  type HomepageDemo,
+  type HomepageDemoId,
+} from '../content/homepageContent';
 import styles from './index.module.css';
 
 function Arrow() {
@@ -32,200 +36,14 @@ function SectionHeading({
   );
 }
 
-function WorkflowNode({
-  className,
-  id,
-  kind,
-  title,
-  detail,
-  output,
-  status,
-}: {
-  className: string;
-  id: string;
-  kind: string;
-  title: string;
-  detail: string;
-  output: string;
-  status?: string;
-}) {
-  return (
-    <div className={`${styles.workflowNode} ${className}`}>
-      <div className={styles.nodeHeader}>
-        <span className={styles.nodeDot} />
-        <span>{kind}</span>
-        {status && <span className={styles.nodeStatus}>{status}</span>}
-      </div>
-      <strong>{title}</strong>
-      <span className={styles.nodeDetail}>{detail}</span>
-      <div className={styles.nodeOutput}>
-        <span>Output</span>
-        <b>{output}</b>
-      </div>
-      <i className={styles.inputPort} data-workflow-port={`${id}-input`} />
-      <i className={styles.outputPort} data-workflow-port={`${id}-output`} />
-    </div>
-  );
-}
-
-type WorkflowPoint = { x: number; y: number };
-
-type WorkflowConnectionLayout = {
-  width: number;
-  height: number;
-  paths: string[];
-};
-
-function createConnectionPath(from: WorkflowPoint, to: WorkflowPoint) {
-  const handle = Math.max(28, Math.abs(to.x - from.x) * 0.42);
-  return `M ${from.x} ${from.y} C ${from.x + handle} ${from.y} ${to.x - handle} ${to.y} ${to.x} ${to.y}`;
-}
-
-function WorkflowPreview({ content }: { content: (typeof homepageContent)['workflowPreview'] }) {
-  const { nodes } = content;
-  const logoUrl = useBaseUrl('/img/logo.svg');
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const [connections, setConnections] = useState<WorkflowConnectionLayout | null>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    const updateConnections = () => {
-      const canvasBounds = canvas.getBoundingClientRect();
-      const getPortCenter = (name: string): WorkflowPoint | undefined => {
-        const port = canvas.querySelector<HTMLElement>(`[data-workflow-port="${name}"]`);
-        if (!port) {
-          return undefined;
-        }
-
-        const bounds = port.getBoundingClientRect();
-        return {
-          x: bounds.left - canvasBounds.left + bounds.width / 2,
-          y: bounds.top - canvasBounds.top + bounds.height / 2,
-        };
-      };
-
-      const pairs: Array<[string, string]> = [
-        ['prompt-output', 'agent-input'],
-        ['knowledge-output', 'agent-input'],
-        ['agent-output', 'output-input'],
-      ];
-      const paths = pairs.flatMap(([fromName, toName]) => {
-        const from = getPortCenter(fromName);
-        const to = getPortCenter(toName);
-        return from && to ? [createConnectionPath(from, to)] : [];
-      });
-      const next = { width: canvasBounds.width, height: canvasBounds.height, paths };
-
-      setConnections((current) =>
-        current &&
-        current.width === next.width &&
-        current.height === next.height &&
-        current.paths.join('|') === next.paths.join('|')
-          ? current
-          : next,
-      );
-    };
-
-    updateConnections();
-
-    const observer = new ResizeObserver(updateConnections);
-    observer.observe(canvas);
-    return () => observer.disconnect();
-  }, []);
-
-  return (
-    <div className={styles.workflowPreview} role="img" aria-label="Example Rivet workflow">
-      <div className={styles.previewTopbar}>
-        <span className={styles.previewLights}>
-          <i />
-          <i />
-          <i />
-        </span>
-        <span className={styles.previewProject}>
-          <img src={logoUrl} alt="" />
-          {content.projectName}
-        </span>
-        <span className={styles.runState}>
-          <i /> {content.runState}
-        </span>
-      </div>
-      <div className={styles.canvas} ref={canvasRef}>
-        {connections && (
-          <svg
-            className={styles.workflowConnections}
-            viewBox={`0 0 ${connections.width} ${connections.height}`}
-            aria-hidden="true"
-          >
-            {connections.paths.map((path, index) => (
-              <path d={path} key={index} />
-            ))}
-          </svg>
-        )}
-        <WorkflowNode
-          className={styles.promptNode}
-          id="prompt"
-          kind={nodes.prompt.kind}
-          title={nodes.prompt.title}
-          detail={nodes.prompt.detail}
-          output={nodes.prompt.output}
-        />
-        <WorkflowNode
-          className={styles.knowledgeNode}
-          id="knowledge"
-          kind={nodes.knowledge.kind}
-          title={nodes.knowledge.title}
-          detail={nodes.knowledge.detail}
-          output={nodes.knowledge.output}
-          status={nodes.knowledge.status}
-        />
-        <WorkflowNode
-          className={styles.llmNode}
-          id="agent"
-          kind={nodes.agent.kind}
-          title={nodes.agent.title}
-          detail={nodes.agent.detail}
-          output={nodes.agent.output}
-          status={nodes.agent.status}
-        />
-        <WorkflowNode
-          className={styles.outputNode}
-          id="output"
-          kind={nodes.output.kind}
-          title={nodes.output.title}
-          detail={nodes.output.detail}
-          output={nodes.output.output}
-        />
-        <div className={styles.inspectorCard}>
-          <span>{content.inspector.label}</span>
-          <strong>{content.inspector.title}</strong>
-          {content.inspector.rows.map(([label, value]) => (
-            <div key={label}>
-              <i />
-              <span>{label}</span>
-              <b>{value}</b>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className={styles.previewCaption}>
-        {content.caption.map((label) => (
-          <span key={label}>{label}</span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 type RivetDemoMessage =
   | { type: 'rivet-demo:error'; message?: unknown }
   | { type: 'rivet-demo:ready' }
   | { type: 'rivet-demo:release' };
 
 type RivetDemoRequest = { type: 'rivet-demo:status-request' };
+
+const RIVET_DEMO_STARTUP_TIMEOUT_MS = 30_000;
 
 function isRivetDemoMessage(value: unknown): value is RivetDemoMessage {
   if (typeof value !== 'object' || value == null || !('type' in value)) {
@@ -236,24 +54,49 @@ function isRivetDemoMessage(value: unknown): value is RivetDemoMessage {
   return type === 'rivet-demo:error' || type === 'rivet-demo:ready' || type === 'rivet-demo:release';
 }
 
-function LiveRivetDemo({ url }: { url: string }) {
+function RivetDemoWindow({
+  demo,
+  expanded,
+  onCollapse,
+  onExpand,
+  url,
+}: {
+  demo: HomepageDemo;
+  expanded: boolean;
+  onCollapse: () => void;
+  onExpand: () => void;
+  url: string;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [active, setActive] = useState(false);
   const [error, setError] = useState<string>();
-  const [expanded, setExpanded] = useState(false);
   const [instance, setInstance] = useState(0);
   const [ready, setReady] = useState(false);
+  const loadingLogoUrl = useBaseUrl('/img/logo.svg');
+  const targetOrigin = typeof window === 'undefined' ? undefined : new URL(url, window.location.href).origin;
 
   const requestDemoStatus = useCallback(() => {
     iframeRef.current?.contentWindow?.postMessage(
       { type: 'rivet-demo:status-request' } satisfies RivetDemoRequest,
-      '*',
+      targetOrigin ?? '*',
     );
-  }, []);
+  }, [targetOrigin]);
+
+  const collapse = useCallback(() => {
+    setActive(false);
+    onCollapse();
+    requestAnimationFrame(() => expandButtonRef.current?.focus());
+  }, [onCollapse]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.source !== iframeRef.current?.contentWindow || !isRivetDemoMessage(event.data)) {
+      if (
+        event.source !== iframeRef.current?.contentWindow ||
+        (targetOrigin && event.origin !== targetOrigin) ||
+        !isRivetDemoMessage(event.data)
+      ) {
         return;
       }
 
@@ -261,11 +104,15 @@ function LiveRivetDemo({ url }: { url: string }) {
         setReady(true);
         setError(undefined);
       } else if (event.data.type === 'rivet-demo:release') {
-        setActive(false);
-        setExpanded(false);
+        if (expanded) {
+          collapse();
+        } else {
+          setActive(false);
+        }
         window.focus();
       } else {
         setActive(false);
+        setReady(false);
         setError(typeof event.data.message === 'string' ? event.data.message : 'The embedded demo could not start.');
       }
     };
@@ -273,7 +120,20 @@ function LiveRivetDemo({ url }: { url: string }) {
     window.addEventListener('message', handleMessage);
     requestDemoStatus();
     return () => window.removeEventListener('message', handleMessage);
-  }, [requestDemoStatus]);
+  }, [collapse, expanded, requestDemoStatus, targetOrigin]);
+
+  useEffect(() => {
+    if (ready || error) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setActive(false);
+      setError('Rivet did not finish opening this demo. Check that the demo server is running, then retry.');
+    }, RIVET_DEMO_STARTUP_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [error, instance, ready, url]);
 
   useEffect(() => {
     if (!expanded) {
@@ -283,78 +143,94 @@ function LiveRivetDemo({ url }: { url: string }) {
     const previousOverflow = document.body.style.overflow;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setActive(false);
-        setExpanded(false);
+        event.preventDefault();
+        collapse();
+        return;
+      }
+
+      if (event.key === 'Tab' && dialogRef.current) {
+        const focusable = Array.from(
+          dialogRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), select:not([disabled]), iframe, [href], [tabindex]:not([tabindex="-1"])',
+          ),
+        ).filter((element) => element.getClientRects().length > 0);
+        if (focusable.length === 0) {
+          event.preventDefault();
+          dialogRef.current.focus();
+          return;
+        }
+
+        const first = focusable[0]!;
+        const last = focusable[focusable.length - 1]!;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
 
     document.body.style.overflow = 'hidden';
+    requestAnimationFrame(() => dialogRef.current?.focus());
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [expanded]);
+  }, [collapse, expanded]);
 
   const reset = () => {
     setActive(false);
-    setExpanded(false);
     setError(undefined);
     setReady(false);
     setInstance((current) => current + 1);
   };
 
   const expand = () => {
-    setExpanded(true);
     setActive(true);
+    onExpand();
     requestAnimationFrame(() => iframeRef.current?.focus());
   };
 
   return (
     <>
-      {expanded && (
-        <button
-          aria-label="Close enlarged Rivet demo"
-          className={styles.liveDemoBackdrop}
-          type="button"
-          onClick={() => {
-            setActive(false);
-            setExpanded(false);
-          }}
-        />
-      )}
+      {expanded ? <div aria-hidden="true" className={styles.liveDemoBackdrop} onMouseDown={collapse} /> : null}
       <div
+        ref={dialogRef}
+        aria-label={`${demo.title} — live Rivet demo`}
+        aria-modal={expanded || undefined}
         className={`${styles.liveDemo} ${active ? styles.liveDemoActive : ''} ${expanded ? styles.liveDemoExpanded : ''}`}
+        role={expanded ? 'dialog' : 'region'}
+        tabIndex={-1}
       >
         <div className={styles.liveDemoToolbar}>
           <div className={styles.liveDemoIntroduction}>
-            <span className={styles.liveDemoState}>
+            <span
+              aria-live="polite"
+              className={`${styles.liveDemoState} ${!ready && !error ? styles.liveDemoStateLoading : ''} ${error ? styles.liveDemoStateError : ''}`}
+            >
               <i />
-              Live Rivet app
+              {error ? 'Live demo unavailable' : ready ? 'Live Rivet editor' : 'Opening Rivet'}
             </span>
-            <span>A real demo project is open below. Try editing it, then click Run project.</span>
+            <span>{demo.instruction}</span>
           </div>
           <div className={styles.liveDemoActions}>
             <button type="button" onClick={reset}>
               Reset
             </button>
             <button
+              ref={expandButtonRef}
               type="button"
               disabled={!ready || Boolean(error)}
-              onClick={
-                expanded
-                  ? () => {
-                      setActive(false);
-                      setExpanded(false);
-                    }
-                  : expand
-              }
+              onClick={expanded ? collapse : expand}
             >
               {expanded ? (
-                'Close full screen'
+                'Close large popup'
               ) : (
                 <>
-                  Open full screen <Arrow />
+                  Open large popup <Arrow />
                 </>
               )}
             </button>
@@ -366,32 +242,42 @@ function LiveRivetDemo({ url }: { url: string }) {
             ref={iframeRef}
             className={styles.liveDemoIframe}
             src={url}
-            title="Interactive Rivet 2 workflow editor"
+            title={`${demo.title} — interactive Rivet editor`}
+            loading="eager"
             sandbox="allow-same-origin allow-scripts"
             onLoad={requestDemoStatus}
           />
-          {!active ? (
+          {!ready && !error ? (
+            <div aria-label="Opening Rivet" className={styles.liveDemoLoading} role="status">
+              <img alt="" src={loadingLogoUrl} />
+            </div>
+          ) : error ? (
+            <div className={styles.liveDemoError} role="alert">
+              <img alt="" src={loadingLogoUrl} />
+              <strong>Rivet could not open this demo</strong>
+              <span>{error}</span>
+              <button type="button" onClick={reset}>
+                Retry
+              </button>
+            </div>
+          ) : !active ? (
             <button
               className={styles.liveDemoActivation}
               type="button"
-              disabled={!ready || Boolean(error)}
               onClick={() => {
                 setActive(true);
                 iframeRef.current?.focus();
               }}
             >
-              <strong>
-                {error ? 'Live demo unavailable' : ready ? 'Click to edit and run this workflow' : 'Opening Rivet'}
-              </strong>
+              <strong>Click to explore this project</strong>
               <span>
-                {error ??
-                  (ready
-                    ? 'The frame activates on click so it does not capture page scrolling. Press Escape to release it.'
-                    : 'Loading the real Rivet editor in your browser…')}
+                The frame activates on click so it does not capture page scrolling. Press Escape to release it.
               </span>
             </button>
           ) : (
-            <span className={styles.liveDemoEscapeHint}>Press Esc to release the page</span>
+            <button className={styles.liveDemoEscapeHint} type="button" onClick={() => setActive(false)}>
+              Release page scroll
+            </button>
           )}
         </div>
       </div>
@@ -399,34 +285,115 @@ function LiveRivetDemo({ url }: { url: string }) {
   );
 }
 
-function ResponsiveWorkflowDemo({
-  content,
-  url,
+type DemoShowcaseId = 'hero' | 'foundations' | 'use-cases';
+type DemoPickerVariant = 'hero' | 'contextual';
+
+function RivetDemoShowcase({
+  demoBaseUrl,
+  demos,
+  expanded,
+  onCollapse,
+  onExpand,
+  pickerVariant,
 }: {
-  content: (typeof homepageContent)['workflowPreview'];
-  url: string;
+  demoBaseUrl: string;
+  demos: readonly (HomepageDemo | HomepageContextualDemo)[];
+  expanded: boolean;
+  onCollapse: () => void;
+  onExpand: () => void;
+  pickerVariant: DemoPickerVariant;
 }) {
-  const [wideEnough, setWideEnough] = useState(() => window.matchMedia('(min-width: 621px)').matches);
+  const idPrefix = useId();
+  const [selectedDemoId, setSelectedDemoId] = useState<HomepageDemoId>(demos[0]!.demoId);
+  const selectedDemo = demos.find((demo) => demo.demoId === selectedDemoId) ?? demos[0]!;
+  const panelId = `${idPrefix}-panel`;
+  const selectedTabId = `${idPrefix}-${selectedDemo.demoId}-tab`;
 
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(min-width: 621px)');
-    const update = () => setWideEnough(mediaQuery.matches);
-    mediaQuery.addEventListener('change', update);
-    return () => mediaQuery.removeEventListener('change', update);
-  }, []);
+  const selectDemo = (demoId: HomepageDemoId) => {
+    if (demoId !== selectedDemoId) {
+      setSelectedDemoId(demoId);
+    }
+  };
 
-  if (wideEnough) {
-    return <LiveRivetDemo url={url} />;
-  }
+  const moveSelection = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | undefined;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (index + 1) % demos.length;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (index - 1 + demos.length) % demos.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = demos.length - 1;
+    }
+
+    if (nextIndex == null) {
+      return;
+    }
+
+    event.preventDefault();
+    const nextDemo = demos[nextIndex]!;
+    selectDemo(nextDemo.demoId);
+    document.getElementById(`${idPrefix}-${nextDemo.demoId}-tab`)?.focus();
+  };
 
   return (
-    <div className={styles.mobileDemo}>
-      <WorkflowPreview content={content} />
-      <a className={styles.mobileDemoAction} href={url}>
-        Open the live Rivet demo <Arrow />
-      </a>
+    <div className={styles.demoShowcase}>
+      <div
+        aria-label="Choose the Rivet project shown below"
+        className={pickerVariant === 'hero' ? styles.heroFeatureList : styles.contextualDemoList}
+        role="tablist"
+      >
+        {demos.map((demo, index) => {
+          const selected = demo.demoId === selectedDemo.demoId;
+          const contextualDemo = 'eyebrow' in demo ? demo : undefined;
+          return (
+            <button
+              aria-controls={panelId}
+              aria-selected={selected}
+              className={`${pickerVariant === 'hero' ? styles.heroFeature : styles.contextualDemoOption} ${selected ? styles.demoOptionSelected : ''}`}
+              id={`${idPrefix}-${demo.demoId}-tab`}
+              key={demo.demoId}
+              role="tab"
+              tabIndex={selected ? 0 : -1}
+              type="button"
+              onClick={() => selectDemo(demo.demoId)}
+              onKeyDown={(event) => moveSelection(event, index)}
+            >
+              {contextualDemo ? <span className={styles.contextualDemoEyebrow}>{contextualDemo.eyebrow}</span> : null}
+              <strong>{demo.title}</strong>
+              <span>{demo.description}</span>
+              {selected ? <i className={styles.selectedDemoIndicator}>Selected demo</i> : null}
+            </button>
+          );
+        })}
+      </div>
+      {demos.length > 1 ? (
+        <p className={styles.demoSwitchNote}>Switching projects resets edits and the API key entered in this window.</p>
+      ) : null}
+      <div aria-labelledby={selectedTabId} id={panelId} role="tabpanel">
+        <RivetDemoWindow
+          key={selectedDemo.demoId}
+          demo={selectedDemo}
+          expanded={expanded}
+          onCollapse={onCollapse}
+          onExpand={onExpand}
+          url={getDemoUrl(demoBaseUrl, selectedDemo.demoId)}
+        />
+      </div>
     </div>
   );
+}
+
+function getDemoUrl(baseUrl: string, demoId: HomepageDemoId): string {
+  const hashIndex = baseUrl.indexOf('#');
+  const hash = hashIndex === -1 ? '' : baseUrl.slice(hashIndex);
+  const urlWithoutHash = hashIndex === -1 ? baseUrl : baseUrl.slice(0, hashIndex);
+  const queryIndex = urlWithoutHash.indexOf('?');
+  const path = queryIndex === -1 ? urlWithoutHash : urlWithoutHash.slice(0, queryIndex);
+  const searchParams = new URLSearchParams(queryIndex === -1 ? '' : urlWithoutHash.slice(queryIndex + 1));
+  searchParams.set('project', demoId);
+  return `${path}?${searchParams.toString()}${hash}`;
 }
 
 type UseCaseIconName = (typeof homepageContent)['useCases']['cards'][number]['icon'];
@@ -503,20 +470,21 @@ function ActionLink({
 
 export default function Home() {
   const content = homepageContent;
+  const [expandedShowcaseId, setExpandedShowcaseId] = useState<DemoShowcaseId | null>(null);
   const { siteConfig } = useDocusaurusContext();
   const builtDemoUrl = useBaseUrl('/rivet-demo/');
   const configuredDemoUrl = siteConfig.customFields?.promoDemoUrl;
-  const demoUrl = typeof configuredDemoUrl === 'string' && configuredDemoUrl ? configuredDemoUrl : builtDemoUrl;
+  const demoBaseUrl = typeof configuredDemoUrl === 'string' && configuredDemoUrl ? configuredDemoUrl : builtDemoUrl;
 
   return (
     <Layout description={content.meta.description}>
       <Head>
-        <title>Rivet 2 — {content.meta.title}</title>
-        <meta property="og:title" content={`Rivet 2 — ${content.meta.title}`} />
+        <title>{content.meta.title}</title>
+        <meta property="og:title" content={content.meta.title} />
         <meta property="og:description" content={content.meta.description} />
       </Head>
       <main className={styles.landing}>
-        <section className={styles.hero}>
+        <section className={`${styles.hero} ${expandedShowcaseId === 'hero' ? styles.sectionWithExpandedDemo : ''}`}>
           <div className={styles.heroGlow} aria-hidden="true" />
           <div className={styles.heroGrid}>
             <div className={styles.heroCopy}>
@@ -539,22 +507,25 @@ export default function Home() {
               </div>
             </div>
             <div className={styles.heroShowcase}>
-              <div className={styles.heroFeatureList}>
-                {content.hero.features.map((feature) => (
-                  <article className={styles.heroFeature} key={feature.title}>
-                    <h2>{feature.title}</h2>
-                    <p>{feature.description}</p>
-                  </article>
-                ))}
+              <div className={styles.heroDemoPickerIntroduction}>
+                <strong>Choose a live demo</strong>
+                <span>The selected real Rivet project is loaded in the editor below.</span>
               </div>
-              <BrowserOnly fallback={<WorkflowPreview content={content.workflowPreview} />}>
-                {() => <ResponsiveWorkflowDemo content={content.workflowPreview} url={demoUrl} />}
-              </BrowserOnly>
+              <RivetDemoShowcase
+                demoBaseUrl={demoBaseUrl}
+                demos={content.hero.features}
+                expanded={expandedShowcaseId === 'hero'}
+                onCollapse={() => setExpandedShowcaseId(null)}
+                onExpand={() => setExpandedShowcaseId('hero')}
+                pickerVariant="hero"
+              />
             </div>
           </div>
         </section>
 
-        <section className={styles.foundationSection}>
+        <section
+          className={`${styles.foundationSection} ${expandedShowcaseId === 'foundations' ? styles.sectionWithExpandedDemo : ''}`}
+        >
           <div className={styles.sectionShell}>
             <SectionHeading
               eyebrow={content.philosophy.eyebrow}
@@ -570,10 +541,20 @@ export default function Home() {
                 </article>
               ))}
             </div>
+            <RivetDemoShowcase
+              demoBaseUrl={demoBaseUrl}
+              demos={[content.foundationsDemo]}
+              expanded={expandedShowcaseId === 'foundations'}
+              onCollapse={() => setExpandedShowcaseId(null)}
+              onExpand={() => setExpandedShowcaseId('foundations')}
+              pickerVariant="contextual"
+            />
           </div>
         </section>
 
-        <section className={styles.useCasesSection}>
+        <section
+          className={`${styles.useCasesSection} ${expandedShowcaseId === 'use-cases' ? styles.sectionWithExpandedDemo : ''}`}
+        >
           <div className={styles.sectionShell}>
             <SectionHeading
               eyebrow={content.useCases.eyebrow}
@@ -591,6 +572,14 @@ export default function Home() {
                 </article>
               ))}
             </div>
+            <RivetDemoShowcase
+              demoBaseUrl={demoBaseUrl}
+              demos={[content.useCasesDemo]}
+              expanded={expandedShowcaseId === 'use-cases'}
+              onCollapse={() => setExpandedShowcaseId(null)}
+              onExpand={() => setExpandedShowcaseId('use-cases')}
+              pickerVariant="contextual"
+            />
           </div>
         </section>
 

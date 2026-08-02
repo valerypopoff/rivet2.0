@@ -33,19 +33,63 @@ import {
   mergeNodeRunDataForProcess,
   prepareNodeRunDataForStorage,
 } from './useExecutionDataFlow.js';
+import { applyProcessEventToRunActivityJournal } from '../features/runActivity/runActivityProcessEvents.js';
+import { createRunActivityJournal } from '../features/runActivity/runActivityJournal.js';
+import { handleError } from '../utils/errorHandling.js';
 
 export type ProjectExecutionSnapshotEventResult = {
   changed: boolean;
   snapshot: ProjectExecutionSnapshot;
 };
 
-export function applyProcessEventToProjectExecutionSnapshot<K extends keyof ProcessEventMessageMap>(options: {
+type ProjectExecutionSnapshotEventOptions<K extends keyof ProcessEventMessageMap> = {
   data: ProcessEventMessageMap[K];
   message: K;
   projectId: ProjectId;
   refStore: DataRefStore;
   snapshot: ProjectExecutionSnapshot | undefined;
-}): ProjectExecutionSnapshotEventResult {
+};
+
+export function applyProcessEventToProjectExecutionSnapshot<K extends keyof ProcessEventMessageMap>(
+  options: ProjectExecutionSnapshotEventOptions<K>,
+): ProjectExecutionSnapshotEventResult {
+  const occurredAt = Date.now();
+  const previousSnapshot = options.snapshot ?? createEmptyProjectExecutionSnapshot();
+  const result = applyProcessEventToProjectExecutionSnapshotData(options);
+  let runActivityJournal = previousSnapshot.runActivityJournal ?? createRunActivityJournal();
+
+  try {
+    runActivityJournal = applyProcessEventToRunActivityJournal({
+      data: options.data,
+      // Project snapshots created by older app versions do not carry the
+      // additive Run Activity journal. Treat them as an empty journal instead
+      // of making an inactive-project or replay event fail during restoration.
+      journal: runActivityJournal,
+      message: options.message,
+      occurredAt,
+    });
+  } catch (error) {
+    // This projection is observational. A malformed activity event must not
+    // discard the primary execution snapshot for an inactive project.
+    handleError(error, `Failed to update Run Activity for ${options.message}`, { toastError: false });
+  }
+
+  if (result.snapshot.runActivityJournal === runActivityJournal) {
+    return result;
+  }
+
+  return {
+    changed: true,
+    snapshot: {
+      ...result.snapshot,
+      runActivityJournal,
+    },
+  };
+}
+
+function applyProcessEventToProjectExecutionSnapshotData<K extends keyof ProcessEventMessageMap>(
+  options: ProjectExecutionSnapshotEventOptions<K>,
+): ProjectExecutionSnapshotEventResult {
   const snapshot = options.snapshot ?? createEmptyProjectExecutionSnapshot();
 
   switch (options.message) {
@@ -129,7 +173,11 @@ export function applyProcessEventToProjectExecutionSnapshot<K extends keyof Proc
     case 'nodeOutputsCleared':
       return {
         changed: true,
-        snapshot: applyNodeOutputsCleared(snapshot, options.data as ProcessEvents['nodeOutputsCleared'], options.refStore),
+        snapshot: applyNodeOutputsCleared(
+          snapshot,
+          options.data as ProcessEvents['nodeOutputsCleared'],
+          options.refStore,
+        ),
       };
     case 'userInput':
       return {
@@ -272,10 +320,7 @@ function applyGraphStart(
       });
     }
 
-    draft.selectedGraphRunByView = updateSelectedGraphRunForGraphStart(
-      draft.selectedGraphRunByView,
-      graphViewKey,
-    );
+    draft.selectedGraphRunByView = updateSelectedGraphRunForGraphStart(draft.selectedGraphRunByView, graphViewKey);
   });
 }
 

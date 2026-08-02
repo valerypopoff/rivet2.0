@@ -18,7 +18,6 @@ export const WELCOME_SCREEN_TAB: WorkspaceTabDefinition = {
 
 export const WORKSPACE_TABS: WorkspaceTabDefinition[] = [
   { key: 'trivet', label: 'Trivet Tests', className: 'trivet-menu', targetOverlay: 'trivet' },
-  { key: 'chatViewer', label: 'Chat Viewer', className: 'chat-viewer-menu', targetOverlay: 'chatViewer' },
   { key: 'dataStudio', label: 'Data Studio', className: 'data-studio', targetOverlay: 'dataStudio' },
 ];
 
@@ -30,21 +29,13 @@ export const PROMPT_DESIGNER_TAB: WorkspaceTabDefinition = {
 };
 
 export function getVisibleWorkspaceTabs({
-  chatViewerAvailable,
   openOverlay,
   welcomeScreenAvailable = false,
 }: {
-  chatViewerAvailable: boolean;
   openOverlay: OverlayKey | undefined;
   welcomeScreenAvailable?: boolean;
 }): WorkspaceTabDefinition[] {
-  const workspaceTabs: WorkspaceTabDefinition[] = WORKSPACE_TABS.filter((tab) => {
-    if (tab.key === 'chatViewer') {
-      return chatViewerAvailable;
-    }
-
-    return true;
-  });
+  const workspaceTabs = [...WORKSPACE_TABS];
 
   if (welcomeScreenAvailable) {
     workspaceTabs.unshift(WELCOME_SCREEN_TAB);

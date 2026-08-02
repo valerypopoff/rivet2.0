@@ -38,7 +38,7 @@ const sidebars = {
       items: [
         'user-guide/features/prompt-designer',
         'user-guide/features/trivet-tests',
-        'user-guide/features/chat-viewer',
+        'user-guide/features/run-activity',
         'user-guide/features/data-studio',
       ],
     },

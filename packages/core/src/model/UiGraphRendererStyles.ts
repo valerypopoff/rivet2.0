@@ -577,6 +577,37 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   outline: none;
 }
 
+.rivet-web-app-chat-message-context-menu {
+  position: fixed;
+  z-index: 12;
+  min-width: 196px;
+  border: 1px solid var(--rivet-web-app-control-border);
+  border-radius: 6px;
+  background: var(--rivet-web-app-control-background);
+  box-shadow: 0 8px 18px rgb(0 0 0 / 24%);
+  padding: 4px;
+}
+
+.rivet-web-app-chat-message-context-menu button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--rivet-web-app-foreground);
+  cursor: pointer;
+  font: inherit;
+  padding: 7px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.rivet-web-app-chat-message-context-menu button:hover,
+.rivet-web-app-chat-message-context-menu button:focus-visible {
+  background: var(--rivet-web-app-control-hover-background);
+  outline: none;
+}
+
 .rivet-web-app-chat-history {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -847,6 +878,11 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 .rivet-web-app-chat-message-assistant {
   align-self: flex-start;
   border-bottom-left-radius: 0;
+}
+
+.rivet-web-app-chat-message-context-selected {
+  outline: 1px solid color-mix(in srgb, var(--rivet-web-app-button-background) 70%, var(--rivet-web-app-foreground));
+  outline-offset: 1px;
 }
 
 .rivet-web-app-chat-message-row {
@@ -1460,6 +1496,191 @@ button.rivet-web-app-output-header:focus-visible {
 
 .rivet-web-app-modal-button {
   justify-self: start;
+}
+
+.rivet-web-app-chat-reading-view-backdrop {
+  padding: clamp(10px, 3vw, 28px);
+}
+
+.rivet-web-app-chat-reading-view {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1120px, 100%);
+  height: min(90vh, 920px);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--rivet-web-app-control-border);
+  border-radius: 12px;
+  background: var(--rivet-web-app-card-background);
+  box-shadow: 0 22px 70px rgb(0 0 0 / 42%);
+  color: var(--rivet-web-app-foreground);
+}
+
+.rivet-web-app-chat-reading-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 54px;
+  border-bottom: 1px solid var(--rivet-web-app-card-border);
+  padding: 8px 12px 8px 22px;
+}
+
+.rivet-web-app-chat-reading-view-header strong {
+  font-size: 16px;
+}
+
+.rivet-web-app-chat-reading-view-close {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--rivet-web-app-foreground-muted);
+  cursor: pointer;
+}
+
+.rivet-web-app-chat-reading-view-close:hover,
+.rivet-web-app-chat-reading-view-close:focus-visible {
+  background: var(--rivet-web-app-control-hover-background);
+  color: var(--rivet-web-app-foreground);
+  outline: none;
+}
+
+.rivet-web-app-chat-reading-view-close svg {
+  width: 20px;
+  height: 20px;
+}
+
+.rivet-web-app-chat-reading-view-markdown.markdown-body {
+  --rivet-web-app-chat-message-foreground: var(--rivet-web-app-foreground);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: transparent;
+  color: inherit;
+  padding: 22px 26px 28px;
+}
+
+.rivet-web-app-chat-reading-view-markdown > :first-child {
+  margin-top: 0;
+}
+
+.rivet-web-app-chat-reading-view-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.rivet-web-app-chat-reading-view-markdown table {
+  max-width: none;
+}
+
+.rivet-agent-response-inspector-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10020;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(7 10 15 / 72%);
+}
+
+.rivet-agent-response-inspector {
+  width: min(920px, 100%);
+  max-height: min(820px, calc(100vh - 40px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--rivet-web-app-card-border);
+  border-radius: 12px;
+  background: var(--rivet-web-app-card-background);
+  color: var(--rivet-web-app-foreground);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 45%);
+}
+
+.rivet-agent-response-inspector > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--rivet-web-app-card-border);
+}
+
+.rivet-agent-response-inspector > header div { display: grid; gap: 2px; }
+.rivet-agent-response-inspector > header span { color: var(--rivet-web-app-foreground-muted); font-size: 12px; }
+.rivet-agent-response-inspector > header button {
+  width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 7px;
+  background: transparent; color: inherit; cursor: pointer; outline: none;
+}
+.rivet-agent-response-inspector > header button:hover,
+.rivet-agent-response-inspector > header button:focus-visible {
+  background: var(--rivet-web-app-control-hover-background);
+}
+.rivet-agent-response-inspector > header button:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--rivet-web-app-control-focus-border);
+}
+.rivet-agent-response-inspector > header svg { width: 20px; height: 20px; }
+.rivet-agent-response-inspector-body { display: grid; gap: 18px; min-height: 0; overflow: auto; padding: 20px; }
+.rivet-agent-response-inspector-unavailable { padding: 28px 18px; }
+.rivet-agent-response-inspector-unavailable p { margin-bottom: 0; color: var(--rivet-web-app-foreground-muted); }
+.rivet-agent-response-inspector-metric-group { display: grid; gap: 9px; min-width: 0; }
+.rivet-agent-response-inspector-group-heading { display: grid; gap: 3px; }
+.rivet-agent-response-inspector-group-heading h3 { margin: 0; font-size: 14px; }
+.rivet-agent-response-inspector-group-heading p {
+  margin: 0; color: var(--rivet-web-app-foreground-muted); font-size: 12px; line-height: 1.45;
+}
+.rivet-agent-response-inspector-metrics {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px;
+  margin: 0; padding: 0; width: 100%;
+}
+.rivet-agent-response-inspector-metrics > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(
+    in srgb,
+    var(--rivet-web-app-card-background) 92%,
+    var(--rivet-web-app-foreground) 8%
+  );
+}
+.rivet-agent-response-inspector-metrics dt { color: var(--rivet-web-app-foreground-muted); font-size: 12px; }
+.rivet-agent-response-inspector-metrics dd { margin: 3px 0 0; font-weight: 600; }
+.rivet-agent-response-inspector-timing {
+  display: grid; gap: 4px; margin: 0; padding: 0; color: var(--rivet-web-app-foreground-muted); font-size: 12px;
+}
+.rivet-agent-response-inspector-timing > div {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px;
+}
+.rivet-agent-response-inspector-timing dt { font-weight: 600; }
+.rivet-agent-response-inspector-timing dd { margin: 0; }
+.rivet-agent-response-inspector-section { border-top: 1px solid var(--rivet-web-app-card-border); padding: 12px 0; }
+.rivet-agent-response-inspector-section summary { cursor: pointer; font-weight: 600; }
+.rivet-agent-response-inspector-section article { display: grid; gap: 3px; padding: 10px 0; }
+.rivet-agent-response-inspector-section article + article { border-top: 1px solid var(--rivet-web-app-card-border); }
+.rivet-agent-response-inspector-section article span,
+.rivet-agent-response-inspector-section p { color: var(--rivet-web-app-foreground-muted); font-size: 13px; }
+
+@media (max-width: 520px) {
+  .rivet-agent-response-inspector-backdrop { padding: 10px; }
+  .rivet-agent-response-inspector { max-height: calc(100vh - 20px); }
+  .rivet-agent-response-inspector-body { padding: 16px; }
+
+  .rivet-web-app-chat-reading-view {
+    height: calc(100vh - 20px);
+    border-radius: 10px;
+  }
+
+  .rivet-web-app-chat-reading-view-header {
+    padding-left: 16px;
+  }
+
+  .rivet-web-app-chat-reading-view-markdown.markdown-body {
+    padding: 18px 16px 22px;
+  }
 }
 
 .rivet-web-app-clipboard-fallback {

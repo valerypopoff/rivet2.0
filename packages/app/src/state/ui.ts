@@ -22,7 +22,7 @@ export const debuggerPanelAnchorState = atom<DebuggerPanelAnchor | undefined>(un
 
 export const dataBusFullRowCountState = atom<number>(0);
 
-export type OverlayKey = 'promptDesigner' | 'trivet' | 'chatViewer' | 'dataStudio';
+export type OverlayKey = 'promptDesigner' | 'trivet' | 'dataStudio';
 
 export const overlayOpenState = atom<OverlayKey | undefined>(undefined);
 
@@ -91,6 +91,12 @@ export const fullscreenOutputModalBoundsState = atomWithStorage<HorizontalModalB
 );
 
 export const graphSearchPanelHeightState = atomWithStorage<number>('graphSearchPanelHeightState', 420, storage);
+
+/** Whether the project-scoped Run Activity surface is visible. */
+export const runActivityDrawerOpenState = atom<boolean>(false);
+
+/** Persisted desktop height. Narrow viewports render Run Activity as an overlay instead. */
+export const runActivityDrawerHeightState = atomWithStorage<number>('runActivityDrawerHeightState', 360, storage);
 
 export const leftSidebarWidthState = atomWithStorage<number>(
   'leftSidebarWidthState',

@@ -15,7 +15,6 @@ import { useMenuCommands } from '../hooks/useMenuCommands.js';
 import { TrivetRenderer } from './trivet/Trivet.js';
 import { ActionBar } from './ActionBar';
 import { DebuggerPanelRenderer } from './DebuggerConnectPanel';
-import { ChatViewerRenderer } from './ChatViewer';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
   canvasBackgroundColorModeState,
@@ -48,7 +47,14 @@ import { wrapAsync } from '../utils/errorHandling';
 import { useExecutorSessionCoordinator } from '../hooks/useExecutorSessionCoordinator';
 import { useRestorePersistedWorkspace } from '../hooks/useRestorePersistedWorkspace.js';
 import { DeleteGraphInputConfirmModalRenderer } from './DeleteGraphInputConfirmModal';
-import { dataBusFullRowCountState, leftSidebarLiveWidthState, overlayOpenState, uiFontSizeState } from '../state/ui.js';
+import {
+  dataBusFullRowCountState,
+  leftSidebarLiveWidthState,
+  overlayOpenState,
+  runActivityDrawerHeightState,
+  runActivityDrawerOpenState,
+  uiFontSizeState,
+} from '../state/ui.js';
 import { getUiFontScale, getUiFontSizeCssVariables } from '../utils/uiFontSize.js';
 import { useProjectPlugins } from '../hooks/useProjectPlugins.js';
 import { MissingAppPluginsModalRenderer } from './MissingAppPluginsModal.js';
@@ -64,6 +70,7 @@ import {
   shouldPreloadCodeEditor,
   useRivetAppHostUiConfig,
 } from '../providers/HostUiConfigContext.js';
+import { RunActivityRenderer } from './runActivity/index.js';
 
 const styles = css`
   position: fixed;
@@ -128,6 +135,8 @@ export const RivetApp: FC = () => {
   const leftSidebarOpen = useAtomValue(sidebarOpenState);
   const leftSidebarLiveWidth = useAtomValue(leftSidebarLiveWidthState);
   const openOverlay = useAtomValue(overlayOpenState);
+  const runActivityDrawerOpen = useAtomValue(runActivityDrawerOpenState);
+  const runActivityDrawerHeight = useAtomValue(runActivityDrawerHeightState);
   const workspaceVisibleTabCount = useAtomValue(workspaceVisibleTabCountState);
   const selectedOpeningProjectTabId = useAtomValue(selectedOpeningProjectTabIdState);
   const workspaceTarget = useProjectWorkspaceTarget();
@@ -164,12 +173,15 @@ export const RivetApp: FC = () => {
           uiFontScale: getUiFontScale(uiFontSize),
         })}px`,
         '--data-bus-full-row-left': leftSidebarOpen ? `${leftSidebarLiveWidth}px` : '0px',
+        '--run-activity-drawer-reserved-height': runActivityDrawerOpen ? `${runActivityDrawerHeight}px` : '0px',
       }) as CSSProperties,
     [
       dataBusFullRowCount,
       leftSidebarLiveWidth,
       leftSidebarOpen,
       rootThemeCssVariables,
+      runActivityDrawerHeight,
+      runActivityDrawerOpen,
       uiFontSize,
       uiFontSizeCssVariables,
     ],
@@ -295,7 +307,6 @@ export const RivetApp: FC = () => {
           <NoProject />
           <PromptDesignerRenderer />
           <TrivetRenderer tryRunTests={tryRunTests} />
-          <ChatViewerRenderer />
           <DataStudioRenderer />
           <NewProjectModalRenderer />
           <AppErrorBoundary context="Settings Modal" fallback={<div>Failed to render Settings</div>}>
@@ -331,11 +342,13 @@ export const RivetApp: FC = () => {
           </AppErrorBoundary>
           <PromptDesignerRenderer />
           <TrivetRenderer tryRunTests={tryRunTests} />
-          <ChatViewerRenderer />
           <DataStudioRenderer />
           <NewProjectModalRenderer />
           <MissingAppPluginsModalRenderer />
           <DeleteGraphInputConfirmModalRenderer />
+          <AppErrorBoundary context="Run Activity" fallback={<div>Failed to render Run Activity</div>}>
+            <RunActivityRenderer />
+          </AppErrorBoundary>
         </>
       )}
       <AppErrorBoundary context="Fullscreen Output Modal" fallback={<div>Failed to render Fullscreen Output</div>}>

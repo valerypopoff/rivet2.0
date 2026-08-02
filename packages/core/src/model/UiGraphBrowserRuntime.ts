@@ -8,6 +8,10 @@ import {
   type UiGraphChatMessage,
 } from './UiGraph.js';
 import { getUiGraphJsonOutputFilename } from './UiGraphRuntimeModel.js';
+import { isAgentResponseTrace, type AgentResponseTrace } from './AgentResponseTrace.js';
+
+type UiGraphBrowserStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
+type UiGraphStorageLocation = Pick<Location, 'origin' | 'pathname'>;
 
 const OUTPUT_MAX_HEIGHT_PX = 800;
 const OUTPUT_MAX_VIEWPORT_HEIGHT_RATIO = 0.8;
@@ -17,6 +21,10 @@ const CHAT_SEARCH_MATCH_CLASS = 'rivet-web-app-chat-search-match';
 const CHAT_SEARCH_ACTIVE_MATCH_CLASS = 'rivet-web-app-chat-search-match-active';
 const UI_GRAPH_CHAT_STORAGE_PREFIX = 'rivet-web-app-chat-state:v1';
 const UI_GRAPH_APP_STORAGE_PREFIX = 'rivet-web-app-storage:v1';
+const UI_GRAPH_RESPONSE_TRACE_STORAGE_PREFIX = 'rivet-web-app-response-traces:v1';
+const UI_GRAPH_RESPONSE_TRACE_LIMIT = 100;
+const responseTraceMemoryFallback = new Map<string, AgentResponseTrace[]>();
+const unsyncedResponseTraceKeysByStorage = new WeakMap<UiGraphBrowserStorage, Set<string>>();
 
 export type UiGraphChatMessageTimestampPresentation = Readonly<{
   dateTime: string;
@@ -34,9 +42,6 @@ export type UiGraphChatMessagePresentationOptions = Readonly<{
   locales?: Intl.LocalesArgument;
   timeZone?: string;
 }>;
-
-type UiGraphBrowserStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
-type UiGraphStorageLocation = Pick<Location, 'origin' | 'pathname'>;
 
 const escapeRegularExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -192,6 +197,123 @@ export function getUiGraphWebAppStorageKey(
     encodeURIComponent(pathname),
     encodeURIComponent(uiGraph.id),
   ].join(':');
+}
+
+function getUiGraphResponseTraceStorageKey(
+  uiGraph: UiGraph,
+  componentId: string,
+  location: UiGraphStorageLocation | undefined = getDefaultUiGraphStorageLocation(),
+): string | undefined {
+  if (!location?.origin) return undefined;
+  const pathname = location.pathname.replace(/\/+$/, '') || '/';
+  return [
+    UI_GRAPH_RESPONSE_TRACE_STORAGE_PREFIX,
+    encodeURIComponent(location.origin),
+    encodeURIComponent(pathname),
+    encodeURIComponent(uiGraph.id),
+    encodeURIComponent(componentId),
+  ].join(':');
+}
+
+/** Persists a validated trace outside Chat history so it never enters model context. */
+export function saveUiGraphResponseTrace(
+  uiGraph: UiGraph,
+  componentId: string,
+  trace: AgentResponseTrace,
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
+  location?: UiGraphStorageLocation,
+): void {
+  if (!isAgentResponseTrace(trace)) return;
+  const key =
+    getUiGraphResponseTraceStorageKey(uiGraph, componentId, location) ?? `memory:${uiGraph.id}:${componentId}`;
+  const traces = loadUiGraphResponseTraces(uiGraph, componentId, storage, location).filter(
+    (candidate) => candidate.traceId !== trace.traceId,
+  );
+  traces.push(trace);
+  const bounded = traces.slice(-UI_GRAPH_RESPONSE_TRACE_LIMIT);
+  persistUiGraphResponseTraces(key, bounded, storage);
+}
+
+/** Loads one validated response trace from the app/UI-graph-scoped store. */
+export function loadUiGraphResponseTrace(
+  uiGraph: UiGraph,
+  componentId: string,
+  traceId: string,
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
+  location?: UiGraphStorageLocation,
+): AgentResponseTrace | undefined {
+  return loadUiGraphResponseTraces(uiGraph, componentId, storage, location).find((trace) => trace.traceId === traceId);
+}
+
+/** Removes retained traces no longer referenced by Chat messages. */
+export function pruneUiGraphResponseTraces(
+  uiGraph: UiGraph,
+  state: Readonly<Record<string, unknown>>,
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
+  location?: UiGraphStorageLocation,
+): void {
+  for (const component of uiGraph.components) {
+    if (component.type !== 'chat') continue;
+    const referenced = new Set(
+      getUiGraphChatMessages(component.id, state).flatMap((message) =>
+        typeof message.responseTraceId === 'string' ? [message.responseTraceId] : [],
+      ),
+    );
+    const key =
+      getUiGraphResponseTraceStorageKey(uiGraph, component.id, location) ?? `memory:${uiGraph.id}:${component.id}`;
+    const retained = loadUiGraphResponseTraces(uiGraph, component.id, storage, location).filter((trace) =>
+      referenced.has(trace.traceId),
+    );
+    persistUiGraphResponseTraces(key, retained, storage);
+  }
+}
+
+function persistUiGraphResponseTraces(
+  key: string,
+  traces: AgentResponseTrace[],
+  storage: UiGraphBrowserStorage | undefined,
+): void {
+  responseTraceMemoryFallback.set(key, traces);
+  if (!storage || key.startsWith('memory:')) return;
+
+  try {
+    if (traces.length === 0) storage.removeItem(key);
+    else storage.setItem(key, JSON.stringify(traces));
+    unsyncedResponseTraceKeysByStorage.get(storage)?.delete(key);
+  } catch {
+    const unsyncedKeys = unsyncedResponseTraceKeysByStorage.get(storage) ?? new Set<string>();
+    unsyncedKeys.add(key);
+    unsyncedResponseTraceKeysByStorage.set(storage, unsyncedKeys);
+  }
+}
+
+function loadUiGraphResponseTraces(
+  uiGraph: UiGraph,
+  componentId: string,
+  storage: UiGraphBrowserStorage | undefined,
+  location?: UiGraphStorageLocation,
+): AgentResponseTrace[] {
+  const key =
+    getUiGraphResponseTraceStorageKey(uiGraph, componentId, location) ?? `memory:${uiGraph.id}:${componentId}`;
+  if (storage && unsyncedResponseTraceKeysByStorage.get(storage)?.has(key)) {
+    return responseTraceMemoryFallback.get(key) ?? [];
+  }
+  if (storage && !key.startsWith('memory:')) {
+    try {
+      const raw = storage.getItem(key);
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const traces = parsed.filter(isAgentResponseTrace).slice(-UI_GRAPH_RESPONSE_TRACE_LIMIT);
+          responseTraceMemoryFallback.set(key, traces);
+          return traces;
+        }
+      }
+    } catch {
+      // Fall through to the in-memory copy.
+    }
+  }
+  return responseTraceMemoryFallback.get(key) ?? [];
 }
 
 /** Loads the browser snapshot used by Stored Value nodes for this one web app. */

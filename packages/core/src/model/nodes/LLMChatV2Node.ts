@@ -5,7 +5,7 @@ import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
 import type { NodeBodySpec } from '../NodeBodySpec.js';
 import { nodeDefinition } from '../NodeDefinition.js';
-import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
+import { NodeImpl, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { getCommonChatV2Inputs, getCommonChatV2Outputs } from '../chat-v2/chatV2Shared.js';
@@ -132,6 +132,14 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
         width: 260,
       },
       data: createLLMChatV2NodeData(),
+    };
+  }
+
+  getRunActivityDescriptor(): NodeRunActivityDescriptor {
+    return {
+      category: 'model',
+      primaryOutputPortId: 'response' as PortId,
+      contextInputPortIds: ['prompt' as PortId],
     };
   }
 
@@ -457,6 +465,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
           value: 'Editor cache hit — no LLM Profile calls were made for this run.',
         };
       }
+      context.markResultAsEditorCacheHit?.();
       return runtime.cachedOutputs;
     }
 
