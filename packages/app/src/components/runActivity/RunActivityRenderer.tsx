@@ -27,12 +27,21 @@ import {
 import { graphState } from '../../state/graph.js';
 import { editingNodeState, fullscreenOutputNodeState, selectedNodesState } from '../../state/graphBuilder.js';
 import { projectState } from '../../state/savedGraphs.js';
-import { overlayOpenState, runActivityDrawerHeightState, runActivityDrawerOpenState } from '../../state/ui.js';
+import {
+  overlayOpenState,
+  runActivityColumnWidthsState,
+  runActivityDrawerHeightState,
+  runActivityDrawerOpenState,
+} from '../../state/ui.js';
 import { copyToClipboard } from '../../utils/copyToClipboard.js';
 import { hasStoredPortMapValues, hasStoredSplitOutputValues } from '../../utils/executionDataReaders.js';
 import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
 import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { RunActivityDrawer } from './RunActivityDrawer.js';
+import {
+  areRunActivityColumnWidthsEqual,
+  normalizeRunActivityColumnWidths,
+} from '../../features/runActivity/runActivityColumnWidths.js';
 import {
   buildRunActivityViewModel,
   selectRunActivityRoot,
@@ -47,6 +56,7 @@ const NARROW_VIEWPORT_QUERY = '(max-width: 720px)';
 export const RunActivityRenderer: FC = () => {
   const [open, setOpen] = useAtom(runActivityDrawerOpenState);
   const [height, setHeight] = useAtom(runActivityDrawerHeightState);
+  const [storedColumnWidths, setStoredColumnWidths] = useAtom(runActivityColumnWidthsState);
   const journal = useAtomValue(runActivityJournalState);
   const runDataByNode = useAtomValue(lastRunDataByNodeState);
   const project = useAtomValue(projectState);
@@ -65,6 +75,14 @@ export const RunActivityRenderer: FC = () => {
   const setEditingNode = useSetAtom(editingNodeState);
   const setFullscreenOutputNode = useSetAtom(fullscreenOutputNodeState);
   const selectedRoot = selectRunActivityRoot(journal);
+  const columnWidths = useMemo(() => normalizeRunActivityColumnWidths(storedColumnWidths), [storedColumnWidths]);
+
+  // atomWithStorage intentionally tolerates old browser values. Repair an
+  // invalid record once at the owning UI boundary rather than letting a stale
+  // preference leak into every drawer render.
+  useEffect(() => {
+    if (!areRunActivityColumnWidthsEqual(storedColumnWidths, columnWidths)) setStoredColumnWidths(columnWidths);
+  }, [columnWidths, setStoredColumnWidths, storedColumnWidths]);
 
   useEffect(() => {
     if (!open || (selectedRoot?.status !== 'running' && selectedRoot?.status !== 'outputs-ready')) return;
@@ -219,6 +237,8 @@ export const RunActivityRenderer: FC = () => {
         height={height}
         onClose={() => setOpen(false)}
         onHeightChange={setHeight}
+        columnWidths={columnWidths}
+        onColumnWidthsChange={setStoredColumnWidths}
         onLocate={selectExactInvocation}
         onOpenFullOutput={handleOpenFullOutput}
         onInspectResponse={handleInspectResponse}

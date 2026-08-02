@@ -1,11 +1,15 @@
+import Portal from '@atlaskit/portal';
+import Select from '@atlaskit/select';
 import { css } from '@emotion/react';
 import clsx from 'clsx';
 import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
+import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
 import SearchIcon from 'majesticons/line/search-line.svg?react';
 import {
   type ChangeEvent,
+  type CSSProperties,
   type FC,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -15,6 +19,16 @@ import {
   useRef,
   useState,
 } from 'react';
+import { SegmentedEditor } from '../editors/SegmentedEditor.js';
+import { Tooltip } from '../Tooltip.js';
+import {
+  DEFAULT_RUN_ACTIVITY_COLUMN_WIDTHS,
+  clampRunActivityColumnWidth,
+  getRunActivityColumnWidthBounds,
+  normalizeRunActivityColumnWidths,
+  type RunActivityColumnWidthKey,
+  type RunActivityColumnWidths,
+} from '../../features/runActivity/runActivityColumnWidths.js';
 import type {
   RunActivityDrawerProps,
   RunActivityFilter,
@@ -29,6 +43,18 @@ export const MIN_RUN_ACTIVITY_DRAWER_HEIGHT = 220;
 export const MAX_RUN_ACTIVITY_DRAWER_VIEWPORT_RATIO = 0.72;
 const NARROW_VIEWPORT_QUERY = '(max-width: 720px)';
 const RESIZE_KEYBOARD_STEP = 24;
+const COLUMN_RESIZE_KEYBOARD_STEP = 16;
+
+type GraphFilterOption = { label: string; value: string };
+
+type ColumnResizeState = {
+  key: RunActivityColumnWidthKey;
+  startX: number;
+  startWidth: number;
+  previousBodyCursor: string;
+};
+
+type PointerFocusedHeaderControl = 'graph-filter' | 'search' | undefined;
 
 const drawerStyles = css`
   position: fixed;
@@ -38,13 +64,14 @@ const drawerStyles = css`
   left: var(--data-bus-full-row-left, 0px);
   display: flex;
   flex-direction: column;
+  container-name: run-activity-drawer;
+  container-type: inline-size;
   min-height: ${MIN_RUN_ACTIVITY_DRAWER_HEIGHT}px;
-  overflow: hidden;
+  overflow: visible;
   color: var(--foreground);
   background: var(--app-panel-bg);
   border-top: 1px solid var(--app-panel-border);
   backdrop-filter: blur(2px);
-  box-shadow: 0 -8px 30px rgb(0 0 0 / 28%);
 
   .run-activity-resize-handle {
     position: absolute;
@@ -56,25 +83,27 @@ const drawerStyles = css`
     padding: 0;
     border: 0;
     background: transparent;
-    cursor: ns-resize;
+    cursor: var(--resize-edge-vertical-cursor, ns-resize);
     touch-action: none;
   }
 
   .run-activity-resize-handle::after {
     position: absolute;
-    top: 4px;
-    left: 50%;
-    width: 46px;
-    height: 3px;
-    border-radius: 3px;
-    background: var(--app-panel-border);
+    top: 5px;
+    right: 0;
+    left: 0;
+    height: 2px;
+    background: var(--primary);
     content: '';
-    transform: translateX(-50%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
   }
 
   .run-activity-resize-handle:hover::after,
+  .run-activity-resize-handle.is-resizing::after,
   .run-activity-resize-handle:focus-visible::after {
-    background: var(--primary);
+    opacity: 0.65;
   }
 
   .run-activity-resize-handle:focus-visible {
@@ -83,11 +112,12 @@ const drawerStyles = css`
   }
 
   .run-activity-header {
+    --run-activity-control-height: var(--form-control-select-height);
     display: flex;
     flex: none;
     align-items: center;
-    justify-content: space-between;
-    gap: 14px;
+    flex-wrap: wrap;
+    gap: 8px 12px;
     min-height: 48px;
     padding: 8px 12px 8px 16px;
     border-bottom: 1px solid var(--app-strip-divider-color);
@@ -99,6 +129,7 @@ const drawerStyles = css`
     align-items: center;
     gap: 10px;
     min-width: 0;
+    flex: none;
   }
 
   .run-activity-heading h2 {
@@ -149,6 +180,11 @@ const drawerStyles = css`
     gap: 6px;
   }
 
+  .run-activity-header-actions {
+    flex: none;
+    margin-left: auto;
+  }
+
   .run-activity-follow {
     display: inline-flex;
     align-items: center;
@@ -195,66 +231,47 @@ const drawerStyles = css`
   .run-activity-icon-button:focus-visible,
   .run-activity-action-button:focus-visible,
   .run-activity-new-items:focus-visible,
-  .run-activity-filter:focus-visible,
-  .run-activity-row-toggle:focus-visible {
+  .run-activity-row-toggle:focus-visible,
+  .run-activity-column-resize-handle:focus-visible {
     outline: 1px solid var(--primary);
     outline-offset: 1px;
   }
 
-  .run-activity-toolbar {
+  .run-activity-header-controls {
     display: flex;
-    flex: none;
     align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--app-panel-border);
-    background: var(--modal-surface-bg);
+    min-width: 0;
+    flex: 1 1 560px;
+    gap: 8px;
   }
 
   .run-activity-filters {
-    display: inline-flex;
     flex: none;
-    align-items: center;
-    padding: 2px;
-    border-radius: var(--ui-button-radius-sm, 6px);
-    background: var(--form-control-neutral-bg);
+    min-width: 0;
   }
 
-  .run-activity-filter {
-    min-height: 30px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: calc(var(--ui-button-radius-sm, 6px) - 2px);
-    background: transparent;
-    color: var(--foreground-dim);
-    font-size: var(--ui-font-size-sm);
-    cursor: pointer;
-  }
-
-  .run-activity-filter[aria-pressed='true'] {
-    background: var(--form-control-selected-bg);
-    color: var(--foreground);
+  .run-activity-filters .segmented-choice {
+    min-height: var(--run-activity-control-height);
+    margin-left: 0;
   }
 
   .run-activity-graph-filter {
-    width: min(220px, 24vw);
-    min-width: 130px;
-    height: 32px;
-    padding: 0 28px 0 9px;
-    color: var(--foreground);
-    font-size: var(--ui-font-size-sm);
+    width: min(220px, 22vw);
+    min-width: 160px;
+    flex: none;
   }
 
   .run-activity-search {
     position: relative;
-    min-width: 150px;
-    flex: 1;
+    width: clamp(220px, 20vw, 360px);
+    min-width: 180px;
+    flex: 1 1 220px;
   }
 
   .run-activity-search svg {
     position: absolute;
     top: 50%;
-    left: 9px;
+    left: 10px;
     z-index: 1;
     width: 16px;
     height: 16px;
@@ -266,9 +283,24 @@ const drawerStyles = css`
   .run-activity-search input {
     box-sizing: border-box;
     width: 100%;
-    height: 32px;
-    padding: 0 10px 0 32px;
+    height: var(--run-activity-control-height);
+    padding: 0 10px 0 33px;
+    border-color: var(--form-control-border);
+    border-radius: var(--ui-button-radius-sm, 6px);
     font-size: var(--ui-font-size-sm);
+  }
+
+  .run-activity-search.is-pointer-focused input:focus {
+    border-color: var(--form-control-border) !important;
+    background-color: var(--form-control-bg) !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
+  .run-activity-graph-filter.is-pointer-focused [class*='-control']:has(input:focus) {
+    border-color: var(--form-control-border) !important;
+    background-color: var(--form-control-bg) !important;
+    box-shadow: none !important;
   }
 
   .run-activity-summary {
@@ -294,6 +326,7 @@ const drawerStyles = css`
     position: relative;
     min-height: 0;
     flex: 1;
+    overflow: hidden;
   }
 
   .run-activity-list {
@@ -301,6 +334,83 @@ const drawerStyles = css`
     overflow: auto;
     overscroll-behavior: contain;
     padding: 10px 16px 20px;
+  }
+
+  .run-activity-column-header,
+  .run-activity-row-toggle {
+    display: grid;
+    grid-template-columns:
+      12px
+      minmax(150px, var(--run-activity-column-node-name))
+      minmax(130px, var(--run-activity-column-graph-name))
+      minmax(120px, var(--run-activity-column-node-type))
+      minmax(180px, 1fr)
+      84px
+      72px
+      24px;
+    gap: 10px;
+  }
+
+  .run-activity-column-header {
+    position: sticky;
+    z-index: 2;
+    top: -10px;
+    min-height: 32px;
+    align-items: stretch;
+    padding: 10px 11px 5px;
+    background: var(--app-panel-bg);
+    color: var(--foreground-dim);
+    font-size: var(--ui-font-size-compact);
+    font-weight: 700;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .run-activity-column-header-cell {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .run-activity-column-header-cell.align-end {
+    justify-content: flex-end;
+  }
+
+  .run-activity-column-resize-handle {
+    position: absolute;
+    z-index: 3;
+    top: -4px;
+    right: -8px;
+    bottom: -4px;
+    width: 16px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: col-resize;
+    touch-action: none;
+  }
+
+  .run-activity-column-resize-handle::after {
+    position: absolute;
+    top: 7px;
+    bottom: 7px;
+    left: 7px;
+    width: 1px;
+    border-radius: 1px;
+    background: transparent;
+    content: '';
+    transition: background-color 0.12s ease-out;
+  }
+
+  .run-activity-column-header-cell:hover .run-activity-column-resize-handle::after,
+  .run-activity-column-resize-handle:hover::after,
+  .run-activity-column-resize-handle:focus-visible::after {
+    background: var(--primary);
   }
 
   .run-activity-empty {
@@ -324,10 +434,12 @@ const drawerStyles = css`
   }
 
   .run-activity-row {
+    --run-activity-row-radius: calc(10px * var(--ui-font-scale));
     overflow: hidden;
-    border: 1px solid var(--app-panel-border);
-    border-radius: 8px;
-    background: var(--node-body-bg);
+    border: 1px solid var(--settings-collapsible-border, var(--app-panel-border));
+    border-radius: var(--run-activity-row-radius);
+    corner-shape: squircle;
+    background: var(--settings-collapsible-header-bg, var(--node-body-bg));
     content-visibility: auto;
     contain-intrinsic-size: auto 66px;
   }
@@ -346,14 +458,12 @@ const drawerStyles = css`
   }
 
   .run-activity-row-toggle {
-    display: grid;
-    grid-template-columns: 10px minmax(180px, 1.2fr) minmax(140px, 1fr) max-content 22px;
     align-items: center;
-    gap: 10px;
     width: 100%;
     min-height: 50px;
     padding: 8px 11px;
     border: 0;
+    border-radius: inherit;
     background: transparent;
     color: inherit;
     text-align: left;
@@ -361,7 +471,11 @@ const drawerStyles = css`
   }
 
   .run-activity-row-toggle:hover {
-    background: color-mix(in srgb, var(--surface-row-hover-bg) 42%, transparent);
+    background: var(--settings-collapsible-hover-bg, color-mix(in srgb, var(--surface-row-hover-bg) 42%, transparent));
+  }
+
+  .run-activity-row.is-expanded .run-activity-row-toggle {
+    border-radius: var(--run-activity-row-radius) var(--run-activity-row-radius) 0 0;
   }
 
   .run-activity-status-dot {
@@ -391,6 +505,8 @@ const drawerStyles = css`
   }
 
   .run-activity-identity,
+  .run-activity-graph-name,
+  .run-activity-node-type,
   .run-activity-preview {
     min-width: 0;
   }
@@ -404,15 +520,19 @@ const drawerStyles = css`
   }
 
   .run-activity-node-meta,
+  .run-activity-graph-name,
+  .run-activity-node-type,
   .run-activity-preview,
-  .run-activity-row-timing,
+  .run-activity-started-at,
+  .run-activity-duration,
   .run-activity-detail-label,
   .run-activity-child-secondary {
     color: var(--foreground-dim);
     font-size: var(--ui-font-size-sm);
   }
 
-  .run-activity-node-meta,
+  .run-activity-graph-name,
+  .run-activity-node-type,
   .run-activity-preview {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -423,12 +543,17 @@ const drawerStyles = css`
     color: var(--error-light);
   }
 
-  .run-activity-row-timing {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 7px;
+  .run-activity-started-at,
+  .run-activity-duration {
+    min-width: 0;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .run-activity-node-meta {
+    display: none;
   }
 
   .run-activity-chevron {
@@ -443,7 +568,8 @@ const drawerStyles = css`
 
   .run-activity-row-detail {
     padding: 4px 14px 14px 31px;
-    border-top: 1px solid var(--app-panel-border);
+    border-top: 1px solid var(--settings-collapsible-border, var(--app-panel-border));
+    background: var(--settings-collapsible-body-bg, var(--node-body-bg));
   }
 
   .run-activity-detail-message {
@@ -504,16 +630,65 @@ const drawerStyles = css`
     font-size: var(--ui-font-size-sm);
   }
 
-  @media (max-width: 900px) {
-    .run-activity-row-toggle {
-      grid-template-columns: 10px minmax(160px, 1fr) max-content 22px;
+  @container run-activity-drawer (max-width: 1100px) {
+    .run-activity-header-controls {
+      order: 3;
+      flex-basis: 100%;
     }
 
-    .run-activity-preview {
+    .run-activity-summary {
+      display: none;
+    }
+  }
+
+  @container run-activity-drawer (max-width: 1180px) {
+    .run-activity-row-toggle {
+      grid-template-columns:
+        12px
+        minmax(150px, var(--run-activity-column-node-name))
+        minmax(130px, var(--run-activity-column-graph-name))
+        minmax(180px, 1fr)
+        84px
+        72px
+        24px;
+    }
+
+    .run-activity-column-header {
+      grid-template-columns:
+        12px
+        minmax(150px, var(--run-activity-column-node-name))
+        minmax(130px, var(--run-activity-column-graph-name))
+        minmax(180px, 1fr)
+        84px
+        72px
+        24px;
+    }
+
+    .run-activity-node-type,
+    .run-activity-column-header-cell.node-type,
+    .run-activity-column-resize-handle.node-type {
+      display: none;
+    }
+  }
+
+  @container run-activity-drawer (max-width: 900px) {
+    .run-activity-row-toggle,
+    .run-activity-column-header {
+      grid-template-columns:
+        12px
+        minmax(150px, 1fr)
+        minmax(130px, var(--run-activity-column-graph-name))
+        84px
+        72px
+        24px;
+    }
+
+    .run-activity-preview,
+    .run-activity-column-header-cell.preview {
       display: none;
     }
 
-    .run-activity-toolbar {
+    .run-activity-header-controls {
       flex-wrap: wrap;
     }
 
@@ -529,6 +704,7 @@ const drawerStyles = css`
     height: auto !important;
     min-height: 0;
     border-top: 0;
+    overflow: hidden;
     box-shadow: 0 0 0 100vmax rgb(0 0 0 / 55%);
 
     .run-activity-resize-handle {
@@ -552,22 +728,33 @@ const drawerStyles = css`
     }
 
     .run-activity-header-actions {
-      width: 100%;
-      justify-content: flex-end;
+      width: auto;
+      margin-left: auto;
     }
 
     .run-activity-follow span {
       display: none;
     }
 
-    .run-activity-toolbar {
+    .run-activity-header-controls {
+      order: 3;
       display: grid;
+      width: 100%;
+      flex-basis: 100%;
       grid-template-columns: 1fr;
     }
 
     .run-activity-filters {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      width: 100%;
+    }
+
+    .run-activity-filters .segmented-editor-control,
+    .run-activity-filters .segmented-choice {
+      width: 100%;
+    }
+
+    .run-activity-filters .segmented-choice-option {
+      flex: 1 1 0;
     }
 
     .run-activity-graph-filter,
@@ -579,12 +766,26 @@ const drawerStyles = css`
       display: none;
     }
 
+    .run-activity-column-header {
+      display: none;
+    }
+
     .run-activity-row-toggle {
       grid-template-columns: 10px minmax(0, 1fr) 22px;
     }
 
-    .run-activity-row-timing {
+    .run-activity-graph-name,
+    .run-activity-started-at,
+    .run-activity-duration,
+    .run-activity-column-resize-handle {
       display: none;
+    }
+
+    .run-activity-node-meta {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .run-activity-row-detail {
@@ -614,17 +815,25 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
   onCopyDiagnostics,
   height = DEFAULT_RUN_ACTIVITY_DRAWER_HEIGHT,
   onHeightChange,
+  columnWidths,
+  onColumnWidthsChange,
   renderExpandedContent,
   className,
 }) => {
   const [filter, setFilter] = useState<RunActivityFilter>('all');
   const [graphFilter, setGraphFilter] = useState('');
   const [query, setQuery] = useState('');
+  const [graphMenuPortalTarget, setGraphMenuPortalTarget] = useState<HTMLDivElement | null>(null);
+  const [uncontrolledColumnWidths, setUncontrolledColumnWidths] = useState<RunActivityColumnWidths>(
+    DEFAULT_RUN_ACTIVITY_COLUMN_WIDTHS,
+  );
   const [followLive, setFollowLive] = useState(true);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [newActivityCount, setNewActivityCount] = useState(0);
   const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(new Set());
   const [displayHeight, setDisplayHeight] = useState(() => clampRunActivityDrawerHeight(height));
+  const [isDrawerResizing, setIsDrawerResizing] = useState(false);
+  const [pointerFocusedHeaderControl, setPointerFocusedHeaderControl] = useState<PointerFocusedHeaderControl>();
   const listRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -632,7 +841,23 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
   const previousItemCountRef = useRef(viewModel.items.length);
   const previousRootRunIdRef = useRef(viewModel.rootRunId);
   const resizeStateRef = useRef<{ startY: number; startHeight: number }>();
+  const drawerResizeCleanupRef = useRef<(() => void) | undefined>();
+  const columnResizeCleanupRef = useRef<(() => void) | undefined>();
+  const currentColumnWidthsRef = useRef<RunActivityColumnWidths>(DEFAULT_RUN_ACTIVITY_COLUMN_WIDTHS);
+  const onColumnWidthsChangeRef = useRef(onColumnWidthsChange);
+  const isColumnWidthsControlledRef = useRef(columnWidths !== undefined);
+  const onCloseRef = useRef(onClose);
   const isNarrowViewport = useNarrowViewport();
+
+  const effectiveColumnWidths = useMemo(
+    () => normalizeRunActivityColumnWidths(columnWidths ?? uncontrolledColumnWidths),
+    [columnWidths, uncontrolledColumnWidths],
+  );
+
+  currentColumnWidthsRef.current = effectiveColumnWidths;
+  onColumnWidthsChangeRef.current = onColumnWidthsChange;
+  isColumnWidthsControlledRef.current = columnWidths !== undefined;
+  onCloseRef.current = onClose;
 
   const graphOptions = useMemo(() => {
     if (viewModel.graphOptions) return viewModel.graphOptions;
@@ -640,6 +865,19 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
     for (const item of viewModel.items) graphNames.set(item.graphId, item.graphName);
     return [...graphNames].map(([graphId, graphName]) => ({ graphId, graphName }));
   }, [viewModel.graphOptions, viewModel.items]);
+
+  const graphFilterOptions = useMemo<GraphFilterOption[]>(
+    () => [
+      { label: 'All graphs', value: '' },
+      ...graphOptions.map(({ graphId, graphName }) => ({ label: graphName, value: graphId })),
+    ],
+    [graphOptions],
+  );
+
+  const selectedGraphFilterOption = useMemo(
+    () => graphFilterOptions.find((option) => option.value === graphFilter) ?? graphFilterOptions[0],
+    [graphFilter, graphFilterOptions],
+  );
 
   const filteredItems = useMemo(
     () => filterRunActivityItems(viewModel.items, { filter, graphId: graphFilter, query }),
@@ -659,7 +897,9 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !hasAnotherOpenModal(drawerRef.current)) onClose();
+      if (event.key === 'Escape' && !event.defaultPrevented && !hasAnotherOpenModal(drawerRef.current)) {
+        onCloseRef.current();
+      }
       if (!isNarrowViewport || event.key !== 'Tab' || drawerRef.current == null) return;
       trapFocus(drawerRef.current, event);
     };
@@ -672,7 +912,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       if (isNarrowViewport) previouslyFocusedElementRef.current?.focus();
     };
-  }, [isNarrowViewport, onClose, open]);
+  }, [isNarrowViewport, open]);
 
   useEffect(() => {
     if (previousRootRunIdRef.current === viewModel.rootRunId) return;
@@ -735,24 +975,115 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
     [commitHeight],
   );
 
-  const handleResizePointerUp = useCallback(() => {
-    resizeStateRef.current = undefined;
-    window.removeEventListener('pointermove', handleResizePointerMove);
-    window.removeEventListener('pointerup', handleResizePointerUp);
-  }, [handleResizePointerMove]);
+  const stopDrawerResize = useCallback(() => {
+    drawerResizeCleanupRef.current?.();
+    drawerResizeCleanupRef.current = undefined;
+  }, []);
+
+  useEffect(() => stopDrawerResize, [stopDrawerResize]);
+
+  const commitColumnWidth = useCallback((key: RunActivityColumnWidthKey, value: number) => {
+    const current = currentColumnWidthsRef.current;
+    const nextWidth = clampRunActivityColumnWidth(key, value);
+    if (current[key] === nextWidth) return;
+
+    const next = { ...current, [key]: nextWidth };
+    currentColumnWidthsRef.current = next;
+    if (!isColumnWidthsControlledRef.current) setUncontrolledColumnWidths(next);
+    onColumnWidthsChangeRef.current?.(next);
+  }, []);
+
+  const stopColumnResize = useCallback(() => {
+    columnResizeCleanupRef.current?.();
+    columnResizeCleanupRef.current = undefined;
+  }, []);
+
+  useEffect(() => stopColumnResize, [stopColumnResize]);
 
   useEffect(() => {
-    return () => {
-      window.removeEventListener('pointermove', handleResizePointerMove);
-      window.removeEventListener('pointerup', handleResizePointerUp);
+    if (!open || isNarrowViewport) {
+      stopDrawerResize();
+      stopColumnResize();
+    }
+  }, [isNarrowViewport, open, stopColumnResize, stopDrawerResize]);
+
+  const markHeaderControlPointerFocused = (control: Exclude<PointerFocusedHeaderControl, undefined>) => {
+    setPointerFocusedHeaderControl(control);
+  };
+
+  const clearHeaderControlPointerFocus = (control: Exclude<PointerFocusedHeaderControl, undefined>) => {
+    setPointerFocusedHeaderControl((current) => (current === control ? undefined : current));
+  };
+
+  const handleColumnResizePointerDown = (
+    key: RunActivityColumnWidthKey,
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    event.stopPropagation();
+    stopColumnResize();
+
+    const start: ColumnResizeState = {
+      key,
+      startX: event.clientX,
+      startWidth: currentColumnWidthsRef.current[key],
+      previousBodyCursor: document.body.style.cursor,
     };
-  }, [handleResizePointerMove, handleResizePointerUp]);
+    document.body.style.cursor = 'col-resize';
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      commitColumnWidth(start.key, start.startWidth + moveEvent.clientX - start.startX);
+    };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', cleanup);
+      window.removeEventListener('pointercancel', cleanup);
+      window.removeEventListener('blur', cleanup);
+      document.body.style.cursor = start.previousBodyCursor;
+      if (columnResizeCleanupRef.current === cleanup) columnResizeCleanupRef.current = undefined;
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', cleanup, { once: true });
+    window.addEventListener('pointercancel', cleanup, { once: true });
+    window.addEventListener('blur', cleanup, { once: true });
+    columnResizeCleanupRef.current = cleanup;
+  };
+
+  const handleColumnResizeKeyDown = (key: RunActivityColumnWidthKey, event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const { minWidth, maxWidth } = getRunActivityColumnWidthBounds(key);
+    const current = currentColumnWidthsRef.current[key];
+    const step = event.shiftKey ? COLUMN_RESIZE_KEYBOARD_STEP * 3 : COLUMN_RESIZE_KEYBOARD_STEP;
+    let next: number | undefined;
+    if (event.key === 'ArrowLeft') next = current - step;
+    if (event.key === 'ArrowRight') next = current + step;
+    if (event.key === 'Home') next = minWidth;
+    if (event.key === 'End') next = maxWidth;
+    if (next == null) return;
+    event.preventDefault();
+    commitColumnWidth(key, next);
+  };
 
   const handleResizePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || !event.isPrimary) return;
     event.preventDefault();
+    stopDrawerResize();
+    setIsDrawerResizing(true);
     resizeStateRef.current = { startY: event.clientY, startHeight: displayHeight };
     window.addEventListener('pointermove', handleResizePointerMove);
-    window.addEventListener('pointerup', handleResizePointerUp);
+    const cleanup = () => {
+      resizeStateRef.current = undefined;
+      setIsDrawerResizing(false);
+      window.removeEventListener('pointermove', handleResizePointerMove);
+      window.removeEventListener('pointerup', cleanup);
+      window.removeEventListener('pointercancel', cleanup);
+      window.removeEventListener('blur', cleanup);
+      if (drawerResizeCleanupRef.current === cleanup) drawerResizeCleanupRef.current = undefined;
+    };
+    window.addEventListener('pointerup', cleanup, { once: true });
+    window.addEventListener('pointercancel', cleanup, { once: true });
+    window.addEventListener('blur', cleanup, { once: true });
+    drawerResizeCleanupRef.current = cleanup;
   };
 
   const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -802,6 +1133,12 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
 
   const rootStatus = describeRootStatus(viewModel.status, viewModel.backgroundWorkPending);
   const itemSummary = `${filteredItems.length} of ${viewModel.items.length} ${viewModel.items.length === 1 ? 'activity' : 'activities'}`;
+  const drawerInlineStyle: CSSProperties & Record<`--run-activity-column-${string}`, string> = {
+    height: displayHeight,
+    '--run-activity-column-node-name': `${effectiveColumnWidths.nodeName}px`,
+    '--run-activity-column-graph-name': `${effectiveColumnWidths.graphName}px`,
+    '--run-activity-column-node-type': `${effectiveColumnWidths.nodeType}px`,
+  };
 
   return (
     <aside
@@ -811,7 +1148,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
       aria-label="Run Activity"
       aria-modal={isNarrowViewport || undefined}
       role={isNarrowViewport ? 'dialog' : 'complementary'}
-      style={{ height: displayHeight }}
+      style={drawerInlineStyle}
     >
       <button
         type="button"
@@ -820,7 +1157,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
         aria-valuemax={getMaximumRunActivityDrawerHeight()}
         aria-valuemin={MIN_RUN_ACTIVITY_DRAWER_HEIGHT}
         aria-valuenow={displayHeight}
-        className="run-activity-resize-handle"
+        className={clsx('run-activity-resize-handle', { 'is-resizing': isDrawerResizing })}
         role="separator"
         tabIndex={isNarrowViewport ? -1 : 0}
         onKeyDown={handleResizeKeyDown}
@@ -834,15 +1171,89 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
             {viewModel.durationMs == null ? '' : ` / ${formatDuration(viewModel.durationMs)}`}
           </span>
         </div>
+        <div className="run-activity-header-controls">
+          <div className="run-activity-filters">
+            <SegmentedEditor
+              label=""
+              ariaLabel="Activity type"
+              value={filter}
+              options={FILTERS}
+              isDisabled={false}
+              isReadonly={false}
+              allowOptionWrap={false}
+              onChange={(value) => setFilter(value as RunActivityFilter)}
+            />
+          </div>
+          {graphOptions.length > 1 && (
+            <div
+              className={clsx('run-activity-graph-filter', {
+                'is-pointer-focused': pointerFocusedHeaderControl === 'graph-filter',
+              })}
+              onBlur={() => clearHeaderControlPointerFocus('graph-filter')}
+              onKeyDownCapture={() => clearHeaderControlPointerFocus('graph-filter')}
+              onPointerDown={(event) => {
+                if (event.button === 0 && event.isPrimary) markHeaderControlPointerFocused('graph-filter');
+              }}
+            >
+              <Select
+                instanceId="run-activity-graph-filter"
+                classNamePrefix="run-activity-graph-select"
+                aria-label="Filter by graph"
+                options={graphFilterOptions}
+                value={selectedGraphFilterOption}
+                isSearchable={false}
+                menuPlacement="auto"
+                menuPosition={isNarrowViewport ? 'absolute' : 'fixed'}
+                menuPortalTarget={isNarrowViewport ? undefined : graphMenuPortalTarget ?? undefined}
+                onChange={(selected) => setGraphFilter(selected?.value ?? '')}
+              />
+              {!isNarrowViewport && (
+                <Portal zIndex={1000}>
+                  <div ref={setGraphMenuPortalTarget} />
+                </Portal>
+              )}
+            </div>
+          )}
+          <label
+            className={clsx('run-activity-search', {
+              'is-pointer-focused': pointerFocusedHeaderControl === 'search',
+            })}
+            onBlur={() => clearHeaderControlPointerFocus('search')}
+            onKeyDownCapture={() => clearHeaderControlPointerFocus('search')}
+            onPointerDown={(event) => {
+              if (event.button === 0 && event.isPrimary) markHeaderControlPointerFocused('search');
+            }}
+          >
+            <SearchIcon aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Search Run Activity by node title or metadata"
+              placeholder="Search node titles, graphs, tools, or models"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <span className="run-activity-summary" aria-live="polite">
+            {itemSummary}
+          </span>
+        </div>
         <div className="run-activity-header-actions">
           <label className="run-activity-follow">
             <input type="checkbox" checked={followLive} onChange={handleFollowChange} />
             <span>Follow live</span>
           </label>
           {onCopyDiagnostics && (
-            <button type="button" className="run-activity-action-button" onClick={onCopyDiagnostics}>
-              Copy diagnostics
-            </button>
+            <Tooltip content="Copy diagnostics" tag="span">
+              <button
+                type="button"
+                className="run-activity-icon-button"
+                aria-label="Copy diagnostics"
+                title={isNarrowViewport ? 'Copy diagnostics' : undefined}
+                onClick={onCopyDiagnostics}
+              >
+                <CopyIcon aria-hidden="true" />
+              </button>
+            </Tooltip>
           )}
           <button
             ref={closeButtonRef}
@@ -856,49 +1267,6 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
           </button>
         </div>
       </header>
-      <div className="run-activity-toolbar">
-        <div className="run-activity-filters" aria-label="Activity type" role="group">
-          {FILTERS.map((option) => (
-            <button
-              type="button"
-              key={option.value}
-              className="run-activity-filter"
-              aria-pressed={filter === option.value}
-              onClick={() => setFilter(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-        {graphOptions.length > 1 && (
-          <select
-            className="run-activity-graph-filter"
-            aria-label="Filter by graph"
-            value={graphFilter}
-            onChange={(event) => setGraphFilter(event.target.value)}
-          >
-            <option value="">All graphs</option>
-            {graphOptions.map((option) => (
-              <option key={option.graphId} value={option.graphId}>
-                {option.graphName}
-              </option>
-            ))}
-          </select>
-        )}
-        <label className="run-activity-search">
-          <SearchIcon aria-hidden="true" />
-          <input
-            type="search"
-            aria-label="Search Run Activity by node title or metadata"
-            placeholder="Search node titles, graphs, tools, or models"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-        <span className="run-activity-summary" aria-live="polite">
-          {itemSummary}
-        </span>
-      </div>
       {viewModel.partialReason && (
         <div className="run-activity-notice">Partial activity: {viewModel.partialReason}</div>
       )}
@@ -914,18 +1282,25 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
               {getEmptyStateMessage(viewModel.items.length, filter, graphFilter, query)}
             </div>
           ) : (
-            filteredItems.map((item) => (
-              <RunActivityRow
-                key={item.activityKey}
-                item={item}
-                expanded={expandedKeys.has(item.activityKey)}
-                onToggle={() => toggleExpanded(item.activityKey)}
-                onLocate={onLocate}
-                onOpenFullOutput={onOpenFullOutput}
-                onInspectResponse={onInspectResponse}
-                renderExpandedContent={renderExpandedContent}
+            <>
+              <RunActivityColumnHeader
+                columnWidths={effectiveColumnWidths}
+                onPointerDown={handleColumnResizePointerDown}
+                onKeyDown={handleColumnResizeKeyDown}
               />
-            ))
+              {filteredItems.map((item) => (
+                <RunActivityRow
+                  key={item.activityKey}
+                  item={item}
+                  expanded={expandedKeys.has(item.activityKey)}
+                  onToggle={() => toggleExpanded(item.activityKey)}
+                  onLocate={onLocate}
+                  onOpenFullOutput={onOpenFullOutput}
+                  onInspectResponse={onInspectResponse}
+                  renderExpandedContent={renderExpandedContent}
+                />
+              ))}
+            </>
           )}
         </div>
         {newActivityCount > 0 && (
@@ -935,6 +1310,71 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
         )}
       </div>
     </aside>
+  );
+};
+
+const RunActivityColumnHeader: FC<{
+  columnWidths: RunActivityColumnWidths;
+  onPointerDown(key: RunActivityColumnWidthKey, event: ReactPointerEvent<HTMLButtonElement>): void;
+  onKeyDown(key: RunActivityColumnWidthKey, event: ReactKeyboardEvent<HTMLButtonElement>): void;
+}> = ({ columnWidths, onPointerDown, onKeyDown }) => (
+  <div className="run-activity-column-header" aria-label="Run Activity columns">
+    <span aria-hidden="true" />
+    <RunActivityColumnHeaderCell
+      label="Node name"
+      widthKey="nodeName"
+      width={columnWidths.nodeName}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+    />
+    <RunActivityColumnHeaderCell
+      label="Graph name"
+      widthKey="graphName"
+      width={columnWidths.graphName}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+    />
+    <RunActivityColumnHeaderCell
+      label="Node type"
+      className="node-type"
+      widthKey="nodeType"
+      width={columnWidths.nodeType}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+    />
+    <span className="run-activity-column-header-cell preview">Result</span>
+    <span className="run-activity-column-header-cell align-end">Started</span>
+    <span className="run-activity-column-header-cell align-end">Duration</span>
+    <span aria-hidden="true" />
+  </div>
+);
+
+const RunActivityColumnHeaderCell: FC<{
+  label: string;
+  widthKey: RunActivityColumnWidthKey;
+  width: number;
+  className?: string;
+  onPointerDown(key: RunActivityColumnWidthKey, event: ReactPointerEvent<HTMLButtonElement>): void;
+  onKeyDown(key: RunActivityColumnWidthKey, event: ReactKeyboardEvent<HTMLButtonElement>): void;
+}> = ({ label, widthKey, width, className, onPointerDown, onKeyDown }) => {
+  const { minWidth, maxWidth } = getRunActivityColumnWidthBounds(widthKey);
+  return (
+    <span className={clsx('run-activity-column-header-cell', className)}>
+      {label}
+      <button
+        type="button"
+        className={clsx('run-activity-column-resize-handle', className)}
+        aria-label={`Resize ${label} column`}
+        title={`Drag to resize ${label}`}
+        aria-orientation="vertical"
+        aria-valuemin={minWidth}
+        aria-valuemax={maxWidth}
+        aria-valuenow={width}
+        role="separator"
+        onPointerDown={(event) => onPointerDown(widthKey, event)}
+        onKeyDown={(event) => onKeyDown(widthKey, event)}
+      />
+    </span>
   );
 };
 
@@ -949,7 +1389,10 @@ const RunActivityRow: FC<{
 }> = ({ item, expanded, onToggle, onLocate, onOpenFullOutput, onInspectResponse, renderExpandedContent }) => {
   const preview = item.error ?? item.preview ?? describeActivity(item);
   return (
-    <article className={`run-activity-row status-${item.status}`} data-activity-key={item.activityKey}>
+    <article
+      className={clsx('run-activity-row', `status-${item.status}`, { 'is-expanded': expanded })}
+      data-activity-key={item.activityKey}
+    >
       <button
         type="button"
         className="run-activity-row-toggle"
@@ -964,13 +1407,15 @@ const RunActivityRow: FC<{
             {item.graphName} / {item.nodeType}
           </span>
         </span>
+        <span className="run-activity-graph-name">{item.graphName}</span>
+        <span className="run-activity-node-type">{item.nodeType}</span>
         <span className={clsx('run-activity-preview', { error: item.error })}>{preview}</span>
-        <span className="run-activity-row-timing">
+        <span className="run-activity-started-at">
           {item.startedAt != null && (
             <time dateTime={new Date(item.startedAt).toISOString()}>{formatTime(item.startedAt)}</time>
           )}
-          {item.durationMs != null && <span>{formatDuration(item.durationMs)}</span>}
         </span>
+        <span className="run-activity-duration">{item.durationMs != null && formatDuration(item.durationMs)}</span>
         <span className="run-activity-chevron" aria-hidden="true">
           {expanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
         </span>

@@ -234,6 +234,71 @@ Run Activity must not consume a workspace tab in the top strip. The drawer uses
 the app's semantic panel, strip, form-control, node-body, border, and foreground
 tokens so built-in and custom themes remain the single styling owner.
 
+### Drawer controls and columns
+
+The drawer deliberately reuses the editor's `SegmentedEditor` for the **All / LLM
+and tools / Errors** filter and the ordinary Atlaskit `Select` surface for the
+graph filter. Do not add a Run Activity-specific segmented control, native
+select, or custom Select theme: the graph picker must inherit Rivet's standard
+focus, sizing, theme, arrow, and menu behavior. The graph picker may portal
+above the desktop drawer, but it must stay inside the modal drawer at narrow
+widths so its menu remains inside the dialog's focus boundary.
+Use a stable Select `instanceId`, not a custom `inputId`, so the shared
+React-Select theme selectors continue to recognize the picker.
+
+Those filters, search, and the result count belong in the drawer's primary
+header rather than a second toolbar row. When the drawer becomes too narrow,
+the control group may wrap inside that same header; it must not overflow or be
+hidden. Pointer focus for the graph selector and search should remain visually
+quiet, while keyboard `:focus-visible` remains discoverable. The header's
+diagnostics action is the shared clipboard icon with an accessible **Copy
+diagnostics** label and tooltip, not a separate text-button treatment.
+On narrow/modal layouts, where the shared portal tooltip sits below the modal
+layer, keep the same accessible label and provide the native title fallback
+instead of raising the global tooltip layer above dialogs.
+
+The desktop graph-picker portal only needs to sit above the drawer. Keep it at
+the standard dropdown layer rather than above application modals. Cancel both
+drawer and column resize listeners when the drawer closes or becomes a narrow
+modal, and only start a resize from the primary pointer. The narrow modal's
+initial focus and focus restoration belong to its open/close lifecycle, not to
+incidental rerenders from live journal updates. If a pointer-focused header
+control receives keyboard input, clear its pointer-focus mode immediately so
+the standard keyboard focus affordance becomes visible again.
+
+The desktop resize handle keeps its full hit target and keyboard separator
+semantics. Its hover and active affordance is a thin line across the full top
+edge of the drawer, matching other resizable editor edges; do not replace it
+with a centered grabber or decorative drawer shadow.
+Its keyboard separator uses **Arrow Up/Down** to change the height by 24px and
+**Home/End** to jump to the minimum/maximum height. Every resizable column
+header is likewise a bounded `role="separator"`: **Arrow Left/Right** changes
+its width by 16px, **Shift+Arrow Left/Right** by 48px, and **Home/End** jumps
+to that column's minimum/maximum. Keep the `aria-value*` metadata synchronized
+with these bounds and the current persisted width.
+The desktop drawer root must leave that hit target unclipped; clip the scroll
+content instead. Narrow/modal layouts can clip the whole drawer because their
+resize handle is absent.
+
+Desktop rows expose the stable presentation fields as separate columns: **Node
+name**, **Graph name**, **Node type**, **Result**, **Started**, and **Duration**.
+The header and every collapsed row must share one CSS-grid template; changing one
+without the other causes visible column drift. `nodeName`, `graphName`, and
+`nodeType` have keyboard- and pointer-resizable headers. Their user-local widths
+are persisted in `runActivityColumnWidthsState`, normalized against bounded
+defaults, and belong to UI state only—not project YAML, recordings, execution
+events, or diagnostics.
+
+At narrower desktop widths, hide lower-priority columns before forcing an
+unreadable horizontal table. Those breakpoints are container queries on the
+drawer, rather than viewport queries: an open left sidebar can reduce the
+drawer's actual width long before the application viewport becomes narrow. At
+modal/mobile widths, hide the column header and use the compact row with
+graph/type metadata under the node title. The expanded surface remains a
+controlled Run Activity disclosure: it reuses the editor's collapsible surface
+tokens and chevrons, while its expansion state stays owned by the current root
+run rather than becoming persisted node-editor state.
+
 The Runtime value uses the same selected root as the drawer. While that root is
 live it advances from the recorded start time; after completion it freezes at
 `finishedAt - startedAt`, including after a project switch or status-bar

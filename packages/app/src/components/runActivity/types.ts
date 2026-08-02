@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { GraphId, GraphRunId, NodeId, ProcessId, RootRunId } from '@valerypopoff/rivet2-core';
+import type { RunActivityColumnWidths } from '../../features/runActivity/runActivityColumnWidths.js';
 
 export type RunActivityStatus = 'idle' | 'running' | 'outputs-ready' | 'completed' | 'failed' | 'aborted';
 
@@ -99,6 +100,9 @@ export interface RunActivityDrawerProps {
   onCopyDiagnostics?(): void;
   height?: number;
   onHeightChange?(height: number): void;
+  /** User-local desktop column preferences, owned by the renderer rather than the drawer. */
+  columnWidths?: RunActivityColumnWidths;
+  onColumnWidthsChange?(widths: RunActivityColumnWidths): void;
   /** Lets the host render rich, lazily resolved output without coupling this component to execution atoms. */
   renderExpandedContent?(item: RunActivityItemViewModel): ReactNode;
   className?: string;

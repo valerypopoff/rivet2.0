@@ -85,6 +85,8 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
   const located: string[] = [];
   const fullOutputs: string[] = [];
   const inspected: string[] = [];
+  const diagnosticsCopied: boolean[] = [];
+  const columnWidths: Array<{ nodeName: number; graphName: number; nodeType: number }> = [];
   const viewModel: RunActivityViewModel = {
     status: 'outputs-ready',
     durationMs: 1_234,
@@ -104,6 +106,8 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
           onLocate={(item) => located.push(item.activityKey)}
           onOpenFullOutput={(item) => fullOutputs.push(item.activityKey)}
           onInspectResponse={(item) => inspected.push(item.activityKey)}
+          onCopyDiagnostics={() => diagnosticsCopied.push(true)}
+          onColumnWidthsChange={(widths) => columnWidths.push(widths)}
         />,
       );
     });
@@ -112,8 +116,48 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
     assert.match(document.body.textContent ?? '', /Outputs ready; async work still running/);
     assert.match(document.body.textContent ?? '', /Partial activity: This legacy recording/);
     assert.match(document.body.textContent ?? '', /2 older activities are omitted/);
+    assert.match(document.body.textContent ?? '', /Node name/);
+    assert.match(document.body.textContent ?? '', /Graph name/);
+    assert.match(document.body.textContent ?? '', /Node type/);
+    assert.match(document.body.textContent ?? '', /Result/);
+    assert.match(document.body.textContent ?? '', /Started/);
+    assert.match(document.body.textContent ?? '', /Duration/);
+    assert.ok(document.querySelector('#react-select-run-activity-graph-filter-input'));
+    assert.ok(document.querySelector('.run-activity-header-controls'));
+    assert.equal(document.querySelector('.run-activity-toolbar'), null);
+
+    const copyDiagnosticsButton = document.querySelector<HTMLButtonElement>('[aria-label="Copy diagnostics"]')!;
+    assert.equal(copyDiagnosticsButton.textContent, '');
+    await act(async () => copyDiagnosticsButton.click());
+    assert.deepEqual(diagnosticsCopied, [true]);
+
+    const searchInput = document.querySelector<HTMLInputElement>('[aria-label^="Search Run Activity"]')!;
+    const searchControl = searchInput.closest<HTMLElement>('.run-activity-search')!;
+    await act(async () => {
+      dispatchPrimaryPointerDown(dom, searchInput);
+      searchInput.focus();
+    });
+    assert.equal(searchControl.classList.contains('is-pointer-focused'), true);
+    await act(async () => {
+      searchInput.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    assert.equal(searchControl.classList.contains('is-pointer-focused'), false);
+
+    const graphFilterInput = document.querySelector<HTMLInputElement>('#react-select-run-activity-graph-filter-input')!;
+    const graphFilter = graphFilterInput.closest<HTMLElement>('.run-activity-graph-filter')!;
+    await act(async () => {
+      dispatchPrimaryPointerDown(dom, graphFilterInput);
+      graphFilterInput.focus();
+    });
+    assert.equal(graphFilter.classList.contains('is-pointer-focused'), true);
+    await act(async () => {
+      graphFilterInput.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    assert.equal(graphFilter.classList.contains('is-pointer-focused'), false);
 
     const modelRow = document.querySelector<HTMLElement>('[data-activity-key="root:graph:model:process"]')!;
+    assert.equal(modelRow.querySelector('.run-activity-graph-name')?.textContent, 'Main graph');
+    assert.equal(modelRow.querySelector('.run-activity-node-type')?.textContent, 'LLM Chat');
     await act(async () => modelRow.querySelector<HTMLButtonElement>('.run-activity-row-toggle')!.click());
     const buttons = [...modelRow.querySelectorAll<HTMLButtonElement>('.run-activity-row-actions button')];
     assert.deepEqual(
@@ -127,12 +171,21 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
     assert.deepEqual(fullOutputs, ['root:graph:model:process']);
     assert.deepEqual(inspected, ['root:graph:model:process']);
 
-    const errorsFilter = [...document.querySelectorAll<HTMLButtonElement>('.run-activity-filter')].find(
+    const errorsFilter = [...document.querySelectorAll<HTMLButtonElement>('.segmented-choice-option')].find(
       (button) => button.textContent === 'Errors',
     )!;
     await act(async () => errorsFilter.click());
     assert.equal(document.querySelectorAll('[data-activity-key]').length, 1);
     assert.match(document.body.textContent ?? '', /Fetch URL/);
+
+    const resizeNodeName = document.querySelector<HTMLButtonElement>('[aria-label="Resize Node name column"]')!;
+    await act(async () => {
+      resizeNodeName.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    });
+    assert.equal(columnWidths.at(-1)?.nodeName, 246);
+    // A callback alone is observational. The drawer must remain usable unless
+    // its caller explicitly supplies the controlled `columnWidths` value.
+    assert.equal(resizeNodeName.getAttribute('aria-valuenow'), '246');
   } finally {
     await act(async () => root.unmount());
     restore();
@@ -219,6 +272,75 @@ test('synchronizes an oversized desktop height and leaves narrow persisted heigh
   }
 });
 
+test('cancels active desktop resizes when the drawer closes or becomes narrow', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/' });
+  let narrow = false;
+  const mediaListeners = new Set<() => void>();
+  Object.defineProperty(dom.window, 'matchMedia', {
+    configurable: true,
+    value: () => ({
+      get matches() {
+        return narrow;
+      },
+      media: '(max-width: 720px)',
+      onchange: null,
+      addEventListener: (type: string, listener: () => void) => {
+        if (type === 'change') mediaListeners.add(listener);
+      },
+      removeEventListener: (type: string, listener: () => void) => {
+        if (type === 'change') mediaListeners.delete(listener);
+      },
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => true,
+    }),
+  });
+  const restore = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const heights: number[] = [];
+  const widths: Array<{ nodeName: number; graphName: number; nodeType: number }> = [];
+  const renderDrawer = async (open: boolean) => {
+    await act(async () => {
+      root.render(
+        <RunActivityDrawer
+          open={open}
+          viewModel={{ status: 'completed', items: ITEMS }}
+          onClose={() => undefined}
+          onHeightChange={(height) => heights.push(height)}
+          onColumnWidthsChange={(width) => widths.push(width)}
+        />,
+      );
+    });
+  };
+
+  try {
+    await renderDrawer(true);
+    const drawerResize = dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Resize Run Activity"]')!;
+    await act(async () => dispatchPrimaryPointerDown(dom, drawerResize, { clientY: 300 }));
+
+    narrow = true;
+    await act(async () => mediaListeners.forEach((listener) => listener()));
+    await act(async () => dispatchPointerMove(dom, dom.window, { clientY: 120 }));
+    assert.deepEqual(heights, []);
+
+    narrow = false;
+    await act(async () => mediaListeners.forEach((listener) => listener()));
+    const columnResize = dom.window.document.querySelector<HTMLButtonElement>(
+      '[aria-label="Resize Node name column"]',
+    )!;
+    await act(async () => dispatchPrimaryPointerDown(dom, columnResize, { clientX: 300 }));
+    assert.equal(dom.window.document.body.style.cursor, 'col-resize');
+
+    await renderDrawer(false);
+    assert.equal(dom.window.document.body.style.cursor, '');
+    await act(async () => dispatchPointerMove(dom, dom.window, { clientX: 460 }));
+    assert.deepEqual(widths, []);
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
+
 test('Escape closes a modal opened from the drawer before it closes the drawer', async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/' });
   const restore = installDomGlobals(dom);
@@ -244,6 +366,11 @@ test('Escape closes a modal opened from the drawer before it closes the drawer',
     assert.equal(closeCount, 0);
 
     nestedModal.remove();
+    const handledEscape = new dom.window.KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    handledEscape.preventDefault();
+    dom.window.dispatchEvent(handledEscape);
+    assert.equal(closeCount, 0);
+
     dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
     assert.equal(closeCount, 1);
   } finally {
@@ -258,6 +385,7 @@ function installDomGlobals(dom: JSDOM): () => void {
     document: globalThis.document,
     navigator: globalThis.navigator,
     HTMLElement: globalThis.HTMLElement,
+    ResizeObserver: globalThis.ResizeObserver,
     requestAnimationFrame: globalThis.requestAnimationFrame,
     cancelAnimationFrame: globalThis.cancelAnimationFrame,
     IS_REACT_ACT_ENVIRONMENT: (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT,
@@ -267,6 +395,18 @@ function installDomGlobals(dom: JSDOM): () => void {
     document: { configurable: true, value: dom.window.document },
     navigator: { configurable: true, value: dom.window.navigator },
     HTMLElement: { configurable: true, value: dom.window.HTMLElement },
+    ResizeObserver: {
+      configurable: true,
+      value: class ResizeObserver {
+        observe() {
+          // JSDOM has no layout observer; the segmented control only needs a
+          // no-op implementation for this rendering-level test.
+        }
+        disconnect() {
+          // No-op.
+        }
+      },
+    },
     requestAnimationFrame: {
       configurable: true,
       value: (callback: FrameRequestCallback) => dom.window.setTimeout(() => callback(Date.now()), 0),
@@ -286,9 +426,34 @@ function installDomGlobals(dom: JSDOM): () => void {
       document: { configurable: true, value: previous.document },
       navigator: { configurable: true, value: previous.navigator },
       HTMLElement: { configurable: true, value: previous.HTMLElement },
+      ResizeObserver: { configurable: true, value: previous.ResizeObserver },
       requestAnimationFrame: { configurable: true, value: previous.requestAnimationFrame },
       cancelAnimationFrame: { configurable: true, value: previous.cancelAnimationFrame },
       IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: previous.IS_REACT_ACT_ENVIRONMENT },
     });
   };
+}
+
+function dispatchPrimaryPointerDown(
+  dom: JSDOM,
+  element: HTMLElement,
+  position: { clientX?: number; clientY?: number } = {},
+): void {
+  const event = new dom.window.Event('pointerdown', { bubbles: true });
+  Object.defineProperties(event, {
+    button: { value: 0 },
+    isPrimary: { value: true },
+    clientX: { value: position.clientX ?? 0 },
+    clientY: { value: position.clientY ?? 0 },
+  });
+  element.dispatchEvent(event);
+}
+
+function dispatchPointerMove(dom: JSDOM, target: EventTarget, position: { clientX?: number; clientY?: number }): void {
+  const event = new dom.window.Event('pointermove');
+  Object.defineProperties(event, {
+    clientX: { value: position.clientX ?? 0 },
+    clientY: { value: position.clientY ?? 0 },
+  });
+  target.dispatchEvent(event);
 }
