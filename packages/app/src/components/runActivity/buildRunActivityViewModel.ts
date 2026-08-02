@@ -119,6 +119,7 @@ function buildInvocationViewModel(
     children.some((child) => child.status === 'error' || child.status === 'interrupted');
   const detailRows = buildDetailRows(invocation, resolved, category);
   const primaryModelCall = getEffectiveModelCall(invocation.modelCalls);
+  const searchTerms = buildInvocationSearchTerms(invocation, resolved.searchTerms);
 
   return {
     activityKey: invocation.key,
@@ -149,12 +150,24 @@ function buildInvocationViewModel(
     ...(invocation.toolCallCount > 0 ? { toolCallCount: invocation.toolCallCount } : {}),
     ...(detailRows.length === 0 ? {} : { detailRows }),
     ...(children.length === 0 ? {} : { children }),
-    ...(resolved.searchTerms == null ? {} : { searchTerms: resolved.searchTerms }),
+    ...(searchTerms.length === 0 ? {} : { searchTerms }),
     navigable: resolved.navigable ?? false,
     fullOutputAvailable: resolved.fullOutputAvailable ?? (resolved.runData != null && invocation.outputsAvailable),
     inspectable: resolved.inspectable ?? false,
     ...(hasErrors ? { hasErrors: true } : {}),
   };
+}
+
+function buildInvocationSearchTerms(
+  invocation: RunActivityNodeInvocation,
+  resolvedSearchTerms: readonly string[] | undefined,
+): string[] {
+  const terms = [
+    ...(resolvedSearchTerms ?? []),
+    ...invocation.modelCalls.flatMap((call) => [call.provider, call.model]),
+    ...invocation.toolCalls.map((call) => call.toolName),
+  ];
+  return [...new Set(terms.map(normalizeNonEmptyLabel).filter((term): term is string => term != null))];
 }
 
 function normalizeNonEmptyLabel(value: string | undefined): string | undefined {

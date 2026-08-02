@@ -10,10 +10,6 @@ import {
   type RivetWebAppStorage,
   type StringArrayDataValue,
   type GraphId,
-  type AgentResponseTrace,
-  type AgentTraceEvent,
-  type GraphExecutionMetadata,
-  buildAgentResponseTrace,
 } from '@valerypopoff/rivet2-core';
 import { useCurrentExecution } from './useCurrentExecution';
 import { graphState } from '../state/graph';
@@ -72,14 +68,12 @@ import {
 } from './remoteDebuggerDiagnostics.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
-
-type RemoteResponseTraceState = {
-  callback: (trace: AgentResponseTrace) => void;
-  events: AgentTraceEvent[];
-  startedAt: number;
-  execution?: GraphExecutionMetadata;
-  delivered: boolean;
-};
+import {
+  captureRemoteResponseTraceRootExecution,
+  collectRemoteAgentTraceEvent,
+  emitRemoteResponseTrace,
+  type RemoteResponseTraceState,
+} from './remoteResponseTrace.js';
 
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
@@ -251,6 +245,7 @@ export function useRemoteExecutor() {
           }
           break;
         case 'start':
+          captureRemoteResponseTraceRootExecution(responseTraceByRequestIdRef.current, requestId, data);
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.start(data);
           }
@@ -341,6 +336,7 @@ export function useRemoteExecutor() {
           executorSession.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
           break;
         case 'graphStart':
+          captureRemoteResponseTraceRootExecution(responseTraceByRequestIdRef.current, requestId, data);
           if (shouldDispatchExecutionEvent) {
             eventDispatcher.graphStart(data);
           }
@@ -792,55 +788,6 @@ export function useRemoteExecutor() {
     tryRunTests,
     submitUserInput,
   };
-}
-
-function collectRemoteAgentTraceEvent(
-  traces: Map<RemoteRunRequestId, RemoteResponseTraceState>,
-  requestId: RemoteRunRequestId | undefined,
-  type: AgentTraceEvent['type'],
-  data: unknown,
-): void {
-  if (requestId == null) return;
-  const trace = traces.get(requestId);
-  if (trace == null || trace.delivered || typeof data !== 'object' || data == null) return;
-  const event = { type, ...data } as AgentTraceEvent;
-  trace.execution ??= event.execution;
-  trace.events.push(event);
-}
-
-function emitRemoteResponseTrace(
-  traces: Map<RemoteRunRequestId, RemoteResponseTraceState>,
-  requestId: RemoteRunRequestId | undefined,
-  data: unknown,
-  backgroundWorkPending: boolean,
-  terminalStatus?: 'error' | 'aborted',
-): void {
-  if (requestId == null) return;
-  const state = traces.get(requestId);
-  if (state == null || state.delivered) return;
-  const eventExecution =
-    typeof data === 'object' && data != null && 'execution' in data
-      ? (data as { execution?: GraphExecutionMetadata }).execution
-      : undefined;
-  state.execution ??= eventExecution;
-  if (state.execution == null) return;
-
-  const now = Date.now();
-  const trace = buildAgentResponseTrace({
-    scope: 'response',
-    execution: state.execution,
-    events: state.events,
-    startedAt: state.startedAt,
-    ...(backgroundWorkPending ? { responseReadyAt: now } : { finishedAt: now }),
-    status: terminalStatus ?? (backgroundWorkPending ? 'response-ready' : 'completed'),
-    backgroundWorkPending,
-  });
-  state.delivered = true;
-  try {
-    state.callback(trace);
-  } catch (error) {
-    logRuntimeDebug('Response trace observer failed.', { error });
-  }
 }
 
 function getActiveGraphRunRequestId(

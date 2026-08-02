@@ -127,16 +127,27 @@ void describe('UiGraphActionProtocol', () => {
     assert.equal(isRivetWebAppRunTerminalEvent(completed), true);
     assert.equal(isRivetWebAppRunTerminalEvent(accepted), false);
     assert.deepEqual(completed?.type === 'action.completed' ? completed.responseTrace : undefined, responseTrace);
-    assert.equal(
-      parseRivetWebAppServerMessage({
-        type: 'action.completed',
-        requestId: 'request',
-        runId: 'run',
-        sequence: 3,
-        statePatch: {},
-        responseTrace: { ...responseTrace, messages: ['secret'] },
-      }),
-      undefined,
-    );
+    for (const invalidOrFutureTrace of [
+      { ...responseTrace, messages: ['secret'] },
+      { ...responseTrace, schemaVersion: responseTrace.schemaVersion + 1 },
+    ]) {
+      assert.deepEqual(
+        parseRivetWebAppServerMessage({
+          type: 'action.completed',
+          requestId: 'request',
+          runId: 'run',
+          sequence: 3,
+          statePatch: { result: 'Still valid' },
+          responseTrace: invalidOrFutureTrace,
+        }),
+        {
+          type: 'action.completed',
+          requestId: 'request',
+          runId: 'run',
+          sequence: 3,
+          statePatch: { result: 'Still valid' },
+        },
+      );
+    }
   });
 });

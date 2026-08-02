@@ -1,4 +1,4 @@
-import { type FC, useEffect, useRef } from 'react';
+import { type FC, useEffect, useState } from 'react';
 import { css } from '@emotion/react';
 import { useTotalRunCost } from '../hooks/useTotalRunCost';
 import { useAtom, useAtomValue } from 'jotai';
@@ -62,14 +62,13 @@ export const StatusBar: FC<{}> = () => {
   const graphStartTime = useAtomValue(graphStartTimeState);
   const runActivityJournal = useAtomValue(runActivityJournalState);
   const [runActivityOpen, setRunActivityOpen] = useAtom(runActivityDrawerOpenState);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
   const runtimeTiming = resolveRuntimeStatusTiming({
     graphRunning,
     graphStartTime,
     journal: runActivityJournal,
-    now: Date.now(),
+    now: currentTime,
   });
-
-  const runtimeRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!runtimeTiming.isLive) {
@@ -78,14 +77,7 @@ export const StatusBar: FC<{}> = () => {
 
     let animationFrameId: number | undefined;
     const updateRuntime = () => {
-      const runtime = runtimeRef.current;
-      if (runtime == null) {
-        return;
-      }
-
-      if (runtimeTiming.startedAt != null) {
-        runtime.innerText = formatRuntime(Math.max(0, Date.now() - runtimeTiming.startedAt));
-      }
+      setCurrentTime(Date.now());
       animationFrameId = requestAnimationFrame(updateRuntime);
     };
 
@@ -107,7 +99,7 @@ export const StatusBar: FC<{}> = () => {
         title={runActivityOpen ? 'Close Run Activity' : 'Open Run Activity'}
         onClick={() => setRunActivityOpen((current) => !current)}
       >
-        Runtime: <strong ref={runtimeRef}>{formatRuntimeOrPlaceholder(runtimeTiming.elapsedMs)}</strong>
+        Runtime: <strong>{formatRuntimeOrPlaceholder(runtimeTiming.elapsedMs)}</strong>
       </button>
       {cost > 0 && (
         <div className="cost">

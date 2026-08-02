@@ -235,6 +235,70 @@ describe('UiGraphRuntimeModel', () => {
     );
   });
 
+  it('purges response trace IDs and data when Chat response inspection is disabled', () => {
+    const chatId = 'opt-out-chat' as UiComponentId;
+    const enabledUiGraph: UiGraph = {
+      components: [{ action: { type: 'runGraph' }, allowResponseInspection: true, id: chatId, type: 'chat' }],
+      id: 'opt-out-trace-app' as UiGraphId,
+      name: 'Opt-out trace app',
+    };
+    const disabledUiGraph: UiGraph = {
+      ...enabledUiGraph,
+      components: [{ action: { type: 'runGraph' }, allowResponseInspection: false, id: chatId, type: 'chat' }],
+    };
+    const storageValues = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      removeItem: (key: string) => storageValues.delete(key),
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+    };
+    const location = { origin: 'https://example.test', pathname: '/apps/opt-out-traces/' };
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution: {
+        graphId: 'graph',
+        graphRunId: 'graph-run',
+        rootRunId: 'opt-out-trace',
+      } as GraphExecutionMetadata,
+      events: [],
+      status: 'completed',
+    });
+    const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+    const state = {
+      [messagesKey]: [
+        { content: 'Question', role: 'user' },
+        { content: 'Answer', responseTraceId: trace.traceId, role: 'assistant' },
+      ],
+    };
+
+    saveUiGraphResponseTrace(enabledUiGraph, chatId, trace, storage, location);
+    saveUiGraphChatPersistentState(enabledUiGraph, state, storage, location);
+    assert.equal(
+      loadUiGraphResponseTrace(enabledUiGraph, chatId, trace.traceId, storage, location)?.traceId,
+      trace.traceId,
+    );
+
+    saveUiGraphChatPersistentState(disabledUiGraph, state, storage, location);
+
+    assert.deepEqual(loadUiGraphChatPersistentState(disabledUiGraph, storage, location), {
+      [messagesKey]: [
+        { content: 'Question', role: 'user' },
+        { content: 'Answer', role: 'assistant' },
+      ],
+    });
+    assert.equal(loadUiGraphResponseTrace(disabledUiGraph, chatId, trace.traceId, storage, location), undefined);
+    assert.equal(
+      [...storageValues.values()].some((value) => value.includes(trace.traceId)),
+      false,
+    );
+
+    saveUiGraphResponseTrace(disabledUiGraph, chatId, trace, storage, location);
+    assert.equal(
+      [...storageValues.values()].some((value) => value.includes(trace.traceId)),
+      false,
+    );
+  });
+
   it('isolates graph-managed browser storage by app URL and UI graph ID', () => {
     const uiGraph: UiGraph = { components: [], id: 'settings-app' as UiGraphId, name: 'Settings app' };
     const otherUiGraph: UiGraph = { ...uiGraph, id: 'other-app' as UiGraphId };

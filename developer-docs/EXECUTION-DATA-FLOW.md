@@ -1518,6 +1518,11 @@ and tool-call identities; timing-based association is forbidden. Observer,
 serialization, and trace-building failures are non-fatal and cannot alter graph
 execution or cost accounting.
 
+Response traces always take their public graph identity and terminal boundary
+from the root graph execution. Physical model and tool rows from nested graphs
+remain part of the trace, but nested graph lifecycle events cannot finalize or
+re-identify the response.
+
 These events are deliberately privacy-bounded. Do not add prompts, conversation
 messages, response text, reasoning, tool arguments/results, retrieved documents,
 raw provider bodies, headers, credentials, or raw errors. Old recordings without

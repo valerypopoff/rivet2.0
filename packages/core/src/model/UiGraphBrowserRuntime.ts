@@ -215,6 +215,33 @@ function getUiGraphResponseTraceStorageKey(
   ].join(':');
 }
 
+const isUiGraphResponseInspectionEnabled = (uiGraph: UiGraph, componentId: string): boolean =>
+  uiGraph.components.some(
+    (component) =>
+      component.type === 'chat' && component.id === componentId && component.allowResponseInspection === true,
+  );
+
+const removeUiGraphChatResponseTraceIds = (messages: readonly UiGraphChatMessage[]): UiGraphChatMessage[] =>
+  messages.map((message) => {
+    if (message.responseTraceId == null) return message;
+    const sanitized = { ...message };
+    delete sanitized.responseTraceId;
+    return sanitized;
+  });
+
+const purgeDisabledUiGraphResponseTraces = (
+  uiGraph: UiGraph,
+  storage: UiGraphBrowserStorage | undefined,
+  location?: UiGraphStorageLocation,
+): void => {
+  for (const component of uiGraph.components) {
+    if (component.type !== 'chat' || component.allowResponseInspection === true) continue;
+    const key =
+      getUiGraphResponseTraceStorageKey(uiGraph, component.id, location) ?? `memory:${uiGraph.id}:${component.id}`;
+    persistUiGraphResponseTraces(key, [], storage);
+  }
+};
+
 /** Persists a validated trace outside Chat history so it never enters model context. */
 export function saveUiGraphResponseTrace(
   uiGraph: UiGraph,
@@ -224,6 +251,12 @@ export function saveUiGraphResponseTrace(
   location?: UiGraphStorageLocation,
 ): void {
   if (!isAgentResponseTrace(trace)) return;
+  if (!isUiGraphResponseInspectionEnabled(uiGraph, componentId)) {
+    const key =
+      getUiGraphResponseTraceStorageKey(uiGraph, componentId, location) ?? `memory:${uiGraph.id}:${componentId}`;
+    persistUiGraphResponseTraces(key, [], storage);
+    return;
+  }
   const key =
     getUiGraphResponseTraceStorageKey(uiGraph, componentId, location) ?? `memory:${uiGraph.id}:${componentId}`;
   const traces = loadUiGraphResponseTraces(uiGraph, componentId, storage, location).filter(
@@ -242,6 +275,7 @@ export function loadUiGraphResponseTrace(
   storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
   location?: UiGraphStorageLocation,
 ): AgentResponseTrace | undefined {
+  if (!isUiGraphResponseInspectionEnabled(uiGraph, componentId)) return undefined;
   return loadUiGraphResponseTraces(uiGraph, componentId, storage, location).find((trace) => trace.traceId === traceId);
 }
 
@@ -254,11 +288,14 @@ export function pruneUiGraphResponseTraces(
 ): void {
   for (const component of uiGraph.components) {
     if (component.type !== 'chat') continue;
-    const referenced = new Set(
-      getUiGraphChatMessages(component.id, state).flatMap((message) =>
-        typeof message.responseTraceId === 'string' ? [message.responseTraceId] : [],
-      ),
-    );
+    const referenced =
+      component.allowResponseInspection === true
+        ? new Set(
+            getUiGraphChatMessages(component.id, state).flatMap((message) =>
+              typeof message.responseTraceId === 'string' ? [message.responseTraceId] : [],
+            ),
+          )
+        : new Set<string>();
     const key =
       getUiGraphResponseTraceStorageKey(uiGraph, component.id, location) ?? `memory:${uiGraph.id}:${component.id}`;
     const retained = loadUiGraphResponseTraces(uiGraph, component.id, storage, location).filter((trace) =>
@@ -398,13 +435,15 @@ export function getUiGraphChatPersistentState(
     const pinsStateKey = getUiGraphChatPinsStateKey(component.id);
     const draft = state[draftStateKey];
     const messages = getUiGraphChatMessages(component.id, state);
+    const persistedMessages =
+      component.allowResponseInspection === true ? messages : removeUiGraphChatResponseTraceIds(messages);
     const pins = getUiGraphChatPins(component.id, state).map((pin) => pin.messageIndex);
 
     if (typeof draft === 'string' && draft) {
       persistentState[draftStateKey] = draft;
     }
-    if (messages.length > 0) {
-      persistentState[messagesStateKey] = messages;
+    if (persistedMessages.length > 0) {
+      persistentState[messagesStateKey] = persistedMessages;
     }
     if (pins.length > 0) {
       persistentState[pinsStateKey] = pins;
@@ -468,6 +507,7 @@ export function saveUiGraphChatPersistentState(
   storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
   location?: UiGraphStorageLocation,
 ): void {
+  purgeDisabledUiGraphResponseTraces(uiGraph, storage, location);
   const key = getUiGraphChatStorageKey(uiGraph, location);
   if (!key || !storage) {
     return;

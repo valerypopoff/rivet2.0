@@ -488,7 +488,9 @@ Chat response inspection is opt-in per component through
 runner must not collect, transport, persist, or expose an `AgentResponseTrace`.
 When enabled, HTTP results and protocol-v1 `action.completed` messages may add an
 optional `responseTrace`. This is an additive v1 field: older clients ignore it,
-and newer clients show **Trace unavailable** if an older host omits it.
+and newer clients show **Trace unavailable** if an older host omits it. Clients
+also ignore an invalid or future-version optional trace without discarding the
+otherwise valid `action.completed` state patch.
 
 Assistant messages store only an optional `responseTraceId`. Conversation
 history conversion ignores that field, so trace metadata never enters later LLM
@@ -498,7 +500,9 @@ orphans after history changes. Unavailable browser storage falls back to
 in-memory storage for the page session. If a browser-storage write fails, that
 in-memory copy remains authoritative until a later write succeeds, so an older
 persisted record cannot hide a response trace that the current page just
-produced.
+produced. Disabling response inspection strips earlier trace IDs from persisted
+messages and deletes that Chat component's separately stored trace data; later
+trace-save attempts are ignored while inspection remains disabled.
 
 The assistant-message menu order is **Open in reading view**, **Inspect
 response**, **Remove message**. The shared accessible inspector groups metadata

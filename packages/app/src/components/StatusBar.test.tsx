@@ -141,8 +141,86 @@ test('renders the retained completed runtime immediately after a status-bar remo
   }
 });
 
+test('replaces the last live frame with the exact terminal duration', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installStatusBarGlobals(dom);
+  const store = getDefaultStore();
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const previousGraphRunning = store.get(graphRunningState);
+  const previousGraphStartTime = store.get(graphStartTimeState);
+  const previousJournal = store.get(runActivityJournalState);
+  const previousDateNow = Date.now;
+  let now = 3_750;
+  Date.now = () => now;
+
+  try {
+    store.set(graphRunningState, true);
+    store.set(graphStartTimeState, 1_000);
+    store.set(runActivityJournalState, createRunActivityJournal());
+
+    await act(async () =>
+      root.render(
+        <ProvidersProvider>
+          <StatusBar />
+        </ProvidersProvider>,
+      ),
+    );
+
+    const runtime = dom.window.document.querySelector<HTMLButtonElement>('.runtime')!;
+    assert.equal(runtime.textContent?.trim(), 'Runtime: 2.75s');
+
+    now = 3_760;
+    await runNextAnimationFrame();
+    assert.equal(runtime.textContent?.trim(), 'Runtime: 2.76s');
+
+    const journal = createRunActivityJournal();
+    const rootRunId = 'just-completed-runtime-root' as RootRunId;
+    journal.rootsById[rootRunId] = {
+      sequence: 1,
+      rootRunId,
+      status: 'completed',
+      startedAt: 1_000,
+      finishedAt: 3_750,
+      paused: false,
+      isPartial: false,
+      graphRunsById: {},
+      graphRunOrder: [],
+      nodeInvocationsByKey: {},
+      nodeInvocationOrder: [],
+      omittedNodeInvocationCount: 0,
+      omittedLegacyEventCount: 0,
+    };
+    journal.rootOrder = [rootRunId];
+    journal.latestCompletedRootRunId = rootRunId;
+
+    await act(async () => {
+      store.set(runActivityJournalState, journal);
+      store.set(graphRunningState, false);
+    });
+
+    assert.equal(runtime.textContent?.trim(), 'Runtime: 2.75s');
+    assert.equal(requestAnimationFrameCallbacks.size, 0);
+  } finally {
+    Date.now = previousDateNow;
+    await act(async () => root.unmount());
+    store.set(graphRunningState, previousGraphRunning);
+    store.set(graphStartTimeState, previousGraphStartTime);
+    store.set(runActivityJournalState, previousJournal);
+    restoreGlobals();
+    dom.window.close();
+  }
+});
+
 let nextAnimationFrameId = 0;
 const requestAnimationFrameCallbacks = new Map<number, FrameRequestCallback>();
+
+async function runNextAnimationFrame(): Promise<void> {
+  const next = requestAnimationFrameCallbacks.entries().next().value as [number, FrameRequestCallback] | undefined;
+  assert.ok(next, 'expected a scheduled animation frame');
+  const [animationFrameId, callback] = next;
+  requestAnimationFrameCallbacks.delete(animationFrameId);
+  await act(async () => callback(Date.now()));
+}
 
 function installStatusBarGlobals(dom: JSDOM): () => void {
   const previous = {

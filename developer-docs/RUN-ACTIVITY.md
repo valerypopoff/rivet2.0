@@ -253,6 +253,10 @@ The journal is editor-only and does not add web-app protocol payloads.
 Bound activity and child-call collections, avoid eagerly restoring large
 values, and virtualize or use browser visibility containment for long runs.
 Search operates on bounded metadata and safe previews.
+Its metadata projection indexes every bounded model-call provider/model pair and
+every bounded tool-call name shown in the expanded activity row, including
+failed profile attempts and later parallel tools rather than only the row's
+effective summary values.
 
 Never place secrets, raw request bodies, full message arrays, chain-of-thought,
 tool arguments/results, or retrieved documents into activity metadata.

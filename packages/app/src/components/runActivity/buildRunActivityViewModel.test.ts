@@ -14,6 +14,7 @@ import {
   previewStoredDataValue,
   selectRunActivityRoot,
 } from './buildRunActivityViewModel.js';
+import { filterRunActivityItems } from './filterRunActivityItems.js';
 
 const completedRootId = 'completed-root' as RootRunId;
 const olderActiveRootId = 'older-active' as RootRunId;
@@ -279,6 +280,99 @@ test('preserves the captured node title when the current graph title is blank', 
 
   const viewModel = buildRunActivityViewModel(journal, () => ({ nodeTitle: '   ' }));
   assert.equal(viewModel.items[0]?.nodeTitle, 'Captured Text Title');
+});
+
+test('searches every displayed model attempt and tool call instead of only row summaries', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const capturedInvocation = invocation({
+    key: 'multi-call-search',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'chat',
+    processId: 'chat-process',
+  });
+  capturedInvocation.modelCallCount = 2;
+  capturedInvocation.modelCalls = [
+    {
+      sequence: 2,
+      callId: 'failed-profile',
+      nodeId: capturedInvocation.nodeId,
+      processId: capturedInvocation.processId,
+      provider: 'openai',
+      model: 'failed-profile-model',
+      outcome: 'provider-failure',
+      attemptIndex: 0,
+      profileIndex: 0,
+      pricing: { status: 'unknown' },
+    },
+    {
+      sequence: 3,
+      callId: 'successful-profile',
+      nodeId: capturedInvocation.nodeId,
+      processId: capturedInvocation.processId,
+      provider: 'anthropic',
+      model: 'effective-model',
+      outcome: 'success',
+      attemptIndex: 0,
+      profileIndex: 1,
+      pricing: { status: 'unknown' },
+    },
+  ];
+  capturedInvocation.toolCallCount = 2;
+  capturedInvocation.toolCalls = [
+    {
+      sequence: 4,
+      toolCallId: 'first-tool',
+      toolName: 'searchKnowledge',
+      sourceNodeId: capturedInvocation.nodeId,
+      sourceProcessId: capturedInvocation.processId,
+      handlerKind: 'graph',
+      outcome: 'success',
+    },
+    {
+      sequence: 5,
+      toolCallId: 'second-tool',
+      toolName: 'loadFullDocument',
+      sourceNodeId: capturedInvocation.nodeId,
+      sourceProcessId: capturedInvocation.processId,
+      handlerKind: 'graph',
+      outcome: 'success',
+    },
+  ];
+  selectedRoot.nodeInvocationsByKey[capturedInvocation.key] = capturedInvocation;
+  selectedRoot.nodeInvocationOrder = [capturedInvocation.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const viewModel = buildRunActivityViewModel(journal, () => ({
+    nodeTitle: 'Answer user',
+    searchTerms: ['designer alias'],
+  }));
+  const item = viewModel.items[0]!;
+
+  assert.deepEqual(item.searchTerms, [
+    'designer alias',
+    'openai',
+    'failed-profile-model',
+    'anthropic',
+    'effective-model',
+    'searchKnowledge',
+    'loadFullDocument',
+  ]);
+  assert.deepEqual(
+    filterRunActivityItems(viewModel.items, { filter: 'all', graphId: '', query: 'failed-profile-model' }).map(
+      (entry) => entry.activityKey,
+    ),
+    [capturedInvocation.key],
+  );
+  assert.deepEqual(
+    filterRunActivityItems(viewModel.items, { filter: 'all', graphId: '', query: 'loadFullDocument' }).map(
+      (entry) => entry.activityKey,
+    ),
+    [capturedInvocation.key],
+  );
 });
 
 function root(rootRunId: RootRunId, sequence: number, status: RunActivityRoot['status']): RunActivityRoot {

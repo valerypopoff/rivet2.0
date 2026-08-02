@@ -164,9 +164,7 @@ export function parseRivetWebAppServerMessage(value: unknown): RivetWebAppServer
       return progress ? { type: value.type, ...base, progress } : undefined;
     }
     case 'action.completed':
-      return isRecord(value.statePatch) &&
-        (value.storagePatch == null || isRecord(value.storagePatch)) &&
-        (value.responseTrace == null || isAgentResponseTrace(value.responseTrace))
+      return isRecord(value.statePatch) && (value.storagePatch == null || isRecord(value.storagePatch))
         ? {
             type: value.type,
             ...base,
