@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
   coreRunGraph,
@@ -27,6 +27,19 @@ const demos = Object.entries(PROMO_PROJECT_MANIFEST).map(([kind, definition]) =>
   ...definition,
   kind: kind as PromoProjectKey,
 }));
+
+const promoProjectsDirectory = fileURLToPath(new URL('../src/promo/projects/', import.meta.url));
+const declaredPromoProjectFiles = demos.map((demo) => demo.file).sort();
+const storedPromoProjectFiles = (await readdir(promoProjectsDirectory, { withFileTypes: true }))
+  .filter((entry) => entry.isFile() && entry.name.endsWith('.rivet-project'))
+  .map((entry) => entry.name)
+  .sort();
+
+assert.deepEqual(
+  storedPromoProjectFiles,
+  declaredPromoProjectFiles,
+  'The dedicated promo/projects directory must contain exactly the projects declared by the promo manifest.',
+);
 
 for (const field of ['file', 'path', 'projectId'] as const) {
   assert.equal(
@@ -88,7 +101,7 @@ function findNodeByTitle(graph: NodeGraph, title: string): ChartNode {
 function findApiKeyNode(project: Project): TextNode {
   const matches = Object.values(project.graphs)
     .flatMap((graph) => filterNodes(graph, 'text'))
-    .filter((node) => /^API Key\b/u.test(node.title ?? ''));
+    .filter((node) => /\bAPI Key\b/iu.test(node.title ?? ''));
 
   assert.equal(matches.length, 1, `${project.metadata.title} must contain exactly one API Key text node.`);
   assert.equal(matches[0]!.data.text, '', `${project.metadata.title} must not ship an API key.`);
@@ -170,12 +183,22 @@ function assertAgent(project: Project): Promise<void> {
     2,
     'The agent needs only its main graph and one tool handler graph.',
   );
-  assertNodeTypes(mainGraph, ['delegateFunctionCall', 'gptFunction', 'graphOutput', 'llmChatV2', 'text', 'text']);
+  assertNodeTypes(mainGraph, [
+    'delegateFunctionCall',
+    'gptFunction',
+    'graphInput',
+    'graphOutput',
+    'llmChatV2',
+    'prompt',
+    'text',
+    'text',
+    'text',
+  ]);
   assert.equal(llm.data.useToolCalling, true);
   assert.equal(llm.data.autoContinueToolCalls, true);
-  assert.equal(llm.data.maxToolRounds, 1);
-  assert.equal(llm.data.toolChoice, 'function');
-  assert.equal(llm.data.toolChoiceFunction, tool.data.name);
+  assert.equal(llm.data.maxToolRounds, 3);
+  assert.equal(llm.data.toolChoice, '');
+  assert.equal(llm.data.toolChoiceFunction, '');
   assert.equal(tool.data.resultHandling, 'continue');
   assert.equal(delegate.data.autoDelegate, true);
   assert.ok(
@@ -191,20 +214,19 @@ function assertAgent(project: Project): Promise<void> {
 
   const handlerGraph = Object.values(project.graphs).find((graph) => graph.metadata?.name === tool.data.name);
   assert.ok(handlerGraph, `No handler graph matches tool ${String(tool.data.name)}.`);
-  assertNodeTypes(handlerGraph, ['graphInput', 'graphInput', 'graphOutput', 'text']);
-  const handlerInputIds = filterNodes(handlerGraph, 'graphInput')
-    .map((node) => node.data.id)
-    .sort();
-  assert.deepEqual(handlerInputIds, ['audience', 'product']);
+  assertNodeTypes(handlerGraph, ['codeNew', 'graphOutput']);
 
   assert.ok(handlerGraph.metadata?.id, 'The agent tool handler graph must have an id.');
   return coreRunGraph(project, {
     graph: handlerGraph.metadata.id,
-    inputs: { audience: 'busy neighbors', product: 'a bread subscription' },
   }).then((outputs) => {
-    assert.equal(outputs.output?.type, 'string');
-    assert.match(String(outputs.output?.value), /Promise/);
-    assert.match(String(outputs.output?.value), /busy neighbors/);
+    assert.ok(outputs.output, 'The UTC-time tool must return an output.');
+    const timestamp = (
+      typeof outputs.output.value === 'string' ? JSON.parse(outputs.output.value) : outputs.output.value
+    ) as { iso?: unknown; unixMs?: unknown };
+    assert.equal(typeof timestamp.iso, 'string');
+    assert.equal(typeof timestamp.unixMs, 'number');
+    assert.equal(Date.parse(timestamp.iso as string), timestamp.unixMs);
   });
 }
 
@@ -384,7 +406,7 @@ function assertWebApp(project: Project): void {
 }
 
 for (const demo of demos) {
-  const path = fileURLToPath(new URL(`../src/promo/${demo.file}`, import.meta.url));
+  const path = fileURLToPath(new URL(`../src/promo/projects/${demo.file}`, import.meta.url));
   const project = loadProjectFromString(await readFile(path, 'utf8'));
   assert.equal(project.metadata.id, demo.projectId);
   assert.equal(project.metadata.mainGraphId, demo.graphId);

@@ -18,7 +18,10 @@ The docs should describe the current Rivet 2 package and app shape:
 The GitHub Pages deployment uses `baseUrl: /rivet2.0/`. The Docusaurus pages
 plugin owns the promotional homepage at `/`, while the docs plugin continues to
 serve the User Guide at `/user-guide` and preserves the existing Tutorial, API,
-Node Reference, CLI, download, and deep documentation routes.
+Node Reference, CLI, download, and deep documentation routes. The production
+bundle check verifies that the generated landing-page iframes target
+`/rivet2.0/rivet-demo/`, contain no development host paths, and ship with the
+`.nojekyll` marker required by the Pages artifact.
 
 The landing-page copy is intentionally centralized in
 `src/content/homepageContent.ts`. Update that file for ordinary wording, card, or
@@ -35,11 +38,12 @@ Keep the hero calls to action in one non-shifting row, with the source link
 following the two primary actions. At every supported viewport width, each
 section window embeds the real Rivet editor from the separately built
 `/rivet-demo/` entry. The checked-in projects live at
-`../app/src/promo/promo-agent.rivet-project`,
-`../app/src/promo/promo-workflow.rivet-project`, and
-`../app/src/promo/promo-web-app.rivet-project`, with the contextual examples in
-`../app/src/promo/promo-batch-runs.rivet-project` and
-`../app/src/promo/promo-structured-output.rivet-project`. The canonical
+`../app/src/promo/projects/promo-agent.rivet-project`,
+`../app/src/promo/projects/promo-workflow.rivet-project`, and
+`../app/src/promo/projects/promo-web-app.rivet-project`, with the contextual examples in
+`../app/src/promo/projects/promo-batch-runs.rivet-project` and
+`../app/src/promo/projects/promo-structured-output.rivet-project`. All landing-page projects stay together in this
+dedicated `promo/projects` directory. The canonical
 manifest in `../app/src/promo/promoProjectManifest.ts` owns their query ids,
 project ids, initial graphs, paths, and loading hints. The whitelisted `project`
 query selects one of those five demos; an unknown value produces an explicit
@@ -67,14 +71,15 @@ parent-request/child-response status handshake in addition to the child's
 initial ready event, so a fast iframe cannot leave the landing page permanently
 stuck on its loading overlay by posting readiness before the parent listener is
 attached. Until that handshake succeeds, the parent covers the iframe with an
-opaque black Rivet-logo loading surface, so an incomplete or unrelated document
+opaque black Rivet-logo-and-spinner loading surface, so an incomplete or unrelated document
 cannot leak into the page. A bounded startup timer turns a missing or invalid
-promo host into a retryable error instead of leaving `Opening Rivet` forever.
+promo host into a retryable error instead of leaving `Loading Rivet 2 editor` forever.
 The trusted frame allows
 same-origin ES-module loading, while the bundled project, editor-state provider,
 and static-data provider use fresh in-memory stores instead of loading or saving
 the documentation site's persisted Rivet state. The promo host also blocks
-browser File commands. Any future feature added to this surface that writes
+browser File commands and hides the Trivet Tests and Data Studio workspace tabs.
+Any future feature added to this surface that writes
 directly to browser storage must be reviewed separately. Narrow screens keep all
 three section-owned editor windows embedded; responsive layout stacks their
 controls and content without replacing the demos with links. The

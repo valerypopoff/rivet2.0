@@ -2,11 +2,12 @@ import { css } from '@emotion/react';
 import clsx from 'clsx';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { type FC, type ReactNode } from 'react';
+import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { hideGraphSearchPanelState, searchingGraphState } from '../state/graphBuilder.js';
 import { trivetState } from '../state/trivet.js';
 import { overlayOpenState, runActivityDrawerOpenState, type OverlayKey } from '../state/ui.js';
 import { getVisibleWorkspaceTabs } from '../utils/workspaceTabs.js';
-import { LoadingSpinner } from './LoadingSpinner.js';
+import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 
 const styles = css`
   display: flex;
@@ -90,15 +91,12 @@ const styles = css`
       margin-left: 4px;
     }
   }
-
-  .trivet-menu.active .spinner svg {
-    color: var(--grey-dark);
-  }
 `;
 
 export const OverlayTabs: FC<{
   showWelcomeScreen?: boolean;
 }> = ({ showWelcomeScreen = false }) => {
+  const hostUiConfig = useRivetAppHostUiConfig();
   const [openOverlay, setOpenOverlay] = useAtom(overlayOpenState);
   const setRunActivityOpen = useSetAtom(runActivityDrawerOpenState);
   const setGraphSearch = useSetAtom(searchingGraphState);
@@ -112,9 +110,14 @@ export const OverlayTabs: FC<{
   };
 
   const visibleWorkspaceTabs = getVisibleWorkspaceTabs({
+    config: hostUiConfig.workspaceTabs,
     openOverlay,
     welcomeScreenAvailable: showWelcomeScreen,
   });
+
+  if (visibleWorkspaceTabs.length === 0) {
+    return null;
+  }
 
   return (
     <nav css={styles} aria-label="Workspace navigation">
@@ -129,7 +132,7 @@ export const OverlayTabs: FC<{
             {tab.label}
             {tab.key === 'trivet' && trivet.runningTests && (
               <div className="spinner">
-                <LoadingSpinner />
+                <NodeRunningIndicator isRunning delayMs={0} label="Trivet tests running" />
               </div>
             )}
           </WorkspaceTab>

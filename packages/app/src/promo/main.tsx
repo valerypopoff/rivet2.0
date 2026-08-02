@@ -11,11 +11,11 @@ import { useCallback, useRef, useState } from 'react';
 import { deserializeProject, getError, type GraphId } from '@valerypopoff/rivet2-core';
 import { MemoryAsyncStorage, MemoryStaticDataStore, RivetAppHost, type RivetWorkspaceHost } from '../host.js';
 import { installGlobalErrorHandlers } from '../utils/errorHandling.js';
-import agentProjectSource from './promo-agent.rivet-project?raw';
-import batchRunsProjectSource from './promo-batch-runs.rivet-project?raw';
-import structuredOutputProjectSource from './promo-structured-output.rivet-project?raw';
-import webAppProjectSource from './promo-web-app.rivet-project?raw';
-import workflowProjectSource from './promo-workflow.rivet-project?raw';
+import agentProjectSource from './projects/promo-agent.rivet-project?raw';
+import batchRunsProjectSource from './projects/promo-batch-runs.rivet-project?raw';
+import structuredOutputProjectSource from './projects/promo-structured-output.rivet-project?raw';
+import webAppProjectSource from './projects/promo-web-app.rivet-project?raw';
+import workflowProjectSource from './projects/promo-workflow.rivet-project?raw';
 import { isPromoProjectKey, PROMO_PROJECT_MANIFEST, type PromoProjectKey } from './promoProjectManifest.js';
 import '../host.css';
 import './promo.css';
@@ -57,6 +57,7 @@ const PROMO_HOST_UI = {
   checkForUpdates: false,
   fileMenu: { visibleItems: [] },
   preloadCodeEditor: false,
+  workspaceTabs: { visibleItems: [] },
 } as const;
 
 type PromoMessage =

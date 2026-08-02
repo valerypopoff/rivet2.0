@@ -17,11 +17,38 @@ async function listFilesRecursively(directory) {
 }
 
 const docsDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const demoDirectory = resolve(docsDirectory, 'build/rivet-demo');
+const buildDirectory = resolve(docsDirectory, 'build');
+const demoDirectory = resolve(buildDirectory, 'rivet-demo');
 const require = createRequire(import.meta.url);
-const { baseUrl } = require('../docusaurus.config.js');
+const { baseUrl, url } = require('../docusaurus.config.js');
 const promoPublicPath = `${baseUrl.replace(/\/?$/, '/')}rivet-demo/`;
+const publishedSiteUrl = new URL(baseUrl, url).href;
+const publishedPromoUrl = new URL('rivet-demo/', publishedSiteUrl).href;
+const landingHtml = await readFile(resolve(buildDirectory, 'index.html'), 'utf8');
 const indexHtml = await readFile(resolve(demoDirectory, 'index.html'), 'utf8');
+
+const expectedLandingIframeSources = ['agent', 'batch-runs', 'structured-output'].map(
+  (projectId) => `${promoPublicPath}?project=${projectId}`,
+);
+const landingIframeSources = [...landingHtml.matchAll(/<iframe\b[^>]+src="([^"]+)"/g)].map((match) => match[1]);
+
+assert.deepEqual(
+  landingIframeSources,
+  expectedLandingIframeSources,
+  `The generated landing page must embed its initial Rivet editors from ${publishedPromoUrl}.`,
+);
+assert.equal(landingHtml.includes('localhost'), false, 'The production landing page must not reference localhost.');
+assert.equal(
+  landingHtml.includes('.promo-dev'),
+  false,
+  'The production landing page must not reference development output.',
+);
+assert.doesNotMatch(
+  landingHtml,
+  /(?:src|href)="\/rivet-demo\//,
+  `The production landing page must keep Rivet demo URLs under the GitHub Pages base path ${baseUrl}.`,
+);
+await readFile(resolve(buildDirectory, '.nojekyll'));
 
 function resolvePromoAssetPath(assetUrl) {
   const pathname = new URL(assetUrl, 'https://rivet.invalid/').pathname;
@@ -79,5 +106,6 @@ assert.ok(
 
 console.log(
   `Promo bundle is within budget: ${(initialGzipBytes / 1024 / 1024).toFixed(2)} MiB initial gzip, ` +
-    `${(totalAssetBytes / 1024 / 1024).toFixed(2)} MiB total assets.`,
+    `${(totalAssetBytes / 1024 / 1024).toFixed(2)} MiB total assets. ` +
+    `Landing embeds target ${publishedPromoUrl}.`,
 );

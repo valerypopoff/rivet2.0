@@ -141,6 +141,7 @@ export {
   type RivetAppHostUiConfig,
 } from './providers/HostUiConfigContext.js';
 export type { FileMenuConfig, FileMenuItemId } from './utils/fileMenuConfiguration.js';
+export type { WorkspaceTabItemId, WorkspaceTabsConfig } from './utils/workspaceTabs.js';
 export { RivetWorkspaceHostBridge, type RivetWorkspaceHostBridgeProps } from './components/RivetWorkspaceHostBridge.js';
 export {
   createExecutorSessionRuntime,

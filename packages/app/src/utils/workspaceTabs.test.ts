@@ -39,3 +39,39 @@ test('workspace tabs show Welcome screen only in no-project mode', () => {
     ],
   );
 });
+
+test('workspace tabs honor a host-provided visible-item allowlist', () => {
+  assert.deepEqual(
+    getVisibleWorkspaceTabs({
+      config: { visibleItems: ['dataStudio', 'trivet'] },
+      openOverlay: undefined,
+    }).map((tab) => tab.key),
+    ['trivet', 'dataStudio'],
+  );
+
+  assert.deepEqual(
+    getVisibleWorkspaceTabs({
+      config: { visibleItems: ['dataStudio'] },
+      openOverlay: undefined,
+      welcomeScreenAvailable: true,
+    }).map((tab) => tab.key),
+    ['welcomeScreen', 'dataStudio'],
+  );
+
+  assert.deepEqual(
+    getVisibleWorkspaceTabs({
+      config: { visibleItems: [] },
+      openOverlay: 'promptDesigner',
+      welcomeScreenAvailable: true,
+    }).map((tab) => tab.key),
+    ['welcomeScreen', 'promptDesigner'],
+  );
+
+  assert.deepEqual(
+    getVisibleWorkspaceTabs({
+      config: { visibleItems: [] },
+      openOverlay: undefined,
+    }),
+    [],
+  );
+});

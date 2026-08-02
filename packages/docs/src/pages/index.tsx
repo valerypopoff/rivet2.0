@@ -16,6 +16,10 @@ function Arrow() {
   return <span aria-hidden="true">↗</span>;
 }
 
+function RivetNodeRunningIndicator() {
+  return <span aria-hidden="true" className={styles.liveDemoRunningIndicator} />;
+}
+
 function SectionHeading({
   eyebrow,
   title,
@@ -199,7 +203,7 @@ function RivetDemoWindow({
       {expanded ? <div aria-hidden="true" className={styles.liveDemoBackdrop} onMouseDown={collapse} /> : null}
       <div
         ref={dialogRef}
-        aria-label={`${demo.title} — live Rivet demo`}
+        aria-label={`${demo.title} — live Rivet 2 demo`}
         aria-modal={expanded || undefined}
         className={`${styles.liveDemo} ${active ? styles.liveDemoActive : ''} ${expanded ? styles.liveDemoExpanded : ''}`}
         role={expanded ? 'dialog' : 'region'}
@@ -212,7 +216,7 @@ function RivetDemoWindow({
               className={`${styles.liveDemoState} ${!ready && !error ? styles.liveDemoStateLoading : ''} ${error ? styles.liveDemoStateError : ''}`}
             >
               <i />
-              {error ? 'Live demo unavailable' : ready ? 'Live Rivet editor' : 'Opening Rivet'}
+              {error ? 'Live demo unavailable' : ready ? 'Live Rivet 2 editor' : 'Loading Rivet 2 editor'}
             </span>
             <span>{demo.instruction}</span>
           </div>
@@ -242,14 +246,15 @@ function RivetDemoWindow({
             ref={iframeRef}
             className={styles.liveDemoIframe}
             src={url}
-            title={`${demo.title} — interactive Rivet editor`}
+            title={`${demo.title} — interactive Rivet 2 editor`}
             loading="eager"
             sandbox="allow-same-origin allow-scripts"
             onLoad={requestDemoStatus}
           />
           {!ready && !error ? (
-            <div aria-label="Opening Rivet" className={styles.liveDemoLoading} role="status">
+            <div aria-label="Loading Rivet 2 editor" className={styles.liveDemoLoading} role="status">
               <img alt="" src={loadingLogoUrl} />
+              <RivetNodeRunningIndicator />
             </div>
           ) : error ? (
             <div className={styles.liveDemoError} role="alert">
@@ -274,11 +279,7 @@ function RivetDemoWindow({
                 The frame activates on click so it does not capture page scrolling. Press Escape to release it.
               </span>
             </button>
-          ) : (
-            <button className={styles.liveDemoEscapeHint} type="button" onClick={() => setActive(false)}>
-              Release page scroll
-            </button>
-          )}
+          ) : null}
         </div>
       </div>
     </>
@@ -368,9 +369,7 @@ function RivetDemoShowcase({
           );
         })}
       </div>
-      {demos.length > 1 ? (
-        <p className={styles.demoSwitchNote}>Switching projects resets edits and the API key entered in this window.</p>
-      ) : null}
+
       <div aria-labelledby={selectedTabId} id={panelId} role="tabpanel">
         <RivetDemoWindow
           key={selectedDemo.demoId}
@@ -507,10 +506,6 @@ export default function Home() {
               </div>
             </div>
             <div className={styles.heroShowcase}>
-              <div className={styles.heroDemoPickerIntroduction}>
-                <strong>Choose a live demo</strong>
-                <span>The selected real Rivet project is loaded in the editor below.</span>
-              </div>
               <RivetDemoShowcase
                 demoBaseUrl={demoBaseUrl}
                 demos={content.hero.features}

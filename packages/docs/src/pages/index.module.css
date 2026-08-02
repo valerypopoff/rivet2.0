@@ -237,22 +237,6 @@
   gap: clamp(1.5rem, 3vw, 2.5rem);
 }
 
-.heroDemoPickerIntroduction {
-  display: flex;
-  align-items: baseline;
-  gap: 0.65rem;
-}
-
-.heroDemoPickerIntroduction strong {
-  color: var(--landing-ink);
-  font-size: 0.86rem;
-}
-
-.heroDemoPickerIntroduction span {
-  color: var(--landing-muted);
-  font-size: 0.8rem;
-}
-
 .heroFeatureList {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -340,13 +324,6 @@
   letter-spacing: 0.04em;
   line-height: 1.25;
   text-transform: uppercase;
-}
-
-.demoSwitchNote {
-  margin: -0.15rem 0 0;
-  color: var(--landing-muted);
-  font-size: 0.75rem;
-  line-height: 1.5;
 }
 
 .liveDemo {
@@ -484,7 +461,7 @@
 
 .liveDemoViewport {
   position: relative;
-  height: clamp(420px, 42vw, 540px);
+  height: clamp(546px, 54.6vw, 702px);
   min-height: 0;
   background: var(--landing-canvas);
 }
@@ -516,10 +493,32 @@
   text-align: center;
 }
 
+.liveDemoLoading {
+  gap: 1rem;
+}
+
 .liveDemoLoading img {
-  width: clamp(4.5rem, 9vw, 7rem);
+  width: clamp(3rem, 5vw, 3.75rem);
   height: auto;
   filter: invert(1);
+}
+
+.liveDemoRunningIndicator {
+  box-sizing: border-box;
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 50%;
+  animation: live-demo-running-indicator-spin 0.8s linear infinite;
+}
+
+@keyframes live-demo-running-indicator-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .liveDemoError {
@@ -575,7 +574,7 @@
   padding: 2rem;
   border: 0;
   color: #fff;
-  background: linear-gradient(rgba(14, 18, 25, 0.1), rgba(14, 18, 25, 0.24));
+  background: rgba(8, 11, 16, 0.58);
   font: inherit;
   text-align: center;
   cursor: pointer;
@@ -597,27 +596,6 @@
   background: rgba(19, 24, 33, 0.76);
   font-size: 0.75rem;
   line-height: 1.5;
-}
-
-.liveDemoEscapeHint {
-  position: absolute;
-  z-index: 3;
-  top: 0.75rem;
-  right: 0.75rem;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 0.45rem;
-  color: rgba(255, 255, 255, 0.78);
-  background: rgba(14, 18, 25, 0.86);
-  font-family: inherit;
-  font-size: 0.68rem;
-  cursor: pointer;
-}
-
-.liveDemoEscapeHint:hover,
-.liveDemoEscapeHint:focus-visible {
-  border-color: rgba(255, 255, 255, 0.3);
-  color: #fff;
 }
 
 .contextualDemoList {
@@ -1314,7 +1292,7 @@
   }
 
   .liveDemoViewport {
-    height: clamp(430px, 68svh, 560px);
+    height: clamp(559px, 88.4svh, 728px);
   }
 
   .liveDemoExpanded {
@@ -1356,6 +1334,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .liveDemoRunningIndicator {
+    animation: none;
+  }
+
   .primaryAction,
   .secondaryAction,
   .useCaseCard {

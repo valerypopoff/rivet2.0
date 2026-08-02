@@ -22,19 +22,19 @@ export type HomepageUseCase = HomepageCard & {
 
 const agentDemo = {
   demoId: 'agent',
-  title: 'LLM agent with tools',
-  description: 'Let an LLM call a typed tool backed by a Rivet graph. Inspect the call, tool result, and final answer.',
+  title: 'LLM agents with tools',
+  description: 'Easily build LLM agents with tools. Inspect the calls, tool results, and final answers.',
   instruction: 'Paste your OpenAI API key, then run the project to watch the LLM call its tool graph.',
 } satisfies HomepageDemo;
 const workflowDemo = {
   demoId: 'workflow',
-  title: 'Multi-step LLM workflow',
+  title: 'Multi-step LLM workflows',
   description: 'Run focused LLM steps in parallel, combine their results, and inspect every value in the workflow.',
   instruction: 'Paste your OpenAI API key, then run the project to see two LLM steps execute in parallel.',
 } satisfies HomepageDemo;
 const webAppDemo = {
   demoId: 'web-app',
-  title: 'Web app powered by a workflow',
+  title: 'Workflow-powered web apps',
   description: 'Put a chat interface over an LLM workflow. Build both in Rivet and keep them in the same project.',
   instruction: 'Paste your OpenAI API key, then open “Chat web app — open this” under Web Apps.',
 } satisfies HomepageDemo;
@@ -64,9 +64,9 @@ export const homepageContent = {
   },
   hero: {
     eyebrow: 'Free · Open-source · MIT licensed',
-    title: 'Build AI agents, workflows, and web apps visually',
+    title: 'Rivet 2 — visual IDE for production AI agents, workflows, and web apps',
     description:
-      'Prototype, inspect and run the same Rivet project in Node, from the CLI, or inside your own application.',
+      'Build, debug and run the same Rivet 2 project in a desktop app, in a self-hosted web-service, or serve as an endpoint inside your own backend.',
     primaryAction: {
       label: 'Download Rivet 2',
       to: '/download',

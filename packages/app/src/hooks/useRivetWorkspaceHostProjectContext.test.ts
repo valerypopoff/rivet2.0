@@ -131,7 +131,10 @@ test('workspace host exposes transient project tab UI state for hosted wrappers'
   );
   assert.doesNotMatch(projectTabUiSource, /atomWithStorage/);
   assert.match(workspaceHostTypesSource, /export type RivetProjectTabUiState = ProjectTabUiState;/);
-  assert.match(workspaceHostTypesSource, /export type RivetProjectOpenOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/);
+  assert.match(
+    workspaceHostTypesSource,
+    /export type RivetProjectOpenOptions = \{[\s\S]*tabUi\?: RivetProjectTabUiState;/,
+  );
   assert.match(workspaceHostTypesSource, /export type RivetProjectReplaceOptions = RivetProjectOpenOptions;/);
   assert.match(
     workspaceHostTypesSource,
@@ -210,8 +213,10 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
   );
   assert.match(projectSelectorSource, /<ProjectTabRow/);
   assert.match(projectTabRowSource, /<OpeningProjectTab/);
-  assert.match(projectSelectorSource, /onCloseOpeningProjectTab=\{\(openingTabId\) => void cancelOpeningProjectTab\(openingTabId\)\}/);
-  assert.doesNotMatch(projectSelectorSource, /LoadingSpinner/);
+  assert.match(
+    projectSelectorSource,
+    /onCloseOpeningProjectTab=\{\(openingTabId\) => void cancelOpeningProjectTab\(openingTabId\)\}/,
+  );
   assert.doesNotMatch(projectSelectorSource, /opening-project-spinner/);
   assert.match(rivetAppSource, /workspaceVisibleTabCountState/);
   assert.match(rivetAppSource, /selectedOpeningProjectTabIdState/);

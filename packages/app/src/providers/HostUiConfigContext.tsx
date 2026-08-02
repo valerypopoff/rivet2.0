@@ -1,5 +1,6 @@
 import { createContext, useContext, type FC, type ReactNode } from 'react';
 import type { FileMenuConfig } from '../utils/fileMenuConfiguration.js';
+import type { WorkspaceTabsConfig } from '../utils/workspaceTabs.js';
 
 export type RivetAppHostUiConfig = {
   checkForUpdates?: boolean;
@@ -8,6 +9,7 @@ export type RivetAppHostUiConfig = {
   webApps?: {
     desktopPreview?: boolean;
   };
+  workspaceTabs?: WorkspaceTabsConfig;
 };
 
 const DEFAULT_HOST_UI_CONFIG: RivetAppHostUiConfig = {};
