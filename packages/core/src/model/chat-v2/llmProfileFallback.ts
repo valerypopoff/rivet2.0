@@ -1,5 +1,6 @@
 import type { PortId } from '../NodeBase.js';
 import {
+  isChatV2ResponseValidationError,
   materializeChatV2PipelineFailure,
   runChatV2PipelineExecution,
   type ChatV2PipelineProviderFailure,
@@ -16,7 +17,7 @@ export type LLMProfileAttempt = {
   profileIndex: number;
   provider: ChatV2Provider;
   model: string;
-  stage: 'configuration' | 'request';
+  stage: 'configuration' | 'request' | 'response-validation';
   outcome: 'success' | 'failure';
   attemptIndex?: number;
   status?: number;
@@ -94,10 +95,15 @@ function getSafeErrorMessage(error: unknown, candidate: LLMProfileFallbackCandid
 function buildExhaustedMessage(attempts: readonly LLMProfileAttempt[]): string {
   const details = attempts
     .map((attempt) => {
-      const request = attempt.attemptIndex == null ? '' : ` attempt ${attempt.attemptIndex}`;
+      const stage =
+        attempt.stage === 'request'
+          ? `request${attempt.attemptIndex == null ? '' : ` attempt ${attempt.attemptIndex}`}`
+          : attempt.stage === 'response-validation'
+            ? 'response validation'
+            : 'configuration';
       const status = attempt.status == null ? '' : ` (${attempt.status})`;
-      const error = attempt.error ? `: ${attempt.error}` : '';
-      return `Profile ${attempt.profileIndex} (${attempt.provider}/${attempt.model}), round ${attempt.roundIndex}${request}${status}${error}`;
+      const error = attempt.error ? `: ${attempt.error.replace(/\r\n|\r|\n/g, '\n  ')}` : '';
+      return `Profile ${attempt.profileIndex} (${attempt.provider}/${attempt.model}), round ${attempt.roundIndex}, ${stage} ${attempt.outcome}${status}${error}`;
     })
     .join('\n');
   return details
@@ -130,7 +136,15 @@ export function buildLLMProfileFallbackSummary(
       const successfulRounds = [
         ...new Set(
           profileAttempts
-            .filter((attempt) => attempt.stage === 'request' && attempt.outcome === 'success')
+            .filter(
+              (attempt) =>
+                attempt.stage === 'request' &&
+                attempt.outcome === 'success' &&
+                !profileAttempts.some(
+                  (candidate) =>
+                    candidate.stage === 'response-validation' && candidate.roundIndex === attempt.roundIndex,
+                ),
+            )
             .map((attempt) => attempt.roundIndex),
         ),
       ];
@@ -139,6 +153,12 @@ export function buildLLMProfileFallbackSummary(
       );
       const failedRequestAttempts = profileAttempts.filter(
         (attempt) => attempt.stage === 'request' && attempt.outcome === 'failure',
+      );
+      const hasSuccessfulRequest = profileAttempts.some(
+        (attempt) => attempt.stage === 'request' && attempt.outcome === 'success',
+      );
+      const failedResponseValidations = profileAttempts.filter(
+        (attempt) => attempt.stage === 'response-validation' && attempt.outcome === 'failure',
       );
       const clauses: string[] = [];
 
@@ -153,7 +173,14 @@ export function buildLLMProfileFallbackSummary(
       if (failedRequestAttempts.length > 0) {
         const lastFailedRequest = failedRequestAttempts.at(-1)!;
         const status = lastFailedRequest.status == null ? '' : `; last status ${lastFailedRequest.status}`;
-        clauses.push(`failed after ${pluralize(failedRequestAttempts.length, 'provider attempt')}${status}`);
+        clauses.push(
+          hasSuccessfulRequest
+            ? `had ${pluralize(failedRequestAttempts.length, 'failed provider attempt')}${status}`
+            : `failed after ${pluralize(failedRequestAttempts.length, 'provider attempt')}${status}`,
+        );
+      }
+      if (failedResponseValidations.length > 0) {
+        clauses.push(`failed response validation in ${pluralize(failedResponseValidations.length, 'model round')}`);
       }
 
       return `${identity}: ${clauses.join('; ')}.`;
@@ -344,12 +371,13 @@ export function createLLMProfileFallbackRunner(params: {
           // of every failed candidate.
           lastError = error;
           terminalProviderFailure = undefined;
+          const responseValidationFailure = isChatV2ResponseValidationError(error);
           attempts.push({
             roundIndex,
             profileIndex,
             provider: candidate.provider,
             model: candidate.model,
-            stage: 'configuration',
+            stage: responseValidationFailure ? 'response-validation' : 'configuration',
             outcome: 'failure',
             error: getSafeErrorMessage(error, candidate),
           });

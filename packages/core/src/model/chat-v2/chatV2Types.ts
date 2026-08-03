@@ -114,6 +114,7 @@ export type RunChatV2PipelineOptions = {
   seed?: number | undefined;
   responseOutput?: ChatV2ResponseOutput | undefined;
   responseFormat?: ChatV2ResponseFormatMode | undefined;
+  failProfileOnNonObjectResponse?: boolean | undefined;
   providerOptions?: ChatV2ProviderOptions | undefined;
   toolChoice?: ChatV2ToolChoice | undefined;
   anthropicCacheControlTtl?: '5m' | '1h' | undefined;

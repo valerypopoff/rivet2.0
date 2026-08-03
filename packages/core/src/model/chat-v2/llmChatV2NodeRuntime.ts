@@ -114,6 +114,7 @@ function createSharedRunOptions(params: {
     functions: shared.functions,
     responseOutput: createChatV2ResponseOutput(shared.responseFormatParameters, provider),
     responseFormat: shared.responseFormatParameters?.responseFormat,
+    failProfileOnNonObjectResponse: shared.data.failProfileOnNonObjectResponse,
     outputUsage: shared.data.outputUsage,
     outputReasoning: shared.data.outputReasoning,
     outputRequestStatus: shared.data.outputRequestStatus,

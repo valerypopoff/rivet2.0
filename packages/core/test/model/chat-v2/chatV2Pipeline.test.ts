@@ -1712,6 +1712,66 @@ void describe('runChatV2Pipeline', () => {
     });
   });
 
+  void it('validates the final parsed Response value for JSON schema output', async () => {
+    const parsedObject = { answer: 'Paris' };
+    let invalidCalls = 0;
+
+    const validResult = await runChatV2Pipeline({
+      provider: 'custom',
+      model: createMockModel(),
+      modelId: 'custom-json-model',
+      prompt: { type: 'string', value: 'Answer as JSON.' },
+      responseOutput: { name: 'answer_schema' },
+      responseFormat: 'json_schema',
+      failProfileOnNonObjectResponse: true,
+      emitPartialOutputs: false,
+      context: {
+        signal: new AbortController().signal,
+      },
+      executeGenerate: async () => ({
+        text: JSON.stringify(parsedObject),
+        output: undefined,
+        requestStatus: 200,
+      }),
+    });
+
+    assert.deepEqual(validResult.commonOutputs['response' as PortId], {
+      type: 'object',
+      value: parsedObject,
+    });
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'custom-json-model',
+          prompt: { type: 'string', value: 'Answer as JSON.' },
+          responseOutput: { name: 'answer_schema' },
+          responseFormat: 'json_schema',
+          failProfileOnNonObjectResponse: true,
+          retryOnNon200: true,
+          retryOnNon200RepeatTimes: 3,
+          retryOnNon200CooldownMs: 0,
+          emitPartialOutputs: false,
+          context: {
+            signal: new AbortController().signal,
+          },
+          executeGenerate: async () => {
+            invalidCalls += 1;
+            return { text: 'not json', output: undefined, requestStatus: 200 };
+          },
+        }),
+      (error) => {
+        assert.match(String(error), /final value prepared for the Response port is not an object/);
+        assert.match(String(error), /Parsed Response type: string/);
+        assert.match(String(error), /Retry on non-200 does not apply/);
+        return true;
+      },
+    );
+    assert.equal(invalidCalls, 1);
+  });
+
   void it('falls back to raw text when non-streaming structured output parsing fails', async () => {
     const responseText = 'not json';
     const usage: LanguageModelUsage = {

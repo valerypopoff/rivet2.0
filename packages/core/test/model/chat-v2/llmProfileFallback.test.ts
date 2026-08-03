@@ -453,6 +453,138 @@ describe('LLM Profile fallback chain', () => {
     );
   });
 
+  it('advances immediately after parsed Response validation fails without non-200 retries', async () => {
+    const calls: number[] = [];
+    let primaryCalls = 0;
+    const runner = createLLMProfileFallbackRunner({
+      candidates: [
+        { provider: 'custom', model: 'invalid-json' },
+        { provider: 'custom', model: 'backup' },
+      ],
+      resolveCandidate: async (profileIndex, roundOptions) => ({
+        ...roundOptions,
+        provider: 'custom',
+        model: {} as ChatV2Model,
+        modelId: profileIndex === 0 ? 'invalid-json' : 'backup',
+        responseOutput: { name: 'answer_schema' },
+        responseFormat: 'json_schema',
+        failProfileOnNonObjectResponse: true,
+        retryOnNon200: true,
+        retryOnNon200RepeatTimes: 3,
+        retryOnNon200CooldownMs: 0,
+        executeGenerate: async () => {
+          calls.push(profileIndex);
+          if (profileIndex === 0) {
+            primaryCalls += 1;
+          }
+          return {
+            text: profileIndex === 0 ? (primaryCalls === 1 ? 'temporary error' : 'not json') : '{"answer":"backup"}',
+            requestStatus: profileIndex === 0 && primaryCalls === 1 ? 503 : 200,
+          };
+        },
+      }),
+    });
+
+    const result = await runner.run(baseRoundOptions());
+
+    assert.deepEqual(calls, [0, 0, 1]);
+    assert.deepEqual(result.commonOutputs.response, {
+      type: 'object',
+      value: { answer: 'backup' },
+    });
+    assert.deepEqual(
+      runner.attempts.map((attempt) => [attempt.profileIndex, attempt.stage, attempt.outcome, attempt.status]),
+      [
+        [0, 'request', 'failure', 503],
+        [0, 'request', 'success', 200],
+        [0, 'response-validation', 'failure', undefined],
+        [1, 'request', 'success', 200],
+      ],
+    );
+    assert.deepEqual(buildLLMProfileRequestDiagnostics(2, runner.attempts), {
+      statuses: [[503, 200], 200],
+      errors: ['Provider request returned non-200 status: 503', []],
+    });
+    assert.equal(
+      runner.summary(),
+      'Profile 0 (custom/invalid-json): had 1 failed provider attempt; last status 503; failed response validation in 1 model round.\n' +
+        'Profile 1 (custom/backup): succeeded in model 1 round (0).',
+    );
+  });
+
+  it('preserves the detailed parsed Response validation error for a scalar profile', async () => {
+    let calls = 0;
+    const runner = createLLMProfileFallbackRunner({
+      candidates: [{ provider: 'custom', model: 'only-profile' }],
+      resolveCandidate: async (_profileIndex, roundOptions) => ({
+        ...roundOptions,
+        provider: 'custom',
+        model: {} as ChatV2Model,
+        modelId: 'only-profile',
+        responseOutput: { name: 'answer_schema' },
+        responseFormat: 'json_schema',
+        failProfileOnNonObjectResponse: true,
+        retryOnNon200: true,
+        retryOnNon200RepeatTimes: 2,
+        retryOnNon200CooldownMs: 0,
+        executeGenerate: async () => {
+          calls += 1;
+          return { text: 'not json', requestStatus: 200 };
+        },
+      }),
+    });
+
+    await assert.rejects(
+      () => runner.run(baseRoundOptions()),
+      (error) => {
+        assert.match(String(error), /Parsed Response type: string/);
+        assert.match(String(error), /Retry on non-200 does not apply/);
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
+    assert.deepEqual(
+      runner.attempts.map((attempt) => [attempt.stage, attempt.outcome, attempt.status]),
+      [
+        ['request', 'success', 200],
+        ['response-validation', 'failure', undefined],
+      ],
+    );
+  });
+
+  it('explains successful requests and response-validation failures when every profile is exhausted', async () => {
+    const runner = createLLMProfileFallbackRunner({
+      candidates: [
+        { provider: 'custom', model: 'first-invalid' },
+        { provider: 'custom', model: 'second-invalid' },
+      ],
+      resolveCandidate: async (profileIndex, roundOptions) => ({
+        ...roundOptions,
+        provider: 'custom',
+        model: {} as ChatV2Model,
+        modelId: profileIndex === 0 ? 'first-invalid' : 'second-invalid',
+        responseOutput: { name: 'answer_schema' },
+        responseFormat: 'json_schema',
+        failProfileOnNonObjectResponse: true,
+        executeGenerate: async () => ({ text: 'not json', requestStatus: 200 }),
+      }),
+    });
+
+    await assert.rejects(
+      () => runner.run(baseRoundOptions()),
+      (error) => {
+        assert.ok(error instanceof LLMProfileFallbackExhaustedError);
+        assert.match(error.message, /Profile 0 \(custom\/first-invalid\), round 0, request attempt 0 success \(200\)/);
+        assert.match(error.message, /Profile 0 \(custom\/first-invalid\), round 0, response validation failure:/);
+        assert.match(error.message, /response validation failure: LLM profile response validation failed\.\n  Response format:/);
+        assert.match(error.message, /Profile 1 \(custom\/second-invalid\), round 0, request attempt 0 success \(200\)/);
+        assert.match(error.message, /Profile 1 \(custom\/second-invalid\), round 0, response validation failure:/);
+        return true;
+      },
+    );
+    assert.equal(runner.wasExhausted(), true);
+  });
+
   it('moves forward permanently after a profile succeeds in a prior model round', async () => {
     const calls: number[] = [];
     const runner = createLLMProfileFallbackRunner({

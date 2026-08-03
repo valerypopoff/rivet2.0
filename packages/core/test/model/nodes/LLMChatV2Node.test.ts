@@ -121,6 +121,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.useResponseSchemaNameInput, false);
     assert.equal(node.data.responseSchemaDescription, '');
     assert.equal(node.data.useResponseSchemaDescriptionInput, false);
+    assert.equal(node.data.failProfileOnNonObjectResponse, false);
     assert.equal(node.data.anthropicThinkingMode, '');
     assert.equal(node.data.anthropicThinkingBudget, undefined);
     assert.equal(node.data.useAnthropicThinkingBudgetInput, false);
@@ -1258,6 +1259,18 @@ describe('LLMChatV2NodeImpl', () => {
       { value: 'json', label: 'JSON object' },
       { value: 'json_schema', label: 'JSON schema' },
     ]);
+    const failProfileEditor = responseFormatGroup.editors.find(
+      (editor: any) => editor.dataKey === 'failProfileOnNonObjectResponse',
+    );
+    assert.equal(failProfileEditor?.label, 'Fail the LLM profile on non-JSON response');
+    assert.equal(failProfileEditor?.hideIf(defaultNode.data), true);
+    assert.equal(failProfileEditor?.hideIf(jsonSchemaNode.data), false);
+    assert.equal(
+      createNode({ responseFormat: 'json_schema', failProfileOnNonObjectResponse: true })
+        .getOutputDefinitions()
+        .find((output) => output.id === 'response')?.dataType,
+      'object',
+    );
     assert.ok(!defaultNode.getInputDefinitions().some((input) => input.id === 'responseSchema'));
 
     const inputs = jsonSchemaNode.getInputDefinitions();
@@ -1284,6 +1297,7 @@ describe('LLMChatV2NodeImpl', () => {
       customProviderBaseURL: 'https://api.cerebras.ai/v1',
       customProviderApiKeyEnvVarName: 'CEREBRAS_API_KEY',
       responseFormat: 'json_schema',
+      failProfileOnNonObjectResponse: true,
       responseSchemaName: 'answer_schema',
       responseSchemaDescription: 'Answer payload',
       extraProviderOptions: '{ "customFlag": true, "response_format": { "type": "json_object" } }',
@@ -1318,6 +1332,7 @@ describe('LLMChatV2NodeImpl', () => {
         },
       },
     });
+    assert.equal(runtime.runOptions.failProfileOnNonObjectResponse, true);
   });
 
   it('restores explicit developer roles in Custom provider request bodies', async () => {

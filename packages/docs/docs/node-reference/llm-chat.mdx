@@ -74,7 +74,7 @@ Provider and model support still applies; a Custom provider that rejects
 | Response Error       | `string`, `string[]`, or `any`                                            | Available when Output response error is enabled. Retry on non-200 uses a per-attempt array. With an actual LLM Profile array, one error is a string, retries remain an array, and no request errors return `[]`. When multiple profiles contain an error, the Any value retains their profile positions.                    |
 | LLM request body     | `object`, `object[]`, `string`, `string[]`, `any`, or `any[]`             | Available when Output request body is enabled. Shows the provider request body captured at the HTTP boundary and parsed for inspection. Multiple provider calls, such as retries or auto-continued tool rounds, are returned in call order as an array. Request headers and Rivet-managed API key headers are not included. |
 | LLM Profile Summary  | `string`                                                                  | Available in From profile mode. Human-readable outcome for every configured profile: succeeded, failed, or not attempted.                                                                                                                                                                                                   |
-| LLM Profile Attempts | `object[]`                                                                | Available in From profile mode. Chronological safe history of profile-chain configuration/request attempts, retry indexes, outcomes, statuses, and errors with known API-key and header values redacted.                                                                                                                    |
+| LLM Profile Attempts | `object[]`                                                                | Available in From profile mode. Chronological safe history of profile-chain configuration, provider-request, and parsed-response-validation attempts, retry indexes, outcomes, statuses, and errors with known API-key and header values redacted.                                                                          |
 
 </TabItem>
 
@@ -150,7 +150,17 @@ The node body shows the selected reasoning effort for built-in providers.
 
 ### Response Format
 
-Response format supports Default, Text, JSON object, and JSON schema. JSON object and JSON schema make the Response output emit the parsed structured value instead of a JSON string when parsing succeeds. If the provider returns text that cannot be parsed into the requested structure, Rivet falls back to the raw string Response output instead of failing the node. JSON object asks OpenAI-compatible Custom providers for `response_format: { type: "json_object" }`. JSON schema adds a Response Schema input port and optional schema name/description settings. For Custom provider, JSON schema sends the same plain JSON-compatible schema as an OpenAI-compatible `response_format` request field so compatible endpoints receive the schema instead of only JSON object mode.
+Response format supports Default, Text, JSON object, and JSON schema. JSON object and JSON schema make the Response output emit the parsed structured value instead of a JSON string when parsing succeeds. If the provider returns text that cannot be parsed into the requested structure, Rivet normally falls back to the raw string Response output instead of failing the node. JSON object asks OpenAI-compatible Custom providers for `response_format: { type: "json_object" }`. JSON schema adds a Response Schema input port and optional schema name/description settings. For Custom provider, JSON schema sends the same plain JSON-compatible schema as an OpenAI-compatible `response_format` request field so compatible endpoints receive the schema instead of only JSON object mode.
+
+JSON schema also offers **Fail the LLM profile on non-JSON response**, which is
+off by default. It checks the final value prepared for the **Response** port,
+after Rivet has tried to parse raw response text. A parsed object succeeds; a
+remaining string, array, primitive, null, or missing value rejects that LLM
+profile. This validation does not use **Retry on non-200** because the provider
+request itself succeeded. With an LLM Profile fallback chain, Rivet immediately
+tries the next profile. With Inline configuration or no remaining fallback,
+the node fails with an error that identifies the final Response type and
+explains why non-200 retry was not used.
 
 ### Tools
 

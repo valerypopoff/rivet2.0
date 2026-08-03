@@ -285,18 +285,21 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     const responseOutput = outputs.find((output) => output.id === ('response' as PortId));
 
     if (responseOutput != null && isLLMChatV2StructuredResponseFormat(this.data.responseFormat)) {
-      responseOutput.dataType = [
-        'object',
-        'object[]',
-        'any',
-        'any[]',
-        'string',
-        'string[]',
-        'number',
-        'number[]',
-        'boolean',
-        'boolean[]',
-      ] as const;
+      responseOutput.dataType =
+        this.data.responseFormat === 'json_schema' && this.data.failProfileOnNonObjectResponse
+          ? 'object'
+          : ([
+              'object',
+              'object[]',
+              'any',
+              'any[]',
+              'string',
+              'string[]',
+              'number',
+              'number[]',
+              'boolean',
+              'boolean[]',
+            ] as const);
     }
 
     if (this.data.outputRequestStatus) {
@@ -359,7 +362,8 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
           id: 'llmProfileAttempts' as PortId,
           title: 'LLM Profile Attempts',
           dataType: 'object[]',
-          description: 'Chronological provider/profile attempts for this LLM Chat run.',
+          description:
+            'Chronological profile configuration, provider request, and parsed-response validation attempts for this LLM Chat run.',
         },
       );
     }

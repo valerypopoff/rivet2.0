@@ -399,6 +399,14 @@ function getResponseFormatEditors(): LLMChatV2EditorDefinition {
       helperMessage: 'Optional description passed to the provider for JSON object or JSON schema responses.',
       hideIf: (data) => data.responseFormat !== 'json' && data.responseFormat !== 'json_schema',
     },
+    {
+      type: 'toggle',
+      label: 'Fail the LLM profile on non-JSON response',
+      dataKey: 'failProfileOnNonObjectResponse',
+      helperMessage:
+        'Checks the final parsed Response value. If it is not an object, Rivet rejects the current LLM profile without Retry on non-200 and advances to the next fallback profile when available.',
+      hideIf: (data) => data.responseFormat !== 'json_schema',
+    },
   ]);
 }
 

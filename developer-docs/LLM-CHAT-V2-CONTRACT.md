@@ -93,6 +93,17 @@ right in the chain, never return to an earlier profile. This prevents a tool
 conversation from oscillating between providers while preserving model-round
 order.
 
+For JSON schema response format, the optional **Fail the LLM profile on
+non-JSON response** policy validates the final Data Value assembled for the
+`Response` port, after SDK structured output and Rivet's JSON text fallback have
+both had a chance to produce it. Only an `object` Data Value passes; strings,
+arrays, primitives, null, and missing values reject the current profile. This
+is a profile-level response-validation failure after a successful provider
+request, not a non-200 transport failure: it never enters **Retry on non-200**.
+An actual fallback chain advances immediately to the next profile. Inline and
+scalar-profile runs throw the detailed validation error when no fallback is
+available.
+
 The chain covers construction and execution of the provider/model round. Tool
 handler/delegate execution, connected-continuation scheduling, direct-return
 handler validation, and downstream graph work retain their normal errors; a
@@ -108,7 +119,10 @@ attempted, so a recovered primary failure is visible in the ordinary node
 output. The attempt array is chronological and contains the round/profile
 index, safe provider/model identity, configuration versus request stage,
 physical retry attempt index, outcome, observable HTTP status, and a
-redacted/capped error message where applicable. Redaction covers the profile
+redacted/capped error message where applicable. Attempt stages distinguish
+configuration, physical request, and parsed-response validation. A request can
+therefore retain its truthful HTTP 200 success immediately before that profile's
+response-validation failure. Redaction covers the profile
 API key and known profile/global request-header values. It is the authoritative
 cross-profile debugging history. A scalar profile retains the normal
 `Response Status` / `Response Error` scalar-or-retry-array shape. When the
@@ -128,6 +142,11 @@ profile chain, including whether its input was scalar or array, effective global
 Chat headers, and each credential rather than storing raw keys. A cache hit
 emits an empty attempt array and an explicit cache-hit summary because it made
 no physical provider attempt, and a run that exhausts a chain is never cached.
+Exhausted-chain errors label every retained configuration, request, and
+response-validation event with its explicit outcome, so an HTTP 200 followed
+by rejected parsed output cannot be mistaken for a failed transport call.
+Continuation lines in multiline attempt errors remain indented under the
+attempt that owns them.
 The exhausted-chain error intentionally does not retain a raw `cause`; its safe
 attempt history is the error's complete diagnostic surface.
 
@@ -237,7 +256,9 @@ paths and should not be used as the primary target for new provider refactors.
   normalizes Rivet retries, fixes AI SDK retries at zero, and carries response,
   tool, generation, provider-option, and output policy into the pipeline.
 - [`chatV2Pipeline.ts`](../packages/core/src/model/chat-v2/chatV2Pipeline.ts)
-  owns the Vercel AI SDK request/stream-or-generate/retry/result pipeline.
+  owns the Vercel AI SDK request/stream-or-generate/retry/result pipeline and
+  optional validation of the final parsed `Response` Data Value for JSON schema
+  profile acceptance.
 - [`chatV2CallObserver.ts`](../packages/core/src/model/chat-v2/chatV2CallObserver.ts)
   owns the privacy-bounded physical-call accounting event. It snapshots safe
   usage, outcome, provider/model identity, and known/unknown pricing once per

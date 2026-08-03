@@ -48,6 +48,7 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   useResponseSchemaNameInput?: boolean;
   responseSchemaDescription?: string;
   useResponseSchemaDescriptionInput?: boolean;
+  failProfileOnNonObjectResponse?: boolean;
   toolChoice?: LLMChatV2ToolChoiceMode;
   toolChoiceFunction?: string;
   parallelToolCalls?: boolean;
@@ -175,6 +176,7 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     useResponseSchemaNameInput: false,
     responseSchemaDescription: '',
     useResponseSchemaDescriptionInput: false,
+    failProfileOnNonObjectResponse: false,
     toolChoice: '',
     toolChoiceFunction: '',
     parallelToolCalls: false,

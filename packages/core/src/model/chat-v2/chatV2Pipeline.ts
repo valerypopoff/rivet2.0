@@ -55,6 +55,24 @@ export type ChatV2PipelineExecution =
       failure: ChatV2PipelineProviderFailure;
     };
 
+export class ChatV2ResponseValidationError extends Error {
+  constructor(public readonly responseDataType: string) {
+    super(
+      'LLM profile response validation failed.\n' +
+        'Response format: JSON schema\n' +
+        `Parsed Response type: ${responseDataType}\n` +
+        'The provider request succeeded, but the final value prepared for the Response port is not an object. ' +
+        'Because "Fail the LLM profile on non-JSON response" is enabled, Rivet rejected this LLM profile. ' +
+        'Retry on non-200 does not apply to this validation failure.',
+    );
+    this.name = 'ChatV2ResponseValidationError';
+  }
+}
+
+export function isChatV2ResponseValidationError(error: unknown): error is ChatV2ResponseValidationError {
+  return error instanceof ChatV2ResponseValidationError;
+}
+
 class ChatV2RetryFailure extends Error {
   constructor(
     public readonly error: unknown,
@@ -438,6 +456,13 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
         diagnosticResult: result,
       },
     };
+  }
+
+  if (options.failProfileOnNonObjectResponse && plan.request.responseFormat === 'json_schema') {
+    const responseOutput = commonOutputs['response' as PortId];
+    if (responseOutput?.type !== 'object') {
+      throw new ChatV2ResponseValidationError(responseOutput?.type ?? 'missing');
+    }
   }
 
   return { outcome: 'success', result };

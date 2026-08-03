@@ -30,6 +30,7 @@ data:
             enableOpenAICodeInterpreter: false
             enableOpenAIWebSearch: false
             extraProviderOptions: ""
+            failProfileOnNonObjectResponse: false
             googleIncludeThoughts: false
             googleThinkingLevel: ""
             headers: []
@@ -180,6 +181,7 @@ data:
             enableOpenAICodeInterpreter: false
             enableOpenAIWebSearch: false
             extraProviderOptions: ""
+            failProfileOnNonObjectResponse: false
             googleIncludeThoughts: false
             googleThinkingLevel: ""
             headers: []
