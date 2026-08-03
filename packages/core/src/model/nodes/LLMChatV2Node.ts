@@ -140,7 +140,6 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     return {
       category: 'model',
       primaryOutputPortId: 'response' as PortId,
-      contextInputPortIds: ['prompt' as PortId],
     };
   }
 

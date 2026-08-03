@@ -53,8 +53,14 @@ export type NodeRunActivityDescriptor = {
   category?: 'generic' | 'model' | 'tool';
   /** Preferred output to preview without changing execution or serialization. */
   primaryOutputPortId?: PortId;
-  /** Small context inputs that are useful to label an invocation. */
+  /**
+   * @deprecated Run Activity no longer renders input provenance. Retained only
+   * so existing plugin descriptors remain source-compatible; new nodes must
+   * not use it.
+   */
   contextInputPortIds?: PortId[];
+  /** Contextual label for the existing node-owned full-output action. */
+  fullOutputActionLabel?: string;
 };
 
 export abstract class NodeImpl<T extends ChartNode, Type extends T['type'] = T['type']> {

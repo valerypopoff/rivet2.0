@@ -231,6 +231,7 @@ const drawerStyles = css`
 
   .run-activity-icon-button:focus-visible,
   .run-activity-action-button:focus-visible,
+  .run-activity-child-action:focus-visible,
   .run-activity-new-items:focus-visible,
   .run-activity-row-toggle:focus-visible,
   .run-activity-column-resize-handle:focus-visible {
@@ -334,7 +335,7 @@ const drawerStyles = css`
     height: 100%;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: 10px 16px 20px;
+    padding: 0 16px 20px;
   }
 
   .run-activity-column-header,
@@ -355,7 +356,7 @@ const drawerStyles = css`
   .run-activity-column-header {
     position: sticky;
     z-index: 2;
-    top: -10px;
+    top: 0;
     min-height: 32px;
     align-items: stretch;
     padding: 10px 11px 5px;
@@ -620,7 +621,7 @@ const drawerStyles = css`
 
   .run-activity-child {
     display: grid;
-    grid-template-columns: 8px minmax(0, 1fr) max-content;
+    grid-template-columns: 8px minmax(0, 1fr) max-content max-content;
     align-items: center;
     gap: 8px;
     min-height: 30px;
@@ -637,6 +638,22 @@ const drawerStyles = css`
     padding: 0 10px;
     border-color: var(--form-control-border);
     font-size: var(--ui-font-size-sm);
+  }
+
+  .run-activity-child-action {
+    grid-column: 4;
+    min-height: 26px;
+    padding: 0 8px;
+    border: 0;
+    background: transparent;
+    color: var(--primary);
+    font-size: var(--ui-font-size-sm);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .run-activity-child-action:hover {
+    color: var(--primary-light);
   }
 
   @container run-activity-drawer (max-width: 1100px) {
@@ -820,8 +837,8 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
   onClose,
   onLocate,
   onOpenFullOutput,
+  onOpenToolResult,
   onInspectResponse,
-  onInspectValueProvenance,
   onCopyDiagnostics,
   height = DEFAULT_RUN_ACTIVITY_DRAWER_HEIGHT,
   onHeightChange,
@@ -1309,8 +1326,8 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
                   onToggle={() => toggleExpanded(item.activityKey)}
                   onLocate={onLocate}
                   onOpenFullOutput={onOpenFullOutput}
+                  onOpenToolResult={onOpenToolResult}
                   onInspectResponse={onInspectResponse}
-                  onInspectValueProvenance={onInspectValueProvenance}
                   renderExpandedContent={renderExpandedContent}
                 />
               ))}
@@ -1356,7 +1373,7 @@ const RunActivityColumnHeader: FC<{
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
     />
-    <span className="run-activity-column-header-cell preview">Result</span>
+    <span className="run-activity-column-header-cell preview">Output</span>
     <span className="run-activity-column-header-cell align-end">Started</span>
     <span className="run-activity-column-header-cell align-end">Duration</span>
     <span aria-hidden="true" />
@@ -1398,8 +1415,8 @@ const RunActivityRow: FC<{
   onToggle(): void;
   onLocate?: RunActivityDrawerProps['onLocate'];
   onOpenFullOutput?: RunActivityDrawerProps['onOpenFullOutput'];
+  onOpenToolResult?: RunActivityDrawerProps['onOpenToolResult'];
   onInspectResponse?: RunActivityDrawerProps['onInspectResponse'];
-  onInspectValueProvenance?: RunActivityDrawerProps['onInspectValueProvenance'];
   renderExpandedContent?: RunActivityDrawerProps['renderExpandedContent'];
 }> = ({
   item,
@@ -1407,8 +1424,8 @@ const RunActivityRow: FC<{
   onToggle,
   onLocate,
   onOpenFullOutput,
+  onOpenToolResult,
   onInspectResponse,
-  onInspectValueProvenance,
   renderExpandedContent,
 }) => {
   const preview = item.error ?? item.preview ?? describeActivity(item);
@@ -1446,7 +1463,7 @@ const RunActivityRow: FC<{
       </button>
       {expanded && (
         <div className="run-activity-row-detail" id={`run-activity-detail-${toDomId(item.activityKey)}`}>
-          {(item.error || item.preview) && (
+          {(item.error != null || item.preview != null) && (
             <div className={clsx('run-activity-detail-message', { error: item.error })}>
               {item.error ?? item.preview}
             </div>
@@ -1467,6 +1484,15 @@ const RunActivityRow: FC<{
                   {child.durationMs != null && (
                     <span className="run-activity-child-secondary">{formatDuration(child.durationMs)}</span>
                   )}
+                  {child.toolResultTarget && onOpenToolResult && (
+                    <button
+                      type="button"
+                      className="run-activity-child-action"
+                      onClick={() => onOpenToolResult(child.toolResultTarget!)}
+                    >
+                      Open tool result
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -1479,21 +1505,12 @@ const RunActivityRow: FC<{
             )}
             {item.fullOutputAvailable && onOpenFullOutput && (
               <button type="button" className="run-activity-action-button" onClick={() => onOpenFullOutput(item)}>
-                Open full output
+                {item.fullOutputActionLabel ?? 'Open full output'}
               </button>
             )}
             {item.inspectable && onInspectResponse && (
               <button type="button" className="run-activity-action-button" onClick={() => onInspectResponse(item)}>
                 Inspect response
-              </button>
-            )}
-            {item.inputProvenanceAvailable && onInspectValueProvenance && (
-              <button
-                type="button"
-                className="run-activity-action-button"
-                onClick={() => onInspectValueProvenance(item)}
-              >
-                Explain inputs
               </button>
             )}
           </div>

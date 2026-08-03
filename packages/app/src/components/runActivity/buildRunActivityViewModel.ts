@@ -31,12 +31,17 @@ export type RunActivityInvocationResolution = {
   graphName?: string;
   nodeTitle?: string;
   nodeType?: string;
+  /** Human-readable caller for a subgraph, resolved from the current project when available. */
+  subgraphCaller?: {
+    nodeTitle: string;
+    graphName: string;
+  };
   category?: Exclude<RunActivityCategory, 'error'>;
   primaryOutputPortId?: PortId;
-  contextInputPortIds?: PortId[];
   runData?: NodeRunDataWithRefs;
   navigable?: boolean;
   fullOutputAvailable?: boolean;
+  fullOutputActionLabel?: string;
   inspectable?: boolean;
   searchTerms?: string[];
 };
@@ -199,11 +204,8 @@ function buildInvocationViewModel(
     ...(searchTerms.length === 0 ? {} : { searchTerms }),
     navigable: resolved.navigable ?? false,
     fullOutputAvailable: resolved.fullOutputAvailable ?? (resolved.runData != null && invocation.outputsAvailable),
+    ...(resolved.fullOutputActionLabel == null ? {} : { fullOutputActionLabel: resolved.fullOutputActionLabel }),
     inspectable: resolved.inspectable ?? false,
-    inputProvenanceAvailable:
-      Object.keys(resolved.runData?.inputData ?? {}).length > 0 ||
-      invocation.inputPortIds.length > 0 ||
-      (invocation.inputConnections?.length ?? 0) > 0,
     ...(hasErrors ? { hasErrors: true } : {}),
   };
 }
@@ -253,7 +255,7 @@ function getInvocationPreview(
   invocation: RunActivityNodeInvocation,
   resolved: RunActivityInvocationResolution,
 ): string | undefined {
-  if (invocation.errorSummary) return undefined;
+  if (invocation.errorSummary != null) return undefined;
   if (!invocation.outputsAvailable) {
     return invocation.outputsClearedAt == null
       ? describeUnavailableOutput(invocation)
@@ -294,7 +296,7 @@ function selectStoredPortValue(
 function buildChildRows(invocation: RunActivityNodeInvocation): RunActivityChildViewModel[] {
   return [
     ...invocation.modelCalls.map((call) => ({ sequence: call.sequence, child: modelCallToChild(call) })),
-    ...invocation.toolCalls.map((call) => ({ sequence: call.sequence, child: toolCallToChild(call) })),
+    ...invocation.toolCalls.map((call) => ({ sequence: call.sequence, child: toolCallToChild(call, invocation) })),
   ]
     .sort((left, right) => left.sequence - right.sequence || left.child.id.localeCompare(right.child.id))
     .map(({ child }) => child);
@@ -321,7 +323,7 @@ function modelCallToChild(call: RunActivityModelCall): RunActivityChildViewModel
   };
 }
 
-function toolCallToChild(call: RunActivityToolCall): RunActivityChildViewModel {
+function toolCallToChild(call: RunActivityToolCall, invocation: RunActivityNodeInvocation): RunActivityChildViewModel {
   const context = [call.outcome, call.handlerKind, call.handlerName].filter((value): value is string => value != null);
   return {
     id: `tool:${call.toolCallId ?? call.toolName}:${call.sequence}`,
@@ -329,6 +331,18 @@ function toolCallToChild(call: RunActivityToolCall): RunActivityChildViewModel {
     secondaryText: context.join(' / '),
     status: call.outcome === 'success' ? 'success' : call.outcome === 'aborted' ? 'interrupted' : 'error',
     ...(call.durationMs == null ? {} : { durationMs: call.durationMs }),
+    ...(call.resultOwner == null || (call.outcome !== 'success' && call.outcome !== 'passthrough-error')
+      ? {}
+      : {
+          toolResultTarget: {
+            rootRunId: invocation.rootRunId,
+            graphRunId: invocation.graphRunId,
+            graphId: invocation.graphId,
+            nodeId: call.resultOwner.nodeId,
+            processId: call.resultOwner.processId,
+            outputPortId: call.resultOwner.outputPortId,
+          },
+        }),
   };
 }
 
@@ -339,7 +353,7 @@ function buildDetailRows(
   resolved: RunActivityInvocationResolution,
   category: RunActivityCategory,
 ): RunActivityDetailRow[] {
-  // A normal physical execution is the expected case and does not need a
+  // A normal runtime execution is the expected case and does not need a
   // provenance badge on every row. Replay and legacy origins are exceptional,
   // actionable metadata, so keep those visible.
   const rows: RunActivityDetailRow[] =
@@ -351,12 +365,11 @@ function buildDetailRows(
   if (graphRun?.executor) {
     rows.push({
       label: 'Subgraph caller',
-      value: `Node ${graphRun.executor.nodeId} in ${graphRun.executor.parentGraphId}`,
+      value:
+        resolved.subgraphCaller == null
+          ? 'Caller node details are unavailable'
+          : `‘${resolved.subgraphCaller.nodeTitle}’ node in ‘${resolved.subgraphCaller.graphName}’ graph`,
     });
-  }
-  for (const portId of resolved.contextInputPortIds ?? []) {
-    const value = resolved.runData?.inputData?.[portId];
-    if (value != null) rows.push({ label: `Input: ${portId}`, value: previewStoredDataValue(value) });
   }
   if (invocation.waitingForUserInput) {
     rows.push({
@@ -393,16 +406,7 @@ function buildDetailRows(
       label: 'Model call details',
       value:
         invocation.resultOrigin === 'executed'
-          ? 'No physical provider-call event was recorded'
-          : 'Unavailable for this replayed result',
-    });
-  }
-  if (invocation.status !== 'running' && category === 'tool' && invocation.toolCallCount === 0) {
-    rows.push({
-      label: 'Tool call details',
-      value:
-        invocation.resultOrigin === 'executed'
-          ? 'No physical tool-call event was recorded'
+          ? 'No provider request was recorded'
           : 'Unavailable for this replayed result',
     });
   }

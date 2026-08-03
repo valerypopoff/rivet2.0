@@ -10,7 +10,7 @@ export function previewStoredDataValue(value: StoredDataValue): string {
 }
 
 function previewStoredRef(preview: StoredDataPreview): string {
-  if (preview.kind === 'summary') return truncatePreview(preview.label);
+  if (preview.kind === 'summary') return truncatePreview(preview.excerpt ?? preview.label);
   return truncatePreview(preview.excerpt);
 }
 

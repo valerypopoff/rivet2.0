@@ -439,6 +439,11 @@ void describe('ExecutionRecorder', () => {
       toolName: 'lookup',
       sourceNodeId: nodeId,
       sourceProcessId: processId,
+      resultOwner: {
+        nodeId: 'delegate-node' as NodeId,
+        processId: 'delegate-process' as ProcessId,
+        outputPortId: 'output' as PortId,
+      },
       handlerKind: 'graph',
       handlerGraphId: graph.metadata!.id,
       handlerName: 'Lookup',

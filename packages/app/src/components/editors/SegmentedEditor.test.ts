@@ -12,7 +12,10 @@ test('active segmented choices use calculated primary foreground contrast', () =
     segmentedEditorSource,
     /\.segmented-choice-option\.is-active \{[\s\S]*background: var\(--primary\);[\s\S]*color: var\(--foreground-on-primary\);/,
   );
-  assert.doesNotMatch(segmentedEditorSource, /\.segmented-choice-option\.is-active \{[\s\S]*color: var\(--grey-darkest\);/);
+  assert.doesNotMatch(
+    segmentedEditorSource,
+    /\.segmented-choice-option\.is-active \{[\s\S]*color: var\(--grey-darkest\);/,
+  );
 });
 
 test('segmented choice track is theme-tokenized for Bright contrast', () => {
@@ -29,4 +32,8 @@ test('segmented choice track is theme-tokenized for Bright contrast', () => {
 test('callers can keep compact segmented options on one line', () => {
   assert.match(segmentedEditorSource, /allowOptionWrap\?: boolean/);
   assert.match(segmentedEditorSource, /const wraps = allowOptionWrap && choice\.scrollWidth > availableWidth \+ 1;/);
+  assert.match(
+    segmentedEditorSource,
+    /\.segmented-choice\[data-wrap='false'\] \{[\s\S]*max-width: none;[\s\S]*flex-shrink: 0;/,
+  );
 });

@@ -146,6 +146,9 @@ aligned to the right edge of the node settings panel. Its tooltip wrapper is
 the aligned flex item, so tooltip composition cannot constrain or wrap the
 switcher. This two-option switcher opts out of the shared segmented control's
 automatic option wrapping, so **From profile** remains one label on one line.
+The row reserves the switcher's intrinsic width and one standard control
+height regardless of whether the Inline-only action is present: switching mode
+must neither clip the trailing option padding nor move the following section.
 
 **Output reasoning** is invocation-owned because it controls whether that LLM
 Chat exposes a `Reasoning` output; it always appears in the Chat node's
@@ -366,6 +369,13 @@ paths and should not be used as the primary target for new provider refactors.
   handler graph or external function rather than its pre-tool or downstream
   branches. The generic output order matches the node ports: Tool Name, Tool
   Arguments, Message, Output, Tool Execution Time (sec), Tool Result Message.
+- A successful or passthrough-error physical Delegate invocation emits an
+  optional privacy-bounded `toolCallFinished.resultOwner` pointer to its exact
+  persisted `Output` process page. It is used by Run Activity to open that
+  specific tool result rather than the Tool node's function definition. The
+  pointer contains only Delegate node/process/port identity; it must not carry
+  arguments or result text. Failed, aborted, and internal no-Delegate paths
+  omit it, so observers do not invent a tool result destination.
 - Early and final Delegate branches may converge within the same tool round:
   outputs completed by the early pre-tool message branch are available to the
   final tool-result branch for that round. Do not treat prior-round branch

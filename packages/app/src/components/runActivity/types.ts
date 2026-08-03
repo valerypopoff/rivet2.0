@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { GraphId, GraphRunId, NodeId, ProcessId, RootRunId } from '@valerypopoff/rivet2-core';
+import type { GraphId, GraphRunId, NodeId, PortId, ProcessId, RootRunId } from '@valerypopoff/rivet2-core';
 import type { RunActivityColumnWidths } from '../../features/runActivity/runActivityColumnWidths.js';
 
 export type RunActivityStatus = 'idle' | 'running' | 'outputs-ready' | 'completed' | 'failed' | 'aborted';
@@ -41,12 +41,19 @@ export interface RunActivityDetailRow {
   value: string;
 }
 
+/** Exact persisted Delegate output that produced one tool-call result. */
+export type RunActivityToolResultTarget = RunActivityInvocationIdentity & {
+  outputPortId: PortId;
+};
+
 export interface RunActivityChildViewModel {
   id: string;
   label: string;
   secondaryText?: string;
   status?: RunActivityItemStatus;
   durationMs?: number;
+  /** Present only when this child has an exact Delegate Tool Call result owner. */
+  toolResultTarget?: RunActivityToolResultTarget;
 }
 
 /**
@@ -80,9 +87,9 @@ export interface RunActivityItemViewModel {
   searchTerms?: string[];
   navigable?: boolean;
   fullOutputAvailable?: boolean;
+  /** Contextual name for the node-owned full-output action. */
+  fullOutputActionLabel?: string;
   inspectable?: boolean;
-  /** This invocation recorded input ports or the ordinary execution store retained input values. */
-  inputProvenanceAvailable?: boolean;
   /** Lets Errors include failed child model/tool attempts without mislabelling the node result itself. */
   hasErrors?: boolean;
   resultOrigin: RunActivityResultOriginView;
@@ -110,8 +117,8 @@ export interface RunActivityDrawerProps {
   onClose(): void;
   onLocate?(item: RunActivityItemViewModel): void;
   onOpenFullOutput?(item: RunActivityItemViewModel): void;
+  onOpenToolResult?(target: RunActivityToolResultTarget): void;
   onInspectResponse?(item: RunActivityItemViewModel): void;
-  onInspectValueProvenance?(item: RunActivityItemViewModel): void;
   onCopyDiagnostics?(): void;
   height?: number;
   onHeightChange?(height: number): void;

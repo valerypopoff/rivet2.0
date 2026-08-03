@@ -34,7 +34,7 @@ test('selects the newest active root before the latest completed root', () => {
   assert.equal(selectRunActivityRoot(journal)?.rootRunId, completedRootId);
 });
 
-test('projects stable exact invocation rows, bounded stored previews, children, filters, and provenance', () => {
+test('projects stable exact invocation rows, bounded stored previews, children, and filters', () => {
   const journal = createRunActivityJournal();
   const selectedRoot = root(newerActiveRootId, 7, 'outputs-ready');
   selectedRoot.startedAt = 1_000;
@@ -157,7 +157,6 @@ test('projects stable exact invocation rows, bounded stored previews, children, 
           nodeType: 'LLM Chat',
           category: 'model',
           primaryOutputPortId: 'response' as PortId,
-          contextInputPortIds: ['prompt' as PortId],
           runData,
           navigable: true,
           inspectable: true,
@@ -214,14 +213,7 @@ test('projects stable exact invocation rows, bounded stored previews, children, 
   assert.equal(modelItem.preview?.includes('must-not-be-resolved'), false);
   assert.equal(modelItem.provider, 'anthropic');
   assert.equal(modelItem.model, 'fallback-b');
-  assert.deepEqual(
-    modelItem.detailRows?.find((row) => row.label === 'Input: prompt'),
-    { label: 'Input: prompt', value: 'Compact prompt context' },
-  );
-  assert.equal(
-    modelItem.detailRows?.some((row) => row.label === 'Result origin'),
-    false,
-  );
+  assert.equal(modelItem.detailRows?.some((row) => row.label === 'Result origin') ?? false, false);
   assert.equal(modelItem.children?.length, 2);
   assert.deepEqual(
     modelItem.children?.map((child) => child.status),
@@ -256,32 +248,253 @@ test('does not recursively materialize large or cyclic inline values', () => {
   assert.ok(preview.length <= RUN_ACTIVITY_PREVIEW_MAX_CHARS);
 });
 
-test('only exposes input provenance when an invocation has a recorded or connected input', () => {
+test('uses a ref-backed summary excerpt when it is available and preserves summary-only fallbacks', () => {
+  const chatPreview: StoredDataValue = {
+    type: 'chat-message',
+    storage: 'ref',
+    refId: 'prompt-output',
+    preview: {
+      kind: 'summary',
+      label: 'Chat Message (developer)',
+      excerpt: 'Answer the user question with concise facts.',
+      totalBytes: 42,
+    },
+  };
+  const mediaPreview: StoredDataValue = {
+    type: 'image',
+    storage: 'ref',
+    refId: 'image-output',
+    preview: {
+      kind: 'summary',
+      label: 'Image (image/png)',
+      totalBytes: 128,
+    },
+  };
+
+  assert.equal(previewStoredDataValue(chatPreview), 'Answer the user question with concise facts.');
+  assert.equal(previewStoredDataValue(mediaPreview), 'Image (image/png)');
+});
+
+test('does not replace an explicitly recorded empty error with an output preview', () => {
   const journal = createRunActivityJournal();
   const selectedRoot = root(newerActiveRootId, 1, 'completed');
-  const capturedInvocation = invocation({
-    key: 'input-provenance',
+  const erroredInvocation = invocation({
+    key: 'empty-error',
     sequence: 1,
     graphId: 'main',
     graphRunId: 'main-run',
-    nodeId: 'text',
-    processId: 'text-process',
+    nodeId: 'chat',
+    processId: 'chat-process',
   });
-  selectedRoot.nodeInvocationsByKey[capturedInvocation.key] = capturedInvocation;
-  selectedRoot.nodeInvocationOrder = [capturedInvocation.key];
+  erroredInvocation.errorSummary = '';
+  erroredInvocation.outputPortIds = ['response' as PortId];
+  selectedRoot.nodeInvocationsByKey[erroredInvocation.key] = erroredInvocation;
+  selectedRoot.nodeInvocationOrder = [erroredInvocation.key];
   journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
   journal.latestCompletedRootRunId = selectedRoot.rootRunId;
 
-  const withoutInputs = buildRunActivityViewModel(journal, () => ({
-    runData: { inputData: {}, outputData: {} },
-  }));
-  assert.equal(withoutInputs.items[0]?.inputProvenanceAvailable, false);
+  const item = buildRunActivityViewModel(journal, () => ({
+    nodeTitle: 'Answer user',
+    nodeType: 'LLM Chat',
+    category: 'model',
+  })).items[0]!;
+  assert.equal(item.error, '');
+  assert.equal(item.preview, undefined);
+});
 
-  capturedInvocation.inputPortIds = ['prompt' as PortId];
-  const withConnectedInput = buildRunActivityViewModel(journal, () => ({
-    runData: { inputData: {}, outputData: {} },
+test('projects only successful and passthrough tool results to their exact Delegate invocation', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const source = invocation({
+    key: 'tool-result-source',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'chat',
+    processId: 'chat-process',
+  });
+  source.toolCallCount = 3;
+  source.toolCalls = [
+    {
+      sequence: 2,
+      toolCallId: 'successful-tool',
+      toolName: 'searchKnowledge',
+      sourceNodeId: source.nodeId,
+      sourceProcessId: source.processId,
+      handlerKind: 'graph',
+      outcome: 'success',
+      resultOwner: {
+        nodeId: 'delegate' as NodeId,
+        processId: 'delegate-success' as ProcessId,
+        outputPortId: 'output' as PortId,
+      },
+    },
+    {
+      sequence: 3,
+      toolCallId: 'passthrough-tool',
+      toolName: 'fetchMetadata',
+      sourceNodeId: source.nodeId,
+      sourceProcessId: source.processId,
+      handlerKind: 'external',
+      outcome: 'passthrough-error',
+      resultOwner: {
+        nodeId: 'delegate' as NodeId,
+        processId: 'delegate-passthrough' as ProcessId,
+        outputPortId: 'output' as PortId,
+      },
+    },
+    {
+      sequence: 4,
+      toolCallId: 'failed-tool',
+      toolName: 'deleteAllKnowledge',
+      sourceNodeId: source.nodeId,
+      sourceProcessId: source.processId,
+      handlerKind: 'graph',
+      outcome: 'failure',
+    },
+  ];
+  selectedRoot.nodeInvocationsByKey[source.key] = source;
+  selectedRoot.nodeInvocationOrder = [source.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const viewModel = buildRunActivityViewModel(journal, () => ({
+    nodeTitle: 'Answer user',
+    nodeType: 'LLM Chat',
+    category: 'model',
   }));
-  assert.equal(withConnectedInput.items[0]?.inputProvenanceAvailable, true);
+
+  const children = viewModel.items[0]?.children;
+  assert.deepEqual(children?.[0]?.toolResultTarget, {
+    rootRunId: source.rootRunId,
+    graphRunId: source.graphRunId,
+    graphId: source.graphId,
+    nodeId: 'delegate',
+    processId: 'delegate-success',
+    outputPortId: 'output',
+  });
+  assert.deepEqual(children?.[1]?.toolResultTarget, {
+    rootRunId: source.rootRunId,
+    graphRunId: source.graphRunId,
+    graphId: source.graphId,
+    nodeId: 'delegate',
+    processId: 'delegate-passthrough',
+    outputPortId: 'output',
+  });
+  assert.equal(children?.[2]?.toolResultTarget, undefined);
+});
+
+test('describes a subgraph caller with resolved node and graph names', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const childInvocation = invocation({
+    key: 'tool-handler',
+    sequence: 2,
+    graphId: 'get-current-time',
+    graphRunId: 'get-current-time-run',
+    nodeId: 'graph-output',
+    processId: 'graph-output-process',
+  });
+  selectedRoot.graphRunsById[childInvocation.graphRunId] = {
+    sequence: 2,
+    rootRunId: selectedRoot.rootRunId,
+    graphRunId: childInvocation.graphRunId,
+    graphId: childInvocation.graphId,
+    graphName: 'Get current time',
+    parentGraphRunId: 'main-run' as GraphRunId,
+    executor: {
+      nodeId: 'agent-delegate' as NodeId,
+      parentGraphId: 'main' as GraphId,
+      processId: 'delegate-process' as ProcessId,
+    },
+    status: 'completed',
+  };
+  selectedRoot.graphRunsById['main-run' as GraphRunId] = {
+    sequence: 1,
+    rootRunId: selectedRoot.rootRunId,
+    graphRunId: 'main-run' as GraphRunId,
+    graphId: 'main' as GraphId,
+    graphName: 'LLM agent',
+    status: 'completed',
+  };
+  selectedRoot.graphRunOrder = ['main-run' as GraphRunId, childInvocation.graphRunId];
+  selectedRoot.nodeInvocationsByKey[childInvocation.key] = childInvocation;
+  selectedRoot.nodeInvocationOrder = [childInvocation.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const viewModel = buildRunActivityViewModel(journal, () => ({
+    subgraphCaller: {
+      nodeTitle: 'Delegate Tool Call',
+      graphName: 'LLM agent',
+    },
+  }));
+
+  assert.deepEqual(
+    viewModel.items[0]?.detailRows?.find((row) => row.label === 'Subgraph caller'),
+    {
+      label: 'Subgraph caller',
+      value: '‘Delegate Tool Call’ node in ‘LLM agent’ graph',
+    },
+  );
+});
+
+test('does not present zero tool-call events as a problem for Tool or Delegate rows', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const toolDefinition = invocation({
+    key: 'tool-definition',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'tool',
+    processId: 'tool-process',
+  });
+  const delegate = invocation({
+    key: 'delegate-without-call',
+    sequence: 2,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'delegate',
+    processId: 'delegate-process',
+  });
+  selectedRoot.nodeInvocationsByKey[toolDefinition.key] = toolDefinition;
+  selectedRoot.nodeInvocationsByKey[delegate.key] = delegate;
+  selectedRoot.nodeInvocationOrder = [toolDefinition.key, delegate.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const viewModel = buildRunActivityViewModel(journal, ({ invocation: current }) => ({
+    nodeTitle: current.nodeId === toolDefinition.nodeId ? 'Search documentation' : 'Delegate Tool Call',
+    category: 'tool',
+  }));
+
+  for (const item of viewModel.items) {
+    assert.equal(item.toolCallCount, undefined);
+    assert.equal(item.detailRows?.some((row) => row.label === 'Tool call details') ?? false, false);
+  }
+});
+
+test('uses plain provider-request wording when a model row has no recorded request', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const model = invocation({
+    key: 'model-without-request',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'chat',
+    processId: 'chat-process',
+  });
+  selectedRoot.nodeInvocationsByKey[model.key] = model;
+  selectedRoot.nodeInvocationOrder = [model.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const viewModel = buildRunActivityViewModel(journal, () => ({ category: 'model' }));
+  assert.deepEqual(viewModel.items[0]?.detailRows, [
+    { label: 'Model call details', value: 'No provider request was recorded' },
+  ]);
 });
 
 test('empty journal discloses ignored legacy events without inventing a run', () => {

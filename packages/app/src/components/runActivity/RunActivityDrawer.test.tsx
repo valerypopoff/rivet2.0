@@ -4,7 +4,7 @@ import React from 'react';
 import { JSDOM } from 'jsdom';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
-import type { GraphId, GraphRunId, NodeId, ProcessId, RootRunId } from '@valerypopoff/rivet2-core';
+import type { GraphId, GraphRunId, NodeId, PortId, ProcessId, RootRunId } from '@valerypopoff/rivet2-core';
 import {
   MAX_RUN_ACTIVITY_DRAWER_VIEWPORT_RATIO,
   MIN_RUN_ACTIVITY_DRAWER_HEIGHT,
@@ -30,8 +30,23 @@ const ITEMS: RunActivityItemViewModel[] = [
     navigable: true,
     fullOutputAvailable: true,
     inspectable: true,
-    inputProvenanceAvailable: true,
     resultOrigin: 'executed',
+    children: [
+      {
+        id: 'tool:searchKnowledge:1',
+        label: 'searchKnowledge',
+        status: 'success',
+        toolResultTarget: {
+          ...identity('main', 'delegate', 'delegate-process'),
+          outputPortId: 'output' as PortId,
+        },
+      },
+      {
+        id: 'tool:failed:2',
+        label: 'failedTool',
+        status: 'error',
+      },
+    ],
   },
   {
     activityKey: 'root:graph:tool:process',
@@ -39,11 +54,13 @@ const ITEMS: RunActivityItemViewModel[] = [
     sequence: 2,
     graphId: 'tools' as GraphId,
     graphName: 'Tool handlers',
-    nodeTitle: 'Search docs',
-    nodeType: 'Delegate Tool Call',
+    nodeTitle: 'Search docs tool',
+    nodeType: 'Tool',
     status: 'running',
     category: 'tool',
     toolName: 'searchKnowledge',
+    fullOutputAvailable: true,
+    fullOutputActionLabel: 'Open tool definition',
     resultOrigin: 'executed',
   },
   {
@@ -86,7 +103,7 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
   const located: string[] = [];
   const fullOutputs: string[] = [];
   const inspected: string[] = [];
-  const inspectedInputs: string[] = [];
+  const toolResults: Array<{ nodeId: NodeId; processId: ProcessId; outputPortId: string }> = [];
   const diagnosticsCopied: boolean[] = [];
   const columnWidths: Array<{ nodeName: number; graphName: number; nodeType: number }> = [];
   const viewModel: RunActivityViewModel = {
@@ -108,7 +125,7 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
           onLocate={(item) => located.push(item.activityKey)}
           onOpenFullOutput={(item) => fullOutputs.push(item.activityKey)}
           onInspectResponse={(item) => inspected.push(item.activityKey)}
-          onInspectValueProvenance={(item) => inspectedInputs.push(item.activityKey)}
+          onOpenToolResult={(target) => toolResults.push(target)}
           onCopyDiagnostics={() => diagnosticsCopied.push(true)}
           onColumnWidthsChange={(widths) => columnWidths.push(widths)}
         />,
@@ -122,7 +139,18 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
     assert.match(document.body.textContent ?? '', /Node name/);
     assert.match(document.body.textContent ?? '', /Graph name/);
     assert.match(document.body.textContent ?? '', /Node type/);
-    assert.match(document.body.textContent ?? '', /Result/);
+    assert.equal(
+      [...document.querySelectorAll<HTMLElement>('.run-activity-column-header-cell')].some(
+        (cell) => cell.textContent?.trim() === 'Output',
+      ),
+      true,
+    );
+    assert.equal(
+      [...document.querySelectorAll<HTMLElement>('.run-activity-column-header-cell')].some(
+        (cell) => cell.textContent?.trim() === 'Result',
+      ),
+      false,
+    );
     assert.match(document.body.textContent ?? '', /Started/);
     assert.match(document.body.textContent ?? '', /Duration/);
     assert.ok(document.querySelector('#react-select-run-activity-graph-filter-input'));
@@ -165,16 +193,40 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
     const buttons = [...modelRow.querySelectorAll<HTMLButtonElement>('.run-activity-row-actions button')];
     assert.deepEqual(
       buttons.map((button) => button.textContent?.trim()),
-      ['Locate on canvas', 'Open full output', 'Inspect response', 'Explain inputs'],
+      ['Locate on canvas', 'Open full output', 'Inspect response'],
     );
     await act(async () => buttons[0]!.click());
     await act(async () => buttons[1]!.click());
     await act(async () => buttons[2]!.click());
-    await act(async () => buttons[3]!.click());
     assert.deepEqual(located, ['root:graph:model:process']);
     assert.deepEqual(fullOutputs, ['root:graph:model:process']);
     assert.deepEqual(inspected, ['root:graph:model:process']);
-    assert.deepEqual(inspectedInputs, ['root:graph:model:process']);
+
+    const toolResultActions = [...modelRow.querySelectorAll<HTMLButtonElement>('.run-activity-child-action')];
+    assert.deepEqual(
+      toolResultActions.map((button) => button.textContent?.trim()),
+      ['Open tool result'],
+    );
+    await act(async () => toolResultActions[0]!.click());
+    assert.deepEqual(toolResults, [
+      {
+        nodeId: 'delegate' as NodeId,
+        processId: 'delegate-process' as ProcessId,
+        outputPortId: 'output',
+        rootRunId: 'root' as RootRunId,
+        graphRunId: 'main-run' as GraphRunId,
+        graphId: 'main' as GraphId,
+      },
+    ]);
+
+    const toolDefinitionRow = document.querySelector<HTMLElement>('[data-activity-key="root:graph:tool:process"]')!;
+    await act(async () => toolDefinitionRow.querySelector<HTMLButtonElement>('.run-activity-row-toggle')!.click());
+    const toolDefinitionAction = toolDefinitionRow.querySelector<HTMLButtonElement>(
+      '.run-activity-row-actions button',
+    )!;
+    assert.equal(toolDefinitionAction.textContent?.trim(), 'Open tool definition');
+    await act(async () => toolDefinitionAction.click());
+    assert.deepEqual(fullOutputs, ['root:graph:model:process', 'root:graph:tool:process']);
 
     const errorsFilter = [...document.querySelectorAll<HTMLButtonElement>('.segmented-choice-option')].find(
       (button) => button.textContent === 'Errors',

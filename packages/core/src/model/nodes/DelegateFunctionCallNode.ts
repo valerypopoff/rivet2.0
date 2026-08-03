@@ -117,7 +117,7 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     return {
       category: 'tool',
       primaryOutputPortId: 'output' as PortId,
-      contextInputPortIds: ['function-call' as PortId],
+      fullOutputActionLabel: 'Open tool result',
     };
   }
 

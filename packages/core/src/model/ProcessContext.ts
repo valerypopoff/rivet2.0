@@ -115,6 +115,16 @@ export type ToolCallFinishedEvent = {
   toolName: string;
   sourceNodeId: NodeId;
   sourceProcessId: ProcessId;
+  /**
+   * Exact node invocation that owns the persisted tool-result output, when
+   * delegation ran through a Delegate Tool Call node. This is intentionally a
+   * pointer only: execution traces never copy tool arguments or result text.
+   */
+  resultOwner?: {
+    nodeId: NodeId;
+    processId: ProcessId;
+    outputPortId: PortId;
+  };
   handlerKind: 'graph' | 'external' | 'unknown';
   handlerGraphId?: GraphId;
   handlerName?: string;

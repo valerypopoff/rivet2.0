@@ -9,7 +9,6 @@ import {
   type GraphId,
   type GraphRunId,
   type NodeGraph,
-  type NodeConnection,
   type NodeId,
   type PortId,
   type ProcessEvents,
@@ -58,8 +57,6 @@ export type RunActivityNodeInvocation = {
   exclusionReason?: string;
   waitingForUserInput?: { questionCount: number; renderingType: 'text' | 'markdown' };
   progress?: GraphProgress;
-  /** Effective, value-free input edges captured when this invocation started. */
-  inputConnections?: NodeConnection[];
   inputPortIds: PortId[];
   outputPortIds: PortId[];
   splitOutputPortIds: Record<number, PortId[]>;
@@ -181,8 +178,6 @@ export const DEFAULT_RUN_ACTIVITY_JOURNAL_LIMITS: RunActivityJournalLimits = {
   modelCallsPerInvocation: AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS,
   toolCallsPerInvocation: AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS,
 };
-
-const MAX_ERROR_SUMMARY_LENGTH = 500;
 
 export function createRunActivityJournal(limits: Partial<RunActivityJournalLimits> = {}): RunActivityJournal {
   return {
@@ -385,7 +380,7 @@ function applyGraphTerminal(
   graph.finishedAt = at;
   graph.terminalEventMissing = undefined;
   const error = 'error' in data ? data.error : undefined;
-  if (error != null) graph.errorSummary = summarizeError(error);
+  if (error != null) graph.errorSummary = serializeErrorMessage(error);
 
   if (execution.parentGraphRunId == null) {
     const wasTerminal = isTerminalRootStatus(root.status);
@@ -409,11 +404,6 @@ function applyNodeStart(
   invocation.status = 'running';
   invocation.startedAt = minDefined(invocation.startedAt, at);
   invocation.inputPortIds = mergePortIds(invocation.inputPortIds, Object.keys(data.inputs) as PortId[]);
-  // A legacy duplicate can omit this newer metadata. Keep the richer first
-  // observation instead of erasing an exact invocation-time snapshot.
-  if (data.inputConnections != null) {
-    invocation.inputConnections = normalizeInputConnections(data.inputConnections);
-  }
   invocation.waitingForUserInput = undefined;
 }
 
@@ -447,32 +437,6 @@ function applyProgress(
   invocation.status = invocation.status === 'unknown' ? 'running' : invocation.status;
   invocation.startedAt = minDefined(invocation.startedAt, at);
   invocation.progress = data.progress;
-}
-
-/**
- * The journal is a metadata boundary. Preserve only the value-free identity
- * fields required by provenance; canvas-only bend points and malformed remote
- * payload baggage must not become retained activity history.
- */
-function normalizeInputConnections(connections: readonly NodeConnection[]): NodeConnection[] {
-  return connections.flatMap((connection) => {
-    if (
-      typeof connection?.outputNodeId !== 'string' ||
-      typeof connection.inputNodeId !== 'string' ||
-      typeof connection.outputId !== 'string' ||
-      typeof connection.inputId !== 'string'
-    ) {
-      return [];
-    }
-    return [
-      {
-        outputNodeId: connection.outputNodeId,
-        outputId: connection.outputId,
-        inputNodeId: connection.inputNodeId,
-        inputId: connection.inputId,
-      },
-    ];
-  });
 }
 
 function applyPartialOutput(
@@ -545,7 +509,7 @@ function applyNodeError(
   invocation.terminalEventMissing = undefined;
   invocation.durationMs = normalizeDuration(data.durationMs, invocation.startedAt, at);
   invocation.splitRunDurationMs = data.splitRunDurationMs;
-  invocation.errorSummary = summarizeError(data.error);
+  invocation.errorSummary = serializeErrorMessage(data.error);
 }
 
 function applyNodeExcluded(
@@ -662,18 +626,24 @@ function applyToolCallFinished(
 
   const existingIndex =
     data.toolCallId == null ? -1 : invocation.toolCalls.findIndex((call) => call.toolCallId === data.toolCallId);
+  const existingCall = existingIndex < 0 ? undefined : invocation.toolCalls[existingIndex];
+  const resultOwner =
+    data.outcome === 'success' || data.outcome === 'passthrough-error'
+      ? data.resultOwner ?? existingCall?.resultOwner
+      : undefined;
   const call: RunActivityToolCall = {
     ...(data.toolCallId == null ? {} : { toolCallId: data.toolCallId }),
     toolName: data.toolName,
     sourceNodeId: data.sourceNodeId,
     sourceProcessId: data.sourceProcessId,
+    ...(resultOwner == null ? {} : { resultOwner }),
     handlerKind: data.handlerKind,
     ...(data.handlerGraphId == null ? {} : { handlerGraphId: data.handlerGraphId }),
     ...(data.handlerName == null ? {} : { handlerName: data.handlerName }),
     outcome: data.outcome,
     ...(data.startedAt == null ? {} : { startedAt: data.startedAt }),
     ...(data.durationMs == null ? {} : { durationMs: data.durationMs }),
-    sequence: existingIndex < 0 ? takeSequence(journal) : invocation.toolCalls[existingIndex]!.sequence,
+    sequence: existingIndex < 0 ? takeSequence(journal) : existingCall!.sequence,
   };
 
   if (existingIndex >= 0) {
@@ -872,7 +842,7 @@ function finishRoot(
   root.status = status;
   root.finishedAt = at;
   root.paused = false;
-  if (error != null) root.terminalErrorSummary = summarizeError(error);
+  if (error != null) root.terminalErrorSummary = serializeErrorMessage(error);
 
   for (const graphRunId of root.graphRunOrder) {
     const graphRun = root.graphRunsById[graphRunId];
@@ -1054,9 +1024,11 @@ function mergePortIds(current: PortId[], incoming: PortId[]): PortId[] {
   return next;
 }
 
-function summarizeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.length <= MAX_ERROR_SUMMARY_LENGTH ? message : `${message.slice(0, MAX_ERROR_SUMMARY_LENGTH - 3)}...`;
+function serializeErrorMessage(error: unknown): string {
+  // `errorSummary` is a historic field name. Unlike ordinary output previews,
+  // failure diagnostics must remain complete so the expanded activity row can
+  // be used to diagnose the original provider or runtime failure.
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeDuration(

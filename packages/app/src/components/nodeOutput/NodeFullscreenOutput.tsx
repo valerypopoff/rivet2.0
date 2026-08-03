@@ -435,7 +435,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       <div className="errored">
         {showDurationSummary && filteredOutput && <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody />}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
-        {content.error}
+        <div className="node-output-error-message">{content.error}</div>
       </div>
     );
   } else {

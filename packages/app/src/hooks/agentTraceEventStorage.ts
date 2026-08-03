@@ -1,4 +1,4 @@
-import { getAgentTraceEventIdentity, type AgentTraceEvent } from '@valerypopoff/rivet2-core';
+import { getAgentTraceEventIdentity, mergeAgentTraceEvent, type AgentTraceEvent } from '@valerypopoff/rivet2-core';
 import type { RunDataByNodeId } from '../state/dataFlow.js';
 
 /**
@@ -36,6 +36,6 @@ export function upsertAgentTraceEventForInvocation(runDataByNode: RunDataByNodeI
   if (existingIndex < 0) {
     events.push(event);
   } else {
-    events[existingIndex] = event;
+    events[existingIndex] = mergeAgentTraceEvent(events[existingIndex]!, event);
   }
 }

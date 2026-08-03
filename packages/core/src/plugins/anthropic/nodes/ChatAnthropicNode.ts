@@ -140,7 +140,6 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
     return {
       category: 'model',
       primaryOutputPortId: 'response' as PortId,
-      contextInputPortIds: ['prompt' as PortId],
     };
   },
 

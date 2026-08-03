@@ -278,7 +278,7 @@ export const AgentResponseInspector: FC<{
             <TraceSection
               title="Model calls"
               omitted={trace.omittedModelCallCount}
-              empty="No physical model calls recorded."
+              empty="No provider requests recorded."
             >
               {trace.modelCalls.map((call) => (
                 <article key={call.callId}>

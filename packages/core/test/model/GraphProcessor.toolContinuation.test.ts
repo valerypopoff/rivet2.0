@@ -2277,6 +2277,16 @@ describe('GraphProcessor connected tool continuation', () => {
       toolEvents.every((event) => event.handlerKind === 'external' && event.outcome === 'success'),
       true,
     );
+    const delegateProcessByToolCallId = new Map(delegateStarts.map((run) => [run.toolCallId, run.processId]));
+    assert.equal(
+      toolEvents.every(
+        (event) =>
+          event.resultOwner?.nodeId === delegate.id &&
+          event.resultOwner?.processId === delegateProcessByToolCallId.get(event.toolCallId ?? '') &&
+          event.resultOwner?.outputPortId === 'output',
+      ),
+      true,
+    );
     assert.equal(
       toolEvents.every((event) => !('arguments' in event) && !('result' in event)),
       true,

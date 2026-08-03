@@ -112,6 +112,13 @@ export type StoredDataPreview =
   | {
       kind: 'summary';
       label: string;
+      /**
+       * Optional compact text representation for consumers that cannot or
+       * should not restore the ref-backed value. This supplements the summary
+       * label; it never changes how the normal output renderer restores the
+       * underlying value.
+       */
+      excerpt?: string;
       totalBytes?: number;
       itemCount?: number;
     };

@@ -12,13 +12,22 @@ import { type SharedEditorProps } from '../SharedEditorProps.js';
 
 const styles = css`
   display: flex;
-  align-items: end;
+  align-items: center;
   gap: calc(8px * var(--ui-font-scale));
+  min-height: calc(32px * var(--ui-font-scale));
   width: 100%;
   min-width: 0;
 
-  > :first-child {
+  .llm-configuration-mode {
     flex: 0 0 auto;
+    width: max-content;
+    min-width: max-content;
+  }
+
+  .llm-configuration-mode .segmented-editor-control,
+  .llm-configuration-mode .segmented-choice {
+    width: max-content;
+    max-width: none;
   }
 
   .llm-configuration-export {
@@ -51,29 +60,31 @@ export const LLMChatV2ConfigurationEditor: FC<Props> = ({ editor, isDisabled, is
         <div>
           <FieldHelperMessage>{helperMessage}</FieldHelperMessage>
           <div css={styles} className="llm-configuration-row">
-            <SegmentedEditor
-              value={data.configurationMode}
-              onChange={(configurationMode) =>
-                onChange({
-                  ...node,
-                  data: {
-                    ...(node.data as Record<string, unknown>),
-                    configurationMode,
-                  },
-                })
-              }
-              isReadonly={isReadonly}
-              isDisabled={isDisabled}
-              label=""
-              ariaLabel="LLM configuration source"
-              name="configurationMode"
-              options={[
-                { value: 'inline', label: 'Inline' },
-                { value: 'profile', label: 'From profile' },
-              ]}
-              defaultValue="inline"
-              allowOptionWrap={false}
-            />
+            <div className="llm-configuration-mode">
+              <SegmentedEditor
+                value={data.configurationMode}
+                onChange={(configurationMode) =>
+                  onChange({
+                    ...node,
+                    data: {
+                      ...(node.data as Record<string, unknown>),
+                      configurationMode,
+                    },
+                  })
+                }
+                isReadonly={isReadonly}
+                isDisabled={isDisabled}
+                label=""
+                ariaLabel="LLM configuration source"
+                name="configurationMode"
+                options={[
+                  { value: 'inline', label: 'Inline' },
+                  { value: 'profile', label: 'From profile' },
+                ]}
+                defaultValue="inline"
+                allowOptionWrap={false}
+              />
+            </div>
             {canExportToProfile && (
               <Tooltip tag="span" className="llm-configuration-export" content={exportTooltip}>
                 <Button

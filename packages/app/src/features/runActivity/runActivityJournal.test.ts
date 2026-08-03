@@ -70,15 +70,6 @@ test('projects a complete lifecycle without retaining DataValues or node data', 
       processId,
       execution,
       inputs: { ['prompt' as PortId]: { type: 'string', value: 'DO_NOT_COPY_INPUT_VALUE' } },
-      inputConnections: [
-        {
-          outputNodeId: 'source-node' as NodeId,
-          outputId: 'output' as PortId,
-          inputNodeId: nodeId,
-          inputId: 'prompt' as PortId,
-          bendPoint: { x: 1, y: 2 },
-        },
-      ],
     },
     12,
   );
@@ -156,14 +147,6 @@ test('projects a complete lifecycle without retaining DataValues or node data', 
   assert.equal(invocation.partialOutputCount, 2);
   assert.equal(invocation.outputRevision, 3);
   assert.deepEqual(invocation.inputPortIds, ['prompt']);
-  assert.deepEqual(invocation.inputConnections, [
-    {
-      outputNodeId: 'source-node',
-      outputId: 'output',
-      inputNodeId: nodeId,
-      inputId: 'prompt',
-    },
-  ]);
   assert.deepEqual(invocation.outputPortIds, ['response', 'usage']);
   assert.equal(invocation.firstOutputAt, 15);
   assert.equal(invocation.latestOutputAt, 18);
@@ -179,6 +162,19 @@ test('projects a complete lifecycle without retaining DataValues or node data', 
   ]) {
     assert.equal(serialized.includes(forbidden), false, forbidden);
   }
+});
+
+test('retains complete multiline node errors for Run Activity diagnostics', () => {
+  const error = `LLM provider request failed (401 Unauthorized).
+Provider: OpenAI
+Provider message: ${'x'.repeat(700)}`;
+  let journal = createRunActivityJournal();
+  journal = apply(journal, 'graphStart', { graph, inputs: {}, execution }, 1);
+  journal = apply(journal, 'nodeStart', { node, processId, inputs: {}, execution }, 2);
+  journal = apply(journal, 'nodeError', { node, processId, execution, error }, 3);
+
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  assert.equal(journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.errorSummary, error);
 });
 
 test('keeps first-seen invocation order while parallel nodes finish out of order', () => {
@@ -234,25 +230,6 @@ test('retains waiting and progress metadata without retaining the user-input cal
 
   journal = apply(journal, 'nodeFinish', { node, processId, execution, outputs: {} }, 4);
   assert.equal(journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.waitingForUserInput, undefined);
-});
-
-test('does not let a legacy duplicate node-start erase its captured wiring snapshot', () => {
-  const inputConnections = [
-    {
-      outputNodeId: 'source-node' as NodeId,
-      outputId: 'output' as PortId,
-      inputNodeId: nodeId,
-      inputId: 'input' as PortId,
-    },
-  ];
-  const journal = reduceRunActivityEvents(createRunActivityJournal(), [
-    event('start', { project, startGraph: graph, inputs: {}, contextValues: {}, execution }, 1),
-    event('nodeStart', { node, processId, execution, inputs: {}, inputConnections }, 2),
-    event('nodeStart', { node, processId, execution, inputs: {} }, 3),
-  ]);
-
-  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
-  assert.deepEqual(journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.inputConnections, inputConnections);
 });
 
 test('does not resurrect a terminal invocation from delayed start or user-input events', () => {
@@ -413,6 +390,11 @@ test('attaches bounded model and tool traces without duplicating identified even
       toolName: 'search',
       sourceNodeId: nodeId,
       sourceProcessId: processId,
+      resultOwner: {
+        nodeId: 'delegate' as NodeId,
+        processId: 'delegate-process' as ProcessId,
+        outputPortId: 'output' as PortId,
+      },
       handlerKind: 'graph',
       outcome: 'success',
       durationMs: 5,
@@ -470,6 +452,11 @@ test('attaches bounded model and tool traces without duplicating identified even
   assert.equal(invocation.toolCallCount, 3);
   assert.equal(invocation.toolCalls.length, 2);
   assert.equal(invocation.toolCalls[0]!.durationMs, 6);
+  assert.deepEqual(invocation.toolCalls[0]!.resultOwner, {
+    nodeId: 'delegate',
+    processId: 'delegate-process',
+    outputPortId: 'output',
+  });
   assert.equal(invocation.omittedToolCallCount, 1);
 });
 

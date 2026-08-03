@@ -240,7 +240,7 @@ const NodeOutputSingleProcess: FC<{
         <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
           {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody />}
           {showDurationMeta && <NodeRunDurationMeta data={data} hasBody />}
-          {content.error}
+          <div className="node-output-error-message">{content.error}</div>
         </NodeOutputContentFade>
       </div>
     );

@@ -107,8 +107,9 @@ It deliberately does not provide persistent multi-run history; execution
 recordings own that use case.
 
 The journal keeps identifiers, hierarchy, statuses, timestamps, port ids,
-output revisions/availability, split indices, compact error summaries, and
-bounded agent-trace metadata. It does not store `DataValue` objects, node data,
+output revisions/availability, split indices, complete error messages, and
+bounded agent-trace metadata. (`errorSummary` is a historical field name; it is
+not a truncation policy.) It does not store `DataValue` objects, node data,
 full prompts, outputs, retrieved documents, tool arguments/results, response
 texts, provider bodies, headers, or credentials.
 
@@ -120,31 +121,22 @@ rather than throwing or substituting `undefined`. Journal eviction does not own
 or delete ordinary node-history values; those remain governed by the
 execution-data lifecycle.
 
-### Input provenance
+Errors are an exception to ordinary output-preview truncation: the activity
+row may visually ellipsize its one-line summary, but its expanded detail retains
+the original complete message and line breaks. The generic node-output body and
+fullscreen output use the same preserved error text with pre-wrapped rendering,
+so provider diagnostics remain readable in every inspector surface. An
+explicitly recorded empty error message still represents an error state; it
+must not fall through to an unrelated output preview.
 
-Expanded Run Activity rows with recorded inputs expose **Explain inputs**. The
-inspector prefers the selected invocation's effective, value-free input-edge
-snapshot, captured at `nodeStart` after Data Bus preprocessing, and combines it
-with the ordinary per-invocation input/output store; it is not a
-second value store and does not add values, prompts, or credentials to the
-journal. Snapshot retention strips every field except the four endpoint ids.
-It expands Data Bus channels through the same compiled topology used
-by execution, then follows upstream node inputs recursively with a bounded
-depth. It uses the existing bounded stored-value previews, except that
-credential-like input ports (for example `apiKey`, `token`, `authorization`,
-or `password`) never display their value preview.
-
-The producer process shown for a connection is the latest compatible recorded
-producer before the consumer invocation in that graph run. This is a useful,
-conservative association for ordinary flow, but it is not a new runtime
-causality guarantee for arbitrary repeated/looped work. If a producer record,
-captured edge, current graph fallback, or Data Bus topology is unavailable, the
-inspector must say so instead of guessing. Older recordings and remote hosts
-that did not provide the snapshot may use current effective graph wiring, and
-the inspector must mark that reduced confidence explicitly. Inputs without a
-graph connection are labelled as supplied outside ordinary graph wiring (for
-example node configuration/defaults) when a value was recorded, or as not
-supplied when no value was recorded.
+For its collapsed **Output** column, Run Activity uses a node descriptor's
+declared primary output when one exists, otherwise the actual recorded output
+port order, with the stored map only as a legacy fallback. It never guesses
+from a port name. Ref-backed chat messages and serializable structured arrays
+retain bounded text/JSON excerpts for this metadata-only path, so a Prompt
+shows its message text rather than a generic data-type label. Typed media and
+lazy function values remain summary-only because retaining their payloads in a
+compact activity preview would be unsafe or misleading.
 
 The default bounds retain every active root plus the newest completed root,
 2,000 node invocations per root, 250 model-call rows per invocation, and 500
@@ -160,20 +152,21 @@ run beside a newly selected activity timeline.
 ## Result provenance
 
 When the runtime supplies result provenance, preserve whether a visible result
-was physically executed, preloaded, frozen, restored from editor cache, or has
-unknown origin. Frozen/preloaded/cache replay must not be represented as a new
-physical model or tool operation.
+was runtime-executed, preloaded, frozen, restored from editor cache, or has
+unknown origin. Here, **runtime-executed** means the node did its work during
+this run rather than reusing an existing result. Frozen/preloaded/cache replay
+must not be represented as a new model or tool operation.
 
 Old remote hosts and recordings may omit newer provenance. Display `unknown` or
 a partial-data explanation rather than inferring provenance from timestamps or
-zero usage. Provider prompt-cache usage is still a physical model call and is
+zero usage. Provider prompt-cache usage is still a runtime-executed model call and is
 not the same as Rivet editor-cache replay.
 
 Normal `executed` provenance is implicit and should not add a repetitive detail
 row to every activity. Show the result-origin detail only when it explains a
 preloaded, frozen, editor-cache, or unknown/legacy result.
 
-Current runtimes must emit `resultOrigin` explicitly for every physical node
+Current runtimes must emit `resultOrigin` explicitly for every runtime-executed node
 lifecycle event. The reserved legacy preload process id remains recognizable as
 preloaded, but all other lifecycle events without provenance stay `unknown`.
 For normal and split-run invocations, `nodeStart` is provisional `executed`
@@ -181,7 +174,7 @@ because the node implementation has begun. The terminal `nodeFinish` or
 `nodeError` event is authoritative and may replace that value with
 `editor-cache` after a cache-aware node confirms that it returned cached
 outputs. A split-run result is `editor-cache` only when every split replayed
-cached output; a mixed cached/physical run remains `executed`. Partial outputs
+cached output; a mixed cached/runtime-executed run remains `executed`. Partial outputs
 remain `executed` because editor-cache replay does not stream partial values.
 Remote execution serialization, `ExecutionRecorder`, and `RecordingPlayer`
 must preserve an explicitly supplied `resultOrigin`. Legacy protocol payloads
@@ -200,17 +193,31 @@ provenance as unknown.
 
 ## Model and tool activity
 
-Physical model-call and tool-call events attach to the exact owning node
+Runtime-executed model-call and tool-call events attach to the exact owning node
 invocation through execution identity. Direct-return tools must show the real
 provider call and tool execution without inventing a follow-up model request.
 Parallel tools remain separate child entries. Retry and LLM-profile fallback
 counts come from explicit attempt/profile metadata, not inferred timing.
 
+A Tool node owns a function **definition**, while a Delegate Tool Call
+invocation owns the corresponding function **result**. A completed delegated
+tool event may therefore carry a privacy-bounded result-owner pointer
+(`nodeId`, `processId`, and `outputPortId`) to that exact Delegate output. The
+event must not copy the output text or tool arguments into the journal. Run
+Activity uses the pointer only to offer **Open tool result** on that concrete
+tool-call child; it must never try to find a result by tool name, tool-call id,
+or timestamp. Parallel and repeated calls make all of those guesses unsafe.
+Successful and passthrough-error Delegate calls have an owner pointer because
+they persist a string result. Failed/aborted calls and internal delegation
+without a Delegate node invocation do not, so the action is absent rather than
+fabricating a destination. Old recordings and hosts may omit the optional
+pointer with the same safe no-action behavior.
+
 Run Activity reuses the response-inspector model for metadata when it is
 available. It must not introduce another trace format or another cost/usage
 aggregation path.
 
-The root header may aggregate retained physical model/tool counts, normalized
+The root header may aggregate retained runtime-executed model/tool counts, normalized
 usage, and known model cost. It must identify incomplete cost as partial when a
 retained call has unknown pricing or bounded trace retention omitted calls;
 never present that subtotal as a complete total. Roots with no model or tool
@@ -218,10 +225,10 @@ activity do not render an empty accounting summary. Per-row response inspection
 remains the authoritative detailed accounting view.
 
 Copy diagnostics may include this bounded root accounting summary, but must not
-derive or export provider request data, stored values, or input-preview rows.
+derive or export provider request data or stored values.
 
 The response projection deduplicates transport redelivery by stable
-physical-call identity before calculating rows or totals. Model identity
+runtime-executed call identity before calculating rows or totals. Model identity
 includes the owning root/graph run, node/process, and model-call id; identified
 tool identity includes the owning root/graph run, source node/process, and
 tool-call id. Anonymous tool events deliberately remain distinct. Run Activity
@@ -240,18 +247,32 @@ descriptor with:
 
 - a category such as model, tool, or generic;
 - an optional primary output port for the collapsed preview;
-- optional context input ports for the expanded view.
+- an optional contextual label for the existing node-owned full-output action.
 
 The descriptor is runtime/editor metadata and is not serialized into a Rivet
 project. Unknown nodes remain visible as generic invocation rows; the absence of
 a descriptor only removes the specialized preview.
 
+`contextInputPortIds` remains on the exported descriptor type only for existing
+plugin source compatibility. Run Activity no longer reads it after the removal
+of **Explain inputs**; new nodes must not add it.
+
 The current built-in descriptors are deliberately small:
 
 - Chat (Legacy), LLM Chat, and the legacy Anthropic Chat plugin use category
-  `model`, primary output `response`, and context input `prompt`.
-- Delegate Tool Call uses category `tool`, primary output `output`, and context
-  input `function-call`.
+  `model` and primary output `response`.
+- Delegate Tool Call uses category `tool`, primary output `output`; its
+  node-owned action is **Open tool result**.
+- Tool uses category `tool`, its `function` definition output, and the
+  node-owned action **Open tool definition**. It does not own a handler result.
+
+The `tool` category is a filtering and presentation classification, not proof
+that a tool was invoked. Tool definition rows naturally have no tool-call
+child, and a Delegate Tool Call row can legitimately complete without handling
+one when it receives an already-delegated record. The drawer must not display
+an absent-tool-call warning for either case. Recorded calls remain visible as
+child rows, including their exact **Open tool result** action where an owner
+pointer exists.
 
 When a node changes its port contract, update its descriptor and the focused
 descriptor-port regression test together. Never leave a descriptor pointing at
@@ -259,7 +280,10 @@ a port that the node no longer exposes.
 
 Descriptors must name only workflow data that already belongs to the selected
 invocation. They do not authorize copying values into the journal or exposing
-credentials and provider request internals.
+credentials and provider request internals. A contextual full-output label
+also does not change ownership: the Tool definition row still opens the Tool
+node's own `function` output, while an invocation-specific tool result is
+reached only through its explicit result-owner pointer.
 
 ## Exact navigation
 
@@ -303,6 +327,11 @@ widths so its menu remains inside the dialog's focus boundary.
 Use a stable Select `instanceId`, not a custom `inputId`, so the shared
 React-Select theme selectors continue to recognize the picker.
 
+The column header belongs to the same scroll surface as its rows so column
+widths remain aligned with the scrollbar, but it starts at that surface's
+origin and sticks at `top: 0`. Do not combine a top list inset with a negative
+sticky offset: that visibly jumps the labels when scrolling begins.
+
 Those filters, search, and the result count belong in the drawer's primary
 header rather than a second toolbar row. When the drawer becomes too narrow,
 the control group may wrap inside that same header; it must not overflow or be
@@ -338,13 +367,19 @@ content instead. Narrow/modal layouts can clip the whole drawer because their
 resize handle is absent.
 
 Desktop rows expose the stable presentation fields as separate columns: **Node
-name**, **Graph name**, **Node type**, **Result**, **Started**, and **Duration**.
+name**, **Graph name**, **Node type**, **Output**, **Started**, and **Duration**.
 The header and every collapsed row must share one CSS-grid template; changing one
 without the other causes visible column drift. `nodeName`, `graphName`, and
 `nodeType` have keyboard- and pointer-resizable headers. Their user-local widths
 are persisted in `runActivityColumnWidthsState`, normalized against bounded
 defaults, and belong to UI state only—not project YAML, recordings, execution
 events, or diagnostics.
+
+Expanded subgraph rows name their caller from the current project definition:
+**‘<node title or type>’ node in ‘<graph name>’ graph**. Do not expose opaque
+node or graph ids in that user-facing detail. If a caller node or graph was
+removed after the run, state that the corresponding caller detail is unavailable
+rather than guessing a label from an id.
 
 At narrower desktop widths, hide lower-priority columns before forcing an
 unreadable horizontal table. Those breakpoints are container queries on the
@@ -400,7 +435,7 @@ Tests must cover:
 - stable ordering when parallel operations finish out of order;
 - split runs, partial output, failures, cancellation, and preflight errors;
 - outputs-ready while async work remains active;
-- physical model calls, retries, profile fallbacks, parallel tools, and direct
+- runtime-executed model calls, retries, profile fallbacks, parallel tools, and direct
   return without double counting;
 - frozen, preloaded, cached, unknown, and ref-evicted values;
 - exact graph-run/process navigation and deleted targets;

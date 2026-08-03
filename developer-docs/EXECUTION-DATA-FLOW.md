@@ -1083,7 +1083,7 @@ Persisted app-side execution payloads now share one storage/preview utility laye
 - `sanitizeInputsOrOutputs(...)` in `executionDataSanitization.ts` fixes Uint8Array-shaped values without destructively truncating them
 - `storeNodeDataForHistory(...)` / `storeInputsOrOutputsForHistory(...)` in `executionDataStorage.ts` decide whether each payload stays inline or moves into `globalDataRefs`
 - `storeInputsOrOutputsForHistory(...)` stores only actual per-port `DataValue` payloads. A missing/nullish port entry is treated as absent and skipped, while explicit runtime values such as `{ type: 'any', value: undefined }` remain real payloads because the wrapper object exists. Generic renderers, node-specific output renderers, port inspectors, Run Activity's lazily resolved invocation values, display-copy, node-specific copy projectors, and JSON-copy readers preserve that same distinction so malformed absent wrappers do not appear as user-authored `undefined` values.
-- `getStorageDecision(...)` in `executionDataPreview.ts` owns preview thresholds, text/json excerpts, encoded hints, media/chat summaries, and defensive inline fallback for malformed typed payloads, so an invalid node output can stay inline for debugging instead of throwing an unhandled UI error while the graph itself has already finished
+- `getStorageDecision(...)` in `executionDataPreview.ts` owns preview thresholds, text/json excerpts, encoded hints, media/chat summaries, and defensive inline fallback for malformed typed payloads, so an invalid node output can stay inline for debugging instead of throwing an unhandled UI error while the graph itself has already finished. Ref-backed chat-message summaries retain a bounded text-only excerpt when one can be derived (including role-labelled message arrays), and other serializable structured arrays retain JSON excerpts. Metadata-only consumers such as Run Activity use those excerpts instead of generic type labels without dereferencing the payload or changing the normal role-aware output renderer. Media bytes and lazy function values remain summary-only.
 - ref cleanup in `executionDataStorage.ts` must distinguish node-run records from stored port maps by checking that `inputData`, `outputData`, or `splitOutputData` are actual stored port maps. Port ids such as `status`, `inputData`, `outputData`, and `splitOutputData` are valid output names and must still have their refs collected and deleted like ordinary ports. Legacy/malformed split-output maps may contain nullish split entries; ref cleanup should skip those entries without misclassifying the whole node-run record and losing refs from sibling split entries.
 - downstream UI consumers must preserve that boundary: output visibility checks, `RenderDataValue`, custom node output bodies, port inspectors, Run Activity value resolution, Prompt Designer attached-node hydration, run-cost totals, `Copy value`, and `globalDataRefs` sizing all use the shared runtime guards in `dataValuePayloads.ts` or explicit nullish-wrapper guards to tolerate malformed inline/ref payloads and render or fall back instead of assuming the static `DataValue` type was honored at runtime
 - explicit `{ type: 'any', value: undefined }` output is real display data, not a missing payload. Shared rendering and display-oriented copy should show the literal text `undefined`; explicit `any[]` arrays should apply the same projection to each item. Large ref-backed `any[]` previews and fullscreen-search text should use the same display projection so undefined items stay findable instead of becoming JSON `null`. That projection must stay cycle-safe and fall back through the existing defensive JSON/string path for circular arrays. Absent `DataValue` wrappers, malformed typed payloads, and `control-flow-excluded` remain separate fallback/exclusion cases.
@@ -1523,6 +1523,15 @@ the same execution identity as the work they describe. Tool events cover
 internal and connected delegation, graph and external handlers, failures,
 passthrough errors, and cancellation. Parallel tool calls stay separate rows;
 they do not become extra model rounds.
+
+When a physical Delegate Tool Call invocation persists the final tool-result
+string, its successful or passthrough-error event also carries an optional
+`resultOwner` pointer containing that Delegate node id, exact process id, and
+`output` port id. The pointer is correlation metadata only: it carries neither
+the tool arguments nor result text. Failures, cancellation, and LLM Chat's
+internal delegation have no persisted Delegate output and must omit it. The
+field stays optional so old recordings, old executors, and hosts remain valid;
+consumers simply omit result navigation when it is absent.
 
 The public `AgentResponseTrace` projection bounds retained detail to 250 model
 calls and 500 tool calls while its summary totals cover all observed events and

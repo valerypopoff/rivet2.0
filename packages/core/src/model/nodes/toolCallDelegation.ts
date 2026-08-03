@@ -1,7 +1,7 @@
 import { omit } from 'lodash-es';
 import type { DataValue, ParsedAssistantChatMessageFunctionCall, ChatMessage } from '../DataValue.js';
 import type { GraphId } from '../NodeGraph.js';
-import type { InternalProcessContext, ProcessId } from '../ProcessContext.js';
+import type { InternalProcessContext, ProcessId, ToolCallFinishedEvent } from '../ProcessContext.js';
 import type { NodeId, PortId } from '../NodeBase.js';
 import type { Outputs } from '../GraphProcessor.js';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
@@ -258,6 +258,11 @@ export async function delegateToolCall(
     nodeId: context.node?.id ?? ('unknown' as NodeId),
     processId: context.processId ?? ('unknown' as ProcessId),
   };
+  // A connected continuation changes the trace *source* to the LLM Chat, but
+  // the Delegate invocation still owns the persisted result. Carry that exact
+  // pointer so observers can navigate to the result without matching tool
+  // names or scanning potentially evicted input values.
+  const resultOwner = getToolCallResultOwner(context);
   const startedAt = Date.now();
   const timingStart = getCurrentTimeMs();
   const trace: ToolCallTraceHandler = { handlerKind: 'unknown' };
@@ -269,6 +274,7 @@ export async function delegateToolCall(
       toolName: functionCall.name,
       sourceNodeId: source.nodeId,
       sourceProcessId: source.processId,
+      ...(resultOwner == null ? {} : { resultOwner }),
       ...trace,
       outcome: result.traceOutcome ?? 'success',
       startedAt,
@@ -288,6 +294,19 @@ export async function delegateToolCall(
     });
     throw error;
   }
+}
+
+function getToolCallResultOwner(context: InternalProcessContext): ToolCallFinishedEvent['resultOwner'] | undefined {
+  const node = context.node;
+  if (node?.type !== 'delegateFunctionCall' || typeof node.id !== 'string' || typeof context.processId !== 'string') {
+    return undefined;
+  }
+
+  return {
+    nodeId: node.id,
+    processId: context.processId,
+    outputPortId: 'output' as PortId,
+  };
 }
 
 type ToolCallTraceHandler = {

@@ -18,7 +18,7 @@ const segmentedEditorStyles = css`
     width: fit-content;
     max-width: 100%;
     min-height: calc(32px * var(--ui-font-scale));
-    overflow: hidden;
+    overflow: visible;
     gap: calc(3px * var(--ui-font-scale));
     padding: calc(3px * var(--ui-font-scale));
     margin-left: -0.2em;
@@ -38,11 +38,19 @@ const segmentedEditorStyles = css`
     overflow: visible;
   }
 
+  /* A caller that opts out of wrapping expects all option labels and the
+   * track padding to remain visible. Do not silently clip the trailing
+   * segment when a flex parent measures the control too narrowly. */
+  .segmented-choice[data-wrap='false'] {
+    max-width: none;
+    flex-shrink: 0;
+  }
+
   .segmented-choice-option {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    flex: 0 0 max-content;
+    flex: 0 0 auto;
     min-height: calc(24px * var(--ui-font-scale));
     padding: calc(4px * var(--ui-font-scale)) calc(12px * var(--ui-font-scale));
     box-sizing: border-box;

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   WarningsPort,
+  type AgentTraceEvent,
   type DataValue,
   type GraphId,
   type GraphRunId,
@@ -281,7 +282,7 @@ test('inactive project snapshot reducer upserts identified model and tool trace 
     }).snapshot;
   }
 
-  for (const durationMs of [4, 6]) {
+  for (const [index, durationMs] of [4, 6].entries()) {
     snapshot = applyProcessEventToProjectExecutionSnapshot({
       data: {
         durationMs,
@@ -292,6 +293,15 @@ test('inactive project snapshot reducer upserts identified model and tool trace 
         sourceProcessId: processId,
         toolCallId: 'tool-call',
         toolName: 'lookup',
+        ...(index === 0
+          ? {
+              resultOwner: {
+                nodeId: 'delegate-node' as NodeId,
+                processId: 'delegate-process' as ProcessId,
+                outputPortId: 'output' as PortId,
+              },
+            }
+          : {}),
       } as never,
       message: 'toolCallFinished',
       projectId,
@@ -306,6 +316,11 @@ test('inactive project snapshot reducer upserts identified model and tool trace 
   assert.equal(events?.[0]?.durationMs, 12);
   assert.equal(events?.[1]?.type, 'tool-call-finished');
   assert.equal(events?.[1]?.durationMs, 6);
+  assert.deepEqual((events?.[1] as Extract<AgentTraceEvent, { type: 'tool-call-finished' }> | undefined)?.resultOwner, {
+    nodeId: 'delegate-node',
+    processId: 'delegate-process',
+    outputPortId: 'output',
+  });
 });
 
 test('inactive project snapshot reducer keeps anonymous tool trace events distinct', () => {

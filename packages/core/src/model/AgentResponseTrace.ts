@@ -36,6 +36,8 @@ export type AgentToolCallTrace = {
   toolName: string;
   sourceNodeId: NodeId;
   sourceProcessId: ProcessId;
+  /** Pointer to the pre-existing Delegate Tool Call output, never copied result text. */
+  resultOwner?: ToolCallFinishedEvent['resultOwner'];
   handlerKind: ToolCallFinishedEvent['handlerKind'];
   handlerGraphId?: GraphId;
   handlerName?: string;
@@ -169,7 +171,7 @@ function deduplicateAgentTraceEvents(events: readonly AgentTraceEvent[]): AgentT
       deduplicated.push(event);
     } else {
       // Preserve first-seen order while retaining the latest terminal metadata.
-      deduplicated[existingIndex] = event;
+      deduplicated[existingIndex] = mergeAgentTraceEvent(deduplicated[existingIndex]!, event);
     }
   }
 
@@ -184,6 +186,25 @@ export function getAgentTraceEventIdentity(event: AgentTraceEvent): string | und
   return event.toolCallId == null
     ? undefined
     : `tool\u0000${event.execution.rootRunId}\u0000${event.execution.graphRunId}\u0000${event.sourceNodeId}\u0000${event.sourceProcessId}\u0000${event.toolCallId}`;
+}
+
+/**
+ * Redelivery is allowed to omit newly added optional observability fields. Keep
+ * an exact Delegate result pointer once it was observed instead of making a
+ * later legacy-shaped copy erase result navigation.
+ */
+export function mergeAgentTraceEvent(existing: AgentTraceEvent, incoming: AgentTraceEvent): AgentTraceEvent {
+  if (
+    existing.type === 'tool-call-finished' &&
+    incoming.type === 'tool-call-finished' &&
+    existing.resultOwner != null &&
+    incoming.resultOwner == null &&
+    isAgentToolResultOutcome(incoming.outcome)
+  ) {
+    return { ...incoming, resultOwner: existing.resultOwner };
+  }
+
+  return incoming;
 }
 
 function toModelCallTrace(event: Extract<AgentTraceEvent, { type: 'llm-call-finished' }>): AgentModelCallTrace {
@@ -211,6 +232,7 @@ function toToolCallTrace(event: Extract<AgentTraceEvent, { type: 'tool-call-fini
     toolName: event.toolName,
     sourceNodeId: event.sourceNodeId,
     sourceProcessId: event.sourceProcessId,
+    ...(event.resultOwner == null ? {} : { resultOwner: event.resultOwner }),
     handlerKind: event.handlerKind,
     ...(event.handlerGraphId == null ? {} : { handlerGraphId: event.handlerGraphId }),
     ...(event.handlerName == null ? {} : { handlerName: event.handlerName }),
@@ -439,6 +461,13 @@ function isAgentModelCallTrace(value: unknown): boolean {
 }
 
 function isAgentToolCallTrace(value: unknown): boolean {
+  const hasKnownOutcome =
+    isRecord(value) &&
+    (value.outcome === 'success' ||
+      value.outcome === 'passthrough-error' ||
+      value.outcome === 'failure' ||
+      value.outcome === 'aborted');
+
   return (
     isRecord(value) &&
     hasOnlyKeys(value, [
@@ -446,6 +475,7 @@ function isAgentToolCallTrace(value: unknown): boolean {
       'toolName',
       'sourceNodeId',
       'sourceProcessId',
+      'resultOwner',
       'handlerKind',
       'handlerGraphId',
       'handlerName',
@@ -457,15 +487,28 @@ function isAgentToolCallTrace(value: unknown): boolean {
     typeof value.toolName === 'string' &&
     typeof value.sourceNodeId === 'string' &&
     typeof value.sourceProcessId === 'string' &&
+    (value.resultOwner === undefined ||
+      (isAgentToolResultOutcome(value.outcome) && isAgentToolResultOwner(value.resultOwner))) &&
     (value.handlerKind === 'graph' || value.handlerKind === 'external' || value.handlerKind === 'unknown') &&
     isOptionalString(value.handlerGraphId) &&
     isOptionalString(value.handlerName) &&
-    (value.outcome === 'success' ||
-      value.outcome === 'passthrough-error' ||
-      value.outcome === 'failure' ||
-      value.outcome === 'aborted') &&
+    hasKnownOutcome &&
     isOptionalNonNegativeFiniteNumber(value.startedAt) &&
     isOptionalNonNegativeFiniteNumber(value.durationMs)
+  );
+}
+
+function isAgentToolResultOutcome(value: unknown): value is 'success' | 'passthrough-error' {
+  return value === 'success' || value === 'passthrough-error';
+}
+
+function isAgentToolResultOwner(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['nodeId', 'processId', 'outputPortId']) &&
+    typeof value.nodeId === 'string' &&
+    typeof value.processId === 'string' &&
+    typeof value.outputPortId === 'string'
   );
 }
 

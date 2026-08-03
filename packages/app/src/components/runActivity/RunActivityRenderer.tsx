@@ -4,6 +4,7 @@ import {
   type GraphId,
   type NodeGraph,
   type NodeRunActivityDescriptor,
+  type PortId,
 } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { type FC, useEffect, useMemo, useState } from 'react';
@@ -38,18 +39,16 @@ import { hasStoredPortMapValues, hasStoredSplitOutputValues } from '../../utils/
 import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
 import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { RunActivityDrawer } from './RunActivityDrawer.js';
-import { ValueProvenanceInspector } from './ValueProvenanceInspector.js';
 import {
   areRunActivityColumnWidthsEqual,
   normalizeRunActivityColumnWidths,
 } from '../../features/runActivity/runActivityColumnWidths.js';
-import { buildValueProvenanceReport } from '../../features/runActivity/valueProvenance.js';
 import {
   buildRunActivityViewModel,
   selectRunActivityRoot,
   type ResolveRunActivityInvocation,
 } from './buildRunActivityViewModel.js';
-import type { RunActivityInvocationIdentity, RunActivityItemViewModel } from './types.js';
+import type { RunActivityInvocationIdentity, RunActivityItemViewModel, RunActivityToolResultTarget } from './types.js';
 
 const LIVE_DURATION_REFRESH_MS = 250;
 const NARROW_VIEWPORT_QUERY = '(max-width: 720px)';
@@ -69,7 +68,6 @@ export const RunActivityRenderer: FC = () => {
     node: ChartNode;
     processData: ProcessDataForNode;
   }>();
-  const [provenanceItem, setProvenanceItem] = useState<RunActivityItemViewModel>();
   const goToNode = useGoToNode();
   const setOpenOverlay = useSetAtom(overlayOpenState);
   const setSelectedGraphRunByView = useSetAtom(selectedGraphRunByViewState);
@@ -95,10 +93,19 @@ export const RunActivityRenderer: FC = () => {
   }, [open, selectedRoot?.rootRunId, selectedRoot?.status]);
 
   const resolveInvocation = useMemo<ResolveRunActivityInvocation>(() => {
-    return ({ invocation }) => {
+    return ({ root, graphRun, invocation }) => {
       const graph = getCurrentGraphDefinition(project.graphs[invocation.graphId], currentGraph, invocation.graphId);
       const sourceNode = graph?.nodes.find((node) => node.id === invocation.nodeId);
       const effectiveNode = sourceNode ? resolveNodePrefabInstance(project, sourceNode) : undefined;
+      const executor = graphRun?.executor;
+      const parentGraph =
+        executor == null
+          ? undefined
+          : getCurrentGraphDefinition(project.graphs[executor.parentGraphId], currentGraph, executor.parentGraphId);
+      const callerNode = executor == null ? undefined : parentGraph?.nodes.find((node) => node.id === executor.nodeId);
+      const effectiveCallerNode = callerNode ? resolveNodePrefabInstance(project, callerNode) : undefined;
+      const parentGraphRun =
+        graphRun?.parentGraphRunId == null ? undefined : root.graphRunsById[graphRun.parentGraphRunId];
       const processData = findExactProcessData(runDataByNode, {
         rootRunId: invocation.rootRunId,
         graphRunId: invocation.graphRunId,
@@ -108,6 +115,17 @@ export const RunActivityRenderer: FC = () => {
       });
       const descriptor = effectiveNode ? safelyGetRunActivityDescriptor(registry, effectiveNode) : undefined;
       const displayType = effectiveNode ? safelyGetNodeDisplayName(registry, effectiveNode) : invocation.nodeType;
+      const callerNodeTitle =
+        getNonEmptyLabel(callerNode?.title) ??
+        (effectiveCallerNode == null
+          ? undefined
+          : getNonEmptyLabel(safelyGetNodeDisplayName(registry, effectiveCallerNode))) ??
+        'Unavailable caller node';
+      const callerGraphName =
+        getNonEmptyLabel(parentGraph?.metadata?.name) ??
+        getNonEmptyLabel(parentGraphRun?.graphName) ??
+        (executor?.parentGraphId === root.rootGraphId ? getNonEmptyLabel(root.rootGraphName) : undefined) ??
+        'Unavailable caller graph';
       const hasStoredOutput = processData ? processHasStoredOutput(processData) : false;
       const responseTrace = effectiveNode ? buildLlmInvocationTrace(effectiveNode, processData) : undefined;
 
@@ -115,12 +133,13 @@ export const RunActivityRenderer: FC = () => {
         graphName: graph?.metadata?.name,
         nodeTitle: sourceNode?.title,
         nodeType: displayType,
+        ...(executor == null ? {} : { subgraphCaller: { nodeTitle: callerNodeTitle, graphName: callerGraphName } }),
         category: descriptor?.category,
         primaryOutputPortId: descriptor?.primaryOutputPortId,
-        contextInputPortIds: descriptor?.contextInputPortIds,
         runData: processData?.data,
         navigable: graph != null && sourceNode != null,
         fullOutputAvailable: graph != null && sourceNode != null && hasStoredOutput,
+        fullOutputActionLabel: descriptor?.fullOutputActionLabel,
         inspectable: responseTrace != null,
         searchTerms: [sourceNode?.title, effectiveNode?.type, displayType].filter(
           (value): value is string => value != null && value.length > 0,
@@ -144,27 +163,27 @@ export const RunActivityRenderer: FC = () => {
     };
   }, [now, selectedRoot?.finishedAt, selectedRoot?.startedAt, stableViewModel]);
 
-  const selectExactInvocation = useStableCallback((item: RunActivityItemViewModel) => {
-    const graphRun = journal.rootsById[item.identity.rootRunId]?.graphRunsById[item.identity.graphRunId];
-    const graph = getCurrentGraphDefinition(project.graphs[item.graphId], currentGraph, item.graphId);
-    if (!graphRun || !graph?.nodes.some((node) => node.id === item.identity.nodeId)) return false;
+  const selectExactExecutionTarget = useStableCallback((identity: RunActivityInvocationIdentity) => {
+    const graphRun = journal.rootsById[identity.rootRunId]?.graphRunsById[identity.graphRunId];
+    const graph = getCurrentGraphDefinition(project.graphs[identity.graphId], currentGraph, identity.graphId);
+    if (!graphRun || !graph?.nodes.some((node) => node.id === identity.nodeId)) return false;
 
-    const graphView = createRunActivityGraphView(item.identity.graphId, graphRun.executor);
-    const page = findExactProcessPage(runDataByNode, item.identity);
+    const graphView = createRunActivityGraphView(identity.graphId, graphRun.executor);
+    const page = findExactProcessPage(runDataByNode, identity);
     setOpenOverlay(undefined);
     setSelectedGraphRunByView((current) => ({
       ...current,
-      [graphView.key]: item.identity.graphRunId,
+      [graphView.key]: identity.graphRunId,
     }));
     if (page != null) {
-      setSelectedProcessPages((current) => ({ ...current, [item.identity.nodeId]: page }));
+      setSelectedProcessPages((current) => ({ ...current, [identity.nodeId]: page }));
     }
     setEditingNode(null);
 
     const narrow = window.matchMedia(NARROW_VIEWPORT_QUERY).matches;
     if (narrow) setOpen(false);
-    goToNode(item.identity.nodeId, {
-      graphId: item.identity.graphId,
+    goToNode(identity.nodeId, {
+      graphId: identity.graphId,
       graphView,
       zoom: 0.85,
       viewportCenter: narrow
@@ -176,13 +195,30 @@ export const RunActivityRenderer: FC = () => {
     });
     // Loading another graph clears its selection, so select the exact node only
     // after navigation has installed the target graph workspace.
-    setSelectedNodes([item.identity.nodeId]);
+    setSelectedNodes([identity.nodeId]);
     return true;
   });
+
+  const selectExactInvocation = useStableCallback((item: RunActivityItemViewModel) =>
+    selectExactExecutionTarget(item.identity),
+  );
 
   const handleOpenFullOutput = useStableCallback((item: RunActivityItemViewModel) => {
     if (!selectExactInvocation(item)) return;
     window.requestAnimationFrame(() => setFullscreenOutputNode(item.identity.nodeId));
+  });
+
+  const handleOpenToolResult = useStableCallback((target: RunActivityToolResultTarget) => {
+    const processData = findExactProcessData(runDataByNode, target);
+    if (processData == null || !processHasStoredOutputPort(processData, target.outputPortId)) {
+      toast.info('The recorded tool result is no longer available.');
+      return;
+    }
+    if (!selectExactExecutionTarget(target)) {
+      toast.info('The Delegate Tool Call result is no longer available in this project.');
+      return;
+    }
+    window.requestAnimationFrame(() => setFullscreenOutputNode(target.nodeId));
   });
 
   const handleInspectResponse = useStableCallback((item: RunActivityItemViewModel) => {
@@ -194,33 +230,6 @@ export const RunActivityRenderer: FC = () => {
     if (!buildLlmInvocationTrace(effectiveNode, processData)) return;
     setInspectedProcess({ node: effectiveNode, processData });
   });
-
-  const handleInspectValueProvenance = useStableCallback((item: RunActivityItemViewModel) => {
-    setProvenanceItem(item);
-  });
-
-  const provenanceReport = useMemo(() => {
-    if (provenanceItem == null) return undefined;
-    const root = journal.rootsById[provenanceItem.identity.rootRunId];
-    const invocation = root?.nodeInvocationsByKey[provenanceItem.activityKey];
-    const graph = getCurrentGraphDefinition(
-      project.graphs[provenanceItem.graphId],
-      currentGraph,
-      provenanceItem.graphId,
-    );
-    if (!root || !invocation || !graph) return undefined;
-    return buildValueProvenanceReport({ graph, root, target: invocation, runDataByNode });
-  }, [currentGraph, journal.rootsById, project.graphs, provenanceItem, runDataByNode]);
-
-  useEffect(() => {
-    if (provenanceItem != null && provenanceReport == null) setProvenanceItem(undefined);
-  }, [provenanceItem, provenanceReport]);
-
-  useEffect(() => {
-    if (provenanceItem != null && (!open || selectedRoot?.rootRunId !== provenanceItem.identity.rootRunId)) {
-      setProvenanceItem(undefined);
-    }
-  }, [open, provenanceItem, selectedRoot?.rootRunId]);
 
   const handleCopyDiagnostics = useStableCallback(() => {
     const diagnostic = {
@@ -272,15 +281,12 @@ export const RunActivityRenderer: FC = () => {
         onColumnWidthsChange={setStoredColumnWidths}
         onLocate={selectExactInvocation}
         onOpenFullOutput={handleOpenFullOutput}
+        onOpenToolResult={handleOpenToolResult}
         onInspectResponse={handleInspectResponse}
-        onInspectValueProvenance={handleInspectValueProvenance}
         onCopyDiagnostics={handleCopyDiagnostics}
       />
       {inspectedProcess && (
         <AgentResponseInspector trace={inspectedTrace} onClose={() => setInspectedProcess(undefined)} renderInPortal />
-      )}
-      {provenanceItem && provenanceReport && (
-        <ValueProvenanceInspector report={provenanceReport} onClose={() => setProvenanceItem(undefined)} />
       )}
     </>
   );
@@ -311,6 +317,11 @@ function safelyGetNodeDisplayName(registry: ReturnType<typeof useProjectNodeRegi
   } catch {
     return node.type;
   }
+}
+
+function getNonEmptyLabel(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 function findExactProcessData(
@@ -345,6 +356,19 @@ function processHasStoredOutput(processData: ProcessDataForNode): boolean {
   return (
     hasStoredPortMapValues(processData.data.outputData) || hasStoredSplitOutputValues(processData.data.splitOutputData)
   );
+}
+
+/**
+ * Result-owner pointers identify one concrete output port, not merely a node
+ * invocation. Do not open a Delegate modal just because another retained port
+ * (for example its tool name or early message) still has data.
+ */
+function processHasStoredOutputPort(processData: ProcessDataForNode, outputPortId: PortId): boolean {
+  if (processData.data.outputData?.[outputPortId] != null) {
+    return true;
+  }
+
+  return Object.values(processData.data.splitOutputData ?? {}).some((outputs) => outputs?.[outputPortId] != null);
 }
 
 function createRunActivityGraphView(

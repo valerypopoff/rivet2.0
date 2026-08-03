@@ -45,7 +45,6 @@ export class ChatNodeImpl extends NodeImpl<ChatNode> {
     return {
       category: 'model',
       primaryOutputPortId: 'response' as PortId,
-      contextInputPortIds: ['prompt' as PortId],
     };
   }
 

@@ -10,6 +10,7 @@ import {
   type GraphId,
   type GraphRunId,
   type NodeId,
+  type PortId,
   type ProcessId,
   type RootRunId,
 } from '../../src/index.js';
@@ -104,7 +105,15 @@ void describe('AgentResponseTrace', () => {
       normalizedUsage: { promptTokens: 20, completionTokens: 3 },
       pricing: { status: 'known', costUsd: 0.02 },
     });
-    const delegatedToolCall = toolEvent({ toolCallId: 'delegated-tool', durationMs: 5 });
+    const delegatedToolCall = toolEvent({
+      toolCallId: 'delegated-tool',
+      durationMs: 5,
+      resultOwner: {
+        nodeId: 'delegate' as NodeId,
+        processId: 'delegate-process' as ProcessId,
+        outputPortId: 'output' as PortId,
+      },
+    });
 
     const trace = buildAgentResponseTrace({
       scope: 'llm-invocation',
@@ -135,6 +144,14 @@ void describe('AgentResponseTrace', () => {
       ],
     );
     assert.equal(trace.toolCalls[0]?.durationMs, 6);
+    // Remote/local redelivery from an older executor may not have the newly
+    // optional pointer. Preserve an observed exact result owner instead of
+    // silently removing the Run Activity navigation target.
+    assert.deepEqual(trace.toolCalls[0]?.resultOwner, {
+      nodeId: 'delegate',
+      processId: 'delegate-process',
+      outputPortId: 'output',
+    });
   });
 
   void it('keeps identical call ids from separate graph runs distinct in a response trace', () => {
@@ -205,6 +222,43 @@ void describe('AgentResponseTrace', () => {
     });
 
     assert.equal(trace.summary.toolCallCount, 2);
+  });
+
+  void it('preserves a tool-result owner pointer without accepting result payloads', () => {
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [
+        toolEvent({
+          resultOwner: {
+            nodeId: 'delegate' as NodeId,
+            processId: 'delegate-process' as ProcessId,
+            outputPortId: 'output' as PortId,
+          },
+        }),
+      ],
+      status: 'completed',
+    });
+
+    assert.deepEqual(trace.toolCalls[0]?.resultOwner, {
+      nodeId: 'delegate',
+      processId: 'delegate-process',
+      outputPortId: 'output',
+    });
+    assert.equal(
+      isAgentResponseTrace({
+        ...trace,
+        toolCalls: [{ ...trace.toolCalls[0], resultOwner: { nodeId: 'delegate' } }],
+      }),
+      false,
+    );
+    assert.equal(
+      isAgentResponseTrace({
+        ...trace,
+        toolCalls: [{ ...trace.toolCalls[0], outcome: 'failure' }],
+      }),
+      false,
+    );
   });
 
   void it('keeps aggregate totals while bounding rendered rows', () => {

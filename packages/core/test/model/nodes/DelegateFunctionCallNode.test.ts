@@ -169,14 +169,17 @@ describe('DelegateFunctionCallNodeImpl', () => {
 
   it('reports one privacy-bounded execution event without exposing tool arguments or results', async () => {
     const events: ToolCallFinishedEvent[] = [];
+    const node = createNode();
     const context = createContext(() => 'private result');
+    context.node = node.chartNode;
+    context.processId = 'delegate-process' as ProcessId;
     context.toolCallTraceSource = {
       nodeId: 'llm-node' as NodeId,
       processId: 'llm-process' as ProcessId,
     };
     context.onToolCallFinished = (event) => events.push(event);
 
-    await createNode().process(
+    await node.process(
       {
         ['function-call' as PortId]: {
           type: 'object',
@@ -192,6 +195,11 @@ describe('DelegateFunctionCallNodeImpl', () => {
       toolName: 'foo',
       sourceNodeId: 'llm-node',
       sourceProcessId: 'llm-process',
+      resultOwner: {
+        nodeId: node.id,
+        processId: 'delegate-process',
+        outputPortId: 'output',
+      },
       handlerKind: 'external',
       handlerName: 'foo',
       outcome: 'success',
@@ -202,6 +210,36 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.equal(typeof events[0]!.durationMs, 'number');
     assert.equal('arguments' in events[0]!, false);
     assert.equal('result' in events[0]!, false);
+  });
+
+  it('does not point a failed delegate invocation at an output that was never persisted', async () => {
+    const events: ToolCallFinishedEvent[] = [];
+    const node = createNode({ passthroughErrors: false });
+    const context = createContext(() => {
+      throw new Error('handler failed');
+    });
+    context.node = node.chartNode;
+    context.processId = 'failed-delegate-process' as ProcessId;
+    context.onToolCallFinished = (event) => events.push(event);
+
+    await assert.rejects(
+      () =>
+        node.process(
+          {
+            ['function-call' as PortId]: {
+              type: 'object',
+              value: { name: 'foo', arguments: {}, id: 'call_failed' },
+            },
+          },
+          context,
+        ),
+      /External function call failed for foo: handler failed/,
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.outcome, 'failure');
+    assert.equal(events[0]?.resultOwner, undefined);
+    assert.equal('resultOwner' in events[0]!, false);
   });
 
   it('does not let a trace observer failure change successful tool execution', async () => {
