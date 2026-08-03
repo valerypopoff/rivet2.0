@@ -1,10 +1,11 @@
 import type { ChatV2Provider, ChatV2ProviderOptions } from './chatV2Types.js';
+import { getChatV2ProviderCapabilities } from './chatV2ProviderRegistry.js';
 
 export const LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE =
   'Allows the model to request multiple tool calls in one round.';
 
 export function supportsLLMChatV2ParallelToolCalls(provider: ChatV2Provider): boolean {
-  return provider === 'openai' || provider === 'anthropic' || provider === 'custom';
+  return getChatV2ProviderCapabilities(provider).parallelToolCalls;
 }
 
 function mergeProviderOptions(

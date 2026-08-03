@@ -8,6 +8,7 @@ import {
 import {
   shouldOutputChatV2RequestError,
   type ChatV2Provider,
+  type ChatV2PipelineRoundOptions,
   type ChatV2PipelineResult,
   type RunChatV2PipelineOptions,
 } from './chatV2Types.js';
@@ -18,7 +19,7 @@ export type LLMProfileAttempt = {
   provider: ChatV2Provider;
   model: string;
   stage: 'configuration' | 'request' | 'response-validation';
-  outcome: 'success' | 'failure';
+  outcome: 'success' | 'failure' | 'aborted';
   attemptIndex?: number;
   status?: number;
   error?: string;
@@ -58,7 +59,7 @@ export type LLMProfileRequestDiagnostics = {
 export type LLMProfileRequestErrorDiagnostics = string | string[] | Array<string | string[]>;
 
 export type LLMProfileFallbackRunner = {
-  run: (roundOptions: RunChatV2PipelineOptions) => Promise<ChatV2PipelineResult>;
+  run: (roundOptions: ChatV2PipelineRoundOptions) => Promise<ChatV2PipelineResult>;
   attempts: LLMProfileAttempt[];
   summary: () => string;
   wasExhausted: () => boolean;
@@ -241,7 +242,7 @@ export function compactLLMProfileRequestErrors(errors: readonly unknown[]): unkn
   return compacted.length === 1 ? compacted[0] ?? [] : compacted;
 }
 
-function clearPartialResponse(options: RunChatV2PipelineOptions): void {
+function clearPartialResponse(options: Pick<ChatV2PipelineRoundOptions, 'emitPartialOutputs' | 'context'>): void {
   if (!options.emitPartialOutputs) {
     return;
   }
@@ -276,9 +277,21 @@ function throwIfAborted(signal: AbortSignal): void {
  */
 export function createLLMProfileFallbackRunner(params: {
   candidates: readonly LLMProfileFallbackCandidate[];
-  resolveCandidate: (profileIndex: number, roundOptions: RunChatV2PipelineOptions) => Promise<RunChatV2PipelineOptions>;
+  resolveCandidate: (
+    profileIndex: number,
+    roundOptions: ChatV2PipelineRoundOptions,
+  ) => Promise<RunChatV2PipelineOptions>;
+  onAttempt?: ((attempt: LLMProfileAttempt) => void) | undefined;
 }): LLMProfileFallbackRunner {
   const attempts: LLMProfileAttempt[] = [];
+  const recordAttempt = (attempt: LLMProfileAttempt) => {
+    attempts.push(attempt);
+    try {
+      params.onAttempt?.(attempt);
+    } catch {
+      // Diagnostics must not alter profile recovery.
+    }
+  };
   let activeProfileIndex = 0;
   let nextRoundIndex = 0;
   let exhausted = false;
@@ -310,7 +323,7 @@ export function createLLMProfileFallbackRunner(params: {
 
           lastError = error;
           terminalProviderFailure = undefined;
-          attempts.push({
+          recordAttempt({
             roundIndex,
             profileIndex,
             provider: candidate.provider,
@@ -340,13 +353,14 @@ export function createLLMProfileFallbackRunner(params: {
               // A caller-owned observer must not prevent this runner from
               // retaining the profile-chain diagnostics it owns.
             }
-            attempts.push({
+            recordAttempt({
               roundIndex,
               profileIndex,
               provider: candidate.provider,
               model: candidate.model,
               stage: 'request',
-              outcome: attempt.outcome === 'success' ? 'success' : 'failure',
+              outcome:
+                attempt.outcome === 'success' ? 'success' : attempt.outcome === 'aborted' ? 'aborted' : 'failure',
               attemptIndex: attempt.attemptIndex,
               ...(attempt.status == null ? {} : { status: attempt.status }),
               ...(attempt.error == null ? {} : { error: getSafeErrorMessage(attempt.error, candidate) }),
@@ -372,7 +386,7 @@ export function createLLMProfileFallbackRunner(params: {
           lastError = error;
           terminalProviderFailure = undefined;
           const responseValidationFailure = isChatV2ResponseValidationError(error);
-          attempts.push({
+          recordAttempt({
             roundIndex,
             profileIndex,
             provider: candidate.provider,

@@ -145,6 +145,9 @@ export type RunChatV2PipelineOptions = {
   executeGenerate?: ChatV2GenerateExecutor | undefined;
 };
 
+/** Provider-neutral per-round fields. Candidate resolution supplies the model. */
+export type ChatV2PipelineRoundOptions = Omit<RunChatV2PipelineOptions, 'model'>;
+
 /**
  * Older LLM Chat nodes used Output request details as one switch for status,
  * error, and request body. Keep that saved contract intact while newly saved
@@ -164,7 +167,7 @@ export function shouldOutputChatV2RequestBody(
 
 export type ChatV2ProviderAttempt = {
   attemptIndex: number;
-  outcome: 'success' | 'provider-failure';
+  outcome: 'success' | 'provider-failure' | 'aborted';
   status?: number | undefined;
   error?: unknown;
 };
@@ -181,4 +184,11 @@ export type ChatV2PipelineResult = {
   finishReason: string | undefined;
   providerMetadata: ChatV2ProviderMetadata | undefined;
   requestStatus: number | undefined;
+  /**
+   * Internal terminal classification for a provider request that produced
+   * diagnostic outputs instead of throwing. A non-200 response can still
+   * carry partial text or tool-like data; it must never enter tool
+   * continuation as though the provider completed successfully.
+   */
+  terminalOutcome?: 'provider-failure' | undefined;
 };

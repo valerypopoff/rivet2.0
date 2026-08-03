@@ -206,6 +206,13 @@ independent:
   response outputs plus the error output. It does not hide local graph, model,
   or request-construction errors.
 
+Internally, a provider failure that is represented as normal diagnostic outputs
+is marked as a terminal provider failure. Failed providers can still expose
+partial response text or tool-shaped data; that material is inspectable only.
+LLM Chat never treats it as a successful model result for tool continuation:
+it does not delegate apparent tool calls or release a connected Delegate Tool
+Call continuation from it.
+
 Older serialized nodes can contain only `outputRequestStatus`, formerly labeled
 **Output request details**. Deserialization materializes `outputRequestError`
 and `outputRequestBody` as true when that old setting was true, preserving the
@@ -234,8 +241,59 @@ paths and should not be used as the primary target for new provider refactors.
 - [`llmChatV2NodeData.ts`](../packages/core/src/model/chat-v2/llmChatV2NodeData.ts)
   owns persisted node data shape, defaults, and migration-compatible fields.
 - [`llmChatV2NodeRuntime.ts`](../packages/core/src/model/chat-v2/llmChatV2NodeRuntime.ts)
-  owns shared invocation assembly, lazy profile-candidate provider resolution,
-  and profile-chain cache integration.
+  is the thin node-runtime adapter. It selects cache behavior and composes the
+  invocation plan, candidate resolver, fallback runner, and output projector;
+  it must not duplicate provider or profile resolution policy.
+- [`llmProfileFieldRegistry.ts`](../packages/core/src/model/chat-v2/llmProfileFieldRegistry.ts)
+  is the canonical declaration of profile-owned persisted fields and dynamic
+  input ids. Its field-level scalar validation kind and resolved-input-toggle
+  flag also derive profile normalization from the same declaration. Profile
+  serialization, profile-mode stripping, validation categories, and UI ports
+  must not keep parallel hand-written field lists.
+- [`llmInvocationPlan.ts`](../packages/core/src/model/chat-v2/llmInvocationPlan.ts)
+  owns provider-neutral, once-per-node-run inputs: prompts, Rivet tools,
+  response-format policy, output policy, and request-body capture.
+- [`llmModelCandidate.ts`](../packages/core/src/model/chat-v2/llmModelCandidate.ts)
+  owns one resolved provider/model candidate. It applies an optional profile,
+  resolves credentials and provider configuration, and returns executable
+  pipeline options without fabricating a model for a profile that has not yet
+  been selected by the fallback runner.
+- [`chatV2ProviderRegistry.ts`](../packages/core/src/model/chat-v2/chatV2ProviderRegistry.ts)
+  owns the closed capability table for Rivet's bundled providers. Parallel-tool
+  and built-in-tool checks must use it rather than duplicate provider switches.
+- [`llmInvocationCoordinator.ts`](../packages/core/src/model/chat-v2/llmInvocationCoordinator.ts)
+  owns the invocation-level provider/tool/terminal decision boundary. It uses
+  a provider-neutral round template, so profile fallback never carries a fake
+  executable model before a real candidate has been resolved. It records one
+  terminal journal disposition on every completion, failure, or root-signal
+  cancellation without changing the original thrown error.
+- [`llmResponseMaterializer.ts`](../packages/core/src/model/chat-v2/llmResponseMaterializer.ts)
+  owns SDK-structured, JSON-text, and plain-text response materialization. The
+  final JSON-schema acceptance policy inspects this exact Response Data Value.
+- [`llmInvocationJournal.ts`](../packages/core/src/model/chat-v2/llmInvocationJournal.ts)
+  owns the append-only physical-call event collection for one invocation. It
+  records a privacy-bounded snapshot for every physical call even when Usage is
+  not enabled, so diagnostics cannot depend on a particular output setting.
+  [`llmInvocationResultProjector.ts`](../packages/core/src/model/chat-v2/llmInvocationResultProjector.ts)
+  derives the public usage and profile diagnostics from that journal and the
+  fallback result. New public outputs must be added to the projector instead
+  of reimplementing aggregation in the node.
+  [`llmInvocationProjections.ts`](../packages/core/src/model/chat-v2/llmInvocationProjections.ts)
+  contains the pure usage and profile-diagnostic projections used by that
+  projector.
+- [`toolCallCodec.ts`](../packages/core/src/model/chat-v2/toolCallCodec.ts),
+  [`toolHandlerResolver.ts`](../packages/core/src/model/chat-v2/toolHandlerResolver.ts),
+  and [`toolRoundExecutor.ts`](../packages/core/src/model/chat-v2/toolRoundExecutor.ts)
+  are the canonical tool boundary: raw-call normalization, legacy
+  exact-then-fuzzy handler matching, result messages/records, and the common
+  ordered round contract for internal and connected delegation.
+- [`ConnectedToolContinuationHost.ts`](../packages/core/src/model/ConnectedToolContinuationHost.ts)
+  owns connected Delegate lifetime. `GraphProcessor` supplies narrow scheduler
+  callbacks and output commits but no longer keeps a second continuation map.
+- [`llmChatV2CacheBoundary.ts`](../packages/core/src/model/chat-v2/llmChatV2CacheBoundary.ts)
+  owns cache-hit/write projection. [`llmChatV2NodeMigration.ts`](../packages/core/src/model/chat-v2/llmChatV2NodeMigration.ts)
+  owns idempotent serialized-node normalization; generic serialization merely
+  invokes that node-specific normalizer.
 - [`llmProfileFallback.ts`](../packages/core/src/model/chat-v2/llmProfileFallback.ts)
   owns ordered candidate attempts, retry-before-advance coordination,
   forward-only profile stickiness across continuation rounds, redacted attempt
@@ -303,7 +361,8 @@ paths and should not be used as the primary target for new provider refactors.
 - [`aiSdkBridge.ts`](../packages/core/src/model/chat-v2/aiSdkBridge.ts) is the
   only place that should directly adapt to Vercel AI SDK call signatures.
 - [`chatV2Outputs.ts`](../packages/core/src/model/chat-v2/chatV2Outputs.ts)
-  owns output DataValue construction and output-port compatibility.
+  owns output-port compatibility and delegates final Response DataValue
+  construction to `llmResponseMaterializer.ts`.
 - [`chatV2Errors.ts`](../packages/core/src/model/chat-v2/chatV2Errors.ts) owns
   provider-error normalization and secret-safe messages. For observable API-call
   failures it preserves the provider's original response message, preferring the
@@ -315,6 +374,10 @@ paths and should not be used as the primary target for new provider refactors.
   owns model/provider option resolution and model catalog integration.
 - [`toolContinuation.ts`](../packages/core/src/model/chat-v2/toolContinuation.ts)
   owns auto-continuation and tool-call follow-up behavior.
+- [`rivetToolRegistry.ts`](../packages/core/src/model/chat-v2/rivetToolRegistry.ts)
+  owns Rivet Tool-name lookup. Blank declarations are ignored and duplicate
+  declarations retain the long-standing last-declaration-wins behavior in both
+  provider projection and continuation/direct-return selection.
 - [`ToolNode.ts`](../packages/core/src/model/nodes/ToolNode.ts) owns Rivet-only
   `GptFunction.resultHandling` metadata. Provider adapters must project only the
   provider tool definition and must never forward this execution policy.
@@ -329,6 +392,15 @@ paths and should not be used as the primary target for new provider refactors.
   remains the narrow adapter and owns lifecycle events, processor construction,
   mutable run state, branch-result commits, and downstream scheduling. The LLM
   node must not directly schedule graph nodes.
+- [`llmChatV2CachePolicy.ts`](../packages/core/src/model/chat-v2/llmChatV2CachePolicy.ts)
+  owns whether legacy editor replay is eligible. It is deliberately disabled
+  for Rivet Tool use and known provider-native tools because replay cannot
+  reproduce their live side effects or Delegate lifecycle. Cache secret
+  fingerprints use SHA-256 and never retain raw credentials or headers. Its
+  explicit cache-key version invalidates only in-memory editor entries when
+  cache identity semantics change. In From profile mode, every candidate in
+  the ordered chain must be eligible; a provider-native tool in any profile
+  disables the shared cache entry.
 
 ## Behavior That Must Stay Compatible
 

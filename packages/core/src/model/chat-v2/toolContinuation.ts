@@ -2,15 +2,19 @@ import type { ChatMessageDataValue, GptFunction } from '../DataValue.js';
 import type {
   ChatV2NormalizedUsage,
   ChatV2PipelineResult,
+  ChatV2PipelineRoundOptions,
   ChatV2ReasoningOutput,
-  RunChatV2PipelineOptions,
 } from './chatV2Types.js';
 import type { StreamedFunctionCall } from '../chat/streamChatResponse.js';
-import { runChatV2Pipeline } from './chatV2Pipeline.js';
 import type { DelegatedToolCallRecord } from '../nodes/toolCallDelegation.js';
 import type { PortId } from '../NodeBase.js';
+import { createRivetToolRegistry } from './rivetToolRegistry.js';
+import { materializeLLMResponse } from './llmResponseMaterializer.js';
+import { createCallbackToolRoundExecutor, type ToolRoundExecutor } from './toolRoundExecutor.js';
+import { decideLLMInvocationRound } from './llmInvocationDecision.js';
+import { isChatV2PipelineProviderFailureResult } from './chatV2Pipeline.js';
 
-export type ToolContinuationOptions = RunChatV2PipelineOptions & {
+export type ToolContinuationOptions = ChatV2PipelineRoundOptions & {
   autoContinue: boolean;
   maxToolRounds: number;
   functions: GptFunction[] | undefined;
@@ -19,37 +23,21 @@ export type ToolContinuationOptions = RunChatV2PipelineOptions & {
     toolCalls: StreamedFunctionCall[],
     preToolMessage: string,
   ) => Promise<ToolContinuationToolResult[]>;
-  runPipeline?: (options: RunChatV2PipelineOptions) => Promise<ChatV2PipelineResult>;
+  runPipeline: (options: ChatV2PipelineRoundOptions) => Promise<ChatV2PipelineResult>;
 };
 
 export type ToolContinuationToolResult = ChatMessageDataValue & {
   delegatedToolCall?: DelegatedToolCallRecord;
 };
 
-function getToolNames(functions: GptFunction[] | undefined): Set<string> {
-  return new Set((functions ?? []).map((fn) => fn.name).filter((name) => name.trim().length > 0));
-}
-
-function canAutoContinue(functionCalls: StreamedFunctionCall[], toolNames: Set<string>): boolean {
-  return functionCalls.length > 0 && functionCalls.every((call) => toolNames.has(call.name));
-}
-
 function shouldReturnToolResultDirectly(
   functionCalls: StreamedFunctionCall[],
-  functions: GptFunction[] | undefined,
+  registry: ReturnType<typeof createRivetToolRegistry>,
 ): boolean {
   if (functionCalls.length !== 1) {
     return false;
   }
-
-  let tool: GptFunction | undefined;
-  for (const candidate of functions ?? []) {
-    if (candidate.name === functionCalls[0]!.name) {
-      // Provider tool maps use the last declaration for duplicate names.
-      tool = candidate;
-    }
-  }
-  return tool?.resultHandling === 'return-direct';
+  return registry.byName.get(functionCalls[0]!.name)?.resultHandling === 'return-direct';
 }
 
 function addUsage(
@@ -127,6 +115,26 @@ function applyAccumulatedReasoning(
   }
 }
 
+function applyTerminalContinuationOutputs(
+  result: ChatV2PipelineResult,
+  delegatedToolCalls: readonly DelegatedToolCallRecord[],
+  accumulatedUsage: ChatV2NormalizedUsage | undefined,
+  reasoningRounds: string[],
+  options: Pick<ToolContinuationOptions, 'autoContinue' | 'outputUsage' | 'outputReasoning' | 'includeFunctionCalls'>,
+): void {
+  if (result.functionCalls.length === 0 && delegatedToolCalls.length > 0 && options.includeFunctionCalls) {
+    result.commonOutputs['function-calls' as PortId] = {
+      type: 'object[]',
+      value: [...delegatedToolCalls],
+    };
+  }
+
+  if (options.autoContinue) {
+    applyAccumulatedUsage(result, accumulatedUsage, options.outputUsage);
+    applyAccumulatedReasoning(result, reasoningRounds, options.outputReasoning);
+  }
+}
+
 export async function runChatV2PipelineWithToolContinuation(
   options: ToolContinuationOptions,
 ): Promise<ChatV2PipelineResult> {
@@ -136,10 +144,14 @@ export async function runChatV2PipelineWithToolContinuation(
     functions,
     delegateToolCall,
     delegateToolCallRound,
-    runPipeline = runChatV2Pipeline,
+    runPipeline,
     ...pipelineOptions
   } = options;
-  const toolNames = getToolNames(functions);
+  const toolRegistry = createRivetToolRegistry(functions);
+  const toolRoundExecutor: ToolRoundExecutor = createCallbackToolRoundExecutor({
+    delegateOne: delegateToolCall,
+    delegateRound: delegateToolCallRound,
+  });
   const maxRounds = Math.max(1, Math.floor(Number.isFinite(maxToolRounds) ? maxToolRounds : 1));
 
   let currentPrompt = pipelineOptions.prompt;
@@ -161,43 +173,77 @@ export async function runChatV2PipelineWithToolContinuation(
       appendReasoningRound(reasoningRounds, result.reasoning);
     }
 
-    if (!autoContinue || completedRounds >= maxRounds || !canAutoContinue(result.functionCalls, toolNames)) {
-      if (result.functionCalls.length === 0 && delegatedToolCalls.length > 0 && pipelineOptions.includeFunctionCalls) {
-        result.commonOutputs['function-calls' as PortId] = {
-          type: 'object[]',
-          value: delegatedToolCalls,
-        };
-      }
+    // Request diagnostics can preserve partial provider content on a failed
+    // HTTP response. That content is for inspection only: it is not a valid
+    // assistant tool request and must never trigger a handler side effect.
+    if (isChatV2PipelineProviderFailureResult(result)) {
+      applyTerminalContinuationOutputs(result, delegatedToolCalls, accumulatedUsage, reasoningRounds, {
+        autoContinue,
+        outputUsage: pipelineOptions.outputUsage,
+        outputReasoning: pipelineOptions.outputReasoning,
+        includeFunctionCalls: pipelineOptions.includeFunctionCalls,
+      });
+      return result;
+    }
 
-      if (autoContinue) {
-        applyAccumulatedUsage(result, accumulatedUsage, pipelineOptions.outputUsage);
-        applyAccumulatedReasoning(result, reasoningRounds, pipelineOptions.outputReasoning);
-      }
+    const decision = decideLLMInvocationRound({
+      autoContinue,
+      completedRounds,
+      maxToolRounds: maxRounds,
+      calls: result.functionCalls,
+      knownToolNames: toolRegistry.names,
+      isDirectReturn: shouldReturnToolResultDirectly(result.functionCalls, toolRegistry),
+    });
+    if (
+      decision.kind === 'final-model-answer' ||
+      decision.kind === 'release-unresolved-calls' ||
+      decision.kind === 'max-rounds-reached'
+    ) {
+      applyTerminalContinuationOutputs(result, delegatedToolCalls, accumulatedUsage, reasoningRounds, {
+        autoContinue,
+        outputUsage: pipelineOptions.outputUsage,
+        outputReasoning: pipelineOptions.outputReasoning,
+        includeFunctionCalls: pipelineOptions.includeFunctionCalls,
+      });
 
       return result;
     }
 
-    const toolResultMessages = delegateToolCallRound
-      ? await delegateToolCallRound(result.functionCalls, result.response)
-      : await Promise.all(result.functionCalls.map(delegateToolCall));
+    const toolResultMessages = await toolRoundExecutor.executeRound({
+      calls: result.functionCalls,
+      assistantMessage: result.response,
+    });
     delegatedToolCalls.push(
       ...toolResultMessages
         .map((message) => message.delegatedToolCall)
         .filter((record): record is DelegatedToolCallRecord => record != null),
     );
 
-    if (shouldReturnToolResultDirectly(result.functionCalls, functions)) {
+    if (decision.kind === 'direct-tool-response') {
       const directResultMessage = toolResultMessages[0]?.value;
       if (directResultMessage?.type !== 'function' || typeof directResultMessage.message !== 'string') {
         throw new Error('Return directly requires the delegated tool handler to return a string output.');
       }
 
       result.response = directResultMessage.message;
+      const materializedDirectResponse = materializeLLMResponse({
+        rawText: result.response,
+        structuredOutput: undefined,
+        responseFormat: pipelineOptions.responseFormat,
+        requireObject: pipelineOptions.failProfileOnNonObjectResponse,
+      });
+      if (materializedDirectResponse.validation === 'invalid') {
+        throw new Error(
+          'Return directly tool handler response validation failed.\n' +
+            'Response format: JSON schema\n' +
+            `Parsed Response type: ${materializedDirectResponse.value.type}\n` +
+            'A direct tool result is terminal and is not retried or sent to another LLM profile.',
+        );
+      }
       result.allMessages = [...result.allMessages, directResultMessage];
       result.functionCalls = [];
       result.commonOutputs['response' as PortId] = {
-        type: 'string',
-        value: result.response,
+        ...materializedDirectResponse.value,
       };
       result.commonOutputs['all-messages' as PortId] = {
         type: 'chat-message[]',

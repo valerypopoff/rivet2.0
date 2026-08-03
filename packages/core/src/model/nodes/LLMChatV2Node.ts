@@ -16,28 +16,24 @@ import {
   type LLMChatV2Node,
 } from '../chat-v2/llmChatV2NodeData.js';
 import { isLLMChatV2StructuredResponseFormat } from '../chat-v2/chatV2FeatureCompatibility.js';
-import {
-  buildLLMProfileRequestDiagnostics,
-  compactLLMProfileRequestErrors,
-  compactLLMProfileRequestStatuses,
-} from '../chat-v2/llmProfileFallback.js';
 import { getChatV2ModelInfo } from '../chat-v2/modelRegistry.js';
-import { summarizeChatV2PhysicalCallUsage } from '../chat-v2/chatV2UsageAccounting.js';
+import { LLMInvocationJournal } from '../chat-v2/llmInvocationJournal.js';
+import { executeLLMInvocation } from '../chat-v2/llmInvocationCoordinator.js';
+import { projectLLMInvocationResult } from '../chat-v2/llmInvocationResultProjector.js';
+import { isChatV2PipelineProviderFailureResult } from '../chat-v2/chatV2Pipeline.js';
 import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from '../chat-v2/chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
-  cloneLLMChatV2EditorCacheOutputs,
   resolveLLMChatV2RuntimeConfig,
   resolveLLMChatV2RuntimeProviderOptions,
 } from '../chat-v2/llmChatV2NodeRuntime.js';
+import { projectLLMChatV2EditorCacheHit, writeLLMChatV2EditorCache } from '../chat-v2/llmChatV2CacheBoundary.js';
 import {
   anthropicEffortOptions,
   getChatV2ProviderLabel,
   googleThinkingLevelOptions,
   openAIReasoningEffortOptions,
 } from '../chat-v2/providerOptions.js';
-import { runChatV2PipelineWithToolContinuation } from '../chat-v2/toolContinuation.js';
-import { delegateToolCall } from './toolCallDelegation.js';
 
 export type {
   LLMChatV2ApiKeySource,
@@ -434,153 +430,61 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
-    const physicalCallEvents: ChatV2CallFinishedEvent[] = [];
-    // Usage is a node-level output, while retries, fallback profiles, and tool
-    // continuation produce several physical provider calls underneath it.
-    // Observe those calls locally before runtime assembly so the final Usage
-    // can reflect the same physical-call boundary as Response Inspector.
-    const usageTrackingContext = this.data.outputUsage
-      ? {
-          ...context,
-          onChatV2CallFinished: (event: ChatV2CallFinishedEvent) => {
-            try {
-              physicalCallEvents.push(event);
-            } catch {
-              // Accounting is observational and must never affect a provider call.
-            }
-            return context.onChatV2CallFinished?.(event);
-          },
+    const invocationJournal = new LLMInvocationJournal();
+    // Retries, fallback profiles, and tool continuation produce several
+    // physical provider calls underneath one node invocation. Always observe
+    // them locally so every later output projection shares one truthful
+    // boundary; whether Usage is exposed remains an output-setting decision.
+    const usageTrackingContext = {
+      ...context,
+      onChatV2CallFinished: (event: ChatV2CallFinishedEvent) => {
+        try {
+          invocationJournal.recordModelCall(event);
+        } catch {
+          // Accounting is observational and must never affect a provider call.
         }
-      : context;
+        return context.onChatV2CallFinished?.(event);
+      },
+    };
     const runtime = await resolveLLMChatV2RuntimeConfig({
       data: this.data,
       nodeId: this.chartNode.id,
       inputs,
       context: usageTrackingContext,
+      onProfileAttempt: (attempt) => invocationJournal.recordProfileAttempt(attempt),
     });
     const toolCallContinuation = context.toolCallContinuation;
 
-    if (runtime.cachedOutputs != null) {
-      if (runtime.profileChainUsesArray && this.data.outputRequestStatus) {
-        const cachedStatus = runtime.cachedOutputs['requestStatus' as PortId];
-        if (cachedStatus?.type === 'any' && Array.isArray(cachedStatus.value)) {
-          cachedStatus.value = compactLLMProfileRequestStatuses(cachedStatus.value);
-        }
-      }
-      if (runtime.profileChainUsesArray && shouldOutputChatV2RequestError(this.data)) {
-        const cachedError = runtime.cachedOutputs['requestError' as PortId];
-        if (cachedError?.type === 'any' && Array.isArray(cachedError.value)) {
-          cachedError.value = compactLLMProfileRequestErrors(cachedError.value);
-        }
-      }
-
-      // Cached provider output belongs to an earlier invocation, whereas this
-      // port is an observability record for physical profile attempts made by
-      // the current one. A cache hit made no such attempt.
-      if (runtime.profileAttempts != null) {
-        runtime.cachedOutputs['llmProfileAttempts' as PortId] = {
-          type: 'object[]',
-          value: [],
-        };
-        runtime.cachedOutputs['llmProfileSummary' as PortId] = {
-          type: 'string',
-          value: 'Editor cache hit — no LLM Profile calls were made for this run.',
-        };
-      }
+    const cacheHit = projectLLMChatV2EditorCacheHit(runtime);
+    if (cacheHit != null) {
       context.markResultAsEditorCacheHit?.();
-      return runtime.cachedOutputs;
+      return cacheHit;
     }
 
-    const result = runtime.shouldAutoContinueToolCalls
-      ? await runChatV2PipelineWithToolContinuation({
-          ...runtime.runOptions,
-          autoContinue: true,
-          maxToolRounds: runtime.maxToolRounds,
-          functions: runtime.functions,
-          delegateToolCallRound: toolCallContinuation
-            ? async (toolCalls, preToolMessage) => {
-                const results = await toolCallContinuation.run(toolCalls, preToolMessage);
-                return results.map((result) => ({
-                  type: 'chat-message' as const,
-                  value: result.message,
-                  delegatedToolCall: result.record,
-                }));
-              }
-            : undefined,
-          delegateToolCall: async (toolCall) => {
-            const delegated = await delegateToolCall(toolCall, context, {
-              handlers: [],
-              unknownHandler: undefined,
-              autoDelegate: true,
-              fallBackToExternalCall: true,
-              passthroughErrors: true,
-            });
+    const result = await executeLLMInvocation({
+      context,
+      journal: invocationJournal,
+      runtime,
+      toolCallContinuation,
+    });
 
-            return {
-              type: 'chat-message',
-              value: delegated.message,
-              delegatedToolCall: delegated.record,
-            };
-          },
-          runPipeline: runtime.runPipeline,
-        })
-      : await runtime.runPipeline(runtime.runOptions);
+    projectLLMInvocationResult({
+      result,
+      modelCalls: invocationJournal.modelCalls,
+      outputUsage: this.data.outputUsage,
+      outputRequestStatus: this.data.outputRequestStatus,
+      outputRequestError: shouldOutputChatV2RequestError(this.data),
+      profileAttempts: runtime.profileAttempts == null ? undefined : invocationJournal.profileAttempts,
+      profileChainLength: runtime.profileChainLength,
+      profileChainUsesArray: runtime.profileChainUsesArray,
+      profileSummary: runtime.getProfileSummary?.(),
+    });
 
-    if (this.data.outputUsage && physicalCallEvents.length > 0) {
-      const physicalUsage = summarizeChatV2PhysicalCallUsage(physicalCallEvents);
-      if (physicalUsage != null) {
-        result.usage = physicalUsage;
-        result.commonOutputs['usage' as PortId] = {
-          type: 'object',
-          value: physicalUsage,
-        };
-      }
-    }
-
-    if (runtime.profileAttempts != null) {
-      result.commonOutputs['llmProfileAttempts' as PortId] = {
-        type: 'object[]',
-        value: runtime.profileAttempts,
-      };
-      result.commonOutputs['llmProfileSummary' as PortId] = {
-        type: 'string',
-        value: runtime.getProfileSummary!(),
-      };
-
-      if (runtime.profileChainUsesArray && runtime.profileChainLength != null) {
-        const diagnostics = buildLLMProfileRequestDiagnostics(runtime.profileChainLength, runtime.profileAttempts);
-        // Rivet has scalar and one-dimensional array Data Values, but no
-        // nested-array Data Type. Keep profile/retry grouping as portable JSON
-        // inside Any values. One request or error stays scalar when doing so
-        // preserves useful diagnostic information.
-        if (this.data.outputRequestStatus) {
-          result.commonOutputs['requestStatus' as PortId] = {
-            type: 'any',
-            value: diagnostics.statuses,
-          };
-        }
-        if (shouldOutputChatV2RequestError(this.data)) {
-          result.commonOutputs['requestError' as PortId] = {
-            type: 'any',
-            value: diagnostics.errors,
-          };
-        }
-      }
-    }
-
-    if (toolCallContinuation && result.functionCalls.length > 0) {
+    if (toolCallContinuation && !isChatV2PipelineProviderFailureResult(result) && result.functionCalls.length > 0) {
       toolCallContinuation.release();
     }
 
-    if (runtime.cacheKey != null && runtime.editorCache != null && !runtime.isProfileFallbackExhausted()) {
-      const cacheOutputs = cloneLLMChatV2EditorCacheOutputs(result.commonOutputs);
-      // Attempt history is specific to this execution. Rebuild it as an empty
-      // observability value on a later cache hit instead of presenting stale
-      // provider calls as if they happened again.
-      delete cacheOutputs['llmProfileAttempts' as PortId];
-      delete cacheOutputs['llmProfileSummary' as PortId];
-      runtime.editorCache.set(runtime.cacheKey, cacheOutputs);
-    }
+    writeLLMChatV2EditorCache({ runtime, result });
 
     return result.commonOutputs;
   }

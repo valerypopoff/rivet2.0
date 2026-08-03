@@ -9,6 +9,7 @@ import {
   type ResolvedChatV2ProviderConfig,
 } from './providerOptions.js';
 import type { ChatV2Model, ChatV2Provider } from './chatV2Types.js';
+import { getChatV2ProviderCapabilities } from './chatV2ProviderRegistry.js';
 
 export type ChatV2CredentialReference = {
   source: 'input' | 'settings' | 'plugin' | 'programmatic' | 'environment' | 'none';
@@ -161,8 +162,8 @@ export async function createResolvedChatV2Provider(options: {
       hasCustomHeaders: Object.keys(config.headers ?? {}).length > 0,
       credential: options.credential.reference,
       capabilities: {
-        builtInTools: options.provider === 'openai' || options.provider === 'google',
-        structuredOutput: true,
+        builtInTools: getChatV2ProviderCapabilities(options.provider).builtInTools,
+        structuredOutput: getChatV2ProviderCapabilities(options.provider).structuredOutput,
       },
     },
     model,

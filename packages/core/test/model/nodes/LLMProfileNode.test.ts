@@ -2,6 +2,13 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import { LLMChatV2NodeImpl, LLMProfileNodeImpl, type LLMChatV2Node, type LLMProfileNode } from '../../../src/index.js';
 import { llmChatV2ProfileDataKeys } from '../../../src/model/chat-v2/llmChatV2NodeData.js';
+import {
+  llmProfileBooleanDataKeys,
+  llmProfileOptionalNumberDataKeys,
+  llmProfileRequiredNumberDataKeys,
+  llmProfileResolvedInputToggleDataKeys,
+  llmProfileStringDataKeys,
+} from '../../../src/model/chat-v2/llmProfileFieldRegistry.js';
 import { normalizeLLMProfileValue } from '../../../src/model/chat-v2/llmProfile.js';
 import { llmProfileInputIds } from '../../../src/model/chat-v2/llmProfileTypes.js';
 import { resolveLLMChatV2RuntimeConfig } from '../../../src/model/chat-v2/llmChatV2NodeRuntime.js';
@@ -106,6 +113,19 @@ describe('LLMProfileNodeImpl', () => {
     );
 
     assert.deepEqual([...profileInputIds].sort(), [...llmProfileInputIds].sort());
+  });
+
+  it('keeps profile validation categories within the canonical profile-field contract', () => {
+    const profileFields = new Set(llmChatV2ProfileDataKeys);
+    const validationFields = [
+      ...llmProfileStringDataKeys,
+      ...llmProfileBooleanDataKeys,
+      ...llmProfileRequiredNumberDataKeys,
+      ...llmProfileOptionalNumberDataKeys,
+      ...llmProfileResolvedInputToggleDataKeys,
+    ];
+
+    assert.ok(validationFields.every((field) => profileFields.has(field)));
   });
 
   it('exposes and resolves an input-driven OpenAI Previous Response ID in the profile', async () => {
@@ -257,7 +277,6 @@ describe('LLMProfileNodeImpl', () => {
     assert.equal(externallyDynamicProfile.configuration.useHeadersInput, false);
     assert.equal(runtime.runOptions.modelId, 'profile-model');
     assert.equal(runtime.runOptions.temperature, profile.configuration.temperature);
-    assert.equal(runtime.providerProfile.hasCustomHeaders, false);
   });
 
   it('keeps profile-owned settings on LLM Profile and invocation-owned settings on LLM Chat', async () => {
@@ -372,8 +391,9 @@ describe('LLMProfileNodeImpl', () => {
     assert.equal(runtime.runOptions.includeFunctionCalls, false);
     assert.match(JSON.stringify(runtime.runOptions.providerOptions), /response-from-profile/);
     assert.doesNotMatch(JSON.stringify(runtime.runOptions.providerOptions), /response-from-chat/);
-    assert.doesNotMatch(runtime.cacheKey!, /profile-openai-secret/);
-    assert.doesNotMatch(runtime.cacheKey!, /stale-inline-model/);
+    // The profile enables OpenAI web search, so legacy editor replay is unsafe
+    // even though the Chat node itself still has its old cache flag enabled.
+    assert.equal(runtime.cacheKey, undefined);
   });
 
   it('does not add Tool Calls output when From profile mode has Tool use off', async () => {

@@ -15,7 +15,8 @@ export function normalizeLLMChatV2RetryCooldownMs(value: number | undefined): nu
   return Math.max(0, Math.floor(cooldownMs));
 }
 
-function buildAbortError(): Error {
+/** Keeps cancellation identity consistent before and during a retry cooldown. */
+export function createLLMChatV2RetryAbortError(): Error {
   const error = new Error('Aborted');
   error.name = 'AbortError';
   return error;
@@ -23,7 +24,7 @@ function buildAbortError(): Error {
 
 export async function waitForLLMChatV2RetryCooldown(cooldownMs: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
-    throw buildAbortError();
+    throw createLLMChatV2RetryAbortError();
   }
 
   if (cooldownMs <= 0) {
@@ -37,7 +38,7 @@ export async function waitForLLMChatV2RetryCooldown(cooldownMs: number, signal: 
     };
     const onAbort = () => {
       cleanup();
-      reject(buildAbortError());
+      reject(createLLMChatV2RetryAbortError());
     };
 
     const timeout = setTimeout(() => {

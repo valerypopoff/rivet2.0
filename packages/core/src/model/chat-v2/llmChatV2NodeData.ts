@@ -6,6 +6,7 @@ import {
 } from './chatV2Retry.js';
 import type { ChatV2Provider } from './chatV2Types.js';
 import type { ChartNode, NodeId } from '../NodeBase.js';
+import { llmProfileDataKeys } from './llmProfileFieldRegistry.js';
 
 export type LLMChatV2ToolChoiceMode = '' | 'auto' | 'function' | 'required';
 export type LLMChatV2ApiKeySource = 'environment' | 'input';
@@ -65,59 +66,15 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
 export type LLMChatV2NodeData = LLMChatV2NodeConfigData;
 export type LLMChatV2Node = ChartNode<'llmChatV2', LLMChatV2NodeData>;
 
-export const llmChatV2ProfileDataKeys = [
-  'model',
-  'useModelInput',
-  'temperature',
-  'useTemperatureInput',
-  'topP',
-  'useTopPInput',
-  'topK',
-  'useTopKInput',
-  'presencePenalty',
-  'usePresencePenaltyInput',
-  'frequencyPenalty',
-  'useFrequencyPenaltyInput',
-  'stopSequences',
-  'useStopSequencesInput',
-  'seed',
-  'useSeedInput',
-  'maxTokens',
-  'useMaxTokensInput',
-  'provider',
-  'apiKeySource',
-  'customProviderApiKeyProgrammaticName',
-  'customProviderApiKeyEnvVarName',
-  'customProviderBaseURL',
-  'useCustomProviderBaseURLInput',
-  'headers',
-  'useHeadersInput',
-  'extraProviderOptions',
-  'useExtraProviderOptionsInput',
-  'openAIReasoningEffort',
-  'openAIReasoningSummary',
-  'openAIPreviousResponseId',
-  'useOpenAIPreviousResponseIdInput',
-  'enableOpenAIWebSearch',
-  'openAIWebSearchContextSize',
-  'enableOpenAICodeInterpreter',
-  'anthropicThinkingMode',
-  'anthropicThinkingBudget',
-  'useAnthropicThinkingBudgetInput',
-  'anthropicEffort',
-  'anthropicCacheControlTtl',
-  'googleThinkingBudget',
-  'useGoogleThinkingBudgetInput',
-  'googleThinkingLevel',
-  'googleIncludeThoughts',
-  'enableGoogleSearchGrounding',
-  'enableGoogleUrlContext',
-] as const satisfies readonly (keyof LLMChatV2NodeData)[];
+/** @deprecated Use llmProfileDataKeys from llmProfileFieldRegistry instead. */
+export const llmChatV2ProfileDataKeys = llmProfileDataKeys;
 
 export type LLMChatV2ProfileDataKey = (typeof llmChatV2ProfileDataKeys)[number];
 export type LLMChatV2ProfileData = Pick<LLMChatV2NodeData, LLMChatV2ProfileDataKey>;
 
 export type LLMChatV2EditorCacheKeyParts = {
+  /** Bump when cache identity semantics change; entries are editor-memory only. */
+  cacheVersion?: number;
   nodeId: NodeId;
   nodeData: LLMChatV2NodeData;
   provider: ChatV2Provider;

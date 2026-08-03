@@ -307,6 +307,83 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.deepEqual(result['cost' as PortId], { type: 'number', value: 1.25 });
   });
 
+  it('keeps Rivet-owned tool inputs safe from reserved and prototype-like arguments', async () => {
+    const graphId = 'safe-handler' as GraphId;
+    let receivedInputs: Record<string, unknown> | undefined;
+
+    await createNode().process(
+      {
+        ['function-call' as PortId]: {
+          type: 'object',
+          value: {
+            name: 'safe',
+            arguments: JSON.parse(
+              '{"_function_name":"overwritten","_arguments":{"overwritten":true},"__proto__":{"polluted":true},"ordinary":"value"}',
+            ),
+            id: 'call_safe',
+          },
+        },
+      },
+      {
+        project: {
+          graphs: {
+            [graphId]: { metadata: { id: graphId, name: 'safe' }, nodes: [], connections: [] },
+          },
+        },
+        externalFunctions: {},
+        signal: new AbortController().signal,
+        contextValues: {},
+        createSubProcessor: () => ({
+          processGraph: async (_context: unknown, inputs: Record<string, unknown>) => {
+            receivedInputs = inputs;
+            return { ['output' as PortId]: { type: 'string', value: 'done' } };
+          },
+        }),
+      } as unknown as InternalProcessContext,
+    );
+
+    assert.equal(Object.getPrototypeOf(receivedInputs!), null);
+    assert.deepEqual(receivedInputs!._function_name, { type: 'string', value: 'safe' });
+    assert.deepEqual(receivedInputs!._arguments, {
+      type: 'object',
+      value: JSON.parse(
+        '{"_function_name":"overwritten","_arguments":{"overwritten":true},"__proto__":{"polluted":true},"ordinary":"value"}',
+      ),
+    });
+    assert.deepEqual(receivedInputs!._rivet_tool_call, {
+      type: 'object',
+      value: {
+        id: 'call_safe',
+        name: 'safe',
+        arguments: JSON.parse(
+          '{"_function_name":"overwritten","_arguments":{"overwritten":true},"__proto__":{"polluted":true},"ordinary":"value"}',
+        ),
+      },
+    });
+    assert.equal(receivedInputs!.ordinary != null, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(receivedInputs!, '__proto__'), true);
+    assert.deepEqual(receivedInputs!.__proto__, { type: 'any', value: { polluted: true } });
+    assert.equal((receivedInputs! as { polluted?: boolean }).polluted, undefined);
+  });
+
+  it('fails clearly when a graph handler does not return a string output', async () => {
+    const graphId = 'missing-output-handler' as GraphId;
+
+    await assert.rejects(
+      () =>
+        createNode().process(
+          {
+            ['function-call' as PortId]: {
+              type: 'object',
+              value: { name: 'missingOutput', arguments: {}, id: 'call_missing' },
+            },
+          },
+          createSubgraphContext([{ id: graphId, name: 'missingOutput' }], () => ({})),
+        ),
+      /must return a string Graph Output named "output"/,
+    );
+  });
+
   it('retains the containing-name auto-delegate fallback when no exact graph exists', async () => {
     const matchingGraphId = 'compatible-handler' as GraphId;
     let selectedGraphId: GraphId | undefined;

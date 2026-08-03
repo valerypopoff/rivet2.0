@@ -19,12 +19,13 @@ import {
   isChatV2ProviderFetchError,
   normalizeChatV2ProviderError,
 } from './chatV2Errors.js';
-import { waitForLLMChatV2RetryCooldown } from './chatV2Retry.js';
+import { createLLMChatV2RetryAbortError, waitForLLMChatV2RetryCooldown } from './chatV2Retry.js';
 import {
   createChatV2CommonOutputs,
   createChatV2ProviderFailureOutputs,
   normalizeChatV2Usage,
 } from './chatV2Outputs.js';
+import { materializeLLMResponse } from './llmResponseMaterializer.js';
 
 type ChatV2WithRetryResult = {
   result: StreamChatV2Result;
@@ -54,6 +55,15 @@ export type ChatV2PipelineExecution =
       outcome: 'provider-failure';
       failure: ChatV2PipelineProviderFailure;
     };
+
+/**
+ * A provider failure may be represented by normal diagnostic outputs instead
+ * of a thrown error. Do not infer success from the presence of Response text:
+ * providers can attach partial content to a failed HTTP response.
+ */
+export function isChatV2PipelineProviderFailureResult(result: ChatV2PipelineResult): boolean {
+  return result.terminalOutcome === 'provider-failure';
+}
 
 export class ChatV2ResponseValidationError extends Error {
   constructor(public readonly responseDataType: string) {
@@ -213,10 +223,17 @@ async function runChatV2WithRetry(
       const statusCode = getChatV2ProviderErrorStatusCode(error);
       notifyProviderAttempt(options, {
         attemptIndex: attempt,
-        outcome: 'provider-failure',
+        outcome: signal.aborted ? 'aborted' : 'provider-failure',
         ...(statusCode == null ? {} : { status: statusCode }),
         error,
       });
+
+      if (signal.aborted) {
+        // The provider may reject concurrently with graph cancellation. The
+        // cancellation wins: it must neither retry nor masquerade as a
+        // provider failure to profile fallback and run activity.
+        throw createLLMChatV2RetryAbortError();
+      }
 
       if (!retryPlan.enabled || statusCode == null || statusCode === 200) {
         throw error;
@@ -294,6 +311,7 @@ function buildProviderFailureResult(
     finishReason: undefined,
     providerMetadata: undefined,
     requestStatus: statusCode,
+    terminalOutcome: 'provider-failure',
   };
 }
 
@@ -458,10 +476,22 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
     };
   }
 
-  if (options.failProfileOnNonObjectResponse && plan.request.responseFormat === 'json_schema') {
-    const responseOutput = commonOutputs['response' as PortId];
-    if (responseOutput?.type !== 'object') {
-      throw new ChatV2ResponseValidationError(responseOutput?.type ?? 'missing');
+  // A tool-request round is not a terminal Response value. Auto-continuation
+  // will make another model call after delegated tools finish, so validate the
+  // value only once a provider round actually produces the final response.
+  if (
+    options.failProfileOnNonObjectResponse &&
+    plan.request.responseFormat === 'json_schema' &&
+    chatResponse.result.functionCalls.length === 0
+  ) {
+    const materialized = materializeLLMResponse({
+      rawText: chatResponse.result.responseText,
+      structuredOutput: chatResponse.result.structuredOutput,
+      responseFormat: plan.request.responseFormat,
+      requireObject: true,
+    });
+    if (materialized.validation === 'invalid') {
+      throw new ChatV2ResponseValidationError(materialized.value.type);
     }
   }
 
@@ -475,7 +505,10 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
  */
 export function materializeChatV2PipelineFailure(failure: ChatV2PipelineProviderFailure): ChatV2PipelineResult {
   if (failure.diagnosticResult != null) {
-    return failure.diagnosticResult;
+    return {
+      ...failure.diagnosticResult,
+      terminalOutcome: 'provider-failure',
+    };
   }
   const failureResult = buildProviderFailureResult(
     failure.requestMessages,

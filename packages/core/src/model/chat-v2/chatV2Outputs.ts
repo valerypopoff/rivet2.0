@@ -4,7 +4,7 @@ import type { ChatMessage, DataValue } from '../DataValue.js';
 import type { Outputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import { createAssistantMessagesOutput, type StreamedFunctionCall } from '../chat/streamChatResponse.js';
-import { isChatV2StructuredResponseFormat } from './chatV2ResponseFormat.js';
+import { materializeLLMResponse } from './llmResponseMaterializer.js';
 import { calculateChatV2UsageCost } from './modelRegistry.js';
 import { isChatV2FiniteNonNegativeNumber } from './chatV2UsageAccounting.js';
 import {
@@ -128,26 +128,17 @@ export function normalizeChatV2Usage(
   };
 }
 
-function tryParseStructuredResponseText(response: string): unknown {
-  try {
-    return JSON.parse(response);
-  } catch {
-    return undefined;
-  }
-}
-
-function createChatV2ResponseOutput(
+export function createChatV2ResponseOutput(
   response: string,
   structuredOutput: unknown | undefined,
   responseFormat: RunChatV2PipelineOptions['responseFormat'],
 ): DataValue {
-  if (!isChatV2StructuredResponseFormat(responseFormat)) {
-    return { type: 'string', value: response };
-  }
-
-  const parsedOutput = structuredOutput !== undefined ? structuredOutput : tryParseStructuredResponseText(response);
-
-  return parsedOutput !== undefined ? inferType(parsedOutput) : { type: 'string', value: response };
+  return materializeLLMResponse({
+    rawText: response,
+    structuredOutput,
+    responseFormat,
+    requireObject: false,
+  }).value;
 }
 
 function createChatV2ReasoningOutput(reasoning: ChatV2ReasoningOutput | undefined): Outputs[PortId] {

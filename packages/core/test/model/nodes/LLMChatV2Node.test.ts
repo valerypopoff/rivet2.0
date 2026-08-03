@@ -1907,7 +1907,7 @@ describe('LLMChatV2NodeImpl', () => {
 
     assert.doesNotMatch(runtime.cacheKey!, /raw-header-secret/);
     assert.doesNotMatch(runtime.cacheKey!, /sk-cerebras-secret/);
-    assert.equal(getCacheProviderConfig(runtime).headers.Authorization.startsWith('24:'), true);
+    assert.match(getCacheProviderConfig(runtime).headers.Authorization, /^sha256:[a-f0-9]{64}$/);
   });
 
   it('fingerprints extra provider option values in editor cache keys without changing runtime options', async () => {

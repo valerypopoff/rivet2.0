@@ -193,6 +193,26 @@ describe('runChatV2PipelineWithToolContinuation', () => {
     assert.equal(result, firstResult);
   });
 
+  it('does not execute a tool from a provider-failure diagnostic result', async () => {
+    const failedToolCall = makeToolCall('call_failed', 'foo');
+    const failedResult = makePipelineResult('partial provider content', [failedToolCall]);
+    failedResult.terminalOutcome = 'provider-failure';
+    let delegated = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        runPipeline: async () => failedResult,
+        delegateToolCall: async (toolCall) => {
+          delegated += 1;
+          return makeToolResultMessage(toolCall, 'must not run');
+        },
+      }),
+    );
+
+    assert.strictEqual(result, failedResult);
+    assert.equal(delegated, 0);
+  });
+
   it('delegates all tool calls in a round before asking the model again', async () => {
     const fooCall = makeToolCall('call_foo', 'foo');
     const barCall = makeToolCall('call_bar', 'bar');

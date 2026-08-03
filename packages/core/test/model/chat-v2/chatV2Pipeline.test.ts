@@ -1145,6 +1145,7 @@ void describe('runChatV2Pipeline', () => {
     assert.equal(attempt, 2);
     assert.equal(result.response, 'Still failing 2');
     assert.equal(result.requestStatus, 503);
+    assert.equal(result.terminalOutcome, 'provider-failure');
     assert.deepEqual(result.commonOutputs['requestStatus' as PortId], {
       type: 'number[]',
       value: [503, 503],

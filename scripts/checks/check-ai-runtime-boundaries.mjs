@@ -36,6 +36,23 @@ for (const { pattern, reason } of [
     failures.push(`packages/app/src/hooks/useAiGraphBuilder.ts: ${reason}`);
   }
 }
+
+// The scheduler owns only the connected-continuation adapter. Profile fallback,
+// retries, response formatting, cache projection, and LLM output assembly are
+// all node/runtime concerns. Keeping that direction explicit prevents a future
+// GraphProcessor edit from recreating a second LLM orchestration path.
+const graphProcessorSource = readFileSync(join(repoRoot, 'packages/core/src/model/GraphProcessor.ts'), 'utf8');
+for (const seam of [
+  'llmProfile',
+  'chatV2Retry',
+  'chatV2ResponseFormat',
+  'llmInvocationResultProjector',
+  'llmChatV2Cache',
+]) {
+  if (new RegExp(`['\"]\\./chat-v2/${seam}[^'\"]*['\"]`).test(graphProcessorSource)) {
+    failures.push(`packages/core/src/model/GraphProcessor.ts: must not import LLM ${seam} policy`);
+  }
+}
 if (
   !legacyGraphBuilderHost.includes('runLegacyGraphBuilderDraft') ||
   !legacyGraphBuilderHost.includes('tryCommitGraphBuilderDraftState')

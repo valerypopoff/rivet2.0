@@ -103,6 +103,10 @@ import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore
 import { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
 import { isDataBusTopologyNode } from './DataBusTopology.js';
 import { resolveNodePrefabInstance } from './NodePrefabResolver.js';
+import {
+  ConnectedToolContinuationHost,
+  type ConnectedToolContinuationInvocation,
+} from './ConnectedToolContinuationHost.js';
 
 // eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
@@ -117,14 +121,6 @@ type ManagedAsyncBranchFailure = {
   triggerNode: ChartNode;
   nodeErrors: Array<{ error: Error | string; node: ChartNode }>;
 };
-type ToolCallContinuationInvocation = {
-  delegateNode: DelegateFunctionCallNode;
-  latestOutputs: Map<NodeId, Outputs>;
-  llmNodeId: NodeId;
-  llmProcessId: ProcessId;
-  released: boolean;
-};
-
 function createGraphOutputsOverlay(parent: GraphOutputs): { view: GraphOutputs; writes: GraphOutputs } {
   const writes: GraphOutputs = {};
   const view = new Proxy(writes, {
@@ -532,7 +528,7 @@ export class GraphProcessor {
     | undefined;
   readonly #suppressedPreloadedNodeIds = new Set<NodeId>();
   readonly #preloadedNodeResults: NodeResults = new Map();
-  #toolCallContinuationInvocations = new Map<string, ToolCallContinuationInvocation>();
+  #connectedToolContinuationHost = new ConnectedToolContinuationHost();
   #continuationCompletionOwnerByNodeId = new Map<NodeId, NodeId>();
   #effectiveConnectionsForRun: NodeConnection[] | undefined;
   #asyncBranchPlansByTriggerNodeId = new Map<NodeId, ToolCallContinuationAsyncBranchPlan>();
@@ -1171,7 +1167,7 @@ export class GraphProcessor {
     this.#graphOutputs = this.#sharedRunStateOverride?.graphOutputs ?? {};
     this.#executionCache ??= new Map();
     this.#queuedNodes = new Set();
-    this.#toolCallContinuationInvocations = new Map();
+    this.#connectedToolContinuationHost.reset();
     this.#continuationCompletionOwnerByNodeId = new Map();
     this.#effectiveConnectionsForRun = undefined;
     this.#asyncBranchPlansByTriggerNodeId = new Map();
@@ -1239,7 +1235,9 @@ export class GraphProcessor {
     const completionPromise = (async () => {
       try {
         try {
-          this.#profileRuntimeSync('initializeGraphRun', () => this.#initializeGraphRun(context, inputs, contextValues));
+          this.#profileRuntimeSync('initializeGraphRun', () =>
+            this.#initializeGraphRun(context, inputs, contextValues),
+          );
           await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
           this.#profileRuntimeSync('prepareNodeProcessContextBase', () => this.#prepareNodeProcessContextBase());
 
@@ -2862,23 +2860,14 @@ export class GraphProcessor {
     }
 
     const delegateNode = resolution.delegateNode as DelegateFunctionCallNode;
-    const invocationKey = this.#getToolCallContinuationInvocationKey(processId, index);
-    const invocation: ToolCallContinuationInvocation = {
+    return this.#connectedToolContinuationHost.begin({
+      key: this.#getToolCallContinuationInvocationKey(processId, index),
       delegateNode,
-      latestOutputs: new Map(),
       llmNodeId: node.id,
       llmProcessId: processId,
-      released: false,
-    };
-    this.#toolCallContinuationInvocations.set(invocationKey, invocation);
-
-    return {
-      run: (toolCalls, assistantMessage) =>
+      run: (invocation, toolCalls, assistantMessage) =>
         this.#runToolCallContinuationRound(node, invocation, toolCalls, assistantMessage, llmSignal),
-      release: () => {
-        invocation.released = true;
-      },
-    };
+    });
   }
 
   #getToolCallContinuationInvocationKey(processId: ProcessId, index: number): string {
@@ -2886,39 +2875,38 @@ export class GraphProcessor {
   }
 
   #finalizeToolCallContinuation(processId: ProcessId, index: number, nodeOutputs: Outputs): void {
-    const invocationKey = this.#getToolCallContinuationInvocationKey(processId, index);
-    const invocation = this.#toolCallContinuationInvocations.get(invocationKey);
-    this.#toolCallContinuationInvocations.delete(invocationKey);
-    if (!invocation || invocation.released) {
-      return;
-    }
-
-    if (invocation.latestOutputs.size === 0) {
-      const replayedCalls = nodeOutputs['function-calls' as PortId];
-      if (
-        replayedCalls?.type === 'object[]' &&
-        replayedCalls.value.length > 0 &&
-        replayedCalls.value.every(isDelegatedToolCallRecord)
-      ) {
-        invocation.latestOutputs.set(invocation.delegateNode.id, buildDelegatedToolCallOutputs(replayedCalls.value));
-      }
-    }
-
-    for (const [nodeId, outputs] of invocation.latestOutputs) {
-      this.#nodeResults.set(nodeId, outputs);
-      this.#visitedNodes.add(nodeId);
-      this.#remainingNodes.delete(nodeId);
-      this.#continuationCompletionOwnerByNodeId.set(nodeId, invocation.llmNodeId);
-    }
+    this.#connectedToolContinuationHost.finalize({
+      key: this.#getToolCallContinuationInvocationKey(processId, index),
+      nodeOutputs,
+      replay: (invocation, outputs) => {
+        if (invocation.latestOutputs.size !== 0) return;
+        const replayedCalls = outputs['function-calls' as PortId];
+        if (
+          replayedCalls?.type === 'object[]' &&
+          replayedCalls.value.length > 0 &&
+          replayedCalls.value.every(isDelegatedToolCallRecord)
+        ) {
+          invocation.latestOutputs.set(invocation.delegateNode.id, buildDelegatedToolCallOutputs(replayedCalls.value));
+        }
+      },
+      commit: (invocation) => {
+        for (const [nodeId, outputs] of invocation.latestOutputs) {
+          this.#nodeResults.set(nodeId, outputs);
+          this.#visitedNodes.add(nodeId);
+          this.#remainingNodes.delete(nodeId);
+          this.#continuationCompletionOwnerByNodeId.set(nodeId, invocation.llmNodeId);
+        }
+      },
+    });
   }
 
   #discardToolCallContinuation(processId: ProcessId, index: number): void {
-    this.#toolCallContinuationInvocations.delete(this.#getToolCallContinuationInvocationKey(processId, index));
+    this.#connectedToolContinuationHost.discard(this.#getToolCallContinuationInvocationKey(processId, index));
   }
 
   async #runToolCallContinuationRound(
     llmNode: ChartNode,
-    invocation: ToolCallContinuationInvocation,
+    invocation: ConnectedToolContinuationInvocation,
     toolCalls: StreamedFunctionCall[],
     assistantMessage: string,
     llmSignal: AbortSignal,

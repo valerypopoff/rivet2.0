@@ -1,4 +1,5 @@
 import stableStringify from 'safe-stable-stringify';
+import CryptoJS from 'crypto-js';
 import type { Outputs } from '../GraphProcessor.js';
 import type { ResolvedChatV2ProviderConfig } from './providerOptions.js';
 import type { ChatV2Provider, ChatV2ProviderOptions, ChatV2ToolChoice } from './chatV2Types.js';
@@ -6,7 +7,8 @@ import type { LLMChatV2EditorCacheKeyParts, LLMChatV2NodeData } from './llmChatV
 import type { LLMProfileValue } from './llmProfileTypes.js';
 
 export function buildLLMChatV2EditorCacheKey(parts: LLMChatV2EditorCacheKeyParts): string {
-  return stableStringify(parts) ?? '';
+  const { cacheVersion = 2, ...keyParts } = parts;
+  return stableStringify({ cacheVersion, ...keyParts }) ?? '';
 }
 
 function cloneEditorCacheValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
@@ -57,14 +59,9 @@ function fingerprintSecret(secret: string | undefined): string | undefined {
     return undefined;
   }
 
-  let hash = 2166136261;
-
-  for (let i = 0; i < secret.length; i++) {
-    hash ^= secret.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return `${secret.length}:${(hash >>> 0).toString(36)}`;
+  // Cache keys stay in-memory, but provider credentials and header values must
+  // not be recoverable from them. SHA-256 also avoids FNV's easy collisions.
+  return `sha256:${CryptoJS.SHA256(secret).toString(CryptoJS.enc.Hex)}`;
 }
 
 function fingerprintProviderConfigForCache(config: ResolvedChatV2ProviderConfig): ResolvedChatV2ProviderConfig {

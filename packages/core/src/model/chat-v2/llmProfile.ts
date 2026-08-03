@@ -1,11 +1,13 @@
 import type { ChatV2CredentialReference, ChatV2CredentialResult } from './chatV2ProviderProfile.js';
-import {
-  createLLMChatV2NodeData,
-  type LLMChatV2NodeData,
-  type LLMChatV2ProfileData,
-  type LLMChatV2ProfileDataKey,
-} from './llmChatV2NodeData.js';
+import { createLLMChatV2NodeData, type LLMChatV2NodeData, type LLMChatV2ProfileData } from './llmChatV2NodeData.js';
 import type { ChatV2Provider } from './chatV2Types.js';
+import {
+  llmProfileBooleanDataKeys,
+  llmProfileOptionalNumberDataKeys,
+  llmProfileRequiredNumberDataKeys,
+  llmProfileResolvedInputToggleDataKeys,
+  llmProfileStringDataKeys,
+} from './llmProfileFieldRegistry.js';
 import { LLM_PROFILE_VALUE_VERSION, pickLLMChatV2ProfileData, type LLMProfileValue } from './llmProfileTypes.js';
 
 export {
@@ -26,65 +28,6 @@ const credentialSources = new Set<ChatV2CredentialReference['source']>([
   'none',
 ]);
 const profileProviders = new Set<ChatV2Provider>(['openai', 'anthropic', 'google', 'custom']);
-const stringFields = [
-  'model',
-  'customProviderApiKeyProgrammaticName',
-  'customProviderApiKeyEnvVarName',
-  'customProviderBaseURL',
-  'extraProviderOptions',
-  'openAIReasoningEffort',
-  'openAIReasoningSummary',
-  'openAIPreviousResponseId',
-] as const satisfies readonly LLMChatV2ProfileDataKey[];
-const booleanFields = [
-  'useModelInput',
-  'useTemperatureInput',
-  'useTopPInput',
-  'useTopKInput',
-  'usePresencePenaltyInput',
-  'useFrequencyPenaltyInput',
-  'useStopSequencesInput',
-  'useSeedInput',
-  'useMaxTokensInput',
-  'useCustomProviderBaseURLInput',
-  'useHeadersInput',
-  'useExtraProviderOptionsInput',
-  'useOpenAIPreviousResponseIdInput',
-  'enableOpenAIWebSearch',
-  'enableOpenAICodeInterpreter',
-  'useAnthropicThinkingBudgetInput',
-  'useGoogleThinkingBudgetInput',
-  'googleIncludeThoughts',
-  'enableGoogleSearchGrounding',
-  'enableGoogleUrlContext',
-] as const satisfies readonly LLMChatV2ProfileDataKey[];
-const requiredNumberFields = ['temperature', 'maxTokens'] as const satisfies readonly LLMChatV2ProfileDataKey[];
-const optionalNumberFields = [
-  'topP',
-  'topK',
-  'presencePenalty',
-  'frequencyPenalty',
-  'seed',
-  'anthropicThinkingBudget',
-  'googleThinkingBudget',
-] as const satisfies readonly LLMChatV2ProfileDataKey[];
-const resolvedInputToggleFields = [
-  'useModelInput',
-  'useTemperatureInput',
-  'useTopPInput',
-  'useTopKInput',
-  'usePresencePenaltyInput',
-  'useFrequencyPenaltyInput',
-  'useStopSequencesInput',
-  'useSeedInput',
-  'useMaxTokensInput',
-  'useCustomProviderBaseURLInput',
-  'useHeadersInput',
-  'useExtraProviderOptionsInput',
-  'useOpenAIPreviousResponseIdInput',
-  'useAnthropicThinkingBudgetInput',
-  'useGoogleThinkingBudgetInput',
-] as const satisfies readonly LLMChatV2ProfileDataKey[];
 
 export function normalizeLLMProfileValue(value: unknown): LLMProfileValue {
   if (!isRecord(value)) {
@@ -145,22 +88,22 @@ export function normalizeLLMProfileChainInput(value: unknown): LLMProfileValue[]
 }
 
 function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
-  for (const field of stringFields) {
+  for (const field of llmProfileStringDataKeys) {
     if (typeof data[field] !== 'string') {
       throw new Error(`LLM Profile ${field} must be a string.`);
     }
   }
-  for (const field of booleanFields) {
+  for (const field of llmProfileBooleanDataKeys) {
     if (typeof data[field] !== 'boolean') {
       throw new Error(`LLM Profile ${field} must be a boolean.`);
     }
   }
-  for (const field of requiredNumberFields) {
+  for (const field of llmProfileRequiredNumberDataKeys) {
     if (typeof data[field] !== 'number' || !Number.isFinite(data[field])) {
       throw new Error(`LLM Profile ${field} must be a finite number.`);
     }
   }
-  for (const field of optionalNumberFields) {
+  for (const field of llmProfileOptionalNumberDataKeys) {
     const fieldValue = data[field];
     if (fieldValue != null && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))) {
       throw new Error(`LLM Profile ${field} must be a finite number when provided.`);
@@ -200,8 +143,8 @@ function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
   // A profile is a resolved configuration value. LLM Chat intentionally does not
   // expose the profile-owned inputs, so accepting a dynamic flag here would let
   // stale hidden connections influence a supposedly self-contained profile.
-  for (const field of resolvedInputToggleFields) {
-    resolvedData[field] = false;
+  for (const field of llmProfileResolvedInputToggleDataKeys) {
+    (resolvedData as Record<string, unknown>)[field] = false;
   }
 
   return pickLLMChatV2ProfileData(resolvedData);

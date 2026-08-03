@@ -21,6 +21,7 @@ import {
 } from './serialization_v4.js';
 import { graphV2Deserializer, projectV2Deserializer } from './serialization_v2.js';
 import { graphV1Deserializer, projectV1Deserializer } from './serialization_v1.js';
+import { normalizeSerializedLLMChatV2Node } from '../../model/chat-v2/llmChatV2NodeMigration.js';
 
 export function serializeProject(project: Project, attachedData?: AttachedData): unknown {
   return projectV4Serializer(project, attachedData);
@@ -93,36 +94,9 @@ type LegacyPassthroughData = Record<string, unknown> & {
   renderAsDataBus?: unknown;
 };
 
-type LegacyLLMChatV2DiagnosticsData = Record<string, unknown> & {
-  outputRequestStatus?: unknown;
-  outputRequestError?: unknown;
-  outputRequestBody?: unknown;
-};
-
 function hasLegacyDataBusFlag(node: ChartNode): node is ChartNode<'passthrough', LegacyPassthroughData> {
   const data = node.data as LegacyPassthroughData | undefined;
   return node.type === 'passthrough' && data != null && Object.hasOwn(data, 'renderAsDataBus');
-}
-
-function migrateLegacyLLMChatV2Diagnostics(node: ChartNode): void {
-  if (node.type !== 'llmChatV2' || node.data == null || typeof node.data !== 'object') {
-    return;
-  }
-
-  const data = node.data as LegacyLLMChatV2DiagnosticsData;
-  if (data.outputRequestStatus !== true) {
-    return;
-  }
-
-  // Output request details used to expose all three diagnostics together.
-  // Materialize the split settings on load so existing output connections and
-  // editor-visible behavior remain unchanged after the setting was separated.
-  if (!Object.hasOwn(data, 'outputRequestError')) {
-    data.outputRequestError = true;
-  }
-  if (!Object.hasOwn(data, 'outputRequestBody')) {
-    data.outputRequestBody = true;
-  }
 }
 
 function normalizeDeserializedNode(node: ChartNode): void {
@@ -137,7 +111,7 @@ function normalizeDeserializedNode(node: ChartNode): void {
     (node as ChartNode).data = data;
   }
 
-  migrateLegacyLLMChatV2Diagnostics(node);
+  normalizeSerializedLLMChatV2Node(node);
 }
 
 function deserializeProjectByVersion(

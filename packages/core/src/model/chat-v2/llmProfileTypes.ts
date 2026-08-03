@@ -13,24 +13,7 @@ export const LLM_PROFILE_VALUE_VERSION = 1 as const;
  * until their matching provider or input toggle is enabled. This lets editor
  * operations preserve recoverable connections across configuration changes.
  */
-export const llmProfileInputIds = [
-  'model',
-  'apiKey',
-  'customProviderBaseURL',
-  'previousResponseId',
-  'temperature',
-  'maxTokens',
-  'topP',
-  'topK',
-  'presencePenalty',
-  'frequencyPenalty',
-  'stopSequences',
-  'seed',
-  'headers',
-  'extraProviderOptions',
-  'anthropicThinkingBudget',
-  'googleThinkingBudget',
-] as const;
+export { llmProfileInputIds } from './llmProfileFieldRegistry.js';
 
 export type LLMProfileValue = {
   version: typeof LLM_PROFILE_VALUE_VERSION;

@@ -228,6 +228,38 @@ describe('LLM Profile fallback chain', () => {
     assert.equal(cacheHitMarks, 1);
   });
 
+  it('does not cache a profile chain when any candidate enables a provider-native tool', async () => {
+    const created = LLMChatV2NodeImpl.create();
+    const node = new LLMChatV2NodeImpl({
+      ...created,
+      data: {
+        ...created.data,
+        configurationMode: 'profile',
+        cache: true,
+      },
+    });
+    const profile = createDefaultLLMProfileValue();
+    profile.configuration = { ...profile.configuration, enableOpenAIWebSearch: true };
+
+    const runtime = await resolveLLMChatV2RuntimeConfig({
+      data: node.data,
+      nodeId: node.chartNode.id,
+      inputs: {
+        prompt: { type: 'string', value: 'Hello' },
+        llmProfile: { type: 'llm-config', value: profile },
+      } as any,
+      context: {
+        signal: new AbortController().signal,
+        editorExecutionCache: new Map<string, unknown>(),
+        settings: { openAiKey: 'test-key', chatNodeHeaders: {} },
+        getPluginConfig: () => '',
+      } as any,
+    });
+
+    assert.equal(runtime.editorCache, undefined);
+    assert.equal(runtime.cacheKey, undefined);
+  });
+
   it('keys the editor cache by fallback order without storing profile secrets', async () => {
     const created = LLMChatV2NodeImpl.create();
     const node = new LLMChatV2NodeImpl({
@@ -370,11 +402,13 @@ describe('LLM Profile fallback chain', () => {
   it('retries one profile before advancing to the next and preserves physical attempt history', async () => {
     const calls: number[] = [];
     const observed: ChatV2CallFinishedEvent[] = [];
+    const journalObserved: Array<[number, number | undefined, string]> = [];
     const runner = createLLMProfileFallbackRunner({
       candidates: [
         { provider: 'custom', model: 'primary', credential: 'primary-secret' },
         { provider: 'custom', model: 'backup', credential: 'backup-secret' },
       ],
+      onAttempt: (attempt) => journalObserved.push([attempt.profileIndex, attempt.attemptIndex, attempt.outcome]),
       resolveCandidate: async (profileIndex, roundOptions) => ({
         ...roundOptions,
         provider: 'custom',
@@ -423,6 +457,11 @@ describe('LLM Profile fallback chain', () => {
         [1, 0, 0, 'success'],
       ],
     );
+    assert.deepEqual(journalObserved, [
+      [0, 0, 'failure'],
+      [0, 1, 'failure'],
+      [1, 0, 'success'],
+    ]);
     assert.equal(
       runner.summary(),
       'Profile 0 (custom/primary): failed after 2 provider attempts; last status 503.\n' +
@@ -576,7 +615,10 @@ describe('LLM Profile fallback chain', () => {
         assert.ok(error instanceof LLMProfileFallbackExhaustedError);
         assert.match(error.message, /Profile 0 \(custom\/first-invalid\), round 0, request attempt 0 success \(200\)/);
         assert.match(error.message, /Profile 0 \(custom\/first-invalid\), round 0, response validation failure:/);
-        assert.match(error.message, /response validation failure: LLM profile response validation failed\.\n  Response format:/);
+        assert.match(
+          error.message,
+          /response validation failure: LLM profile response validation failed\.\n  Response format:/,
+        );
         assert.match(error.message, /Profile 1 \(custom\/second-invalid\), round 0, request attempt 0 success \(200\)/);
         assert.match(error.message, /Profile 1 \(custom\/second-invalid\), round 0, response validation failure:/);
         return true;
