@@ -237,11 +237,17 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot: applyAbort(snapshot),
       };
     case 'pause':
+      if ((options.data as ProcessEvents['pause'])?.isReplay) {
+        return { changed: false, snapshot };
+      }
       return {
         changed: true,
         snapshot: { ...snapshot, graphPaused: true },
       };
     case 'resume':
+      if ((options.data as ProcessEvents['resume'])?.isReplay) {
+        return { changed: false, snapshot };
+      }
       return {
         changed: true,
         snapshot: { ...snapshot, graphPaused: false },
@@ -307,6 +313,13 @@ function applyUserInput(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['userInput'],
 ): ProjectExecutionSnapshot {
+  // Playback retains this event for the snapshot's Run Activity journal, but
+  // never restores an already-satisfied historical prompt into the User Input
+  // modal when the project becomes active again.
+  if (data.isReplay) {
+    return snapshot;
+  }
+
   return produce(snapshot, (draft) => {
     draft.userInputQuestions ??= {};
     draft.userInputQuestions[data.node.id] ??= [];

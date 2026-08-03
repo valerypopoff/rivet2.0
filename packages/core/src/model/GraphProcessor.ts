@@ -216,6 +216,13 @@ export type ProcessEvents = {
     processId: ProcessId;
 
     renderingType: 'text' | 'markdown';
+
+    /**
+     * Present only when RecordingPlayer re-emits a historical prompt. It is
+     * display-only: hosts must project it to observability without asking the
+     * user for input again.
+     */
+    isReplay?: true;
   }>;
 
   /** Called when a node has partially processed, with the current partial output values for the node. */
@@ -254,11 +261,11 @@ export type ProcessEvents = {
   /** Called for trace level logs. */
   trace: string;
 
-  /** Called when the graph has been paused. */
-  pause: void;
+  /** Called when the graph has been paused. Historical playback pauses are display-only. */
+  pause: { isReplay?: true } | undefined;
 
-  /** Called when the graph has been resumed. */
-  resume: void;
+  /** Called when the graph has been resumed. Historical playback resumes are display-only. */
+  resume: { isReplay?: true } | undefined;
 
   /** Called when a global variable has been set in a graph. */
   globalSet: WithExecution<{ id: string; value: ScalarOrArrayDataValue; processId: ProcessId }>;
@@ -1108,12 +1115,19 @@ export class GraphProcessor {
   }
 
   async replayRecording(recorder: ExecutionRecorder): Promise<GraphOutputs> {
+    // Playback is a new root run, even though its node/graph events originate
+    // from a historic recording. Giving the processor a real identity here is
+    // essential if the user aborts while playback is in progress: abort()
+    // emits its own graph terminal outside RecordingPlayer's event adapter.
+    this.#initializeExecutionIdentity();
     this.#initProcessState();
     this.#graphOutputs = await replayExecutionRecording({
       emitter: this.#emitter,
       erroredNodes: this.#erroredNodes,
       graphInputs: this.#graphInputs,
       graphOutputs: this.#graphOutputs,
+      fallbackGraphId: this.#graph.metadata!.id!,
+      initialReplayExecution: this.#buildExecutionMetadata(),
       isAborted: () => this.#lifecycle.isAborted,
       nodeResults: this.#nodeResults,
       project: this.#project,
@@ -1224,13 +1238,13 @@ export class GraphProcessor {
 
     const completionPromise = (async () => {
       try {
-        this.#profileRuntimeSync('initializeGraphRun', () => this.#initializeGraphRun(context, inputs, contextValues));
-        await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
-        this.#profileRuntimeSync('prepareNodeProcessContextBase', () => this.#prepareNodeProcessContextBase());
-
-        const shouldUseSeededExecutionPlan = this.#seededExecutionPlanForNextRun() != null;
-        this.#useSeededExecutionPlanOnNextRun = false;
         try {
+          this.#profileRuntimeSync('initializeGraphRun', () => this.#initializeGraphRun(context, inputs, contextValues));
+          await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
+          this.#profileRuntimeSync('prepareNodeProcessContextBase', () => this.#prepareNodeProcessContextBase());
+
+          const shouldUseSeededExecutionPlan = this.#seededExecutionPlanForNextRun() != null;
+          this.#useSeededExecutionPlanOnNextRun = false;
           if (!shouldUseSeededExecutionPlan) {
             this.#preprocessGraph();
           }
@@ -1238,13 +1252,7 @@ export class GraphProcessor {
           this.#prepareAsyncBranchTopology();
         } catch (error) {
           const normalizedError = getError(error);
-          // Preflight validation happens before graphStart/nodeStart. Emit the
-          // ordinary root error event so every executor can present an
-          // actionable configuration failure instead of only rejecting the
-          // processGraph promise.
-          if (!this.#isSubProcessor && !this.#suppressGraphLifecycleEvents) {
-            await this.#emitter.emit('error', { error: normalizedError });
-          }
+          await this.#emitRootStartupError(normalizedError);
           throw normalizedError;
         }
 
@@ -1327,12 +1335,23 @@ export class GraphProcessor {
     inputs: Record<string, DataValue>,
     contextValues: Record<string, DataValue>,
   ): void {
+    this.#initializeExecutionIdentity();
+
     this.#initProcessState();
 
     this.#context = context;
     this.#graphInputs = inputs;
     this.#contextValues = contextValues;
 
+    this.#cleanupTokenizerErrorListener();
+    const unsubscribeTokenizerError = this.#context.tokenizer.on('error', (error) => {
+      emitDetached(this.#emitter, 'error', { error });
+    });
+    this.#unsubscribeTokenizerError =
+      typeof unsubscribeTokenizerError === 'function' ? unsubscribeTokenizerError : undefined;
+  }
+
+  #initializeExecutionIdentity(): void {
     if (this.#executionIdentityOverride) {
       this.#rootRunId = this.#executionIdentityOverride.rootRunId;
       this.#graphRunId = this.#executionIdentityOverride.graphRunId;
@@ -1342,13 +1361,19 @@ export class GraphProcessor {
       this.#graphRunId = nanoid() as GraphRunId;
       this.#parentGraphRunId = this.#parent ? this.#parent.#graphRunId : undefined;
     }
+  }
 
-    this.#cleanupTokenizerErrorListener();
-    const unsubscribeTokenizerError = this.#context.tokenizer.on('error', (error) => {
-      emitDetached(this.#emitter, 'error', { error });
-    });
-    this.#unsubscribeTokenizerError =
-      typeof unsubscribeTokenizerError === 'function' ? unsubscribeTokenizerError : undefined;
+  async #emitRootStartupError(error: Error): Promise<void> {
+    // Startup can fail before graphStart/nodeStart: initialization, reference
+    // loading, process-context construction, or graph preflight. Emit the
+    // same scoped graph terminal plus unscoped root confirmation as ordinary
+    // runtime failures so observers can establish a truthful root lifecycle.
+    if (this.#isSubProcessor || this.#suppressGraphLifecycleEvents) {
+      return;
+    }
+
+    await this.#emitter.emit('graphError', this.#withExecution({ graph: this.#graph, error }));
+    await this.#emitter.emit('error', { error });
   }
 
   #prepareNodeProcessContextBase(): void {

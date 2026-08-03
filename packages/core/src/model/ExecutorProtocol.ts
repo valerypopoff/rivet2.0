@@ -79,6 +79,8 @@ export type SerializedProcessEventMap = {
     inputs: Inputs;
     processId: ProcessId;
     renderingType: 'text' | 'markdown';
+    /** See ProcessEvents.userInput.isReplay. */
+    isReplay?: true;
   }>;
   partialOutput: WithExecution<{
     node: ChartNode;
@@ -100,8 +102,10 @@ export type SerializedProcessEventMap = {
   abort: { successful: boolean; error?: string | Error };
   finish: void;
   trace: string;
-  pause: void;
-  resume: void;
+  /** Present only when RecordingPlayer re-emits a historical lifecycle transition. */
+  pause: { isReplay?: true } | undefined;
+  /** Present only when RecordingPlayer re-emits a historical lifecycle transition. */
+  resume: { isReplay?: true } | undefined;
   globalSet: WithExecution<{ id: string; value: ScalarOrArrayDataValue; processId: ProcessId }>;
 };
 
@@ -132,8 +136,8 @@ export type ProcessEventMessageMap = {
   error: SerializedProcessEventMap['error'];
   graphError: SerializedProcessEventMap['graphError'];
   trace: string;
-  pause: void;
-  resume: void;
+  pause: SerializedProcessEventMap['pause'];
+  resume: SerializedProcessEventMap['resume'];
 };
 
 export type GraphUploadAllowedMessage = {

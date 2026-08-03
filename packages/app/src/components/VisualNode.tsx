@@ -112,6 +112,13 @@ const VisualNodeImpl = memo(
       const executorSession = useExecutorSessionState();
       const nodeColor = node.visualData.color;
       const isOutputPreviewHovered = Boolean(isHovered || shouldShowHoverControls);
+      const isHistoricalChanged = changeInfo != null && changeInfo.changed && !!changeInfo.before && !!changeInfo.after;
+      const staticHeaderControlCount =
+        Number(isHistoricalChanged) +
+        Number(Boolean(headerWarning)) +
+        Number(isNodePrefabInstance) +
+        Number(graphId != null && compareChangeKind === 'changed') +
+        Number(node.type === 'delegateFunctionCall');
 
       useDependsOnPlugins();
 
@@ -133,6 +140,7 @@ const VisualNodeImpl = memo(
           '--node-bg-foreground': fgColor,
           '--node-stack-front-bg': splitStackGhostColors.frontBackground,
           '--node-stack-back-bg': splitStackGhostColors.backBackground,
+          '--node-title-header-padding': `calc(${66 + 30 * staticHeaderControlCount}px * var(--ui-font-scale))`,
         } as CSSProperties;
       }, [
         commentHeight,
@@ -145,6 +153,7 @@ const VisualNodeImpl = memo(
         node.visualData.x,
         node.visualData.y,
         node.visualData.zIndex,
+        staticHeaderControlCount,
         xDelta,
         yDelta,
       ]);
@@ -171,8 +180,6 @@ const VisualNodeImpl = memo(
             : 'changed'
           : 'not-changed'
         : '';
-      const isHistoricalChanged = changeInfo != null && changeInfo.changed && !!changeInfo.before && !!changeInfo.after;
-
       return (
         <div
           className={clsx(
@@ -196,6 +203,7 @@ const VisualNodeImpl = memo(
               conditional: !!node.isConditional,
               hasPrefabIndicator: isNodePrefabInstance,
               hasHeaderWarning: Boolean(headerWarning),
+              hasToolCallContinuationIndicator: node.type === 'delegateFunctionCall',
               hasCompareChange: compareChangeKind === 'changed',
               [`compare-${compareChangeKind}`]: compareChangeKind && compareChangeKind !== 'unchanged',
             },
@@ -261,7 +269,8 @@ const VisualNodeImpl = memo(
 const GetGlobalVisualNode = memo(
   forwardRef<HTMLDivElement, VisualNodeImplProps>((props, ref) => {
     const enabledStaticGlobalVariableIds = useAtomValue(enabledStaticGlobalVariableIdsState);
-    const headerWarning = props.headerWarning ?? getMissingStaticSetGlobalWarning(props.node, enabledStaticGlobalVariableIds);
+    const headerWarning =
+      props.headerWarning ?? getMissingStaticSetGlobalWarning(props.node, enabledStaticGlobalVariableIds);
 
     return <VisualNodeImpl {...props} ref={ref} headerWarning={headerWarning} />;
   }),

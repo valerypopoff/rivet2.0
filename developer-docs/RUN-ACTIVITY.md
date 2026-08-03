@@ -7,6 +7,12 @@ executor, durable run database, response-trace transport, or copy of node
 outputs. The same journal reducer must consume Browser, internal Node, Remote
 Debugger, inactive-project snapshot, and recording-replay events.
 
+The persistent bottom-right trigger is labelled **Runtime activity** before a
+run is available. During a run and after the latest run settles, it appends the
+same live or exact terminal duration used by the activity root, for example
+**Runtime activity: 2.75s**. The label is presentation-only; it remains the
+toggle for this drawer.
+
 ## Ownership
 
 The implementation has three boundaries:
@@ -64,7 +70,11 @@ Keep these states distinct:
 
 An outputs-ready event must not be labelled as complete while an async branch
 continues. A startup or preflight failure must still produce root-level error
-activity even when no graph or node lifecycle began.
+activity even when no graph or node lifecycle began. Startup includes processor
+initialization, project-reference loading, process-context preparation, and
+graph preflight. The root processor emits a scoped `graphError` first and its
+ordinary unscoped `error` confirmation second; this is the same terminal
+ordering as a later runtime failure.
 
 When a root settles without an expected child terminal event, mark that child
 with `terminalEventMissing`. A successful root leaves its child status
@@ -412,6 +422,53 @@ does not provide them. Observer failures are non-fatal and must never change
 workflow scheduling, outputs, errors, cancellation, or cost accounting.
 Active-run dispatch and inactive-project snapshot projection keep Run Activity
 behind a separate error boundary from the primary execution-state update.
+
+`userInput`, `progress`, `pause`, and `resume` are part of that shared contract. Every local,
+remote, inactive-snapshot, and replay path must forward them through the same
+dispatcher that updates primary execution state; they are not editor-only UI
+signals. A forwarding failure must not suppress the primary callback, and a
+Run Activity projection failure must not suppress the workflow event.
+
+Playback re-emits recorded pause and resume lifecycle events for observability,
+but never automatically pauses the new playback session at a historical pause.
+Only a pause requested by the current user may suspend the player.
+
+### Recording playback identity and timing
+
+A recording is evidence of a past execution; playing it is a new editor
+execution. `RecordingPlayer` maps every recorded `rootRunId` and `graphRunId`
+to a fresh replay identity for that playback, while preserving `graphId`,
+`parentGraphRunId` lineage, and subgraph executor metadata. All events that
+belonged to one recorded root still share one replay root. This prevents a
+freshly loaded recording, or a second playback of the same recording, from
+colliding with a retained terminal Run Activity root.
+
+The playback `GraphProcessor` allocates the first replay root identity before
+the player starts. The player adopts that identity for the first recorded root
+and the selected graph when they match. This keeps a user-requested `abort()`
+during playback attached to the same Run Activity root; it must never emit an
+undefined or unrelated lifecycle identity.
+
+Run Activity timestamps its root and node lifecycle to the playback session so
+the running UI measures the replay the user is currently watching. Recorded
+node durations and physical model/tool durations remain attached to their
+replayed events when present. Do not present a recording's historical
+wall-clock timestamps as the current playback time.
+
+The response inspector is scoped to the currently selected root. Closing the
+drawer, clearing its root, or selecting another root closes any open inspector
+so replayed trace data never outlives its owning activity view.
+
+An incompatible recording can fail before its first recorded graph or node
+event can be replayed. Historic recordings can also contain only an unscoped
+`done`, `error`, or `abort` terminal (notably preflight failures recorded
+before scoped graph errors existed). In either case the player emits one
+scoped fallback terminal for the graph selected for replay, then replays the
+original unscoped terminal confirmation. It uses the project main graph only
+when the replay target is unavailable. The drawer therefore shows a truthful
+terminal row rather than treating the event as unattributable legacy data.
+Normal recordings already have scoped lifecycle events and must not gain a
+duplicate fallback terminal.
 
 ## Privacy and performance
 

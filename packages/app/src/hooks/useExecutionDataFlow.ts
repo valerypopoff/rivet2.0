@@ -163,7 +163,15 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     setSelectedPage((prev) => ({ ...prev, [nodeId]: 'latest' }));
   };
 
-  const onUserInput = ({ node, processId, inputStrings, execution }: ProcessEvents['userInput']) => {
+  const onUserInput = ({ node, processId, inputStrings, execution, isReplay }: ProcessEvents['userInput']) => {
+    // RecordingPlayer re-emits historical prompts for observability. Their
+    // recorded answers are already part of the replay, so they must never
+    // create an interactive modal even if a future caller bypasses the normal
+    // dispatcher-level observer-only route.
+    if (isReplay) {
+      return;
+    }
+
     const questions: ProcessQuestions = {
       nodeId: node.id,
       processId,

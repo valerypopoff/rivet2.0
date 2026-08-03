@@ -416,8 +416,18 @@ export function createProcessEventDispatcher(currentExecution: {
       dispatchWithRunActivity('nodeError', data as ProcessEvents['nodeError'], () =>
         currentExecution.onNodeError(data as ProcessEvents['nodeError']),
       ),
-    userInput: (data: unknown) =>
-      dispatchGraphExecutionEvent('userInput', () => currentExecution.onUserInput(data as ProcessEvents['userInput'])),
+    userInput: (data: unknown) => {
+      const event = data as ProcessEvents['userInput'];
+
+      // Recording playback re-emits historical questions so Run Activity can
+      // show the original wait. The recorded answer has already been applied,
+      // so this is strictly an observer event, not a new modal interaction.
+      if (event.isReplay) {
+        return dispatchRunActivityEvent('userInput', event);
+      }
+
+      return dispatchWithRunActivity('userInput', event, () => currentExecution.onUserInput(event));
+    },
     start: (data: unknown) =>
       dispatchWithRunActivity('start', data as ProcessEvents['start'], () =>
         currentExecution.onStart(data as ProcessEvents['start']),
@@ -464,8 +474,20 @@ export function createProcessEventDispatcher(currentExecution: {
       dispatchWithRunActivity('nodeOutputsCleared', data as ProcessEvents['nodeOutputsCleared'], () =>
         currentExecution.onNodeOutputsCleared(data as ProcessEvents['nodeOutputsCleared']),
       ),
-    pause: () => dispatchWithRunActivity('pause', undefined, () => currentExecution.onPause()),
-    resume: () => dispatchWithRunActivity('resume', undefined, () => currentExecution.onResume()),
+    progress: (data: unknown) =>
+      dispatchRunActivityEvent('progress', data as ProcessEvents['progress']),
+    pause: (data: unknown) => {
+      const event = data as ProcessEvents['pause'];
+      return event?.isReplay
+        ? dispatchRunActivityEvent('pause', event)
+        : dispatchWithRunActivity('pause', event, () => currentExecution.onPause());
+    },
+    resume: (data: unknown) => {
+      const event = data as ProcessEvents['resume'];
+      return event?.isReplay
+        ? dispatchRunActivityEvent('resume', event)
+        : dispatchWithRunActivity('resume', event, () => currentExecution.onResume());
+    },
     error: (data: unknown) =>
       dispatchWithRunActivity('error', data as ProcessEvents['error'], () =>
         currentExecution.onError(data as ProcessEvents['error']),

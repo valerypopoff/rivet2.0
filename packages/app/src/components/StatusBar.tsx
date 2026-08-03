@@ -99,7 +99,12 @@ export const StatusBar: FC<{}> = () => {
         title={runActivityOpen ? 'Close Run Activity' : 'Open Run Activity'}
         onClick={() => setRunActivityOpen((current) => !current)}
       >
-        Runtime: <strong>{formatRuntimeOrPlaceholder(runtimeTiming.elapsedMs)}</strong>
+        Runtime activity
+        {runtimeTiming.elapsedMs != null && (
+          <>
+            : <strong>{formatRuntime(runtimeTiming.elapsedMs)}</strong>
+          </>
+        )}
       </button>
       {cost > 0 && (
         <div className="cost">
@@ -115,8 +120,4 @@ function formatRuntime(elapsedMs: number): string {
     keepDecimalsOnWholeSeconds: true,
     secondsDecimalDigits: 2,
   });
-}
-
-function formatRuntimeOrPlaceholder(elapsedMs: number | undefined): string {
-  return elapsedMs == null ? '—' : formatRuntime(elapsedMs);
 }

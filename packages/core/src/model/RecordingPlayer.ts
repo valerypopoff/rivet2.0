@@ -1,7 +1,7 @@
 import { getError } from '../utils/errors.js';
 import type { ExecutionRecorder } from '../recording/ExecutionRecorder.js';
 import type { RecordedEvents } from '../recording/RecordedEvents.js';
-import type { DataValue, StringArrayDataValue } from './DataValue.js';
+import type { DataValue } from './DataValue.js';
 import { nanoid } from 'nanoid/non-secure';
 import type { GraphExecutionMetadata, GraphRunId, ProcessId, RootRunId } from './ProcessContext.js';
 import type { GraphId } from './NodeGraph.js';
@@ -33,6 +33,10 @@ export async function replayExecutionRecording(options: {
   erroredNodes: Map<NodeId, Error | string>;
   graphInputs: GraphInputs;
   graphOutputs: GraphOutputs;
+  /** Current graph selected for replay; used only if a recording has no scoped lifecycle event. */
+  fallbackGraphId?: GraphId;
+  /** Identity already allocated by the playback processor for its own lifecycle events. */
+  initialReplayExecution?: GraphExecutionMetadata;
   project: Project;
   recorder: ExecutionRecorder;
   recordingPlaybackChatLatency: number;
@@ -49,6 +53,8 @@ export async function replayExecutionRecording(options: {
     emitter,
     erroredNodes,
     graphOutputs,
+    fallbackGraphId,
+    initialReplayExecution,
     project,
     recorder,
     recordingPlaybackChatLatency,
@@ -71,7 +77,69 @@ export async function replayExecutionRecording(options: {
     }
   }
 
-  const rootGraphId = (project.metadata.mainGraphId ?? Object.keys(project.graphs)[0]) as GraphId;
+  let hasEmittedRunActivityExecution = false;
+  let getFallbackExecution: ((graphId: GraphId) => GraphExecutionMetadata) | undefined;
+
+  const getReplayFallbackGraph = () => {
+    const replayTargetGraph = fallbackGraphId == null ? undefined : project.graphs[fallbackGraphId];
+    const projectMainGraph =
+      project.metadata.mainGraphId == null ? undefined : project.graphs[project.metadata.mainGraphId];
+    return replayTargetGraph ?? projectMainGraph ?? Object.values(project.graphs)[0];
+  };
+
+  const emitReplayExecutionEvent = <K extends keyof ProcessEvents>(
+    event: K,
+    data: ProcessEvents[K] & { execution: GraphExecutionMetadata },
+  ): void => {
+    // Run Activity can materialize a root only from an execution-bearing
+    // lifecycle or observability event. Remember emitted events so a later
+    // playback error remains attached to that root instead of synthesizing a
+    // second one.
+    hasEmittedRunActivityExecution = true;
+    emitDetached(emitter, event, data);
+  };
+
+  const emitFallbackRootTerminal = (
+    status: 'completed' | 'error' | 'aborted',
+    data: { error?: Error | string; outputs?: GraphOutputs; successful?: boolean },
+  ): void => {
+    // Older recordings and preflight-error recordings can contain only the
+    // unscoped processor terminal. Materialize the current project's root
+    // graph once so Run Activity has exact execution identity to attach that
+    // terminal confirmation to. Do not add a duplicate when any ordinary
+    // graph/node event has already established the replay root.
+    if (hasEmittedRunActivityExecution || !getFallbackExecution) return;
+
+    const fallbackGraph = getReplayFallbackGraph();
+    const fallbackGraphMetadataId = fallbackGraph?.metadata?.id;
+    if (!fallbackGraph || !fallbackGraphMetadataId) return;
+
+    const execution = getFallbackExecution(fallbackGraphMetadataId);
+    if (status === 'completed') {
+      emitReplayExecutionEvent('graphFinish', {
+        graph: fallbackGraph,
+        outputs: data.outputs ?? {},
+        execution,
+      });
+      return;
+    }
+
+    if (status === 'error') {
+      emitReplayExecutionEvent('graphError', {
+        graph: fallbackGraph,
+        error: data.error ?? 'Recording replay failed before graph execution began.',
+        execution,
+      });
+      return;
+    }
+
+    emitReplayExecutionEvent('graphAbort', {
+      graph: fallbackGraph,
+      error: data.error,
+      successful: data.successful ?? false,
+      execution,
+    });
+  };
 
   const getGraph = (graphId: GraphId) => {
     const graph = project.graphs[graphId];
@@ -100,13 +168,22 @@ export async function replayExecutionRecording(options: {
   };
 
   try {
-    const legacyRootRunId = nanoid() as RootRunId;
+    const legacyRootRunId = initialReplayExecution?.rootRunId ?? (nanoid() as RootRunId);
     const legacyGraphRunsByGraphId = new Map<GraphId, GraphRunId>();
+    const replayRootRunIds = new Map<RootRunId, RootRunId>();
+    const replayGraphRunIdsByRoot = new Map<RootRunId, Map<GraphRunId, GraphRunId>>();
     const nodeStartTimestamps = new Map<string, number>();
 
     const getExecution = (graphId: GraphId, recordedExecution?: GraphExecutionMetadata): GraphExecutionMetadata => {
       if (recordedExecution) {
-        return recordedExecution;
+        return getReplayExecution(recordedExecution);
+      }
+
+      // Legacy recordings have no execution metadata. Keep the processor's
+      // already-allocated selected-graph identity so an external abort during
+      // replay terminates the same root instead of creating a second one.
+      if (initialReplayExecution?.graphId === graphId) {
+        return initialReplayExecution;
       }
 
       let graphRunId = legacyGraphRunsByGraphId.get(graphId);
@@ -119,6 +196,49 @@ export async function replayExecutionRecording(options: {
         graphId,
         graphRunId,
         rootRunId: legacyRootRunId,
+      };
+    };
+    getFallbackExecution = (graphId) => getExecution(graphId);
+
+    // A recording describes a past execution, but replay is a new editor run.
+    // Reusing recorded identities makes a second playback collide with the
+    // journal's terminal root and can leave Run Activity showing stale state.
+    // Keep its graph hierarchy intact while assigning fresh replay identity.
+    const getReplayExecution = (recordedExecution: GraphExecutionMetadata): GraphExecutionMetadata => {
+      let replayRootRunId = replayRootRunIds.get(recordedExecution.rootRunId);
+      if (replayRootRunId == null) {
+        // The first recorded root belongs to this playback processor. Later
+        // roots remain distinct in malformed or concatenated recordings.
+        replayRootRunId =
+          replayRootRunIds.size === 0 && initialReplayExecution
+            ? initialReplayExecution.rootRunId
+            : (nanoid() as RootRunId);
+        replayRootRunIds.set(recordedExecution.rootRunId, replayRootRunId);
+      }
+
+      const getReplayGraphRunId = (recordedGraphRunId: GraphRunId): GraphRunId => {
+        let graphRunIds = replayGraphRunIdsByRoot.get(recordedExecution.rootRunId);
+        if (graphRunIds == null) {
+          graphRunIds = new Map();
+          replayGraphRunIdsByRoot.set(recordedExecution.rootRunId, graphRunIds);
+        }
+
+        const replayGraphRunId = graphRunIds.get(recordedGraphRunId) ?? (nanoid() as GraphRunId);
+        graphRunIds.set(recordedGraphRunId, replayGraphRunId);
+        return replayGraphRunId;
+      };
+
+      const { rootRunId: _recordedRootRunId, graphRunId, parentGraphRunId, ...rest } = recordedExecution;
+      const isInitialRootGraph =
+        initialReplayExecution != null &&
+        replayRootRunId === initialReplayExecution.rootRunId &&
+        parentGraphRunId == null &&
+        rest.graphId === initialReplayExecution.graphId;
+      return {
+        ...rest,
+        rootRunId: replayRootRunId,
+        graphRunId: isInitialRootGraph ? initialReplayExecution!.graphRunId : getReplayGraphRunId(graphRunId),
+        ...(parentGraphRunId == null ? {} : { parentGraphRunId: getReplayGraphRunId(parentGraphRunId) }),
       };
     };
 
@@ -150,7 +270,7 @@ export async function replayExecutionRecording(options: {
       switch (event.type) {
         case 'start': {
           const { data } = event;
-          emitDetached(emitter, 'start', {
+          emitReplayExecutionEvent('start', {
             project,
             contextValues: data.contextValues,
             inputs: data.inputs,
@@ -162,28 +282,42 @@ export async function replayExecutionRecording(options: {
           break;
         }
         case 'abort': {
+          emitFallbackRootTerminal('aborted', event.data);
           emitDetached(emitter, 'abort', event.data);
           break;
         }
-        case 'pause':
+        case 'pause': {
+          // A replay does not automatically stop at a historical pause, but
+          // observers still need the original lifecycle event to faithfully
+          // project the recorded run (including Run Activity's paused state).
+          emitDetached(emitter, 'pause', { isReplay: true });
+          break;
+        }
         case 'resume': {
+          emitDetached(emitter, 'resume', { isReplay: true });
           break;
         }
         case 'done': {
+          emitFallbackRootTerminal('completed', { outputs: event.data.results });
           emitDetached(emitter, 'done', event.data);
           setGraphOutputs(event.data.results);
           setRunning(false);
           break;
         }
         case 'error': {
+          emitFallbackRootTerminal('error', event.data);
           emitDetached(emitter, 'error', event.data);
           break;
         }
         case 'globalSet': {
           const { data } = event;
+          const legacyGraphId = data.execution?.graphId ?? getReplayFallbackGraph()?.metadata?.id;
+          if (legacyGraphId == null) {
+            throw new Error('Cannot replay a global value event because the current project has no graph to attach it to.');
+          }
           emitDetached(emitter, 'globalSet', {
             ...data,
-            execution: getExecution(data.execution?.graphId ?? rootGraphId, data.execution),
+            execution: getExecution(legacyGraphId, data.execution),
           });
           break;
         }
@@ -195,7 +329,7 @@ export async function replayExecutionRecording(options: {
           const { data } = event;
           const execution = getExecution(data.graphId, data.execution);
           legacyGraphRunsByGraphId.set(data.graphId, execution.graphRunId);
-          emitDetached(emitter, 'graphStart', {
+          emitReplayExecutionEvent('graphStart', {
             graph: getGraph(data.graphId),
             inputs: data.inputs,
             execution,
@@ -204,7 +338,7 @@ export async function replayExecutionRecording(options: {
         }
         case 'graphFinish': {
           const { data } = event;
-          emitDetached(emitter, 'graphFinish', {
+          emitReplayExecutionEvent('graphFinish', {
             graph: getGraph(data.graphId),
             outputs: data.outputs,
             execution: getExecution(data.graphId, data.execution),
@@ -213,7 +347,7 @@ export async function replayExecutionRecording(options: {
         }
         case 'graphOutputsReady': {
           const { data } = event;
-          emitDetached(emitter, 'graphOutputsReady', {
+          emitReplayExecutionEvent('graphOutputsReady', {
             graph: getGraph(data.graphId),
             outputs: data.outputs,
             execution: getExecution(data.graphId, data.execution),
@@ -222,7 +356,7 @@ export async function replayExecutionRecording(options: {
         }
         case 'graphError': {
           const { data } = event;
-          emitDetached(emitter, 'graphError', {
+          emitReplayExecutionEvent('graphError', {
             graph: getGraph(data.graphId),
             error: data.error,
             execution: getExecution(data.graphId, data.execution),
@@ -231,7 +365,7 @@ export async function replayExecutionRecording(options: {
         }
         case 'graphAbort': {
           const { data } = event;
-          emitDetached(emitter, 'graphAbort', {
+          emitReplayExecutionEvent('graphAbort', {
             graph: getGraph(data.graphId),
             error: data.error,
             successful: data.successful,
@@ -244,7 +378,7 @@ export async function replayExecutionRecording(options: {
           const node = getNode(data.nodeId);
           const execution = getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution);
           nodeStartTimestamps.set(getNodeRunKey(execution, data.nodeId, data.processId as ProcessId), event.ts);
-          emitDetached(emitter, 'nodeStart', {
+          emitReplayExecutionEvent('nodeStart', {
             node,
             inputs: data.inputs,
             ...(data.inputConnections === undefined ? {} : { inputConnections: data.inputConnections }),
@@ -261,8 +395,7 @@ export async function replayExecutionRecording(options: {
           const { data } = event;
           const node = getNode(data.nodeId);
           const execution = getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution);
-          emitDetached(
-            emitter,
+          emitReplayExecutionEvent(
             'nodeFinish',
             withOptionalDuration(
               {
@@ -284,8 +417,7 @@ export async function replayExecutionRecording(options: {
           const { data } = event;
           const node = getNode(data.nodeId);
           const execution = getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution);
-          emitDetached(
-            emitter,
+          emitReplayExecutionEvent(
             'nodeError',
             withOptionalDuration(
               {
@@ -306,7 +438,7 @@ export async function replayExecutionRecording(options: {
         case 'nodeExcluded': {
           const { data } = event;
           const node = getNode(data.nodeId);
-          emitDetached(emitter, 'nodeExcluded', {
+          emitReplayExecutionEvent('nodeExcluded', {
             node,
             processId: data.processId as ProcessId,
             inputs: data.inputs,
@@ -324,7 +456,7 @@ export async function replayExecutionRecording(options: {
           if (data.processId == null) {
             nodeResults.delete(data.nodeId);
           }
-          emitDetached(emitter, 'nodeOutputsCleared', {
+          emitReplayExecutionEvent('nodeOutputsCleared', {
             node,
             processId: data.processId as ProcessId | undefined,
             execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
@@ -334,7 +466,7 @@ export async function replayExecutionRecording(options: {
         case 'partialOutput': {
           const { data } = event;
           const node = getNode(data.nodeId);
-          emitDetached(emitter, 'partialOutput', {
+          emitReplayExecutionEvent('partialOutput', {
             node,
             outputs: data.outputs,
             index: data.index,
@@ -346,7 +478,7 @@ export async function replayExecutionRecording(options: {
         }
         case 'progress': {
           const { data } = event;
-          emitDetached(emitter, 'progress', {
+          emitReplayExecutionEvent('progress', {
             node: getNode(data.nodeId),
             processId: data.processId as ProcessId,
             progress: data.progress,
@@ -356,7 +488,7 @@ export async function replayExecutionRecording(options: {
         }
         case 'llmCallFinished': {
           const { data } = event;
-          emitDetached(emitter, 'llmCallFinished', {
+          emitReplayExecutionEvent('llmCallFinished', {
             ...data,
             execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
           });
@@ -364,7 +496,7 @@ export async function replayExecutionRecording(options: {
         }
         case 'toolCallFinished': {
           const { data } = event;
-          emitDetached(emitter, 'toolCallFinished', {
+          emitReplayExecutionEvent('toolCallFinished', {
             ...data,
             execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.sourceNodeId), data.execution),
           });
@@ -373,10 +505,14 @@ export async function replayExecutionRecording(options: {
         case 'userInput': {
           const { data } = event;
           const node = getNode(data.nodeId) as UserInputNode;
-          emitDetached(emitter, 'userInput', {
-            callback: undefined as unknown as (values: StringArrayDataValue) => void,
+          emitReplayExecutionEvent('userInput', {
+            // A replayed prompt is historical and must not wait for a new
+            // answer, but listeners still receive a safe callback-shaped
+            // event for compatibility with ordinary user-input observers.
+            callback: () => undefined,
             inputStrings: data.inputStrings,
             inputs: data.inputs,
+            isReplay: true,
             node,
             processId: data.processId as ProcessId,
             renderingType: data.renderingType,
@@ -411,7 +547,15 @@ export async function replayExecutionRecording(options: {
       }
     }
   } catch (error) {
-    emitDetached(emitter, 'error', { error: getError(error) });
+    const replayError = getError(error);
+
+    // A recording can fail before its first graph/node event, for example when
+    // it refers to a graph that no longer exists in the loaded project. The
+    // normal root-level `error` event is intentionally unscoped, so Run
+    // Activity has no active root to attach it to in that case.
+    emitFallbackRootTerminal('error', { error: replayError });
+
+    emitDetached(emitter, 'error', { error: replayError });
   } finally {
     setRunning(false);
   }

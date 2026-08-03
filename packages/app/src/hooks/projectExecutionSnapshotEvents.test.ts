@@ -13,6 +13,7 @@ import {
   type RootRunId,
 } from '@valerypopoff/rivet2-core';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
+import { createRunActivityNodeKey } from '../features/runActivity/runActivityJournal.js';
 import { createEmptyProjectExecutionSnapshot, type ProjectExecutionSnapshot } from '../state/dataFlow.js';
 import { MISSING_DEBUGGER_TERMINAL_EVENT_WARNING } from './graphExecutionEventHelpers.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
@@ -216,11 +217,13 @@ test('inactive project snapshot reducer stores hidden user input prompts and cle
         graphRunId,
         rootRunId,
       },
+      inputs: {},
       inputStrings: ['Question?'],
       node: {
         id: nodeId,
       },
       processId,
+      renderingType: 'text',
     } as never,
     message: 'userInput',
     projectId,
@@ -248,6 +251,65 @@ test('inactive project snapshot reducer stores hidden user input prompts and cle
   }).snapshot;
 
   assert.deepEqual(finishedSnapshot.userInputQuestions, {});
+});
+
+test('inactive project snapshots retain replayed user-input activity without restoring a modal question', () => {
+  const nodeId = 'node-a' as NodeId;
+  const processId = 'replay-process-a' as ProcessId;
+  const projectId = 'project-a' as ProjectId;
+  const graphId = 'graph-a' as GraphId;
+  const graphRunId = 'replay-graph-run-a' as GraphRunId;
+  const rootRunId = 'replay-root-run-a' as RootRunId;
+  const refStore = createDataRefStore();
+
+  const snapshot = applyProcessEventToProjectExecutionSnapshot({
+    data: {
+      execution: { graphId, graphRunId, rootRunId },
+      inputs: {},
+      inputStrings: ['Historical question?'],
+      isReplay: true,
+      node: { id: nodeId },
+      processId,
+      renderingType: 'markdown',
+    } as never,
+    message: 'userInput',
+    projectId,
+    refStore,
+    snapshot: createEmptyProjectExecutionSnapshot(),
+  }).snapshot;
+
+  assert.deepEqual(snapshot.userInputQuestions, {});
+  assert.equal(snapshot.selectedProcessPageNodes[nodeId], undefined);
+
+  const invocation = snapshot.runActivityJournal.rootsById[rootRunId]!.nodeInvocationsByKey[
+    createRunActivityNodeKey({ graphRunId, nodeId, processId, rootRunId })
+  ]!;
+  assert.equal(invocation.status, 'waiting');
+  assert.deepEqual(invocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
+});
+
+test('inactive project snapshots retain their live pause state while replaying historical pause lifecycle events', () => {
+  const projectId = 'project-a' as ProjectId;
+  const refStore = createDataRefStore();
+  const snapshot = { ...createEmptyProjectExecutionSnapshot(), graphPaused: true };
+
+  const afterPause = applyProcessEventToProjectExecutionSnapshot({
+    data: { isReplay: true },
+    message: 'pause',
+    projectId,
+    refStore,
+    snapshot,
+  }).snapshot;
+  const afterResume = applyProcessEventToProjectExecutionSnapshot({
+    data: { isReplay: true },
+    message: 'resume',
+    projectId,
+    refStore,
+    snapshot: afterPause,
+  }).snapshot;
+
+  assert.equal(afterPause.graphPaused, true);
+  assert.equal(afterResume.graphPaused, true);
 });
 
 test('inactive project snapshot reducer upserts identified model and tool trace events', () => {

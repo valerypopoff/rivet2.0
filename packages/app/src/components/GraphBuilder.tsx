@@ -18,7 +18,7 @@ import { UserInputModal } from './UserInputModal.js';
 import Button from '@atlaskit/button';
 import { isNotNull } from '../utils/genericUtilFunctions.js';
 import { ErrorBoundary } from 'react-error-boundary';
-import { loadedRecordingState } from '../state/execution.js';
+import { getLoadedRecordingForProject, loadedRecordingState } from '../state/execution.js';
 import { useGraphHistoryNavigation } from '../hooks/useGraphHistoryNavigation';
 import { entries } from '../utils/typeSafety';
 import { useGraphBuilderContextMenuHandler } from '../hooks/useGraphBuilderContextMenuHandler';
@@ -130,8 +130,8 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
   const [connections, setConnections] = useAtom(connectionsState);
   const [selectedNodeIds, setSelectedNodeIds] = useAtom(selectedNodesState);
   const setEditingNodeId = useSetAtom(editingNodeState);
-  const loadedRecording = useAtomValue(loadedRecordingState);
   const project = useAtomValue(projectState);
+  const loadedRecording = getLoadedRecordingForProject(useAtomValue(loadedRecordingState), project.metadata.id);
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
   const setProjectCompareReference = useSetAtom(projectCompareReferenceState);

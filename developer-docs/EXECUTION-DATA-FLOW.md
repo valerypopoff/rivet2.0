@@ -1631,11 +1631,35 @@ recording load/unload while an execution is active, which keeps the playback
 override stable for the lifetime of the run and prevents Abort/Pause/Resume from
 switching executor targets mid-run.
 
-The critical design point is **execution metadata parity**: replay emits events
-with the same `GraphExecutionMetadata` that was recorded, so:
+A loaded recording is also owned by the project tab from which it was selected.
+Switching to another open project preserves that recording for its owner, but
+must not make the other project's ActionBar, executor selection, canvas border,
+or frozen-output controls behave as though replay were active. Returning to the
+owning project restores its `Play Recording` controls.
+While a recording remains loaded, only that owning tab may replace or unload
+the selection; another tab's More menu must not silently redirect an in-flight
+or loaded replay to a different project. Closing the owning tab atomically
+clears its loaded recording and the short pre-start playback flag before the
+tab is removed. Likewise, an asynchronous file-picker completion is discarded
+if its source tab was closed while the picker was open. Switching to another
+still-open tab deliberately does neither: the recording remains available when
+the owner is selected again. Playback captures that exact selection, then
+revalidates it after its pre-start repaint yield; only the same still-loaded
+selection may clear the shared pre-start flag. A closed tab therefore cannot
+continue a hidden replay or reset a newer recording's startup state.
+
+The critical design point is **execution metadata topology parity**: replay
+emits each event with a fresh, internally consistent `GraphExecutionMetadata`
+identity for this playback. `RecordingPlayer` maps a recorded root and every
+recorded graph run to new ids, while preserving `graphId`, nested
+`parentGraphRunId` relationships, and executor metadata. The mapping is fresh
+for every playback, so a newly replayed recording cannot collide with the
+terminal Run Activity root retained from its source run or an earlier replay.
+That means:
 
 - `graphRunHistoryByView` gets populated with the same view keys.
-- `lastRunDataByNodeState` entries get the same `graphRunId` tags.
+- `lastRunDataByNodeState` entries get one fresh, matching replay `graphRunId`
+  for every event in the same graph invocation.
 - The run switcher and data filtering work identically to live execution.
 
 ### Legacy recording fallback
@@ -1651,7 +1675,7 @@ const legacyGraphRunsByGraphId = new Map<GraphId, GraphRunId>();
 
 const getExecution = (graphId: GraphId, recordedExecution?: GraphExecutionMetadata): GraphExecutionMetadata => {
   if (recordedExecution) {
-    return recordedExecution; // New recording; use as-is
+    return getReplayExecution(recordedExecution); // Fresh IDs, preserved topology
   }
 
   // Legacy recording; synthesize consistent IDs per graphId
@@ -1666,26 +1690,43 @@ const getExecution = (graphId: GraphId, recordedExecution?: GraphExecutionMetada
 ```
 
 This ensures legacy recordings produce stable synthetic `graphRunId` values per
-graph (the same `graphId` always maps to the same `graphRunId` within a replay),
-while new recordings use the original metadata verbatim.
+graph (the same `graphId` always maps to the same `graphRunId` within a replay).
+Recorded metadata uses the same fresh-per-playback mapping described above,
+rather than reusing the original execution ids.
+
+If an incompatible recording fails before it can emit any execution-bearing
+lifecycle event (for example, its first graph no longer exists in the project),
+the player emits one scoped fallback `graphError` using an available project
+graph and a fresh replay identity, followed by the ordinary root `error`.
+This gives Run Activity a visible failed replay row instead of silently
+discarding an unscoped startup failure. The error message retains the original
+mismatch details; the fallback graph only supplies a valid editor location for
+the failed playback.
 
 ### Event coverage
 
-All event types relevant to data flow are replayed:
+Lifecycle and observability events relevant to editor data flow are replayed:
 
-| Event                                       | Effect on app state                                 |
-| ------------------------------------------- | --------------------------------------------------- |
-| `start`                                     | Clears history, sets context values and inputs      |
-| `graphStart`                                | Creates `GraphRunRecord` in history                 |
-| `graphFinish` / `graphError` / `graphAbort` | Updates run record status                           |
-| `nodeStart` / `nodeFinish` / `nodeError`    | Stores per-node execution data                      |
-| `nodeExcluded`                              | Stores excluded status                              |
-| `partialOutput`                             | Stores streaming/split-run output                   |
-| `nodeOutputsCleared`                        | Removes node data entries                           |
-| `done`                                      | Sets final outputs, marks not running               |
-| `userInput`                                 | Replays user input prompt (callback is `undefined`) |
-| `globalSet`                                 | Replays global variable changes                     |
-| `llmCallFinished` / `toolCallFinished`      | Replays bounded response-inspector metadata         |
+| Event                                       | Effect on app state                                                                                                                |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `start`                                     | Clears history, sets context values and inputs                                                                                     |
+| `graphStart`                                | Creates `GraphRunRecord` in history                                                                                                |
+| `graphFinish` / `graphError` / `graphAbort` | Updates run record status                                                                                                          |
+| `nodeStart` / `nodeFinish` / `nodeError`    | Stores per-node execution data                                                                                                     |
+| `nodeExcluded`                              | Stores excluded status                                                                                                             |
+| `partialOutput`                             | Stores streaming/split-run output                                                                                                  |
+| `progress`                                  | Updates the exact invocation's latest progress                                                                                     |
+| `nodeOutputsCleared`                        | Removes node data entries                                                                                                          |
+| `done`                                      | Sets final outputs, marks not running                                                                                              |
+| `userInput`                                 | Replays the historical prompt into Run Activity with `isReplay: true`; the callback is a no-op and no User Input modal is reopened |
+| `globalSet`                                 | Replays global variable changes                                                                                                    |
+| `llmCallFinished` / `toolCallFinished`      | Replays bounded response-inspector metadata                                                                                        |
+
+Recorded `pause` and `resume` are re-emitted with `isReplay: true` for Run
+Activity observability, but they never pause or resume the new playback
+session. Playback uses the current user's controls; a real pause or resume of
+the replaying processor still follows the ordinary live process-event path into
+editor state and Run Activity.
 
 Chat nodes get an artificial delay (`recordingPlaybackChatLatency`) during replay
 to simulate streaming behavior.

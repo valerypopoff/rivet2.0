@@ -1,3 +1,7 @@
+- In the LLM chat node, at the "Retry on non-200" phrase the hint so it's obvious that this setting only works when the request happens. If the error is that no request was made, this setting won't help.
+
+- In the "Fail the whole llm profile at non-object output", add a hint that explicitly says that won't go through the "Retry on non-200" setting.
+
 - In LLM chat output, "messages sent" and "all messages" - auto collapse them and let the user unflod them when long
 
 - При вызове туллколов трекать на что уходит время и сколько

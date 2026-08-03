@@ -283,7 +283,7 @@ export const nodeStyles = css`
   }
 
   .node:not(.isComment) .grab-area {
-    padding-right: calc(66px * var(--ui-font-scale));
+    padding-right: var(--node-title-header-padding, calc(66px * var(--ui-font-scale)));
   }
 
   .node.hasHeaderWarning:not(.isComment) .grab-area {
@@ -489,7 +489,8 @@ export const nodeStyles = css`
     .changed-button,
     .edit-button,
     .node-prefab-instance-indicator,
-    .node-header-warning {
+    .node-header-warning,
+    .tool-call-continuation-indicator {
       background-color: transparent;
       border: none;
       color: var(--node-bg-foreground);
@@ -514,6 +515,12 @@ export const nodeStyles = css`
       cursor: help;
       pointer-events: auto;
       width: calc(20px * var(--ui-font-scale));
+    }
+
+    .tool-call-continuation-indicator {
+      cursor: help;
+      pointer-events: auto;
+      width: calc(24px * var(--ui-font-scale));
     }
 
     .node-prefab-instance-indicator {
@@ -545,6 +552,12 @@ export const nodeStyles = css`
   }
 
   .node.hasHeaderWarning:not(.isComment) .title-controls {
+    gap: calc(3px * var(--ui-font-scale));
+    min-width: calc(66px * var(--ui-font-scale));
+    width: max-content;
+  }
+
+  .node.hasToolCallContinuationIndicator:not(.isComment) .title-controls {
     gap: calc(3px * var(--ui-font-scale));
     min-width: calc(66px * var(--ui-font-scale));
     width: max-content;
@@ -591,6 +604,12 @@ export const nodeStyles = css`
   }
 
   .title-controls .node-prefab-instance-tooltip {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .title-controls .tool-call-continuation-tooltip {
     position: static;
     opacity: 1;
     pointer-events: auto;

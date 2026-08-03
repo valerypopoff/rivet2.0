@@ -5,6 +5,7 @@ import {
   type NodeGraph,
   type NodeRunActivityDescriptor,
   type PortId,
+  type RootRunId,
 } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { type FC, useEffect, useMemo, useState } from 'react';
@@ -49,6 +50,7 @@ import {
   type ResolveRunActivityInvocation,
 } from './buildRunActivityViewModel.js';
 import type { RunActivityInvocationIdentity, RunActivityItemViewModel, RunActivityToolResultTarget } from './types.js';
+import { shouldCloseRunActivityInspector } from './runActivityInspectorLifecycle.js';
 
 const LIVE_DURATION_REFRESH_MS = 250;
 const NARROW_VIEWPORT_QUERY = '(max-width: 720px)';
@@ -67,6 +69,7 @@ export const RunActivityRenderer: FC = () => {
   const [inspectedProcess, setInspectedProcess] = useState<{
     node: ChartNode;
     processData: ProcessDataForNode;
+    rootRunId: RootRunId;
   }>();
   const goToNode = useGoToNode();
   const setOpenOverlay = useSetAtom(overlayOpenState);
@@ -76,7 +79,14 @@ export const RunActivityRenderer: FC = () => {
   const setEditingNode = useSetAtom(editingNodeState);
   const setFullscreenOutputNode = useSetAtom(fullscreenOutputNodeState);
   const selectedRoot = selectRunActivityRoot(journal);
+  const inspectedRootRunId = inspectedProcess?.rootRunId;
   const columnWidths = useMemo(() => normalizeRunActivityColumnWidths(storedColumnWidths), [storedColumnWidths]);
+
+  useEffect(() => {
+    if (shouldCloseRunActivityInspector({ drawerOpen: open, inspectedRootRunId, selectedRootRunId: selectedRoot?.rootRunId })) {
+      setInspectedProcess(undefined);
+    }
+  }, [inspectedRootRunId, open, selectedRoot?.rootRunId]);
 
   // atomWithStorage intentionally tolerates old browser values. Repair an
   // invalid record once at the owning UI boundary rather than letting a stale
@@ -228,7 +238,7 @@ export const RunActivityRenderer: FC = () => {
     if (!sourceNode || !processData) return;
     const effectiveNode = resolveNodePrefabInstance(project, sourceNode);
     if (!buildLlmInvocationTrace(effectiveNode, processData)) return;
-    setInspectedProcess({ node: effectiveNode, processData });
+    setInspectedProcess({ node: effectiveNode, processData, rootRunId: item.identity.rootRunId });
   });
 
   const handleCopyDiagnostics = useStableCallback(() => {

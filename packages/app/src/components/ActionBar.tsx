@@ -5,7 +5,12 @@ import { useAtomValue } from 'jotai';
 import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useSaveRecording } from '../hooks/useSaveRecording';
 import { graphRunningState, graphPausedState } from '../state/dataFlow';
-import { lastRecordingState, loadedRecordingState, recordingPlaybackStartingState } from '../state/execution';
+import {
+  getLoadedRecordingForProject,
+  lastRecordingState,
+  loadedRecordingState,
+  recordingPlaybackStartingState,
+} from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
 import MultiplyIcon from 'majesticons/line/multiply-line.svg?react';
 import PauseIcon from 'majesticons/line/pause-circle-line.svg?react';
@@ -175,7 +180,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const graphRunning = useAtomValue(graphRunningState);
   const graphPaused = useAtomValue(graphPausedState);
 
-  const loadedRecording = useAtomValue(loadedRecordingState);
+  const loadedRecording = getLoadedRecordingForProject(useAtomValue(loadedRecordingState), projectMetadata.id);
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const { unloadRecording } = useLoadRecording();
   const [menuIsOpen, toggleMenuIsOpen] = useToggle();

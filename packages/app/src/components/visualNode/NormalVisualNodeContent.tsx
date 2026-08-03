@@ -46,6 +46,7 @@ import { NodeHeaderWarningIcon } from './NodeHeaderWarningIcon.js';
 import { ConditionalIfPort } from './ConditionalIfPort.js';
 import { viewingProjectComparisonNodeState } from '../../state/projectComparison.js';
 import { SubgraphLinkIcon } from './SubgraphLinkIcon.js';
+import { ToolCallContinuationIndicator } from './ToolCallContinuationIndicator.js';
 
 export const NormalVisualNodeContent: FC<{
   heightCache: HeightCache;
@@ -84,12 +85,7 @@ export const NormalVisualNodeContent: FC<{
     isNodePrefabInstance = false,
   }) => {
     useDependsOnPlugins();
-    const {
-      onNodeSelected,
-      onNodeSizeChanged,
-      onNodeStartEditing,
-      onResizeFinish,
-    } = useCanvasHandlersContext();
+    const { onNodeSelected, onNodeSizeChanged, onNodeStartEditing, onResizeFinish } = useCanvasHandlersContext();
     const { clientToCanvasPosition } = useCanvasPositioning();
     const setViewingNodeChanges = useSetAtom(viewingNodeChangesState);
     const setViewingProjectComparisonNode = useSetAtom(viewingProjectComparisonNodeState);
@@ -308,6 +304,7 @@ export const NormalVisualNodeContent: FC<{
               </button>
             )}
             <NodeRunningIndicator isRunning={showRunningIndicator} delayMs={0} />
+            {node.type === 'delegateFunctionCall' && <ToolCallContinuationIndicator />}
             {isNodePrefabInstance && (
               <Tooltip className="node-prefab-instance-tooltip" content="Open library node">
                 <button

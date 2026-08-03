@@ -45,6 +45,18 @@ test('local executor clears project-owned browser runtime resources on project c
   assert.match(useLocalExecutorSource, /editorExecutionCachesByProjectId\.current\.delete\(projectId\);/);
 });
 
+test('local recording playback revalidates its captured owner before and after the pre-start yield', () => {
+  assert.match(useLocalExecutorSource, /isCurrentLoadedRecordingForProject/);
+  assert.match(
+    useLocalExecutorSource,
+    /await yieldToMacrotask\(\);[\s\S]*store\.get\(loadedRecordingState\),[\s\S]*recordingToReplay,[\s\S]*runProjectId/,
+  );
+  assert.match(
+    useLocalExecutorSource,
+    /if \(recordingToReplay\) \{[\s\S]*isCurrentLoadedRecordingForProject\([\s\S]*setRecordingPlaybackStarting\(false\)/,
+  );
+});
+
 test('local executor stops hidden browser snapshots when startup fails before a terminal event', () => {
   assert.match(
     useLocalExecutorSource,

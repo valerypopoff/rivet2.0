@@ -362,6 +362,11 @@ paths and should not be used as the primary target for new provider refactors.
   node return immediately when the remaining work must not hold the foreground
   path open, while keeping it owned by the root run. Each invocation's scalar
   tool-result downstream branches run after that invocation finishes.
+- The Delegate Tool Call canvas header includes a non-interactive two-lane
+  request/response icon: the upper arrow represents incoming LLM tool calls and
+  the lower arrow represents results returning to the LLM, which can continue
+  or issue another call. It is presentation-only and appears at normal and
+  zoomed-out canvas detail levels.
 - Delegate Tool Call exposes **Tool Name** and **Tool Arguments** for each
   completed invocation. Tool Arguments is the normalized object actually passed
   to the handler, including parsed JSON-string arguments from legacy call

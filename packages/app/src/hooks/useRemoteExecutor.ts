@@ -334,6 +334,9 @@ export function useRemoteExecutor() {
         break;
       case 'progress':
         executorSession.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.progress(data);
+        }
         break;
       case 'graphStart':
         captureRemoteResponseTraceRootExecution(responseTraceByRequestIdRef.current, requestId, data);
@@ -359,12 +362,12 @@ export function useRemoteExecutor() {
         break;
       case 'pause':
         if (shouldDispatchExecutionEvent) {
-          eventDispatcher.pause();
+          eventDispatcher.pause(data);
         }
         break;
       case 'resume':
         if (shouldDispatchExecutionEvent) {
-          eventDispatcher.resume();
+          eventDispatcher.resume(data);
         }
         break;
       case 'error':

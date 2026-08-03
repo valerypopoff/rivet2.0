@@ -9,6 +9,7 @@ import { replayExecutionRecording } from '../../src/model/RecordingPlayer.js';
 import type { GraphExecutionMetadata, GraphRunId, ProcessId, RootRunId } from '../../src/model/ProcessContext.js';
 import { ExecutionRecorder } from '../../src/recording/ExecutionRecorder.js';
 import type { ChartNode, NodeId, PortId } from '../../src/model/NodeBase.js';
+import type { UserInputNode } from '../../src/model/nodes/UserInputNode.js';
 import { text } from 'node:stream/consumers';
 import { Readable } from 'node:stream';
 
@@ -74,6 +75,16 @@ async function addEvents(recorder: ExecutionRecorder, options: { includeIntermed
   });
 
   if (includeIntermediateEvents) {
+    await emitter.emit('userInput', {
+      node: node as UserInputNode,
+      inputs: { [userInputPort]: { type: 'string', value: 'asdf' } },
+      callback: () => {},
+      processId,
+      inputStrings: ['Continue?'],
+      renderingType: 'markdown',
+      execution,
+    });
+
     await emitter.emit('partialOutput', {
       node,
       outputs: { output: { type: 'string', value: 'partial' } },
@@ -248,6 +259,9 @@ void describe('ExecutionRecorder', () => {
       execution?: GraphExecutionMetadata;
       processId?: ProcessId;
       index?: number;
+      inputStrings?: string[];
+      renderingType?: 'text' | 'markdown';
+      isReplay?: true;
     }> = [];
 
     replayEmitter.on('graphStart', (data: ProcessEvents['graphStart']) => {
@@ -259,6 +273,16 @@ void describe('ExecutionRecorder', () => {
         execution: data.execution,
         index: data.index,
         processId: data.processId,
+      });
+    });
+    replayEmitter.on('userInput', (data: ProcessEvents['userInput']) => {
+      replayedEvents.push({
+        type: 'userInput',
+        execution: data.execution,
+        processId: data.processId,
+        inputStrings: data.inputStrings,
+        renderingType: data.renderingType,
+        isReplay: data.isReplay,
       });
     });
     replayEmitter.on('progress', (data: ProcessEvents['progress']) => {
@@ -293,24 +317,177 @@ void describe('ExecutionRecorder', () => {
     });
 
     assert.deepEqual(
-      replayedEvents.map((event) => ({
-        ...event,
-        execution: event.execution
-          ? {
-              graphId: event.execution.graphId,
-              graphRunId: event.execution.graphRunId,
-              rootRunId: event.execution.rootRunId,
-            }
-          : undefined,
-      })),
+      replayedEvents.map(({ execution: _execution, ...event }) => event),
       [
-        { type: 'graphStart', execution: execution },
-        { type: 'partialOutput', execution: execution, index: 0, processId },
-        { type: 'progress', execution: execution, processId },
-        { type: 'nodeOutputsCleared', execution: execution, processId },
-        { type: 'graphFinish', execution: execution },
+        { type: 'graphStart' },
+        { type: 'userInput', processId, inputStrings: ['Continue?'], renderingType: 'markdown', isReplay: true },
+        { type: 'partialOutput', index: 0, processId },
+        { type: 'progress', processId },
+        { type: 'nodeOutputsCleared', processId },
+        { type: 'graphFinish' },
       ],
     );
+
+    const replayedExecutions = replayedEvents
+      .map((event) => event.execution)
+      .filter((replayedExecution): replayedExecution is GraphExecutionMetadata => replayedExecution !== undefined);
+    assert.equal(replayedExecutions.length, 6);
+    assert.ok(replayedExecutions.every((replayedExecution) => replayedExecution.graphId === execution.graphId));
+    assert.ok(
+      replayedExecutions.every(
+        (replayedExecution) =>
+          replayedExecution.rootRunId === replayedExecutions[0]!.rootRunId &&
+          replayedExecution.graphRunId === replayedExecutions[0]!.graphRunId,
+      ),
+    );
+    assert.notEqual(replayedExecutions[0]!.rootRunId, execution.rootRunId);
+    assert.notEqual(replayedExecutions[0]!.graphRunId, execution.graphRunId);
+  });
+
+  void it('creates fresh replay identities per playback while preserving nested execution lineage', async () => {
+    const subgraphId = 'subgraph-id' as GraphId;
+    const rootNode = { id: 'root-node' as NodeId, type: 'test' } as ChartNode;
+    const subgraphNode = { id: 'subgraph-node' as NodeId, type: 'test' } as ChartNode;
+    const rootGraph: NodeGraph = {
+      metadata: { id: graph.metadata!.id! },
+      nodes: [rootNode],
+      connections: [],
+    };
+    const subgraph: NodeGraph = {
+      metadata: { id: subgraphId },
+      nodes: [subgraphNode],
+      connections: [],
+    };
+    const rootExecution: GraphExecutionMetadata = {
+      graphId: rootGraph.metadata!.id!,
+      graphRunId: 'recorded-root-graph-run' as GraphRunId,
+      rootRunId: 'recorded-root-run' as RootRunId,
+    };
+    const subgraphExecution: GraphExecutionMetadata = {
+      graphId: subgraphId,
+      graphRunId: 'recorded-subgraph-run' as GraphRunId,
+      rootRunId: rootExecution.rootRunId,
+      parentGraphRunId: rootExecution.graphRunId,
+      executor: {
+        nodeId: rootNode.id,
+        parentGraphId: rootExecution.graphId,
+        processId: 'parent-process' as ProcessId,
+      },
+    };
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    await sourceEmitter.emit('graphStart', { graph: rootGraph, inputs: {}, execution: rootExecution });
+    await sourceEmitter.emit('graphStart', { graph: subgraph, inputs: {}, execution: subgraphExecution });
+    await sourceEmitter.emit('nodeStart', {
+      node: subgraphNode,
+      inputs: {},
+      processId,
+      execution: subgraphExecution,
+    });
+    await sourceEmitter.emit('nodeFinish', {
+      node: subgraphNode,
+      outputs: {},
+      processId,
+      execution: subgraphExecution,
+    });
+    await sourceEmitter.emit('graphFinish', { graph: subgraph, outputs: {}, execution: subgraphExecution });
+    await sourceEmitter.emit('graphFinish', { graph: rootGraph, outputs: {}, execution: rootExecution });
+    await sourceEmitter.emit('done', { results: {} });
+
+    const replay = async () => {
+      const replayEmitter = new Emittery<ProcessEvents>();
+      const replayedGraphExecutions: GraphExecutionMetadata[] = [];
+      const replayedNodeExecutions: GraphExecutionMetadata[] = [];
+      replayEmitter.on('graphStart', (data) => replayedGraphExecutions.push(data.execution));
+      replayEmitter.on('nodeFinish', (data) => replayedNodeExecutions.push(data.execution));
+      await replayExecutionRecording({
+        emitter: replayEmitter,
+        erroredNodes: new Map(),
+        graphInputs: {},
+        graphOutputs: {},
+        isAborted: () => false,
+        nodeResults: new Map(),
+        project: {
+          metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: rootGraph.metadata!.id! },
+          graphs: { [rootGraph.metadata!.id!]: rootGraph, [subgraphId]: subgraph },
+        } as any,
+        recorder,
+        recordingPlaybackChatLatency: 0,
+        setContextValues: () => {},
+        setGraphInputs: () => {},
+        setGraphOutputs: () => {},
+        setRunning: () => {},
+        visitedNodes: new Set(),
+        waitUntilUnpaused: async () => {},
+      });
+      return { replayedGraphExecutions, replayedNodeExecutions };
+    };
+
+    const firstPlayback = await replay();
+    const secondPlayback = await replay();
+    const [firstRoot, firstSubgraph] = firstPlayback.replayedGraphExecutions;
+    const [secondRoot, secondSubgraph] = secondPlayback.replayedGraphExecutions;
+
+    assert.equal(firstPlayback.replayedGraphExecutions.length, 2);
+    assert.equal(firstPlayback.replayedNodeExecutions.length, 1);
+    assert.equal(firstRoot!.graphId, rootExecution.graphId);
+    assert.equal(firstSubgraph!.graphId, subgraphExecution.graphId);
+    assert.equal(firstSubgraph!.rootRunId, firstRoot!.rootRunId);
+    assert.equal(firstSubgraph!.parentGraphRunId, firstRoot!.graphRunId);
+    assert.deepEqual(firstSubgraph!.executor, subgraphExecution.executor);
+    assert.equal(firstPlayback.replayedNodeExecutions[0]!.graphRunId, firstSubgraph!.graphRunId);
+    assert.notEqual(firstRoot!.rootRunId, rootExecution.rootRunId);
+    assert.notEqual(firstRoot!.graphRunId, rootExecution.graphRunId);
+    assert.notEqual(firstSubgraph!.graphRunId, subgraphExecution.graphRunId);
+    assert.notEqual(secondRoot!.rootRunId, firstRoot!.rootRunId);
+    assert.notEqual(secondRoot!.graphRunId, firstRoot!.graphRunId);
+    assert.notEqual(secondSubgraph!.graphRunId, firstSubgraph!.graphRunId);
+    assert.equal(secondSubgraph!.parentGraphRunId, secondRoot!.graphRunId);
+  });
+
+  void it('adopts the playback processor identity for the first recorded root', async () => {
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution });
+    await sourceEmitter.emit('nodeStart', { node, inputs: {}, processId, execution });
+    await sourceEmitter.emit('nodeFinish', { node, outputs: {}, processId, execution });
+    await sourceEmitter.emit('done', { results: {} });
+
+    const initialReplayExecution: GraphExecutionMetadata = {
+      graphId: graph.metadata!.id!,
+      graphRunId: 'playback-graph-run' as GraphRunId,
+      rootRunId: 'playback-root-run' as RootRunId,
+    };
+    const replayEmitter = new Emittery<ProcessEvents>();
+    const replayedExecutions: GraphExecutionMetadata[] = [];
+    replayEmitter.on('graphStart', (data) => replayedExecutions.push(data.execution));
+    replayEmitter.on('nodeFinish', (data) => replayedExecutions.push(data.execution));
+
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      initialReplayExecution,
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+
+    assert.deepEqual(replayedExecutions, [initialReplayExecution, initialReplayExecution]);
   });
 
   void it('preserves result origins through serialized executor events, recording, and replay', async () => {
@@ -482,7 +659,25 @@ void describe('ExecutionRecorder', () => {
       waitUntilUnpaused: async () => {},
     });
 
-    assert.deepEqual(replayed, [modelEvent, toolEvent]);
+    assert.equal(replayed.length, 2);
+    const [replayedModelEvent, replayedToolEvent] = replayed as [
+      ProcessEvents['llmCallFinished'],
+      ProcessEvents['toolCallFinished'],
+    ];
+    assert.deepEqual(
+      { ...replayedModelEvent, execution: undefined },
+      { ...modelEvent, execution: undefined },
+    );
+    assert.deepEqual(
+      { ...replayedToolEvent, execution: undefined },
+      { ...toolEvent, execution: undefined },
+    );
+    assert.equal(replayedModelEvent.execution.graphId, execution.graphId);
+    assert.equal(replayedToolEvent.execution.graphId, execution.graphId);
+    assert.equal(replayedModelEvent.execution.rootRunId, replayedToolEvent.execution.rootRunId);
+    assert.equal(replayedModelEvent.execution.graphRunId, replayedToolEvent.execution.graphRunId);
+    assert.notEqual(replayedModelEvent.execution.rootRunId, execution.rootRunId);
+    assert.notEqual(replayedModelEvent.execution.graphRunId, execution.graphRunId);
     assert.equal('rawUsage' in (replayed[0] as object), false);
     assert.equal('arguments' in (replayed[1] as object), false);
     assert.equal('result' in (replayed[1] as object), false);
@@ -564,6 +759,56 @@ void describe('ExecutionRecorder', () => {
       waitUntilUnpaused: async () => {},
     });
     assert.deepEqual(replayedConnections, inputConnections);
+  });
+
+  void it('re-emits recorded pause and resume events without pausing playback itself', async () => {
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution });
+    await sourceEmitter.emit('pause', undefined);
+    await sourceEmitter.emit('resume', undefined);
+    await sourceEmitter.emit('done', { results: {} });
+
+    const replayEmitter = new Emittery<ProcessEvents>();
+    const replayedLifecycle: string[] = [];
+    const replayedPauseData: ProcessEvents['pause'][] = [];
+    const replayedResumeData: ProcessEvents['resume'][] = [];
+    replayEmitter.on('graphStart', () => replayedLifecycle.push('graphStart'));
+    replayEmitter.on('pause', (data) => {
+      replayedLifecycle.push('pause');
+      replayedPauseData.push(data);
+    });
+    replayEmitter.on('resume', (data) => {
+      replayedLifecycle.push('resume');
+      replayedResumeData.push(data);
+    });
+    replayEmitter.on('done', () => replayedLifecycle.push('done'));
+
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+
+    assert.deepEqual(replayedLifecycle, ['graphStart', 'pause', 'resume', 'done']);
+    assert.deepEqual(replayedPauseData, [{ isReplay: true }]);
+    assert.deepEqual(replayedResumeData, [{ isReplay: true }]);
   });
 
   void it('derives legacy node finish duration from recorded timestamps when missing', async () => {
@@ -723,6 +968,165 @@ void describe('ExecutionRecorder', () => {
       recorder.events.map((event) => event.type),
       ['abort'],
     );
+  });
+
+  void it('emits a scoped failed replay lifecycle when the recording cannot resolve its first graph', async () => {
+    const missingGraphId = 'missing-recorded-graph' as GraphId;
+    const missingExecution: GraphExecutionMetadata = {
+      graphId: missingGraphId,
+      graphRunId: 'missing-recorded-graph-run' as GraphRunId,
+      rootRunId: 'missing-recorded-root-run' as RootRunId,
+    };
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    await sourceEmitter.emit('graphStart', {
+      graph: { metadata: { id: missingGraphId }, nodes: [], connections: [] },
+      inputs: {},
+      execution: missingExecution,
+    });
+
+    const replayEmitter = new Emittery<ProcessEvents>();
+    const graphErrors: ProcessEvents['graphError'][] = [];
+    const errors: ProcessEvents['error'][] = [];
+    replayEmitter.on('graphError', (data) => graphErrors.push(data));
+    replayEmitter.on('error', (data) => errors.push(data));
+    let running = true;
+
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: (nextRunning) => {
+        running = nextRunning;
+      },
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+    await Promise.resolve();
+
+    assert.equal(graphErrors.length, 1);
+    assert.equal(errors.length, 1);
+    assert.equal(graphErrors[0]!.graph.metadata!.id, graph.metadata!.id);
+    assert.notEqual(graphErrors[0]!.execution.rootRunId, missingExecution.rootRunId);
+    assert.match(String(graphErrors[0]!.error), /missing-recorded-graph/);
+    assert.equal(running, false);
+  });
+
+  void it('materializes scoped replay lifecycles for terminal-only recordings', async () => {
+    const replayTargetGraph: NodeGraph = {
+      ...graph,
+      metadata: { id: 'selected-replay-graph' as GraphId },
+    };
+    const results = { output: { type: 'string' as const, value: 'terminal output' } };
+
+    const scenarios = [
+      {
+        name: 'completed',
+        expectedEvents: ['graphFinish', 'done'],
+        expectedGraphEvent: 'graphFinish',
+        record: async (emitter: Emittery<ProcessEvents>) => {
+          await emitter.emit('done', { results });
+        },
+      },
+      {
+        name: 'failed',
+        expectedEvents: ['graphError', 'error'],
+        expectedGraphEvent: 'graphError',
+        record: async (emitter: Emittery<ProcessEvents>) => {
+          await emitter.emit('error', { error: new Error('preflight validation failed') });
+        },
+      },
+      {
+        name: 'aborted',
+        expectedEvents: ['graphAbort', 'abort'],
+        expectedGraphEvent: 'graphAbort',
+        record: async (emitter: Emittery<ProcessEvents>) => {
+          await emitter.emit('abort', { successful: false, error: 'stopped before graph start' });
+        },
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const recorder = new ExecutionRecorder();
+      const sourceEmitter = new Emittery<ProcessEvents>();
+      recorder.record(sourceEmitter as unknown as GraphProcessor);
+      await scenario.record(sourceEmitter);
+
+      const replayEmitter = new Emittery<ProcessEvents>();
+      const lifecycleEvents: string[] = [];
+      let terminalGraphId: GraphId | undefined;
+      let terminalError: Error | string | undefined;
+      let terminalOutputs: Record<string, DataValue> | undefined;
+      let running = true;
+
+      replayEmitter.on('graphFinish', (event) => {
+        lifecycleEvents.push('graphFinish');
+        terminalGraphId = event.graph.metadata?.id;
+        terminalOutputs = event.outputs;
+      });
+      replayEmitter.on('graphError', (event) => {
+        lifecycleEvents.push('graphError');
+        terminalGraphId = event.graph.metadata?.id;
+        terminalError = event.error;
+      });
+      replayEmitter.on('graphAbort', (event) => {
+        lifecycleEvents.push('graphAbort');
+        terminalGraphId = event.graph.metadata?.id;
+        terminalError = event.error;
+      });
+      replayEmitter.on('done', () => lifecycleEvents.push('done'));
+      replayEmitter.on('error', () => lifecycleEvents.push('error'));
+      replayEmitter.on('abort', () => lifecycleEvents.push('abort'));
+
+      await replayExecutionRecording({
+        emitter: replayEmitter,
+        erroredNodes: new Map(),
+        graphInputs: {},
+        graphOutputs: {},
+        fallbackGraphId: replayTargetGraph.metadata!.id!,
+        isAborted: () => false,
+        nodeResults: new Map(),
+        project: {
+          metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+          graphs: { [graph.metadata!.id!]: graph, [replayTargetGraph.metadata!.id!]: replayTargetGraph },
+        } as any,
+        recorder,
+        recordingPlaybackChatLatency: 0,
+        setContextValues: () => {},
+        setGraphInputs: () => {},
+        setGraphOutputs: () => {},
+        setRunning: (nextRunning) => {
+          running = nextRunning;
+        },
+        visitedNodes: new Set(),
+        waitUntilUnpaused: async () => {},
+      });
+      await Promise.resolve();
+
+      assert.deepEqual(lifecycleEvents, scenario.expectedEvents, scenario.name);
+      assert.equal(terminalGraphId, replayTargetGraph.metadata?.id, scenario.name);
+      if (scenario.name === 'completed') {
+        assert.deepEqual(terminalOutputs, results);
+      } else if (scenario.name === 'failed') {
+        assert.match(String(terminalError), /preflight validation failed/);
+      } else {
+        assert.match(String(terminalError), /stopped before graph start/);
+      }
+      assert.equal(running, false, scenario.name);
+    }
   });
 
   void it('preserves remote socket node finish duration', async () => {

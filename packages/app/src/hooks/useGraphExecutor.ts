@@ -1,7 +1,8 @@
 import { useAtomValue } from 'jotai';
 import { useEffect } from 'react';
-import { loadedRecordingState } from '../state/execution';
+import { getLoadedRecordingForProject, loadedRecordingState } from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
+import { projectState } from '../state/savedGraphs.js';
 import { canRunGraphFromEditor, shouldUseRemoteExecutor } from '../state/selectors/executionSelectors.js';
 import { useLocalExecutor } from './useLocalExecutor';
 import { useRemoteExecutor } from './useRemoteExecutor';
@@ -12,7 +13,8 @@ import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 
 export function useGraphExecutor() {
   const selectedExecutor = useAtomValue(selectedExecutorState);
-  const loadedRecording = useAtomValue(loadedRecordingState);
+  const project = useAtomValue(projectState);
+  const loadedRecording = getLoadedRecordingForProject(useAtomValue(loadedRecordingState), project.metadata.id);
   const localExecutor = useLocalExecutor();
   const remoteExecutor = useRemoteExecutor();
   const session = useExecutorSessionState();
