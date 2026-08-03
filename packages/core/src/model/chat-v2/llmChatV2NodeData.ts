@@ -49,7 +49,6 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   useResponseSchemaNameInput?: boolean;
   responseSchemaDescription?: string;
   useResponseSchemaDescriptionInput?: boolean;
-  failProfileOnNonObjectResponse?: boolean;
   toolChoice?: LLMChatV2ToolChoiceMode;
   toolChoiceFunction?: string;
   parallelToolCalls?: boolean;
@@ -61,6 +60,7 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   outputRequestStatus?: boolean;
   outputRequestError?: boolean;
   outputRequestBody?: boolean;
+  outputResponseBody?: boolean;
 };
 
 export type LLMChatV2NodeData = LLMChatV2NodeConfigData;
@@ -133,7 +133,6 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     useResponseSchemaNameInput: false,
     responseSchemaDescription: '',
     useResponseSchemaDescriptionInput: false,
-    failProfileOnNonObjectResponse: false,
     toolChoice: '',
     toolChoiceFunction: '',
     parallelToolCalls: false,
@@ -145,6 +144,7 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     outputRequestStatus: false,
     outputRequestError: false,
     outputRequestBody: false,
+    outputResponseBody: false,
   };
 }
 

@@ -138,9 +138,11 @@ describe('chatV2Outputs', () => {
       requestStatuses: [503, 200],
       requestErrors: ['503 HTTP error'],
       requestBodies: [{ model: 'gpt-4o', messages: [{ role: 'user', content: 'Hello' }] }],
+      responseBodies: [{ id: 'response-1', output: 'Hello' }],
       outputUsage: true,
       outputReasoning: true,
       outputRequestStatus: true,
+      outputResponseBody: true,
       includeFunctionCalls: true,
       retryOnNon200: true,
       responseFormat: 'json',
@@ -171,6 +173,10 @@ describe('chatV2Outputs', () => {
       type: 'object',
       value: { model: 'gpt-4o', messages: [{ role: 'user', content: 'Hello' }] },
     });
+    assert.deepEqual(outputs['responseBody' as PortId], {
+      type: 'object',
+      value: { id: 'response-1', output: 'Hello' },
+    });
   });
 
   it('keeps optional successful outputs excluded when the provider returns no value for them', () => {
@@ -186,9 +192,11 @@ describe('chatV2Outputs', () => {
       requestStatuses: [],
       requestErrors: [],
       requestBodies: [],
+      responseBodies: [],
       outputUsage: true,
       outputReasoning: true,
       outputRequestStatus: true,
+      outputResponseBody: true,
       includeFunctionCalls: true,
       retryOnNon200: false,
       responseFormat: undefined,
@@ -218,6 +226,10 @@ describe('chatV2Outputs', () => {
       type: 'control-flow-excluded',
       value: undefined,
     });
+    assert.deepEqual(outputs['responseBody' as PortId], {
+      type: 'control-flow-excluded',
+      value: undefined,
+    });
   });
 
   it('keeps response status, response error, and request body independently optional', () => {
@@ -233,11 +245,13 @@ describe('chatV2Outputs', () => {
       requestStatuses: [],
       requestErrors: [],
       requestBodies: [{ model: 'test' }],
+      responseBodies: [{ id: 'response-1' }],
       outputUsage: false,
       outputReasoning: false,
       outputRequestStatus: true,
       outputRequestError: false,
       outputRequestBody: false,
+      outputResponseBody: false,
       includeFunctionCalls: false,
       retryOnNon200: false,
       responseFormat: undefined,
@@ -246,6 +260,7 @@ describe('chatV2Outputs', () => {
     assert.deepEqual(outputs['requestStatus' as PortId], { type: 'number', value: 202 });
     assert.equal('requestError' in outputs, false);
     assert.equal('requestBody' in outputs, false);
+    assert.equal('responseBody' in outputs, false);
   });
 
   it('does not emit tool calls when Tool use did not declare that output', () => {
@@ -279,11 +294,13 @@ describe('chatV2Outputs', () => {
       requestStatuses: [429, 429],
       requestErrors: ['first 429', 'second 429'],
       requestBodies: [{ attempt: 1 }, { attempt: 2 }],
+      responseBodies: [{ error: { message: 'first' } }, { error: { message: 'second' } }],
       outputUsage: true,
       outputReasoning: true,
       outputRequestStatus: true,
       outputRequestError: true,
       outputRequestBody: true,
+      outputResponseBody: true,
       includeFunctionCalls: true,
       retryOnNon200: true,
     });
@@ -299,6 +316,10 @@ describe('chatV2Outputs', () => {
     assert.deepEqual(outputs['requestBody' as PortId], {
       type: 'object[]',
       value: [{ attempt: 1 }, { attempt: 2 }],
+    });
+    assert.deepEqual(outputs['responseBody' as PortId], {
+      type: 'object[]',
+      value: [{ error: { message: 'first' } }, { error: { message: 'second' } }],
     });
     assert.deepEqual(outputs['response' as PortId], {
       type: 'control-flow-excluded',
@@ -326,6 +347,7 @@ describe('chatV2Outputs', () => {
       outputRequestStatus: false,
       outputRequestError: true,
       outputRequestBody: false,
+      outputResponseBody: false,
       includeFunctionCalls: false,
       retryOnNon200: false,
     });

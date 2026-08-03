@@ -8,7 +8,6 @@ describe('materializeLLMResponse', () => {
       rawText: 'not used',
       structuredOutput: { value: true },
       responseFormat: 'json_schema',
-      requireObject: true,
     });
     assert.deepEqual(result.value, { type: 'object', value: { value: true } });
     assert.equal(result.source, 'sdk-structured');
@@ -20,11 +19,9 @@ describe('materializeLLMResponse', () => {
       rawText: '"a JSON string"',
       structuredOutput: undefined,
       responseFormat: 'json_schema',
-      requireObject: true,
     });
     assert.deepEqual(result.value, { type: 'string', value: 'a JSON string' });
     assert.equal(result.source, 'text-json');
     assert.equal(result.validation, 'invalid');
-    assert.match(result.validationError ?? '', /Parsed Response type: string/);
   });
 });

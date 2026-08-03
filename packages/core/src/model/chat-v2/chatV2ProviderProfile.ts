@@ -137,6 +137,7 @@ export async function createResolvedChatV2Provider(options: {
   headers?: Record<string, string> | undefined;
   credential: ChatV2CredentialResult;
   onRequestBody?: CreateChatV2ModelOptions['onRequestBody'];
+  onResponseBody?: CreateChatV2ModelOptions['onResponseBody'];
   transformRequestBody?: CreateChatV2ModelOptions['transformRequestBody'];
 }): Promise<{
   profile: ChatV2ProviderProfile;
@@ -151,6 +152,7 @@ export async function createResolvedChatV2Provider(options: {
     ...config,
     apiKey: options.credential.value,
     onRequestBody: options.onRequestBody,
+    onResponseBody: options.onResponseBody,
     transformRequestBody: options.transformRequestBody,
   });
 

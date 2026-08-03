@@ -10,6 +10,7 @@ import { isChatV2FiniteNonNegativeNumber } from './chatV2UsageAccounting.js';
 import {
   shouldOutputChatV2RequestBody,
   shouldOutputChatV2RequestError,
+  shouldOutputChatV2ResponseBody,
   type ChatV2NormalizedUsage,
   type ChatV2ReasoningOutput,
   type RunChatV2PipelineOptions,
@@ -18,6 +19,7 @@ import {
 const CHAT_V2_REQUEST_STATUS_PORT_ID = 'requestStatus' as PortId;
 const CHAT_V2_REQUEST_ERROR_PORT_ID = 'requestError' as PortId;
 const CHAT_V2_REQUEST_BODY_PORT_ID = 'requestBody' as PortId;
+const CHAT_V2_RESPONSE_BODY_PORT_ID = 'responseBody' as PortId;
 
 type ControlFlowExcludedOutput = { type: 'control-flow-excluded'; value: undefined };
 
@@ -28,6 +30,7 @@ type ChatV2CommonOutputOptions = Pick<
   | 'outputRequestStatus'
   | 'outputRequestError'
   | 'outputRequestBody'
+  | 'outputResponseBody'
   | 'includeFunctionCalls'
   | 'functionCallMode'
   | 'retryOnNon200'
@@ -46,6 +49,7 @@ type CreateChatV2CommonOutputsOptions = ChatV2CommonOutputOptions & {
   requestStatuses: number[];
   requestErrors: string[];
   requestBodies?: unknown[] | undefined;
+  responseBodies?: unknown[] | undefined;
 };
 
 type CreateChatV2ProviderFailureOutputsOptions = Pick<
@@ -55,6 +59,7 @@ type CreateChatV2ProviderFailureOutputsOptions = Pick<
   | 'outputRequestStatus'
   | 'outputRequestError'
   | 'outputRequestBody'
+  | 'outputResponseBody'
   | 'includeFunctionCalls'
   | 'retryOnNon200'
 > & {
@@ -64,6 +69,7 @@ type CreateChatV2ProviderFailureOutputsOptions = Pick<
   requestStatuses: number[];
   requestErrors: string[];
   requestBodies?: unknown[] | undefined;
+  responseBodies?: unknown[] | undefined;
 };
 
 function toFunctionCallOutputValue(functionCall: StreamedFunctionCall) {
@@ -137,7 +143,6 @@ export function createChatV2ResponseOutput(
     rawText: response,
     structuredOutput,
     responseFormat,
-    requireObject: false,
   }).value;
 }
 
@@ -163,12 +168,12 @@ function createChatV2ReasoningOutput(reasoning: ChatV2ReasoningOutput | undefine
     : createControlFlowExcludedOutput();
 }
 
-function createChatV2RequestBodyOutput(requestBodies: unknown[] | undefined): Outputs[PortId] {
-  if (requestBodies == null || requestBodies.length === 0) {
+function createChatV2CapturedBodiesOutput(bodies: unknown[] | undefined): Outputs[PortId] {
+  if (bodies == null || bodies.length === 0) {
     return createControlFlowExcludedOutput();
   }
 
-  return inferType(requestBodies.length === 1 ? requestBodies[0] : requestBodies);
+  return inferType(bodies.length === 1 ? bodies[0] : bodies);
 }
 
 function createChatV2RetryAttemptOutput(
@@ -200,11 +205,13 @@ export function createChatV2CommonOutputs({
   requestStatuses,
   requestErrors,
   requestBodies,
+  responseBodies,
   outputUsage,
   outputReasoning,
   outputRequestStatus,
   outputRequestError,
   outputRequestBody,
+  outputResponseBody,
   includeFunctionCalls,
   functionCallMode,
   retryOnNon200,
@@ -275,7 +282,11 @@ export function createChatV2CommonOutputs({
   }
 
   if (shouldOutputChatV2RequestBody({ outputRequestStatus, outputRequestBody })) {
-    outputs[CHAT_V2_REQUEST_BODY_PORT_ID] = createChatV2RequestBodyOutput(requestBodies);
+    outputs[CHAT_V2_REQUEST_BODY_PORT_ID] = createChatV2CapturedBodiesOutput(requestBodies);
+  }
+
+  if (shouldOutputChatV2ResponseBody({ outputResponseBody })) {
+    outputs[CHAT_V2_RESPONSE_BODY_PORT_ID] = createChatV2CapturedBodiesOutput(responseBodies);
   }
 
   return outputs;
@@ -288,11 +299,13 @@ export function createChatV2ProviderFailureOutputs({
   requestStatuses,
   requestErrors,
   requestBodies,
+  responseBodies,
   outputUsage,
   outputReasoning,
   outputRequestStatus,
   outputRequestError,
   outputRequestBody,
+  outputResponseBody,
   includeFunctionCalls,
   retryOnNon200,
 }: CreateChatV2ProviderFailureOutputsOptions): Outputs {
@@ -329,7 +342,11 @@ export function createChatV2ProviderFailureOutputs({
   }
 
   if (shouldOutputChatV2RequestBody({ outputRequestStatus, outputRequestBody })) {
-    outputs[CHAT_V2_REQUEST_BODY_PORT_ID] = createChatV2RequestBodyOutput(requestBodies);
+    outputs[CHAT_V2_REQUEST_BODY_PORT_ID] = createChatV2CapturedBodiesOutput(requestBodies);
+  }
+
+  if (shouldOutputChatV2ResponseBody({ outputResponseBody })) {
+    outputs[CHAT_V2_RESPONSE_BODY_PORT_ID] = createChatV2CapturedBodiesOutput(responseBodies);
   }
 
   if (includeFunctionCalls) {

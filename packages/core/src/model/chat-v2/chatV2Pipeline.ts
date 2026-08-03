@@ -72,7 +72,7 @@ export class ChatV2ResponseValidationError extends Error {
         'Response format: JSON schema\n' +
         `Parsed Response type: ${responseDataType}\n` +
         'The provider request succeeded, but the final value prepared for the Response port is not an object. ' +
-        'Because "Fail the LLM profile on non-JSON response" is enabled, Rivet rejected this LLM profile. ' +
+        'JSON schema response format requires an object, so Rivet rejected this LLM profile. ' +
         'Retry on non-200 does not apply to this validation failure.',
     );
     this.name = 'ChatV2ResponseValidationError';
@@ -175,6 +175,7 @@ async function runChatV2WithRetry(
     let callWasObserved = false;
     try {
       const result = transportMode === 'generate' ? await generateChatV2(chatOptions) : await streamChatV2(chatOptions);
+      await options.responseBodyCapture?.flush();
       const statusCode = result.requestStatus ?? 200;
       notifyChatV2CallFinished(options, {
         callId,
@@ -210,6 +211,7 @@ async function runChatV2WithRetry(
 
       await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
     } catch (error) {
+      await options.responseBodyCapture?.flush();
       if (!callWasObserved) {
         notifyChatV2CallFinished(options, {
           callId,
@@ -285,11 +287,13 @@ function buildProviderFailureResult(
     requestStatuses: retryRequestStatuses,
     requestErrors: retryRequestErrors,
     requestBodies: options.requestBodies,
+    responseBodies: options.responseBodies,
     outputUsage: plan.output.outputUsage,
     outputReasoning: plan.output.outputReasoning,
     outputRequestStatus: plan.output.outputRequestStatus,
     outputRequestError: plan.output.outputRequestError,
     outputRequestBody: plan.output.outputRequestBody,
+    outputResponseBody: plan.output.outputResponseBody,
     includeFunctionCalls: plan.output.includeFunctionCalls,
     retryOnNon200: plan.retry.enabled,
   });
@@ -370,11 +374,13 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
                   requestStatuses: [],
                   requestErrors: [],
                   requestBodies: undefined,
+                  responseBodies: undefined,
                   outputUsage: false,
                   outputReasoning: false,
                   outputRequestStatus: false,
                   outputRequestError: false,
                   outputRequestBody: false,
+                  outputResponseBody: false,
                   includeFunctionCalls: plan.output.includeFunctionCalls,
                   functionCallMode: plan.output.functionCallMode,
                   retryOnNon200: false,
@@ -427,11 +433,13 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
     requestStatuses,
     requestErrors,
     requestBodies: options.requestBodies,
+    responseBodies: options.responseBodies,
     outputUsage: plan.output.outputUsage,
     outputReasoning: plan.output.outputReasoning,
     outputRequestStatus: plan.output.outputRequestStatus,
     outputRequestError: plan.output.outputRequestError,
     outputRequestBody: plan.output.outputRequestBody,
+    outputResponseBody: plan.output.outputResponseBody,
     includeFunctionCalls: plan.output.includeFunctionCalls,
     functionCallMode: plan.output.functionCallMode,
     retryOnNon200: plan.retry.enabled,
@@ -479,16 +487,11 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
   // A tool-request round is not a terminal Response value. Auto-continuation
   // will make another model call after delegated tools finish, so validate the
   // value only once a provider round actually produces the final response.
-  if (
-    options.failProfileOnNonObjectResponse &&
-    plan.request.responseFormat === 'json_schema' &&
-    chatResponse.result.functionCalls.length === 0
-  ) {
+  if (plan.request.responseFormat === 'json_schema' && chatResponse.result.functionCalls.length === 0) {
     const materialized = materializeLLMResponse({
       rawText: chatResponse.result.responseText,
       structuredOutput: chatResponse.result.structuredOutput,
       responseFormat: plan.request.responseFormat,
-      requireObject: true,
     });
     if (materialized.validation === 'invalid') {
       throw new ChatV2ResponseValidationError(materialized.value.type);

@@ -68,6 +68,10 @@ export async function resolveLLMModelCandidate(params: {
     headers,
     credential,
     onRequestBody: plan.requestBodies == null ? undefined : (body) => plan.requestBodies!.push(body),
+    onResponseBody:
+      plan.responseBodyCapture == null
+        ? undefined
+        : (response) => plan.responseBodyCapture!.capture(response, [credential.value ?? '']),
     transformRequestBody,
   });
   const generationParameters = resolveLLMChatV2GenerationParameters(effectiveData, plan.inputs);
@@ -106,6 +110,8 @@ export async function resolveLLMModelCandidate(params: {
       anthropicCacheControlTtl:
         provider === 'anthropic' ? effectiveData.anthropicCacheControlTtl || undefined : undefined,
       requestBodies: plan.requestBodies,
+      responseBodies: plan.responseBodies,
+      responseBodyCapture: plan.responseBodyCapture,
     },
   };
 }

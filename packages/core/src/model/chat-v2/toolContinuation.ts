@@ -230,7 +230,6 @@ export async function runChatV2PipelineWithToolContinuation(
         rawText: result.response,
         structuredOutput: undefined,
         responseFormat: pipelineOptions.responseFormat,
-        requireObject: pipelineOptions.failProfileOnNonObjectResponse,
       });
       if (materializedDirectResponse.validation === 'invalid') {
         throw new Error(

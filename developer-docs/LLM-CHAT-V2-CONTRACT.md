@@ -93,16 +93,15 @@ right in the chain, never return to an earlier profile. This prevents a tool
 conversation from oscillating between providers while preserving model-round
 order.
 
-For JSON schema response format, the optional **Fail the LLM profile on
-non-JSON response** policy validates the final Data Value assembled for the
-`Response` port, after SDK structured output and Rivet's JSON text fallback have
-both had a chance to produce it. Only an `object` Data Value passes; strings,
-arrays, primitives, null, and missing values reject the current profile. This
-is a profile-level response-validation failure after a successful provider
-request, not a non-200 transport failure: it never enters **Retry on non-200**.
-An actual fallback chain advances immediately to the next profile. Inline and
-scalar-profile runs throw the detailed validation error when no fallback is
-available.
+For JSON schema response format, the final Data Value assembled for the
+`Response` port is always validated after SDK structured output and Rivet's JSON
+text fallback have both had a chance to produce it. Only an `object` Data Value
+passes; strings, arrays, primitives, null, and missing values reject the current
+profile. This is a profile-level response-validation failure after a successful
+provider request, not a non-200 transport failure: it never enters **Retry on
+non-200**. An actual fallback chain advances immediately to the next profile.
+Inline and scalar-profile runs throw the detailed validation error when no
+fallback is available.
 
 The chain covers construction and execution of the provider/model round. Tool
 handler/delegate execution, connected-continuation scheduling, direct-return
@@ -194,14 +193,17 @@ construction.
 cost observation surface and is emitted only when `Output usage details` is on.
 
 The **Outputs** group owns `Output response status` (`outputRequestStatus`),
-`Output request body` (`outputRequestBody`), reasoning, usage, and streaming.
-The **Error behavior** group owns retry controls and `Output response error`
-(`outputRequestError`). These three request diagnostics are deliberately
-independent:
+`Output request body` (`outputRequestBody`), `Output response body`
+(`outputResponseBody`), reasoning, usage, and streaming. The **Error behavior**
+group owns retry controls and `Output response error` (`outputRequestError`).
+These diagnostics are deliberately independent:
 
 - status reports the successful/final transport status, including retries;
 - request body exposes only the captured provider body, never authorization
   headers or API keys; and
+- response body clones the provider HTTP response before the SDK consumes it,
+  parses valid JSON for inspection, otherwise preserves response text, and
+  redacts the active API key if a provider echoed it; and
 - response error turns recognized provider/API/fetch failures into excluded
   response outputs plus the error output. It does not hide local graph, model,
   or request-construction errors.
@@ -218,7 +220,8 @@ Older serialized nodes can contain only `outputRequestStatus`, formerly labeled
 and `outputRequestBody` as true when that old setting was true, preserving the
 old ports and behavior. Programmatic callers that construct the old shape
 directly receive the same runtime fallback. Newly created nodes use three
-explicit false defaults.
+explicit false defaults. `outputResponseBody` is deliberately not part of that
+legacy fallback: it is a new, opt-in raw-response diagnostic.
 
 The `cache` setting is legacy editor behavior. Its control is rendered only
 when the node already has `cache: true`; turning it off removes the control on
@@ -315,7 +318,7 @@ paths and should not be used as the primary target for new provider refactors.
   tool, generation, provider-option, and output policy into the pipeline.
 - [`chatV2Pipeline.ts`](../packages/core/src/model/chat-v2/chatV2Pipeline.ts)
   owns the Vercel AI SDK request/stream-or-generate/retry/result pipeline and
-  optional validation of the final parsed `Response` Data Value for JSON schema
+  required validation of the final parsed `Response` Data Value for JSON schema
   profile acceptance.
 - [`chatV2CallObserver.ts`](../packages/core/src/model/chat-v2/chatV2CallObserver.ts)
   owns the privacy-bounded physical-call accounting event. It snapshots safe
@@ -546,7 +549,7 @@ paths and should not be used as the primary target for new provider refactors.
 - Structured-output fallback, deduping, and schema validation must stay covered
   by tests before moving normalization code.
 - Streaming output must preserve response text, all messages, request status,
-  request body, usage, reasoning, and response-error ports.
+  request body, response body, usage, reasoning, and response-error ports.
 - `Prompt` and `Assemble Message` can create distinct `system` and `developer`
   chat messages. AI SDK's provider-neutral `ModelMessage` exposes only `system`
   for instruction messages, so `messageConverter.ts` temporarily represents
@@ -574,7 +577,10 @@ paths and should not be used as the primary target for new provider refactors.
   prompt is prepended without replacing any of them. The merge checks the
   coerced string value, not the truthiness of its `DataValue` wrapper.
 - Provider errors must stay normalized and secret-safe; do not log raw provider
-  payloads or credentials.
+  payloads or credentials. The opt-in `LLM response body` output is the sole
+  raw response-payload diagnostic: it captures no request headers, does not
+  consume the SDK response stream, and must not be connected to untrusted
+  user-facing flows.
 - Editor cache keys must keep secret fingerprints and provider/model identity
   separated enough to avoid stale catalog reuse. The editor-only cache control
   is legacy: it is visible only on nodes that already have it enabled, and once

@@ -4,6 +4,7 @@ import type { Outputs } from '../GraphProcessor.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { AssistantMessageFunctionCallMode, StreamedFunctionCall } from '../chat/streamChatResponse.js';
 import type { ChatV2Provider } from './chatV2ProviderTypes.js';
+import type { ChatV2ResponseBodyCapture } from './chatV2ResponseBodyCapture.js';
 
 export type { ChatV2Provider };
 
@@ -114,16 +115,18 @@ export type RunChatV2PipelineOptions = {
   seed?: number | undefined;
   responseOutput?: ChatV2ResponseOutput | undefined;
   responseFormat?: ChatV2ResponseFormatMode | undefined;
-  failProfileOnNonObjectResponse?: boolean | undefined;
   providerOptions?: ChatV2ProviderOptions | undefined;
   toolChoice?: ChatV2ToolChoice | undefined;
   anthropicCacheControlTtl?: '5m' | '1h' | undefined;
   requestBodies?: unknown[] | undefined;
+  responseBodies?: unknown[] | undefined;
+  responseBodyCapture?: ChatV2ResponseBodyCapture | undefined;
   outputUsage?: boolean | undefined;
   outputReasoning?: boolean | undefined;
   outputRequestStatus?: boolean | undefined;
   outputRequestError?: boolean | undefined;
   outputRequestBody?: boolean | undefined;
+  outputResponseBody?: boolean | undefined;
   includeFunctionCalls?: boolean | undefined;
   emitPartialOutputs?: boolean | undefined;
   functionCallMode?: AssistantMessageFunctionCallMode | undefined;
@@ -163,6 +166,11 @@ export function shouldOutputChatV2RequestBody(
   options: Pick<RunChatV2PipelineOptions, 'outputRequestStatus' | 'outputRequestBody'>,
 ): boolean {
   return options.outputRequestBody ?? options.outputRequestStatus ?? false;
+}
+
+/** New diagnostics are opt-in; old status-detail nodes never expose responses. */
+export function shouldOutputChatV2ResponseBody(options: Pick<RunChatV2PipelineOptions, 'outputResponseBody'>): boolean {
+  return options.outputResponseBody === true;
 }
 
 export type ChatV2ProviderAttempt = {

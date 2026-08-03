@@ -15,7 +15,6 @@ export type MaterializedLLMResponse = {
   value: DataValue;
   source: 'sdk-structured' | 'text-json' | 'plain-text';
   validation: 'not-requested' | 'valid' | 'invalid';
-  validationError?: string;
 };
 
 function tryParseJson(value: string): unknown | undefined {
@@ -30,9 +29,8 @@ export function materializeLLMResponse(params: {
   rawText: string;
   structuredOutput: unknown | undefined;
   responseFormat: ChatV2ResponseFormatMode | undefined;
-  requireObject: boolean | undefined;
 }): MaterializedLLMResponse {
-  const { rawText, structuredOutput, responseFormat, requireObject } = params;
+  const { rawText, structuredOutput, responseFormat } = params;
   let value: DataValue;
   let source: MaterializedLLMResponse['source'];
 
@@ -53,23 +51,12 @@ export function materializeLLMResponse(params: {
     }
   }
 
-  const validationRequested = requireObject && responseFormat === 'json_schema';
+  const validationRequested = responseFormat === 'json_schema';
   const valid = !validationRequested || value.type === 'object';
   return {
     rawText,
     value,
     source,
     validation: !validationRequested ? 'not-requested' : valid ? 'valid' : 'invalid',
-    ...(valid
-      ? {}
-      : {
-          validationError:
-            `LLM profile response validation failed.\n` +
-            `Response format: JSON schema\n` +
-            `Parsed Response type: ${value.type}\n` +
-            'The provider request succeeded, but the final value prepared for the Response port is not an object. ' +
-            'Because "Fail the LLM profile on non-JSON response" is enabled, Rivet rejected this LLM profile. ' +
-            'Retry on non-200 does not apply to this validation failure.',
-        }),
   };
 }

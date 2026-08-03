@@ -104,6 +104,7 @@ export type CreateChatV2ModelOptions = {
   baseURL?: string | undefined;
   headers?: Record<string, string> | undefined;
   onRequestBody?: ((body: unknown) => void) | undefined;
+  onResponseBody?: ((response: Response) => void) | undefined;
   transformRequestBody?: ((body: unknown) => unknown) | undefined;
 };
 
@@ -211,7 +212,7 @@ function removeStaleContentLength(headers: HeadersInit | undefined): HeadersInit
   return nextHeaders;
 }
 
-function createRequestBodyProcessingFetch(options: CreateChatV2ModelOptions): typeof fetch {
+function createDiagnosticProcessingFetch(options: CreateChatV2ModelOptions): typeof fetch {
   return async (input, init) => {
     const parsedBody = parseFetchBody(init?.body);
     const processedBody =
@@ -232,14 +233,20 @@ function createRequestBodyProcessingFetch(options: CreateChatV2ModelOptions): ty
             headers: removeStaleContentLength(init?.headers),
           }
         : init;
-    return nativeFetch(input, processedInit);
+    const response = await nativeFetch(input, processedInit);
+    try {
+      options.onResponseBody?.(response);
+    } catch {
+      // Diagnostic capture is observational and must never change a provider call.
+    }
+    return response;
   };
 }
 
-function maybeCreateRequestBodyProcessingFetch(options: CreateChatV2ModelOptions): typeof fetch | undefined {
-  return options.onRequestBody == null && options.transformRequestBody == null
+function maybeCreateDiagnosticProcessingFetch(options: CreateChatV2ModelOptions): typeof fetch | undefined {
+  return options.onRequestBody == null && options.onResponseBody == null && options.transformRequestBody == null
     ? undefined
-    : createRequestBodyProcessingFetch(options);
+    : createDiagnosticProcessingFetch(options);
 }
 
 export async function resolveChatV2ProviderConfig(
@@ -300,7 +307,7 @@ export function createChatV2Model(
         organization: context.settings.openAiOrganization || undefined,
         baseURL: undefined,
         headers: options.headers,
-        fetch: maybeCreateRequestBodyProcessingFetch(options),
+        fetch: maybeCreateDiagnosticProcessingFetch(options),
       });
 
       return providerInstance.responses(modelId);
@@ -312,7 +319,7 @@ export function createChatV2Model(
           options.apiKey || context.settings.anthropicApiKey || context.getPluginConfig('anthropicApiKey') || undefined,
         baseURL: undefined,
         headers: options.headers,
-        fetch: maybeCreateRequestBodyProcessingFetch(options),
+        fetch: maybeCreateDiagnosticProcessingFetch(options),
       });
 
       return providerInstance.messages(modelId);
@@ -323,7 +330,7 @@ export function createChatV2Model(
         apiKey: options.apiKey || context.settings.googleApiKey || context.getPluginConfig('googleApiKey') || undefined,
         baseURL: undefined,
         headers: options.headers,
-        fetch: maybeCreateRequestBodyProcessingFetch(options),
+        fetch: maybeCreateDiagnosticProcessingFetch(options),
       });
 
       return providerInstance.chat(modelId);
@@ -340,7 +347,7 @@ export function createChatV2Model(
         baseURL: options.baseURL,
         headers: options.headers,
         includeUsage: false,
-        fetch: maybeCreateRequestBodyProcessingFetch(options),
+        fetch: maybeCreateDiagnosticProcessingFetch(options),
       });
       const model = providerInstance.chatModel(modelId) as StructuredOutputCapableChatModel;
       // The installed OpenAI-compatible provider reads this from the model instance,

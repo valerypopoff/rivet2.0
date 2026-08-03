@@ -1,6 +1,7 @@
 import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createChatV2Model, resolveChatV2ProviderConfig } from '../../../src/model/chat-v2/providerOptions.js';
+import { createChatV2ResponseBodyCapture } from '../../../src/model/chat-v2/chatV2ResponseBodyCapture.js';
 
 describe('resolveChatV2ProviderConfig', () => {
   it('ignores legacy OpenAI endpoint overrides and keeps node/global headers', async () => {
@@ -236,6 +237,56 @@ describe('createChatV2Model', () => {
     } finally {
       fetchMock.mock.restore();
     }
+  });
+
+  it('captures a cloned provider response body without consuming the SDK response', async () => {
+    const responseBodyCapture = createChatV2ResponseBodyCapture();
+    const fetchMock = mock.method(
+      globalThis,
+      'fetch',
+      async () =>
+        new Response('{"id":"response-1","output":"Hello secret-key"}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+
+    try {
+      const model = createChatV2Model(
+        'custom',
+        'gpt-oss-120b',
+        {
+          settings: {},
+          getPluginConfig: () => undefined,
+        } as any,
+        {
+          apiKey: 'secret-key',
+          baseURL: 'https://api.example.test/v1',
+          onResponseBody: (response) => responseBodyCapture.capture(response, ['secret-key']),
+        },
+      ) as { config?: { fetch?: typeof fetch } };
+
+      assert.ok(model.config?.fetch);
+      const response = await model.config.fetch('https://api.example.test/v1/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({ model: 'gpt-oss-120b' }),
+      });
+      await responseBodyCapture.flush();
+
+      assert.deepEqual(responseBodyCapture.bodies, [{ id: 'response-1', output: 'Hello [redacted]' }]);
+      assert.equal(await response.text(), '{"id":"response-1","output":"Hello secret-key"}');
+      assert.equal(fetchMock.mock.callCount(), 1);
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
+
+  it('redacts the active API key from captured provider response bodies', async () => {
+    const responseBodyCapture = createChatV2ResponseBodyCapture();
+    responseBodyCapture.capture(new Response('{"error":{"message":"Key secret-key was rejected"}}'), ['secret-key']);
+    await responseBodyCapture.flush();
+
+    assert.deepEqual(responseBodyCapture.bodies, [{ error: { message: 'Key [redacted] was rejected' } }]);
   });
 
   it('sends and captures transformed provider request bodies', async () => {

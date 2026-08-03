@@ -121,7 +121,6 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.useResponseSchemaNameInput, false);
     assert.equal(node.data.responseSchemaDescription, '');
     assert.equal(node.data.useResponseSchemaDescriptionInput, false);
-    assert.equal(node.data.failProfileOnNonObjectResponse, false);
     assert.equal(node.data.anthropicThinkingMode, '');
     assert.equal(node.data.anthropicThinkingBudget, undefined);
     assert.equal(node.data.useAnthropicThinkingBudgetInput, false);
@@ -141,6 +140,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.outputRequestStatus, false);
     assert.equal(node.data.outputRequestError, false);
     assert.equal(node.data.outputRequestBody, false);
+    assert.equal(node.data.outputResponseBody, false);
   });
 
   it('uses the dedicated configuration editor so Inline settings can be exported to a profile', async () => {
@@ -435,6 +435,10 @@ describe('LLMChatV2NodeImpl', () => {
       outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label,
       'Output request body',
     );
+    assert.equal(
+      outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputResponseBody')?.label,
+      'Output response body',
+    );
     const legacyCacheEditor = outputsGroup.editors.find((editor: any) => editor.dataKey === 'cache');
     assert.equal(legacyCacheEditor.label, 'Cache outputs (editor only) (legacy)');
     assert.equal(legacyCacheEditor.hideIf({ cache: false }), true);
@@ -456,6 +460,9 @@ describe('LLMChatV2NodeImpl', () => {
     const bodyNode = createNode({
       outputRequestBody: true,
     });
+    const responseBodyNode = createNode({
+      outputResponseBody: true,
+    });
     const profileStatusNode = createNode({
       configurationMode: 'profile',
       outputRequestStatus: true,
@@ -464,6 +471,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestStatus'));
     assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestError'));
     assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestBody'));
+    assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'responseBody'));
     assert.deepEqual(
       statusNode.getOutputDefinitions().find((output) => output.id === 'requestStatus'),
       {
@@ -514,6 +522,24 @@ describe('LLMChatV2NodeImpl', () => {
         dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'],
       },
     );
+    assert.deepEqual(
+      responseBodyNode.getOutputDefinitions().find((output) => output.id === 'responseBody'),
+      {
+        id: 'responseBody',
+        title: 'LLM response body',
+        dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'],
+      },
+    );
+    const bothBodyNode = createNode({
+      outputRequestBody: true,
+      outputResponseBody: true,
+    });
+    const bothBodyOutputIds = bothBodyNode.getOutputDefinitions().map((output) => output.id);
+    assert.equal(
+      bothBodyOutputIds.indexOf('responseBody'),
+      bothBodyOutputIds.indexOf('requestBody') + 1,
+      'LLM response body follows LLM request body in the node output contract.',
+    );
     assert.equal(
       retryStatusNode.getOutputDefinitions().some((output) => output.id === 'requestStatuses'),
       false,
@@ -540,7 +566,7 @@ describe('LLMChatV2NodeImpl', () => {
     );
   });
 
-  it('marks the response output as structured when JSON object response format is enabled', () => {
+  it('marks JSON object output as structured and JSON schema output as an object', () => {
     const defaultNode = createNode();
     const jsonNode = createNode({
       responseFormat: 'json',
@@ -562,18 +588,7 @@ describe('LLMChatV2NodeImpl', () => {
       'boolean',
       'boolean[]',
     ]);
-    assert.deepEqual(schemaNode.getOutputDefinitions().find((output) => output.id === 'response')?.dataType, [
-      'object',
-      'object[]',
-      'any',
-      'any[]',
-      'string',
-      'string[]',
-      'number',
-      'number[]',
-      'boolean',
-      'boolean[]',
-    ]);
+    assert.equal(schemaNode.getOutputDefinitions().find((output) => output.id === 'response')?.dataType, 'object');
   });
 
   it('adds the base URL input only for Custom provider URL fields', () => {
@@ -1259,14 +1274,12 @@ describe('LLMChatV2NodeImpl', () => {
       { value: 'json', label: 'JSON object' },
       { value: 'json_schema', label: 'JSON schema' },
     ]);
-    const failProfileEditor = responseFormatGroup.editors.find(
-      (editor: any) => editor.dataKey === 'failProfileOnNonObjectResponse',
-    );
-    assert.equal(failProfileEditor?.label, 'Fail the LLM profile on non-JSON response');
-    assert.equal(failProfileEditor?.hideIf(defaultNode.data), true);
-    assert.equal(failProfileEditor?.hideIf(jsonSchemaNode.data), false);
     assert.equal(
-      createNode({ responseFormat: 'json_schema', failProfileOnNonObjectResponse: true })
+      responseFormatGroup.editors.some((editor: any) => editor.dataKey === 'failProfileOnNonObjectResponse'),
+      false,
+    );
+    assert.equal(
+      createNode({ responseFormat: 'json_schema' })
         .getOutputDefinitions()
         .find((output) => output.id === 'response')?.dataType,
       'object',
@@ -1297,7 +1310,6 @@ describe('LLMChatV2NodeImpl', () => {
       customProviderBaseURL: 'https://api.cerebras.ai/v1',
       customProviderApiKeyEnvVarName: 'CEREBRAS_API_KEY',
       responseFormat: 'json_schema',
-      failProfileOnNonObjectResponse: true,
       responseSchemaName: 'answer_schema',
       responseSchemaDescription: 'Answer payload',
       extraProviderOptions: '{ "customFlag": true, "response_format": { "type": "json_object" } }',
@@ -1332,7 +1344,7 @@ describe('LLMChatV2NodeImpl', () => {
         },
       },
     });
-    assert.equal(runtime.runOptions.failProfileOnNonObjectResponse, true);
+    assert.equal('failProfileOnNonObjectResponse' in runtime.runOptions, false);
   });
 
   it('restores explicit developer roles in Custom provider request bodies', async () => {

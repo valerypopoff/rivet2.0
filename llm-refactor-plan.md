@@ -150,10 +150,10 @@ or advance to another profile.
 
 ### JSON-schema validation needs a terminal-response boundary
 
-The optional "Fail the LLM profile on non-JSON response" policy currently runs
-inside a single provider round, before tool continuation decides whether the
-round is intermediate. A model response that requests tools may not contain the
-final response object, so it can be rejected before the tools run.
+JSON-schema response validation runs inside a single provider round, before tool
+continuation decides whether the round is intermediate. A model response that
+requests tools may not contain the final response object, so it can be rejected
+before the tools run.
 
 The intended behavior must be pinned before implementation:
 

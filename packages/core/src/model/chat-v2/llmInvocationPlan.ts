@@ -13,9 +13,14 @@ import {
 } from './chatV2ResponseFormat.js';
 import { resolveLLMChatV2ToolChoice } from './chatV2RuntimeOptions.js';
 import { shouldIncludeLLMChatV2ToolCalls, type LLMChatV2NodeData } from './llmChatV2NodeData.js';
-import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from './chatV2Types.js';
-import type { RunChatV2PipelineOptions } from './chatV2Types.js';
+import {
+  shouldOutputChatV2RequestBody,
+  shouldOutputChatV2RequestError,
+  shouldOutputChatV2ResponseBody,
+  type RunChatV2PipelineOptions,
+} from './chatV2Types.js';
 import type { parseChatV2Provider } from './providerOptions.js';
+import { createChatV2ResponseBodyCapture, type ChatV2ResponseBodyCapture } from './chatV2ResponseBodyCapture.js';
 
 /** Provider-neutral state assembled once per root LLM invocation. */
 export type LLMInvocationPlan = {
@@ -28,6 +33,8 @@ export type LLMInvocationPlan = {
   responseFormatParameters: ChatV2ResponseFormatParameters;
   toolChoice: ReturnType<typeof resolveLLMChatV2ToolChoice>;
   requestBodies: unknown[] | undefined;
+  responseBodies: unknown[] | undefined;
+  responseBodyCapture: ChatV2ResponseBodyCapture | undefined;
   instructionRoles: ReturnType<typeof getInstructionMessageRoles>;
 };
 
@@ -46,6 +53,7 @@ export function buildLLMInvocationPlan(params: {
   const { data, inputs, context } = params;
   const prompt = inputs['prompt' as PortId];
   const systemPrompt = inputs['systemPrompt' as PortId];
+  const responseBodyCapture = shouldOutputChatV2ResponseBody(data) ? createChatV2ResponseBodyCapture() : undefined;
   return {
     data,
     inputs,
@@ -59,6 +67,8 @@ export function buildLLMInvocationPlan(params: {
     responseFormatParameters: resolveChatV2ResponseFormatParameters(data, inputs),
     toolChoice: resolveLLMChatV2ToolChoice(data),
     requestBodies: shouldOutputChatV2RequestBody(data) ? [] : undefined,
+    responseBodies: responseBodyCapture?.bodies,
+    responseBodyCapture,
     instructionRoles: getInstructionMessageRoles(prependSystemPrompt(coercePromptToChatMessages(prompt), systemPrompt)),
   };
 }
@@ -82,16 +92,18 @@ export function buildLLMInvocationRunOptions(params: {
     functions: plan.functions,
     responseOutput: createChatV2ResponseOutput(plan.responseFormatParameters, provider),
     responseFormat: plan.responseFormatParameters?.responseFormat,
-    failProfileOnNonObjectResponse: plan.data.failProfileOnNonObjectResponse,
     outputUsage: plan.data.outputUsage,
     outputReasoning: plan.data.outputReasoning,
     outputRequestStatus: plan.data.outputRequestStatus,
     outputRequestError: shouldOutputChatV2RequestError(plan.data),
     outputRequestBody: shouldOutputChatV2RequestBody(plan.data),
+    outputResponseBody: shouldOutputChatV2ResponseBody(plan.data),
     includeFunctionCalls: shouldIncludeLLMChatV2ToolCalls(plan.data),
     emitPartialOutputs: plan.data.useAsGraphPartialOutput,
     toolChoice: plan.toolChoice,
     requestBodies: plan.requestBodies,
+    responseBodies: plan.responseBodies,
+    responseBodyCapture: plan.responseBodyCapture,
     retryOnNon200: plan.data.retryOnNon200,
     retryOnNon200RepeatTimes: plan.data.retryOnNon200RepeatTimes,
     retryOnNon200CooldownMs: plan.data.retryOnNon200CooldownMs,

@@ -21,7 +21,11 @@ import { LLMInvocationJournal } from '../chat-v2/llmInvocationJournal.js';
 import { executeLLMInvocation } from '../chat-v2/llmInvocationCoordinator.js';
 import { projectLLMInvocationResult } from '../chat-v2/llmInvocationResultProjector.js';
 import { isChatV2PipelineProviderFailureResult } from '../chat-v2/chatV2Pipeline.js';
-import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from '../chat-v2/chatV2Types.js';
+import {
+  shouldOutputChatV2RequestBody,
+  shouldOutputChatV2RequestError,
+  shouldOutputChatV2ResponseBody,
+} from '../chat-v2/chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
   resolveLLMChatV2RuntimeConfig,
@@ -282,7 +286,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
 
     if (responseOutput != null && isLLMChatV2StructuredResponseFormat(this.data.responseFormat)) {
       responseOutput.dataType =
-        this.data.responseFormat === 'json_schema' && this.data.failProfileOnNonObjectResponse
+        this.data.responseFormat === 'json_schema'
           ? 'object'
           : ([
               'object',
@@ -342,6 +346,14 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       outputs.push({
         id: 'requestBody' as PortId,
         title: 'LLM request body',
+        dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'] as const,
+      });
+    }
+
+    if (shouldOutputChatV2ResponseBody(this.data)) {
+      outputs.push({
+        id: 'responseBody' as PortId,
+        title: 'LLM response body',
         dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'] as const,
       });
     }

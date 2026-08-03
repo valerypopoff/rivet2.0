@@ -988,6 +988,38 @@ void describe('runChatV2Pipeline', () => {
     });
   });
 
+  void it('waits for the opt-in response-body diagnostic before projecting outputs', async () => {
+    const responseBodies: unknown[] = [];
+    let flushCount = 0;
+
+    const result = await runChatV2Pipeline({
+      provider: 'openai',
+      model: createMockModel(),
+      modelId: 'gpt-5',
+      prompt: { type: 'string', value: 'Hello' },
+      outputResponseBody: true,
+      responseBodies,
+      responseBodyCapture: {
+        bodies: responseBodies,
+        capture: () => undefined,
+        flush: async () => {
+          flushCount += 1;
+          responseBodies.push({ id: `response-${flushCount}` });
+        },
+      },
+      context: {
+        signal: new AbortController().signal,
+      },
+      executeStream: createTextStreamExecutor({ text: 'Done' }),
+    });
+
+    assert.equal(flushCount, 1);
+    assert.deepEqual(result.commonOutputs['responseBody' as PortId], {
+      type: 'object',
+      value: { id: 'response-1' },
+    });
+  });
+
   void it('normalizes the final Vercel status error after retry attempts are exhausted', async () => {
     let attempt = 0;
     const executeStream: ChatV2StreamExecutor = async () => {
@@ -1724,7 +1756,6 @@ void describe('runChatV2Pipeline', () => {
       prompt: { type: 'string', value: 'Answer as JSON.' },
       responseOutput: { name: 'answer_schema' },
       responseFormat: 'json_schema',
-      failProfileOnNonObjectResponse: true,
       emitPartialOutputs: false,
       context: {
         signal: new AbortController().signal,
@@ -1750,7 +1781,6 @@ void describe('runChatV2Pipeline', () => {
           prompt: { type: 'string', value: 'Answer as JSON.' },
           responseOutput: { name: 'answer_schema' },
           responseFormat: 'json_schema',
-          failProfileOnNonObjectResponse: true,
           retryOnNon200: true,
           retryOnNon200RepeatTimes: 3,
           retryOnNon200CooldownMs: 0,

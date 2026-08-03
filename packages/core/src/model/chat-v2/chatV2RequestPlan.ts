@@ -6,7 +6,11 @@ import type {
   RunChatV2PipelineOptions,
   StreamChatV2Options,
 } from './chatV2Types.js';
-import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from './chatV2Types.js';
+import {
+  shouldOutputChatV2RequestBody,
+  shouldOutputChatV2RequestError,
+  shouldOutputChatV2ResponseBody,
+} from './chatV2Types.js';
 
 export type ChatV2TransportMode = 'stream' | 'generate';
 
@@ -27,6 +31,7 @@ export type ChatV2RequestPlan = {
     | 'outputRequestStatus'
     | 'outputRequestError'
     | 'outputRequestBody'
+    | 'outputResponseBody'
     | 'includeFunctionCalls'
     | 'functionCallMode'
   >;
@@ -57,6 +62,7 @@ type BuildChatV2RequestPlanOptions = Pick<
   | 'outputRequestStatus'
   | 'outputRequestError'
   | 'outputRequestBody'
+  | 'outputResponseBody'
   | 'includeFunctionCalls'
   | 'emitPartialOutputs'
   | 'functionCallMode'
@@ -123,6 +129,7 @@ export function buildChatV2RequestPlan(options: BuildChatV2RequestPlanOptions): 
       outputRequestStatus: options.outputRequestStatus === true,
       outputRequestError: shouldOutputChatV2RequestError(options),
       outputRequestBody: shouldOutputChatV2RequestBody(options),
+      outputResponseBody: shouldOutputChatV2ResponseBody(options),
       includeFunctionCalls: options.includeFunctionCalls,
       functionCallMode: options.functionCallMode,
     },

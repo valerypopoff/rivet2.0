@@ -507,7 +507,6 @@ describe('LLM Profile fallback chain', () => {
         modelId: profileIndex === 0 ? 'invalid-json' : 'backup',
         responseOutput: { name: 'answer_schema' },
         responseFormat: 'json_schema',
-        failProfileOnNonObjectResponse: true,
         retryOnNon200: true,
         retryOnNon200RepeatTimes: 3,
         retryOnNon200CooldownMs: 0,
@@ -562,7 +561,6 @@ describe('LLM Profile fallback chain', () => {
         modelId: 'only-profile',
         responseOutput: { name: 'answer_schema' },
         responseFormat: 'json_schema',
-        failProfileOnNonObjectResponse: true,
         retryOnNon200: true,
         retryOnNon200RepeatTimes: 2,
         retryOnNon200CooldownMs: 0,
@@ -604,7 +602,6 @@ describe('LLM Profile fallback chain', () => {
         modelId: profileIndex === 0 ? 'first-invalid' : 'second-invalid',
         responseOutput: { name: 'answer_schema' },
         responseFormat: 'json_schema',
-        failProfileOnNonObjectResponse: true,
         executeGenerate: async () => ({ text: 'not json', requestStatus: 200 }),
       }),
     });

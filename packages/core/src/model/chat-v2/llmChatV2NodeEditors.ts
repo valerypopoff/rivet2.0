@@ -399,14 +399,6 @@ function getResponseFormatEditors(): LLMChatV2EditorDefinition {
       helperMessage: 'Optional description passed to the provider for JSON object or JSON schema responses.',
       hideIf: (data) => data.responseFormat !== 'json' && data.responseFormat !== 'json_schema',
     },
-    {
-      type: 'toggle',
-      label: 'Fail the LLM profile on non-JSON response',
-      dataKey: 'failProfileOnNonObjectResponse',
-      helperMessage:
-        'Checks the final parsed Response value. If it is not an object, Rivet rejects the current LLM profile without Retry on non-200 and advances to the next fallback profile when available.',
-      hideIf: (data) => data.responseFormat !== 'json_schema',
-    },
   ]);
 }
 
@@ -496,6 +488,13 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
       dataKey: 'outputRequestBody',
       helperMessage:
         'Adds an LLM request body output. It can contain prompts and non-secret provider options; it never includes authorization headers or API keys.',
+    },
+    {
+      type: 'toggle',
+      label: 'Output response body',
+      dataKey: 'outputResponseBody',
+      helperMessage:
+        'Adds an LLM response body output captured at the provider HTTP boundary. JSON responses are parsed for inspection; other responses remain text.',
     },
     {
       type: 'toggle',
