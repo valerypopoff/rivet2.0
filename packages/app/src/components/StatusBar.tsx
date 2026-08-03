@@ -4,8 +4,8 @@ import { useTotalRunCost } from '../hooks/useTotalRunCost';
 import { useAtom, useAtomValue } from 'jotai';
 import { graphRunningState, graphStartTimeState, runActivityJournalState } from '../state/dataFlow';
 import { runActivityDrawerOpenState } from '../state/ui.js';
-import prettyMs from 'pretty-ms';
 import { resolveRuntimeStatusTiming } from './runtimeStatus.js';
+import { formatRunActivityDuration } from '../utils/runActivityDuration.js';
 
 const styles = css`
   position: fixed;
@@ -99,10 +99,10 @@ export const StatusBar: FC<{}> = () => {
         title={runActivityOpen ? 'Close Run Activity' : 'Open Run Activity'}
         onClick={() => setRunActivityOpen((current) => !current)}
       >
-        Runtime activity
+        Run activity
         {runtimeTiming.elapsedMs != null && (
           <>
-            : <strong>{formatRuntime(runtimeTiming.elapsedMs)}</strong>
+            : <strong>{formatRunActivityDuration(runtimeTiming.elapsedMs)}</strong>
           </>
         )}
       </button>
@@ -114,10 +114,3 @@ export const StatusBar: FC<{}> = () => {
     </div>
   );
 };
-
-function formatRuntime(elapsedMs: number): string {
-  return prettyMs(elapsedMs, {
-    keepDecimalsOnWholeSeconds: true,
-    secondsDecimalDigits: 2,
-  });
-}

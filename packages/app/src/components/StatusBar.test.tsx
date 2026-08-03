@@ -46,7 +46,7 @@ test('cancels the runtime animation frame when the status bar unmounts', async (
   }
 });
 
-test('the always-present Runtime activity control toggles Run Activity', async () => {
+test('the always-present Run activity control toggles Run Activity', async () => {
   const dom = new JSDOM('<div id="root"></div>');
   const restoreGlobals = installStatusBarGlobals(dom);
   const store = getDefaultStore();
@@ -70,7 +70,7 @@ test('the always-present Runtime activity control toggles Run Activity', async (
     );
 
     const runtime = dom.window.document.querySelector<HTMLButtonElement>('.runtime')!;
-    assert.equal(runtime.textContent?.trim(), 'Runtime activity');
+    assert.equal(runtime.textContent?.trim(), 'Run activity');
     assert.equal(runtime.getAttribute('aria-pressed'), 'false');
 
     await act(async () => runtime.click());
@@ -129,7 +129,7 @@ test('renders the retained completed runtime immediately after a status-bar remo
     );
 
     const runtime = dom.window.document.querySelector<HTMLButtonElement>('.runtime')!;
-    assert.equal(runtime.textContent?.trim(), 'Runtime activity: 2.75s');
+    assert.equal(runtime.textContent?.trim(), 'Run activity: 2.75s');
     assert.equal(requestAnimationFrameCallbacks.size, 0);
   } finally {
     await act(async () => root.unmount());
@@ -167,11 +167,11 @@ test('replaces the last live frame with the exact terminal duration', async () =
     );
 
     const runtime = dom.window.document.querySelector<HTMLButtonElement>('.runtime')!;
-    assert.equal(runtime.textContent?.trim(), 'Runtime activity: 2.75s');
+    assert.equal(runtime.textContent?.trim(), 'Run activity: 2.75s');
 
     now = 3_760;
     await runNextAnimationFrame();
-    assert.equal(runtime.textContent?.trim(), 'Runtime activity: 2.76s');
+    assert.equal(runtime.textContent?.trim(), 'Run activity: 2.76s');
 
     const journal = createRunActivityJournal();
     const rootRunId = 'just-completed-runtime-root' as RootRunId;
@@ -198,7 +198,7 @@ test('replaces the last live frame with the exact terminal duration', async () =
       store.set(graphRunningState, false);
     });
 
-    assert.equal(runtime.textContent?.trim(), 'Runtime activity: 2.75s');
+    assert.equal(runtime.textContent?.trim(), 'Run activity: 2.75s');
     assert.equal(requestAnimationFrameCallbacks.size, 0);
   } finally {
     Date.now = previousDateNow;

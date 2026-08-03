@@ -7,10 +7,12 @@ executor, durable run database, response-trace transport, or copy of node
 outputs. The same journal reducer must consume Browser, internal Node, Remote
 Debugger, inactive-project snapshot, and recording-replay events.
 
-The persistent bottom-right trigger is labelled **Runtime activity** before a
+The persistent bottom-right trigger is labelled **Run activity** before a
 run is available. During a run and after the latest run settles, it appends the
 same live or exact terminal duration used by the activity root, for example
-**Runtime activity: 2.75s**. The label is presentation-only; it remains the
+**Run activity: 2.75s**. The trigger and drawer use the same compact duration
+formatter, so a longer run is shown consistently as `1m 25.05s` rather than one
+surface using seconds alone. The label is presentation-only; it remains the
 toggle for this drawer.
 
 ## Ownership

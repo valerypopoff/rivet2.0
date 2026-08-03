@@ -21,6 +21,7 @@ import {
 } from 'react';
 import { SegmentedEditor } from '../editors/SegmentedEditor.js';
 import { Tooltip } from '../Tooltip.js';
+import { formatRunActivityDuration } from '../../utils/runActivityDuration.js';
 import {
   DEFAULT_RUN_ACTIVITY_COLUMN_WIDTHS,
   clampRunActivityColumnWidth,
@@ -1195,7 +1196,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
           <h2>Run Activity</h2>
           <span className={`run-activity-status status-${viewModel.status}`}>
             {rootStatus}
-            {viewModel.durationMs == null ? '' : ` / ${formatDuration(viewModel.durationMs)}`}
+            {viewModel.durationMs == null ? '' : ` / ${formatRunActivityDuration(viewModel.durationMs)}`}
           </span>
           {viewModel.accounting && (
             <span className="run-activity-summary">{formatAccounting(viewModel.accounting)}</span>
@@ -1456,7 +1457,9 @@ const RunActivityRow: FC<{
             <time dateTime={new Date(item.startedAt).toISOString()}>{formatTime(item.startedAt)}</time>
           )}
         </span>
-        <span className="run-activity-duration">{item.durationMs != null && formatDuration(item.durationMs)}</span>
+        <span className="run-activity-duration">
+          {item.durationMs != null && formatRunActivityDuration(item.durationMs)}
+        </span>
         <span className="run-activity-chevron" aria-hidden="true">
           {expanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
         </span>
@@ -1482,7 +1485,7 @@ const RunActivityRow: FC<{
                     )}
                   </span>
                   {child.durationMs != null && (
-                    <span className="run-activity-child-secondary">{formatDuration(child.durationMs)}</span>
+                    <span className="run-activity-child-secondary">{formatRunActivityDuration(child.durationMs)}</span>
                   )}
                   {child.toolResultTarget && onOpenToolResult && (
                     <button
@@ -1594,12 +1597,6 @@ function getEmptyStateMessage(
   if (filter === 'llm-tools') return 'No LLM or tool activity was recorded in this run.';
   if (filter === 'errors') return 'No errors were recorded in this run.';
   return 'No activity matches the current filters.';
-}
-
-function formatDuration(value: number): string {
-  if (value < 1_000) return `${Math.max(0, Math.round(value))} ms`;
-  const seconds = value / 1_000;
-  return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} sec`;
 }
 
 function formatTime(value: number): string {
