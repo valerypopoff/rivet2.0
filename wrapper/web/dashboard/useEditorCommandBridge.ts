@@ -3,7 +3,7 @@ import { useSetAtom } from 'jotai';
 import { useEffect, useRef } from 'react';
 
 import type { RivetWorkspaceHost } from '../../../rivet/packages/app/src/host';
-import { clearLoadedRecordingForProjectState } from '../../../rivet/packages/app/src/state/execution';
+import { loadedRecordingState } from '../../../rivet/packages/app/src/state/execution';
 import {
   loadedProjectState,
   openedProjectSnapshotsState,
@@ -60,7 +60,7 @@ export function useEditorCommandBridge({
 }) {
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
-  const clearLoadedRecordingForProject = useSetAtom(clearLoadedRecordingForProjectState);
+  const setLoadedRecording = useSetAtom(loadedRecordingState);
   const projectsRef = useRef(projects);
   const loadedProjectRef = useRef(loadedProject);
   const currentProjectRef = useRef(currentProject);
@@ -80,7 +80,8 @@ export function useEditorCommandBridge({
   useEffect(() => {
     const context: EditorCommandBridgeContext = {
       clearLoadedRecording: (projectId) => {
-        clearLoadedRecordingForProject(projectId);
+        setLoadedRecording((loadedRecording) =>
+          projectId != null && loadedRecording?.projectId === projectId ? null : loadedRecording);
       },
       getCurrentProject: () => currentProjectRef.current,
       getLoadedProject: () => loadedProjectRef.current,
@@ -163,8 +164,8 @@ export function useEditorCommandBridge({
   }, [
     preview,
     recording,
-    clearLoadedRecordingForProject,
     setLoadedProject,
+    setLoadedRecording,
     setOpenedProjectSnapshots,
   ]);
 }
