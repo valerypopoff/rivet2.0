@@ -31,11 +31,6 @@ const STATUS_TEXT: Record<number, string> = {
   429: 'Rate Limited',
 };
 
-function compact(value: string, maxLength = 500): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (value == null || typeof value !== 'object') {
     return false;
@@ -62,7 +57,7 @@ function stringifyProviderValue(value: unknown): string | undefined {
   }
 
   if (typeof value === 'string') {
-    return compact(value);
+    return value;
   }
 
   if (typeof value === 'number' || typeof value === 'boolean') {
@@ -70,7 +65,7 @@ function stringifyProviderValue(value: unknown): string | undefined {
   }
 
   try {
-    return compact(JSON.stringify(value));
+    return JSON.stringify(value);
   } catch {
     return undefined;
   }
@@ -102,7 +97,7 @@ function parseResponseBodyMessage(responseBody: string | undefined): string | un
   try {
     return findProviderMessage(JSON.parse(responseBody));
   } catch {
-    return compact(responseBody);
+    return responseBody;
   }
 }
 
@@ -149,14 +144,7 @@ function getProviderMessage(error: unknown, seen = new Set<unknown>()): string |
 }
 
 function formatEndpoint(url: string): string {
-  try {
-    const parsed = new URL(url);
-    parsed.search = '';
-    parsed.hash = '';
-    return parsed.toString();
-  } catch {
-    return compact(url.split(/[?#]/, 1)[0] ?? url);
-  }
+  return url;
 }
 
 function getApiCallRecommendation(statusCode: number | undefined, context: ChatV2ErrorContext): string {
@@ -289,7 +277,7 @@ function formatProviderFetchError(error: ErrorLike, context: ChatV2ErrorContext)
     `Model: ${context.modelId}`,
     'The browser/runtime fetch layer hid the provider response. In Browser executor mode this commonly happens because of CORS or a provider-side request rejection.',
     'Check the API key source, provider URL, and network access. Use the Node executor when you need the exact provider HTTP status.',
-    compact(error.message),
+    error.message,
   ].join('\n');
 }
 
@@ -332,7 +320,7 @@ function formatKnownSdkError(error: ErrorLike, context: ChatV2ErrorContext): str
       'LLM API key could not be loaded.',
       `Provider: ${getChatV2ProviderLabel(context.provider)}`,
       'Check the API key source and configured provider credentials.',
-      compact(error.message),
+      error.message,
     ].join('\n');
   }
 
@@ -352,7 +340,7 @@ function formatKnownSdkError(error: ErrorLike, context: ChatV2ErrorContext): str
       `Provider: ${getChatV2ProviderLabel(context.provider)}`,
       `Model: ${context.modelId}`,
       'Check the response format settings and provider response.',
-      compact(error.message),
+      error.message,
     ].join('\n');
   }
 

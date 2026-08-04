@@ -137,8 +137,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.retryOnNon200, false);
     assert.equal(node.data.retryOnNon200RepeatTimes, 1);
     assert.equal(node.data.retryOnNon200CooldownMs, 0);
-    assert.equal(node.data.outputRequestStatus, false);
-    assert.equal(node.data.outputRequestError, false);
+    assert.equal(node.data.outputLLMAttempts, false);
     assert.equal(node.data.outputRequestBody, false);
     assert.equal(node.data.outputResponseBody, false);
   });
@@ -422,9 +421,9 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(errorBehaviorGroup.editors[1]?.hideIf({ retryOnNon200: false }), true);
     assert.equal(errorBehaviorGroup.editors[1]?.hideIf({ retryOnNon200: true }), false);
     assert.equal(errorBehaviorGroup.editors[2]?.dataKey, 'retryOnNon200CooldownMs');
-    assert.equal(errorBehaviorGroup.editors[3]?.dataKey, 'outputRequestError');
+    assert.equal(errorBehaviorGroup.editors.length, 3);
     assert.equal(
-      outputsGroup.editors.some((editor: any) => editor.dataKey === 'outputRequestStatus'),
+      outputsGroup.editors.some((editor: any) => editor.dataKey === 'outputLLMAttempts'),
       true,
     );
     assert.equal(
@@ -445,73 +444,41 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(legacyCacheEditor.hideIf({ cache: true }), false);
   });
 
-  it('adds independent request diagnostic outputs only when their controls are on', () => {
+  it('adds LLM Attempts and HTTP body diagnostics only when their controls are on', () => {
     const defaultNode = createNode();
-    const statusNode = createNode({
-      outputRequestStatus: true,
-    });
-    const retryStatusNode = createNode({
-      outputRequestStatus: true,
-      retryOnNon200: true,
-    });
-    const errorNode = createNode({
-      outputRequestError: true,
-    });
+    const attemptsNode = createNode({ outputLLMAttempts: true });
     const bodyNode = createNode({
       outputRequestBody: true,
     });
     const responseBodyNode = createNode({
       outputResponseBody: true,
     });
-    const profileStatusNode = createNode({
+    const profileAttemptsNode = createNode({
       configurationMode: 'profile',
-      outputRequestStatus: true,
+      outputLLMAttempts: true,
     });
 
-    assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestStatus'));
-    assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestError'));
+    assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'llmAttempts'));
     assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'requestBody'));
     assert.ok(!defaultNode.getOutputDefinitions().some((output) => output.id === 'responseBody'));
     assert.deepEqual(
-      statusNode.getOutputDefinitions().find((output) => output.id === 'requestStatus'),
+      attemptsNode.getOutputDefinitions().find((output) => output.id === 'llmAttempts'),
       {
-        id: 'requestStatus',
-        title: 'Response Status',
-        dataType: 'number',
-      },
-    );
-    assert.deepEqual(
-      retryStatusNode.getOutputDefinitions().find((output) => output.id === 'requestStatus'),
-      {
-        id: 'requestStatus',
-        title: 'Response Status',
-        dataType: 'number[]',
-      },
-    );
-    assert.deepEqual(
-      statusNode.getOutputDefinitions().find((output) => output.id === 'requestError'),
-      undefined,
-    );
-    assert.deepEqual(
-      retryStatusNode.getOutputDefinitions().find((output) => output.id === 'requestError'),
-      undefined,
-    );
-    assert.deepEqual(
-      errorNode.getOutputDefinitions().find((output) => output.id === 'requestError'),
-      {
-        id: 'requestError',
-        title: 'Response Error',
-        dataType: 'string',
-      },
-    );
-    assert.deepEqual(
-      profileStatusNode.getOutputDefinitions().find((output) => output.id === 'requestStatus'),
-      {
-        id: 'requestStatus',
-        title: 'Response Status',
-        dataType: ['number', 'number[]', 'any'],
+        id: 'llmAttempts',
+        title: 'LLM Attempts',
+        dataType: 'object[]',
         description:
-          'A scalar profile keeps the normal status shape. An LLM Profile array groups values by profile: one request is a number, retries are a number array.',
+          'Chronological provider configuration, request, and response-validation attempts for this LLM Chat run.',
+      },
+    );
+    assert.deepEqual(
+      profileAttemptsNode.getOutputDefinitions().find((output) => output.id === 'llmAttempts'),
+      {
+        id: 'llmAttempts',
+        title: 'LLM Attempts',
+        dataType: 'object[]',
+        description:
+          'Chronological provider configuration, request, and response-validation attempts for this LLM Chat run.',
       },
     );
     assert.deepEqual(
@@ -541,23 +508,7 @@ describe('LLMChatV2NodeImpl', () => {
       'LLM response body follows LLM request body in the node output contract.',
     );
     assert.equal(
-      retryStatusNode.getOutputDefinitions().some((output) => output.id === 'requestStatuses'),
-      false,
-    );
-    assert.equal(
-      retryStatusNode.getOutputDefinitions().some((output) => output.id === 'requestErrors'),
-      false,
-    );
-    assert.equal(
-      errorNode.getOutputDefinitions().some((output) => output.id === 'requestStatus'),
-      false,
-    );
-    assert.equal(
-      bodyNode.getOutputDefinitions().some((output) => output.id === 'requestStatus'),
-      false,
-    );
-    assert.equal(
-      bodyNode.getOutputDefinitions().some((output) => output.id === 'requestError'),
+      attemptsNode.getOutputDefinitions().some((output) => output.id === 'requestStatus' || output.id === 'requestError'),
       false,
     );
     assert.equal(
@@ -723,9 +674,16 @@ describe('LLMChatV2NodeImpl', () => {
       toolsGroup.editors.find((editor: any) => editor.dataKey === 'parallelToolCalls')?.label,
       'Allow parallel toolcalls',
     );
+    const parallelToolCallsEditor = toolsGroup.editors.find(
+      (editor: any) => editor.dataKey === 'parallelToolCalls',
+    ) as any;
     assert.equal(
-      toolsGroup.editors.find((editor: any) => editor.dataKey === 'parallelToolCalls')?.helperMessage,
+      parallelToolCallsEditor.helperMessage({ configurationMode: 'inline' }),
       'Allows the model to request multiple tool calls in one round.',
+    );
+    assert.match(
+      parallelToolCallsEditor.helperMessage({ configurationMode: 'profile' }),
+      /applies only to candidates whose providers support parallel tool calls/,
     );
     assert.equal(
       toolsGroup.editors

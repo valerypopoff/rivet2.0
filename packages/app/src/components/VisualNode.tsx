@@ -40,6 +40,12 @@ import { getDuplicateGraphOutputIdWarning } from '../domain/graphEditing/graphOu
 import { duplicateGraphOutputIdsState } from '../state/selectors/graphOutputs.js';
 import { getRecursiveSubGraphWarning } from '../domain/graphEditing/subGraphs.js';
 import { projectState } from '../state/savedGraphs.js';
+import { graphState } from '../state/atoms/graph.js';
+import {
+  getDuplicateToolNodeIds,
+  getMissingAutoDelegateToolGraphWarnings,
+  getToolNodeHeaderWarning,
+} from '../domain/graphEditing/toolWarnings.js';
 
 export type VisualNodeProps = {
   node: ChartNode;
@@ -203,7 +209,6 @@ const VisualNodeImpl = memo(
               conditional: !!node.isConditional,
               hasPrefabIndicator: isNodePrefabInstance,
               hasHeaderWarning: Boolean(headerWarning),
-              hasToolCallContinuationIndicator: node.type === 'delegateFunctionCall',
               hasCompareChange: compareChangeKind === 'changed',
               [`compare-${compareChangeKind}`]: compareChangeKind && compareChangeKind !== 'unchanged',
             },
@@ -285,6 +290,52 @@ const GraphOutputVisualNode = memo(
   }),
 );
 
+const ToolVisualNode = memo(
+  forwardRef<HTMLDivElement, VisualNodeImplProps>((props, ref) => {
+    const graph = useAtomValue(graphState);
+    const project = useAtomValue(projectState);
+    const nodeForWarnings = props.editTargetNode ?? props.node;
+    const headerWarning = useMemo(() => {
+      // A prefab/library instance can render the source node while its
+      // editable target has newer data. Project the editable target into the
+      // topology before checking it, so the warning is accurate while the
+      // user is actively changing a Tool name rather than only after save.
+      const graphForWarnings = graph.nodes.some((candidate) => candidate.id === nodeForWarnings.id)
+        ? {
+            ...graph,
+            nodes: graph.nodes.map((candidate) =>
+              candidate.id === nodeForWarnings.id ? nodeForWarnings : candidate,
+            ),
+          }
+        : graph;
+      const graphId = graphForWarnings.metadata?.id;
+      const projectWithCurrentGraph =
+        graphId == null
+          ? project
+          : {
+              ...project,
+              graphs: {
+                ...project.graphs,
+                [graphId]: graphForWarnings,
+              },
+            };
+      return (
+        props.headerWarning ??
+        getToolNodeHeaderWarning({
+          node: nodeForWarnings,
+          duplicateToolNodeIds: getDuplicateToolNodeIds(graphForWarnings),
+          missingAutoDelegateToolGraphWarnings: getMissingAutoDelegateToolGraphWarnings(
+            graphForWarnings,
+            projectWithCurrentGraph,
+          ),
+        })
+      );
+    }, [graph, nodeForWarnings, project, props.headerWarning]);
+
+    return <VisualNodeImpl {...props} ref={ref} headerWarning={headerWarning} />;
+  }),
+);
+
 const SubGraphVisualNode = memo(
   forwardRef<HTMLDivElement, VisualNodeImplProps>((props, ref) => {
     const containingGraphId = useAtomValue(graphMetadataState)?.id;
@@ -302,6 +353,10 @@ const RoutedVisualNode = memo(
 
     if (props.node.type === 'graphOutput') {
       return <GraphOutputVisualNode {...props} ref={ref} />;
+    }
+
+    if (props.node.type === 'gptFunction') {
+      return <ToolVisualNode {...props} ref={ref} />;
     }
 
     if (props.node.type === 'subGraph') {

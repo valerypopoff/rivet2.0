@@ -384,6 +384,28 @@ export const nodeStyles = css`
     stroke-linejoin: round;
   }
 
+  .title-text-label .tool-call-continuation-tooltip {
+    display: inline-flex;
+    margin-right: 0.35em;
+    pointer-events: auto;
+    vertical-align: -0.14em;
+  }
+
+  .title-text-label .tool-call-continuation-indicator {
+    align-items: center;
+    color: currentColor;
+    cursor: help;
+    display: inline-flex;
+    height: 1em;
+    justify-content: center;
+    width: 1em;
+
+    svg {
+      height: 1em;
+      width: 1em;
+    }
+  }
+
   .node .node-title .title-text-description {
     min-width: 0;
     max-width: 100%;
@@ -489,8 +511,7 @@ export const nodeStyles = css`
     .changed-button,
     .edit-button,
     .node-prefab-instance-indicator,
-    .node-header-warning,
-    .tool-call-continuation-indicator {
+    .node-header-warning {
       background-color: transparent;
       border: none;
       color: var(--node-bg-foreground);
@@ -515,12 +536,6 @@ export const nodeStyles = css`
       cursor: help;
       pointer-events: auto;
       width: calc(20px * var(--ui-font-scale));
-    }
-
-    .tool-call-continuation-indicator {
-      cursor: help;
-      pointer-events: auto;
-      width: calc(24px * var(--ui-font-scale));
     }
 
     .node-prefab-instance-indicator {
@@ -552,12 +567,6 @@ export const nodeStyles = css`
   }
 
   .node.hasHeaderWarning:not(.isComment) .title-controls {
-    gap: calc(3px * var(--ui-font-scale));
-    min-width: calc(66px * var(--ui-font-scale));
-    width: max-content;
-  }
-
-  .node.hasToolCallContinuationIndicator:not(.isComment) .title-controls {
     gap: calc(3px * var(--ui-font-scale));
     min-width: calc(66px * var(--ui-font-scale));
     width: max-content;
@@ -604,12 +613,6 @@ export const nodeStyles = css`
   }
 
   .title-controls .node-prefab-instance-tooltip {
-    position: static;
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .title-controls .tool-call-continuation-tooltip {
     position: static;
     opacity: 1;
     pointer-events: auto;

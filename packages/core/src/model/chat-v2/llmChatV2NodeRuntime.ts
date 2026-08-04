@@ -3,7 +3,11 @@ import type { GptFunction } from '../DataValue.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
-import { createLLMProfileFallbackRunner, type LLMProfileAttempt } from './llmProfileFallback.js';
+import {
+  createLLMProfileFallbackRunner,
+  getLLMAttemptErrorMessage,
+  type LLMAttempt,
+} from './llmProfileFallback.js';
 import { applyLLMProfileToNodeData, normalizeLLMProfileChainInput } from './llmProfile.js';
 import { buildLLMInvocationPlan, buildLLMInvocationRunOptions } from './llmInvocationPlan.js';
 import { resolveLLMModelCandidate } from './llmModelCandidate.js';
@@ -21,11 +25,11 @@ import {
   resolveLLMChatV2RuntimeProviderOptions,
 } from './chatV2RuntimeOptions.js';
 import { type LLMChatV2EditorCacheKeyParts, type LLMChatV2NodeData } from './llmChatV2NodeData.js';
-import { runChatV2Pipeline } from './chatV2Pipeline.js';
+import { isChatV2ResponseValidationError, runChatV2Pipeline } from './chatV2Pipeline.js';
 
 export { buildLLMChatV2EditorCacheKey, cloneLLMChatV2EditorCacheOutputs };
 export { resolveLLMChatV2RuntimeProviderOptions } from './chatV2RuntimeOptions.js';
-export type { LLMProfileAttempt } from './llmProfileFallback.js';
+export type { LLMAttempt } from './llmProfileFallback.js';
 
 export type LLMChatV2RuntimeConfig = {
   /**
@@ -42,11 +46,7 @@ export type LLMChatV2RuntimeConfig = {
   editorCache: Map<string, unknown> | undefined;
   shouldAutoContinueToolCalls: boolean;
   maxToolRounds: number;
-  profileAttempts: LLMProfileAttempt[] | undefined;
-  /** True only when the incoming LLM Profile value was an actual array. */
-  profileChainUsesArray: boolean;
-  /** Defined for From profile runs, including a scalar single-profile input. */
-  profileChainLength: number | undefined;
+  outputLLMAttempts: boolean;
   getProfileSummary: (() => string) | undefined;
   isProfileFallbackExhausted: () => boolean;
 };
@@ -57,7 +57,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
   inputs: Inputs;
   context: InternalProcessContext;
   /** Invocation-owned observer; it must not affect fallback recovery. */
-  onProfileAttempt?: ((attempt: LLMProfileAttempt) => void) | undefined;
+  onLLMAttempt?: ((attempt: LLMAttempt) => void) | undefined;
 }): Promise<LLMChatV2RuntimeConfig> {
   const { data, nodeId, inputs, context } = params;
   const profileInput = inputs['llmProfile' as PortId];
@@ -102,16 +102,59 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
 
     return {
       runOptions: inlineRunOptions,
-      runPipeline: (roundOptions) => runChatV2Pipeline({ ...roundOptions, model: inlineRunOptions.model }),
+      runPipeline: async (roundOptions) => {
+        try {
+          return await runChatV2Pipeline({
+            ...roundOptions,
+            model: inlineRunOptions.model,
+            onProviderAttempt: (attempt) => {
+              try {
+                roundOptions.onProviderAttempt?.(attempt);
+              } catch {
+                // A caller-owned observer must not affect the physical request.
+              }
+              try {
+                params.onLLMAttempt?.({
+                  roundIndex: roundOptions.roundIndex ?? 0,
+                  provider: inlineRunOptions.provider,
+                  model: inlineRunOptions.modelId,
+                  stage: 'request',
+                  outcome:
+                    attempt.outcome === 'success' ? 'success' : attempt.outcome === 'aborted' ? 'aborted' : 'failure',
+                  attemptIndex: attempt.attemptIndex,
+                  ...(attempt.status == null ? {} : { status: attempt.status }),
+                  ...(attempt.error == null ? {} : { error: getLLMAttemptErrorMessage(attempt.error) }),
+                });
+              } catch {
+                // Diagnostics must never affect a model invocation.
+              }
+            },
+          });
+        } catch (error) {
+          if (isChatV2ResponseValidationError(error)) {
+            try {
+              params.onLLMAttempt?.({
+                roundIndex: roundOptions.roundIndex ?? 0,
+                provider: inlineRunOptions.provider,
+                model: inlineRunOptions.modelId,
+                stage: 'response-validation',
+                outcome: 'failure',
+                error: getLLMAttemptErrorMessage(error),
+              });
+            } catch {
+              // Diagnostics must never affect a model invocation.
+            }
+          }
+          throw error;
+        }
+      },
       functions: plan.functions,
       cacheKey,
       cachedOutputs,
       editorCache,
       shouldAutoContinueToolCalls: !!data.autoContinueToolCalls && data.useToolCalling,
       maxToolRounds: data.maxToolRounds ?? 3,
-      profileAttempts: undefined,
-      profileChainUsesArray: false,
-      profileChainLength: undefined,
+      outputLLMAttempts: data.outputLLMAttempts === true,
       getProfileSummary: undefined,
       isProfileFallbackExhausted: () => false,
     };
@@ -153,11 +196,6 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     candidates: profiles.map((profile) => ({
       provider: parseChatV2Provider(profile.configuration.provider),
       model: profile.configuration.model,
-      credential: profile.credential.value,
-      redactionValues: [
-        ...profile.configuration.headers.map((header) => header.value),
-        ...Object.values(cleanHeaders(context.settings?.chatNodeHeaders ?? {})),
-      ],
     })),
     resolveCandidate: (profileIndex, roundOptions) =>
       resolveLLMModelCandidate({
@@ -165,7 +203,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
         profile: profiles[profileIndex]!,
         roundOptions,
       }).then((candidate) => candidate.runOptions),
-    onAttempt: params.onProfileAttempt,
+    onAttempt: params.onLLMAttempt,
   });
   const { cacheKey, cachedOutputs } = resolveLLMChatV2EditorCache({
     apiKey: undefined,
@@ -179,7 +217,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     provider: firstProvider,
     // Profile headers are part of the individual profile fingerprints, but
     // provider resolution also merges project-wide Chat headers. Include those
-    // values through the existing redacted provider-config fingerprint so a
+    // values through the normalized provider-config fingerprint so a
     // global-header edit cannot reuse a stale profile-mode editor cache entry.
     providerConfig: { headers: cleanHeaders(context.settings?.chatNodeHeaders ?? {}) },
     providerOptions: undefined,
@@ -187,7 +225,6 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     systemPrompt: plan.systemPrompt,
     toolChoice: plan.toolChoice,
     profileChain: profiles,
-    profileChainUsesArray: Array.isArray(profileInput?.value),
   });
 
   return {
@@ -199,9 +236,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     editorCache,
     shouldAutoContinueToolCalls: !!data.autoContinueToolCalls && data.useToolCalling,
     maxToolRounds: data.maxToolRounds ?? 3,
-    profileAttempts: fallbackRunner.attempts,
-    profileChainUsesArray: Array.isArray(profileInput?.value),
-    profileChainLength: profiles.length,
+    outputLLMAttempts: data.outputLLMAttempts === true,
     getProfileSummary: fallbackRunner.summary,
     isProfileFallbackExhausted: fallbackRunner.wasExhausted,
   };

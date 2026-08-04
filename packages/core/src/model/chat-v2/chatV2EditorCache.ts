@@ -139,8 +139,6 @@ export function resolveLLMChatV2EditorCache(params: {
   systemPrompt: unknown;
   toolChoice: ChatV2ToolChoice | undefined;
   profileChain?: readonly LLMProfileValue[] | undefined;
-  /** Keeps scalar profile output shapes distinct from one-item profile arrays. */
-  profileChainUsesArray?: boolean | undefined;
 }): { cacheKey: string | undefined; cachedOutputs: Outputs | undefined } {
   const { editorCache } = params;
 
@@ -165,10 +163,7 @@ export function resolveLLMChatV2EditorCache(params: {
     profileChain:
       params.profileChain == null
         ? undefined
-        : {
-            inputWasArray: params.profileChainUsesArray ?? false,
-            profiles: fingerprintProfileChainForCache(params.data, params.profileChain),
-          },
+        : fingerprintProfileChainForCache(params.data, params.profileChain),
   });
 
   return {

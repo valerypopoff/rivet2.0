@@ -71,7 +71,7 @@ export async function resolveLLMModelCandidate(params: {
     onResponseBody:
       plan.responseBodyCapture == null
         ? undefined
-        : (response) => plan.responseBodyCapture!.capture(response, [credential.value ?? '']),
+        : (response) => plan.responseBodyCapture!.capture(response),
     transformRequestBody,
   });
   const generationParameters = resolveLLMChatV2GenerationParameters(effectiveData, plan.inputs);

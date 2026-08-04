@@ -123,8 +123,6 @@ export type RunChatV2PipelineOptions = {
   responseBodyCapture?: ChatV2ResponseBodyCapture | undefined;
   outputUsage?: boolean | undefined;
   outputReasoning?: boolean | undefined;
-  outputRequestStatus?: boolean | undefined;
-  outputRequestError?: boolean | undefined;
   outputRequestBody?: boolean | undefined;
   outputResponseBody?: boolean | undefined;
   includeFunctionCalls?: boolean | undefined;
@@ -151,21 +149,8 @@ export type RunChatV2PipelineOptions = {
 /** Provider-neutral per-round fields. Candidate resolution supplies the model. */
 export type ChatV2PipelineRoundOptions = Omit<RunChatV2PipelineOptions, 'model'>;
 
-/**
- * Older LLM Chat nodes used Output request details as one switch for status,
- * error, and request body. Keep that saved contract intact while newly saved
- * nodes use the independent controls.
- */
-export function shouldOutputChatV2RequestError(
-  options: Pick<RunChatV2PipelineOptions, 'outputRequestStatus' | 'outputRequestError'>,
-): boolean {
-  return options.outputRequestError ?? options.outputRequestStatus ?? false;
-}
-
-export function shouldOutputChatV2RequestBody(
-  options: Pick<RunChatV2PipelineOptions, 'outputRequestStatus' | 'outputRequestBody'>,
-): boolean {
-  return options.outputRequestBody ?? options.outputRequestStatus ?? false;
+export function shouldOutputChatV2RequestBody(options: Pick<RunChatV2PipelineOptions, 'outputRequestBody'>): boolean {
+  return options.outputRequestBody === true;
 }
 
 /** New diagnostics are opt-in; old status-detail nodes never expose responses. */

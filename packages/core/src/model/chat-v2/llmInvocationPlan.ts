@@ -15,7 +15,6 @@ import { resolveLLMChatV2ToolChoice } from './chatV2RuntimeOptions.js';
 import { shouldIncludeLLMChatV2ToolCalls, type LLMChatV2NodeData } from './llmChatV2NodeData.js';
 import {
   shouldOutputChatV2RequestBody,
-  shouldOutputChatV2RequestError,
   shouldOutputChatV2ResponseBody,
   type RunChatV2PipelineOptions,
 } from './chatV2Types.js';
@@ -94,8 +93,6 @@ export function buildLLMInvocationRunOptions(params: {
     responseFormat: plan.responseFormatParameters?.responseFormat,
     outputUsage: plan.data.outputUsage,
     outputReasoning: plan.data.outputReasoning,
-    outputRequestStatus: plan.data.outputRequestStatus,
-    outputRequestError: shouldOutputChatV2RequestError(plan.data),
     outputRequestBody: shouldOutputChatV2RequestBody(plan.data),
     outputResponseBody: shouldOutputChatV2ResponseBody(plan.data),
     includeFunctionCalls: shouldIncludeLLMChatV2ToolCalls(plan.data),

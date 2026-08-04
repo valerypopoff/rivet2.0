@@ -107,47 +107,25 @@ The chain covers construction and execution of the provider/model round. Tool
 handler/delegate execution, connected-continuation scheduling, direct-return
 handler validation, and downstream graph work retain their normal errors; a
 successful model response is not rerun on another profile because a tool handler
-failed. A provider response with a non-200 status is unsuccessful even when
-`Output response error` would normally convert that one-profile call into an
-excluded diagnostic output.
+failed. A provider response with a non-200 status is always unsuccessful. A
+terminal provider failure is a real LLM Chat node error; it never becomes an
+excluded output and cannot trigger tool continuation.
 
-Profile mode always exposes `LLM Profile Summary` (`llmProfileSummary`,
-`string`) and `LLM Profile Attempts` (`llmProfileAttempts`, `object[]`). The
-summary names every configured array position as succeeded, failed, or not
-attempted, so a recovered primary failure is visible in the ordinary node
-output. The attempt array is chronological and contains the round/profile
-index, safe provider/model identity, configuration versus request stage,
-physical retry attempt index, outcome, observable HTTP status, and a
-redacted/capped error message where applicable. Attempt stages distinguish
-configuration, physical request, and parsed-response validation. A request can
-therefore retain its truthful HTTP 200 success immediately before that profile's
-response-validation failure. Redaction covers the profile
-API key and known profile/global request-header values. It is the authoritative
-cross-profile debugging history. A scalar profile retains the normal
-`Response Status` / `Response Error` scalar-or-retry-array shape. When the
-incoming profile value is an actual `llm-config[]` array, those outputs are Any
-Data Values grouped by input profile. `Response Status` uses a number for a
-profile with exactly one physical request and a `number[]` only when that
-profile has multiple requests. `Response Error` is compact: one error is a
-string, retries remain a `string[]`, and a chain with no request errors returns
-`[]`. When a multi-profile chain has an error, it preserves the profile
-positions, for example `['Invalid URL', []]`. Configuration failures still
-appear in `LLM Profile Attempts`, which remains the complete per-profile,
-per-attempt record. If the terminal candidate fails during setup rather than in
-a provider call, the node keeps the aggregate chain error instead of
-misreporting an earlier profile's request details. Request-body capture remains
-in physical call order. The editor cache fingerprints the complete ordered
-profile chain, including whether its input was scalar or array, effective global
-Chat headers, and each credential rather than storing raw keys. A cache hit
-emits an empty attempt array and an explicit cache-hit summary because it made
-no physical provider attempt, and a run that exhausts a chain is never cached.
-Exhausted-chain errors label every retained configuration, request, and
-response-validation event with its explicit outcome, so an HTTP 200 followed
-by rejected parsed output cannot be mistaken for a failed transport call.
-Continuation lines in multiline attempt errors remain indented under the
-attempt that owns them.
-The exhausted-chain error intentionally does not retain a raw `cause`; its safe
-attempt history is the error's complete diagnostic surface.
+`Output LLM attempts` (`outputLLMAttempts`) adds `LLM Attempts`
+(`llmAttempts`, `object[]`) in both Inline and From profile modes. It is one
+chronological, developer-visible record per profile configuration, physical
+provider request, or JSON-schema response-validation attempt. Each record holds
+provider/model identity, model round, retry index where applicable, outcome,
+observable HTTP status, and original error text where available. Profile records
+also carry their zero-based `profileIndex`. `LLM Profile Summary`
+(`llmProfileSummary`, `string`) remains profile-only and names every configured
+candidate as succeeded, failed, or not attempted. Captured response bodies and
+attempt errors are deliberately neither redacted nor truncated. The editor cache
+fingerprints the complete ordered profile chain, effective global Chat headers,
+and each credential without storing
+raw keys. A cache hit emits an empty LLM Attempts array and an explicit profile
+summary because it made no provider call. Exhausted chains are never cached and
+their error includes every retained attempt.
 
 The editor's Inline-only **Export LLM settings to profile node** action is a graph-editing
 convenience, not a third configuration mode. It creates a neighbouring LLM
@@ -187,51 +165,43 @@ Rivet Tool Calls port or output. The shared `shouldIncludeLLMChatV2ToolCalls(...
 policy owns this decision for both port declaration and runtime output
 construction.
 
+The app-level `toolWarnings.ts` is the editor-only guard for static Rivet Tool
+wiring. It shows the normal node-header warning on every enabled Tool whose
+literal name duplicates another Tool in the same LLM Chat **Tools** input,
+because those definitions would overwrite each other in that model tool
+registry. Tools in separate registries are allowed to share a name. For an
+eligible connected LLM Chat → Delegate Tool Call continuation with **Auto
+Delegate** enabled, it also warns every statically named connected Tool unless
+the project contains a graph whose name exactly matches that Tool name. Dynamic
+Tool names are intentionally not guessed, and Delegate external/unknown-handler
+settings remain fallbacks rather than substitutes for a named handler graph.
+
 ### Invocation output and error controls
 
 `Response Tokens` is retired from LLM Chat V2. `Usage` is the complete token and
 cost observation surface and is emitted only when `Output usage details` is on.
 
-The **Outputs** group owns `Output response status` (`outputRequestStatus`),
+The **Outputs** group owns `Output LLM attempts` (`outputLLMAttempts`),
 `Output request body` (`outputRequestBody`), `Output response body`
-(`outputResponseBody`), reasoning, usage, and streaming. The **Error behavior**
-group owns retry controls and `Output response error` (`outputRequestError`).
-These diagnostics are deliberately independent:
+(`outputResponseBody`), reasoning, usage, and streaming. **Error behavior**
+owns retry controls. `LLM Attempts` is the sole retry/fallback debugging
+surface; `Response Status` and `Response Error` are retired and are no longer
+node ports. Request body exposes the provider request payload but not transport
+headers. Response body clones the provider HTTP response before the SDK
+consumes it, parses valid JSON for inspection, otherwise preserves text, and
+leaves captured content unredacted and untruncated.
 
-- status reports the successful/final transport status, including retries;
-- request body exposes only the captured provider body, never authorization
-  headers or API keys; and
-- response body clones the provider HTTP response before the SDK consumes it,
-  parses valid JSON for inspection, otherwise preserves response text, and
-  redacts the active API key if a provider echoed it; and
-- response error turns recognized provider/API/fetch failures into excluded
-  response outputs plus the error output. It does not hide local graph, model,
-  or request-construction errors.
-
-Internally, a provider failure that is represented as normal diagnostic outputs
-is marked as a terminal provider failure. Failed providers can still expose
-partial response text or tool-shaped data; that material is inspectable only.
-LLM Chat never treats it as a successful model result for tool continuation:
-it does not delegate apparent tool calls or release a connected Delegate Tool
-Call continuation from it.
-
-Older serialized nodes can contain only `outputRequestStatus`, formerly labeled
-**Output request details**. Deserialization materializes `outputRequestError`
-and `outputRequestBody` as true when that old setting was true, preserving the
-old ports and behavior. Programmatic callers that construct the old shape
-directly receive the same runtime fallback. Newly created nodes use three
-explicit false defaults. `outputResponseBody` is deliberately not part of that
-legacy fallback: it is a new, opt-in raw-response diagnostic.
+Older serialized `outputRequestStatus` and `outputRequestError` settings are
+migrated to `outputLLMAttempts: true` and then removed. The old request-details
+switch also preserves `outputRequestBody: true` when it had enabled that
+supported capture. Programmatic old fields are ignored. Newly created nodes use
+false defaults; `outputResponseBody` remains independently opt-in.
 
 The `cache` setting is legacy editor behavior. Its control is rendered only
 when the node already has `cache: true`; turning it off removes the control on
-the next editor render, while runtime support remains for old projects. Profile
-chain cache hits also normalize legacy request diagnostics to the current
-shape: one stored status is a number rather than a one-item array; one error is
-a string; retries remain arrays; and no request errors are `[]`. When more than
-one profile is involved and an error occurred, `Response Error` retains the
-profile positions, such as `['Invalid URL', []]`. `LLM Profile Attempts`
-always remains the full per-profile/per-attempt record.
+the next editor render, while runtime support remains for old projects. Cache
+hits never replay LLM Attempts because no provider calls occurred in the current
+invocation.
 
 The user-facing `LLM Chat` node is the current chat node. Its persisted internal
 node type is `llmChatV2`; legacy `Chat` / `Chat Loop` nodes remain compatibility
@@ -299,8 +269,8 @@ paths and should not be used as the primary target for new provider refactors.
   invokes that node-specific normalizer.
 - [`llmProfileFallback.ts`](../packages/core/src/model/chat-v2/llmProfileFallback.ts)
   owns ordered candidate attempts, retry-before-advance coordination,
-  forward-only profile stickiness across continuation rounds, redacted attempt
-  history, and safe exhausted-chain errors.
+  forward-only profile stickiness across continuation rounds, full developer-visible
+  attempt history, and exhausted-chain errors.
 - [`llmChatV2NodeEditors.ts`](../packages/core/src/model/chat-v2/llmChatV2NodeEditors.ts)
   owns settings-panel editor definitions and must preserve labels, port ids,
   and persisted data keys.
@@ -367,7 +337,7 @@ paths and should not be used as the primary target for new provider refactors.
   owns output-port compatibility and delegates final Response DataValue
   construction to `llmResponseMaterializer.ts`.
 - [`chatV2Errors.ts`](../packages/core/src/model/chat-v2/chatV2Errors.ts) owns
-  provider-error normalization and secret-safe messages. For observable API-call
+  provider-error normalization and complete developer-visible messages. For observable API-call
   failures it preserves the provider's original response message, preferring the
   HTTP response body over generic SDK metadata and following nested error causes;
   Rivet guidance supplements that message instead of replacing or deduplicating it.
@@ -459,10 +429,15 @@ paths and should not be used as the primary target for new provider refactors.
   path open, while keeping it owned by the root run. Each invocation's scalar
   tool-result downstream branches run after that invocation finishes.
 - The Delegate Tool Call canvas header includes a non-interactive two-lane
-  request/response icon: the upper arrow represents incoming LLM tool calls and
-  the lower arrow represents results returning to the LLM, which can continue
-  or issue another call. It is presentation-only and appears at normal and
-  zoomed-out canvas detail levels.
+  request/response icon immediately before its title: the upper arrow represents
+  incoming LLM tool calls and the lower arrow represents results returning to
+  the LLM, which can continue or issue another call. An eligible connected
+  LLM Chat ↔ Delegate Tool Call edge uses two inset parallel lanes with matching
+  directional arrowheads at their target endpoints, one LLM → Delegate and one
+  Delegate → LLM. The arrowheads are rendered over and slightly into their
+  target ports so they visibly enter, rather than disappear beneath, their
+  destination. These are
+  presentation-only and appear at normal and zoomed-out canvas detail levels.
 - Delegate Tool Call exposes **Tool Name** and **Tool Arguments** for each
   completed invocation. Tool Arguments is the normalized object actually passed
   to the handler, including parsed JSON-string arguments from legacy call
@@ -548,8 +523,9 @@ paths and should not be used as the primary target for new provider refactors.
   runtime enforces that restriction.
 - Structured-output fallback, deduping, and schema validation must stay covered
   by tests before moving normalization code.
-- Streaming output must preserve response text, all messages, request status,
-  request body, response body, usage, reasoning, and response-error ports.
+- Streaming output must preserve response text, all messages, request body,
+  response body, usage, reasoning, and the opt-in chronological `LLM Attempts`
+  output.
 - `Prompt` and `Assemble Message` can create distinct `system` and `developer`
   chat messages. AI SDK's provider-neutral `ModelMessage` exposes only `system`
   for instruction messages, so `messageConverter.ts` temporarily represents
@@ -576,11 +552,10 @@ paths and should not be used as the primary target for new provider refactors.
   `System Prompt` input leaves them untouched; a non-empty dedicated system
   prompt is prepended without replacing any of them. The merge checks the
   coerced string value, not the truthiness of its `DataValue` wrapper.
-- Provider errors must stay normalized and secret-safe; do not log raw provider
-  payloads or credentials. The opt-in `LLM response body` output is the sole
-  raw response-payload diagnostic: it captures no request headers, does not
-  consume the SDK response stream, and must not be connected to untrusted
-  user-facing flows.
+- Provider errors must stay normalized without shortening or redacting provider
+  diagnostics. The opt-in `LLM response body` output captures the raw response
+  payload without consuming the SDK response stream. It deliberately omits no
+  content, so workflow authors are responsible for where they expose it.
 - Editor cache keys must keep secret fingerprints and provider/model identity
   separated enough to avoid stale catalog reuse. The editor-only cache control
   is legacy: it is visible only on nodes that already have it enabled, and once
@@ -598,7 +573,7 @@ focused owner-level test before extracting that behavior.
 | Persisted node type, data keys, port ids, labels, and `maxTokens` compatibility                                                                               | `LLMChatV2Node.ts`, `llmChatV2NodeData.ts`, `llmChatV2NodeEditors.ts`                                                                                                                 | `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                          | integration                                               |
 | Provider/model option resolution, catalog labels, and pricing availability                                                                                    | `providerOptions.ts`, `modelRegistry.ts`, `llmChatV2NodeEditors.ts`                                                                                                                   | `packages/core/test/model/chat-v2/providerOptions.test.ts`, `packages/core/test/model/chat-v2/modelRegistry.test.ts`, `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                                                                                                                                                                                                                                    | focused                                                   |
 | Credential lookup and secret-free provider identity                                                                                                           | `chatV2ProviderProfile.ts`, `llmChatV2NodeRuntime.ts`                                                                                                                                 | `packages/core/test/model/chat-v2/chatV2ProviderProfile.test.ts`, `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                                                                                                                                                                                                                                                                                        | focused                                                   |
-| Stream/generate selection, retries, request/output policy, and secret-free inspection                                                                         | `chatV2RequestPlan.ts`, `chatV2Pipeline.ts`                                                                                                                                           | `packages/core/test/model/chat-v2/chatV2RequestPlan.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                                                                                                                                                                                                                                                                                                                                         | focused                                                   |
+| Stream/generate selection, retries, request/output policy, and complete developer inspection                                                                   | `chatV2RequestPlan.ts`, `chatV2Pipeline.ts`                                                                                                                                           | `packages/core/test/model/chat-v2/chatV2RequestPlan.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                                                                                                                                                                                                                                                                                                                                         | focused                                                   |
 | Custom-provider base URL/header handling, generation parameters, and omission of unset SDK fields                                                             | `llmChatV2NodeRuntime.ts`, `chatV2RuntimeOptions.ts`                                                                                                                                  | `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                          | integration                                               |
 | Custom-provider JSON-schema `response_format` override and provider option conflict handling                                                                  | `chatV2ResponseFormat.ts`, `chatV2RuntimeOptions.ts`                                                                                                                                  | `packages/core/test/model/chat-v2/chatV2ResponseFormat.test.ts`, `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                                                                                                                                                                                                                                                                                         | focused                                                   |
 | Tool use versus structured output mutual exclusion                                                                                                            | `chatV2FeatureCompatibility.ts`, `llmChatV2NodeRuntime.ts`, app editor validation                                                                                                     | `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                          | integration                                               |
@@ -607,8 +582,8 @@ focused owner-level test before extracting that behavior.
 | Message normalization and provider-neutral message conversion                                                                                                 | `messageConverter.ts`, `chatV2Pipeline.ts`                                                                                                                                            | `packages/core/test/model/chat-v2/messageConverter.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                                                                                                                                                                                                                                                                                                                                          | focused                                                   |
 | Tool conversion, `Tool Calls` output label / `function-calls` output id, output shape, and internal auto-continuation                                         | `toolConverter.ts`, `toolContinuation.ts`, `chatV2Pipeline.ts`                                                                                                                        | `packages/core/test/model/chat-v2/toolContinuation.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                                                                                                                                                                                                                                                                                                                                          | focused                                                   |
 | Connected Delegate resolution, round coordination, branch planning, pre-tool message branch, unresolved-call release, and freeze policy                       | `toolContinuationConnection.ts`, `ToolCallContinuationCoordinator.ts`, `ToolCallContinuationBranchPlanner.ts`, `GraphProcessor.ts`, `DelegateFunctionCallNode.ts`, app canvas helpers | `packages/core/test/model/chat-v2/toolContinuationConnection.test.ts`, `packages/core/test/model/GraphProcessor.toolContinuation.test.ts`, `packages/core/test/model/ToolCallContinuationCoordinator.test.ts`, `packages/core/test/model/ToolCallContinuationBranchPlanner.test.ts`, `packages/core/test/model/nodes/DelegateFunctionCallNode.test.ts`, `packages/app/src/components/nodeCanvas/toolContinuationWireState.test.ts`, `packages/app/src/components/nodeCanvas/nodeCanvasContextMenuModel.test.ts` | focused                                                   |
-| Output contracts for response, messages, usage, reasoning, independently enabled status/error/request-body details, retry arrays, and control-flow exclusions | `LLMChatV2Node.ts`, `chatV2UsageAccounting.ts`, `chatV2Outputs.ts`, `chatV2Pipeline.ts`                                                                                               | `packages/core/test/model/chat-v2/chatV2UsageAccounting.test.ts`, `packages/core/test/model/chat-v2/chatV2Outputs.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                                                                                                                                                                                                                                                                           | focused                                                   |
-| Provider/API/fetch error normalization, status extraction, retry classification, and secret-safe messages                                                     | `chatV2Errors.ts`, `chatV2Retry.ts`, `chatV2Pipeline.ts`                                                                                                                              | `packages/core/test/model/chat-v2/chatV2Errors.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`                                                                                                                                                                                                                                                                                                                                                                                              | focused                                                   |
+| Output contracts for response, messages, usage, reasoning, opt-in LLM Attempts/request/response bodies, and control-flow exclusions                           | `LLMChatV2Node.ts`, `llmInvocationResultProjector.ts`, `chatV2UsageAccounting.ts`, `chatV2Outputs.ts`, `chatV2Pipeline.ts`                                                         | `packages/core/test/model/chat-v2/chatV2UsageAccounting.test.ts`, `packages/core/test/model/chat-v2/chatV2Outputs.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`, `packages/core/test/model/chat-v2/llmProfileFallback.test.ts`                                                                                                                               | focused                                                   |
+| Provider/API/fetch error normalization, status extraction, retry classification, and developer-visible diagnostics                                            | `chatV2Errors.ts`, `chatV2Retry.ts`, `chatV2Pipeline.ts`, `llmProfileFallback.ts`                                                                                                    | `packages/core/test/model/chat-v2/chatV2Errors.test.ts`, `packages/core/test/model/chat-v2/chatV2Pipeline.test.ts`, `packages/core/test/model/chat-v2/llmProfileFallback.test.ts`                                                                                                                                                                                                       | focused                                                   |
 | Editor cache identity, secret fingerprinting, clone-on-read/write, and project/node scoping                                                                   | `chatV2EditorCache.ts`, `llmChatV2NodeRuntime.ts`                                                                                                                                     | `packages/core/test/model/nodes/LLMChatV2Node.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                          | integration; add focused editor-cache tests before moving |
 | Legacy Chat compatibility boundary                                                                                                                            | `ChatNodeBase.ts`, `ChatNode.ts`, `ChatLoopNode.ts`                                                                                                                                   | legacy node tests and compile checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | compatibility-only; do not refactor for polish            |
 

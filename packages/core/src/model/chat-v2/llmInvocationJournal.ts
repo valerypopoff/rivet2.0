@@ -1,21 +1,21 @@
 import type { ChatV2CallFinishedEvent } from '../ProcessContext.js';
-import type { LLMProfileAttempt } from './llmProfileFallback.js';
+import type { LLMAttempt } from './llmProfileFallback.js';
 
 export type LLMInvocationJournalEvent =
   | { type: 'model-call'; event: ChatV2CallFinishedEvent }
-  | { type: 'profile-attempt'; attempt: LLMProfileAttempt }
+  | { type: 'llm-attempt'; attempt: LLMAttempt }
   | { type: 'tool-round'; kind: 'connected' | 'internal'; count: number }
   | { type: 'terminal'; kind: 'final-model-answer' | 'released-unresolved-calls' | 'failed' | 'cancelled' };
 
 /**
  * Invocation-scoped, append-only facts collected from physical provider calls.
- * It intentionally stores the already privacy-bounded observer event rather
- * than request/response bodies or credentials.
+ * It stores physical-call accounting alongside the full developer-visible LLM
+ * attempt diagnostics selected by the node.
  */
 export class LLMInvocationJournal {
   readonly #modelCalls: ChatV2CallFinishedEvent[] = [];
   readonly #events: LLMInvocationJournalEvent[] = [];
-  readonly #profileAttempts: LLMProfileAttempt[] = [];
+  readonly #llmAttempts: LLMAttempt[] = [];
 
   recordModelCall(event: ChatV2CallFinishedEvent): void {
     // The host observer is allowed to inspect the same event after this local
@@ -35,10 +35,10 @@ export class LLMInvocationJournal {
     this.#events.push({ type: 'tool-round', ...event });
   }
 
-  recordProfileAttempt(attempt: LLMProfileAttempt): void {
+  recordLLMAttempt(attempt: LLMAttempt): void {
     const snapshot = { ...attempt };
-    this.#profileAttempts.push(snapshot);
-    this.#events.push({ type: 'profile-attempt', attempt: snapshot });
+    this.#llmAttempts.push(snapshot);
+    this.#events.push({ type: 'llm-attempt', attempt: snapshot });
   }
 
   recordTerminal(event: { kind: Extract<LLMInvocationJournalEvent, { type: 'terminal' }>['kind'] }): void {
@@ -53,7 +53,7 @@ export class LLMInvocationJournal {
     return this.#events;
   }
 
-  get profileAttempts(): readonly LLMProfileAttempt[] {
-    return this.#profileAttempts;
+  get llmAttempts(): readonly LLMAttempt[] {
+    return this.#llmAttempts;
   }
 }

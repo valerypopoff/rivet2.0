@@ -11,7 +11,7 @@ function createRuntime(editorCache: Map<string, unknown>) {
 }
 
 describe('LLM Chat v2 editor cache boundary', () => {
-  it('does not cache diagnostic provider-failure outputs', () => {
+  it('does not cache legacy provider-failure results', () => {
     const editorCache = new Map<string, unknown>();
 
     writeLLMChatV2EditorCache({
@@ -20,7 +20,6 @@ describe('LLM Chat v2 editor cache boundary', () => {
         terminalOutcome: 'provider-failure',
         commonOutputs: {
           response: { type: 'string', value: 'partial diagnostic text' },
-          requestError: { type: 'string', value: 'Provider failed' },
         },
       } as any,
     });

@@ -262,7 +262,7 @@ describe('createChatV2Model', () => {
         {
           apiKey: 'secret-key',
           baseURL: 'https://api.example.test/v1',
-          onResponseBody: (response) => responseBodyCapture.capture(response, ['secret-key']),
+          onResponseBody: (response) => responseBodyCapture.capture(response),
         },
       ) as { config?: { fetch?: typeof fetch } };
 
@@ -273,7 +273,7 @@ describe('createChatV2Model', () => {
       });
       await responseBodyCapture.flush();
 
-      assert.deepEqual(responseBodyCapture.bodies, [{ id: 'response-1', output: 'Hello [redacted]' }]);
+      assert.deepEqual(responseBodyCapture.bodies, [{ id: 'response-1', output: 'Hello secret-key' }]);
       assert.equal(await response.text(), '{"id":"response-1","output":"Hello secret-key"}');
       assert.equal(fetchMock.mock.callCount(), 1);
     } finally {
@@ -281,12 +281,12 @@ describe('createChatV2Model', () => {
     }
   });
 
-  it('redacts the active API key from captured provider response bodies', async () => {
+  it('retains complete provider response bodies for workflow debugging', async () => {
     const responseBodyCapture = createChatV2ResponseBodyCapture();
-    responseBodyCapture.capture(new Response('{"error":{"message":"Key secret-key was rejected"}}'), ['secret-key']);
+    responseBodyCapture.capture(new Response('{"error":{"message":"Key secret-key was rejected"}}'));
     await responseBodyCapture.flush();
 
-    assert.deepEqual(responseBodyCapture.bodies, [{ error: { message: 'Key [redacted] was rejected' } }]);
+    assert.deepEqual(responseBodyCapture.bodies, [{ error: { message: 'Key secret-key was rejected' } }]);
   });
 
   it('sends and captures transformed provider request bodies', async () => {

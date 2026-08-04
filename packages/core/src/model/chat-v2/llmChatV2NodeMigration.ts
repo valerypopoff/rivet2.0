@@ -4,6 +4,7 @@ type LegacyLLMChatV2DiagnosticsData = Record<string, unknown> & {
   outputRequestStatus?: unknown;
   outputRequestError?: unknown;
   outputRequestBody?: unknown;
+  outputLLMAttempts?: unknown;
 };
 
 /**
@@ -18,16 +19,19 @@ export function normalizeSerializedLLMChatV2Node(node: ChartNode): void {
   }
 
   const data = node.data as LegacyLLMChatV2DiagnosticsData;
-  if (data.outputRequestStatus !== true) {
-    return;
+  const hadLegacyRequestDiagnostics = data.outputRequestStatus === true || data.outputRequestError === true;
+
+  if (hadLegacyRequestDiagnostics && !Object.hasOwn(data, 'outputLLMAttempts')) {
+    data.outputLLMAttempts = true;
   }
 
-  // Older projects used one "Output request details" switch. Retain its
-  // observable status/error/body outputs after the controls were split.
-  if (!Object.hasOwn(data, 'outputRequestError')) {
-    data.outputRequestError = true;
-  }
-  if (!Object.hasOwn(data, 'outputRequestBody')) {
+  // The original request-details switch also enabled request-body capture.
+  // Preserve that still-supported diagnostic independently from the retired
+  // status/error ports.
+  if (data.outputRequestStatus === true && !Object.hasOwn(data, 'outputRequestBody')) {
     data.outputRequestBody = true;
   }
+
+  delete data.outputRequestStatus;
+  delete data.outputRequestError;
 }

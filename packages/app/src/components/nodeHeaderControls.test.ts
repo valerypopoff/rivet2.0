@@ -24,21 +24,17 @@ test('node edit gear reveal does not animate icon color', () => {
 
 test('Delegate Tool Call headers expose the request-response continuation indicator', () => {
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
-  const normalNodeSource = readFileSync(join(componentsDir, 'visualNode', 'NormalVisualNodeContent.tsx'), 'utf8');
-  const zoomedOutNodeSource = readFileSync(join(componentsDir, 'visualNode', 'ZoomedOutVisualNodeContent.tsx'), 'utf8');
+  const nodeTitleLabelSource = readFileSync(join(componentsDir, 'visualNode', 'NodeTitleLabel.tsx'), 'utf8');
   const indicatorSource = readFileSync(join(componentsDir, 'visualNode', 'ToolCallContinuationIndicator.tsx'), 'utf8');
   const iconSource = readFileSync(join(componentsDir, 'visualNode', 'ToolCallContinuationIcon.tsx'), 'utf8');
-  const visualNodeSource = readFileSync(join(componentsDir, 'VisualNode.tsx'), 'utf8');
 
-  for (const source of [normalNodeSource, zoomedOutNodeSource]) {
-    assert.match(source, /node\.type === 'delegateFunctionCall' && <ToolCallContinuationIndicator \/>/);
-  }
+  assert.match(nodeTitleLabelSource, /node\.type === 'delegateFunctionCall'/);
+  assert.match(nodeTitleLabelSource, /hasToolCallContinuationIcon && <ToolCallContinuationIndicator \/>/);
   assert.match(indicatorSource, /Tool calls return results to the LLM/);
   assert.match(iconSource, /M3\.5 7\.5h14\.7/);
   assert.match(iconSource, /M20\.5 16\.5H5\.8/);
-  assert.match(visualNodeSource, /hasToolCallContinuationIndicator: node\.type === 'delegateFunctionCall'/);
-  assert.match(nodeStylesSource, /\.node\.hasToolCallContinuationIndicator:not\(\.isComment\) \.title-controls/);
-  assert.doesNotMatch(nodeStylesSource, /:has\(\.tool-call-continuation-indicator\)/);
+  assert.match(nodeStylesSource, /\.title-text-label \.tool-call-continuation-indicator/);
+  assert.doesNotMatch(nodeStylesSource, /hasToolCallContinuationIndicator/);
 });
 
 test('linked node headers use the library-link control instead of the edit gear', () => {

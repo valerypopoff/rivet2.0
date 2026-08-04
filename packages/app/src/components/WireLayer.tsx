@@ -20,7 +20,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { css } from '@emotion/react';
 import clsx from 'clsx';
-import { ConditionallyRenderWire, PartialWire } from './Wire.js';
+import { ConditionallyRenderWire, PartialWire, ToolContinuationEndpointMarkers } from './Wire.js';
 import { useCanvasPositioning } from '../hooks/useCanvasPositioning.js';
 import { ErrorBoundary } from 'react-error-boundary';
 import { draggingWireClosestPortState } from '../state/graphBuilder.js';
@@ -128,6 +128,10 @@ const wiresStyles = css`
     stroke-width: 1px;
   }
 
+  .tool-continuation-endpoint-marker-path {
+    stroke: none;
+  }
+
   .tool-continuation-marker-default {
     fill: gray;
     stroke: none;
@@ -214,6 +218,10 @@ const hoverRevealedWiresStyles = css`
   pointer-events: none;
 `;
 
+const toolContinuationEndpointMarkerLayerStyles = css`
+  z-index: 10002;
+`;
+
 export type WireDef = {
   startNodeId: NodeId;
   startPortId: PortId;
@@ -242,14 +250,15 @@ const ToolContinuationMarkerDefinitions: FC<{ markerIds: ToolContinuationMarkerI
       <marker
         key={id}
         id={id}
-        markerHeight="7"
+        markerHeight="8"
         markerUnits="userSpaceOnUse"
-        markerWidth="7"
+        markerWidth="8"
         orient="auto-start-reverse"
-        refX="6"
-        refY="3"
+        refX="7"
+        refY="4"
+        viewBox="0 0 8 8"
       >
-        <path className={className} d="M 0 0 L 6 3 L 0 6 z" />
+        <path className={className} d="M 0 0 L 7 4 L 0 8 z" />
       </marker>
     ))}
   </defs>
@@ -328,6 +337,15 @@ export const WireLayer: FC<WireLayerProps> = ({
       added: `${toolContinuationMarkerPrefix}-overlay-added`,
       changed: `${toolContinuationMarkerPrefix}-overlay-changed`,
       error: `${toolContinuationMarkerPrefix}-overlay-error`,
+    }),
+    [toolContinuationMarkerPrefix],
+  );
+  const endpointToolContinuationMarkerIds = useMemo<ToolContinuationMarkerIds>(
+    () => ({
+      default: `${toolContinuationMarkerPrefix}-endpoint`,
+      added: `${toolContinuationMarkerPrefix}-endpoint-added`,
+      changed: `${toolContinuationMarkerPrefix}-endpoint-changed`,
+      error: `${toolContinuationMarkerPrefix}-endpoint-error`,
     }),
     [toolContinuationMarkerPrefix],
   );
@@ -820,6 +838,20 @@ export const WireLayer: FC<WireLayerProps> = ({
           )}
         </g>
       </svg>
+      <svg aria-hidden="true" css={[wiresStyles, toolContinuationEndpointMarkerLayerStyles]}>
+        <ToolContinuationMarkerDefinitions markerIds={endpointToolContinuationMarkerIds} />
+        <g transform={`scale(${canvasPosition.zoom}) translate(${canvasPosition.x}, ${canvasPosition.y})`}>
+          <ToolContinuationEndpointMarkerContents
+            connectionCompareKindsByKey={connectionCompareKindsByKey}
+            connections={mainRenderableWires}
+            draggingBendPreview={draggingBendPreview}
+            markerIds={endpointToolContinuationMarkerIds}
+            nodesById={renderNodesById}
+            portPositions={portPositions}
+            toolContinuationWireStates={toolContinuationWireStates}
+          />
+        </g>
+      </svg>
       {draggingWireContents &&
         draggingWireTouchesDataBus &&
         hoverOverlayHost &&
@@ -856,6 +888,52 @@ export const WireLayer: FC<WireLayerProps> = ({
     </>
   );
 };
+
+const ToolContinuationEndpointMarkerContents: FC<{
+  connections: readonly NodeConnection[];
+  connectionCompareKindsByKey: Record<string, ProjectComparisonChangeKind | undefined>;
+  draggingBendPreview: { connectionKey: string; point: ConnectionBendPoint } | undefined;
+  markerIds: ToolContinuationMarkerIds;
+  nodesById: Record<NodeId, ChartNode>;
+  portPositions: PortPositions;
+  toolContinuationWireStates: ReadonlyMap<NodeConnection, ToolContinuationWireState>;
+}> = ({
+  connections,
+  connectionCompareKindsByKey,
+  draggingBendPreview,
+  markerIds,
+  nodesById,
+  portPositions,
+  toolContinuationWireStates,
+}) => (
+  <>
+    {connections.map((connection) => {
+      const toolContinuationWireState = toolContinuationWireStates.get(connection);
+      if (toolContinuationWireState?.kind !== 'connected') {
+        return null;
+      }
+
+      const connectionKey = getProjectConnectionComparisonKey(connection);
+      const bendPoint =
+        draggingBendPreview?.connectionKey === connectionKey ? draggingBendPreview.point : connection.bendPoint;
+
+      return (
+        <ToolContinuationEndpointMarkers
+          key={`tool-continuation-endpoint-markers-${connectionKey}`}
+          bendPoint={bendPoint}
+          connection={connection}
+          markerId={getToolContinuationMarkerId(
+            toolContinuationWireState.kind,
+            connectionCompareKindsByKey[connectionKey],
+            markerIds,
+          )}
+          nodesById={nodesById}
+          portPositions={portPositions}
+        />
+      );
+    })}
+  </>
+);
 
 const StaticWireContents = memo(
   ({

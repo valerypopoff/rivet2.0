@@ -178,10 +178,12 @@ describe('normalizeChatV2ProviderError', () => {
     );
   });
 
-  it('does not include endpoint query strings in formatted API errors', () => {
+  it('preserves complete provider diagnostics, including endpoint query strings and long multiline messages', () => {
+    const providerMessage = `Line one\n${'x'.repeat(600)}\nLine three`;
     const normalized = normalizeChatV2ProviderError(
       createApiError({
         url: 'https://api.example.test/v1/chat/completions?api_key=secret#fragment',
+        responseBody: JSON.stringify({ error: { message: providerMessage } }),
       }),
       {
         provider: 'custom',
@@ -190,9 +192,8 @@ describe('normalizeChatV2ProviderError', () => {
     );
 
     assert.ok(normalized instanceof Error);
-    assert.match(normalized.message, /Endpoint: https:\/\/api\.example\.test\/v1\/chat\/completions/);
-    assert.doesNotMatch(normalized.message, /secret/);
-    assert.doesNotMatch(normalized.message, /fragment/);
+    assert.match(normalized.message, /Endpoint: https:\/\/api\.example\.test\/v1\/chat\/completions\?api_key=secret#fragment/);
+    assert.match(normalized.message, new RegExp(providerMessage));
   });
 
   it('does not dump provider data objects without a clear message', () => {

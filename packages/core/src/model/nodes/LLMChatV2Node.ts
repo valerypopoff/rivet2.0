@@ -23,7 +23,6 @@ import { projectLLMInvocationResult } from '../chat-v2/llmInvocationResultProjec
 import { isChatV2PipelineProviderFailureResult } from '../chat-v2/chatV2Pipeline.js';
 import {
   shouldOutputChatV2RequestBody,
-  shouldOutputChatV2RequestError,
   shouldOutputChatV2ResponseBody,
 } from '../chat-v2/chatV2Types.js';
 import {
@@ -302,46 +301,6 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
             ] as const);
     }
 
-    if (this.data.outputRequestStatus) {
-      const profileArrayRequestDetails =
-        this.data.configurationMode === 'profile'
-          ? (['number', 'number[]', 'any'] as const)
-          : this.data.retryOnNon200
-            ? 'number[]'
-            : 'number';
-      outputs.push({
-        id: 'requestStatus' as PortId,
-        title: 'Response Status',
-        dataType: profileArrayRequestDetails,
-        ...(this.data.configurationMode === 'profile'
-          ? {
-              description:
-                'A scalar profile keeps the normal status shape. An LLM Profile array groups values by profile: one request is a number, retries are a number array.',
-            }
-          : {}),
-      });
-    }
-
-    if (shouldOutputChatV2RequestError(this.data)) {
-      const profileArrayRequestErrors =
-        this.data.configurationMode === 'profile'
-          ? (['string', 'string[]', 'any'] as const)
-          : this.data.retryOnNon200
-            ? 'string[]'
-            : 'string';
-      outputs.push({
-        id: 'requestError' as PortId,
-        title: 'Response Error',
-        dataType: profileArrayRequestErrors,
-        ...(this.data.configurationMode === 'profile'
-          ? {
-              description:
-                'A scalar profile keeps the normal error shape. An LLM Profile array keeps profile positions when errors occur: one error is a string and retries are an array.',
-            }
-          : {}),
-      });
-    }
-
     if (shouldOutputChatV2RequestBody(this.data)) {
       outputs.push({
         id: 'requestBody' as PortId,
@@ -358,6 +317,16 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
+    if (this.data.outputLLMAttempts) {
+      outputs.push({
+        id: 'llmAttempts' as PortId,
+        title: 'LLM Attempts',
+        dataType: 'object[]',
+        description:
+          'Chronological provider configuration, request, and response-validation attempts for this LLM Chat run.',
+      });
+    }
+
     if (this.data.configurationMode === 'profile') {
       outputs.push(
         {
@@ -365,13 +334,6 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
           title: 'LLM Profile Summary',
           dataType: 'string',
           description: 'Human-readable profile fallback outcome for this LLM Chat run.',
-        },
-        {
-          id: 'llmProfileAttempts' as PortId,
-          title: 'LLM Profile Attempts',
-          dataType: 'object[]',
-          description:
-            'Chronological profile configuration, provider request, and parsed-response validation attempts for this LLM Chat run.',
         },
       );
     }
@@ -463,7 +425,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       nodeId: this.chartNode.id,
       inputs,
       context: usageTrackingContext,
-      onProfileAttempt: (attempt) => invocationJournal.recordProfileAttempt(attempt),
+      onLLMAttempt: (attempt) => invocationJournal.recordLLMAttempt(attempt),
     });
     const toolCallContinuation = context.toolCallContinuation;
 
@@ -484,11 +446,8 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       result,
       modelCalls: invocationJournal.modelCalls,
       outputUsage: this.data.outputUsage,
-      outputRequestStatus: this.data.outputRequestStatus,
-      outputRequestError: shouldOutputChatV2RequestError(this.data),
-      profileAttempts: runtime.profileAttempts == null ? undefined : invocationJournal.profileAttempts,
-      profileChainLength: runtime.profileChainLength,
-      profileChainUsesArray: runtime.profileChainUsesArray,
+      outputLLMAttempts: this.data.outputLLMAttempts,
+      llmAttempts: invocationJournal.llmAttempts,
       profileSummary: runtime.getProfileSummary?.(),
     });
 

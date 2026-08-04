@@ -69,8 +69,7 @@ data:
             openAIWebSearchContextSize: medium
             outputReasoning: false
             outputRequestBody: false
-            outputRequestError: false
-            outputRequestStatus: false
+            outputLLMAttempts: false
             outputUsage: false
             parallelToolCalls: false
             provider: openai
@@ -137,8 +136,7 @@ data:
             openAIWebSearchContextSize: medium
             outputReasoning: false
             outputRequestBody: false
-            outputRequestError: false
-            outputRequestStatus: false
+            outputLLMAttempts: false
             outputUsage: false
             parallelToolCalls: false
             provider: openai

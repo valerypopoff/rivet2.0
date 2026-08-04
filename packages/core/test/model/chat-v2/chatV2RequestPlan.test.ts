@@ -42,7 +42,7 @@ describe('buildChatV2RequestPlan', () => {
       retryOnNon200RepeatTimes: 2,
       retryOnNon200CooldownMs: 25,
       outputUsage: true,
-      outputRequestStatus: true,
+      outputRequestBody: true,
       includeFunctionCalls: true,
     });
 
@@ -50,8 +50,6 @@ describe('buildChatV2RequestPlan', () => {
     assert.equal(plan.request.responseFormat, 'json_schema');
     assert.deepEqual(plan.request.providerOptions, { custom: { structuredOutputs: true } });
     assert.equal(plan.output.outputUsage, true);
-    assert.equal(plan.output.outputRequestStatus, true);
-    assert.equal(plan.output.outputRequestError, true);
     assert.equal(plan.output.outputRequestBody, true);
     assert.equal(plan.output.outputResponseBody, false);
   });

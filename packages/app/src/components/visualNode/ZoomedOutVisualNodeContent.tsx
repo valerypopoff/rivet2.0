@@ -14,7 +14,6 @@ import { Tooltip } from '../Tooltip.js';
 import { NodeHeaderWarningIcon } from './NodeHeaderWarningIcon.js';
 import { ConditionalIfPort } from './ConditionalIfPort.js';
 import { SubgraphLinkIcon } from './SubgraphLinkIcon.js';
-import { ToolCallContinuationIndicator } from './ToolCallContinuationIndicator.js';
 
 export const ZoomedOutVisualNodeContent: FC<{
   node: ChartNode;
@@ -83,7 +82,6 @@ export const ZoomedOutVisualNodeContent: FC<{
           {!isReallyZoomedOut && (
             <div className="title-controls">
               <NodeRunningIndicator isRunning={showRunningIndicator} delayMs={0} />
-              {node.type === 'delegateFunctionCall' && <ToolCallContinuationIndicator />}
               {isNodePrefabInstance && (
                 <Tooltip className="node-prefab-instance-tooltip" content="Open library node">
                   <button

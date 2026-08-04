@@ -57,8 +57,7 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   retryOnNon200?: boolean;
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
-  outputRequestStatus?: boolean;
-  outputRequestError?: boolean;
+  outputLLMAttempts?: boolean;
   outputRequestBody?: boolean;
   outputResponseBody?: boolean;
 };
@@ -141,8 +140,7 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     retryOnNon200: false,
     retryOnNon200RepeatTimes: DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_REPEAT_TIMES,
     retryOnNon200CooldownMs: DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS,
-    outputRequestStatus: false,
-    outputRequestError: false,
+    outputLLMAttempts: false,
     outputRequestBody: false,
     outputResponseBody: false,
   };

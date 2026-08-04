@@ -6,7 +6,7 @@ export type ChatV2ResponseBodyCapture = {
   /** Captured bodies in physical provider-response order. */
   readonly bodies: unknown[];
   /** Starts an independent clone read for one provider HTTP response. */
-  capture(response: Response, redactionValues?: readonly string[]): void;
+  capture(response: Response): void;
   /** Waits for every response observed so far to finish cloning. */
   flush(): Promise<void>;
 };
@@ -25,34 +25,11 @@ function parseResponseBody(text: string): unknown {
   }
 }
 
-function redactCapturedResponseBody(value: unknown, redactionValues: readonly string[]): unknown {
-  if (typeof value === 'string') {
-    return redactionValues.reduce((redacted, secret) => redacted.split(secret).join('[redacted]'), value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => redactCapturedResponseBody(item, redactionValues));
-  }
-
-  if (value != null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactCapturedResponseBody(item, redactionValues)]),
-    );
-  }
-
-  return value;
-}
-
-function normalizeRedactionValues(values: readonly string[] | undefined): string[] {
-  return [...new Set((values ?? []).filter((value) => value.length > 0))].sort(
-    (left, right) => right.length - left.length,
-  );
-}
-
 /**
- * A failed clone is intentionally omitted instead of changing the provider
- * result. It can happen when a non-standard fetch mock or an aborted response
- * does not support cloning; diagnostics must never alter request semantics.
+ * A failed clone is intentionally omitted instead of changing provider
+ * behavior. Captured diagnostics do not redact or truncate provider content.
+ * JSON is parsed only to make it inspectable as structured output; all other
+ * bodies remain their original text.
  */
 export function createChatV2ResponseBodyCapture(): ChatV2ResponseBodyCapture {
   const entries: CapturedResponseBody[] = [];
@@ -60,7 +37,7 @@ export function createChatV2ResponseBodyCapture(): ChatV2ResponseBodyCapture {
 
   return {
     bodies,
-    capture(response, redactionValues) {
+    capture(response) {
       const entry: CapturedResponseBody = {
         captured: false,
         value: undefined,
@@ -70,11 +47,10 @@ export function createChatV2ResponseBodyCapture(): ChatV2ResponseBodyCapture {
 
       try {
         const responseClone = response.clone();
-        const normalizedRedactionValues = normalizeRedactionValues(redactionValues);
         entry.settled = responseClone
           .text()
           .then((text) => {
-            entry.value = redactCapturedResponseBody(parseResponseBody(text), normalizedRedactionValues);
+            entry.value = parseResponseBody(text);
             entry.captured = true;
           })
           .catch(() => {

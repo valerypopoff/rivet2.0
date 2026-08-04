@@ -16,7 +16,7 @@ describe('LLM invocation journal', () => {
     assert.equal(journal.modelCalls[0]!.normalizedUsage!.totalTokens, 3);
   });
 
-  it('keeps profile fallback attempts on the same immutable invocation timeline', () => {
+  it('keeps LLM attempts on the same immutable invocation timeline', () => {
     const journal = new LLMInvocationJournal();
     const attempt = {
       roundIndex: 0,
@@ -29,16 +29,16 @@ describe('LLM invocation journal', () => {
       error: 'Invalid URL',
     };
 
-    journal.recordProfileAttempt(attempt);
+    journal.recordLLMAttempt(attempt);
     attempt.error = 'mutated after recording';
 
-    assert.deepEqual(journal.profileAttempts, [
+    assert.deepEqual(journal.llmAttempts, [
       {
         ...attempt,
         error: 'Invalid URL',
       },
     ]);
-    assert.equal(journal.events[0]?.type, 'profile-attempt');
+    assert.equal(journal.events[0]?.type, 'llm-attempt');
   });
 });
 

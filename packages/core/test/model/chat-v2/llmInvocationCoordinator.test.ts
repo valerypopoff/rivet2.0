@@ -84,9 +84,7 @@ function failingRuntime(error: Error): LLMChatV2RuntimeConfig {
     editorCache: undefined,
     shouldAutoContinueToolCalls: false,
     maxToolRounds: 3,
-    profileAttempts: undefined,
-    profileChainUsesArray: false,
-    profileChainLength: undefined,
+    outputLLMAttempts: false,
     getProfileSummary: undefined,
     isProfileFallbackExhausted: () => false,
   };

@@ -36,7 +36,7 @@ export function getDependentDataForNodeForPreload(
   dependencyNodes: NodeId[],
   previousRunData: RunDataByNodeId,
   options: { frozenNodeOutputs?: FrozenNodeOutputsByGraph; graphId?: GraphId } = {},
-) {
+): Record<NodeId, Outputs> {
   const preloadData: Record<NodeId, Outputs> = {};
 
   for (const dependencyNode of dependencyNodes) {

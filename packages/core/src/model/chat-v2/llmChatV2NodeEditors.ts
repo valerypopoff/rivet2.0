@@ -434,7 +434,10 @@ function getToolEditors(): LLMChatV2EditorDefinition {
       type: 'toggle',
       label: 'Allow parallel toolcalls',
       dataKey: 'parallelToolCalls',
-      helperMessage: LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE,
+      helperMessage: (data) =>
+        data.configurationMode === 'profile'
+          ? `${LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE} In From profile mode, it applies only to candidates whose providers support parallel tool calls; unsupported candidates ignore it.`
+          : LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE,
       hideIf: (data) =>
         !data.useToolCalling ||
         (data.configurationMode !== 'profile' && !supportsLLMChatV2ParallelToolCalls(data.provider)),
@@ -477,10 +480,10 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
-      label: 'Output response status',
-      dataKey: 'outputRequestStatus',
+      label: 'Output LLM attempts',
+      dataKey: 'outputLLMAttempts',
       helperMessage:
-        'Adds a Response Status output. Retry mode returns statuses for each physical request. An LLM Profile array groups values by profile, while a profile with one request stays a number.',
+        'Adds one chronological record for every profile configuration, provider request, and response-validation attempt. Records include provider, model, retry status, and provider error details when available.',
     },
     {
       type: 'toggle',
@@ -494,7 +497,7 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
       label: 'Output response body',
       dataKey: 'outputResponseBody',
       helperMessage:
-        'Adds an LLM response body output captured at the provider HTTP boundary. JSON responses are parsed for inspection; other responses remain text.',
+        'Adds the complete LLM response body captured at the provider HTTP boundary. JSON responses are parsed for inspection; other responses remain text. Rivet does not redact or truncate captured content.',
     },
     {
       type: 'toggle',
@@ -566,13 +569,6 @@ function getErrorBehaviorEditors(): LLMChatV2EditorDefinition {
       layout: 'inline',
       helperMessage: 'Milliseconds to wait between repeats',
       hideIf: (data) => !data.retryOnNon200,
-    },
-    {
-      type: 'toggle',
-      label: 'Output response error',
-      dataKey: 'outputRequestError',
-      helperMessage:
-        'Adds a Response Error output. Provider request failures become excluded outputs instead of node errors. Retry mode returns errors for each physical request; an LLM Profile array groups errors by profile.',
     },
   ]);
 }

@@ -12,9 +12,11 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { nodeByIdState } from '../state/graph';
 import { type PortPositions } from './NodeCanvas';
 import {
+  getNormalOffsetWirePoints,
   getNormalOffsetWirePath,
   getWirePath,
   getWireSegments,
+  type WirePoint,
   type WireEndpointDirection,
 } from './nodeCanvas/wireGeometry.js';
 
@@ -49,6 +51,8 @@ export type PartialConnection = {
   toX: number;
   toY: number;
 };
+
+const TOOL_CONTINUATION_ENDPOINT_ARROW_INSET = -7;
 
 export const ConditionallyRenderWire: FC<WireProps> = ({
   connection,
@@ -115,14 +119,12 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
                 normalOffset={-2}
                 normalOffsetPath
                 toolContinuationPaired
-                markerEnd={index === wireSegments.length - 1 ? toolContinuation?.markerId : undefined}
               />
               <Wire
                 {...wireProps}
                 normalOffset={2}
                 normalOffsetPath
                 toolContinuationPaired
-                markerStart={index === 0 ? toolContinuation?.markerId : undefined}
               />
             </Fragment>
           );
@@ -269,6 +271,110 @@ export const Wire: FC<{
 );
 
 Wire.displayName = 'Wire';
+
+export const ToolContinuationEndpointMarkers: FC<{
+  connection: NodeConnection;
+  markerId: string;
+  nodesById: Record<NodeId, ChartNode>;
+  portPositions: PortPositions;
+  startEndpointDirection?: WireEndpointDirection;
+  endEndpointDirection?: WireEndpointDirection;
+  bendPoint?: NodeConnection['bendPoint'];
+}> = ({
+  connection,
+  markerId,
+  nodesById,
+  portPositions,
+  startEndpointDirection,
+  endEndpointDirection,
+  bendPoint: bendPointOverride,
+}) => {
+  const inputNode = nodesById[connection.inputNodeId];
+  const outputNode = nodesById[connection.outputNodeId];
+
+  if (!inputNode || !outputNode) {
+    return null;
+  }
+
+  const [outputCacheKey, inputCacheKey] = getConnectionCacheKeys(connection);
+  const start = getNodePortPosition(outputNode, connection.outputId, outputCacheKey, portPositions);
+  const end = getNodePortPosition(inputNode, connection.inputId, inputCacheKey, portPositions);
+  const segments = getWireSegments({
+    bendPoint: bendPointOverride ?? connection.bendPoint,
+    end,
+    start,
+  });
+  const forwardPath = getToolContinuationEndpointMarkerPath({
+    segment: segments[segments.length - 1]!,
+    offset: -2,
+    startDirection: segments.length === 1 ? startEndpointDirection : undefined,
+    endDirection: endEndpointDirection,
+    direction: 'end',
+  });
+  const reversePath = getToolContinuationEndpointMarkerPath({
+    segment: segments[0]!,
+    offset: 2,
+    startDirection: startEndpointDirection,
+    endDirection: segments.length === 1 ? endEndpointDirection : undefined,
+    direction: 'start',
+  });
+
+  return (
+    <>
+      {forwardPath && (
+        <path className="tool-continuation-endpoint-marker-path" d={forwardPath} markerEnd={`url(#${markerId})`} />
+      )}
+      {reversePath && (
+        <path className="tool-continuation-endpoint-marker-path" d={reversePath} markerEnd={`url(#${markerId})`} />
+      )}
+    </>
+  );
+};
+
+ToolContinuationEndpointMarkers.displayName = 'ToolContinuationEndpointMarkers';
+
+function getToolContinuationEndpointMarkerPath({
+  segment,
+  offset,
+  startDirection,
+  endDirection,
+  direction,
+}: {
+  segment: { start: WirePoint; end: WirePoint };
+  offset: number;
+  startDirection?: WireEndpointDirection;
+  endDirection?: WireEndpointDirection;
+  direction: 'start' | 'end';
+}): string | undefined {
+  const points = getNormalOffsetWirePoints({
+    sx: segment.start.x,
+    sy: segment.start.y,
+    ex: segment.end.x,
+    ey: segment.end.y,
+    offset,
+    startDirection,
+    endDirection,
+  });
+
+  if (points.length < 3) {
+    return undefined;
+  }
+
+  const endpointIndex = direction === 'end' ? points.length - 1 : 0;
+  const startIndex = direction === 'end' ? points.length - 4 : 3;
+  const markerStart = points[startIndex]!;
+  const endpoint = points[endpointIndex]!;
+  const directionLength = Math.hypot(endpoint.x - markerStart.x, endpoint.y - markerStart.y);
+  if (directionLength === 0) {
+    return undefined;
+  }
+
+  const insetEndpoint = {
+    x: endpoint.x + ((endpoint.x - markerStart.x) / directionLength) * TOOL_CONTINUATION_ENDPOINT_ARROW_INSET,
+    y: endpoint.y + ((endpoint.y - markerStart.y) / directionLength) * TOOL_CONTINUATION_ENDPOINT_ARROW_INSET,
+  };
+  return `M${markerStart.x},${markerStart.y} L${insetEndpoint.x},${insetEndpoint.y}`;
+}
 
 const WireInteractionTarget: FC<{
   sx: number;

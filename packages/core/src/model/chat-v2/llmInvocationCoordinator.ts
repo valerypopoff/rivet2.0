@@ -2,7 +2,6 @@ import type { ChatV2PipelineResult } from './chatV2Types.js';
 import type { LLMChatV2RuntimeConfig } from './llmChatV2NodeRuntime.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { ToolCallContinuation } from '../ToolCallContinuation.js';
-import type { PortId } from '../NodeBase.js';
 import { delegateToolCall } from '../nodes/toolCallDelegation.js';
 import { runChatV2PipelineWithToolContinuation } from './toolContinuation.js';
 import type { LLMInvocationJournal } from './llmInvocationJournal.js';
@@ -58,15 +57,11 @@ export async function executeLLMInvocation(params: {
       : await runtime.runPipeline(runtime.runOptions);
 
     journal.recordTerminal({
-      kind:
-        isChatV2PipelineProviderFailureResult(result) ||
-        // Keep pre-refactor result fixtures and third-party callers that use
-        // the established excluded-output failure surface observable too.
-        result.commonOutputs['response' as PortId]?.type === 'control-flow-excluded'
-          ? 'failed'
-          : result.functionCalls.length > 0
-            ? 'released-unresolved-calls'
-            : 'final-model-answer',
+      kind: isChatV2PipelineProviderFailureResult(result)
+        ? 'failed'
+        : result.functionCalls.length > 0
+          ? 'released-unresolved-calls'
+          : 'final-model-answer',
     });
     return result;
   } catch (error) {

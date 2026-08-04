@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -47,6 +48,13 @@ test('NodeTitleLabel gives every Knowledge node a database icon', () => {
     assert.match(html, /<ellipse/);
     assert.match(html, /aria-hidden="true"/);
   }
+});
+
+test('NodeTitleLabel gives Delegate Tool Call its lifecycle icon before the title', () => {
+  const source = readFileSync(new URL('./NodeTitleLabel.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /const hasToolCallContinuationIcon = node\.type === 'delegateFunctionCall';/);
+  assert.match(source, /hasToolCallContinuationIcon && <ToolCallContinuationIndicator \/>/);
 });
 
 test('NodeTitleLabel leaves other node titles plain', () => {

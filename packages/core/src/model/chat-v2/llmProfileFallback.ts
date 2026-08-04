@@ -1,21 +1,19 @@
 import type { PortId } from '../NodeBase.js';
 import {
   isChatV2ResponseValidationError,
-  materializeChatV2PipelineFailure,
   runChatV2PipelineExecution,
-  type ChatV2PipelineProviderFailure,
 } from './chatV2Pipeline.js';
 import {
-  shouldOutputChatV2RequestError,
   type ChatV2Provider,
   type ChatV2PipelineRoundOptions,
   type ChatV2PipelineResult,
   type RunChatV2PipelineOptions,
 } from './chatV2Types.js';
 
-export type LLMProfileAttempt = {
+export type LLMAttempt = {
   roundIndex: number;
-  profileIndex: number;
+  /** Present when a From profile candidate produced this attempt. */
+  profileIndex?: number;
   provider: ChatV2Provider;
   model: string;
   stage: 'configuration' | 'request' | 'response-validation';
@@ -28,72 +26,31 @@ export type LLMProfileAttempt = {
 export type LLMProfileFallbackCandidate = {
   provider: ChatV2Provider;
   model: string;
-  credential?: string | undefined;
-  /** Additional known request secrets, such as profile or global header values. */
-  redactionValues?: readonly string[] | undefined;
 };
-
-/**
- * Request-level diagnostics grouped by the configured LLM Profile order.
- *
- * `LLMProfileAttempt` deliberately retains the full chronology and round
- * information. These compact arrays are the shape used by the familiar
- * Response Status and Response Error outputs when a profile *array* drives
- * LLM Chat: outer index is the input profile index; inner order is the
- * physical request order for that profile across the whole invocation.
- */
-export type LLMProfileRequestDiagnostics = {
-  statuses: Array<number | number[]>;
-  errors: LLMProfileRequestErrorDiagnostics;
-};
-
-/**
- * Compact error diagnostics for an LLM Profile array.
- *
- * A single request failure is easier to inspect as a string, while retries
- * still need an array. When every candidate completed without a request error,
- * there is nothing useful to preserve per profile, so the value is simply an
- * empty array. The detailed LLM Profile Attempts output remains the canonical
- * per-profile/per-attempt record in every case.
- */
-export type LLMProfileRequestErrorDiagnostics = string | string[] | Array<string | string[]>;
 
 export type LLMProfileFallbackRunner = {
   run: (roundOptions: ChatV2PipelineRoundOptions) => Promise<ChatV2PipelineResult>;
-  attempts: LLMProfileAttempt[];
+  attempts: LLMAttempt[];
   summary: () => string;
   wasExhausted: () => boolean;
 };
 
 export class LLMProfileFallbackExhaustedError extends Error {
-  constructor(public readonly attempts: readonly LLMProfileAttempt[]) {
+  constructor(public readonly attempts: readonly LLMAttempt[]) {
     super(buildExhaustedMessage(attempts));
     this.name = 'LLMProfileFallbackExhaustedError';
   }
 }
 
-function getSafeErrorMessage(error: unknown, candidate: LLMProfileFallbackCandidate): string {
-  let message: string;
+export function getLLMAttemptErrorMessage(error: unknown): string {
   try {
-    message = error instanceof Error ? error.message : String(error);
+    return error instanceof Error ? error.message : String(error);
   } catch {
-    message = 'Provider request failed with unreadable error metadata.';
+    return 'Provider request failed with unreadable error metadata.';
   }
-
-  // Replace longer values first so one secret which contains another cannot
-  // leave a meaningful suffix behind. Header values can be credentials too;
-  // callers deliberately provide every known sensitive request value here.
-  const redactionValues = [candidate.credential, ...(candidate.redactionValues ?? [])]
-    .filter((value): value is string => typeof value === 'string' && value.length > 0)
-    .sort((left, right) => right.length - left.length);
-  for (const value of new Set(redactionValues)) {
-    message = message.split(value).join('[redacted]');
-  }
-
-  return message.length > 1_000 ? `${message.slice(0, 997)}...` : message;
 }
 
-function buildExhaustedMessage(attempts: readonly LLMProfileAttempt[]): string {
+function buildExhaustedMessage(attempts: readonly LLMAttempt[]): string {
   const details = attempts
     .map((attempt) => {
       const stage =
@@ -123,7 +80,7 @@ function pluralize(count: number, singular: string, plural = `${singular}s`): st
  */
 export function buildLLMProfileFallbackSummary(
   candidates: readonly LLMProfileFallbackCandidate[],
-  attempts: readonly LLMProfileAttempt[],
+  attempts: readonly LLMAttempt[],
 ): string {
   return candidates
     .map((candidate, profileIndex) => {
@@ -189,59 +146,6 @@ export function buildLLMProfileFallbackSummary(
     .join('\n');
 }
 
-export function buildLLMProfileRequestDiagnostics(
-  profileCount: number,
-  attempts: readonly LLMProfileAttempt[],
-): LLMProfileRequestDiagnostics {
-  const statuses = Array.from({ length: profileCount }, () => [] as number[]);
-  const errors = Array.from({ length: profileCount }, () => [] as string[]);
-
-  for (const attempt of attempts) {
-    if (attempt.stage !== 'request' || attempt.profileIndex < 0 || attempt.profileIndex >= profileCount) {
-      continue;
-    }
-
-    if (attempt.status != null) {
-      statuses[attempt.profileIndex]!.push(attempt.status);
-    }
-    if (attempt.error != null) {
-      errors[attempt.profileIndex]!.push(attempt.error);
-    }
-  }
-
-  return {
-    statuses: compactLLMProfileRequestStatuses(statuses) as Array<number | number[]>,
-    errors: compactLLMProfileRequestErrors(errors) as LLMProfileRequestErrorDiagnostics,
-  };
-}
-
-/**
- * Preserves one profile slot per input profile while making a single physical
- * request easy to read. This also repairs cache entries made before the
- * scalar-single-status contract was introduced.
- */
-export function compactLLMProfileRequestStatuses(statuses: readonly unknown[]): unknown[] {
-  return statuses.map((profileStatuses) =>
-    Array.isArray(profileStatuses) && profileStatuses.length === 1 ? profileStatuses[0] : profileStatuses,
-  );
-}
-
-/**
- * Keeps Response Error readable for profile-array fallback chains and repairs
- * editor-cache entries written before that compact presentation contract.
- */
-export function compactLLMProfileRequestErrors(errors: readonly unknown[]): unknown {
-  if (errors.every((profileErrors) => Array.isArray(profileErrors) && profileErrors.length === 0)) {
-    return [];
-  }
-
-  const compacted = errors.map((profileErrors) =>
-    Array.isArray(profileErrors) && profileErrors.length === 1 ? profileErrors[0] : profileErrors,
-  );
-
-  return compacted.length === 1 ? compacted[0] ?? [] : compacted;
-}
-
 function clearPartialResponse(options: Pick<ChatV2PipelineRoundOptions, 'emitPartialOutputs' | 'context'>): void {
   if (!options.emitPartialOutputs) {
     return;
@@ -281,10 +185,10 @@ export function createLLMProfileFallbackRunner(params: {
     profileIndex: number,
     roundOptions: ChatV2PipelineRoundOptions,
   ) => Promise<RunChatV2PipelineOptions>;
-  onAttempt?: ((attempt: LLMProfileAttempt) => void) | undefined;
+  onAttempt?: ((attempt: LLMAttempt) => void) | undefined;
 }): LLMProfileFallbackRunner {
-  const attempts: LLMProfileAttempt[] = [];
-  const recordAttempt = (attempt: LLMProfileAttempt) => {
+  const attempts: LLMAttempt[] = [];
+  const recordAttempt = (attempt: LLMAttempt) => {
     attempts.push(attempt);
     try {
       params.onAttempt?.(attempt);
@@ -302,11 +206,6 @@ export function createLLMProfileFallbackRunner(params: {
     wasExhausted: () => exhausted,
     run: async (roundOptions) => {
       const roundIndex = nextRoundIndex;
-      // Only a provider failure from the terminal candidate may become normal
-      // request-detail outputs. If a later candidate instead fails while being
-      // configured, returning diagnostics from an earlier provider would lie
-      // about which profile terminally failed.
-      let terminalProviderFailure: ChatV2PipelineProviderFailure | undefined;
       let lastError: unknown;
 
       for (let profileIndex = activeProfileIndex; profileIndex < params.candidates.length; profileIndex++) {
@@ -322,7 +221,6 @@ export function createLLMProfileFallbackRunner(params: {
           }
 
           lastError = error;
-          terminalProviderFailure = undefined;
           recordAttempt({
             roundIndex,
             profileIndex,
@@ -330,7 +228,7 @@ export function createLLMProfileFallbackRunner(params: {
             model: candidate.model,
             stage: 'configuration',
             outcome: 'failure',
-            error: getSafeErrorMessage(error, candidate),
+            error: getLLMAttemptErrorMessage(error),
           });
           clearPartialResponse(roundOptions);
           continue;
@@ -363,7 +261,7 @@ export function createLLMProfileFallbackRunner(params: {
                 attempt.outcome === 'success' ? 'success' : attempt.outcome === 'aborted' ? 'aborted' : 'failure',
               attemptIndex: attempt.attemptIndex,
               ...(attempt.status == null ? {} : { status: attempt.status }),
-              ...(attempt.error == null ? {} : { error: getSafeErrorMessage(attempt.error, candidate) }),
+              ...(attempt.error == null ? {} : { error: getLLMAttemptErrorMessage(attempt.error) }),
             });
           },
         };
@@ -381,10 +279,9 @@ export function createLLMProfileFallbackRunner(params: {
           // exactly what a fallback chain is intended to recover from. This
           // also lets a later profile whose provider supports the same shared
           // prompt/schema continue. If every candidate has the same graph
-          // configuration problem, the aggregate error retains a safe record
-          // of every failed candidate.
+          // configuration problem, the aggregate error retains every failed
+          // candidate diagnostic.
           lastError = error;
-          terminalProviderFailure = undefined;
           const responseValidationFailure = isChatV2ResponseValidationError(error);
           recordAttempt({
             roundIndex,
@@ -393,7 +290,7 @@ export function createLLMProfileFallbackRunner(params: {
             model: candidate.model,
             stage: responseValidationFailure ? 'response-validation' : 'configuration',
             outcome: 'failure',
-            error: getSafeErrorMessage(error, candidate),
+            error: getLLMAttemptErrorMessage(error),
           });
           clearPartialResponse(roundOptions);
           continue;
@@ -404,40 +301,15 @@ export function createLLMProfileFallbackRunner(params: {
           return execution.result;
         }
 
-        terminalProviderFailure = execution.failure;
         lastError = execution.failure.normalizedError;
         clearPartialResponse(roundOptions);
       }
 
       exhausted = true;
-      if (params.candidates.length === 1 && terminalProviderFailure != null) {
-        return materializeChatV2PipelineFailure(terminalProviderFailure);
-      }
-
-      // A scalar profile must preserve the legacy error surface for setup or
-      // request-planning failures that occurred before the pipeline could
-      // produce a provider-failure result.
+      // A scalar profile keeps its underlying provider/configuration error.
       if (params.candidates.length === 1 && lastError !== undefined) {
         throw lastError;
       }
-
-      if (
-        terminalProviderFailure != null &&
-        (terminalProviderFailure.options.outputRequestStatus ||
-          shouldOutputChatV2RequestError(terminalProviderFailure.options))
-      ) {
-        try {
-          return materializeChatV2PipelineFailure(terminalProviderFailure);
-        } catch {
-          // Some response-generation failures intentionally remain node errors
-          // even when request details are enabled. The chain error below keeps
-          // the complete profile history without hiding that failure.
-        }
-      }
-
-      // `lastError` can contain raw provider metadata. The attempt records are
-      // intentionally redacted, so do not attach the raw error as `cause` and
-      // accidentally expose it through node/error serialization.
       throw new LLMProfileFallbackExhaustedError(attempts);
     },
   };

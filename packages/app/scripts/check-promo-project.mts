@@ -115,8 +115,7 @@ function assertApiKeyWiring(project: Project, apiKeyNode: TextNode): void {
   for (const llmNode of llmNodes) {
     assert.equal(llmNode.data.configurationMode, 'inline', `${llmNode.title} must keep its settings inline.`);
     assert.equal(llmNode.data.apiKeySource, 'input', `${llmNode.title} must use its API Key input.`);
-    assert.equal(llmNode.data.outputRequestError, false, `${llmNode.title} must not expose a diagnostic error port.`);
-    assert.equal(llmNode.data.outputRequestStatus, false, `${llmNode.title} must not expose a status port.`);
+    assert.equal(llmNode.data.outputLLMAttempts, false, `${llmNode.title} must not expose an LLM attempts port.`);
     assert.equal(llmNode.data.outputUsage, false, `${llmNode.title} must not expose an unused usage port.`);
     const ownerGraph = Object.values(project.graphs).find((graph) =>
       graph.nodes.some((node) => node.id === llmNode.id),
