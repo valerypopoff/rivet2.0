@@ -64,7 +64,7 @@ export class ManagedWorkflowBackend {
   }
 
   async initialize(): Promise<void> {
-    await this.#context.initialize();
+    await this.#recordings.initialize();
   }
 
   async dispose(): Promise<void> {
@@ -243,6 +243,10 @@ export class ManagedWorkflowBackend {
 
   async importWorkflowRecording(options: ImportManagedWorkflowRecordingOptions): Promise<void> {
     return this.#recordings.importWorkflowRecording(options);
+  }
+
+  async cleanupWorkflowRecordings(): Promise<void> {
+    return this.#recordings.cleanupWorkflowRecordingStorage();
   }
 
   async listWorkflowRecordingWorkflows(): Promise<WorkflowRecordingWorkflowListResponse> {

@@ -67,11 +67,25 @@ export async function getWorkflowFolder(root: string, folderPath: string): Promi
   };
 }
 
-export async function getWorkflowProject(root: string, filePath: string): Promise<WorkflowProjectItem> {
+export async function getWorkflowProject(
+  root: string,
+  filePath: string,
+  options: {
+    includeAggregatePublicationStatus?: boolean;
+    includeStats?: boolean;
+  } = {},
+): Promise<WorkflowProjectItem> {
   const stats = await fs.stat(filePath);
   const relativePath = path.relative(root, filePath).replace(/\\/g, '/');
   const fileName = path.basename(filePath);
   const projectName = fileName.slice(0, -PROJECT_EXTENSION.length);
+  const settings = await getWorkflowProjectSettings(filePath, projectName, {
+    includeAggregatePublicationStatus: options.includeAggregatePublicationStatus,
+    root,
+  });
+  const projectStats = options.includeStats === false
+    ? undefined
+    : await getWorkflowProjectStats(filePath);
 
   return {
     id: relativePath,
@@ -80,8 +94,8 @@ export async function getWorkflowProject(root: string, filePath: string): Promis
     relativePath,
     absolutePath: filePath,
     updatedAt: stats.mtime.toISOString(),
-    settings: await getWorkflowProjectSettings(filePath, projectName, { root }),
-    stats: await getWorkflowProjectStats(filePath),
+    settings,
+    ...(projectStats ? { stats: projectStats } : {}),
   };
 }
 

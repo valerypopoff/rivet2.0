@@ -144,7 +144,7 @@ export async function handleOpenProjectCommand(
       context.preview.clearPreviewProjectByPath(replacedPath);
       context.recording.recordingByProjectPathRef.current.delete(replacedPath);
     }
-    context.clearLoadedRecording();
+    context.clearLoadedRecording(openResult.projectId);
     focusHostedEditorFrame();
     postMessageToDashboard({ type: 'project-opened', path: command.path, requestId: command.requestId });
   } catch (error) {
@@ -189,7 +189,7 @@ export async function handleRefreshOpenProjectCommand(
       rememberOpenedProjectPathAlias(context, command.path, openResult.projectId);
     }
     context.preview.promotePreviewProjectByPath(command.path);
-    context.clearLoadedRecording();
+    context.clearLoadedRecording(openResult.projectId);
     postMessageToDashboard({ type: 'project-opened', path: command.path });
   } catch (error) {
     const message = getError(error).message;

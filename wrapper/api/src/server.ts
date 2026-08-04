@@ -4,7 +4,8 @@ import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
 import { disposeRuntimeLibrariesBackend } from './runtime-libraries/backend.js';
 import { initializeLatestWorkflowRemoteDebugger } from './latestWorkflowRemoteDebugger.js';
 import { initializeWebAppActionWebSockets, type WebAppActionWebSocketRuntime } from './web-app-action-websocket.js';
-import { initializeWorkflowStorage } from './routes/workflows/storage-backend.js';
+import { disposeWorkflowStorage, initializeWorkflowStorage } from './routes/workflows/storage-backend.js';
+import { flushWorkflowExecutionRecordingPersistence } from './routes/workflows/recordings.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile } from './runtime-profile.js';
 import { assertApiRuntimeProfileStartupPreconditions, createApiApp } from './app.js';
 import { initializeAppSettingsRepositories } from './app-settings/settings-repository.js';
@@ -62,6 +63,14 @@ async function shutdown(signal: string): Promise<void> {
     });
   }
   webAppActionWebSockets = null;
+
+  await flushWorkflowExecutionRecordingPersistence().catch((error) => {
+    console.error('[workflow-recordings] Failed to flush recording persistence during shutdown:', error);
+  });
+
+  await disposeWorkflowStorage().catch((error) => {
+    console.error('[managed-workflows] Failed to dispose storage backend during shutdown:', error);
+  });
 
   await disposeRuntimeLibrariesBackend().catch((error) => {
     console.error('[runtime-libraries] Failed to dispose backend during shutdown:', error);

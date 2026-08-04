@@ -27,7 +27,7 @@ export type SerializedEditorCommand = Extract<DashboardToEditorCommand, {
 }>;
 
 export type EditorCommandBridgeContext = {
-  clearLoadedRecording(): void;
+  clearLoadedRecording(projectId?: ProjectId): void;
   getCurrentProject(): Project;
   getLoadedProject(): LoadedProjectInfo;
   getOpenProject(): ReturnType<typeof useOpenWorkflowProject>;

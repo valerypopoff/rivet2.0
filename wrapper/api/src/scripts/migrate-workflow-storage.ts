@@ -303,6 +303,7 @@ async function main() {
       const importedProjects = await importSourceWorkflows(sourceRoot, backend);
       console.log(`[workflow-storage:${mode}] Importing recordings...`);
       await importSourceRecordings(sourceRoot, backend, importedProjects);
+      await backend.cleanupWorkflowRecordings();
     }
 
     console.log(`[workflow-storage:${mode}] Verifying managed state...`);

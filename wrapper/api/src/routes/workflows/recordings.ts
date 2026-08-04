@@ -25,16 +25,17 @@ import {
   countWorkflowRecordingRuns,
   deleteEmptyWorkflowRecordingWorkflows,
   deleteWorkflowRecordingWorkflowRow,
+  getWorkflowRecordingIndexRevision,
   getWorkflowRecordingRunRow,
   getWorkflowRecordingStorageState,
   getWorkflowRecordingWorkflowRowsBySourceProjectPath,
+  listWorkflowRecordingBundlePaths,
   listWorkflowRecordingRunRowsByWorkflowId,
   listWorkflowRecordingRunRowsForWorkflow,
   listWorkflowRecordingWorkflowStatsRows,
   resetWorkflowRecordingDatabaseForTests,
   setWorkflowRecordingStorageState,
-  upsertWorkflowRecordingRun,
-  upsertWorkflowRecordingWorkflow,
+  upsertWorkflowRecordingBundle,
   type WorkflowRecordingRunRow,
 } from './recordings-db.js';
 import { createWorkflowRecordingStore } from './recordings-store.js';
@@ -80,6 +81,7 @@ type PersistWorkflowExecutionRecordingOptions = {
 };
 
 type WorkflowRecordingStorageCounts = {
+  bundleKeySignature: string;
   workflowCount: number;
   runCount: number;
 };
@@ -95,16 +97,30 @@ type WorkflowRecordingMetadataState = {
 };
 
 const workflowRecordingStore = createWorkflowRecordingStore({
-  rebuildIndex: rebuildWorkflowRecordingIndex,
+  rebuildIndex: async (root) => {
+    await rebuildWorkflowRecordingIndex(root);
+  },
   cleanupStorage: cleanupWorkflowRecordingStorage,
   setSchemaVersion: (version) => setWorkflowRecordingStorageState('schema-version', version),
   resetDatabaseForTests: resetWorkflowRecordingDatabaseForTests,
 });
 
+const INDEX_REPAIR_MIN_INTERVAL_MS = 5 * 60_000;
+const INDEX_REPAIR_START_DELAY_MS = 1_000;
+const INDEX_REPAIR_STAT_BATCH_SIZE = 64;
+
 let unresolvedWorkflowRecordingDriftSignature: string | null = null;
+let indexRepairTimer: ReturnType<typeof setTimeout> | null = null;
+let indexRepairPromise: Promise<void> | null = null;
+let pendingIndexRepairRoot = '';
+let lastIndexRepairStartedAt = 0;
 
 export function enqueueWorkflowExecutionRecordingPersistence(task: () => Promise<void>): boolean {
   return workflowRecordingStore.enqueuePersistence(task);
+}
+
+export async function flushWorkflowExecutionRecordingPersistence(): Promise<void> {
+  await workflowRecordingStore.flush();
 }
 
 function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRecordingRunSummary {
@@ -142,15 +158,26 @@ function getWorkflowRecordingDriftSignature(
     recordingsRoot,
     diskCounts.workflowCount,
     diskCounts.runCount,
+    diskCounts.bundleKeySignature,
     diskCounts.completedBundleSignature,
     indexedCounts.workflowCount,
     indexedCounts.runCount,
+    indexedCounts.bundleKeySignature,
   ].join(':');
 }
 
-async function countIndexedWorkflowRecordings(): Promise<WorkflowRecordingStorageCounts> {
-  const indexedWorkflows = await listWorkflowRecordingWorkflowStatsRows();
+function createRecordingBundleKeySignature(bundleKeys: string[]): string {
+  return createHash('sha256').update(JSON.stringify(bundleKeys.sort())).digest('hex');
+}
+
+async function countIndexedWorkflowRecordings(recordingsRoot: string): Promise<WorkflowRecordingStorageCounts> {
+  const [indexedWorkflows, indexedBundlePaths] = await Promise.all([
+    listWorkflowRecordingWorkflowStatsRows(),
+    listWorkflowRecordingBundlePaths(),
+  ]);
   return {
+    bundleKeySignature: createRecordingBundleKeySignature(indexedBundlePaths.map((bundlePath) =>
+      path.relative(recordingsRoot, bundlePath).replace(/\\/g, '/'))),
     workflowCount: indexedWorkflows.length,
     runCount: indexedWorkflows.reduce((total, workflow) => total + workflow.totalRuns, 0),
   };
@@ -178,50 +205,67 @@ async function getRecordingMetadataState(
 
 async function countRecordingBundlesOnDisk(recordingsRoot: string): Promise<WorkflowRecordingDiskCounts> {
   if (!await pathExists(recordingsRoot)) {
-    return { workflowCount: 0, runCount: 0, completedBundleSignature: '' };
+    return {
+      bundleKeySignature: createRecordingBundleKeySignature([]),
+      workflowCount: 0,
+      runCount: 0,
+      completedBundleSignature: '',
+    };
   }
 
   const workflowDirectories = (await fs.readdir(recordingsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
     .sort((left, right) => left.name.localeCompare(right.name));
-  const workflowStates = await Promise.all(
-    workflowDirectories.map(async (workflowDirectory) => {
-      const workflowRoot = path.join(recordingsRoot, workflowDirectory.name);
-      const bundleDirectories = (await fs.readdir(workflowRoot, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-        .sort((left, right) => left.name.localeCompare(right.name));
-      const completedBundleStates = await Promise.all(
-        bundleDirectories.map(async (entry) => {
-          const metadataState = await getRecordingMetadataState(
-            getWorkflowRecordingMetadataPath(path.join(workflowRoot, entry.name)),
-          );
+  const workflowStates: Array<{
+    runCount: number;
+    bundleKeys: string[];
+    completedBundleSignatures: string[];
+  }> = [];
 
-          return metadataState
-            ? {
-                ...metadataState,
-                bundleKey: `${workflowDirectory.name}/${entry.name}`,
-              }
-            : null;
-        }),
-      );
-      const completedBundles = completedBundleStates.filter(
+  for (const workflowDirectory of workflowDirectories) {
+    const workflowRoot = path.join(recordingsRoot, workflowDirectory.name);
+    const bundleDirectories = (await fs.readdir(workflowRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const completedBundles: WorkflowRecordingMetadataState[] = [];
+
+    for (let index = 0; index < bundleDirectories.length; index += INDEX_REPAIR_STAT_BATCH_SIZE) {
+      const batch = bundleDirectories.slice(index, index + INDEX_REPAIR_STAT_BATCH_SIZE);
+      const states = await Promise.all(batch.map(async (entry) => {
+        const metadataState = await getRecordingMetadataState(
+          getWorkflowRecordingMetadataPath(path.join(workflowRoot, entry.name)),
+        );
+
+        return metadataState
+          ? {
+              ...metadataState,
+              bundleKey: `${workflowDirectory.name}/${entry.name}`,
+            }
+          : null;
+      }));
+      completedBundles.push(...states.filter(
         (state): state is WorkflowRecordingMetadataState => state != null,
-      );
-      return {
-        runCount: completedBundles.length,
-        completedBundleSignatures: completedBundles.map((state) => [
-          state.bundleKey,
-          state.mtimeMs,
-          state.size,
-        ].join(':')),
-      };
-    }),
-  );
+      ));
+    }
+
+    workflowStates.push({
+      runCount: completedBundles.length,
+      bundleKeys: completedBundles.map((state) => state.bundleKey),
+      completedBundleSignatures: completedBundles.map((state) => [
+        state.bundleKey,
+        state.mtimeMs,
+        state.size,
+      ].join(':')),
+    });
+  }
   const completedBundleSignature = createHash('sha256')
     .update(workflowStates.flatMap((state) => state.completedBundleSignatures).join('|'))
     .digest('hex');
 
   return {
+    bundleKeySignature: createRecordingBundleKeySignature(
+      workflowStates.flatMap((state) => state.bundleKeys),
+    ),
     workflowCount: workflowStates.filter((state) => state.runCount > 0).length,
     runCount: workflowStates.reduce((total, state) => total + state.runCount, 0),
     completedBundleSignature,
@@ -229,12 +273,14 @@ async function countRecordingBundlesOnDisk(recordingsRoot: string): Promise<Work
 }
 
 async function repairWorkflowRecordingIndexIfDrifted(recordingsRoot: string): Promise<void> {
-  const indexedCounts = await countIndexedWorkflowRecordings();
+  const expectedRevision = getWorkflowRecordingIndexRevision();
+  const indexedCounts = await countIndexedWorkflowRecordings(recordingsRoot);
   const diskCounts = await countRecordingBundlesOnDisk(recordingsRoot);
 
   if (
     indexedCounts.workflowCount === diskCounts.workflowCount &&
-    indexedCounts.runCount === diskCounts.runCount
+    indexedCounts.runCount === diskCounts.runCount &&
+    indexedCounts.bundleKeySignature === diskCounts.bundleKeySignature
   ) {
     unresolvedWorkflowRecordingDriftSignature = null;
     return;
@@ -245,12 +291,16 @@ async function repairWorkflowRecordingIndexIfDrifted(recordingsRoot: string): Pr
     return;
   }
 
-  await rebuildWorkflowRecordingIndex(recordingsRoot);
-  const repairedIndexedCounts = await countIndexedWorkflowRecordings();
+  const replaced = await rebuildWorkflowRecordingIndex(recordingsRoot, { expectedRevision });
+  if (!replaced) {
+    return;
+  }
+  const repairedIndexedCounts = await countIndexedWorkflowRecordings(recordingsRoot);
 
   if (
     repairedIndexedCounts.workflowCount === diskCounts.workflowCount &&
-    repairedIndexedCounts.runCount === diskCounts.runCount
+    repairedIndexedCounts.runCount === diskCounts.runCount &&
+    repairedIndexedCounts.bundleKeySignature === diskCounts.bundleKeySignature
   ) {
     unresolvedWorkflowRecordingDriftSignature = null;
     return;
@@ -268,14 +318,56 @@ async function repairWorkflowRecordingIndexIfDrifted(recordingsRoot: string): Pr
   );
 }
 
+function startWorkflowRecordingIndexRepair(recordingsRoot: string): void {
+  lastIndexRepairStartedAt = Date.now();
+  indexRepairPromise = repairWorkflowRecordingIndexIfDrifted(recordingsRoot)
+    .catch((error) => {
+      console.error('[workflow-recordings] Background recording index repair failed:', error);
+    })
+    .finally(() => {
+      indexRepairPromise = null;
+    });
+}
+
+function scheduleWorkflowRecordingIndexRepair(recordingsRoot: string): void {
+  if (
+    indexRepairTimer ||
+    indexRepairPromise ||
+    Date.now() - lastIndexRepairStartedAt < INDEX_REPAIR_MIN_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  pendingIndexRepairRoot = recordingsRoot;
+  indexRepairTimer = setTimeout(() => {
+    indexRepairTimer = null;
+    const repairRoot = pendingIndexRepairRoot;
+    pendingIndexRepairRoot = '';
+    startWorkflowRecordingIndexRepair(repairRoot);
+  }, INDEX_REPAIR_START_DELAY_MS);
+  indexRepairTimer.unref();
+}
+
+export async function flushWorkflowRecordingIndexRepairForTests(): Promise<void> {
+  if (indexRepairTimer) {
+    clearTimeout(indexRepairTimer);
+    indexRepairTimer = null;
+    const repairRoot = pendingIndexRepairRoot;
+    pendingIndexRepairRoot = '';
+    startWorkflowRecordingIndexRepair(repairRoot);
+  }
+
+  await indexRepairPromise;
+}
+
 export async function initializeWorkflowRecordingStorage(root?: string): Promise<void> {
   const recordingsRoot = await ensureWorkflowRecordingsRoot(root);
   await workflowRecordingStore.ensureStorage(recordingsRoot);
+  lastIndexRepairStartedAt = Date.now();
 }
 
 export async function listWorkflowRecordingWorkflows(root: string): Promise<WorkflowRecordingWorkflowListResponse> {
   const recordingsRoot = await ensureWorkflowRecordingStorage(root);
-  await repairWorkflowRecordingIndexIfDrifted(recordingsRoot);
 
   const recordingWorkflows = await listWorkflowRecordingWorkflowStatsRows();
   const recordingWorkflowByPath = new Map(recordingWorkflows.map((workflow) => [workflow.sourceProjectPath, workflow]));
@@ -285,7 +377,10 @@ export async function listWorkflowRecordingWorkflows(root: string): Promise<Work
   const workflows: WorkflowRecordingWorkflowSummary[] = [];
 
   for (const projectPath of projectPaths) {
-    const project = await getWorkflowProject(root, projectPath);
+    const project = await getWorkflowProject(root, projectPath, {
+      includeAggregatePublicationStatus: false,
+      includeStats: false,
+    });
     const workflowByPath = recordingWorkflowByPath.get(projectPath);
     let workflowId = workflowByPath?.workflowId ?? '';
 
@@ -333,6 +428,7 @@ export async function listWorkflowRecordingWorkflows(root: string): Promise<Work
     return left.project.name.localeCompare(right.project.name);
   });
 
+  scheduleWorkflowRecordingIndexRepair(recordingsRoot);
   return { workflows };
 }
 
@@ -346,8 +442,7 @@ export async function listWorkflowRecordingRunsPage(
   inputCursor = 0,
   signal?: AbortSignal,
 ): Promise<WorkflowRecordingRunsPageResponse> {
-  const recordingsRoot = await ensureWorkflowRecordingStorage(root);
-  await repairWorkflowRecordingIndexIfDrifted(recordingsRoot);
+  await ensureWorkflowRecordingStorage(root);
 
   const normalizedPage = Math.max(1, Math.floor(page));
   const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
@@ -424,8 +519,7 @@ export async function readWorkflowRecordingArtifact(
   recordingId: string,
   artifact: WorkflowRecordingArtifactKind,
 ): Promise<string> {
-  const recordingsRoot = await ensureWorkflowRecordingStorage(root);
-  await repairWorkflowRecordingIndexIfDrifted(recordingsRoot);
+  await ensureWorkflowRecordingStorage(root);
 
   const row = await getWorkflowRecordingRunRow(recordingId);
   if (!row) {
@@ -446,7 +540,6 @@ export async function readWorkflowRecordingArtifact(
 
 export async function deleteWorkflowRecording(root: string, recordingId: string): Promise<void> {
   const recordingsRoot = await ensureWorkflowRecordingStorage(root);
-  await repairWorkflowRecordingIndexIfDrifted(recordingsRoot);
 
   const row = await getWorkflowRecordingRunRow(recordingId);
   if (!row) {
@@ -558,21 +651,19 @@ export async function persistWorkflowExecutionRecording(
       errorMessage: options.errorMessage,
     };
 
-    await fs.writeFile(
-      getWorkflowRecordingMetadataPath(bundlePath),
-      `${JSON.stringify(metadata, null, 2)}\n`,
-      'utf8',
-    );
+    const metadataPath = getWorkflowRecordingMetadataPath(bundlePath);
+    const temporaryMetadataPath = `${metadataPath}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporaryMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+    await fs.rename(temporaryMetadataPath, metadataPath);
 
-    await upsertWorkflowRecordingWorkflow({
+    await upsertWorkflowRecordingBundle({
       workflowId,
       sourceProjectMetadataId: workflowId,
       sourceProjectPath: options.sourceProjectPath,
       sourceProjectRelativePath,
       sourceProjectName,
       updatedAt: createdAt,
-    });
-    await upsertWorkflowRecordingRun({
+    }, {
       id: recordingId,
       workflowId,
       createdAt,
@@ -640,6 +731,14 @@ export async function deleteWorkflowRecordingsByWorkflowId(
 }
 
 export async function resetWorkflowRecordingStorageForTests(): Promise<void> {
+  if (indexRepairTimer) {
+    clearTimeout(indexRepairTimer);
+    indexRepairTimer = null;
+  }
+  await indexRepairPromise;
+  indexRepairPromise = null;
+  pendingIndexRepairRoot = '';
+  lastIndexRepairStartedAt = 0;
   unresolvedWorkflowRecordingDriftSignature = null;
   await workflowRecordingStore.resetForTests();
 }

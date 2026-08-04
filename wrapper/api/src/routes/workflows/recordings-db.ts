@@ -66,7 +66,110 @@ const RECORDING_RUN_COLUMNS = `
   dataset_uncompressed_bytes AS datasetUncompressedBytes
 `;
 
+const UPSERT_RECORDING_WORKFLOW_SQL = `
+  INSERT INTO recording_workflows (
+    workflow_id,
+    source_project_metadata_id,
+    source_project_path,
+    source_project_relative_path,
+    source_project_name,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(workflow_id) DO UPDATE SET
+    source_project_metadata_id = excluded.source_project_metadata_id,
+    source_project_path = excluded.source_project_path,
+    source_project_relative_path = excluded.source_project_relative_path,
+    source_project_name = excluded.source_project_name,
+    updated_at = excluded.updated_at
+`;
+
+const UPSERT_RECORDING_RUN_SQL = `
+  INSERT INTO recording_runs (
+    id,
+    workflow_id,
+    created_at,
+    run_kind,
+    status,
+    duration_ms,
+    endpoint_name_at_execution,
+    error_message,
+    bundle_path,
+    encoding,
+    has_replay_dataset,
+    recording_compressed_bytes,
+    recording_uncompressed_bytes,
+    project_compressed_bytes,
+    project_uncompressed_bytes,
+    dataset_compressed_bytes,
+    dataset_uncompressed_bytes
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    workflow_id = excluded.workflow_id,
+    created_at = excluded.created_at,
+    run_kind = excluded.run_kind,
+    status = excluded.status,
+    duration_ms = excluded.duration_ms,
+    endpoint_name_at_execution = excluded.endpoint_name_at_execution,
+    error_message = excluded.error_message,
+    bundle_path = excluded.bundle_path,
+    encoding = excluded.encoding,
+    has_replay_dataset = excluded.has_replay_dataset,
+    recording_compressed_bytes = excluded.recording_compressed_bytes,
+    recording_uncompressed_bytes = excluded.recording_uncompressed_bytes,
+    project_compressed_bytes = excluded.project_compressed_bytes,
+    project_uncompressed_bytes = excluded.project_uncompressed_bytes,
+    dataset_compressed_bytes = excluded.dataset_compressed_bytes,
+    dataset_uncompressed_bytes = excluded.dataset_uncompressed_bytes
+`;
+
+type RecordingStatement = ReturnType<DatabaseSync['prepare']>;
+
+function writeWorkflowRecordingWorkflow(
+  statement: RecordingStatement,
+  row: WorkflowRecordingWorkflowRow,
+): void {
+  statement.run(
+    row.workflowId,
+    row.sourceProjectMetadataId,
+    row.sourceProjectPath,
+    row.sourceProjectRelativePath,
+    row.sourceProjectName,
+    row.updatedAt,
+  );
+}
+
+function writeWorkflowRecordingRun(statement: RecordingStatement, row: WorkflowRecordingRunRow): void {
+  statement.run(
+    row.id,
+    row.workflowId,
+    row.createdAt,
+    row.runKind,
+    row.status,
+    row.durationMs,
+    row.endpointNameAtExecution,
+    row.errorMessage ?? null,
+    row.bundlePath,
+    row.encoding,
+    row.hasReplayDataset ? 1 : 0,
+    row.recordingCompressedBytes,
+    row.recordingUncompressedBytes,
+    row.projectCompressedBytes,
+    row.projectUncompressedBytes,
+    row.datasetCompressedBytes,
+    row.datasetUncompressedBytes,
+  );
+}
+
 let databasePromise: Promise<DatabaseSync> | null = null;
+let recordingIndexRevision = 0;
+
+export function getWorkflowRecordingIndexRevision(): number {
+  return recordingIndexRevision;
+}
+
+function markWorkflowRecordingIndexChanged(): void {
+  recordingIndexRevision += 1;
+}
 
 function toNumber(value: unknown): number {
   if (typeof value === 'bigint') {
@@ -173,93 +276,78 @@ export async function clearWorkflowRecordingIndex(): Promise<void> {
     DELETE FROM recording_runs;
     DELETE FROM recording_workflows;
   `);
+  markWorkflowRecordingIndexChanged();
 }
 
 export async function upsertWorkflowRecordingWorkflow(row: WorkflowRecordingWorkflowRow): Promise<void> {
   const db = await getDatabase();
-  db.prepare(`
-    INSERT INTO recording_workflows (
-      workflow_id,
-      source_project_metadata_id,
-      source_project_path,
-      source_project_relative_path,
-      source_project_name,
-      updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(workflow_id) DO UPDATE SET
-      source_project_metadata_id = excluded.source_project_metadata_id,
-      source_project_path = excluded.source_project_path,
-      source_project_relative_path = excluded.source_project_relative_path,
-      source_project_name = excluded.source_project_name,
-      updated_at = excluded.updated_at
-  `).run(
-    row.workflowId,
-    row.sourceProjectMetadataId,
-    row.sourceProjectPath,
-    row.sourceProjectRelativePath,
-    row.sourceProjectName,
-    row.updatedAt,
-  );
+  writeWorkflowRecordingWorkflow(db.prepare(UPSERT_RECORDING_WORKFLOW_SQL), row);
+  markWorkflowRecordingIndexChanged();
 }
 
 export async function upsertWorkflowRecordingRun(row: WorkflowRecordingRunRow): Promise<void> {
   const db = await getDatabase();
-  db.prepare(`
-    INSERT INTO recording_runs (
-      id,
-      workflow_id,
-      created_at,
-      run_kind,
-      status,
-      duration_ms,
-      endpoint_name_at_execution,
-      error_message,
-      bundle_path,
-      encoding,
-      has_replay_dataset,
-      recording_compressed_bytes,
-      recording_uncompressed_bytes,
-      project_compressed_bytes,
-      project_uncompressed_bytes,
-      dataset_compressed_bytes,
-      dataset_uncompressed_bytes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      workflow_id = excluded.workflow_id,
-      created_at = excluded.created_at,
-      run_kind = excluded.run_kind,
-      status = excluded.status,
-      duration_ms = excluded.duration_ms,
-      endpoint_name_at_execution = excluded.endpoint_name_at_execution,
-      error_message = excluded.error_message,
-      bundle_path = excluded.bundle_path,
-      encoding = excluded.encoding,
-      has_replay_dataset = excluded.has_replay_dataset,
-      recording_compressed_bytes = excluded.recording_compressed_bytes,
-      recording_uncompressed_bytes = excluded.recording_uncompressed_bytes,
-      project_compressed_bytes = excluded.project_compressed_bytes,
-      project_uncompressed_bytes = excluded.project_uncompressed_bytes,
-      dataset_compressed_bytes = excluded.dataset_compressed_bytes,
-      dataset_uncompressed_bytes = excluded.dataset_uncompressed_bytes
-  `).run(
-    row.id,
-    row.workflowId,
-    row.createdAt,
-    row.runKind,
-    row.status,
-    row.durationMs,
-    row.endpointNameAtExecution,
-    row.errorMessage ?? null,
-    row.bundlePath,
-    row.encoding,
-    row.hasReplayDataset ? 1 : 0,
-    row.recordingCompressedBytes,
-    row.recordingUncompressedBytes,
-    row.projectCompressedBytes,
-    row.projectUncompressedBytes,
-    row.datasetCompressedBytes,
-    row.datasetUncompressedBytes,
-  );
+  writeWorkflowRecordingRun(db.prepare(UPSERT_RECORDING_RUN_SQL), row);
+  markWorkflowRecordingIndexChanged();
+}
+
+export async function upsertWorkflowRecordingBundle(
+  workflow: WorkflowRecordingWorkflowRow,
+  run: WorkflowRecordingRunRow,
+): Promise<void> {
+  const db = await getDatabase();
+  const workflowStatement = db.prepare(UPSERT_RECORDING_WORKFLOW_SQL);
+  const runStatement = db.prepare(UPSERT_RECORDING_RUN_SQL);
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    writeWorkflowRecordingWorkflow(workflowStatement, workflow);
+    writeWorkflowRecordingRun(runStatement, run);
+    db.exec('COMMIT');
+    markWorkflowRecordingIndexChanged();
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Preserve the original bundle-index failure.
+    }
+    throw error;
+  }
+}
+
+export async function replaceWorkflowRecordingIndex(
+  workflows: readonly WorkflowRecordingWorkflowRow[],
+  runs: readonly WorkflowRecordingRunRow[],
+  options: { expectedRevision?: number } = {},
+): Promise<boolean> {
+  const db = await getDatabase();
+  if (options.expectedRevision != null && options.expectedRevision !== recordingIndexRevision) {
+    return false;
+  }
+
+  const workflowStatement = db.prepare(UPSERT_RECORDING_WORKFLOW_SQL);
+  const runStatement = db.prepare(UPSERT_RECORDING_RUN_SQL);
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec('DELETE FROM recording_runs; DELETE FROM recording_workflows;');
+    for (const workflow of workflows) {
+      writeWorkflowRecordingWorkflow(workflowStatement, workflow);
+    }
+    for (const run of runs) {
+      writeWorkflowRecordingRun(runStatement, run);
+    }
+    db.exec('COMMIT');
+    markWorkflowRecordingIndexChanged();
+    return true;
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Preserve the original replacement failure.
+    }
+    throw error;
+  }
 }
 
 export async function listWorkflowRecordingWorkflowStatsRows(): Promise<WorkflowRecordingWorkflowStatsRow[]> {
@@ -382,6 +470,17 @@ export async function listWorkflowRecordingRunsOldestFirst(): Promise<WorkflowRe
   return rows.map(normalizeWorkflowRecordingRunRow);
 }
 
+export async function listWorkflowRecordingBundlePaths(): Promise<string[]> {
+  const db = await getDatabase();
+  const rows = db.prepare(`
+    SELECT bundle_path AS bundlePath
+    FROM recording_runs
+    ORDER BY bundle_path ASC
+  `).all<{ bundlePath: string }>();
+
+  return rows.map((row) => String(row.bundlePath ?? ''));
+}
+
 export async function getWorkflowRecordingWorkflowRowsBySourceProjectPath(
   sourceProjectPath: string,
   sourceProjectRelativePath: string,
@@ -412,11 +511,13 @@ export async function getWorkflowRecordingWorkflowRowsBySourceProjectPath(
 export async function deleteWorkflowRecordingRunRow(recordingId: string): Promise<void> {
   const db = await getDatabase();
   db.prepare('DELETE FROM recording_runs WHERE id = ?').run(recordingId);
+  markWorkflowRecordingIndexChanged();
 }
 
 export async function deleteWorkflowRecordingWorkflowRow(workflowId: string): Promise<void> {
   const db = await getDatabase();
   db.prepare('DELETE FROM recording_workflows WHERE workflow_id = ?').run(workflowId);
+  markWorkflowRecordingIndexChanged();
 }
 
 export async function deleteEmptyWorkflowRecordingWorkflows(): Promise<void> {
@@ -425,6 +526,7 @@ export async function deleteEmptyWorkflowRecordingWorkflows(): Promise<void> {
     DELETE FROM recording_workflows
     WHERE workflow_id NOT IN (SELECT DISTINCT workflow_id FROM recording_runs)
   `).run();
+  markWorkflowRecordingIndexChanged();
 }
 
 export async function getWorkflowRecordingTotalCompressedBytes(): Promise<number> {
@@ -443,12 +545,14 @@ export async function getWorkflowRecordingTotalCompressedBytes(): Promise<number
 
 export async function resetWorkflowRecordingDatabaseForTests(): Promise<void> {
   if (!databasePromise) {
+    recordingIndexRevision = 0;
     return;
   }
 
   const db = await databasePromise;
   db.close();
   databasePromise = null;
+  recordingIndexRevision = 0;
 }
 
 function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): WorkflowRecordingRunRow {

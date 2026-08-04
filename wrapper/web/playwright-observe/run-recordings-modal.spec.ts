@@ -504,6 +504,9 @@ test.describe('Run recordings modal', () => {
     expect(replayProjectFetches[0]).toBe('recording-b-2');
     await expect(page.locator('.dashboard-empty-state')).toBeHidden();
     await expect(page.locator('.Toastify__toast', { hasText: 'Failed to open project' })).toHaveCount(0);
+    const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+    await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toBeVisible();
+    await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toBeVisible();
     await expect(modal).toBeHidden();
     await expect(page.getByText('Found: 11')).toBeVisible();
 

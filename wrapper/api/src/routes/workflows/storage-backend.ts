@@ -453,6 +453,17 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   );
 }
 
+export async function disposeWorkflowStorage(): Promise<void> {
+  const backendPromise = managedBackendPromise;
+  managedBackendPromise = null;
+  if (!backendPromise) {
+    return;
+  }
+
+  const backend = await backendPromise;
+  await backend.dispose();
+}
+
 export async function readWorkflowRecordingArtifactWithBackend(recordingId: string, artifact: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> {
   return delegateWithWorkflowsRoot(
     async (backend) => backend.readWorkflowRecordingArtifact(recordingId, artifact),

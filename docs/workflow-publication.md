@@ -689,6 +689,8 @@ Operational defaults are intentionally conservative:
 - dataset snapshots are disabled by default
 - retention cleanup runs automatically
 
+Retention applies to both storage backends. The per-endpoint cap groups by workflow id plus historical endpoint name, preserving independent allowances when a slug is later reused by another project. Filesystem cleanup deletes bundle directories and SQLite rows. Managed cleanup deletes matching Postgres rows transactionally and removes their recording/replay objects after commit; concurrent replicas delete blobs only for rows they actually claimed. Per-endpoint and age cleanup stays workflow/endpoint-scoped on ordinary managed writes, while startup reconciliation and the optional global byte cap inspect the full recording metadata set.
+
 ## Recording index and API shape
 
 The browser does not scan recording bundles directly. The API serves recording lists and artifact lookup from the active backend:
@@ -696,9 +698,9 @@ The browser does not scan recording bundles directly. The API serves recording l
 - in `filesystem` mode, from `recordings.sqlite` plus `RIVET_WORKFLOW_RECORDINGS_ROOT`
 - in `managed` mode, from Postgres `workflow_recordings` plus recording/replay blobs in object storage
 
-In `filesystem` mode, the API validates the SQLite index against completed recording bundles on disk before serving recording lists and artifacts. A completed bundle is a bundle directory with `metadata.json`; abandoned empty workflow-recording directories under `RIVET_WORKFLOW_RECORDINGS_ROOT` are ignored for drift detection so they do not force every recordings request to rebuild the index.
+In `filesystem` mode, startup reconciliation validates and rebuilds the SQLite index from completed recording bundles. Normal workflow-summary, run-page, artifact-read, and delete requests trust that maintained index instead of traversing every bundle before responding. The workflow-summary route can schedule a throttled background drift check after its response path; that repair scans metadata first and replaces the index in one SQLite transaction, so concurrent readers see either the previous complete index or the repaired complete index. If normal persistence or deletion changes the index during the scan, a revision guard discards the stale replacement instead of overwriting the newer mutation. A completed bundle is a bundle directory with `metadata.json`, and abandoned empty workflow-recording directories are ignored. This keeps manual/on-disk drift repair without making a large history capable of timing out `GET /api/workflows/recordings/workflows`.
 
-If repair still cannot converge, for example because a `metadata.json` file exists but cannot be parsed into an index row, the API logs the static mismatch and suppresses repeated repair until the on-disk completed-bundle signature or indexed counts change.
+Drift detection compares both counts and stable bundle keys, so replacing one indexed bundle with another cannot escape repair merely because the totals stayed equal. If repair still cannot converge, for example because a `metadata.json` file exists but cannot be parsed into an index row, the API logs the static mismatch and suppresses repeated repair until the on-disk completed-bundle signature or indexed state changes.
 
 That backend data serves:
 
@@ -708,6 +710,10 @@ That backend data serves:
 - optional input filtering against each recording's captured workflow request or graph action input
 - artifact lookup by `recordingId`
 - single-run deletion by `recordingId`
+
+The workflow summary and ordinary run pages are metadata-only reads. They do not read compressed recording/replay payloads, and the workflow summary omits project graph/node statistics and aggregate web-app publication status that the recordings modal does not display. Full recording or replay artifacts are loaded only when the user opens a run; input filtering reads recording artifacts incrementally because the predicate depends on captured input data.
+
+Completed bundle publication is crash-aware. Filesystem metadata becomes visible only after all artifacts are written; the completion marker is published by atomic rename, and the corresponding workflow/run index rows are inserted in one SQLite transaction. Recorder serialization and storage remain background work so they do not inflate endpoint response timing. Graceful API shutdown drains queued recording writes after active WebSocket actions are interrupted and their terminal hooks have run, then closes managed workflow storage. This protects accepted recordings during normal Docker/Kubernetes rollouts; forced process termination and queue overflow remain explicit loss boundaries and are logged.
 
 The main recordings routes are:
 
