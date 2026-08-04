@@ -103,8 +103,30 @@ export function createWorkflowRecordingStore(options: {
     persistenceQueueStartImmediate = setImmediate(runWorkflowRecordingPersistenceQueue);
   };
 
+  const flushWorkflowRecordingStore = async (): Promise<void> => {
+    while (persistenceQueueStartImmediate || persistenceQueuePromise || persistenceQueue.length > 0) {
+      if (persistenceQueueStartImmediate) {
+        clearImmediate(persistenceQueueStartImmediate);
+        persistenceQueueStartImmediate = null;
+        runWorkflowRecordingPersistenceQueue();
+      } else if (!persistenceQueuePromise && persistenceQueue.length > 0) {
+        runWorkflowRecordingPersistenceQueue();
+      }
+
+      await persistenceQueuePromise;
+    }
+
+    while (cleanupPromise || cleanupRequested) {
+      if (!cleanupPromise && cleanupRequested) {
+        scheduleWorkflowRecordingCleanup();
+      }
+      await cleanupPromise;
+    }
+  };
+
   return {
     scheduleCleanup: scheduleWorkflowRecordingCleanup,
+    flush: flushWorkflowRecordingStore,
 
     enqueuePersistence(task: WorkflowRecordingPersistenceTask): boolean {
       if (!isWorkflowRecordingEnabled() || resettingWorkflowRecordingStorageForTests) {

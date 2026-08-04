@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { serializeDatasets, serializeProject, type Project } from '@valerypopoff/rivet2-node';
-import { type Pool, type PoolClient, type QueryResultRow } from 'pg';
 
 import type {
   WorkflowRecordingFilterStatus,
@@ -12,25 +11,111 @@ import type {
 } from '../../../../../shared/workflow-recording-types.js';
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
+import { getWorkflowRecordingConfig, type WorkflowRecordingConfig } from '../recordings-config.js';
 import { parseManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type {
   ImportManagedWorkflowRecordingOptions,
   PersistWorkflowExecutionRecordingOptions,
-  RecordingBlobArtifacts,
-  RecordingBlobKeys,
-  RecordingInsertRowData,
   RecordingRow,
-  TransactionHooks,
   WorkflowRecordingListRow,
-  WorkflowRow,
 } from './types.js';
 import { filterRowsBySerializedRecordingInputPage } from '../recording-input-filter.js';
 
 type ManagedWorkflowRecordingServiceDependencies = {
   context: ManagedWorkflowContext;
+  getRecordingConfig?: () => WorkflowRecordingConfig;
 };
+
+type ManagedRecordingRetentionConfig = Pick<
+  WorkflowRecordingConfig,
+  'retentionDays' | 'maxRunsPerEndpoint' | 'maxTotalBytes'
+>;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function getEndpointRetentionKey(row: RecordingRow): string {
+  return `${row.workflow_id}\0${row.endpoint_name_at_execution.trim().toLowerCase()}`;
+}
+
+function getCompressedBundleSize(row: RecordingRow): number {
+  return row.recording_compressed_bytes + row.project_compressed_bytes + row.dataset_compressed_bytes;
+}
+
+function getCreatedAtMs(row: RecordingRow): number {
+  const timestamp = row.created_at instanceof Date
+    ? row.created_at.getTime()
+    : Date.parse(String(row.created_at));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+export function selectManagedRecordingRowsForCleanup(
+  rows: RecordingRow[],
+  config: ManagedRecordingRetentionConfig,
+  now = Date.now(),
+): RecordingRow[] {
+  const oldestRows = [...rows].sort((left, right) => {
+    const createdAtDifference = getCreatedAtMs(left) - getCreatedAtMs(right);
+    return createdAtDifference || left.recording_id.localeCompare(right.recording_id);
+  });
+  const rowsToDelete = new Map<string, RecordingRow>();
+
+  if (config.retentionDays > 0) {
+    const cutoff = now - config.retentionDays * DAY_MS;
+    for (const row of oldestRows) {
+      if (getCreatedAtMs(row) < cutoff) {
+        rowsToDelete.set(row.recording_id, row);
+      }
+    }
+  }
+
+  if (config.maxRunsPerEndpoint > 0) {
+    const rowsByEndpoint = new Map<string, RecordingRow[]>();
+    for (const row of oldestRows) {
+      if (rowsToDelete.has(row.recording_id)) {
+        continue;
+      }
+
+      const endpointKey = getEndpointRetentionKey(row);
+      const endpointRows = rowsByEndpoint.get(endpointKey) ?? [];
+      endpointRows.push(row);
+      rowsByEndpoint.set(endpointKey, endpointRows);
+    }
+
+    for (const endpointRows of rowsByEndpoint.values()) {
+      const excessCount = endpointRows.length - config.maxRunsPerEndpoint;
+      for (const row of endpointRows.slice(0, Math.max(0, excessCount))) {
+        rowsToDelete.set(row.recording_id, row);
+      }
+    }
+  }
+
+  if (config.maxTotalBytes > 0) {
+    let retainedBytes = oldestRows.reduce((total, row) => total + getCompressedBundleSize(row), 0);
+    for (const row of rowsToDelete.values()) {
+      retainedBytes -= getCompressedBundleSize(row);
+    }
+
+    for (const row of oldestRows) {
+      if (retainedBytes <= config.maxTotalBytes) {
+        break;
+      }
+      if (rowsToDelete.has(row.recording_id)) {
+        continue;
+      }
+
+      rowsToDelete.set(row.recording_id, row);
+      retainedBytes -= getCompressedBundleSize(row);
+    }
+  }
+
+  return [...rowsToDelete.values()];
+}
+
+function getUtf8ByteLength(value: string | null | undefined): number {
+  return value == null ? 0 : Buffer.byteLength(value, 'utf8');
+}
 
 async function filterManagedRecordingRowsByInput(
   rows: RecordingRow[],
@@ -69,8 +154,78 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
     workflowColumnsQualified: options.context.mappers.WORKFLOW_COLUMNS_QUALIFIED,
     recordingColumns: options.context.mappers.RECORDING_COLUMNS,
   };
+  let initialCleanupPromise: Promise<void> | null = null;
+
+  const cleanupWorkflowRecordingStorage = async (workflowId?: string, endpointName?: string): Promise<void> => {
+    const config = options.getRecordingConfig?.() ?? getWorkflowRecordingConfig();
+    if (config.retentionDays <= 0 && config.maxRunsPerEndpoint <= 0 && config.maxTotalBytes <= 0) {
+      return;
+    }
+
+    const cutoff = config.retentionDays > 0
+      ? new Date(Date.now() - config.retentionDays * DAY_MS).toISOString()
+      : null;
+    const normalizedEndpointName = endpointName?.trim().toLowerCase() || null;
+    const endpointScoped = Boolean(workflowId && normalizedEndpointName);
+    const rows = await deps.queryRows<RecordingRow>(
+      deps.pool,
+      config.maxTotalBytes > 0 || !endpointScoped
+        ? `SELECT ${deps.recordingColumns} FROM workflow_recordings ORDER BY created_at ASC, recording_id ASC`
+        : `
+          SELECT ${deps.recordingColumns}
+          FROM workflow_recordings
+          WHERE ($1::timestamptz IS NOT NULL AND created_at < $1::timestamptz)
+             OR (workflow_id = $2 AND LOWER(BTRIM(endpoint_name_at_execution)) = $3)
+          ORDER BY created_at ASC, recording_id ASC
+        `,
+      config.maxTotalBytes > 0 || !endpointScoped ? [] : [cutoff, workflowId, normalizedEndpointName],
+    );
+    const rowsToDelete = selectManagedRecordingRowsForCleanup(rows, config);
+    if (rowsToDelete.length === 0) {
+      return;
+    }
+
+    const recordingIds = rowsToDelete.map((row) => row.recording_id);
+    await deps.withTransaction(async (client, hooks) => {
+      const deletedRows = await deps.queryRows<RecordingRow>(
+        client,
+        `
+          DELETE FROM workflow_recordings
+          WHERE recording_id = ANY($1::text[])
+          RETURNING ${deps.recordingColumns}
+        `,
+        [recordingIds],
+      );
+      if (deletedRows.length > 0) {
+        hooks.onCommit(() => deps.deleteBlobKeysBestEffort(
+          `recording retention cleanup (${deletedRows.length} recordings)`,
+          deletedRows.flatMap((row) => [
+            row.recording_blob_key,
+            row.replay_project_blob_key,
+            row.replay_dataset_blob_key,
+          ]),
+        ));
+      }
+    });
+  };
+
+  const cleanupAfterWrite = async (workflowId: string, endpointName: string): Promise<void> => {
+    try {
+      await cleanupWorkflowRecordingStorage(workflowId, endpointName);
+    } catch (error) {
+      console.error('[workflow-recordings] Managed recording cleanup failed:', error);
+    }
+  };
 
   return {
+    async initialize(): Promise<void> {
+      await deps.initialize();
+      initialCleanupPromise ??= cleanupWorkflowRecordingStorage().catch((error) => {
+        console.error('[workflow-recordings] Managed startup cleanup failed:', error);
+      });
+      await initialCleanupPromise;
+    },
+
     async importWorkflowRecording(options: ImportManagedWorkflowRecordingOptions): Promise<void> {
       await deps.initialize();
 
@@ -111,12 +266,12 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           replayProjectBlobKey: uploadedBlobs.replayProjectBlobKey,
           replayDatasetBlobKey: uploadedBlobs.replayDatasetBlobKey,
           hasReplayDataset: Boolean(uploadedBlobs.replayDatasetBlobKey),
-          recordingCompressedBytes: options.recordingContents.length,
-          recordingUncompressedBytes: options.recordingContents.length,
-          projectCompressedBytes: options.replayProjectContents.length,
-          projectUncompressedBytes: options.replayProjectContents.length,
-          datasetCompressedBytes: options.replayDatasetContents?.length ?? 0,
-          datasetUncompressedBytes: options.replayDatasetContents?.length ?? 0,
+          recordingCompressedBytes: getUtf8ByteLength(options.recordingContents),
+          recordingUncompressedBytes: getUtf8ByteLength(options.recordingContents),
+          projectCompressedBytes: getUtf8ByteLength(options.replayProjectContents),
+          projectUncompressedBytes: getUtf8ByteLength(options.replayProjectContents),
+          datasetCompressedBytes: getUtf8ByteLength(options.replayDatasetContents),
+          datasetUncompressedBytes: getUtf8ByteLength(options.replayDatasetContents),
         },
         {
           timestampMode: 'provided',
@@ -359,12 +514,12 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           replayProjectBlobKey: uploadedBlobs.replayProjectBlobKey,
           replayDatasetBlobKey: uploadedBlobs.replayDatasetBlobKey,
           hasReplayDataset: Boolean(uploadedBlobs.replayDatasetBlobKey),
-          recordingCompressedBytes: options.recordingSerialized.length,
-          recordingUncompressedBytes: options.recordingSerialized.length,
-          projectCompressedBytes: replayProjectSerialized.length,
-          projectUncompressedBytes: replayProjectSerialized.length,
-          datasetCompressedBytes: replayDatasetSerialized?.length ?? 0,
-          datasetUncompressedBytes: replayDatasetSerialized?.length ?? 0,
+          recordingCompressedBytes: getUtf8ByteLength(options.recordingSerialized),
+          recordingUncompressedBytes: getUtf8ByteLength(options.recordingSerialized),
+          projectCompressedBytes: getUtf8ByteLength(replayProjectSerialized),
+          projectUncompressedBytes: getUtf8ByteLength(replayProjectSerialized),
+          datasetCompressedBytes: getUtf8ByteLength(replayDatasetSerialized),
+          datasetUncompressedBytes: getUtf8ByteLength(replayDatasetSerialized),
         },
         {
           timestampMode: 'now',
@@ -372,6 +527,12 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           cleanupContext: 'recording persistence failure',
         },
       );
+      await cleanupAfterWrite(workflowId, options.endpointName);
+    },
+
+    async cleanupWorkflowRecordingStorage(): Promise<void> {
+      await deps.initialize();
+      await cleanupWorkflowRecordingStorage();
     },
   };
 }

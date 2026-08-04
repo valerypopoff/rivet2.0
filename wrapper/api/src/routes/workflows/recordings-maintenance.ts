@@ -3,14 +3,13 @@ import path from 'node:path';
 
 import type { WorkflowRecordingRunRow } from './recordings-db.js';
 import {
-  clearWorkflowRecordingIndex,
   deleteEmptyWorkflowRecordingWorkflows,
   deleteWorkflowRecordingRunRow,
   getWorkflowRecordingTotalCompressedBytes,
   listWorkflowRecordingRunsOlderThan,
   listWorkflowRecordingRunsOldestFirst,
-  upsertWorkflowRecordingRun,
-  upsertWorkflowRecordingWorkflow,
+  replaceWorkflowRecordingIndex,
+  type WorkflowRecordingWorkflowRow,
 } from './recordings-db.js';
 import { getWorkflowRecordingConfig } from './recordings-config.js';
 import {
@@ -19,8 +18,8 @@ import {
 } from './fs-helpers.js';
 import { readStoredWorkflowRecordingMetadata } from './recordings-metadata.js';
 
-function getEndpointRetentionKey(endpointName: string): string {
-  return endpointName.trim().toLowerCase();
+function getEndpointRetentionKey(run: WorkflowRecordingRunRow): string {
+  return `${run.workflowId}\0${run.endpointNameAtExecution.trim().toLowerCase()}`;
 }
 
 function getCompressedBundleSize(run: Pick<
@@ -34,44 +33,51 @@ function formatCleanupTarget(row: WorkflowRecordingRunRow): string {
   return `${row.id} (${row.bundlePath})`;
 }
 
-export async function rebuildWorkflowRecordingIndex(recordingsRoot: string): Promise<void> {
-  await clearWorkflowRecordingIndex();
+export async function rebuildWorkflowRecordingIndex(
+  recordingsRoot: string,
+  options: { expectedRevision?: number } = {},
+): Promise<boolean> {
+  const workflows = new Map<string, WorkflowRecordingWorkflowRow>();
+  const runs: WorkflowRecordingRunRow[] = [];
 
-  if (!await pathExists(recordingsRoot)) {
-    return;
-  }
-
-  const workflowDirectories = await fs.readdir(recordingsRoot, { withFileTypes: true });
-  for (const workflowDirectory of workflowDirectories) {
-    if (!workflowDirectory.isDirectory() || workflowDirectory.name.startsWith('.')) {
-      continue;
-    }
-
-    const workflowRecordingRoot = path.join(recordingsRoot, workflowDirectory.name);
-    const bundleDirectories = await fs.readdir(workflowRecordingRoot, { withFileTypes: true });
-
-    for (const bundleDirectory of bundleDirectories) {
-      if (!bundleDirectory.isDirectory() || bundleDirectory.name.startsWith('.')) {
+  if (await pathExists(recordingsRoot)) {
+    const workflowDirectories = await fs.readdir(recordingsRoot, { withFileTypes: true });
+    for (const workflowDirectory of workflowDirectories) {
+      if (!workflowDirectory.isDirectory() || workflowDirectory.name.startsWith('.')) {
         continue;
       }
 
-      const bundlePath = path.join(workflowRecordingRoot, bundleDirectory.name);
-      const metadata = await readStoredWorkflowRecordingMetadata(bundlePath);
-      if (!metadata) {
-        continue;
-      }
+      const workflowRecordingRoot = path.join(recordingsRoot, workflowDirectory.name);
+      const bundleDirectories = await fs.readdir(workflowRecordingRoot, { withFileTypes: true });
 
-      await upsertWorkflowRecordingWorkflow({
-        workflowId: metadata.workflowId,
-        sourceProjectMetadataId: metadata.sourceProjectMetadataId,
-        sourceProjectPath: metadata.sourceProjectPath,
-        sourceProjectRelativePath: metadata.sourceProjectRelativePath,
-        sourceProjectName: metadata.sourceProjectName,
-        updatedAt: metadata.run.createdAt,
-      });
-      await upsertWorkflowRecordingRun(metadata.run);
+      for (const bundleDirectory of bundleDirectories) {
+        if (!bundleDirectory.isDirectory() || bundleDirectory.name.startsWith('.')) {
+          continue;
+        }
+
+        const bundlePath = path.join(workflowRecordingRoot, bundleDirectory.name);
+        const metadata = await readStoredWorkflowRecordingMetadata(bundlePath);
+        if (!metadata) {
+          continue;
+        }
+
+        const existingWorkflow = workflows.get(metadata.workflowId);
+        if (!existingWorkflow || metadata.run.createdAt >= existingWorkflow.updatedAt) {
+          workflows.set(metadata.workflowId, {
+            workflowId: metadata.workflowId,
+            sourceProjectMetadataId: metadata.sourceProjectMetadataId,
+            sourceProjectPath: metadata.sourceProjectPath,
+            sourceProjectRelativePath: metadata.sourceProjectRelativePath,
+            sourceProjectName: metadata.sourceProjectName,
+            updatedAt: metadata.run.createdAt,
+          });
+        }
+        runs.push(metadata.run);
+      }
     }
   }
+
+  return replaceWorkflowRecordingIndex([...workflows.values()], runs, options);
 }
 
 export async function deleteRecordingRun(row: WorkflowRecordingRunRow): Promise<void> {
@@ -117,7 +123,7 @@ export async function cleanupWorkflowRecordingStorage(): Promise<void> {
         continue;
       }
 
-      const endpointKey = getEndpointRetentionKey(row.endpointNameAtExecution);
+      const endpointKey = getEndpointRetentionKey(row);
       const existingRows = rowsByEndpoint.get(endpointKey);
       if (existingRows) {
         existingRows.push(row);

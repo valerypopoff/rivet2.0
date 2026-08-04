@@ -249,6 +249,8 @@ CREATE TABLE IF NOT EXISTS workflow_recordings (
 
 CREATE INDEX IF NOT EXISTS workflow_recordings_workflow_id_idx ON workflow_recordings(workflow_id);
 CREATE INDEX IF NOT EXISTS workflow_recordings_created_at_idx ON workflow_recordings(created_at DESC);
+CREATE INDEX IF NOT EXISTS workflow_recordings_endpoint_created_at_idx
+  ON workflow_recordings(workflow_id, (LOWER(BTRIM(endpoint_name_at_execution))), created_at DESC, recording_id DESC);
 
 -- The web-app WebSocket transport keeps a compact, short-lived durable ledger.
 -- This is intentionally separate from workflow_recordings: it exists for action

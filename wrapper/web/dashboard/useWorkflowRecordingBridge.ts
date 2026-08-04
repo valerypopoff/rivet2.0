@@ -1,6 +1,7 @@
-import { ExecutionRecorder } from '@valerypopoff/rivet2-core';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
+import { useCallback, useEffect, useMemo, useRef, type SetStateAction } from 'react';
 
+import type { LoadedRecording } from '../../../rivet/packages/app/src/state/execution';
 import {
   getWorkflowRecordingIdFromVirtualProjectPath,
 } from '../../shared/workflow-recording-types';
@@ -34,41 +35,54 @@ export async function fetchLoadedWorkflowRecording(recordingId: string): Promise
 }
 
 export function useWorkflowRecordingBridge({
+  currentProjectId,
   loadedProjectPath,
+  openedProjectPaths,
   setLoadedRecording,
   selectBrowserExecutor,
 }: {
+  currentProjectId?: ProjectId;
   loadedProjectPath: string | null;
-  setLoadedRecording: (recording: LoadedWorkflowRecording | null) => void;
+  openedProjectPaths: readonly string[];
+  setLoadedRecording: (recording: SetStateAction<LoadedRecording | null>) => void;
   selectBrowserExecutor: () => void;
 }) {
   const recordingByProjectPathRef = useRef(new Map<string, LoadedWorkflowRecording>());
-  const activateWorkflowRecording = useCallback((loadedRecording: LoadedWorkflowRecording) => {
+  const activateWorkflowRecording = useCallback((
+    loadedRecording: LoadedWorkflowRecording,
+    projectId: ProjectId,
+  ) => {
     selectBrowserExecutor();
-    setLoadedRecording(loadedRecording);
+    setLoadedRecording({ ...loadedRecording, projectId });
   }, [selectBrowserExecutor, setLoadedRecording]);
+
+  useEffect(() => {
+    const openPaths = new Set(openedProjectPaths);
+    for (const projectPath of recordingByProjectPathRef.current.keys()) {
+      if (projectPath !== loadedProjectPath && !openPaths.has(projectPath)) {
+        recordingByProjectPathRef.current.delete(projectPath);
+      }
+    }
+  }, [loadedProjectPath, openedProjectPaths]);
 
   useEffect(() => {
     let cancelled = false;
     const projectPath = loadedProjectPath;
     if (!projectPath) {
-      setLoadedRecording(null);
+      return;
+    }
+
+    const recordingId = getWorkflowRecordingIdFromVirtualProjectPath(projectPath);
+    if (!recordingId || !currentProjectId) {
       return;
     }
 
     const cachedRecording = recordingByProjectPathRef.current.get(projectPath);
     if (cachedRecording) {
-      activateWorkflowRecording(cachedRecording);
+      activateWorkflowRecording(cachedRecording, currentProjectId);
       return;
     }
 
-    const recordingId = getWorkflowRecordingIdFromVirtualProjectPath(projectPath);
-    if (!recordingId) {
-      setLoadedRecording(null);
-      return;
-    }
-
-    setLoadedRecording(null);
     void fetchLoadedWorkflowRecording(recordingId)
       .then((loadedRecording) => {
         if (cancelled) {
@@ -76,7 +90,7 @@ export function useWorkflowRecordingBridge({
         }
 
         recordingByProjectPathRef.current.set(projectPath, loadedRecording);
-        activateWorkflowRecording(loadedRecording);
+        activateWorkflowRecording(loadedRecording, currentProjectId);
       })
       .catch((error) => {
         if (cancelled) {
@@ -84,13 +98,14 @@ export function useWorkflowRecordingBridge({
         }
 
         console.error('Failed to restore workflow recording:', error);
-        setLoadedRecording(null);
+        setLoadedRecording((currentRecording) =>
+          currentRecording?.projectId === currentProjectId ? null : currentRecording);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [activateWorkflowRecording, loadedProjectPath, setLoadedRecording]);
+  }, [activateWorkflowRecording, currentProjectId, loadedProjectPath, setLoadedRecording]);
 
   return useMemo(() => ({
     activateWorkflowRecording,

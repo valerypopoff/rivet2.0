@@ -92,6 +92,93 @@ test('recording index migrates from WAL to volume-compatible rollback journaling
   }
 });
 
+test('recording bundle index insertion rolls back the workflow row when the run insert fails', async () => {
+  const workflowId = 'atomic-recording-workflow';
+  const createdAt = new Date().toISOString();
+
+  await assert.rejects(
+    workflowRecordingDb.upsertWorkflowRecordingBundle(
+      {
+        workflowId,
+        sourceProjectMetadataId: workflowId,
+        sourceProjectPath: path.join(workflowsRoot, 'Atomic.rivet-project'),
+        sourceProjectRelativePath: 'Atomic.rivet-project',
+        sourceProjectName: 'Atomic',
+        updatedAt: createdAt,
+      },
+      {
+        id: 'atomic-recording-run',
+        workflowId: 'missing-workflow',
+        createdAt,
+        runKind: 'published',
+        status: 'succeeded',
+        durationMs: 1,
+        endpointNameAtExecution: 'atomic',
+        bundlePath: path.join(recordingsRoot, workflowId, 'atomic-recording-run'),
+        encoding: 'identity',
+        hasReplayDataset: false,
+        recordingCompressedBytes: 1,
+        recordingUncompressedBytes: 1,
+        projectCompressedBytes: 1,
+        projectUncompressedBytes: 1,
+        datasetCompressedBytes: 0,
+        datasetUncompressedBytes: 0,
+      },
+    ),
+  );
+
+  const indexedWorkflows = await workflowRecordingDb.listWorkflowRecordingWorkflowStatsRows();
+  assert.equal(indexedWorkflows.some((workflow) => workflow.workflowId === workflowId), false);
+});
+
+test('recording index rebuild keeps workflow metadata from the newest bundle', async () => {
+  const workflowId = 'workflow-metadata-order';
+  const workflowRoot = path.join(recordingsRoot, workflowId);
+  const writeBundleMetadata = async (
+    bundleName: string,
+    createdAt: string,
+    sourceProjectName: string,
+  ): Promise<void> => {
+    const bundlePath = path.join(workflowRoot, bundleName);
+    await fs.mkdir(bundlePath, { recursive: true });
+    await fs.writeFile(path.join(bundlePath, 'metadata.json'), `${JSON.stringify({
+      version: 2,
+      id: bundleName,
+      workflowId,
+      sourceProjectMetadataId: workflowId,
+      sourceProjectName,
+      sourceProjectPath: path.join(workflowsRoot, `${sourceProjectName}.rivet-project`),
+      sourceProjectRelativePath: `${sourceProjectName}.rivet-project`,
+      endpointNameAtExecution: 'metadata-order',
+      createdAt,
+      runKind: 'published',
+      status: 'succeeded',
+      durationMs: 1,
+      encoding: 'identity',
+      hasReplayDataset: false,
+      recordingCompressedBytes: 1,
+      recordingUncompressedBytes: 1,
+      projectCompressedBytes: 1,
+      projectUncompressedBytes: 1,
+      datasetCompressedBytes: 0,
+      datasetUncompressedBytes: 0,
+    })}\n`, 'utf8');
+  };
+
+  // Directory order intentionally scans the newer bundle first and the older
+  // bundle last. Workflow metadata must still come from the newest run.
+  await writeBundleMetadata('a-newer', '2026-08-03T00:00:00.000Z', 'New project name');
+  await writeBundleMetadata('z-older', '2026-08-01T00:00:00.000Z', 'Old project name');
+  await workflowRecordings.initializeWorkflowRecordingStorage(workflowsRoot);
+
+  const [workflow] = await workflowRecordingDb.listWorkflowRecordingWorkflowStatsRows();
+  assert.ok(workflow);
+  assert.equal(workflow.sourceProjectName, 'New project name');
+  assert.equal(workflow.sourceProjectRelativePath, 'New project name.rivet-project');
+  assert.equal(workflow.updatedAt, '2026-08-03T00:00:00.000Z');
+  assert.equal(workflow.totalRuns, 2);
+});
+
 test('filesystem recording persistence writes bundles under the configured recordings root', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'RootSplit');
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
@@ -125,11 +212,15 @@ test('filesystem recording persistence writes bundles under the configured recor
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
 
   assert.equal(bundleDirectories.length, 1);
+  const bundlePath = path.join(projectRecordingsRoot, bundleDirectories[0]!.name);
+  const bundleFiles = await fs.readdir(bundlePath);
+  assert.equal(bundleFiles.includes('metadata.json'), true);
+  assert.equal(bundleFiles.some((fileName) => fileName.endsWith('.tmp')), false);
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.recordings')), false);
   assert.equal(projectRecordingsRoot.startsWith(recordingsRoot), true);
 });
 
-test('recordings listing rebuilds the index when on-disk bundles drift from the sqlite index', async () => {
+test('recordings listing repairs on-disk index drift without blocking the list response', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'DriftRepair');
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'drift-repair-endpoint',
@@ -162,11 +253,129 @@ test('recordings listing rebuilds the index when on-disk bundles drift from the 
 
   await workflowRecordingDb.clearWorkflowRecordingIndex();
 
-  const workflows = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
-  const repaired = workflows.workflows.find((workflow) => workflow.workflowId === loadedProject.metadata.id);
+  const staleWorkflows = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+  const stale = staleWorkflows.workflows.find((workflow) => workflow.workflowId === loadedProject.metadata.id);
+  assert.ok(stale);
+  assert.equal(stale.totalRuns, 0);
+
+  await workflowRecordings.flushWorkflowRecordingIndexRepairForTests();
+  const repairedWorkflows = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+  const repaired = repairedWorkflows.workflows.find((workflow) => workflow.workflowId === loadedProject.metadata.id);
 
   assert.ok(repaired);
   assert.equal(repaired.totalRuns, 1);
+  assert.equal(repaired.project.settings.publicationStatus, undefined);
+  assert.equal(repaired.project.stats, undefined);
+});
+
+test('recording index replacement is atomic and rejects a stale concurrent scan', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'AtomicRecordingIndex');
+  const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+
+  await workflowRecordings.persistWorkflowExecutionRecording({
+    workflowsRoot,
+    sourceProject: loadedProject,
+    sourceProjectPath: created.absolutePath,
+    executedProject: loadedProject,
+    executedAttachedData: attachedData,
+    executedDatasets: [],
+    endpointName: 'atomic-recording-index-endpoint',
+    recordingSerialized: JSON.stringify({
+      version: 1,
+      recording: {
+        recordingId: 'atomic-recording-index-recording',
+        events: [],
+        startTs: 1,
+        finishTs: 1,
+      },
+      assets: {},
+      strings: {},
+    }),
+    runKind: 'published',
+    status: 'succeeded',
+    durationMs: 1,
+  });
+
+  const workflowId = loadedProject.metadata.id!;
+  const [existingRun] = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
+  assert.ok(existingRun);
+
+  await assert.rejects(
+    workflowRecordingDb.replaceWorkflowRecordingIndex([], [existingRun]),
+  );
+
+  const workflows = await workflowRecordingDb.listWorkflowRecordingWorkflowStatsRows();
+  let runs = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
+  assert.equal(workflows.length, 1);
+  assert.equal(workflows[0]?.workflowId, workflowId);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.id, existingRun.id);
+
+  const scanRevision = workflowRecordingDb.getWorkflowRecordingIndexRevision();
+  await workflowRecordingDb.upsertWorkflowRecordingRun({
+    ...existingRun,
+    id: 'concurrent-recording-index-write',
+  });
+  const replaced = await workflowRecordingDb.replaceWorkflowRecordingIndex(
+    [workflows[0]!],
+    [existingRun],
+    { expectedRevision: scanRevision },
+  );
+
+  assert.equal(replaced, false);
+  runs = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
+  assert.equal(runs.length, 2);
+  assert.equal(runs.some((run) => run.id === 'concurrent-recording-index-write'), true);
+});
+
+test('recordings drift repair detects swapped bundle rows when counts stay equal', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'EqualCountDrift');
+  const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+
+  await workflowRecordings.persistWorkflowExecutionRecording({
+    workflowsRoot,
+    sourceProject: loadedProject,
+    sourceProjectPath: created.absolutePath,
+    executedProject: loadedProject,
+    executedAttachedData: attachedData,
+    executedDatasets: [],
+    endpointName: 'equal-count-drift-endpoint',
+    recordingSerialized: JSON.stringify({
+      version: 1,
+      recording: {
+        recordingId: 'equal-count-drift-recording',
+        events: [],
+        startTs: 1,
+        finishTs: 1,
+      },
+      assets: {},
+      strings: {},
+    }),
+    runKind: 'published',
+    status: 'succeeded',
+    durationMs: 1,
+  });
+
+  const workflowId = loadedProject.metadata.id!;
+  const [storedRun] = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
+  const [storedWorkflow] = await workflowRecordingDb.listWorkflowRecordingWorkflowStatsRows();
+  assert.ok(storedRun);
+  assert.ok(storedWorkflow);
+
+  const indexOnlyRun = {
+    ...storedRun,
+    id: 'equal-count-drift-index-only-recording',
+    bundlePath: path.join(recordingsRoot, workflowId, 'equal-count-drift-index-only-recording'),
+  };
+  await workflowRecordingDb.replaceWorkflowRecordingIndex([storedWorkflow], [indexOnlyRun]);
+
+  await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+  await workflowRecordings.flushWorkflowRecordingIndexRepairForTests();
+
+  const repairedRuns = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
+  assert.equal(repairedRuns.length, 1);
+  assert.equal(repairedRuns[0]?.id, storedRun.id);
+  assert.equal(repairedRuns[0]?.bundlePath, storedRun.bundlePath);
 });
 
 test('recordings listing ignores empty workflow recording directories during drift repair', async () => {
@@ -267,6 +476,7 @@ test('recordings listing does not repeat an unrepairable drift rebuild on every 
   });
 
   await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+  await workflowRecordings.flushWorkflowRecordingIndexRepairForTests();
 
   const sentinelUpdatedAt = '2099-01-01T00:00:00.000Z';
   await workflowRecordingDb.upsertWorkflowRecordingWorkflow({
@@ -369,4 +579,55 @@ test('recordings cleanup tolerates a permission failure deleting one stale bundl
   assert.equal(errors.length > 0, true);
   const [firstErrorArgs] = errors as unknown[] as Array<unknown[]>;
   assert.match(String(firstErrorArgs?.[0] ?? ''), /Failed to delete recording during cleanup/);
+});
+
+test('recordings cleanup keeps independent limits when projects reuse an endpoint slug', async () => {
+  const createdAt = ['2026-08-01T00:00:00.000Z', '2026-08-02T00:00:00.000Z', '2026-08-01T12:00:00.000Z'];
+  const workflows = [
+    { workflowId: 'workflow-a', runId: 'a-old', createdAt: createdAt[0] },
+    { workflowId: 'workflow-a', runId: 'a-new', createdAt: createdAt[1] },
+    { workflowId: 'workflow-b', runId: 'b-only', createdAt: createdAt[2] },
+  ];
+
+  for (const item of workflows) {
+    await workflowRecordingDb.upsertWorkflowRecordingBundle(
+      {
+        workflowId: item.workflowId,
+        sourceProjectMetadataId: item.workflowId,
+        sourceProjectPath: path.join(workflowsRoot, `${item.workflowId}.rivet-project`),
+        sourceProjectRelativePath: `${item.workflowId}.rivet-project`,
+        sourceProjectName: item.workflowId,
+        updatedAt: item.createdAt!,
+      },
+      {
+        id: item.runId,
+        workflowId: item.workflowId,
+        createdAt: item.createdAt!,
+        runKind: 'published',
+        status: 'succeeded',
+        durationMs: 1,
+        endpointNameAtExecution: 'shared',
+        bundlePath: path.join(recordingsRoot, item.workflowId, item.runId),
+        encoding: 'identity',
+        hasReplayDataset: false,
+        recordingCompressedBytes: 1,
+        recordingUncompressedBytes: 1,
+        projectCompressedBytes: 1,
+        projectUncompressedBytes: 1,
+        datasetCompressedBytes: 0,
+        datasetUncompressedBytes: 0,
+      },
+    );
+  }
+
+  await writeRunRecordingsSettings({
+    maxPendingWrites: 100,
+    maxRunsPerEndpoint: 1,
+    retentionDays: 0,
+  });
+  await (await import('../routes/workflows/recordings-maintenance.js')).cleanupWorkflowRecordingStorage();
+
+  assert.equal(await workflowRecordingDb.getWorkflowRecordingRunRow('a-old'), null);
+  assert.ok(await workflowRecordingDb.getWorkflowRecordingRunRow('a-new'));
+  assert.ok(await workflowRecordingDb.getWorkflowRecordingRunRow('b-only'));
 });

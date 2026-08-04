@@ -50,18 +50,26 @@ async function appendWorkflowDatasetContentHash(hash: ReturnType<typeof createHa
 export async function getWorkflowProjectSettings(
   projectPath: string,
   projectName: string,
-  options: { root?: string } = {},
+  options: {
+    includeAggregatePublicationStatus?: boolean;
+    root?: string;
+  } = {},
 ): Promise<WorkflowProjectSettings> {
   const storedSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
-  const currentStateHash = await createWorkflowPublicationStateHash(projectPath, storedSettings.endpointName);
+  const currentStateHash = storedSettings.publishedStateHash
+    ? await createWorkflowPublicationStateHash(projectPath, storedSettings.endpointName)
+    : '';
   const status = getDerivedWorkflowProjectStatus(storedSettings, currentStateHash);
-  const webAppStatuses = options.root
+  const includeAggregatePublicationStatus = options.includeAggregatePublicationStatus !== false;
+  const webAppStatuses = includeAggregatePublicationStatus && options.root
     ? await getPublishedWebAppPublicationStatuses(options.root, projectPath, storedSettings.publishedWebApps)
     : [];
 
   return {
     status,
-    publicationStatus: getAggregateWorkflowProjectStatus(status, webAppStatuses),
+    ...(includeAggregatePublicationStatus
+      ? { publicationStatus: getAggregateWorkflowProjectStatus(status, webAppStatuses) }
+      : {}),
     endpointName: storedSettings.endpointName,
     lastPublishedAt: await resolveWorkflowLastPublishedAt(projectPath, storedSettings, status),
     publishedWebApps: storedSettings.publishedWebApps.map((webApp) => ({

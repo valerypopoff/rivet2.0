@@ -127,6 +127,60 @@ test('recordings store runs persistence tasks asynchronously and drains them in 
   });
 });
 
+test('recordings store flush starts scheduled work and waits for persistence and cleanup', async () => {
+  await withRunRecordingsAppSettings({ maxPendingWrites: 0 }, async () => {
+    let releasePersistence: () => void = () => {};
+    let releaseCleanup: () => void = () => {};
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const events: string[] = [];
+    const store = createWorkflowRecordingStore({
+      async rebuildIndex() {},
+      async cleanupStorage() {
+        events.push('cleanup-started');
+        await cleanupGate;
+        events.push('cleanup-finished');
+      },
+      async setSchemaVersion() {},
+      async resetDatabaseForTests() {},
+    });
+
+    assert.equal(store.enqueuePersistence(async () => {
+      events.push('persistence-started');
+      await persistenceGate;
+      events.push('persistence-finished');
+      store.scheduleCleanup();
+    }), true);
+
+    let flushed = false;
+    const flushPromise = store.flush().then(() => {
+      flushed = true;
+    });
+    await Promise.resolve();
+    assert.deepEqual(events, ['persistence-started']);
+    assert.equal(flushed, false);
+
+    releasePersistence();
+    await waitForImmediate();
+    assert.deepEqual(events, ['persistence-started', 'persistence-finished', 'cleanup-started']);
+    assert.equal(flushed, false);
+
+    releaseCleanup();
+    await flushPromise;
+    assert.deepEqual(events, [
+      'persistence-started',
+      'persistence-finished',
+      'cleanup-started',
+      'cleanup-finished',
+    ]);
+    assert.equal(flushed, true);
+  });
+});
+
 test('recordings store drops persistence tasks once the configured queue limit is exceeded', async () => {
   await withRunRecordingsAppSettings({ maxPendingWrites: 1 }, async () => {
     let releaseFirstTask: () => void = () => {};

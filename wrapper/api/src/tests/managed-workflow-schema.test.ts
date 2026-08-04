@@ -118,6 +118,13 @@ test('managed schema persists resumable web app action runs separately from reco
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ON DELETE CASCADE'));
 });
 
+test('managed recording schema supports endpoint-scoped retention scans', () => {
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('workflow_recordings_endpoint_created_at_idx'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ON workflow_recordings(workflow_id,'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('LOWER(BTRIM(endpoint_name_at_execution))'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('created_at DESC, recording_id DESC'));
+});
+
 test('managed published execution lookup uses published endpoint rows and the published revision join', async () => {
   const { pool, queries } = createExecutionLookupPool();
   const managedQueries = createManagedWorkflowQueries(pool);

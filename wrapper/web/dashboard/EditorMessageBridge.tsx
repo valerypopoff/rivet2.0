@@ -1,6 +1,6 @@
 import { type ProjectId } from '@valerypopoff/rivet2-core';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { type FC, useCallback, useEffect, useRef } from 'react';
+import { type FC, useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { useExecutorSessionRuntime, type RivetWorkspaceHost } from '../../../rivet/packages/app/src/host';
 import { useSaveProject } from '../../../rivet/packages/app/src/hooks/useSaveProject';
@@ -45,6 +45,9 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   const setLoadedRecording = useSetAtom(loadedRecordingState);
   const setSelectedExecutor = useSetAtom(selectedExecutorState);
   const setSearching = useSetAtom(searchingGraphState);
+  const openedProjectPaths = useMemo(() => projects.openedProjectsSortedIds
+    .map((projectId) => projects.openedProjects[projectId]?.fsPath)
+    .filter((projectPath): projectPath is string => Boolean(projectPath)), [projects]);
   const loadedProjectRef = useRef(loadedProject);
   const saveProjectRef = useRef(saveProject);
   loadedProjectRef.current = loadedProject;
@@ -60,7 +63,9 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   });
   const selectBrowserExecutor = useCallback(() => setSelectedExecutor('browser'), [setSelectedExecutor]);
   const recording = useWorkflowRecordingBridge({
+    currentProjectId: currentProject.metadata.id as ProjectId | undefined,
     loadedProjectPath: loadedProject.path,
+    openedProjectPaths,
     selectBrowserExecutor,
     setLoadedRecording,
   });
