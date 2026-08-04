@@ -66,6 +66,9 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorCommandBridge, /handleWorkflowPathsMovedCommand/);
   assert.match(editorCommandBridge, /handleRefreshOpenProjectCommand/);
   assert.match(editorCommandBridge, /setOpenedProjectSnapshots/);
+  assert.match(editorCommandBridge, /loadedRecordingState/);
+  assert.match(editorCommandBridge, /projectId != null && loadedRecording\?\.projectId === projectId \? null : loadedRecording/);
+  assert.doesNotMatch(editorCommandBridge, /clearLoadedRecordingForProjectState/);
   assert.match(editorProjectLifecycleCommands, /context\.getWorkspace\(\)\.closeProject\(deletedProjectId\)/);
   assert.match(editorProjectLifecycleCommands, /context\.getWorkspace\(\)\.moveProjectPaths/);
   assert.match(editorProjectLifecycleCommands, /resolveHostedProjectMetadataUpdatesForPathMoves\(context\.getProjects\(\), moves\)/);
