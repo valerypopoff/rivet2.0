@@ -1,4 +1,5 @@
 import type { AttachedData, CombinedDataset, Project } from '@valerypopoff/rivet2-node';
+import type { WorkflowRecordingExecutionIdentity } from '../../../../../shared/workflow-recording-types.js';
 
 import type {
   WorkflowProjectItem,
@@ -106,6 +107,16 @@ export type RecordingRow = {
   status: 'succeeded' | 'failed' | 'suspicious';
   duration_ms: number;
   endpoint_name_at_execution: string;
+  execution_surface: 'workflow_endpoint' | 'web_app_action' | null;
+  graph_id_at_execution: string | null;
+  graph_name_at_execution: string | null;
+  revision_key_at_execution: string | null;
+  ui_graph_id_at_execution: string | null;
+  ui_graph_name_at_execution: string | null;
+  web_app_slug_at_execution: string | null;
+  component_id_at_execution: string | null;
+  component_type_at_execution: 'button' | 'chat' | null;
+  component_label_at_execution: string | null;
   error_message: string | null;
   recording_blob_key: string;
   replay_project_blob_key: string;
@@ -159,6 +170,7 @@ export type PersistWorkflowExecutionRecordingOptions = {
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
   errorMessage?: string;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
 };
 
 export type ImportManagedWorkflowOptions = {
@@ -197,6 +209,7 @@ export type ImportManagedWorkflowRecordingOptions = {
   durationMs: number;
   endpointName: string;
   errorMessage?: string;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
   recordingContents: string;
   replayProjectContents: string;
   replayDatasetContents?: string | null;
@@ -223,6 +236,7 @@ export type RecordingInsertRowData = {
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
   endpointNameAtExecution: string;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
   errorMessage: string | null;
   recordingBlobKey: string;
   replayProjectBlobKey: string;

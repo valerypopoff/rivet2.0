@@ -129,6 +129,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     setAboutOpen,
     setRuntimeLibsOpen,
     openRunRecordingsModal,
+    setRunStatisticsOpen,
     runRecordingsRetained,
     runRecordingsFoundCount,
     setAppSettingsOpen,
@@ -250,6 +251,14 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
               <div className="panel-bottom-action-summary">Found: {runRecordingsFoundCount}</div>
             ) : null}
           </div>
+          <Button
+            appearance="subtle"
+            className="panel-bottom-button project-settings-secondary-button button-size-m"
+            onClick={() => setRunStatisticsOpen(true)}
+            title="Compare recorded workflow and web app execution time"
+          >
+            Run statistics
+          </Button>
           <Button
             appearance="subtle"
             className="panel-bottom-button project-settings-secondary-button button-size-m"

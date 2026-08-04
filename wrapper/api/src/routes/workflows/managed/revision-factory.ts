@@ -165,9 +165,10 @@ export function createManagedWorkflowRevisionFactory(options: {
         cleanupContext: string;
       },
     ): Promise<void> {
+      const identity = row.executionIdentity;
       const valuesClause = options.timestampMode === 'provided'
-        ? 'VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)'
-        : 'VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)';
+        ? 'VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)'
+        : 'VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)';
       const params = options.timestampMode === 'provided'
         ? [
           row.recordingId,
@@ -179,6 +180,16 @@ export function createManagedWorkflowRevisionFactory(options: {
           row.status,
           row.durationMs,
           row.endpointNameAtExecution,
+          identity?.surface ?? null,
+          identity?.graphId ?? null,
+          identity?.graphName ?? null,
+          identity?.revisionKey ?? null,
+          identity?.uiGraphId ?? null,
+          identity?.uiGraphName ?? null,
+          identity?.webAppSlug ?? null,
+          identity?.componentId ?? null,
+          identity?.componentType ?? null,
+          identity?.componentLabel ?? null,
           row.errorMessage,
           row.recordingBlobKey,
           row.replayProjectBlobKey,
@@ -200,6 +211,16 @@ export function createManagedWorkflowRevisionFactory(options: {
           row.status,
           row.durationMs,
           row.endpointNameAtExecution,
+          identity?.surface ?? null,
+          identity?.graphId ?? null,
+          identity?.graphName ?? null,
+          identity?.revisionKey ?? null,
+          identity?.uiGraphId ?? null,
+          identity?.uiGraphName ?? null,
+          identity?.webAppSlug ?? null,
+          identity?.componentId ?? null,
+          identity?.componentType ?? null,
+          identity?.componentLabel ?? null,
           row.errorMessage,
           row.recordingBlobKey,
           row.replayProjectBlobKey,

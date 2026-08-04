@@ -15,6 +15,11 @@ import type {
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
+  WorkflowRunStatisticsCatalogResponse,
+  WorkflowRunStatisticsPeriod,
+  WorkflowRunStatisticsQuery,
+  WorkflowRunStatisticsResponse,
+  WorkflowRunStatisticsSurface,
 } from '../../../../../shared/workflow-recording-types.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
@@ -271,6 +276,18 @@ export class ManagedWorkflowBackend {
       inputCursor,
       signal,
     );
+  }
+
+  async listWorkflowRunStatisticsCatalog(
+    surface: WorkflowRunStatisticsSurface,
+    period: WorkflowRunStatisticsPeriod,
+    runKind?: WorkflowRunStatisticsQuery['runKind'],
+  ): Promise<WorkflowRunStatisticsCatalogResponse> {
+    return this.#recordings.listWorkflowRunStatisticsCatalog(surface, period, runKind);
+  }
+
+  async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery): Promise<WorkflowRunStatisticsResponse> {
+    return this.#recordings.getWorkflowRunStatistics(query);
   }
 
   async readWorkflowRecordingArtifact(recordingId: string, artifact: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> {

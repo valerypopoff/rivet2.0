@@ -5,7 +5,10 @@ import { validateBody } from '../../middleware/validate.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest } from '../../utils/httpError.js';
 import { createResponseTimingMiddleware } from '../../utils/responseTiming.js';
-import { WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS } from '../../../../shared/workflow-recording-types.js';
+import {
+  WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS,
+  type WorkflowRunStatisticsQuery,
+} from '../../../../shared/workflow-recording-types.js';
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../shared/workflow-types.js';
 import {
   PROJECT_EXTENSION,
@@ -26,9 +29,11 @@ import {
   deleteWorkflowRecordingWithBackend,
   duplicateWorkflowProjectItemWithBackend,
   getWorkflowTree,
+  getWorkflowRunStatisticsWithBackend,
   listWorkflowProjectWebAppsWithBackend,
   listWorkflowRecordingRunsPageWithBackend,
   listWorkflowRecordingWorkflowsWithBackend,
+  listWorkflowRunStatisticsCatalogWithBackend,
   moveWorkflowItemWithBackend,
   publishWorkflowProjectWebAppsWithBackend,
   publishWorkflowProjectItemWithBackend,
@@ -48,6 +53,7 @@ import {
   uploadWorkflowProjectItemWithBackend,
 } from './storage-backend.js';
 import { createWorkflowDownloadContentDisposition } from './workflow-download.js';
+import { getStatisticsQueryPeriod } from './recording-statistics.js';
 
 export const workflowsRouter = Router();
 const timing = createResponseTimingMiddleware();
@@ -188,6 +194,41 @@ const recordingsRunsQuerySchema = z.object({
   inputCursor: z.coerce.number().int().min(0).optional().default(0),
 });
 
+const runStatisticsTargetSchema = z.union([
+  z.object({ surface: z.literal('endpoint'), workflowId: z.string().min(1) }),
+  z.object({
+    surface: z.literal('web_app'),
+    workflowId: z.string().min(1),
+    uiGraphId: z.string().min(1),
+    componentId: z.string().min(1),
+  }),
+  z.object({
+    surface: z.literal('web_app'),
+    workflowId: z.string().min(1),
+    legacyEndpointName: z.string().min(1),
+  }),
+]);
+
+const runStatisticsPeriodSchema = z.object({
+  from: z.string().datetime(),
+  to: z.string().datetime(),
+});
+
+const runStatisticsCatalogQuerySchema = z.object({
+  surface: z.enum(['endpoint', 'web_app']),
+  from: z.string().datetime(),
+  to: z.string().datetime(),
+  runKind: z.enum(['published', 'latest', 'both']).optional().default('both'),
+});
+
+const runStatisticsQuerySchema = z.object({
+  target: runStatisticsTargetSchema,
+  period: runStatisticsPeriodSchema,
+  runKind: z.enum(['published', 'latest', 'both']),
+  includeFailed: z.boolean().default(false),
+  includeWarnings: z.boolean().default(false),
+});
+
 workflowsRouter.get('/tree', timing, asyncHandler(async (_req, res) => {
   res.json(await getWorkflowTree());
 }));
@@ -198,6 +239,28 @@ workflowsRouter.get('/recordings', asyncHandler(async (_req, res) => {
 
 workflowsRouter.get('/recordings/workflows', asyncHandler(async (_req, res) => {
   res.json(await listWorkflowRecordingWorkflowsWithBackend());
+}));
+
+workflowsRouter.get('/run-statistics/targets', asyncHandler(async (req, res) => {
+  const query = runStatisticsCatalogQuerySchema.parse(req.query);
+  let period;
+  try {
+    period = getStatisticsQueryPeriod(query);
+  } catch (error) {
+    throw badRequest(error instanceof Error ? error.message : 'Invalid statistics period');
+  }
+  res.json(await listWorkflowRunStatisticsCatalogWithBackend(query.surface, period, query.runKind));
+}));
+
+workflowsRouter.post('/run-statistics/query', validateBody(runStatisticsQuerySchema), asyncHandler(async (req, res) => {
+  const body = req.body as WorkflowRunStatisticsQuery;
+  let period;
+  try {
+    period = getStatisticsQueryPeriod(body.period);
+  } catch (error) {
+    throw badRequest(error instanceof Error ? error.message : 'Invalid statistics period');
+  }
+  res.json(await getWorkflowRunStatisticsWithBackend({ ...body, period }));
 }));
 
 workflowsRouter.get('/recordings/workflows/:workflowId/runs', asyncHandler(async (req, res) => {

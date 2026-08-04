@@ -223,6 +223,7 @@ async function importSourceRecordings(root: string, backend: ManagedWorkflowBack
           durationMs: run.durationMs,
           endpointName: run.endpointNameAtExecution,
           errorMessage: run.errorMessage,
+          executionIdentity: run.executionIdentity,
           recordingContents,
           replayProjectContents,
           replayDatasetContents,

@@ -18,9 +18,15 @@ import type {
 } from '../../../../shared/workflow-types.js';
 import type {
   WorkflowRecordingFilterStatus,
+  WorkflowRecordingExecutionIdentity,
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
+  WorkflowRunStatisticsCatalogResponse,
+  WorkflowRunStatisticsPeriod,
+  WorkflowRunStatisticsQuery,
+  WorkflowRunStatisticsResponse,
+  WorkflowRunStatisticsSurface,
 } from '../../../../shared/workflow-recording-types.js';
 import { getWorkflowsRoot } from '../../security.js';
 import { createHttpError } from '../../utils/httpError.js';
@@ -66,6 +72,8 @@ import {
   deleteWorkflowRecording,
   initializeWorkflowRecordingStorage,
   listWorkflowRecordingRunsPage,
+  getWorkflowRunStatistics,
+  listWorkflowRunStatisticsCatalog,
   listWorkflowRecordingWorkflows,
   persistWorkflowExecutionRecording,
   readWorkflowRecordingArtifact,
@@ -453,6 +461,26 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   );
 }
 
+export async function listWorkflowRunStatisticsCatalogWithBackend(
+  surface: WorkflowRunStatisticsSurface,
+  period: WorkflowRunStatisticsPeriod,
+  runKind?: WorkflowRunStatisticsQuery['runKind'],
+): Promise<WorkflowRunStatisticsCatalogResponse> {
+  return delegateWithWorkflowsRoot(
+    async (backend) => backend.listWorkflowRunStatisticsCatalog(surface, period, runKind),
+    async (root) => listWorkflowRunStatisticsCatalog(root, surface, period, runKind),
+  );
+}
+
+export async function getWorkflowRunStatisticsWithBackend(
+  query: WorkflowRunStatisticsQuery,
+): Promise<WorkflowRunStatisticsResponse> {
+  return delegateWithWorkflowsRoot(
+    async (backend) => backend.getWorkflowRunStatistics(query),
+    async (root) => getWorkflowRunStatistics(root, query),
+  );
+}
+
 export async function disposeWorkflowStorage(): Promise<void> {
   const backendPromise = managedBackendPromise;
   managedBackendPromise = null;
@@ -785,6 +813,7 @@ export async function persistWorkflowExecutionRecordingWithBackend(options: {
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
   errorMessage?: string;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
 }) {
   if (isManagedWorkflowStorageEnabled()) {
     await (await getManagedBackend()).persistWorkflowExecutionRecording(options);

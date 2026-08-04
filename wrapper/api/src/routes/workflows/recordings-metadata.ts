@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 
 import type {
   WorkflowRecordingBlobEncoding,
+  WorkflowRecordingExecutionIdentity,
   WorkflowRecordingRunKind,
   WorkflowRecordingStatus,
 } from '../../../../shared/workflow-recording-types.js';
@@ -37,6 +38,11 @@ export type StoredWorkflowRecordingMetadataV2 = {
   datasetCompressedBytes: number;
   datasetUncompressedBytes: number;
   errorMessage?: string;
+};
+
+export type StoredWorkflowRecordingMetadataV3 = Omit<StoredWorkflowRecordingMetadataV2, 'version'> & {
+  version: 3;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
 };
 
 export type StoredWorkflowRecordingMetadataV1 = {
@@ -78,6 +84,7 @@ export type NormalizedStoredWorkflowRecordingFields = {
   status: WorkflowRecordingStatus;
   durationMs: number;
   errorMessage?: string;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
 };
 
 function isNonEmptyString(value: unknown): value is string {
@@ -94,6 +101,32 @@ function normalizeNumber(value: unknown): number | null {
 
 function normalizeOptionalErrorMessage(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function normalizeExecutionIdentity(value: unknown): WorkflowRecordingExecutionIdentity | undefined {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.surface !== 'workflow_endpoint' && raw.surface !== 'web_app_action') {
+    return undefined;
+  }
+  const componentType = raw.componentType;
+  const optionalString = (field: string) => isNonEmptyString(raw[field]) ? raw[field].trim() : undefined;
+
+  return {
+    surface: raw.surface,
+    graphId: optionalString('graphId'),
+    graphName: optionalString('graphName'),
+    revisionKey: optionalString('revisionKey'),
+    uiGraphId: optionalString('uiGraphId'),
+    uiGraphName: optionalString('uiGraphName'),
+    webAppSlug: optionalString('webAppSlug'),
+    componentId: optionalString('componentId'),
+    componentType: componentType === 'button' || componentType === 'chat' ? componentType : undefined,
+    componentLabel: optionalString('componentLabel'),
+  };
 }
 
 export function normalizeRunKind(value: unknown): WorkflowRecordingRunKind | null {
@@ -153,6 +186,7 @@ export function normalizeStoredWorkflowRecordingFields(
     runKind,
     status,
     errorMessage: normalizeOptionalErrorMessage(raw.errorMessage),
+    executionIdentity: normalizeExecutionIdentity(raw.executionIdentity),
   };
 }
 
@@ -166,7 +200,7 @@ export async function normalizeStoredWorkflowRecording(
 
   const raw = value as Record<string, unknown>;
 
-  if (raw.version === 2) {
+  if (raw.version === 2 || raw.version === 3) {
     const normalized = normalizeStoredWorkflowRecordingFields(raw, raw.workflowId);
     if (!normalized) {
       return null;
@@ -186,6 +220,7 @@ export async function normalizeStoredWorkflowRecording(
         status: normalized.status,
         durationMs: normalized.durationMs,
         endpointNameAtExecution: normalized.endpointNameAtExecution,
+        executionIdentity: normalized.executionIdentity,
         errorMessage: normalized.errorMessage,
         bundlePath,
         encoding: normalizeEncoding(raw.encoding),
@@ -242,6 +277,7 @@ export async function normalizeStoredWorkflowRecording(
         status: normalized.status,
         durationMs: normalized.durationMs,
         endpointNameAtExecution: normalized.endpointNameAtExecution,
+        executionIdentity: normalized.executionIdentity,
         errorMessage: normalized.errorMessage,
         bundlePath,
         encoding,
