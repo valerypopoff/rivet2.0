@@ -763,8 +763,9 @@ the Node build.
   legacy context, policy projects/manifests, or node help/specifications get a
   clear GitHub failure line before the heavier build/test phases;
   `yarn test:style` keeps the same guard for local parity
-- formatting check covers repo-maintenance docs and scripts that are already Prettier-clean. The full repo is not
-  currently Prettier-normalized, so do not switch this to `prettier --check .` without a dedicated format pass.
+- formatting check covers the package manifest and executable maintenance scripts. Markdown is intentionally excluded so
+  prose/table layout cannot block CI; `yarn prettier:fix` remains available for an explicit full-repository format pass.
+  Do not switch this to `prettier --check .` without a dedicated format pass.
 
 ## `release.yml`
 
