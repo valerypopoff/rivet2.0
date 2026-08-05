@@ -102,6 +102,12 @@ test('Tool warnings follow the actual LLM continuation and auto-delegate handler
   const handler = graph('handler', 'weather', []);
   assert.deepEqual([...getMissingAutoDelegateToolGraphWarnings(main, project(main, handler))], []);
 
+  // Graph rows render only their basename in the project tree, but their
+  // stored name includes a folder path. Auto Delegate accepts that legacy
+  // contains match at runtime, so the editor warning must not contradict it.
+  const folderedHandler = graph('foldered-handler', 'Tools/weather', []);
+  assert.deepEqual([...getMissingAutoDelegateToolGraphWarnings(main, project(main, folderedHandler))], []);
+
   const externalFallback = {
     ...main,
     nodes: main.nodes.map((candidate) =>
@@ -113,8 +119,8 @@ test('Tool warnings follow the actual LLM continuation and auto-delegate handler
         : candidate,
     ),
   };
-  assert.match(
-    getMissingAutoDelegateToolGraphWarnings(externalFallback, project(externalFallback)).get(tool.id) ?? '',
-    /External Call and Unknown Handler settings are fallbacks/,
+  assert.equal(
+    getMissingAutoDelegateToolGraphWarnings(externalFallback, project(externalFallback)).get(tool.id),
+    'Auto Delegate needs a graph named "weather" for Tool "weather".',
   );
 });

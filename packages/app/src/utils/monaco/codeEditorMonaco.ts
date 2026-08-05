@@ -1,3 +1,4 @@
+import './monacoWorkerEnvironment.js';
 import { cloneDeep } from 'lodash-es';
 import * as monaco from 'monaco-editor';
 

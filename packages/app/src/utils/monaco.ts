@@ -1,3 +1,4 @@
+import './monaco/monacoWorkerEnvironment.js';
 import * as monaco from 'monaco-editor';
 
 import {

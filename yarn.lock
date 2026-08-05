@@ -8863,7 +8863,6 @@ __metadata:
     url-join: "npm:^5.0.0"
     use-async-effect: "npm:^2.2.7"
     vite: "npm:^6.4.3"
-    vite-plugin-monaco-editor: "npm:^1.1.0"
     vite-plugin-svgr: "npm:^4.5.0"
     vite-plugin-top-level-await: "npm:^1.6.0"
     vite-tsconfig-paths: "npm:^4.3.2"
@@ -23124,15 +23123,6 @@ __metadata:
     "@types/unist": "npm:^3.0.0"
     vfile-message: "npm:^4.0.0"
   checksum: 10/a5a85293c9eb8787aa42e180edaef00c13199a493d6ed82fecf13ab29a68526850788e22434d77808ea6b17a74e03ff899b9b4711df5b9eee75afcddd7c2e1fb
-  languageName: node
-  linkType: hard
-
-"vite-plugin-monaco-editor@npm:^1.1.0":
-  version: 1.1.0
-  resolution: "vite-plugin-monaco-editor@npm:1.1.0"
-  peerDependencies:
-    monaco-editor: ">=0.33.0"
-  checksum: 10/46ac2b301b42d0903c6eb8f165e672912b4f55e947b8d55a8c4e85d38632adc7dc450ff28012727f02a411f2e736c12c90515dcbbd95bd3345093b317db33253
   languageName: node
   linkType: hard
 

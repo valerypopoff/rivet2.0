@@ -15483,7 +15483,6 @@ const RAW_RUNTIME_STATE =
           ["url-join", "npm:5.0.0"],\
           ["use-async-effect", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:2.2.7"],\
           ["vite", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:6.4.3"],\
-          ["vite-plugin-monaco-editor", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:1.1.0"],\
           ["vite-plugin-svgr", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:4.5.0"],\
           ["vite-plugin-top-level-await", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:1.6.0"],\
           ["vite-tsconfig-paths", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:4.3.2"],\
@@ -33804,28 +33803,6 @@ const RAW_RUNTIME_STATE =
           "terser",\
           "tsx",\
           "yaml"\
-        ],\
-        "linkType": "HARD"\
-      }]\
-    ]],\
-    ["vite-plugin-monaco-editor", [\
-      ["npm:1.1.0", {\
-        "packageLocation": "./.yarn/cache/vite-plugin-monaco-editor-npm-1.1.0-658baab5bb-46ac2b301b.zip/node_modules/vite-plugin-monaco-editor/",\
-        "packageDependencies": [\
-          ["vite-plugin-monaco-editor", "npm:1.1.0"]\
-        ],\
-        "linkType": "SOFT"\
-      }],\
-      ["virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:1.1.0", {\
-        "packageLocation": "./.yarn/__virtual__/vite-plugin-monaco-editor-virtual-d4e2b5b328/0/cache/vite-plugin-monaco-editor-npm-1.1.0-658baab5bb-46ac2b301b.zip/node_modules/vite-plugin-monaco-editor/",\
-        "packageDependencies": [\
-          ["@types/monaco-editor", null],\
-          ["monaco-editor", "npm:0.44.0"],\
-          ["vite-plugin-monaco-editor", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:1.1.0"]\
-        ],\
-        "packagePeers": [\
-          "@types/monaco-editor",\
-          "monaco-editor"\
         ],\
         "linkType": "HARD"\
       }]\

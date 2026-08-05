@@ -8,10 +8,7 @@ const defaultPromoOutDir = '../../docs/build/rivet-demo';
 
 export default defineConfig(({ command }) =>
   mergeConfig(
-    createRivetViteConfig({
-      monacoWorkerDistPath: (root, outDir) => resolve(root, outDir, 'monacoeditorwork'),
-      reactDevTools: false,
-    }),
+    createRivetViteConfig({ reactDevTools: false }),
     {
       root: resolve(appDirectory, 'promo'),
       // Docusaurus serves directory indexes from their no-trailing-slash URL.
@@ -21,8 +18,6 @@ export default defineConfig(({ command }) =>
       base: command === 'build' ? process.env.RIVET_PROMO_BASE_URL ?? '/rivet2.0/rivet-demo/' : '/',
       publicDir: false,
       build: {
-        // Keep this relative to `root`: vite-plugin-monaco-editor joins the two
-        // paths itself and cannot handle an absolute Windows outDir.
         outDir: process.env.RIVET_PROMO_OUT_DIR ?? defaultPromoOutDir,
         emptyOutDir: true,
       },

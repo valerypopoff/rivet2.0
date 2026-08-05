@@ -3,7 +3,6 @@ import type { PluginOption, UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import viteTsconfigPaths from 'vite-tsconfig-paths';
 import svgr from 'vite-plugin-svgr';
-import monacoEditorPlugin from 'vite-plugin-monaco-editor';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -126,7 +125,6 @@ const cspellWordsBrowserPlugin = (): PluginOption => ({
 });
 
 export type RivetViteConfigOptions = {
-  monacoWorkerDistPath?: (root: string, outDir: string, base: string) => string;
   reactDevTools?: boolean;
 };
 
@@ -192,10 +190,6 @@ export function createRivetViteConfig(options: RivetViteConfigOptions = {}): Use
       }),
       dictionaryEnBrowserPlugin(),
       cspellWordsBrowserPlugin(),
-      // Bad ESM
-      (monacoEditorPlugin as any).default(
-        options.monacoWorkerDistPath ? { customDistPath: options.monacoWorkerDistPath } : {},
-      ),
       topLevelAwait(),
       splitVendorChunkPlugin(),
     ],

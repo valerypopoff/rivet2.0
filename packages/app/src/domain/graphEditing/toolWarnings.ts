@@ -1,4 +1,5 @@
 import {
+  findAutoDelegateGraphCandidate,
   resolveToolContinuationConnections,
   type ChartNode,
   type NodeGraph,
@@ -122,8 +123,9 @@ function getToolNodeIdsUpstreamFromLLMToolsInput(graph: NodeGraph, llmNodeId: No
 /**
  * Returns warnings only for Tool nodes that feed an eligible connected LLM
  * continuation. Dynamic tool names are intentionally not warned because their
- * handler cannot be statically determined. External and unknown fallbacks do
- * not suppress this warning: they are fallbacks, not a named graph handler.
+ * handler cannot be statically determined. The handler lookup deliberately
+ * shares runtime's exact-name-then-contains matching semantics, including
+ * graphs stored inside folders.
  */
 export function getMissingAutoDelegateToolGraphWarnings(
   graph: NodeGraph | undefined,
@@ -155,13 +157,15 @@ export function getMissingAutoDelegateToolGraphWarnings(
         continue;
       }
 
-      const hasExactHandler = Object.values(project.graphs).some(
-        (candidate) => candidate.metadata?.name === toolName,
+      const handler = findAutoDelegateGraphCandidate(
+        Object.values(project.graphs),
+        toolName,
+        (candidate) => candidate.metadata?.name,
       );
-      if (!hasExactHandler) {
+      if (handler == null) {
         warnings.set(
           toolNodeId,
-          `Auto Delegate needs a graph named "${toolName}" for Tool "${toolName}". External Call and Unknown Handler settings are fallbacks, not named graph handlers.`,
+          `Auto Delegate needs a graph named "${toolName}" for Tool "${toolName}".`,
         );
       }
     }

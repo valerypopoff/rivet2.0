@@ -71,22 +71,21 @@ const initialAssetPaths = [...indexHtml.matchAll(/<(?:script|link)\b[^>]+(?:src|
   .filter((assetUrl) => /\.(?:css|js)(?:$|\?)/.test(assetUrl))
   .map(resolvePromoAssetPath);
 
-const monacoWorkerAssetPaths = [
-  ...new Set([...indexHtml.matchAll(/"([^"]*\/monacoeditorwork\/[^"]+\.js)"/g)].map((match) => match[1])),
-].map(resolvePromoAssetPath);
-
 assert.ok(initialAssetPaths.length > 0, 'The promo entry must reference built JS or CSS assets.');
-assert.ok(monacoWorkerAssetPaths.length > 0, 'The promo entry must declare its Monaco worker assets.');
-
-// Reading these files proves that the URLs injected by vite-plugin-monaco-editor
-// map to the same output tree that Docusaurus serves. The plugin otherwise
-// silently duplicates an absolute URL base inside the filesystem output path.
-await Promise.all(monacoWorkerAssetPaths.map((path) => readFile(path)));
 
 const initialGzipBytes = (
   await Promise.all(initialAssetPaths.map(async (path) => gzipSync(await readFile(path)).byteLength))
 ).reduce((total, bytes) => total + bytes, 0);
 const outputPaths = await listFilesRecursively(demoDirectory);
+const monacoWorkerAssetPaths = outputPaths.filter((path) => /(?:^|[\\/])(?:css|editor|html|json|ts)\.worker-[^\\/]+\.js$/.test(path));
+
+assert.ok(monacoWorkerAssetPaths.length >= 5, 'The promo build must emit all five Monaco language worker assets.');
+
+// Vite-native worker imports keep worker URLs inside compiled application code
+// instead of injecting them into index.html. Reading each emitted asset guards
+// against a publish layout that omits a lazily created language worker.
+await Promise.all(monacoWorkerAssetPaths.map((path) => readFile(path)));
+
 const totalAssetBytes = (await Promise.all(outputPaths.map(async (path) => (await readFile(path)).byteLength))).reduce(
   (total, bytes) => total + bytes,
   0,
