@@ -40,9 +40,9 @@ data:
             openAIReasoningEffort: ""
             openAIReasoningSummary: ""
             openAIWebSearchContextSize: medium
+            outputLLMAttempts: false
             outputReasoning: false
             outputRequestBody: false
-            outputLLMAttempts: false
             outputResponseBody: false
             outputUsage: false
             parallelToolCalls: false
@@ -190,9 +190,9 @@ data:
             openAIReasoningEffort: ""
             openAIReasoningSummary: ""
             openAIWebSearchContextSize: medium
+            outputLLMAttempts: false
             outputReasoning: false
             outputRequestBody: false
-            outputLLMAttempts: false
             outputResponseBody: false
             outputUsage: false
             parallelToolCalls: false

@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:9d20412a931d8dba",
+  "catalogFingerprint": "fnv1a64:53f0b1125976868b",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -170,7 +170,7 @@
       "authoringChoiceId": "registered:chat",
       "nodeType": "chat",
       "displayName": "Chat (Legacy)",
-      "description": "The Chat Node sends one or more messages to an OpenAI compatible chat completions API and returns the response from the LLM. :::info This is the legacy chat node. It remains available so existing graphs keep working. For new graphs, prefer the LLM Chat Node, which supports OpenAI, Anthropic, Google, custom OpenAI compatible providers, input port API keys, reasoning settings, response status/error outputs, and retry diagnostics. ::: You can use the Chat Node for local LLMs, as long as their API is compatible with the OpenAI API. For example, you can use the Chat Node with LM Studio. If you are looking for other language models that do not support the OpenAI API format, use LLM Chat or see the Plugins page for available plugin nodes.",
+      "description": "The Chat Node sends one or more messages to an OpenAI compatible chat completions API and returns the response from the LLM. :::info This is the legacy chat node. It remains available so existing graphs keep working. For new graphs, prefer the LLM Chat Node, which supports OpenAI, Anthropic, Google, custom OpenAI compatible providers, input port API keys, reasoning settings, LLM Attempts diagnostics, and retry controls. ::: You can use the Chat Node for local LLMs, as long as their API is compatible with the OpenAI API. For example, you can use the Chat Node with LM Studio. If you are looking for other language models that do not support the OpenAI API format, use LLM Chat or see the Plugins page for available plugin nodes.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
